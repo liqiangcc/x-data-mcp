@@ -2,7 +2,7 @@
 
 ## 权威来源与版本
 
-本项目采用 [AI Engineering Conventions](https://github.com/liqiangcc/ai-engineering-conventions)，初始基线为远程已发布提交 [bcddf961f1800897f0b13538b6f96f64b462c8a2](https://github.com/liqiangcc/ai-engineering-conventions/tree/bcddf961f1800897f0b13538b6f96f64b462c8a2)，采用日期为 2026-09-09。
+本项目采用 [AI Engineering Conventions](https://github.com/liqiangcc/ai-engineering-conventions)，当前采用基线为远程已发布提交 [6aa4b960db895d0a11d0d92f1659ba27c5166013](https://github.com/liqiangcc/ai-engineering-conventions/tree/6aa4b960db895d0a11d0d92f1659ba27c5166013)，采用日期为 2026-09-09。
 
 固定版本用于使实现和 Review 可复核，避免上游变化后无法确定任务当时遵循的规则。后续升级需检查差异与迁移影响，通过独立规范采用任务更新本节；不把未发布的本地提交视为其他开发环境可取得的基线。
 
@@ -12,13 +12,13 @@
 
 | 关注点 | 规范入口 |
 |---|---|
-| 职责与依赖边界 | [关注点分离](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/principles/separation-of-concerns.md)、[复杂度预算](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/principles/complexity-budget.md) |
-| 需求与任务 | [需求到 Issue](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/workflow/requirement-to-issue.md)、[研发 Issue 模板](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/templates/development-issue.md) |
-| Issue 操作与进度 | [Issue CLI](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/workflow/issue-cli.md)、[中文阶段标签](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/workflow/issue-progress.md)、[工作计划](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/workflow/issue-planning.md) |
-| 身份与历史 | [UC / BR / BC / INC](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/traceability/identity-system.md)、[Git 历史](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/traceability/git-history.md) |
-| 正确性与运行证据 | [测试与验证](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/testing/README.md)、[验证结果语义](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/schemas/verification-result.md) |
-| 自动执行与 Review | [自动化](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/automation/README.md)、[Code Review](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/workflow/code-review.md) |
-| 规则演进 | [规范治理](https://github.com/liqiangcc/ai-engineering-conventions/blob/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/reference/governance.md)、[迁移记录](https://github.com/liqiangcc/ai-engineering-conventions/tree/bcddf961f1800897f0b13538b6f96f64b462c8a2/docs/migrations) |
+| 职责与依赖边界 | [关注点分离](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/principles/separation-of-concerns.md)、[复杂度预算](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/principles/complexity-budget.md) |
+| 需求与任务 | [需求到 Issue](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/workflow/requirement-to-issue.md)、[研发 Issue 模板](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/templates/development-issue.md) |
+| Issue 操作与进度 | [Issue CLI](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/workflow/issue-cli.md)、[中文阶段标签](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/workflow/issue-progress.md)、[工作计划](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/workflow/issue-planning.md) |
+| 身份与历史 | [UC / BR / BC / INC](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/traceability/identity-system.md)、[Git 历史](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/traceability/git-history.md) |
+| 正确性与运行证据 | [测试与验证](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/testing/README.md)、[验证结果语义](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/schemas/verification-result.md) |
+| 自动执行与 Review | [自动化](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/automation/README.md)、[Code Review](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/workflow/code-review.md) |
+| 规则演进 | [规范治理](https://github.com/liqiangcc/ai-engineering-conventions/blob/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/reference/governance.md)、[迁移记录](https://github.com/liqiangcc/ai-engineering-conventions/tree/6aa4b960db895d0a11d0d92f1659ba27c5166013/docs/migrations) |
 
 ## Rust 与 MCP 的适用范围
 
