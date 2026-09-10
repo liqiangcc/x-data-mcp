@@ -1,16 +1,19 @@
 use chrono::DateTime;
 use rust_decimal::Decimal;
+use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use x_data_mcp::{
     market_data::{
         Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
     },
     mcp::{GetTaskArgs, McpApi, StartCollectionArgs},
-    task::TaskStore,
+    task::{ScopeExecutionResult, TaskExecutionRecord, TaskStatus, TaskStore},
 };
 
 #[derive(Clone)]
-struct FakeSource;
+struct FakeSource {
+    calls: Arc<Mutex<Vec<(String, Period)>>>,
+}
 
 impl MarketDataSource for FakeSource {
     fn fetch(
@@ -19,6 +22,7 @@ impl MarketDataSource for FakeSource {
         period: Period,
         adjustment: Adjustment,
     ) -> Result<MarketDataBatch, SourceError> {
+        self.calls.lock().unwrap().push((symbol.to_owned(), period));
         let source_period = match period {
             Period::Day => "day",
             Period::Year => "year",
@@ -50,7 +54,12 @@ impl MarketDataSource for FakeSource {
 
 fn api() -> (McpApi<FakeSource>, tempfile::TempDir) {
     let dir = tempdir().unwrap();
-    let api = McpApi::new(FakeSource, TaskStore::new(dir.path()));
+    let api = McpApi::new(
+        FakeSource {
+            calls: Arc::new(Mutex::new(Vec::new())),
+        },
+        TaskStore::new(dir.path()),
+    );
     (api, dir)
 }
 
@@ -159,5 +168,54 @@ fn run_worker_once_returns_explicit_idle_when_queue_is_empty() {
         .unwrap()
         .status,
         "succeeded"
+    );
+}
+
+#[test]
+fn get_task_reports_needs_verification_and_worker_does_not_resume_it() {
+    let dir = tempdir().unwrap();
+    let store = TaskStore::new(dir.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let api = McpApi::new(
+        FakeSource {
+            calls: calls.clone(),
+        },
+        store.clone(),
+    );
+    let started = api
+        .start_collection(start_args("r1", &["000001", "600000"], &["day"]))
+        .unwrap();
+    store
+        .save_execution(TaskExecutionRecord {
+            task_id: started.task_id.clone(),
+            status: TaskStatus::Running,
+            scope_results: vec![ScopeExecutionResult {
+                symbol: "000001".into(),
+                period: Period::Day,
+                success: true,
+                error: None,
+            }],
+        })
+        .unwrap();
+
+    let view = api
+        .get_task(GetTaskArgs {
+            task_id: started.task_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(view.status, "needs_verification");
+    assert_eq!(view.scope_results.len(), 1);
+    assert_eq!(view.scope_results[0].symbol, "000001");
+
+    let idle = api.run_worker_once().unwrap();
+    assert!(idle.idle);
+    assert!(calls.lock().unwrap().is_empty());
+    assert_eq!(
+        store
+            .get_execution(&started.task_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        TaskStatus::NeedsVerification
     );
 }

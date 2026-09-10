@@ -137,7 +137,7 @@ fn rebuilt_worker_continues_with_the_next_pending_task() {
 }
 
 #[test]
-fn persisted_running_task_uses_resume() {
+fn persisted_running_task_needs_verification_without_source() {
     let dir = tempdir().unwrap();
     let store = TaskStore::new(dir.path());
     let task_id = accept(&store, "r1", &["000001", "600000"], &[Period::Day]);
@@ -156,9 +156,32 @@ fn persisted_running_task_uses_resume() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let worker = worker(&store, calls.clone());
 
-    let step = worker.run_once().unwrap().unwrap();
+    assert!(worker.run_once().unwrap().is_none());
+    assert!(calls.lock().unwrap().is_empty());
+    let record = store.get_execution(&task_id).unwrap().unwrap();
+    assert_eq!(record.status, TaskStatus::NeedsVerification);
+    assert_eq!(record.scope_results.len(), 1);
+    assert_eq!(record.scope_results[0].symbol, "000001");
+}
 
-    assert_eq!(step.task_id, task_id);
+#[test]
+fn needs_verification_does_not_block_a_new_pending_task() {
+    let dir = tempdir().unwrap();
+    let store = TaskStore::new(dir.path());
+    let interrupted = accept(&store, "r1", &["000001"], &[Period::Day]);
+    let pending = accept(&store, "r2", &["600000"], &[Period::Day]);
+    store
+        .save_execution(TaskExecutionRecord {
+            task_id: interrupted,
+            status: TaskStatus::Running,
+            scope_results: vec![],
+        })
+        .unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+
+    let step = worker(&store, calls.clone()).run_once().unwrap().unwrap();
+
+    assert_eq!(step.task_id, pending);
     assert_eq!(step.status, TaskStatus::Succeeded);
     assert_eq!(
         calls.lock().unwrap().as_slice(),

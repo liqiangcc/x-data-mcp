@@ -30,6 +30,7 @@ pub struct TaskBinding {
 pub enum TaskStatus {
     Pending,
     Running,
+    NeedsVerification,
     Succeeded,
     PartiallyFailed,
     Failed,
