@@ -161,6 +161,9 @@ impl MarketDataSource for TdxSource {
             unit_currency: crate::market_data::UnitCurrencyEvidence::unknown(
                 "TDX adapter has no reliable unit/currency evidence",
             ),
+            adjustment_evidence: crate::market_data::AdjustmentEvidence::unknown(
+                "TDX adapter has no reliable qfq adjustment evidence",
+            ),
         })
     }
 }
