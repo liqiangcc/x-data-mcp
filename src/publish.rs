@@ -13,6 +13,9 @@ use crate::{
     storage::JsonFileStore,
 };
 
+const ADJUSTMENT_VERIFICATION_REASON: &str =
+    "candidate adjustment evidence is unknown or incompatible with qfq";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidationSummary {
     pub record_count: usize,
@@ -99,13 +102,19 @@ impl MarketDataPublisher {
         }
         let (records, validation) = validate_and_deduplicate(batch)?;
         validate_unit_currency_evidence(batch)?;
-        validate_adjustment_evidence(batch)?;
+        let adjustment_error = validate_adjustment_evidence(batch).err();
         let latest = self.store.get_latest_effective_for_adjustment(
             &batch.symbol,
             batch.period,
             batch.adjustment,
         )?;
         if let Some(existing) = latest {
+            if adjustment_error.is_some() {
+                return Ok(PublishOutcome::NeedsVerification {
+                    version_id: existing.version_id,
+                    reason: ADJUSTMENT_VERIFICATION_REASON.into(),
+                });
+            }
             if same_content(&existing, batch, &records) {
                 return Ok(PublishOutcome::NoChange {
                     version_id: existing.version_id,
@@ -115,6 +124,9 @@ impl MarketDataPublisher {
                 version_id: existing.version_id,
                 reason: "candidate differs from effective version without revision evidence".into(),
             });
+        }
+        if let Some(error) = adjustment_error {
+            return Err(error);
         }
 
         let version = EffectiveVersion {

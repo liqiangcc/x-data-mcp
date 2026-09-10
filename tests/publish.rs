@@ -1,11 +1,12 @@
 use chrono::Utc;
 use rust_decimal::Decimal;
+use std::fs;
 use tempfile::tempdir;
 use x_data_mcp::{
     collector::Collector,
     market_data::{
-        Adjustment, AdjustmentEvidence, Bar, MarketDataBatch, MarketDataSource, Period, Provenance,
-        SourceError, UnitCurrencyEvidence,
+        Adjustment, AdjustmentEvidence, Bar, EvidenceStatus, MarketDataBatch, MarketDataSource,
+        Period, Provenance, SourceError, UnitCurrencyEvidence,
     },
     publish::{MarketDataPublisher, PublishError, PublishOutcome},
     storage::JsonFileStore,
@@ -197,6 +198,40 @@ fn unknown_or_incompatible_adjustment_evidence_rejects_without_publish() {
                 .unwrap()
                 .is_none()
         );
+    }
+}
+
+#[test]
+fn existing_version_and_invalid_adjustment_need_verification_without_change() {
+    let cases = [
+        AdjustmentEvidence::unknown("source qfq evidence unavailable"),
+        AdjustmentEvidence::confirmed("hfq", "source used another adjustment"),
+    ];
+    for evidence in cases {
+        let dir = tempdir().unwrap();
+        let store = JsonFileStore::new(dir.path());
+        let publisher = MarketDataPublisher::new(store.clone());
+        let original = valid_day();
+        let first = match publisher.publish(&original).unwrap() {
+            PublishOutcome::Published(version) => version,
+            other => panic!("unexpected outcome: {other:?}"),
+        };
+        let mut candidate = original.clone();
+        candidate.adjustment_evidence = evidence;
+
+        assert!(matches!(
+            publisher.publish(&candidate).unwrap(),
+            PublishOutcome::NeedsVerification { version_id, reason }
+                if version_id == first.version_id
+                    && reason == "candidate adjustment evidence is unknown or incompatible with qfq"
+        ));
+        let latest = store
+            .get_latest_effective("000001", Period::Day)
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest.version_id, first.version_id);
+        assert_eq!(latest.records, first.records);
+        assert_eq!(latest.adjustment_evidence, first.adjustment_evidence);
     }
 }
 
@@ -394,8 +429,10 @@ fn adjustment_evidence_is_persisted_and_changes_are_not_no_change() {
     changed.adjustment_evidence =
         AdjustmentEvidence::unknown("qfq compatibility cannot be confirmed");
     assert!(matches!(
-        publisher.publish(&changed),
-        Err(PublishError::AdjustmentEvidence(_))
+        publisher.publish(&changed).unwrap(),
+        PublishOutcome::NeedsVerification { version_id, reason }
+            if version_id == first.version_id
+                && reason == "candidate adjustment evidence is unknown or incompatible with qfq"
     ));
     assert_eq!(
         store
@@ -413,6 +450,30 @@ fn adjustment_evidence_is_persisted_and_changes_are_not_no_change() {
         publisher.publish(&different_confirmed).unwrap(),
         PublishOutcome::NeedsVerification { version_id, .. } if version_id == first.version_id
     ));
+}
+
+#[test]
+fn old_effective_without_adjustment_field_reads_as_unknown_after_restart() {
+    let dir = tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    MarketDataPublisher::new(store.clone())
+        .publish(&valid_day())
+        .unwrap();
+
+    let path = dir.path().join("effective/000001.day.qfq.json");
+    let mut payload: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    payload[0]
+        .as_object_mut()
+        .unwrap()
+        .remove("adjustment_evidence");
+    fs::write(&path, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
+
+    let rebuilt = JsonFileStore::new(dir.path());
+    let latest = rebuilt
+        .get_latest_effective("000001", Period::Day)
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.adjustment_evidence.status, EvidenceStatus::Unknown);
 }
 
 #[derive(Clone)]
@@ -459,6 +520,72 @@ fn one_scope_publish_rejection_does_not_block_other_scope() {
         Adjustment::Forward,
     );
     assert!(results[0].result.is_err());
+    assert!(results[1].result.is_ok());
+    assert!(
+        store
+            .get_latest_effective("000001", Period::Day)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_latest_effective("000001", Period::Year)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[derive(Clone)]
+struct AdjustmentScopeSource;
+
+impl MarketDataSource for AdjustmentScopeSource {
+    fn fetch(
+        &self,
+        symbol: &str,
+        period: Period,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let mut result = batch(
+            period,
+            vec![bar(
+                if period == Period::Day {
+                    (2026, 9, 10)
+                } else {
+                    (2025, 1, 1)
+                },
+                11,
+                Some(Decimal::ONE),
+                Some(Decimal::TWO),
+            )],
+        );
+        result.symbol = symbol.into();
+        result.provenance.symbol = symbol.into();
+        result.adjustment = adjustment;
+        if period == Period::Day {
+            result.adjustment_evidence =
+                AdjustmentEvidence::unknown("source qfq evidence unavailable");
+        }
+        Ok(result)
+    }
+}
+
+#[test]
+fn adjustment_rejection_does_not_block_another_scope() {
+    let dir = tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let results = Collector::new(AdjustmentScopeSource, store.clone()).collect(
+        &["000001"],
+        &[Period::Day, Period::Year],
+        Adjustment::Forward,
+    );
+    assert!(results[0].result.is_err());
+    assert!(
+        results[0]
+            .result
+            .as_ref()
+            .unwrap_err()
+            .contains("adjustment evidence")
+    );
     assert!(results[1].result.is_ok());
     assert!(
         store
