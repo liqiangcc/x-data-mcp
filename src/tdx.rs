@@ -143,8 +143,8 @@ impl MarketDataSource for TdxSource {
                     high: b.high,
                     low: b.low,
                     close: b.close,
-                    volume: b.volume,
-                    amount: b.amount,
+                    volume: Some(b.volume),
+                    amount: Some(b.amount),
                 })
                 .collect(),
             provenance: Provenance {
