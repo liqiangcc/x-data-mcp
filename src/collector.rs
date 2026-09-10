@@ -1,6 +1,7 @@
 use crate::{
     market_data::{Adjustment, MarketDataSource, Period, SourceError},
     storage::JsonFileStore,
+    task::FrozenScope,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,17 @@ impl<S: MarketDataSource> Collector<S> {
             .iter()
             .flat_map(|symbol| periods.iter().map(move |period| (*symbol, *period)))
             .map(|(symbol, period)| self.collect_one(symbol, period, adjustment))
+            .collect()
+    }
+
+    pub fn collect_frozen(
+        &self,
+        frozen_range: &[FrozenScope],
+        adjustment: Adjustment,
+    ) -> Vec<CollectionItemResult> {
+        frozen_range
+            .iter()
+            .map(|scope| self.collect_one(&scope.symbol, scope.period, adjustment))
             .collect()
     }
 
