@@ -196,6 +196,11 @@ impl TaskAcceptanceService {
         let mut created = binding;
         created.task_id = next_task_id();
         self.store.append(created.clone())?;
+        self.store.save_execution(TaskExecutionRecord {
+            task_id: created.task_id.clone(),
+            status: TaskStatus::Pending,
+            scope_results: Vec::new(),
+        })?;
         Ok(AcceptedTask {
             task_id: created.task_id.clone(),
             binding: created,
