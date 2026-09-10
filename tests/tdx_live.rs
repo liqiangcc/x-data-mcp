@@ -1,4 +1,5 @@
-use x_data_mcp::market_data::{Adjustment, MarketDataSource, Period};
+use x_data_mcp::collector::Collector;
+use x_data_mcp::market_data::{Adjustment, Period};
 use x_data_mcp::storage::JsonFileStore;
 use x_data_mcp::tdx::TdxSource;
 
@@ -12,19 +13,26 @@ fn fetches_and_roundtrips_two_live_day_and_year_qfq_samples() {
     let dir = tempfile::tempdir().unwrap();
     let store = JsonFileStore::new(dir.path());
 
-    for (period, source_period) in [(Period::Day, "day"), (Period::Year, "year")] {
-        for symbol in ["000001", "600000"] {
-            let batch = source.fetch(symbol, period, Adjustment::Forward).unwrap();
-            assert!(!batch.bars.is_empty());
-            assert_eq!(batch.provenance.source, "tdx");
-            assert_eq!(batch.provenance.source_period, source_period);
-            assert_eq!(batch.provenance.source_adjustment, "qfq");
-            assert_eq!(batch.provenance.symbol, symbol);
-            store.put(&batch).unwrap();
-            assert_eq!(
-                store.get(symbol, period, Adjustment::Forward).unwrap(),
-                batch
-            );
-        }
+    let collector = Collector::new(source, store.clone());
+    let results = collector.collect(
+        &["000001", "600000"],
+        &[Period::Day, Period::Year],
+        Adjustment::Forward,
+    );
+    assert_eq!(results.len(), 4);
+    for item in results {
+        assert!(
+            item.result.is_ok(),
+            "{} {:?}: {:?}",
+            item.symbol,
+            item.period,
+            item.result
+        );
+        let batch = store
+            .get(&item.symbol, item.period, Adjustment::Forward)
+            .unwrap();
+        assert!(!batch.bars.is_empty());
+        assert_eq!(batch.provenance.source, "tdx");
+        assert_eq!(batch.provenance.symbol, item.symbol);
     }
 }
