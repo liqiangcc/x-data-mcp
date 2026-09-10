@@ -55,10 +55,11 @@ impl TdxSource {
         }
     }
 
-    fn invoke_bridge(&self, symbol: &str) -> Result<Output, SourceError> {
+    fn invoke_bridge(&self, symbol: &str, source_period: &str) -> Result<Output, SourceError> {
         let mut child = Command::new(&self.python)
             .arg(&self.bridge_script)
             .arg(symbol)
+            .arg(source_period)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -97,17 +98,21 @@ impl MarketDataSource for TdxSource {
         period: Period,
         adjustment: Adjustment,
     ) -> Result<MarketDataBatch, SourceError> {
-        if period != Period::Year || adjustment != Adjustment::Forward {
+        if adjustment != Adjustment::Forward {
             return Err(SourceError::Unsupported(
-                "TDX vertical slice only supports year + forward".into(),
+                "TDX vertical slice only supports day/year + forward".into(),
             ));
         }
+        let source_period = match period {
+            Period::Day => "day",
+            Period::Year => "year",
+        };
         if symbol != "000001" && symbol != "600000" {
             return Err(SourceError::Unsupported(format!(
                 "TDX vertical slice only supports 000001 and 600000, got {symbol}"
             )));
         }
-        let output = self.invoke_bridge(symbol)?;
+        let output = self.invoke_bridge(symbol, source_period)?;
         if !output.status.success() {
             return Err(SourceError::Invocation(
                 String::from_utf8_lossy(&output.stderr).trim().to_owned(),
@@ -116,7 +121,7 @@ impl MarketDataSource for TdxSource {
         let response: BridgeResponse = serde_json::from_slice(&output.stdout)
             .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
         if response.source != "tdx"
-            || response.source_period != "year"
+            || response.source_period != source_period
             || response.source_adjustment != "qfq"
             || response.symbol != symbol
             || response.bars.is_empty()

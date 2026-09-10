@@ -3,13 +3,15 @@ use rust_decimal::Decimal;
 use tempfile::tempdir;
 use x_data_mcp::market_data::{Adjustment, Bar, MarketDataBatch, Period, Provenance};
 use x_data_mcp::storage::JsonFileStore;
-#[test]
-fn persists_and_reads_back_year_qfq_with_provenance() {
-    let dir = tempdir().unwrap();
-    let store = JsonFileStore::new(dir.path());
-    let batch = MarketDataBatch {
-        symbol: "000001".into(),
-        period: Period::Year,
+
+fn sample_batch(symbol: &str, period: Period) -> MarketDataBatch {
+    let source_period = match period {
+        Period::Day => "day",
+        Period::Year => "year",
+    };
+    MarketDataBatch {
+        symbol: symbol.into(),
+        period,
         adjustment: Adjustment::Forward,
         bars: vec![Bar {
             date: chrono::NaiveDate::from_ymd_opt(2026, 9, 10).unwrap(),
@@ -22,13 +24,37 @@ fn persists_and_reads_back_year_qfq_with_provenance() {
         }],
         provenance: Provenance {
             source: "tdx".into(),
-            source_period: "year".into(),
+            source_period: source_period.into(),
             source_adjustment: "qfq".into(),
-            symbol: "000001".into(),
+            symbol: symbol.into(),
             acquired_at: Utc::now(),
             adapter_version: "test".into(),
         },
-    };
-    store.put(&batch).unwrap();
-    assert_eq!(store.get("000001").unwrap(), batch);
+    }
+}
+
+#[test]
+fn persists_day_and_year_without_overwriting_provenance() {
+    let dir = tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let day = sample_batch("000001", Period::Day);
+    let year = sample_batch("000001", Period::Year);
+
+    store.put(&day).unwrap();
+    store.put(&year).unwrap();
+
+    assert_eq!(
+        store
+            .get("000001", Period::Day, Adjustment::Forward)
+            .unwrap(),
+        day
+    );
+    assert_eq!(
+        store
+            .get("000001", Period::Year, Adjustment::Forward)
+            .unwrap(),
+        year
+    );
+    assert!(dir.path().join("000001.day.qfq.json").is_file());
+    assert!(dir.path().join("000001.year.qfq.json").is_file());
 }
