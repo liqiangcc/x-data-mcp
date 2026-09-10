@@ -1,6 +1,6 @@
 use x_data_mcp::collector::Collector;
 use x_data_mcp::execution::TaskExecutionService;
-use x_data_mcp::market_data::{Adjustment, Period};
+use x_data_mcp::market_data::{Adjustment, CoverageStatus, MarketDataSource, Period};
 use x_data_mcp::mcp::{GetTaskArgs, McpApi, StartCollectionArgs};
 use x_data_mcp::storage::JsonFileStore;
 use x_data_mcp::task::{
@@ -19,6 +19,14 @@ fn fetches_and_roundtrips_two_live_day_and_year_qfq_samples() {
     let dir = tempfile::tempdir().unwrap();
     let store = JsonFileStore::new(dir.path());
 
+    for symbol in ["000001", "600000"] {
+        for period in [Period::Day, Period::Year] {
+            let batch = source.fetch(symbol, period, Adjustment::Forward).unwrap();
+            assert!(!batch.bars.is_empty());
+            assert_eq!(batch.coverage.status, CoverageStatus::Unknown);
+            assert!(batch.coverage.reason.contains("no reliable"));
+        }
+    }
     let collector = Collector::new(source, store.clone());
     let results = collector.collect(
         &["000001", "600000"],
@@ -27,19 +35,14 @@ fn fetches_and_roundtrips_two_live_day_and_year_qfq_samples() {
     );
     assert_eq!(results.len(), 4);
     for item in results {
+        assert!(item.result.is_err(), "unexpected publish: {item:?}");
+        assert!(item.result.unwrap_err().contains("coverage Unknown"));
         assert!(
-            item.result.is_ok(),
-            "{} {:?}: {:?}",
-            item.symbol,
-            item.period,
-            item.result
+            store
+                .get_latest_effective(&item.symbol, item.period)
+                .unwrap()
+                .is_none()
         );
-        let batch = store
-            .get(&item.symbol, item.period, Adjustment::Forward)
-            .unwrap();
-        assert!(!batch.bars.is_empty());
-        assert_eq!(batch.provenance.source, "tdx");
-        assert_eq!(batch.provenance.symbol, item.symbol);
     }
 }
 
@@ -76,13 +79,16 @@ fn recovers_live_tdx_task_without_repeating_preset_success() {
         task_store.clone(),
     );
     let record = service.resume(&accepted.task_id).unwrap();
-    assert_eq!(record.status, TaskStatus::Succeeded);
+    assert_eq!(record.status, TaskStatus::PartiallyFailed);
     assert_eq!(record.scope_results.len(), 4);
-    assert!(record.scope_results.iter().all(|item| item.success));
+    assert!(record.scope_results[0].success);
+    assert!(record.scope_results[1..].iter().all(|item| {
+        !item.success && item.error.as_deref().unwrap().contains("coverage Unknown")
+    }));
 }
 
 #[test]
-fn mcp_live_collection_reaches_terminal_with_complete_scopes() {
+fn mcp_live_collection_requires_coverage_evidence_before_publish() {
     if std::env::var_os("X_DATA_MCP_TDX_LIVE").is_none() {
         return;
     }
@@ -105,16 +111,23 @@ fn mcp_live_collection_reaches_terminal_with_complete_scopes() {
     let run = api.run_worker_once().unwrap();
     assert!(!run.idle);
     assert_eq!(run.task_id.as_deref(), Some(started.task_id.as_str()));
-    assert_eq!(run.status.as_deref(), Some("succeeded"));
+    assert_eq!(run.status.as_deref(), Some("failed"));
 
     let view = api
         .get_task(GetTaskArgs {
             task_id: started.task_id,
         })
         .unwrap();
-    assert_eq!(view.status, "succeeded");
+    assert_eq!(view.status, "failed");
     assert_eq!(view.scope_results.len(), 4);
-    assert!(view.scope_results.iter().all(|result| result.success));
+    assert!(view.scope_results.iter().all(|result| {
+        !result.success
+            && result
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("coverage Unknown")
+    }));
     assert_eq!(
         view.scope_results
             .iter()
@@ -165,8 +178,8 @@ fn worker_processes_two_live_tdx_tasks_to_terminal() {
     let second = worker.run_once().unwrap().unwrap();
     assert_eq!(first.task_id, accepted_000001.task_id);
     assert_eq!(second.task_id, accepted_600000.task_id);
-    assert_eq!(first.status, TaskStatus::Succeeded);
-    assert_eq!(second.status, TaskStatus::Succeeded);
+    assert_eq!(first.status, TaskStatus::Failed);
+    assert_eq!(second.status, TaskStatus::Failed);
     assert!(worker.run_once().unwrap().is_none());
 
     let market_store = JsonFileStore::new(dir.path());
@@ -179,22 +192,15 @@ fn worker_processes_two_live_tdx_tasks_to_terminal() {
             })
             .unwrap()
             .unwrap();
-        assert_eq!(record.status, TaskStatus::Succeeded);
+        assert_eq!(record.status, TaskStatus::Failed);
         assert_eq!(record.scope_results.len(), 2);
         for period in [Period::Day, Period::Year] {
-            let batch = market_store
-                .get(symbol, period, Adjustment::Forward)
-                .unwrap();
-            assert!(!batch.bars.is_empty());
-            assert_eq!(batch.provenance.source, "tdx");
-            assert_eq!(
-                batch.provenance.source_period,
-                match period {
-                    Period::Day => "day",
-                    Period::Year => "year",
-                }
+            assert!(
+                market_store
+                    .get_latest_effective(symbol, period)
+                    .unwrap()
+                    .is_none()
             );
-            assert_eq!(batch.provenance.source_adjustment, "qfq");
         }
     }
 }

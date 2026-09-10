@@ -40,6 +40,7 @@ fn batch(period: Period, bars: Vec<Bar>) -> MarketDataBatch {
             acquired_at: Utc::now(),
             adapter_version: "test".into(),
         },
+        coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
     }
 }
 

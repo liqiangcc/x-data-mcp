@@ -12,6 +12,49 @@ pub enum Adjustment {
     Forward,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CoverageStatus {
+    Complete,
+    Incomplete,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoverageEvidence {
+    pub status: CoverageStatus,
+    pub reason: String,
+}
+
+impl Default for CoverageEvidence {
+    fn default() -> Self {
+        Self::unknown("coverage evidence was not supplied")
+    }
+}
+
+impl CoverageEvidence {
+    pub fn complete(reason: impl Into<String>) -> Self {
+        Self {
+            status: CoverageStatus::Complete,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn incomplete(reason: impl Into<String>) -> Self {
+        Self {
+            status: CoverageStatus::Incomplete,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn unknown(reason: impl Into<String>) -> Self {
+        Self {
+            status: CoverageStatus::Unknown,
+            reason: reason.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bar {
     pub date: NaiveDate,
@@ -38,6 +81,8 @@ pub struct MarketDataBatch {
     pub adjustment: Adjustment,
     pub bars: Vec<Bar>,
     pub provenance: Provenance,
+    #[serde(default)]
+    pub coverage: CoverageEvidence,
 }
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {

@@ -1,5 +1,5 @@
 use crate::{
-    market_data::{Adjustment, MarketDataBatch, Period},
+    market_data::{Adjustment, CoverageEvidence, MarketDataBatch, Period},
     publish::EffectiveVersion,
 };
 use std::{
@@ -41,6 +41,7 @@ impl JsonFileStore {
             adjustment: version.adjustment,
             bars: version.records.clone(),
             provenance: version.provenance(),
+            coverage: CoverageEvidence::complete("read from effective version"),
         })
     }
 

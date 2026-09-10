@@ -56,6 +56,7 @@ impl MarketDataSource for FakeSource {
                 acquired_at: DateTime::from_timestamp(0, 0).unwrap(),
                 adapter_version: "test".into(),
             },
+            coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
         })
     }
 }
