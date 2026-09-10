@@ -100,6 +100,29 @@ fn start_collection_reports_request_conflict() {
 }
 
 #[test]
+fn start_collection_reports_range_conflict_with_scopes() {
+    let (api, _) = api();
+    api.start_collection(start_args("r1", &["000001"], &["day"]))
+        .unwrap();
+
+    let error = api
+        .start_collection(start_args("r2", &["000001", "600000"], &["day"]))
+        .unwrap_err();
+    assert_eq!(error.code, "range_conflict");
+    assert_eq!(
+        error.message,
+        "requested range is busy; no task was accepted"
+    );
+    assert_eq!(
+        error.scopes.unwrap(),
+        vec![x_data_mcp::mcp::ScopeView {
+            symbol: "000001".into(),
+            period: "day".into(),
+        }]
+    );
+}
+
+#[test]
 fn get_task_exposes_pending_and_terminal_results() {
     let (api, _) = api();
     let started = api

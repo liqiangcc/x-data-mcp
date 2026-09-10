@@ -60,6 +60,7 @@ impl<S: MarketDataSource> TaskExecutionService<S> {
             scope_results,
         };
         self.store.save_execution(record.clone())?;
+        self.store.release_occupancy(task_id)?;
         Ok(record)
     }
 
@@ -127,6 +128,7 @@ impl<S: MarketDataSource> TaskExecutionService<S> {
             TaskStatus::PartiallyFailed
         };
         self.store.save_execution(record.clone())?;
+        self.store.release_occupancy(task_id)?;
         Ok(record)
     }
 }

@@ -61,7 +61,7 @@ fn different_request_ids_create_different_tasks() {
         .accept("r1", &["000001"], &[Period::Day], Adjustment::Forward)
         .unwrap();
     let second = service
-        .accept("r2", &["000001"], &[Period::Day], Adjustment::Forward)
+        .accept("r2", &["600000"], &[Period::Day], Adjustment::Forward)
         .unwrap();
     assert_ne!(first.task_id, second.task_id);
 }

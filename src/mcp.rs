@@ -62,6 +62,8 @@ pub struct WorkerRunResult {
 pub struct ApiError {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<ScopeView>>,
 }
 
 impl ApiError {
@@ -69,7 +71,13 @@ impl ApiError {
         Self {
             code: code.into(),
             message: message.into(),
+            scopes: None,
         }
+    }
+
+    fn with_scopes(mut self, scopes: Vec<ScopeView>) -> Self {
+        self.scopes = Some(scopes);
+        self
     }
 }
 
@@ -227,6 +235,11 @@ fn task_error(error: TaskError) -> ApiError {
             ApiError::new("unsupported_adjustment", error.to_string())
         }
         TaskError::RequestConflict { .. } => ApiError::new("request_conflict", error.to_string()),
+        TaskError::RangeConflict { scopes } => ApiError::new(
+            "range_conflict",
+            "requested range is busy; no task was accepted",
+        )
+        .with_scopes(scopes.iter().map(scope_view).collect()),
         TaskError::Storage(_) => ApiError::new("storage_error", error.to_string()),
     }
 }
