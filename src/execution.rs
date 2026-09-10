@@ -2,8 +2,10 @@ use crate::{
     collector::Collector,
     market_data::MarketDataSource,
     storage::JsonFileStore,
-    task::{ScopeExecutionResult, TaskExecutionRecord, TaskStatus, TaskStore},
+    task::{FrozenScope, ScopeExecutionResult, TaskExecutionRecord, TaskStatus, TaskStore},
 };
+
+const CANCELLED_SCOPE_ERROR: &str = "cancelled before execution";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
@@ -36,27 +38,38 @@ impl<S: MarketDataSource> TaskExecutionService<S> {
             scope_results: Vec::new(),
         })?;
         let collector = Collector::new(&self.source, JsonFileStore::new(self.store.root()));
-        let raw = collector.collect_frozen(&binding.frozen_range, binding.adjustment);
-        let scope_results: Vec<ScopeExecutionResult> = raw
-            .into_iter()
-            .map(|item| ScopeExecutionResult {
+        let mut scope_results = Vec::new();
+        let mut cancelled = false;
+        for (index, scope) in binding.frozen_range.iter().enumerate() {
+            if self.is_cancel_requested(task_id)? {
+                append_cancelled_scopes(&binding.frozen_range, index, &mut scope_results);
+                cancelled = true;
+                break;
+            }
+            let item = collector
+                .collect_frozen(std::slice::from_ref(scope), binding.adjustment)
+                .into_iter()
+                .next()
+                .expect("one frozen scope produces one result");
+            scope_results.push(ScopeExecutionResult {
                 symbol: item.symbol,
                 period: item.period,
                 success: item.result.is_ok(),
                 error: item.result.err(),
-            })
-            .collect();
-        let successes = scope_results.iter().filter(|item| item.success).count();
-        let status = if successes == scope_results.len() {
-            TaskStatus::Succeeded
-        } else if successes == 0 {
-            TaskStatus::Failed
-        } else {
-            TaskStatus::PartiallyFailed
-        };
+            });
+            if self.is_cancel_requested(task_id)? {
+                append_cancelled_scopes(&binding.frozen_range, index + 1, &mut scope_results);
+                cancelled = true;
+                break;
+            }
+        }
         let record = TaskExecutionRecord {
             task_id: task_id.to_owned(),
-            status,
+            status: if cancelled {
+                TaskStatus::Cancelled
+            } else {
+                terminal_status(&scope_results)
+            },
             scope_results,
         };
         self.store.save_execution(record.clone())?;
@@ -85,7 +98,13 @@ impl<S: MarketDataSource> TaskExecutionService<S> {
             });
         }
         let collector = Collector::new(&self.source, JsonFileStore::new(self.store.root()));
-        for scope in &binding.frozen_range {
+        let mut cancelled = false;
+        for (index, scope) in binding.frozen_range.iter().enumerate() {
+            if self.is_cancel_requested(task_id)? {
+                append_cancelled_scopes(&binding.frozen_range, index, &mut record.scope_results);
+                cancelled = true;
+                break;
+            }
             if record.scope_results.iter().any(|item| {
                 item.symbol == scope.symbol && item.period == scope.period && item.success
             }) {
@@ -106,7 +125,20 @@ impl<S: MarketDataSource> TaskExecutionService<S> {
                 existing.symbol != scope_result.symbol || existing.period != scope_result.period
             });
             record.scope_results.push(scope_result);
+            let cancellation_requested = self.is_cancel_requested(task_id)?;
+            if cancellation_requested {
+                append_cancelled_scopes(
+                    &binding.frozen_range,
+                    index + 1,
+                    &mut record.scope_results,
+                );
+                record.status = TaskStatus::CancelRequested;
+                cancelled = true;
+            }
             self.store.save_execution(record.clone())?;
+            if cancelled {
+                break;
+            }
         }
         record.scope_results.sort_by_key(|item| {
             binding
@@ -115,20 +147,86 @@ impl<S: MarketDataSource> TaskExecutionService<S> {
                 .position(|scope| scope.symbol == item.symbol && scope.period == item.period)
                 .unwrap_or(usize::MAX)
         });
-        let successes = record
-            .scope_results
-            .iter()
-            .filter(|item| item.success)
-            .count();
-        record.status = if successes == binding.frozen_range.len() {
-            TaskStatus::Succeeded
-        } else if successes == 0 {
-            TaskStatus::Failed
+        record.status = if cancelled {
+            TaskStatus::Cancelled
         } else {
-            TaskStatus::PartiallyFailed
+            terminal_status(&record.scope_results)
         };
         self.store.save_execution(record.clone())?;
         self.store.release_occupancy(task_id)?;
         Ok(record)
+    }
+
+    pub fn finalize_cancel_requested(
+        &self,
+        task_id: &str,
+    ) -> Result<TaskExecutionRecord, ExecutionError> {
+        let binding = self
+            .store
+            .get_task(task_id)?
+            .ok_or_else(|| ExecutionError::NotFound(task_id.to_owned()))?;
+        let mut record =
+            self.store
+                .get_execution(task_id)?
+                .ok_or_else(|| ExecutionError::NotRunning {
+                    task_id: task_id.to_owned(),
+                })?;
+        if record.status != TaskStatus::CancelRequested {
+            return Err(ExecutionError::NotRunning {
+                task_id: task_id.to_owned(),
+            });
+        }
+        append_cancelled_scopes(&binding.frozen_range, 0, &mut record.scope_results);
+        record.scope_results.sort_by_key(|item| {
+            binding
+                .frozen_range
+                .iter()
+                .position(|scope| scope.symbol == item.symbol && item.period == scope.period)
+                .unwrap_or(usize::MAX)
+        });
+        record.status = TaskStatus::Cancelled;
+        self.store.save_execution(record.clone())?;
+        self.store.release_occupancy(task_id)?;
+        Ok(record)
+    }
+
+    fn is_cancel_requested(&self, task_id: &str) -> Result<bool, ExecutionError> {
+        Ok(self
+            .store
+            .get_execution(task_id)?
+            .map(|record| record.status == TaskStatus::CancelRequested)
+            .unwrap_or(false))
+    }
+}
+
+fn terminal_status(scope_results: &[ScopeExecutionResult]) -> TaskStatus {
+    let successes = scope_results.iter().filter(|item| item.success).count();
+    if successes == scope_results.len() {
+        TaskStatus::Succeeded
+    } else if successes == 0 {
+        TaskStatus::Failed
+    } else {
+        TaskStatus::PartiallyFailed
+    }
+}
+
+fn append_cancelled_scopes(
+    frozen_range: &[FrozenScope],
+    start: usize,
+    scope_results: &mut Vec<ScopeExecutionResult>,
+) {
+    for scope in frozen_range.iter().skip(start) {
+        if scope_results
+            .iter()
+            .any(|item| item.symbol == scope.symbol && item.period == scope.period)
+        {
+            continue;
+        }
+        scope_results.push(ScopeExecutionResult {
+            symbol: scope.symbol.clone(),
+            period: scope.period,
+            success: false,
+            error: Some(CANCELLED_SCOPE_ERROR.into()),
+        });
     }
 }

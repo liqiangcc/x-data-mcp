@@ -1,13 +1,21 @@
 use crate::{
     market_data::{Adjustment, MarketDataSource, Period},
-    task::{FrozenScope, ScopeExecutionResult, TaskError, TaskStatus, TaskStore},
+    task::{
+        CancellationResult, FrozenScope, ScopeExecutionResult, TaskCancellationService, TaskError,
+        TaskStatus, TaskStore,
+    },
     worker::{Worker, WorkerError},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
 
-pub const TOOL_NAMES: [&str; 3] = ["start_collection", "get_task", "run_worker_once"];
+pub const TOOL_NAMES: [&str; 4] = [
+    "start_collection",
+    "get_task",
+    "run_worker_once",
+    "cancel_task",
+];
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StartCollectionArgs {
@@ -18,6 +26,11 @@ pub struct StartCollectionArgs {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GetTaskArgs {
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CancelTaskArgs {
     pub task_id: String,
 }
 
@@ -59,6 +72,14 @@ pub struct WorkerRunResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CancelTaskResult {
+    pub task_id: String,
+    pub status: String,
+    pub scope_results: Vec<ScopeResultView>,
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ApiError {
     pub code: String,
     pub message: String,
@@ -83,6 +104,7 @@ impl ApiError {
 
 pub struct McpApi<S> {
     acceptance: crate::task::TaskAcceptanceService,
+    cancellation: TaskCancellationService,
     store: TaskStore,
     worker: Worker<S>,
 }
@@ -91,6 +113,7 @@ impl<S: MarketDataSource> McpApi<S> {
     pub fn new(source: S, store: TaskStore) -> Self {
         Self {
             acceptance: crate::task::TaskAcceptanceService::new(store.clone()),
+            cancellation: TaskCancellationService::new(store.clone()),
             worker: Worker::new(source, store.clone()),
             store,
         }
@@ -169,6 +192,14 @@ impl<S: MarketDataSource> McpApi<S> {
             },
         })
     }
+
+    pub fn cancel_task(&self, args: CancelTaskArgs) -> Result<CancelTaskResult, ApiError> {
+        let result = self
+            .cancellation
+            .cancel_task(&args.task_id)
+            .map_err(task_error)?;
+        Ok(cancel_result(result))
+    }
 }
 
 fn parse_period(value: &str) -> Result<Period, ApiError> {
@@ -186,10 +217,12 @@ fn status_name(status: TaskStatus) -> String {
     match status {
         TaskStatus::Pending => "pending",
         TaskStatus::Running => "running",
+        TaskStatus::CancelRequested => "cancel_requested",
         TaskStatus::NeedsVerification => "needs_verification",
         TaskStatus::Succeeded => "succeeded",
         TaskStatus::PartiallyFailed => "partially_failed",
         TaskStatus::Failed => "failed",
+        TaskStatus::Cancelled => "cancelled",
     }
     .into()
 }
@@ -226,6 +259,15 @@ fn scope_result_view(result: &ScopeExecutionResult) -> ScopeResultView {
     }
 }
 
+fn cancel_result(result: CancellationResult) -> CancelTaskResult {
+    CancelTaskResult {
+        task_id: result.task_id,
+        status: status_name(result.status),
+        scope_results: result.scope_results.iter().map(scope_result_view).collect(),
+        changed: result.changed,
+    }
+}
+
 fn task_error(error: TaskError) -> ApiError {
     match error {
         TaskError::EmptyRequestId => ApiError::new("empty_request_id", error.to_string()),
@@ -240,6 +282,7 @@ fn task_error(error: TaskError) -> ApiError {
             "requested range is busy; no task was accepted",
         )
         .with_scopes(scopes.iter().map(scope_view).collect()),
+        TaskError::TaskNotFound { .. } => ApiError::new("task_not_found", error.to_string()),
         TaskError::Storage(_) => ApiError::new("storage_error", error.to_string()),
     }
 }
@@ -284,6 +327,16 @@ pub fn public_tools() -> Value {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {}
+            }
+        },
+        {
+            "name": "cancel_task",
+            "description": "Request cancellation of a pending or running task.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["task_id"],
+                "properties": {"task_id": {"type": "string"}}
             }
         }
     ])
@@ -373,6 +426,12 @@ fn handle_tool_call<S: MarketDataSource>(api: &McpApi<S>, id: Value, params: Val
         "run_worker_once" => api
             .run_worker_once()
             .map(|value| serde_json::to_value(value).unwrap()),
+        "cancel_task" => serde_json::from_value::<CancelTaskArgs>(args)
+            .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
+            .and_then(|args| {
+                api.cancel_task(args)
+                    .map(|value| serde_json::to_value(value).unwrap())
+            }),
         _ => Err(ApiError::new(
             "unknown_tool",
             format!("unsupported tool: {name}"),

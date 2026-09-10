@@ -30,10 +30,12 @@ pub struct TaskBinding {
 pub enum TaskStatus {
     Pending,
     Running,
+    CancelRequested,
     NeedsVerification,
     Succeeded,
     PartiallyFailed,
     Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +66,14 @@ pub struct AcceptedTask {
     pub reused: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancellationResult {
+    pub task_id: String,
+    pub status: TaskStatus,
+    pub scope_results: Vec<ScopeExecutionResult>,
+    pub changed: bool,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TaskError {
     #[error("request_id must not be empty")]
@@ -78,6 +88,8 @@ pub enum TaskError {
     RequestConflict { request_id: String },
     #[error("requested frozen range is occupied")]
     RangeConflict { scopes: Vec<FrozenScope> },
+    #[error("task {task_id} was not found")]
+    TaskNotFound { task_id: String },
     #[error("task store I/O failed: {0}")]
     Storage(#[from] io::Error),
 }
@@ -298,14 +310,77 @@ impl TaskAcceptanceService {
 
 impl TaskStatus {
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Succeeded | Self::PartiallyFailed | Self::Failed)
+        matches!(
+            self,
+            Self::Succeeded | Self::PartiallyFailed | Self::Failed | Self::Cancelled
+        )
     }
 
     pub fn occupies_range(self) -> bool {
         matches!(
             self,
-            Self::Pending | Self::Running | Self::NeedsVerification
+            Self::Pending | Self::Running | Self::CancelRequested | Self::NeedsVerification
         )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskCancellationService {
+    store: TaskStore,
+}
+
+impl TaskCancellationService {
+    pub fn new(store: TaskStore) -> Self {
+        Self { store }
+    }
+
+    pub fn cancel_task(&self, task_id: &str) -> Result<CancellationResult, TaskError> {
+        if self.store.get_task(task_id)?.is_none() {
+            return Err(TaskError::TaskNotFound {
+                task_id: task_id.to_owned(),
+            });
+        }
+        let record = self
+            .store
+            .get_execution(task_id)?
+            .unwrap_or(TaskExecutionRecord {
+                task_id: task_id.to_owned(),
+                status: TaskStatus::Pending,
+                scope_results: Vec::new(),
+            });
+        let (result, changed) = match record.status {
+            TaskStatus::Pending => {
+                let cancelled = TaskExecutionRecord {
+                    task_id: task_id.to_owned(),
+                    status: TaskStatus::Cancelled,
+                    scope_results: record.scope_results,
+                };
+                self.store.save_execution(cancelled.clone())?;
+                self.store.release_occupancy(task_id)?;
+                (cancelled, true)
+            }
+            TaskStatus::Running => {
+                let requested = TaskExecutionRecord {
+                    task_id: task_id.to_owned(),
+                    status: TaskStatus::CancelRequested,
+                    scope_results: record.scope_results,
+                };
+                self.store.save_execution(requested.clone())?;
+                (requested, true)
+            }
+            TaskStatus::CancelRequested
+            | TaskStatus::NeedsVerification
+            | TaskStatus::Succeeded
+            | TaskStatus::PartiallyFailed
+            | TaskStatus::Failed
+            | TaskStatus::Cancelled => (record, false),
+        };
+        Ok(CancellationResult {
+            task_id: result.task_id,
+            status: result.status,
+            scope_results: result.scope_results,
+            changed,
+        })
     }
 }
 
