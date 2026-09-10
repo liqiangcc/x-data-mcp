@@ -1,6 +1,7 @@
 use x_data_mcp::collector::Collector;
 use x_data_mcp::execution::TaskExecutionService;
 use x_data_mcp::market_data::{Adjustment, Period};
+use x_data_mcp::mcp::{GetTaskArgs, McpApi, StartCollectionArgs};
 use x_data_mcp::storage::JsonFileStore;
 use x_data_mcp::task::{
     ScopeExecutionResult, TaskAcceptanceService, TaskExecutionRecord, TaskStatus, TaskStore,
@@ -78,6 +79,56 @@ fn recovers_live_tdx_task_without_repeating_preset_success() {
     assert_eq!(record.status, TaskStatus::Succeeded);
     assert_eq!(record.scope_results.len(), 4);
     assert!(record.scope_results.iter().all(|item| item.success));
+}
+
+#[test]
+fn mcp_live_collection_reaches_terminal_with_complete_scopes() {
+    if std::env::var_os("X_DATA_MCP_TDX_LIVE").is_none() {
+        return;
+    }
+    let python = std::env::var("X_DATA_MCP_TDX_PYTHON").expect("set X_DATA_MCP_TDX_PYTHON");
+    let dir = tempfile::tempdir().unwrap();
+    let api = McpApi::new(
+        TdxSource::new(python, "scripts/tdx_bridge.py"),
+        TaskStore::new(dir.path()),
+    );
+    let started = api
+        .start_collection(StartCollectionArgs {
+            request_id: "live-mcp-collection".into(),
+            symbols: vec!["000001".into(), "600000".into()],
+            periods: vec!["day".into(), "year".into()],
+        })
+        .unwrap();
+    assert_eq!(started.status, "pending");
+    assert_eq!(started.frozen_range.len(), 4);
+
+    let run = api.run_worker_once().unwrap();
+    assert!(!run.idle);
+    assert_eq!(run.task_id.as_deref(), Some(started.task_id.as_str()));
+    assert_eq!(run.status.as_deref(), Some("succeeded"));
+
+    let view = api
+        .get_task(GetTaskArgs {
+            task_id: started.task_id,
+        })
+        .unwrap();
+    assert_eq!(view.status, "succeeded");
+    assert_eq!(view.scope_results.len(), 4);
+    assert!(view.scope_results.iter().all(|result| result.success));
+    assert_eq!(
+        view.scope_results
+            .iter()
+            .map(|result| (result.symbol.as_str(), result.period.as_str()))
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            ("000001", "day"),
+            ("000001", "year"),
+            ("600000", "day"),
+            ("600000", "year"),
+        ]
+        .into_iter()
+        .collect()
+    );
 }
 
 #[test]
