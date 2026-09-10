@@ -1,5 +1,6 @@
 use crate::market_data::{
-    Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
+    Adjustment, Bar, CoverageEvidence, MarketDataBatch, MarketDataSource, Period, Provenance,
+    SourceError,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -124,7 +125,6 @@ impl MarketDataSource for TdxSource {
             || response.source_period != source_period
             || response.source_adjustment != "qfq"
             || response.symbol != symbol
-            || response.bars.is_empty()
         {
             return Err(SourceError::InvalidResponse(
                 "bridge provenance or bars do not match requested year + qfq data".into(),
@@ -155,6 +155,9 @@ impl MarketDataSource for TdxSource {
                 acquired_at: response.acquired_at,
                 adapter_version: response.adapter_version,
             },
+            coverage: CoverageEvidence::unknown(
+                "TDX adapter has no reliable range completeness evidence",
+            ),
         })
     }
 }

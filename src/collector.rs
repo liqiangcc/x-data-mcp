@@ -66,6 +66,9 @@ impl<S: MarketDataSource> Collector<S> {
                             "effective publish needs verification: {reason}"
                         )))
                     }
+                    Ok(PublishOutcome::CoverageRejected { status, reason }) => Err(
+                        SourceError::InvalidResponse(format!("coverage {status:?}: {reason}")),
+                    ),
                     Err(error) => Err(SourceError::InvalidResponse(error.to_string())),
                 }
             })

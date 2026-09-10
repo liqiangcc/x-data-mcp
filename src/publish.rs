@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    market_data::{Adjustment, Bar, MarketDataBatch, Period, Provenance},
+    market_data::{Adjustment, Bar, CoverageStatus, MarketDataBatch, Period, Provenance},
     storage::JsonFileStore,
 };
 
@@ -45,8 +45,17 @@ impl EffectiveVersion {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublishOutcome {
     Published(EffectiveVersion),
-    NoChange { version_id: String },
-    NeedsVerification { version_id: String, reason: String },
+    NoChange {
+        version_id: String,
+    },
+    NeedsVerification {
+        version_id: String,
+        reason: String,
+    },
+    CoverageRejected {
+        status: CoverageStatus,
+        reason: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +79,12 @@ impl MarketDataPublisher {
     }
 
     pub fn publish(&self, batch: &MarketDataBatch) -> Result<PublishOutcome, PublishError> {
+        if batch.coverage.status != CoverageStatus::Complete {
+            return Ok(PublishOutcome::CoverageRejected {
+                status: batch.coverage.status,
+                reason: batch.coverage.reason.clone(),
+            });
+        }
         let (records, validation) = validate_and_deduplicate(batch)?;
         let latest = self.store.get_latest_effective_for_adjustment(
             &batch.symbol,
