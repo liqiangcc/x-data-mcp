@@ -7,7 +7,9 @@ use x_data_mcp::{
     market_data::{
         Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
     },
-    task::{TaskAcceptanceService, TaskStatus, TaskStore},
+    task::{
+        ScopeExecutionResult, TaskAcceptanceService, TaskExecutionRecord, TaskStatus, TaskStore,
+    },
 };
 
 #[derive(Clone)]
@@ -165,4 +167,170 @@ fn rebuilt_service_reads_terminal_record() {
     let read = rebuilt.get(&task_id).unwrap().unwrap();
     assert_eq!(read.status, TaskStatus::Succeeded);
     assert_eq!(read.scope_results.len(), 4);
+}
+
+fn running_record(dir: &std::path::Path, task_id: &str, results: Vec<ScopeExecutionResult>) {
+    TaskStore::new(dir)
+        .save_execution(TaskExecutionRecord {
+            task_id: task_id.to_owned(),
+            status: TaskStatus::Running,
+            scope_results: results,
+        })
+        .unwrap();
+}
+
+#[test]
+fn resume_runs_only_unexecuted_scopes() {
+    let dir = tempdir().unwrap();
+    let task_id = accept(dir.path());
+    running_record(
+        dir.path(),
+        &task_id,
+        vec![ScopeExecutionResult {
+            symbol: "000001".into(),
+            period: Period::Day,
+            success: true,
+            error: None,
+        }],
+    );
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let record = TaskExecutionService::new(
+        FakeSource {
+            calls: calls.clone(),
+            failures: Vec::new(),
+        },
+        TaskStore::new(dir.path()),
+    )
+    .resume(&task_id)
+    .unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 3);
+    assert_eq!(record.status, TaskStatus::Succeeded);
+}
+
+#[test]
+fn resume_skips_success_and_retries_failure() {
+    let dir = tempdir().unwrap();
+    let task_id = accept(dir.path());
+    running_record(
+        dir.path(),
+        &task_id,
+        vec![
+            ScopeExecutionResult {
+                symbol: "000001".into(),
+                period: Period::Day,
+                success: true,
+                error: None,
+            },
+            ScopeExecutionResult {
+                symbol: "600000".into(),
+                period: Period::Year,
+                success: false,
+                error: Some("old".into()),
+            },
+        ],
+    );
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let record = TaskExecutionService::new(
+        FakeSource {
+            calls: calls.clone(),
+            failures: Vec::new(),
+        },
+        TaskStore::new(dir.path()),
+    )
+    .resume(&task_id)
+    .unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 3);
+    assert_eq!(record.status, TaskStatus::Succeeded);
+}
+
+#[test]
+fn resume_has_no_duplicate_scope_results() {
+    let dir = tempdir().unwrap();
+    let task_id = accept(dir.path());
+    running_record(
+        dir.path(),
+        &task_id,
+        vec![ScopeExecutionResult {
+            symbol: "000001".into(),
+            period: Period::Day,
+            success: true,
+            error: None,
+        }],
+    );
+    let record = TaskExecutionService::new(
+        FakeSource {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            failures: Vec::new(),
+        },
+        TaskStore::new(dir.path()),
+    )
+    .resume(&task_id)
+    .unwrap();
+    assert_eq!(record.scope_results.len(), 4);
+    for (i, left) in record.scope_results.iter().enumerate() {
+        assert!(
+            !record.scope_results[i + 1..]
+                .iter()
+                .any(|right| left.symbol == right.symbol && left.period == right.period)
+        );
+    }
+}
+
+#[test]
+fn all_success_resume_does_not_call_source() {
+    let dir = tempdir().unwrap();
+    let task_id = accept(dir.path());
+    let all = ["000001", "600000"]
+        .into_iter()
+        .flat_map(|symbol| {
+            [Period::Day, Period::Year]
+                .into_iter()
+                .map(move |period| ScopeExecutionResult {
+                    symbol: symbol.into(),
+                    period,
+                    success: true,
+                    error: None,
+                })
+        })
+        .collect();
+    running_record(dir.path(), &task_id, all);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let record = TaskExecutionService::new(
+        FakeSource {
+            calls: calls.clone(),
+            failures: Vec::new(),
+        },
+        TaskStore::new(dir.path()),
+    )
+    .resume(&task_id)
+    .unwrap();
+    assert!(calls.lock().unwrap().is_empty());
+    assert_eq!(record.status, TaskStatus::Succeeded);
+}
+
+#[test]
+fn rebuilt_service_can_resume_running_task() {
+    let dir = tempdir().unwrap();
+    let task_id = accept(dir.path());
+    running_record(
+        dir.path(),
+        &task_id,
+        vec![ScopeExecutionResult {
+            symbol: "000001".into(),
+            period: Period::Day,
+            success: true,
+            error: None,
+        }],
+    );
+    let rebuilt = TaskExecutionService::new(
+        FakeSource {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            failures: Vec::new(),
+        },
+        TaskStore::new(dir.path()),
+    );
+    assert_eq!(
+        rebuilt.resume(&task_id).unwrap().status,
+        TaskStatus::Succeeded
+    );
 }

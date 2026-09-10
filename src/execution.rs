@@ -11,6 +11,8 @@ pub enum ExecutionError {
     NotFound(String),
     #[error("task execution storage failed: {0}")]
     Storage(#[from] std::io::Error),
+    #[error("task {task_id} is not recoverable (expected running status)")]
+    NotRunning { task_id: String },
 }
 
 pub struct TaskExecutionService<S> {
@@ -63,5 +65,68 @@ impl<S: MarketDataSource> TaskExecutionService<S> {
 
     pub fn get(&self, task_id: &str) -> Result<Option<TaskExecutionRecord>, ExecutionError> {
         Ok(self.store.get_execution(task_id)?)
+    }
+
+    pub fn resume(&self, task_id: &str) -> Result<TaskExecutionRecord, ExecutionError> {
+        let binding = self
+            .store
+            .get_task(task_id)?
+            .ok_or_else(|| ExecutionError::NotFound(task_id.to_owned()))?;
+        let mut record =
+            self.store
+                .get_execution(task_id)?
+                .ok_or_else(|| ExecutionError::NotRunning {
+                    task_id: task_id.to_owned(),
+                })?;
+        if record.status != TaskStatus::Running {
+            return Err(ExecutionError::NotRunning {
+                task_id: task_id.to_owned(),
+            });
+        }
+        let collector = Collector::new(&self.source, JsonFileStore::new(self.store.root()));
+        for scope in &binding.frozen_range {
+            if record.scope_results.iter().any(|item| {
+                item.symbol == scope.symbol && item.period == scope.period && item.success
+            }) {
+                continue;
+            }
+            let item = collector.collect_frozen(std::slice::from_ref(scope), binding.adjustment);
+            let result = item
+                .into_iter()
+                .next()
+                .expect("one frozen scope produces one result");
+            let scope_result = ScopeExecutionResult {
+                symbol: result.symbol,
+                period: result.period,
+                success: result.result.is_ok(),
+                error: result.result.err(),
+            };
+            record.scope_results.retain(|existing| {
+                existing.symbol != scope_result.symbol || existing.period != scope_result.period
+            });
+            record.scope_results.push(scope_result);
+            self.store.save_execution(record.clone())?;
+        }
+        record.scope_results.sort_by_key(|item| {
+            binding
+                .frozen_range
+                .iter()
+                .position(|scope| scope.symbol == item.symbol && scope.period == item.period)
+                .unwrap_or(usize::MAX)
+        });
+        let successes = record
+            .scope_results
+            .iter()
+            .filter(|item| item.success)
+            .count();
+        record.status = if successes == binding.frozen_range.len() {
+            TaskStatus::Succeeded
+        } else if successes == 0 {
+            TaskStatus::Failed
+        } else {
+            TaskStatus::PartiallyFailed
+        };
+        self.store.save_execution(record.clone())?;
+        Ok(record)
     }
 }
