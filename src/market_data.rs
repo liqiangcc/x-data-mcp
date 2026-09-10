@@ -44,6 +44,8 @@ pub enum SourceError {
     Unsupported(String),
     #[error("source invocation failed: {0}")]
     Invocation(String),
+    #[error("source invocation timed out after {timeout_ms} ms")]
+    Timeout { timeout_ms: u64 },
     #[error("invalid source response: {0}")]
     InvalidResponse(String),
 }
