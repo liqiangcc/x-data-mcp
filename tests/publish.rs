@@ -5,6 +5,7 @@ use x_data_mcp::{
     collector::Collector,
     market_data::{
         Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
+        UnitCurrencyEvidence,
     },
     publish::{MarketDataPublisher, PublishError, PublishOutcome},
     storage::JsonFileStore,
@@ -41,7 +42,12 @@ fn batch(period: Period, bars: Vec<Bar>) -> MarketDataBatch {
             adapter_version: "test".into(),
         },
         coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
+        unit_currency: confirmed_units(),
     }
+}
+
+fn confirmed_units() -> UnitCurrencyEvidence {
+    UnitCurrencyEvidence::confirmed("CNY", "share", "lot", "CNY", "yuan", "test fixture")
 }
 
 fn valid_day() -> MarketDataBatch {
@@ -147,7 +153,13 @@ fn ohlc_and_negative_values_reject_without_publishing() {
 fn missing_volume_and_amount_remain_unknown() {
     let dir = tempdir().unwrap();
     let store = JsonFileStore::new(dir.path());
-    let candidate = batch(Period::Day, vec![bar((2026, 9, 10), 11, None, None)]);
+    let mut candidate = batch(Period::Day, vec![bar((2026, 9, 10), 11, None, None)]);
+    candidate.unit_currency.volume_unit =
+        x_data_mcp::market_data::EvidenceValue::unknown("volume was not supplied");
+    candidate.unit_currency.amount_currency =
+        x_data_mcp::market_data::EvidenceValue::unknown("amount was not supplied");
+    candidate.unit_currency.amount_unit =
+        x_data_mcp::market_data::EvidenceValue::unknown("amount was not supplied");
     MarketDataPublisher::new(store.clone())
         .publish(&candidate)
         .unwrap();
@@ -157,6 +169,56 @@ fn missing_volume_and_amount_remain_unknown() {
         .unwrap();
     assert_eq!(latest.records[0].volume, None);
     assert_eq!(latest.records[0].amount, None);
+}
+
+#[test]
+fn unknown_price_or_provided_field_units_reject_without_publish() {
+    let cases = [
+        {
+            let mut value = valid_day();
+            value.unit_currency.price_currency =
+                x_data_mcp::market_data::EvidenceValue::unknown("currency unavailable");
+            value
+        },
+        {
+            let mut value = valid_day();
+            value.unit_currency.price_unit =
+                x_data_mcp::market_data::EvidenceValue::unknown("price unit unavailable");
+            value
+        },
+        {
+            let mut value = valid_day();
+            value.unit_currency.volume_unit =
+                x_data_mcp::market_data::EvidenceValue::unknown("volume unit unavailable");
+            value
+        },
+        {
+            let mut value = valid_day();
+            value.unit_currency.amount_currency =
+                x_data_mcp::market_data::EvidenceValue::unknown("amount currency unavailable");
+            value
+        },
+        {
+            let mut value = valid_day();
+            value.unit_currency.amount_unit =
+                x_data_mcp::market_data::EvidenceValue::unknown("amount unit unavailable");
+            value
+        },
+    ];
+    for candidate in cases {
+        let dir = tempdir().unwrap();
+        let store = JsonFileStore::new(dir.path());
+        assert!(matches!(
+            MarketDataPublisher::new(store.clone()).publish(&candidate),
+            Err(PublishError::UnitEvidence(_))
+        ));
+        assert!(
+            store
+                .get_latest_effective("000001", Period::Day)
+                .unwrap()
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -237,6 +299,44 @@ fn old_version_survives_rejection_no_change_and_unverified_revision() {
             .unwrap()
             .version_id,
         first.version_id
+    );
+}
+
+#[test]
+fn unit_evidence_is_persisted_and_changes_are_not_no_change() {
+    let dir = tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let publisher = MarketDataPublisher::new(store.clone());
+    let original = valid_day();
+    let first = match publisher.publish(&original).unwrap() {
+        PublishOutcome::Published(version) => version,
+        other => panic!("unexpected outcome: {other:?}"),
+    };
+
+    let rebuilt = JsonFileStore::new(dir.path());
+    assert_eq!(
+        rebuilt
+            .get_latest_effective("000001", Period::Day)
+            .unwrap()
+            .unwrap()
+            .unit_currency,
+        original.unit_currency
+    );
+
+    let mut changed = original.clone();
+    changed.unit_currency.price_currency =
+        x_data_mcp::market_data::EvidenceValue::confirmed("USD", "different source");
+    assert!(matches!(
+        publisher.publish(&changed).unwrap(),
+        PublishOutcome::NeedsVerification { version_id, .. } if version_id == first.version_id
+    ));
+    assert_eq!(
+        store
+            .get_latest_effective("000001", Period::Day)
+            .unwrap()
+            .unwrap()
+            .unit_currency,
+        original.unit_currency
     );
 }
 

@@ -56,6 +56,14 @@ impl MarketDataSource for FakeSource {
                 adapter_version: "test".into(),
             },
             coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
+            unit_currency: x_data_mcp::market_data::UnitCurrencyEvidence::confirmed(
+                "CNY",
+                "share",
+                "lot",
+                "CNY",
+                "yuan",
+                "test fixture",
+            ),
         })
     }
 }

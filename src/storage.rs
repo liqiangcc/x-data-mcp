@@ -42,6 +42,7 @@ impl JsonFileStore {
             bars: version.records.clone(),
             provenance: version.provenance(),
             coverage: CoverageEvidence::complete("read from effective version"),
+            unit_currency: version.unit_currency.clone(),
         })
     }
 

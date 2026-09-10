@@ -6,7 +6,9 @@ use std::{
 };
 
 use crate::{
-    market_data::{Adjustment, Bar, CoverageStatus, MarketDataBatch, Period, Provenance},
+    market_data::{
+        Adjustment, Bar, CoverageStatus, MarketDataBatch, Period, Provenance, UnitCurrencyEvidence,
+    },
     storage::JsonFileStore,
 };
 
@@ -27,6 +29,8 @@ pub struct EffectiveVersion {
     pub records: Vec<Bar>,
     pub published_at: DateTime<Utc>,
     pub validation: ValidationSummary,
+    #[serde(default)]
+    pub unit_currency: UnitCurrencyEvidence,
 }
 
 impl EffectiveVersion {
@@ -42,6 +46,7 @@ impl EffectiveVersion {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublishOutcome {
     Published(EffectiveVersion),
@@ -60,6 +65,8 @@ pub enum PublishOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PublishError {
+    #[error("unit/currency evidence is not confirmed: {0}")]
+    UnitEvidence(String),
     #[error("invalid market data record: {0}")]
     InvalidRecord(String),
     #[error("conflicting duplicate market data key: {0}")]
@@ -85,6 +92,7 @@ impl MarketDataPublisher {
                 reason: batch.coverage.reason.clone(),
             });
         }
+        validate_unit_currency_evidence(batch)?;
         let (records, validation) = validate_and_deduplicate(batch)?;
         let latest = self.store.get_latest_effective_for_adjustment(
             &batch.symbol,
@@ -112,10 +120,39 @@ impl MarketDataPublisher {
             records,
             published_at: Utc::now(),
             validation,
+            unit_currency: batch.unit_currency.clone(),
         };
         self.store.publish_effective(&version)?;
         self.store.put(batch)?;
         Ok(PublishOutcome::Published(version))
+    }
+}
+
+fn validate_unit_currency_evidence(batch: &MarketDataBatch) -> Result<(), PublishError> {
+    require_confirmed("price currency", &batch.unit_currency.price_currency)?;
+    require_confirmed("price unit", &batch.unit_currency.price_unit)?;
+
+    if batch.bars.iter().any(|bar| bar.volume.is_some()) {
+        require_confirmed("volume unit", &batch.unit_currency.volume_unit)?;
+    }
+    if batch.bars.iter().any(|bar| bar.amount.is_some()) {
+        require_confirmed("amount currency", &batch.unit_currency.amount_currency)?;
+        require_confirmed("amount unit", &batch.unit_currency.amount_unit)?;
+    }
+    Ok(())
+}
+
+fn require_confirmed(
+    field: &str,
+    evidence: &crate::market_data::EvidenceValue,
+) -> Result<(), PublishError> {
+    if evidence.is_confirmed() {
+        Ok(())
+    } else {
+        Err(PublishError::UnitEvidence(format!(
+            "{field}: {}",
+            evidence.reason
+        )))
     }
 }
 
@@ -179,6 +216,7 @@ fn same_content(existing: &EffectiveVersion, batch: &MarketDataBatch, records: &
         && existing.period == batch.period
         && existing.adjustment == batch.adjustment
         && existing.source == batch.provenance.source
+        && existing.unit_currency == batch.unit_currency
         && existing.records == records
 }
 

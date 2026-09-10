@@ -158,6 +158,9 @@ impl MarketDataSource for TdxSource {
             coverage: CoverageEvidence::unknown(
                 "TDX adapter has no reliable range completeness evidence",
             ),
+            unit_currency: crate::market_data::UnitCurrencyEvidence::unknown(
+                "TDX adapter has no reliable unit/currency evidence",
+            ),
         })
     }
 }
