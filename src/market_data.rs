@@ -26,6 +26,95 @@ pub struct CoverageEvidence {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum EvidenceStatus {
+    Confirmed,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceValue {
+    pub status: EvidenceStatus,
+    pub value: Option<String>,
+    pub reason: String,
+}
+
+impl Default for EvidenceValue {
+    fn default() -> Self {
+        Self::unknown("unit/currency evidence was not supplied")
+    }
+}
+
+impl EvidenceValue {
+    pub fn confirmed(value: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            status: EvidenceStatus::Confirmed,
+            value: Some(value.into()),
+            reason: reason.into(),
+        }
+    }
+
+    pub fn unknown(reason: impl Into<String>) -> Self {
+        Self {
+            status: EvidenceStatus::Unknown,
+            value: None,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn is_confirmed(&self) -> bool {
+        self.status == EvidenceStatus::Confirmed
+            && self.value.as_deref().is_some_and(|value| !value.is_empty())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnitCurrencyEvidence {
+    pub price_currency: EvidenceValue,
+    pub price_unit: EvidenceValue,
+    pub volume_unit: EvidenceValue,
+    pub amount_currency: EvidenceValue,
+    pub amount_unit: EvidenceValue,
+}
+
+impl Default for UnitCurrencyEvidence {
+    fn default() -> Self {
+        Self::unknown("unit/currency evidence was not supplied")
+    }
+}
+
+impl UnitCurrencyEvidence {
+    pub fn confirmed(
+        price_currency: impl Into<String>,
+        price_unit: impl Into<String>,
+        volume_unit: impl Into<String>,
+        amount_currency: impl Into<String>,
+        amount_unit: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        let reason = reason.into();
+        Self {
+            price_currency: EvidenceValue::confirmed(price_currency, reason.clone()),
+            price_unit: EvidenceValue::confirmed(price_unit, reason.clone()),
+            volume_unit: EvidenceValue::confirmed(volume_unit, reason.clone()),
+            amount_currency: EvidenceValue::confirmed(amount_currency, reason.clone()),
+            amount_unit: EvidenceValue::confirmed(amount_unit, reason),
+        }
+    }
+
+    pub fn unknown(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            price_currency: EvidenceValue::unknown(reason.clone()),
+            price_unit: EvidenceValue::unknown(reason.clone()),
+            volume_unit: EvidenceValue::unknown(reason.clone()),
+            amount_currency: EvidenceValue::unknown(reason.clone()),
+            amount_unit: EvidenceValue::unknown(reason),
+        }
+    }
+}
+
 impl Default for CoverageEvidence {
     fn default() -> Self {
         Self::unknown("coverage evidence was not supplied")
@@ -83,6 +172,8 @@ pub struct MarketDataBatch {
     pub provenance: Provenance,
     #[serde(default)]
     pub coverage: CoverageEvidence,
+    #[serde(default)]
+    pub unit_currency: UnitCurrencyEvidence,
 }
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
