@@ -1,5 +1,6 @@
 use crate::{
     market_data::{Adjustment, MarketDataSource, Period, SourceError},
+    publish::{MarketDataPublisher, PublishOutcome},
     storage::JsonFileStore,
     task::FrozenScope,
 };
@@ -56,9 +57,17 @@ impl<S: MarketDataSource> Collector<S> {
             .fetch(symbol, period, adjustment)
             .and_then(|batch| {
                 validate_provenance(&batch, symbol, period, adjustment)?;
-                self.store.put(&batch).map_err(|error| {
-                    SourceError::Invocation(format!("storage write failed: {error}"))
-                })
+                match MarketDataPublisher::new(self.store.clone()).publish(&batch) {
+                    Ok(PublishOutcome::Published(_)) | Ok(PublishOutcome::NoChange { .. }) => {
+                        Ok(())
+                    }
+                    Ok(PublishOutcome::NeedsVerification { reason, .. }) => {
+                        Err(SourceError::InvalidResponse(format!(
+                            "effective publish needs verification: {reason}"
+                        )))
+                    }
+                    Err(error) => Err(SourceError::InvalidResponse(error.to_string())),
+                }
             })
             .map_err(|error| error.to_string());
         CollectionItemResult {

@@ -12,15 +12,15 @@ pub enum Adjustment {
     Forward,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bar {
     pub date: NaiveDate,
     pub open: Decimal,
     pub high: Decimal,
     pub low: Decimal,
     pub close: Decimal,
-    pub volume: Decimal,
-    pub amount: Decimal,
+    pub volume: Option<Decimal>,
+    pub amount: Option<Decimal>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provenance {

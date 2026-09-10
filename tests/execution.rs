@@ -48,8 +48,8 @@ impl MarketDataSource for FakeSource {
                 high: Decimal::ONE,
                 low: Decimal::ONE,
                 close: Decimal::ONE,
-                volume: Decimal::ONE,
-                amount: Decimal::ONE,
+                volume: Some(Decimal::ONE),
+                amount: Some(Decimal::ONE),
             }],
             provenance: Provenance {
                 source: "fake".into(),
