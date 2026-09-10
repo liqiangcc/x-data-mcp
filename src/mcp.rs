@@ -2,7 +2,7 @@ use crate::{
     market_data::{Adjustment, MarketDataSource, Period},
     task::{
         CancellationResult, FrozenScope, ScopeExecutionResult, TaskCancellationService, TaskError,
-        TaskStatus, TaskStore,
+        TaskRetryService, TaskStatus, TaskStore,
     },
     worker::{Worker, WorkerError},
 };
@@ -10,11 +10,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
 
-pub const TOOL_NAMES: [&str; 4] = [
+pub const TOOL_NAMES: [&str; 5] = [
     "start_collection",
     "get_task",
     "run_worker_once",
     "cancel_task",
+    "retry_task",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -32,6 +33,19 @@ pub struct GetTaskArgs {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CancelTaskArgs {
     pub task_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetryScopeArgs {
+    pub symbol: String,
+    pub period: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetryTaskArgs {
+    pub original_task_id: String,
+    pub new_request_id: String,
+    pub selected_scopes: Vec<RetryScopeArgs>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -54,6 +68,7 @@ pub struct TaskView {
     pub status: String,
     pub frozen_range: Vec<ScopeView>,
     pub scope_results: Vec<ScopeResultView>,
+    pub retry_of: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -77,6 +92,15 @@ pub struct CancelTaskResult {
     pub status: String,
     pub scope_results: Vec<ScopeResultView>,
     pub changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RetryTaskResult {
+    pub task_id: String,
+    pub status: String,
+    pub frozen_range: Vec<ScopeView>,
+    pub retry_of: Option<String>,
+    pub reused: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -105,6 +129,7 @@ impl ApiError {
 pub struct McpApi<S> {
     acceptance: crate::task::TaskAcceptanceService,
     cancellation: TaskCancellationService,
+    retry: TaskRetryService,
     store: TaskStore,
     worker: Worker<S>,
 }
@@ -114,6 +139,7 @@ impl<S: MarketDataSource> McpApi<S> {
         Self {
             acceptance: crate::task::TaskAcceptanceService::new(store.clone()),
             cancellation: TaskCancellationService::new(store.clone()),
+            retry: TaskRetryService::new(store.clone()),
             worker: Worker::new(source, store.clone()),
             store,
         }
@@ -174,6 +200,7 @@ impl<S: MarketDataSource> McpApi<S> {
             scope_results: execution
                 .map(|record| record.scope_results.iter().map(scope_result_view).collect())
                 .unwrap_or_default(),
+            retry_of: binding.retry_of,
         })
     }
 
@@ -199,6 +226,40 @@ impl<S: MarketDataSource> McpApi<S> {
             .cancel_task(&args.task_id)
             .map_err(task_error)?;
         Ok(cancel_result(result))
+    }
+
+    pub fn retry_task(&self, args: RetryTaskArgs) -> Result<RetryTaskResult, ApiError> {
+        let selected_scopes = args
+            .selected_scopes
+            .iter()
+            .map(|scope| {
+                Ok(FrozenScope {
+                    symbol: scope.symbol.clone(),
+                    period: parse_period(&scope.period)?,
+                })
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        let accepted = self
+            .retry
+            .retry_task(
+                &args.original_task_id,
+                &args.new_request_id,
+                &selected_scopes,
+                Adjustment::Forward,
+            )
+            .map_err(task_error)?;
+        Ok(RetryTaskResult {
+            task_id: accepted.task_id,
+            status: status_name(TaskStatus::Pending),
+            frozen_range: accepted
+                .binding
+                .frozen_range
+                .iter()
+                .map(scope_view)
+                .collect(),
+            retry_of: accepted.binding.retry_of,
+            reused: accepted.reused,
+        })
     }
 }
 
@@ -283,6 +344,15 @@ fn task_error(error: TaskError) -> ApiError {
         )
         .with_scopes(scopes.iter().map(scope_view).collect()),
         TaskError::TaskNotFound { .. } => ApiError::new("task_not_found", error.to_string()),
+        TaskError::RetryRequestIdConflict => {
+            ApiError::new("retry_request_id_conflict", error.to_string())
+        }
+        TaskError::RetrySelectionEmpty => ApiError::new("empty_selected_scopes", error.to_string()),
+        TaskError::RetrySelectionInvalid { scopes } => ApiError::new(
+            "invalid_retry_selection",
+            "retry selected scopes are invalid, outside the original range, or already completed",
+        )
+        .with_scopes(scopes.iter().map(scope_view).collect()),
         TaskError::Storage(_) => ApiError::new("storage_error", error.to_string()),
     }
 }
@@ -337,6 +407,31 @@ pub fn public_tools() -> Value {
                 "additionalProperties": false,
                 "required": ["task_id"],
                 "properties": {"task_id": {"type": "string"}}
+            }
+        },
+        {
+            "name": "retry_task",
+            "description": "Retry explicitly selected unfinished scopes as a new linked task.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["original_task_id", "new_request_id", "selected_scopes"],
+                "properties": {
+                    "original_task_id": {"type": "string"},
+                    "new_request_id": {"type": "string"},
+                    "selected_scopes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["symbol", "period"],
+                            "properties": {
+                                "symbol": {"type": "string"},
+                                "period": {"type": "string", "enum": ["day", "year"]}
+                            }
+                        }
+                    }
+                }
             }
         }
     ])
@@ -430,6 +525,12 @@ fn handle_tool_call<S: MarketDataSource>(api: &McpApi<S>, id: Value, params: Val
             .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
             .and_then(|args| {
                 api.cancel_task(args)
+                    .map(|value| serde_json::to_value(value).unwrap())
+            }),
+        "retry_task" => serde_json::from_value::<RetryTaskArgs>(args)
+            .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
+            .and_then(|args| {
+                api.retry_task(args)
                     .map(|value| serde_json::to_value(value).unwrap())
             }),
         _ => Err(ApiError::new(

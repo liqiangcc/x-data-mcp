@@ -6,7 +6,9 @@ use x_data_mcp::{
     market_data::{
         Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
     },
-    mcp::{CancelTaskArgs, GetTaskArgs, McpApi, StartCollectionArgs},
+    mcp::{
+        CancelTaskArgs, GetTaskArgs, McpApi, RetryScopeArgs, RetryTaskArgs, StartCollectionArgs,
+    },
     task::{ScopeExecutionResult, TaskExecutionRecord, TaskStatus, TaskStore},
 };
 
@@ -152,6 +154,68 @@ fn cancel_task_returns_cancelled_and_is_idempotent() {
         .unwrap()
         .status,
         "cancelled"
+    );
+}
+
+#[test]
+fn retry_task_links_new_task_and_get_task_exposes_association() {
+    let (api, dir) = api();
+    let started = api
+        .start_collection(start_args("original", &["000001", "600000"], &["day"]))
+        .unwrap();
+    let store = x_data_mcp::task::TaskStore::new(dir.path());
+    store
+        .save_execution(TaskExecutionRecord {
+            task_id: started.task_id.clone(),
+            status: TaskStatus::Failed,
+            scope_results: vec![
+                ScopeExecutionResult {
+                    symbol: "000001".into(),
+                    period: Period::Day,
+                    success: true,
+                    error: None,
+                },
+                ScopeExecutionResult {
+                    symbol: "600000".into(),
+                    period: Period::Day,
+                    success: false,
+                    error: Some("planned".into()),
+                },
+            ],
+        })
+        .unwrap();
+
+    let retry = api
+        .retry_task(RetryTaskArgs {
+            original_task_id: started.task_id.clone(),
+            new_request_id: "retry-request".into(),
+            selected_scopes: vec![RetryScopeArgs {
+                symbol: "600000".into(),
+                period: "day".into(),
+            }],
+        })
+        .unwrap();
+    assert_eq!(retry.status, "pending");
+    assert_eq!(retry.retry_of.as_deref(), Some(started.task_id.as_str()));
+
+    let view = api
+        .get_task(GetTaskArgs {
+            task_id: retry.task_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(view.retry_of.as_deref(), Some(started.task_id.as_str()));
+    assert_eq!(view.frozen_range.len(), 1);
+    assert_eq!(
+        api.run_worker_once().unwrap().status.as_deref(),
+        Some("succeeded")
+    );
+    assert_eq!(
+        api.get_task(GetTaskArgs {
+            task_id: retry.task_id,
+        })
+        .unwrap()
+        .status,
+        "succeeded"
     );
 }
 

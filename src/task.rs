@@ -24,6 +24,8 @@ pub struct TaskBinding {
     pub adjustment: Adjustment,
     pub frozen_range: Vec<FrozenScope>,
     pub contract_version: String,
+    #[serde(default)]
+    pub retry_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +92,12 @@ pub enum TaskError {
     RangeConflict { scopes: Vec<FrozenScope> },
     #[error("task {task_id} was not found")]
     TaskNotFound { task_id: String },
+    #[error("retry request_id must differ from the original task request_id")]
+    RetryRequestIdConflict,
+    #[error("retry selected_scopes must not be empty")]
+    RetrySelectionEmpty,
+    #[error("retry selection contains invalid or already completed scopes")]
+    RetrySelectionInvalid { scopes: Vec<FrozenScope> },
     #[error("task store I/O failed: {0}")]
     Storage(#[from] io::Error),
 }
@@ -270,7 +278,50 @@ impl TaskAcceptanceService {
         adjustment: Adjustment,
     ) -> Result<AcceptedTask, TaskError> {
         let binding = normalize(request_id, symbols, periods, adjustment)?;
-        if let Some(existing) = self.store.get(request_id)? {
+        self.accept_binding(binding)
+    }
+
+    pub fn accept_frozen(
+        &self,
+        request_id: &str,
+        scopes: &[FrozenScope],
+        adjustment: Adjustment,
+        retry_of: Option<&str>,
+    ) -> Result<AcceptedTask, TaskError> {
+        if request_id.is_empty() {
+            return Err(TaskError::EmptyRequestId);
+        }
+        if scopes.is_empty() {
+            return Err(TaskError::EmptyPeriods);
+        }
+        if adjustment != Adjustment::Forward {
+            return Err(TaskError::UnsupportedAdjustment);
+        }
+        let frozen_range = canonical_scopes(scopes);
+        let mut symbols = Vec::new();
+        let mut periods = Vec::new();
+        for scope in &frozen_range {
+            if !symbols.contains(&scope.symbol) {
+                symbols.push(scope.symbol.clone());
+            }
+            if !periods.contains(&scope.period) {
+                periods.push(scope.period);
+            }
+        }
+        self.accept_binding(TaskBinding {
+            request_id: request_id.to_owned(),
+            task_id: String::new(),
+            symbols,
+            periods,
+            adjustment,
+            frozen_range,
+            contract_version: CONTRACT_VERSION.to_owned(),
+            retry_of: retry_of.map(str::to_owned),
+        })
+    }
+
+    fn accept_binding(&self, binding: TaskBinding) -> Result<AcceptedTask, TaskError> {
+        if let Some(existing) = self.store.get(&binding.request_id)? {
             if same_semantics(&existing, &binding) {
                 return Ok(AcceptedTask {
                     task_id: existing.task_id.clone(),
@@ -279,7 +330,7 @@ impl TaskAcceptanceService {
                 });
             }
             return Err(TaskError::RequestConflict {
-                request_id: request_id.to_owned(),
+                request_id: binding.request_id.clone(),
             });
         }
         let mut created = binding;
@@ -305,6 +356,67 @@ impl TaskAcceptanceService {
 
     pub fn store(&self) -> &TaskStore {
         &self.store
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskRetryService {
+    store: TaskStore,
+    acceptance: TaskAcceptanceService,
+}
+
+impl TaskRetryService {
+    pub fn new(store: TaskStore) -> Self {
+        Self {
+            acceptance: TaskAcceptanceService::new(store.clone()),
+            store,
+        }
+    }
+
+    pub fn retry_task(
+        &self,
+        original_task_id: &str,
+        new_request_id: &str,
+        selected_scopes: &[FrozenScope],
+        adjustment: Adjustment,
+    ) -> Result<AcceptedTask, TaskError> {
+        let original =
+            self.store
+                .get_task(original_task_id)?
+                .ok_or_else(|| TaskError::TaskNotFound {
+                    task_id: original_task_id.to_owned(),
+                })?;
+        if original.request_id == new_request_id {
+            return Err(TaskError::RetryRequestIdConflict);
+        }
+        if selected_scopes.is_empty() {
+            return Err(TaskError::RetrySelectionEmpty);
+        }
+        let selected = canonical_scopes(selected_scopes);
+        let execution = self.store.get_execution(original_task_id)?;
+        let invalid = selected
+            .iter()
+            .filter(|scope| {
+                !original.frozen_range.contains(scope)
+                    || execution.as_ref().is_some_and(|record| {
+                        record.scope_results.iter().any(|result| {
+                            result.symbol == scope.symbol
+                                && result.period == scope.period
+                                && result.success
+                        })
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !invalid.is_empty() {
+            return Err(TaskError::RetrySelectionInvalid { scopes: invalid });
+        }
+        self.acceptance.accept_frozen(
+            new_request_id,
+            &selected,
+            adjustment,
+            Some(original_task_id),
+        )
     }
 }
 
@@ -428,7 +540,26 @@ fn normalize(
         adjustment,
         frozen_range,
         contract_version: CONTRACT_VERSION.to_owned(),
+        retry_of: None,
     })
+}
+
+fn canonical_scopes(scopes: &[FrozenScope]) -> Vec<FrozenScope> {
+    let mut canonical = scopes.to_vec();
+    canonical.sort_by(|left, right| {
+        left.symbol
+            .cmp(&right.symbol)
+            .then_with(|| period_order(left.period).cmp(&period_order(right.period)))
+    });
+    canonical.dedup();
+    canonical
+}
+
+fn period_order(period: Period) -> u8 {
+    match period {
+        Period::Day => 0,
+        Period::Year => 1,
+    }
 }
 
 fn same_semantics(left: &TaskBinding, right: &TaskBinding) -> bool {
@@ -438,6 +569,7 @@ fn same_semantics(left: &TaskBinding, right: &TaskBinding) -> bool {
         && left.adjustment == right.adjustment
         && left.frozen_range == right.frozen_range
         && left.contract_version == right.contract_version
+        && left.retry_of == right.retry_of
 }
 
 static TASK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
