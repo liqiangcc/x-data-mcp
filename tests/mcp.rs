@@ -6,7 +6,7 @@ use x_data_mcp::{
     market_data::{
         Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
     },
-    mcp::{GetTaskArgs, McpApi, StartCollectionArgs},
+    mcp::{CancelTaskArgs, GetTaskArgs, McpApi, StartCollectionArgs},
     task::{ScopeExecutionResult, TaskExecutionRecord, TaskStatus, TaskStore},
 };
 
@@ -119,6 +119,39 @@ fn start_collection_reports_range_conflict_with_scopes() {
             symbol: "000001".into(),
             period: "day".into(),
         }]
+    );
+}
+
+#[test]
+fn cancel_task_returns_cancelled_and_is_idempotent() {
+    let (api, _) = api();
+    let started = api
+        .start_collection(start_args("cancel", &["000001"], &["day"]))
+        .unwrap();
+
+    let first = api
+        .cancel_task(CancelTaskArgs {
+            task_id: started.task_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(first.status, "cancelled");
+    assert!(first.changed);
+
+    let second = api
+        .cancel_task(CancelTaskArgs {
+            task_id: started.task_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(second.status, "cancelled");
+    assert!(!second.changed);
+    assert!(api.run_worker_once().unwrap().idle);
+    assert_eq!(
+        api.get_task(GetTaskArgs {
+            task_id: started.task_id,
+        })
+        .unwrap()
+        .status,
+        "cancelled"
     );
 }
 

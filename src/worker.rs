@@ -33,6 +33,13 @@ impl<S: MarketDataSource> Worker<S> {
 
     pub fn run_once(&self) -> Result<Option<WorkerStep>, WorkerError> {
         self.mark_running_tasks_needing_verification()?;
+        if let Some(task_id) = self.next_cancel_requested()? {
+            let record = self.execution.finalize_cancel_requested(&task_id)?;
+            return Ok(Some(WorkerStep {
+                task_id,
+                status: record.status,
+            }));
+        }
         let Some(task_id) = self.next_pending()? else {
             return Ok(None);
         };
@@ -73,6 +80,19 @@ impl<S: MarketDataSource> Worker<S> {
                 .map(|record| record.status)
                 .unwrap_or(TaskStatus::Pending);
             if status == TaskStatus::Pending {
+                return Ok(Some(binding.task_id));
+            }
+        }
+        Ok(None)
+    }
+
+    fn next_cancel_requested(&self) -> Result<Option<String>, std::io::Error> {
+        for binding in self.store.list()? {
+            let status = self
+                .store
+                .get_execution(&binding.task_id)?
+                .map(|record| record.status);
+            if status == Some(TaskStatus::CancelRequested) {
                 return Ok(Some(binding.task_id));
             }
         }
