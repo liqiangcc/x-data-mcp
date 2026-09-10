@@ -7,7 +7,8 @@ use std::{
 
 use crate::{
     market_data::{
-        Adjustment, Bar, CoverageStatus, MarketDataBatch, Period, Provenance, UnitCurrencyEvidence,
+        Adjustment, AdjustmentEvidence, Bar, CoverageStatus, MarketDataBatch, Period, Provenance,
+        UnitCurrencyEvidence,
     },
     storage::JsonFileStore,
 };
@@ -31,6 +32,8 @@ pub struct EffectiveVersion {
     pub validation: ValidationSummary,
     #[serde(default)]
     pub unit_currency: UnitCurrencyEvidence,
+    #[serde(default)]
+    pub adjustment_evidence: AdjustmentEvidence,
 }
 
 impl EffectiveVersion {
@@ -67,6 +70,8 @@ pub enum PublishOutcome {
 pub enum PublishError {
     #[error("unit/currency evidence is not confirmed: {0}")]
     UnitEvidence(String),
+    #[error("adjustment evidence is not confirmed: {0}")]
+    AdjustmentEvidence(String),
     #[error("invalid market data record: {0}")]
     InvalidRecord(String),
     #[error("conflicting duplicate market data key: {0}")]
@@ -92,8 +97,9 @@ impl MarketDataPublisher {
                 reason: batch.coverage.reason.clone(),
             });
         }
-        validate_unit_currency_evidence(batch)?;
         let (records, validation) = validate_and_deduplicate(batch)?;
+        validate_unit_currency_evidence(batch)?;
+        validate_adjustment_evidence(batch)?;
         let latest = self.store.get_latest_effective_for_adjustment(
             &batch.symbol,
             batch.period,
@@ -121,6 +127,7 @@ impl MarketDataPublisher {
             published_at: Utc::now(),
             validation,
             unit_currency: batch.unit_currency.clone(),
+            adjustment_evidence: batch.adjustment_evidence.clone(),
         };
         self.store.publish_effective(&version)?;
         self.store.put(batch)?;
@@ -138,6 +145,22 @@ fn validate_unit_currency_evidence(batch: &MarketDataBatch) -> Result<(), Publis
     if batch.bars.iter().any(|bar| bar.amount.is_some()) {
         require_confirmed("amount currency", &batch.unit_currency.amount_currency)?;
         require_confirmed("amount unit", &batch.unit_currency.amount_unit)?;
+    }
+    Ok(())
+}
+
+fn validate_adjustment_evidence(batch: &MarketDataBatch) -> Result<(), PublishError> {
+    let evidence = &batch.adjustment_evidence;
+    if !evidence.is_confirmed() {
+        return Err(PublishError::AdjustmentEvidence(evidence.reason.clone()));
+    }
+    let expected = match batch.adjustment {
+        Adjustment::Forward => "qfq",
+    };
+    if evidence.value.as_deref() != Some(expected) {
+        return Err(PublishError::AdjustmentEvidence(format!(
+            "confirmed value must be {expected}"
+        )));
     }
     Ok(())
 }
@@ -217,6 +240,7 @@ fn same_content(existing: &EffectiveVersion, batch: &MarketDataBatch, records: &
         && existing.adjustment == batch.adjustment
         && existing.source == batch.provenance.source
         && existing.unit_currency == batch.unit_currency
+        && existing.adjustment_evidence == batch.adjustment_evidence
         && existing.records == records
 }
 

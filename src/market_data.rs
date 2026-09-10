@@ -115,6 +115,42 @@ impl UnitCurrencyEvidence {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdjustmentEvidence {
+    pub status: EvidenceStatus,
+    pub value: Option<String>,
+    pub reason: String,
+}
+
+impl Default for AdjustmentEvidence {
+    fn default() -> Self {
+        Self::unknown("adjustment evidence was not supplied")
+    }
+}
+
+impl AdjustmentEvidence {
+    pub fn confirmed(value: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            status: EvidenceStatus::Confirmed,
+            value: Some(value.into()),
+            reason: reason.into(),
+        }
+    }
+
+    pub fn unknown(reason: impl Into<String>) -> Self {
+        Self {
+            status: EvidenceStatus::Unknown,
+            value: None,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn is_confirmed(&self) -> bool {
+        self.status == EvidenceStatus::Confirmed
+            && self.value.as_deref().is_some_and(|value| !value.is_empty())
+    }
+}
+
 impl Default for CoverageEvidence {
     fn default() -> Self {
         Self::unknown("coverage evidence was not supplied")
@@ -174,6 +210,8 @@ pub struct MarketDataBatch {
     pub coverage: CoverageEvidence,
     #[serde(default)]
     pub unit_currency: UnitCurrencyEvidence,
+    #[serde(default)]
+    pub adjustment_evidence: AdjustmentEvidence,
 }
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {

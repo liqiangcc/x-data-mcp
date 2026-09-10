@@ -4,8 +4,8 @@ use tempfile::tempdir;
 use x_data_mcp::{
     collector::Collector,
     market_data::{
-        Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
-        UnitCurrencyEvidence,
+        Adjustment, AdjustmentEvidence, Bar, MarketDataBatch, MarketDataSource, Period, Provenance,
+        SourceError, UnitCurrencyEvidence,
     },
     publish::{MarketDataPublisher, PublishError, PublishOutcome},
     storage::JsonFileStore,
@@ -43,11 +43,16 @@ fn batch(period: Period, bars: Vec<Bar>) -> MarketDataBatch {
         },
         coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
         unit_currency: confirmed_units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "test fixture"),
     }
 }
 
 fn confirmed_units() -> UnitCurrencyEvidence {
     UnitCurrencyEvidence::confirmed("CNY", "share", "lot", "CNY", "yuan", "test fixture")
+}
+
+fn confirmed_adjustment() -> AdjustmentEvidence {
+    AdjustmentEvidence::confirmed("qfq", "test fixture")
 }
 
 fn valid_day() -> MarketDataBatch {
@@ -169,6 +174,30 @@ fn missing_volume_and_amount_remain_unknown() {
         .unwrap();
     assert_eq!(latest.records[0].volume, None);
     assert_eq!(latest.records[0].amount, None);
+}
+
+#[test]
+fn unknown_or_incompatible_adjustment_evidence_rejects_without_publish() {
+    let cases = [
+        AdjustmentEvidence::unknown("source qfq evidence unavailable"),
+        AdjustmentEvidence::confirmed("hfq", "source used another adjustment"),
+    ];
+    for evidence in cases {
+        let dir = tempdir().unwrap();
+        let store = JsonFileStore::new(dir.path());
+        let mut candidate = valid_day();
+        candidate.adjustment_evidence = evidence;
+        assert!(matches!(
+            MarketDataPublisher::new(store.clone()).publish(&candidate),
+            Err(PublishError::AdjustmentEvidence(_))
+        ));
+        assert!(
+            store
+                .get_latest_effective("000001", Period::Day)
+                .unwrap()
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -338,6 +367,52 @@ fn unit_evidence_is_persisted_and_changes_are_not_no_change() {
             .unit_currency,
         original.unit_currency
     );
+}
+
+#[test]
+fn adjustment_evidence_is_persisted_and_changes_are_not_no_change() {
+    let dir = tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let publisher = MarketDataPublisher::new(store.clone());
+    let original = valid_day();
+    let first = match publisher.publish(&original).unwrap() {
+        PublishOutcome::Published(version) => version,
+        other => panic!("unexpected outcome: {other:?}"),
+    };
+
+    let rebuilt = JsonFileStore::new(dir.path());
+    assert_eq!(
+        rebuilt
+            .get_latest_effective("000001", Period::Day)
+            .unwrap()
+            .unwrap()
+            .adjustment_evidence,
+        confirmed_adjustment()
+    );
+
+    let mut changed = original.clone();
+    changed.adjustment_evidence =
+        AdjustmentEvidence::unknown("qfq compatibility cannot be confirmed");
+    assert!(matches!(
+        publisher.publish(&changed),
+        Err(PublishError::AdjustmentEvidence(_))
+    ));
+    assert_eq!(
+        store
+            .get_latest_effective("000001", Period::Day)
+            .unwrap()
+            .unwrap()
+            .version_id,
+        first.version_id
+    );
+
+    let mut different_confirmed = original;
+    different_confirmed.adjustment_evidence =
+        AdjustmentEvidence::confirmed("qfq", "different compatible source evidence");
+    assert!(matches!(
+        publisher.publish(&different_confirmed).unwrap(),
+        PublishOutcome::NeedsVerification { version_id, .. } if version_id == first.version_id
+    ));
 }
 
 #[derive(Clone)]

@@ -68,6 +68,10 @@ impl MarketDataSource for FakeSource {
                 "yuan",
                 "test fixture",
             ),
+            adjustment_evidence: x_data_mcp::market_data::AdjustmentEvidence::confirmed(
+                "qfq",
+                "test fixture",
+            ),
         })
     }
 }

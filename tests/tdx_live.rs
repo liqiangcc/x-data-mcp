@@ -1,6 +1,8 @@
 use x_data_mcp::collector::Collector;
 use x_data_mcp::execution::TaskExecutionService;
-use x_data_mcp::market_data::{Adjustment, CoverageStatus, MarketDataSource, Period};
+use x_data_mcp::market_data::{
+    Adjustment, CoverageStatus, EvidenceStatus, MarketDataSource, Period,
+};
 use x_data_mcp::mcp::{GetTaskArgs, McpApi, StartCollectionArgs};
 use x_data_mcp::storage::JsonFileStore;
 use x_data_mcp::task::{
@@ -25,6 +27,8 @@ fn fetches_and_roundtrips_two_live_day_and_year_qfq_samples() {
             assert!(!batch.bars.is_empty());
             assert_eq!(batch.coverage.status, CoverageStatus::Unknown);
             assert!(batch.coverage.reason.contains("no reliable"));
+            assert_eq!(batch.adjustment_evidence.status, EvidenceStatus::Unknown);
+            assert!(batch.adjustment_evidence.reason.contains("no reliable qfq"));
         }
     }
     let collector = Collector::new(source, store.clone());

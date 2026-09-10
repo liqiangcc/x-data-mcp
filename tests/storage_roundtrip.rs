@@ -39,6 +39,10 @@ fn sample_batch(symbol: &str, period: Period) -> MarketDataBatch {
             "yuan",
             "test fixture",
         ),
+        adjustment_evidence: x_data_mcp::market_data::AdjustmentEvidence::confirmed(
+            "qfq",
+            "test fixture",
+        ),
     }
 }
 
