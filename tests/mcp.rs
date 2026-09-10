@@ -1,0 +1,163 @@
+use chrono::DateTime;
+use rust_decimal::Decimal;
+use tempfile::tempdir;
+use x_data_mcp::{
+    market_data::{
+        Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
+    },
+    mcp::{GetTaskArgs, McpApi, StartCollectionArgs},
+    task::TaskStore,
+};
+
+#[derive(Clone)]
+struct FakeSource;
+
+impl MarketDataSource for FakeSource {
+    fn fetch(
+        &self,
+        symbol: &str,
+        period: Period,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let source_period = match period {
+            Period::Day => "day",
+            Period::Year => "year",
+        };
+        Ok(MarketDataBatch {
+            symbol: symbol.to_owned(),
+            period,
+            adjustment,
+            bars: vec![Bar {
+                date: chrono::NaiveDate::from_ymd_opt(2026, 9, 10).unwrap(),
+                open: Decimal::ONE,
+                high: Decimal::ONE,
+                low: Decimal::ONE,
+                close: Decimal::ONE,
+                volume: Decimal::ONE,
+                amount: Decimal::ONE,
+            }],
+            provenance: Provenance {
+                source: "fake".into(),
+                source_period: source_period.into(),
+                source_adjustment: "qfq".into(),
+                symbol: symbol.to_owned(),
+                acquired_at: DateTime::from_timestamp(0, 0).unwrap(),
+                adapter_version: "test".into(),
+            },
+        })
+    }
+}
+
+fn api() -> (McpApi<FakeSource>, tempfile::TempDir) {
+    let dir = tempdir().unwrap();
+    let api = McpApi::new(FakeSource, TaskStore::new(dir.path()));
+    (api, dir)
+}
+
+fn start_args(request_id: &str, symbols: &[&str], periods: &[&str]) -> StartCollectionArgs {
+    StartCollectionArgs {
+        request_id: request_id.into(),
+        symbols: symbols.iter().map(|symbol| (*symbol).into()).collect(),
+        periods: periods.iter().map(|period| (*period).into()).collect(),
+    }
+}
+
+#[test]
+fn start_collection_is_idempotent_for_same_request() {
+    let (api, _) = api();
+    let first = api
+        .start_collection(start_args("r1", &["000001"], &["day"]))
+        .unwrap();
+    let second = api
+        .start_collection(start_args("r1", &["000001"], &["day"]))
+        .unwrap();
+
+    assert_eq!(first.task_id, second.task_id);
+    assert!(!first.reused);
+    assert!(second.reused);
+}
+
+#[test]
+fn start_collection_reports_request_conflict() {
+    let (api, _) = api();
+    api.start_collection(start_args("r1", &["000001"], &["day"]))
+        .unwrap();
+
+    let error = api
+        .start_collection(start_args("r1", &["600000"], &["day"]))
+        .unwrap_err();
+    assert_eq!(error.code, "request_conflict");
+    assert!(!error.message.is_empty());
+}
+
+#[test]
+fn get_task_exposes_pending_and_terminal_results() {
+    let (api, _) = api();
+    let started = api
+        .start_collection(start_args("r1", &["000001"], &["day"]))
+        .unwrap();
+
+    let pending = api
+        .get_task(GetTaskArgs {
+            task_id: started.task_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(pending.status, "pending");
+    assert_eq!(pending.frozen_range.len(), 1);
+    assert!(pending.scope_results.is_empty());
+
+    let run = api.run_worker_once().unwrap();
+    assert_eq!(run.status.as_deref(), Some("succeeded"));
+    let terminal = api
+        .get_task(GetTaskArgs {
+            task_id: started.task_id,
+        })
+        .unwrap();
+    assert_eq!(terminal.status, "succeeded");
+    assert_eq!(terminal.scope_results.len(), 1);
+    assert!(terminal.scope_results[0].success);
+}
+
+#[test]
+fn run_worker_once_processes_at_most_one_task() {
+    let (api, dir) = api();
+    let first = api
+        .start_collection(start_args("r1", &["000001"], &["day"]))
+        .unwrap();
+    let second = api
+        .start_collection(start_args("r2", &["600000"], &["day"]))
+        .unwrap();
+
+    let run = api.run_worker_once().unwrap();
+    assert_eq!(run.task_id.as_deref(), Some(first.task_id.as_str()));
+    assert_eq!(run.status.as_deref(), Some("succeeded"));
+    let second_view = api
+        .get_task(GetTaskArgs {
+            task_id: second.task_id,
+        })
+        .unwrap();
+    assert_eq!(second_view.status, "pending");
+    assert!(dir.path().join("task-executions.json").is_file());
+}
+
+#[test]
+fn run_worker_once_returns_explicit_idle_when_queue_is_empty() {
+    let (api, _) = api();
+    let started = api
+        .start_collection(start_args("r1", &["000001"], &["day"]))
+        .unwrap();
+    api.run_worker_once().unwrap();
+
+    let idle = api.run_worker_once().unwrap();
+    assert!(idle.idle);
+    assert!(idle.task_id.is_none());
+    assert!(idle.status.is_none());
+    assert_eq!(
+        api.get_task(GetTaskArgs {
+            task_id: started.task_id,
+        })
+        .unwrap()
+        .status,
+        "succeeded"
+    );
+}
