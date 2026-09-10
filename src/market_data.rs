@@ -58,3 +58,14 @@ pub trait MarketDataSource {
         adjustment: Adjustment,
     ) -> Result<MarketDataBatch, SourceError>;
 }
+
+impl<S: MarketDataSource + ?Sized> MarketDataSource for &S {
+    fn fetch(
+        &self,
+        symbol: &str,
+        period: Period,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        (**self).fetch(symbol, period, adjustment)
+    }
+}

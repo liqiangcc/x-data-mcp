@@ -1,0 +1,168 @@
+use chrono::DateTime;
+use rust_decimal::Decimal;
+use std::sync::{Arc, Mutex};
+use tempfile::tempdir;
+use x_data_mcp::{
+    execution::TaskExecutionService,
+    market_data::{
+        Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
+    },
+    task::{TaskAcceptanceService, TaskStatus, TaskStore},
+};
+
+#[derive(Clone)]
+struct FakeSource {
+    calls: Arc<Mutex<Vec<(String, Period)>>>,
+    failures: Vec<(String, Period)>,
+}
+type Calls = Arc<Mutex<Vec<(String, Period)>>>;
+
+impl MarketDataSource for FakeSource {
+    fn fetch(
+        &self,
+        symbol: &str,
+        period: Period,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        self.calls.lock().unwrap().push((symbol.to_owned(), period));
+        if self
+            .failures
+            .iter()
+            .any(|item| item == &(symbol.to_owned(), period))
+        {
+            return Err(SourceError::Invocation("planned failure".into()));
+        }
+        let source_period = match period {
+            Period::Day => "day",
+            Period::Year => "year",
+        };
+        Ok(MarketDataBatch {
+            symbol: symbol.into(),
+            period,
+            adjustment,
+            bars: vec![Bar {
+                date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                open: Decimal::ONE,
+                high: Decimal::ONE,
+                low: Decimal::ONE,
+                close: Decimal::ONE,
+                volume: Decimal::ONE,
+                amount: Decimal::ONE,
+            }],
+            provenance: Provenance {
+                source: "fake".into(),
+                source_period: source_period.into(),
+                source_adjustment: "qfq".into(),
+                symbol: symbol.into(),
+                acquired_at: DateTime::from_timestamp(0, 0).unwrap(),
+                adapter_version: "test".into(),
+            },
+        })
+    }
+}
+
+fn accept(dir: &std::path::Path) -> String {
+    TaskAcceptanceService::new(TaskStore::new(dir))
+        .accept(
+            "request",
+            &["000001", "600000"],
+            &[Period::Day, Period::Year],
+            Adjustment::Forward,
+        )
+        .unwrap()
+        .task_id
+}
+
+fn execute(
+    failures: Vec<(String, Period)>,
+) -> (
+    x_data_mcp::task::TaskExecutionRecord,
+    Calls,
+    tempfile::TempDir,
+) {
+    let dir = tempdir().unwrap();
+    let task_id = accept(dir.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let record = TaskExecutionService::new(
+        FakeSource {
+            calls: calls.clone(),
+            failures,
+        },
+        TaskStore::new(dir.path()),
+    )
+    .execute(&task_id)
+    .unwrap();
+    (record, calls, dir)
+}
+
+#[test]
+fn all_scopes_succeed() {
+    let (record, _, _) = execute(Vec::new());
+    assert_eq!(record.status, TaskStatus::Succeeded);
+    assert_eq!(record.scope_results.len(), 4);
+    assert!(record.scope_results.iter().all(|item| item.success));
+}
+
+#[test]
+fn partial_failure_preserves_successes() {
+    let (record, _, dir) = execute(vec![("600000".into(), Period::Year)]);
+    assert_eq!(record.status, TaskStatus::PartiallyFailed);
+    assert_eq!(
+        record
+            .scope_results
+            .iter()
+            .filter(|item| item.success)
+            .count(),
+        3
+    );
+    assert!(std::fs::read(dir.path().join("000001.day.qfq.json")).is_ok());
+    assert!(std::fs::read(dir.path().join("600000.year.qfq.json")).is_err());
+}
+
+#[test]
+fn all_scopes_fail() {
+    let (record, _, _) = execute(vec![
+        ("000001".into(), Period::Day),
+        ("000001".into(), Period::Year),
+        ("600000".into(), Period::Day),
+        ("600000".into(), Period::Year),
+    ]);
+    assert_eq!(record.status, TaskStatus::Failed);
+    assert!(record.scope_results.iter().all(|item| !item.success));
+}
+
+#[test]
+fn execution_consumes_frozen_range_exactly() {
+    let (record, calls, _) = execute(Vec::new());
+    let calls = calls.lock().unwrap().clone();
+    let executed: Vec<_> = record
+        .scope_results
+        .iter()
+        .map(|item| (item.symbol.clone(), item.period))
+        .collect();
+    assert_eq!(calls, executed);
+}
+
+#[test]
+fn rebuilt_service_reads_terminal_record() {
+    let dir = tempdir().unwrap();
+    let task_id = accept(dir.path());
+    let service = TaskExecutionService::new(
+        FakeSource {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            failures: Vec::new(),
+        },
+        TaskStore::new(dir.path()),
+    );
+    service.execute(&task_id).unwrap();
+    let rebuilt = TaskExecutionService::new(
+        FakeSource {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            failures: Vec::new(),
+        },
+        TaskStore::new(dir.path()),
+    );
+    let read = rebuilt.get(&task_id).unwrap().unwrap();
+    assert_eq!(read.status, TaskStatus::Succeeded);
+    assert_eq!(read.scope_results.len(), 4);
+}

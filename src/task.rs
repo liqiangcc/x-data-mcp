@@ -26,6 +26,30 @@ pub struct TaskBinding {
     pub contract_version: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskStatus {
+    Pending,
+    Running,
+    Succeeded,
+    PartiallyFailed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeExecutionResult {
+    pub symbol: String,
+    pub period: Period,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskExecutionRecord {
+    pub task_id: String,
+    pub status: TaskStatus,
+    pub scope_results: Vec<ScopeExecutionResult>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptedTask {
     pub task_id: String,
@@ -70,6 +94,45 @@ impl TaskStore {
         self.read_all()
     }
 
+    pub fn get_task(&self, task_id: &str) -> Result<Option<TaskBinding>, io::Error> {
+        Ok(self
+            .read_all()?
+            .into_iter()
+            .find(|item| item.task_id == task_id))
+    }
+
+    pub fn get_execution(&self, task_id: &str) -> Result<Option<TaskExecutionRecord>, io::Error> {
+        let path = self.execution_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let records: Vec<TaskExecutionRecord> =
+            serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
+        Ok(records.into_iter().find(|item| item.task_id == task_id))
+    }
+
+    pub fn save_execution(&self, record: TaskExecutionRecord) -> Result<(), io::Error> {
+        fs::create_dir_all(&self.root)?;
+        let path = self.execution_path();
+        let mut records = if path.exists() {
+            serde_json::from_slice(&fs::read(&path)?).map_err(io::Error::other)?
+        } else {
+            Vec::new()
+        };
+        if let Some(existing) = records
+            .iter_mut()
+            .find(|item: &&mut TaskExecutionRecord| item.task_id == record.task_id)
+        {
+            *existing = record;
+        } else {
+            records.push(record);
+        }
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&records).map_err(io::Error::other)?,
+        )
+    }
+
     fn read_all(&self) -> Result<Vec<TaskBinding>, io::Error> {
         let path = self.path();
         if !path.exists() {
@@ -89,6 +152,10 @@ impl TaskStore {
 
     fn path(&self) -> PathBuf {
         self.root.join("task-bindings.json")
+    }
+
+    fn execution_path(&self) -> PathBuf {
+        self.root.join("task-executions.json")
     }
 
     pub fn root(&self) -> &Path {
