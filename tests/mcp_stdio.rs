@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 #[test]
-fn stdio_initialize_then_tools_list_exposes_exactly_four_tools() {
+fn stdio_initialize_then_tools_list_exposes_exactly_five_tools() {
     let dir = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp_server"))
         .env("X_DATA_MCP_STORE", dir.path())
@@ -57,6 +57,7 @@ fn stdio_initialize_then_tools_list_exposes_exactly_four_tools() {
         vec![
             "cancel_task",
             "get_task",
+            "retry_task",
             "run_worker_once",
             "start_collection",
         ]
