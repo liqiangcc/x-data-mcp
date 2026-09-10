@@ -1,4 +1,4 @@
-use crate::market_data::MarketDataBatch;
+use crate::market_data::{Adjustment, MarketDataBatch, Period};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -14,14 +14,30 @@ impl JsonFileStore {
     pub fn put(&self, batch: &MarketDataBatch) -> Result<(), io::Error> {
         fs::create_dir_all(&self.root)?;
         let payload = serde_json::to_vec_pretty(batch).map_err(io::Error::other)?;
-        fs::write(self.path_for(&batch.symbol), payload)
+        fs::write(
+            self.path_for(&batch.symbol, batch.period, batch.adjustment),
+            payload,
+        )
     }
-    pub fn get(&self, symbol: &str) -> Result<MarketDataBatch, io::Error> {
-        let bytes = fs::read(self.path_for(symbol))?;
+    pub fn get(
+        &self,
+        symbol: &str,
+        period: Period,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, io::Error> {
+        let bytes = fs::read(self.path_for(symbol, period, adjustment))?;
         serde_json::from_slice(&bytes).map_err(io::Error::other)
     }
-    fn path_for(&self, symbol: &str) -> PathBuf {
-        self.root.join(format!("{symbol}.year.qfq.json"))
+    fn path_for(&self, symbol: &str, period: Period, adjustment: Adjustment) -> PathBuf {
+        let period = match period {
+            Period::Day => "day",
+            Period::Year => "year",
+        };
+        let adjustment = match adjustment {
+            Adjustment::Forward => "qfq",
+        };
+        self.root
+            .join(format!("{symbol}.{period}.{adjustment}.json"))
     }
     pub fn root(&self) -> &Path {
         &self.root
