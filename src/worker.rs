@@ -32,24 +32,17 @@ impl<S: MarketDataSource> Worker<S> {
     }
 
     pub fn run_once(&self) -> Result<Option<WorkerStep>, WorkerError> {
-        let Some((task_id, status)) = self.next_runnable()? else {
+        self.mark_running_tasks_needing_verification()?;
+        let Some(task_id) = self.next_pending()? else {
             return Ok(None);
         };
 
-        let record = match status {
-            TaskStatus::Pending => {
-                self.store.save_execution(TaskExecutionRecord {
-                    task_id: task_id.clone(),
-                    status: TaskStatus::Running,
-                    scope_results: Vec::new(),
-                })?;
-                self.execution.execute(&task_id)?
-            }
-            TaskStatus::Running => self.execution.resume(&task_id)?,
-            TaskStatus::Succeeded | TaskStatus::PartiallyFailed | TaskStatus::Failed => {
-                unreachable!("terminal tasks are filtered before execution")
-            }
-        };
+        self.store.save_execution(TaskExecutionRecord {
+            task_id: task_id.clone(),
+            status: TaskStatus::Running,
+            scope_results: Vec::new(),
+        })?;
+        let record = self.execution.execute(&task_id)?;
 
         Ok(Some(WorkerStep {
             task_id,
@@ -57,15 +50,30 @@ impl<S: MarketDataSource> Worker<S> {
         }))
     }
 
-    fn next_runnable(&self) -> Result<Option<(String, TaskStatus)>, std::io::Error> {
+    fn mark_running_tasks_needing_verification(&self) -> Result<(), std::io::Error> {
+        for binding in self.store.list()? {
+            if let Some(record) = self.store.get_execution(&binding.task_id)?
+                && record.status == TaskStatus::Running
+            {
+                self.store.save_execution(TaskExecutionRecord {
+                    task_id: record.task_id,
+                    status: TaskStatus::NeedsVerification,
+                    scope_results: record.scope_results,
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn next_pending(&self) -> Result<Option<String>, std::io::Error> {
         for binding in self.store.list()? {
             let status = self
                 .store
                 .get_execution(&binding.task_id)?
                 .map(|record| record.status)
                 .unwrap_or(TaskStatus::Pending);
-            if matches!(status, TaskStatus::Pending | TaskStatus::Running) {
-                return Ok(Some((binding.task_id, status)));
+            if status == TaskStatus::Pending {
+                return Ok(Some(binding.task_id));
             }
         }
         Ok(None)

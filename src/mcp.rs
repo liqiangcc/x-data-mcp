@@ -106,7 +106,7 @@ impl<S: MarketDataSource> McpApi<S> {
             .store
             .get_execution(&accepted.task_id)
             .map_err(|error| ApiError::new("storage_error", error.to_string()))?
-            .map(|record| record.status)
+            .map(|record| visible_status(record.status))
             .unwrap_or(TaskStatus::Pending);
         Ok(StartCollectionResult {
             task_id: accepted.task_id,
@@ -136,7 +136,7 @@ impl<S: MarketDataSource> McpApi<S> {
             status: status_name(
                 execution
                     .as_ref()
-                    .map(|record| record.status)
+                    .map(|record| visible_status(record.status))
                     .unwrap_or(TaskStatus::Pending),
             ),
             frozen_range: binding.frozen_range.iter().map(scope_view).collect(),
@@ -178,11 +178,20 @@ fn status_name(status: TaskStatus) -> String {
     match status {
         TaskStatus::Pending => "pending",
         TaskStatus::Running => "running",
+        TaskStatus::NeedsVerification => "needs_verification",
         TaskStatus::Succeeded => "succeeded",
         TaskStatus::PartiallyFailed => "partially_failed",
         TaskStatus::Failed => "failed",
     }
     .into()
+}
+
+fn visible_status(status: TaskStatus) -> TaskStatus {
+    if status == TaskStatus::Running {
+        TaskStatus::NeedsVerification
+    } else {
+        status
+    }
 }
 
 fn scope_view(scope: &FrozenScope) -> ScopeView {
