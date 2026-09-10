@@ -51,6 +51,12 @@ pub struct TaskExecutionRecord {
     pub scope_results: Vec<ScopeExecutionResult>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OccupancyRecord {
+    pub task_id: String,
+    pub scopes: Vec<FrozenScope>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptedTask {
     pub task_id: String,
@@ -70,6 +76,8 @@ pub enum TaskError {
     UnsupportedAdjustment,
     #[error("request_id {request_id} is already bound to different parameters")]
     RequestConflict { request_id: String },
+    #[error("requested frozen range is occupied")]
+    RangeConflict { scopes: Vec<FrozenScope> },
     #[error("task store I/O failed: {0}")]
     Storage(#[from] io::Error),
 }
@@ -134,6 +142,70 @@ impl TaskStore {
         )
     }
 
+    pub fn list_occupancy(&self) -> Result<Vec<OccupancyRecord>, io::Error> {
+        let path = self.occupancy_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)
+    }
+
+    pub fn active_conflicts(
+        &self,
+        requested: &[FrozenScope],
+    ) -> Result<Vec<FrozenScope>, io::Error> {
+        let occupancy = self.list_occupancy()?;
+        let mut conflicts = Vec::new();
+        for scope in requested {
+            let mut occupied = false;
+            for record in &occupancy {
+                let status = self
+                    .get_execution(&record.task_id)?
+                    .map(|execution| execution.status)
+                    .unwrap_or(TaskStatus::Pending);
+                if status.occupies_range() && record.scopes.contains(scope) {
+                    occupied = true;
+                    break;
+                }
+            }
+            if occupied {
+                conflicts.push(scope.clone());
+            }
+        }
+        Ok(conflicts)
+    }
+
+    pub fn save_occupancy(&self, task_id: &str, scopes: &[FrozenScope]) -> Result<(), io::Error> {
+        fs::create_dir_all(&self.root)?;
+        let path = self.occupancy_path();
+        let mut records = self.list_occupancy()?;
+        if let Some(existing) = records.iter_mut().find(|item| item.task_id == task_id) {
+            existing.scopes = scopes.to_vec();
+        } else {
+            records.push(OccupancyRecord {
+                task_id: task_id.to_owned(),
+                scopes: scopes.to_vec(),
+            });
+        }
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&records).map_err(io::Error::other)?,
+        )
+    }
+
+    pub fn release_occupancy(&self, task_id: &str) -> Result<(), io::Error> {
+        let path = self.occupancy_path();
+        if !path.exists() {
+            return Ok(());
+        }
+        let mut records = self.list_occupancy()?;
+        records.retain(|item| item.task_id != task_id);
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&records).map_err(io::Error::other)?,
+        )
+    }
+
     fn read_all(&self) -> Result<Vec<TaskBinding>, io::Error> {
         let path = self.path();
         if !path.exists() {
@@ -157,6 +229,10 @@ impl TaskStore {
 
     fn execution_path(&self) -> PathBuf {
         self.root.join("task-executions.json")
+    }
+
+    fn occupancy_path(&self) -> PathBuf {
+        self.root.join("task-occupancy.json")
     }
 
     pub fn root(&self) -> &Path {
@@ -196,12 +272,18 @@ impl TaskAcceptanceService {
         }
         let mut created = binding;
         created.task_id = next_task_id();
+        let conflicts = self.store.active_conflicts(&created.frozen_range)?;
+        if !conflicts.is_empty() {
+            return Err(TaskError::RangeConflict { scopes: conflicts });
+        }
         self.store.append(created.clone())?;
         self.store.save_execution(TaskExecutionRecord {
             task_id: created.task_id.clone(),
             status: TaskStatus::Pending,
             scope_results: Vec::new(),
         })?;
+        self.store
+            .save_occupancy(&created.task_id, &created.frozen_range)?;
         Ok(AcceptedTask {
             task_id: created.task_id.clone(),
             binding: created,
@@ -211,6 +293,19 @@ impl TaskAcceptanceService {
 
     pub fn store(&self) -> &TaskStore {
         &self.store
+    }
+}
+
+impl TaskStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Succeeded | Self::PartiallyFailed | Self::Failed)
+    }
+
+    pub fn occupies_range(self) -> bool {
+        matches!(
+            self,
+            Self::Pending | Self::Running | Self::NeedsVerification
+        )
     }
 }
 
