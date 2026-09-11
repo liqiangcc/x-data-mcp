@@ -32,4 +32,4 @@ See `event-input.json` for the self-contained decoded event and provenance,
 and `event-analysis.json` for raw record hex, integer prices, Decimal
 calculations, and the comparison data. `analyze_event.py` is stdlib-only and
 was run twice with identical output SHA256
-`5a653a0fa4b30f2b3270448089b42b43758049ba8de965c153090efca2a2c98f`.
+`6429d176fb030e6b0c831477338eca59834dff246f9efd1b53bd423ad0d84b82`.

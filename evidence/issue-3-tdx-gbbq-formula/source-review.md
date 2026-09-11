@@ -32,6 +32,14 @@ record for `600000`, category `1`,
 `0x40000000, 0x00000000, 0x40400000, 0x00000000`, diagnostic values
 `2.0, 0.0, 3.0, 0.0`. Applying the independently observed mapping gives:
 
+The input records origin PR #49 HEAD
+`2583d4606c12d91c4da7cf5a3686f53d3358f431`, source-file raw SHA256
+`6664a14b997d367cc07761705e0e1eaab0751906d4064557e11ca009467c93f3`, and
+canonical JSON SHA256
+`c23b84e7d42cf750411cbd280de7c3a4ae9f7d3c0d798e1a769a3f4c46d4dfec`.
+Only this event is copied, so a clean checkout of PR #50 does not require
+PR #49.
+
 ```text
 fenhong=2.0, peigujia=0.0, songzhuangu=3.0, peigu=0.0
 previous close (2017-05-24) = 15.47

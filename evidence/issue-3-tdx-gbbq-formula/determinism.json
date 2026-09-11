@@ -1,7 +1,7 @@
 {
   "runs": 2,
   "network_requests": 0,
-  "output_sha256": "5a653a0fa4b30f2b3270448089b42b43758049ba8de965c153090efca2a2c98f",
+  "output_sha256": "6429d176fb030e6b0c831477338eca59834dff246f9efd1b53bd423ad0d84b82",
   "byte_identical": true,
   "script": "analyze_event.py",
   "inputs": [
