@@ -516,11 +516,21 @@
     "The TDX original public materials do not specify the complete qfq cumulative formula or annual OHLC construction rule; this remains a conditional reconciliation, not a source-contract confirmation."
   ],
   "annual_ohlc_conditional_check": {
+    "context": "historical_conditional_assumption_only",
+    "not_current_verdict": true,
     "precision_tolerance": "±0.005 price units, an explicit half-cent display-rounding envelope; not a TDX contract assertion.",
     "open": {"none": "11.73", "observed_qfq": "10.77", "observed_offset": "-0.96", "expected_offset": "-0.9580", "residual": "-0.0020", "event_offsets_used": ["0.3620", "0.2360", "0.3600"], "pass_within_tolerance": true},
     "high": {"none": "13.33", "observed_qfq": "12.73", "observed_offset": "-0.60", "expected_offset": "-0.5960", "residual": "-0.0040", "event_offsets_used": ["0.2360", "0.3600"], "pass_within_tolerance": true},
     "low": {"none": "10.48", "observed_qfq": "9.52", "observed_offset": "-0.96", "expected_offset": "-0.9580", "residual": "-0.0020", "event_offsets_used": ["0.3620", "0.2360", "0.3600"], "pass_within_tolerance": true},
     "close": {"none": "11.41", "observed_qfq": "11.05", "observed_offset": "-0.36", "expected_offset": "-0.3600", "residual": "0.0000", "event_offsets_used": ["0.3600"], "pass_within_tolerance": true}
   },
-  "verdict": "CONDITIONAL_RECONCILIATION: all four 2025 annual OHLC offsets fit the date-segmented cash-only hypothesis within ±0.005; this does not confirm TDX qfq basis or annual OHLC construction for all history."
+  "historical_verdict": "CONDITIONAL_RECONCILIATION: all four 2025 annual OHLC offsets fit the date-segmented cash-only hypothesis within ±0.005; this does not confirm TDX qfq basis or annual OHLC construction for all history.",
+  "verdict": "HYPOTHESIS_FIT_ONLY",
+  "verdict_scope": "current",
+  "current_verdict_details": {
+    "is_qfq_validation": false,
+    "is_confirmed": false,
+    "tolerance": "±0.005 is an analysis assumption, not a source-defined precision or contract tolerance",
+    "annual_high_low_contributing_dates": "unverified"
+  }
 }
