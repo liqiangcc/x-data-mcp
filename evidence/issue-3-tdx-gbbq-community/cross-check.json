@@ -1,0 +1,19 @@
+{
+  "durable_evidence_source": "evidence/issue-2-baostock-qfq-doc-example/probe-result.json",
+  "durable_source_review": "evidence/issue-2-baostock-qfq-doc-example/source-review.md",
+  "official_pdf_url_recorded_there": "https://www.baostock.com/helpdocs/pdf/BaoStock%E5%A4%8D%E6%9D%83%E5%9B%A0%E5%AD%90%E7%AE%80%E4%BB%8B.pdf",
+  "comparison": {
+    "target_code": "600000",
+    "target_date": "2017-05-25",
+    "gbbq_exact_match_count": 1,
+    "gbbq_exact_match_record_index": 127199,
+    "gbbq_exact_match_category": 1,
+    "status": "DATE_EXACT_MATCH_ONLY",
+    "interpretation": "The community decoder yields one 600000 record whose decoded integer date is exactly 20170525, the same date present in the durable BaoStock official-PDF qfq example window. This is an independent date cross-check only; it does not identify the category semantics or prove a causal corporate action."
+  },
+  "000001_on_2017_05_25": {
+    "match_count": 0,
+    "status": "NO_MATCH_IN_THIS_GBBQ_FILE"
+  },
+  "no_new_network_data_request": true
+}

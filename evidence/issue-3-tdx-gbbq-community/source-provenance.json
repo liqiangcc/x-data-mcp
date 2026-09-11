@@ -1,0 +1,19 @@
+{
+  "official_input": {
+    "origin_evidence": "Issue #47 official TDX gbbq.zip download",
+    "archive_sha256": "6cfdbfc5a67e80ba6773cd5e8cc6779a97a01e07d892e5e6a17c9b35dbef60aa",
+    "member": "gbbq",
+    "member_bytes": 5966087,
+    "member_sha256": "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60"
+  },
+  "community_decoder": {
+    "repo": "wxyzZ/pytdx",
+    "commit": "0d6f80618e1bae0f8e48552e597af492f3640f5d",
+    "path": "pytdx/reader/gbbq_reader.py",
+    "git_blob_sha1": "0eda4935027ffc79b5c425eff0a70a6d492b21d1",
+    "raw_sha256": "e28fae76760b1247a960cab285aa357c2d263b3212e7cabfb3f1ebfcc127d6ba",
+    "original_dependencies": ["struct", "ctypes", "pandas"],
+    "used_in_this_validation": ["struct", "hashlib", "re", "datetime", "json"],
+    "contract_status": "community reverse-engineering only; source comments cite two reverse-engineering blog posts, not official TDX documentation"
+  }
+}
