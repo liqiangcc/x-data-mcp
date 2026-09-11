@@ -89,11 +89,16 @@ Therefore the persisted conclusions are:
 - `BAOSTOCK_OUTPUT_COMPATIBLE_WITH_CENT_REFERENCE_6DP_FACTOR`;
 - `CURRENT_ANCHORED_QFQ_RECONSTRUCTION_NOT_PROVEN`.
 
-This compatibility result is bounded to the saved BaoStock output and fixed
-sample. `TDX_OFFICIAL_QFQ_CONTRACT_NOT_PROVEN` and production sufficiency
+The first two variants—unrounded and cent-rounded full-precision—fail their
+exact gates. The third `cent-reference + cumulative-factor 6dp HALF_UP`
+variant passes its bounded exact output-compatibility gates: 2017 is 12/12
+OHLC fields, fixed_history is 1,644/1,644 OHLC fields across 411/411 dates,
+and unresolved events are 0. Its only conclusion is
+`BAOSTOCK_OUTPUT_COMPATIBLE_WITH_CENT_REFERENCE_6DP_FACTOR`; it is not a TDX
+or BaoStock official contract. `CURRENT_ANCHORED_QFQ_RECONSTRUCTION_NOT_PROVEN`,
+`TDX_OFFICIAL_QFQ_CONTRACT_NOT_PROVEN`, and production sufficiency
 `NOT_VERIFIED` remain explicit.
 
 This does not establish that `.day + gbbq` is insufficient in every possible
-implementation; it records that these fixed community mapping/formula
-variants do not pass the predeclared exact full-chain gates. No rounding,
-factor, or tolerance was tuned to obtain a pass.
+implementation. No rounding, factor, or tolerance was tuned to obtain the
+bounded output-compatibility result.
