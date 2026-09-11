@@ -226,6 +226,7 @@ def main() -> None:
     relevant_events = [event for event in events if event["domain_class"] == "relevant"]
     relevant_unresolved_events = [event for event in relevant_events if event["status"] != "resolved"]
     total_unresolved_events = [event for event in events if event["status"] == "unresolved"]
+    resolved_events = [event for event in events if event["status"] == "resolved"]
     for event in events:
         if event["status"] == "resolved":
             event["previous_date_factor_6dp"] = str(output_factor(event["previous_trading_date"], events))
@@ -271,7 +272,7 @@ def main() -> None:
             "relevant_resolved_count": len(relevant_events) - len(relevant_unresolved_events),
             "relevant_unresolved_count": len(relevant_unresolved_events),
             "relevant_unresolved_events": relevant_unresolved_events,
-            "resolved_count": len(events) - len(total_unresolved_events),
+            "resolved_count": len(resolved_events),
             "unresolved_count": len(total_unresolved_events),
             "total_unresolved_count": len(total_unresolved_events),
             "records": events,
