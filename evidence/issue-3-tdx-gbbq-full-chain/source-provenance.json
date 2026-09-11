@@ -1,0 +1,47 @@
+{
+  "scope": "offline only; no new TDX or market-data request",
+  "main_commit": "e90e524a3d2ad9dacbabe98e38e52631c3b8ccc0",
+  "official_artifacts": {
+    "gbbq_zip": {
+      "sha256": "6cfdbfc5a67e80ba6773cd5e8cc6779a97a01e07d892e5e6a17c9b35dbef60aa",
+      "member": "gbbq",
+      "member_sha256": "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60",
+      "member_bytes": 5966087,
+      "origin": "merged PR #47 evidence"
+    },
+    "hsjday_zip": {
+      "sha256": "611ea3ccc1e64717aebc9a14ce9c8b1ed06526b5fd69bd14275fc376f4f44272",
+      "member": "sh\\lday\\sh600000.day",
+      "member_sha256": "bc6815ceafa9cdcd24c68df4d8ec43accfc3e724f5d34d2c7d827a5b12ccac8f",
+      "member_bytes": 204416,
+      "origin": "merged PR #48 evidence"
+    }
+  },
+  "event_source": {
+    "path": "evidence/issue-3-tdx-gbbq-community/target-summary.json",
+    "origin": "merged PR #49 evidence",
+    "raw_sha256": "6664a14b997d367cc07761705e0e1eaab0751906d4064557e11ca009467c93f3",
+    "canonical_sha256": "c23b84e7d42cf750411cbd280de7c3a4ae9f7d3c0d798e1a769a3f4c46d4dfec",
+    "decoder": {
+      "repo": "wxyzZ/pytdx",
+      "commit": "0d6f80618e1bae0f8e48552e597af492f3640f5d",
+      "path": "pytdx/reader/gbbq_reader.py",
+      "boundary": "community reverse engineering, not official TDX contract"
+    },
+    "mapping": "merged PR #50 community-consistent C1/C2/C3/C4 mapping"
+  },
+  "cross_check_sources": {
+    "baostock_qfq_doc_example": {
+      "probe_path": "evidence/issue-2-baostock-qfq-doc-example/probe-result.json",
+      "probe_sha256": "df09924b26dc1cade9d115a3294938567a5716a6cb003aa2ca1d3cffdef61556",
+      "derived_path": "evidence/issue-2-baostock-qfq-doc-example/derived-analysis.json",
+      "derived_sha256": "01c16b30e665ccf58e688414180eb988ae20306393a92290522a7c03b11695af",
+      "origin": "merged PR #43 evidence"
+    },
+    "baostock_daily": {
+      "path": "evidence/issue-2-baostock-daily/probe-result.json",
+      "sha256": "b1e524a2705f79366ca5c7821644522b519b92e9d4ea422a4521d6d4cd9ab21e",
+      "origin": "merged PR #42 evidence; fixed_history sh.600000 2025-01-01..2026-09-10"
+    }
+  }
+}
