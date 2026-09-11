@@ -29,7 +29,7 @@ The PDF's factor examples and narrative are documentation evidence. They are not
 
 Both sessions returned `error_code=0`, three rows, and the requested fields. Every row's code was `sh.600000`; qfq rows had row-level `adjustflag="2"`, and no-adjust rows had `adjustflag="3"`. The complete raw string rows and UTC/Asia-Shanghai timestamps are in `probe-result.json`.
 
-The no-adjust `date/code/open/close/preclose` values were **live_string_exact** for all nine compared fields. The qfq values were:
+The nine classified no-adjust `open/close/preclose` values were **live_string_exact**. The raw response `date/code` rows also matched the requested/documented rows, but `date` and `code` are not entries in the nine-field classification array. The qfq values were:
 
 | date | live qfq open / close / preclose | PDF open / close / preclose | classification |
 |---|---|---|---|
