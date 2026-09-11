@@ -1,0 +1,12 @@
+{
+  "python": "3.12.3",
+  "execution": "temporary PYTHONPATH only; no system/venv install",
+  "baostock_distribution": "0.9.3",
+  "baostock_module_version": "00.9.30",
+  "baostock_wheel": "baostock-0.9.3-py3-none-any.whl",
+  "baostock_wheel_sha256": "acbd19403285bc4e254cee8297cf0e2646ae2276e5af7e549deed3988ab02293",
+  "pandas_distribution": "3.0.5",
+  "pandas_wheel_sha256": "d373ce03ffd84010ed9839fa73672a9c8256990532e158440c0085db7d914b34",
+  "official_pdf_url": "https://www.baostock.com/helpdocs/pdf/BaoStock%E5%A4%8D%E6%9D%83%E5%9B%A0%E5%AD%90%E7%AE%80%E4%BB%8B.pdf",
+  "source_flag_evidence": "downloaded baostock/security/history.py and demo/demo_A_stock_k_data.py"
+}
