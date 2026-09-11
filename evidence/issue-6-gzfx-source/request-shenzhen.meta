@@ -1,0 +1,8 @@
+http_code=200
+size_download=3028
+market=sz
+request_start_utc=2026-09-11T06:18:57Z
+request_start_shanghai=2026-09-11T14:18:57+0800
+request_end_utc=2026-09-11T06:18:57Z
+request_end_shanghai=2026-09-11T14:18:57+0800
+filter=(TRADE_DATE='2026-09-10')(TRADE_MARKET in ("069001002001","069001002002","069001002005"))

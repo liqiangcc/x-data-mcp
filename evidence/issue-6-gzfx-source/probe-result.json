@@ -1,0 +1,71 @@
+{
+  "captured_at_utc": "2026-09-11T06:18:57Z",
+  "captured_at_asia_shanghai": "2026-09-11T14:18:57+0800",
+  "request_count": 2,
+  "authentication": "none",
+  "source_pages": {
+    "index": "https://data.eastmoney.com/gzfx/",
+    "list": "https://data.eastmoney.com/gzfx/list.html",
+    "index_html_sha256": "e657d2009b37a2084525b95ec547b69aa9e285f8fa257df432516686d107ca55",
+    "list_html_sha256": "162228f46dd83294f7e6bfb9b17890b398eeb0c426279eee61b0c867a8f62f44",
+    "index_js": "https://data.eastmoney.com/newstatic/js/gzfx/index.js",
+    "list_js": "https://data.eastmoney.com/newstatic/js/gzfx/list.js",
+    "index_js_sha256": "6762957f504c9811f49011b13b914312cab0691498c93076f6fac8d1fa44ef33",
+    "list_js_sha256": "305b6477273d47ccc9dd7b40a623c881f309cb769d444f6430cc9e8a5f7c03cd"
+  },
+  "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+  "reportName": "RPT_VALUEANALYSIS_DET",
+  "common_params": {
+    "columns": "ALL",
+    "quoteColumns": "",
+    "pageNumber": 1,
+    "pageSize": 5,
+    "sortColumns": "SECURITY_CODE",
+    "sortTypes": 1,
+    "source": "WEB",
+    "client": "WEB"
+  },
+  "responses": [
+    {
+      "market": "shanghai",
+      "request_start_utc": "2026-09-11T06:18:57Z",
+      "request_start_asia_shanghai": "2026-09-11T14:18:57+0800",
+      "request_end_utc": "2026-09-11T06:18:57Z",
+      "request_end_asia_shanghai": "2026-09-11T14:18:57+0800",
+      "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001001001\",\"069001001006\",\"069001001003\"))",
+      "http_status": 200,
+      "business": {"success": true, "code": 0, "message": "ok"},
+      "result": {"count": 2317, "pages": 464, "returned_rows": 5},
+      "response_file": "response-shanghai.json",
+      "response_sha256": "4df36f81488764fd04abbdbd29f19d49ca6aade17160bc0faacfceb2995fbc46",
+      "fields_observed": ["SECURITY_CODE", "SECUCODE", "SECURITY_NAME_ABBR", "TRADE_MARKET", "BOARD_CODE", "BOARD_NAME", "TRADE_DATE"],
+      "sample_identity_and_industry": [
+        {"SECURITY_CODE": "600000", "SECUCODE": "600000.SH", "SECURITY_NAME_ABBR": "浦发银行", "TRADE_MARKET": "069001001001", "BOARD_CODE": "016029", "BOARD_NAME": "银行Ⅱ", "TRADE_DATE": "2026-09-10 00:00:00"},
+        {"SECURITY_CODE": "600004", "SECUCODE": "600004.SH", "SECURITY_NAME_ABBR": "白云机场", "TRADE_MARKET": "069001001001", "BOARD_CODE": "016001", "BOARD_NAME": "航空机场", "TRADE_DATE": "2026-09-10 00:00:00"}
+      ]
+    },
+    {
+      "market": "shenzhen",
+      "request_start_utc": "2026-09-11T06:18:57Z",
+      "request_start_asia_shanghai": "2026-09-11T14:18:57+0800",
+      "request_end_utc": "2026-09-11T06:18:57Z",
+      "request_end_asia_shanghai": "2026-09-11T14:18:57+0800",
+      "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001002001\",\"069001002002\",\"069001002005\"))",
+      "http_status": 200,
+      "business": {"success": true, "code": 0, "message": "ok"},
+      "result": {"count": 2901, "pages": 581, "returned_rows": 5},
+      "response_file": "response-shenzhen.json",
+      "response_sha256": "bddd6885cf085d9ff1fe52259e2d8afe725ce81ed303800cb488190f15571c09",
+      "fields_observed": ["SECURITY_CODE", "SECUCODE", "SECURITY_NAME_ABBR", "TRADE_MARKET", "BOARD_CODE", "BOARD_NAME", "TRADE_DATE"],
+      "sample_identity_and_industry": [
+        {"SECURITY_CODE": "000001", "SECUCODE": "000001.SZ", "SECURITY_NAME_ABBR": "平安银行", "TRADE_MARKET": "069001002001", "BOARD_CODE": "016029", "BOARD_NAME": "银行Ⅱ", "TRADE_DATE": "2026-09-10 00:00:00"},
+        {"SECURITY_CODE": "000002", "SECUCODE": "000002.SZ", "SECURITY_NAME_ABBR": "万科A", "TRADE_MARKET": "069001002001", "BOARD_CODE": "016017", "BOARD_NAME": "房地产开发", "TRADE_DATE": "2026-09-10 00:00:00"}
+      ]
+    }
+  ],
+  "interpretation": {
+    "candidate": "worth bounded follow-up as an unauthenticated server-readable source candidate",
+    "proven": ["static endpoint and parameters are auditable", "two small market-filtered reads succeeded", "identity and displayed industry fields were returned"],
+    "not_proven": ["complete directory", "all-page pagination reliability", "stable secondary-industry contract", "identity continuity", "long-term availability", "production authorization/licensing"]
+  }
+}
