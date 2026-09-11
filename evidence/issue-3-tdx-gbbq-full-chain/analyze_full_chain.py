@@ -27,6 +27,7 @@ MAPPING = {"C1": "fenhong", "C2": "peigujia", "C3": "songzhuangu", "C4": "peigu"
 EXPECTED_GBBQ_MEMBER_SHA256 = "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60"
 EXPECTED_DAY_MEMBER_SHA256 = "bc6815ceafa9cdcd24c68df4d8ec43accfc3e724f5d34d2c7d827a5b12ccac8f"
 CENT = Decimal("0.01")
+FACTOR_6DP = Decimal("0.000001")
 
 
 def dec(value: object) -> Decimal:
@@ -162,6 +163,10 @@ def factor_for(day: str, events: list[dict], key: str) -> Decimal:
     return factor
 
 
+def factor_6dp_for(day: str, events: list[dict]) -> Decimal:
+    return factor_for(day, events, "cent_rounded_ratio").quantize(FACTOR_6DP, rounding=ROUND_HALF_UP)
+
+
 def baostock_rows(probe: dict, mode: str) -> dict[str, list[str]]:
     response = probe[mode]["response"]
     positions = {field: index for index, field in enumerate(response["fields"])}
@@ -192,6 +197,7 @@ def crosscheck_2017(day_rows: dict[str, dict], events: list[dict], probe: dict) 
         }
         unrounded_factor = factor_for(current_date, events, "unrounded_ratio")
         rounded_factor = factor_for(current_date, events, "cent_rounded_ratio")
+        six_dp_factor = factor_6dp_for(current_date, events)
         tdx_values = {field: dec(day_rows[current_date][field]) for field in ("open", "high", "low", "close")}
         result[current_date] = {
             "baostock_no_adjust": none[current_date],
@@ -199,6 +205,7 @@ def crosscheck_2017(day_rows: dict[str, dict], events: list[dict], probe: dict) 
             "baostock_ratios": {field: str(value) for field, value in baostock_ratios.items()},
             "unrounded_factor": str(unrounded_factor),
             "cent_rounded_factor": str(rounded_factor),
+            "six_dp_output_factor": str(six_dp_factor),
             "factor_vs_baostock_ratio": {
                 "unrounded": {
                     field: compare_decimal(unrounded_factor, value)
@@ -218,6 +225,10 @@ def crosscheck_2017(day_rows: dict[str, dict], events: list[dict], probe: dict) 
                     field: compare_price(tdx_values[field] * rounded_factor, qfq_price_values[field])
                     for field in ("open", "high", "low", "close")
                 },
+                "six_dp_output_factor": {
+                    field: compare_price(tdx_values[field] * six_dp_factor, qfq_price_values[field])
+                    for field in ("open", "high", "low", "close")
+                },
             },
         }
     before = result["2017-05-24"]["baostock_ratios"]
@@ -226,12 +237,28 @@ def crosscheck_2017(day_rows: dict[str, dict], events: list[dict], probe: dict) 
     result["quotient_2017-05-24_over_05-25"] = {
         "unrounded_local_event_ratio": unrounded_event["unrounded_ratio"],
         "cent_rounded_local_event_ratio": unrounded_event["cent_rounded_ratio"],
+        "six_dp_factors": {
+            "2017-05-24": str(factor_6dp_for("2017-05-24", events)),
+            "2017-05-25": str(factor_6dp_for("2017-05-25", events)),
+            "quotient": str(factor_6dp_for("2017-05-24", events) / factor_6dp_for("2017-05-25", events)),
+        },
         "baostock_ratio_quotients": {
             field: compare_decimal(dec(before[field]) / dec(event_day[field]), Decimal(unrounded_event["unrounded_ratio"]))
             for field in before
         },
         "cent_rounded_comparisons": {
             field: compare_decimal(dec(before[field]) / dec(event_day[field]), Decimal(unrounded_event["cent_rounded_ratio"]))
+            for field in before
+        },
+        "six_dp_factor_quotient_vs_cent_event_ratio": compare_decimal(
+            factor_6dp_for("2017-05-24", events) / factor_6dp_for("2017-05-25", events),
+            Decimal(unrounded_event["cent_rounded_ratio"]),
+        ),
+        "six_dp_factor_quotient_vs_baostock_ratio_quotient": {
+            field: compare_decimal(
+                factor_6dp_for("2017-05-24", events) / factor_6dp_for("2017-05-25", events),
+                dec(before[field]) / dec(event_day[field]),
+            )
             for field in before
         },
     }
@@ -386,6 +413,115 @@ def crosscheck_2025_2026(day_rows: dict[str, dict], events: list[dict], daily_pr
     return out
 
 
+def crosscheck_full_fixed_history(day_rows: dict[str, dict], events: list[dict], daily_probe: dict) -> dict:
+    session = next(
+        query for query in daily_probe["initial_session"]["queries"]
+        if query["label"] == "fixed_history" and query["request"]["code"] == "sh.600000"
+    )
+    response = session["response"]
+    positions = {field: index for index, field in enumerate(response["fields"])}
+    source_rows = {row[positions["date"]]: row for row in response["rows"]}
+    expected_dates = sorted(source_rows)
+    matched_dates = sorted(set(expected_dates) & set(day_rows))
+    missing_dates = sorted(set(expected_dates) - set(day_rows))
+    comparisons = {}
+    exact_match_count = 0
+    mismatch_count = 0
+    first_mismatch = None
+    inference = {}
+    for current_date in expected_dates:
+        if current_date not in day_rows:
+            continue
+        source_row = source_rows[current_date]
+        source_values = {field: dec(source_row[positions[field]]) for field in ("open", "high", "low", "close")}
+        raw_values = {field: dec(day_rows[current_date][field]) for field in source_values}
+        factor = factor_6dp_for(current_date, events)
+        row_comparisons = {}
+        for field in source_values:
+            comparison = compare_decimal(raw_values[field] * factor, source_values[field])
+            comparison["raw_day_value"] = str(raw_values[field])
+            comparison["factor_6dp"] = str(factor)
+            comparison["source_qfq_value"] = str(source_values[field])
+            row_comparisons[field] = comparison
+            if comparison["exact_equal"]:
+                exact_match_count += 1
+            else:
+                mismatch_count += 1
+                if first_mismatch is None:
+                    first_mismatch = {
+                        "date": current_date,
+                        "field": field,
+                        "raw": str(raw_values[field]),
+                        "factor": str(factor),
+                        "local": str(raw_values[field] * factor),
+                        "source": str(source_values[field]),
+                        "diff": comparison["difference"],
+                    }
+        comparisons[current_date] = row_comparisons
+        ratios = {
+            field: source_values[field] / raw_values[field]
+            for field in ("open", "high", "low", "close")
+            if raw_values[field] != 0
+        }
+        rounded_ratios = {field: ratio.quantize(FACTOR_6DP, rounding=ROUND_HALF_UP) for field, ratio in ratios.items()}
+        all_four_nonzero = len(ratios) == 4
+        consistent = all_four_nonzero and len(set(rounded_ratios.values())) == 1
+        inference[current_date] = {
+            "raw_nonzero_fields": sorted(ratios),
+            "ratios": {field: str(value) for field, value in ratios.items()},
+            "rounded_6dp_ratios": {field: str(value) for field, value in rounded_ratios.items()},
+            "all_four_ohlc_nonzero": all_four_nonzero,
+            "consistent_6dp": consistent,
+            "reason": "all four OHLC quotients round to one 6dp factor" if consistent else "not asserted: zero field or 6dp quotient disagreement",
+        }
+    consistent_dates = [current_date for current_date, item in inference.items() if item["consistent_6dp"]]
+    return {
+        "source_request": session["request"],
+        "expected_source_row_count": 411,
+        "actual_source_row_count": len(source_rows),
+        "matched_date_count": len(matched_dates),
+        "matched_dates_first": matched_dates[0] if matched_dates else None,
+        "matched_dates_last": matched_dates[-1] if matched_dates else None,
+        "missing_dates": missing_dates,
+        "field_count": len(expected_dates) * 4,
+        "exact_match_count": exact_match_count,
+        "mismatch_count": mismatch_count,
+        "first_mismatch": first_mismatch,
+        "comparisons": comparisons,
+        "factor_inference": {
+            "consistent_6dp_count": len(consistent_dates),
+            "inconsistent_or_not_inferable_count": len(inference) - len(consistent_dates),
+            "first_inconsistent_or_not_inferable": next(
+                (current_date for current_date in inference if not inference[current_date]["consistent_6dp"]),
+                None,
+            ),
+            "rows": inference,
+        },
+    }
+
+
+def event_boundaries(events: list[dict]) -> list[dict]:
+    boundaries = []
+    for event in events:
+        if event["status"] != "resolved":
+            boundaries.append({"event_date": event["date"], "status": event["status"]})
+            continue
+        previous_date = event["previous_trading_date"]
+        boundaries.append(
+            {
+                "event_date": event["date"],
+                "previous_trading_date": previous_date,
+                "unrounded_previous_date_factor": str(factor_for(previous_date, events, "unrounded_ratio")),
+                "unrounded_event_date_factor": str(factor_for(event["date"], events, "unrounded_ratio")),
+                "cent_rounded_previous_date_factor": str(factor_for(previous_date, events, "cent_rounded_ratio")),
+                "cent_rounded_event_date_factor": str(factor_for(event["date"], events, "cent_rounded_ratio")),
+                "six_dp_previous_date_factor": str(factor_6dp_for(previous_date, events)),
+                "six_dp_event_date_factor": str(factor_6dp_for(event["date"], events)),
+            }
+        )
+    return boundaries
+
+
 def main() -> None:
     target_path, day_zip, doc_probe_path, daily_probe_path, output_path = map(Path, sys.argv[1:6])
     target = json.loads(target_path.read_text())
@@ -406,11 +542,55 @@ def main() -> None:
     latest_event = max(event_dates)
     cross_2017 = crosscheck_2017(day, events, doc_probe)
     cross_recent = crosscheck_2025_2026(day, events, daily_probe)
+    cross_fixed_history = crosscheck_full_fixed_history(day, events, daily_probe)
+    six_dp_2017_comparisons = {
+        current_date: cross_2017[current_date]["scaled_price_comparison"]["six_dp_output_factor"]
+        for current_date in DATES_2017
+    }
+    six_dp_2017_exact_count = sum(
+        item["exact_equal"] for values in six_dp_2017_comparisons.values() for item in values.values()
+    )
+    six_dp_2017_field_count = len(DATES_2017) * 4
+    six_dp_gates = [
+        make_gate("unresolved_count_zero", len(unresolved) == 0, True, {"unresolved_count": len(unresolved)}),
+        make_gate(
+            "anchor_latest_event_semantics",
+            latest_event < "2026-09-11" and factor_6dp_for("2026-09-11", events) == Decimal(1),
+            True,
+            {"latest_event_date": latest_event, "factor_at_2026-09-11": str(factor_6dp_for("2026-09-11", events))},
+        ),
+        make_gate(
+            "2017_ohlc_exact",
+            six_dp_2017_exact_count == six_dp_2017_field_count,
+            True,
+            {"exact_match_count": six_dp_2017_exact_count, "field_count": six_dp_2017_field_count, "comparisons": six_dp_2017_comparisons},
+        ),
+        make_gate(
+            "fixed_history_expected_row_count",
+            cross_fixed_history["actual_source_row_count"] == 411,
+            True,
+            {"expected": 411, "actual": cross_fixed_history["actual_source_row_count"]},
+        ),
+        make_gate(
+            "fixed_history_dates_complete",
+            cross_fixed_history["matched_date_count"] == 411 and not cross_fixed_history["missing_dates"],
+            True,
+            {"matched_date_count": cross_fixed_history["matched_date_count"], "missing_dates": cross_fixed_history["missing_dates"]},
+        ),
+        make_gate(
+            "fixed_history_ohlc_exact",
+            cross_fixed_history["exact_match_count"] == cross_fixed_history["field_count"] and cross_fixed_history["mismatch_count"] == 0,
+            True,
+            {"exact_match_count": cross_fixed_history["exact_match_count"], "mismatch_count": cross_fixed_history["mismatch_count"], "field_count": cross_fixed_history["field_count"], "first_mismatch": cross_fixed_history["first_mismatch"]},
+        ),
+    ]
+    six_dp_full_match = all(gate["pass"] for gate in six_dp_gates if gate["required_for_full_match"])
     selected_dates = set(DATES_2017 + cross_recent["selected_dates"] + ["2026-09-11"])
     factors = {
         current_date: {
             "unrounded": str(factor_for(current_date, events, "unrounded_ratio")),
             "cent_rounded_diagnostic": str(factor_for(current_date, events, "cent_rounded_ratio")),
+            "cent_rounded_6dp_output": str(factor_6dp_for(current_date, events)),
         }
         for current_date in sorted(selected_dates)
     }
@@ -461,17 +641,33 @@ def main() -> None:
             "latest_date": latest_event,
             "records": events,
         },
+        "event_boundaries": event_boundaries(events),
         "cumulative_factors": factors,
         "cross_checks": {
             "2017_baostock_current_qfq": cross_2017,
             "2025_2026_baostock_current_qfq": cross_recent,
+            "fixed_history_6dp_output_factor": cross_fixed_history,
         },
-        "match_gates": gates,
+        "match_gates": {
+            "unrounded": gates["unrounded"],
+            "cent_rounded": gates["cent_rounded"],
+            "cent_rounded_6dp_output": {
+                "variant": "evidence-driven diagnostic/output-compatibility variant",
+                "rule": "cent-reference event ratios; cumulative factor ROUND_HALF_UP to 0.000001 before raw OHLC multiplication",
+                "not_official_contract": True,
+                "gates": six_dp_gates,
+                "required_gate_names": [gate["name"] for gate in six_dp_gates if gate["required_for_full_match"]],
+                "full_chain_match": six_dp_full_match,
+            },
+        },
         "conclusions": {
             "unrounded_full_chain_current_qfq": "UNROUNDED_FULL_CHAIN_CURRENT_QFQ_MATCH" if unrounded_match else "UNROUNDED_FULL_CHAIN_CURRENT_QFQ_MISMATCH",
             "cent_rounded_diagnostic_full_chain": "CENT_ROUNDED_DIAGNOSTIC_FULL_CHAIN_MATCH" if cent_match else "CENT_ROUNDED_DIAGNOSTIC_FULL_CHAIN_MISMATCH",
+            "cent_rounded_6dp_output_factor": "BAOSTOCK_OUTPUT_COMPATIBLE_WITH_CENT_REFERENCE_6DP_FACTOR" if six_dp_full_match else "BAOSTOCK_OUTPUT_MISMATCH_WITH_CENT_REFERENCE_6DP_FACTOR",
             "current_anchored_qfq_reconstruction": "CURRENT_ANCHORED_QFQ_RECONSTRUCTION_PROVEN" if current_proven else "CURRENT_ANCHORED_QFQ_RECONSTRUCTION_NOT_PROVEN",
             "rounding_rule": "NOT_OFFICIAL_TDX_CONTRACT",
+            "tdx_official_qfq_contract": "NOT_PROVEN",
+            "production_sufficiency": "NOT_VERIFIED",
         },
     }
     output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
