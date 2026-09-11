@@ -1,0 +1,12 @@
+{
+  "script": "analyze_000001.py",
+  "runs": 2,
+  "network_requests": 0,
+  "byte_identical": true,
+  "output_sha256": "692694209ecd04b95e52239222c0e8bdad2ef73fbcb60490f31b61de95f93915",
+  "inputs": [
+    "merged target-summary.json",
+    "official hsjday.zip retained in /tmp",
+    "merged #42 BaoStock daily probe-result.json"
+  ]
+}

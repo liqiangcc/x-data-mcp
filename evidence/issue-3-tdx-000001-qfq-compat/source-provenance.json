@@ -1,0 +1,26 @@
+{
+  "scope": "offline independent verification; no new data request",
+  "main_commit": "dafe8e69570014a07a9a50ee6fdb044e5e674bba",
+  "official_day_member": {
+    "archive": "hsjday.zip retained in /tmp",
+    "member": "sz\\lday\\sz000001.day",
+    "member_sha256": "8db365d39beaa0e2178717adcdc1e411f63295f87c647b8bf6aa56d9762dfc7b",
+    "origin": "merged official hsjday evidence"
+  },
+  "gbbq_input": {
+    "path": "evidence/issue-3-tdx-gbbq-community/target-summary.json",
+    "origin": "merged PR #49 evidence",
+    "selection": "all records for 000001 with category=1; no re-decoding or field reorder",
+    "mapping": "C1/C2/C3/C4 = fenhong/peigujia/songzhuangu/peigu"
+  },
+  "baostock_input": {
+    "path": "evidence/issue-2-baostock-daily/probe-result.json",
+    "origin": "merged PR #42 evidence",
+    "selection": "initial_session fixed_history code=sz.000001 adjustflag=2"
+  },
+  "algorithm": {
+    "reference_rounding": "ROUND_HALF_UP to 0.01",
+    "factor_rule": "strictly later event_date ratios multiplied, then ROUND_HALF_UP to 0.000001 before raw OHLC",
+    "status": "fixed PR #51 diagnostic/output-compatibility rule; not official TDX/BaoStock contract"
+  }
+}
