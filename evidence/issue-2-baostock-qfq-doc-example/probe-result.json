@@ -1,0 +1,372 @@
+{
+  "schema": "x-data-mcp.issue-2.baostock-qfq-doc-example.v1",
+  "scope": {
+    "code": "sh.600000",
+    "start_date": "2017-05-24",
+    "end_date": "2017-05-26",
+    "frequency": "d",
+    "modes": [
+      "qfq",
+      "none"
+    ]
+  },
+  "official_pdf_url": "https://www.baostock.com/helpdocs/pdf/BaoStock%E5%A4%8D%E6%9D%83%E5%9B%A0%E5%AD%90%E7%AE%80%E4%BB%8B.pdf",
+  "qfq": {
+    "schema": "x-data-mcp.issue-2.baostock-qfq-doc-example.v1",
+    "mode": "qfq",
+    "request": {
+      "code": "sh.600000",
+      "start_date": "2017-05-24",
+      "end_date": "2017-05-26",
+      "frequency": "d",
+      "adjustflag": "2",
+      "fields": "date,code,open,high,low,close,preclose,volume,amount,adjustflag"
+    },
+    "no_application_retry": true,
+    "socket_timeout_seconds": 8,
+    "login": {
+      "mode": "anonymous_handshake",
+      "requested_at": {
+        "utc": "2026-09-11T04:40:00.120023Z",
+        "asia_shanghai": "2026-09-11T12:40:00.120023+08:00"
+      },
+      "received_at": {
+        "utc": "2026-09-11T04:40:00.233086Z",
+        "asia_shanghai": "2026-09-11T12:40:00.233086+08:00"
+      },
+      "error_code": "0",
+      "error_msg": "success",
+      "user_id": "anonymous"
+    },
+    "response": {
+      "requested_at": {
+        "utc": "2026-09-11T04:40:00.233172Z",
+        "asia_shanghai": "2026-09-11T12:40:00.233172+08:00"
+      },
+      "received_at": {
+        "utc": "2026-09-11T04:40:00.275688Z",
+        "asia_shanghai": "2026-09-11T12:40:00.275688+08:00"
+      },
+      "error_code": "0",
+      "error_msg": "success",
+      "fields": [
+        "date",
+        "code",
+        "open",
+        "high",
+        "low",
+        "close",
+        "preclose",
+        "volume",
+        "amount",
+        "adjustflag"
+      ],
+      "code": "sh.600000",
+      "start_date": "2017-05-24",
+      "end_date": "2017-05-26",
+      "frequency": "d",
+      "adjustflag_metadata": "",
+      "row_count": 3,
+      "first_date": "2017-05-24",
+      "last_date": "2017-05-26",
+      "rows": [
+        [
+          "2017-05-24",
+          "sh.600000",
+          "8.2023385600",
+          "8.2770022400",
+          "8.1116755200",
+          "8.2503366400",
+          "8.2290041600",
+          "70439028",
+          "1081376992.0000",
+          "2"
+        ],
+        [
+          "2017-05-25",
+          "sh.600000",
+          "8.2503330000",
+          "9.0788770800",
+          "8.2292683200",
+          "9.0788770800",
+          "8.2503330000",
+          "222373433",
+          "2803027088.0000",
+          "2"
+        ],
+        [
+          "2017-05-26",
+          "sh.600000",
+          "8.9946183600",
+          "9.0648339600",
+          "8.8050362400",
+          "9.0156830400",
+          "9.0788770800",
+          "176456630",
+          "2246593328.0000",
+          "2"
+        ]
+      ],
+      "parsed_response_sha256": "0953ce86038b75516e65778a59fa50442c02cbf2b3308a9abcca96b233fae0f5"
+    },
+    "comparison": {
+      "basis": "Issue-provided BaoStock official PDF example values; no float conversion",
+      "fields": [
+        "date",
+        "code",
+        "open",
+        "close",
+        "preclose"
+      ],
+      "results": [
+        {
+          "date": "2017-05-24",
+          "field": "open",
+          "live": "8.2023385600",
+          "documented": "11.681648",
+          "classification": "inconsistent"
+        },
+        {
+          "date": "2017-05-24",
+          "field": "close",
+          "live": "8.2503366400",
+          "documented": "11.750007",
+          "classification": "inconsistent"
+        },
+        {
+          "date": "2017-05-24",
+          "field": "preclose",
+          "live": "8.2290041600",
+          "documented": "11.719625",
+          "classification": "inconsistent"
+        },
+        {
+          "date": "2017-05-25",
+          "field": "open",
+          "live": "8.2503330000",
+          "documented": "11.75",
+          "classification": "inconsistent"
+        },
+        {
+          "date": "2017-05-25",
+          "field": "close",
+          "live": "9.0788770800",
+          "documented": "12.93",
+          "classification": "inconsistent"
+        },
+        {
+          "date": "2017-05-25",
+          "field": "preclose",
+          "live": "8.2503330000",
+          "documented": "11.75",
+          "classification": "inconsistent"
+        },
+        {
+          "date": "2017-05-26",
+          "field": "open",
+          "live": "8.9946183600",
+          "documented": "12.81",
+          "classification": "inconsistent"
+        },
+        {
+          "date": "2017-05-26",
+          "field": "close",
+          "live": "9.0156830400",
+          "documented": "12.84",
+          "classification": "inconsistent"
+        },
+        {
+          "date": "2017-05-26",
+          "field": "preclose",
+          "live": "9.0788770800",
+          "documented": "12.93",
+          "classification": "inconsistent"
+        }
+      ]
+    },
+    "finished_at": {
+      "utc": "2026-09-11T04:40:00.276175Z",
+      "asia_shanghai": "2026-09-11T12:40:00.276175+08:00"
+    }
+  },
+  "none": {
+    "schema": "x-data-mcp.issue-2.baostock-qfq-doc-example.v1",
+    "mode": "none",
+    "request": {
+      "code": "sh.600000",
+      "start_date": "2017-05-24",
+      "end_date": "2017-05-26",
+      "frequency": "d",
+      "adjustflag": "3",
+      "fields": "date,code,open,high,low,close,preclose,volume,amount,adjustflag"
+    },
+    "no_application_retry": true,
+    "socket_timeout_seconds": 8,
+    "login": {
+      "mode": "anonymous_handshake",
+      "requested_at": {
+        "utc": "2026-09-11T04:40:01.352874Z",
+        "asia_shanghai": "2026-09-11T12:40:01.352874+08:00"
+      },
+      "received_at": {
+        "utc": "2026-09-11T04:40:01.437139Z",
+        "asia_shanghai": "2026-09-11T12:40:01.437139+08:00"
+      },
+      "error_code": "0",
+      "error_msg": "success",
+      "user_id": "anonymous"
+    },
+    "response": {
+      "requested_at": {
+        "utc": "2026-09-11T04:40:01.437213Z",
+        "asia_shanghai": "2026-09-11T12:40:01.437213+08:00"
+      },
+      "received_at": {
+        "utc": "2026-09-11T04:40:01.526173Z",
+        "asia_shanghai": "2026-09-11T12:40:01.526173+08:00"
+      },
+      "error_code": "0",
+      "error_msg": "success",
+      "fields": [
+        "date",
+        "code",
+        "open",
+        "high",
+        "low",
+        "close",
+        "preclose",
+        "volume",
+        "amount",
+        "adjustflag"
+      ],
+      "code": "sh.600000",
+      "start_date": "2017-05-24",
+      "end_date": "2017-05-26",
+      "frequency": "d",
+      "adjustflag_metadata": "",
+      "row_count": 3,
+      "first_date": "2017-05-24",
+      "last_date": "2017-05-26",
+      "rows": [
+        [
+          "2017-05-24",
+          "sh.600000",
+          "15.3800",
+          "15.5200",
+          "15.2100",
+          "15.4700",
+          "15.4300",
+          "70439028",
+          "1081376992.0000",
+          "3"
+        ],
+        [
+          "2017-05-25",
+          "sh.600000",
+          "11.7500",
+          "12.9300",
+          "11.7200",
+          "12.9300",
+          "11.7500",
+          "222373433",
+          "2803027088.0000",
+          "3"
+        ],
+        [
+          "2017-05-26",
+          "sh.600000",
+          "12.8100",
+          "12.9100",
+          "12.5400",
+          "12.8400",
+          "12.9300",
+          "176456630",
+          "2246593328.0000",
+          "3"
+        ]
+      ],
+      "parsed_response_sha256": "27d4e480b28a2921866699475b576d7db70bbb17d3dd359d691ae2df0bbece51"
+    },
+    "comparison": {
+      "basis": "Issue-provided BaoStock official PDF example values; no float conversion",
+      "fields": [
+        "date",
+        "code",
+        "open",
+        "close",
+        "preclose"
+      ],
+      "results": [
+        {
+          "date": "2017-05-24",
+          "field": "open",
+          "live": "15.3800",
+          "documented": "15.3800",
+          "classification": "live_string_exact"
+        },
+        {
+          "date": "2017-05-24",
+          "field": "close",
+          "live": "15.4700",
+          "documented": "15.4700",
+          "classification": "live_string_exact"
+        },
+        {
+          "date": "2017-05-24",
+          "field": "preclose",
+          "live": "15.4300",
+          "documented": "15.4300",
+          "classification": "live_string_exact"
+        },
+        {
+          "date": "2017-05-25",
+          "field": "open",
+          "live": "11.7500",
+          "documented": "11.7500",
+          "classification": "live_string_exact"
+        },
+        {
+          "date": "2017-05-25",
+          "field": "close",
+          "live": "12.9300",
+          "documented": "12.9300",
+          "classification": "live_string_exact"
+        },
+        {
+          "date": "2017-05-25",
+          "field": "preclose",
+          "live": "11.7500",
+          "documented": "11.7500",
+          "classification": "live_string_exact"
+        },
+        {
+          "date": "2017-05-26",
+          "field": "open",
+          "live": "12.8100",
+          "documented": "12.8100",
+          "classification": "live_string_exact"
+        },
+        {
+          "date": "2017-05-26",
+          "field": "close",
+          "live": "12.8400",
+          "documented": "12.8400",
+          "classification": "live_string_exact"
+        },
+        {
+          "date": "2017-05-26",
+          "field": "preclose",
+          "live": "12.9300",
+          "documented": "12.9300",
+          "classification": "live_string_exact"
+        }
+      ]
+    },
+    "finished_at": {
+      "utc": "2026-09-11T04:40:01.526387Z",
+      "asia_shanghai": "2026-09-11T12:40:01.526387+08:00"
+    }
+  },
+  "no_source_year_request": true,
+  "no_application_retry": true
+}
