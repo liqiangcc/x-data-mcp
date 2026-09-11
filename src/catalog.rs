@@ -226,14 +226,23 @@ fn validate_snapshot(
         return Err(RejectReason::EmptySnapshot);
     }
 
-    let mut keys = HashSet::new();
+    let mut records_by_key = HashMap::<SecurityKey, String>::new();
     let mut source_ids = HashMap::<String, SecurityKey>::new();
     for record in &snapshot.records {
         validate_record(snapshot, record)?;
         let key = record.key();
-        if !keys.insert(key.clone()) {
-            return Err(RejectReason::DuplicateSecurity { key });
+        if let Some(previous_source_id) = records_by_key.get(&key) {
+            if previous_source_id == &record.source_security_id {
+                return Err(RejectReason::DuplicateSecurity { key });
+            }
+            return Err(RejectReason::IdentityConflict {
+                message: format!(
+                    "security key {:?} maps to both source security ids {} and {}",
+                    key, previous_source_id, record.source_security_id
+                ),
+            });
         }
+        records_by_key.insert(key.clone(), record.source_security_id.clone());
         if let Some(previous_key) =
             source_ids.insert(record.source_security_id.clone(), key.clone())
         {
@@ -247,7 +256,7 @@ fn validate_snapshot(
     }
 
     if let Some(previous) = previous {
-        let current_keys = keys;
+        let current_keys = records_by_key.keys().cloned().collect::<HashSet<_>>();
         let mut disappeared = previous
             .records
             .iter()

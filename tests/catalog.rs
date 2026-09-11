@@ -1,11 +1,14 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    io,
+    sync::{Arc, Mutex},
+};
 
 use chrono::{DateTime, Utc};
 use tempfile::tempdir;
 use x_data_mcp::catalog::{
-    CatalogRepository, CatalogService, CatalogSnapshot, CatalogSourceError, CompletenessEvidence,
-    Exchange, IndustryInfo, JsonCatalogStore, RefreshStatus, RejectReason, SecurityCatalogSource,
-    SecurityKey, SecurityRecord, SecurityType,
+    CatalogError, CatalogRepository, CatalogService, CatalogSnapshot, CatalogSourceError,
+    CatalogVersion, CompletenessEvidence, Exchange, IndustryInfo, JsonCatalogStore, RefreshStatus,
+    RejectReason, SecurityCatalogSource, SecurityKey, SecurityRecord, SecurityType,
 };
 
 #[derive(Clone)]
@@ -15,6 +18,27 @@ struct FakeSource {
 
 type SharedResponse = Arc<Mutex<Result<CatalogSnapshot, CatalogSourceError>>>;
 type FakeService = CatalogService<FakeSource, JsonCatalogStore>;
+type CatalogState = Arc<Mutex<Option<CatalogVersion>>>;
+
+#[derive(Clone)]
+struct FailingRepository {
+    current: CatalogState,
+    fail_publish: bool,
+}
+
+impl CatalogRepository for FailingRepository {
+    fn latest(&self) -> Result<Option<CatalogVersion>, io::Error> {
+        Ok(self.current.lock().unwrap().clone())
+    }
+
+    fn publish_atomic(&self, version: &CatalogVersion) -> Result<(), io::Error> {
+        if self.fail_publish {
+            return Err(io::Error::other("injected publish failure"));
+        }
+        *self.current.lock().unwrap() = Some(version.clone());
+        Ok(())
+    }
+}
 
 impl SecurityCatalogSource for FakeSource {
     fn fetch(&self) -> Result<CatalogSnapshot, CatalogSourceError> {
@@ -267,4 +291,124 @@ fn duplicate_identity_mapping_and_out_of_scope_records_reject() {
         service.refresh().unwrap().reason,
         Some(RejectReason::InvalidRecord { .. })
     ));
+}
+
+#[test]
+fn same_key_with_different_source_ids_is_an_identity_conflict() {
+    let mut second = record(
+        "000001",
+        Exchange::Shenzhen,
+        "vendor-sz-000001-v2",
+        assigned(),
+    );
+    second.name = "security-000001-renamed".into();
+    let (service, _, _) = make_service(Ok(snapshot(
+        vec![
+            record("000001", Exchange::Shenzhen, "vendor-sz-000001", assigned()),
+            second,
+        ],
+        CompletenessEvidence::Complete { expected_count: 2 },
+    )));
+    assert!(matches!(
+        service.refresh().unwrap().reason,
+        Some(RejectReason::IdentityConflict { .. })
+    ));
+}
+
+#[test]
+fn required_identity_fields_reject_without_publishing() {
+    let mut missing_name = record("000001", Exchange::Shenzhen, "vendor-sz-000001", assigned());
+    missing_name.name.clear();
+    let (service, _, _) = make_service(Ok(snapshot(
+        vec![missing_name],
+        CompletenessEvidence::Complete { expected_count: 1 },
+    )));
+    assert!(matches!(
+        service.refresh().unwrap().reason,
+        Some(RejectReason::InvalidRecord { message }) if message == "name must not be empty"
+    ));
+
+    let (service, _, _) = make_service(Ok(snapshot(
+        vec![record("000001", Exchange::Shenzhen, "", assigned())],
+        CompletenessEvidence::Complete { expected_count: 1 },
+    )));
+    assert!(matches!(
+        service.refresh().unwrap().reason,
+        Some(RejectReason::InvalidRecord { message })
+            if message == "source_security_id must not be empty"
+    ));
+}
+
+#[test]
+fn expected_count_mismatch_and_complete_empty_snapshot_reject() {
+    let (service, _, _) = make_service(Ok(snapshot(
+        vec![record(
+            "000001",
+            Exchange::Shenzhen,
+            "vendor-sz-000001",
+            assigned(),
+        )],
+        CompletenessEvidence::Complete { expected_count: 2 },
+    )));
+    assert!(matches!(
+        service.refresh().unwrap().reason,
+        Some(RejectReason::Incomplete { .. })
+    ));
+
+    let (service, _, _) = make_service(Ok(snapshot(
+        Vec::new(),
+        CompletenessEvidence::Complete { expected_count: 0 },
+    )));
+    assert_eq!(
+        service.refresh().unwrap().reason,
+        Some(RejectReason::EmptySnapshot)
+    );
+}
+
+#[test]
+fn publish_repository_failure_returns_storage_error_and_keeps_old_version() {
+    let current = Arc::new(Mutex::new(None));
+    let initial = CatalogService::new(
+        FakeSource {
+            response: Arc::new(Mutex::new(Ok(snapshot(
+                vec![record(
+                    "000001",
+                    Exchange::Shenzhen,
+                    "vendor-sz-000001",
+                    assigned(),
+                )],
+                CompletenessEvidence::Complete { expected_count: 1 },
+            )))),
+        },
+        FailingRepository {
+            current: current.clone(),
+            fail_publish: false,
+        },
+    );
+    initial.refresh().unwrap();
+    let old = current.lock().unwrap().clone().unwrap();
+
+    let failing = CatalogService::new(
+        FakeSource {
+            response: Arc::new(Mutex::new(Ok(snapshot(
+                vec![record(
+                    "000001",
+                    Exchange::Shenzhen,
+                    "vendor-sz-000001",
+                    assigned(),
+                )],
+                CompletenessEvidence::Complete { expected_count: 1 },
+            )))),
+        },
+        FailingRepository {
+            current: current.clone(),
+            fail_publish: true,
+        },
+    );
+    let error = failing.refresh().unwrap_err();
+    assert!(
+        matches!(error, CatalogError::Storage(ref error) if error.to_string() == "injected publish failure")
+    );
+    assert_eq!(failing.current().unwrap(), Some(old.clone()));
+    assert_eq!(current.lock().unwrap().as_ref(), Some(&old));
 }

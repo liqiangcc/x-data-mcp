@@ -41,10 +41,11 @@ prefix and never treats a non-empty list as complete.
 
 Routine representation choices are local: Rust enums are serde-tagged,
 timestamps are RFC3339 UTC, the effective file is
-`catalog.effective.json`, and version IDs are generated from the source
-publication timestamp plus a stable content-independent publication prefix.
-These choices do not settle the still-open source encoding, pagination
-snapshot, authorization, or deployment contracts.
+`catalog.effective.json`, and the current implementation generates a local
+version ID from `published_at = Utc::now()` plus a stable content-independent
+prefix. This is not the final external version/time contract. These choices
+do not settle the still-open source encoding, pagination snapshot,
+authorization, or deployment contracts.
 
 ## Acceptance mapping
 
