@@ -1,0 +1,10 @@
+requested_at_utc=2026-09-11T11:21:40.791Z
+requested_at_asia_shanghai=2026-09-11T19:21:40.793+0800
+http_code=200
+url_effective=https://data.tdx.com.cn/vipdoc/hsjday.zip
+size_download=549205235
+content_type=application/zip
+received_at_utc=2026-09-11T11:29:40.026Z
+received_at_asia_shanghai=2026-09-11T19:29:40.032+0800
+actual_bytes=549205235
+sha256=611ea3ccc1e64717aebc9a14ce9c8b1ed06526b5fd69bd14275fc376f4f44272

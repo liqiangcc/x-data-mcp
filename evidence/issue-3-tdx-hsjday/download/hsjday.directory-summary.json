@@ -1,0 +1,24 @@
+{
+  "member_count": 12406,
+  "testzip_bad_member": null,
+  "extensions": {
+    ".day": 12406
+  },
+  "by_top_level": {
+    "bj": {
+      "member_count": 609,
+      "compressed_bytes": 8229441,
+      "uncompressed_bytes": 14925888
+    },
+    "sh": {
+      "member_count": 5942,
+      "compressed_bytes": 287314739,
+      "uncompressed_bytes": 485122496
+    },
+    "sz": {
+      "member_count": 5855,
+      "compressed_bytes": 252221937,
+      "uncompressed_bytes": 449748256
+    }
+  }
+}

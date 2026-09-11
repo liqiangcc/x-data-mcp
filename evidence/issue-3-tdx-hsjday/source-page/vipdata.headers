@@ -1,0 +1,12 @@
+HTTP/1.1 200 OK
+Server: nginx
+Date: Fri, 11 Sep 2026 11:21:11 GMT
+Content-Type: text/html
+Content-Length: 25274
+Last-Modified: Wed, 26 Aug 2026 10:13:13 GMT
+Connection: keep-alive
+Vary: Accept-Encoding
+ETag: "6a8ebc39-62ba"
+Expires: Fri, 11 Sep 2026 11:24:11 GMT
+Cache-Control: max-age=180
+Accept-Ranges: bytes

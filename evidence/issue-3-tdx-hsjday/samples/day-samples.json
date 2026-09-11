@@ -1,0 +1,136 @@
+{
+  "archive_sha256": "611ea3ccc1e64717aebc9a14ce9c8b1ed06526b5fd69bd14275fc376f4f44272",
+  "record_width_candidate": 32,
+  "layout_basis": {
+    "basis": "high-confidence TDX .day fixed-record structure, independently checked by exact file-length divisibility and valid ordered dates; page does not publish field schema",
+    "limitations": "amount remains raw bytes; no qfq interpretation; no float decoding"
+  },
+  "samples": {
+    "sh600000": {
+      "zip_path": "sh\\lday\\sh600000.day",
+      "compressed_size": 114776,
+      "uncompressed_size": 204416,
+      "crc32": "a5141f91",
+      "zip_timestamp": [
+        2026,
+        9,
+        11,
+        15,
+        37,
+        40
+      ],
+      "file_bytes": 204416,
+      "sha256": "bc6815ceafa9cdcd24c68df4d8ec43accfc3e724f5d34d2c7d827a5b12ccac8f",
+      "record_count": 6388,
+      "first_date": "1999-11-10",
+      "last_date": "2026-09-11",
+      "first_last_records": [
+        {
+          "record_index": 0,
+          "raw_hex": "460a3101860b0000a40b00008c0a0000d70a000002d0904f8853600ae8030000",
+          "date_int": 19991110,
+          "date_iso": "1999-11-10",
+          "open_raw_int": 2950,
+          "high_raw_int": 2980,
+          "low_raw_int": 2700,
+          "close_raw_int": 2775,
+          "price_scale_rule": "raw integer / 100; decimal rendered without float",
+          "open_decimal": "29.50",
+          "high_decimal": "29.80",
+          "low_decimal": "27.00",
+          "close_decimal": "27.75",
+          "amount_raw_u32": 1334890498,
+          "amount_raw_hex": "02d0904f",
+          "amount_decoding": "NOT DECODED: raw 4 bytes retained; no authoritative .day amount type contract in fetched page/package",
+          "volume_raw_u32": 174085000,
+          "volume_rule": "raw uint32 retained; unit not inferred",
+          "reserved_raw_u32": 1000
+        },
+        {
+          "record_index": 6387,
+          "raw_hex": "2f283501a7030000a70300009a0300009e0300006f27104ebdd0e40300000100",
+          "date_int": 20260911,
+          "date_iso": "2026-09-11",
+          "open_raw_int": 935,
+          "high_raw_int": 935,
+          "low_raw_int": 922,
+          "close_raw_int": 926,
+          "price_scale_rule": "raw integer / 100; decimal rendered without float",
+          "open_decimal": "9.35",
+          "high_decimal": "9.35",
+          "low_decimal": "9.22",
+          "close_decimal": "9.26",
+          "amount_raw_u32": 1309681519,
+          "amount_raw_hex": "6f27104e",
+          "amount_decoding": "NOT DECODED: raw 4 bytes retained; no authoritative .day amount type contract in fetched page/package",
+          "volume_raw_u32": 65327293,
+          "volume_rule": "raw uint32 retained; unit not inferred",
+          "reserved_raw_u32": 65536
+        }
+      ]
+    },
+    "sz000001": {
+      "zip_path": "sz\\lday\\sz000001.day",
+      "compressed_size": 149787,
+      "uncompressed_size": 270464,
+      "crc32": "cffea6f5",
+      "zip_timestamp": [
+        2026,
+        9,
+        11,
+        15,
+        35,
+        58
+      ],
+      "file_bytes": 270464,
+      "sha256": "8db365d39beaa0e2178717adcdc1e411f63295f87c647b8bf6aa56d9762dfc7b",
+      "record_count": 8452,
+      "first_date": "1991-04-03",
+      "last_date": "2026-09-11",
+      "first_last_records": [
+        {
+          "record_index": 0,
+          "raw_hex": "03cf2f012413000024130000241300002413000000409c456400000000000000",
+          "date_int": 19910403,
+          "date_iso": "1991-04-03",
+          "open_raw_int": 4900,
+          "high_raw_int": 4900,
+          "low_raw_int": 4900,
+          "close_raw_int": 4900,
+          "price_scale_rule": "raw integer / 100; decimal rendered without float",
+          "open_decimal": "49.00",
+          "high_decimal": "49.00",
+          "low_decimal": "49.00",
+          "close_decimal": "49.00",
+          "amount_raw_u32": 1167867904,
+          "amount_raw_hex": "00409c45",
+          "amount_decoding": "NOT DECODED: raw 4 bytes retained; no authoritative .day amount type contract in fetched page/package",
+          "volume_raw_u32": 100,
+          "volume_rule": "raw uint32 retained; unit not inferred",
+          "reserved_raw_u32": 0
+        },
+        {
+          "record_index": 8451,
+          "raw_hex": "2f2835019e040000a20400009304000096040000e0a5694e043cf60400000100",
+          "date_int": 20260911,
+          "date_iso": "2026-09-11",
+          "open_raw_int": 1182,
+          "high_raw_int": 1186,
+          "low_raw_int": 1171,
+          "close_raw_int": 1174,
+          "price_scale_rule": "raw integer / 100; decimal rendered without float",
+          "open_decimal": "11.82",
+          "high_decimal": "11.86",
+          "low_decimal": "11.71",
+          "close_decimal": "11.74",
+          "amount_raw_u32": 1315546592,
+          "amount_raw_hex": "e0a5694e",
+          "amount_decoding": "NOT DECODED: raw 4 bytes retained; no authoritative .day amount type contract in fetched page/package",
+          "volume_raw_u32": 83246084,
+          "volume_rule": "raw uint32 retained; unit not inferred",
+          "reserved_raw_u32": 65536
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "page": {
+    "url": "https://www.tdx.com.cn/article/vipdata.html",
+    "http_code": 200,
+    "bytes": 25274,
+    "sha256": "ab3bbe9c8bd1e4cba19145171e97aeb8aab57507fd3af923ae74a90673e3eca7",
+    "auditable_link_text": "沪深京日线数据完整包",
+    "auditable_href": "//data.tdx.com.cn/vipdoc/hsjday.zip",
+    "inline_js_reference": "//data.tdx.com.cn/vipdoc/_hsjdayinfo.js?t= + Math.floor(new Date().getTime()/10000)"
+  },
+  "metadata_js": {
+    "url": "https://data.tdx.com.cn/vipdoc/_hsjdayinfo.js",
+    "http_code": 200,
+    "bytes": 120,
+    "sha256": "52c5a43e0267fd6a9b924b5d264dbd4fe4ebf12d38c106a06709fc6e50393bf5",
+    "HSJDAY_SOFT_SIZE": "523.76MB",
+    "HSJDAY_SOFT_TIME": "2026-09-11 15:58:57"
+  },
+  "resolved_download_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+  "resolution": "protocol-relative href resolved to HTTPS; no path was guessed"
+}
