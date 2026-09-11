@@ -1,0 +1,48 @@
+{
+  "http_status": 200,
+  "error": null,
+  "version": "10050f468d2210fe32cb4bd1ccf6ea98",
+  "business": {
+    "success": true,
+    "code": 0,
+    "message": "ok"
+  },
+  "result": {
+    "count": 2901,
+    "pages": 581,
+    "row_count": 1,
+    "rows": [
+      {
+        "SECURITY_CODE": "302132",
+        "SECUCODE": "302132.SZ",
+        "TRADE_MARKET": "069001002002",
+        "BOARD_CODE": "016119",
+        "BOARD_NAME": "航空装备Ⅱ"
+      }
+    ]
+  },
+  "name": "shenzhen-page-581",
+  "market": "shenzhen",
+  "page_number": 581,
+  "page_size": 5,
+  "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+  "params": {
+    "reportName": "RPT_VALUEANALYSIS_DET",
+    "columns": "ALL",
+    "quoteColumns": "",
+    "pageNumber": 581,
+    "pageSize": 5,
+    "sortColumns": "SECURITY_CODE",
+    "sortTypes": 1,
+    "source": "WEB",
+    "client": "WEB",
+    "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001002001\",\"069001002002\",\"069001002005\"))"
+  },
+  "url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&quoteColumns=&pageNumber=581&pageSize=5&sortColumns=SECURITY_CODE&sortTypes=1&source=WEB&client=WEB&filter=%28TRADE_DATE%3D%272026-09-10%27%29%28TRADE_MARKET+in+%28%22069001002001%22%2C%22069001002002%22%2C%22069001002005%22%29%29",
+  "request_start_utc": "2026-09-11T06:35:07.841619Z",
+  "request_start_asia_shanghai": "2026-09-11T14:35:07.841619+08:00",
+  "request_end_utc": "2026-09-11T06:35:08.039520Z",
+  "request_end_asia_shanghai": "2026-09-11T14:35:08.039520+08:00",
+  "raw_sha256": "b098c2fbf1c9857cb50cd49d82b81d40396ab573e0ef40f824c05d264383f904",
+  "raw_file": "shenzhen-page-581.json"
+}

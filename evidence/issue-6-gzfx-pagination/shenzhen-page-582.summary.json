@@ -1,0 +1,40 @@
+{
+  "http_status": 200,
+  "error": null,
+  "version": null,
+  "business": {
+    "success": false,
+    "code": 9201,
+    "message": "返回数据为空"
+  },
+  "result": {
+    "count": null,
+    "pages": null,
+    "row_count": 0,
+    "rows": []
+  },
+  "name": "shenzhen-page-582",
+  "market": "shenzhen",
+  "page_number": 582,
+  "page_size": 5,
+  "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+  "params": {
+    "reportName": "RPT_VALUEANALYSIS_DET",
+    "columns": "ALL",
+    "quoteColumns": "",
+    "pageNumber": 582,
+    "pageSize": 5,
+    "sortColumns": "SECURITY_CODE",
+    "sortTypes": 1,
+    "source": "WEB",
+    "client": "WEB",
+    "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001002001\",\"069001002002\",\"069001002005\"))"
+  },
+  "url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&quoteColumns=&pageNumber=582&pageSize=5&sortColumns=SECURITY_CODE&sortTypes=1&source=WEB&client=WEB&filter=%28TRADE_DATE%3D%272026-09-10%27%29%28TRADE_MARKET+in+%28%22069001002001%22%2C%22069001002002%22%2C%22069001002005%22%29%29",
+  "request_start_utc": "2026-09-11T06:35:08.041130Z",
+  "request_start_asia_shanghai": "2026-09-11T14:35:08.041130+08:00",
+  "request_end_utc": "2026-09-11T06:35:08.382254Z",
+  "request_end_asia_shanghai": "2026-09-11T14:35:08.382254+08:00",
+  "raw_sha256": "ea6528a2204b61a7ee34683a73ca00f8afdc86aadf3f765d4dae39bbfb19dbe7",
+  "raw_file": "shenzhen-page-582.json"
+}

@@ -1,0 +1,76 @@
+{
+  "http_status": 200,
+  "error": null,
+  "version": "6611258b7e4dcac52f636cabf8a08714",
+  "business": {
+    "success": true,
+    "code": 0,
+    "message": "ok"
+  },
+  "result": {
+    "count": 2317,
+    "pages": 464,
+    "row_count": 5,
+    "rows": [
+      {
+        "SECURITY_CODE": "600009",
+        "SECUCODE": "600009.SH",
+        "TRADE_MARKET": "069001001001",
+        "BOARD_CODE": "016001",
+        "BOARD_NAME": "航空机场"
+      },
+      {
+        "SECURITY_CODE": "600010",
+        "SECUCODE": "600010.SH",
+        "TRADE_MARKET": "069001001001",
+        "BOARD_CODE": "016114",
+        "BOARD_NAME": "普钢"
+      },
+      {
+        "SECURITY_CODE": "600011",
+        "SECUCODE": "600011.SH",
+        "TRADE_MARKET": "069001001001",
+        "BOARD_CODE": "016007",
+        "BOARD_NAME": "电力"
+      },
+      {
+        "SECURITY_CODE": "600012",
+        "SECUCODE": "600012.SH",
+        "TRADE_MARKET": "069001001001",
+        "BOARD_CODE": "016002",
+        "BOARD_NAME": "铁路公路"
+      },
+      {
+        "SECURITY_CODE": "600015",
+        "SECUCODE": "600015.SH",
+        "TRADE_MARKET": "069001001001",
+        "BOARD_CODE": "016029",
+        "BOARD_NAME": "银行Ⅱ"
+      }
+    ]
+  },
+  "name": "shanghai-page-2",
+  "market": "shanghai",
+  "page_number": 2,
+  "page_size": 5,
+  "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+  "params": {
+    "reportName": "RPT_VALUEANALYSIS_DET",
+    "columns": "ALL",
+    "quoteColumns": "",
+    "pageNumber": 2,
+    "pageSize": 5,
+    "sortColumns": "SECURITY_CODE",
+    "sortTypes": 1,
+    "source": "WEB",
+    "client": "WEB",
+    "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001001001\",\"069001001006\",\"069001001003\"))"
+  },
+  "url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&quoteColumns=&pageNumber=2&pageSize=5&sortColumns=SECURITY_CODE&sortTypes=1&source=WEB&client=WEB&filter=%28TRADE_DATE%3D%272026-09-10%27%29%28TRADE_MARKET+in+%28%22069001001001%22%2C%22069001001006%22%2C%22069001001003%22%29%29",
+  "request_start_utc": "2026-09-11T06:35:07.046765Z",
+  "request_start_asia_shanghai": "2026-09-11T14:35:07.046765+08:00",
+  "request_end_utc": "2026-09-11T06:35:07.260543Z",
+  "request_end_asia_shanghai": "2026-09-11T14:35:07.260543+08:00",
+  "raw_sha256": "8b9989cc9d13bf6bddb20f671f296650568c304922832e96612394bda79eece4",
+  "raw_file": "shanghai-page-2.json"
+}
