@@ -2,8 +2,10 @@
 
 This is an evidence-only, offline analysis for Issue #3. It reuses the
 already downloaded official `gbbq` member and `hsjday.zip`, plus the
-committed BaoStock evidence from PRs #43/#49. No TDX or market-data request
-was made in this slice, and no production Rust code is changed.
+committed BaoStock evidence from PR #43. The minimal decoded event input is
+copied from PR #49 with its source commit and canonical/raw hashes recorded;
+the full PR #49 evidence is not required. No TDX or market-data request was
+made in this slice, and no production Rust code is changed.
 
 The fixed event is `600000`, category `1`, dated `2017-05-25`. Two community
 implementations agree on the category-1 field order used here:
@@ -26,7 +28,8 @@ Layered result:
 - category semantics and `.day + gbbq` production sufficiency remain
   `NOT_VERIFIED`
 
-See `event-analysis.json` for raw record hex, integer prices, Decimal
+See `event-input.json` for the self-contained decoded event and provenance,
+and `event-analysis.json` for raw record hex, integer prices, Decimal
 calculations, and the comparison data. `analyze_event.py` is stdlib-only and
 was run twice with identical output SHA256
 `5a653a0fa4b30f2b3270448089b42b43758049ba8de965c153090efca2a2c98f`.

@@ -5,7 +5,7 @@
   "byte_identical": true,
   "script": "analyze_event.py",
   "inputs": [
-    "PR #49 target-summary.json",
+    "event-input.json (copied from PR #49 target-summary.json with source hashes)",
     "official hsjday.zip retained in /tmp",
     "PR #43 BaoStock probe-result.json",
     "PR #43 derived-analysis.json"

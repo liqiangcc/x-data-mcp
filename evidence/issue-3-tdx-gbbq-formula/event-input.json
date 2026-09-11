@@ -1,0 +1,28 @@
+{
+  "schema": "x-data-mcp.issue-3.tdx-gbbq-event-input.v1",
+  "source": {
+    "origin_pr": 49,
+    "origin_head": "2583d4606c12d91c4da7cf5a3686f53d3358f431",
+    "origin_file": "evidence/issue-3-tdx-gbbq-community/target-summary.json",
+    "origin_file_raw_sha256": "6664a14b997d367cc07761705e0e1eaab0751906d4064557e11ca009467c93f3",
+    "origin_file_canonical_sha256": "c23b84e7d42cf750411cbd280de7c3a4ae9f7d3c0d798e1a769a3f4c46d4dfec",
+    "selection": "exact 600000/category=1/2017-05-25 match copied from the PR #49 target summary; no full PR #49 evidence is copied"
+  },
+  "code": "600000",
+  "category": 1,
+  "date": "2017-05-25",
+  "record_index": 127199,
+  "clear_hex": "01363030303030001dc733010100000040000000000000404000000000",
+  "float32_raw_bits_hex": [
+    "0x40000000",
+    "0x00000000",
+    "0x40400000",
+    "0x00000000"
+  ],
+  "float32_repr_diagnostic": [
+    2.0,
+    0.0,
+    3.0,
+    0.0
+  ]
+}

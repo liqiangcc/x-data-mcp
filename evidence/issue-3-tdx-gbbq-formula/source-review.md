@@ -26,7 +26,8 @@ It is also community evidence, not an official TDX formula contract.
 
 ## One-event offline calculation
 
-The PR #49 decoded clear record for `600000`, category `1`,
+The self-contained `event-input.json` copies only the PR #49 decoded clear
+record for `600000`, category `1`,
 `2017-05-25` has float32 raw bits
 `0x40000000, 0x00000000, 0x40400000, 0x00000000`, diagnostic values
 `2.0, 0.0, 3.0, 0.0`. Applying the independently observed mapping gives:

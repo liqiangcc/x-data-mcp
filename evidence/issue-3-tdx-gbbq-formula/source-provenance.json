@@ -47,7 +47,15 @@
     "boundary": "community formula reference, not an official TDX contract"
   },
   "reused_evidence": {
-    "pr_49_target_summary": "evidence/issue-3-tdx-gbbq-community/target-summary.json",
+    "minimal_event_input": {
+      "path": "evidence/issue-3-tdx-gbbq-formula/event-input.json",
+      "origin_pr": 49,
+      "origin_head": "2583d4606c12d91c4da7cf5a3686f53d3358f431",
+      "origin_file": "evidence/issue-3-tdx-gbbq-community/target-summary.json",
+      "origin_file_raw_sha256": "6664a14b997d367cc07761705e0e1eaab0751906d4064557e11ca009467c93f3",
+      "origin_file_canonical_sha256": "c23b84e7d42cf750411cbd280de7c3a4ae9f7d3c0d798e1a769a3f4c46d4dfec",
+      "selection": "only the 600000/category-1/2017-05-25 decoded event is copied; no PR #49 runtime dependency"
+    },
     "pr_43_baostock_probe": "evidence/issue-2-baostock-qfq-doc-example/probe-result.json",
     "pr_43_decimal_analysis": "evidence/issue-2-baostock-qfq-doc-example/derived-analysis.json"
   }

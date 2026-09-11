@@ -161,7 +161,15 @@
       "peigujia": "0.0",
       "songzhuangu": "3.0"
     },
-    "record_index": 127199
+    "record_index": 127199,
+    "source": {
+      "origin_file": "evidence/issue-3-tdx-gbbq-community/target-summary.json",
+      "origin_file_canonical_sha256": "c23b84e7d42cf750411cbd280de7c3a4ae9f7d3c0d798e1a769a3f4c46d4dfec",
+      "origin_file_raw_sha256": "6664a14b997d367cc07761705e0e1eaab0751906d4064557e11ca009467c93f3",
+      "origin_head": "2583d4606c12d91c4da7cf5a3686f53d3358f431",
+      "origin_pr": 49,
+      "selection": "exact 600000/category=1/2017-05-25 match copied from the PR #49 target summary; no full PR #49 evidence is copied"
+    }
   },
   "existing_baostock_evidence": {
     "current_qfq_no_adjust_ratios": {

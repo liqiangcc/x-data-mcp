@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Offline Decimal analysis of the 600000/2017-05-25 category-1 event.
 
-Inputs are the already committed PR #49 target summary, the already
-downloaded official hsjday.zip, and the already committed BaoStock evidence.
-No network or third-party package is used.
+Inputs are the self-contained event input in this evidence directory, the
+already downloaded official hsjday.zip, and the BaoStock evidence already on
+main. The event input records its PR #49 provenance without requiring PR #49
+to be present in a clean checkout. No network or third-party package is used.
 """
 
 from __future__ import annotations
@@ -73,17 +74,16 @@ def rows_by_date(response: dict) -> dict[str, list[str]]:
 
 
 def main() -> None:
-    target_path, day_zip, probe_path, derived_path, output_path = map(Path, sys.argv[1:6])
-    target = json.loads(target_path.read_text())
+    event_input_path, day_zip, probe_path, derived_path, output_path = map(Path, sys.argv[1:6])
+    event_input = json.loads(event_input_path.read_text())
     probe = json.loads(probe_path.read_text())
     derived = json.loads(derived_path.read_text())
     rows = day_rows(day_zip)
     day = {row["date"]: row for row in rows}
 
-    event = target["target_records"]["600000"]["exact_2017_05_25_matches"]
-    if len(event) != 1:
-        raise ValueError("expected exactly one 600000/2017-05-25 event")
-    event = event[0]
+    if event_input["code"] != "600000" or event_input["category"] != 1 or event_input["date"] != EVENT_DATE:
+        raise ValueError("event input is not the expected 600000/category-1/2017-05-25 record")
+    event = event_input
     bits = event["float32_raw_bits_hex"]
     diagnostic = event["float32_repr_diagnostic"]
     mapping = {
@@ -161,6 +161,7 @@ def main() -> None:
             "anchor": "2017-05-26 temporary local anchor only",
         },
         "event": {
+            "source": event["source"],
             "record_index": event["record_index"],
             "category": event["category"],
             "clear_hex": event["clear_hex"],
