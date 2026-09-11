@@ -5,7 +5,7 @@ This directory records one bounded, read-only BaoStock daily-data verification f
 - Fixed symbols: `sh.600000`, `sz.000001`.
 - Request: `frequency=d`, `adjustflag=2`, with string-valued rows preserved.
 - Evidence scripts use an anonymous BaoStock protocol handshake only; no user account or credential was used.
-- `probe-result.json` contains the machine-readable parsed rows, timestamps, request parameters, response fields, page summaries, and parsed-response hashes.
+- `probe-result.json` contains the machine-readable parsed string rows, timestamps, request parameters, response fields, `page_count`, flattened rows, first/last dates, and parsed-response hashes. It does not claim to preserve fresh-session per-page row boundaries.
 - `environment.json` records the temporary PyPI distributions and SHA-256 values. No package was installed into a system or virtual environment.
 - `source-review.md` separates observed response facts, reused official documentation, and conclusions/unknowns.
 
