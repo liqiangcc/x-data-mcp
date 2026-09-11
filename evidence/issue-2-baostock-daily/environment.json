@@ -1,0 +1,14 @@
+{
+  "python": "3.12.3",
+  "execution_mode": "temporary PYTHONPATH only; no pip install/uv/system/venv modification",
+  "baostock_distribution": "0.9.3",
+  "baostock_module_version": "00.9.30",
+  "baostock_wheel": "baostock-0.9.3-py3-none-any.whl",
+  "baostock_wheel_sha256": "acbd19403285bc4e254cee8297cf0e2646ae2276e5af7e549deed3988ab02293",
+  "baostock_pypi_json_sha256": "ce73d1ed66a6c75980f700fee8388c01fac32bd41dd1f39d671dcdca6fb94fa6",
+  "pandas_distribution": "3.0.5",
+  "pandas_wheel": "pandas-3.0.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+  "pandas_wheel_sha256": "d373ce03ffd84010ed9839fa73672a9c8256990532e158440c0085db7d914b34",
+  "numpy_existing": "1.26.4",
+  "official_docs_reused_from_issue": "https://www.baostock.com/mainContent?file=stockKData.md"
+}
