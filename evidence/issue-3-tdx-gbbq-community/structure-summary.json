@@ -1,0 +1,17 @@
+{
+  "file_bytes": 5966087,
+  "count_u32_le": 205727,
+  "record_width": 29,
+  "expected_bytes": 5966087,
+  "formula": "4 + count * 29",
+  "length_matches": true,
+  "decoded_count": 205727,
+  "invalid_code_count": 0,
+  "calendar_invalid_date_count": 0,
+  "date_sentinel_or_out_of_range_count": 1,
+  "date_boundary_note": "One calendar-valid 1899-12-30 sentinel/out-of-range value was retained as a date plausibility exception; no target record was affected.",
+  "global_plausible_date_min": "1900-01-01",
+  "global_plausible_date_max": "2026-09-21",
+  "all_decoded_category_values": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "category_semantics": "NOT_VERIFIED; numeric values are not labeled as dividend, rights, split, or other business events"
+}
