@@ -1,0 +1,525 @@
+{
+  "schema": "x-data-mcp.issue-2.tdx-event-reconciliation.v1",
+  "source": "tdx-7709",
+  "client": "eltdx",
+  "client_version": "3.1.7",
+  "target": "000001",
+  "wire_code": "sz000001",
+  "request_policy": "one bounded year none call and one bounded year qfq call; no retry; no pagination",
+  "timeout_seconds": 8.0,
+  "probe_timeout_seconds": 1.2,
+  "event": {
+    "event_date": "2026-06-12",
+    "cash_dividend_per_share": "0.3600",
+    "stock_dividend_per_share": "0",
+    "rights_issue_per_share": "0",
+    "source": "https://static.cninfo.com.cn/finalpage/2026-06-05/bde1eece-e914-4a31-a51d-5de619feb208.PDF"
+  },
+  "input_bar_date": "2025-12-31",
+  "none": {
+    "adjust": "none",
+    "period_argument": "year",
+    "adjust_argument": null,
+    "count_argument": 50,
+    "requested_at_utc": "2026-09-11T00:03:45.806419Z",
+    "received_at_utc": "2026-09-11T00:03:45.854743Z",
+    "period_name": "year",
+    "period_raw": 11,
+    "period_param_raw": 1,
+    "adjust_mode": "none",
+    "bar_count": 36,
+    "first_date": "1991-12-31",
+    "last_date": "2026-09-10",
+    "raw_response_sha256": "465bb287ffc3d1286aefcc6bea55cec79a1cab44c0c3740e525a74aa87fd5da9",
+    "bars": {
+      "1991-12-31": {
+        "open": "49.0",
+        "high": "49.0",
+        "low": "13.4",
+        "close": "29.35"
+      },
+      "1992-12-31": {
+        "open": "29.15",
+        "high": "48.55",
+        "low": "21.05",
+        "close": "44.5"
+      },
+      "1993-12-31": {
+        "open": "45.5",
+        "high": "62.0",
+        "low": "19.45",
+        "close": "22.35"
+      },
+      "1994-12-30": {
+        "open": "22.35",
+        "high": "22.4",
+        "low": "7.83",
+        "close": "10.48"
+      },
+      "1995-12-29": {
+        "open": "10.72",
+        "high": "12.9",
+        "low": "6.38",
+        "close": "6.43"
+      },
+      "1996-12-31": {
+        "open": "6.12",
+        "high": "20.5",
+        "low": "5.9",
+        "close": "16.54"
+      },
+      "1997-12-31": {
+        "open": "16.5",
+        "high": "49.0",
+        "low": "15.68",
+        "close": "22.7"
+      },
+      "1998-12-31": {
+        "open": "22.65",
+        "high": "24.3",
+        "low": "14.28",
+        "close": "14.85"
+      },
+      "1999-12-30": {
+        "open": "14.88",
+        "high": "29.4",
+        "low": "12.1",
+        "close": "17.45"
+      },
+      "2000-12-29": {
+        "open": "17.5",
+        "high": "21.01",
+        "low": "14.3",
+        "close": "14.52"
+      },
+      "2001-12-31": {
+        "open": "14.54",
+        "high": "17.11",
+        "low": "11.9",
+        "close": "12.25"
+      },
+      "2002-12-31": {
+        "open": "12.28",
+        "high": "15.86",
+        "low": "9.45",
+        "close": "10.49"
+      },
+      "2003-12-31": {
+        "open": "10.35",
+        "high": "13.9",
+        "low": "7.62",
+        "close": "8.51"
+      },
+      "2004-12-31": {
+        "open": "8.51",
+        "high": "11.4",
+        "low": "6.55",
+        "close": "6.59"
+      },
+      "2005-12-30": {
+        "open": "6.59",
+        "high": "7.39",
+        "low": "5.05",
+        "close": "6.14"
+      },
+      "2006-12-29": {
+        "open": "6.13",
+        "high": "14.68",
+        "low": "6.05",
+        "close": "14.47"
+      },
+      "2007-12-28": {
+        "open": "14.65",
+        "high": "48.98",
+        "low": "13.0",
+        "close": "38.6"
+      },
+      "2008-12-31": {
+        "open": "38.5",
+        "high": "44.5",
+        "low": "8.0",
+        "close": "9.46"
+      },
+      "2009-12-31": {
+        "open": "9.57",
+        "high": "26.73",
+        "low": "8.88",
+        "close": "24.37"
+      },
+      "2010-12-31": {
+        "open": "24.52",
+        "high": "24.58",
+        "low": "15.51",
+        "close": "15.79"
+      },
+      "2011-12-30": {
+        "open": "15.82",
+        "high": "19.0",
+        "low": "14.86",
+        "close": "15.59"
+      },
+      "2012-12-31": {
+        "open": "15.59",
+        "high": "17.78",
+        "low": "12.48",
+        "close": "16.02"
+      },
+      "2013-12-31": {
+        "open": "16.32",
+        "high": "24.71",
+        "low": "8.97",
+        "close": "12.25"
+      },
+      "2014-12-31": {
+        "open": "12.12",
+        "high": "16.16",
+        "low": "9.52",
+        "close": "15.84"
+      },
+      "2015-12-31": {
+        "open": "15.99",
+        "high": "19.8",
+        "low": "9.3",
+        "close": "11.99"
+      },
+      "2016-12-30": {
+        "open": "12.0",
+        "high": "12.03",
+        "low": "8.52",
+        "close": "9.1"
+      },
+      "2017-12-29": {
+        "open": "9.11",
+        "high": "15.24",
+        "low": "8.54",
+        "close": "13.3"
+      },
+      "2018-12-28": {
+        "open": "13.35",
+        "high": "15.13",
+        "low": "8.45",
+        "close": "9.38"
+      },
+      "2019-12-31": {
+        "open": "9.39",
+        "high": "17.6",
+        "low": "9.15",
+        "close": "16.45"
+      },
+      "2020-12-31": {
+        "open": "16.65",
+        "high": "20.88",
+        "low": "11.91",
+        "close": "19.34"
+      },
+      "2021-12-31": {
+        "open": "19.1",
+        "high": "25.31",
+        "low": "16.4",
+        "close": "16.48"
+      },
+      "2022-12-30": {
+        "open": "16.48",
+        "high": "17.56",
+        "low": "10.22",
+        "close": "13.16"
+      },
+      "2023-12-29": {
+        "open": "13.2",
+        "high": "15.74",
+        "low": "8.99",
+        "close": "9.39"
+      },
+      "2024-12-31": {
+        "open": "9.39",
+        "high": "13.43",
+        "low": "8.96",
+        "close": "11.7"
+      },
+      "2025-12-31": {
+        "open": "11.73",
+        "high": "13.33",
+        "low": "10.48",
+        "close": "11.41"
+      },
+      "2026-09-10": {
+        "open": "11.42",
+        "high": "12.08",
+        "low": "9.99",
+        "close": "11.85"
+      }
+    }
+  },
+  "qfq": {
+    "adjust": "qfq",
+    "period_argument": "year",
+    "adjust_argument": "qfq",
+    "count_argument": 50,
+    "requested_at_utc": "2026-09-11T00:03:45.855178Z",
+    "received_at_utc": "2026-09-11T00:03:45.906176Z",
+    "period_name": "year",
+    "period_raw": 11,
+    "period_param_raw": 1,
+    "adjust_mode": "qfq",
+    "bar_count": 36,
+    "first_date": "1991-12-31",
+    "last_date": "2026-09-10",
+    "raw_response_sha256": "55357b65417b75cf06ee5c2179bad685ec00ba57ef715b6bd17b23ea5be1e5d9",
+    "bars": {
+      "1991-12-31": {
+        "open": "-3.26",
+        "high": "-3.03",
+        "low": "-3.3",
+        "close": "-3.12"
+      },
+      "1992-12-31": {
+        "open": "-3.12",
+        "high": "-2.62",
+        "low": "-3.13",
+        "close": "-2.69"
+      },
+      "1993-12-31": {
+        "open": "-2.67",
+        "high": "-2.38",
+        "low": "-2.82",
+        "close": "-2.72"
+      },
+      "1994-12-30": {
+        "open": "-2.72",
+        "high": "-2.5",
+        "low": "-3.09",
+        "close": "-2.91"
+      },
+      "1995-12-29": {
+        "open": "-2.9",
+        "high": "-2.78",
+        "low": "-3.05",
+        "close": "-3.05"
+      },
+      "1996-12-31": {
+        "open": "-3.07",
+        "high": "-0.8",
+        "low": "-3.08",
+        "close": "-1.32"
+      },
+      "1997-12-31": {
+        "open": "-1.32",
+        "high": "2.88",
+        "low": "-1.43",
+        "close": "0.97"
+      },
+      "1998-12-31": {
+        "open": "0.96",
+        "high": "1.28",
+        "low": "-0.66",
+        "close": "-0.55"
+      },
+      "1999-12-30": {
+        "open": "-0.54",
+        "high": "2.27",
+        "low": "-1.08",
+        "close": "0.07"
+      },
+      "2000-12-29": {
+        "open": "0.08",
+        "high": "0.76",
+        "low": "-0.19",
+        "close": "-0.11"
+      },
+      "2001-12-31": {
+        "open": "-0.11",
+        "high": "0.53",
+        "low": "-0.78",
+        "close": "-0.69"
+      },
+      "2002-12-31": {
+        "open": "-0.68",
+        "high": "0.25",
+        "low": "-1.4",
+        "close": "-1.1"
+      },
+      "2003-12-31": {
+        "open": "-1.13",
+        "high": "-0.23",
+        "low": "-1.78",
+        "close": "-1.56"
+      },
+      "2004-12-31": {
+        "open": "-1.56",
+        "high": "-0.83",
+        "low": "-2.05",
+        "close": "-2.04"
+      },
+      "2005-12-30": {
+        "open": "-2.04",
+        "high": "-1.84",
+        "low": "-2.43",
+        "close": "-2.16"
+      },
+      "2006-12-29": {
+        "open": "-2.16",
+        "high": "0.0",
+        "low": "-2.18",
+        "close": "-0.05"
+      },
+      "2007-12-28": {
+        "open": "-0.01",
+        "high": "9.91",
+        "low": "-0.42",
+        "close": "7.02"
+      },
+      "2008-12-31": {
+        "open": "6.99",
+        "high": "8.66",
+        "low": "-0.81",
+        "close": "-0.28"
+      },
+      "2009-12-31": {
+        "open": "-0.24",
+        "high": "5.96",
+        "low": "-0.49",
+        "close": "5.1"
+      },
+      "2010-12-31": {
+        "open": "5.16",
+        "high": "5.18",
+        "low": "1.9",
+        "close": "2.0"
+      },
+      "2011-12-30": {
+        "open": "2.01",
+        "high": "3.16",
+        "low": "1.66",
+        "close": "1.93"
+      },
+      "2012-12-31": {
+        "open": "1.93",
+        "high": "2.72",
+        "low": "0.84",
+        "close": "2.12"
+      },
+      "2013-12-31": {
+        "open": "2.23",
+        "high": "5.26",
+        "low": "1.58",
+        "close": "3.48"
+      },
+      "2014-12-31": {
+        "open": "3.4",
+        "high": "7.7",
+        "low": "2.19",
+        "close": "7.48"
+      },
+      "2015-12-31": {
+        "open": "7.58",
+        "high": "11.18",
+        "low": "4.35",
+        "close": "6.59"
+      },
+      "2016-12-30": {
+        "open": "6.6",
+        "high": "6.62",
+        "low": "4.45",
+        "close": "5.83"
+      },
+      "2017-12-29": {
+        "open": "5.84",
+        "high": "12.13",
+        "low": "5.27",
+        "close": "10.19"
+      },
+      "2018-12-28": {
+        "open": "10.24",
+        "high": "12.02",
+        "low": "5.34",
+        "close": "6.4"
+      },
+      "2019-12-31": {
+        "open": "6.41",
+        "high": "14.77",
+        "low": "6.17",
+        "close": "13.62"
+      },
+      "2020-12-31": {
+        "open": "13.82",
+        "high": "18.26",
+        "low": "9.08",
+        "close": "16.72"
+      },
+      "2021-12-31": {
+        "open": "16.48",
+        "high": "22.72",
+        "low": "13.96",
+        "close": "14.04"
+      },
+      "2022-12-30": {
+        "open": "14.04",
+        "high": "15.12",
+        "low": "8.01",
+        "close": "10.95"
+      },
+      "2023-12-29": {
+        "open": "10.99",
+        "high": "13.53",
+        "low": "7.07",
+        "close": "7.47"
+      },
+      "2024-12-31": {
+        "open": "7.47",
+        "high": "12.23",
+        "low": "7.04",
+        "close": "10.74"
+      },
+      "2025-12-31": {
+        "open": "10.77",
+        "high": "12.73",
+        "low": "9.52",
+        "close": "11.05"
+      },
+      "2026-09-10": {
+        "open": "11.06",
+        "high": "12.08",
+        "low": "9.99",
+        "close": "11.85"
+      }
+    }
+  },
+  "events_used": [
+    {
+      "event_date": "2025-06-12",
+      "cash_dividend_per_share": "0.3620",
+      "stock_dividend_per_share": "0",
+      "rights_issue_per_share": "0",
+      "source": "https://file.finance.sina.com.cn/211.154.219.97%3A9494/MRGG/CNSESZ_STOCK/2025/2025-6/2025-06-05/11161352.PDF"
+    },
+    {
+      "event_date": "2025-10-15",
+      "cash_dividend_per_share": "0.2360",
+      "stock_dividend_per_share": "0",
+      "rights_issue_per_share": "0",
+      "source": "https://static.cninfo.com.cn/finalpage/2025-09-30/1224693497.PDF"
+    },
+    {
+      "event_date": "2026-06-12",
+      "cash_dividend_per_share": "0.3600",
+      "stock_dividend_per_share": "0",
+      "rights_issue_per_share": "0",
+      "source": "https://disc.static.szse.cn/disc/disk03/finalpage/2026-06-05/bde1eece-e914-4a31-a51d-5de619feb208.PDF"
+    }
+  ],
+  "conditional_formula": "For each daily raw price before an ex-date, qfq_offset(t) is the sum of later cash dividends under the cash-only/no-share-change assumption; annual OHLC must then be aggregated from the date-varying adjusted daily values, not transformed by one annual scalar.",
+  "inputs_and_assumptions": [
+    "The three issuer notices say cash-only distributions of 0.3620, 0.2360 and 0.3600 yuan/share on 2025-06-12, 2025-10-15 and 2026-06-12; no bonus shares, capital-reserve transfers or rights issues are used.",
+    "The Shenzhen Stock Exchange reference formula reduces to ex-price = prior close - cash per share when share change and rights issue are zero.",
+    "The selected 2025 annual bar contains dates on both sides of the 2025-06-12 and 2025-10-15 events; the displayed OHLC offsets can therefore test a piecewise adjustment hypothesis, but the actual daily extrema dates are not returned in this annual response.",
+    "The TDX original public materials do not specify the complete qfq cumulative formula or annual OHLC construction rule; this remains a conditional reconciliation, not a source-contract confirmation."
+  ],
+  "annual_ohlc_conditional_check": {
+    "precision_tolerance": "±0.005 price units, an explicit half-cent display-rounding envelope; not a TDX contract assertion.",
+    "open": {"none": "11.73", "observed_qfq": "10.77", "observed_offset": "-0.96", "expected_offset": "-0.9580", "residual": "-0.0020", "event_offsets_used": ["0.3620", "0.2360", "0.3600"], "pass_within_tolerance": true},
+    "high": {"none": "13.33", "observed_qfq": "12.73", "observed_offset": "-0.60", "expected_offset": "-0.5960", "residual": "-0.0040", "event_offsets_used": ["0.2360", "0.3600"], "pass_within_tolerance": true},
+    "low": {"none": "10.48", "observed_qfq": "9.52", "observed_offset": "-0.96", "expected_offset": "-0.9580", "residual": "-0.0020", "event_offsets_used": ["0.3620", "0.2360", "0.3600"], "pass_within_tolerance": true},
+    "close": {"none": "11.41", "observed_qfq": "11.05", "observed_offset": "-0.36", "expected_offset": "-0.3600", "residual": "0.0000", "event_offsets_used": ["0.3600"], "pass_within_tolerance": true}
+  },
+  "verdict": "CONDITIONAL_RECONCILIATION: all four 2025 annual OHLC offsets fit the date-segmented cash-only hypothesis within ±0.005; this does not confirm TDX qfq basis or annual OHLC construction for all history."
+}
