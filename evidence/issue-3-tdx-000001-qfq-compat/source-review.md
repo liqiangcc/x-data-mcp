@@ -16,10 +16,14 @@ local_ohlc = raw_day_ohlc * factor(d)
 
 The actual member SHA is recorded in `source-provenance.json`. It has 8,452
 records from 1991-04-03 through 2026-09-11. There are 32 category-1 events
-from 1990-03-01 through 2026-06-12. The first event is explicitly retained as
-`unresolved` because no earlier `.day` trading record exists; it is not
-silently discarded. The other 31 events resolve to a strict prior trading
-date.
+from 1990-03-01 through 2026-06-12. The 1990-03-01 event is explicitly
+retained as `pre_history`: it precedes the first available `.day` date, so it
+has no previous close or ratio and cannot affect any available bar. The other
+31 events are `relevant` because they satisfy the domain rule
+`event_date > first_day`; all 31 resolve to a strict prior trading date
+(`relevant_unresolved_count=0`). An event exactly on `first_day` would be
+classified as non-relevant because the frozen factor rule uses strict
+`event_date > bar_date`.
 
 The merged #42 `sz.000001` fixed_history has 411 source rows from
 2025-01-02 through 2026-09-10. Every date is present in the official member,
@@ -28,8 +32,9 @@ factor rule. Each of those 411 rows also has four non-zero OHLC quotients that
 round to one common 6dp factor. The 2026-06-12 latest event is before the
 2026-09-11 anchor, whose factor is 1.000000.
 
-The acceptance conclusion nevertheless remains
-`BAOSTOCK_000001_OUTPUT_MISMATCH_WITH_FIXED_TDX_LOCAL_QFQ_RULE` because the
-predeclared rule requires zero unresolved events. This is not a TDX or
-BaoStock official QFQ contract; `TDX_OFFICIAL_QFQ_CONTRACT_NOT_PROVEN` and
-production sufficiency `NOT_VERIFIED` remain.
+The available-daily-domain acceptance gate uses
+`relevant_unresolved_count=0`, complete fixed_history dates, and exact OHLC
+comparisons, not the count of pre-history records. It therefore concludes
+`BAOSTOCK_000001_OUTPUT_COMPATIBLE_WITH_FIXED_TDX_LOCAL_QFQ_RULE`. This is
+not a TDX or BaoStock official QFQ contract; `TDX_OFFICIAL_QFQ_CONTRACT_NOT_PROVEN`
+and full-market production sufficiency `NOT_VERIFIED` remain.

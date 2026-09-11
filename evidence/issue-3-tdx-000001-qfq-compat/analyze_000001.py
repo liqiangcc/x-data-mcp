@@ -70,12 +70,11 @@ def read_day(zip_path: Path) -> tuple[dict[str, dict], dict]:
 
 def map_events(target: dict, day: dict[str, dict]) -> list[dict]:
     events = []
+    first_day = min(day)
     for record in target["target_records"][CODE]["records"]:
         if record["category"] != 1:
             continue
         event_date = record["date_iso"]
-        prior_dates = [current_date for current_date in day if current_date < event_date]
-        previous_date = max(prior_dates) if prior_dates else None
         mapped = {MAPPING[f"C{i}"]: dec(record["float32_repr_diagnostic"][i - 1]) for i in range(1, 5)}
         event = {
             "record_index": record["record_index"],
@@ -86,8 +85,29 @@ def map_events(target: dict, day: dict[str, dict]) -> list[dict]:
             "float32_repr_diagnostic": record["float32_repr_diagnostic"],
             "mapping": MAPPING,
             "mapped_decimal_inputs": {key: str(value) for key, value in mapped.items()},
-            "previous_trading_date": previous_date,
         }
+        if event_date < first_day:
+            event.update({
+                "domain_class": "pre_history",
+                "status": "pre_history",
+                "previous_trading_date": None,
+                "unresolved_reason": "event precedes first available .day date and cannot affect any available bar",
+            })
+            events.append(event)
+            continue
+        if event_date == first_day:
+            event.update({
+                "domain_class": "non_relevant_on_first_day",
+                "status": "non_relevant_on_first_day",
+                "previous_trading_date": None,
+                "unresolved_reason": "strict event_date > bar_date excludes an event on the first available bar",
+            })
+            events.append(event)
+            continue
+        prior_dates = [current_date for current_date in day if current_date < event_date]
+        previous_date = max(prior_dates) if prior_dates else None
+        event["domain_class"] = "relevant"
+        event["previous_trading_date"] = previous_date
         if previous_date is None:
             event.update({"status": "unresolved", "unresolved_reason": "no earlier .day trading record"})
             events.append(event)
@@ -201,7 +221,11 @@ def main() -> None:
     daily_probe = json.loads(daily_probe_path.read_text())
     day, day_meta = read_day(zip_path)
     events = map_events(target, day)
-    unresolved = [event for event in events if event["status"] != "resolved"]
+    pre_history_events = [event for event in events if event["domain_class"] == "pre_history"]
+    non_relevant_events = [event for event in events if event["domain_class"] == "non_relevant_on_first_day"]
+    relevant_events = [event for event in events if event["domain_class"] == "relevant"]
+    relevant_unresolved_events = [event for event in relevant_events if event["status"] != "resolved"]
+    total_unresolved_events = [event for event in events if event["status"] == "unresolved"]
     for event in events:
         if event["status"] == "resolved":
             event["previous_date_factor_6dp"] = str(output_factor(event["previous_trading_date"], events))
@@ -210,7 +234,7 @@ def main() -> None:
     latest_event = max(event["event_date"] for event in events)
     anchor_factor = output_factor("2026-09-11", events)
     all_exact = (
-        not unresolved
+        not relevant_unresolved_events
         and window["actual_source_row_count"] == 411
         and window["matched_date_count"] == 411
         and not window["missing_dates"]
@@ -239,9 +263,28 @@ def main() -> None:
             "count": len(events),
             "first_date": min(event["event_date"] for event in events),
             "last_date": latest_event,
-            "resolved_count": len(events) - len(unresolved),
-            "unresolved_count": len(unresolved),
+            "pre_history_event_count": len(pre_history_events),
+            "pre_history_events": pre_history_events,
+            "non_relevant_event_count": len(non_relevant_events),
+            "non_relevant_events": non_relevant_events,
+            "relevant_event_count": len(relevant_events),
+            "relevant_resolved_count": len(relevant_events) - len(relevant_unresolved_events),
+            "relevant_unresolved_count": len(relevant_unresolved_events),
+            "relevant_unresolved_events": relevant_unresolved_events,
+            "resolved_count": len(events) - len(total_unresolved_events),
+            "unresolved_count": len(total_unresolved_events),
+            "total_unresolved_count": len(total_unresolved_events),
             "records": events,
+        },
+        "available_daily_domain": {
+            "first_day": min(day),
+            "last_day": max(day),
+            "pre_history_rule": "event_date < first_day is retained without previous_close/ratio and cannot affect an available bar",
+            "relevant_rule": "event_date > first_day can affect at least the first available bar under strict event_date > bar_date",
+            "first_day_rule": "event_date == first_day does not affect the first bar under strict event_date > bar_date",
+            "pre_history_event_count": len(pre_history_events),
+            "relevant_event_count": len(relevant_events),
+            "relevant_unresolved_count": len(relevant_unresolved_events),
         },
         "selected_factors": selected_factors,
         "fixed_history": window,
@@ -253,7 +296,7 @@ def main() -> None:
         },
     }
     output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-    print(json.dumps({"event_count": len(events), "first_event": output["events"]["first_date"], "last_event": latest_event, "unresolved": len(unresolved), "window_rows": window["actual_source_row_count"], "matched_dates": window["matched_date_count"], "exact": window["exact_match_count"], "fields": window["field_count"], "mismatch": window["mismatch_count"], "first_mismatch": window["first_mismatch"], "consistent_6dp": window["factor_inference"]["consistent_6dp_count"], "conclusions": output["conclusions"]}, ensure_ascii=False, sort_keys=True))
+    print(json.dumps({"event_count": len(events), "first_event": output["events"]["first_date"], "last_event": latest_event, "pre_history": len(pre_history_events), "relevant": len(relevant_events), "relevant_unresolved": len(relevant_unresolved_events), "total_unresolved": len(total_unresolved_events), "window_rows": window["actual_source_row_count"], "matched_dates": window["matched_date_count"], "exact": window["exact_match_count"], "fields": window["field_count"], "mismatch": window["mismatch_count"], "first_mismatch": window["first_mismatch"], "consistent_6dp": window["factor_inference"]["consistent_6dp_count"], "conclusions": output["conclusions"]}, ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == "__main__":

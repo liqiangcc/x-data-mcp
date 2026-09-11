@@ -6,8 +6,18 @@
     "latest_event_before_anchor": true,
     "latest_event_date": "2026-06-12"
   },
+  "available_daily_domain": {
+    "first_day": "1991-04-03",
+    "first_day_rule": "event_date == first_day does not affect the first bar under strict event_date > bar_date",
+    "last_day": "2026-09-11",
+    "pre_history_event_count": 1,
+    "pre_history_rule": "event_date < first_day is retained without previous_close/ratio and cannot affect an available bar",
+    "relevant_event_count": 31,
+    "relevant_rule": "event_date > first_day can affect at least the first available bar under strict event_date > bar_date",
+    "relevant_unresolved_count": 0
+  },
   "conclusions": {
-    "output_compatibility": "BAOSTOCK_000001_OUTPUT_MISMATCH_WITH_FIXED_TDX_LOCAL_QFQ_RULE",
+    "output_compatibility": "BAOSTOCK_000001_OUTPUT_COMPATIBLE_WITH_FIXED_TDX_LOCAL_QFQ_RULE",
     "production_sufficiency": "NOT_VERIFIED",
     "tdx_official_qfq_contract": "NOT_PROVEN"
   },
@@ -25,10 +35,14 @@
     "count": 32,
     "first_date": "1990-03-01",
     "last_date": "2026-06-12",
-    "records": [
+    "non_relevant_event_count": 0,
+    "non_relevant_events": [],
+    "pre_history_event_count": 1,
+    "pre_history_events": [
       {
         "category": 1,
         "clear_hex": "00303030303031008da72f0101000000000ad76340000000000000803f",
+        "domain_class": "pre_history",
         "event_date": "1990-03-01",
         "float32_raw_bits_hex": [
           "0x00000000",
@@ -56,12 +70,49 @@
         },
         "previous_trading_date": null,
         "record_index": 0,
-        "status": "unresolved",
-        "unresolved_reason": "no earlier .day trading record"
+        "status": "pre_history",
+        "unresolved_reason": "event precedes first available .day date and cannot affect any available bar"
+      }
+    ],
+    "records": [
+      {
+        "category": 1,
+        "clear_hex": "00303030303031008da72f0101000000000ad76340000000000000803f",
+        "domain_class": "pre_history",
+        "event_date": "1990-03-01",
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x4063d70a",
+          "0x00000000",
+          "0x3f800000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          3.559999942779541,
+          0.0,
+          1.0
+        ],
+        "mapped_decimal_inputs": {
+          "fenhong": "0.0",
+          "peigu": "1.0",
+          "peigujia": "3.559999942779541",
+          "songzhuangu": "0.0"
+        },
+        "mapping": {
+          "C1": "fenhong",
+          "C2": "peigujia",
+          "C3": "songzhuangu",
+          "C4": "peigu"
+        },
+        "previous_trading_date": null,
+        "record_index": 0,
+        "status": "pre_history",
+        "unresolved_reason": "event precedes first available .day date and cannot affect any available bar"
       },
       {
         "category": 1,
         "clear_hex": "003030303030310066cf2f010100004040000000000000804000000000",
+        "domain_class": "relevant",
         "event_date": "1991-05-02",
         "event_date_factor_6dp": "0.004334",
         "event_ratio": "0.7094780219780219780219780219780219780219780219780219780219780219780219780219780219780219780219780220",
@@ -100,6 +151,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100a1d02f010100000000000000000000204100000000",
+        "domain_class": "relevant",
         "event_date": "1991-08-17",
         "event_date_factor_6dp": "0.008669",
         "event_ratio": "0.5",
@@ -138,6 +190,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100c3f52f010100000040000000000000a04000000000",
+        "domain_class": "relevant",
         "event_date": "1992-03-23",
         "event_date_factor_6dp": "0.013084",
         "event_ratio": "0.6625577812018489984591679506933744221879815100154083204930662557781201848998459167950693374422187982",
@@ -176,6 +229,7 @@
       {
         "category": 1,
         "clear_hex": "00303030303031009c1d3001010000404000008041000008410000803f",
+        "domain_class": "relevant",
         "event_date": "1993-05-24",
         "event_date_factor_6dp": "0.024921",
         "event_ratio": "0.525",
@@ -214,6 +268,7 @@
       {
         "category": 1,
         "clear_hex": "003030303030310067453001010000a0400000a0400000a0400000803f",
+        "domain_class": "relevant",
         "event_date": "1994-07-11",
         "event_date_factor_6dp": "0.039851",
         "event_ratio": "0.6253623188405797101449275362318840579710144927536231884057971014492753623188405797101449275362318841",
@@ -252,6 +307,7 @@
       {
         "category": 1,
         "clear_hex": "00303030303031004d6d30010100004040000000000000004000000000",
+        "domain_class": "relevant",
         "event_date": "1995-09-25",
         "event_date_factor_6dp": "0.049289",
         "event_ratio": "0.8085106382978723404255319148936170212765957446808510638297872340425531914893617021276595744680851064",
@@ -290,6 +346,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100cf9230010100000000000000000000204100000000",
+        "domain_class": "relevant",
         "event_date": "1996-05-27",
         "event_date_factor_6dp": "0.098578",
         "event_ratio": "0.5",
@@ -328,6 +385,7 @@
       {
         "category": 1,
         "clear_hex": "003030303030310009bb30010100000040000000000000a04000000000",
+        "domain_class": "relevant",
         "event_date": "1997-08-25",
         "event_date_factor_6dp": "0.148834",
         "event_ratio": "0.6623376623376623376623376623376623376623376623376623376623376623376623376623376623376623376623376623",
@@ -366,6 +424,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100ea093101010000c040000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "1999-10-18",
         "event_date_factor_6dp": "0.152880",
         "event_ratio": "0.9735333039258932509925011027790030877812086457873842082046757829730921923246581385090427878253198059",
@@ -404,6 +463,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100523131010100000000000000410000000000004040",
+        "domain_class": "relevant",
         "event_date": "2000-11-06",
         "event_date_factor_6dp": "0.175031",
         "event_ratio": "0.8734463276836158192090395480225988700564971751412429378531073446327683615819209039548022598870056497",
@@ -442,6 +502,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100f37d3101010000c03f000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2002-07-23",
         "event_date_factor_6dp": "0.176860",
         "event_ratio": "0.9896551724137931034482758620689655172413793103448275862068965517241379310344827586206896551724137931",
@@ -480,6 +541,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100d1a53101010000c03f000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2003-09-29",
         "event_date_factor_6dp": "0.179747",
         "event_ratio": "0.9839400428265524625267665952890792291220556745182012847965738758029978586723768736616702355460385439",
@@ -518,6 +580,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100da4032010100000000000000000000803f00000000",
+        "domain_class": "relevant",
         "event_date": "2007-06-18",
         "event_date_factor_6dp": "0.197735",
         "event_ratio": "0.9090275357267340536772394562565353781805507145346810735447891251307075636110142906936214708957825026",
@@ -556,6 +619,7 @@
       {
         "category": 1,
         "clear_hex": "003030303030310087693201011f85ab3e000000000000404000000000",
+        "domain_class": "relevant",
         "event_date": "2008-10-31",
         "event_date_factor_6dp": "0.257946",
         "event_ratio": "0.7665782493368700265251989389920424403183023872679045092838196286472148541114058355437665782493368700",
@@ -594,6 +658,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100bb053301010000803f000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2012-10-19",
         "event_date_factor_6dp": "0.259869",
         "event_ratio": "0.9925980754996299037749814951887490747594374537379718726868985936343449296817172464840858623242042931",
@@ -632,6 +697,7 @@
       {
         "category": 1,
         "clear_hex": "00303030303031003c2b3301019a99d93f000000000000c04000000000",
+        "domain_class": "relevant",
         "event_date": "2013-06-20",
         "event_date_factor_6dp": "0.419453",
         "event_ratio": "0.6195426195426195426195426195426195426195426195426195426195426195426195426195426195426195426195426195",
@@ -670,6 +736,7 @@
       {
         "category": 1,
         "clear_hex": "00303030303031004452330101cdcccc3f000000000000004000000000",
+        "domain_class": "relevant",
         "event_date": "2014-06-12",
         "event_date_factor_6dp": "0.510450",
         "event_ratio": "0.8217317487266553480475382003395585738539898132427843803056027164685908319185059422750424448217317487",
@@ -708,6 +775,7 @@
       {
         "category": 1,
         "clear_hex": "00303030303031008d7833010152b8de3f000000000000004000000000",
+        "domain_class": "relevant",
         "event_date": "2015-04-13",
         "event_date_factor_6dp": "0.618160",
         "event_ratio": "0.8257575757575757575757575757575757575757575757575757575757575757575757575757575757575757575757575758",
@@ -746,6 +814,7 @@
       {
         "category": 1,
         "clear_hex": "003030303030310068a03301010ad7c33f000000000000004000000000",
+        "domain_class": "relevant",
         "event_date": "2016-06-16",
         "event_date_factor_6dp": "0.753044",
         "event_ratio": "0.8208812260536398467432950191570881226053639846743295019157088122605363984674329501915708812260536398",
@@ -784,6 +853,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100e1c7330101713dca3f000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2017-07-21",
         "event_date_factor_6dp": "0.764190",
         "event_ratio": "0.9854147675478577939835916134913400182315405651777575205104831358249772105742935278030993618960802188",
@@ -822,6 +892,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100e8ee3301017b14ae3f000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2018-07-12",
         "event_date_factor_6dp": "0.776573",
         "event_ratio": "0.9840546697038724373576309794988610478359908883826879271070615034168564920273348519362186788154897494",
@@ -860,6 +931,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100a2153401019a99b93f000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2019-06-26",
         "event_date_factor_6dp": "0.785344",
         "event_ratio": "0.9888309754281459419210722263588979895755770662695457930007446016381236038719285182427401340282948622",
@@ -898,6 +970,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100503c3401011f850b40000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2020-05-28",
         "event_date_factor_6dp": "0.798864",
         "event_ratio": "0.9830769230769230769230769230769230769230769230769230769230769230769230769230769230769230769230769231",
@@ -936,6 +1009,7 @@
       {
         "category": 1,
         "clear_hex": "003030303030310052633401016666e63f000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2021-05-14",
         "event_date_factor_6dp": "0.805146",
         "event_ratio": "0.9921976592977893368010403120936280884265279583875162548764629388816644993498049414824447334200260078",
@@ -974,6 +1048,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100328b34010185eb1140000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2022-07-22",
         "event_date_factor_6dp": "0.819636",
         "event_ratio": "0.9823212913143735588009223674096848578016910069177555726364335126825518831667947732513451191391237510",
@@ -1012,6 +1087,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100d6b134010166663640000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2023-06-14",
         "event_date_factor_6dp": "0.839609",
         "event_ratio": "0.9762107051826677994902293967714528462192013593882752761257434154630416312659303313508920985556499575",
@@ -1050,6 +1126,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100e6d83401017b14e640000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2024-06-14",
         "event_date_factor_6dp": "0.899581",
         "event_ratio": "0.9333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333",
@@ -1088,6 +1165,7 @@
       {
         "category": 1,
         "clear_hex": "003030303030310072da340101a4701d40000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2024-10-10",
         "event_date_factor_6dp": "0.919257",
         "event_ratio": "0.9785958904109589041095890410958904109589041095890410958904109589041095890410958904109589041095890411",
@@ -1126,6 +1204,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100f4ff34010114ae6740000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2025-06-12",
         "event_date_factor_6dp": "0.948059",
         "event_ratio": "0.9696202531645569620253164556962025316455696202531645569620253164556962025316455696202531645569620253",
@@ -1164,6 +1243,7 @@
       {
         "category": 1,
         "clear_hex": "003030303030310087013501013d0a1740000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2025-10-15",
         "event_date_factor_6dp": "0.968142",
         "event_ratio": "0.9792566983578219533275713050993949870354364736387208297320656871218668971477960242005185825410544512",
@@ -1202,6 +1282,7 @@
       {
         "category": 1,
         "clear_hex": "0030303030303100042735010166666640000000000000000000000000",
+        "domain_class": "relevant",
         "event_date": "2026-06-12",
         "event_date_factor_6dp": "1.000000",
         "event_ratio": "0.9681415929203539823008849557522123893805309734513274336283185840707964601769911504424778761061946903",
@@ -1238,8 +1319,13 @@
         "status": "resolved"
       }
     ],
-    "resolved_count": 31,
-    "unresolved_count": 1
+    "relevant_event_count": 31,
+    "relevant_resolved_count": 31,
+    "relevant_unresolved_count": 0,
+    "relevant_unresolved_events": [],
+    "resolved_count": 32,
+    "total_unresolved_count": 0,
+    "unresolved_count": 0
   },
   "fixed_history": {
     "actual_source_row_count": 411,

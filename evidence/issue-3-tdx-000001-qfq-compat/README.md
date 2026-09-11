@@ -14,17 +14,22 @@ OHLC with Decimal.
 
 Results:
 
-- 32 category-1 events, 1990-03-01..2026-06-12;
-- 31 resolved, 1 unresolved: the 1990-03-01 event has no earlier `.day`
-  trading record because this member starts at 1991-04-03;
+- 32 category-1 events, 1990-03-01..2026-06-12; the available `.day` domain
+  is 1991-04-03..2026-09-11;
+- 1 `pre_history` event (1990-03-01) is retained with no previous close or
+  ratio because it precedes the first available `.day` record and cannot
+  affect any available bar; the other 31 events are relevant and all resolve
+  (`relevant_unresolved_count=0`);
 - #42 `sz.000001` fixed_history: 411/411 dates, 1,644/1,644 OHLC exact,
   no first mismatch;
 - all 411 rows infer one consistent 6dp factor from their four non-zero OHLC
   quotients;
 - 2026-09-11 anchor factor is 1.000000.
 
-Because the frozen acceptance rule requires `unresolved=0`, the bounded
-conclusion is `BAOSTOCK_000001_OUTPUT_MISMATCH_WITH_FIXED_TDX_LOCAL_QFQ_RULE`,
-despite the exact 411-row output comparison. This remains compatibility
-evidence only: `TDX_OFFICIAL_QFQ_CONTRACT_NOT_PROVEN` and production
-sufficiency `NOT_VERIFIED`.
+The bounded available-daily-domain conclusion is
+`BAOSTOCK_000001_OUTPUT_COMPATIBLE_WITH_FIXED_TDX_LOCAL_QFQ_RULE`: the gate
+uses `relevant_unresolved_count=0`, complete fixed_history dates, and 1,644
+of 1,644 exact OHLC fields. The pre-history event is not an unresolved
+blocker and is not used to invent a ratio for dates before the first bar.
+This remains compatibility evidence only: `TDX_OFFICIAL_QFQ_CONTRACT_NOT_PROVEN`
+and full-market production sufficiency `NOT_VERIFIED`.

@@ -3,7 +3,7 @@
   "runs": 2,
   "network_requests": 0,
   "byte_identical": true,
-  "output_sha256": "692694209ecd04b95e52239222c0e8bdad2ef73fbcb60490f31b61de95f93915",
+  "output_sha256": "53e3b1402e8c7a458e1248ea276a85853240aff07b1bf12ae56030dc6acc92bf",
   "inputs": [
     "merged target-summary.json",
     "official hsjday.zip retained in /tmp",
