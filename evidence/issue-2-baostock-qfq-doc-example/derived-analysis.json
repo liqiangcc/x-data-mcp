@@ -1,0 +1,132 @@
+{
+  "schema": "x-data-mcp.issue-2.baostock-qfq-doc-example.derived-analysis.v1",
+  "source_probe_result": "probe-result.json",
+  "method": "Python Decimal only; no float and no production tolerance",
+  "comparison_fields": [
+    "open",
+    "close",
+    "preclose"
+  ],
+  "ratios": [
+    {
+      "date": "2017-05-24",
+      "field": "open",
+      "live_qfq": "8.2023385600",
+      "live_no_adjust": "15.3800",
+      "ratio_decimal": "0.533312",
+      "expected_ratio": "0.533312",
+      "exact_decimal_equal": true,
+      "cross_multiplication_residual": "0E-10"
+    },
+    {
+      "date": "2017-05-24",
+      "field": "close",
+      "live_qfq": "8.2503366400",
+      "live_no_adjust": "15.4700",
+      "ratio_decimal": "0.533312",
+      "expected_ratio": "0.533312",
+      "exact_decimal_equal": true,
+      "cross_multiplication_residual": "0E-10"
+    },
+    {
+      "date": "2017-05-24",
+      "field": "preclose",
+      "live_qfq": "8.2290041600",
+      "live_no_adjust": "15.4300",
+      "ratio_decimal": "0.533312",
+      "expected_ratio": "0.533312",
+      "exact_decimal_equal": true,
+      "cross_multiplication_residual": "0E-10"
+    },
+    {
+      "date": "2017-05-25",
+      "field": "open",
+      "live_qfq": "8.2503330000",
+      "live_no_adjust": "11.7500",
+      "ratio_decimal": "0.702156",
+      "expected_ratio": "0.702156",
+      "exact_decimal_equal": true,
+      "cross_multiplication_residual": "0E-10"
+    },
+    {
+      "date": "2017-05-25",
+      "field": "close",
+      "live_qfq": "9.0788770800",
+      "live_no_adjust": "12.9300",
+      "ratio_decimal": "0.702156",
+      "expected_ratio": "0.702156",
+      "exact_decimal_equal": true,
+      "cross_multiplication_residual": "0E-10"
+    },
+    {
+      "date": "2017-05-25",
+      "field": "preclose",
+      "live_qfq": "8.2503330000",
+      "live_no_adjust": "11.7500",
+      "ratio_decimal": "0.702156",
+      "expected_ratio": "0.702156",
+      "exact_decimal_equal": true,
+      "cross_multiplication_residual": "0E-10"
+    },
+    {
+      "date": "2017-05-26",
+      "field": "open",
+      "live_qfq": "8.9946183600",
+      "live_no_adjust": "12.8100",
+      "ratio_decimal": "0.702156",
+      "expected_ratio": "0.702156",
+      "exact_decimal_equal": true,
+      "cross_multiplication_residual": "0E-10"
+    },
+    {
+      "date": "2017-05-26",
+      "field": "close",
+      "live_qfq": "9.0156830400",
+      "live_no_adjust": "12.8400",
+      "ratio_decimal": "0.702156",
+      "expected_ratio": "0.702156",
+      "exact_decimal_equal": true,
+      "cross_multiplication_residual": "0E-10"
+    },
+    {
+      "date": "2017-05-26",
+      "field": "preclose",
+      "live_qfq": "9.0788770800",
+      "live_no_adjust": "12.9300",
+      "ratio_decimal": "0.702156",
+      "expected_ratio": "0.702156",
+      "exact_decimal_equal": true,
+      "cross_multiplication_residual": "0E-10"
+    }
+  ],
+  "uniform_scale_checks": {
+    "2017-05-24": {
+      "expected_ratio": "0.533312",
+      "all_three_fields_exact_decimal_equal": true
+    },
+    "2017-05-25": {
+      "expected_ratio": "0.702156",
+      "all_three_fields_exact_decimal_equal": true
+    },
+    "2017-05-26": {
+      "expected_ratio": "0.702156",
+      "all_three_fields_exact_decimal_equal": true
+    }
+  },
+  "official_factor_relationship": {
+    "old_factor_2016_06_23": "0.759535",
+    "later_scale_observed_2017_05_25_26": "0.702156",
+    "product_decimal": "0.533312057460",
+    "observed_2017_05_24_ratio": "0.533312",
+    "exact_decimal_equal": false,
+    "difference_observed_minus_product": "-5.7460E-8",
+    "product_rounded_to_documented_six_places": "0.533312",
+    "classification": "compatible at displayed factor precision; not exact equality"
+  },
+  "interpretation_boundary": {
+    "later_scale_identity_verified": false,
+    "all_subsequent_corporate_actions_verified": false,
+    "historical_revision_semantics_verified": false,
+    "production_authorization_verified": false
+  }
+}
