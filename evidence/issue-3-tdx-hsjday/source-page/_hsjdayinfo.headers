@@ -1,0 +1,11 @@
+HTTP/1.1 200 OK
+Last-Modified: Fri, 11 Sep 2026 08:20:01 GMT
+Etag: "6aa3b9b1-78"
+Server: nginx
+Content-Type: application/javascript
+Content-Length: 120
+Accept-Ranges: bytes
+Connection: keep-alive
+Date: Fri, 11 Sep 2026 11:21:28 GMT
+EO-LOG-UUID: 8889493484739531789
+EO-Cache-Status: HIT
