@@ -1,0 +1,62 @@
+{
+  "scope": "offline evidence only; no new TDX or market-data request",
+  "official_inputs": {
+    "gbbq_member": {
+      "source": "official TDX gbbq.zip evidence already saved by PR #47",
+      "member": "gbbq",
+      "sha256": "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60",
+      "count": 205727,
+      "record_width": 29
+    },
+    "hsjday_member": {
+      "source": "official TDX hsjday.zip evidence already saved by PR #48",
+      "member": "sh\\lday\\sh600000.day",
+      "sha256": "bc6815ceafa9cdcd24c68df4d8ec43accfc3e724f5d34d2c7d827a5b12ccac8f",
+      "record_width": 32
+    }
+  },
+  "community_mapping_paths": [
+    {
+      "role": "record structure and decoder",
+      "repo": "wxyzZ/pytdx",
+      "commit": "0d6f80618e1bae0f8e48552e597af492f3640f5d",
+      "path": "pytdx/reader/gbbq_reader.py",
+      "git_blob_sha1": "0eda4935027ffc79b5c425eff0a70a6d492b21d1",
+      "raw_sha256": "e28fae76760b1247a960cab285aa357c2d263b3212e7cabfb3f1ebfcc127d6ba",
+      "boundary": "community reverse engineering; source comments cite blogs, not an official TDX contract",
+      "relevant_declaration": "category-1 payload is unpacked as four float32 values after the decoded record fields"
+    },
+    {
+      "role": "independent category-1 field mapping",
+      "repo": "injoyai/tdx",
+      "commit": "39b30f44477dad4a783921de5284b055bf347e88",
+      "path": "protocol/model_gbbq.go",
+      "git_blob_sha1": "0340ee6bf4ec8ef7fa82df36415894a387aa1430",
+      "raw_sha256": "86859c72918e79f7d68b1473988a9e32b23be36b85cf2214b02f9e020562cbd4",
+      "relevant_declaration": "C1/C2/C3/C4 are assigned to Fenhong/Peigujia/Songzhuangu/Peigu",
+      "boundary": "community implementation; category labels and numeric semantics are not independently official-verified"
+    }
+  ],
+  "community_formula_path": {
+    "repo": "mootdx/mootdx",
+    "commit": "e99ae34382d970c68654c6d17c45512e728f130d",
+    "path": "sample/fq.py",
+    "git_blob_sha1": "3b1528cb74f90d2645b6aa5fd64f54cad8ce4948",
+    "raw_sha256": "9a3b0b4bd731b611e1c0c84d1bd260dd317e7ad65aba8cbdf26d3595cf3ebeda",
+    "formula_summary": "preclose=(prev_close*10-fenhong+peigu*peigujia)/(10+peigu+songzhuangu); adjustment uses reverse cumulative next_preclose/current_close",
+    "boundary": "community formula reference, not an official TDX contract"
+  },
+  "reused_evidence": {
+    "minimal_event_input": {
+      "path": "evidence/issue-3-tdx-gbbq-formula/event-input.json",
+      "origin_pr": 49,
+      "origin_head": "2583d4606c12d91c4da7cf5a3686f53d3358f431",
+      "origin_file": "evidence/issue-3-tdx-gbbq-community/target-summary.json",
+      "origin_file_raw_sha256": "6664a14b997d367cc07761705e0e1eaab0751906d4064557e11ca009467c93f3",
+      "origin_file_canonical_sha256": "c23b84e7d42cf750411cbd280de7c3a4ae9f7d3c0d798e1a769a3f4c46d4dfec",
+      "selection": "only the 600000/category-1/2017-05-25 decoded event is copied; no PR #49 runtime dependency"
+    },
+    "pr_43_baostock_probe": "evidence/issue-2-baostock-qfq-doc-example/probe-result.json",
+    "pr_43_decimal_analysis": "evidence/issue-2-baostock-qfq-doc-example/derived-analysis.json"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "runs": 2,
+  "network_requests": 0,
+  "output_sha256": "6429d176fb030e6b0c831477338eca59834dff246f9efd1b53bd423ad0d84b82",
+  "byte_identical": true,
+  "script": "analyze_event.py",
+  "inputs": [
+    "event-input.json (copied from PR #49 target-summary.json with source hashes)",
+    "official hsjday.zip retained in /tmp",
+    "PR #43 BaoStock probe-result.json",
+    "PR #43 derived-analysis.json"
+  ]
+}
