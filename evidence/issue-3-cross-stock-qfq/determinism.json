@@ -1,0 +1,17 @@
+{
+  "script": "validate_cross_stock.py",
+  "runs": 2,
+  "byte_identical": true,
+  "selection_sha256": "e6a3a4c59f02120c02328fdfc519592d9acf16666f8b1876dcbde670124b5446",
+  "aggregate_summary_sha256": "b2f1c68885a790c30c918f44a536cfb4f1d4d3f2e57b723df58c131b4ab24965",
+  "valid_baostock_requests": 4,
+  "excluded_incident_requests": 4,
+  "network_requests_during_reproduction": 0,
+  "inputs": [
+    "selection.json",
+    "selected-events.json",
+    "baostock-valid-probe.json",
+    "official hsjday.zip retained in /tmp"
+  ],
+  "algorithm_boundary": "PR #51/#52 frozen Decimal rule; no formula, precision, event filter, or tolerance change"
+}
