@@ -4,6 +4,13 @@ Probe date: 2026-09-11, current server, UTC timestamps are in `probe-result.json
 This is investigation material only. It does not alter the Rust adapter or any
 `unknown`/`confirmed` evidence value.
 
+> **Current interpretation correction (2026-09-11): HYPOTHESIS_FIT_ONLY.**
+> Historical `CONDITIONAL`/`CONSISTENT` wording and the `±0.005` comparison in
+> the files below record a numerical fit under an explicit assumption only.
+> The tolerance is not source-defined, annual high/low dates were not verified,
+> and the result must not be read as qfq validation or as permission to mark
+> evidence `confirmed`. See `official-factor-assessment.md`.
+
 ## Fixed source material
 
 - `eltdx==3.1.7`, release tag `v3.1.7`, commit

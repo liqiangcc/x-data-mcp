@@ -1,6 +1,7 @@
 {
   "schema": "x-data-mcp.issue-2.tdx-event-reconciliation.v1",
   "source": "tdx-7709",
+  "current_interpretation": "HYPOTHESIS_FIT_ONLY: historical conditional reconciliation is not qfq validation; ±0.005 is an analysis assumption, and annual high/low dates were not independently verified.",
   "client": "eltdx",
   "client_version": "3.1.7",
   "target": "000001",

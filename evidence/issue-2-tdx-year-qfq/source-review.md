@@ -3,6 +3,12 @@
 Review date: 2026-09-11. This material records source findings only; it does
 not change the production adapter or promote any evidence status.
 
+> **Current interpretation correction (2026-09-11): HYPOTHESIS_FIT_ONLY.**
+> The historical `CONDITIONAL`/`CONSISTENT` result and `±0.005` envelope below
+> are an assumption-based numerical fit, not source validation. The tolerance
+> is not TDX-defined and annual high/low dates were not independently verified.
+> Do not interpret this file as qfq confirmation or as `confirmed` evidence.
+
 ## Source roles
 
 ### TongdaXin publisher material
