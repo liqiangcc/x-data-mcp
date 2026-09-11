@@ -1,0 +1,217 @@
+{
+  "archive": "gbbq.zip",
+  "sha256": "6cfdbfc5a67e80ba6773cd5e8cc6779a97a01e07d892e5e6a17c9b35dbef60aa",
+  "file_bytes": 6350201,
+  "member_count": 26,
+  "testzip": null,
+  "members": [
+    {
+      "path": "gbbq",
+      "compressed_size": 3395082,
+      "uncompressed_size": 5966087,
+      "crc32": "77203f74",
+      "timestamp_local": "2026-09-11T17:15:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "gbbq.map",
+      "compressed_size": 26958,
+      "uncompressed_size": 96083,
+      "crc32": "afe9b169",
+      "timestamp_local": "2026-09-11T17:15:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor.lst",
+      "compressed_size": 497,
+      "uncompressed_size": 1105,
+      "crc32": "7b9b807b",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1.txt",
+      "compressed_size": 905,
+      "uncompressed_size": 1538,
+      "crc32": "5da49c1c",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_10.txt",
+      "compressed_size": 20333,
+      "uncompressed_size": 85414,
+      "crc32": "ca21e055",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_11.txt",
+      "compressed_size": 832,
+      "uncompressed_size": 2234,
+      "crc32": "9d1b5d56",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_13.txt",
+      "compressed_size": 886,
+      "uncompressed_size": 3100,
+      "crc32": "23eb0441",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_14.txt",
+      "compressed_size": 1664,
+      "uncompressed_size": 6222,
+      "crc32": "7dd4c365",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_15.txt",
+      "compressed_size": 604,
+      "uncompressed_size": 3224,
+      "crc32": "24e1fd28",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_16.txt",
+      "compressed_size": 5417,
+      "uncompressed_size": 13884,
+      "crc32": "9393773e",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_17.txt",
+      "compressed_size": 5426,
+      "uncompressed_size": 10298,
+      "crc32": "e24cb407",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_18.txt",
+      "compressed_size": 6371,
+      "uncompressed_size": 13422,
+      "crc32": "4cc2ca80",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_19.txt",
+      "compressed_size": 2401,
+      "uncompressed_size": 3760,
+      "crc32": "07d96f8d",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_20.txt",
+      "compressed_size": 12876,
+      "uncompressed_size": 23910,
+      "crc32": "f2430ce8",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_21.txt",
+      "compressed_size": 12984,
+      "uncompressed_size": 23627,
+      "crc32": "9b00c79a",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_22.txt",
+      "compressed_size": 6242,
+      "uncompressed_size": 12992,
+      "crc32": "043b26e0",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_23.txt",
+      "compressed_size": 9717,
+      "uncompressed_size": 20539,
+      "crc32": "1e796a21",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_3.txt",
+      "compressed_size": 720,
+      "uncompressed_size": 1308,
+      "crc32": "11de759a",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_6.txt",
+      "compressed_size": 6577,
+      "uncompressed_size": 20324,
+      "crc32": "70d4d59f",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_7.txt",
+      "compressed_size": 2351,
+      "uncompressed_size": 6300,
+      "crc32": "7035a413",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_8.txt",
+      "compressed_size": 537692,
+      "uncompressed_size": 2601007,
+      "crc32": "59885c12",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_9.txt",
+      "compressed_size": 844,
+      "uncompressed_size": 2070,
+      "crc32": "849e316e",
+      "timestamp_local": "2026-09-11T17:16:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_block.dat",
+      "compressed_size": 178334,
+      "uncompressed_size": 742813,
+      "crc32": "6fecc9ee",
+      "timestamp_local": "2026-09-11T17:57:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "tend_std.zip",
+      "compressed_size": 717356,
+      "uncompressed_size": 717356,
+      "crc32": "be834d8a",
+      "timestamp_local": "2026-09-11T17:25:56",
+      "flag_bits": 0
+    },
+    {
+      "path": "zhb.txt",
+      "compressed_size": 14,
+      "uncompressed_size": 14,
+      "crc32": "9c783799",
+      "timestamp_local": "2026-09-11T17:59:30",
+      "flag_bits": 0
+    },
+    {
+      "path": "zhb.zip",
+      "compressed_size": 1393406,
+      "uncompressed_size": 1393406,
+      "crc32": "5e83b671",
+      "timestamp_local": "2026-09-11T18:06:52",
+      "flag_bits": 0
+    }
+  ]
+}

@@ -1,0 +1,1341 @@
+{
+  "file": "base.dbf",
+  "file_bytes": 4268265,
+  "sha256": "bdee117a65d74087dc3ec6e3dbf43608f636839eb58b74bc8ee2e6c982594652",
+  "dbf_version_byte": "0x03",
+  "last_update_header_date": "2026-09-11",
+  "record_count_header": 8871,
+  "header_length": 1313,
+  "record_length": 481,
+  "code_page_byte": "0x7a",
+  "code_page_interpretation": "UNKNOWN; cp936 text is diagnostic only",
+  "field_count": 40,
+  "fields": [
+    {
+      "name": "SC",
+      "type": "C",
+      "length": 1,
+      "decimal": 0,
+      "offset_in_record": 1
+    },
+    {
+      "name": "GPDM",
+      "type": "C",
+      "length": 6,
+      "decimal": 0,
+      "offset_in_record": 2
+    },
+    {
+      "name": "GXRQ",
+      "type": "N",
+      "length": 8,
+      "decimal": 0,
+      "offset_in_record": 8
+    },
+    {
+      "name": "ZGB",
+      "type": "N",
+      "length": 14,
+      "decimal": 2,
+      "offset_in_record": 16
+    },
+    {
+      "name": "GJG",
+      "type": "N",
+      "length": 14,
+      "decimal": 2,
+      "offset_in_record": 30
+    },
+    {
+      "name": "FQRFRG",
+      "type": "N",
+      "length": 14,
+      "decimal": 2,
+      "offset_in_record": 44
+    },
+    {
+      "name": "FRG",
+      "type": "N",
+      "length": 14,
+      "decimal": 2,
+      "offset_in_record": 58
+    },
+    {
+      "name": "BG",
+      "type": "N",
+      "length": 14,
+      "decimal": 2,
+      "offset_in_record": 72
+    },
+    {
+      "name": "HG",
+      "type": "N",
+      "length": 14,
+      "decimal": 2,
+      "offset_in_record": 86
+    },
+    {
+      "name": "LTAG",
+      "type": "N",
+      "length": 14,
+      "decimal": 2,
+      "offset_in_record": 100
+    },
+    {
+      "name": "ZGG",
+      "type": "N",
+      "length": 14,
+      "decimal": 2,
+      "offset_in_record": 114
+    },
+    {
+      "name": "ZPG",
+      "type": "N",
+      "length": 14,
+      "decimal": 2,
+      "offset_in_record": 128
+    },
+    {
+      "name": "ZZC",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 142
+    },
+    {
+      "name": "LDZC",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 156
+    },
+    {
+      "name": "GDZC",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 170
+    },
+    {
+      "name": "WXZC",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 184
+    },
+    {
+      "name": "CQTZ",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 198
+    },
+    {
+      "name": "LDFZ",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 212
+    },
+    {
+      "name": "CQFZ",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 226
+    },
+    {
+      "name": "ZBGJJ",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 240
+    },
+    {
+      "name": "JZC",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 254
+    },
+    {
+      "name": "ZYSY",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 268
+    },
+    {
+      "name": "ZYLY",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 282
+    },
+    {
+      "name": "QTLY",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 296
+    },
+    {
+      "name": "YYLY",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 310
+    },
+    {
+      "name": "TZSY",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 324
+    },
+    {
+      "name": "BTSY",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 338
+    },
+    {
+      "name": "YYWSZ",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 352
+    },
+    {
+      "name": "SNSYTZ",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 366
+    },
+    {
+      "name": "LYZE",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 380
+    },
+    {
+      "name": "SHLY",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 394
+    },
+    {
+      "name": "JLY",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 408
+    },
+    {
+      "name": "WFPLY",
+      "type": "N",
+      "length": 14,
+      "decimal": 1,
+      "offset_in_record": 422
+    },
+    {
+      "name": "TZMGJZ",
+      "type": "N",
+      "length": 14,
+      "decimal": 3,
+      "offset_in_record": 436
+    },
+    {
+      "name": "DY",
+      "type": "C",
+      "length": 3,
+      "decimal": 0,
+      "offset_in_record": 450
+    },
+    {
+      "name": "HY",
+      "type": "C",
+      "length": 4,
+      "decimal": 0,
+      "offset_in_record": 453
+    },
+    {
+      "name": "ZBNB",
+      "type": "N",
+      "length": 2,
+      "decimal": 0,
+      "offset_in_record": 457
+    },
+    {
+      "name": "SSDATE",
+      "type": "C",
+      "length": 8,
+      "decimal": 0,
+      "offset_in_record": 459
+    },
+    {
+      "name": "MODIDATE",
+      "type": "C",
+      "length": 6,
+      "decimal": 0,
+      "offset_in_record": 467
+    },
+    {
+      "name": "GDRS",
+      "type": "N",
+      "length": 8,
+      "decimal": 0,
+      "offset_in_record": 473
+    }
+  ],
+  "record_flags": {
+    "0x00": 8871
+  },
+  "deleted_record_count_reliably_counted_as_0x2a": 0,
+  "eof_marker": {
+    "present_at": 4268264,
+    "byte_hex": "1a"
+  },
+  "samples_first_three": [
+    {
+      "record_index": 0,
+      "deleted_flag_hex": "00",
+      "fields": {
+        "SC": {
+          "raw_hex": "30",
+          "raw_text_cp936_diagnostic": "0",
+          "trimmed_text_cp936_diagnostic": "0"
+        },
+        "GPDM": {
+          "raw_hex": "303030303031",
+          "raw_text_cp936_diagnostic": "000001",
+          "trimmed_text_cp936_diagnostic": "000001"
+        },
+        "GXRQ": {
+          "raw_hex": "3230323630383135",
+          "raw_text_cp936_diagnostic": "20260815",
+          "trimmed_text_cp936_diagnostic": "20260815"
+        },
+        "ZGB": {
+          "raw_hex": "20202020313934303539312e3838",
+          "raw_text_cp936_diagnostic": "    1940591.88",
+          "trimmed_text_cp936_diagnostic": "    1940591.88"
+        },
+        "GJG": {
+          "raw_hex": "20202020202020313936362e3030",
+          "raw_text_cp936_diagnostic": "       1966.00",
+          "trimmed_text_cp936_diagnostic": "       1966.00"
+        },
+        "FQRFRG": {
+          "raw_hex": "20202032343837303030302e3030",
+          "raw_text_cp936_diagnostic": "   24870000.00",
+          "trimmed_text_cp936_diagnostic": "   24870000.00"
+        },
+        "FRG": {
+          "raw_hex": "20202036393338353030302e3030",
+          "raw_text_cp936_diagnostic": "   69385000.00",
+          "trimmed_text_cp936_diagnostic": "   69385000.00"
+        },
+        "BG": {
+          "raw_hex": "20202020202020202020302e3030",
+          "raw_text_cp936_diagnostic": "          0.00",
+          "trimmed_text_cp936_diagnostic": "          0.00"
+        },
+        "HG": {
+          "raw_hex": "20202020202020202020302e3030",
+          "raw_text_cp936_diagnostic": "          0.00",
+          "trimmed_text_cp936_diagnostic": "          0.00"
+        },
+        "LTAG": {
+          "raw_hex": "20202020313934303536382e3530",
+          "raw_text_cp936_diagnostic": "    1940568.50",
+          "trimmed_text_cp936_diagnostic": "    1940568.50"
+        },
+        "ZGG": {
+          "raw_hex": "20202020202020202020312e3234",
+          "raw_text_cp936_diagnostic": "          1.24",
+          "trimmed_text_cp936_diagnostic": "          1.24"
+        },
+        "ZPG": {
+          "raw_hex": "0000000000000000000000000000",
+          "raw_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+          "trimmed_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000"
+        },
+        "ZZC": {
+          "raw_hex": "2020363032383738353135322e30",
+          "raw_text_cp936_diagnostic": "  6028785152.0",
+          "trimmed_text_cp936_diagnostic": "  6028785152.0"
+        },
+        "LDZC": {
+          "raw_hex": "2020202020202020202020302e30",
+          "raw_text_cp936_diagnostic": "           0.0",
+          "trimmed_text_cp936_diagnostic": "           0.0"
+        },
+        "GDZC": {
+          "raw_hex": "2020202031303436343030302e30",
+          "raw_text_cp936_diagnostic": "    10464000.0",
+          "trimmed_text_cp936_diagnostic": "    10464000.0"
+        },
+        "WXZC": {
+          "raw_hex": "2020202020353431353030302e30",
+          "raw_text_cp936_diagnostic": "     5415000.0",
+          "trimmed_text_cp936_diagnostic": "     5415000.0"
+        },
+        "CQTZ": {
+          "raw_hex": "2020202020203435303731322e30",
+          "raw_text_cp936_diagnostic": "      450712.0",
+          "trimmed_text_cp936_diagnostic": "      450712.0"
+        },
+        "LDFZ": {
+          "raw_hex": "2020202020202020202020302e30",
+          "raw_text_cp936_diagnostic": "           0.0",
+          "trimmed_text_cp936_diagnostic": "           0.0"
+        },
+        "CQFZ": {
+          "raw_hex": "2020202020202020202020302e30",
+          "raw_text_cp936_diagnostic": "           0.0",
+          "trimmed_text_cp936_diagnostic": "           0.0"
+        },
+        "ZBGJJ": {
+          "raw_hex": "2020202038303432383030302e30",
+          "raw_text_cp936_diagnostic": "    80428000.0",
+          "trimmed_text_cp936_diagnostic": "    80428000.0"
+        },
+        "JZC": {
+          "raw_hex": "2020203534383231343031362e30",
+          "raw_text_cp936_diagnostic": "   548214016.0",
+          "trimmed_text_cp936_diagnostic": "   548214016.0"
+        },
+        "ZYSY": {
+          "raw_hex": "2020202037303631373030302e30",
+          "raw_text_cp936_diagnostic": "    70617000.0",
+          "trimmed_text_cp936_diagnostic": "    70617000.0"
+        },
+        "ZYLY": {
+          "raw_hex": "2020202033393738393030302e30",
+          "raw_text_cp936_diagnostic": "    39789000.0",
+          "trimmed_text_cp936_diagnostic": "    39789000.0"
+        },
+        "QTLY": {
+          "raw_hex": "2020202020202020202020302e30",
+          "raw_text_cp936_diagnostic": "           0.0",
+          "trimmed_text_cp936_diagnostic": "           0.0"
+        },
+        "YYLY": {
+          "raw_hex": "2020202033303832383030302e30",
+          "raw_text_cp936_diagnostic": "    30828000.0",
+          "trimmed_text_cp936_diagnostic": "    30828000.0"
+        },
+        "TZSY": {
+          "raw_hex": "2020202031313532363030302e30",
+          "raw_text_cp936_diagnostic": "    11526000.0",
+          "trimmed_text_cp936_diagnostic": "    11526000.0"
+        },
+        "BTSY": {
+          "raw_hex": "2020203231353031323030302e30",
+          "raw_text_cp936_diagnostic": "   215012000.0",
+          "trimmed_text_cp936_diagnostic": "   215012000.0"
+        },
+        "YYWSZ": {
+          "raw_hex": "2020202d35313439353030302e30",
+          "raw_text_cp936_diagnostic": "   -51495000.0",
+          "trimmed_text_cp936_diagnostic": "   -51495000.0"
+        },
+        "SNSYTZ": {
+          "raw_hex": "2020202020202020202020302e30",
+          "raw_text_cp936_diagnostic": "           0.0",
+          "trimmed_text_cp936_diagnostic": "           0.0"
+        },
+        "LYZE": {
+          "raw_hex": "2020202033303739353030302e30",
+          "raw_text_cp936_diagnostic": "    30795000.0",
+          "trimmed_text_cp936_diagnostic": "    30795000.0"
+        },
+        "SHLY": {
+          "raw_hex": "2020202032353639363030302e30",
+          "raw_text_cp936_diagnostic": "    25696000.0",
+          "trimmed_text_cp936_diagnostic": "    25696000.0"
+        },
+        "JLY": {
+          "raw_hex": "2020202032353639363030302e30",
+          "raw_text_cp936_diagnostic": "    25696000.0",
+          "trimmed_text_cp936_diagnostic": "    25696000.0"
+        },
+        "WFPLY": {
+          "raw_hex": "2020203238373835363939322e30",
+          "raw_text_cp936_diagnostic": "   287856992.0",
+          "trimmed_text_cp936_diagnostic": "   287856992.0"
+        },
+        "TZMGJZ": {
+          "raw_hex": "202020202020202032342e313330",
+          "raw_text_cp936_diagnostic": "        24.130",
+          "trimmed_text_cp936_diagnostic": "        24.130"
+        },
+        "DY": {
+          "raw_hex": "203138",
+          "raw_text_cp936_diagnostic": " 18",
+          "trimmed_text_cp936_diagnostic": " 18"
+        },
+        "HY": {
+          "raw_hex": "20202031",
+          "raw_text_cp936_diagnostic": "   1",
+          "trimmed_text_cp936_diagnostic": "   1"
+        },
+        "ZBNB": {
+          "raw_hex": "2036",
+          "raw_text_cp936_diagnostic": " 6",
+          "trimmed_text_cp936_diagnostic": " 6"
+        },
+        "SSDATE": {
+          "raw_hex": "3139393130343033",
+          "raw_text_cp936_diagnostic": "19910403",
+          "trimmed_text_cp936_diagnostic": "19910403"
+        },
+        "MODIDATE": {
+          "raw_hex": "203132383731",
+          "raw_text_cp936_diagnostic": " 12871",
+          "trimmed_text_cp936_diagnostic": " 12871"
+        },
+        "GDRS": {
+          "raw_hex": "2020343530373132",
+          "raw_text_cp936_diagnostic": "  450712",
+          "trimmed_text_cp936_diagnostic": "  450712"
+        }
+      }
+    },
+    {
+      "record_index": 1,
+      "deleted_flag_hex": "00",
+      "fields": {
+        "SC": {
+          "raw_hex": "30",
+          "raw_text_cp936_diagnostic": "0",
+          "trimmed_text_cp936_diagnostic": "0"
+        },
+        "GPDM": {
+          "raw_hex": "303030303032",
+          "raw_text_cp936_diagnostic": "000002",
+          "trimmed_text_cp936_diagnostic": "000002"
+        },
+        "GXRQ": {
+          "raw_hex": "3230323630383238",
+          "raw_text_cp936_diagnostic": "20260828",
+          "trimmed_text_cp936_diagnostic": "20260828"
+        },
+        "ZGB": {
+          "raw_hex": "20202020313139333037312e3030",
+          "raw_text_cp936_diagnostic": "    1193071.00",
+          "trimmed_text_cp936_diagnostic": "    1193071.00"
+        },
+        "GJG": {
+          "raw_hex": "20202020202020323037302e3030",
+          "raw_text_cp936_diagnostic": "       2070.00",
+          "trimmed_text_cp936_diagnostic": "       2070.00"
+        },
+        "FQRFRG": {
+          "raw_hex": "20202d31313934363537342e3030",
+          "raw_text_cp936_diagnostic": "  -11946574.00",
+          "trimmed_text_cp936_diagnostic": "  -11946574.00"
+        },
+        "FRG": {
+          "raw_hex": "20203130353332333239362e3030",
+          "raw_text_cp936_diagnostic": "  105323296.00",
+          "trimmed_text_cp936_diagnostic": "  105323296.00"
+        },
+        "BG": {
+          "raw_hex": "20202020202020202020302e3030",
+          "raw_text_cp936_diagnostic": "          0.00",
+          "trimmed_text_cp936_diagnostic": "          0.00"
+        },
+        "HG": {
+          "raw_hex": "20202020203232303635312e3330",
+          "raw_text_cp936_diagnostic": "     220651.30",
+          "trimmed_text_cp936_diagnostic": "     220651.30"
+        },
+        "LTAG": {
+          "raw_hex": "20202020203937313531312e3331",
+          "raw_text_cp936_diagnostic": "     971511.31",
+          "trimmed_text_cp936_diagnostic": "     971511.31"
+        },
+        "ZGG": {
+          "raw_hex": "2020202020202020202d312e3235",
+          "raw_text_cp936_diagnostic": "         -1.25",
+          "trimmed_text_cp936_diagnostic": "         -1.25"
+        },
+        "ZPG": {
+          "raw_hex": "0000000000000000000000000000",
+          "raw_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+          "trimmed_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000"
+        },
+        "ZZC": {
+          "raw_hex": "2020203935393736313533362e30",
+          "raw_text_cp936_diagnostic": "   959761536.0",
+          "trimmed_text_cp936_diagnostic": "   959761536.0"
+        },
+        "LDZC": {
+          "raw_hex": "2020203635333032343634302e30",
+          "raw_text_cp936_diagnostic": "   653024640.0",
+          "trimmed_text_cp936_diagnostic": "   653024640.0"
+        },
+        "GDZC": {
+          "raw_hex": "2020202031383131393737342e30",
+          "raw_text_cp936_diagnostic": "    18119774.0",
+          "trimmed_text_cp936_diagnostic": "    18119774.0"
+        },
+        "WXZC": {
+          "raw_hex": "2020202020373038343534392e35",
+          "raw_text_cp936_diagnostic": "     7084549.5",
+          "trimmed_text_cp936_diagnostic": "     7084549.5"
+        },
+        "CQTZ": {
+          "raw_hex": "2020202020203435383130322e30",
+          "raw_text_cp936_diagnostic": "      458102.0",
+          "trimmed_text_cp936_diagnostic": "      458102.0"
+        },
+        "LDFZ": {
+          "raw_hex": "2020203535333432393832342e30",
+          "raw_text_cp936_diagnostic": "   553429824.0",
+          "trimmed_text_cp936_diagnostic": "   553429824.0"
+        },
+        "CQFZ": {
+          "raw_hex": "2020203131333632353033322e30",
+          "raw_text_cp936_diagnostic": "   113625032.0",
+          "trimmed_text_cp936_diagnostic": "   113625032.0"
+        },
+        "ZBGJJ": {
+          "raw_hex": "2020202032363935383337362e30",
+          "raw_text_cp936_diagnostic": "    26958376.0",
+          "trimmed_text_cp936_diagnostic": "    26958376.0"
+        },
+        "JZC": {
+          "raw_hex": "2020203130323138313230302e30",
+          "raw_text_cp936_diagnostic": "   102181200.0",
+          "trimmed_text_cp936_diagnostic": "   102181200.0"
+        },
+        "ZYSY": {
+          "raw_hex": "2020202037303136393131322e30",
+          "raw_text_cp936_diagnostic": "    70169112.0",
+          "trimmed_text_cp936_diagnostic": "    70169112.0"
+        },
+        "ZYLY": {
+          "raw_hex": "2020202036343539393932342e30",
+          "raw_text_cp936_diagnostic": "    64599924.0",
+          "trimmed_text_cp936_diagnostic": "    64599924.0"
+        },
+        "QTLY": {
+          "raw_hex": "2020202031313036373831352e30",
+          "raw_text_cp936_diagnostic": "    11067815.0",
+          "trimmed_text_cp936_diagnostic": "    11067815.0"
+        },
+        "YYLY": {
+          "raw_hex": "2020202d31323531333033302e30",
+          "raw_text_cp936_diagnostic": "   -12513030.0",
+          "trimmed_text_cp936_diagnostic": "   -12513030.0"
+        },
+        "TZSY": {
+          "raw_hex": "202020202d333334303438392e35",
+          "raw_text_cp936_diagnostic": "    -3340489.5",
+          "trimmed_text_cp936_diagnostic": "    -3340489.5"
+        },
+        "BTSY": {
+          "raw_hex": "2020202020203439343736362e30",
+          "raw_text_cp936_diagnostic": "      494766.0",
+          "trimmed_text_cp936_diagnostic": "      494766.0"
+        },
+        "YYWSZ": {
+          "raw_hex": "202020202d383334363338392e30",
+          "raw_text_cp936_diagnostic": "    -8346389.0",
+          "trimmed_text_cp936_diagnostic": "    -8346389.0"
+        },
+        "SNSYTZ": {
+          "raw_hex": "2020203334353935373838382e30",
+          "raw_text_cp936_diagnostic": "   345957888.0",
+          "trimmed_text_cp936_diagnostic": "   345957888.0"
+        },
+        "LYZE": {
+          "raw_hex": "2020202d31333438393938392e30",
+          "raw_text_cp936_diagnostic": "   -13489989.0",
+          "trimmed_text_cp936_diagnostic": "   -13489989.0"
+        },
+        "SHLY": {
+          "raw_hex": "2020202d31363032313235332e30",
+          "raw_text_cp936_diagnostic": "   -16021253.0",
+          "trimmed_text_cp936_diagnostic": "   -16021253.0"
+        },
+        "JLY": {
+          "raw_hex": "2020202d31343935313236392e30",
+          "raw_text_cp936_diagnostic": "   -14951269.0",
+          "trimmed_text_cp936_diagnostic": "   -14951269.0"
+        },
+        "WFPLY": {
+          "raw_hex": "2020202d35393336393836342e30",
+          "raw_text_cp936_diagnostic": "   -59369864.0",
+          "trimmed_text_cp936_diagnostic": "   -59369864.0"
+        },
+        "TZMGJZ": {
+          "raw_hex": "202020202020202020382e353630",
+          "raw_text_cp936_diagnostic": "         8.560",
+          "trimmed_text_cp936_diagnostic": "         8.560"
+        },
+        "DY": {
+          "raw_hex": "203138",
+          "raw_text_cp936_diagnostic": " 18",
+          "trimmed_text_cp936_diagnostic": " 18"
+        },
+        "HY": {
+          "raw_hex": "20203131",
+          "raw_text_cp936_diagnostic": "  11",
+          "trimmed_text_cp936_diagnostic": "  11"
+        },
+        "ZBNB": {
+          "raw_hex": "2036",
+          "raw_text_cp936_diagnostic": " 6",
+          "trimmed_text_cp936_diagnostic": " 6"
+        },
+        "SSDATE": {
+          "raw_hex": "3139393130313239",
+          "raw_text_cp936_diagnostic": "19910129",
+          "trimmed_text_cp936_diagnostic": "19910129"
+        },
+        "MODIDATE": {
+          "raw_hex": "203132383936",
+          "raw_text_cp936_diagnostic": " 12896",
+          "trimmed_text_cp936_diagnostic": " 12896"
+        },
+        "GDRS": {
+          "raw_hex": "2020343538313032",
+          "raw_text_cp936_diagnostic": "  458102",
+          "trimmed_text_cp936_diagnostic": "  458102"
+        }
+      }
+    },
+    {
+      "record_index": 2,
+      "deleted_flag_hex": "00",
+      "fields": {
+        "SC": {
+          "raw_hex": "30",
+          "raw_text_cp936_diagnostic": "0",
+          "trimmed_text_cp936_diagnostic": "0"
+        },
+        "GPDM": {
+          "raw_hex": "303030303033",
+          "raw_text_cp936_diagnostic": "000003",
+          "trimmed_text_cp936_diagnostic": "000003"
+        },
+        "GXRQ": {
+          "raw_hex": "3230323430383038",
+          "raw_text_cp936_diagnostic": "20240808",
+          "trimmed_text_cp936_diagnostic": "20240808"
+        },
+        "ZGB": {
+          "raw_hex": "20202020202033333334332e3336",
+          "raw_text_cp936_diagnostic": "      33343.36",
+          "trimmed_text_cp936_diagnostic": "      33343.36"
+        },
+        "GJG": {
+          "raw_hex": "20202020202020202020302e3030",
+          "raw_text_cp936_diagnostic": "          0.00",
+          "trimmed_text_cp936_diagnostic": "          0.00"
+        },
+        "FQRFRG": {
+          "raw_hex": "20202020202d31323935382e3233",
+          "raw_text_cp936_diagnostic": "     -12958.23",
+          "trimmed_text_cp936_diagnostic": "     -12958.23"
+        },
+        "FRG": {
+          "raw_hex": "20202020202020393337372e3231",
+          "raw_text_cp936_diagnostic": "       9377.21",
+          "trimmed_text_cp936_diagnostic": "       9377.21"
+        },
+        "BG": {
+          "raw_hex": "20202020202020202020302e3030",
+          "raw_text_cp936_diagnostic": "          0.00",
+          "trimmed_text_cp936_diagnostic": "          0.00"
+        },
+        "HG": {
+          "raw_hex": "20202020202020202020302e3030",
+          "raw_text_cp936_diagnostic": "          0.00",
+          "trimmed_text_cp936_diagnostic": "          0.00"
+        },
+        "LTAG": {
+          "raw_hex": "20202020202032363630342e3537",
+          "raw_text_cp936_diagnostic": "      26604.57",
+          "trimmed_text_cp936_diagnostic": "      26604.57"
+        },
+        "ZGG": {
+          "raw_hex": "20202020202020202020302e3030",
+          "raw_text_cp936_diagnostic": "          0.00",
+          "trimmed_text_cp936_diagnostic": "          0.00"
+        },
+        "ZPG": {
+          "raw_hex": "0000000000000000000000000000",
+          "raw_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+          "trimmed_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000"
+        },
+        "ZZC": {
+          "raw_hex": "2020202020202020373932352e35",
+          "raw_text_cp936_diagnostic": "        7925.5",
+          "trimmed_text_cp936_diagnostic": "        7925.5"
+        },
+        "LDZC": {
+          "raw_hex": "2020202020202020343234322e33",
+          "raw_text_cp936_diagnostic": "        4242.3",
+          "trimmed_text_cp936_diagnostic": "        4242.3"
+        },
+        "GDZC": {
+          "raw_hex": "2020202020202020333638332e32",
+          "raw_text_cp936_diagnostic": "        3683.2",
+          "trimmed_text_cp936_diagnostic": "        3683.2"
+        },
+        "WXZC": {
+          "raw_hex": "2020202020202020202020302e30",
+          "raw_text_cp936_diagnostic": "           0.0",
+          "trimmed_text_cp936_diagnostic": "           0.0"
+        },
+        "CQTZ": {
+          "raw_hex": "2020202020203131313031312e30",
+          "raw_text_cp936_diagnostic": "      111011.0",
+          "trimmed_text_cp936_diagnostic": "      111011.0"
+        },
+        "LDFZ": {
+          "raw_hex": "2020202020313739313131342e38",
+          "raw_text_cp936_diagnostic": "     1791114.8",
+          "trimmed_text_cp936_diagnostic": "     1791114.8"
+        },
+        "CQFZ": {
+          "raw_hex": "20202020202020202d3939302e39",
+          "raw_text_cp936_diagnostic": "        -990.9",
+          "trimmed_text_cp936_diagnostic": "        -990.9"
+        },
+        "ZBGJJ": {
+          "raw_hex": "2020202020313331383332382e36",
+          "raw_text_cp936_diagnostic": "     1318328.6",
+          "trimmed_text_cp936_diagnostic": "     1318328.6"
+        },
+        "JZC": {
+          "raw_hex": "202020202d313738323139382e32",
+          "raw_text_cp936_diagnostic": "    -1782198.2",
+          "trimmed_text_cp936_diagnostic": "    -1782198.2"
+        },
+        "ZYSY": {
+          "raw_hex": "2020202020202031313230352e36",
+          "raw_text_cp936_diagnostic": "       11205.6",
+          "trimmed_text_cp936_diagnostic": "       11205.6"
+        },
+        "ZYLY": {
+          "raw_hex": "2020202020202020343731352e34",
+          "raw_text_cp936_diagnostic": "        4715.4",
+          "trimmed_text_cp936_diagnostic": "        4715.4"
+        },
+        "QTLY": {
+          "raw_hex": "2020202020202020202020302e30",
+          "raw_text_cp936_diagnostic": "           0.0",
+          "trimmed_text_cp936_diagnostic": "           0.0"
+        },
+        "YYLY": {
+          "raw_hex": "2020202020202d31323335372e38",
+          "raw_text_cp936_diagnostic": "      -12357.8",
+          "trimmed_text_cp936_diagnostic": "      -12357.8"
+        },
+        "TZSY": {
+          "raw_hex": "2020202020202020202020302e30",
+          "raw_text_cp936_diagnostic": "           0.0",
+          "trimmed_text_cp936_diagnostic": "           0.0"
+        },
+        "BTSY": {
+          "raw_hex": "2020202020202020323234322e36",
+          "raw_text_cp936_diagnostic": "        2242.6",
+          "trimmed_text_cp936_diagnostic": "        2242.6"
+        },
+        "YYWSZ": {
+          "raw_hex": "2020202020202020323138362e33",
+          "raw_text_cp936_diagnostic": "        2186.3",
+          "trimmed_text_cp936_diagnostic": "        2186.3"
+        },
+        "SNSYTZ": {
+          "raw_hex": "2020202020202020202020332e30",
+          "raw_text_cp936_diagnostic": "           3.0",
+          "trimmed_text_cp936_diagnostic": "           3.0"
+        },
+        "LYZE": {
+          "raw_hex": "2020202020203831363132352e35",
+          "raw_text_cp936_diagnostic": "      816125.5",
+          "trimmed_text_cp936_diagnostic": "      816125.5"
+        },
+        "SHLY": {
+          "raw_hex": "2020202020203831363132352e35",
+          "raw_text_cp936_diagnostic": "      816125.5",
+          "trimmed_text_cp936_diagnostic": "      816125.5"
+        },
+        "JLY": {
+          "raw_hex": "2020202020203831363132352e35",
+          "raw_text_cp936_diagnostic": "      816125.5",
+          "trimmed_text_cp936_diagnostic": "      816125.5"
+        },
+        "WFPLY": {
+          "raw_hex": "202020202d333435363830392e30",
+          "raw_text_cp936_diagnostic": "    -3456809.0",
+          "trimmed_text_cp936_diagnostic": "    -3456809.0"
+        },
+        "TZMGJZ": {
+          "raw_hex": "202020202020202020302e303030",
+          "raw_text_cp936_diagnostic": "         0.000",
+          "trimmed_text_cp936_diagnostic": "         0.000"
+        },
+        "DY": {
+          "raw_hex": "202030",
+          "raw_text_cp936_diagnostic": "  0",
+          "trimmed_text_cp936_diagnostic": "  0"
+        },
+        "HY": {
+          "raw_hex": "20202030",
+          "raw_text_cp936_diagnostic": "   0",
+          "trimmed_text_cp936_diagnostic": "   0"
+        },
+        "ZBNB": {
+          "raw_hex": "3132",
+          "raw_text_cp936_diagnostic": "12",
+          "trimmed_text_cp936_diagnostic": "12"
+        },
+        "SSDATE": {
+          "raw_hex": "2020202020202030",
+          "raw_text_cp936_diagnostic": "       0",
+          "trimmed_text_cp936_diagnostic": "       0"
+        },
+        "MODIDATE": {
+          "raw_hex": "203131333937",
+          "raw_text_cp936_diagnostic": " 11397",
+          "trimmed_text_cp936_diagnostic": " 11397"
+        },
+        "GDRS": {
+          "raw_hex": "2020313131303131",
+          "raw_text_cp936_diagnostic": "  111011",
+          "trimmed_text_cp936_diagnostic": "  111011"
+        }
+      }
+    }
+  ],
+  "target_samples": {
+    "000001": [
+      {
+        "record_index": 0,
+        "deleted_flag_hex": "00",
+        "fields": {
+          "SC": {
+            "raw_hex": "30",
+            "raw_text_cp936_diagnostic": "0",
+            "trimmed_text_cp936_diagnostic": "0"
+          },
+          "GPDM": {
+            "raw_hex": "303030303031",
+            "raw_text_cp936_diagnostic": "000001",
+            "trimmed_text_cp936_diagnostic": "000001"
+          },
+          "GXRQ": {
+            "raw_hex": "3230323630383135",
+            "raw_text_cp936_diagnostic": "20260815",
+            "trimmed_text_cp936_diagnostic": "20260815"
+          },
+          "ZGB": {
+            "raw_hex": "20202020313934303539312e3838",
+            "raw_text_cp936_diagnostic": "    1940591.88",
+            "trimmed_text_cp936_diagnostic": "    1940591.88"
+          },
+          "GJG": {
+            "raw_hex": "20202020202020313936362e3030",
+            "raw_text_cp936_diagnostic": "       1966.00",
+            "trimmed_text_cp936_diagnostic": "       1966.00"
+          },
+          "FQRFRG": {
+            "raw_hex": "20202032343837303030302e3030",
+            "raw_text_cp936_diagnostic": "   24870000.00",
+            "trimmed_text_cp936_diagnostic": "   24870000.00"
+          },
+          "FRG": {
+            "raw_hex": "20202036393338353030302e3030",
+            "raw_text_cp936_diagnostic": "   69385000.00",
+            "trimmed_text_cp936_diagnostic": "   69385000.00"
+          },
+          "BG": {
+            "raw_hex": "20202020202020202020302e3030",
+            "raw_text_cp936_diagnostic": "          0.00",
+            "trimmed_text_cp936_diagnostic": "          0.00"
+          },
+          "HG": {
+            "raw_hex": "20202020202020202020302e3030",
+            "raw_text_cp936_diagnostic": "          0.00",
+            "trimmed_text_cp936_diagnostic": "          0.00"
+          },
+          "LTAG": {
+            "raw_hex": "20202020313934303536382e3530",
+            "raw_text_cp936_diagnostic": "    1940568.50",
+            "trimmed_text_cp936_diagnostic": "    1940568.50"
+          },
+          "ZGG": {
+            "raw_hex": "20202020202020202020312e3234",
+            "raw_text_cp936_diagnostic": "          1.24",
+            "trimmed_text_cp936_diagnostic": "          1.24"
+          },
+          "ZPG": {
+            "raw_hex": "0000000000000000000000000000",
+            "raw_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+            "trimmed_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000"
+          },
+          "ZZC": {
+            "raw_hex": "2020363032383738353135322e30",
+            "raw_text_cp936_diagnostic": "  6028785152.0",
+            "trimmed_text_cp936_diagnostic": "  6028785152.0"
+          },
+          "LDZC": {
+            "raw_hex": "2020202020202020202020302e30",
+            "raw_text_cp936_diagnostic": "           0.0",
+            "trimmed_text_cp936_diagnostic": "           0.0"
+          },
+          "GDZC": {
+            "raw_hex": "2020202031303436343030302e30",
+            "raw_text_cp936_diagnostic": "    10464000.0",
+            "trimmed_text_cp936_diagnostic": "    10464000.0"
+          },
+          "WXZC": {
+            "raw_hex": "2020202020353431353030302e30",
+            "raw_text_cp936_diagnostic": "     5415000.0",
+            "trimmed_text_cp936_diagnostic": "     5415000.0"
+          },
+          "CQTZ": {
+            "raw_hex": "2020202020203435303731322e30",
+            "raw_text_cp936_diagnostic": "      450712.0",
+            "trimmed_text_cp936_diagnostic": "      450712.0"
+          },
+          "LDFZ": {
+            "raw_hex": "2020202020202020202020302e30",
+            "raw_text_cp936_diagnostic": "           0.0",
+            "trimmed_text_cp936_diagnostic": "           0.0"
+          },
+          "CQFZ": {
+            "raw_hex": "2020202020202020202020302e30",
+            "raw_text_cp936_diagnostic": "           0.0",
+            "trimmed_text_cp936_diagnostic": "           0.0"
+          },
+          "ZBGJJ": {
+            "raw_hex": "2020202038303432383030302e30",
+            "raw_text_cp936_diagnostic": "    80428000.0",
+            "trimmed_text_cp936_diagnostic": "    80428000.0"
+          },
+          "JZC": {
+            "raw_hex": "2020203534383231343031362e30",
+            "raw_text_cp936_diagnostic": "   548214016.0",
+            "trimmed_text_cp936_diagnostic": "   548214016.0"
+          },
+          "ZYSY": {
+            "raw_hex": "2020202037303631373030302e30",
+            "raw_text_cp936_diagnostic": "    70617000.0",
+            "trimmed_text_cp936_diagnostic": "    70617000.0"
+          },
+          "ZYLY": {
+            "raw_hex": "2020202033393738393030302e30",
+            "raw_text_cp936_diagnostic": "    39789000.0",
+            "trimmed_text_cp936_diagnostic": "    39789000.0"
+          },
+          "QTLY": {
+            "raw_hex": "2020202020202020202020302e30",
+            "raw_text_cp936_diagnostic": "           0.0",
+            "trimmed_text_cp936_diagnostic": "           0.0"
+          },
+          "YYLY": {
+            "raw_hex": "2020202033303832383030302e30",
+            "raw_text_cp936_diagnostic": "    30828000.0",
+            "trimmed_text_cp936_diagnostic": "    30828000.0"
+          },
+          "TZSY": {
+            "raw_hex": "2020202031313532363030302e30",
+            "raw_text_cp936_diagnostic": "    11526000.0",
+            "trimmed_text_cp936_diagnostic": "    11526000.0"
+          },
+          "BTSY": {
+            "raw_hex": "2020203231353031323030302e30",
+            "raw_text_cp936_diagnostic": "   215012000.0",
+            "trimmed_text_cp936_diagnostic": "   215012000.0"
+          },
+          "YYWSZ": {
+            "raw_hex": "2020202d35313439353030302e30",
+            "raw_text_cp936_diagnostic": "   -51495000.0",
+            "trimmed_text_cp936_diagnostic": "   -51495000.0"
+          },
+          "SNSYTZ": {
+            "raw_hex": "2020202020202020202020302e30",
+            "raw_text_cp936_diagnostic": "           0.0",
+            "trimmed_text_cp936_diagnostic": "           0.0"
+          },
+          "LYZE": {
+            "raw_hex": "2020202033303739353030302e30",
+            "raw_text_cp936_diagnostic": "    30795000.0",
+            "trimmed_text_cp936_diagnostic": "    30795000.0"
+          },
+          "SHLY": {
+            "raw_hex": "2020202032353639363030302e30",
+            "raw_text_cp936_diagnostic": "    25696000.0",
+            "trimmed_text_cp936_diagnostic": "    25696000.0"
+          },
+          "JLY": {
+            "raw_hex": "2020202032353639363030302e30",
+            "raw_text_cp936_diagnostic": "    25696000.0",
+            "trimmed_text_cp936_diagnostic": "    25696000.0"
+          },
+          "WFPLY": {
+            "raw_hex": "2020203238373835363939322e30",
+            "raw_text_cp936_diagnostic": "   287856992.0",
+            "trimmed_text_cp936_diagnostic": "   287856992.0"
+          },
+          "TZMGJZ": {
+            "raw_hex": "202020202020202032342e313330",
+            "raw_text_cp936_diagnostic": "        24.130",
+            "trimmed_text_cp936_diagnostic": "        24.130"
+          },
+          "DY": {
+            "raw_hex": "203138",
+            "raw_text_cp936_diagnostic": " 18",
+            "trimmed_text_cp936_diagnostic": " 18"
+          },
+          "HY": {
+            "raw_hex": "20202031",
+            "raw_text_cp936_diagnostic": "   1",
+            "trimmed_text_cp936_diagnostic": "   1"
+          },
+          "ZBNB": {
+            "raw_hex": "2036",
+            "raw_text_cp936_diagnostic": " 6",
+            "trimmed_text_cp936_diagnostic": " 6"
+          },
+          "SSDATE": {
+            "raw_hex": "3139393130343033",
+            "raw_text_cp936_diagnostic": "19910403",
+            "trimmed_text_cp936_diagnostic": "19910403"
+          },
+          "MODIDATE": {
+            "raw_hex": "203132383731",
+            "raw_text_cp936_diagnostic": " 12871",
+            "trimmed_text_cp936_diagnostic": " 12871"
+          },
+          "GDRS": {
+            "raw_hex": "2020343530373132",
+            "raw_text_cp936_diagnostic": "  450712",
+            "trimmed_text_cp936_diagnostic": "  450712"
+          }
+        }
+      }
+    ],
+    "600000": [
+      {
+        "record_index": 3162,
+        "deleted_flag_hex": "00",
+        "fields": {
+          "SC": {
+            "raw_hex": "31",
+            "raw_text_cp936_diagnostic": "1",
+            "trimmed_text_cp936_diagnostic": "1"
+          },
+          "GPDM": {
+            "raw_hex": "363030303030",
+            "raw_text_cp936_diagnostic": "600000",
+            "trimmed_text_cp936_diagnostic": "600000"
+          },
+          "GXRQ": {
+            "raw_hex": "3230323630383238",
+            "raw_text_cp936_diagnostic": "20260828",
+            "trimmed_text_cp936_diagnostic": "20260828"
+          },
+          "ZGB": {
+            "raw_hex": "20202020333333303538332e3735",
+            "raw_text_cp936_diagnostic": "    3330583.75",
+            "trimmed_text_cp936_diagnostic": "    3330583.75"
+          },
+          "GJG": {
+            "raw_hex": "20202020202020313936362e3030",
+            "raw_text_cp936_diagnostic": "       1966.00",
+            "trimmed_text_cp936_diagnostic": "       1966.00"
+          },
+          "FQRFRG": {
+            "raw_hex": "20202032393733373030302e3030",
+            "raw_text_cp936_diagnostic": "   29737000.00",
+            "trimmed_text_cp936_diagnostic": "   29737000.00"
+          },
+          "FRG": {
+            "raw_hex": "20202039303535393030302e3030",
+            "raw_text_cp936_diagnostic": "   90559000.00",
+            "trimmed_text_cp936_diagnostic": "   90559000.00"
+          },
+          "BG": {
+            "raw_hex": "20202020202020202020302e3030",
+            "raw_text_cp936_diagnostic": "          0.00",
+            "trimmed_text_cp936_diagnostic": "          0.00"
+          },
+          "HG": {
+            "raw_hex": "20202020202020202020302e3030",
+            "raw_text_cp936_diagnostic": "          0.00",
+            "trimmed_text_cp936_diagnostic": "          0.00"
+          },
+          "LTAG": {
+            "raw_hex": "20202020333333303538332e3735",
+            "raw_text_cp936_diagnostic": "    3330583.75",
+            "trimmed_text_cp936_diagnostic": "    3330583.75"
+          },
+          "ZGG": {
+            "raw_hex": "20202020202020202020302e3839",
+            "raw_text_cp936_diagnostic": "          0.89",
+            "trimmed_text_cp936_diagnostic": "          0.89"
+          },
+          "ZPG": {
+            "raw_hex": "0000000000000000000000000000",
+            "raw_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+            "trimmed_text_cp936_diagnostic": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000"
+          },
+          "ZZC": {
+            "raw_hex": "2031303430353335343439362e30",
+            "raw_text_cp936_diagnostic": " 10405354496.0",
+            "trimmed_text_cp936_diagnostic": " 10405354496.0"
+          },
+          "LDZC": {
+            "raw_hex": "2020202020202020202020302e30",
+            "raw_text_cp936_diagnostic": "           0.0",
+            "trimmed_text_cp936_diagnostic": "           0.0"
+          },
+          "GDZC": {
+            "raw_hex": "2020202037303339333030302e30",
+            "raw_text_cp936_diagnostic": "    70393000.0",
+            "trimmed_text_cp936_diagnostic": "    70393000.0"
+          },
+          "WXZC": {
+            "raw_hex": "2020202020383832323030302e30",
+            "raw_text_cp936_diagnostic": "     8822000.0",
+            "trimmed_text_cp936_diagnostic": "     8822000.0"
+          },
+          "CQTZ": {
+            "raw_hex": "2020202020203136333332372e30",
+            "raw_text_cp936_diagnostic": "      163327.0",
+            "trimmed_text_cp936_diagnostic": "      163327.0"
+          },
+          "LDFZ": {
+            "raw_hex": "2020202020202020202020302e30",
+            "raw_text_cp936_diagnostic": "           0.0",
+            "trimmed_text_cp936_diagnostic": "           0.0"
+          },
+          "CQFZ": {
+            "raw_hex": "2020202020363931323030302e30",
+            "raw_text_cp936_diagnostic": "     6912000.0",
+            "trimmed_text_cp936_diagnostic": "     6912000.0"
+          },
+          "ZBGJJ": {
+            "raw_hex": "2020203133343431383030302e30",
+            "raw_text_cp936_diagnostic": "   134418000.0",
+            "trimmed_text_cp936_diagnostic": "   134418000.0"
+          },
+          "JZC": {
+            "raw_hex": "2020203833333737323932382e30",
+            "raw_text_cp936_diagnostic": "   833772928.0",
+            "trimmed_text_cp936_diagnostic": "   833772928.0"
+          },
+          "ZYSY": {
+            "raw_hex": "2020202039333737373030302e30",
+            "raw_text_cp936_diagnostic": "    93777000.0",
+            "trimmed_text_cp936_diagnostic": "    93777000.0"
+          },
+          "ZYLY": {
+            "raw_hex": "2020202035373239303030302e30",
+            "raw_text_cp936_diagnostic": "    57290000.0",
+            "trimmed_text_cp936_diagnostic": "    57290000.0"
+          },
+          "QTLY": {
+            "raw_hex": "2020202020202020202020302e30",
+            "raw_text_cp936_diagnostic": "           0.0",
+            "trimmed_text_cp936_diagnostic": "           0.0"
+          },
+          "YYLY": {
+            "raw_hex": "2020202033363438373030302e30",
+            "raw_text_cp936_diagnostic": "    36487000.0",
+            "trimmed_text_cp936_diagnostic": "    36487000.0"
+          },
+          "TZSY": {
+            "raw_hex": "2020202032303134343030302e30",
+            "raw_text_cp936_diagnostic": "    20144000.0",
+            "trimmed_text_cp936_diagnostic": "    20144000.0"
+          },
+          "BTSY": {
+            "raw_hex": "2020203430343330343030302e30",
+            "raw_text_cp936_diagnostic": "   404304000.0",
+            "trimmed_text_cp936_diagnostic": "   404304000.0"
+          },
+          "YYWSZ": {
+            "raw_hex": "202020202d363837323030382e30",
+            "raw_text_cp936_diagnostic": "    -6872008.0",
+            "trimmed_text_cp936_diagnostic": "    -6872008.0"
+          },
+          "SNSYTZ": {
+            "raw_hex": "2020202020202020202020302e30",
+            "raw_text_cp936_diagnostic": "           0.0",
+            "trimmed_text_cp936_diagnostic": "           0.0"
+          },
+          "LYZE": {
+            "raw_hex": "2020202033363434363030302e30",
+            "raw_text_cp936_diagnostic": "    36446000.0",
+            "trimmed_text_cp936_diagnostic": "    36446000.0"
+          },
+          "SHLY": {
+            "raw_hex": "2020202033313335343030302e30",
+            "raw_text_cp936_diagnostic": "    31354000.0",
+            "trimmed_text_cp936_diagnostic": "    31354000.0"
+          },
+          "JLY": {
+            "raw_hex": "2020202033303935313030302e30",
+            "raw_text_cp936_diagnostic": "    30951000.0",
+            "trimmed_text_cp936_diagnostic": "    30951000.0"
+          },
+          "WFPLY": {
+            "raw_hex": "2020203235353437343030302e30",
+            "raw_text_cp936_diagnostic": "   255474000.0",
+            "trimmed_text_cp936_diagnostic": "   255474000.0"
+          },
+          "TZMGJZ": {
+            "raw_hex": "202020202020202032322e363330",
+            "raw_text_cp936_diagnostic": "        22.630",
+            "trimmed_text_cp936_diagnostic": "        22.630"
+          },
+          "DY": {
+            "raw_hex": "203136",
+            "raw_text_cp936_diagnostic": " 16",
+            "trimmed_text_cp936_diagnostic": " 16"
+          },
+          "HY": {
+            "raw_hex": "20202031",
+            "raw_text_cp936_diagnostic": "   1",
+            "trimmed_text_cp936_diagnostic": "   1"
+          },
+          "ZBNB": {
+            "raw_hex": "2036",
+            "raw_text_cp936_diagnostic": " 6",
+            "trimmed_text_cp936_diagnostic": " 6"
+          },
+          "SSDATE": {
+            "raw_hex": "3139393931313130",
+            "raw_text_cp936_diagnostic": "19991110",
+            "trimmed_text_cp936_diagnostic": "19991110"
+          },
+          "MODIDATE": {
+            "raw_hex": "203132383937",
+            "raw_text_cp936_diagnostic": " 12897",
+            "trimmed_text_cp936_diagnostic": " 12897"
+          },
+          "GDRS": {
+            "raw_hex": "2020313633333237",
+            "raw_text_cp936_diagnostic": "  163327",
+            "trimmed_text_cp936_diagnostic": "  163327"
+          }
+        }
+      }
+    ]
+  }
+}

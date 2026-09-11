@@ -1,0 +1,48 @@
+{
+  "base_zip": {
+    "member_count": 542,
+    "suffix_counts": {
+      ".dat": 424,
+      ".md5": 105,
+      ".code": 1,
+      ".name": 1,
+      ".txt": 1,
+      ".ini": 1,
+      ".cfg": 7,
+      ".dbf": 1,
+      ".map": 1
+    },
+    "key_members": [
+      "infoharbor_qsid.txt",
+      "tdxhy.cfg",
+      "tdxhy2.cfg",
+      "tdxzsbase.cfg",
+      "tdxzsbase2.cfg",
+      "base.dbf",
+      "base.map"
+    ]
+  },
+  "gbbq_zip": {
+    "member_count": 26,
+    "suffix_counts": {
+      "<no-extension>": 1,
+      ".map": 1,
+      ".lst": 1,
+      ".txt": 20,
+      ".dat": 1,
+      ".zip": 2
+    },
+    "key_members": [
+      "gbbq",
+      "gbbq.map",
+      "infoharbor.lst",
+      "tend_std.zip",
+      "zhb.txt",
+      "zhb.zip"
+    ]
+  },
+  "package_documentation": {
+    "base_readme_or_field_spec": "not found; cfg/dat/map files exist but no base.dbf field-definition document",
+    "gbbq_readme_or_field_spec": "not found; infoharbor text files are market/reference material, not gbbq binary schema"
+  }
+}

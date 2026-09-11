@@ -1,0 +1,56 @@
+{
+  "collection_date": "2026-09-11",
+  "official_notification": {
+    "url": "https://www.tdx.com.cn/article/52.html",
+    "http_code": 200,
+    "bytes": 24873,
+    "sha256": "527d447ca305ca0f9a16e8f79201264856e7be08f4971eaefa6baafd6dc57d37",
+    "note": "Fetched body confirms the official download links; no field-definition contract is inferred from it."
+  },
+  "archives": {
+    "base.zip": {
+      "requested_url": "http://www.tdx.com.cn/products/data/data/dbf/base.zip",
+      "effective_url": "http://www.tdx.com.cn/products/data/data/dbf/base.zip",
+      "http_code": 200,
+      "content_type": "application/zip",
+      "content_length": 16098051,
+      "actual_bytes": 16098051,
+      "sha256": "80ad1681c260cea18bb6f3e5ca6d3ac1acd215eae7b533048c8735619a1dc433",
+      "last_modified": "Fri, 11 Sep 2026 10:22:54 GMT",
+      "etag": "\"6aa3d67e-f5a303\"",
+      "download_start_utc": "2026-09-11T11:01:09.622Z",
+      "download_end_utc": "2026-09-11T11:02:11.063Z",
+      "download_start_asia_shanghai": "2026-09-11T19:01:09.626+0800",
+      "download_end_asia_shanghai": "2026-09-11T19:02:11.066+0800"
+    },
+    "gbbq.zip": {
+      "requested_url": "http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+      "effective_url": "http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+      "http_code": 200,
+      "content_type": "application/zip",
+      "content_length": 6350201,
+      "actual_bytes": 6350201,
+      "sha256": "6cfdbfc5a67e80ba6773cd5e8cc6779a97a01e07d892e5e6a17c9b35dbef60aa",
+      "last_modified": "Fri, 11 Sep 2026 10:22:54 GMT",
+      "etag": "\"6aa3d67e-60e579\"",
+      "download_start_utc": "2026-09-11T11:02:11.106Z",
+      "download_end_utc": "2026-09-11T11:02:34.243Z",
+      "download_start_asia_shanghai": "2026-09-11T19:02:11.109+0800",
+      "download_end_asia_shanghai": "2026-09-11T19:02:34.246+0800"
+    }
+  },
+  "extracted_files": {
+    "base/base.dbf": {
+      "bytes": 4268265,
+      "sha256": "bdee117a65d74087dc3ec6e3dbf43608f636839eb58b74bc8ee2e6c982594652"
+    },
+    "gbbq/gbbq": {
+      "bytes": 5966087,
+      "sha256": "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60"
+    },
+    "gbbq/gbbq.map": {
+      "bytes": 96083,
+      "sha256": "b2c83ef38462e1716ea33e3ef326d38ab287c13b8b50c92e960c2b932a6ae400"
+    }
+  }
+}

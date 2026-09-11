@@ -1,0 +1,4345 @@
+{
+  "archive": "base.zip",
+  "sha256": "80ad1681c260cea18bb6f3e5ca6d3ac1acd215eae7b533048c8735619a1dc433",
+  "file_bytes": 16098051,
+  "member_count": 542,
+  "testzip": null,
+  "members": [
+    {
+      "path": "infoharbor_33_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_33_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_33_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_33_mdp.dat",
+      "compressed_size": 15789,
+      "uncompressed_size": 17289,
+      "crc32": "5b0e16c1",
+      "timestamp_local": "2026-08-28T18:20:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_33_xgd.dat",
+      "compressed_size": 137770,
+      "uncompressed_size": 632859,
+      "crc32": "0085c810",
+      "timestamp_local": "2026-08-28T18:21:02",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_34_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_34_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_34_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_34_mdp.dat",
+      "compressed_size": 15821,
+      "uncompressed_size": 17379,
+      "crc32": "a59b0ddb",
+      "timestamp_local": "2026-08-28T18:21:02",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_34_xgd.dat",
+      "compressed_size": 134891,
+      "uncompressed_size": 633324,
+      "crc32": "a7ffddc5",
+      "timestamp_local": "2026-08-28T18:21:04",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_35_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_35_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_35_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_35_mdp.dat",
+      "compressed_size": 16150,
+      "uncompressed_size": 17623,
+      "crc32": "b2dfdca9",
+      "timestamp_local": "2026-08-28T18:21:04",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_35_xgd.dat",
+      "compressed_size": 137759,
+      "uncompressed_size": 632859,
+      "crc32": "fa44a465",
+      "timestamp_local": "2026-08-28T18:21:08",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_36_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_36_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_36_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_36_mdp.dat",
+      "compressed_size": 21339,
+      "uncompressed_size": 23501,
+      "crc32": "ea736123",
+      "timestamp_local": "2026-09-04T21:01:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_36_xgd.dat",
+      "compressed_size": 147183,
+      "uncompressed_size": 650752,
+      "crc32": "12b43e60",
+      "timestamp_local": "2026-09-04T20:58:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_37_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_37_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_37_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_37_mdp.dat",
+      "compressed_size": 21294,
+      "uncompressed_size": 23342,
+      "crc32": "2359f593",
+      "timestamp_local": "2026-09-04T21:00:20",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_37_xgd.dat",
+      "compressed_size": 146852,
+      "uncompressed_size": 651638,
+      "crc32": "fb7665d0",
+      "timestamp_local": "2026-09-04T20:58:02",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_38_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_38_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_38_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_38_mdp.dat",
+      "compressed_size": 8448,
+      "uncompressed_size": 9051,
+      "crc32": "c3c54ea2",
+      "timestamp_local": "2026-08-28T18:21:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_38_xgd.dat",
+      "compressed_size": 64897,
+      "uncompressed_size": 256834,
+      "crc32": "8195590d",
+      "timestamp_local": "2026-08-28T18:21:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_39_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_39_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_39_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_39_mdp.dat",
+      "compressed_size": 15791,
+      "uncompressed_size": 17289,
+      "crc32": "3e32cc6a",
+      "timestamp_local": "2026-08-28T18:21:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_39_xgd.dat",
+      "compressed_size": 137767,
+      "uncompressed_size": 632859,
+      "crc32": "7992354a",
+      "timestamp_local": "2026-08-28T18:21:18",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_40_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_40_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_40_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_40_mdp.dat",
+      "compressed_size": 15789,
+      "uncompressed_size": 17289,
+      "crc32": "82930b82",
+      "timestamp_local": "2026-08-28T18:21:20",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_40_xgd.dat",
+      "compressed_size": 137773,
+      "uncompressed_size": 632859,
+      "crc32": "53253071",
+      "timestamp_local": "2026-08-28T18:21:22",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_41_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_41_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_41_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_41_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "20e64ba6",
+      "timestamp_local": "2026-08-28T18:21:22",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_41_xgd.dat",
+      "compressed_size": 137768,
+      "uncompressed_size": 632859,
+      "crc32": "2c1f37fd",
+      "timestamp_local": "2026-08-28T18:21:26",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_42_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_42_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_42_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_42_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "33aea721",
+      "timestamp_local": "2026-08-28T18:21:26",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_42_xgd.dat",
+      "compressed_size": 137756,
+      "uncompressed_size": 632859,
+      "crc32": "ff49909e",
+      "timestamp_local": "2026-08-28T18:21:28",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_43_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_43_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_43_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_43_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "20d99231",
+      "timestamp_local": "2026-08-28T18:21:28",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_43_xgd.dat",
+      "compressed_size": 137769,
+      "uncompressed_size": 632859,
+      "crc32": "12c9e989",
+      "timestamp_local": "2026-08-28T18:21:30",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_44_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_44_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_44_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_44_mdp.dat",
+      "compressed_size": 21289,
+      "uncompressed_size": 23342,
+      "crc32": "9862b33e",
+      "timestamp_local": "2026-09-04T21:00:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_44_xgd.dat",
+      "compressed_size": 146867,
+      "uncompressed_size": 651638,
+      "crc32": "0a7ceaa0",
+      "timestamp_local": "2026-09-04T20:57:50",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_45_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_45_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_45_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_45_mdp.dat",
+      "compressed_size": 15789,
+      "uncompressed_size": 17289,
+      "crc32": "dade7bad",
+      "timestamp_local": "2026-08-28T18:21:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_45_xgd.dat",
+      "compressed_size": 137762,
+      "uncompressed_size": 632859,
+      "crc32": "19fe4959",
+      "timestamp_local": "2026-08-28T18:21:36",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_46_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_46_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_46_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_46_mdp.dat",
+      "compressed_size": 8443,
+      "uncompressed_size": 9051,
+      "crc32": "644dabb9",
+      "timestamp_local": "2026-08-28T18:21:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_46_xgd.dat",
+      "compressed_size": 64895,
+      "uncompressed_size": 256834,
+      "crc32": "c4b8532e",
+      "timestamp_local": "2026-08-28T18:21:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_47_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_47_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_47_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_47_mdp.dat",
+      "compressed_size": 14708,
+      "uncompressed_size": 15886,
+      "crc32": "3dd5f491",
+      "timestamp_local": "2026-08-28T18:21:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_47_xgd.dat",
+      "compressed_size": 115226,
+      "uncompressed_size": 547340,
+      "crc32": "2ad99ba2",
+      "timestamp_local": "2026-08-28T18:21:40",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_48_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_48_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_48_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_48_mdp.dat",
+      "compressed_size": 15823,
+      "uncompressed_size": 17287,
+      "crc32": "619ca016",
+      "timestamp_local": "2026-08-28T18:21:40",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_48_xgd.dat",
+      "compressed_size": 137760,
+      "uncompressed_size": 632859,
+      "crc32": "f67c3f60",
+      "timestamp_local": "2026-08-28T18:21:44",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_49_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_49_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_49_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_49_mdp.dat",
+      "compressed_size": 16207,
+      "uncompressed_size": 17732,
+      "crc32": "19f46623",
+      "timestamp_local": "2026-08-28T18:21:44",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_49_xgd.dat",
+      "compressed_size": 137756,
+      "uncompressed_size": 632859,
+      "crc32": "dd922017",
+      "timestamp_local": "2026-08-28T18:21:46",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_50_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_50_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_50_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_50_mdp.dat",
+      "compressed_size": 15553,
+      "uncompressed_size": 17123,
+      "crc32": "590eea44",
+      "timestamp_local": "2026-08-28T18:21:50",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_50_xgd.dat",
+      "compressed_size": 146627,
+      "uncompressed_size": 632693,
+      "crc32": "f758115d",
+      "timestamp_local": "2026-08-28T18:21:52",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_51_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_51_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_51_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_51_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "16eace4b",
+      "timestamp_local": "2026-08-28T18:21:52",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_51_xgd.dat",
+      "compressed_size": 137767,
+      "uncompressed_size": 632859,
+      "crc32": "28abcaa4",
+      "timestamp_local": "2026-08-28T18:21:56",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_52_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_52_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_52_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_52_mdp.dat",
+      "compressed_size": 14664,
+      "uncompressed_size": 16057,
+      "crc32": "3ac200ea",
+      "timestamp_local": "2026-08-28T18:21:56",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_52_xgd.dat",
+      "compressed_size": 136736,
+      "uncompressed_size": 629557,
+      "crc32": "4399a738",
+      "timestamp_local": "2026-08-28T18:11:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_53_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_53_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_53_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_53_mdp.dat",
+      "compressed_size": 16984,
+      "uncompressed_size": 18734,
+      "crc32": "1a27e3a3",
+      "timestamp_local": "2026-08-28T18:11:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_53_xgd.dat",
+      "compressed_size": 140629,
+      "uncompressed_size": 750060,
+      "crc32": "a30a66ed",
+      "timestamp_local": "2026-08-28T18:12:04",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_54_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_54_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_54_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_54_mdp.dat",
+      "compressed_size": 13572,
+      "uncompressed_size": 14820,
+      "crc32": "ee26c4d8",
+      "timestamp_local": "2026-08-28T18:12:04",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_54_xgd.dat",
+      "compressed_size": 117568,
+      "uncompressed_size": 572133,
+      "crc32": "42989eee",
+      "timestamp_local": "2026-08-28T18:12:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_55_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_55_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_55_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_55_mdp.dat",
+      "compressed_size": 2255,
+      "uncompressed_size": 2255,
+      "crc32": "956cc20b",
+      "timestamp_local": "2026-08-28T18:12:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_55_xgd.dat",
+      "compressed_size": 3826,
+      "uncompressed_size": 6975,
+      "crc32": "89b4aec8",
+      "timestamp_local": "2026-08-28T18:12:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_56_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_56_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_56_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_56_mdp.dat",
+      "compressed_size": 14666,
+      "uncompressed_size": 16057,
+      "crc32": "6f5ad3a0",
+      "timestamp_local": "2026-08-28T18:12:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_56_xgd.dat",
+      "compressed_size": 136733,
+      "uncompressed_size": 629557,
+      "crc32": "fc75594b",
+      "timestamp_local": "2026-08-28T18:12:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_57_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_57_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_57_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_57_mdp.dat",
+      "compressed_size": 14665,
+      "uncompressed_size": 16057,
+      "crc32": "2a571730",
+      "timestamp_local": "2026-08-28T18:12:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_57_xgd.dat",
+      "compressed_size": 136739,
+      "uncompressed_size": 629557,
+      "crc32": "0baeb24c",
+      "timestamp_local": "2026-08-28T18:12:22",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_58_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_58_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_58_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_58_mdp.dat",
+      "compressed_size": 14665,
+      "uncompressed_size": 16057,
+      "crc32": "10c312fe",
+      "timestamp_local": "2026-08-28T18:12:22",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_58_xgd.dat",
+      "compressed_size": 136739,
+      "uncompressed_size": 629557,
+      "crc32": "fa5d236b",
+      "timestamp_local": "2026-08-28T18:12:26",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_59_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_59_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_59_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_59_mdp.dat",
+      "compressed_size": 14665,
+      "uncompressed_size": 16057,
+      "crc32": "52f12859",
+      "timestamp_local": "2026-08-28T18:12:28",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_59_xgd.dat",
+      "compressed_size": 136740,
+      "uncompressed_size": 629557,
+      "crc32": "8510fe99",
+      "timestamp_local": "2026-08-28T18:12:32",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_60_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_60_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_60_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_60_mdp.dat",
+      "compressed_size": 14665,
+      "uncompressed_size": 16057,
+      "crc32": "69bcec9d",
+      "timestamp_local": "2026-08-28T18:12:32",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_60_xgd.dat",
+      "compressed_size": 136743,
+      "uncompressed_size": 629557,
+      "crc32": "92ca4021",
+      "timestamp_local": "2026-08-28T18:12:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_61_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_61_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_61_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_61_mdp.dat",
+      "compressed_size": 13787,
+      "uncompressed_size": 15101,
+      "crc32": "039728a9",
+      "timestamp_local": "2026-08-28T18:12:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_61_xgd.dat",
+      "compressed_size": 125612,
+      "uncompressed_size": 584142,
+      "crc32": "d936b40d",
+      "timestamp_local": "2026-08-28T18:12:42",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_62_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_62_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_62_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_62_mdp.dat",
+      "compressed_size": 14666,
+      "uncompressed_size": 16057,
+      "crc32": "68fad534",
+      "timestamp_local": "2026-08-28T18:12:44",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_62_xgd.dat",
+      "compressed_size": 136740,
+      "uncompressed_size": 629557,
+      "crc32": "de73842d",
+      "timestamp_local": "2026-08-28T18:12:48",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_68_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_68_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_68_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_68_mdp.dat",
+      "compressed_size": 20119,
+      "uncompressed_size": 22110,
+      "crc32": "f3074ec3",
+      "timestamp_local": "2026-09-04T21:00:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_68_xgd.dat",
+      "compressed_size": 145317,
+      "uncompressed_size": 647450,
+      "crc32": "36e2b593",
+      "timestamp_local": "2026-09-04T20:57:32",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_69_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_69_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_69_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_69_mdp.dat",
+      "compressed_size": 14665,
+      "uncompressed_size": 16057,
+      "crc32": "4f62cb4e",
+      "timestamp_local": "2026-08-28T18:12:54",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_69_xgd.dat",
+      "compressed_size": 136747,
+      "uncompressed_size": 629557,
+      "crc32": "cf386478",
+      "timestamp_local": "2026-08-28T18:13:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_71_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_71_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_71_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_71_mdp.dat",
+      "compressed_size": 15082,
+      "uncompressed_size": 16500,
+      "crc32": "b35c9113",
+      "timestamp_local": "2026-08-28T18:13:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_71_xgd.dat",
+      "compressed_size": 136741,
+      "uncompressed_size": 629557,
+      "crc32": "ea63119c",
+      "timestamp_local": "2026-08-28T18:13:04",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_72_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_72_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_72_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_72_mdp.dat",
+      "compressed_size": 14666,
+      "uncompressed_size": 16057,
+      "crc32": "353ea100",
+      "timestamp_local": "2026-08-28T18:13:04",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_72_xgd.dat",
+      "compressed_size": 136738,
+      "uncompressed_size": 629557,
+      "crc32": "b67f3142",
+      "timestamp_local": "2026-08-28T18:13:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_73_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_73_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_73_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_73_mdp.dat",
+      "compressed_size": 14666,
+      "uncompressed_size": 16057,
+      "crc32": "c01285e8",
+      "timestamp_local": "2026-08-28T18:13:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_73_xgd.dat",
+      "compressed_size": 136737,
+      "uncompressed_size": 629557,
+      "crc32": "423e0fe9",
+      "timestamp_local": "2026-08-28T18:13:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_75_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_75_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_75_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_75_mdp.dat",
+      "compressed_size": 15156,
+      "uncompressed_size": 16668,
+      "crc32": "9dd34c97",
+      "timestamp_local": "2026-08-28T18:13:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_75_xgd.dat",
+      "compressed_size": 135219,
+      "uncompressed_size": 629723,
+      "crc32": "cfcd3e13",
+      "timestamp_local": "2026-08-28T18:13:20",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_76_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_76_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_76_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_76_mdp.dat",
+      "compressed_size": 6570,
+      "uncompressed_size": 6823,
+      "crc32": "55a22658",
+      "timestamp_local": "2026-08-28T18:13:22",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_76_xgd.dat",
+      "compressed_size": 46307,
+      "uncompressed_size": 213878,
+      "crc32": "1bf26b4b",
+      "timestamp_local": "2026-08-28T18:13:24",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_77_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_77_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_77_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_77_mdp.dat",
+      "compressed_size": 14666,
+      "uncompressed_size": 16057,
+      "crc32": "2bed1fc6",
+      "timestamp_local": "2026-08-28T18:13:24",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_77_xgd.dat",
+      "compressed_size": 136741,
+      "uncompressed_size": 629557,
+      "crc32": "21700ddb",
+      "timestamp_local": "2026-08-28T18:13:28",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_78_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_78_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_78_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_78_mdp.dat",
+      "compressed_size": 14666,
+      "uncompressed_size": 16057,
+      "crc32": "195e5961",
+      "timestamp_local": "2026-08-28T18:13:28",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_78_xgd.dat",
+      "compressed_size": 136743,
+      "uncompressed_size": 629557,
+      "crc32": "8ee3c090",
+      "timestamp_local": "2026-08-28T18:13:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_79_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_79_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_79_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_79_mdp.dat",
+      "compressed_size": 15083,
+      "uncompressed_size": 16500,
+      "crc32": "a7dd173f",
+      "timestamp_local": "2026-08-28T18:13:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_79_xgd.dat",
+      "compressed_size": 136742,
+      "uncompressed_size": 629557,
+      "crc32": "f7160458",
+      "timestamp_local": "2026-08-28T18:13:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_80_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_80_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_80_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_80_mdp.dat",
+      "compressed_size": 14667,
+      "uncompressed_size": 16055,
+      "crc32": "74fe7af9",
+      "timestamp_local": "2026-08-28T18:13:44",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_80_xgd.dat",
+      "compressed_size": 136736,
+      "uncompressed_size": 629557,
+      "crc32": "78ebd43a",
+      "timestamp_local": "2026-08-28T18:13:50",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_81_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_81_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_81_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_81_mdp.dat",
+      "compressed_size": 13594,
+      "uncompressed_size": 14810,
+      "crc32": "50ea620a",
+      "timestamp_local": "2026-08-28T18:13:50",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_81_xgd.dat",
+      "compressed_size": 123685,
+      "uncompressed_size": 577830,
+      "crc32": "f9cf65d2",
+      "timestamp_local": "2026-08-28T18:13:54",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_82_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_82_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_82_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_82_mdp.dat",
+      "compressed_size": 2241,
+      "uncompressed_size": 2253,
+      "crc32": "3a721221",
+      "timestamp_local": "2026-08-28T18:13:54",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_82_xgd.dat",
+      "compressed_size": 3785,
+      "uncompressed_size": 6935,
+      "crc32": "68a607f5",
+      "timestamp_local": "2026-08-28T18:13:54",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_83_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_83_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_83_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_83_mdp.dat",
+      "compressed_size": 14665,
+      "uncompressed_size": 16057,
+      "crc32": "3d0dea35",
+      "timestamp_local": "2026-08-28T18:13:54",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_83_xgd.dat",
+      "compressed_size": 136739,
+      "uncompressed_size": 629557,
+      "crc32": "8032d512",
+      "timestamp_local": "2026-08-28T18:14:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_85_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_85_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_85_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_85_mdp.dat",
+      "compressed_size": 2241,
+      "uncompressed_size": 2253,
+      "crc32": "3a721221",
+      "timestamp_local": "2026-08-28T18:14:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_85_xgd.dat",
+      "compressed_size": 3826,
+      "uncompressed_size": 6975,
+      "crc32": "89b4aec8",
+      "timestamp_local": "2026-08-28T18:14:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_89_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_89_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_89_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_89_mdp.dat",
+      "compressed_size": 14665,
+      "uncompressed_size": 16057,
+      "crc32": "cc3f5612",
+      "timestamp_local": "2026-08-28T18:14:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_89_xgd.dat",
+      "compressed_size": 136748,
+      "uncompressed_size": 629557,
+      "crc32": "7bb1d4a1",
+      "timestamp_local": "2026-08-28T18:14:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_90_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_90_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_90_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_90_mdp.dat",
+      "compressed_size": 14666,
+      "uncompressed_size": 16057,
+      "crc32": "0a606556",
+      "timestamp_local": "2026-08-28T18:14:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_90_xgd.dat",
+      "compressed_size": 136739,
+      "uncompressed_size": 629557,
+      "crc32": "9746a593",
+      "timestamp_local": "2026-08-28T18:14:12",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_92_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_92_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_92_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_92_mdp.dat",
+      "compressed_size": 13646,
+      "uncompressed_size": 14947,
+      "crc32": "df34d923",
+      "timestamp_local": "2026-08-28T18:14:12",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_92_xgd.dat",
+      "compressed_size": 127017,
+      "uncompressed_size": 577734,
+      "crc32": "fc92695c",
+      "timestamp_local": "2026-08-28T18:14:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_93_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_93_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_93_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_93_mdp.dat",
+      "compressed_size": 13595,
+      "uncompressed_size": 14810,
+      "crc32": "751bf152",
+      "timestamp_local": "2026-08-28T18:14:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_93_xgd.dat",
+      "compressed_size": 123685,
+      "uncompressed_size": 577830,
+      "crc32": "65ec320f",
+      "timestamp_local": "2026-08-28T18:14:22",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_94_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_94_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_94_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_94_mdp.dat",
+      "compressed_size": 15082,
+      "uncompressed_size": 16500,
+      "crc32": "6f4a128d",
+      "timestamp_local": "2026-08-28T18:14:22",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_94_xgd.dat",
+      "compressed_size": 136740,
+      "uncompressed_size": 629557,
+      "crc32": "3108f13d",
+      "timestamp_local": "2026-08-28T18:14:26",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_95_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_95_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_95_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_95_mdp.dat",
+      "compressed_size": 20122,
+      "uncompressed_size": 22110,
+      "crc32": "fc165b3d",
+      "timestamp_local": "2026-09-04T20:59:52",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_95_xgd.dat",
+      "compressed_size": 145848,
+      "uncompressed_size": 648336,
+      "crc32": "f8fec801",
+      "timestamp_local": "2026-09-04T20:56:30",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_96_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_96_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_96_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_96_mdp.dat",
+      "compressed_size": 14665,
+      "uncompressed_size": 16057,
+      "crc32": "8b8a9674",
+      "timestamp_local": "2026-08-28T18:14:32",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_96_xgd.dat",
+      "compressed_size": 136748,
+      "uncompressed_size": 629557,
+      "crc32": "8ea90268",
+      "timestamp_local": "2026-08-28T18:14:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_98_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_98_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_98_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_98_mdp.dat",
+      "compressed_size": 14666,
+      "uncompressed_size": 16057,
+      "crc32": "53ff1c3c",
+      "timestamp_local": "2026-08-28T18:14:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_98_xgd.dat",
+      "compressed_size": 136739,
+      "uncompressed_size": 629557,
+      "crc32": "4b659ec7",
+      "timestamp_local": "2026-08-28T18:14:42",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_102_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_102_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_102_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_102_mdp.dat",
+      "compressed_size": 15823,
+      "uncompressed_size": 17287,
+      "crc32": "930125ce",
+      "timestamp_local": "2026-08-28T18:19:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_102_xgd.dat",
+      "compressed_size": 137757,
+      "uncompressed_size": 632859,
+      "crc32": "fe0f228e",
+      "timestamp_local": "2026-08-28T18:19:08",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_103_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_103_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_103_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_103_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "699f297d",
+      "timestamp_local": "2026-08-28T18:19:08",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_103_xgd.dat",
+      "compressed_size": 137763,
+      "uncompressed_size": 632859,
+      "crc32": "d9f6e65c",
+      "timestamp_local": "2026-08-28T18:19:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_104_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_104_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_104_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_104_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "02aec64c",
+      "timestamp_local": "2026-08-28T18:19:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_104_xgd.dat",
+      "compressed_size": 137761,
+      "uncompressed_size": 632859,
+      "crc32": "49da743a",
+      "timestamp_local": "2026-08-28T18:19:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_106_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_106_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_106_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_106_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "edf9385a",
+      "timestamp_local": "2026-08-28T18:19:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_106_xgd.dat",
+      "compressed_size": 137769,
+      "uncompressed_size": 632859,
+      "crc32": "c454e3d7",
+      "timestamp_local": "2026-08-28T18:19:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_107_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_107_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_107_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_107_mdp.dat",
+      "compressed_size": 15789,
+      "uncompressed_size": 17289,
+      "crc32": "a8fa1a3d",
+      "timestamp_local": "2026-08-28T18:19:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_107_xgd.dat",
+      "compressed_size": 137764,
+      "uncompressed_size": 632859,
+      "crc32": "63a91ef4",
+      "timestamp_local": "2026-08-28T18:19:18",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_109_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_109_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_109_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_109_mdp.dat",
+      "compressed_size": 21286,
+      "uncompressed_size": 23342,
+      "crc32": "20d7e183",
+      "timestamp_local": "2026-09-04T20:59:42",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_109_xgd.dat",
+      "compressed_size": 146865,
+      "uncompressed_size": 651638,
+      "crc32": "66acc48b",
+      "timestamp_local": "2026-09-04T20:56:20",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_110_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_110_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_110_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_110_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "abfb5926",
+      "timestamp_local": "2026-08-28T18:19:22",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_110_xgd.dat",
+      "compressed_size": 137765,
+      "uncompressed_size": 632859,
+      "crc32": "90604b49",
+      "timestamp_local": "2026-08-28T18:19:24",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_111_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_111_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_111_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_111_mdp.dat",
+      "compressed_size": 15791,
+      "uncompressed_size": 17289,
+      "crc32": "a4dcafb4",
+      "timestamp_local": "2026-08-28T18:19:24",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_111_xgd.dat",
+      "compressed_size": 137757,
+      "uncompressed_size": 632859,
+      "crc32": "de518c66",
+      "timestamp_local": "2026-08-28T18:19:26",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_114_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_114_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_114_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_114_mdp.dat",
+      "compressed_size": 6329,
+      "uncompressed_size": 6569,
+      "crc32": "0d3e1101",
+      "timestamp_local": "2026-08-28T18:19:26",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_114_xgd.dat",
+      "compressed_size": 43671,
+      "uncompressed_size": 146388,
+      "crc32": "7565e93a",
+      "timestamp_local": "2026-08-28T18:19:28",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_116_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_116_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_116_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_116_mdp.dat",
+      "compressed_size": 21295,
+      "uncompressed_size": 23342,
+      "crc32": "b3e73bb3",
+      "timestamp_local": "2026-09-04T20:59:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_116_xgd.dat",
+      "compressed_size": 146874,
+      "uncompressed_size": 651638,
+      "crc32": "51435cfa",
+      "timestamp_local": "2026-09-04T20:56:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_117_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_117_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_117_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_117_mdp.dat",
+      "compressed_size": 15789,
+      "uncompressed_size": 17289,
+      "crc32": "154761a4",
+      "timestamp_local": "2026-08-28T18:19:30",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_117_xgd.dat",
+      "compressed_size": 137768,
+      "uncompressed_size": 632859,
+      "crc32": "c465db73",
+      "timestamp_local": "2026-08-28T18:19:32",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_118_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_118_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_118_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_118_mdp.dat",
+      "compressed_size": 16118,
+      "uncompressed_size": 17625,
+      "crc32": "49f164ae",
+      "timestamp_local": "2026-08-28T18:19:32",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_118_xgd.dat",
+      "compressed_size": 137767,
+      "uncompressed_size": 632859,
+      "crc32": "1807ecb8",
+      "timestamp_local": "2026-08-28T18:19:36",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_121_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_121_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_121_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_121_mdp.dat",
+      "compressed_size": 15791,
+      "uncompressed_size": 17289,
+      "crc32": "28d26ef7",
+      "timestamp_local": "2026-08-28T18:19:36",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_121_xgd.dat",
+      "compressed_size": 137765,
+      "uncompressed_size": 632859,
+      "crc32": "b49e3899",
+      "timestamp_local": "2026-08-28T18:19:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_122_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_122_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_122_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_122_mdp.dat",
+      "compressed_size": 12424,
+      "uncompressed_size": 13481,
+      "crc32": "c6c45120",
+      "timestamp_local": "2026-08-28T18:19:38",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_122_xgd.dat",
+      "compressed_size": 98208,
+      "uncompressed_size": 465393,
+      "crc32": "002b81a9",
+      "timestamp_local": "2026-08-28T18:19:40",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_123_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_123_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_123_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_123_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "84a47b44",
+      "timestamp_local": "2026-08-28T18:19:40",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_123_xgd.dat",
+      "compressed_size": 137767,
+      "uncompressed_size": 632859,
+      "crc32": "89744347",
+      "timestamp_local": "2026-08-28T18:19:42",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_127_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_127_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_127_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_127_mdp.dat",
+      "compressed_size": 15824,
+      "uncompressed_size": 17287,
+      "crc32": "89893c0c",
+      "timestamp_local": "2026-08-28T18:19:42",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_127_xgd.dat",
+      "compressed_size": 137753,
+      "uncompressed_size": 632859,
+      "crc32": "ccf3f441",
+      "timestamp_local": "2026-08-28T18:19:46",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_128_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_128_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_128_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_128_mdp.dat",
+      "compressed_size": 15789,
+      "uncompressed_size": 17289,
+      "crc32": "f304d622",
+      "timestamp_local": "2026-08-28T18:19:46",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_128_xgd.dat",
+      "compressed_size": 137759,
+      "uncompressed_size": 632859,
+      "crc32": "56ea57af",
+      "timestamp_local": "2026-08-28T18:19:48",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_130_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_130_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_130_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_130_mdp.dat",
+      "compressed_size": 15789,
+      "uncompressed_size": 17289,
+      "crc32": "447cbfc2",
+      "timestamp_local": "2026-08-28T18:19:48",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_130_xgd.dat",
+      "compressed_size": 137768,
+      "uncompressed_size": 632859,
+      "crc32": "5410b0d6",
+      "timestamp_local": "2026-08-28T18:19:52",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_132_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_132_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_132_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_132_mdp.dat",
+      "compressed_size": 11643,
+      "uncompressed_size": 12501,
+      "crc32": "eea95f27",
+      "timestamp_local": "2026-08-28T18:19:52",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_132_xgd.dat",
+      "compressed_size": 90922,
+      "uncompressed_size": 422070,
+      "crc32": "640bb9e7",
+      "timestamp_local": "2026-08-28T18:19:52",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_136_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_136_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_136_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_136_mdp.dat",
+      "compressed_size": 14317,
+      "uncompressed_size": 15517,
+      "crc32": "16893c99",
+      "timestamp_local": "2026-08-28T18:19:54",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_136_xgd.dat",
+      "compressed_size": 116119,
+      "uncompressed_size": 544903,
+      "crc32": "8627d4d5",
+      "timestamp_local": "2026-08-28T18:19:56",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_139_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_139_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_139_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_139_mdp.dat",
+      "compressed_size": 11177,
+      "uncompressed_size": 11974,
+      "crc32": "54d77314",
+      "timestamp_local": "2026-08-28T18:19:56",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_139_xgd.dat",
+      "compressed_size": 86489,
+      "uncompressed_size": 398061,
+      "crc32": "ecce85a8",
+      "timestamp_local": "2026-08-28T18:19:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_140_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_140_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_140_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_140_mdp.dat",
+      "compressed_size": 11176,
+      "uncompressed_size": 11974,
+      "crc32": "a1a2c700",
+      "timestamp_local": "2026-08-28T18:19:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_140_xgd.dat",
+      "compressed_size": 86485,
+      "uncompressed_size": 398061,
+      "crc32": "4526bdb8",
+      "timestamp_local": "2026-08-28T18:20:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_141_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_141_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_141_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_141_mdp.dat",
+      "compressed_size": 11176,
+      "uncompressed_size": 11974,
+      "crc32": "89d2fd70",
+      "timestamp_local": "2026-08-28T18:20:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_141_xgd.dat",
+      "compressed_size": 86486,
+      "uncompressed_size": 398061,
+      "crc32": "d8c6bcc7",
+      "timestamp_local": "2026-08-28T18:20:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_142_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_142_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_142_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_142_mdp.dat",
+      "compressed_size": 8779,
+      "uncompressed_size": 9314,
+      "crc32": "f589c3db",
+      "timestamp_local": "2026-08-28T18:20:02",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_142_xgd.dat",
+      "compressed_size": 57651,
+      "uncompressed_size": 276283,
+      "crc32": "0f684e28",
+      "timestamp_local": "2026-08-28T18:20:02",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1001_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1001_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1001_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1001_mdp.dat",
+      "compressed_size": 13159,
+      "uncompressed_size": 14271,
+      "crc32": "3078f815",
+      "timestamp_local": "2026-08-28T18:19:02",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1001_xgd.dat",
+      "compressed_size": 104739,
+      "uncompressed_size": 501198,
+      "crc32": "65a32a7a",
+      "timestamp_local": "2026-08-28T18:19:04",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1002_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1002_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1002_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1002_mdp.dat",
+      "compressed_size": 5450,
+      "uncompressed_size": 5640,
+      "crc32": "71cc2ae6",
+      "timestamp_local": "2026-08-28T18:19:04",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1002_xgd.dat",
+      "compressed_size": 27612,
+      "uncompressed_size": 109793,
+      "crc32": "ee84e72c",
+      "timestamp_local": "2026-08-28T18:19:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_ex.code",
+      "compressed_size": 104072,
+      "uncompressed_size": 182154,
+      "crc32": "e40f6904",
+      "timestamp_local": "2026-09-11T17:18:12",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_ex.name",
+      "compressed_size": 25974,
+      "uncompressed_size": 81704,
+      "crc32": "c2cf0fd9",
+      "timestamp_local": "2026-09-11T17:18:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_qsid.txt",
+      "compressed_size": 707,
+      "uncompressed_size": 1374,
+      "crc32": "a3554328",
+      "timestamp_local": "2026-06-26T20:22:28",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_riskips_tdx.ini",
+      "compressed_size": 291,
+      "uncompressed_size": 831,
+      "crc32": "545d319b",
+      "timestamp_local": "2026-06-26T20:22:24",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_short.cfg",
+      "compressed_size": 14086,
+      "uncompressed_size": 42239,
+      "crc32": "1296ffc0",
+      "timestamp_local": "2026-09-11T17:18:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_spec.cfg",
+      "compressed_size": 1169,
+      "uncompressed_size": 4986,
+      "crc32": "dd4682b9",
+      "timestamp_local": "2026-09-11T17:18:12",
+      "flag_bits": 0
+    },
+    {
+      "path": "tdxhy.cfg",
+      "compressed_size": 25488,
+      "uncompressed_size": 150332,
+      "crc32": "d9e703ee",
+      "timestamp_local": "2026-09-11T17:17:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "tdxhy2.cfg",
+      "compressed_size": 41343,
+      "uncompressed_size": 249145,
+      "crc32": "55b21e4e",
+      "timestamp_local": "2026-09-11T17:18:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "tdxzsbase.cfg",
+      "compressed_size": 105227,
+      "uncompressed_size": 238540,
+      "crc32": "ceeca24a",
+      "timestamp_local": "2026-09-11T17:18:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "tdxzsbase2.cfg",
+      "compressed_size": 26164,
+      "uncompressed_size": 68663,
+      "crc32": "d8f6b8ed",
+      "timestamp_local": "2026-09-11T17:18:12",
+      "flag_bits": 0
+    },
+    {
+      "path": "xgcode.cfg",
+      "compressed_size": 956,
+      "uncompressed_size": 1934,
+      "crc32": "bb4e0e5d",
+      "timestamp_local": "2026-09-11T17:17:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "base.dbf",
+      "compressed_size": 973391,
+      "uncompressed_size": 4268265,
+      "crc32": "62e7feef",
+      "timestamp_local": "2026-09-11T17:30:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "base.map",
+      "compressed_size": 27745,
+      "uncompressed_size": 123684,
+      "crc32": "4129f9a8",
+      "timestamp_local": "2026-09-11T17:30:00",
+      "flag_bits": 0
+    },
+    {
+      "path": "block.dat",
+      "compressed_size": 37717,
+      "uncompressed_size": 281686,
+      "crc32": "5b24ef31",
+      "timestamp_local": "2026-09-11T17:57:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "block_fg.dat",
+      "compressed_size": 50543,
+      "uncompressed_size": 453279,
+      "crc32": "868dbab9",
+      "timestamp_local": "2026-09-11T17:57:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "block_gn.dat",
+      "compressed_size": 96221,
+      "uncompressed_size": 757083,
+      "crc32": "37adda53",
+      "timestamp_local": "2026-09-11T17:57:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "block_zs.dat",
+      "compressed_size": 25023,
+      "uncompressed_size": 329507,
+      "crc32": "6c482732",
+      "timestamp_local": "2026-09-11T17:57:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1_mdp.dat",
+      "compressed_size": 15833,
+      "uncompressed_size": 17379,
+      "crc32": "4b24f8fe",
+      "timestamp_local": "2026-08-28T18:20:18",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_1_xgd.dat",
+      "compressed_size": 135264,
+      "uncompressed_size": 633324,
+      "crc32": "49da6851",
+      "timestamp_local": "2026-08-28T18:20:20",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_2_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_2_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_2_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_2_mdp.dat",
+      "compressed_size": 15746,
+      "uncompressed_size": 17291,
+      "crc32": "584edab7",
+      "timestamp_local": "2026-08-28T18:20:48",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_2_xgd.dat",
+      "compressed_size": 137760,
+      "uncompressed_size": 632859,
+      "crc32": "3294d5da",
+      "timestamp_local": "2026-08-28T18:20:50",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_3_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_3_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_3_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_3_mdp.dat",
+      "compressed_size": 15746,
+      "uncompressed_size": 17291,
+      "crc32": "e028f1af",
+      "timestamp_local": "2026-08-28T18:21:18",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_3_xgd.dat",
+      "compressed_size": 137760,
+      "uncompressed_size": 632859,
+      "crc32": "ea714af7",
+      "timestamp_local": "2026-08-28T18:21:20",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_4_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_4_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_4_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_4_mdp.dat",
+      "compressed_size": 15908,
+      "uncompressed_size": 17400,
+      "crc32": "9ee272d8",
+      "timestamp_local": "2026-08-28T18:21:46",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_4_xgd.dat",
+      "compressed_size": 137764,
+      "uncompressed_size": 632859,
+      "crc32": "e2b0ddb0",
+      "timestamp_local": "2026-08-28T18:21:50",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_7_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_7_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_7_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_7_mdp.dat",
+      "compressed_size": 14985,
+      "uncompressed_size": 16393,
+      "crc32": "07c91d69",
+      "timestamp_local": "2026-08-28T18:13:40",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_7_xgd.dat",
+      "compressed_size": 136731,
+      "uncompressed_size": 629557,
+      "crc32": "e0c4d81a",
+      "timestamp_local": "2026-08-28T18:13:44",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_12_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_12_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_12_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_12_mdp.dat",
+      "compressed_size": 6548,
+      "uncompressed_size": 6842,
+      "crc32": "2e6768c8",
+      "timestamp_local": "2026-08-28T18:19:48",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_12_xgd.dat",
+      "compressed_size": 39620,
+      "uncompressed_size": 162973,
+      "crc32": "d8dc5344",
+      "timestamp_local": "2026-08-28T18:19:48",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_13_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_13_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_13_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_13_mdp.dat",
+      "compressed_size": 3394,
+      "uncompressed_size": 3485,
+      "crc32": "4153ed6f",
+      "timestamp_local": "2026-08-28T18:19:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_13_xgd.dat",
+      "compressed_size": 5367,
+      "uncompressed_size": 10237,
+      "crc32": "ff049a6a",
+      "timestamp_local": "2026-08-28T18:19:58",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_14_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_14_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_14_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_14_mdp.dat",
+      "compressed_size": 21289,
+      "uncompressed_size": 23342,
+      "crc32": "95ebeb99",
+      "timestamp_local": "2026-09-04T21:02:44",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_14_xgd.dat",
+      "compressed_size": 146865,
+      "uncompressed_size": 651638,
+      "crc32": "e65dfb3c",
+      "timestamp_local": "2026-09-04T20:59:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_15_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_15_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_15_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_15_mdp.dat",
+      "compressed_size": 21288,
+      "uncompressed_size": 23342,
+      "crc32": "dcbfb4e9",
+      "timestamp_local": "2026-09-04T21:02:36",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_15_xgd.dat",
+      "compressed_size": 146883,
+      "uncompressed_size": 651638,
+      "crc32": "6ef4da4b",
+      "timestamp_local": "2026-09-04T20:59:04",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_16_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_16_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_16_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_16_mdp.dat",
+      "compressed_size": 15936,
+      "uncompressed_size": 17318,
+      "crc32": "87654449",
+      "timestamp_local": "2026-08-28T18:20:08",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_16_xgd.dat",
+      "compressed_size": 133148,
+      "uncompressed_size": 608853,
+      "crc32": "0e6f8f7f",
+      "timestamp_local": "2026-08-28T18:20:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_17_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_17_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_17_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_17_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "df311b67",
+      "timestamp_local": "2026-08-28T18:20:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_17_xgd.dat",
+      "compressed_size": 137773,
+      "uncompressed_size": 632859,
+      "crc32": "9e6dbcfb",
+      "timestamp_local": "2026-08-28T18:20:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_18_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_18_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_18_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_18_mdp.dat",
+      "compressed_size": 15914,
+      "uncompressed_size": 17375,
+      "crc32": "a456dc5a",
+      "timestamp_local": "2026-08-28T18:20:14",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_18_xgd.dat",
+      "compressed_size": 137751,
+      "uncompressed_size": 632859,
+      "crc32": "04f7f710",
+      "timestamp_local": "2026-08-28T18:20:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_19_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_19_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_19_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_19_mdp.dat",
+      "compressed_size": 9330,
+      "uncompressed_size": 9877,
+      "crc32": "302d41ac",
+      "timestamp_local": "2026-08-28T18:20:16",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_19_xgd.dat",
+      "compressed_size": 64002,
+      "uncompressed_size": 299911,
+      "crc32": "335989e5",
+      "timestamp_local": "2026-08-28T18:20:18",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_20_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_20_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_20_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_20_mdp.dat",
+      "compressed_size": 21184,
+      "uncompressed_size": 23252,
+      "crc32": "421c742a",
+      "timestamp_local": "2026-09-04T21:02:26",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_20_xgd.dat",
+      "compressed_size": 148993,
+      "uncompressed_size": 647765,
+      "crc32": "4cf0c53c",
+      "timestamp_local": "2026-09-04T20:58:54",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_21_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_21_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_21_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_21_mdp.dat",
+      "compressed_size": 13773,
+      "uncompressed_size": 15022,
+      "crc32": "07aca29d",
+      "timestamp_local": "2026-08-28T18:20:24",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_21_xgd.dat",
+      "compressed_size": 113232,
+      "uncompressed_size": 502408,
+      "crc32": "f9ccfa3b",
+      "timestamp_local": "2026-08-28T18:20:26",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_22_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_22_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_22_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_22_mdp.dat",
+      "compressed_size": 21204,
+      "uncompressed_size": 23258,
+      "crc32": "dfbeadc2",
+      "timestamp_local": "2026-09-04T21:02:18",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_22_xgd.dat",
+      "compressed_size": 146864,
+      "uncompressed_size": 651638,
+      "crc32": "50d00194",
+      "timestamp_local": "2026-09-04T20:58:42",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_23_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_23_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_23_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_23_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "b49431c0",
+      "timestamp_local": "2026-08-28T18:20:28",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_23_xgd.dat",
+      "compressed_size": 137757,
+      "uncompressed_size": 632859,
+      "crc32": "619bd02d",
+      "timestamp_local": "2026-08-28T18:20:30",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_24_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_24_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_24_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_24_mdp.dat",
+      "compressed_size": 16207,
+      "uncompressed_size": 17732,
+      "crc32": "e9f5f459",
+      "timestamp_local": "2026-08-28T18:20:30",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_24_xgd.dat",
+      "compressed_size": 137770,
+      "uncompressed_size": 632859,
+      "crc32": "16ecb689",
+      "timestamp_local": "2026-08-28T18:20:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_25_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_25_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_25_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_25_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "73184900",
+      "timestamp_local": "2026-08-28T18:20:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_25_xgd.dat",
+      "compressed_size": 137766,
+      "uncompressed_size": 632859,
+      "crc32": "721b2aec",
+      "timestamp_local": "2026-08-28T18:20:36",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_26_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_26_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_26_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_26_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "d220f170",
+      "timestamp_local": "2026-08-28T18:20:36",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_26_xgd.dat",
+      "compressed_size": 137758,
+      "uncompressed_size": 632859,
+      "crc32": "5c09a45b",
+      "timestamp_local": "2026-08-28T18:20:40",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_27_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_27_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_27_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_27_mdp.dat",
+      "compressed_size": 22748,
+      "uncompressed_size": 24782,
+      "crc32": "bba34ada",
+      "timestamp_local": "2026-09-04T21:02:10",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_27_xgd.dat",
+      "compressed_size": 130201,
+      "uncompressed_size": 733655,
+      "crc32": "5d2ae793",
+      "timestamp_local": "2026-09-04T20:58:32",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_28_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_28_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_28_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_28_mdp.dat",
+      "compressed_size": 15340,
+      "uncompressed_size": 16756,
+      "crc32": "3aa9705f",
+      "timestamp_local": "2026-08-28T18:20:42",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_28_xgd.dat",
+      "compressed_size": 129253,
+      "uncompressed_size": 589526,
+      "crc32": "8c043127",
+      "timestamp_local": "2026-08-28T18:20:44",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_29_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_29_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_29_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_29_mdp.dat",
+      "compressed_size": 15790,
+      "uncompressed_size": 17289,
+      "crc32": "b335300f",
+      "timestamp_local": "2026-08-28T18:20:44",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_29_xgd.dat",
+      "compressed_size": 137774,
+      "uncompressed_size": 632859,
+      "crc32": "92ff2b5f",
+      "timestamp_local": "2026-08-28T18:20:48",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_30_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_30_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_30_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_30_mdp.dat",
+      "compressed_size": 15823,
+      "uncompressed_size": 17287,
+      "crc32": "6efe84db",
+      "timestamp_local": "2026-08-28T18:20:50",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_30_xgd.dat",
+      "compressed_size": 137756,
+      "uncompressed_size": 632859,
+      "crc32": "d4e18864",
+      "timestamp_local": "2026-08-28T18:20:52",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_31_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_31_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_31_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_31_mdp.dat",
+      "compressed_size": 15822,
+      "uncompressed_size": 17287,
+      "crc32": "440d9a41",
+      "timestamp_local": "2026-08-28T18:20:54",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_31_xgd.dat",
+      "compressed_size": 137755,
+      "uncompressed_size": 632859,
+      "crc32": "f83cf82d",
+      "timestamp_local": "2026-08-28T18:20:56",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_32_aud_std.dat",
+      "compressed_size": 107,
+      "uncompressed_size": 107,
+      "crc32": "8b604644",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_32_aud_std.md5",
+      "compressed_size": 32,
+      "uncompressed_size": 32,
+      "crc32": "a251036f",
+      "timestamp_local": "2020-08-26T16:26:34",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_32_aui_std.dat",
+      "compressed_size": 21,
+      "uncompressed_size": 21,
+      "crc32": "7b1e9917",
+      "timestamp_local": "2020-08-20T16:02:06",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_32_mdp.dat",
+      "compressed_size": 16304,
+      "uncompressed_size": 17742,
+      "crc32": "851c5156",
+      "timestamp_local": "2026-08-28T18:20:56",
+      "flag_bits": 0
+    },
+    {
+      "path": "infoharbor_32_xgd.dat",
+      "compressed_size": 148609,
+      "uncompressed_size": 633580,
+      "crc32": "3ce95351",
+      "timestamp_local": "2026-08-28T18:20:58",
+      "flag_bits": 0
+    }
+  ]
+}
