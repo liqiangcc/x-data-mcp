@@ -438,11 +438,11 @@ def main() -> None:
             "cent_rounded_variant": "diagnostic only: ROUND_HALF_UP reference preclose to 0.01 before dividing by previous close; not an official contract",
         },
         "inputs": {
-            "gbbq_target_summary": str(target_path),
-            "day_zip": str(day_zip),
+            "gbbq_target_summary": "evidence/issue-3-tdx-gbbq-community/target-summary.json",
+            "day_zip": "official hsjday.zip retained in /tmp",
             "day_member": day_meta,
-            "doc_probe": str(doc_probe_path),
-            "daily_probe": str(daily_probe_path),
+            "doc_probe": "evidence/issue-2-baostock-qfq-doc-example/probe-result.json",
+            "daily_probe": "evidence/issue-2-baostock-daily/probe-result.json",
             "mapping": MAPPING,
         },
         "daily_source": {

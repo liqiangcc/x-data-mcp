@@ -1980,7 +1980,7 @@
       "record_width": 32,
       "sha256": "bc6815ceafa9cdcd24c68df4d8ec43accfc3e724f5d34d2c7d827a5b12ccac8f"
     },
-    "day_zip": "/tmp/tdx-vipdata-evidence.qusdV2/hsjday.zip",
+    "day_zip": "official hsjday.zip retained in /tmp",
     "doc_probe": "evidence/issue-2-baostock-qfq-doc-example/probe-result.json",
     "gbbq_target_summary": "evidence/issue-3-tdx-gbbq-community/target-summary.json",
     "mapping": {
