@@ -1,0 +1,2182 @@
+{
+  "mapping": {
+    "C1": "fenhong",
+    "C2": "peigujia",
+    "C3": "songzhuangu",
+    "C4": "peigu"
+  },
+  "schema": "x-data-mcp.issue-3.cross-stock.selected-events.v1",
+  "selected_events": {
+    "sh.600004": [
+      {
+        "category": 1,
+        "clear_hex": "013630303030340009cc3101010000803f000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2004-07-13",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20040713,
+        "float32_raw_bits_hex": [
+          "0x3f800000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127303
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303034001bf331010100002040000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2005-07-15",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20050715,
+        "float32_raw_bits_hex": [
+          "0x40200000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127304
+      },
+      {
+        "category": 1,
+        "clear_hex": "013630303030340014f531010100000000000000003333f33f00000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2005-12-20",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20051220,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x00000000",
+          "0x3ff33333",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          0.0,
+          1.899999976158142,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127306
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400311a3201010000803f000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2006-07-21",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20060721,
+        "float32_raw_bits_hex": [
+          "0x3f800000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127308
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400a7413201010000c03f000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2007-08-23",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20070823,
+        "float32_raw_bits_hex": [
+          "0x3fc00000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127310
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400a5683201016666e63f000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2008-08-05",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20080805,
+        "float32_raw_bits_hex": [
+          "0x3fe66666",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.7999999523162842,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127313
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400b68f3201019a99d93f000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2009-08-06",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20090806,
+        "float32_raw_bits_hex": [
+          "0x3fd9999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.7000000476837158,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127316
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400d3b632010166662640000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2010-08-19",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20100819,
+        "float32_raw_bits_hex": [
+          "0x40266666",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.5999999046325684,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127317
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400e1dd32010100004040000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2011-08-17",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20110817,
+        "float32_raw_bits_hex": [
+          "0x40400000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          3.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127319
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400950433010100006040000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2012-07-25",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20120725,
+        "float32_raw_bits_hex": [
+          "0x40600000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          3.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127320
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400a62b33010133335340000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2013-07-26",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20130726,
+        "float32_raw_bits_hex": [
+          "0x40533333",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          3.299999952316284,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127321
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303034000853330101cdcc6c40000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2014-08-08",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20140808,
+        "float32_raw_bits_hex": [
+          "0x406ccccd",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          3.700000047683716,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127322
+      },
+      {
+        "category": 1,
+        "clear_hex": "013630303030340054793301019a993940000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2015-06-12",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20150612,
+        "float32_raw_bits_hex": [
+          "0x4039999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.9000000953674316,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127323
+      },
+      {
+        "category": 1,
+        "clear_hex": "013630303030340025a1330101cdcc4c40000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2016-08-05",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20160805,
+        "float32_raw_bits_hex": [
+          "0x404ccccd",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          3.200000047683716,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127324
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400dac7330101cdcc6c40000000000000904000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2017-07-14",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20170714,
+        "float32_raw_bits_hex": [
+          "0x406ccccd",
+          "0x00000000",
+          "0x40900000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          3.700000047683716,
+          0.0,
+          4.5,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127331
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400e9ee3301019a991940000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2018-07-13",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20180713,
+        "float32_raw_bits_hex": [
+          "0x4019999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.4000000953674316,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127333
+      },
+      {
+        "category": 1,
+        "clear_hex": "013630303030340059163401019a99d93f000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2019-08-09",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20190809,
+        "float32_raw_bits_hex": [
+          "0x3fd9999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.7000000476837158,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127334
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400643d3401019a99b93f000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2020-08-04",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20200804,
+        "float32_raw_bits_hex": [
+          "0x3fb9999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.4500000476837158,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127335
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303034007d643401017593d83e000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2021-08-13",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20210813,
+        "float32_raw_bits_hex": [
+          "0x3ed89375",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.4230000078678131,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127337
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400a9d9340101643b3f3f000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2024-08-09",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20240809,
+        "float32_raw_bits_hex": [
+          "0x3f3f3b64",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.746999979019165,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127339
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303034000300350101c3f5c83f000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2025-06-27",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20250627,
+        "float32_raw_bits_hex": [
+          "0x3fc8f5c3",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5700000524520874,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127340
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303400742735010166663640000000000000000000000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2026-07-24",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20260724,
+        "float32_raw_bits_hex": [
+          "0x40366666",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.8499999046325684,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127342
+      }
+    ],
+    "sh.600006": [
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600722f3101010000803f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2000-06-26",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20000626,
+        "float32_raw_bits_hex": [
+          "0x3f800000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127375
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600755631010100000040000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2001-06-13",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20010613,
+        "float32_raw_bits_hex": [
+          "0x40000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127376
+      },
+      {
+        "category": 1,
+        "clear_hex": "013630303030360016583101010000003f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2001-10-30",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20011030,
+        "float32_raw_bits_hex": [
+          "0x3f000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127377
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036002a7d31010100000040000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2002-05-22",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20020522,
+        "float32_raw_bits_hex": [
+          "0x40000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127378
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036008aa431010100000040000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2003-06-02",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20030602,
+        "float32_raw_bits_hex": [
+          "0x40000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127379
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600a3cb31010100000040000000000000204100000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2004-06-11",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20040611,
+        "float32_raw_bits_hex": [
+          "0x40000000",
+          "0x00000000",
+          "0x41200000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.0,
+          0.0,
+          10.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127380
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600c4f23101010000403f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2005-06-28",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20050628,
+        "float32_raw_bits_hex": [
+          "0x3f400000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.75,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127382
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600cc19320101cdcc4c3f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2006-06-20",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20060620,
+        "float32_raw_bits_hex": [
+          "0x3f4ccccd",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.800000011920929,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127383
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600b91b32010100000000000000003333534000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2006-11-13",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20061113,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x00000000",
+          "0x40533333",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          0.0,
+          3.299999952316284,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127384
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036003f413201019a99993f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2007-07-19",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20070719,
+        "float32_raw_bits_hex": [
+          "0x3f99999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.2000000476837158,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127386
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600ef673201010000c03f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2008-06-23",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20080623,
+        "float32_raw_bits_hex": [
+          "0x3fc00000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127387
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600fe8e3201016666663f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2009-06-22",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20090622,
+        "float32_raw_bits_hex": [
+          "0x3f666666",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.8999999761581421,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127388
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036000db63201019a99193f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2010-06-21",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20100621,
+        "float32_raw_bits_hex": [
+          "0x3f19999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.6000000238418579,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127390
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036001ddd3201019a99993f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2011-06-21",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20110621,
+        "float32_raw_bits_hex": [
+          "0x3f99999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.2000000476837158,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127391
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036002a043301010000003f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2012-06-18",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20120618,
+        "float32_raw_bits_hex": [
+          "0x3f000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127392
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600392b330101022b073d000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2013-06-17",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20130617,
+        "float32_raw_bits_hex": [
+          "0x3d072b02",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.032999999821186066,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127393
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036004c52330101e3a59b3d000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2014-06-20",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20140620,
+        "float32_raw_bits_hex": [
+          "0x3d9ba5e3",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.07599999755620956,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127394
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600c4793301018716593e000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2015-07-24",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20150724,
+        "float32_raw_bits_hex": [
+          "0x3e591687",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.21199999749660492,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127395
+      },
+      {
+        "category": 1,
+        "clear_hex": "013630303030360076a0330101b81e053f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2016-06-30",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20160630,
+        "float32_raw_bits_hex": [
+          "0x3f051eb8",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.5199999809265137,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127396
+      },
+      {
+        "category": 1,
+        "clear_hex": "0136303030303600dac7330101c3f5a83e000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2017-07-14",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20170714,
+        "float32_raw_bits_hex": [
+          "0x3ea8f5c3",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.33000001311302185,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127397
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036008bee330101d1229b3e000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2018-06-19",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20180619,
+        "float32_raw_bits_hex": [
+          "0x3e9b22d1",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.30300000309944153,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127398
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036009c153401017d3f553f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2019-06-20",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20190620,
+        "float32_raw_bits_hex": [
+          "0x3f553f7d",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.8330000042915344,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127399
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036000d3d340101e7fb293f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2020-07-17",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20200717,
+        "float32_raw_bits_hex": [
+          "0x3f29fbe7",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.6639999747276306,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127400
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036001a643401016abc543f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2021-07-14",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20210714,
+        "float32_raw_bits_hex": [
+          "0x3f54bc6a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.8309999704360962,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127401
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036002b8b34010117d90e3f000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2022-07-15",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20220715,
+        "float32_raw_bits_hex": [
+          "0x3f0ed917",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.5580000281333923,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127402
+      },
+      {
+        "category": 1,
+        "clear_hex": "013630303030360039b2340101d122db3e000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2023-07-13",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20230713,
+        "float32_raw_bits_hex": [
+          "0x3edb22d1",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.42800000309944153,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127403
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036004bd9340101ac1c9a3e000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2024-07-15",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20240715,
+        "float32_raw_bits_hex": [
+          "0x3e9a1cac",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.3009999990463257,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127404
+      },
+      {
+        "category": 1,
+        "clear_hex": "01363030303036005d00350101cdcc4c3d000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2025-07-17",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20250717,
+        "float32_raw_bits_hex": [
+          "0x3d4ccccd",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.05000000074505806,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127405
+      }
+    ],
+    "sz.000002": [
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200c9cf2f010100000000cdcc8c40000000000000a040",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1991-06-01",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19910601,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x408ccccd",
+          "0x00000000",
+          "0x40a00000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          4.400000095367432,
+          0.0,
+          5.0
+        ],
+        "market": 0,
+        "record_index": 81
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200d0cf2f010100000000000000000000004000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1991-06-08",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19910608,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x00000000",
+          "0x40000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          0.0,
+          2.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 82
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200c0f52f010100000000000000000000004000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1992-03-20",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19920320,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x00000000",
+          "0x40000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          0.0,
+          2.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 84
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200251d3001019a99193f000000000000a04000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1993-04-05",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19930405,
+        "float32_raw_bits_hex": [
+          "0x3f19999a",
+          "0x00000000",
+          "0x40a00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.6000000238418579,
+          0.0,
+          5.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 86
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303032000d453001010000c03f000000000000604000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1994-06-21",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19940621,
+        "float32_raw_bits_hex": [
+          "0x3fc00000",
+          "0x00000000",
+          "0x40600000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5,
+          0.0,
+          3.5,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 88
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200706c3001010000c03f000000000000c03f00000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1995-07-04",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19950704,
+        "float32_raw_bits_hex": [
+          "0x3fc00000",
+          "0x00000000",
+          "0x3fc00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5,
+          0.0,
+          1.5,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 90
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200e6933001013333b33f000000000000803f00000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1996-08-06",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19960806,
+        "float32_raw_bits_hex": [
+          "0x3fb33333",
+          "0x00000000",
+          "0x3f800000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.399999976158142,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 92
+      },
+      {
+        "category": 1,
+        "clear_hex": "003030303030320043ba3001010000803f000000000000c03f00000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1997-06-27",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19970627,
+        "float32_raw_bits_hex": [
+          "0x3f800000",
+          "0x00000000",
+          "0x3fc00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.0,
+          0.0,
+          1.5,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 95
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303032009aba30010100000000000090400000000014ae1740",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1997-07-14",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19970714,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x40900000",
+          "0x00000000",
+          "0x4017ae14"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          4.5,
+          0.0,
+          2.369999885559082
+        ],
+        "market": 0,
+        "record_index": 97
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200a6e13001010000c03f000000000000803f00000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1998-07-10",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19980710,
+        "float32_raw_bits_hex": [
+          "0x3fc00000",
+          "0x00000000",
+          "0x3f800000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 99
+      },
+      {
+        "category": 1,
+        "clear_hex": "003030303030320016093101010000803f000000000000803f00000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1999-08-06",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19990806,
+        "float32_raw_bits_hex": [
+          "0x3f800000",
+          "0x00000000",
+          "0x3f800000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 101
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303032006e2d310101000000000000f040000000002b872e40",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2000-01-10",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20000110,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x40f00000",
+          "0x00000000",
+          "0x402e872b"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          7.5,
+          0.0,
+          2.7269999980926514
+        ],
+        "market": 0,
+        "record_index": 103
+      },
+      {
+        "category": 1,
+        "clear_hex": "003030303030320031303101010000c03f000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2000-08-17",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20000817,
+        "float32_raw_bits_hex": [
+          "0x3fc00000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 105
+      },
+      {
+        "category": 1,
+        "clear_hex": "003030303030320045573101016666e63f000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2001-08-21",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20010821,
+        "float32_raw_bits_hex": [
+          "0x3fe66666",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.7999999523162842,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 106
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200ed7d31010100000040000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2002-07-17",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20020717,
+        "float32_raw_bits_hex": [
+          "0x40000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 107
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303032003ba431010100000040000000000000204100000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2003-05-23",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20030523,
+        "float32_raw_bits_hex": [
+          "0x40000000",
+          "0x00000000",
+          "0x41200000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          2.0,
+          0.0,
+          10.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 110
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303032004ecb3101010000003f000000000000a04000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2004-05-26",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20040526,
+        "float32_raw_bits_hex": [
+          "0x3f000000",
+          "0x00000000",
+          "0x40a00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.5,
+          0.0,
+          5.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 117
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200c5f23101010000c03f000000000000a04000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2005-06-29",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20050629,
+        "float32_raw_bits_hex": [
+          "0x3fc00000",
+          "0x00000000",
+          "0x40a00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5,
+          0.0,
+          5.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 121
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200311a3201010000c03f000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2006-07-21",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20060721,
+        "float32_raw_bits_hex": [
+          "0x3fc00000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 129
+      },
+      {
+        "category": 1,
+        "clear_hex": "003030303030320074403201010000c03f000000000000a04000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2007-05-16",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20070516,
+        "float32_raw_bits_hex": [
+          "0x3fc00000",
+          "0x00000000",
+          "0x40a00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.5,
+          0.0,
+          5.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 133
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200e8673201010000803f000000000000c04000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2008-06-16",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20080616,
+        "float32_raw_bits_hex": [
+          "0x3f800000",
+          "0x00000000",
+          "0x40c00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.0,
+          0.0,
+          6.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 139
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200f08e3201010000003f000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2009-06-08",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20090608,
+        "float32_raw_bits_hex": [
+          "0x3f000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 142
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200a6b53201013333333f000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2010-05-18",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20100518,
+        "float32_raw_bits_hex": [
+          "0x3f333333",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.699999988079071,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 145
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200bfdc3201010000803f000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2011-05-27",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20110527,
+        "float32_raw_bits_hex": [
+          "0x3f800000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 146
+      },
+      {
+        "category": 1,
+        "clear_hex": "003030303030320081043301016666a63f000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2012-07-05",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20120705,
+        "float32_raw_bits_hex": [
+          "0x3fa66666",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.2999999523162842,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 149
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200d42a3301016666e63f000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2013-05-16",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20130516,
+        "float32_raw_bits_hex": [
+          "0x3fe66666",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.7999999523162842,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 151
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200dc5133010133338340000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2014-05-08",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20140508,
+        "float32_raw_bits_hex": [
+          "0x40833333",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          4.099999904632568,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 154
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200c1793301010000a040000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2015-07-21",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20150721,
+        "float32_raw_bits_hex": [
+          "0x40a00000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          5.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 159
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200d9a03301016666e640000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2016-07-29",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20160729,
+        "float32_raw_bits_hex": [
+          "0x40e66666",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          7.199999809265137,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 166
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303032004dc8330101cdccfc40000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2017-08-29",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20170829,
+        "float32_raw_bits_hex": [
+          "0x40fccccd",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          7.900000095367432,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 169
+      },
+      {
+        "category": 1,
+        "clear_hex": "003030303030320057ef33010100001041000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2018-08-23",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20180823,
+        "float32_raw_bits_hex": [
+          "0x41100000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          9.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 171
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303032005f1634010161372741000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2019-08-15",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20190815,
+        "float32_raw_bits_hex": [
+          "0x41273761",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          10.451020240783691,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 173
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303032006e3d34010179a82241000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2020-08-14",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20200814,
+        "float32_raw_bits_hex": [
+          "0x4122a879",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          10.166131019592285,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 176
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200896434010100004841000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2021-08-25",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20210825,
+        "float32_raw_bits_hex": [
+          "0x41480000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          12.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 178
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200998b3401011c2e1c41000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2022-08-25",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20220825,
+        "float32_raw_bits_hex": [
+          "0x411c2e1c",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          9.76125717163086,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 181
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303200a9b23401019a99d940000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2023-08-25",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20230825,
+        "float32_raw_bits_hex": [
+          "0x40d9999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          6.800000190734863,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 186
+      }
+    ],
+    "sz.000004": [
+      {
+        "category": 1,
+        "clear_hex": "0030303030303400e4cf2f010100000000000000000000c03f00000000",
+        "code": "000004",
+        "date_calendar_valid": true,
+        "date_iso": "1991-06-28",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19910628,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x00000000",
+          "0x3fc00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          0.0,
+          1.5,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 208
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303034002bf62f010100000000000000000000004000000000",
+        "code": "000004",
+        "date_calendar_valid": true,
+        "date_iso": "1992-04-27",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19920427,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x00000000",
+          "0x40000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          0.0,
+          2.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 209
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303034009c1d300101cdcc4c3f000020410000404000008040",
+        "code": "000004",
+        "date_calendar_valid": true,
+        "date_iso": "1993-05-24",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19930524,
+        "float32_raw_bits_hex": [
+          "0x3f4ccccd",
+          "0x41200000",
+          "0x40400000",
+          "0x40800000"
+        ],
+        "float32_repr_diagnostic": [
+          0.800000011920929,
+          10.0,
+          3.0,
+          4.0
+        ],
+        "market": 0,
+        "record_index": 211
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303400a5443001010000803f000000000000a04000000000",
+        "code": "000004",
+        "date_calendar_valid": true,
+        "date_iso": "1994-05-17",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19940517,
+        "float32_raw_bits_hex": [
+          "0x3f800000",
+          "0x00000000",
+          "0x40a00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.0,
+          0.0,
+          5.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 214
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303400ee6c3001019a99193f000000000000803f00000000",
+        "code": "000004",
+        "date_calendar_valid": true,
+        "date_iso": "1995-08-30",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19950830,
+        "float32_raw_bits_hex": [
+          "0x3f19999a",
+          "0x00000000",
+          "0x3f800000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.6000000238418579,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 215
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303400907d3101010000003f000000000000000000000000",
+        "code": "000004",
+        "date_calendar_valid": true,
+        "date_iso": "2002-06-24",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20020624,
+        "float32_raw_bits_hex": [
+          "0x3f000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.5,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 217
+      },
+      {
+        "category": 1,
+        "clear_hex": "00303030303034009ba43101019a99993e000000000000000000000000",
+        "code": "000004",
+        "date_calendar_valid": true,
+        "date_iso": "2003-06-19",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20030619,
+        "float32_raw_bits_hex": [
+          "0x3e99999a",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.30000001192092896,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 218
+      },
+      {
+        "category": 1,
+        "clear_hex": "0030303030303400921a32010100000000000000000000204000000000",
+        "code": "000004",
+        "date_calendar_valid": true,
+        "date_iso": "2006-08-18",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20060818,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x00000000",
+          "0x40200000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          0.0,
+          2.5,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 219
+      }
+    ]
+  },
+  "source": "selection.json selected codes; only category=1 records are retained"
+}

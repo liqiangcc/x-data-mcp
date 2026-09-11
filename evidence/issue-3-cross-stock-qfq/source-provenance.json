@@ -1,0 +1,19 @@
+{
+  "official_gbbq_archive_sha256": "6cfdbfc5a67e80ba6773cd5e8cc6779a97a01e07d892e5e6a17c9b35dbef60aa",
+  "official_gbbq_member_sha256": "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60",
+  "official_hsjday_zip_sha256": "611ea3ccc1e64717aebc9a14ce9c8b1ed06526b5fd69bd14275fc376f4f44272",
+  "community_decoder": {
+    "repo": "wxyzZ/pytdx",
+    "commit": "0d6f80618e1bae0f8e48552e597af492f3640f5d",
+    "path": "pytdx/reader/gbbq_reader.py",
+    "git_blob_sha1": "0eda4935027ffc79b5c425eff0a70a6d492b21d1",
+    "raw_sha256": "e28fae76760b1247a960cab285aa357c2d263b3212e7cabfb3f1ebfcc127d6ba",
+    "boundary": "community reverse-engineering evidence, not official TDX contract"
+  },
+  "baostock": {
+    "package": "baostock 0.9.3",
+    "wheel_sha256": "acbd19403285bc4e254cee8297cf0e2646ae2276e5af7e549deed3988ab02293",
+    "query_mode": "one fresh anonymous session per corrected security; no application retry"
+  },
+  "selection_sha256": "e6a3a4c59f02120c02328fdfc519592d9acf16666f8b1876dcbde670124b5446"
+}

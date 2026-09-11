@@ -1,0 +1,82 @@
+{
+  "compatible_stock_count": 2,
+  "conclusions": {
+    "cross_market": "CROSS_MARKET_VALIDATION_HAS_MISMATCH",
+    "full_market_production_sufficiency": "NOT_VERIFIED",
+    "tdx_official_qfq_contract": "NOT_PROVEN"
+  },
+  "incident_excluded": {
+    "excluded_from_validation_conclusions": true,
+    "path": "pre-probe-selection-bug.json",
+    "type": "PRE_PROBE_SELECTION_BUG"
+  },
+  "per_stock": [
+    {
+      "compatible": true,
+      "consistent_6dp_count": 411,
+      "exact_match_count": 1644,
+      "field_count": 1644,
+      "first_mismatch": null,
+      "mismatch_count": 0,
+      "relevant_unresolved_count": 0,
+      "security": "sh.600004",
+      "source_row_count": 411
+    },
+    {
+      "compatible": false,
+      "consistent_6dp_count": 411,
+      "exact_match_count": 1128,
+      "field_count": 1644,
+      "first_mismatch": {
+        "date": "2025-01-02",
+        "difference": "-0.0101494400",
+        "factor": "0.998621",
+        "field": "open",
+        "local": "7.34985056",
+        "raw": "7.36",
+        "source": "7.3600000000"
+      },
+      "mismatch_count": 516,
+      "relevant_unresolved_count": 0,
+      "security": "sh.600006",
+      "source_row_count": 411
+    },
+    {
+      "compatible": true,
+      "consistent_6dp_count": 411,
+      "exact_match_count": 1644,
+      "field_count": 1644,
+      "first_mismatch": null,
+      "mismatch_count": 0,
+      "relevant_unresolved_count": 0,
+      "security": "sz.000002",
+      "source_row_count": 411
+    },
+    {
+      "compatible": false,
+      "consistent_6dp_count": 331,
+      "exact_match_count": 1324,
+      "field_count": 1472,
+      "first_mismatch": null,
+      "mismatch_count": 0,
+      "relevant_unresolved_count": 0,
+      "security": "sz.000004",
+      "source_row_count": 368
+    }
+  ],
+  "schema": "x-data-mcp.issue-3.cross-stock.qfq-validation.v1",
+  "scope": {
+    "algorithm": "frozen PR #51/#52 Decimal rule; no formula, precision, event filter, or tolerance changes",
+    "selection_sha256": "e6a3a4c59f02120c02328fdfc519592d9acf16666f8b1876dcbde670124b5446",
+    "window": {
+      "end": "2026-09-10",
+      "start": "2025-01-01"
+    }
+  },
+  "selected_securities": [
+    "sh.600004",
+    "sh.600006",
+    "sz.000002",
+    "sz.000004"
+  ]
+}
