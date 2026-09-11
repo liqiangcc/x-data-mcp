@@ -1,0 +1,404 @@
+{
+  "network_requests_in_analysis": 0,
+  "corrected_batch_request_count": 6,
+  "source_conclusion_uses_only": "corrected batch; prior 9501 responses are operator_request_construction_error audit only",
+  "requests": [
+    {
+      "http_status": 200,
+      "error": null,
+      "version": "6611258b7e4dcac52f636cabf8a08714",
+      "business": {
+        "success": true,
+        "code": 0,
+        "message": "ok"
+      },
+      "result": {
+        "count": 2317,
+        "pages": 464,
+        "row_count": 5,
+        "rows": [
+          {
+            "SECURITY_CODE": "600009",
+            "SECUCODE": "600009.SH",
+            "TRADE_MARKET": "069001001001",
+            "BOARD_CODE": "016001",
+            "BOARD_NAME": "航空机场"
+          },
+          {
+            "SECURITY_CODE": "600010",
+            "SECUCODE": "600010.SH",
+            "TRADE_MARKET": "069001001001",
+            "BOARD_CODE": "016114",
+            "BOARD_NAME": "普钢"
+          },
+          {
+            "SECURITY_CODE": "600011",
+            "SECUCODE": "600011.SH",
+            "TRADE_MARKET": "069001001001",
+            "BOARD_CODE": "016007",
+            "BOARD_NAME": "电力"
+          },
+          {
+            "SECURITY_CODE": "600012",
+            "SECUCODE": "600012.SH",
+            "TRADE_MARKET": "069001001001",
+            "BOARD_CODE": "016002",
+            "BOARD_NAME": "铁路公路"
+          },
+          {
+            "SECURITY_CODE": "600015",
+            "SECUCODE": "600015.SH",
+            "TRADE_MARKET": "069001001001",
+            "BOARD_CODE": "016029",
+            "BOARD_NAME": "银行Ⅱ"
+          }
+        ]
+      },
+      "name": "shanghai-page-2",
+      "market": "shanghai",
+      "page_number": 2,
+      "page_size": 5,
+      "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+      "params": {
+        "reportName": "RPT_VALUEANALYSIS_DET",
+        "columns": "ALL",
+        "quoteColumns": "",
+        "pageNumber": 2,
+        "pageSize": 5,
+        "sortColumns": "SECURITY_CODE",
+        "sortTypes": 1,
+        "source": "WEB",
+        "client": "WEB",
+        "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001001001\",\"069001001006\",\"069001001003\"))"
+      },
+      "url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&quoteColumns=&pageNumber=2&pageSize=5&sortColumns=SECURITY_CODE&sortTypes=1&source=WEB&client=WEB&filter=%28TRADE_DATE%3D%272026-09-10%27%29%28TRADE_MARKET+in+%28%22069001001001%22%2C%22069001001006%22%2C%22069001001003%22%29%29",
+      "request_start_utc": "2026-09-11T06:35:07.046765Z",
+      "request_start_asia_shanghai": "2026-09-11T14:35:07.046765+08:00",
+      "request_end_utc": "2026-09-11T06:35:07.260543Z",
+      "request_end_asia_shanghai": "2026-09-11T14:35:07.260543+08:00",
+      "raw_sha256": "8b9989cc9d13bf6bddb20f671f296650568c304922832e96612394bda79eece4",
+      "raw_file": "shanghai-page-2.json"
+    },
+    {
+      "http_status": 200,
+      "error": null,
+      "version": "1ae0209da6f4c927235a6c9da6db9ce0",
+      "business": {
+        "success": true,
+        "code": 0,
+        "message": "ok"
+      },
+      "result": {
+        "count": 2317,
+        "pages": 464,
+        "row_count": 2,
+        "rows": [
+          {
+            "SECURITY_CODE": "688981",
+            "SECUCODE": "688981.SH",
+            "TRADE_MARKET": "069001001006",
+            "BOARD_CODE": "016077",
+            "BOARD_NAME": "半导体"
+          },
+          {
+            "SECURITY_CODE": "689009",
+            "SECUCODE": "689009.SH",
+            "TRADE_MARKET": "069001001006",
+            "BOARD_CODE": "016151",
+            "BOARD_NAME": "摩托车及其他"
+          }
+        ]
+      },
+      "name": "shanghai-page-464",
+      "market": "shanghai",
+      "page_number": 464,
+      "page_size": 5,
+      "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+      "params": {
+        "reportName": "RPT_VALUEANALYSIS_DET",
+        "columns": "ALL",
+        "quoteColumns": "",
+        "pageNumber": 464,
+        "pageSize": 5,
+        "sortColumns": "SECURITY_CODE",
+        "sortTypes": 1,
+        "source": "WEB",
+        "client": "WEB",
+        "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001001001\",\"069001001006\",\"069001001003\"))"
+      },
+      "url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&quoteColumns=&pageNumber=464&pageSize=5&sortColumns=SECURITY_CODE&sortTypes=1&source=WEB&client=WEB&filter=%28TRADE_DATE%3D%272026-09-10%27%29%28TRADE_MARKET+in+%28%22069001001001%22%2C%22069001001006%22%2C%22069001001003%22%29%29",
+      "request_start_utc": "2026-09-11T06:35:07.261466Z",
+      "request_start_asia_shanghai": "2026-09-11T14:35:07.261466+08:00",
+      "request_end_utc": "2026-09-11T06:35:07.421334Z",
+      "request_end_asia_shanghai": "2026-09-11T14:35:07.421334+08:00",
+      "raw_sha256": "0df900e5bd5053f783ca76742e97d0074c8a2eb6f36b23a40c61ecfe39fbbbdf",
+      "raw_file": "shanghai-page-464.json"
+    },
+    {
+      "http_status": 200,
+      "error": null,
+      "version": null,
+      "business": {
+        "success": false,
+        "code": 9201,
+        "message": "返回数据为空"
+      },
+      "result": {
+        "count": null,
+        "pages": null,
+        "row_count": 0,
+        "rows": []
+      },
+      "name": "shanghai-page-465",
+      "market": "shanghai",
+      "page_number": 465,
+      "page_size": 5,
+      "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+      "params": {
+        "reportName": "RPT_VALUEANALYSIS_DET",
+        "columns": "ALL",
+        "quoteColumns": "",
+        "pageNumber": 465,
+        "pageSize": 5,
+        "sortColumns": "SECURITY_CODE",
+        "sortTypes": 1,
+        "source": "WEB",
+        "client": "WEB",
+        "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001001001\",\"069001001006\",\"069001001003\"))"
+      },
+      "url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&quoteColumns=&pageNumber=465&pageSize=5&sortColumns=SECURITY_CODE&sortTypes=1&source=WEB&client=WEB&filter=%28TRADE_DATE%3D%272026-09-10%27%29%28TRADE_MARKET+in+%28%22069001001001%22%2C%22069001001006%22%2C%22069001001003%22%29%29",
+      "request_start_utc": "2026-09-11T06:35:07.422271Z",
+      "request_start_asia_shanghai": "2026-09-11T14:35:07.422271+08:00",
+      "request_end_utc": "2026-09-11T06:35:07.588720Z",
+      "request_end_asia_shanghai": "2026-09-11T14:35:07.588720+08:00",
+      "raw_sha256": "ea6528a2204b61a7ee34683a73ca00f8afdc86aadf3f765d4dae39bbfb19dbe7",
+      "raw_file": "shanghai-page-465.json"
+    },
+    {
+      "http_status": 200,
+      "error": null,
+      "version": "f1af2d1788d7791062de05498434b477",
+      "business": {
+        "success": true,
+        "code": 0,
+        "message": "ok"
+      },
+      "result": {
+        "count": 2901,
+        "pages": 581,
+        "row_count": 5,
+        "rows": [
+          {
+            "SECURITY_CODE": "000009",
+            "SECUCODE": "000009.SZ",
+            "TRADE_MARKET": "069001002001",
+            "BOARD_CODE": "016042",
+            "BOARD_NAME": "综合Ⅱ"
+          },
+          {
+            "SECURITY_CODE": "000010",
+            "SECUCODE": "000010.SZ",
+            "TRADE_MARKET": "069001002005",
+            "BOARD_CODE": "016135",
+            "BOARD_NAME": "基础建设"
+          },
+          {
+            "SECURITY_CODE": "000011",
+            "SECUCODE": "000011.SZ",
+            "TRADE_MARKET": "069001002001",
+            "BOARD_CODE": "016017",
+            "BOARD_NAME": "房地产开发"
+          },
+          {
+            "SECURITY_CODE": "000012",
+            "SECUCODE": "000012.SZ",
+            "TRADE_MARKET": "069001002001",
+            "BOARD_CODE": "016044",
+            "BOARD_NAME": "玻璃玻纤"
+          },
+          {
+            "SECURITY_CODE": "000014",
+            "SECUCODE": "000014.SZ",
+            "TRADE_MARKET": "069001002001",
+            "BOARD_CODE": "016017",
+            "BOARD_NAME": "房地产开发"
+          }
+        ]
+      },
+      "name": "shenzhen-page-2",
+      "market": "shenzhen",
+      "page_number": 2,
+      "page_size": 5,
+      "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+      "params": {
+        "reportName": "RPT_VALUEANALYSIS_DET",
+        "columns": "ALL",
+        "quoteColumns": "",
+        "pageNumber": 2,
+        "pageSize": 5,
+        "sortColumns": "SECURITY_CODE",
+        "sortTypes": 1,
+        "source": "WEB",
+        "client": "WEB",
+        "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001002001\",\"069001002002\",\"069001002005\"))"
+      },
+      "url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&quoteColumns=&pageNumber=2&pageSize=5&sortColumns=SECURITY_CODE&sortTypes=1&source=WEB&client=WEB&filter=%28TRADE_DATE%3D%272026-09-10%27%29%28TRADE_MARKET+in+%28%22069001002001%22%2C%22069001002002%22%2C%22069001002005%22%29%29",
+      "request_start_utc": "2026-09-11T06:35:07.589426Z",
+      "request_start_asia_shanghai": "2026-09-11T14:35:07.589426+08:00",
+      "request_end_utc": "2026-09-11T06:35:07.840905Z",
+      "request_end_asia_shanghai": "2026-09-11T14:35:07.840905+08:00",
+      "raw_sha256": "791985607341329c2b1e116e88d753d1a72733a6817142541767635953b1e019",
+      "raw_file": "shenzhen-page-2.json"
+    },
+    {
+      "http_status": 200,
+      "error": null,
+      "version": "10050f468d2210fe32cb4bd1ccf6ea98",
+      "business": {
+        "success": true,
+        "code": 0,
+        "message": "ok"
+      },
+      "result": {
+        "count": 2901,
+        "pages": 581,
+        "row_count": 1,
+        "rows": [
+          {
+            "SECURITY_CODE": "302132",
+            "SECUCODE": "302132.SZ",
+            "TRADE_MARKET": "069001002002",
+            "BOARD_CODE": "016119",
+            "BOARD_NAME": "航空装备Ⅱ"
+          }
+        ]
+      },
+      "name": "shenzhen-page-581",
+      "market": "shenzhen",
+      "page_number": 581,
+      "page_size": 5,
+      "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+      "params": {
+        "reportName": "RPT_VALUEANALYSIS_DET",
+        "columns": "ALL",
+        "quoteColumns": "",
+        "pageNumber": 581,
+        "pageSize": 5,
+        "sortColumns": "SECURITY_CODE",
+        "sortTypes": 1,
+        "source": "WEB",
+        "client": "WEB",
+        "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001002001\",\"069001002002\",\"069001002005\"))"
+      },
+      "url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&quoteColumns=&pageNumber=581&pageSize=5&sortColumns=SECURITY_CODE&sortTypes=1&source=WEB&client=WEB&filter=%28TRADE_DATE%3D%272026-09-10%27%29%28TRADE_MARKET+in+%28%22069001002001%22%2C%22069001002002%22%2C%22069001002005%22%29%29",
+      "request_start_utc": "2026-09-11T06:35:07.841619Z",
+      "request_start_asia_shanghai": "2026-09-11T14:35:07.841619+08:00",
+      "request_end_utc": "2026-09-11T06:35:08.039520Z",
+      "request_end_asia_shanghai": "2026-09-11T14:35:08.039520+08:00",
+      "raw_sha256": "b098c2fbf1c9857cb50cd49d82b81d40396ab573e0ef40f824c05d264383f904",
+      "raw_file": "shenzhen-page-581.json"
+    },
+    {
+      "http_status": 200,
+      "error": null,
+      "version": null,
+      "business": {
+        "success": false,
+        "code": 9201,
+        "message": "返回数据为空"
+      },
+      "result": {
+        "count": null,
+        "pages": null,
+        "row_count": 0,
+        "rows": []
+      },
+      "name": "shenzhen-page-582",
+      "market": "shenzhen",
+      "page_number": 582,
+      "page_size": 5,
+      "endpoint": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+      "params": {
+        "reportName": "RPT_VALUEANALYSIS_DET",
+        "columns": "ALL",
+        "quoteColumns": "",
+        "pageNumber": 582,
+        "pageSize": 5,
+        "sortColumns": "SECURITY_CODE",
+        "sortTypes": 1,
+        "source": "WEB",
+        "client": "WEB",
+        "filter": "(TRADE_DATE='2026-09-10')(TRADE_MARKET in (\"069001002001\",\"069001002002\",\"069001002005\"))"
+      },
+      "url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&quoteColumns=&pageNumber=582&pageSize=5&sortColumns=SECURITY_CODE&sortTypes=1&source=WEB&client=WEB&filter=%28TRADE_DATE%3D%272026-09-10%27%29%28TRADE_MARKET+in+%28%22069001002001%22%2C%22069001002002%22%2C%22069001002005%22%29%29",
+      "request_start_utc": "2026-09-11T06:35:08.041130Z",
+      "request_start_asia_shanghai": "2026-09-11T14:35:08.041130+08:00",
+      "request_end_utc": "2026-09-11T06:35:08.382254Z",
+      "request_end_asia_shanghai": "2026-09-11T14:35:08.382254+08:00",
+      "raw_sha256": "ea6528a2204b61a7ee34683a73ca00f8afdc86aadf3f765d4dae39bbfb19dbe7",
+      "raw_file": "shenzhen-page-582.json"
+    }
+  ],
+  "static_checks": [
+    {
+      "market": "shanghai",
+      "page1_count": 2317,
+      "page1_pages": 464,
+      "ceil_count_div_5_equals_pages": true,
+      "page2_security_codes_overlap_page1": [],
+      "derived_expected_last_page_rows": 2,
+      "actual_last_page_rows": 2,
+      "last_plus_one_observation": {
+        "http_status": 200,
+        "business": {
+          "success": false,
+          "code": 9201,
+          "message": "返回数据为空"
+        },
+        "version": null,
+        "result": {
+          "count": null,
+          "pages": null,
+          "row_count": 0,
+          "rows": []
+        },
+        "error": null
+      },
+      "version_vs_page1": {
+        "page2": "different",
+        "last": "different",
+        "last_plus_one": "different_or_absent"
+      }
+    },
+    {
+      "market": "shenzhen",
+      "page1_count": 2901,
+      "page1_pages": 581,
+      "ceil_count_div_5_equals_pages": true,
+      "page2_security_codes_overlap_page1": [],
+      "derived_expected_last_page_rows": 1,
+      "actual_last_page_rows": 1,
+      "last_plus_one_observation": {
+        "http_status": 200,
+        "business": {
+          "success": false,
+          "code": 9201,
+          "message": "返回数据为空"
+        },
+        "version": null,
+        "result": {
+          "count": null,
+          "pages": null,
+          "row_count": 0,
+          "rows": []
+        },
+        "error": null
+      },
+      "version_vs_page1": {
+        "page2": "different",
+        "last": "different",
+        "last_plus_one": "different_or_absent"
+      }
+    }
+  ]
+}
