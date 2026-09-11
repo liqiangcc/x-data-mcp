@@ -1,0 +1,20 @@
+{
+  "main_file": {
+    "file": "gbbq",
+    "file_bytes": 5966087,
+    "sha256": "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60",
+    "first_64_bytes_hex": "9f230300631224b0f311c9a953c0bb1806866a39dcbc5c5514c3e1d2000000803f631224b0f311c9a9b1e786c097f3e81ca0ae101bb36641e145239097456312",
+    "format": "UNKNOWN proprietary binary; not DBF and no package schema found"
+  },
+  "map_file": {
+    "file": "gbbq.map",
+    "file_bytes": 96083,
+    "sha256": "b2c83ef38462e1716ea33e3ef326d38ab287c13b8b50c92e960c2b932a6ae400",
+    "numeric_entry_lines": 7391,
+    "target_map_entries": [
+      "0000019723",
+      "6000009687"
+    ]
+  },
+  "target_record_status": "map entries exist for both codes, but no auditable record layout/field mapping permits decoding dates/categories/values without guessing"
+}

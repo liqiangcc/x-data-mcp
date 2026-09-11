@@ -1,0 +1,9 @@
+HTTP/1.1 200 OK
+Server: nginx
+Date: Fri, 11 Sep 2026 11:01:09 GMT
+Content-Type: application/zip
+Content-Length: 16098051
+Last-Modified: Fri, 11 Sep 2026 10:22:54 GMT
+Connection: keep-alive
+ETag: "6aa3d67e-f5a303"
+Accept-Ranges: bytes

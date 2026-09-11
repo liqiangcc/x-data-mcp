@@ -1,0 +1,699 @@
+{
+  "archive_member": "zhb.zip",
+  "bytes": 1393406,
+  "sha256": "5c49eeb8e684601cad0070ea161ca58ade0e4ad8b34268f281d6861b159f027a",
+  "testzip_bad_member": null,
+  "member_count": 46,
+  "members": [
+    {
+      "path": "addedcode_bj.cfg",
+      "compressed_size": 4604,
+      "uncompressed_size": 15091,
+      "crc32": "5d541071",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        14,
+        36
+      ],
+      "compression": 8
+    },
+    {
+      "path": "brkcomp.dat",
+      "compressed_size": 9528,
+      "uncompressed_size": 29595,
+      "crc32": "4a6da583",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        22
+      ],
+      "compression": 8
+    },
+    {
+      "path": "brkseat.dat",
+      "compressed_size": 7168,
+      "uncompressed_size": 32550,
+      "crc32": "16297540",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        22
+      ],
+      "compression": 8
+    },
+    {
+      "path": "csiblock.dat",
+      "compressed_size": 2778,
+      "uncompressed_size": 13797,
+      "crc32": "3430bd7a",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        56,
+        56
+      ],
+      "compression": 8
+    },
+    {
+      "path": "hkblock.dat",
+      "compressed_size": 17107,
+      "uncompressed_size": 70803,
+      "crc32": "24fa3b17",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        22
+      ],
+      "compression": 8
+    },
+    {
+      "path": "hkzsinfo.cfg",
+      "compressed_size": 1111,
+      "uncompressed_size": 3007,
+      "crc32": "2f76dada",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        28
+      ],
+      "compression": 8
+    },
+    {
+      "path": "hqrule.dat",
+      "compressed_size": 142,
+      "uncompressed_size": 217,
+      "crc32": "ce0bcb90",
+      "timestamp": [
+        2026,
+        7,
+        3,
+        18,
+        37,
+        46
+      ],
+      "compression": 8
+    },
+    {
+      "path": "hspy.dat",
+      "compressed_size": 189,
+      "uncompressed_size": 325,
+      "crc32": "e26c25c2",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        50
+      ],
+      "compression": 8
+    },
+    {
+      "path": "ilong.dat",
+      "compressed_size": 6598,
+      "uncompressed_size": 23111,
+      "crc32": "38dafd2f",
+      "timestamp": [
+        2026,
+        8,
+        7,
+        13,
+        54,
+        18
+      ],
+      "compression": 8
+    },
+    {
+      "path": "importzs.cfg",
+      "compressed_size": 220,
+      "uncompressed_size": 553,
+      "crc32": "560a61d8",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        16,
+        40
+      ],
+      "compression": 8
+    },
+    {
+      "path": "incon.dat",
+      "compressed_size": 23790,
+      "uncompressed_size": 67543,
+      "crc32": "359c11fc",
+      "timestamp": [
+        2026,
+        6,
+        22,
+        14,
+        45,
+        48
+      ],
+      "compression": 8
+    },
+    {
+      "path": "jjblock.dat",
+      "compressed_size": 13844,
+      "uncompressed_size": 56169,
+      "crc32": "47c35dc4",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        28
+      ],
+      "compression": 8
+    },
+    {
+      "path": "mgblock.dat",
+      "compressed_size": 19307,
+      "uncompressed_size": 45784,
+      "crc32": "a3a64368",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        26
+      ],
+      "compression": 8
+    },
+    {
+      "path": "nacomte.dat",
+      "compressed_size": 7385,
+      "uncompressed_size": 9636,
+      "crc32": "892937f1",
+      "timestamp": [
+        2026,
+        8,
+        1,
+        16,
+        59,
+        10
+      ],
+      "compression": 8
+    },
+    {
+      "path": "nbcomte.dat",
+      "compressed_size": 7385,
+      "uncompressed_size": 9636,
+      "crc32": "892937f1",
+      "timestamp": [
+        2026,
+        8,
+        1,
+        16,
+        59,
+        52
+      ],
+      "compression": 8
+    },
+    {
+      "path": "needini.dat",
+      "compressed_size": 856,
+      "uncompressed_size": 3850,
+      "crc32": "ef73af26",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        52
+      ],
+      "compression": 8
+    },
+    {
+      "path": "neednote.dat",
+      "compressed_size": 1445,
+      "uncompressed_size": 4412,
+      "crc32": "0e52e8d2",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        16,
+        40
+      ],
+      "compression": 8
+    },
+    {
+      "path": "nscomte.dat",
+      "compressed_size": 1336,
+      "uncompressed_size": 1358,
+      "crc32": "73a80f07",
+      "timestamp": [
+        2024,
+        3,
+        29,
+        14,
+        31,
+        52
+      ],
+      "compression": 8
+    },
+    {
+      "path": "nscomte_std.dat",
+      "compressed_size": 1440,
+      "uncompressed_size": 1487,
+      "crc32": "9dbe81a8",
+      "timestamp": [
+        2026,
+        7,
+        13,
+        10,
+        38,
+        54
+      ],
+      "compression": 8
+    },
+    {
+      "path": "nvcomte.dat",
+      "compressed_size": 5266,
+      "uncompressed_size": 6927,
+      "crc32": "fd61a6c4",
+      "timestamp": [
+        2026,
+        8,
+        1,
+        16,
+        59,
+        22
+      ],
+      "compression": 8
+    },
+    {
+      "path": "nzcomte.dat",
+      "compressed_size": 2230,
+      "uncompressed_size": 2475,
+      "crc32": "8283e4ae",
+      "timestamp": [
+        2026,
+        8,
+        7,
+        18,
+        12,
+        36
+      ],
+      "compression": 8
+    },
+    {
+      "path": "othersg.cfg",
+      "compressed_size": 755,
+      "uncompressed_size": 1991,
+      "crc32": "7123ecf3",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        50
+      ],
+      "compression": 8
+    },
+    {
+      "path": "profile.dat",
+      "compressed_size": 47004,
+      "uncompressed_size": 314368,
+      "crc32": "6e29a22f",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        34
+      ],
+      "compression": 8
+    },
+    {
+      "path": "pttab.dat",
+      "compressed_size": 12589,
+      "uncompressed_size": 33548,
+      "crc32": "803efb46",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        34
+      ],
+      "compression": 8
+    },
+    {
+      "path": "relation.dat",
+      "compressed_size": 16511,
+      "uncompressed_size": 96828,
+      "crc32": "cd70ac40",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        18
+      ],
+      "compression": 8
+    },
+    {
+      "path": "sbblock.dat",
+      "compressed_size": 7301,
+      "uncompressed_size": 28350,
+      "crc32": "99a6ba53",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        22,
+        44
+      ],
+      "compression": 8
+    },
+    {
+      "path": "sgxblock.dat",
+      "compressed_size": 368,
+      "uncompressed_size": 623,
+      "crc32": "37d5503a",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        36
+      ],
+      "compression": 8
+    },
+    {
+      "path": "spblock.dat",
+      "compressed_size": 72159,
+      "uncompressed_size": 316396,
+      "crc32": "57aa22f3",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        56,
+        52
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxadr.cfg",
+      "compressed_size": 524,
+      "uncompressed_size": 726,
+      "crc32": "72b80dec",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        26
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxahrate.cfg",
+      "compressed_size": 23,
+      "uncompressed_size": 23,
+      "crc32": "3898b754",
+      "timestamp": [
+        2025,
+        7,
+        29,
+        13,
+        43,
+        52
+      ],
+      "compression": 0
+    },
+    {
+      "path": "tdxbjmore.cfg",
+      "compressed_size": 3304,
+      "uncompressed_size": 8570,
+      "crc32": "1bcc3270",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        36
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxbk.cfg",
+      "compressed_size": 701,
+      "uncompressed_size": 1451,
+      "crc32": "c43e3ae0",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        34
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxchain.cfg",
+      "compressed_size": 899,
+      "uncompressed_size": 1963,
+      "crc32": "487867a4",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        16,
+        4
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxdszs.cfg",
+      "compressed_size": 4303,
+      "uncompressed_size": 14801,
+      "crc32": "1a61b7ac",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        57,
+        30
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxhkag.cfg",
+      "compressed_size": 2890,
+      "uncompressed_size": 6648,
+      "crc32": "1b7eb362",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        28
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxmgag.cfg",
+      "compressed_size": 5715,
+      "uncompressed_size": 14136,
+      "crc32": "8014b813",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        26
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxpkmore.cfg",
+      "compressed_size": 15382,
+      "uncompressed_size": 50308,
+      "crc32": "f64b476f",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        36
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxsbzs.cfg",
+      "compressed_size": 112,
+      "uncompressed_size": 186,
+      "crc32": "92124cb5",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        22,
+        44
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxstat.cfg",
+      "compressed_size": 508591,
+      "uncompressed_size": 1382375,
+      "crc32": "e989f9ae",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        48
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxstat2.cfg",
+      "compressed_size": 357243,
+      "uncompressed_size": 912192,
+      "crc32": "d301b48a",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        15,
+        50
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxzs.cfg",
+      "compressed_size": 6722,
+      "uncompressed_size": 18272,
+      "crc32": "100107ce",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        56,
+        48
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tdxzs3.cfg",
+      "compressed_size": 11134,
+      "uncompressed_size": 32730,
+      "crc32": "74191835",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        56,
+        48
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tend_std.cfg",
+      "compressed_size": 2292,
+      "uncompressed_size": 15626,
+      "crc32": "24ce265a",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        16,
+        26
+      ],
+      "compression": 8
+    },
+    {
+      "path": "tipinfo.dat",
+      "compressed_size": 174932,
+      "uncompressed_size": 644680,
+      "crc32": "bd25a89e",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        57,
+        24
+      ],
+      "compression": 8
+    },
+    {
+      "path": "ukblock.dat",
+      "compressed_size": 802,
+      "uncompressed_size": 1652,
+      "crc32": "f79c3d0c",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        28
+      ],
+      "compression": 8
+    },
+    {
+      "path": "xgsg.cfg",
+      "compressed_size": 1225,
+      "uncompressed_size": 2781,
+      "crc32": "762be724",
+      "timestamp": [
+        2026,
+        9,
+        11,
+        17,
+        18,
+        18
+      ],
+      "compression": 8
+    }
+  ]
+}

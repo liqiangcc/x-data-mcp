@@ -1,0 +1,12 @@
+http_code=200
+url_effective=http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip
+size_download=6350201
+content_type=application/zip
+requested_url=http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip
+start_utc=2026-09-11T11:02:11.106Z
+start_asia_shanghai=2026-09-11T19:02:11.109+0800
+end_utc=2026-09-11T11:02:34.243Z
+end_asia_shanghai=2026-09-11T19:02:34.246+0800
+curl_exit=0
+actual_bytes=6350201
+sha256=6cfdbfc5a67e80ba6773cd5e8cc6779a97a01e07d892e5e6a17c9b35dbef60aa

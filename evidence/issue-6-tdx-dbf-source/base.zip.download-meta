@@ -1,0 +1,12 @@
+http_code=200
+url_effective=http://www.tdx.com.cn/products/data/data/dbf/base.zip
+size_download=16098051
+content_type=application/zip
+requested_url=http://www.tdx.com.cn/products/data/data/dbf/base.zip
+start_utc=2026-09-11T11:01:09.622Z
+start_asia_shanghai=2026-09-11T19:01:09.626+0800
+end_utc=2026-09-11T11:02:11.063Z
+end_asia_shanghai=2026-09-11T19:02:11.066+0800
+curl_exit=0
+actual_bytes=16098051
+sha256=80ad1681c260cea18bb6f3e5ca6d3ac1acd215eae7b533048c8735619a1dc433
