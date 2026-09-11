@@ -316,6 +316,23 @@ fn same_key_with_different_source_ids_is_an_identity_conflict() {
 }
 
 #[test]
+fn same_key_with_same_source_id_remains_a_duplicate() {
+    let duplicate = record("000001", Exchange::Shenzhen, "vendor-sz-000001", assigned());
+    let (service, _, _) = make_service(Ok(snapshot(
+        vec![duplicate.clone(), duplicate],
+        CompletenessEvidence::Complete { expected_count: 2 },
+    )));
+    assert!(matches!(
+        service.refresh().unwrap().reason,
+        Some(RejectReason::DuplicateSecurity { key })
+            if key == SecurityKey {
+                exchange: Exchange::Shenzhen,
+                symbol: "000001".into()
+            }
+    ));
+}
+
+#[test]
 fn required_identity_fields_reject_without_publishing() {
     let mut missing_name = record("000001", Exchange::Shenzhen, "vendor-sz-000001", assigned());
     missing_name.name.clear();
