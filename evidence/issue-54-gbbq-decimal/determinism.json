@@ -1,0 +1,24 @@
+{
+  "schema": "issue54.offline-reproduction.v1",
+  "tested_commit": "3525e11a6f26af7f6c1fd391c34a37574d5ddb5e",
+  "checkouts": [
+    "/tmp/x-data-mcp-issue54-repro-a",
+    "/tmp/x-data-mcp-issue54-repro-b"
+  ],
+  "clean_before_and_after": true,
+  "runs": 2,
+  "byte_identical": true,
+  "matrix_sha256": "2fe91f1a946146503a131977c91c15c5b2c1e5ee3d2fdb880ecadf4853beb8fb",
+  "plan_sha256": "fe0e4a0855f3f4dd0c85a60cd74de41e67e6f5eb80b39d7dd9d484fea75f6106",
+  "inputs_sha256": "34af2d78b9071f8505e99ff5dfdf563bd9a833b76c5de7112d02cb997ec4d99c",
+  "runner_sha256": "c9784a64b5257a4960a45b3b3c04839883ef9e7ff17e93dc12a60c1166bef659",
+  "python": "3.12.3",
+  "network_requests_during_replay": 0,
+  "regression_tests_per_checkout": 5,
+  "original_retained_artifact_audit": "PASS: exact hsjday extraction and nine indexed GBBQ decryptions; community decoder only",
+  "original_artifact_audit_runs": 1,
+  "full_four_stock_revalidation": "NOT_RUN_NO_OFFICIAL_NORMALIZATION_CONTRACT",
+  "live_source": "NOT_RUN",
+  "official_normalization": "NOT_VERIFIED",
+  "scope": "Committed bounded extraction replay; no reacquisition, no official semantic verification"
+}
