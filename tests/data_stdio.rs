@@ -68,6 +68,44 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     let listing = s.request("tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 13);
+    let caps = s.call("get_data_capabilities", json!({}), false);
+    let listed: std::collections::BTreeSet<_> =
+        tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    let discovered: std::collections::BTreeSet<_> = caps["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["tool_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(listed, discovered);
+    let worker = s.call(
+        "get_data_capabilities",
+        json!({"operation":"run_worker_once"}),
+        false,
+    );
+    assert_eq!(worker["items"].as_array().unwrap().len(), 1);
+    assert!(
+        worker["items"][0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("never downloads or publishes")
+    );
+    let worker_tool = tools
+        .iter()
+        .find(|t| t["name"] == "run_worker_once")
+        .unwrap();
+    assert_eq!(
+        worker["items"][0]["input_schema"],
+        worker_tool["inputSchema"]
+    );
+    assert_eq!(
+        worker["items"][0]["output_schema"],
+        worker_tool["outputSchema"]
+    );
+    assert_eq!(
+        s.call("run_worker_once", json!({"extra":true}), true)["code"],
+        "invalid_arguments"
+    );
     let schema =
         |name: &str, field: &str| tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();
     for entry in x_data_mcp::data_supply::registry::entries() {
@@ -119,7 +157,13 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
         s.call("start_collection", extra, true)["code"],
         "invalid_arguments"
     );
-    s.call("run_worker_once", json!({}), false);
+    let executed = s.call("run_worker_once", json!({}), false);
+    assert_eq!(executed["idle"], false);
+    assert_eq!(executed["status"], "failed");
+    jsonschema::validator_for(&worker["items"][0]["output_schema"])
+        .unwrap()
+        .validate(&executed)
+        .unwrap();
     let p = s.call("get_task_progress", json!({"task_id":task}), false);
     assert_eq!(p["failed"], 1);
     let retry = json!({"contract_version":"v1","original_task_id":task,"new_request_id":"retry","item_ids":accepted["item_ids"]});

@@ -69,11 +69,11 @@
 准确代码 SHA、Actions 与未验证项见 [#78 实施记录](docs/tasks/issue-78.md)。
 服务器磁盘受限，本轮完整编译和测试使用 Actions，本机仅格式与差异检查。
 
-## SQLite 行情 Stage B（#79，Draft）
+## SQLite 行情 Stage B（#79，已合并）
 
 [PR #83](https://github.com/liqiangcc/x-data-mcp/pull/83) 提供库内 fixture/dry-run 能力：
 结构化 daily/yearly、完整 legacy JSON/digest 核验、固定版本 SQL 范围读取，以及同库条件发布和任务输出关联。
-显式 task_sqlite init/upgrade 使用 schema v3；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
+Stage B 引入 schema v3；当前显式 task_sqlite init/upgrade 使用 schema v4；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
 历史固定 daily 可派生 immutable yearly，但不推进 yearly head；current-head 同时核对 daily/yearly head、任务修订与占用。
 实现、完整性扫描成本、测试入口及未验证项见 [Stage B 记录](docs/tasks/issue-79.md)。
 当前仍 NOT_PRODUCTION_READY；该切片不解除 #54/#6/#46/#71 来源门禁。
@@ -91,7 +91,9 @@ git diff --check
 
 `./scripts/verify` 尚未实现，不调用不存在的命令。
 测试覆盖核心、发布门禁及真实 stdio 二进制的离线拒绝行为；Fake 不证明真实 parser/QFQ/yearly。
-归档在线测试不进入 Cargo，真实官方来源验证为 NOT_RUN；部署、全市场覆盖和性能为 NOT_VERIFIED。
+归档在线测试不进入 Cargo，真实官方来源验证为 NOT_RUN；全市场覆盖和性能为 NOT_VERIFIED。
+预览包本机离线部署检查已 PASS；用户报告 ChatGPT 当前会话能调用 13 工具，普通库没有已发布数据。
+这不证明真实采集/发布闭环完成，见[闭环门禁与实施顺序](docs/source-closure.md)。
 行情发布已改为[batch与version单点提交](docs/publish-storage.md)；[任务受理](docs/task-storage.md)也以单一快照提交绑定、执行状态和范围占用；当前仍要求单写者运行。
 
 Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README.md)已保存：仅 evidence，官方 normalization 契约仍 NOT_VERIFIED，未解除生产门禁。
@@ -129,3 +131,5 @@ Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README
 `bin/create_demo <全新测试库路径>` 仅创建合成演示数据，不覆盖既有文件，正常服务不会自动调用。
 `python3 check.py --bin-dir bin --report smoke-report.json` 在临时新库运行真实部署检查并写报告。
 检查通过只证明当前二进制和 fixture 功能，不证明官方来源、真实行情或全部未来产品功能已完成。
+
+`run_worker_once` 保留 Stage A 受控开发语义，并登记在 get_data_capabilities：会修改任务状态/占用，当前执行器仅记录来源拒绝，不能下载或发布行情；接口 ready 不代表生产 worker 就绪。
