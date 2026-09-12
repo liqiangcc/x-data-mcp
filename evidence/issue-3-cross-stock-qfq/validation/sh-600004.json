@@ -15,6 +15,7 @@
     "record_count": 5629,
     "sha256": "9fa246c023ca11c427d45aa527f01a64611cc40903ec5b636290d0986fe470a9"
   },
+  "diagnostics": {},
   "events": {
     "category": 1,
     "first_date": "2004-07-13",
@@ -18129,6 +18130,8 @@
     "matched_dates_first": "2025-01-02",
     "matched_dates_last": "2026-09-10",
     "mismatch_count": 0,
+    "mismatch_date_count": 0,
+    "mismatch_dates": [],
     "missing_dates": [],
     "response_error_code": "0",
     "response_error_msg": "success",

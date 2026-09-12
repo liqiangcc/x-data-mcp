@@ -15,6 +15,77 @@
     "record_count": 8251,
     "sha256": "77a40ad72bf1a338a4a49a8586744127aa9f800496b095d231d30251f62b966b"
   },
+  "diagnostics": {
+    "coverage_result": "BAOSTOCK_SUSPENSION_PLACEHOLDER_NOT_PRESENT_IN_TDX_DAY",
+    "first_counterexample": null,
+    "gate_boundary": "The security remains incompatible under the original all-source-dates-present gate; this is not classified as an OHLC QFQ numeric mismatch.",
+    "matched_trading_bar_result": {
+      "matched_dates": 331,
+      "mismatch_count": 0,
+      "ohlc_exact_fields": 1324,
+      "ohlc_field_total_on_matched_dates": 1324,
+      "status": "MATCHED_TRADING_BAR_QFQ_EXACT"
+    },
+    "missing_clusters_in_source_row_order": [
+      {
+        "end_date": "2025-04-29",
+        "row_count": 1,
+        "source_row_indices": [
+          76
+        ],
+        "start_date": "2025-04-29"
+      },
+      {
+        "end_date": "2026-06-22",
+        "row_count": 36,
+        "source_row_indices": [
+          317,
+          318,
+          319,
+          320,
+          321,
+          322,
+          323,
+          324,
+          325,
+          326,
+          327,
+          328,
+          329,
+          330,
+          331,
+          332,
+          333,
+          334,
+          335,
+          336,
+          337,
+          338,
+          339,
+          340,
+          341,
+          342,
+          343,
+          344,
+          345,
+          346,
+          347,
+          348,
+          349,
+          350,
+          351,
+          352
+        ],
+        "start_date": "2026-04-28"
+      }
+    ],
+    "missing_day_date_count": 37,
+    "missing_source_row_count": 37,
+    "placeholder_rows_all_match": true,
+    "placeholder_rows_matching": 37,
+    "placeholder_rule": "open=high=low=close=preclose as raw strings, volume='' and amount=''",
+    "reason": "source-row coverage/suspension-placeholder difference"
+  },
   "events": {
     "category": 1,
     "first_date": "1991-06-28",
@@ -14609,6 +14680,8 @@
     "matched_dates_first": "2025-01-02",
     "matched_dates_last": "2026-07-13",
     "mismatch_count": 0,
+    "mismatch_date_count": 0,
+    "mismatch_dates": [],
     "missing_dates": [
       "2025-04-29",
       "2026-04-28",

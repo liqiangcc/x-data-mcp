@@ -57,11 +57,29 @@ selection was not changed after these requests:
 | `sz.000002` | 411 / 2025-01-02..2026-09-10 | 36 | 0 | 1644/1644 | 411/411 | compatible |
 | `sz.000004` | 368 / 2025-01-02..2026-07-13 | 8 | 0 | 1324/1472 over 331 matched dates; 37 source dates absent from `.day` | 331/331 | mismatch |
 
-The first mismatch is `sh.600006` on 2025-01-02 open: local
-`7.34985056` versus BaoStock `7.3600000000`, difference `-0.0101494400`,
-under the frozen factor `0.998621`. `sz.000004` has no OHLC mismatch on its
-331 matched dates, but the source returned 37 dates absent from the official
-member, so it fails the date-domain gate.
+The `sh.600006` mismatch is classified as a GBBQ numeric-semantics diagnostic,
+not repaired by changing the frozen rule. Its 2025-07-17 category-1 event has
+C1 raw bits `0x3d4ccccd`, decoder diagnostic
+`0.05000000074505806`, and C2/C3/C4 zero. The previous raw close on
+2025-07-16 is `7.25`. The frozen diagnostic Decimal produces reference
+`7.244999999925494194`, cent value `7.24`, ratio
+`0.998620689655...`, and output factor `0.998621`; this leaves 129 dates
+(2025-01-02..2025-07-16) and 516 OHLC mismatches. The persisted BaoStock
+rows independently infer `1.000000` for all four OHLC quotients on all 129
+dates. Treating the diagnostic value as business Decimal `0.05` is only a
+counterfactual: reference `7.245` -> `7.25`, ratio `1`, which explains the
+source factor but is `GBBQ_FLOAT32_BUSINESS_DECIMAL_NORMALIZATION_NOT_VERIFIED`
+and not an official contract.
+
+`sz.000004` has no OHLC mismatch on its 331 matched dates: the result is
+`MATCHED_TRADING_BAR_QFQ_EXACT` with 331 dates / 1324 fields. The source also
+returned 37 rows absent from the official member. All 37 are verified
+suspension placeholders (`open=high=low=close=preclose`, `volume=''`,
+`amount=''`), in clusters 2025-04-29 (1 row) and 2026-04-28..2026-06-22
+(36 rows). This is
+`BAOSTOCK_SUSPENSION_PLACEHOLDER_NOT_PRESENT_IN_TDX_DAY`, not a numeric QFQ
+mismatch, but the stock remains incompatible under the original all-source-
+dates-present gate.
 
 The aggregate conclusion is
 `CROSS_MARKET_VALIDATION_HAS_MISMATCH`, not a four-stock pass. The incident

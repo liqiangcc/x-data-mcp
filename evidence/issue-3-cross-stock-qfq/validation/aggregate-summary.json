@@ -64,6 +64,12 @@
       "source_row_count": 368
     }
   ],
+  "reason_taxonomy": {
+    "sh.600004": "exact pass",
+    "sh.600006": "numeric-semantics/float32-normalization blocker",
+    "sz.000002": "exact pass",
+    "sz.000004": "source-row coverage/suspension-placeholder difference"
+  },
   "schema": "x-data-mcp.issue-3.cross-stock.qfq-validation.v1",
   "scope": {
     "algorithm": "frozen PR #51/#52 Decimal rule; no formula, precision, event filter, or tolerance changes",
