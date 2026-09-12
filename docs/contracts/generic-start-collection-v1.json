@@ -5,58 +5,28 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "request_id",
-        "dataset",
-        "contract_version",
-        "selection"
-      ],
+      "required": ["request_id", "dataset", "contract_version", "selection"],
       "properties": {
-        "request_id": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "\\S"
-        },
-        "dataset": {
-          "const": "market.daily"
-        },
-        "contract_version": {
-          "const": "v1"
-        },
+        "request_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "dataset": {"const": "market.daily"},
+        "contract_version": {"const": "v1"},
         "selection": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "kind",
-            "securities"
-          ],
+          "required": ["kind", "securities"],
           "properties": {
-            "kind": {
-              "const": "explicit"
-            },
+            "kind": {"const": "explicit"},
             "securities": {
               "type": "array",
               "minItems": 1,
-              "uniqueItems": true,
+              "$comment": "Write selections use set semantics: accept identical repeated securities and normalize before request comparison, item counting and occupancy. Conflicting semantic options must be rejected, not discarded. This schema is a design slice, not runtime registration.",
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": [
-                  "exchange",
-                  "code"
-                ],
+                "required": ["exchange", "code"],
                 "properties": {
-                  "exchange": {
-                    "type": "string",
-                    "enum": [
-                      "sh",
-                      "sz"
-                    ]
-                  },
-                  "code": {
-                    "type": "string",
-                    "pattern": "^[0-9]{6}$"
-                  }
+                  "exchange": {"type": "string", "enum": ["sh", "sz"]},
+                  "code": {"type": "string", "pattern": "^[0-9]{6}$"}
                 }
               }
             }
@@ -67,35 +37,16 @@
     {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "request_id",
-        "dataset",
-        "contract_version",
-        "selection"
-      ],
+      "required": ["request_id", "dataset", "contract_version", "selection"],
       "properties": {
-        "request_id": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "\\S"
-        },
-        "dataset": {
-          "const": "securities.catalog"
-        },
-        "contract_version": {
-          "const": "v1"
-        },
+        "request_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "dataset": {"const": "securities.catalog"},
+        "contract_version": {"const": "v1"},
         "selection": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "scope"
-          ],
-          "properties": {
-            "scope": {
-              "const": "current_sh_sz_a"
-            }
-          }
+          "required": ["scope"],
+          "properties": {"scope": {"const": "current_sh_sz_a"}}
         }
       }
     }
