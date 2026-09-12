@@ -197,7 +197,7 @@ impl MarketDataPublisher {
     }
 }
 
-fn validate_unit_currency_evidence(batch: &MarketDataBatch) -> Result<(), PublishError> {
+pub(crate) fn validate_unit_currency_evidence(batch: &MarketDataBatch) -> Result<(), PublishError> {
     require_confirmed("price currency", &batch.unit_currency.price_currency)?;
     require_confirmed("price unit", &batch.unit_currency.price_unit)?;
 
@@ -211,7 +211,7 @@ fn validate_unit_currency_evidence(batch: &MarketDataBatch) -> Result<(), Publis
     Ok(())
 }
 
-fn validate_adjustment_evidence(batch: &MarketDataBatch) -> Result<(), PublishError> {
+pub(crate) fn validate_adjustment_evidence(batch: &MarketDataBatch) -> Result<(), PublishError> {
     let evidence = &batch.adjustment_evidence;
     if !evidence.is_confirmed() {
         return Err(PublishError::AdjustmentEvidence(evidence.reason.clone()));
@@ -241,7 +241,7 @@ fn require_confirmed(
     }
 }
 
-fn validate_and_deduplicate(
+pub(crate) fn validate_and_deduplicate(
     batch: &MarketDataBatch,
 ) -> Result<(Vec<Bar>, ValidationSummary), PublishError> {
     if batch.bars.is_empty() {

@@ -8,10 +8,11 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 2;
-const MIGRATIONS: [&str; 2] = [
+pub const SCHEMA_VERSION: u32 = 3;
+const MIGRATIONS: [&str; 3] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
+    include_str!("../migrations/tasks/003_market.sql"),
 ];
 #[derive(Clone)]
 pub struct SqliteTasks {
@@ -70,7 +71,7 @@ impl SqliteTasks {
         tx.commit()
             .map_err(|e| Error::OutcomeUnknown(e.to_string()))
     }
-    fn connect(&self, readonly: bool) -> Result<Connection, Error> {
+    pub(crate) fn connect(&self, readonly: bool) -> Result<Connection, Error> {
         let flag = if readonly {
             OpenFlags::SQLITE_OPEN_READ_ONLY
         } else {
@@ -143,7 +144,7 @@ fn apply_migration(c: &Connection, version: usize, sql: &str) -> Result<(), Erro
         .map_err(storage)?;
     Ok(())
 }
-fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> {
+pub(crate) fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> {
     let version: u32 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(storage)?;
