@@ -1,0 +1,68 @@
+{
+  "documents": [
+    {
+      "retained_name": "tdx-user-agreement.html",
+      "url": "https://www.tdx.com.cn/about/yhxy/index.html?tabindex=0",
+      "sha256": "0fd44a6966a80ebefc86aeb0a3720087eb6f903d3ce07214af95cda5c0f205be",
+      "bytes": 1750,
+      "retained_completion_utc": "2026-09-12T05:18:16.247504+00:00",
+      "markers": [
+        "js/index.js"
+      ]
+    },
+    {
+      "retained_name": "tdx-community-rules.html",
+      "url": "https://www.tdx.com.cn/about/sqgz/index.html",
+      "sha256": "b0c4e490ef2be67782f15789b3069cfc7e470d567cb88e5c23b0a73ca5b797a5",
+      "bytes": 1664,
+      "retained_completion_utc": "2026-09-12T05:18:16.372505+00:00",
+      "markers": [
+        "js/index.js"
+      ]
+    },
+    {
+      "retained_name": "tdx-user-agreement-index.js",
+      "url": "https://www.tdx.com.cn/about/yhxy/js/index.js",
+      "sha256": "81318b55104499be2de288150f1d0939c0657c7efb4e4fda5ab8909152c6666b",
+      "bytes": 47925,
+      "retained_completion_utc": "2026-09-12T05:18:54.831699+00:00",
+      "markers": [
+        "第三方软件",
+        "反向工程"
+      ]
+    },
+    {
+      "retained_name": "tdx-community-rules-index.js",
+      "url": "https://www.tdx.com.cn/about/sqgz/js/index.js",
+      "sha256": "b04799c4b2d96eafd663605ce3756a9e1e18318dab1672eeef6b61e83731c0ab",
+      "bytes": 30314,
+      "retained_completion_utc": "2026-09-12T05:18:54.982700+00:00",
+      "markers": [
+        "通过机器人爬虫形式抓取通达信数据"
+      ]
+    },
+    {
+      "retained_name": "tdx-file-download-notice.html",
+      "url": "https://www.tdx.com.cn/article/52.html",
+      "sha256": "527d447ca305ca0f9a16e8f79201264856e7be08f4971eaefa6baafd6dc57d37",
+      "bytes": 24873,
+      "retained_completion_utc": "2026-09-12T05:19:55.752006+00:00",
+      "markers": [
+        "请券商客户修改行情主站定时服务配置",
+        "base.zip",
+        "gbbq.zip"
+      ]
+    },
+    {
+      "retained_name": "tdx-vipdata-page.html",
+      "url": "https://www.tdx.com.cn/article/vipdata.html",
+      "sha256": "ab3bbe9c8bd1e4cba19145171e97aeb8aab57507fd3af923ae74a90673e3eca7",
+      "bytes": 25274,
+      "retained_completion_utc": "2026-09-12T05:26:15.830924+00:00",
+      "markers": [
+        "适用于通达信个人版PC端软件的盘后数据下载",
+        "hsjday.zip"
+      ]
+    }
+  ]
+}

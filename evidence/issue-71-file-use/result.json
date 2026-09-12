@@ -1,0 +1,57 @@
+{
+  "schema": "x-data-mcp.file-use-evidence.v1",
+  "documents": [
+    {
+      "url": "https://www.tdx.com.cn/about/yhxy/index.html?tabindex=0",
+      "sha256": "0fd44a6966a80ebefc86aeb0a3720087eb6f903d3ce07214af95cda5c0f205be",
+      "markers_present": {
+        "js/index.js": true
+      }
+    },
+    {
+      "url": "https://www.tdx.com.cn/about/sqgz/index.html",
+      "sha256": "b0c4e490ef2be67782f15789b3069cfc7e470d567cb88e5c23b0a73ca5b797a5",
+      "markers_present": {
+        "js/index.js": true
+      }
+    },
+    {
+      "url": "https://www.tdx.com.cn/about/yhxy/js/index.js",
+      "sha256": "81318b55104499be2de288150f1d0939c0657c7efb4e4fda5ab8909152c6666b",
+      "markers_present": {
+        "第三方软件": true,
+        "反向工程": true
+      }
+    },
+    {
+      "url": "https://www.tdx.com.cn/about/sqgz/js/index.js",
+      "sha256": "b04799c4b2d96eafd663605ce3756a9e1e18318dab1672eeef6b61e83731c0ab",
+      "markers_present": {
+        "通过机器人爬虫形式抓取通达信数据": true
+      }
+    },
+    {
+      "url": "https://www.tdx.com.cn/article/52.html",
+      "sha256": "527d447ca305ca0f9a16e8f79201264856e7be08f4971eaefa6baafd6dc57d37",
+      "markers_present": {
+        "请券商客户修改行情主站定时服务配置": true,
+        "base.zip": true,
+        "gbbq.zip": true
+      }
+    },
+    {
+      "url": "https://www.tdx.com.cn/article/vipdata.html",
+      "sha256": "ab3bbe9c8bd1e4cba19145171e97aeb8aab57507fd3af923ae74a90673e3eca7",
+      "markers_present": {
+        "适用于通达信个人版PC端软件的盘后数据下载": true,
+        "hsjday.zip": true
+      }
+    }
+  ],
+  "evidence_level": "OFFICIAL_PUBLIC_DOCUMENTS_SCOPE_UNRESOLVED",
+  "file_access_use": "NOT_VERIFIED",
+  "production_ready": false,
+  "normalization_contract": "NOT_VERIFIED",
+  "live_market_source": "NOT_RUN",
+  "official_document_get": "RUN"
+}
