@@ -203,11 +203,11 @@ impl DataApi {
                         Some(r) => match r.outcome {
                             crate::task_control::RequestOutcome::Task(s) => {
                                 Some(super::observe::summary(
-                                    &self
-                                        .observer
-                                        .repository
-                                        .task(&s.task.task_id, &self.access)
-                                        .map_err(mapped)?,
+                                    &super::observe::TaskFacts {
+                                        request_id: a.request_id.clone(),
+                                        snapshot: s,
+                                        publications: vec![],
+                                    },
                                     &self.observer.run_id,
                                 ))
                             }
@@ -392,6 +392,9 @@ impl DataApi {
 fn task_error(e: crate::task_control::Error) -> ApiError {
     use crate::task_control::Error as E;
     let code = match &e {
+        E::TaskNotFound => "task_not_found",
+        E::UnsupportedContract => "unsupported_contract",
+        E::NeedsVerification(_) => "needs_verification",
         E::RequestConflict => "request_conflict",
         E::RevisionConflict => "precondition_conflict",
         E::RangeConflict(_) => "range_conflict",
