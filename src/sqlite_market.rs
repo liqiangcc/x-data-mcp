@@ -70,11 +70,18 @@ impl SqliteMarket {
     pub fn range(&self, scope: &Scope, id: Option<&str>, range: &Range) -> Result<ReadPage, Error> {
         range.validate()?;
         self.read(|c| {
+            let version_missing_from_head = id.is_none();
             let id = match id {
                 Some(id) => id.to_owned(),
                 None => head(c, scope)?.ok_or(Error::NotFound)?,
             };
-            let record = read_record(c, &id, true, true)?;
+            let record = read_record(c, &id, true, true).map_err(|e| {
+                if version_missing_from_head && matches!(&e, Error::NotFound) {
+                    integrity("effective head target unavailable")
+                } else {
+                    e
+                }
+            })?;
             if Scope::of(&record.version) != *scope {
                 return Err(Error::Integrity("version/scope mismatch".into()));
             }
@@ -323,9 +330,26 @@ fn read_projection(
     allow_yearly: bool,
 ) -> Result<CheckedRecord, Error> {
     let row:Option<(String,String,String,String)>=c.query_row("SELECT compat_json,content_digest,digest_format,state FROM data_versions WHERE version_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(storage)?;
-    let (raw, digest, format, state) = row.ok_or(Error::NotFound)?;
+    let publication_exists: bool = c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM publication_batches WHERE version_id=?1)",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    let (raw, digest, format, state) = row.ok_or_else(|| {
+        if publication_exists {
+            integrity("published version record missing")
+        } else {
+            Error::NotFound
+        }
+    })?;
     if published && state != "published" {
-        return Err(Error::NotFound);
+        return Err(if publication_exists {
+            integrity("published version state changed")
+        } else {
+            Error::NotFound
+        });
     }
     let raw: Value = serde_json::from_str(&raw).map_err(integrity)?;
     let record = compat::check(&raw)?;

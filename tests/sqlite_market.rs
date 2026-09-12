@@ -742,3 +742,36 @@ fn fixed_base_change_after_prepare_is_rejected_without_recomputing_or_rebinding(
             .is_none()
     );
 }
+#[test]
+fn damaged_published_state_or_missing_version_is_not_reported_as_no_data() {
+    use x_data_mcp::{market_storage::query::Pages, query::MarketQuery};
+    for sql in [
+        "UPDATE data_versions SET state='validated'",
+        "PRAGMA foreign_keys=OFF; DELETE FROM data_versions;",
+    ] {
+        let (_dir, store) = db();
+        published_fixture(&store, &samples()[0]["record"]);
+        Connection::open(store.tasks.path())
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap();
+        assert!(matches!(
+            store.fixed("legacy-daily"),
+            Err(Error::Integrity(_))
+        ));
+        let args = MarketQuery {
+            exchange: "sh".into(),
+            code: "600006".into(),
+            period: "day".into(),
+            start_date: range().start,
+            end_date: range().end,
+            version_id: None,
+            page_size: Some(1),
+            cursor: None,
+        };
+        assert!(matches!(
+            Pages::new(store).market(args, chrono::Utc::now()),
+            Err(Error::Integrity(_))
+        ));
+    }
+}
