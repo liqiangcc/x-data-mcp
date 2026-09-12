@@ -49,6 +49,16 @@ fn update_preserves_both_sides_and_tracks_years_without_publishing() {
         panic!("expected combined candidate")
     };
     assert_eq!(result.records.len(), 3);
+    assert_eq!(
+        result.candidate_sha256,
+        market_update::candidate_digest(&batch).unwrap()
+    );
+    assert_eq!(result.requested_range, range);
+    assert_eq!(
+        result.same_qfq_basis_ref,
+        "fixture:verified-compatible-basis"
+    );
+    assert_eq!(result.base_integrity_sha256, base.raw()["integrity_sha256"]);
     assert_eq!(result.records[0], base.version().records[0]);
     assert_eq!(result.records[2], base.version().records[2]);
     assert_eq!(result.changed_dates, vec![range.start]);

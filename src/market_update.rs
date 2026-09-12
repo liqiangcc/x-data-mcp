@@ -50,6 +50,11 @@ pub struct PreparedRange {
     pub changed_dates: Vec<NaiveDate>,
     pub affected_years: BTreeSet<i32>,
     pub base_version_id: String,
+    pub base_integrity_sha256: String,
+    pub candidate_sha256: String,
+    pub requested_range: DateRange,
+    pub same_qfq_basis_ref: String,
+    pub revision_ref: Option<String>,
 }
 pub fn candidate_digest(batch: &MarketDataBatch) -> Result<String, Error> {
     serde_json::to_vec(batch)
@@ -178,5 +183,10 @@ pub fn prepare(
         affected_years: changed.iter().map(|d| d.year()).collect(),
         changed_dates: changed,
         base_version_id: old.version_id.clone(),
+        base_integrity_sha256: proof.base_integrity_sha256.clone(),
+        candidate_sha256: proof.candidate_sha256.clone(),
+        requested_range: range.clone(),
+        same_qfq_basis_ref: proof.same_qfq_basis_ref.clone(),
+        revision_ref: proof.revision_ref.clone(),
     }))
 }
