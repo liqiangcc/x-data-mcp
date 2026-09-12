@@ -35,3 +35,5 @@ pub mod sqlite_supply;
 pub mod metrics;
 
 pub mod sqlite_metrics;
+
+pub mod market_update;
