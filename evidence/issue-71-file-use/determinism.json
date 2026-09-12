@@ -1,7 +1,7 @@
 {
-  "tested_commit": "a21712ab1d2c56a04f60168143f0b346e1f68db2",
+  "tested_commit": "0f8470e0ffb9e02f9cde44b9514ec6ebf3900f32",
   "two_clean_checkouts": "BYTE_IDENTICAL",
-  "result_sha256": "d79399d5197b701cb302a9603e1b055d0b8b46a683ce241776e6f826821412b6",
+  "result_sha256": "1b461288617b93c09d3c2acd2090658131159c7e1e599a40700d2893af8b9836",
   "tampered_artifact": "REJECTED_NO_RESULT",
   "live_market_source": "NOT_RUN",
   "file_access_use": "NOT_VERIFIED"
