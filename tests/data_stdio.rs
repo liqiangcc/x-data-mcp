@@ -67,7 +67,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     assert!(s.request("initialize", json!({}))["result"]["serverInfo"].is_object());
     let listing = s.request("tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 12);
+    assert_eq!(tools.len(), 13);
     let schema =
         |name: &str, field: &str| tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();
     for entry in x_data_mcp::data_supply::registry::entries() {
@@ -77,7 +77,8 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
             .unwrap();
         if matches!(
             entry.handler,
-            x_data_mcp::data_supply::registry::Handler::Progress
+            x_data_mcp::data_supply::registry::Handler::Compute
+                | x_data_mcp::data_supply::registry::Handler::Progress
                 | x_data_mcp::data_supply::registry::Handler::Collection
                 | x_data_mcp::data_supply::registry::Handler::Retry
                 | x_data_mcp::data_supply::registry::Handler::Task
