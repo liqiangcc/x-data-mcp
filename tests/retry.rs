@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use x_data_mcp::{
     execution::TaskExecutionService,
     market_data::{
-        Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
+        Adjustment, Bar, MarketDataBatch, MarketDataPipeline, Period, Provenance, SourceError,
     },
     task::{
         FrozenScope, TaskAcceptanceService, TaskError, TaskRetryService, TaskStatus, TaskStore,
@@ -17,7 +17,7 @@ struct FakeSource {
     failures: Vec<(String, Period)>,
 }
 
-impl MarketDataSource for FakeSource {
+impl FakeSource {
     fn fetch(
         &self,
         symbol: &str,
@@ -48,13 +48,14 @@ impl MarketDataSource for FakeSource {
                 source: "fake".into(),
                 source_period: match period {
                     Period::Day => "day",
-                    Period::Year => "year",
+                    Period::Year => "day",
                 }
                 .into(),
                 source_adjustment: "qfq".into(),
                 symbol: symbol.to_owned(),
                 acquired_at: DateTime::from_timestamp(0, 0).unwrap(),
                 adapter_version: "test".into(),
+                yearly_derivation: None,
             },
             coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
             unit_currency: x_data_mcp::market_data::UnitCurrencyEvidence::confirmed(
@@ -276,4 +277,29 @@ fn retry_occupancy_conflict_rejects_without_creating_retry_task() {
     assert!(store.get("retry-busy").unwrap().is_none());
     assert_eq!(store.list_occupancy().unwrap().len(), 1);
     assert_eq!(store.list_occupancy().unwrap()[0].task_id, blocker.task_id);
+}
+
+impl MarketDataPipeline for FakeSource {
+    fn materialize_daily(
+        &self,
+        symbol: &str,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        self.fetch(symbol, Period::Day, adjustment)
+    }
+
+    fn derive_yearly(
+        &self,
+        daily: &x_data_mcp::publish::EffectiveVersion,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let mut batch = self.fetch(&daily.symbol, Period::Year, daily.adjustment)?;
+        batch.provenance.source_period = "day".into();
+        batch.provenance.yearly_derivation = Some(x_data_mcp::market_data::YearlyDerivation {
+            base_daily_version_id: daily.version_id.clone(),
+            algorithm_version: "fake-yearly-fixture".into(),
+            first_trading_date: daily.records.first().unwrap().date,
+            last_trading_date: daily.records.last().unwrap().date,
+        });
+        Ok(batch)
+    }
 }

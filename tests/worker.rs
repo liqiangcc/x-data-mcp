@@ -5,7 +5,7 @@ use rust_decimal::Decimal;
 use tempfile::tempdir;
 use x_data_mcp::{
     market_data::{
-        Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
+        Adjustment, Bar, MarketDataBatch, MarketDataPipeline, Period, Provenance, SourceError,
     },
     task::{
         ScopeExecutionResult, TaskAcceptanceService, TaskExecutionRecord, TaskStatus, TaskStore,
@@ -18,7 +18,7 @@ struct FakeSource {
     calls: Arc<Mutex<Vec<(String, Period)>>>,
 }
 
-impl MarketDataSource for FakeSource {
+impl FakeSource {
     fn fetch(
         &self,
         symbol: &str,
@@ -28,7 +28,7 @@ impl MarketDataSource for FakeSource {
         self.calls.lock().unwrap().push((symbol.to_owned(), period));
         let source_period = match period {
             Period::Day => "day",
-            Period::Year => "year",
+            Period::Year => "day",
         };
         Ok(MarketDataBatch {
             symbol: symbol.to_owned(),
@@ -50,6 +50,7 @@ impl MarketDataSource for FakeSource {
                 symbol: symbol.to_owned(),
                 acquired_at: DateTime::from_timestamp(0, 0).unwrap(),
                 adapter_version: "test".into(),
+                yearly_derivation: None,
             },
             coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
             unit_currency: x_data_mcp::market_data::UnitCurrencyEvidence::confirmed(
@@ -127,7 +128,7 @@ fn rebuilt_worker_continues_with_the_next_pending_task() {
     let dir = tempdir().unwrap();
     let store = TaskStore::new(dir.path());
     let first = accept(&store, "r1", &["000001"], &[Period::Day]);
-    let second = accept(&store, "r2", &["600000"], &[Period::Year]);
+    let second = accept(&store, "r2", &["600000"], &[Period::Day]);
     let first_calls = Arc::new(Mutex::new(Vec::new()));
 
     assert_eq!(
@@ -145,7 +146,7 @@ fn rebuilt_worker_continues_with_the_next_pending_task() {
     assert!(rebuilt.run_once().unwrap().is_none());
     assert_eq!(
         rebuilt_calls.lock().unwrap().as_slice(),
-        [("600000".into(), Period::Year)]
+        [("600000".into(), Period::Day)]
     );
 }
 
@@ -217,4 +218,29 @@ fn queue_order_is_creation_order() {
 
     assert_eq!(processed, vec![first, second, third]);
     assert!(worker.run_once().unwrap().is_none());
+}
+
+impl MarketDataPipeline for FakeSource {
+    fn materialize_daily(
+        &self,
+        symbol: &str,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        self.fetch(symbol, Period::Day, adjustment)
+    }
+
+    fn derive_yearly(
+        &self,
+        daily: &x_data_mcp::publish::EffectiveVersion,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let mut batch = self.fetch(&daily.symbol, Period::Year, daily.adjustment)?;
+        batch.provenance.source_period = "day".into();
+        batch.provenance.yearly_derivation = Some(x_data_mcp::market_data::YearlyDerivation {
+            base_daily_version_id: daily.version_id.clone(),
+            algorithm_version: "fake-yearly-fixture".into(),
+            first_trading_date: daily.records.first().unwrap().date,
+            last_trading_date: daily.records.last().unwrap().date,
+        });
+        Ok(batch)
+    }
 }

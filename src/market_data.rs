@@ -191,6 +191,14 @@ pub struct Bar {
     pub amount: Option<Decimal>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct YearlyDerivation {
+    pub base_daily_version_id: String,
+    pub algorithm_version: String,
+    pub first_trading_date: NaiveDate,
+    pub last_trading_date: NaiveDate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provenance {
     pub source: String,
     pub source_period: String,
@@ -198,6 +206,9 @@ pub struct Provenance {
     pub symbol: String,
     pub acquired_at: DateTime<Utc>,
     pub adapter_version: String,
+    /// None for daily and legacy records; never infer lineage for old yearly data.
+    #[serde(default)]
+    pub yearly_derivation: Option<YearlyDerivation>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataBatch {
@@ -215,6 +226,8 @@ pub struct MarketDataBatch {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
+    #[error("SOURCE_NOT_VERIFIED: {0}")]
+    NotVerified(String),
     #[error("unsupported request: {0}")]
     Unsupported(String),
     #[error("source invocation failed: {0}")]
@@ -224,22 +237,35 @@ pub enum SourceError {
     #[error("invalid source response: {0}")]
     InvalidResponse(String),
 }
-pub trait MarketDataSource {
-    fn fetch(
+/// Local processing port, Issue #55. No external period/year fetch contract.
+/// Implementations materialize QFQ daily from official file snapshots; yearly
+/// consumes exactly one already published QFQ daily version, never a source year.
+pub trait MarketDataPipeline {
+    fn materialize_daily(
         &self,
         symbol: &str,
-        period: Period,
         adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError>;
+
+    fn derive_yearly(
+        &self,
+        daily: &crate::publish::EffectiveVersion,
     ) -> Result<MarketDataBatch, SourceError>;
 }
 
-impl<S: MarketDataSource + ?Sized> MarketDataSource for &S {
-    fn fetch(
+impl<S: MarketDataPipeline + ?Sized> MarketDataPipeline for &S {
+    fn materialize_daily(
         &self,
         symbol: &str,
-        period: Period,
         adjustment: Adjustment,
     ) -> Result<MarketDataBatch, SourceError> {
-        (**self).fetch(symbol, period, adjustment)
+        (**self).materialize_daily(symbol, adjustment)
+    }
+
+    fn derive_yearly(
+        &self,
+        daily: &crate::publish::EffectiveVersion,
+    ) -> Result<MarketDataBatch, SourceError> {
+        (**self).derive_yearly(daily)
     }
 }

@@ -63,3 +63,77 @@ fn stdio_initialize_then_tools_list_exposes_exactly_five_tools() {
         ]
     );
 }
+
+/// Issue #55 AC-01/04: the actual binary ignores retired source configuration.
+#[test]
+fn production_stdio_fails_closed_without_python_and_does_not_publish() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp_server"))
+        .env("X_DATA_MCP_STORE", dir.path())
+        .env("X_DATA_MCP_TDX_PYTHON", "/nonexistent/retired-python")
+        .env("X_DATA_MCP_TDX_LIVE", "1")
+        .env("PATH", "")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        for request in [
+            json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{
+                "name":"start_collection", "arguments":{"request_id":"blocked", "symbols":["000001"], "periods":["day","year"]}
+            }}),
+            json!({"jsonrpc":"2.0", "id":2, "method":"tools/call", "params":{"name":"run_worker_once", "arguments":{}}}),
+        ] {
+            writeln!(stdin, "{request}").unwrap();
+        }
+    }
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        responses[0]["result"]["structuredContent"]["status"],
+        "pending"
+    );
+    assert_eq!(
+        responses[1]["result"]["structuredContent"]["status"],
+        "failed"
+    );
+    let task_id = responses[0]["result"]["structuredContent"]["task_id"]
+        .as_str()
+        .unwrap();
+    let record = x_data_mcp::task::TaskStore::new(dir.path())
+        .get_execution(task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.scope_results.len(), 2);
+    assert!(record.scope_results.iter().all(|result| !result.success));
+    assert!(
+        record.scope_results[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("FILE_SET_CONSISTENCY_NOT_VERIFIED")
+    );
+    assert!(
+        record.scope_results[1]
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("PUBLISHED_QFQ_DAILY_REQUIRED")
+    );
+    assert!(!dir.path().join("effective").exists());
+    assert!(!dir.path().join("000001.day.qfq.json").exists());
+    assert!(!dir.path().join("000001.year.qfq.json").exists());
+}

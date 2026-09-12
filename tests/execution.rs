@@ -5,7 +5,7 @@ use tempfile::tempdir;
 use x_data_mcp::{
     execution::TaskExecutionService,
     market_data::{
-        Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
+        Adjustment, Bar, MarketDataBatch, MarketDataPipeline, Period, Provenance, SourceError,
     },
     task::{
         ScopeExecutionResult, TaskAcceptanceService, TaskExecutionRecord, TaskStatus, TaskStore,
@@ -19,7 +19,7 @@ struct FakeSource {
 }
 type Calls = Arc<Mutex<Vec<(String, Period)>>>;
 
-impl MarketDataSource for FakeSource {
+impl FakeSource {
     fn fetch(
         &self,
         symbol: &str,
@@ -36,7 +36,7 @@ impl MarketDataSource for FakeSource {
         }
         let source_period = match period {
             Period::Day => "day",
-            Period::Year => "year",
+            Period::Year => "day",
         };
         Ok(MarketDataBatch {
             symbol: symbol.into(),
@@ -58,6 +58,7 @@ impl MarketDataSource for FakeSource {
                 symbol: symbol.into(),
                 acquired_at: DateTime::from_timestamp(0, 0).unwrap(),
                 adapter_version: "test".into(),
+                yearly_derivation: None,
             },
             coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
             unit_currency: x_data_mcp::market_data::UnitCurrencyEvidence::confirmed(
@@ -183,6 +184,24 @@ fn rebuilt_service_reads_terminal_record() {
 }
 
 fn running_record(dir: &std::path::Path, task_id: &str, results: Vec<ScopeExecutionResult>) {
+    // A successful daily scope now supplies the persisted base for local yearly.
+    let pipeline = FakeSource {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        failures: Vec::new(),
+    };
+    let publisher =
+        x_data_mcp::publish::MarketDataPublisher::new(x_data_mcp::storage::JsonFileStore::new(dir));
+    for result in &results {
+        if result.success && result.period == Period::Day {
+            publisher
+                .publish(
+                    &pipeline
+                        .materialize_daily(&result.symbol, Adjustment::Forward)
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+    }
     TaskStore::new(dir)
         .save_execution(TaskExecutionRecord {
             task_id: task_id.to_owned(),
@@ -346,4 +365,29 @@ fn rebuilt_service_can_resume_running_task() {
         rebuilt.resume(&task_id).unwrap().status,
         TaskStatus::Succeeded
     );
+}
+
+impl MarketDataPipeline for FakeSource {
+    fn materialize_daily(
+        &self,
+        symbol: &str,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        self.fetch(symbol, Period::Day, adjustment)
+    }
+
+    fn derive_yearly(
+        &self,
+        daily: &x_data_mcp::publish::EffectiveVersion,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let mut batch = self.fetch(&daily.symbol, Period::Year, daily.adjustment)?;
+        batch.provenance.source_period = "day".into();
+        batch.provenance.yearly_derivation = Some(x_data_mcp::market_data::YearlyDerivation {
+            base_daily_version_id: daily.version_id.clone(),
+            algorithm_version: "fake-yearly-fixture".into(),
+            first_trading_date: daily.records.first().unwrap().date,
+            last_trading_date: daily.records.last().unwrap().date,
+        });
+        Ok(batch)
+    }
 }

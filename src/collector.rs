@@ -1,5 +1,5 @@
 use crate::{
-    market_data::{Adjustment, MarketDataSource, Period, SourceError},
+    market_data::{Adjustment, MarketDataPipeline, Period, SourceError},
     publish::{MarketDataPublisher, PublishOutcome},
     storage::JsonFileStore,
     task::FrozenScope,
@@ -17,7 +17,7 @@ pub struct Collector<S> {
     store: JsonFileStore,
 }
 
-impl<S: MarketDataSource> Collector<S> {
+impl<S: MarketDataPipeline> Collector<S> {
     pub fn new(source: S, store: JsonFileStore) -> Self {
         Self { source, store }
     }
@@ -52,9 +52,11 @@ impl<S: MarketDataSource> Collector<S> {
         period: Period,
         adjustment: Adjustment,
     ) -> CollectionItemResult {
-        let result = self
-            .source
-            .fetch(symbol, period, adjustment)
+        let candidate = match period {
+            Period::Day => self.source.materialize_daily(symbol, adjustment),
+            Period::Year => self.derive_yearly(symbol, adjustment),
+        };
+        let result = candidate
             .and_then(|batch| {
                 validate_provenance(&batch, symbol, period, adjustment)?;
                 match MarketDataPublisher::new(self.store.clone()).publish(&batch) {
@@ -79,6 +81,31 @@ impl<S: MarketDataSource> Collector<S> {
             result,
         }
     }
+
+    fn derive_yearly(
+        &self,
+        symbol: &str,
+        adjustment: Adjustment,
+    ) -> Result<crate::market_data::MarketDataBatch, SourceError> {
+        let daily = self.store.get_latest_effective_for_adjustment(symbol, Period::Day, adjustment)
+            .map_err(|error| SourceError::Invocation(error.to_string()))?
+            .ok_or_else(|| SourceError::NotVerified(
+                "PUBLISHED_QFQ_DAILY_REQUIRED: yearly only derives from one fixed published QFQ daily version".into()
+            ))?;
+        let batch = self.source.derive_yearly(&daily)?;
+        if batch
+            .provenance
+            .yearly_derivation
+            .as_ref()
+            .map(|lineage| lineage.base_daily_version_id.as_str())
+            != Some(daily.version_id.as_str())
+        {
+            return Err(SourceError::InvalidResponse(
+                "yearly does not reference the supplied published daily version".into(),
+            ));
+        }
+        Ok(batch)
+    }
 }
 
 fn validate_provenance(
@@ -87,10 +114,8 @@ fn validate_provenance(
     period: Period,
     adjustment: Adjustment,
 ) -> Result<(), SourceError> {
-    let expected_period = match period {
-        Period::Day => "day",
-        Period::Year => "year",
-    };
+    // Both local QFQ daily and derived yearly are based on daily inputs.
+    let expected_period = "day";
     let expected_adjustment = match adjustment {
         Adjustment::Forward => "qfq",
     };
