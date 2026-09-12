@@ -41,3 +41,5 @@ pub mod registry;
 pub mod collect;
 
 pub mod range;
+
+pub mod worker;

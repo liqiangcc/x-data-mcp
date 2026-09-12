@@ -41,3 +41,21 @@ impl MarketDataPipeline for OfficialFilePipeline {
         Err(Self::blocked())
     }
 }
+
+/// Existing generic task refusal, shared by compatibility/application workers.
+pub(crate) struct BlockedSource;
+impl crate::task_control::Executor for BlockedSource {
+    fn execute(
+        &self,
+        _key: &crate::task_control::CommandKey,
+        _item: &crate::task_control::ItemSpec,
+    ) -> crate::task_control::ItemOutcome {
+        crate::task_control::ItemOutcome {
+            success: false,
+            error: Some(format!(
+                "SOURCE_NOT_VERIFIED: {}",
+                PRODUCTION_BLOCKERS.join("; ")
+            )),
+        }
+    }
+}

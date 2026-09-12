@@ -422,12 +422,33 @@ impl DataApi {
                     encode(computed)
                 }
             }
+            Handler::Worker => {
+                if self.access != Access::local() {
+                    return Err(ApiError::new(
+                        "forbidden",
+                        "worker requires local owner access",
+                    ));
+                }
+                let _: WorkerInput = decode(input)?;
+                let snapshot =
+                    super::worker::run_once(&self.legacy.control, &self.queries.repository.market)
+                        .map_err(mapped)?;
+                encode(WorkerOutput {
+                    idle: snapshot.is_none(),
+                    task_id: snapshot.as_ref().map(|s| s.task.task_id.clone()),
+                    status: snapshot.as_ref().map(|s| {
+                        serde_json::from_value(
+                            serde_json::to_value(s.visible_status(&self.observer.run_id)).unwrap(),
+                        )
+                        .unwrap()
+                    }),
+                })
+            }
             Handler::Collection
             | Handler::Retry
             | Handler::Task
             | Handler::Request
-            | Handler::Cancel
-            | Handler::Worker => self.legacy_call(name, input),
+            | Handler::Cancel => self.legacy_call(name, input),
             Handler::Query => encode(
                 self.queries
                     .query(decode::<Query>(input)?, &self.access)
