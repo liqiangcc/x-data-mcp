@@ -3,6 +3,7 @@ use crate::{
     publish::EffectiveVersion,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::io::Write;
 use std::{
     fs, io,
@@ -15,6 +16,18 @@ struct PublishedRecord {
     // Old arrays of EffectiveVersion remain readable without migration.
     #[serde(default)]
     batch: Option<MarketDataBatch>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum VerifiedReadError {
+    #[error("published version was not found in the requested scope")]
+    NotFound,
+    #[error("published version is unavailable: {0}")]
+    Unavailable(String),
+    #[error("invalid storage scope")]
+    InvalidScope,
+    #[error("published storage read failed: {0}")]
+    Storage(#[from] io::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -80,11 +93,20 @@ impl JsonFileStore {
     ) -> Result<(), io::Error> {
         fs::create_dir_all(self.effective_root())?;
         let path = self.effective_path(&version.symbol, version.period, version.adjustment);
-        let mut records = self.read_records(&path)?;
-        records.push(PublishedRecord {
+        // Preserve old JSON values byte-semantically instead of reserializing
+        // historical structs and potentially dropping unknown fields.
+        let mut records = self.read_values(&path)?;
+        let mut record = serde_json::to_value(PublishedRecord {
             version: version.clone(),
             batch,
-        });
+        })
+        .map_err(io::Error::other)?;
+        let digest = record_digest(&record)?;
+        record
+            .as_object_mut()
+            .unwrap()
+            .insert("integrity_sha256".into(), Value::String(digest));
+        records.push(record);
         let payload = serde_json::to_vec_pretty(&records).map_err(io::Error::other)?;
         atomic_replace(&path, |file| file.write_all(&payload))
     }
@@ -95,6 +117,74 @@ impl JsonFileStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(error) => Err(error),
         }
+    }
+
+    fn read_values(&self, path: &Path) -> io::Result<Vec<Value>> {
+        match fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Read one integrity-checked storage record, never a candidate.
+    /// The checksum detects accidental changes; it is NOT source authentication.
+    /// None selects the last committed record and never falls back from damage.
+    pub fn get_verified_version(
+        &self,
+        symbol: &str,
+        period: Period,
+        adjustment: Adjustment,
+        version_id: Option<&str>,
+    ) -> Result<Option<EffectiveVersion>, VerifiedReadError> {
+        check_scope(symbol)?;
+        let values = self.read_values(&self.effective_path(symbol, period, adjustment))?;
+        let value = if let Some(id) = version_id {
+            let matches: Vec<_> = values
+                .iter()
+                .filter(|value| value.get("version_id").and_then(Value::as_str) == Some(id))
+                .collect();
+            match matches.as_slice() {
+                [] => return Err(VerifiedReadError::NotFound),
+                [one] => Some(*one),
+                _ => {
+                    return Err(VerifiedReadError::Unavailable(
+                        "duplicate version identity".into(),
+                    ));
+                }
+            }
+        } else {
+            values.last()
+        };
+        value
+            .map(|value| verified_record(value, symbol, period, adjustment))
+            .transpose()
+    }
+
+    /// All records must be verifiable for this full-list operation. Explicit
+    /// version reads can still select an intact record beside a damaged one.
+    pub fn list_verified_versions(
+        &self,
+        symbol: &str,
+        period: Period,
+        adjustment: Adjustment,
+    ) -> Result<Vec<EffectiveVersion>, VerifiedReadError> {
+        check_scope(symbol)?;
+        let values = self.read_values(&self.effective_path(symbol, period, adjustment))?;
+        let mut versions = Vec::new();
+        for value in &values {
+            let version = verified_record(value, symbol, period, adjustment)?;
+            if versions
+                .iter()
+                .any(|v: &EffectiveVersion| v.version_id == version.version_id)
+            {
+                return Err(VerifiedReadError::Unavailable(
+                    "duplicate version identity".into(),
+                ));
+            }
+            versions.push(version);
+        }
+        Ok(versions)
     }
 
     fn latest_record(
@@ -157,6 +247,58 @@ impl JsonFileStore {
     pub fn root(&self) -> &Path {
         &self.root
     }
+}
+
+fn check_scope(symbol: &str) -> Result<(), VerifiedReadError> {
+    if symbol.is_empty()
+        || !symbol
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+    {
+        Err(VerifiedReadError::InvalidScope)
+    } else {
+        Ok(())
+    }
+}
+
+fn record_digest(value: &Value) -> io::Result<String> {
+    let mut payload = value.clone();
+    let object = payload
+        .as_object_mut()
+        .ok_or_else(|| io::Error::other("record must be an object"))?;
+    object.remove("integrity_sha256");
+    Ok(crate::day_file::sha256(
+        &serde_json::to_vec(&payload).map_err(io::Error::other)?,
+    ))
+}
+
+fn verified_record(
+    value: &Value,
+    symbol: &str,
+    period: Period,
+    adjustment: Adjustment,
+) -> Result<EffectiveVersion, VerifiedReadError> {
+    let digest = value
+        .get("integrity_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| VerifiedReadError::Unavailable("integrity evidence missing".into()))?;
+    if digest != record_digest(value)? {
+        return Err(VerifiedReadError::Unavailable(
+            "integrity digest mismatch".into(),
+        ));
+    }
+    let record: PublishedRecord = serde_json::from_value(value.clone())
+        .map_err(|e| VerifiedReadError::Unavailable(e.to_string()))?;
+    if record.version.version_id.is_empty()
+        || record.version.symbol != symbol
+        || record.version.period != period
+        || record.version.adjustment != adjustment
+    {
+        return Err(VerifiedReadError::Unavailable(
+            "version identity/scope mismatch".into(),
+        ));
+    }
+    Ok(record.version)
 }
 
 // Same-directory rename is the visibility commit point on the supported Linux

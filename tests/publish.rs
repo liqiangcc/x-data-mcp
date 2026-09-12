@@ -735,3 +735,131 @@ fn committed_batch_wins_over_stale_legacy_batch_after_restart() {
         stale
     );
 }
+
+#[test]
+fn verified_reads_pin_a_version_and_do_not_fall_back_from_damage() {
+    let dir = tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let PublishOutcome::Published(first) = MarketDataPublisher::new(store.clone())
+        .publish(&valid_day())
+        .unwrap()
+    else {
+        panic!()
+    };
+    let mut second = first.clone();
+    second.version_id = "version-second".into();
+    store.publish_effective(&second).unwrap();
+    assert_eq!(
+        store
+            .get_verified_version(
+                "000001",
+                Period::Day,
+                Adjustment::Forward,
+                Some(&first.version_id)
+            )
+            .unwrap(),
+        Some(first.clone())
+    );
+    assert_eq!(
+        store
+            .list_verified_versions("000001", Period::Day, Adjustment::Forward)
+            .unwrap(),
+        vec![first.clone(), second]
+    );
+    let path = dir.path().join("effective/000001.day.qfq.json");
+    let mut values: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    values[1]["records"][0]["close"] = serde_json::json!("10.5");
+    fs::write(&path, serde_json::to_vec(&values).unwrap()).unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(
+        store
+            .get_verified_version("000001", Period::Day, Adjustment::Forward, None)
+            .is_err()
+    );
+    assert!(
+        store
+            .get_verified_version(
+                "000001",
+                Period::Day,
+                Adjustment::Forward,
+                Some("version-second")
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .get_verified_version(
+                "000001",
+                Period::Day,
+                Adjustment::Forward,
+                Some(&first.version_id)
+            )
+            .unwrap(),
+        Some(first)
+    );
+    assert!(
+        store
+            .get_verified_version("000001", Period::Day, Adjustment::Forward, Some("missing"))
+            .is_err()
+    );
+    assert!(
+        store
+            .list_verified_versions("000001", Period::Day, Adjustment::Forward)
+            .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn legacy_without_integrity_remains_unknown_without_read_side_effects() {
+    let dir = tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let PublishOutcome::Published(version) = MarketDataPublisher::new(store.clone())
+        .publish(&valid_day())
+        .unwrap()
+    else {
+        panic!()
+    };
+    let path = dir.path().join("effective/000001.day.qfq.json");
+    fs::write(&path, serde_json::to_vec(&vec![version.clone()]).unwrap()).unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(
+        store
+            .get_verified_version("000001", Period::Day, Adjustment::Forward, None)
+            .is_err()
+    );
+    assert_eq!(
+        store.get_latest_effective("000001", Period::Day).unwrap(),
+        Some(version)
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(
+        store
+            .get_verified_version("../escape", Period::Day, Adjustment::Forward, None)
+            .is_err()
+    );
+}
+
+#[test]
+fn verified_read_does_not_create_empty_storage_or_claim_data_exists() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("missing");
+    let store = JsonFileStore::new(&root);
+    assert!(
+        store
+            .get_verified_version("sh.600006", Period::Day, Adjustment::Forward, None)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_verified_version(
+                "sh.600006",
+                Period::Day,
+                Adjustment::Forward,
+                Some("unknown")
+            )
+            .is_err()
+    );
+    assert!(!root.exists());
+}
