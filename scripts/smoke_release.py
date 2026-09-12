@@ -68,6 +68,21 @@ def main():
             view = call("get_task", dict(contract_version="v1", task_id=retry["task_id"]))
             call("cancel_task", dict(contract_version="v1", task_id=retry["task_id"], expected_revision=view["state_revision"]))
             checks.append("request_task_retry_cancel_and_source_gate")
+            call("run_worker_once", {})
+            yearly_caps = call("get_data_capabilities", dict(operation="update_data", dataset="market.yearly"))
+            assert len(yearly_caps["items"]) == 1 and yearly_caps["items"][0]["readiness"] == "blocked"
+            assert yearly_caps["items"][0]["example"]["items"][0]["publication"]["mode"] == "historical_fixed_base"
+            yearly_input = dict(request_id="smoke-yearly-update", dataset="market.yearly", contract_version="v1", items=[dict(entity=entity, base_daily_version_id="demo-daily", years=[2020], publication=dict(mode="historical_fixed_base", comparison_version_id=None))])
+            yearly_task = call("update_data", yearly_input)
+            assert call("update_data", yearly_input)["task_id"] == yearly_task["task_id"]
+            assert call("run_worker_once", {})["task_id"] == yearly_task["task_id"]
+            yearly_progress = call("get_task_progress", dict(task_id=yearly_task["task_id"]))
+            assert yearly_progress["failed"] == 1 and yearly_progress["yearly_results"] == []
+            assert yearly_progress["frozen_yearly_inputs"][0]["years"] == [2020]
+            assert "SOURCE_NOT_VERIFIED" in yearly_progress["unfinished"][0]["error"]
+            computed_after = call("compute_metrics", computation)
+            assert computed_after == computed
+            checks.append("yearly_update_frozen_input_and_blocked_worker_preserves_fixture")
         finally:
             child.stdin.close()
             if child.wait(timeout=20) != 0:
