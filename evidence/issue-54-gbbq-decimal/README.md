@@ -19,7 +19,8 @@ float tails, two C3 tails, two C4 tails, two C2/C4 combinations (one overlaps a 
 tail), and the mandatory half-cent event. Only two C3 and two C4 tail events exist
 in this bounded universe; the frozen “first three” cap does not invent a third.
 There are no unresolved previous closes. This is not all-event or all-market
-validation; sz.000004 has no event meeting this frozen matrix's predicates.
+validation; sz.000004 has eligible C1-tail/rights events but none falls within
+the frozen first-N caps after sorting, so it contributes no matrix row.
 
 `inputs.json` preserves selected decoded record bytes/bits/index, selection
 reasons, official .day member hashes, previous/next raw 32-byte records and previous
