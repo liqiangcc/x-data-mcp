@@ -8,11 +8,18 @@ use x_data_mcp::{
 };
 /// Independent one-observation-per-year fixture: yearly OHLC equals that year's sole daily bar.
 pub fn publish(store: &SqliteMarket, coverage: bool) -> Value {
+    publish_at(store, coverage, false)
+}
+pub fn publish_at(store: &SqliteMarket, coverage: bool, unfinished: bool) -> Value {
     let bars:Vec<_>=["100","90","80","70"].iter().enumerate().map(|(i,p)|json!({"date":format!("{}-12-30",2020+i),"open":p,"high":p,"low":p,"close":p,"volume":null,"amount":null})).collect();
     let mut daily = market::samples()[0]["record"].clone();
     daily["version_id"] = json!("metric-daily");
     daily["source"] = json!("fixture:metrics");
-    daily["published_at"] = json!("2024-01-01T00:00:00Z");
+    daily["published_at"] = json!(if unfinished {
+        "2023-12-30T00:00:00Z"
+    } else {
+        "2024-01-01T00:00:00Z"
+    });
     daily["records"] = json!(bars);
     daily["batch"]["bars"] = json!(bars);
     daily["batch"]["provenance"]["source"] = json!("fixture:metrics");

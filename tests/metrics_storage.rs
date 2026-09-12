@@ -97,3 +97,37 @@ fn compute_unknown_fields_mode_latest_and_budget_are_rejected() {
     r.range.end_year = 1001;
     assert!(compute.compute(r, &Access::local()).is_err());
 }
+#[test]
+fn sqlite_unfinished_tail_honors_both_explicit_modes() {
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t);
+    let reference = fixture::publish_at(&store, true, true);
+    let compute = Metrics {
+        repository: SqliteMetrics { market: store },
+    };
+    let mut request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
+    assert!(matches!(
+        compute
+            .compute(request.clone(), &Access::local())
+            .unwrap()
+            .result,
+        Outcome::Computed {
+            run_length: 2,
+            matches: None,
+            provisional: false,
+            ..
+        }
+    ));
+    request.metrics[0].parameters.completed_only = false;
+    assert!(matches!(
+        compute.compute(request, &Access::local()).unwrap().result,
+        Outcome::Computed {
+            run_length: 3,
+            matches: Some(true),
+            provisional: true,
+            ..
+        }
+    ));
+}

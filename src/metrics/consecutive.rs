@@ -145,7 +145,7 @@ pub fn evaluate(input: &[Observation], range: &Years, p: &Parameters) -> Result<
         run_length: run,
         run_length_kind: kind.clone(),
         matches,
-        anchor: (run > 0).then(|| data[anchor].point()),
+        anchor: (run > 0).then(|| Box::new(data[anchor].point())),
         first_change: (run > 0).then(|| data[anchor + 1].point()),
         end: end.point(),
         cumulative_change,

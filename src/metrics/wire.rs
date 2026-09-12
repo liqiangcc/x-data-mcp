@@ -139,7 +139,7 @@ pub enum Outcome {
         run_length: usize,
         run_length_kind: RunKind,
         matches: Option<bool>,
-        anchor: Option<Point>,
+        anchor: Option<Box<Point>>,
         first_change: Option<Point>,
         end: Point,
         cumulative_change: Option<String>,
