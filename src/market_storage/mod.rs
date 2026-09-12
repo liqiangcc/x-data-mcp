@@ -1,5 +1,6 @@
 //! Stage B application contracts. No SQLite, MCP, download or production wiring.
 pub mod compat;
+pub mod query;
 use crate::{
     market_data::{Bar, Period},
     publish::EffectiveVersion,
@@ -89,6 +90,7 @@ pub struct Receipt {
 }
 #[derive(Debug, Clone)]
 pub struct ReadPage {
+    pub integrity_sha256: String,
     pub version: EffectiveVersion,
     pub rows: Vec<Bar>,
     pub next_after: Option<NaiveDate>,
@@ -118,6 +120,7 @@ pub trait MarketRepository {
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error>;
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error>;
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error>;
+    fn fixed_many(&self, ids: &[String]) -> Result<Vec<CheckedRecord>, Error>;
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error>;
     fn commit(&self, plan: &PublishPlan) -> Result<Receipt, Error>;
     fn receipt(&self, id: &str) -> Result<Option<Receipt>, Error>;

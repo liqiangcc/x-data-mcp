@@ -282,7 +282,7 @@ impl QueryService {
         Ok(response)
     }
 }
-fn scope(
+pub(crate) fn scope(
     exchange: &str,
     code: &str,
     period: &str,

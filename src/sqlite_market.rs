@@ -90,6 +90,7 @@ impl SqliteMarket {
                 None
             };
             Ok(ReadPage {
+                integrity_sha256: record.raw["integrity_sha256"].as_str().unwrap().to_owned(),
                 version: record.version,
                 rows,
                 next_after,
@@ -474,6 +475,13 @@ impl MarketRepository for SqliteMarket {
     }
     fn versions(&self, scope: &Scope) -> Result<Vec<crate::publish::EffectiveVersion>, Error> {
         SqliteMarket::versions(self, scope)
+    }
+    fn fixed_many(&self, ids: &[String]) -> Result<Vec<CheckedRecord>, Error> {
+        self.read(|c| {
+            ids.iter()
+                .map(|id| read_record(c, id, true, true))
+                .collect()
+        })
     }
     fn task(&self, id: &str) -> Result<crate::task_control::TaskSnapshot, Error> {
         self.read(|c| {

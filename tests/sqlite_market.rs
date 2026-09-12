@@ -521,3 +521,200 @@ fn yearly_lineage_projection_tampering_and_forged_published_flag_are_rejected() 
         Err(Error::Integrity(_))
     ));
 }
+#[test]
+fn fixed_paging_ignores_new_head_preserves_conditions_and_rejects_later_damage() {
+    use x_data_mcp::{market_storage::query::Pages, query::MarketQuery};
+    let (_dir, store) = db();
+    let raw = samples()[0]["record"].clone();
+    published_fixture(&store, &raw);
+    let pages = Pages::new(store.clone());
+    let now = "2026-01-02T00:00:00Z".parse().unwrap();
+    let query = MarketQuery {
+        exchange: "sh".into(),
+        code: "600006".into(),
+        period: "day".into(),
+        start_date: "2024-01-01".parse().unwrap(),
+        end_date: "2026-12-31".parse().unwrap(),
+        version_id: None,
+        page_size: Some(1),
+        cursor: None,
+    };
+    let first = pages.market(query.clone(), now).unwrap();
+    let mut next = query.clone();
+    next.cursor = first.next_cursor;
+    let plan = prepare(
+        &store,
+        &revised(&raw, "new-head"),
+        PublishIntent::Daily {
+            expected_head: Some("legacy-daily".into()),
+        },
+    );
+    store.commit(&plan).unwrap();
+    let second = pages.market(next.clone(), chrono::Utc::now()).unwrap();
+    assert_eq!(second.query_time, now);
+    assert_eq!(second.data.unwrap().version.version_id, "legacy-daily");
+    let mut changed = next.clone();
+    changed.page_size = Some(2);
+    assert!(matches!(pages.market(changed, now), Err(Error::Invalid(_))));
+    assert!(Pages::new(store.clone()).market(next.clone(), now).is_err());
+    Connection::open(store.tasks.path())
+        .unwrap()
+        .execute(
+            "UPDATE daily_bars SET open='0' WHERE version_id='legacy-daily'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(pages.market(next, now), Err(Error::Integrity(_))));
+    assert_eq!(
+        current_head(&store, Period::Day).as_deref(),
+        Some("new-head")
+    );
+}
+#[test]
+fn version_list_freezes_members_and_tie_sort_order() {
+    use x_data_mcp::{market_storage::query::Pages, query::VersionQuery};
+    let (_dir, store) = db();
+    let raw = samples()[0]["record"].clone();
+    published_fixture(&store, &raw);
+    let plan = prepare(
+        &store,
+        &revised(&raw, "a-version"),
+        PublishIntent::Daily {
+            expected_head: Some("legacy-daily".into()),
+        },
+    );
+    store.commit(&plan).unwrap();
+    let pages = Pages::new(store.clone());
+    let now = chrono::Utc::now();
+    let query = VersionQuery {
+        exchange: "sh".into(),
+        code: "600006".into(),
+        period: "day".into(),
+        page_size: Some(1),
+        cursor: None,
+    };
+    let first = pages.versions(query.clone(), now).unwrap();
+    assert_eq!(first.versions[0].version_id, "a-version");
+    let plan = prepare(
+        &store,
+        &revised(&raw, "0-new"),
+        PublishIntent::Daily {
+            expected_head: Some("a-version".into()),
+        },
+    );
+    store.commit(&plan).unwrap();
+    let mut next = query;
+    next.cursor = first.next_cursor;
+    let second = pages.versions(next.clone(), now).unwrap();
+    assert_eq!(second.versions[0].version_id, "legacy-daily");
+    assert!(second.next_cursor.is_none());
+    Connection::open(store.tasks.path()).unwrap().execute("UPDATE version_evidence SET value='raw' WHERE version_id='legacy-daily' AND field='adjustment'",[]).unwrap();
+    assert!(pages.versions(next, now).is_err());
+}
+#[test]
+fn composite_task_keeps_protection_until_last_publication_commits() {
+    let (_dir, store) = db();
+    let raw = samples()[0]["record"].clone();
+    store.stage(&raw).unwrap();
+    let ctl = TaskControl::new(
+        store.tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    let a = ctl
+        .accept(
+            "compound",
+            LegacyCollection.key(),
+            json!({"symbols":["sh.600006"],"periods":["day","year"]}),
+        )
+        .unwrap();
+    let RequestOutcome::Task(t) = a.record.outcome else {
+        panic!()
+    };
+    let task = store
+        .tasks
+        .transition(&t.task.task_id, 0, "run", Change::Claim)
+        .unwrap();
+    let daily_item = task
+        .items
+        .iter()
+        .find(|i| i.spec.target["period"] == "day")
+        .unwrap()
+        .spec
+        .item_id
+        .clone();
+    let task = store
+        .tasks
+        .transition(
+            &task.task.task_id,
+            1,
+            "run",
+            Change::StartItem(daily_item.clone()),
+        )
+        .unwrap();
+    let p = Publication {
+        publication_id: "compound-day".into(),
+        version_id: "legacy-daily".into(),
+        task_id: task.task.task_id.clone(),
+        item_id: daily_item,
+        run_id: "run".into(),
+        expected_revision: task.task.state_revision,
+        intent: PublishIntent::Daily {
+            expected_head: None,
+        },
+    };
+    let plan = Publisher {
+        repository: store.clone(),
+    }
+    .prepare(p)
+    .unwrap();
+    store.commit(&plan).unwrap();
+    let task = store.task(&task.task.task_id).unwrap();
+    assert_eq!(task.task.status, x_data_mcp::task_control::Status::Running);
+    assert_eq!(task.claims.len(), 2);
+    let year_item = task
+        .items
+        .iter()
+        .find(|i| i.spec.target["period"] == "year")
+        .unwrap()
+        .spec
+        .item_id
+        .clone();
+    let task = store
+        .tasks
+        .transition(
+            &task.task.task_id,
+            task.task.state_revision,
+            "run",
+            Change::StartItem(year_item.clone()),
+        )
+        .unwrap();
+    store
+        .stage(&yearly("compound-year", "legacy-daily"))
+        .unwrap();
+    let p = Publication {
+        publication_id: "compound-year-pub".into(),
+        version_id: "compound-year".into(),
+        task_id: task.task.task_id.clone(),
+        item_id: year_item,
+        run_id: "run".into(),
+        expected_revision: task.task.state_revision,
+        intent: PublishIntent::CurrentHead {
+            expected_daily_head: "legacy-daily".into(),
+            expected_yearly_head: None,
+        },
+    };
+    let plan = Publisher {
+        repository: store.clone(),
+    }
+    .prepare(p)
+    .unwrap();
+    store.commit(&plan).unwrap();
+    let task = store.task(&task.task.task_id).unwrap();
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::Succeeded
+    );
+    assert!(task.claims.is_empty());
+}
