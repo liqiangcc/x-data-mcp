@@ -1423,6 +1423,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "jsonschema",
+ "num-bigint",
+ "num-traits",
  "rusqlite",
  "rust_decimal",
  "schemars",
