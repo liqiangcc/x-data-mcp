@@ -143,6 +143,8 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                     return Err(error);
                 }
                 let current = self.repository.task(task_id)?;
+                let cancelled_without_publication = matches!(error, Error::Conflict(_))
+                    && current.task.status == Status::CancelRequested;
                 let next = self.repository.transition_task(
                     task_id,
                     current.task.state_revision,
@@ -162,7 +164,11 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                         task_id,
                         next.task.state_revision,
                         &self.run_id,
-                        Change::FinishExecution,
+                        if cancelled_without_publication {
+                            Change::FinishCancellation
+                        } else {
+                            Change::FinishExecution
+                        },
                     )?
                 } else {
                     next

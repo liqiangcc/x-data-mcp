@@ -171,6 +171,9 @@ pub enum Change {
     StartItem(String),
     FinishItem(String, ItemOutcome),
     FinishExecution,
+    /// Internal executor acknowledgement after cancellation stopped all writers.
+    /// Never mapped from a user-supplied stopped/approval flag.
+    FinishCancellation,
     Reconcile,
 }
 #[derive(Debug, thiserror::Error)]
@@ -255,6 +258,7 @@ pub fn decide(
             Err(Error::RevisionConflict)
         };
     }
+    let cancellation_finished = matches!(change, Change::FinishCancellation);
     let recovery = matches!(change, Change::Reconcile);
     if recovery {
         if s.visible_status(run) != s.task.status {
@@ -305,7 +309,10 @@ pub fn decide(
                 item.stage = Stage::Finished;
                 item.outcome = Some(outcome);
             }
-            Change::FinishExecution => {
+            Change::FinishExecution | Change::FinishCancellation => {
+                if cancellation_finished && s.task.status != Status::CancelRequested {
+                    return Err(Error::RevisionConflict);
+                }
                 let owned = s.task.owner_run_id.as_deref() == Some(run);
                 let never_started = s.task.owner_run_id.is_none()
                     && s.items.iter().all(|i| i.stage == Stage::Pending);
@@ -324,7 +331,9 @@ pub fn decide(
                     .iter()
                     .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
                     .count();
-                s.task.status = if finished == s.items.len() {
+                s.task.status = if cancellation_finished && success < s.items.len() {
+                    Status::Cancelled
+                } else if finished == s.items.len() {
                     if success == finished {
                         Status::Succeeded
                     } else if success == 0 {

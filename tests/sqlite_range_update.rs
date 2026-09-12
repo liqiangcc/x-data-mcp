@@ -1039,7 +1039,10 @@ fn range_runner_cancellation_and_official_gate_never_publish() {
         else {
             panic!()
         };
-        assert!(task.task.status.terminal());
+        assert_eq!(
+            task.task.status,
+            x_data_mcp::task_control::Status::Cancelled
+        );
         assert!(task.claims.is_empty());
         assert_eq!(provider.calls.get(), usize::from(started));
         assert_eq!(f.count("market_update_results"), 0);
@@ -1137,4 +1140,58 @@ fn public_range_request_to_fixture_execution_and_verified_query_is_connected() {
         );
         assert_eq!(provider.calls.get(), 1);
     }
+}
+
+#[test]
+fn range_cancel_ack_requires_stopped_items_and_does_not_rewrite_terminals() {
+    let f = runner_fixture();
+    let t =
+        f.db.tasks
+            .transition(&f.command.task_id, 0, "range-run", Change::Claim)
+            .unwrap();
+    let t =
+        f.db.tasks
+            .transition(
+                &t.task.task_id,
+                t.task.state_revision,
+                "range-run",
+                Change::StartItem(f.command.item_id.clone()),
+            )
+            .unwrap();
+    let t =
+        f.db.tasks
+            .transition(
+                &t.task.task_id,
+                t.task.state_revision,
+                "range-run",
+                Change::RequestCancel,
+            )
+            .unwrap();
+    assert!(
+        f.db.tasks
+            .transition(
+                &t.task.task_id,
+                t.task.state_revision,
+                "range-run",
+                Change::FinishCancellation
+            )
+            .is_err()
+    );
+    assert_eq!(f.count("scope_occupancy"), 1);
+    let completed = fixture(false);
+    completed.db.commit_range(&completed.plan()).unwrap();
+    let terminal = completed.db.task(&completed.command.task_id).unwrap();
+    assert!(
+        completed
+            .db
+            .tasks
+            .transition(
+                &terminal.task.task_id,
+                terminal.task.state_revision,
+                "range-run",
+                Change::FinishCancellation
+            )
+            .is_err()
+    );
+    assert_eq!(completed.db.task(&terminal.task.task_id).unwrap(), terminal);
 }
