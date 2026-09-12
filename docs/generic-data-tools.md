@@ -11,6 +11,8 @@
 不批准新来源，不取消查询、更新、补采、核实、恢复等能力。
 新增 dataset 通常只扩展已有工具的 schema 分支与处理器；真正不同的业务动作才新增工具。
 
+本设计的 AI 数据供给扩展见末节：新增 get_data_availability、list_tasks，批量读取和目录筛选复用 query_data；帮助返回采用两级目录/详情。
+
 ## 工具集合与能力边界
 
 | 目标工具 | 意图 | 通用输入要点 | 成功结果 |
@@ -21,6 +23,8 @@
 | backfill_data | 补指定历史范围 | 同上，加类型化 range | WriteAcceptance |
 | query_data | 读取已发布数据 | dataset、contract_version、selection、filter、version_id?、page_size?、cursor? | DataPage |
 | list_data_versions | 列出指定对象的版本 | dataset、contract_version、selection、page_size?、cursor? | VersionPage |
+| get_data_availability | 检查已存版本与覆盖证据 | dataset、selection、range、分页 | AvailabilitySnapshot |
+| list_tasks | 发现已有任务 | 类型/状态/时间过滤、分页 | TaskListSnapshot |
 | get_request | 核对持久请求结果 | request_id | RequestResult |
 | get_task / get_task_progress | 查询任务/固定进度快照 | task_id；进度支持分页 | TaskResult / TaskSnapshot |
 | cancel_task | 申请取消 | task_id | CancellationResult |
@@ -213,3 +217,130 @@ SQLite 专项的行情表保持行情专用；公共任务表不得固定 Scope(
 跨 dataset cursor 拒绝；来源 blocked 不发布；客户端重新发现新增分支；
 新增测试类别无需修改 worker 调度逻辑且旧行情回归通过。
 文档阶段只能验证示例形状与设计一致性，不宣称上述实现测试已通过。
+
+## AI 分析数据供给补充设计
+
+依据：用户明确主要场景为“给 AI 分析提供数据和采集数据”，并要求下一步推进。
+本节新增两个目标工具并扩展 query_data；export_data 仅列后续候选，不加入首期验收。
+这些是本次接口设计决定，尚未实现；此前单对象查询限制按本节批量规则扩展。
+
+### get_data_availability：先判断有什么数据
+
+只读输入：dataset、contract_version、selection、range，可选 page_size/cursor。
+selection 和 range 使用该 dataset 的闭合 schema；daily 为证券选择与闭日期区间，
+yearly 为证券选择与自然年范围，catalog 为目录范围，不接受行情日期伪装目录生效期。
+
+响应包含 snapshot_id、snapshot_time、dataset、contract_version、
+分页 items、next_cursor、page_complete。每个 item 包含：
+
+| 字段 | 含义 |
+|---|---|
+| entity、version_ref | 标准业务对象及本次解析的已发布版本；无版本明确 null |
+| availability | available、partial、absent、unknown、unavailable；以请求范围为判断对象 |
+| first_record / last_record、record_count | 固定版本实际保存边界/条数，不冒充完整历史 |
+| coverage_status、coverage_evidence | 范围覆盖结论及依据；没有证据就是 unknown |
+| confirmed_gaps | 有证据的缺失范围，含原因与证据引用；不能从不连续日期推断 |
+| unresolved_ranges | 无法判断的范围，不能自动转成补采计划 |
+| published_at、freshness | 发布时间与业务新鲜度分别表达；未定义规则则 freshness=unknown |
+| related_tasks | 本快照中相关任务引用和已知占用，不能当作保证会补齐 |
+| limitations、next_actions | 来源限制及适用操作建议，不触发实际动作 |
+
+available/partial 必须有相应覆盖证据，不能仅凭有行数判定。absent 仅表示可靠读到
+没有已发布版本；有版本但请求区间无记录且原因未知应为 unknown。
+坏版本为 unavailable，不能作为 absent 重新采集；全局存储故障返回工具错误。
+若只能获取元数据而未完成内容核验，明确 integrity=not_verified，不能声称版本可读。
+
+版本选择、任务引用与覆盖说明在一次服务读快照解析；不在查询中实时访问来源。
+分页冻结全部结果，不随采集推进替换部分字段；新查询才反映新数据。
+仅依据日期包含未来不能制造历史缺口，未来范围单独标记。
+next_actions 中的采集/补采建议仍需显式写调用，并在受理时重新核对冲突和证据。
+
+### list_tasks：发现已有执行，避免盲目重复采集
+
+只读输入可选 dataset、operation、status[]、created_from/created_to、page_size、cursor，
+所有字段严格校验；不支持任意条件表达式或 SQL。
+返回 snapshot_id、snapshot_time、items、next_cursor、page_complete。
+item 含 task_id、request_id、dataset、operation、contract_version、status、
+created_at、last_progress_at、简要结果；详细范围/未完成项通过 get_task_progress 查询。
+版本化旧复合任务可用 legacy task_kind 明确表达，不能伪造单 dataset。
+
+排序 created_at 降序、task_id 升序打破并列，后续页固定初次快照。
+授权过滤先于枚举、计数和分页；不可泄露其他调用者无权读取的任务。
+列表为空不等同某 request_id 未受理，确定请求事实仍使用 get_request。
+不启动任务、不取消或修复；未知过滤值拒绝，不静默忽略。
+page_size 默认 100、最大 1000 为本设计工程上限，不是性能承诺；
+cursor 采用实例内有界快照策略，具体资源上限由能力发现公开，不隐含永久保留。
+
+### query_data：批量多对象读取
+
+同一 dataset 内增加 single/batch 两个互斥 schema 分支。
+batch selection 为非空、无重复的标准 entity 列表；目录动态条件先固定成员快照。
+filter 对所有对象共享，不能在自由 options 中传任意每对象参数。
+目标批量对象上限初定 100，作为可调整的工程限制在 capabilities 中公开并测试。
+超出明确拒绝，不能悄悄截断；不同 dataset 仍需分别查询。
+
+版本选择为 latest_per_entity 或 explicit_version_map，二选一；
+explicit map 必须与所选对象精确对应，无缺项、重复或额外项。
+首个请求在同一个存储读快照中解析各对象版本，返回固定 version_manifest：
+每对象版本引用、元数据或明确不可用状态及原因。
+该快照保证“选中了哪些版本”的一致读取，不证明所有来源在同一市场时点发布。
+
+输出记录按规范业务对象键、dataset 内记录键升序排列：
+行情为 exchange/code/date 或 year；其他类别由契约声明稳定顺序。
+每条记录带 entity 与 version_ref，数字保留精确类型。
+一个 cursor 固定选择、过滤、契约、排序、页大小、版本清单及每对象状态，
+不为每只股票返回独立且可混用的 cursor。page_size 限制每页记录数，不是对象数。
+
+目标首期批量采用严格错误策略：任一所选已有版本损坏、指定版本不存在/不匹配、
+存储不可读，整体拒绝，不返回看似完整的部分成功批次；
+默认 latest 下可靠判定某对象尚无版本，可在 manifest 显式 absent 并返回其他对象数据。
+范围内无记录仍保留该对象版本与限制。manifest 的 absent/空范围不能证明历史不存在。
+续页任一固定版本不可核验即停止；不自动移除该对象后继续其他页。
+
+版本 manifest 是独立响应元数据，不受记录分页裁剪；上限随批量对象数有界。
+响应标注 selection_complete（每个对象都有明确状态）与 page_complete，
+二者均不等于 coverage complete。cursor 失效时重新固定同一 explicit map 开始，
+不得把新 latest 结果接到旧页后面。
+
+### 目录筛选：复用 query_data
+
+dataset=securities.catalog 的 filter 可声明 code、name_query、industry_code；
+字段组合采用 AND，名称首期按字面子串匹配，不做正则或模糊身份猜测。
+筛选基于一个明确目录版本，结果返回 SecurityRef、名称、分类状态和 catalog_version_id。
+行业缺失不伪造为“其他”；查询不到不能推断证券退市。
+命中多项由 AI 显式选择，不能自动取第一项采集。
+schema、大小写/规范化和排序规则在实现契约中固化，绑定请求保留原选择语义。
+
+### 帮助与能力发现的两级返回
+
+get_data_capabilities 无过滤参数时返回简洁 dataset/operation 目录与 readiness，
+不重复发送所有完整 schema；指定 dataset + operation 后返回详细参数定义、
+最小调用示例、常见拒绝、前置条件、结果解释和可组合的后续操作。
+只指定 dataset 时返回该类别操作目录。此规则替代此前无参数返回全部详细描述的目标。
+详细 schema、示例及 handler 由同一注册描述校验；工具基础描述仍须足够清楚，
+不强制每次调用前先查帮助。来源门禁明确显示，不用示例暗示生产已经可用。
+
+### export_data：后续候选
+
+当分页数据不适合进入 AI 上下文时，再交付固定版本导出任务：
+固定 dataset、版本清单、过滤与格式，生成文件及行数/哈希/精度/来源清单。
+应复用 task/request 机制；读源数据但会创建导出产物，不能标为完全无副作用。
+访问授权、文件可获取方式、过期清理、配额、Decimal 编码和格式尚需单独设计。
+本次不新增下载端点、不开放任意服务器路径，也不宣称文件导出可用。
+
+### 正常 AI 组合与验收
+
+1. get_data_capabilities 发现类别与调用方式。
+2. query_data(catalog) 固定目录并选择证券。
+3. get_data_availability 检查已存版本、覆盖证据及相关任务。
+4. 有可用版本则批量 query_data；确需采集且已获授权才显式发写请求。
+5. 丢失 task_id 时用 list_tasks 发现任务；丢失受理响应用 get_request 精确核对。
+6. get_task_progress 获取结果后，以发布版本清单开始研究；不把任务执行成功代替覆盖证据。
+
+新增验收：未知缺口不生成虚假补采建议；坏库不返回 absent；列表跨权限不泄漏；
+任务/版本变化期间分页保持快照；多证券同日记录不丢失或重复；explicit map 完整匹配；
+一个版本损坏批量明确拒绝；无版本对象显式列出；帮助示例与 schema 一致。
+上述为目标验收，文档提交不作为实现测试通过。
+
+目标工具目录现为 19 个业务工具（原 17 个加 availability、list_tasks），
+query_data 的批量/目录筛选不新增工具；export_data 未计入，run_worker_once 仍为运维能力。
