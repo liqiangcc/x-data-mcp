@@ -143,7 +143,7 @@ pub enum Outcome {
         first_change: Option<Point>,
         end: Point,
         cumulative_change: Option<String>,
-        precision: Precision,
+        precision: Box<Precision>,
         actual_input_range: Years,
         excluded_tail: Vec<i32>,
         provisional: bool,

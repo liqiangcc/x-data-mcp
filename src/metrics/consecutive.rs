@@ -83,9 +83,9 @@ pub fn evaluate(input: &[Observation], range: &Years, p: &Parameters) -> Result<
             Some(Reason::NonPositivePrice)
         } else if o.completion == Completion::Unknown {
             Some(Reason::UnknownCompletion)
-        } else if o.completion == Completion::Incomplete && !(provisional && o.year == end.year) {
-            Some(Reason::IncompletePeriod)
-        } else if o.unfinished && o.year != end.year {
+        } else if (o.completion == Completion::Incomplete && !(provisional && o.year == end.year))
+            || (o.unfinished && o.year != end.year)
+        {
             Some(Reason::IncompletePeriod)
         } else {
             None
@@ -147,11 +147,11 @@ pub fn evaluate(input: &[Observation], range: &Years, p: &Parameters) -> Result<
         first_change: (run > 0).then(|| data[anchor + 1].point()),
         end: end.point(),
         cumulative_change,
-        precision: Precision {
+        precision: Box::new(Precision {
             scale: 12,
             rounding: "half_even_once".into(),
             unit: "ratio".into(),
-        },
+        }),
         actual_input_range: Years {
             start_year: data[anchor].year,
             end_year: end.year,
