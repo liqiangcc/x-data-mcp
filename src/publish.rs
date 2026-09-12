@@ -151,8 +151,7 @@ impl MarketDataPublisher {
             adjustment_evidence: batch.adjustment_evidence.clone(),
             yearly_derivation: batch.provenance.yearly_derivation.clone(),
         };
-        self.store.publish_effective(&version)?;
-        self.store.put(batch)?;
+        self.store.publish_batch(&version, batch)?;
         Ok(PublishOutcome::Published(version))
     }
 

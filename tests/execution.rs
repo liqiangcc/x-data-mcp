@@ -131,8 +131,8 @@ fn partial_failure_preserves_successes() {
             .count(),
         3
     );
-    assert!(std::fs::read(dir.path().join("000001.day.qfq.json")).is_ok());
-    assert!(std::fs::read(dir.path().join("600000.year.qfq.json")).is_err());
+    assert!(std::fs::read(dir.path().join("effective/000001.day.qfq.json")).is_ok());
+    assert!(std::fs::read(dir.path().join("effective/600000.year.qfq.json")).is_err());
 }
 
 #[test]
