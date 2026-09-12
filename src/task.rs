@@ -250,7 +250,7 @@ impl TaskStore {
         state.bindings.push(binding);
         self.write_state(&state)
     }
-    fn verify_reusable(&self, binding: &TaskBinding) -> io::Result<()> {
+    pub(crate) fn verify_reusable(&self, binding: &TaskBinding) -> io::Result<()> {
         let state = self.read_state()?;
         let execution = state
             .executions
