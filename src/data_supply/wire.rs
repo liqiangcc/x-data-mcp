@@ -134,6 +134,7 @@ pub struct ManifestEntry {
     pub entity: Option<Security>,
     pub version_ref: Option<VersionRef>,
     pub status: ManifestStatus,
+    pub metadata: Option<Metadata>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -182,4 +183,57 @@ pub struct DataPage {
     pub page_complete: bool,
     pub selection_complete: bool,
     pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VersionsQuery {
+    pub dataset: Dataset,
+    pub contract_version: ContractVersion,
+    pub selection: Selection,
+    #[serde(default = "default_page")]
+    pub page_size: usize,
+    pub cursor: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VersionInfo {
+    pub version_ref: VersionRef,
+    pub published_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VersionPage {
+    pub snapshot_id: String,
+    pub snapshot_time: DateTime<Utc>,
+    pub items: Vec<VersionInfo>,
+    pub next_cursor: Option<String>,
+    pub page_complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Evidence {
+    pub field: String,
+    pub status: String,
+    pub value: Option<String>,
+    pub reason: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Lineage {
+    pub base_daily_version_id: String,
+    pub algorithm_version: String,
+    pub first_trading_date: NaiveDate,
+    pub last_trading_date: NaiveDate,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Metadata {
+    pub source: String,
+    pub published_at: DateTime<Utc>,
+    pub coverage_status: String,
+    pub coverage_reason: String,
+    pub units: Vec<Evidence>,
+    pub lineage: Option<Lineage>,
 }

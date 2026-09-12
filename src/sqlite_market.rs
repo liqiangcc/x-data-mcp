@@ -19,7 +19,10 @@ impl SqliteMarket {
     pub fn new(tasks: SqliteTasks) -> Self {
         Self { tasks }
     }
-    fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {
+    pub(crate) fn read<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         let mut c = self.tasks.connect(true)?;
         let tx = c.transaction().map_err(storage)?;
         crate::sqlite_tasks::check_schema(&tx, true)?;
@@ -146,7 +149,7 @@ fn base_record(c: &Connection, r: &CheckedRecord) -> Result<Option<CheckedRecord
         .map(|l| read_record(c, &l.base_daily_version_id, true, false).map_err(base_error))
         .transpose()
 }
-fn head(c: &Connection, scope: &Scope) -> Result<Option<String>, Error> {
+pub(crate) fn head(c: &Connection, scope: &Scope) -> Result<Option<String>, Error> {
     c.query_row(
         "SELECT version_id FROM effective_heads WHERE symbol=?1 AND period=?2 AND adjustment='qfq'",
         params![scope.symbol, period(scope.period)],
@@ -315,7 +318,7 @@ fn rows(c: &Connection, sql: &str, id: &str, n: usize) -> Result<Vec<Vec<Option<
     .collect::<Result<Vec<_>, _>>()
     .map_err(storage)
 }
-fn read_record(
+pub(crate) fn read_record(
     c: &Connection,
     id: &str,
     published: bool,
