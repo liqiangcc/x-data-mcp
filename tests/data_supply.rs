@@ -269,3 +269,128 @@ fn availability_classifies_corrupt_version_but_not_bad_database_as_absent() {
         .unwrap();
     assert!(o.availability(args(), &Access::local()).is_err());
 }
+
+#[test]
+fn query_budgets_cursor_instance_eviction_and_permissions_are_enforced() {
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t);
+    market::published_fixture(&store, &market::samples()[0]["record"]);
+    let repo = SqliteSupply { market: store };
+    let q = Queries::new(repo.clone());
+    for size in [0, 1001] {
+        let mut a = args();
+        a.page_size = size;
+        assert!(q.query(a, &Access::local()).is_err());
+    }
+    let mut a = args();
+    a.selection = Selection::Batch {
+        entities: (0..101)
+            .map(|n| Security {
+                exchange: Exchange::Sh,
+                code: format!("{n:06}"),
+            })
+            .collect(),
+    };
+    assert!(q.query(a, &Access::local()).is_err());
+    let first = q.query(args(), &Access::local()).unwrap();
+    let mut next = args();
+    next.cursor = first.next_cursor;
+    assert!(
+        Queries::new(repo)
+            .query(next.clone(), &Access::local())
+            .is_err()
+    );
+    let mut revoked = Access::local();
+    revoked.principal = "another-context".into();
+    assert!(q.query(next.clone(), &revoked).is_err());
+    for _ in 0..33 {
+        q.query(args(), &Access::local()).unwrap();
+    }
+    assert!(q.query(next, &Access::local()).is_err());
+}
+#[test]
+fn catalog_filter_and_selector_freeze_version_without_inventing_industry() {
+    use x_data_mcp::{
+        catalog::*, data_supply::mcp::DataApi, mcp::ToolHandler, sqlite_catalog::SqliteCatalog,
+    };
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let now = chrono::Utc::now();
+    let source = "fixture:selector".to_string();
+    let record = |symbol: &str, industry: IndustryInfo| SecurityRecord {
+        symbol: symbol.into(),
+        name: format!("股票{symbol}"),
+        exchange: x_data_mcp::catalog::Exchange::Shanghai,
+        security_type: SecurityType::AShare,
+        source_security_id: symbol.into(),
+        industry,
+        source: source.clone(),
+        acquired_at: now,
+    };
+    SqliteCatalog::new(t.clone())
+        .publish_fixture(
+            "catalog-1",
+            CatalogSnapshot {
+                source: source.clone(),
+                acquired_at: now,
+                completeness: CompletenessEvidence::Complete { expected_count: 2 },
+                records: vec![
+                    record(
+                        "600006",
+                        IndustryInfo::Assigned {
+                            code: "I".into(),
+                            name: "行业".into(),
+                        },
+                    ),
+                    record(
+                        "600007",
+                        IndustryInfo::Missing {
+                            reason: "not mapped".into(),
+                        },
+                    ),
+                ],
+            },
+            None,
+        )
+        .unwrap();
+    let api = DataApi::new(t, "run".into(), Access::local()).unwrap();
+    let a = json!({"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"catalog","industry_code":"I","name_query":"股票"},"version":{"kind":"catalog_version","version_id":"catalog-1"}});
+    let p = api.call("query_data", a).unwrap();
+    assert_eq!(p["records"].as_array().unwrap().len(), 1);
+    let accepted=api.call("start_collection",json!({"dataset":"market.daily","contract_version":"v1","request_id":"selector","selection":{"kind":"catalog","version_id":p["version_manifest"][0]["version_ref"]["version_id"],"industry_code":"I"}})).unwrap();
+    assert_eq!(accepted["item_ids"].as_array().unwrap().len(), 1);
+}
+#[test]
+fn yearly_collection_requires_exact_fixed_base_map_and_stores_frozen_years() {
+    use x_data_mcp::{data_supply::mcp::DataApi, mcp::ToolHandler, task_control::TaskRepository};
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t.clone());
+    market::published_fixture(&store, &market::samples()[0]["record"]);
+    let api = DataApi::new(t.clone(), "run".into(), Access::local()).unwrap();
+    let e = json!({"exchange":"sh","code":"600006"});
+    let mut a = json!({"dataset":"market.yearly","contract_version":"v1","request_id":"year","selection":{"kind":"explicit","securities":[e.clone() ]},"base_daily_versions":[{"entity":e,"version_id":"legacy-daily"}],"years":[2025,2025]});
+    let accepted = api.call("start_collection", a.clone()).unwrap();
+    a["years"] = json!([2025]);
+    assert_eq!(
+        api.call("start_collection", a.clone()).unwrap()["reused"],
+        true
+    );
+    let task = t
+        .read_task(accepted["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.items[0].spec.frozen_inputs["years"], json!([2025]));
+    assert_eq!(
+        task.items[0].spec.frozen_inputs["base_daily_version_id"],
+        "legacy-daily"
+    );
+    a["request_id"] = json!("bad-map");
+    a["base_daily_versions"] = json!([]);
+    assert!(api.call("start_collection", a).is_err());
+    assert!(t.read_request("bad-map").unwrap().is_none());
+}
