@@ -42,6 +42,7 @@
 
 #6/#46 目录与研究行业二级文件能力、#54 GBBQ/QFQ 数值语义、官方文件长期服务器获取/使用边界、
 .day/gbbq 独立快照的一致性仍未通过。[.day原始解析器](docs/day-file.md)已实现；GBBQ、QFQ 和真实文件发布闭环尚未实现。本地[年线聚合核心](docs/yearly.md)已实现，尚未接入生产入口。
+已提供[本地输入清单核验](docs/snapshot-input.md)，字节匹配不代表跨文件一致或来源授权。
 默认装配的 `OfficialFilePipeline` 始终返回 `SOURCE_NOT_VERIFIED`，没有开关可绕过门禁。
 
 ## 本地入口
