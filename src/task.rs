@@ -1,5 +1,6 @@
 use crate::market_data::{Adjustment, Period};
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -107,154 +108,167 @@ pub struct TaskStore {
     root: PathBuf,
 }
 
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct TaskState {
+    bindings: Vec<TaskBinding>,
+    executions: Vec<TaskExecutionRecord>,
+    occupancy: Vec<OccupancyRecord>,
+}
+
 impl TaskStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
 
-    pub fn get(&self, request_id: &str) -> Result<Option<TaskBinding>, io::Error> {
+    fn read_state(&self) -> io::Result<TaskState> {
+        match fs::read(self.root.join("task-state.json")) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(TaskState {
+                bindings: self.read_legacy("task-bindings.json")?,
+                executions: self.read_legacy("task-executions.json")?,
+                occupancy: self.read_legacy("task-occupancy.json")?,
+            }),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn read_legacy<T: serde::de::DeserializeOwned>(&self, name: &str) -> io::Result<Vec<T>> {
+        match fs::read(self.root.join(name)) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn write_state(&self, state: &TaskState) -> io::Result<()> {
+        fs::create_dir_all(&self.root)?;
+        let payload = serde_json::to_vec_pretty(state).map_err(io::Error::other)?;
+        crate::storage::atomic_replace(&self.root.join("task-state.json"), |file| {
+            file.write_all(&payload)
+        })
+    }
+
+    pub fn get(&self, request_id: &str) -> io::Result<Option<TaskBinding>> {
         Ok(self
-            .read_all()?
+            .read_state()?
+            .bindings
             .into_iter()
             .find(|item| item.request_id == request_id))
     }
-
-    pub fn list(&self) -> Result<Vec<TaskBinding>, io::Error> {
-        self.read_all()
+    pub fn list(&self) -> io::Result<Vec<TaskBinding>> {
+        Ok(self.read_state()?.bindings)
     }
-
-    pub fn get_task(&self, task_id: &str) -> Result<Option<TaskBinding>, io::Error> {
+    pub fn get_task(&self, task_id: &str) -> io::Result<Option<TaskBinding>> {
         Ok(self
-            .read_all()?
+            .read_state()?
+            .bindings
             .into_iter()
             .find(|item| item.task_id == task_id))
     }
-
-    pub fn get_execution(&self, task_id: &str) -> Result<Option<TaskExecutionRecord>, io::Error> {
-        let path = self.execution_path();
-        if !path.exists() {
-            return Ok(None);
-        }
-        let records: Vec<TaskExecutionRecord> =
-            serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
-        Ok(records.into_iter().find(|item| item.task_id == task_id))
+    pub fn get_execution(&self, task_id: &str) -> io::Result<Option<TaskExecutionRecord>> {
+        Ok(self
+            .read_state()?
+            .executions
+            .into_iter()
+            .find(|item| item.task_id == task_id))
     }
-
-    pub fn save_execution(&self, record: TaskExecutionRecord) -> Result<(), io::Error> {
-        fs::create_dir_all(&self.root)?;
-        let path = self.execution_path();
-        let mut records = if path.exists() {
-            serde_json::from_slice(&fs::read(&path)?).map_err(io::Error::other)?
-        } else {
-            Vec::new()
-        };
-        if let Some(existing) = records
+    pub fn save_execution(&self, record: TaskExecutionRecord) -> io::Result<()> {
+        let mut state = self.read_state()?;
+        if let Some(existing) = state
+            .executions
             .iter_mut()
-            .find(|item: &&mut TaskExecutionRecord| item.task_id == record.task_id)
+            .find(|item| item.task_id == record.task_id)
         {
             *existing = record;
         } else {
-            records.push(record);
+            state.executions.push(record);
         }
-        fs::write(
-            path,
-            serde_json::to_vec_pretty(&records).map_err(io::Error::other)?,
-        )
+        self.write_state(&state)
     }
-
-    pub fn list_occupancy(&self) -> Result<Vec<OccupancyRecord>, io::Error> {
-        let path = self.occupancy_path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)
+    pub fn list_occupancy(&self) -> io::Result<Vec<OccupancyRecord>> {
+        Ok(self.read_state()?.occupancy)
     }
-
-    pub fn active_conflicts(
-        &self,
-        requested: &[FrozenScope],
-    ) -> Result<Vec<FrozenScope>, io::Error> {
-        let occupancy = self.list_occupancy()?;
-        let mut conflicts = Vec::new();
-        for scope in requested {
-            let mut occupied = false;
-            for record in &occupancy {
-                let status = self
-                    .get_execution(&record.task_id)?
-                    .map(|execution| execution.status)
-                    .unwrap_or(TaskStatus::Pending);
-                if status.occupies_range() && record.scopes.contains(scope) {
-                    occupied = true;
-                    break;
-                }
-            }
-            if occupied {
-                conflicts.push(scope.clone());
-            }
-        }
-        Ok(conflicts)
+    pub fn active_conflicts(&self, requested: &[FrozenScope]) -> io::Result<Vec<FrozenScope>> {
+        let state = self.read_state()?;
+        let active = |id: &str| {
+            state
+                .executions
+                .iter()
+                .find(|e| e.task_id == id)
+                .map(|e| e.status.occupies_range())
+                .unwrap_or(true)
+        };
+        // An incomplete legacy binding still reserves its scope conservatively.
+        // Absence of its occupancy file is not evidence that work has stopped.
+        Ok(requested
+            .iter()
+            .filter(|scope| {
+                state
+                    .occupancy
+                    .iter()
+                    .any(|o| active(&o.task_id) && o.scopes.contains(scope))
+                    || state
+                        .bindings
+                        .iter()
+                        .any(|b| active(&b.task_id) && b.frozen_range.contains(scope))
+            })
+            .cloned()
+            .collect())
     }
-
-    pub fn save_occupancy(&self, task_id: &str, scopes: &[FrozenScope]) -> Result<(), io::Error> {
-        fs::create_dir_all(&self.root)?;
-        let path = self.occupancy_path();
-        let mut records = self.list_occupancy()?;
-        if let Some(existing) = records.iter_mut().find(|item| item.task_id == task_id) {
+    pub fn save_occupancy(&self, task_id: &str, scopes: &[FrozenScope]) -> io::Result<()> {
+        let mut state = self.read_state()?;
+        if let Some(existing) = state
+            .occupancy
+            .iter_mut()
+            .find(|item| item.task_id == task_id)
+        {
             existing.scopes = scopes.to_vec();
         } else {
-            records.push(OccupancyRecord {
-                task_id: task_id.to_owned(),
+            state.occupancy.push(OccupancyRecord {
+                task_id: task_id.into(),
                 scopes: scopes.to_vec(),
             });
         }
-        fs::write(
-            path,
-            serde_json::to_vec_pretty(&records).map_err(io::Error::other)?,
-        )
+        self.write_state(&state)
     }
-
-    pub fn release_occupancy(&self, task_id: &str) -> Result<(), io::Error> {
-        let path = self.occupancy_path();
-        if !path.exists() {
-            return Ok(());
+    pub fn release_occupancy(&self, task_id: &str) -> io::Result<()> {
+        let mut state = self.read_state()?;
+        state.occupancy.retain(|item| item.task_id != task_id);
+        self.write_state(&state)
+    }
+    fn commit_acceptance(&self, binding: TaskBinding) -> io::Result<()> {
+        let mut state = self.read_state()?;
+        state.executions.push(TaskExecutionRecord {
+            task_id: binding.task_id.clone(),
+            status: TaskStatus::Pending,
+            scope_results: Vec::new(),
+        });
+        state.occupancy.push(OccupancyRecord {
+            task_id: binding.task_id.clone(),
+            scopes: binding.frozen_range.clone(),
+        });
+        state.bindings.push(binding);
+        self.write_state(&state)
+    }
+    fn verify_reusable(&self, binding: &TaskBinding) -> io::Result<()> {
+        let state = self.read_state()?;
+        let execution = state
+            .executions
+            .iter()
+            .find(|e| e.task_id == binding.task_id)
+            .ok_or_else(|| io::Error::other("ACCEPTANCE_NEEDS_VERIFICATION: execution missing"))?;
+        if execution.status.occupies_range()
+            && !state
+                .occupancy
+                .iter()
+                .any(|o| o.task_id == binding.task_id && o.scopes == binding.frozen_range)
+        {
+            return Err(io::Error::other(
+                "ACCEPTANCE_NEEDS_VERIFICATION: occupancy missing or inconsistent",
+            ));
         }
-        let mut records = self.list_occupancy()?;
-        records.retain(|item| item.task_id != task_id);
-        fs::write(
-            path,
-            serde_json::to_vec_pretty(&records).map_err(io::Error::other)?,
-        )
+        Ok(())
     }
-
-    fn read_all(&self) -> Result<Vec<TaskBinding>, io::Error> {
-        let path = self.path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let bytes = fs::read(path)?;
-        serde_json::from_slice(&bytes).map_err(io::Error::other)
-    }
-
-    fn append(&self, binding: TaskBinding) -> Result<(), io::Error> {
-        fs::create_dir_all(&self.root)?;
-        let mut items = self.read_all()?;
-        items.push(binding);
-        let payload = serde_json::to_vec_pretty(&items).map_err(io::Error::other)?;
-        fs::write(self.path(), payload)
-    }
-
-    fn path(&self) -> PathBuf {
-        self.root.join("task-bindings.json")
-    }
-
-    fn execution_path(&self) -> PathBuf {
-        self.root.join("task-executions.json")
-    }
-
-    fn occupancy_path(&self) -> PathBuf {
-        self.root.join("task-occupancy.json")
-    }
-
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -323,6 +337,7 @@ impl TaskAcceptanceService {
     fn accept_binding(&self, binding: TaskBinding) -> Result<AcceptedTask, TaskError> {
         if let Some(existing) = self.store.get(&binding.request_id)? {
             if same_semantics(&existing, &binding) {
+                self.store.verify_reusable(&existing)?;
                 return Ok(AcceptedTask {
                     task_id: existing.task_id.clone(),
                     binding: existing,
@@ -339,14 +354,7 @@ impl TaskAcceptanceService {
         if !conflicts.is_empty() {
             return Err(TaskError::RangeConflict { scopes: conflicts });
         }
-        self.store.append(created.clone())?;
-        self.store.save_execution(TaskExecutionRecord {
-            task_id: created.task_id.clone(),
-            status: TaskStatus::Pending,
-            scope_results: Vec::new(),
-        })?;
-        self.store
-            .save_occupancy(&created.task_id, &created.frozen_range)?;
+        self.store.commit_acceptance(created.clone())?;
         Ok(AcceptedTask {
             task_id: created.task_id.clone(),
             binding: created,
