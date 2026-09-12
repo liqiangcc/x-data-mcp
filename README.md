@@ -56,6 +56,19 @@
 年线没有已发布 daily 时报告 `PUBLISHED_QFQ_DAILY_REQUIRED`。
 此入口不是部署完成或自动后台执行的证明。
 
+## SQLite 任务开发入口（#78，Draft）
+
+[PR #82](https://github.com/liqiangcc/x-data-mcp/pull/82) 新增独立任务存储，尚待 Coordinator 审查。
+显式初始化用 `cargo run --locked --bin task_sqlite -- init <新库路径>`；
+既有受支持 schema 的升级用 `task_sqlite upgrade <库路径>`。初始化不覆盖既有文件，普通读取不建库、不迁移、不回退 JSON。
+`cargo run --locked --bin mcp_sqlite_dev -- <已初始化库路径>` 是独立开发入口，仅提供六个旧任务控制工具；
+其同步 worker 只记录来源拒绝，不写行情。默认 `mcp_server` 的八工具及 JSON 装配保持。
+两种存储没有跨库原子发布保证，同库行情发布属于 #79。
+
+真实临时 SQLite 的受理、并发、进程退出、状态及故障测试随 `cargo test --locked` 运行；
+准确代码 SHA、Actions 与未验证项见 [#78 实施记录](docs/tasks/issue-78.md)。
+服务器磁盘受限，本轮完整编译和测试使用 Actions，本机仅格式与差异检查。
+
 ## 验证
 
 当前稳定入口与 CI 一致：

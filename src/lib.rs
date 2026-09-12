@@ -16,3 +16,10 @@ pub mod day_file;
 pub mod query;
 
 pub mod snapshot;
+
+pub mod sqlite_tasks;
+pub mod task_control;
+
+pub mod sqlite_task_mcp;
+
+pub mod hash;

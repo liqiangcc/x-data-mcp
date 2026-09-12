@@ -1,7 +1,7 @@
 //! Structural .day decoding. Raw fields are not approved business prices/units.
+pub use crate::hash::sha256;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 pub const RECORD_BYTES: usize = 32;
 
@@ -53,11 +53,4 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<RawDayRecord>, DayFileError> {
         });
     }
     Ok(records)
-}
-
-pub fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
