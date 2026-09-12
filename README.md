@@ -49,7 +49,8 @@
 `cargo run --locked --bin mcp_server` 启动 stdio 原型。`X_DATA_MCP_STORE` 设置本地状态目录，
 默认 `.x-data-mcp`。旧 `X_DATA_MCP_TDX_PYTHON` 不再读取，不需要 Python/eltdx/Key。
 
-工具为 `start_collection`、`get_task`、`run_worker_once`、`cancel_task`、`retry_task`。
+工具为 `start_collection`、`get_task`、`run_worker_once`、`cancel_task`、`retry_task`，
+以及只读的 `get_market_data`、`list_market_data_versions`、`get_request`，见[查询契约](docs/published-queries.md)。
 受理会写入任务并返回 pending；必须显式运行 worker，当前采集会失败并报告未验证，不能发布新行情。
 年线没有已发布 daily 时报告 `PUBLISHED_QFQ_DAILY_REQUIRED`。
 此入口不是部署完成或自动后台执行的证明。

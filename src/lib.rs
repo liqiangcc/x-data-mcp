@@ -12,3 +12,5 @@ pub mod worker;
 pub mod yearly;
 
 pub mod day_file;
+
+pub mod query;

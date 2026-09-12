@@ -10,15 +10,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
 
-pub const TOOL_NAMES: [&str; 5] = [
+pub const TOOL_NAMES: [&str; 8] = [
     "start_collection",
     "get_task",
     "run_worker_once",
     "cancel_task",
     "retry_task",
+    "get_market_data",
+    "list_market_data_versions",
+    "get_request",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StartCollectionArgs {
     pub request_id: String,
     pub symbols: Vec<String>,
@@ -26,22 +30,26 @@ pub struct StartCollectionArgs {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetTaskArgs {
     pub task_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CancelTaskArgs {
     pub task_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RetryScopeArgs {
     pub symbol: String,
     pub period: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RetryTaskArgs {
     pub original_task_id: String,
     pub new_request_id: String,
@@ -126,7 +134,18 @@ impl ApiError {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyArgs {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GetRequestArgs {
+    pub request_id: String,
+}
+
 pub struct McpApi<S> {
+    query: crate::query::QueryService,
     acceptance: crate::task::TaskAcceptanceService,
     cancellation: TaskCancellationService,
     retry: TaskRetryService,
@@ -137,6 +156,9 @@ pub struct McpApi<S> {
 impl<S: MarketDataPipeline> McpApi<S> {
     pub fn new(source: S, store: TaskStore) -> Self {
         Self {
+            query: crate::query::QueryService::new(crate::storage::JsonFileStore::new(
+                store.root(),
+            )),
             acceptance: crate::task::TaskAcceptanceService::new(store.clone()),
             cancellation: TaskCancellationService::new(store.clone()),
             retry: TaskRetryService::new(store.clone()),
@@ -202,6 +224,26 @@ impl<S: MarketDataPipeline> McpApi<S> {
                 .unwrap_or_default(),
             retry_of: binding.retry_of,
         })
+    }
+
+    pub fn get_request(&self, args: GetRequestArgs) -> Result<Value, ApiError> {
+        if args.request_id.trim().is_empty() {
+            return Err(ApiError::new("invalid_arguments", "empty request_id"));
+        }
+        let binding = self
+            .store
+            .get(&args.request_id)
+            .map_err(|e| ApiError::new("storage_error", e.to_string()))?;
+        let Some(binding) = binding else {
+            return Ok(json!({"request_id":args.request_id,"bound":false,"task":null}));
+        };
+        self.store
+            .verify_reusable(&binding)
+            .map_err(|e| ApiError::new("request_needs_verification", e.to_string()))?;
+        let task = self.get_task(GetTaskArgs {
+            task_id: binding.task_id,
+        })?;
+        Ok(json!({"request_id":args.request_id,"bound":true,"task":task}))
     }
 
     pub fn run_worker_once(&self) -> Result<WorkerRunResult, ApiError> {
@@ -365,7 +407,7 @@ fn worker_error(error: WorkerError) -> ApiError {
 }
 
 pub fn public_tools() -> Value {
-    json!([
+    let mut tools = json!([
         {
             "name": "start_collection",
             "description": "Accept local official-file processing: day is QFQ daily; year derives from one published QFQ daily version. Production source is NOT_VERIFIED.",
@@ -434,7 +476,33 @@ pub fn public_tools() -> Value {
                 }
             }
         }
-    ])
+    ]);
+    for (name, dates) in [
+        ("get_market_data", true),
+        ("list_market_data_versions", false),
+    ] {
+        let mut properties = json!({
+            "exchange":{"type":"string","enum":["sh","sz"]},
+            "code":{"type":"string","pattern":"^[0-9]{6}$"},
+            "period":{"type":"string","enum":["day","year"]},
+            "page_size":{"type":"integer","minimum":1,"maximum":1000,"default":100},
+            "cursor":{"type":"string"}
+        });
+        let mut required = vec!["exchange", "code", "period"];
+        if dates {
+            properties["start_date"] = json!({"type":"string","format":"date"});
+            properties["end_date"] = json!({"type":"string","format":"date"});
+            properties["version_id"] = json!({"type":"string"});
+            required.extend(["start_date", "end_date"]);
+        }
+        tools.as_array_mut().unwrap().push(json!({"name":name,
+            "description":"Read integrity-checked published storage only. No collection, repair or source fallback. Cursors fix the version and query within this process.",
+            "inputSchema":{"type":"object","additionalProperties":false,"required":required,"properties":properties}}));
+    }
+    tools.as_array_mut().unwrap().push(json!({"name":"get_request",
+        "description":"Read the actual request_id binding and task state without accepting work.",
+        "inputSchema":{"type":"object","additionalProperties":false,"required":["request_id"],"properties":{"request_id":{"type":"string"}}}}));
+    tools
 }
 
 pub fn run_stdio<S: MarketDataPipeline>(api: McpApi<S>) -> io::Result<()> {
@@ -518,9 +586,29 @@ fn handle_tool_call<S: MarketDataPipeline>(api: &McpApi<S>, id: Value, params: V
                 api.get_task(args)
                     .map(|value| serde_json::to_value(value).unwrap())
             }),
-        "run_worker_once" => api
-            .run_worker_once()
-            .map(|value| serde_json::to_value(value).unwrap()),
+        "run_worker_once" => serde_json::from_value::<EmptyArgs>(args)
+            .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
+            .and_then(|_| {
+                api.run_worker_once()
+                    .map(|value| serde_json::to_value(value).unwrap())
+            }),
+        "get_market_data" => serde_json::from_value::<crate::query::MarketQuery>(args)
+            .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
+            .and_then(|args| {
+                api.query
+                    .market(args, chrono::Utc::now())
+                    .map_err(query_error)
+            }),
+        "list_market_data_versions" => serde_json::from_value::<crate::query::VersionQuery>(args)
+            .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
+            .and_then(|args| {
+                api.query
+                    .versions(args, chrono::Utc::now())
+                    .map_err(query_error)
+            }),
+        "get_request" => serde_json::from_value::<GetRequestArgs>(args)
+            .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
+            .and_then(|args| api.get_request(args)),
         "cancel_task" => serde_json::from_value::<CancelTaskArgs>(args)
             .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
             .and_then(|args| {
@@ -573,4 +661,13 @@ fn rpc_error(
             "data": {"code": code, "message": message}
         }
     })
+}
+
+fn query_error(error: crate::query::QueryError) -> ApiError {
+    let code = match &error {
+        crate::query::QueryError::Invalid(_) => "invalid_arguments",
+        crate::query::QueryError::Cursor => "invalid_cursor",
+        crate::query::QueryError::Unavailable(_) => "published_data_unavailable",
+    };
+    ApiError::new(code, error.to_string())
 }

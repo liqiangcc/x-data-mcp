@@ -378,3 +378,95 @@ impl MarketDataPipeline for FakeSource {
         Ok(batch)
     }
 }
+
+#[test]
+fn request_lookup_is_bound_only_after_complete_acceptance_and_reports_storage_errors() {
+    use x_data_mcp::mcp::GetRequestArgs;
+    let (api, dir) = api();
+    assert_eq!(
+        api.get_request(GetRequestArgs {
+            request_id: "r".into()
+        })
+        .unwrap()["bound"],
+        false
+    );
+    let accepted = api
+        .start_collection(start_args("r", &["sh.600006"], &["day"]))
+        .unwrap();
+    let bytes = std::fs::read(dir.path().join("task-state.json")).unwrap();
+    let result = api
+        .get_request(GetRequestArgs {
+            request_id: "r".into(),
+        })
+        .unwrap();
+    assert_eq!(result["task"]["task_id"], accepted.task_id);
+    assert_eq!(result["task"]["status"], "pending");
+    assert_eq!(
+        std::fs::read(dir.path().join("task-state.json")).unwrap(),
+        bytes
+    );
+    let mut state: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    state["executions"] = serde_json::json!([]);
+    std::fs::write(
+        dir.path().join("task-state.json"),
+        serde_json::to_vec(&state).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        api.get_request(GetRequestArgs {
+            request_id: "r".into()
+        })
+        .unwrap_err()
+        .code,
+        "request_needs_verification"
+    );
+    std::fs::write(dir.path().join("task-state.json"), b"invalid-json").unwrap();
+    assert_eq!(
+        api.get_request(GetRequestArgs {
+            request_id: "r".into()
+        })
+        .unwrap_err()
+        .code,
+        "storage_error"
+    );
+}
+
+#[test]
+fn every_tool_rejects_unknown_fields_before_any_action() {
+    use serde_json::json;
+    use x_data_mcp::mcp::handle_json;
+    let (api, dir) = api();
+    let cases = [
+        (
+            "start_collection",
+            json!({"request_id":"r","symbols":["sh.600006"],"periods":["day"]}),
+        ),
+        ("get_task", json!({"task_id":"t"})),
+        ("cancel_task", json!({"task_id":"t"})),
+        (
+            "retry_task",
+            json!({"original_task_id":"t","new_request_id":"r","selected_scopes":[{"symbol":"sh.600006","period":"day"}]}),
+        ),
+        ("run_worker_once", json!({})),
+        ("get_request", json!({"request_id":"r"})),
+        (
+            "get_market_data",
+            json!({"exchange":"sh","code":"600006","period":"day","start_date":"2025-01-01","end_date":"2025-12-31"}),
+        ),
+        (
+            "list_market_data_versions",
+            json!({"exchange":"sh","code":"600006","period":"day"}),
+        ),
+    ];
+    for (name, mut args) in cases {
+        args["unknown"] = json!(true);
+        let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}});
+        let response: serde_json::Value =
+            serde_json::from_str(&handle_json(&api, &request.to_string()).unwrap()).unwrap();
+        assert_eq!(
+            response["result"]["structuredContent"]["code"], "invalid_arguments",
+            "{name}"
+        );
+    }
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}

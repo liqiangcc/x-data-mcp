@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 #[test]
-fn stdio_initialize_then_tools_list_exposes_exactly_five_tools() {
+fn stdio_initialize_then_tools_list_exposes_exactly_eight_tools() {
     let dir = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp_server"))
         .env("X_DATA_MCP_STORE", dir.path())
@@ -56,7 +56,10 @@ fn stdio_initialize_then_tools_list_exposes_exactly_five_tools() {
         names,
         vec![
             "cancel_task",
+            "get_market_data",
+            "get_request",
             "get_task",
+            "list_market_data_versions",
             "retry_task",
             "run_worker_once",
             "start_collection",
@@ -136,4 +139,65 @@ fn production_stdio_fails_closed_without_python_and_does_not_publish() {
     assert!(!dir.path().join("effective").exists());
     assert!(!dir.path().join("000001.day.qfq.json").exists());
     assert!(!dir.path().join("000001.year.qfq.json").exists());
+}
+
+#[test]
+fn actual_stdio_queries_are_readonly_and_unknown_arguments_reject() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("absent");
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_mcp_server"))
+        .env("X_DATA_MCP_STORE", &store)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let calls = [
+        (
+            "get_market_data",
+            json!({"exchange":"sh","code":"600006","period":"day","start_date":"2027-01-01","end_date":"2027-12-31"}),
+        ),
+        (
+            "list_market_data_versions",
+            json!({"exchange":"sh","code":"600006","period":"day"}),
+        ),
+        ("get_request", json!({"request_id":"unbound"})),
+        ("run_worker_once", json!({"unexpected":true})),
+        (
+            "start_collection",
+            json!({"request_id":"bad","symbols":["sh.600006"],"periods":["day"],"unexpected":true}),
+        ),
+    ];
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        for (i, (name, args)) in calls.into_iter().enumerate() {
+            writeln!(stdin,"{}",json!({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{"name":name,"arguments":args}})).unwrap();
+        }
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let responses: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(responses.len(), 5);
+    assert_eq!(
+        responses[0]["result"]["structuredContent"]["records"],
+        json!([])
+    );
+    assert_eq!(
+        responses[1]["result"]["structuredContent"]["records"],
+        json!([])
+    );
+    assert_eq!(responses[2]["result"]["structuredContent"]["bound"], false);
+    for response in &responses[3..] {
+        assert_eq!(response["result"]["isError"], true);
+        assert_eq!(
+            response["result"]["structuredContent"]["code"],
+            "invalid_arguments"
+        );
+    }
+    assert!(!store.exists());
 }
