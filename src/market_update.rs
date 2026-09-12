@@ -5,6 +5,7 @@ use crate::{
     market_storage::{Error, compat::CheckedRecord},
 };
 pub mod publication;
+pub mod tasks;
 use chrono::{Datelike, NaiveDate};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};

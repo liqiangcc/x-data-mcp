@@ -43,3 +43,7 @@ update/backfill 类型化受理、默认范围/明确缺口冻结、MCP/schema/�
 
 #4“已启动首次采集”的受理/实际执行定义已向用户提问，未据此擅自实现默认选择。日线现有模型实际截至日来自参与记录；更丰富的范围/覆盖结构不能仅凭 reason 字符串视为完整通用契约。
 #54/#71/#46/文件一致性仍未解决；live source、真实 normalization、真实行情闭环均 NOT_RUN/NOT_VERIFIED。没有来源采集，不部署此半成品。
+
+### 显式范围任务切片（编码前边界）
+
+下一切片使用内部 explicit-range-task-v1 契约受理 update_data/backfill_data 的显式 daily 范围；还不是公共 MCP v1 schema。每实体一个完整范围/base binding，重复同项规范化，冲突范围不合并。固定版本在单次 fixed_many 读取中核验并冻结 digest/范围，沿用证券日线 scope 占用（日期元数据不缩小占用）。提交应用层必须核对冻结输入，不由 MCP 判断资格。默认对象、自动缺口及 yearly 不以此契约冒充完成。

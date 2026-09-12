@@ -26,21 +26,27 @@ struct Fixture {
     whole: Option<CombinedEvidence>,
 }
 fn command(db: &SqliteMarket, request: &str, version: &str, expected: Option<&str>) -> Publication {
-    // Legacy fixture contract supplies the existing item identity and real occupancy.
-    // Public update/backfill normalization is a separate pending integration.
+    use x_data_mcp::market_update::tasks::{Operation, RangeContract};
     let ctl = TaskControl::new(
         db.tasks.clone(),
         "range-run".into(),
-        vec![Box::new(LegacyCollection)],
+        vec![
+            Box::new(LegacyCollection),
+            Box::new(RangeContract {
+                operation: Operation::Backfill,
+                repository: db.clone(),
+            }),
+        ],
     )
     .unwrap();
-    let request = ctl
-        .accept(
-            request,
+    let (key, payload) = match expected {
+        None => (
             LegacyCollection.key(),
             json!({"symbols":["sh.600006"],"periods":["day"]}),
-        )
-        .unwrap();
+        ),
+        Some(base) => (Operation::Backfill.key(), range_payload(base)),
+    };
+    let request = ctl.accept(request, key, payload).unwrap();
     let RequestOutcome::Task(task) = request.record.outcome else {
         panic!()
     };
@@ -455,4 +461,116 @@ fn range_coverage_only_revision_publishes_and_acquisition_only_reuses() {
         f.db.fixed("coverage-only").unwrap().version().records,
         f.db.fixed("legacy-daily").unwrap().version().records
     );
+}
+
+fn range_payload(base: &str) -> Value {
+    json!({"items":[{"symbol":"sh.600006","base_version_id":base,"start_date":"2025-01-02","end_date":"2025-01-02"}]})
+}
+fn range_control(f: &Fixture) -> TaskControl<SqliteTasks> {
+    use x_data_mcp::market_update::tasks::{Operation, RangeContract};
+    TaskControl::new(
+        f.db.tasks.clone(),
+        "range-run".into(),
+        vec![
+            Box::new(RangeContract {
+                operation: Operation::Backfill,
+                repository: f.db.clone(),
+            }),
+            Box::new(RangeContract {
+                operation: Operation::Update,
+                repository: f.db.clone(),
+            }),
+        ],
+    )
+    .unwrap()
+}
+#[test]
+fn explicit_range_admission_normalizes_sets_and_freezes_base_without_requery_on_replay() {
+    use x_data_mcp::market_update::tasks::Operation;
+    let f = fixture(false);
+    let ctl = range_control(&f);
+    let mut payload = range_payload("legacy-daily");
+    let item = payload["items"][0].clone();
+    payload["items"].as_array_mut().unwrap().push(item);
+    let accepted = ctl
+        .accept("range", Operation::Backfill.key(), payload.clone())
+        .unwrap();
+    assert!(accepted.reused);
+    let RequestOutcome::Task(task) = accepted.record.outcome else {
+        panic!()
+    };
+    assert_eq!(
+        task.items[0].spec.frozen_inputs["base_integrity_sha256"],
+        f.evidence.base_integrity_sha256
+    );
+    f.sql("UPDATE daily_bars SET close='10.07' WHERE trade_date='2025-01-02'");
+    assert!(
+        ctl.accept("range", Operation::Backfill.key(), payload)
+            .unwrap()
+            .reused
+    );
+    assert!(
+        ctl.accept(
+            "new",
+            Operation::Backfill.key(),
+            range_payload("legacy-daily")
+        )
+        .is_err()
+    );
+    assert!(f.db.tasks.read_request("new").unwrap().is_none());
+}
+#[test]
+fn explicit_range_operations_and_different_dates_do_not_evade_request_or_scope_conflicts() {
+    use x_data_mcp::{market_update::tasks::Operation, task_control::Error as TaskError};
+    let f = fixture(false);
+    let ctl = range_control(&f);
+    assert!(matches!(
+        ctl.accept(
+            "range",
+            Operation::Update.key(),
+            range_payload("legacy-daily")
+        ),
+        Err(TaskError::RequestConflict)
+    ));
+    let mut other = range_payload("legacy-daily");
+    other["items"][0]["start_date"] = json!("2025-12-31");
+    other["items"][0]["end_date"] = json!("2025-12-31");
+    assert!(matches!(
+        ctl.accept("other", Operation::Backfill.key(), other),
+        Err(TaskError::RangeConflict(_))
+    ));
+    assert!(f.db.tasks.read_request("other").unwrap().is_none());
+}
+#[test]
+fn explicit_range_invalid_inputs_leave_no_request_binding() {
+    use x_data_mcp::market_update::tasks::Operation;
+    let f = fixture(false);
+    let ctl = range_control(&f);
+    for kind in 0..5 {
+        let mut input = range_payload("legacy-daily");
+        match kind {
+            0 => input["items"] = json!([]),
+            1 => input["items"][0]["extra"] = json!(true),
+            2 => input["items"][0]["end_date"] = json!("2024-01-01"),
+            3 => input["items"][0]["symbol"] = json!("bj.430047"),
+            _ => {
+                let mut other = input["items"][0].clone();
+                other["base_version_id"] = json!("other");
+                input["items"].as_array_mut().unwrap().push(other);
+            }
+        }
+        assert!(
+            ctl.accept("invalid", Operation::Backfill.key(), input)
+                .is_err()
+        );
+        assert!(f.db.tasks.read_request("invalid").unwrap().is_none());
+    }
+}
+#[test]
+fn range_publish_cannot_widen_the_accepted_frozen_dates() {
+    let mut f = fixture(false);
+    f.range.start = "2025-01-01".parse().unwrap();
+    f.evidence.range = f.range.clone();
+    assert!(matches!(f.prepare(), Err(Error::Conflict(_))));
+    assert_eq!(f.count("market_update_results"), 0);
 }

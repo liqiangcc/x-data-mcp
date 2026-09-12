@@ -65,6 +65,28 @@ impl<R: MarketRepository> Publisher<R> {
             ));
         }
         let base = self.repository.fixed(&evidence.base_version_id)?;
+        let task = self.repository.task(&command.task_id)?;
+        if matches!(
+            task.task.key.operation.as_str(),
+            "update_data" | "backfill_data"
+        ) {
+            if task.task.key.contract_version != super::tasks::CONTRACT_VERSION
+                || task.task.key.dataset != "market.daily"
+                || !task.items.iter().any(|item| {
+                    item.spec.item_id == command.item_id
+                        && item.spec.frozen_inputs
+                            == super::tasks::frozen(
+                                &evidence.base_version_id,
+                                &evidence.base_integrity_sha256,
+                                range,
+                            )
+                })
+            {
+                return Err(Error::Conflict(
+                    "range publication differs from accepted frozen inputs".into(),
+                ));
+            }
+        }
         let decision = super::prepare(&base, batch, range, Some(evidence))?;
         let (publication, no_change) = match decision {
             Decision::NeedsVerification(reason) => {
