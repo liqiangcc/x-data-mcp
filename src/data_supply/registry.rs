@@ -18,6 +18,7 @@ pub enum Handler {
     Cancel,
     Compute,
     Worker,
+    Range(crate::market_update::tasks::Operation),
 }
 pub struct Entry {
     pub name: &'static str,
@@ -59,6 +60,7 @@ pub struct Capabilities {
     pub snapshots_per_category: usize,
     pub production_ready: bool,
 }
+pub const RANGE_DESCRIPTION: &str = "Explicit market.daily ranges only, each bound to a published base version. Accepts a task with frozen dates/digest and shared daily occupancy. Default selection, automatic gap discovery and yearly/catalog updates are not implemented. Production source remains blocked; the installed worker only records SOURCE_NOT_VERIFIED and does not publish.";
 pub const WORKER_DESCRIPTION: &str = "Stage A development-only control: synchronously executes at most one locally owned pending task, mutating task outcomes and occupancy. The installed executor only records SOURCE_NOT_VERIFIED failures; it never downloads or publishes market data. Not a background scheduler or production pipeline.";
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -86,6 +88,16 @@ fn entry<I: JsonSchema, O: JsonSchema>(
 pub fn entries() -> Vec<Entry> {
     let query = json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"}});
     vec![
+        entry::<RangeWrite, WriteAcceptance>(
+            "update_data",
+            Handler::Range(crate::market_update::tasks::Operation::Update),
+            json!({"request_id":"example-update","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"published-daily-id","start_date":"2025-01-01","end_date":"2025-12-31"}]}),
+        ),
+        entry::<RangeWrite, WriteAcceptance>(
+            "backfill_data",
+            Handler::Range(crate::market_update::tasks::Operation::Backfill),
+            json!({"request_id":"example-backfill","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"published-daily-id","start_date":"2025-01-01","end_date":"2025-12-31"}]}),
+        ),
         entry::<WorkerInput, WorkerOutput>("run_worker_once", Handler::Worker, json!({})),
         entry::<crate::metrics::wire::Compute, crate::metrics::wire::Computation>(
             "compute_metrics",

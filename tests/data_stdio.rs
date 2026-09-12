@@ -67,7 +67,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     assert!(s.request("initialize", json!({}))["result"]["serverInfo"].is_object());
     let listing = s.request("tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 13);
+    assert_eq!(tools.len(), 15);
     let caps = s.call("get_data_capabilities", json!({}), false);
     let listed: std::collections::BTreeSet<_> =
         tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -118,6 +118,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
             x_data_mcp::data_supply::registry::Handler::Compute
                 | x_data_mcp::data_supply::registry::Handler::Progress
                 | x_data_mcp::data_supply::registry::Handler::Collection
+                | x_data_mcp::data_supply::registry::Handler::Range(_)
                 | x_data_mcp::data_supply::registry::Handler::Retry
                 | x_data_mcp::data_supply::registry::Handler::Task
                 | x_data_mcp::data_supply::registry::Handler::Cancel
@@ -217,4 +218,122 @@ fn real_data_stdio_read_missing_database_does_not_initialize() {
     let mut s = Session::new(&p);
     s.call("list_tasks", json!({}), true);
     assert!(!p.exists());
+}
+
+#[path = "support/market.rs"]
+mod range_fixture;
+#[test]
+fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
+    for operation in ["update_data", "backfill_data"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let tasks = x_data_mcp::sqlite_tasks::SqliteTasks::new(&path);
+        tasks.initialize().unwrap();
+        let market = x_data_mcp::sqlite_market::SqliteMarket::new(tasks);
+        range_fixture::published_fixture(&market, &range_fixture::samples()[0]["record"]);
+        let mut s = Session::new(&path);
+        s.request("initialize", json!({}));
+        let capabilities = s.call(
+            "get_data_capabilities",
+            json!({"operation":operation}),
+            false,
+        );
+        let cap = &capabilities["items"][0];
+        assert_eq!(capabilities["items"].as_array().unwrap().len(), 1);
+        assert_eq!(cap["dataset"], "market.daily");
+        assert_eq!(cap["readiness"], "blocked");
+        assert!(
+            cap["description"]
+                .as_str()
+                .unwrap()
+                .contains("Explicit market.daily")
+        );
+        let mut input = json!({"request_id":"range-write","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"legacy-daily","start_date":"2025-01-02","end_date":"2025-01-02"}]});
+        jsonschema::validator_for(&cap["input_schema"])
+            .unwrap()
+            .validate(&input)
+            .unwrap();
+        let accepted = s.call(operation, input.clone(), false);
+        jsonschema::validator_for(&cap["output_schema"])
+            .unwrap()
+            .validate(&accepted)
+            .unwrap();
+        assert_eq!(accepted["readiness"], "blocked");
+        assert_eq!(accepted["contract_version"], "explicit-range-task-v1");
+        let duplicate = input["items"][0].clone();
+        input["items"].as_array_mut().unwrap().push(duplicate);
+        let replay = s.call(operation, input.clone(), false);
+        assert_eq!(replay["task_id"], accepted["task_id"]);
+        assert_eq!(replay["reused"], true);
+        let other_operation = if operation == "update_data" {
+            "backfill_data"
+        } else {
+            "update_data"
+        };
+        assert_eq!(
+            s.call(other_operation, input.clone(), true)["code"],
+            "request_conflict"
+        );
+        input["request_id"] = json!("range-competing");
+        assert_eq!(
+            s.call(operation, input.clone(), true)["code"],
+            "range_conflict"
+        );
+        assert_eq!(
+            s.call(
+                "get_request",
+                json!({"contract_version":"v1","request_id":"range-competing"}),
+                false
+            )["bound"],
+            false
+        );
+        input["request_id"] = json!("bad-field");
+        input["items"][0]["extra"] = json!(true);
+        assert_eq!(s.call(operation, input, true)["code"], "invalid_arguments");
+        assert_eq!(
+            s.call(
+                "get_request",
+                json!({"contract_version":"v1","request_id":"range-write"}),
+                false
+            )["task"]["task_id"],
+            accepted["task_id"]
+        );
+        let worker = s.call("run_worker_once", json!({}), false);
+        assert_eq!(worker["task_id"], accepted["task_id"]);
+        let progress = s.call(
+            "get_task_progress",
+            json!({"task_id":accepted["task_id"]}),
+            false,
+        );
+        assert_eq!(progress["failed"], 1);
+        assert!(
+            progress["unfinished"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("SOURCE_NOT_VERIFIED")
+        );
+        let retried=s.call("retry_task",json!({"contract_version":"v1","original_task_id":accepted["task_id"],"new_request_id":"range-retry","item_ids":accepted["item_ids"]}),false);
+        let view = s.call(
+            "get_task",
+            json!({"contract_version":"v1","task_id":retried["task_id"]}),
+            false,
+        );
+        s.call("cancel_task",json!({"contract_version":"v1","task_id":retried["task_id"],"expected_revision":view["state_revision"]}),false);
+        s.call("run_worker_once", json!({}), false);
+        let versions: i64 = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT count(*) FROM data_versions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(versions, 1);
+        assert!(
+            s.call(
+                "get_data_capabilities",
+                json!({"operation":operation,"dataset":"market.yearly"}),
+                false
+            )["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

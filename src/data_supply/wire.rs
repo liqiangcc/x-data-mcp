@@ -471,3 +471,27 @@ pub struct ConfirmedGap {
     pub range: Filter,
     pub evidence: String,
 }
+
+/// Only explicit daily ranges are implemented at this stage.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub enum DailyDataset {
+    #[serde(rename = "market.daily")]
+    Daily,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RangeWriteItem {
+    pub entity: Security,
+    pub base_version_id: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RangeWrite {
+    pub request_id: String,
+    pub dataset: DailyDataset,
+    pub contract_version: ContractVersion,
+    #[schemars(length(min = 1, max = 100))]
+    pub items: Vec<RangeWriteItem>,
+}

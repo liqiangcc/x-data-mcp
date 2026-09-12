@@ -49,3 +49,9 @@ update/backfill 公共受理、默认范围/明确缺口冻结、MCP/schema/能�
 已实现内部 explicit-range-task-v1 契约受理 update_data/backfill_data 的显式 daily 范围；还不是公共 MCP v1 schema。每实体一个完整范围/base binding，重复同项规范化，冲突范围不合并。固定版本在单次 fixed_many 读取中核验并冻结 digest/范围，沿用证券日线 scope 占用（日期元数据不缩小占用）。提交应用层必须核对冻结输入，不由 MCP 判断资格。默认对象、自动缺口及 yearly 不以此契约冒充完成。
 
 显式范围测试：explicit_range_admission_normalizes_sets_and_freezes_base_without_requery_on_replay；explicit_range_operations_and_different_dates_do_not_evade_request_or_scope_conflicts；explicit_range_invalid_inputs_leave_no_request_binding；range_publish_cannot_widen_the_accepted_frozen_dates。覆盖同参重复、旧 base 损坏后原请求重放、异操作 request_id 冲突、异日期同 scope 冲突、未知字段/冲突项/非法输入不消费 ID 和发布范围不能扩大。
+
+### 公共 MCP 显式 daily 入口（编码前边界）
+
+update_data/backfill_data 的 v1 首个公共形状为 request_id、dataset=market.daily、contract_version=v1、items（entity、base_version_id、start_date、end_date）。全部显式，不把空/省略列表当作全市场或默认范围；每实体一个范围。响应沿用 WriteAcceptance，其中 contract_version 标明实际持久化执行契约 explicit-range-task-v1。输入映射在应用契约模块，资格判定仍由 RangeContract 完成。
+
+发现 registry 仅为这两个工具列 daily，implemented=true/readiness=blocked，说明仅显式范围受理、来源仍不可信且当前 worker 只记录拒绝。yearly/catalog/default selection 不伪装已实现；非本机所有者上下文不发现/调用写控制。既有 13 工具增加到 15，版本读取与 task 查询不改变语义。

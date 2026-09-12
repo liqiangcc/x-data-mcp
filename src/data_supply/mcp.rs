@@ -40,6 +40,14 @@ impl DataApi {
                     run_id,
                     vec![
                         Box::new(crate::task_control::legacy::LegacyCollection),
+                        Box::new(crate::market_update::tasks::RangeContract {
+                            operation: crate::market_update::tasks::Operation::Update,
+                            repository: repository.market.clone(),
+                        }),
+                        Box::new(crate::market_update::tasks::RangeContract {
+                            operation: crate::market_update::tasks::Operation::Backfill,
+                            repository: repository.market.clone(),
+                        }),
                         Box::new(super::collect::CollectionContract {
                             dataset: Dataset::Daily,
                             repository: repository.clone(),
@@ -84,6 +92,7 @@ impl DataApi {
                 && matches!(
                     e.handler,
                     Handler::Collection
+                        | Handler::Range(_)
                         | Handler::Retry
                         | Handler::Task
                         | Handler::Request
@@ -96,7 +105,15 @@ impl DataApi {
             if args.operation.as_ref().is_some_and(|op| op != e.name) {
                 continue;
             }
-            let datasets = if matches!(
+            if matches!(e.handler, Handler::Range(_))
+                && (!self.access.allows(Dataset::Daily, None)
+                    || args.dataset.is_some_and(|d| d != Dataset::Daily))
+            {
+                continue;
+            }
+            let datasets = if matches!(e.handler, Handler::Range(_)) {
+                vec![Some(Dataset::Daily)]
+            } else if matches!(
                 e.handler,
                 Handler::Query | Handler::Versions | Handler::Availability | Handler::Collection
             ) {
@@ -114,17 +131,17 @@ impl DataApi {
                 let detailed = args.operation.is_some();
                 items.push(Capability {
                     tool_name: e.name.into(),
-                    description: if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
+                    description: if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
-                    readiness: if matches!(e.handler, Handler::Collection) {
+                    readiness: if matches!(e.handler, Handler::Collection | Handler::Range(_)) {
                         "blocked"
                     } else {
                         "ready"
                     }
                     .into(),
-                    blocking_reasons: if matches!(e.handler, Handler::Collection) {
+                    blocking_reasons: if matches!(e.handler, Handler::Collection | Handler::Range(_)) {
                         crate::official_files::PRODUCTION_BLOCKERS
                             .iter()
                             .map(|s| s.to_string())
@@ -348,7 +365,7 @@ impl DataApi {
                 }
             }
         }
-        tools.extend(entries().into_iter().filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities.","inputSchema":e.input,"outputSchema":e.output})));
+        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_))).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
@@ -371,6 +388,21 @@ impl DataApi {
             return self.legacy_call(name, input);
         };
         match entry.handler {
+            Handler::Range(operation) => {
+                if self.access != Access::local() {
+                    return Err(ApiError::new(
+                        "forbidden",
+                        "write controls require local owner access",
+                    ));
+                }
+                let command: RangeWrite = decode(input)?;
+                let accepted = self
+                    .legacy
+                    .control
+                    .accept(&command.request_id, operation.key(), command.payload())
+                    .map_err(task_error)?;
+                self.acceptance(&command.request_id, accepted)
+            }
             Handler::Compute => {
                 let computed = crate::metrics::service::Metrics {
                     repository: crate::sqlite_metrics::SqliteMetrics {
@@ -462,13 +494,22 @@ impl ToolHandler for DataApi {
                     | "get_task_progress"
                     | "get_data_capabilities"
                     | "compute_metrics"
+                    | "update_data"
+                    | "backfill_data"
             );
         self.dispatch(name, input).map_err(|mut e| {
             if generic {
                 e.outcome_certainty = Some(
                     if e.code == "outcome_unknown" {
                         "unknown"
-                    } else if matches!(name, "start_collection" | "retry_task" | "cancel_task") {
+                    } else if matches!(
+                        name,
+                        "start_collection"
+                            | "retry_task"
+                            | "cancel_task"
+                            | "update_data"
+                            | "backfill_data"
+                    ) {
                         "not_committed"
                     } else {
                         "not_applicable"

@@ -448,3 +448,31 @@ fn yearly_query_returns_actual_participation_and_unfinished_semantics() {
         _ => panic!(),
     }
 }
+
+#[test]
+fn range_controls_are_not_discovered_or_callable_without_owner_access() {
+    use x_data_mcp::{data_supply::mcp::DataApi, mcp::ToolHandler};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing");
+    let mut access = Access::local();
+    access.principal = "reader".into();
+    let api = DataApi::new(SqliteTasks::new(&path), "run".into(), access).unwrap();
+    for name in ["update_data", "backfill_data"] {
+        assert!(
+            !api.tools()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["name"] == name)
+        );
+        assert!(
+            api.call("get_data_capabilities", json!({"operation":name}))
+                .unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(api.call(name, json!({})).unwrap_err().code, "forbidden");
+    }
+    assert!(!path.exists());
+}
