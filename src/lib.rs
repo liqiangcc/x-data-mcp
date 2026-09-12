@@ -10,3 +10,5 @@ pub mod task;
 pub mod worker;
 
 pub mod yearly;
+
+pub mod day_file;
