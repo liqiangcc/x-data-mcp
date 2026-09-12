@@ -1,5 +1,7 @@
 # 整体设计
 
+实施入口：[实施基线与阶段范围](implementation-baseline.md)。涉及旧拟议工具名称时仅代表业务能力，当前工具命名统一以 generic-data-tools.md 为准。
+
 ## AI 编排与原子能力（已确认）
 
 用户于 2026-09-12 明确：MCP 提供原子能力，AI 可以编排。服务内部保证一个业务动作的规则、事务与执行；跨工具的研究流程由 AI 显式选择，不隐式补采、换源或自动补偿。[计算与编排设计](compute-capabilities.md)定义通用 compute_metrics 的目标契约。
@@ -28,7 +30,7 @@
 | 查询、进度、版本和完整性保护 | [#5](https://github.com/liqiangcc/x-data-mcp/issues/5) |
 | 当前沪深 A 股和 TDX 研究行业二级 | [#6](https://github.com/liqiangcc/x-data-mcp/issues/6)、[官方文件架构](production-source.md) |
 | 工具输入、输出及行为 | [MCP tools 契约](mcp-tools.md) |
-| SQLite schema、事务、迁移和备份 | [SQLite 设计固定提交](https://github.com/liqiangcc/x-data-mcp/blob/2ff75b5e1c86052e3d114e909ec33a7d946e198d/docs/sqlite-storage-design.md)，[PR #72](https://github.com/liqiangcc/x-data-mcp/pull/72) |
+| SQLite schema、事务、迁移和备份 | [SQLite 设计固定提交](https://github.com/liqiangcc/x-data-mcp/blob/9bae8592eed4394c672734f95132f4e4fa1e4d24/docs/sqlite-storage-design.md)，[PR #72](https://github.com/liqiangcc/x-data-mcp/pull/72) |
 | 工程规范 | [规范采用说明](conventions.md) |
 
 SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合并后将入口改为本地相对链接，
