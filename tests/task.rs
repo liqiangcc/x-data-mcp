@@ -93,17 +93,78 @@ fn rebuilt_service_recovers_persistent_binding() {
 
 #[test]
 fn failed_acceptance_cannot_be_reused_without_complete_state_or_allow_overlap() {
-    for blocked in ["task-bindings.json", "task-executions.json", "task-occupancy.json"] {
-        let dir=tempdir().unwrap();
+    for blocked in [
+        "task-bindings.json",
+        "task-executions.json",
+        "task-occupancy.json",
+    ] {
+        let dir = tempdir().unwrap();
         std::fs::create_dir(dir.path().join(blocked)).unwrap();
-        let service=TaskAcceptanceService::new(TaskStore::new(dir.path()));
-        assert!(service.accept("r1", &["000001"], &[Period::Day], Adjustment::Forward).is_err());
+        let service = TaskAcceptanceService::new(TaskStore::new(dir.path()));
+        assert!(
+            service
+                .accept("r1", &["000001"], &[Period::Day], Adjustment::Forward)
+                .is_err()
+        );
         std::fs::remove_dir(dir.path().join(blocked)).unwrap();
-        let restarted=TaskAcceptanceService::new(TaskStore::new(dir.path()));
-        let accepted=restarted.accept("r1", &["000001"], &[Period::Day], Adjustment::Forward).unwrap();
-        assert!(!accepted.reused,"a failed acceptance left a reusable binding at {blocked}");
-        assert!(restarted.store().get_execution(&accepted.task_id).unwrap().is_some());
-        assert_eq!(restarted.store().list_occupancy().unwrap().len(),1);
-        assert!(matches!(restarted.accept("r2", &["000001"], &[Period::Day], Adjustment::Forward),Err(TaskError::RangeConflict{..})));
+        let restarted = TaskAcceptanceService::new(TaskStore::new(dir.path()));
+        let accepted = restarted
+            .accept("r1", &["000001"], &[Period::Day], Adjustment::Forward)
+            .unwrap();
+        assert!(
+            !accepted.reused,
+            "a failed acceptance left a reusable binding at {blocked}"
+        );
+        assert!(
+            restarted
+                .store()
+                .get_execution(&accepted.task_id)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(restarted.store().list_occupancy().unwrap().len(), 1);
+        assert!(matches!(
+            restarted.accept("r2", &["000001"], &[Period::Day], Adjustment::Forward),
+            Err(TaskError::RangeConflict { .. })
+        ));
     }
+}
+
+#[test]
+fn incomplete_legacy_binding_needs_verification_and_reserves_its_scope() {
+    let (service, dir) = service();
+    let accepted = service
+        .accept("r1", &["000001"], &[Period::Day], Adjustment::Forward)
+        .unwrap();
+    // Reproduce an old partial-write artifact without upgrading it to success.
+    std::fs::remove_file(dir.path().join("task-state.json")).unwrap();
+    std::fs::write(
+        dir.path().join("task-bindings.json"),
+        serde_json::to_vec(&vec![accepted.binding]).unwrap(),
+    )
+    .unwrap();
+    let restarted = TaskAcceptanceService::new(TaskStore::new(dir.path()));
+    assert!(matches!(
+        restarted.accept("r1", &["000001"], &[Period::Day], Adjustment::Forward),
+        Err(TaskError::Storage(_))
+    ));
+    assert!(matches!(
+        restarted.accept("r2", &["000001"], &[Period::Day], Adjustment::Forward),
+        Err(TaskError::RangeConflict { .. })
+    ));
+    assert!(!dir.path().join("task-state.json").exists());
+}
+
+#[test]
+fn unreadable_committed_state_must_not_fall_back_to_empty_legacy_state() {
+    let (service, dir) = service();
+    service
+        .accept("r1", &["000001"], &[Period::Day], Adjustment::Forward)
+        .unwrap();
+    std::fs::write(dir.path().join("task-state.json"), b"{truncated").unwrap();
+    let restarted = TaskAcceptanceService::new(TaskStore::new(dir.path()));
+    assert!(matches!(
+        restarted.accept("r2", &["000001"], &[Period::Day], Adjustment::Forward),
+        Err(TaskError::Storage(_))
+    ));
 }

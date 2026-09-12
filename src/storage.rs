@@ -162,7 +162,7 @@ impl JsonFileStore {
 // Same-directory rename is the visibility commit point on the supported Linux
 // filesystem. Errors before persist leave the existing destination unchanged.
 // This promises process-crash atomic visibility, not power-loss durability.
-fn atomic_replace(
+pub(crate) fn atomic_replace(
     path: &Path,
     write: impl FnOnce(&mut fs::File) -> io::Result<()>,
 ) -> io::Result<()> {

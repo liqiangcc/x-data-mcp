@@ -280,7 +280,7 @@ fn run_worker_once_processes_at_most_one_task() {
         })
         .unwrap();
     assert_eq!(second_view.status, "pending");
-    assert!(dir.path().join("task-executions.json").is_file());
+    assert!(dir.path().join("task-state.json").is_file());
 }
 
 #[test]
