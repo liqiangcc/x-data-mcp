@@ -8,3 +8,5 @@ pub mod publish;
 pub mod storage;
 pub mod task;
 pub mod worker;
+
+pub mod yearly;
