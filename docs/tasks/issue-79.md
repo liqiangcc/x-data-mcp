@@ -76,3 +76,10 @@ yearly 显式读取同时核验固定 daily，并复用已合并年线核心验�
 - 保留 staging/validated 失败候选，不自动修复/删除历史；本次不实现备份恢复、通用工具注册或 #80/#81。
 - 普通读只核验，不建库/升级/回退 JSON。WAL/SHM 文件变化不是业务表写入。
 - PR 保持 Draft，待 Coordinator 审查，不自动 merge/close #79 或父需求。
+
+### 最终复核：publication 关联
+
+receipt 查询必须核对请求的 publication_id，不得接受另一合法发布的 receipt。
+已发布版本同时核对 command 的 item_id 与 publication 行投影。
+回归：`publication_receipt_cannot_alias_another_valid_publication`、
+`publication_item_projection_tampering_is_rejected`；完整验证由本提交 Actions 提供。

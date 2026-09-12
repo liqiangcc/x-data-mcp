@@ -776,3 +776,46 @@ fn damaged_published_state_or_missing_version_is_not_reported_as_no_data() {
         ));
     }
 }
+
+#[test]
+fn publication_receipt_cannot_alias_another_valid_publication() {
+    let (_dir, store) = db();
+    let raw = samples()[0]["record"].clone();
+    published_fixture(&store, &raw);
+    let next = prepare(
+        &store,
+        &revised(&raw, "next"),
+        PublishIntent::Daily {
+            expected_head: Some("legacy-daily".into()),
+        },
+    );
+    store.commit(&next).unwrap();
+    let c = Connection::open(store.tasks.path()).unwrap();
+    c.execute("UPDATE publication_batches SET receipt_json=(SELECT receipt_json FROM publication_batches WHERE publication_id='pub-next') WHERE publication_id='pub-legacy-daily'", []).unwrap();
+    assert!(matches!(
+        store.receipt("pub-legacy-daily"),
+        Err(Error::Integrity(_))
+    ));
+    assert!(store.receipt("pub-next").unwrap().is_some());
+}
+
+#[test]
+fn publication_item_projection_tampering_is_rejected() {
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    Connection::open(store.tasks.path())
+        .unwrap()
+        .execute(
+            "UPDATE publication_batches SET item_id='unrelated-item'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.fixed("legacy-daily"),
+        Err(Error::Integrity(_))
+    ));
+    assert!(matches!(
+        store.receipt("pub-legacy-daily"),
+        Err(Error::Integrity(_))
+    ));
+}

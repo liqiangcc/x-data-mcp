@@ -485,16 +485,17 @@ fn range_rows(c: &Connection, id: &str, p: Period, range: &Range) -> Result<Vec<
 }
 
 fn check_publication_link(c: &Connection, version: &str) -> Result<(), Error> {
-    let row:Option<(String,String,String,String)>=c.query_row(
-        "SELECT b.publication_id,b.command_json,b.receipt_json,b.task_id FROM publication_batches b JOIN task_publications p ON p.publication_id=b.publication_id AND p.task_id=b.task_id AND p.version_id=b.version_id WHERE b.version_id=?1",[version],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
+    let row:Option<(String,String,String,String,String)>=c.query_row(
+        "SELECT b.publication_id,b.command_json,b.receipt_json,b.task_id,b.item_id FROM publication_batches b JOIN task_publications p ON p.publication_id=b.publication_id AND p.task_id=b.task_id AND p.version_id=b.version_id WHERE b.version_id=?1",[version],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
     ).optional().map_err(storage)?;
-    let (id, command, receipt, task) =
+    let (id, command, receipt, task, item) =
         row.ok_or_else(|| integrity("published version lacks atomic publication evidence"))?;
     let command: Publication = serde_json::from_str(&command).map_err(integrity)?;
     let receipt: Receipt = serde_json::from_str(&receipt).map_err(integrity)?;
     if command.publication_id != id
         || command.version_id != version
         || command.task_id != task
+        || command.item_id != item
         || receipt.publication_id != id
         || receipt.version_id != version
         || receipt.task_id != task
@@ -552,6 +553,9 @@ impl MarketRepository for SqliteMarket {
                 .map_err(storage)?;
             raw.map(|raw| {
                 let receipt: Receipt = serde_json::from_str(&raw).map_err(integrity)?;
+                if receipt.publication_id != id {
+                    return Err(integrity("receipt publication identity mismatch"));
+                }
                 read_record(c, &receipt.version_id, true, true)?;
                 Ok(receipt)
             })
