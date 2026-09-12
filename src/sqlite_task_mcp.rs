@@ -1,4 +1,5 @@
 //! Explicit development adapter; the production default backend is unchanged.
+use crate::official_files::BlockedSource;
 use crate::task_control::{
     legacy::{LegacyCollection, scope_id},
     service::TaskControl,
@@ -92,18 +93,6 @@ fn mapped(e: Error, request: bool) -> ApiError {
     }
 
     error
-}
-struct BlockedSource;
-impl Executor for BlockedSource {
-    fn execute(&self, _key: &CommandKey, _item: &ItemSpec) -> ItemOutcome {
-        ItemOutcome {
-            success: false,
-            error: Some(format!(
-                "SOURCE_NOT_VERIFIED: {}",
-                crate::official_files::PRODUCTION_BLOCKERS.join("; ")
-            )),
-        }
-    }
 }
 impl ToolHandler for SqliteTaskApi {
     fn tools(&self) -> Value {

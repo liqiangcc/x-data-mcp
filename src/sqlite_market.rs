@@ -574,41 +574,117 @@ impl MarketRepository for SqliteMarket {
         })
     }
     fn commit(&self, plan: &PublishPlan) -> Result<Receipt, Error> {
-        self.write_transaction(true,|c|{
-            let command=&plan.command;
-            let old:Option<(String,String)>=c.query_row("SELECT command_json,receipt_json FROM publication_batches WHERE publication_id=?1",[&command.publication_id],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(storage)?;
-            if let Some((raw,receipt))=old {
-                if serde_json::from_str::<Publication>(&raw).map_err(integrity)?!=*command{return Err(Error::Conflict("publication identity reused with different command".into()));}
-                let stored=read_projection(c,&command.version_id,true,true)?;
-                if stored.raw!=plan.record.raw{return Err(integrity("published record differs from prepared command"));}
-                return serde_json::from_str(&receipt).map_err(integrity);
-            }
-            let record=read_projection(c,&command.version_id,false,true)?;
-            if record.raw!=plan.record.raw{return Err(integrity("validated candidate changed"));}
-            let state:String=c.query_row("SELECT state FROM data_versions WHERE version_id=?1",[&command.version_id],|r|r.get(0)).map_err(storage)?;
-            if state!="validated"{return Err(Error::Conflict("candidate is not validated".into()));}
-            let base = base_record(c, &record)?;
-            if base.as_ref().map(|r| r.raw["integrity_sha256"].as_str().unwrap().to_owned()) != plan.base_digest {
-                return Err(Error::Base("fixed base changed since validation".into()));
-            }
-            // Only the application plan chooses required heads and whether to promote.
-            for (scope,expected) in &plan.required_heads {if head(c,scope)?!=*expected{return Err(Error::Conflict("effective head changed".into()));}}
-            let task=crate::sqlite_tasks::read_bound_task(c,&command.task_id)?.ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
-            let next=plan.finish_task(task)?;
-            let receipt=Receipt{publication_id:command.publication_id.clone(),version_id:command.version_id.clone(),task_id:command.task_id.clone(),task_revision:next.task.state_revision};
-            c.execute("INSERT INTO publication_batches VALUES(?1,?2,?3,?4,?5,?6)",params![command.publication_id,command.version_id,command.task_id,command.item_id,text(command)?,text(&receipt)?]).map_err(storage)?;
-            c.execute("INSERT INTO task_publications VALUES(?1,?2,?3)",params![command.task_id,command.version_id,command.publication_id]).map_err(storage)?;
-            c.execute("UPDATE data_versions SET state='published' WHERE version_id=?1 AND state='validated'",[&command.version_id]).map_err(storage)?;
-            if let Some(scope)=&plan.promote {
-                let changed = c.execute("INSERT INTO effective_heads VALUES(?1,?2,'qfq',?3) ON CONFLICT(symbol,period,adjustment) DO UPDATE SET version_id=excluded.version_id",params![scope.symbol,period(scope.period),command.version_id]).map_err(storage)?;
-                if changed != 1 { return Err(Error::Conflict("head promotion did not write one row".into())); }
-            }
-            crate::sqlite_tasks::write_task(c,&next,command.expected_revision)?;
-            read_projection(c,&command.version_id,true,true)?;
-            Ok(receipt)
-        })
+        self.write_transaction(true, |c| commit_publication(c, plan))
     }
 }
+
+fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Error> {
+    let command = &plan.command;
+    let old: Option<(String, String)> = c
+        .query_row(
+            "SELECT command_json,receipt_json FROM publication_batches WHERE publication_id=?1",
+            [&command.publication_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(storage)?;
+    if let Some((raw, receipt)) = old {
+        if serde_json::from_str::<Publication>(&raw).map_err(integrity)? != *command {
+            return Err(Error::Conflict(
+                "publication identity reused with different command".into(),
+            ));
+        }
+        let stored = read_projection(c, &command.version_id, true, true)?;
+        if stored.raw != plan.record.raw {
+            return Err(integrity("published record differs from prepared command"));
+        }
+        return serde_json::from_str(&receipt).map_err(integrity);
+    }
+    let reused: bool = c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM market_update_results WHERE result_id=?1)",
+            [&command.publication_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if reused {
+        return Err(Error::Conflict(
+            "publication id used by a range result".into(),
+        ));
+    }
+    let record = read_projection(c, &command.version_id, false, true)?;
+    if record.raw != plan.record.raw {
+        return Err(integrity("validated candidate changed"));
+    }
+    let state: String = c
+        .query_row(
+            "SELECT state FROM data_versions WHERE version_id=?1",
+            [&command.version_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if state != "validated" {
+        return Err(Error::Conflict("candidate is not validated".into()));
+    }
+    let base = base_record(c, &record)?;
+    if base
+        .as_ref()
+        .map(|r| r.raw["integrity_sha256"].as_str().unwrap().to_owned())
+        != plan.base_digest
+    {
+        return Err(Error::Base("fixed base changed since validation".into()));
+    }
+    // Only the application plan chooses required heads and whether to promote.
+    for (scope, expected) in &plan.required_heads {
+        if head(c, scope)? != *expected {
+            return Err(Error::Conflict("effective head changed".into()));
+        }
+    }
+    let task = crate::sqlite_tasks::read_bound_task(c, &command.task_id)?
+        .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
+    let next = plan.finish_task(task)?;
+    let receipt = Receipt {
+        publication_id: command.publication_id.clone(),
+        version_id: command.version_id.clone(),
+        task_id: command.task_id.clone(),
+        task_revision: next.task.state_revision,
+    };
+    c.execute(
+        "INSERT INTO publication_batches VALUES(?1,?2,?3,?4,?5,?6)",
+        params![
+            command.publication_id,
+            command.version_id,
+            command.task_id,
+            command.item_id,
+            text(command)?,
+            text(&receipt)?
+        ],
+    )
+    .map_err(storage)?;
+    c.execute(
+        "INSERT INTO task_publications VALUES(?1,?2,?3)",
+        params![command.task_id, command.version_id, command.publication_id],
+    )
+    .map_err(storage)?;
+    c.execute(
+        "UPDATE data_versions SET state='published' WHERE version_id=?1 AND state='validated'",
+        [&command.version_id],
+    )
+    .map_err(storage)?;
+    if let Some(scope) = &plan.promote {
+        let changed = c.execute("INSERT INTO effective_heads VALUES(?1,?2,'qfq',?3) ON CONFLICT(symbol,period,adjustment) DO UPDATE SET version_id=excluded.version_id",params![scope.symbol,period(scope.period),command.version_id]).map_err(storage)?;
+        if changed != 1 {
+            return Err(Error::Conflict(
+                "head promotion did not write one row".into(),
+            ));
+        }
+    }
+    crate::sqlite_tasks::write_task(c, &next, command.expected_revision)?;
+    read_projection(c, &command.version_id, true, true)?;
+    Ok(receipt)
+}
+
+pub(crate) mod update;
 
 #[cfg(test)]
 mod tests;

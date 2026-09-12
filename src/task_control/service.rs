@@ -163,9 +163,18 @@ impl<R: TaskRepository> TaskControl<R> {
             .accept(id, &command, &work, &self.run_id, Some(&guard))
     }
     pub fn run_once(&self, executor: &dyn Executor) -> Result<Option<TaskSnapshot>, Error> {
-        let Some(mut s) = self.repository.candidates(&self.run_id)?.into_iter().next() else {
+        let Some(s) = self.repository.candidates(&self.run_id)?.into_iter().next() else {
             return Ok(None);
         };
+        self.run_selected(s, executor)
+    }
+    /// Execute the application-selected snapshot; revision conditions reject a
+    /// concurrent claim instead of silently selecting a different task.
+    pub(crate) fn run_selected(
+        &self,
+        mut s: TaskSnapshot,
+        executor: &dyn Executor,
+    ) -> Result<Option<TaskSnapshot>, Error> {
         self.contract(&s.task.key)?;
         if s.task.status == Status::Pending {
             s = self.repository.transition(
@@ -219,5 +228,58 @@ impl<R: TaskRepository> TaskControl<R> {
                 Change::FinishExecution,
             )
             .map(Some)
+    }
+}
+
+#[cfg(test)]
+mod selected_tests {
+    use super::*;
+    #[test]
+    fn selected_task_race_does_not_substitute_another_pending_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::sqlite_tasks::SqliteTasks::new(dir.path().join("selected.sqlite"));
+        db.initialize().unwrap();
+        let ctl = TaskControl::new(
+            db.clone(),
+            "run".into(),
+            vec![Box::new(legacy::LegacyCollection)],
+        )
+        .unwrap();
+        for (id, symbol) in [("first", "sh.600006"), ("second", "sh.600007")] {
+            ctl.accept(
+                id,
+                legacy::LegacyCollection.key(),
+                serde_json::json!({"symbols":[symbol],"periods":["day"]}),
+            )
+            .unwrap();
+        }
+        let chosen = db.candidates("run").unwrap().remove(0);
+        db.transition(
+            &chosen.task.task_id,
+            chosen.task.state_revision,
+            "run",
+            Change::Claim,
+        )
+        .unwrap();
+        struct Count(std::cell::Cell<usize>);
+        impl Executor for Count {
+            fn execute(&self, _key: &CommandKey, _item: &ItemSpec) -> ItemOutcome {
+                self.0.set(self.0.get() + 1);
+                ItemOutcome {
+                    success: false,
+                    error: Some("unexpected execution".into()),
+                }
+            }
+        }
+        let executor = Count(std::cell::Cell::new(0));
+        assert!(matches!(
+            ctl.run_selected(chosen, &executor),
+            Err(Error::RevisionConflict)
+        ));
+        assert_eq!(executor.0.get(), 0);
+        let remaining = db.candidates("run").unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].task.state_revision, 0);
+        assert_eq!(remaining[0].items[0].stage, Stage::Pending);
     }
 }

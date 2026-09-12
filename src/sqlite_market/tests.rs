@@ -16,7 +16,7 @@ pub(super) fn crash_point(point: &str) {
         std::process::exit(79);
     }
 }
-fn setup() -> (tempfile::TempDir, SqliteMarket, PublishPlan) {
+pub(super) fn setup() -> (tempfile::TempDir, SqliteMarket, PublishPlan) {
     let dir = tempfile::tempdir().unwrap();
     let tasks = SqliteTasks::new(dir.path().join("market.sqlite"));
     tasks.initialize().unwrap();

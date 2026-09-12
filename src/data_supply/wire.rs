@@ -332,6 +332,8 @@ pub struct ProgressPage {
     pub next_cursor: Option<String>,
     pub page_complete: bool,
     pub publication_versions: Vec<VersionRef>,
+    pub frozen_daily_ranges: Vec<FrozenDailyRange>,
+    pub range_results: Vec<RangeExecutionResult>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -470,4 +472,49 @@ pub struct Cancellation {
 pub struct ConfirmedGap {
     pub range: Filter,
     pub evidence: String,
+}
+
+/// Only explicit daily ranges are implemented at this stage.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub enum DailyDataset {
+    #[serde(rename = "market.daily")]
+    Daily,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RangeWriteItem {
+    pub entity: Security,
+    pub base_version_id: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RangeWrite {
+    pub request_id: String,
+    pub dataset: DailyDataset,
+    pub contract_version: ContractVersion,
+    #[schemars(length(min = 1))]
+    pub items: Vec<RangeWriteItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenDailyRange {
+    pub item_id: String,
+    pub entity: Security,
+    pub base_version_id: String,
+    pub base_integrity_sha256: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RangeExecutionResult {
+    pub result_id: String,
+    pub item_id: String,
+    pub base_version: VersionRef,
+    pub result_version: VersionRef,
+    pub no_change: bool,
+    pub acquired_at: DateTime<Utc>,
 }
