@@ -296,7 +296,12 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
 }
 
 use crate::data_supply::observe::{ObservationRepository, TaskFacts, authorized, summary};
-fn task_facts(c: &Connection, id: &str, access: &Access) -> Result<TaskFacts, Error> {
+fn task_facts(
+    c: &Connection,
+    id: &str,
+    access: &Access,
+    verify_outputs: bool,
+) -> Result<TaskFacts, Error> {
     let s = crate::sqlite_tasks::read_bound_task(c, id)?
         .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
     if !authorized(&s, access) {
@@ -309,6 +314,13 @@ fn task_facts(c: &Connection, id: &str, access: &Access) -> Result<TaskFacts, Er
             |r| r.get(0),
         )
         .map_err(storage)?;
+    if !verify_outputs {
+        return Ok(TaskFacts {
+            request_id: request,
+            snapshot: s,
+            publications: vec![],
+        });
+    }
     let mut q = c
         .prepare("SELECT version_id FROM task_publications WHERE task_id=?1 ORDER BY version_id")
         .map_err(storage)?;
@@ -372,7 +384,7 @@ fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts>, Error> {
         }) {
             continue;
         }
-        match task_facts(c, &id, access) {
+        match task_facts(c, &id, access, false) {
             Ok(f) => result.push(f),
             Err(Error::Invalid(s)) if s == "forbidden" => continue,
             Err(e) => return Err(e),
@@ -388,7 +400,7 @@ impl ObservationRepository for SqliteSupply {
         self.market.read(|c| task_list(c, access))
     }
     fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
-        self.market.read(|c| task_facts(c, id, access))
+        self.market.read(|c| task_facts(c, id, access, true))
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)

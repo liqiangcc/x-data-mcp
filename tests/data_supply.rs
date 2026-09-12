@@ -243,3 +243,27 @@ fn capability_dataset_examples_validate_against_the_actual_registered_schema() {
         }
     }
 }
+
+#[test]
+fn availability_classifies_corrupt_version_but_not_bad_database_as_absent() {
+    use x_data_mcp::data_supply::observe::Observer;
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t.clone());
+    market::published_fixture(&store, &market::samples()[0]["record"]);
+    let o = Observer::new(SqliteSupply { market: store }, "run".into());
+    let first = o.availability(args(), &Access::local()).unwrap();
+    assert_eq!(first.items[0].availability, Availability::Unknown);
+    rusqlite::Connection::open(t.path())
+        .unwrap()
+        .execute("UPDATE daily_bars SET close='0'", [])
+        .unwrap();
+    let bad = o.availability(args(), &Access::local()).unwrap();
+    assert_eq!(bad.items[0].availability, Availability::Unavailable);
+    rusqlite::Connection::open(t.path())
+        .unwrap()
+        .execute_batch("PRAGMA user_version=999")
+        .unwrap();
+    assert!(o.availability(args(), &Access::local()).is_err());
+}

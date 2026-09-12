@@ -113,6 +113,7 @@ pub struct Query {
     pub filter: Filter,
     pub version: VersionChoice,
     #[serde(default = "default_page")]
+    #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
 }
@@ -192,6 +193,7 @@ pub struct VersionsQuery {
     pub contract_version: ContractVersion,
     pub selection: Selection,
     #[serde(default = "default_page")]
+    #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
 }
@@ -247,6 +249,7 @@ pub struct TasksQuery {
     pub created_from: Option<DateTime<Utc>>,
     pub created_to: Option<DateTime<Utc>>,
     #[serde(default = "default_page")]
+    #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
 }
@@ -272,6 +275,7 @@ pub enum TaskStatus {
 pub struct ProgressQuery {
     pub task_id: String,
     #[serde(default = "default_page")]
+    #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
 }
