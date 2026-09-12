@@ -585,7 +585,7 @@ fn explicit_schema_upgrade_is_transactional_and_checks_migration_identity() {
         c.execute_batch(sql).unwrap();
         c.execute(
             "INSERT INTO schema_migrations VALUES(1,?1,'test')",
-            [x_data_mcp::day_file::sha256(sql.as_bytes())],
+            [x_data_mcp::hash::sha256(sql.as_bytes())],
         )
         .unwrap();
         c.pragma_update(None, "user_version", 1).unwrap();
@@ -615,4 +615,59 @@ fn explicit_schema_upgrade_is_transactional_and_checks_migration_identity() {
             assert!(db.upgrade().is_err());
         }
     }
+}
+
+#[test]
+fn disjoint_dates_do_not_narrow_security_period_occupancy() {
+    struct DatedFixture;
+    impl Contract for DatedFixture {
+        fn key(&self) -> CommandKey {
+            CommandKey {
+                operation: "test_dated_collection".into(),
+                dataset: "test_only_market".into(),
+                contract_version: "v1".into(),
+            }
+        }
+        fn normalize(&self, payload: Value) -> Result<Value, Error> {
+            Ok(payload)
+        }
+        fn resolve(&self, intent: &Value) -> Result<FrozenWork, Error> {
+            let scopes = BTreeSet::from([x_data_mcp::task_control::legacy::scope_id(
+                "sh.600006",
+                "day",
+            )]);
+            Ok(FrozenWork {
+                items: vec![ItemSpec {
+                    item_id: "fixture".into(),
+                    target: json!({"symbol":"sh.600006","period":"day"}),
+                    progress_unit: "security_period".into(),
+                    frozen_inputs: intent.clone(),
+                    scope_keys: scopes.clone(),
+                }],
+                scopes,
+            })
+        }
+    }
+    let (_dir, db) = database();
+    let ctl = TaskControl::new(db.clone(), "run-a".into(), vec![Box::new(DatedFixture)]).unwrap();
+    let first = snapshot(
+        ctl.accept(
+            "2024",
+            DatedFixture.key(),
+            json!({"from":"2024-01-01","to":"2024-12-31"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(first.items[0].spec.frozen_inputs["from"], "2024-01-01");
+    assert!(matches!(
+        ctl.accept(
+            "2025",
+            DatedFixture.key(),
+            json!({"from":"2025-01-01","to":"2025-12-31"})
+        ),
+        Err(Error::RangeConflict(_))
+    ));
+    assert!(db.read_request("2025").unwrap().is_none());
+    assert_eq!(count(&db, "tasks"), 1);
+    assert_eq!(count(&db, "scope_occupancy"), 1);
 }

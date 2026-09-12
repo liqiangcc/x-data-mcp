@@ -21,3 +21,5 @@ pub mod sqlite_tasks;
 pub mod task_control;
 
 pub mod sqlite_task_mcp;
+
+pub mod hash;

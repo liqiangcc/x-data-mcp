@@ -134,7 +134,7 @@ fn apply_migration(c: &Connection, version: usize, sql: &str) -> Result<(), Erro
         "INSERT INTO schema_migrations VALUES(?1,?2,?3)",
         params![
             version as u32,
-            crate::day_file::sha256(sql.as_bytes()),
+            crate::hash::sha256(sql.as_bytes()),
             Utc::now().to_rfc3339()
         ],
     )
@@ -162,7 +162,7 @@ fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> {
         .map_err(storage)?;
     if rows.len() != version as usize
         || rows.iter().enumerate().any(|(i, (v, d))| {
-            *v as usize != i + 1 || *d != crate::day_file::sha256(MIGRATIONS[i].as_bytes())
+            *v as usize != i + 1 || *d != crate::hash::sha256(MIGRATIONS[i].as_bytes())
         })
     {
         return Err(Error::StorageUnavailable(
@@ -368,7 +368,7 @@ fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRecord>, Error
     else {
         return Ok(None);
     };
-    if crate::day_file::sha256(raw.as_bytes()) != digest {
+    if crate::hash::sha256(raw.as_bytes()) != digest {
         return Err(inconsistent("command digest mismatch"));
     }
     let command: Command = decode(raw)?;
@@ -495,7 +495,7 @@ impl TaskRepository for SqliteTasks {
             for i in &work.items {c.execute("INSERT INTO task_items VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)",params![task_id,i.item_id,encode(&i.target)?,i.progress_unit,encode(&i.frozen_inputs)?,encode(&i.scope_keys)?]).map_err(storage)?;}
             for scope in &work.scopes {c.execute("INSERT INTO task_scopes VALUES(?1,?2)",params![task_id,scope]).map_err(storage)?;c.execute("INSERT INTO scope_occupancy VALUES(?1,?2,0)",params![scope,task_id]).map_err(storage)?;}
             let raw=encode(command)?;
-            c.execute("INSERT INTO requests VALUES(?1,?2,?3,'task',?4,NULL)",params![id,raw,crate::day_file::sha256(raw.as_bytes()),task_id]).map_err(storage)?;
+            c.execute("INSERT INTO requests VALUES(?1,?2,?3,'task',?4,NULL)",params![id,raw,crate::hash::sha256(raw.as_bytes()),task_id]).map_err(storage)?;
             Ok(Acceptance{record:read_request(c,id)?.ok_or_else(||inconsistent("inserted binding missing"))?,reused:false})
         })
     }

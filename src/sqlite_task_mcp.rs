@@ -172,17 +172,55 @@ impl ToolHandler for SqliteTaskApi {
             }
             "retry_task" => {
                 let a: RetryTaskArgs = args(input)?;
-                if a.selected_scopes.is_empty() {
-                    return Err(ApiError::new(
-                        "empty_selected_scopes",
-                        "select unfinished scopes",
-                    ));
-                }
+                // Decode periods before business validation, as the legacy Adapter does.
                 if a.selected_scopes
                     .iter()
                     .any(|s| !matches!(s.period.as_str(), "day" | "year"))
                 {
                     return Err(ApiError::new("invalid_period", "unsupported period"));
+                }
+                let original = self
+                    .control
+                    .read_task(&a.original_task_id)
+                    .map_err(|e| mapped(e, false))?;
+                let binding = self
+                    .control
+                    .read_request(&a.new_request_id)
+                    .map_err(|e| mapped(e, false))?;
+                if binding.as_ref().is_some_and(|r| matches!(&r.outcome, RequestOutcome::Task(s) if s.task.task_id == a.original_task_id)) {
+                    return Err(ApiError::new("retry_request_id_conflict", "retry request_id must differ from the original task request_id"));
+                }
+                if a.selected_scopes.is_empty() {
+                    return Err(ApiError::new(
+                        "empty_selected_scopes",
+                        "retry selected_scopes must not be empty",
+                    ));
+                }
+                let selected: std::collections::BTreeSet<_> = a
+                    .selected_scopes
+                    .iter()
+                    .map(|s| (s.symbol.clone(), s.period.clone()))
+                    .collect();
+                let invalid: Vec<_> = selected
+                    .iter()
+                    .filter(|(symbol, period)| {
+                        !original.items.iter().any(|i| {
+                            i.spec.item_id == scope_id(symbol, period)
+                                && !i.outcome.as_ref().is_some_and(|o| o.success)
+                        })
+                    })
+                    .map(|(symbol, period)| crate::mcp::ScopeView {
+                        symbol: symbol.clone(),
+                        period: period.clone(),
+                    })
+                    .collect();
+                if !invalid.is_empty() {
+                    let mut error = ApiError::new(
+                        "invalid_retry_selection",
+                        "retry selected scopes are invalid, outside the original range, or already completed",
+                    );
+                    error.scopes = Some(invalid);
+                    return Err(error);
                 }
                 self.control
                     .retry(
