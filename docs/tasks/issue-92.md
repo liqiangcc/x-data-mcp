@@ -20,3 +20,11 @@ market_update 是无 I/O 的应用判定核心，输入为 CheckedRecord（既�
 未完成：SQLite 原子发布集成、update/backfill 受理及默认范围/明确缺口冻结、MCP/schema/能力发现、部署。#4“已启动首次采集”的受理/实际执行定义已向用户提问，尚未据此实现默认对象选择。
 #54/#71/#46/文件一致性仍未解决；无来源采集，无生产算法变更，不部署此半成品。
 完整 Rust 验证走 Actions，结果在 PR 记录；本机仅 fmt/diff-check，不能冒充测试 PASS。
+
+## SQLite 更新提交设计（实现前固定）
+
+- 应用层重新读取显式 base，执行区间判定；有变化必须另外取得绑定 base/segment/完整候选摘要的全范围覆盖证据。不能把 segment Complete 继承为整个版本 Complete。内部证据仍只供可信验证器/fixture，不从 MCP 接收放行标记。
+- 发布意图只允许 daily + expected_head=base；SQLite 短事务同时重新核验 base、候选、head、task revision/owner/occupancy。任一变化拒绝，不 rebase。领域判定不下沉 SQLite。
+- schema v5 新增 market_update_results：独立不可变任务结果，绑定原版本、新/复用版本、完整判定输入及摘要、收据。无变化不向原 publication_batches/task_publications 追加同版本发布，不创建版本或推进 head；结果与任务完成/释放占用同事务。
+- 有变化沿用 #79 原始发布表，并与更新结果同事务提交；旧记录和旧失败证据不改写。响应丢失按 result id 重查，重放须完整命令一致。普通读取不迁移，显式 init/upgrade 增加 v5；本轮不升级部署库。
+- 真实 SQLite 回归：有变化保留范围外数据、无变化复用版本、head/revision/旧版本破坏拒绝、结果写入失败回滚、重复提交与收据核验。进程退出在既有事务故障注入入口验证。本阶段不表示 update/backfill MCP 或真实来源已完成。

@@ -1,13 +1,15 @@
-//! Pure daily range-update decisions (#4). No source, task, MCP or commit wiring.
+//! Daily range-update application decisions (#4). No source or MCP wiring.
 //! Evidence references are trusted application inputs, never user-controlled approval flags.
 use crate::{
     market_data::{Bar, CoverageStatus, EvidenceValue, MarketDataBatch, Period},
     market_storage::{Error, compat::CheckedRecord},
 };
+pub mod publication;
 use chrono::{Datelike, NaiveDate};
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DateRange {
     pub start: NaiveDate,
     pub end: NaiveDate,
@@ -19,6 +21,7 @@ impl DateRange {
 }
 /// A future evidence verifier must construct this; a nonempty reference alone is
 /// not proof of official semantics. This type is not deserializable or on MCP wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Evidence {
     pub base_version_id: String,
     pub base_integrity_sha256: String,
