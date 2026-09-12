@@ -117,6 +117,10 @@ pub struct ApiError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<ScopeView>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome_certainty: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_actions: Option<Vec<String>>,
 }
 
 impl ApiError {
@@ -125,6 +129,8 @@ impl ApiError {
             code: code.into(),
             message: message.into(),
             scopes: None,
+            outcome_certainty: None,
+            next_actions: None,
         }
     }
 

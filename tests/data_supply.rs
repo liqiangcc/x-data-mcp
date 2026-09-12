@@ -187,3 +187,25 @@ fn new_write_sets_replay_globally_and_old_scope_conflicts_are_shared() {
     let retry=api.call("retry_task",json!({"contract_version":"v1","original_task_id":first["task_id"],"new_request_id":"retry","item_ids":first["item_ids"]})).unwrap();
     assert_eq!(retry["reused"], false);
 }
+
+#[test]
+fn capabilities_do_not_advertise_unauthorized_controls_and_new_errors_are_explicit() {
+    use x_data_mcp::{data_supply::mcp::DataApi, mcp::ToolHandler};
+    let d = tempfile::tempdir().unwrap();
+    let mut a = Access::local();
+    a.principal = "reader".into();
+    let api = DataApi::new(SqliteTasks::new(d.path().join("missing")), "run".into(), a).unwrap();
+    let caps = api.call("get_data_capabilities", json!({})).unwrap();
+    assert!(
+        caps["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["tool_name"] != "start_collection")
+    );
+    let e = api
+        .call("query_data", json!({"dataset":"unknown"}))
+        .unwrap_err();
+    assert_eq!(e.code, "unknown_dataset");
+    assert_eq!(e.outcome_certainty.as_deref(), Some("not_applicable"));
+}

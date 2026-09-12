@@ -74,6 +74,18 @@ impl DataApi {
         }
         let mut items = vec![];
         for e in entries() {
+            if self.access != Access::local()
+                && matches!(
+                    e.handler,
+                    Handler::Collection
+                        | Handler::Retry
+                        | Handler::Task
+                        | Handler::Request
+                        | Handler::Cancel
+                )
+            {
+                continue;
+            }
             if args.operation.as_ref().is_some_and(|op| op != e.name) {
                 continue;
             }
@@ -284,8 +296,8 @@ fn mapped(e: Error) -> ApiError {
     };
     ApiError::new(code, e.to_string())
 }
-impl ToolHandler for DataApi {
-    fn tools(&self) -> Value {
+impl DataApi {
+    fn public_tools(&self) -> Value {
         let mut tools = if self.access == Access::local() {
             self.legacy.tools().as_array().unwrap().clone()
         } else {
@@ -322,7 +334,21 @@ impl ToolHandler for DataApi {
         tools.extend(entries().into_iter().filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel)).map(|e|json!({"name":e.name,"description":"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities.","inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
-    fn call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
+    fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
+        if let Some(dataset) = input.get("dataset") {
+            if serde_json::from_value::<Dataset>(dataset.clone()).is_err() {
+                return Err(ApiError::new(
+                    "unknown_dataset",
+                    "dataset is not registered",
+                ));
+            }
+        }
+        if input.get("contract_version").is_some_and(|v| v != "v1") {
+            return Err(ApiError::new(
+                "unsupported_contract",
+                "unsupported contract version",
+            ));
+        }
         let Some(entry) = entries().into_iter().find(|e| e.name == name) else {
             return self.legacy_call(name, input);
         };
@@ -378,4 +404,46 @@ fn task_error(e: crate::task_control::Error) -> ApiError {
         _ => "storage_error",
     };
     ApiError::new(code, e.to_string())
+}
+
+impl ToolHandler for DataApi {
+    fn tools(&self) -> Value {
+        self.public_tools()
+    }
+    fn call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
+        let generic = input.get("contract_version").is_some()
+            || input.get("dataset").is_some()
+            || matches!(
+                name,
+                "query_data"
+                    | "list_data_versions"
+                    | "get_data_availability"
+                    | "list_tasks"
+                    | "get_task_progress"
+                    | "get_data_capabilities"
+            );
+        self.dispatch(name, input).map_err(|mut e| {
+            if generic {
+                e.outcome_certainty = Some(
+                    if e.code == "outcome_unknown" {
+                        "unknown"
+                    } else if matches!(name, "start_collection" | "retry_task" | "cancel_task") {
+                        "not_committed"
+                    } else {
+                        "not_applicable"
+                    }
+                    .into(),
+                );
+                e.next_actions = Some(if e.code == "outcome_unknown" {
+                    vec![
+                        "inspect the same request_id/task_id; do not invent a replacement identity"
+                            .into(),
+                    ]
+                } else {
+                    vec!["correct the request or inspect the reported storage evidence".into()]
+                });
+            }
+            e
+        })
+    }
 }
