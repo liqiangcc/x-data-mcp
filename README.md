@@ -68,6 +68,6 @@ git diff --check
 `./scripts/verify` 尚未实现，不调用不存在的命令。
 测试覆盖核心、发布门禁及真实 stdio 二进制的离线拒绝行为；Fake 不证明真实 parser/QFQ/yearly。
 归档在线测试不进入 Cargo，真实官方来源验证为 NOT_RUN；部署、全市场覆盖和性能为 NOT_VERIFIED。
-既有发布/任务非原子缺陷不在本阶段修复。
+行情发布已改为[batch与version单点提交](docs/publish-storage.md)；任务受理非原子问题 #58 仍待修复。
 
 Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README.md)已保存：仅 evidence，官方 normalization 契约仍 NOT_VERIFIED，未解除生产门禁。

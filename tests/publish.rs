@@ -127,7 +127,7 @@ fn derived_yearly_retains_its_published_daily_version() {
             .yearly_derivation,
         year.provenance.yearly_derivation
     );
-    fs::remove_file(dir.path().join("000001.year.qfq.json")).unwrap();
+    assert!(!dir.path().join("000001.year.qfq.json").exists());
     assert_eq!(
         store
             .get("000001", Period::Year, Adjustment::Forward)
@@ -677,4 +677,61 @@ impl MarketDataPipeline for AdjustmentScopeSource {
         });
         Ok(batch)
     }
+}
+
+// Issue #57: either a complete publish succeeds, or no new version is visible.
+#[test]
+fn obstructed_legacy_batch_path_cannot_produce_a_partial_publish() {
+    let dir = tempdir().unwrap();
+    fs::create_dir(dir.path().join("000001.day.qfq.json")).unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let batch = valid_day();
+    let outcome = MarketDataPublisher::new(store.clone()).publish(&batch);
+    let restarted = JsonFileStore::new(dir.path());
+    match outcome {
+        Ok(PublishOutcome::Published(version)) => {
+            assert_eq!(
+                restarted
+                    .get_latest_effective("000001", Period::Day)
+                    .unwrap(),
+                Some(version)
+            );
+            assert_eq!(
+                restarted
+                    .get("000001", Period::Day, Adjustment::Forward)
+                    .unwrap(),
+                batch
+            );
+        }
+        Err(_) => assert!(
+            restarted
+                .get_latest_effective("000001", Period::Day)
+                .unwrap()
+                .is_none()
+        ),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn committed_batch_wins_over_stale_legacy_batch_after_restart() {
+    let dir = tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let mut stale = valid_day();
+    stale.provenance.adapter_version = "old-staging-only".into();
+    store.put(&stale).unwrap();
+    let committed = valid_day();
+    MarketDataPublisher::new(store).publish(&committed).unwrap();
+    let restarted = JsonFileStore::new(dir.path());
+    assert_eq!(
+        restarted
+            .get("000001", Period::Day, Adjustment::Forward)
+            .unwrap(),
+        committed
+    );
+    let old_bytes = fs::read(dir.path().join("000001.day.qfq.json")).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<MarketDataBatch>(&old_bytes).unwrap(),
+        stale
+    );
 }

@@ -108,8 +108,6 @@ fn blocked_refresh_preserves_existing_daily_and_yearly_bytes() {
     let paths = [
         "effective/000001.day.qfq.json",
         "effective/000001.year.qfq.json",
-        "000001.day.qfq.json",
-        "000001.year.qfq.json",
     ];
     let before = paths.map(|path| std::fs::read(dir.path().join(path)).unwrap());
     let results = Collector::new(OfficialFilePipeline, store).collect(
