@@ -386,3 +386,230 @@ fn selected_historical_year_cannot_discard_other_years_from_effective_head() {
         1
     );
 }
+
+use x_data_mcp::{market_update::tasks::Operation, yearly_publication::tasks::YearlyContract};
+fn yearly_control(store: &SqliteMarket) -> TaskControl<SqliteTasks> {
+    TaskControl::new(
+        store.tasks.clone(),
+        "run".into(),
+        vec![Box::new(YearlyContract {
+            operation: Operation::Update,
+            repository: store.clone(),
+            today: "2026-09-12".parse().unwrap(),
+        })],
+    )
+    .unwrap()
+}
+fn yearly_key(store: &SqliteMarket) -> x_data_mcp::task_control::CommandKey {
+    YearlyContract {
+        operation: Operation::Update,
+        repository: store.clone(),
+        today: "2026-09-12".parse().unwrap(),
+    }
+    .key()
+}
+fn yearly_payload(years: Value) -> Value {
+    json!({"items":[{"symbol":"sh.600006","base_daily_version_id":"legacy-daily","years":years,"intent":"HistoricalFixedBase"}]})
+}
+fn task_of(
+    acceptance: x_data_mcp::task_control::Acceptance,
+) -> Box<x_data_mcp::task_control::TaskSnapshot> {
+    let RequestOutcome::Task(task) = acceptance.record.outcome else {
+        panic!()
+    };
+    task
+}
+#[test]
+fn yearly_acceptance_normalizes_freezes_and_retains_global_id_and_scope_boundaries() {
+    use x_data_mcp::task_control::Error as TaskError;
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let ctl = yearly_control(&store);
+    let task = task_of(
+        ctl.accept(
+            "years",
+            yearly_key(&store),
+            yearly_payload(json!([2025, 2024, 2025])),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        task.items[0].spec.frozen_inputs["years"],
+        json!([2024, 2025])
+    );
+    assert_eq!(
+        task.items[0].spec.frozen_inputs["base_integrity_sha256"],
+        store.fixed("legacy-daily").unwrap().raw()["integrity_sha256"]
+    );
+    let mut duplicate = yearly_payload(json!([2024, 2025]));
+    let repeated = duplicate["items"][0].clone();
+    duplicate["items"].as_array_mut().unwrap().push(repeated);
+    assert!(
+        ctl.accept("years", yearly_key(&store), duplicate)
+            .unwrap()
+            .reused
+    );
+    assert!(matches!(
+        ctl.accept("years", yearly_key(&store), yearly_payload(json!([2025]))),
+        Err(TaskError::RequestConflict)
+    ));
+    assert!(matches!(
+        ctl.accept(
+            "different-year",
+            yearly_key(&store),
+            yearly_payload(json!([2024]))
+        ),
+        Err(TaskError::RangeConflict(_))
+    ));
+    assert!(ctl.read_request("different-year").unwrap().is_none());
+    let cancelled = ctl
+        .cancel(&task.task.task_id, task.task.state_revision)
+        .unwrap();
+    let retried = task_of(
+        ctl.retry(
+            &task.task.task_id,
+            "retry-years",
+            [task.items[0].spec.item_id.clone()].into(),
+        )
+        .unwrap(),
+    );
+    assert!(cancelled.task.status.terminal());
+    assert_eq!(retried.items[0].spec, task.items[0].spec);
+    Connection::open(store.tasks.path())
+        .unwrap()
+        .execute_batch("UPDATE daily_bars SET close='0' WHERE version_id='legacy-daily'")
+        .unwrap();
+    assert!(
+        ctl.accept(
+            "years",
+            yearly_key(&store),
+            yearly_payload(json!([2024, 2025]))
+        )
+        .unwrap()
+        .reused
+    );
+}
+#[test]
+fn yearly_invalid_or_future_selection_never_creates_a_request() {
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let ctl = yearly_control(&store);
+    for (i, payload) in [
+        yearly_payload(json!([])),
+        yearly_payload(json!([2027])),
+        yearly_payload(json!([2023])),
+        json!({"items":[],"force":true}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("invalid-{i}");
+        assert!(ctl.accept(&id, yearly_key(&store), payload).is_err());
+        assert!(ctl.read_request(&id).unwrap().is_none());
+    }
+}
+#[test]
+fn yearly_same_request_two_connections_create_one_task() {
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let ctl = yearly_control(&store);
+                barrier.wait();
+                task_of(
+                    ctl.accept(
+                        "race-years",
+                        yearly_key(&store),
+                        yearly_payload(json!([2025])),
+                    )
+                    .unwrap(),
+                )
+                .task
+                .task_id
+                .clone()
+            })
+        })
+        .collect();
+    let ids: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(ids[0], ids[1]);
+}
+#[test]
+fn yearly_publication_is_bound_to_accepted_years_base_and_intent() {
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let ctl = yearly_control(&store);
+    let task = task_of(
+        ctl.accept(
+            "year-task",
+            yearly_key(&store),
+            yearly_payload(json!([2025])),
+        )
+        .unwrap(),
+    );
+    let task = store
+        .tasks
+        .transition(
+            &task.task.task_id,
+            task.task.state_revision,
+            "run",
+            Change::Claim,
+        )
+        .unwrap();
+    let task = store
+        .tasks
+        .transition(
+            &task.task.task_id,
+            task.task.state_revision,
+            "run",
+            Change::StartItem(task.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let publisher = Publisher {
+        repository: store.clone(),
+    };
+    let (mut request, mut evidence) = inputs(&store, "accepted-year");
+    let valid = publisher.derive_yearly(&request, &evidence).unwrap();
+    let cmd = Publication {
+        publication_id: "accepted-result".into(),
+        version_id: "accepted-year".into(),
+        task_id: task.task.task_id,
+        item_id: task.items[0].spec.item_id.clone(),
+        run_id: "run".into(),
+        expected_revision: task.task.state_revision,
+        intent: PublishIntent::HistoricalFixedBase,
+    };
+    let changed = Publication {
+        intent: PublishIntent::CurrentHead {
+            expected_daily_head: "legacy-daily".into(),
+            expected_yearly_head: None,
+        },
+        ..cmd.clone()
+    };
+    assert!(matches!(
+        publisher.prepare_derived_yearly(changed, &valid),
+        Err(Error::Conflict(_))
+    ));
+    request.years = [2024, 2025].into();
+    evidence.years = request.years.clone();
+    let widened = publisher.derive_yearly(&request, &evidence).unwrap();
+    assert!(matches!(
+        publisher.prepare_derived_yearly(cmd.clone(), &widened),
+        Err(Error::Conflict(_))
+    ));
+    assert!(store.candidate("accepted-year").is_err());
+    let plan = publisher.prepare_derived_yearly(cmd, &valid).unwrap();
+    store.commit(&plan).unwrap();
+    assert_eq!(
+        store
+            .fixed("accepted-year")
+            .unwrap()
+            .version()
+            .records
+            .len(),
+        1
+    );
+}

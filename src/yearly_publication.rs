@@ -1,4 +1,5 @@
 //! Fixed published daily -> locally derived yearly candidate. No source or MCP wiring.
+pub mod tasks;
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Utc};
@@ -143,6 +144,11 @@ impl<R: MarketRepository> Publisher<R> {
         if candidate.raw["version_id"].as_str() != Some(command.version_id.as_str()) {
             return Err(Error::Invalid("yearly candidate/version binding".into()));
         }
+        tasks::validate_binding(
+            &self.repository.task(&command.task_id)?,
+            &command,
+            candidate,
+        )?;
         let base = self
             .repository
             .fixed(&candidate.base_daily_version_id)

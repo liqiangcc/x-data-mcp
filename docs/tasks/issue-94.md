@@ -29,3 +29,11 @@ AC → 测试（tests/yearly_publication.rs）：
 本机仅 fmt/diff；完整编译和测试由 Actions 执行，准确 run/job/结果记录在 PR 评论。未执行不得称 PASS。
 
 范围保护：current-head 的既有 yearly 若含候选未选择的年度，prepare 拒绝，不隐式删除或从不同 daily 拼接。明确 historical 意图仍可发布选定年度 immutable version，原 head 不变。测试 selected_historical_year_cannot_discard_other_years_from_effective_head 使用真实 SQLite 验证两条路径；不是自动降级。
+
+## 显式任务切片（编码前记录）
+
+新增内部 explicit-yearly-task-v1：每项 symbol、固定 daily version、年度集合，以及明确 historical/current-head 意图。年度去重排序，证券集合规范化；同证券不同年度仍共用股票 × yearly 占用。request_id 全局语义沿用 #78，不从执行状态重新选择范围。使用单次 fixed_many 核验全部基础版本并冻结 digest/years/intent；resolve 按服务端上海日期拒绝未来年度，不能用调用方的 as_of 绕过。日期依赖是应用装配输入，不是 MCP 字段。
+
+不新增 DDL。prepare_derived_yearly 对 update/backfill 任务要求匹配此内部契约及精确冻结输入（包括 intent）；无法扩大年度/更换 base/改变 head 策略。旧首次采集 fixture 契约仅继续验证原发布基础设施，不被当作新受理证据。
+
+测试计划：真实 SQLite 同语义乱序/重复幂等、异参 request 冲突、不同年度占用冲突；缺失/未来年度无绑定；两连接同时受理一个 request；取消/重试保持冻结事实；有效任务可发布，扩大年度或改变意图拒绝。
