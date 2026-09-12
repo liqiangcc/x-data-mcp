@@ -1,0 +1,75 @@
+{
+  "live_source": "NOT_RUN",
+  "network_requests": 0,
+  "parser_sha256": "ec0facfc21501dd39c61e0c222cc7ce26c34b204d75b434b2b56ee2939567f2f",
+  "qfq_normalization": "NOT_VERIFIED",
+  "rows": [
+    {
+      "member": "sh\\lday\\sh600004.day",
+      "observation": {
+        "business_semantics": "NOT_VERIFIED",
+        "bytes": 180128,
+        "evidence": "STRUCTURAL_ONLY",
+        "first_date": "2003-04-28",
+        "last_date": "2026-09-11",
+        "live_source": "NOT_RUN",
+        "production_ready": false,
+        "record_count": 5629,
+        "schema": "x-data-mcp.day-structural-inspection.v1",
+        "sha256": "9fa246c023ca11c427d45aa527f01a64611cc40903ec5b636290d0986fe470a9"
+      },
+      "symbol": "sh.600004"
+    },
+    {
+      "member": "sh\\lday\\sh600006.day",
+      "observation": {
+        "business_semantics": "NOT_VERIFIED",
+        "bytes": 206912,
+        "evidence": "STRUCTURAL_ONLY",
+        "first_date": "1999-07-27",
+        "last_date": "2026-09-11",
+        "live_source": "NOT_RUN",
+        "production_ready": false,
+        "record_count": 6466,
+        "schema": "x-data-mcp.day-structural-inspection.v1",
+        "sha256": "91cb06b2ba0cca331f41f759e3aa0647e6eb5bd62c450cd0fca2e6b397362f7d"
+      },
+      "symbol": "sh.600006"
+    },
+    {
+      "member": "sz\\lday\\sz000002.day",
+      "observation": {
+        "business_semantics": "NOT_VERIFIED",
+        "bytes": 271296,
+        "evidence": "STRUCTURAL_ONLY",
+        "first_date": "1991-01-29",
+        "last_date": "2026-09-11",
+        "live_source": "NOT_RUN",
+        "production_ready": false,
+        "record_count": 8478,
+        "schema": "x-data-mcp.day-structural-inspection.v1",
+        "sha256": "69f117e439555018c64d77b75a359fe725c39a38423971cc03330d6d9b44bc19"
+      },
+      "symbol": "sz.000002"
+    },
+    {
+      "member": "sz\\lday\\sz000004.day",
+      "observation": {
+        "business_semantics": "NOT_VERIFIED",
+        "bytes": 264032,
+        "evidence": "STRUCTURAL_ONLY",
+        "first_date": "1991-01-14",
+        "last_date": "2026-07-13",
+        "live_source": "NOT_RUN",
+        "production_ready": false,
+        "record_count": 8251,
+        "schema": "x-data-mcp.day-structural-inspection.v1",
+        "sha256": "77a40ad72bf1a338a4a49a8586744127aa9f800496b095d231d30251f62b966b"
+      },
+      "symbol": "sz.000004"
+    }
+  ],
+  "schema": "issue64.retained-day-check.v1",
+  "selection_sha256": "e6a3a4c59f02120c02328fdfc519592d9acf16666f8b1876dcbde670124b5446",
+  "status": "STRUCTURAL_MATCH_ONLY"
+}

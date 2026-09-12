@@ -1,0 +1,13 @@
+{
+  "tested_commit": "ec8ec24c04e9798ac4f7d36efda7551f09e8ebd1",
+  "clean_checkouts": 2,
+  "byte_identical": true,
+  "result_sha256": "1c4e646bbb5d0f973a2aa8c717fde6bc933b69b0f78b6d0552e6fef860a4e9c9",
+  "network_requests": 0,
+  "binary_build": "cargo build --locked --bin inspect_day at tested_commit; external shared target cache",
+  "input_scope": "retained #53 four extracted members; member hashes checked against unchanged selection",
+  "evidence": "STRUCTURAL_ONLY",
+  "normalization": "NOT_VERIFIED",
+  "live_source": "NOT_RUN",
+  "note": "Reproduced twice again after CI Rust 1.98 fixed-array-chunk lint change; initial CI failure was style lint, not parser semantic mismatch"
+}
