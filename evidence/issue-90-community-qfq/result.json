@@ -1,0 +1,552 @@
+{
+  "four_stock_full_chain": "NOT_RUN",
+  "live_source": "NOT_RUN",
+  "official_semantics": "NOT_VERIFIED",
+  "plan_sha256": "ee0a397d2657768846d82a2b62f8fafcfc73070ae3bcb23a34416402077be6a4",
+  "production_algorithm_changed": false,
+  "row_count": 9,
+  "rows": [
+    {
+      "date": "2025-07-17",
+      "decoded_fields": [
+        "0.05000000074505806",
+        "0",
+        "0",
+        "0"
+      ],
+      "frozen_repr": {
+        "C1_C2_C3_C4": [
+          "0.05000000074505806",
+          "0.0",
+          "0.0",
+          "0.0"
+        ],
+        "reference": "7.244999999925494194",
+        "reference_cent": "7.24",
+        "roundtrip_to_original_bits": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "single_event_ratio_6dp": "0.998621"
+      },
+      "injoyai_affine_ohlc": [
+        "7.25",
+        "7.2699999999999996",
+        "7.2199999999999998",
+        "7.25"
+      ],
+      "injoyai_fields_2dp": [
+        "0.050000000000000003",
+        "0",
+        "0",
+        "0"
+      ],
+      "normalized_bits_preserved": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "prior_date": 20250716,
+      "prior_ohlc": [
+        "7.25",
+        "7.2699999999999996",
+        "7.2199999999999998",
+        "7.25"
+      ],
+      "quantaxis_raw_input_proportional_ohlc": [
+        "7.2449999999254944",
+        "7.26498620682184",
+        "7.2150206895809745",
+        "7.2449999999254944"
+      ],
+      "quantaxis_raw_input_reference": "7.2449999999254944",
+      "status": "SCALAR_DIAGNOSTIC_ONLY",
+      "symbol": "sh.600006"
+    },
+    {
+      "date": "1993-04-05",
+      "decoded_fields": [
+        "0.60000002384185791",
+        "0",
+        "5",
+        "0"
+      ],
+      "frozen_repr": {
+        "C1_C2_C3_C4": [
+          "0.6000000238418579",
+          "0.0",
+          "5.0",
+          "0.0"
+        ],
+        "reference": "20.3266666650772094733333333333333333333333333333333333333333",
+        "reference_cent": "20.33",
+        "roundtrip_to_original_bits": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "single_event_ratio_6dp": "0.665466"
+      },
+      "injoyai_affine_ohlc": [
+        "20.629999999999999",
+        "20.960000000000001",
+        "20.329999999999998",
+        "20.329999999999998"
+      ],
+      "injoyai_fields_2dp": [
+        "0.59999999999999998",
+        "0",
+        "5",
+        "0"
+      ],
+      "normalized_bits_preserved": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "prior_date": 19930402,
+      "prior_ohlc": [
+        "31",
+        "31.5",
+        "30.550000000000001",
+        "30.550000000000001"
+      ],
+      "quantaxis_raw_input_proportional_ohlc": [
+        "20.62607746701779",
+        "20.958756135840655",
+        "20.326666665077209",
+        "20.326666665077209"
+      ],
+      "quantaxis_raw_input_reference": "20.326666665077209",
+      "status": "SCALAR_DIAGNOSTIC_ONLY",
+      "symbol": "sz.000002"
+    },
+    {
+      "date": "1996-08-06",
+      "decoded_fields": [
+        "1.3999999761581421",
+        "0",
+        "1",
+        "0"
+      ],
+      "frozen_repr": {
+        "C1_C2_C3_C4": [
+          "1.399999976158142",
+          "0.0",
+          "1.0",
+          "0.0"
+        ],
+        "reference": "7.636363638531078",
+        "reference_cent": "7.64",
+        "roundtrip_to_original_bits": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "single_event_ratio_6dp": "0.894614"
+      },
+      "injoyai_affine_ohlc": [
+        "7.5099999999999998",
+        "7.6699999999999999",
+        "7.2400000000000002",
+        "7.6399999999999997"
+      ],
+      "injoyai_fields_2dp": [
+        "1.3999999999999999",
+        "0",
+        "1",
+        "0"
+      ],
+      "normalized_bits_preserved": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "prior_date": 19960805,
+      "prior_ohlc": [
+        "8.4000000000000004",
+        "8.5800000000000001",
+        "8.0999999999999996",
+        "8.5399999999999991"
+      ],
+      "quantaxis_raw_input_proportional_ohlc": [
+        "7.5111773493748313",
+        "7.6721311497185773",
+        "7.2429210154685864",
+        "7.6363636385310771"
+      ],
+      "quantaxis_raw_input_reference": "7.6363636385310771",
+      "status": "SCALAR_DIAGNOSTIC_ONLY",
+      "symbol": "sz.000002"
+    },
+    {
+      "date": "2001-08-21",
+      "decoded_fields": [
+        "1.7999999523162842",
+        "0",
+        "0",
+        "0"
+      ],
+      "frozen_repr": {
+        "C1_C2_C3_C4": [
+          "1.7999999523162842",
+          "0.0",
+          "0.0",
+          "0.0"
+        ],
+        "reference": "14.39000000476837158",
+        "reference_cent": "14.39",
+        "roundtrip_to_original_bits": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "single_event_ratio_6dp": "0.987646"
+      },
+      "injoyai_affine_ohlc": [
+        "14.210000000000001",
+        "14.460000000000001",
+        "14.199999999999999",
+        "14.390000000000001"
+      ],
+      "injoyai_fields_2dp": [
+        "1.8",
+        "0",
+        "0",
+        "0"
+      ],
+      "normalized_bits_preserved": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "prior_date": 20010820,
+      "prior_ohlc": [
+        "14.390000000000001",
+        "14.640000000000001",
+        "14.380000000000001",
+        "14.57"
+      ],
+      "quantaxis_raw_input_proportional_ohlc": [
+        "14.21222375213568",
+        "14.45913521412553",
+        "14.202347293656088",
+        "14.390000004768371"
+      ],
+      "quantaxis_raw_input_reference": "14.390000004768371",
+      "status": "SCALAR_DIAGNOSTIC_ONLY",
+      "symbol": "sz.000002"
+    },
+    {
+      "date": "2005-12-20",
+      "decoded_fields": [
+        "0",
+        "0",
+        "1.8999999761581421",
+        "0"
+      ],
+      "frozen_repr": {
+        "C1_C2_C3_C4": [
+          "0.0",
+          "0.0",
+          "1.899999976158142",
+          "0.0"
+        ],
+        "reference": "6.71428572773790310018098713716595543059976737904945451128817",
+        "reference_cent": "6.71",
+        "roundtrip_to_original_bits": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "single_event_ratio_6dp": "0.839800"
+      },
+      "injoyai_affine_ohlc": [
+        "6.6399999999999997",
+        "6.7699999999999996",
+        "6.6399999999999997",
+        "6.71"
+      ],
+      "injoyai_fields_2dp": [
+        "0",
+        "0",
+        "1.8999999999999999",
+        "0"
+      ],
+      "normalized_bits_preserved": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "prior_date": 20051111,
+      "prior_ohlc": [
+        "7.9000000000000004",
+        "8.0600000000000005",
+        "7.9000000000000004",
+        "7.9900000000000002"
+      ],
+      "quantaxis_raw_input_proportional_ohlc": [
+        "6.6386554754855363",
+        "6.7731092572675218",
+        "6.6386554754855363",
+        "6.7142857277379031"
+      ],
+      "quantaxis_raw_input_reference": "6.7142857277379031",
+      "status": "SCALAR_DIAGNOSTIC_ONLY",
+      "symbol": "sh.600004"
+    },
+    {
+      "date": "2006-11-13",
+      "decoded_fields": [
+        "0",
+        "0",
+        "3.2999999523162842",
+        "0"
+      ],
+      "frozen_repr": {
+        "C1_C2_C3_C4": [
+          "0.0",
+          "0.0",
+          "3.299999952316284",
+          "0.0"
+        ],
+        "reference": "2.73684211507539865805222768401079233471491448297164835866969",
+        "reference_cent": "2.74",
+        "roundtrip_to_original_bits": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "single_event_ratio_6dp": "0.752747"
+      },
+      "injoyai_affine_ohlc": [
+        "2.7799999999999998",
+        "2.7999999999999998",
+        "2.71",
+        "2.7400000000000002"
+      ],
+      "injoyai_fields_2dp": [
+        "0",
+        "0",
+        "3.2999999999999998",
+        "0"
+      ],
+      "normalized_bits_preserved": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "prior_date": 20061020,
+      "prior_ohlc": [
+        "3.7000000000000002",
+        "3.7200000000000002",
+        "3.6099999999999999",
+        "3.6400000000000001"
+      ],
+      "quantaxis_raw_input_proportional_ohlc": [
+        "2.7819548971920258",
+        "2.7969924912309017",
+        "2.7142857240170843",
+        "2.7368421150753983"
+      ],
+      "quantaxis_raw_input_reference": "2.7368421150753983",
+      "status": "SCALAR_DIAGNOSTIC_ONLY",
+      "symbol": "sh.600006"
+    },
+    {
+      "date": "1997-07-14",
+      "decoded_fields": [
+        "0",
+        "4.5",
+        "0",
+        "2.369999885559082"
+      ],
+      "frozen_repr": {
+        "C1_C2_C3_C4": [
+          "0.0",
+          "4.5",
+          "0.0",
+          "2.369999885559082"
+        ],
+        "reference": "15.0820534527906153162835633452183781356460876567879381205562",
+        "reference_cent": "15.08",
+        "roundtrip_to_original_bits": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "single_event_ratio_6dp": "0.857305"
+      },
+      "injoyai_affine_ohlc": [
+        "14.44",
+        "15.09",
+        "14.279999999999999",
+        "15.08"
+      ],
+      "injoyai_fields_2dp": [
+        "0",
+        "4.5",
+        "0",
+        "2.3700000000000001"
+      ],
+      "normalized_bits_preserved": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "prior_date": 19970711,
+      "prior_ohlc": [
+        "16.800000000000001",
+        "17.600000000000001",
+        "16.600000000000001",
+        "17.59"
+      ],
+      "quantaxis_raw_input_proportional_ohlc": [
+        "14.404690051556701",
+        "15.090627673059402",
+        "14.233205646181027",
+        "15.082053452790616"
+      ],
+      "quantaxis_raw_input_reference": "15.082053452790616",
+      "status": "SCALAR_DIAGNOSTIC_ONLY",
+      "symbol": "sz.000002"
+    },
+    {
+      "date": "2000-01-10",
+      "decoded_fields": [
+        "0",
+        "7.5",
+        "0",
+        "2.7269999980926514"
+      ],
+      "frozen_repr": {
+        "C1_C2_C3_C4": [
+          "0.0",
+          "7.5",
+          "0.0",
+          "2.7269999980926514"
+        ],
+        "reference": "10.2422016190170766417026757687313821201967255019267899827677",
+        "reference_cent": "10.24",
+        "roundtrip_to_original_bits": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "single_event_ratio_6dp": "0.931756"
+      },
+      "injoyai_affine_ohlc": [
+        "9.9199999999999999",
+        "10.25",
+        "9.8300000000000001",
+        "10.24"
+      ],
+      "injoyai_fields_2dp": [
+        "0",
+        "7.5",
+        "0",
+        "2.73"
+      ],
+      "normalized_bits_preserved": [
+        true,
+        true,
+        true,
+        false
+      ],
+      "prior_date": 20000107,
+      "prior_ohlc": [
+        "10.58",
+        "11",
+        "10.460000000000001",
+        "10.99"
+      ],
+      "quantaxis_raw_input_proportional_ohlc": [
+        "9.8600994658053391",
+        "10.251521183729558",
+        "9.7482646892555618",
+        "10.242201619017077"
+      ],
+      "quantaxis_raw_input_reference": "10.242201619017077",
+      "status": "SCALAR_DIAGNOSTIC_ONLY",
+      "symbol": "sz.000002"
+    },
+    {
+      "date": "1991-06-01",
+      "decoded_fields": [
+        "0",
+        "4.4000000953674316",
+        "0",
+        "5"
+      ],
+      "frozen_repr": {
+        "C1_C2_C3_C4": [
+          "0.0",
+          "4.400000095367432",
+          "0.0",
+          "5.0"
+        ],
+        "reference": "8.99333336512247733333333333333333333333333333333333333333333",
+        "reference_cent": "8.99",
+        "roundtrip_to_original_bits": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "single_event_ratio_6dp": "0.796280"
+      },
+      "injoyai_affine_ohlc": [
+        "8.9900000000000002",
+        "8.9900000000000002",
+        "8.9900000000000002",
+        "8.9900000000000002"
+      ],
+      "injoyai_fields_2dp": [
+        "0",
+        "4.4000000000000004",
+        "0",
+        "5"
+      ],
+      "normalized_bits_preserved": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "prior_date": 19910527,
+      "prior_ohlc": [
+        "11.289999999999999",
+        "11.289999999999999",
+        "11.289999999999999",
+        "11.289999999999999"
+      ],
+      "quantaxis_raw_input_proportional_ohlc": [
+        "8.9933333651224761",
+        "8.9933333651224761",
+        "8.9933333651224761",
+        "8.9933333651224761"
+      ],
+      "quantaxis_raw_input_reference": "8.9933333651224761",
+      "status": "SCALAR_DIAGNOSTIC_ONLY",
+      "symbol": "sz.000002"
+    }
+  ],
+  "schema": "issue90.result.v1",
+  "upstream_runtime_tests": "NOT_RUN_SCALAR_ADAPTATION_ONLY"
+}
