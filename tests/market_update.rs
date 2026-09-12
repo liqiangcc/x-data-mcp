@@ -232,3 +232,29 @@ fn update_unknown_field_enrichment_is_not_a_known_value_revision() {
         Decision::NeedsVerification(Reason::RevisionUnverified(vec![range.start]))
     );
 }
+
+#[test]
+fn update_coverage_change_needs_version_but_acquisition_time_alone_does_not() {
+    let (base, mut batch, range) = inputs();
+    batch.provenance.acquired_at += chrono::Duration::days(1);
+    let mut e = proof(&base, &batch, &range);
+    e.revision_ref = None;
+    assert!(matches!(
+        market_update::prepare(&base, &batch, &range, Some(&e)).unwrap(),
+        Decision::NoChange { .. }
+    ));
+    batch.coverage.reason = "fixture: newly verified coverage conclusion".into();
+    let e = proof(&base, &batch, &range);
+    let Decision::Candidate(prepared) =
+        market_update::prepare(&base, &batch, &range, Some(&e)).unwrap()
+    else {
+        panic!()
+    };
+    assert!(prepared.metadata_changed);
+    assert!(prepared.changed_dates.is_empty());
+    assert_eq!(prepared.records, base.version().records);
+    assert_eq!(
+        prepared.affected_years.into_iter().collect::<Vec<_>>(),
+        vec![2024, 2025]
+    );
+}

@@ -105,6 +105,14 @@ impl<R: MarketRepository> Publisher<R> {
                     return Ok(Preparation::NeedsVerification(Reason::CoverageUnknown));
                 }
                 let v = candidate.version();
+                if prepared.metadata_changed
+                    && candidate.batch.coverage == base.batch.coverage
+                    && candidate.version().unit_currency == base.version().unit_currency
+                {
+                    return Err(Error::Invalid(
+                        "combined candidate discards changed metadata".into(),
+                    ));
+                }
                 if v.records != prepared.records
                     || v.symbol != batch.symbol
                     || v.period != batch.period

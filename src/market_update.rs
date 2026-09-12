@@ -51,6 +51,7 @@ pub enum Decision {
 pub struct PreparedRange {
     pub records: Vec<Bar>,
     pub changed_dates: Vec<NaiveDate>,
+    pub metadata_changed: bool,
     pub affected_years: BTreeSet<i32>,
     pub base_version_id: String,
     pub base_integrity_sha256: String,
@@ -184,15 +185,34 @@ pub fn prepare(
             revised,
         )));
     }
-    if changed.is_empty() {
+    // #4 AC-84/87: unchanged prices alone do not prove unchanged data.
+    // Acquired-at is execution provenance; changed coverage is version content.
+    let units_enriched = [
+        (&a.price_currency, &b.price_currency),
+        (&a.price_unit, &b.price_unit),
+        (&a.volume_unit, &b.volume_unit),
+        (&a.amount_currency, &b.amount_currency),
+        (&a.amount_unit, &b.amount_unit),
+    ]
+    .into_iter()
+    .any(|(old, new)| !old.is_confirmed() && new.is_confirmed());
+    let metadata_changed = batch.coverage != existing.batch.coverage || units_enriched;
+    if changed.is_empty() && !metadata_changed {
         return Ok(Decision::NoChange {
             version_id: old.version_id.clone(),
         });
     }
     Ok(Decision::Candidate(PreparedRange {
+        // Coverage/units can affect more than numerically changed dates. Do not
+        // promise that unrelated old yearly metadata remains valid.
+        affected_years: if metadata_changed {
+            combined.keys().map(|d| d.year()).collect()
+        } else {
+            changed.iter().map(|d| d.year()).collect()
+        },
         records: combined.into_values().collect(),
-        affected_years: changed.iter().map(|d| d.year()).collect(),
         changed_dates: changed,
+        metadata_changed,
         base_version_id: old.version_id.clone(),
         base_integrity_sha256: proof.base_integrity_sha256.clone(),
         candidate_sha256: proof.candidate_sha256.clone(),

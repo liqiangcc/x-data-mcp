@@ -410,3 +410,49 @@ fn range_schema_v4_requires_explicit_upgrade_and_preserves_published_records() {
     assert_eq!(f.count("market_update_results"), 0);
     f.db.commit_range(&f.plan()).unwrap();
 }
+
+#[test]
+fn range_coverage_only_revision_publishes_and_acquisition_only_reuses() {
+    let mut f = fixture(false);
+    f.batch.provenance.acquired_at += chrono::Duration::days(1);
+    f.evidence.candidate_sha256 = market_update::candidate_digest(&f.batch).unwrap();
+    let plan = f.plan();
+    f.db.commit_range(&plan).unwrap();
+    assert_eq!(f.count("data_versions"), 1);
+    let stored: String = Connection::open(f.db.tasks.path())
+        .unwrap()
+        .query_row("SELECT audit_json FROM market_update_results", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let audit: Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(
+        audit["segment"]["provenance"]["acquired_at"],
+        serde_json::to_value(f.batch.provenance.acquired_at).unwrap()
+    );
+
+    let mut f = fixture(false);
+    f.batch.coverage.reason = "fixture: newly verified coverage".into();
+    f.evidence.candidate_sha256 = market_update::candidate_digest(&f.batch).unwrap();
+    let mut raw = f.db.fixed("legacy-daily").unwrap().raw().clone();
+    raw["version_id"] = json!("coverage-only");
+    raw["batch"]["coverage"] = serde_json::to_value(&f.batch.coverage).unwrap();
+    raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+    f.db.stage(&raw).unwrap();
+    f.command.version_id = "coverage-only".into();
+    f.whole = Some(CombinedEvidence {
+        base_integrity_sha256: f.evidence.base_integrity_sha256.clone(),
+        segment_sha256: f.evidence.candidate_sha256.clone(),
+        combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
+        complete_coverage_ref: "fixture:independent whole coverage".into(),
+    });
+    let plan = f.plan();
+    assert!(!plan.is_no_change());
+    f.db.commit_range(&plan).unwrap();
+    assert_eq!(f.count("data_versions"), 2);
+    assert_eq!(f.head(), "coverage-only");
+    assert_eq!(
+        f.db.fixed("coverage-only").unwrap().version().records,
+        f.db.fixed("legacy-daily").unwrap().version().records
+    );
+}
