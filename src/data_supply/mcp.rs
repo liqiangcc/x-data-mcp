@@ -126,7 +126,7 @@ impl DataApi {
                     },
                     input_schema: detailed.then(|| e.input.clone()),
                     output_schema: detailed.then(|| e.output.clone()),
-                    example: detailed.then(|| e.example.clone()),
+                    example: detailed.then(|| capability_example(&e, dataset)),
                     schema_digest: crate::hash::sha256(
                         serde_json::to_vec(&json!([e.input, e.output]))
                             .unwrap()
@@ -335,13 +335,14 @@ impl DataApi {
         Value::Array(tools)
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
-        if let Some(dataset) = input.get("dataset") {
-            if serde_json::from_value::<Dataset>(dataset.clone()).is_err() {
-                return Err(ApiError::new(
-                    "unknown_dataset",
-                    "dataset is not registered",
-                ));
-            }
+        if input
+            .get("dataset")
+            .is_some_and(|dataset| serde_json::from_value::<Dataset>(dataset.clone()).is_err())
+        {
+            return Err(ApiError::new(
+                "unknown_dataset",
+                "dataset is not registered",
+            ));
         }
         if input.get("contract_version").is_some_and(|v| v != "v1") {
             return Err(ApiError::new(
@@ -446,4 +447,31 @@ impl ToolHandler for DataApi {
             e
         })
     }
+}
+
+fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
+    let mut v = e.example.clone();
+    let Some(d) = dataset else {
+        return v;
+    };
+    v["dataset"] = serde_json::to_value(d).unwrap();
+    if d == Dataset::Catalog {
+        v["selection"] = if matches!(e.handler, Handler::Collection) {
+            json!({"scope":"current_sh_sz_a"})
+        } else {
+            json!({"kind":"catalog","scope":"current_sh_sz_a"})
+        };
+        if v.get("filter").is_some() {
+            v["filter"] = json!({"kind":"catalog"});
+        }
+    } else if d == Dataset::Yearly {
+        if v.get("filter").is_some() {
+            v["filter"] = json!({"kind":"yearly","start_year":2025,"end_year":2025});
+        }
+        if matches!(e.handler, Handler::Collection) {
+            v["base_daily_versions"] = json!([{"entity":{"exchange":"sh","code":"600006"},"version_id":"published-daily-id"}]);
+            v["years"] = json!([2025]);
+        }
+    }
+    v
 }

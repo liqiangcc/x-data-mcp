@@ -430,7 +430,12 @@ fn read_projection(
     }
     Ok(record)
 }
-fn range_rows(c: &Connection, id: &str, p: Period, range: &Range) -> Result<Vec<Bar>, Error> {
+pub(crate) fn range_rows(
+    c: &Connection,
+    id: &str,
+    p: Period,
+    range: &Range,
+) -> Result<Vec<Bar>, Error> {
     let (sql, start, end) = match p {
         Period::Day => (
             "SELECT trade_date,open,high,low,close,volume,amount FROM daily_bars WHERE version_id=?1 AND trade_date>=?2 AND trade_date<=?3 AND (?4 IS NULL OR trade_date>?4) ORDER BY trade_date LIMIT ?5",

@@ -209,3 +209,37 @@ fn capabilities_do_not_advertise_unauthorized_controls_and_new_errors_are_explic
     assert_eq!(e.code, "unknown_dataset");
     assert_eq!(e.outcome_certainty.as_deref(), Some("not_applicable"));
 }
+
+#[test]
+fn capability_dataset_examples_validate_against_the_actual_registered_schema() {
+    use x_data_mcp::{data_supply::mcp::DataApi, mcp::ToolHandler};
+    let d = tempfile::tempdir().unwrap();
+    let api = DataApi::new(
+        SqliteTasks::new(d.path().join("db")),
+        "run".into(),
+        Access::local(),
+    )
+    .unwrap();
+    for dataset in ["securities.catalog", "market.daily", "market.yearly"] {
+        for operation in [
+            "query_data",
+            "list_data_versions",
+            "get_data_availability",
+            "start_collection",
+        ] {
+            let detail = api
+                .call(
+                    "get_data_capabilities",
+                    json!({"dataset":dataset,"operation":operation}),
+                )
+                .unwrap();
+            for i in detail["items"].as_array().unwrap() {
+                jsonschema::validator_for(&i["input_schema"])
+                    .unwrap()
+                    .validate(&i["example"])
+                    .unwrap();
+                assert_eq!(i["example"]["dataset"], dataset);
+            }
+        }
+    }
+}

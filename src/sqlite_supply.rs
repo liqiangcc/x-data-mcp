@@ -5,7 +5,6 @@ use crate::{
     sqlite_catalog,
     sqlite_market::{SqliteMarket, read_record},
 };
-use chrono::Datelike;
 use rusqlite::{Connection, params};
 #[derive(Clone)]
 pub struct SqliteSupply {
@@ -211,31 +210,43 @@ pub(crate) fn query(
                 status: ManifestStatus::Present,
                 metadata: Some(metadata(&r)),
             });
-            for b in &r.version().records {
-                let include = match plan.args.filter {
-                    Filter::Daily {
-                        start_date,
-                        end_date,
-                    } => b.date >= start_date && b.date <= end_date,
-                    Filter::Yearly {
-                        start_year,
-                        end_year,
-                    } => b.date.year() >= start_year && b.date.year() <= end_year,
-                    _ => false,
-                };
-                if include {
-                    result.rows.push(Row::Market {
-                        entity: entity.clone(),
-                        version_ref: reference.clone(),
-                        date: b.date,
-                        open: b.open.to_string(),
-                        high: b.high.to_string(),
-                        low: b.low.to_string(),
-                        close: b.close.to_string(),
-                        volume: b.volume.map(|v| v.to_string()),
-                        amount: b.amount.map(|v| v.to_string()),
-                    });
-                }
+            let (start, end) = match plan.args.filter {
+                Filter::Daily {
+                    start_date,
+                    end_date,
+                } => (start_date, end_date),
+                Filter::Yearly {
+                    start_year,
+                    end_year,
+                } => (
+                    chrono::NaiveDate::from_ymd_opt(start_year, 1, 1).unwrap(),
+                    chrono::NaiveDate::from_ymd_opt(end_year, 12, 31).unwrap(),
+                ),
+                _ => return Err(invalid("market filter")),
+            };
+            let range = crate::market_storage::Range {
+                start,
+                end,
+                after: None,
+                limit: MAX_ROWS,
+            };
+            for b in crate::sqlite_market::range_rows(
+                c,
+                &id,
+                plan.args.dataset.period().unwrap(),
+                &range,
+            )? {
+                result.rows.push(Row::Market {
+                    entity: entity.clone(),
+                    version_ref: reference.clone(),
+                    date: b.date,
+                    open: b.open.to_string(),
+                    high: b.high.to_string(),
+                    low: b.low.to_string(),
+                    close: b.close.to_string(),
+                    volume: b.volume.map(|v| v.to_string()),
+                    amount: b.amount.map(|v| v.to_string()),
+                });
                 if result.rows.len() > MAX_ROWS {
                     return Err(invalid("snapshot row budget exceeded"));
                 }
