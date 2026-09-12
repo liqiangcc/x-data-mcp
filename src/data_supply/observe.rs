@@ -323,7 +323,7 @@ impl<R: ObservationRepository> Observer<R> {
                 range_results: facts.range_results,
             };
             if serde_json::to_vec(&p)
-                .map_err(|e| invalid(e.to_string()))?
+                .map_err(|e| invalid(&e.to_string()))?
                 .len()
                 > MAX_BYTES
             {

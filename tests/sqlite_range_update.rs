@@ -744,3 +744,78 @@ fn range_progress_refuses_damaged_audit_and_immutable_base_without_fallback() {
         );
     }
 }
+
+#[path = "support/market.rs"]
+mod observation_fixture;
+#[test]
+fn range_progress_cursor_rechecks_evidence_after_partial_task_snapshot() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        market_update::tasks::Operation,
+        mcp::ToolHandler,
+    };
+    let mut f = fixture(false);
+    fail_range_without_publication(&f);
+    let mut payload = range_payload("legacy-daily");
+    for (symbol, version) in [("sh.600007", "other-a"), ("sh.600008", "other-b")] {
+        let mut raw = f.db.fixed("legacy-daily").unwrap().raw().clone();
+        raw["version_id"] = json!(version);
+        raw["symbol"] = json!(symbol);
+        raw["batch"]["symbol"] = json!(symbol);
+        raw["batch"]["provenance"]["symbol"] = json!(symbol);
+        raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+        observation_fixture::published_fixture(&f.db, &raw);
+        payload["items"].as_array_mut().unwrap().push(json!({"symbol":symbol,"base_version_id":version,"start_date":"2025-01-02","end_date":"2025-01-02"}));
+    }
+    let accepted = range_control(&f)
+        .accept("paged-range", Operation::Backfill.key(), payload)
+        .unwrap();
+    let RequestOutcome::Task(task) = accepted.record.outcome else {
+        panic!()
+    };
+    let task =
+        f.db.tasks
+            .transition(&task.task.task_id, 0, "range-run", Change::Claim)
+            .unwrap();
+    let item = task
+        .items
+        .iter()
+        .find(|i| i.spec.target["symbol"] == "sh.600006")
+        .unwrap()
+        .spec
+        .item_id
+        .clone();
+    let task =
+        f.db.tasks
+            .transition(
+                &task.task.task_id,
+                task.task.state_revision,
+                "range-run",
+                Change::StartItem(item.clone()),
+            )
+            .unwrap();
+    f.command.task_id = task.task.task_id;
+    f.command.item_id = item;
+    f.command.expected_revision = task.task.state_revision;
+    f.command.publication_id = "partial-result".into();
+    f.db.commit_range(&f.plan()).unwrap();
+    let api = DataApi::new(f.db.tasks.clone(), "range-run".into(), Access::local()).unwrap();
+    let first = api
+        .call(
+            "get_task_progress",
+            json!({"task_id":f.command.task_id,"page_size":1}),
+        )
+        .unwrap();
+    assert_eq!(first["frozen_daily_ranges"].as_array().unwrap().len(), 3);
+    assert_eq!(first["range_results"].as_array().unwrap().len(), 1);
+    assert!(first["next_cursor"].is_string());
+    assert_eq!(first["succeeded"], 1);
+    f.sql("UPDATE market_update_results SET receipt_json='{}'");
+    let error = api
+        .call(
+            "get_task_progress",
+            json!({"task_id":f.command.task_id,"page_size":1,"cursor":first["next_cursor"]}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "integrity_error");
+}
