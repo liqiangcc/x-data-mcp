@@ -1,0 +1,47 @@
+{
+  "schema": "x-data-mcp.official-file-inspection.v1",
+  "manifest_sha256": "0e7f17da03aa8282f746a54888109892e33da760a74014268c9e36697a95afd9",
+  "files": [
+    {
+      "role": "base_industry",
+      "relative_path": "tdx-dbf-evidence.zXosOa/base.zip",
+      "source_url": "http://www.tdx.com.cn/products/data/data/dbf/base.zip",
+      "acquisition_started_at": "2026-09-11T11:01:09.622Z",
+      "acquisition_completed_at": "2026-09-11T11:02:11.063Z",
+      "last_modified": "Fri, 11 Sep 2026 10:22:54 GMT",
+      "etag": "\"6aa3d67e-f5a303\"",
+      "bytes": 16098051,
+      "sha256": "80ad1681c260cea18bb6f3e5ca6d3ac1acd215eae7b533048c8735619a1dc433"
+    },
+    {
+      "role": "day",
+      "relative_path": "tdx-vipdata-evidence.qusdV2/hsjday.zip",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-09-11T11:21:40.791Z",
+      "acquisition_completed_at": "2026-09-11T11:29:40.026Z",
+      "last_modified": "Fri, 11 Sep 2026 07:58:57 GMT",
+      "etag": "\"6aa3b4c1-20bc34f3\"",
+      "bytes": 549205235,
+      "sha256": "611ea3ccc1e64717aebc9a14ce9c8b1ed06526b5fd69bd14275fc376f4f44272"
+    },
+    {
+      "role": "gbbq",
+      "relative_path": "tdx-dbf-evidence.zXosOa/gbbq.zip",
+      "source_url": "http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+      "acquisition_started_at": "2026-09-11T11:02:11.106Z",
+      "acquisition_completed_at": "2026-09-11T11:02:34.243Z",
+      "last_modified": "Fri, 11 Sep 2026 10:22:54 GMT",
+      "etag": "\"6aa3d67e-60e579\"",
+      "bytes": 6350201,
+      "sha256": "6cfdbfc5a67e80ba6773cd5e8cc6779a97a01e07d892e5e6a17c9b35dbef60aa"
+    }
+  ],
+  "byte_integrity": "FILE_BYTES_VERIFIED",
+  "declared_origin": "NOT_AUTHENTICATED",
+  "archive_member_binding": "NOT_VERIFIED",
+  "file_set_consistency": "NOT_VERIFIED",
+  "business_semantics": "NOT_VERIFIED",
+  "access_use": "NOT_VERIFIED",
+  "production_ready": false,
+  "live_source": "NOT_RUN"
+}
