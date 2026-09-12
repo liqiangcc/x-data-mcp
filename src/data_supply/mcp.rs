@@ -372,7 +372,7 @@ impl DataApi {
                     &computed.result
                 {
                     let mut error = ApiError::new("not_computable", format!("{reason:?}"));
-                    error.details = Some(serde_json::to_value(computed).unwrap());
+                    error.details = Some(Box::new(serde_json::to_value(computed).unwrap()));
                     Err(error)
                 } else {
                     encode(computed)
