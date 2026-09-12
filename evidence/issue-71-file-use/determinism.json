@@ -1,0 +1,8 @@
+{
+  "tested_commit": "a21712ab1d2c56a04f60168143f0b346e1f68db2",
+  "two_clean_checkouts": "BYTE_IDENTICAL",
+  "result_sha256": "d79399d5197b701cb302a9603e1b055d0b8b46a683ce241776e6f826821412b6",
+  "tampered_artifact": "REJECTED_NO_RESULT",
+  "live_market_source": "NOT_RUN",
+  "file_access_use": "NOT_VERIFIED"
+}
