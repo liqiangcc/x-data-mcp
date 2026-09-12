@@ -314,3 +314,75 @@ fn fixed_base_damage_after_derivation_never_substitutes_another_version() {
     ));
     assert!(store.candidate("derived").is_err());
 }
+
+#[test]
+fn selected_historical_year_cannot_discard_other_years_from_effective_head() {
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let publisher = Publisher {
+        repository: store.clone(),
+    };
+    let (mut request, mut evidence) = inputs(&store, "both-years");
+    request.years = [2024, 2025].into();
+    evidence.years = request.years.clone();
+    let all = publisher.derive_yearly(&request, &evidence).unwrap();
+    let cmd = command(
+        &store,
+        "both-years",
+        PublishIntent::CurrentHead {
+            expected_daily_head: "legacy-daily".into(),
+            expected_yearly_head: None,
+        },
+    );
+    let plan = publisher.prepare_derived_yearly(cmd, &all).unwrap();
+    store.commit(&plan).unwrap();
+    let (request, evidence) = inputs(&store, "selected-year");
+    let selected = publisher.derive_yearly(&request, &evidence).unwrap();
+    let cmd = command(
+        &store,
+        "selected-year",
+        PublishIntent::CurrentHead {
+            expected_daily_head: "legacy-daily".into(),
+            expected_yearly_head: Some("both-years".into()),
+        },
+    );
+    assert!(matches!(
+        publisher.prepare_derived_yearly(cmd.clone(), &selected),
+        Err(Error::Conflict(_))
+    ));
+    assert!(store.candidate("selected-year").is_err());
+    let historical = Publication {
+        intent: PublishIntent::HistoricalFixedBase,
+        ..cmd
+    };
+    let plan = publisher
+        .prepare_derived_yearly(historical, &selected)
+        .unwrap();
+    store.commit(&plan).unwrap();
+    let page = store
+        .range(
+            &Scope {
+                symbol: request.symbol,
+                period: Period::Year,
+            },
+            None,
+            &Range {
+                start: "2024-01-01".parse().unwrap(),
+                end: "2025-12-31".parse().unwrap(),
+                after: None,
+                limit: 10,
+            },
+        )
+        .unwrap();
+    assert_eq!(page.version.version_id, "both-years");
+    assert_eq!(page.rows.len(), 2);
+    assert_eq!(
+        store
+            .fixed("selected-year")
+            .unwrap()
+            .version()
+            .records
+            .len(),
+        1
+    );
+}

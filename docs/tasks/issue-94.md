@@ -27,3 +27,5 @@ AC → 测试（tests/yearly_publication.rs）：
 所有新增测试只使用固定 fixture；NOT_PRODUCTION_READY。不扩展到目录、来源研究或迁移。
 
 本机仅 fmt/diff；完整编译和测试由 Actions 执行，准确 run/job/结果记录在 PR 评论。未执行不得称 PASS。
+
+范围保护：current-head 的既有 yearly 若含候选未选择的年度，prepare 拒绝，不隐式删除或从不同 daily 拼接。明确 historical 意图仍可发布选定年度 immutable version，原 head 不变。测试 selected_historical_year_cannot_discard_other_years_from_effective_head 使用真实 SQLite 验证两条路径；不是自动降级。

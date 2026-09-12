@@ -1,14 +1,15 @@
 //! Fixed published daily -> locally derived yearly candidate. No source or MCP wiring.
 use std::collections::BTreeSet;
 
-use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
     market_data::{CoverageEvidence, CoverageStatus, Period, YearlyDerivation},
     market_storage::{
-        Error, MarketRepository, Publication, PublishPlan, Publisher, base_error, compat,
+        Error, MarketRepository, Publication, PublishIntent, PublishPlan, Publisher, base_error,
+        compat,
     },
     publish::{EffectiveVersion, validate_and_deduplicate},
     yearly,
@@ -149,6 +150,34 @@ impl<R: MarketRepository> Publisher<R> {
         if base.raw()["integrity_sha256"].as_str() != Some(candidate.base_integrity_sha256.as_str())
         {
             return Err(Error::Base("fixed daily changed after derivation".into()));
+        }
+        if let PublishIntent::CurrentHead {
+            expected_yearly_head: Some(id),
+            ..
+        } = &command.intent
+        {
+            let old = self.repository.fixed(id).map_err(base_error)?;
+            let next = compat::check(&candidate.raw)?;
+            if old.version().symbol != next.version().symbol || old.version().period != Period::Year
+            {
+                return Err(Error::Base("expected yearly identity/period".into()));
+            }
+            let selected: BTreeSet<_> = next
+                .version()
+                .records
+                .iter()
+                .map(|r| r.date.year())
+                .collect();
+            if old
+                .version()
+                .records
+                .iter()
+                .any(|r| !selected.contains(&r.date.year()))
+            {
+                return Err(Error::Conflict(
+                    "selected years cannot replace a head containing other years".into(),
+                ));
+            }
         }
         self.repository.stage(&candidate.raw)?;
         let plan = self.prepare(command)?;
