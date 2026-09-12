@@ -1,0 +1,10 @@
+fn record_digest(value: &Value) -> io::Result<String> {
+    let mut payload = value.clone();
+    let object = payload
+        .as_object_mut()
+        .ok_or_else(|| io::Error::other("record must be an object"))?;
+    object.remove("integrity_sha256");
+    Ok(crate::day_file::sha256(
+        &serde_json::to_vec(&payload).map_err(io::Error::other)?,
+    ))
+}

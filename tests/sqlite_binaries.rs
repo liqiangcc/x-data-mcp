@@ -126,7 +126,7 @@ fn sqlite_cli_init_upgrade_no_clobber_and_stdio_read_never_initializes_or_upgrad
     let version: u32 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, x_data_mcp::sqlite_tasks::SCHEMA_VERSION);
     c.pragma_update(None, "user_version", 999).unwrap();
     assert!(!cli("upgrade", &v1).status.success());
     assert!(!cli("wrong-operation", &path).status.success());

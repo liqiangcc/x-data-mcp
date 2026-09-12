@@ -315,7 +315,12 @@ fn absent_bad_unknown_schema_and_busy_do_not_initialize_or_fall_back() {
         Err(Error::StorageUnavailable(_))
     ));
     assert!(db.upgrade().is_err());
-    c.pragma_update(None, "user_version", 2).unwrap();
+    c.pragma_update(
+        None,
+        "user_version",
+        x_data_mcp::sqlite_tasks::SCHEMA_VERSION,
+    )
+    .unwrap();
     c.execute_batch("BEGIN IMMEDIATE").unwrap();
     assert!(matches!(
         control(&db, "run-a").accept("r", LegacyCollection.key(), payload(&["a"], &["day"])),
@@ -602,7 +607,14 @@ fn explicit_schema_upgrade_is_transactional_and_checks_migration_identity() {
         let version: u32 = c
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, if fail { 1 } else { 2 });
+        assert_eq!(
+            version,
+            if fail {
+                1
+            } else {
+                x_data_mcp::sqlite_tasks::SCHEMA_VERSION
+            }
+        );
         assert_eq!(count(&db, "schema_migrations"), i64::from(version));
         if !fail {
             assert!(db.read_request("r").unwrap().is_none());

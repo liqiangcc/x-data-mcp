@@ -8,10 +8,11 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 2;
-const MIGRATIONS: [&str; 2] = [
+pub const SCHEMA_VERSION: u32 = 3;
+const MIGRATIONS: [&str; 3] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
+    include_str!("../migrations/tasks/003_market.sql"),
 ];
 #[derive(Clone)]
 pub struct SqliteTasks {
@@ -70,7 +71,7 @@ impl SqliteTasks {
         tx.commit()
             .map_err(|e| Error::OutcomeUnknown(e.to_string()))
     }
-    fn connect(&self, readonly: bool) -> Result<Connection, Error> {
+    pub(crate) fn connect(&self, readonly: bool) -> Result<Connection, Error> {
         let flag = if readonly {
             OpenFlags::SQLITE_OPEN_READ_ONLY
         } else {
@@ -143,7 +144,7 @@ fn apply_migration(c: &Connection, version: usize, sql: &str) -> Result<(), Erro
         .map_err(storage)?;
     Ok(())
 }
-fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> {
+pub(crate) fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> {
     let version: u32 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(storage)?;
@@ -398,7 +399,7 @@ fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRecord>, Error
         outcome,
     }))
 }
-fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
+pub(crate) fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
     let snapshot = read_task(c, id)?;
     let binding: Option<String> = c
         .query_row(
@@ -417,7 +418,7 @@ fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Err
         _ => Err(inconsistent("task binding/execution missing")),
     }
 }
-fn write_task(c: &Connection, s: &TaskSnapshot, expected: u64) -> Result<(), Error> {
+pub(crate) fn write_task(c: &Connection, s: &TaskSnapshot, expected: u64) -> Result<(), Error> {
     let changed=c.execute("UPDATE tasks SET status=?1,state_revision=?2,owner_run_id=?3,last_progress_at=?4,result_json=?5 WHERE task_id=?6 AND state_revision=?7",params![tag(&s.task.status),db_revision(s.task.state_revision)?,s.task.owner_run_id,s.task.last_progress_at.to_rfc3339(),s.task.result.as_ref().map(encode).transpose()?,s.task.task_id,db_revision(expected)?]).map_err(storage)?;
     if changed != 1 {
         return Err(Error::RevisionConflict);
