@@ -49,3 +49,19 @@ WriteAcceptance 的 dataset/contract_version 返回原任务契约（含 legacy_
 进度分别返回 pending/running/finished/succeeded/failed，执行百分比为实际 finished/total ×100，
 显示最多两位十进制（half-even）；终态不强行改为 100，百分比不表示历史完整度。
 新接口错误附 outcome_certainty/next_actions；旧调用不增加这些字段。
+
+## AC → 测试入口（完整结果以最终 Actions SHA/run 为准）
+
+- AC-01/02：`real_data_stdio_discovery_queries_and_control_schema_roundtrip`；真实二进制 schema 验证、旧/new 参数互斥；`capability_dataset_examples_validate_against_the_actual_registered_schema`。
+- AC-03：`closed_query_contract_rejects_extra_nested_fields_and_semantic_mismatch`、`new_write_sets_replay_globally_and_old_scope_conflicts_are_shared`、`yearly_collection_requires_exact_fixed_base_map_and_stores_frozen_years`。
+- AC-04：`real_batch_manifest_pages_pin_versions_and_reject_any_later_damage`、`real_task_list_and_progress_freeze_state_and_enforce_authorization`、`query_budgets_cursor_instance_eviction_and_permissions_are_enforced`；底层同快照和发布竞争复用 #79 真实 SQLite 测试。
+- AC-05：`availability_classifies_corrupt_version_but_not_bad_database_as_absent`、`absent_is_explicit_and_read_never_creates_a_task`、`real_catalog_fixture_preserves_missing_industry_and_rejects_tampering`、`failed_refresh_and_head_conflict_keep_old_catalog`。
+- AC-06：`catalog_filter_and_selector_freeze_version_without_inventing_industry`、真实 `data_stdio`，既有 SQLite/legacy stdio 全回归；`forbidden_selection_is_rejected_before_storage_access`、`capabilities_do_not_advertise_unauthorized_controls_and_new_errors_are_explicit`。
+
+完整性扫描与范围查询成本分开：每对象先核验完整固定版本，再在同一事务执行 typed SQL 范围读取。
+列表需加载有界快照；任务过滤只披露已授权条目，计数与分页在授权之后。
+新 schema 的 runtime 业务校验还包括 exact map、dataset/filter 对应、唯一查询实体等跨字段约束，
+这些约束不是仅靠 JSON schema 能表达的条件，帮助与错误也保留说明。
+
+本地没有完整编译；Actions 执行完整稳定入口。jsonschema 0.33 为纯测试依赖，禁用 HTTP/file resolver 默认能力，
+验证本机生成的 schema/stdio 实际输出，不作为生产处理依赖。未增真实来源、后台 worker、远程认证或迁移。

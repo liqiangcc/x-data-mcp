@@ -128,6 +128,32 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
         .unwrap();
     let a = s.call("retry_task", retry, false);
     s.call("cancel_task", json!({"task_id":a["task_id"]}), false);
+    let view = s.call(
+        "get_task",
+        json!({"contract_version":"v1","task_id":a["task_id"]}),
+        false,
+    );
+    let request = s.call(
+        "get_request",
+        json!({"contract_version":"v1","request_id":"retry"}),
+        false,
+    );
+    assert_eq!(request["task"]["task_id"], a["task_id"]);
+    let rev = view["state_revision"].as_u64().unwrap();
+    assert!(rev > 0);
+    assert_eq!(
+        s.call(
+            "cancel_task",
+            json!({"contract_version":"v1","task_id":a["task_id"],"expected_revision":rev-1}),
+            true
+        )["code"],
+        "precondition_conflict"
+    );
+    s.call(
+        "cancel_task",
+        json!({"contract_version":"v1","task_id":a["task_id"],"expected_revision":rev}),
+        false,
+    );
     let detail = s.call(
         "get_data_capabilities",
         json!({"dataset":"market.daily","operation":"query_data"}),
