@@ -88,6 +88,7 @@ impl DataApi {
                         | Handler::Task
                         | Handler::Request
                         | Handler::Cancel
+                        | Handler::Worker
                 )
             {
                 continue;
@@ -113,6 +114,7 @@ impl DataApi {
                 let detailed = args.operation.is_some();
                 items.push(Capability {
                     tool_name: e.name.into(),
+                    description: if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
@@ -310,6 +312,15 @@ impl DataApi {
             vec![]
         };
         for t in &mut tools {
+            if t["name"] == "run_worker_once" {
+                let e = entries()
+                    .into_iter()
+                    .find(|e| e.name == "run_worker_once")
+                    .unwrap();
+                t["description"] = json!(WORKER_DESCRIPTION);
+                t["inputSchema"] = e.input;
+                t["outputSchema"] = e.output;
+            }
             let ty = match t["name"].as_str() {
                 Some("start_collection") => {
                     Some(serde_json::to_value(schemars::schema_for!(Collection)).unwrap())
@@ -337,7 +348,7 @@ impl DataApi {
                 }
             }
         }
-        tools.extend(entries().into_iter().filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel)).map(|e|json!({"name":e.name,"description":"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities.","inputSchema":e.input,"outputSchema":e.output})));
+        tools.extend(entries().into_iter().filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities.","inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
@@ -382,7 +393,8 @@ impl DataApi {
             | Handler::Retry
             | Handler::Task
             | Handler::Request
-            | Handler::Cancel => self.legacy_call(name, input),
+            | Handler::Cancel
+            | Handler::Worker => self.legacy_call(name, input),
             Handler::Query => encode(
                 self.queries
                     .query(decode::<Query>(input)?, &self.access)

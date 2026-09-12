@@ -203,7 +203,18 @@ fn capabilities_do_not_advertise_unauthorized_controls_and_new_errors_are_explic
             .as_array()
             .unwrap()
             .iter()
-            .all(|i| i["tool_name"] != "start_collection")
+            .all(|i| i["tool_name"] != "start_collection" && i["tool_name"] != "run_worker_once")
+    );
+    assert!(
+        !api.tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "run_worker_once")
+    );
+    assert_eq!(
+        api.call("run_worker_once", json!({})).unwrap_err().code,
+        "forbidden"
     );
     let e = api
         .call("query_data", json!({"dataset":"unknown"}))

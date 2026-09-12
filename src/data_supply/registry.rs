@@ -17,6 +17,7 @@ pub enum Handler {
     Request,
     Cancel,
     Compute,
+    Worker,
 }
 pub struct Entry {
     pub name: &'static str,
@@ -35,6 +36,7 @@ pub struct CapabilitiesQuery {
 #[serde(deny_unknown_fields)]
 pub struct Capability {
     pub tool_name: String,
+    pub description: String,
     pub dataset: Option<Dataset>,
     pub contract_version: ContractVersion,
     pub implemented: bool,
@@ -57,6 +59,17 @@ pub struct Capabilities {
     pub snapshots_per_category: usize,
     pub production_ready: bool,
 }
+pub const WORKER_DESCRIPTION: &str = "Stage A development-only control: synchronously executes at most one locally owned pending task, mutating task outcomes and occupancy. The installed executor only records SOURCE_NOT_VERIFIED failures; it never downloads or publishes market data. Not a background scheduler or production pipeline.";
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerInput {}
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerOutput {
+    pub idle: bool,
+    pub task_id: Option<String>,
+    pub status: Option<TaskStatus>,
+}
 fn entry<I: JsonSchema, O: JsonSchema>(
     name: &'static str,
     handler: Handler,
@@ -73,6 +86,7 @@ fn entry<I: JsonSchema, O: JsonSchema>(
 pub fn entries() -> Vec<Entry> {
     let query = json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"}});
     vec![
+        entry::<WorkerInput, WorkerOutput>("run_worker_once", Handler::Worker, json!({})),
         entry::<crate::metrics::wire::Compute, crate::metrics::wire::Computation>(
             "compute_metrics",
             Handler::Compute,
