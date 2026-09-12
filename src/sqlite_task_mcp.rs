@@ -222,6 +222,12 @@ impl ToolHandler for SqliteTaskApi {
                     error.scopes = Some(invalid);
                     return Err(error);
                 }
+                if a.new_request_id.trim().is_empty() {
+                    return Err(ApiError::new(
+                        "empty_request_id",
+                        "request_id must not be empty",
+                    ));
+                }
                 self.control
                     .retry(
                         &a.original_task_id,

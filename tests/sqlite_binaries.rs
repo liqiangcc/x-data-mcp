@@ -249,6 +249,11 @@ fn real_legacy_and_sqlite_stdio_retry_errors_have_identical_code_scopes_and_shap
         ),
         ("retry", json!([]), "empty_selected_scopes"),
         (
+            "",
+            json!([{"symbol":"a","period":"day"}]),
+            "empty_request_id",
+        ),
+        (
             "retry",
             json!([{"symbol":"z","period":"year"},{"symbol":"a","period":"day"},{"symbol":"b","period":"day"},{"symbol":"z","period":"year"}]),
             "invalid_retry_selection",
@@ -273,4 +278,69 @@ fn real_legacy_and_sqlite_stdio_retry_errors_have_identical_code_scopes_and_shap
             );
         }
     }
+}
+
+#[test]
+fn completed_scope_retry_errors_match_real_stdio_with_persisted_test_outcomes() {
+    use x_data_mcp::{
+        sqlite_tasks::SqliteTasks,
+        task_control::{legacy::LegacyCollection, service::TaskControl, *},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks.sqlite");
+    let legacy = dir.path().join("legacy");
+    assert!(cli("init", &path).status.success());
+    let mut old = Session::new(false, &legacy);
+    let mut new = Session::new(true, &path);
+    let old_id = start(&mut old, "original")["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let new_id = start(&mut new, "original")["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Bounded persisted outcome fixture, not a source/publishing correctness claim.
+    old.call("run_worker_once", json!({}), false);
+    let old_store = x_data_mcp::task::TaskStore::new(&legacy);
+    let mut execution = old_store.get_execution(&old_id).unwrap().unwrap();
+    execution.status = x_data_mcp::task::TaskStatus::PartiallyFailed;
+    let day = execution
+        .scope_results
+        .iter_mut()
+        .find(|r| r.period == x_data_mcp::market_data::Period::Day)
+        .unwrap();
+    day.success = true;
+    day.error = None;
+    old_store.save_execution(execution).unwrap();
+    struct Outcomes;
+    impl Executor for Outcomes {
+        fn execute(&self, _: &CommandKey, item: &ItemSpec) -> ItemOutcome {
+            let success = item.target["period"] == "day";
+            ItemOutcome {
+                success,
+                error: (!success).then(|| "fixture failure".into()),
+            }
+        }
+    }
+    let db = SqliteTasks::new(&path);
+    let run = db.read_task(&new_id).unwrap().unwrap().task.accepted_run_id;
+    TaskControl::new(db, run, vec![Box::new(LegacyCollection)])
+        .unwrap()
+        .run_once(&Outcomes)
+        .unwrap();
+    let selection = json!([{"symbol":"a","period":"year"},{"symbol":"a","period":"day"},{"symbol":"a","period":"day"}]);
+    let a = old.call(
+        "retry_task",
+        json!({"original_task_id":old_id,"new_request_id":"retry","selected_scopes":selection}),
+        true,
+    );
+    let b = new.call(
+        "retry_task",
+        json!({"original_task_id":new_id,"new_request_id":"retry","selected_scopes":selection}),
+        true,
+    );
+    assert_eq!(a, b);
+    assert_eq!(b["code"], "invalid_retry_selection");
+    assert_eq!(b["scopes"], json!([{"symbol":"a","period":"day"}]));
 }
