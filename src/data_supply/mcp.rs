@@ -603,6 +603,9 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
             v["filter"] = json!({"kind":"catalog"});
         }
     } else if d == Dataset::Yearly {
+        if matches!(e.handler, Handler::Range(_)) {
+            v["items"] = json!([{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"published-daily-id","years":[2025],"publication":{"mode":"historical_fixed_base","comparison_version_id":null}}]);
+        }
         if v.get("filter").is_some() {
             v["filter"] = json!({"kind":"yearly","start_year":2025,"end_year":2025});
         }

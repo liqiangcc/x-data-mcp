@@ -337,7 +337,7 @@ fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
         assert!(
             s.call(
                 "get_data_capabilities",
-                json!({"operation":operation,"dataset":"market.yearly"}),
+                json!({"operation":operation,"dataset":"securities.catalog"}),
                 false
             )["items"]
                 .as_array()
@@ -366,6 +366,8 @@ fn real_yearly_update_stdio_has_closed_schema_frozen_inputs_and_blocked_worker()
         assert_eq!(caps["items"].as_array().unwrap().len(), 1);
         assert_eq!(caps["items"][0]["readiness"], "blocked");
         let schema = jsonschema::validator_for(&caps["items"][0]["input_schema"]).unwrap();
+        schema.validate(&caps["items"][0]["example"]).unwrap();
+        assert_eq!(caps["items"][0]["example"]["dataset"], "market.yearly");
         let input = json!({"request_id":"yearly-wire","dataset":"market.yearly","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"legacy-daily","years":[2025],"publication":{"mode":"historical_fixed_base","comparison_version_id":null}}]});
         schema.validate(&input).unwrap();
         for location in [0, 1, 2] {
