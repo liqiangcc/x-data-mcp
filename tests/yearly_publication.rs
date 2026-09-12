@@ -465,6 +465,24 @@ fn yearly_acceptance_normalizes_freezes_and_retains_global_id_and_scope_boundari
     let cancelled = ctl
         .cancel(&task.task.task_id, task.task.state_revision)
         .unwrap();
+    assert!(matches!(
+        ctl.retry(
+            &task.task.task_id,
+            "before-stop",
+            [task.items[0].spec.item_id.clone()].into()
+        ),
+        Err(TaskError::RangeConflict(_))
+    ));
+    assert!(ctl.read_request("before-stop").unwrap().is_none());
+    let cancelled = store
+        .tasks
+        .transition(
+            &task.task.task_id,
+            cancelled.task.state_revision,
+            "run",
+            Change::FinishCancellation,
+        )
+        .unwrap();
     let retried = task_of(
         ctl.retry(
             &task.task.task_id,
