@@ -602,7 +602,7 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
     }
     let reused: bool = c
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM market_update_results WHERE result_id=?1)",
+            "SELECT EXISTS(SELECT 1 FROM market_update_results WHERE result_id=?1 UNION ALL SELECT 1 FROM yearly_execution_results WHERE result_id=?1)",
             [&command.publication_id],
             |r| r.get(0),
         )
@@ -685,6 +685,7 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
 }
 
 pub(crate) mod update;
+pub(crate) mod yearly_results;
 
 #[cfg(test)]
 mod tests;

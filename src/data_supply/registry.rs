@@ -60,7 +60,7 @@ pub struct Capabilities {
     pub snapshots_per_category: usize,
     pub production_ready: bool,
 }
-pub const RANGE_DESCRIPTION: &str = "Explicit market.daily ranges only, each bound to a published base version. Accepts a task with frozen dates/digest and shared daily occupancy. Default selection, automatic gap discovery and yearly/catalog updates are not implemented. Production source remains blocked; the installed worker only records SOURCE_NOT_VERIFIED and does not publish.";
+pub const RANGE_DESCRIPTION: &str = "Explicit market.daily ranges or market.yearly natural-year sets, each bound to a published daily version. Yearly publication mode and comparison are explicit and frozen; historical mode never advances head. Default selection, automatic gap discovery and catalog updates are not implemented. Production source remains blocked; the installed worker only records SOURCE_NOT_VERIFIED and does not publish.";
 pub const WORKER_DESCRIPTION: &str = "Stage A development-only control: synchronously executes at most one locally owned pending task, mutating task outcomes and occupancy. The installed executor only records SOURCE_NOT_VERIFIED failures; it never downloads or publishes market data. Not a background scheduler or production pipeline.";
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
