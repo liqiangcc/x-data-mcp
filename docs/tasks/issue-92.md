@@ -71,3 +71,5 @@ get_task_progress 增加 frozen_daily_ranges（每项已受理 base/digest/日�
 RangeRunner 回归：range_runner_executes_and_replays_real_publication_without_reacquiring；range_runner_does_not_reexecute_running_or_old_run_items；range_runner_cancellation_and_official_gate_never_publish；range_runner_reconciles_lost_commit_response_and_preserves_unconfirmed_execution。最后一项在真实 SQLite 前后注入响应不确定，不把此包装器称为进程退出测试；实际进程退出证据仍来自 sqlite_market::update::tests。public_range_request_to_fixture_execution_and_verified_query_is_connected 验证公共 JSON 受理→显式测试 provider 执行→持久结果/行情查询；不存在 MCP 选择 fixture provider 的参数。
 
 按 live #3 显式取消/终态保护规则，增加内部 FinishCancellation：执行器确认已停止且未发布后，可在 cancel_requested、无 running 项时取消收尾；不开放用户 stopped 标记，不改写已有终态。已知来源失败仍按失败记录，已发布成功仍由收据返回；存储/提交结果不明不执行取消或失败收尾。range_cancel_ack_requires_stopped_items_and_does_not_rewrite_terminals 覆盖写入未结束及终态保护。
+
+取消确认结果内部持久化 cancellation_acknowledged，仅由 FinishCancellation 写入；SQLite 校验器在全部项都已尝试结束的 cancelled 情况要求该收尾证据，缺失拒绝，不放宽普通 failed/succeeded 校验。该字段不是 MCP 输入或来源门禁开关。

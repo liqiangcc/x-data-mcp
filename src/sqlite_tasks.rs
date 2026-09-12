@@ -334,7 +334,15 @@ fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), 
         Status::Succeeded => finished == total && success == total,
         Status::Failed => finished == total && success == 0,
         Status::PartiallyFailed => finished == total && success > 0 && success < total,
-        Status::Cancelled => finished < total,
+        Status::Cancelled => {
+            finished < total
+                || (success < total
+                    && s.task
+                        .result
+                        .as_ref()
+                        .and_then(|r| r.get("cancellation_acknowledged"))
+                        == Some(&serde_json::Value::Bool(true)))
+        }
         _ => s.task.result.is_none(),
     };
     if !valid

@@ -153,7 +153,11 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                         item_id.into(),
                         ItemOutcome {
                             success: false,
-                            error: Some(error.to_string()),
+                            error: Some(if cancelled_without_publication {
+                                format!("cancelled before publication: {error}")
+                            } else {
+                                error.to_string()
+                            }),
                         },
                     ),
                 )?;

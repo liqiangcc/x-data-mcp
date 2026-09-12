@@ -348,6 +348,10 @@ pub fn decide(
                 };
                 s.task.result =
                     Some(serde_json::json!({"finished_items":finished,"successful_items":success}));
+                if cancellation_finished && s.task.status == Status::Cancelled {
+                    s.task.result.as_mut().unwrap()["cancellation_acknowledged"] =
+                        serde_json::json!(true);
+                }
             }
             _ => return Err(Error::RevisionConflict),
         }

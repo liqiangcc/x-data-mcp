@@ -1044,6 +1044,15 @@ fn range_runner_cancellation_and_official_gate_never_publish() {
             x_data_mcp::task_control::Status::Cancelled
         );
         assert!(task.claims.is_empty());
+        if started {
+            assert_eq!(
+                task.task.result.as_ref().unwrap()["cancellation_acknowledged"],
+                true
+            );
+            let connection = Connection::open(f.db.tasks.path()).unwrap();
+            connection.execute("UPDATE tasks SET result_json=json_remove(result_json,'$.cancellation_acknowledged') WHERE task_id=?1",[&f.command.task_id]).unwrap();
+            assert!(f.db.task(&f.command.task_id).is_err());
+        }
         assert_eq!(provider.calls.get(), usize::from(started));
         assert_eq!(f.count("market_update_results"), 0);
         assert_eq!(f.count("data_versions"), 1);
