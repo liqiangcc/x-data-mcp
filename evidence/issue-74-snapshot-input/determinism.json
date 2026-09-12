@@ -1,0 +1,13 @@
+{
+  "tested_commit": "3a4b518c6ccb0dd6db6d0ccc0015d3140876f84a",
+  "two_clean_checkouts": "BYTE_IDENTICAL",
+  "binary_reused_from_tested_source": true,
+  "binary_sha256": "afddc7106ece71eff0d5766dd200fea59a92b6208076497f6cdaf48b829d4630",
+  "source_sha256": {
+    "src/snapshot.rs": "e066f3040af637c6a5b0c3b74f3f988c9c4935384e6fe803d71f335717d6be05",
+    "src/bin/inspect_snapshot.rs": "ffeab405ef0cb79ad1ebef7c84577afbdccbe259dab7569cc88feaff4cdc7cc2"
+  },
+  "result_sha256": "a37b7f7813ba177ec33522618b8c51a028681f6973323c7b01edeaae329c0ebd",
+  "live_source": "NOT_RUN",
+  "production_ready": false
+}
