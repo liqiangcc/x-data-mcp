@@ -99,14 +99,35 @@ Cargo.lock 只新增此依赖闭包，未更新已有包。bundled 的本机编�
 | AC-06 | `explicit_schema_upgrade_is_transactional_and_checks_migration_identity` | v1→v2 显式升级、失败回滚、不覆盖已有文件、checksum 拒绝 |
 | AC-06 | `stdio_initialize_then_tools_list_exposes_exactly_eight_tools`、`production_stdio_fails_closed_without_python_and_does_not_publish`、`actual_stdio_queries_are_readonly_and_unknown_arguments_reject` | 原 mcp_server 实际离线 stdio 回归 PASS，默认八工具和来源门禁保持 |
 
-### 未验证与留给 Coordinator 的审查点
+### 剩余未验证边界（第一轮返修后）
 
-- 新 `mcp_sqlite_dev`/`task_sqlite` 二进制通过编译，但它们的实际 stdio/CLI 行为测试尚未编写：NOT_RUN。上表旧入口回归不能替代新 Adapter 的 wire 验证。
-- legacy 错误形状仍需核对：重试复用原请求 ID 当前映射 `request_conflict`，旧 Adapter 有 `retry_request_id_conflict`；非法选择 scopes 的错误详情尚无新 Adapter 回归。未将其报告为兼容 PASS。
-- 不同日期同证券周期、辅助摘要碰撞而完整命令不同、重复项带冲突参数等更细场景尚未单独测试：NOT_RUN。当前 legacy 参数不接受日期，新 dataset/date wire 不在本轮注册。
+- 新二进制与 retry wire 的首轮缺口已增加真实 CLI/stdio 测试，日期冲突已增加测试契约；具体入口见下文返修矩阵。此前 NOT_RUN 结论属于 `8d9b3b0`，不代表返修后的测试范围。
+- 辅助摘要碰撞而完整命令不同、重复项带冲突参数等更细场景尚未单独测试：NOT_RUN；没有注册新 dataset/date wire。
 - 已测试取消发生在同步执行器内部；所有 CAS 窗口、多个业务 worker 的并行执行和长时间压力未穷举：NOT_VERIFIED。继续保持单写 worker 运行边界。
 - 进程 exit(78) 不是断电/硬盘故障耐久性证明。真实断电、提交 I/O 错误导致 OUTCOME_UNKNOWN 的注入、性能阈值：NOT_RUN/NOT_VERIFIED。
 - 本机曾有一次 cargo check 因修订号 u64/SQLite INTEGER 类型转换失败；已显式转换，后续 Actions clippy/test PASS。本机完整验收未执行；没有以本机磁盘限制降低 Actions 命令要求。
 - 来源采集、真实行情迁移、部署、SQLite 同库行情发布：NOT_RUN。#46/#54、授权与跨文件一致性门禁未解除；#79/#80/#81 没有开始。
 
 PR #82 保持 Draft；CI PASS 只证明上述测试场景，不是 production approval、全部 AC 验收或设计 PR #72/#76 整体审结。
+
+## Coordinator 第一轮返修（仅 #78）
+
+依据 [review 5645059361](https://github.com/liqiangcc/x-data-mcp/pull/82#issuecomment-5645059361)。
+首组返修 `e9f42109ce5bc945927de80bff59137123a5c55d` 已在
+[run 34686454218 / job 103534158322](https://github.com/liqiangcc/x-data-mcp/actions/runs/34686454218/job/103534158322) 全绿。
+补充代码 `9c3412021f25ad047dfdc961fe000cee096d99f8` 增加已成功项和空新请求 ID 的对照。
+最终文档 HEAD、run/job 及逐项实际结果固定在 PR #82 / #78 返修交付评论，不能把首组 run 当成补充代码的验证。
+
+| 审查项 / AC | 自动测试入口 | 验证内容 |
+|---|---|---|
+| retry wire / AC-05/06 | `real_legacy_and_sqlite_stdio_retry_errors_have_identical_code_scopes_and_shape` | 两个真实 stdio 子进程比较完整结构化错误，并各自核对 MCP text/structuredContent/isError 外壳；原 ID（含空选择）、空选择、空新 ID、范围外/重复/混合选择 |
+| retry wire / AC-05/06 | `completed_scope_retry_errors_match_real_stdio_with_persisted_test_outcomes` | 持久化有界成功/失败 fixture，再由旧/新真实 stdio 拒绝已成功项；code/scopes/shape 相等。fixture 不证明真实行情或发布 |
+| CLI / AC-03/06 | `sqlite_cli_init_upgrade_no_clobber_and_stdio_read_never_initializes_or_upgrades` | 实际 init/no-clobber、v1→v2 upgrade、未知 schema/非法操作拒绝；真实 stdio 普通读取不建库、不升级 |
+| stdio / AC-05/06 | `sqlite_stdio_six_tools_and_complete_task_control_flow` | initialize、六工具集合、start/get/cancel/retry/run/get_request、真实终态重放、关键错误及六工具 extra fields 拒绝 |
+| 日期范围 / AC-01 | `disjoint_dates_do_not_narrow_security_period_occupancy` | test-only contract 的 2024/2025 两命令持有相同证券×周期 scope_key，第二次 RangeConflict，无新绑定/占用 |
+| 关注点分离 | 既有 `tests/day_file.rs` 及上述全部 SQLite 测试 | SHA-256 实现移到 `src/hash.rs`；`day_file::sha256` 保留 re-export 兼容，SQLite 使用 `hash::sha256`，不依赖 day-file 领域模块 |
+
+retry 的普通验证沿用旧 Adapter 的 period→原任务→原 ID→空选择→非法选择→受理顺序；
+公共事务仍再次检查重试资格与占用。没有修改旧协议，也没有改变默认生产装配。
+全部新测试由现有 `cargo test --locked` 发现，无需新 workflow 或本地 bundled 构建。
+PR 继续 Draft，等待 Coordinator 二次审查；断电、全部 CAS 窗口、多 worker、性能和真实来源边界保持未验证。
