@@ -1,0 +1,10 @@
+{
+  "clean_checkout_commit": "38c7a5aa4b3b8d46e680826677c453113e059a16",
+  "independent_checkouts": 2,
+  "byte_identical": true,
+  "sha256": "331d8c016c61e890760df7a09568111db04447c1099e26a62b3fef25140f2393",
+  "bytes": 12822,
+  "tests_per_checkout": 5,
+  "upstream_runtime": "NOT_RUN",
+  "official_semantics": "NOT_VERIFIED"
+}

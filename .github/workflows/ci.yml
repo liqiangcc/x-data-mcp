@@ -24,3 +24,7 @@ jobs:
         run: |
           python3 -B evidence/issue-54-gbbq-decimal/analyze_matrix.py --check
           python3 -B -m unittest discover -s evidence/issue-54-gbbq-decimal -p 'test_*.py'
+      - name: Issue 90 community scalar diagnostics (not official QFQ validation)
+        run: |
+          python3 -B evidence/issue-90-community-qfq/compare.py --check
+          python3 -B -m unittest discover -s evidence/issue-90-community-qfq -p 'test_*.py'

@@ -1,0 +1,19 @@
+{
+  "schema": "issue90.plan.v1",
+  "base": "f22fab81f40470938c8eca7e495949fba1acb942",
+  "inputs": {
+    "evidence/issue-54-gbbq-decimal/inputs.json": "34af2d78b9071f8505e99ff5dfdf563bd9a833b76c5de7112d02cb997ec4d99c",
+    "evidence/issue-54-gbbq-decimal/matrix.json": "2fe91f1a946146503a131977c91c15c5b2c1e5ee3d2fdb880ecadf4853beb8fb",
+    "evidence/issue-3-cross-stock-qfq/source-provenance.json": "59dd8e903b11b7f94c86157f9c8adb2be363a3bf5d7847b011710ef8d4ea941a"
+  },
+  "sources_sha256": "b24f0c1cff156c2abedc72c096a77cc84dad9c4c742adc3bf13495797d29fa90",
+  "selection": "All nine existing #54 rows in existing order; prior OHLC from retained raw_hex; no new source requests or sample selection",
+  "models": [
+    "injoyai single category-1 event: binary32->binary64, math.Round(field*100)/100 all four fields, affine A=1/m B=-A*c, output math.Round(price*100)/100; preserve operation order",
+    "QUANTAXIS scalar single category-1 event: supplied raw decoded fields, unrounded reference/previous_close proportional factor, no output rounding; input normalization upstream UNKNOWN",
+    "Frozen #54 frozen_repr reference_cent and ratio copied from retained matrix; not recalculated as new expected values"
+  ],
+  "arithmetic": "Python binary64 scalar diagnostic; Go math.Round emulated via exact ratio integer rounding ties away from zero after binary64 multiplication. No Go/Pandas packages executed. No full cumulative historical chain.",
+  "roundtrip_check": "Repack normalized float32 to detect information loss; failed roundtrip is not by itself proof of business invalidity",
+  "acceptance": "Explain model differences only. No official target is available for these complete nine-event outputs. NOT_VERIFIED regardless of agreement. #53 full four-stock validation and live source NOT_RUN."
+}
