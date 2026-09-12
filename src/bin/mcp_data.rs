@@ -7,6 +7,14 @@ fn main() {
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 1 && args[0] == "--version" {
+        println!(
+            "x-data-mcp {} {} NOT_PRODUCTION_READY",
+            env!("CARGO_PKG_VERSION"),
+            env!("X_DATA_MCP_BUILD_SHA")
+        );
+        return Ok(());
+    }
     if args.len() != 1 {
         return Err("usage: mcp_data <initialized-database-path>".into());
     }

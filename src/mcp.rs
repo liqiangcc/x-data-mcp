@@ -557,7 +557,7 @@ pub fn handle_json<H: ToolHandler>(api: &H, input: &str) -> Option<String> {
             "result": {
                 "protocolVersion": "2025-06-18",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "x-data-mcp", "version": "0.1.0"}
+                "serverInfo": {"name": "x-data-mcp", "version": env!("CARGO_PKG_VERSION")}
             }
         }),
         "tools/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": api.tools()}}),

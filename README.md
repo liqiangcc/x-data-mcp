@@ -117,3 +117,15 @@ Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README
 精确比较，累计变化按整数有理数一次 half-even 舍入至 12 位。
 缺少年度覆盖证据返回 `not_computable`，不会把 year_unfinished=false 当成完整性证据。
 当前完整性扩展仅供显式 fixture 验证，不解除真实来源门禁，见[Stage D](docs/tasks/issue-81.md)。
+
+## 预发布包与本机检查
+
+`mcp_data --version` 显示构建 SHA。预发布包包含 manifest.json、SHA256SUMS 和部署检查脚本，
+明确标记 NOT_PRODUCTION_READY。适用 Linux x86_64 / glibc 2.39+；尚未验证其他平台。
+
+解包后先核对 SHA256SUMS；`bin/task_sqlite init <新库路径>` 显式建空库，然后用
+`bin/mcp_data <该库路径>` 配置本地 MCP stdio 客户端。没有 HTTP 监听或匿名远程入口。
+
+`bin/create_demo <全新测试库路径>` 仅创建合成演示数据，不覆盖既有文件，正常服务不会自动调用。
+`python3 check.py --bin-dir bin --report smoke-report.json` 在临时新库运行真实部署检查并写报告。
+检查通过只证明当前二进制和 fixture 功能，不证明官方来源、真实行情或全部未来产品功能已完成。
