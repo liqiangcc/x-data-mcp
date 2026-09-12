@@ -1,0 +1,12 @@
+{
+  "tested_commit": "413ffe028c9766eb5e31406b651f1f8a8f08f3b4",
+  "clean_checkouts": 2,
+  "byte_identical": true,
+  "result_sha256": "d60f1d01fc52bdd8e72af5627b844d8ccb028a25d912ad75e0983dc10a8e8be5",
+  "network_requests": 0,
+  "binary_build": "cargo build --locked --bin inspect_day at tested_commit; external shared target cache",
+  "input_scope": "retained #53 four extracted members; member hashes checked against unchanged selection",
+  "evidence": "STRUCTURAL_ONLY",
+  "normalization": "NOT_VERIFIED",
+  "live_source": "NOT_RUN"
+}
