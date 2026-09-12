@@ -19,3 +19,7 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
       - run: cargo build --locked
+      - name: Issue 54 offline diagnostic evidence (not live source validation)
+        run: |
+          python3 -B evidence/issue-54-gbbq-decimal/analyze_matrix.py --check
+          python3 -B -m unittest discover -s evidence/issue-54-gbbq-decimal -p 'test_*.py'

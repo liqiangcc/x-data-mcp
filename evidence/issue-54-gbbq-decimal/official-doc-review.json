@@ -1,0 +1,26 @@
+[
+  {
+    "url": "https://help.tdx.com.cn/gspt/docs/markdown/redword/functionlist.html",
+    "status": 200,
+    "sha256": "be325fc6980aa3bd27f7b833735882047c5901b13b70b4859dd792bef09cc395",
+    "bytes": 121250,
+    "retrieved_utc": "2026-09-12",
+    "local_review_copy": "/tmp/issue54-official-0.html"
+  },
+  {
+    "url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h10g60jt68sc.html",
+    "status": 200,
+    "sha256": "9997b78f14c68c75f6d060fbac50040e7c263ff9931128fa60bec95a84af1e8d",
+    "bytes": 30319,
+    "retrieved_utc": "2026-09-12",
+    "local_review_copy": "/tmp/issue54-official-1.html"
+  },
+  {
+    "url": "https://www.tdx.com.cn/article/52.html",
+    "status": 200,
+    "sha256": "527d447ca305ca0f9a16e8f79201264856e7be08f4971eaefa6baafd6dc57d37",
+    "bytes": 24873,
+    "retrieved_utc": "2026-09-12",
+    "local_review_copy": "/tmp/issue54-official-2.html"
+  }
+]

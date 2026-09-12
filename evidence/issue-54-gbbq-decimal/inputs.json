@@ -1,0 +1,351 @@
+{
+  "plan_sha256": "fe0e4a0855f3f4dd0c85a60cd74de41e67e6f5eb80b39d7dd9d484fea75f6106",
+  "rows": [
+    {
+      "day_member": "sh\\lday\\sh600006.day",
+      "day_member_sha256": "91cb06b2ba0cca331f41f759e3aa0647e6eb5bd62c450cd0fca2e6b397362f7d",
+      "event": {
+        "category": 1,
+        "clear_hex": "01363030303036005d00350101cdcc4c3d000000000000000000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2025-07-17",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20250717,
+        "float32_raw_bits_hex": [
+          "0x3d4ccccd",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.05000000074505806,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127405
+      },
+      "prior_bar": {
+        "index": 6182,
+        "next_raw_hex": "5d003501d4020000dc020000d3020000dc020000d520804d9fa1330200000100",
+        "raw_hex": "5c003501d5020000d7020000d2020000d5020000b1fe4b4df07fc20100000100"
+      },
+      "selection_reasons": [
+        "mandatory_half_cent"
+      ],
+      "symbol": "sh.600006"
+    },
+    {
+      "day_member": "sz\\lday\\sz000002.day",
+      "day_member_sha256": "69f117e439555018c64d77b75a359fe725c39a38423971cc03330d6d9b44bc19",
+      "event": {
+        "category": 1,
+        "clear_hex": "0030303030303200251d3001019a99193f000000000000a04000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1993-04-05",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19930405,
+        "float32_raw_bits_hex": [
+          "0x3f19999a",
+          "0x00000000",
+          "0x40a00000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.6000000238418579,
+          0.0,
+          5.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 86
+      },
+      "prior_bar": {
+        "index": 571,
+        "next_raw_hex": "251d30010208000034080000f8070000020800004e6f924c20570b0000000000",
+        "raw_hex": "221d30011c0c00004e0c0000ef0b0000ef0b0000f8d8dd4cb4680b0000000000"
+      },
+      "selection_reasons": [
+        "C1_tail"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "day_member": "sz\\lday\\sz000002.day",
+      "day_member_sha256": "69f117e439555018c64d77b75a359fe725c39a38423971cc03330d6d9b44bc19",
+      "event": {
+        "category": 1,
+        "clear_hex": "0030303030303200e6933001013333b33f000000000000803f00000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1996-08-06",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19960806,
+        "float32_raw_bits_hex": [
+          "0x3fb33333",
+          "0x00000000",
+          "0x3f800000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.399999976158142,
+          0.0,
+          1.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 92
+      },
+      "prior_bar": {
+        "index": 1394,
+        "next_raw_hex": "e6933001fe02000001030000df020000fc020000004e6d4b44561f0000000000",
+        "raw_hex": "e5933001480300005a0300002a03000056030000641bd04bfc72310000000000"
+      },
+      "selection_reasons": [
+        "C1_tail"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "day_member": "sz\\lday\\sz000002.day",
+      "day_member_sha256": "69f117e439555018c64d77b75a359fe725c39a38423971cc03330d6d9b44bc19",
+      "event": {
+        "category": 1,
+        "clear_hex": "003030303030320045573101016666e63f000000000000000000000000",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2001-08-21",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20010821,
+        "float32_raw_bits_hex": [
+          "0x3fe66666",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          1.7999999523162842,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "market": 0,
+        "record_index": 106
+      },
+      "prior_bar": {
+        "index": 2604,
+        "next_raw_hex": "45573101ab050000af0500009b0500009f05000030295d4bec4f0f0000000000",
+        "raw_hex": "445731019f050000b80500009e050000b1050000a811b44b4cb9180000000000"
+      },
+      "selection_reasons": [
+        "C1_tail"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "day_member": "sh\\lday\\sh600004.day",
+      "day_member_sha256": "9fa246c023ca11c427d45aa527f01a64611cc40903ec5b636290d0986fe470a9",
+      "event": {
+        "category": 1,
+        "clear_hex": "013630303030340014f531010100000000000000003333f33f00000000",
+        "code": "600004",
+        "date_calendar_valid": true,
+        "date_iso": "2005-12-20",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20051220,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x00000000",
+          "0x3ff33333",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          0.0,
+          1.899999976158142,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127306
+      },
+      "prior_bar": {
+        "index": 602,
+        "next_raw_hex": "14f5310194020000a202000085020000940200001e09654ded222a021f030000",
+        "raw_hex": "a7f431011603000026030000160300001f0300005394a94c8695a90016030000"
+      },
+      "selection_reasons": [
+        "C3_tail"
+      ],
+      "symbol": "sh.600004"
+    },
+    {
+      "day_member": "sh\\lday\\sh600006.day",
+      "day_member_sha256": "91cb06b2ba0cca331f41f759e3aa0647e6eb5bd62c450cd0fca2e6b397362f7d",
+      "event": {
+        "category": 1,
+        "clear_hex": "0136303030303600b91b32010100000000000000003333534000000000",
+        "code": "600006",
+        "date_calendar_valid": true,
+        "date_iso": "2006-11-13",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20061113,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x00000000",
+          "0x40533333",
+          "0x00000000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          0.0,
+          3.299999952316284,
+          0.0
+        ],
+        "market": 1,
+        "record_index": 127384
+      },
+      "prior_bar": {
+        "index": 1711,
+        "next_raw_hex": "b91b320115010000160100000201000009010000ef88a54cc2b1e9016c010000",
+        "raw_hex": "5c1b32017201000074010000690100006c010000226c8c4cd2c6330172010000"
+      },
+      "selection_reasons": [
+        "C3_tail"
+      ],
+      "symbol": "sh.600006"
+    },
+    {
+      "day_member": "sz\\lday\\sz000002.day",
+      "day_member_sha256": "69f117e439555018c64d77b75a359fe725c39a38423971cc03330d6d9b44bc19",
+      "event": {
+        "category": 1,
+        "clear_hex": "00303030303032009aba30010100000000000090400000000014ae1740",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1997-07-14",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19970714,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x40900000",
+          "0x00000000",
+          "0x4017ae14"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          4.5,
+          0.0,
+          2.369999885559082
+        ],
+        "market": 0,
+        "record_index": 97
+      },
+      "prior_bar": {
+        "index": 1618,
+        "next_raw_hex": "9aba30012c06000040060000fb0500001806000059e0ac4c78d0570000000000",
+        "raw_hex": "97ba300190060000e00600007c060000df0600005c8dd94cec71650000000000"
+      },
+      "selection_reasons": [
+        "C4_tail",
+        "C2_C4_combination"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "day_member": "sz\\lday\\sz000002.day",
+      "day_member_sha256": "69f117e439555018c64d77b75a359fe725c39a38423971cc03330d6d9b44bc19",
+      "event": {
+        "category": 1,
+        "clear_hex": "00303030303032006e2d310101000000000000f040000000002b872e40",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "2000-01-10",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 20000110,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x40f00000",
+          "0x00000000",
+          "0x402e872b"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          7.5,
+          0.0,
+          2.7269999980926514
+        ],
+        "market": 0,
+        "record_index": 103
+      },
+      "prior_bar": {
+        "index": 2224,
+        "next_raw_hex": "6e2d31012c040000780400001f0400007804000098e1174d6052d90000000000",
+        "raw_hex": "6b2d3101220400004c040000160400004b040000f6ab0c4d540dd00000000000"
+      },
+      "selection_reasons": [
+        "C4_tail"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "day_member": "sz\\lday\\sz000002.day",
+      "day_member_sha256": "69f117e439555018c64d77b75a359fe725c39a38423971cc03330d6d9b44bc19",
+      "event": {
+        "category": 1,
+        "clear_hex": "0030303030303200c9cf2f010100000000cdcc8c40000000000000a040",
+        "code": "000002",
+        "date_calendar_valid": true,
+        "date_iso": "1991-06-01",
+        "date_plausible_1900_2100": true,
+        "date_raw_int": 19910601,
+        "float32_raw_bits_hex": [
+          "0x00000000",
+          "0x408ccccd",
+          "0x00000000",
+          "0x40a00000"
+        ],
+        "float32_repr_diagnostic": [
+          0.0,
+          4.400000095367432,
+          0.0,
+          5.0
+        ],
+        "market": 0,
+        "record_index": 81
+      },
+      "prior_bar": {
+        "index": 84,
+        "next_raw_hex": "d0cf2f011b0300001b030000e40200001b03000000709446f401000000000000",
+        "raw_hex": "7fcf2f01690400006904000069040000690400008012ae49d462000000000000"
+      },
+      "selection_reasons": [
+        "C2_C4_combination"
+      ],
+      "symbol": "sz.000002"
+    }
+  ],
+  "schema": "issue54.bounded-input.v1",
+  "selected_events_sha256": "c53a962ad4e39ceb3f8c4533451516620b6547cfd071241e826857cd132bfef7",
+  "source_provenance": {
+    "baostock": {
+      "package": "baostock 0.9.3",
+      "query_mode": "one fresh anonymous session per corrected security; no application retry",
+      "wheel_sha256": "acbd19403285bc4e254cee8297cf0e2646ae2276e5af7e549deed3988ab02293"
+    },
+    "community_decoder": {
+      "boundary": "community reverse-engineering evidence, not official TDX contract",
+      "commit": "0d6f80618e1bae0f8e48552e597af492f3640f5d",
+      "git_blob_sha1": "0eda4935027ffc79b5c425eff0a70a6d492b21d1",
+      "path": "pytdx/reader/gbbq_reader.py",
+      "raw_sha256": "e28fae76760b1247a960cab285aa357c2d263b3212e7cabfb3f1ebfcc127d6ba",
+      "repo": "wxyzZ/pytdx"
+    },
+    "official_gbbq_archive_sha256": "6cfdbfc5a67e80ba6773cd5e8cc6779a97a01e07d892e5e6a17c9b35dbef60aa",
+    "official_gbbq_member_sha256": "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60",
+    "official_hsjday_zip_sha256": "611ea3ccc1e64717aebc9a14ce9c8b1ed06526b5fd69bd14275fc376f4f44272",
+    "selection_sha256": "e6a3a4c59f02120c02328fdfc519592d9acf16666f8b1876dcbde670124b5446"
+  }
+}
