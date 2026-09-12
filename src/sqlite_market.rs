@@ -106,7 +106,10 @@ impl SqliteMarket {
     }
     pub fn versions(&self, scope: &Scope) -> Result<Vec<crate::publish::EffectiveVersion>, Error> {
         self.read(|c|{
-            let mut stmt=c.prepare("SELECT version_id FROM data_versions WHERE symbol=?1 AND period=?2 AND adjustment='qfq' AND state='published' ORDER BY published_at DESC,version_id ASC").map_err(storage)?;
+            // Lost version metadata cannot be assigned reliably to a scope: fail closed.
+            let orphan: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM publication_batches b LEFT JOIN data_versions v ON v.version_id=b.version_id WHERE v.version_id IS NULL)", [], |r|r.get(0)).map_err(storage)?;
+            if orphan { return Err(integrity("publication references missing version")); }
+            let mut stmt=c.prepare("SELECT version_id FROM data_versions v WHERE symbol=?1 AND period=?2 AND adjustment='qfq' AND (state='published' OR EXISTS(SELECT 1 FROM publication_batches b WHERE b.version_id=v.version_id)) ORDER BY published_at DESC,version_id ASC").map_err(storage)?;
             let ids=stmt.query_map(params![scope.symbol,period(scope.period)],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
             ids.into_iter().map(|id|read_record(c,&id,true,true).map(|r|r.version)).collect()
         })

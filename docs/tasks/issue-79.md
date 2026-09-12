@@ -83,3 +83,7 @@ receipt 查询必须核对请求的 publication_id，不得接受另一合法发
 已发布版本同时核对 command 的 item_id 与 publication 行投影。
 回归：`publication_receipt_cannot_alias_another_valid_publication`、
 `publication_item_projection_tampering_is_rejected`；完整验证由本提交 Actions 提供。
+
+版本列表也核验曾发布的记录，不因 state 被篡改而过滤掉它；缺失版本的孤立 publication 保守拒绝。
+对应回归复用 `damaged_published_state_or_missing_version_is_not_reported_as_no_data`。
+列表完整性检查包含 publication 关联扫描，不能将其成本描述为只扫描单页。

@@ -760,6 +760,7 @@ fn damaged_published_state_or_missing_version_is_not_reported_as_no_data() {
             store.fixed("legacy-daily"),
             Err(Error::Integrity(_))
         ));
+        assert!(matches!(store.versions(&scope()), Err(Error::Integrity(_))));
         let args = MarketQuery {
             exchange: "sh".into(),
             code: "600006".into(),
@@ -806,7 +807,7 @@ fn publication_item_projection_tampering_is_rejected() {
     Connection::open(store.tasks.path())
         .unwrap()
         .execute(
-            "UPDATE publication_batches SET item_id='unrelated-item'",
+            "UPDATE publication_batches SET command_json=json_set(command_json, '$.item_id', 'unrelated-item')",
             [],
         )
         .unwrap();
