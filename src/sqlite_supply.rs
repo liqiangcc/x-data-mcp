@@ -283,3 +283,123 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
         }),
     }
 }
+
+use crate::data_supply::observe::{ObservationRepository, TaskFacts, authorized, summary};
+fn task_facts(c: &Connection, id: &str, access: &Access) -> Result<TaskFacts, Error> {
+    let s = crate::sqlite_tasks::read_bound_task(c, id)?
+        .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
+    if !authorized(&s, access) {
+        return Err(invalid("forbidden"));
+    }
+    let request = c
+        .query_row(
+            "SELECT request_id FROM requests WHERE task_id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    let mut q = c
+        .prepare("SELECT version_id FROM task_publications WHERE task_id=?1 ORDER BY version_id")
+        .map_err(storage)?;
+    let ids = q
+        .query_map([id], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let mut publications = vec![];
+    for id in ids {
+        let r = read_record(c, &id, true, true)?;
+        let e = crate::data_supply::observe::entity(&r.version().symbol)
+            .ok_or_else(|| Error::Integrity("published task symbol".into()))?;
+        let dataset = if r.version().period == crate::market_data::Period::Day {
+            Dataset::Daily
+        } else {
+            Dataset::Yearly
+        };
+        publications.push(market_ref(dataset, &e, &r));
+    }
+    Ok(TaskFacts {
+        request_id: request,
+        snapshot: s,
+        publications,
+    })
+}
+fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts>, Error> {
+    let mut q=c.prepare("SELECT task_id,command_key_json,frozen_work_json FROM tasks ORDER BY created_at DESC,task_id ASC").map_err(storage)?;
+    let rows = q
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let mut result = vec![];
+    for (id, key, work) in rows {
+        let key: crate::task_control::CommandKey = serde_json::from_str(&key).map_err(storage)?;
+        let allowed = match key.dataset.as_str() {
+            "market.daily" => access.allows(Dataset::Daily, None),
+            "market.yearly" => access.allows(Dataset::Yearly, None),
+            "securities.catalog" => access.allows(Dataset::Catalog, None),
+            "legacy_market_compound" => {
+                access.allows(Dataset::Daily, None) || access.allows(Dataset::Yearly, None)
+            }
+            _ => false,
+        };
+        if !allowed {
+            continue;
+        }
+        let work: crate::task_control::FrozenWork = serde_json::from_str(&work).map_err(storage)?;
+        if work.items.iter().any(|i| {
+            i.target["symbol"].as_str().is_some_and(|s| {
+                crate::data_supply::observe::entity(s)
+                    .is_none_or(|e| access.securities.as_ref().is_some_and(|a| !a.contains(&e)))
+            })
+        }) {
+            continue;
+        }
+        match task_facts(c, &id, access) {
+            Ok(f) => result.push(f),
+            Err(Error::Invalid(s)) if s == "forbidden" => continue,
+            Err(e) => return Err(e),
+        }
+        if result.len() > 10000 {
+            return Err(invalid("task snapshot budget exceeded"));
+        }
+    }
+    Ok(result)
+}
+impl ObservationRepository for SqliteSupply {
+    fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error> {
+        self.market.read(|c| task_list(c, access))
+    }
+    fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
+        self.market.read(|c| task_facts(c, id, access))
+    }
+    fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
+        ReadRepository::verify(self, refs)
+    }
+    fn availability(
+        &self,
+        plan: &QueryPlan,
+        access: &Access,
+        run: &str,
+    ) -> Result<Vec<AvailabilityItem>, Error> {
+        self.market.read(|c|{
+        let tasks=task_list(c,access)?;let mut out=vec![];
+        let entities:Vec<Option<Security>>=if plan.args.dataset==Dataset::Catalog{vec![None]}else{plan.entities.iter().cloned().map(Some).collect()};
+        for entity in entities {
+            let mut single=plan.clone();if let Some(e)=&entity {single.entities=vec![e.clone()];}
+            let related_tasks=tasks.iter().filter(|f|f.snapshot.items.iter().any(|i|match &entity{Some(e)=>i.spec.target["symbol"]==e.symbol(),None=>f.snapshot.task.key.dataset=="securities.catalog"})).map(|f|summary(f,run)).collect();
+            match query(c,&single,access){
+                Ok(s)=>{let m=&s.manifest[0];let dates=s.rows.iter().filter_map(|r|match r{Row::Market{date,..}=>Some(*date),_=>None}).collect::<Vec<_>>();out.push(AvailabilityItem{entity,version_ref:m.version_ref.clone(),availability:if m.status==ManifestStatus::Absent{Availability::Absent}else if plan.args.dataset==Dataset::Catalog{Availability::Available}else{Availability::Unknown},coverage_evidence:m.metadata.as_ref().map(|m|m.coverage_reason.clone()).unwrap_or_else(||"no published version".into()),first_record:dates.first().copied(),last_record:dates.last().copied(),record_count:s.rows.len(),freshness:"unknown".into(),related_tasks,limitations:vec!["range completeness not inferred from contiguous dates or version coverage alone".into()]});},
+                Err(Error::Integrity(reason)|Error::Base(reason))=>out.push(AvailabilityItem{entity,version_ref:None,availability:Availability::Unavailable,coverage_evidence:reason,first_record:None,last_record:None,record_count:0,freshness:"unknown".into(),related_tasks,limitations:vec!["damaged existing input; no automatic collection or repair".into()]}),
+                Err(e)=>return Err(e),
+            }
+        }Ok(out)
+    })
+    }
+}

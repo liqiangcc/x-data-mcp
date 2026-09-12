@@ -237,3 +237,121 @@ pub struct Metadata {
     pub units: Vec<Evidence>,
     pub lineage: Option<Lineage>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TasksQuery {
+    pub dataset: Option<Dataset>,
+    pub operation: Option<TaskOperation>,
+    pub status: Option<Vec<TaskStatus>>,
+    pub created_from: Option<DateTime<Utc>>,
+    pub created_to: Option<DateTime<Utc>>,
+    #[serde(default = "default_page")]
+    pub page_size: usize,
+    pub cursor: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskOperation {
+    StartCollection,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Pending,
+    Running,
+    CancelRequested,
+    NeedsVerification,
+    Succeeded,
+    PartiallyFailed,
+    Failed,
+    Cancelled,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressQuery {
+    pub task_id: String,
+    #[serde(default = "default_page")]
+    pub page_size: usize,
+    pub cursor: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskSummary {
+    pub task_id: String,
+    pub request_id: String,
+    pub dataset: String,
+    pub operation: String,
+    pub contract_version: String,
+    pub status: TaskStatus,
+    pub state_revision: u64,
+    pub created_at: DateTime<Utc>,
+    pub last_progress_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressItem {
+    pub item_id: String,
+    pub entity: Option<Security>,
+    pub period: Option<String>,
+    pub progress_unit: String,
+    pub stage: String,
+    pub success: Option<bool>,
+    pub error: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskListPage {
+    pub snapshot_id: String,
+    pub snapshot_time: DateTime<Utc>,
+    pub items: Vec<TaskSummary>,
+    pub next_cursor: Option<String>,
+    pub page_complete: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressPage {
+    pub snapshot_id: String,
+    pub snapshot_time: DateTime<Utc>,
+    pub task: TaskSummary,
+    pub total: usize,
+    pub finished: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub unfinished: Vec<ProgressItem>,
+    pub next_cursor: Option<String>,
+    pub page_complete: bool,
+    pub publication_versions: Vec<VersionRef>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Availability {
+    Absent,
+    Unknown,
+    Unavailable,
+    Available,
+    Partial,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AvailabilityItem {
+    pub entity: Option<Security>,
+    pub version_ref: Option<VersionRef>,
+    pub availability: Availability,
+    pub coverage_evidence: String,
+    pub first_record: Option<NaiveDate>,
+    pub last_record: Option<NaiveDate>,
+    pub record_count: usize,
+    pub freshness: String,
+    pub related_tasks: Vec<TaskSummary>,
+    pub limitations: Vec<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AvailabilityPage {
+    pub snapshot_id: String,
+    pub snapshot_time: DateTime<Utc>,
+    pub items: Vec<AvailabilityItem>,
+    pub next_cursor: Option<String>,
+    pub page_complete: bool,
+}

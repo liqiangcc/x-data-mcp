@@ -32,3 +32,8 @@ impl Access {
 }
 
 pub mod query;
+
+pub mod observe;
+
+pub mod mcp;
+pub mod registry;
