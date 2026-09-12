@@ -190,14 +190,13 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         let intent: PublishIntent = serde_json::from_value(frozen["intent"].clone())
             .map_err(|e| Error::Integrity(e.to_string()))?;
         let prior = frozen["comparison"]["version_id"].as_str();
-        if let Some(id) = prior {
-            if self.repository.fixed(id)?.raw()["integrity_sha256"]
+        if let Some(id) = prior
+            && self.repository.fixed(id)?.raw()["integrity_sha256"]
                 != frozen["comparison"]["integrity_sha256"]
-            {
-                return Err(Error::Integrity(
-                    "fixed comparison differs from accepted digest".into(),
-                ));
-            }
+        {
+            return Err(Error::Integrity(
+                "fixed comparison differs from accepted digest".into(),
+            ));
         }
         let evidence = verifier
             .verify(&base, &years, self.derived_at)
