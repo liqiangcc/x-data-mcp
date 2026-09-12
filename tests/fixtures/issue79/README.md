@@ -10,6 +10,6 @@ values were calculated independently with Python hashlib over sorted compact JSO
 (`json.dumps(sort_keys=True,separators=(',',':'),ensure_ascii=False)`) after removing
 only top-level integrity_sha256. CI must also match the exact old Rust function;
 this fixture is not a claim that Python JSON is generally serde_json-compatible.
-Cases preserve absent versus null lineage, precision beyond binary64, unknown
+Cases preserve absent versus null lineage, a hand-derived 2025 yearly lineage, precision beyond binary64, unknown
 volume/amount and their units, coverage and explicit evidence. All data is fixture.
 No real legacy database/source file is imported or re-certified.

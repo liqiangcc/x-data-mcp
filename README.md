@@ -56,9 +56,9 @@
 年线没有已发布 daily 时报告 `PUBLISHED_QFQ_DAILY_REQUIRED`。
 此入口不是部署完成或自动后台执行的证明。
 
-## SQLite 任务开发入口（#78，Draft）
+## SQLite 任务开发入口（#78）
 
-[PR #82](https://github.com/liqiangcc/x-data-mcp/pull/82) 新增独立任务存储，尚待 Coordinator 审查。
+[PR #82](https://github.com/liqiangcc/x-data-mcp/pull/82) 已合并独立任务存储。
 显式初始化用 `cargo run --locked --bin task_sqlite -- init <新库路径>`；
 既有受支持 schema 的升级用 `task_sqlite upgrade <库路径>`。初始化不覆盖既有文件，普通读取不建库、不迁移、不回退 JSON。
 `cargo run --locked --bin mcp_sqlite_dev -- <已初始化库路径>` 是独立开发入口，仅提供六个旧任务控制工具；
@@ -68,6 +68,15 @@
 真实临时 SQLite 的受理、并发、进程退出、状态及故障测试随 `cargo test --locked` 运行；
 准确代码 SHA、Actions 与未验证项见 [#78 实施记录](docs/tasks/issue-78.md)。
 服务器磁盘受限，本轮完整编译和测试使用 Actions，本机仅格式与差异检查。
+
+## SQLite 行情 Stage B（#79，Draft）
+
+[PR #83](https://github.com/liqiangcc/x-data-mcp/pull/83) 提供库内 fixture/dry-run 能力：
+结构化 daily/yearly、完整 legacy JSON/digest 核验、固定版本 SQL 范围读取，以及同库条件发布和任务输出关联。
+显式 task_sqlite init/upgrade 使用 schema v3；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
+历史固定 daily 可派生 immutable yearly，但不推进 yearly head；current-head 同时核对 daily/yearly head、任务修订与占用。
+实现、完整性扫描成本、测试入口及未验证项见 [Stage B 记录](docs/tasks/issue-79.md)。
+当前仍 NOT_PRODUCTION_READY；该切片不解除 #54/#6/#46/#71 来源门禁。
 
 ## 验证
 

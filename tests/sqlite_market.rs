@@ -376,6 +376,7 @@ fn head_task_and_batch_write_failures_roll_back_every_publication_fact() {
         "CREATE TRIGGER fail BEFORE INSERT ON publication_batches BEGIN SELECT RAISE(ABORT,'batch fail'); END;",
         "CREATE TRIGGER fail BEFORE UPDATE ON tasks BEGIN SELECT RAISE(ABORT,'task fail'); END;",
         "CREATE TRIGGER fail BEFORE UPDATE ON effective_heads BEGIN SELECT RAISE(ABORT,'head fail'); END;",
+        "CREATE TRIGGER fail BEFORE UPDATE ON effective_heads BEGIN SELECT RAISE(IGNORE); END;",
     ] {
         let (_dir, store) = db();
         let raw = samples()[0]["record"].clone();

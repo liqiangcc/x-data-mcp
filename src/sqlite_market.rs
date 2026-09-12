@@ -585,7 +585,8 @@ impl MarketRepository for SqliteMarket {
             c.execute("INSERT INTO task_publications VALUES(?1,?2,?3)",params![command.task_id,command.version_id,command.publication_id]).map_err(storage)?;
             c.execute("UPDATE data_versions SET state='published' WHERE version_id=?1 AND state='validated'",[&command.version_id]).map_err(storage)?;
             if let Some(scope)=&plan.promote {
-                c.execute("INSERT INTO effective_heads VALUES(?1,?2,'qfq',?3) ON CONFLICT(symbol,period,adjustment) DO UPDATE SET version_id=excluded.version_id",params![scope.symbol,period(scope.period),command.version_id]).map_err(storage)?;
+                let changed = c.execute("INSERT INTO effective_heads VALUES(?1,?2,'qfq',?3) ON CONFLICT(symbol,period,adjustment) DO UPDATE SET version_id=excluded.version_id",params![scope.symbol,period(scope.period),command.version_id]).map_err(storage)?;
+                if changed != 1 { return Err(Error::Conflict("head promotion did not write one row".into())); }
             }
             crate::sqlite_tasks::write_task(c,&next,command.expected_revision)?;
             read_projection(c,&command.version_id,true,true)?;
