@@ -1,5 +1,9 @@
 # MCP tools 契约
 
+## 最新目标契约
+
+[通用数据工具设计](generic-data-tools.md)是本轮目标权威：同类业务动作复用工具，以 dataset 和 contract_version 分派类型化参数。本文“当前八工具”及 schema 快照保留原样；后续章节的分类专用工具名称、组合示例与扩展策略属于此前草案，须按新设计的映射和兼容规则理解，不能与新目标并列注册为两套业务实现。
+
 ## 版本与阅读方式
 
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
@@ -494,7 +498,7 @@ next_actions 仅建议，不自动执行、不包含凭据、不决定权限；�
 不能现在加入未声明的 dataset、source 或任意 options 参数。
 
 目标采用明确的业务工具加共享任务协议：
-新类别定义自己的类型化采集/查询工具，复用 request_id、task_id、进度读取、
+新类别扩展通用采集/查询工具的类型化 schema 分支，复用 request_id、task_id、进度读取、
 取消和幂等机制。新增工具名称在对应 Issue 定稿；财务采集等仅作潜在例子，
 不加入当前工具清单，也不承诺立即实现。
 

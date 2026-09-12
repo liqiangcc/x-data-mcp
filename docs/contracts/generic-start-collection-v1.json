@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Target start_collection v1 design slice (not runtime)",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "dataset",
+        "contract_version",
+        "selection"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "dataset": {
+          "const": "market.daily"
+        },
+        "contract_version": {
+          "const": "v1"
+        },
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "securities"
+          ],
+          "properties": {
+            "kind": {
+              "const": "explicit"
+            },
+            "securities": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "exchange",
+                  "code"
+                ],
+                "properties": {
+                  "exchange": {
+                    "type": "string",
+                    "enum": [
+                      "sh",
+                      "sz"
+                    ]
+                  },
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[0-9]{6}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "dataset",
+        "contract_version",
+        "selection"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "dataset": {
+          "const": "securities.catalog"
+        },
+        "contract_version": {
+          "const": "v1"
+        },
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "const": "current_sh_sz_a"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
