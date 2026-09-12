@@ -12,7 +12,7 @@ use crate::{
     sqlite_tasks::SqliteTasks,
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 pub struct SqliteTaskApi {
     pub control: TaskControl<SqliteTasks>,
 }

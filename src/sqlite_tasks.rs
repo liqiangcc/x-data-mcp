@@ -98,8 +98,12 @@ impl SqliteTasks {
             .map_err(storage)?;
         check_schema(&tx, true)?;
         let value = f(&tx)?;
+        #[cfg(test)]
+        tests::crash_point("before_commit");
         tx.commit()
             .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
+        #[cfg(test)]
+        tests::crash_point("after_commit");
         Ok(value)
     }
 }
@@ -214,6 +218,8 @@ fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
             .transpose()?,
         retry_of: r.get(9).map_err(storage)?,
     };
+    #[cfg(test)]
+    tests::after_task_row();
     let mut stmt=c.prepare("SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=?1 ORDER BY item_id").map_err(storage)?;
     let mut rows = stmt.query([id]).map_err(storage)?;
     let mut items = Vec::new();
@@ -310,6 +316,33 @@ fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), 
     {
         return Err(inconsistent("terminal execution/claims inconsistent"));
     }
+    let finished = s
+        .items
+        .iter()
+        .filter(|i| i.stage == Stage::Finished)
+        .count();
+    let success = s
+        .items
+        .iter()
+        .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+        .count();
+    let total = s.items.len();
+    let valid = match s.task.status {
+        Status::Succeeded => finished == total && success == total,
+        Status::Failed => finished == total && success == 0,
+        Status::PartiallyFailed => finished == total && success > 0 && success < total,
+        Status::Cancelled => finished < total,
+        _ => s.task.result.is_none(),
+    };
+    if !valid
+        || s.task
+            .owner_run_id
+            .as_ref()
+            .is_some_and(|r| r.trim().is_empty())
+        || (s.task.owner_run_id.is_none() && s.items.iter().any(|i| i.stage != Stage::Pending))
+    {
+        return Err(inconsistent("execution status/outcomes inconsistent"));
+    }
     Ok(())
 }
 fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRecord>, Error> {
@@ -346,6 +379,25 @@ fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRecord>, Error
         command,
         outcome,
     }))
+}
+fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
+    let snapshot = read_task(c, id)?;
+    let binding: Option<String> = c
+        .query_row(
+            "SELECT request_id FROM requests WHERE task_id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    match (snapshot, binding) {
+        (Some(s), Some(request)) => {
+            read_request(c, &request)?;
+            Ok(Some(s))
+        }
+        (None, None) => Ok(None),
+        _ => Err(inconsistent("task binding/execution missing")),
+    }
 }
 fn write_task(c: &Connection, s: &TaskSnapshot, expected: u64) -> Result<(), Error> {
     let changed=c.execute("UPDATE tasks SET status=?1,state_revision=?2,owner_run_id=?3,last_progress_at=?4,result_json=?5 WHERE task_id=?6 AND state_revision=?7",params![tag(&s.task.status),db_revision(s.task.state_revision)?,s.task.owner_run_id,s.task.last_progress_at.to_rfc3339(),s.task.result.as_ref().map(encode).transpose()?,s.task.task_id,db_revision(expected)?]).map_err(storage)?;
@@ -384,23 +436,9 @@ impl TaskRepository for SqliteTasks {
         self.read(|c| read_request(c, id))
     }
     fn read_task(&self, id: &str) -> Result<Option<TaskSnapshot>, Error> {
-        self.read(|c| {
-            let s = read_task(c, id)?;
-            if s.is_some() {
-                let request_id: Option<String> = c
-                    .query_row(
-                        "SELECT request_id FROM requests WHERE task_id=?1",
-                        [id],
-                        |r| r.get(0),
-                    )
-                    .optional()
-                    .map_err(storage)?;
-                let request_id = request_id.ok_or_else(|| inconsistent("task binding missing"))?;
-                read_request(c, &request_id)?;
-            }
-            Ok(s)
-        })
+        self.read(|c| read_bound_task(c, id))
     }
+
     fn accept(
         &self,
         id: &str,
@@ -416,11 +454,13 @@ impl TaskRepository for SqliteTasks {
         self.write(|c|{
             if let Some(record)=read_request(c,id)?{if record.command!=*command{return Err(Error::RequestConflict);}return Ok(Acceptance{record,reused:true});}
             // Corrupt accepted state is not permission to steal a missing claim.
+            let orphan: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN requests r ON r.task_id=t.task_id WHERE r.request_id IS NULL)", [], |r| r.get(0)).map_err(storage)?;
+            if orphan { return Err(inconsistent("unbound execution record")); }
             let mut stmt=c.prepare("SELECT request_id FROM requests").map_err(storage)?;
             let ids=stmt.query_map([],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
             for existing in ids{read_request(c,&existing)?;}
             let execution_key=if let Some(guard)=retry {
-                let old=read_task(c,&guard.original_task_id)?.ok_or(Error::TaskNotFound)?;
+                let old=read_bound_task(c,&guard.original_task_id)?.ok_or(Error::TaskNotFound)?;
                 if old.task.state_revision!=guard.expected_revision{return Err(Error::RevisionConflict);}
                 if command.intent!=serde_json::json!({"original_task_id":guard.original_task_id,"selected_items":guard.selected_items}) || command.key!= (CommandKey{operation:"retry_task".into(),..old.task.key.clone()}) {return Err(Error::InvalidRetrySelection);}
                 if c.query_row("SELECT request_id FROM requests WHERE task_id=?1",[&guard.original_task_id],|r|r.get::<_,String>(0)).map_err(storage)?==id{return Err(Error::RequestConflict);}
@@ -449,7 +489,7 @@ impl TaskRepository for SqliteTasks {
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
         self.write(|c| {
-            let old = read_task(c, id)?.ok_or(Error::TaskNotFound)?;
+            let old = read_bound_task(c, id)?.ok_or(Error::TaskNotFound)?;
             if old.task.state_revision != revision {
                 return Err(Error::RevisionConflict);
             }
@@ -457,21 +497,21 @@ impl TaskRepository for SqliteTasks {
             if next.task.state_revision != revision {
                 write_task(c, &next, revision)?;
             }
-            read_task(c, id)?.ok_or(Error::TaskNotFound)
+            read_bound_task(c, id)?.ok_or(Error::TaskNotFound)
         })
     }
     fn candidates(&self, run: &str) -> Result<Vec<TaskSnapshot>, Error> {
         self.read(|c|{
         let mut stmt=c.prepare("SELECT task_id FROM tasks WHERE accepted_run_id=?1 AND owner_run_id IS NULL AND status IN ('pending','cancel_requested') ORDER BY created_at,task_id").map_err(storage)?;
         let ids=stmt.query_map([run],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
-        ids.iter().map(|id|read_task(c,id)?.ok_or(Error::TaskNotFound)).collect()
+        ids.iter().map(|id|read_bound_task(c,id)?.ok_or(Error::TaskNotFound)).collect()
     })
     }
     fn reconcile(&self, run: &str) -> Result<usize, Error> {
         self.write(|c|{
         let mut stmt=c.prepare("SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1))").map_err(storage)?;
         let ids=stmt.query_map([run],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
-        let mut count=0;for id in ids{let old=read_task(c,&id)?.ok_or(Error::TaskNotFound)?;let rev=old.task.state_revision;let next=decide(old,run,Change::Reconcile,Utc::now())?;if next.task.state_revision!=rev{write_task(c,&next,rev)?;count+=1;}}Ok(count)
+        let mut count=0;for id in ids{let old=read_bound_task(c,&id)?.ok_or(Error::TaskNotFound)?;let rev=old.task.state_revision;let next=decide(old,run,Change::Reconcile,Utc::now())?;if next.task.state_revision!=rev{write_task(c,&next,rev)?;count+=1;}}Ok(count)
     })
     }
 }
@@ -483,3 +523,6 @@ fn read_revision(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64>
 fn db_revision(n: u64) -> Result<i64, Error> {
     i64::try_from(n).map_err(|_| Error::RevisionConflict)
 }
+
+#[cfg(test)]
+mod tests;
