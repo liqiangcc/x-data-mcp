@@ -205,7 +205,7 @@ impl DataApi {
                                 Some(super::observe::summary(
                                     &super::observe::TaskFacts {
                                         request_id: a.request_id.clone(),
-                                        snapshot: s,
+                                        snapshot: *s,
                                         publications: vec![],
                                     },
                                     &self.observer.run_id,

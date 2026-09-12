@@ -23,7 +23,12 @@ pub struct AvailabilityFacts {
     pub related_tasks: Vec<TaskFacts>,
 }
 /// Domain classification: storage reports facts, never decides availability policy.
-fn availability_item(f: AvailabilityFacts, dataset: Dataset, run: &str) -> AvailabilityItem {
+fn availability_item(
+    f: AvailabilityFacts,
+    dataset: Dataset,
+    run: &str,
+    range: &Filter,
+) -> AvailabilityItem {
     let unavailable = f.integrity_failure.is_some();
     let availability = if unavailable {
         Availability::Unavailable
@@ -45,7 +50,7 @@ fn availability_item(f: AvailabilityFacts, dataset: Dataset, run: &str) -> Avail
             .map(|m| m.coverage_reason.clone())
             .unwrap_or_else(|| "no published version".into())
     });
-    AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks:f.related_tasks.iter().map(|f|summary(f,run)).collect(),limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]}
+    AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),integrity:if unavailable{"failed"}else if availability==Availability::Absent{"not_applicable"}else{"verified"}.into(),confirmed_gaps:vec![],unresolved_ranges:if availability==Availability::Unknown{vec![range.clone()]}else{vec![]},availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks:f.related_tasks.iter().map(|f|summary(f,run)).collect(),limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]}
 }
 pub trait ObservationRepository {
     fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error>;
