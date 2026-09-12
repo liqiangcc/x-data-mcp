@@ -94,3 +94,16 @@ fn compute_real_stdio_roundtrips_schema_and_fixed_version_reference() {
     );
     assert_eq!(details["items"][0]["input_schema"], tool["inputSchema"]);
 }
+#[test]
+fn missing_completion_is_an_explicit_mcp_failure_with_diagnostics() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("db");
+    let t = x_data_mcp::sqlite_tasks::SqliteTasks::new(&path);
+    t.initialize().unwrap();
+    let reference = fixture::publish(&x_data_mcp::sqlite_market::SqliteMarket::new(t), false);
+    let mut s = Session::new(&path);
+    let result = s.call("compute_metrics", fixture::request(reference), true);
+    assert_eq!(result["code"], "not_computable");
+    assert_eq!(result["details"]["result"]["reason"], "unknown_completion");
+    assert_eq!(result["outcome_certainty"], "not_applicable");
+}

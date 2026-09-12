@@ -265,3 +265,20 @@ fn duplicated_unordered_and_excessive_windows_are_rejected() {
         .is_err()
     );
 }
+#[test]
+fn actual_input_includes_the_break_observation_but_not_irrelevant_prefix() {
+    let data = observations(&["50", "80", "100", "90", "80", "70"]);
+    match run(&data, &parameters("down")) {
+        Outcome::Computed {
+            actual_input_range,
+            observations_used,
+            anchor: Some(anchor),
+            ..
+        } => {
+            assert_eq!(actual_input_range.start_year, 2021);
+            assert_eq!(anchor.year, 2022);
+            assert_eq!(observations_used, 5);
+        }
+        other => panic!("{other:?}"),
+    }
+}

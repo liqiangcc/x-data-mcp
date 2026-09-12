@@ -360,15 +360,24 @@ impl DataApi {
             return self.legacy_call(name, input);
         };
         match entry.handler {
-            Handler::Compute => encode(
-                crate::metrics::service::Metrics {
+            Handler::Compute => {
+                let computed = crate::metrics::service::Metrics {
                     repository: crate::sqlite_metrics::SqliteMetrics {
                         market: self.queries.repository.market.clone(),
                     },
                 }
                 .compute(decode(input)?, &self.access)
-                .map_err(mapped)?,
-            ),
+                .map_err(mapped)?;
+                if let crate::metrics::wire::Outcome::NotComputable { reason, .. } =
+                    &computed.result
+                {
+                    let mut error = ApiError::new("not_computable", format!("{reason:?}"));
+                    error.details = Some(serde_json::to_value(computed).unwrap());
+                    Err(error)
+                } else {
+                    encode(computed)
+                }
+            }
             Handler::Collection
             | Handler::Retry
             | Handler::Task

@@ -121,6 +121,8 @@ pub struct ApiError {
     pub outcome_certainty: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_actions: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 impl ApiError {
@@ -131,6 +133,7 @@ impl ApiError {
             scopes: None,
             outcome_certainty: None,
             next_actions: None,
+            details: None,
         }
     }
 

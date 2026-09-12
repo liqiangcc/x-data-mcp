@@ -93,9 +93,11 @@ pub fn evaluate(input: &[Observation], range: &Years, p: &Parameters) -> Result<
     };
     let mut run = 0;
     let mut anchor = len - 1;
+    let mut earliest_checked = len - 1;
     let mut kind = RunKind::LowerBound;
     let mut observed = None;
     for i in (1..len).rev() {
+        earliest_checked = i - 1;
         let a = &data[i - 1];
         let b = &data[i];
         if b.year - a.year != 1 {
@@ -152,8 +154,12 @@ pub fn evaluate(input: &[Observation], range: &Years, p: &Parameters) -> Result<
             rounding: "half_even_once".into(),
             unit: "ratio".into(),
         }),
+        observations_used: len - earliest_checked,
+        continuity_evidence:
+            "adjacent natural years and explicit completion checked for all used observations"
+                .into(),
         actual_input_range: Years {
-            start_year: data[anchor].year,
+            start_year: data[earliest_checked].year,
             end_year: end.year,
         },
         excluded_tail: excluded,

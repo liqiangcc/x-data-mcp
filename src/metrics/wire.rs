@@ -144,6 +144,8 @@ pub enum Outcome {
         end: Point,
         cumulative_change: Option<String>,
         precision: Box<Precision>,
+        observations_used: usize,
+        continuity_evidence: String,
         actual_input_range: Years,
         excluded_tail: Vec<i32>,
         provisional: bool,
