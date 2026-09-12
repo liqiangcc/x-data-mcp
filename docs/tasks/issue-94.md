@@ -8,7 +8,7 @@ SQLite 设计 c2f89085850423734193f3090dd435c34f4688ec；实施基线 2c706325aa
 输入显式 symbol/base/年度集合/derived_at；DerivationEvidence 只供可信内部 verifier/test 装配，不支持反序列化/MCP。
 完整取得说明须绑定 base digest、年度及 Shanghai as_of；不代表全年/上市以来完整，不生成 analysis_coverage_v1。
 legacy record 保留 batch/digest；新增 local_yearly_derivation_v1 扩展保留逐年 lineage、未结束标记及原 daily 获取时间。
-不修改任何旧 record。不存在新的 DDL、SQL 规则或在线 provider。
+不修改任何旧 record。候选构造本身不新增 DDL；执行结果切片另有 schema v6，见下文。没有在线 provider。
 
 prepare_derived_yearly 校验固定 base 未变，stage 候选并复用已有 Publisher.prepare。
 sealed PublishPlan 的 base digest、daily/yearly head、revision/occupancy 条件继续由已有原子提交核对。
@@ -21,8 +21,8 @@ AC → 测试（tests/yearly_publication.rs）：
 - AC-04 historical_base_can_publish_after_daily_advances_but_current_intent_conflicts。
 - 既有 tests/sqlite_market.rs 继续覆盖双 head、task/occupancy、篡改与真实进程退出矩阵；不是新范围/worker 的证明。
 
-尚未交付：显式 yearly 更新任务、无变化复用、范围外旧 yearly 处理、public wire/worker/进度与部署。
-当前只是新的候选构造路径，不能作为完整 update_data(yearly) 或重复更新规则。
+显式内部 yearly 更新受理、范围保护及无变化原子结果已实现。尚未交付：public wire/worker/进度与部署。
+内部受理/候选/结果可以分别测试，但尚未连成 public update_data(yearly) 执行链。
 真实 verifier/source 尚未实现，#54/#71/#46/#6/文件一致性 NOT_VERIFIED，live source 与四股复验 NOT_RUN。
 所有新增测试只使用固定 fixture；NOT_PRODUCTION_READY。不扩展到目录、来源研究或迁移。
 

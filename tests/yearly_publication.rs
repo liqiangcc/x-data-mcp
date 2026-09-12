@@ -811,3 +811,60 @@ fn yearly_result_schema_requires_explicit_upgrade_and_read_does_not_upgrade() {
         .unwrap();
     assert_eq!(version, 6);
 }
+
+#[test]
+fn numerically_equal_yearly_from_a_different_daily_version_is_not_reuse() {
+    let (_dir, store) = db();
+    let original = samples()[0]["record"].clone();
+    published_fixture(&store, &original);
+    let first = result_plan(&store, "first-yearly", None, "fixture range");
+    store.commit_yearly(&first).unwrap();
+    let newer = revised(&original, "new-base");
+    let daily = prepare(
+        &store,
+        &newer,
+        PublishIntent::Daily {
+            expected_head: Some("legacy-daily".into()),
+        },
+    );
+    store.commit(&daily).unwrap();
+    let publisher = Publisher {
+        repository: store.clone(),
+    };
+    let (mut request, mut evidence) = inputs(&store, "new-lineage");
+    request.base_daily_version_id = "new-base".into();
+    evidence.base_integrity_sha256 = store.fixed("new-base").unwrap().raw()["integrity_sha256"]
+        .as_str()
+        .unwrap()
+        .into();
+    evidence.coverage.reason = "fixture range".into();
+    let candidate = publisher.derive_yearly(&request, &evidence).unwrap();
+    let cmd = command(
+        &store,
+        "new-lineage",
+        PublishIntent::CurrentHead {
+            expected_daily_head: "new-base".into(),
+            expected_yearly_head: Some("first-yearly".into()),
+        },
+    );
+    let plan = publisher
+        .prepare_yearly_result(cmd, &candidate, Some("first-yearly"))
+        .unwrap();
+    assert!(!plan.is_no_change());
+    store.commit_yearly(&plan).unwrap();
+    assert_eq!(
+        store.fixed("first-yearly").unwrap().version().records,
+        store.fixed("new-lineage").unwrap().version().records
+    );
+    assert_eq!(
+        store
+            .fixed("new-lineage")
+            .unwrap()
+            .version()
+            .yearly_derivation
+            .as_ref()
+            .unwrap()
+            .base_daily_version_id,
+        "new-base"
+    );
+}
