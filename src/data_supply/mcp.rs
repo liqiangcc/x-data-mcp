@@ -48,6 +48,28 @@ impl DataApi {
                             operation: crate::market_update::tasks::Operation::Backfill,
                             repository: repository.market.clone(),
                         }),
+                        Box::new(crate::yearly_publication::tasks::YearlyContract {
+                            operation: crate::market_update::tasks::Operation::Update,
+                            repository: repository.market.clone(),
+                            today: || {
+                                chrono::Utc::now()
+                                    .with_timezone(
+                                        &chrono::FixedOffset::east_opt(8 * 3600).unwrap(),
+                                    )
+                                    .date_naive()
+                            },
+                        }),
+                        Box::new(crate::yearly_publication::tasks::YearlyContract {
+                            operation: crate::market_update::tasks::Operation::Backfill,
+                            repository: repository.market.clone(),
+                            today: || {
+                                chrono::Utc::now()
+                                    .with_timezone(
+                                        &chrono::FixedOffset::east_opt(8 * 3600).unwrap(),
+                                    )
+                                    .date_naive()
+                            },
+                        }),
                         Box::new(super::collect::CollectionContract {
                             dataset: Dataset::Daily,
                             repository: repository.clone(),
@@ -105,14 +127,14 @@ impl DataApi {
             if args.operation.as_ref().is_some_and(|op| op != e.name) {
                 continue;
             }
-            if matches!(e.handler, Handler::Range(_))
-                && (!self.access.allows(Dataset::Daily, None)
-                    || args.dataset.is_some_and(|d| d != Dataset::Daily))
-            {
-                continue;
-            }
             let datasets = if matches!(e.handler, Handler::Range(_)) {
-                vec![Some(Dataset::Daily)]
+                [Dataset::Daily, Dataset::Yearly]
+                    .into_iter()
+                    .filter(|d| {
+                        self.access.allows(*d, None) && args.dataset.is_none_or(|a| a == *d)
+                    })
+                    .map(Some)
+                    .collect::<Vec<_>>()
             } else if matches!(
                 e.handler,
                 Handler::Query | Handler::Versions | Handler::Availability | Handler::Collection
@@ -233,6 +255,7 @@ impl DataApi {
                                         snapshot: *s,
                                         publications: vec![],
                                         range_results: vec![],
+                                        yearly_results: vec![],
                                     },
                                     &self.observer.run_id,
                                 ))
@@ -400,9 +423,13 @@ impl DataApi {
                 let accepted = self
                     .legacy
                     .control
-                    .accept(&command.request_id, operation.key(), command.payload())
+                    .accept(
+                        command.request_id(),
+                        command.key(operation),
+                        command.payload(),
+                    )
                     .map_err(task_error)?;
-                self.acceptance(&command.request_id, accepted)
+                self.acceptance(command.request_id(), accepted)
             }
             Handler::Compute => {
                 let computed = crate::metrics::service::Metrics {

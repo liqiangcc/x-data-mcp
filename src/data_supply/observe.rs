@@ -13,6 +13,7 @@ pub struct TaskFacts {
     pub snapshot: TaskSnapshot,
     pub publications: Vec<VersionRef>,
     pub range_results: Vec<RangeExecutionResult>,
+    pub yearly_results: Vec<YearlyExecutionResult>,
 }
 pub struct AvailabilityFacts {
     pub entity: Option<Security>,
@@ -63,6 +64,7 @@ pub trait ObservationRepository {
     ) -> Result<Vec<AvailabilityFacts>, Error>;
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error>;
     fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error>;
+    fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error>;
 }
 pub fn entity(symbol: &str) -> Option<Security> {
     let (ex, code) = symbol.split_once('.')?;
@@ -321,6 +323,8 @@ impl<R: ObservationRepository> Observer<R> {
                 frozen_daily_ranges: frozen_daily_ranges(&facts.snapshot)?,
                 publication_versions: facts.publications,
                 range_results: facts.range_results,
+                yearly_results: facts.yearly_results,
+                frozen_yearly_inputs: frozen_yearly_inputs(&facts.snapshot)?,
             };
             if serde_json::to_vec(&p)
                 .map_err(|e| invalid(&e.to_string()))?
@@ -336,6 +340,7 @@ impl<R: ObservationRepository> Observer<R> {
         };
         self.repository.verify_versions(&p.publication_versions)?;
         self.repository.verify_range_results(&p.range_results)?;
+        self.repository.verify_yearly_results(&p.yearly_results)?;
         let end = (s.offset + args.page_size).min(p.unfinished.len());
         let more = end < p.unfinished.len();
         let mut result = (**p).clone();
@@ -407,6 +412,9 @@ fn budget<T: serde::Serialize>(v: &[T]) -> Result<(), Error> {
 }
 
 fn frozen_daily_ranges(task: &TaskSnapshot) -> Result<Vec<FrozenDailyRange>, Error> {
+    if task.task.key.dataset != "market.daily" {
+        return Ok(vec![]);
+    }
     if !matches!(
         task.task.key.operation.as_str(),
         "update_data" | "backfill_data"
@@ -425,5 +433,30 @@ fn frozen_daily_ranges(task: &TaskSnapshot) -> Result<Vec<FrozenDailyRange>, Err
             "base_version_id":frozen["base_version_id"],"base_integrity_sha256":frozen["base_integrity_sha256"],
             "start_date":frozen["range"]["start"],"end_date":frozen["range"]["end"]
         })).map_err(|e|Error::Integrity(format!("frozen range: {e}")))
+    }).collect()
+}
+
+fn frozen_yearly_inputs(task: &TaskSnapshot) -> Result<Vec<FrozenYearlyInput>, Error> {
+    if task.task.key.dataset != "market.yearly"
+        || !matches!(
+            task.task.key.operation.as_str(),
+            "update_data" | "backfill_data"
+        )
+    {
+        return Ok(vec![]);
+    }
+    if task.task.key.contract_version != crate::yearly_publication::tasks::CONTRACT_VERSION {
+        return Err(Error::Integrity("unknown frozen yearly contract".into()));
+    }
+    task.items.iter().map(|item|{
+        let f=&item.spec.frozen_inputs;
+        let entity=item.spec.target["symbol"].as_str().and_then(entity).ok_or_else(||Error::Integrity("frozen yearly entity missing".into()))?;
+        let intent:crate::market_storage::PublishIntent=serde_json::from_value(f["intent"].clone()).map_err(|e|Error::Integrity(e.to_string()))?;
+        let publication=match intent {
+            crate::market_storage::PublishIntent::HistoricalFixedBase=>YearlyPublication::HistoricalFixedBase{comparison_version_id:f["comparison"]["version_id"].as_str().map(str::to_owned)},
+            crate::market_storage::PublishIntent::CurrentHead{expected_yearly_head,..}=>YearlyPublication::CurrentHead{expected_yearly_head},
+            _=>return Err(Error::Integrity("daily intent in frozen yearly task".into())),
+        };
+        serde_json::from_value(serde_json::json!({"item_id":item.spec.item_id,"entity":entity,"base_daily_version_id":f["base_daily_version_id"],"base_integrity_sha256":f["base_integrity_sha256"],"years":f["years"],"publication":publication,"comparison":f["comparison"]})).map_err(|e|Error::Integrity(e.to_string()))
     }).collect()
 }

@@ -334,6 +334,8 @@ pub struct ProgressPage {
     pub publication_versions: Vec<VersionRef>,
     pub frozen_daily_ranges: Vec<FrozenDailyRange>,
     pub range_results: Vec<RangeExecutionResult>,
+    pub frozen_yearly_inputs: Vec<FrozenYearlyInput>,
+    pub yearly_results: Vec<YearlyExecutionResult>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -474,12 +476,6 @@ pub struct ConfirmedGap {
     pub evidence: String,
 }
 
-/// Only explicit daily ranges are implemented at this stage.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
-pub enum DailyDataset {
-    #[serde(rename = "market.daily")]
-    Daily,
-}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RangeWriteItem {
@@ -489,13 +485,41 @@ pub struct RangeWriteItem {
     pub end_date: NaiveDate,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "dataset", deny_unknown_fields)]
+pub enum RangeWrite {
+    #[serde(rename = "market.daily")]
+    Daily {
+        request_id: String,
+        contract_version: ContractVersion,
+        #[schemars(length(min = 1))]
+        items: Vec<RangeWriteItem>,
+    },
+    #[serde(rename = "market.yearly")]
+    Yearly {
+        request_id: String,
+        contract_version: ContractVersion,
+        #[schemars(length(min = 1))]
+        items: Vec<YearlyWriteItem>,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum YearlyPublication {
+    HistoricalFixedBase {
+        comparison_version_id: Option<String>,
+    },
+    CurrentHead {
+        expected_yearly_head: Option<String>,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct RangeWrite {
-    pub request_id: String,
-    pub dataset: DailyDataset,
-    pub contract_version: ContractVersion,
+pub struct YearlyWriteItem {
+    pub entity: Security,
+    pub base_daily_version_id: String,
     #[schemars(length(min = 1))]
-    pub items: Vec<RangeWriteItem>,
+    pub years: Vec<i32>,
+    pub publication: YearlyPublication,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -517,4 +541,32 @@ pub struct RangeExecutionResult {
     pub result_version: VersionRef,
     pub no_change: bool,
     pub acquired_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComparisonVersion {
+    pub version_id: String,
+    pub integrity_sha256: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenYearlyInput {
+    pub item_id: String,
+    pub entity: Security,
+    pub base_daily_version_id: String,
+    pub base_integrity_sha256: String,
+    pub years: Vec<i32>,
+    pub publication: YearlyPublication,
+    pub comparison: Option<ComparisonVersion>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct YearlyExecutionResult {
+    pub result_id: String,
+    pub item_id: String,
+    pub base_daily_version: VersionRef,
+    pub result_version: VersionRef,
+    pub no_change: bool,
+    pub derived_at: DateTime<Utc>,
 }

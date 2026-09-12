@@ -1145,3 +1145,68 @@ fn yearly_runner_cancellation_before_or_during_verification_does_not_publish() {
         );
     }
 }
+
+#[test]
+fn public_yearly_request_to_fixture_execution_progress_and_query_preserves_reuse() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let api = DataApi::new(store.tasks.clone(), "run".into(), Access::local()).unwrap();
+    let verifier = FixtureYearlyVerifier {
+        calls: 0.into(),
+        cancel: None,
+    };
+    let mut prior: Option<String> = None;
+    for id in ["first-public", "second-public"] {
+        let accepted=api.call("update_data",json!({"request_id":id,"dataset":"market.yearly","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"legacy-daily","years":[2025],"publication":{"mode":"current_head","expected_yearly_head":prior}}]})).unwrap();
+        let YearlyExecution::Published(receipt) = runner(&store)
+            .run_item(
+                accepted["task_id"].as_str().unwrap(),
+                accepted["item_ids"][0].as_str().unwrap(),
+                &verifier,
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        let progress = api
+            .call("get_task_progress", json!({"task_id":accepted["task_id"]}))
+            .unwrap();
+        assert_eq!(progress["succeeded"], 1);
+        assert_eq!(progress["yearly_results"][0]["no_change"], prior.is_some());
+        assert_eq!(
+            progress["yearly_results"][0]["result_version"]["version_id"],
+            receipt.version_id
+        );
+        assert_eq!(progress["frozen_yearly_inputs"][0]["years"], json!([2025]));
+        assert_eq!(
+            progress["publication_versions"].as_array().unwrap().len(),
+            usize::from(prior.is_none())
+        );
+        let page=api.call("query_data",json!({"dataset":"market.yearly","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"yearly","start_year":2025,"end_year":2025},"version":{"kind":"latest_per_entity"}})).unwrap();
+        assert_eq!(page["records"][0]["close"], "11.75");
+        if let Some(prior) = &prior {
+            assert_eq!(&receipt.version_id, prior);
+        }
+        prior = Some(receipt.version_id);
+    }
+    assert_eq!(verifier.calls.get(), 2);
+    Connection::open(store.tasks.path())
+        .unwrap()
+        .execute_batch("UPDATE yearly_execution_results SET audit_json='{}'")
+        .unwrap();
+    let task = api
+        .call(
+            "get_request",
+            json!({"contract_version":"v1","request_id":"second-public"}),
+        )
+        .unwrap()["task"]["task_id"]
+        .clone();
+    assert!(
+        api.call("get_task_progress", json!({"task_id":task}))
+            .is_err()
+    );
+}

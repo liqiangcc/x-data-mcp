@@ -337,6 +337,7 @@ fn task_facts(
             snapshot: s,
             publications: vec![],
             range_results: vec![],
+            yearly_results: vec![],
         });
     }
     let mut q = c
@@ -371,6 +372,20 @@ fn task_facts(
         .iter()
         .map(|id| range_result(c, id))
         .collect::<Result<Vec<_>, _>>()?;
+    let mut q = c
+        .prepare(
+            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id",
+        )
+        .map_err(storage)?;
+    let yearly_ids = q
+        .query_map([id], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let yearly_results = yearly_ids
+        .iter()
+        .map(|id| yearly_result(c, id))
+        .collect::<Result<Vec<_>, _>>()?;
     if matches!(
         s.task.key.operation.as_str(),
         "update_data" | "backfill_data"
@@ -381,10 +396,17 @@ fn task_facts(
             .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
             .map(|i| i.spec.item_id.clone())
             .collect::<std::collections::BTreeSet<_>>();
-        let evidenced = range_results
-            .iter()
-            .map(|r| r.item_id.clone())
-            .collect::<std::collections::BTreeSet<_>>();
+        let evidenced = if s.task.key.dataset == "market.yearly" {
+            yearly_results
+                .iter()
+                .map(|r| r.item_id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+        } else {
+            range_results
+                .iter()
+                .map(|r| r.item_id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
         if successful != evidenced {
             return Err(Error::Integrity(
                 "successful range task lacks matching result evidence".into(),
@@ -392,6 +414,7 @@ fn task_facts(
         }
     }
     Ok(TaskFacts {
+        yearly_results,
         range_results,
         request_id: request,
         snapshot: s,
@@ -455,6 +478,21 @@ impl ObservationRepository for SqliteSupply {
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)
+    }
+    fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error> {
+        if results.is_empty() {
+            return Ok(());
+        }
+        self.market.read(|c| {
+            for expected in results {
+                if yearly_result(c, &expected.result_id)? != *expected {
+                    return Err(Error::Integrity(
+                        "yearly result changed since snapshot".into(),
+                    ));
+                }
+            }
+            Ok(())
+        })
     }
     fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error> {
         if results.is_empty() {
@@ -564,4 +602,23 @@ fn range_result(c: &Connection, id: &str) -> Result<RangeExecutionResult, Error>
         "no_change":audit["no_change"],"acquired_at":audit["segment"]["provenance"]["acquired_at"]
     }))
     .map_err(|e| Error::Integrity(format!("range result projection: {e}")))
+}
+
+fn yearly_result(c: &Connection, id: &str) -> Result<YearlyExecutionResult, Error> {
+    let (audit, receipt) = crate::sqlite_market::yearly_results::read_result(c, id)?
+        .ok_or_else(|| Error::Integrity("yearly result missing".into()))?;
+    let base_id = audit["base_daily_version_id"]
+        .as_str()
+        .ok_or_else(|| Error::Integrity("yearly base missing".into()))?;
+    let base = read_record(c, base_id, true, true)?;
+    let result = read_record(c, &receipt.version_id, true, true)?;
+    if base.version().period != crate::market_data::Period::Day
+        || result.version().period != crate::market_data::Period::Year
+        || base.version().symbol != result.version().symbol
+    {
+        return Err(Error::Integrity("yearly result identity/period".into()));
+    }
+    let entity = crate::data_supply::observe::entity(&base.version().symbol)
+        .ok_or_else(|| Error::Integrity("yearly result entity".into()))?;
+    serde_json::from_value(serde_json::json!({"result_id":id,"item_id":audit["command"]["item_id"],"base_daily_version":market_ref(Dataset::Daily,&entity,&base),"result_version":market_ref(Dataset::Yearly,&entity,&result),"no_change":audit["no_change"],"derived_at":audit["candidate"]["batch"]["provenance"]["acquired_at"]})).map_err(|e|Error::Integrity(e.to_string()))
 }

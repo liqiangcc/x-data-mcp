@@ -25,6 +25,21 @@ pub fn run_once(
         // Compatibility collection tasks retain their existing source refusal.
         return Ok(control.run_selected(candidate, &crate::official_files::BlockedSource)?);
     }
+    if candidate.task.key.dataset == "market.yearly" {
+        let runner = crate::yearly_publication::runner::YearlyRunner {
+            repository: market.clone(),
+            run_id: control.run_id.clone(),
+            derived_at: chrono::Utc::now(),
+        };
+        for item in &candidate.items {
+            runner.run_item(
+                &candidate.task.task_id,
+                &item.spec.item_id,
+                &crate::yearly_publication::runner::OfficialYearlyVerifier,
+            )?;
+        }
+        return Ok(Some(control.read_task(&candidate.task.task_id)?));
+    }
     let runner = RangeRunner {
         repository: market.clone(),
         run_id: control.run_id.clone(),

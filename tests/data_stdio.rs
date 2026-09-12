@@ -239,7 +239,7 @@ fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
             false,
         );
         let cap = &capabilities["items"][0];
-        assert_eq!(capabilities["items"].as_array().unwrap().len(), 1);
+        assert_eq!(capabilities["items"].as_array().unwrap().len(), 2);
         assert_eq!(cap["dataset"], "market.daily");
         assert_eq!(cap["readiness"], "blocked");
         assert!(
@@ -341,6 +341,101 @@ fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
                 false
             )["items"]
                 .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn real_yearly_update_stdio_has_closed_schema_frozen_inputs_and_blocked_worker() {
+    for operation in ["update_data", "backfill_data"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let tasks = x_data_mcp::sqlite_tasks::SqliteTasks::new(&path);
+        tasks.initialize().unwrap();
+        let market = x_data_mcp::sqlite_market::SqliteMarket::new(tasks);
+        range_fixture::published_fixture(&market, &range_fixture::samples()[0]["record"]);
+        let mut s = Session::new(&path);
+        s.request("initialize", json!({}));
+        let caps = s.call(
+            "get_data_capabilities",
+            json!({"operation":operation,"dataset":"market.yearly"}),
+            false,
+        );
+        assert_eq!(caps["items"].as_array().unwrap().len(), 1);
+        assert_eq!(caps["items"][0]["readiness"], "blocked");
+        let schema = jsonschema::validator_for(&caps["items"][0]["input_schema"]).unwrap();
+        let input = json!({"request_id":"yearly-wire","dataset":"market.yearly","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"legacy-daily","years":[2025],"publication":{"mode":"historical_fixed_base","comparison_version_id":null}}]});
+        schema.validate(&input).unwrap();
+        for location in [0, 1, 2] {
+            let mut bad = input.clone();
+            bad["request_id"] = json!(format!("bad-{location}"));
+            match location {
+                0 => bad["provider"] = json!("fixture"),
+                1 => bad["items"][0]["coverage_verified"] = json!(true),
+                _ => bad["items"][0]["publication"]["force"] = json!(true),
+            };
+            assert!(!schema.is_valid(&bad));
+            assert_eq!(s.call(operation, bad, true)["code"], "invalid_arguments");
+        }
+        let accepted = s.call(operation, input.clone(), false);
+        assert_eq!(accepted["contract_version"], "explicit-yearly-task-v1");
+        assert_eq!(accepted["readiness"], "blocked");
+        assert_eq!(
+            s.call(operation, input.clone(), false)["task_id"],
+            accepted["task_id"]
+        );
+        let mut competing = input.clone();
+        competing["request_id"] = json!("competing-year");
+        competing["items"][0]["years"] = json!([2024]);
+        assert_eq!(s.call(operation, competing, true)["code"], "range_conflict");
+        assert_eq!(
+            s.call(
+                "get_request",
+                json!({"contract_version":"v1","request_id":"competing-year"}),
+                false
+            )["bound"],
+            false
+        );
+        let worker = s.call("run_worker_once", json!({}), false);
+        assert_eq!(worker["task_id"], accepted["task_id"]);
+        let progress = s.call(
+            "get_task_progress",
+            json!({"task_id":accepted["task_id"]}),
+            false,
+        );
+        assert_eq!(progress["failed"], 1);
+        assert_eq!(progress["yearly_results"], json!([]));
+        assert_eq!(
+            progress["frozen_yearly_inputs"][0]["base_daily_version_id"],
+            "legacy-daily"
+        );
+        assert_eq!(progress["frozen_yearly_inputs"][0]["years"], json!([2025]));
+        assert_eq!(
+            progress["frozen_yearly_inputs"][0]["publication"]["mode"],
+            "historical_fixed_base"
+        );
+        assert!(
+            progress["unfinished"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("SOURCE_NOT_VERIFIED")
+        );
+        let retried=s.call("retry_task",json!({"contract_version":"v1","original_task_id":accepted["task_id"],"new_request_id":"yearly-retry","item_ids":accepted["item_ids"]}),false);
+        let view = s.call(
+            "get_task",
+            json!({"contract_version":"v1","task_id":retried["task_id"]}),
+            false,
+        );
+        s.call("cancel_task",json!({"contract_version":"v1","task_id":retried["task_id"],"expected_revision":view["state_revision"]}),false);
+        s.call("run_worker_once", json!({}), false);
+        assert!(
+            market
+                .versions(&x_data_mcp::market_storage::Scope {
+                    symbol: "sh.600006".into(),
+                    period: x_data_mcp::market_data::Period::Year
+                })
                 .unwrap()
                 .is_empty()
         );

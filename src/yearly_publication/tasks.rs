@@ -95,10 +95,11 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
     }
     fn resolve(&self, raw: &Value) -> Result<FrozenWork, Error> {
         let input: ExplicitYears = serde_json::from_value(raw.clone()).map_err(invalid)?;
+        let today = (self.today)();
         let future: Vec<_> = input
             .items
             .iter()
-            .filter(|i| i.years.iter().any(|year| *year > (self.today)().year()))
+            .filter(|i| i.years.iter().any(|year| *year > today.year()))
             .map(|i| i.symbol.clone())
             .collect();
         if !future.is_empty() {
