@@ -1,6 +1,6 @@
 use crate::{
     collector::Collector,
-    market_data::MarketDataSource,
+    market_data::MarketDataPipeline,
     storage::JsonFileStore,
     task::{FrozenScope, ScopeExecutionResult, TaskExecutionRecord, TaskStatus, TaskStore},
 };
@@ -22,7 +22,7 @@ pub struct TaskExecutionService<S> {
     store: TaskStore,
 }
 
-impl<S: MarketDataSource> TaskExecutionService<S> {
+impl<S: MarketDataPipeline> TaskExecutionService<S> {
     pub fn new(source: S, store: TaskStore) -> Self {
         Self { source, store }
     }

@@ -37,17 +37,25 @@ pub struct EffectiveVersion {
     pub unit_currency: UnitCurrencyEvidence,
     #[serde(default)]
     pub adjustment_evidence: AdjustmentEvidence,
+    #[serde(default)]
+    pub yearly_derivation: Option<crate::market_data::YearlyDerivation>,
 }
 
 impl EffectiveVersion {
     pub fn provenance(&self) -> Provenance {
         Provenance {
             source: self.source.clone(),
-            source_period: period_name(self.period).into(),
+            source_period: if self.yearly_derivation.is_some() {
+                "day"
+            } else {
+                period_name(self.period)
+            }
+            .into(),
             source_adjustment: adjustment_name(self.adjustment).into(),
             symbol: self.symbol.clone(),
             acquired_at: self.published_at,
             adapter_version: "effective-publish".into(),
+            yearly_derivation: self.yearly_derivation.clone(),
         }
     }
 }
@@ -100,6 +108,7 @@ impl MarketDataPublisher {
                 reason: batch.coverage.reason.clone(),
             });
         }
+        self.validate_derivation(batch)?;
         let (records, validation) = validate_and_deduplicate(batch)?;
         validate_unit_currency_evidence(batch)?;
         let adjustment_error = validate_adjustment_evidence(batch).err();
@@ -140,10 +149,52 @@ impl MarketDataPublisher {
             validation,
             unit_currency: batch.unit_currency.clone(),
             adjustment_evidence: batch.adjustment_evidence.clone(),
+            yearly_derivation: batch.provenance.yearly_derivation.clone(),
         };
         self.store.publish_effective(&version)?;
         self.store.put(batch)?;
         Ok(PublishOutcome::Published(version))
+    }
+
+    // Issue #55 AC-02: an external year or fabricated/missing base cannot publish.
+    fn validate_derivation(&self, batch: &MarketDataBatch) -> Result<(), PublishError> {
+        if batch.period == Period::Day {
+            if batch.provenance.yearly_derivation.is_some() {
+                return Err(PublishError::InvalidRecord(
+                    "daily must not carry yearly lineage".into(),
+                ));
+            }
+            return Ok(());
+        }
+        let lineage = batch.provenance.yearly_derivation.as_ref().ok_or_else(|| {
+            PublishError::InvalidRecord("yearly requires published daily lineage".into())
+        })?;
+        let daily = self
+            .store
+            .get_latest_effective_for_adjustment(&batch.symbol, Period::Day, batch.adjustment)?
+            .ok_or_else(|| {
+                PublishError::InvalidRecord("yearly requires a published QFQ daily version".into())
+            })?;
+        if daily.period != Period::Day
+            || daily.symbol != batch.symbol
+            || daily.adjustment != batch.adjustment
+            || lineage.base_daily_version_id != daily.version_id
+            || lineage.algorithm_version.trim().is_empty()
+            || batch.provenance.source_period != "day"
+            || batch.provenance.source != daily.source
+            // Issue #3 AC-147 permits selected historical years within this base.
+            // These are participation endpoints, not the whole version's bounds.
+            || lineage.first_trading_date > lineage.last_trading_date
+            || !daily.records.iter().any(|bar| bar.date == lineage.first_trading_date)
+            || !daily.records.iter().any(|bar| bar.date == lineage.last_trading_date)
+            || !daily.adjustment_evidence.is_confirmed()
+            || daily.adjustment_evidence.value.as_deref() != Some("qfq")
+        {
+            return Err(PublishError::InvalidRecord(
+                "yearly lineage does not match fixed published QFQ daily input".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -253,6 +304,7 @@ fn same_content(existing: &EffectiveVersion, batch: &MarketDataBatch, records: &
         && existing.source == batch.provenance.source
         && existing.unit_currency == batch.unit_currency
         && existing.adjustment_evidence == batch.adjustment_evidence
+        && existing.yearly_derivation == batch.provenance.yearly_derivation
         && existing.records == records
 }
 

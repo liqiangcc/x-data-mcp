@@ -5,7 +5,7 @@ use tempfile::tempdir;
 use x_data_mcp::{
     collector::Collector,
     market_data::{
-        Adjustment, AdjustmentEvidence, Bar, EvidenceStatus, MarketDataBatch, MarketDataSource,
+        Adjustment, AdjustmentEvidence, Bar, EvidenceStatus, MarketDataBatch, MarketDataPipeline,
         Period, Provenance, SourceError, UnitCurrencyEvidence,
     },
     publish::{MarketDataPublisher, PublishError, PublishOutcome},
@@ -34,13 +34,14 @@ fn batch(period: Period, bars: Vec<Bar>) -> MarketDataBatch {
             source: "fake".into(),
             source_period: match period {
                 Period::Day => "day",
-                Period::Year => "year",
+                Period::Year => "day",
             }
             .into(),
             source_adjustment: "qfq".into(),
             symbol: "000001".into(),
             acquired_at: Utc::now(),
             adapter_version: "test".into(),
+            yearly_derivation: None,
         },
         coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
         unit_currency: confirmed_units(),
@@ -69,15 +70,15 @@ fn valid_day() -> MarketDataBatch {
 }
 
 #[test]
-fn valid_day_and_year_publish_independent_effective_versions() {
+fn derived_yearly_retains_its_published_daily_version() {
     let dir = tempdir().unwrap();
     let store = JsonFileStore::new(dir.path());
     let publisher = MarketDataPublisher::new(store.clone());
     let day = valid_day();
-    let year = batch(
+    let mut year = batch(
         Period::Year,
         vec![bar(
-            (2025, 1, 1),
+            (2026, 9, 10),
             11,
             Some(Decimal::ONE),
             Some(Decimal::TWO),
@@ -88,6 +89,16 @@ fn valid_day_and_year_publish_independent_effective_versions() {
         publisher.publish(&day),
         Ok(PublishOutcome::Published(_))
     ));
+    let daily = store
+        .get_latest_effective("000001", Period::Day)
+        .unwrap()
+        .unwrap();
+    year.provenance.yearly_derivation = Some(x_data_mcp::market_data::YearlyDerivation {
+        base_daily_version_id: daily.version_id.clone(),
+        algorithm_version: "test-fixture".into(),
+        first_trading_date: daily.records[0].date,
+        last_trading_date: daily.records[0].date,
+    });
     assert!(matches!(
         publisher.publish(&year),
         Ok(PublishOutcome::Published(_))
@@ -107,6 +118,23 @@ fn valid_day_and_year_publish_independent_effective_versions() {
             .unwrap()
             .records,
         year.bars
+    );
+    assert_eq!(
+        store
+            .get_latest_effective("000001", Period::Year)
+            .unwrap()
+            .unwrap()
+            .yearly_derivation,
+        year.provenance.yearly_derivation
+    );
+    fs::remove_file(dir.path().join("000001.year.qfq.json")).unwrap();
+    assert_eq!(
+        store
+            .get("000001", Period::Year, Adjustment::Forward)
+            .unwrap()
+            .provenance
+            .yearly_derivation,
+        year.provenance.yearly_derivation
     );
 }
 
@@ -479,14 +507,14 @@ fn old_effective_without_adjustment_field_reads_as_unknown_after_restart() {
 #[derive(Clone)]
 struct TwoScopeSource;
 
-impl MarketDataSource for TwoScopeSource {
+impl TwoScopeSource {
     fn fetch(
         &self,
         symbol: &str,
         period: Period,
         adjustment: Adjustment,
     ) -> Result<MarketDataBatch, SourceError> {
-        if period == Period::Day {
+        if symbol == "000001" {
             let mut invalid = valid_day();
             invalid.symbol = symbol.into();
             invalid.provenance.symbol = symbol.into();
@@ -515,8 +543,8 @@ fn one_scope_publish_rejection_does_not_block_other_scope() {
     let dir = tempdir().unwrap();
     let store = JsonFileStore::new(dir.path());
     let results = Collector::new(TwoScopeSource, store.clone()).collect(
-        &["000001"],
-        &[Period::Day, Period::Year],
+        &["000001", "600000"],
+        &[Period::Day],
         Adjustment::Forward,
     );
     assert!(results[0].result.is_err());
@@ -529,7 +557,7 @@ fn one_scope_publish_rejection_does_not_block_other_scope() {
     );
     assert!(
         store
-            .get_latest_effective("000001", Period::Year)
+            .get_latest_effective("600000", Period::Day)
             .unwrap()
             .is_some()
     );
@@ -538,7 +566,7 @@ fn one_scope_publish_rejection_does_not_block_other_scope() {
 #[derive(Clone)]
 struct AdjustmentScopeSource;
 
-impl MarketDataSource for AdjustmentScopeSource {
+impl AdjustmentScopeSource {
     fn fetch(
         &self,
         symbol: &str,
@@ -548,7 +576,7 @@ impl MarketDataSource for AdjustmentScopeSource {
         let mut result = batch(
             period,
             vec![bar(
-                if period == Period::Day {
+                if symbol == "000001" {
                     (2026, 9, 10)
                 } else {
                     (2025, 1, 1)
@@ -561,7 +589,7 @@ impl MarketDataSource for AdjustmentScopeSource {
         result.symbol = symbol.into();
         result.provenance.symbol = symbol.into();
         result.adjustment = adjustment;
-        if period == Period::Day {
+        if symbol == "000001" {
             result.adjustment_evidence =
                 AdjustmentEvidence::unknown("source qfq evidence unavailable");
         }
@@ -574,8 +602,8 @@ fn adjustment_rejection_does_not_block_another_scope() {
     let dir = tempdir().unwrap();
     let store = JsonFileStore::new(dir.path());
     let results = Collector::new(AdjustmentScopeSource, store.clone()).collect(
-        &["000001"],
-        &[Period::Day, Period::Year],
+        &["000001", "600000"],
+        &[Period::Day],
         Adjustment::Forward,
     );
     assert!(results[0].result.is_err());
@@ -595,8 +623,58 @@ fn adjustment_rejection_does_not_block_another_scope() {
     );
     assert!(
         store
-            .get_latest_effective("000001", Period::Year)
+            .get_latest_effective("600000", Period::Day)
             .unwrap()
             .is_some()
     );
+}
+
+impl MarketDataPipeline for TwoScopeSource {
+    fn materialize_daily(
+        &self,
+        symbol: &str,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        self.fetch(symbol, Period::Day, adjustment)
+    }
+
+    fn derive_yearly(
+        &self,
+        daily: &x_data_mcp::publish::EffectiveVersion,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let mut batch = self.fetch(&daily.symbol, Period::Year, daily.adjustment)?;
+        batch.provenance.source_period = "day".into();
+        batch.provenance.yearly_derivation = Some(x_data_mcp::market_data::YearlyDerivation {
+            base_daily_version_id: daily.version_id.clone(),
+            algorithm_version: "fake-yearly-fixture".into(),
+            first_trading_date: daily.records.first().unwrap().date,
+            last_trading_date: daily.records.last().unwrap().date,
+        });
+        Ok(batch)
+    }
+}
+
+impl MarketDataPipeline for AdjustmentScopeSource {
+    fn materialize_daily(
+        &self,
+        symbol: &str,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        self.fetch(symbol, Period::Day, adjustment)
+    }
+
+    fn derive_yearly(
+        &self,
+        daily: &x_data_mcp::publish::EffectiveVersion,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let mut batch = self.fetch(&daily.symbol, Period::Year, daily.adjustment)?;
+        batch.provenance.source_period = "day".into();
+        batch.provenance.yearly_derivation = Some(x_data_mcp::market_data::YearlyDerivation {
+            base_daily_version_id: daily.version_id.clone(),
+            algorithm_version: "fake-yearly-fixture".into(),
+            first_trading_date: daily.records.first().unwrap().date,
+            last_trading_date: daily.records.last().unwrap().date,
+        });
+        Ok(batch)
+    }
 }

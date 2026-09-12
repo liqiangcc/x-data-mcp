@@ -1,5 +1,5 @@
 use crate::{
-    market_data::{Adjustment, MarketDataSource, Period},
+    market_data::{Adjustment, MarketDataPipeline, Period},
     task::{
         CancellationResult, FrozenScope, ScopeExecutionResult, TaskCancellationService, TaskError,
         TaskRetryService, TaskStatus, TaskStore,
@@ -134,7 +134,7 @@ pub struct McpApi<S> {
     worker: Worker<S>,
 }
 
-impl<S: MarketDataSource> McpApi<S> {
+impl<S: MarketDataPipeline> McpApi<S> {
     pub fn new(source: S, store: TaskStore) -> Self {
         Self {
             acceptance: crate::task::TaskAcceptanceService::new(store.clone()),
@@ -368,7 +368,7 @@ pub fn public_tools() -> Value {
     json!([
         {
             "name": "start_collection",
-            "description": "Accept a collection task with explicit symbols and periods.",
+            "description": "Accept local official-file processing: day is QFQ daily; year derives from one published QFQ daily version. Production source is NOT_VERIFIED.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -437,7 +437,7 @@ pub fn public_tools() -> Value {
     ])
 }
 
-pub fn run_stdio<S: MarketDataSource>(api: McpApi<S>) -> io::Result<()> {
+pub fn run_stdio<S: MarketDataPipeline>(api: McpApi<S>) -> io::Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::BufWriter::new(io::stdout().lock());
     for line in stdin.lock().lines() {
@@ -450,7 +450,7 @@ pub fn run_stdio<S: MarketDataSource>(api: McpApi<S>) -> io::Result<()> {
     Ok(())
 }
 
-pub fn handle_json<S: MarketDataSource>(api: &McpApi<S>, input: &str) -> Option<String> {
+pub fn handle_json<S: MarketDataPipeline>(api: &McpApi<S>, input: &str) -> Option<String> {
     let request: Value = match serde_json::from_str(input) {
         Ok(request) => request,
         Err(error) => {
@@ -497,7 +497,7 @@ pub fn handle_json<S: MarketDataSource>(api: &McpApi<S>, input: &str) -> Option<
     Some(serde_json::to_string(&response).unwrap())
 }
 
-fn handle_tool_call<S: MarketDataSource>(api: &McpApi<S>, id: Value, params: Value) -> Value {
+fn handle_tool_call<S: MarketDataPipeline>(api: &McpApi<S>, id: Value, params: Value) -> Value {
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return rpc_error(id, -32602, "invalid_tool_call", "missing tool name");
     };

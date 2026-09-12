@@ -9,7 +9,7 @@
 - 使用 Rust；性能目标需在具体用例的验收标准中明确，并通过代表性数据与基准测试验证。
 - 当前不建设交易练习界面、订单撮合或自动交易系统。
 
-首期数据范围、数据源、存储方式、MCP 工具契约与性能指标，均需通过研发 Issue 明确后再实现。以上是产品方向，不表示相关能力已经交付。
+首期证券范围为当前沪深 A 股及 TDX 研究行业二级。生产来源目标已收敛为官方可下载文件及本地解析/计算；来源证据、存储交付及性能指标仍需按 Issue 验收，方向确认不表示能力已交付。
 
 ## 开发规范
 
@@ -25,6 +25,47 @@
 
 ## 当前状态
 
-当前仅完成仓库与开发约定初始化。尚无 Rust 工程、业务实现、可执行测试、基准或部署实例；运行验证为 `NOT_RUN`，不能据此声明业务能力或性能已验证。
+**NOT_PRODUCTION_READY — production source convergence stage 1。**
 
-首个实现任务应在用例和 AC 明确后建立最小工程与稳定验证入口，优先采用 `./scripts/verify <target>`。该命令目前尚未实现。
+已有 Rust 核心、任务受理/取消/重试、发布校验、目录核心和 stdio MCP 原型。
+生产来源决策见 [Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)，
+完整边界见[官方文件架构](docs/production-source.md)。
+
+唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →
+从同一已发布 QFQ daily version 本地聚合 yearly。不存在多源生产 fallback。
+
+- BaoStock、源端直接 QFQ 仅 evidence/交叉验证。
+- TdxQuant/TdxAiData/tqserver、东财匿名 datacenter/gzfx 不接入生产。
+- Python bridge/eltdx 在线装配已移除，源码与旧测试保留在 `archive/online-tdx/`。
+- 源端直接年线不再是生产契约；MCP `year` 表示本地派生输出。
+- 既有 `evidence/` 和历史文档原样保留；历史结论不等于当前生产状态。
+
+#6/#46 目录与研究行业二级文件能力、#54 GBBQ/QFQ 数值语义、官方文件长期服务器获取/使用边界、
+.day/gbbq 独立快照的一致性仍未通过。parser、QFQ 和 yearly 算法尚未实现。
+默认装配的 `OfficialFilePipeline` 始终返回 `SOURCE_NOT_VERIFIED`，没有开关可绕过门禁。
+
+## 本地入口
+
+`cargo run --locked --bin mcp_server` 启动 stdio 原型。`X_DATA_MCP_STORE` 设置本地状态目录，
+默认 `.x-data-mcp`。旧 `X_DATA_MCP_TDX_PYTHON` 不再读取，不需要 Python/eltdx/Key。
+
+工具为 `start_collection`、`get_task`、`run_worker_once`、`cancel_task`、`retry_task`。
+受理会写入任务并返回 pending；必须显式运行 worker，当前采集会失败并报告未验证，不能发布新行情。
+年线没有已发布 daily 时报告 `PUBLISHED_QFQ_DAILY_REQUIRED`。
+此入口不是部署完成或自动后台执行的证明。
+
+## 验证
+
+当前稳定入口与 CI 一致：
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --locked
+git diff --check
+```
+
+`./scripts/verify` 尚未实现，不调用不存在的命令。
+测试覆盖核心、发布门禁及真实 stdio 二进制的离线拒绝行为；Fake 不证明真实 parser/QFQ/yearly。
+归档在线测试不进入 Cargo，真实官方来源验证为 NOT_RUN；部署、全市场覆盖和性能为 NOT_VERIFIED。
+既有发布/任务非原子缺陷不在本阶段修复。

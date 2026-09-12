@@ -7,7 +7,7 @@ use x_data_mcp::storage::JsonFileStore;
 fn sample_batch(symbol: &str, period: Period) -> MarketDataBatch {
     let source_period = match period {
         Period::Day => "day",
-        Period::Year => "year",
+        Period::Year => "day",
     };
     MarketDataBatch {
         symbol: symbol.into(),
@@ -29,6 +29,7 @@ fn sample_batch(symbol: &str, period: Period) -> MarketDataBatch {
             symbol: symbol.into(),
             acquired_at: Utc::now(),
             adapter_version: "test".into(),
+            yearly_derivation: None,
         },
         coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
         unit_currency: x_data_mcp::market_data::UnitCurrencyEvidence::confirmed(

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use x_data_mcp::collector::Collector;
 use x_data_mcp::market_data::{
-    Adjustment, Bar, MarketDataBatch, MarketDataSource, Period, Provenance, SourceError,
+    Adjustment, Bar, MarketDataBatch, MarketDataPipeline, Period, Provenance, SourceError,
 };
 use x_data_mcp::storage::JsonFileStore;
 
@@ -14,7 +14,7 @@ struct FakeSource {
     wrong_provenance: bool,
 }
 
-impl MarketDataSource for FakeSource {
+impl FakeSource {
     fn fetch(
         &self,
         symbol: &str,
@@ -27,7 +27,7 @@ impl MarketDataSource for FakeSource {
         }
         let source_period = match period {
             Period::Day => "day",
-            Period::Year => "year",
+            Period::Year => "day",
         };
         Ok(MarketDataBatch {
             symbol: symbol.into(),
@@ -54,6 +54,7 @@ impl MarketDataSource for FakeSource {
                 symbol: symbol.into(),
                 acquired_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
                 adapter_version: "test".into(),
+                yearly_derivation: None,
             },
             coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
             unit_currency: x_data_mcp::market_data::UnitCurrencyEvidence::confirmed(
@@ -138,7 +139,7 @@ fn mismatched_provenance_is_not_published() {
         wrong_provenance: true,
     });
     assert!(results[0].result.is_err());
-    assert!(results[1].result.is_ok());
+    assert!(results[1].result.is_err());
     assert!(
         store
             .get("000001", Period::Day, Adjustment::Forward)
@@ -147,7 +148,7 @@ fn mismatched_provenance_is_not_published() {
     assert!(
         store
             .get("000001", Period::Year, Adjustment::Forward)
-            .is_ok()
+            .is_err()
     );
 }
 
@@ -174,4 +175,29 @@ fn storage_roundtrip_matches_source_batch() {
             .unwrap(),
         expected
     );
+}
+
+impl MarketDataPipeline for FakeSource {
+    fn materialize_daily(
+        &self,
+        symbol: &str,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        self.fetch(symbol, Period::Day, adjustment)
+    }
+
+    fn derive_yearly(
+        &self,
+        daily: &x_data_mcp::publish::EffectiveVersion,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let mut batch = self.fetch(&daily.symbol, Period::Year, daily.adjustment)?;
+        batch.provenance.source_period = "day".into();
+        batch.provenance.yearly_derivation = Some(x_data_mcp::market_data::YearlyDerivation {
+            base_daily_version_id: daily.version_id.clone(),
+            algorithm_version: "fake-yearly-fixture".into(),
+            first_trading_date: daily.records.first().unwrap().date,
+            last_trading_date: daily.records.last().unwrap().date,
+        });
+        Ok(batch)
+    }
 }

@@ -1,6 +1,6 @@
 use crate::{
     execution::{ExecutionError, TaskExecutionService},
-    market_data::MarketDataSource,
+    market_data::MarketDataPipeline,
     task::{TaskExecutionRecord, TaskStatus, TaskStore},
 };
 
@@ -23,7 +23,7 @@ pub struct Worker<S> {
     store: TaskStore,
 }
 
-impl<S: MarketDataSource> Worker<S> {
+impl<S: MarketDataPipeline> Worker<S> {
     pub fn new(source: S, store: TaskStore) -> Self {
         Self {
             execution: TaskExecutionService::new(source, store.clone()),
