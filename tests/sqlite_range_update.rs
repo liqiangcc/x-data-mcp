@@ -392,3 +392,21 @@ fn range_candidates_compete_on_the_same_real_task_and_head() {
     assert_eq!(f.count("market_update_results"), 1);
     assert_eq!(f.count("publication_batches"), 2);
 }
+
+#[test]
+fn range_schema_v4_requires_explicit_upgrade_and_preserves_published_records() {
+    let f = fixture(false);
+    let original = f.db.fixed("legacy-daily").unwrap().raw().clone();
+    f.sql("DROP TABLE market_update_results; DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4;");
+    assert!(f.db.fixed("legacy-daily").is_err());
+    assert!(f.db.range_receipt("absent").is_err());
+    let version: u32 = Connection::open(f.db.tasks.path())
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 4);
+    f.db.tasks.upgrade().unwrap();
+    assert_eq!(f.db.fixed("legacy-daily").unwrap().raw(), &original);
+    assert_eq!(f.count("market_update_results"), 0);
+    f.db.commit_range(&f.plan()).unwrap();
+}

@@ -157,3 +157,173 @@ fn result_digest(audit: &str, receipt: &str) -> String {
     // JSON array framing prevents ambiguous concatenation; both persisted values are covered.
     crate::hash::sha256(serde_json::json!([audit, receipt]).to_string().as_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        market_data::MarketDataBatch,
+        market_update::{
+            DateRange, Evidence,
+            publication::{CombinedEvidence, Preparation},
+        },
+        task_control::{
+            Change, Contract, RequestOutcome, TaskRepository, legacy::LegacyCollection,
+            service::TaskControl,
+        },
+    };
+    fn approve(db: &SqliteMarket, command: Publication, changed: bool) -> Box<RangePlan> {
+        let base = db.fixed("legacy-daily").unwrap();
+        let mut batch: MarketDataBatch = serde_json::from_value(base.raw["batch"].clone()).unwrap();
+        batch.bars = vec![batch.bars[1].clone()];
+        if changed {
+            batch.bars[0].close = "10.06".parse().unwrap();
+        }
+        let range = DateRange {
+            start: batch.bars[0].date,
+            end: batch.bars[0].date,
+        };
+        let evidence = Evidence {
+            base_version_id: "legacy-daily".into(),
+            base_integrity_sha256: base.raw["integrity_sha256"].as_str().unwrap().into(),
+            candidate_sha256: crate::market_update::candidate_digest(&batch).unwrap(),
+            range: range.clone(),
+            same_qfq_basis_ref: "fixture:crash-basis".into(),
+            revision_ref: Some("fixture:crash-revision".into()),
+        };
+        let whole = changed.then(|| CombinedEvidence {
+            base_integrity_sha256: evidence.base_integrity_sha256.clone(),
+            segment_sha256: evidence.candidate_sha256.clone(),
+            combined_integrity_sha256:
+                db.candidate(&command.version_id).unwrap().raw["integrity_sha256"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+            complete_coverage_ref: "fixture:crash-whole".into(),
+        });
+        let Preparation::Ready(plan) = (Publisher {
+            repository: db.clone(),
+        })
+        .prepare_range(command, &batch, &range, &evidence, whole.as_ref())
+        .unwrap() else {
+            panic!()
+        };
+        plan
+    }
+    #[test]
+    fn range_crash_child() {
+        let Ok(path) = std::env::var("X_DATA_MCP_TEST_RANGE_PATH") else {
+            return;
+        };
+        let command =
+            serde_json::from_str(&std::env::var("X_DATA_MCP_TEST_RANGE_COMMAND").unwrap()).unwrap();
+        let changed = std::env::var("X_DATA_MCP_TEST_RANGE_CHANGED").unwrap() == "true";
+        let db = SqliteMarket::new(SqliteTasks::new(path));
+        let plan = approve(&db, command, changed);
+        db.commit_range(&plan).unwrap();
+        panic!("crash not reached");
+    }
+    #[test]
+    fn range_real_exit_before_commit_and_lost_response_after_commit() {
+        for changed in [false, true] {
+            for point in ["before_commit", "after_commit"] {
+                let (_dir, db, first) = super::super::tests::setup();
+                db.commit(&first).unwrap();
+                let version = if changed {
+                    "range-changed"
+                } else {
+                    "legacy-daily"
+                };
+                if changed {
+                    let mut raw = db.fixed("legacy-daily").unwrap().raw;
+                    raw["version_id"] = serde_json::json!(version);
+                    raw["records"][1]["close"] = serde_json::json!("10.06");
+                    raw["batch"]["bars"][1]["close"] = serde_json::json!("10.06");
+                    raw["integrity_sha256"] =
+                        serde_json::json!(compat::legacy_digest(&raw).unwrap());
+                    db.stage(&raw).unwrap();
+                }
+                let ctl = TaskControl::new(
+                    db.tasks.clone(),
+                    "run".into(),
+                    vec![Box::new(LegacyCollection)],
+                )
+                .unwrap();
+                let request = ctl
+                    .accept(
+                        "range",
+                        LegacyCollection.key(),
+                        serde_json::json!({"symbols":["sh.600006"],"periods":["day"]}),
+                    )
+                    .unwrap();
+                let RequestOutcome::Task(task) = request.record.outcome else {
+                    panic!()
+                };
+                let task = db
+                    .tasks
+                    .transition(&task.task.task_id, 0, "run", Change::Claim)
+                    .unwrap();
+                let task = db
+                    .tasks
+                    .transition(
+                        &task.task.task_id,
+                        task.task.state_revision,
+                        "run",
+                        Change::StartItem(task.items[0].spec.item_id.clone()),
+                    )
+                    .unwrap();
+                let command = Publication {
+                    publication_id: "range-result".into(),
+                    version_id: version.into(),
+                    task_id: task.task.task_id.clone(),
+                    item_id: task.items[0].spec.item_id.clone(),
+                    run_id: "run".into(),
+                    expected_revision: task.task.state_revision,
+                    intent: PublishIntent::Daily {
+                        expected_head: Some("legacy-daily".into()),
+                    },
+                };
+                let plan = approve(&db, command.clone(), changed);
+                let status = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "sqlite_market::update::tests::range_crash_child",
+                        "--nocapture",
+                    ])
+                    .env("X_DATA_MCP_TEST_RANGE_PATH", db.tasks.path())
+                    .env("X_DATA_MCP_TEST_RANGE_COMMAND", text(&command).unwrap())
+                    .env("X_DATA_MCP_TEST_RANGE_CHANGED", changed.to_string())
+                    .env("X_DATA_MCP_TEST_MARKET_CRASH", point)
+                    .status()
+                    .unwrap();
+                assert_eq!(status.code(), Some(79));
+                let committed = point == "after_commit";
+                assert_eq!(
+                    db.range_receipt("range-result").unwrap().is_some(),
+                    committed
+                );
+                let connection = Connection::open(db.tasks.path()).unwrap();
+                let publications: i64 = connection
+                    .query_row("SELECT count(*) FROM publication_batches", [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(publications, 1 + i64::from(changed && committed));
+                let results: i64 = connection
+                    .query_row("SELECT count(*) FROM market_update_results", [], |r| {
+                        r.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(results, i64::from(committed));
+                if !committed {
+                    assert_eq!(db.task(&task.task.task_id).unwrap(), task);
+                }
+                let receipt = db.commit_range(&plan).unwrap();
+                assert_eq!(db.commit_range(&plan).unwrap(), receipt);
+                assert!(db.task(&task.task.task_id).unwrap().claims.is_empty());
+                let versions: i64 = connection
+                    .query_row("SELECT count(*) FROM data_versions", [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(versions, if changed { 2 } else { 1 });
+            }
+        }
+    }
+}
