@@ -574,3 +574,95 @@ fn range_publish_cannot_widen_the_accepted_frozen_dates() {
     assert!(matches!(f.prepare(), Err(Error::Conflict(_))));
     assert_eq!(f.count("market_update_results"), 0);
 }
+
+fn fail_range_without_publication(f: &Fixture) {
+    use x_data_mcp::task_control::ItemOutcome;
+    let task =
+        f.db.tasks
+            .transition(
+                &f.command.task_id,
+                f.command.expected_revision,
+                "range-run",
+                Change::FinishItem(
+                    f.command.item_id.clone(),
+                    ItemOutcome {
+                        success: false,
+                        error: Some("fixture: no publication attempted".into()),
+                    },
+                ),
+            )
+            .unwrap();
+    f.db.tasks
+        .transition(
+            &task.task.task_id,
+            task.task.state_revision,
+            "range-run",
+            Change::FinishExecution,
+        )
+        .unwrap();
+}
+#[test]
+fn explicit_range_same_request_competes_atomically_and_retry_keeps_frozen_inputs() {
+    use x_data_mcp::market_update::tasks::{Operation, RangeContract};
+    let f = fixture(false);
+    let original = f.db.task(&f.command.task_id).unwrap();
+    fail_range_without_publication(&f);
+    let ctl = range_control(&f);
+    let retry = ctl
+        .retry(
+            &f.command.task_id,
+            "retry-range",
+            std::collections::BTreeSet::from([f.command.item_id.clone()]),
+        )
+        .unwrap();
+    let RequestOutcome::Task(retry) = retry.record.outcome else {
+        panic!()
+    };
+    assert_eq!(retry.task.key, original.task.key);
+    assert_eq!(retry.items[0].spec, original.items[0].spec);
+    let cancelled = ctl
+        .cancel(&retry.task.task_id, retry.task.state_revision)
+        .unwrap();
+    f.db.tasks
+        .transition(
+            &cancelled.task.task_id,
+            cancelled.task.state_revision,
+            "range-run",
+            Change::FinishExecution,
+        )
+        .unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = (0..2)
+        .map(|i| {
+            let db = f.db.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let ctl = TaskControl::new(
+                    db.tasks.clone(),
+                    "range-run".into(),
+                    vec![Box::new(RangeContract {
+                        operation: Operation::Update,
+                        repository: db,
+                    })],
+                )
+                .unwrap();
+                let mut payload = range_payload("legacy-daily");
+                if i == 1 {
+                    let duplicate = payload["items"][0].clone();
+                    payload["items"].as_array_mut().unwrap().push(duplicate);
+                }
+                barrier.wait();
+                ctl.accept("concurrent", Operation::Update.key(), payload)
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|r| r.reused).count(), 1);
+    assert_eq!(results[0].record, results[1].record);
+    assert_eq!(f.count("scope_occupancy"), 1);
+    assert_eq!(f.count("market_update_results"), 0);
+}
