@@ -1,0 +1,116 @@
+{
+  "candidate_counts": {
+    "sh": 2270,
+    "sz": 2897
+  },
+  "candidate_definition": "six-digit numeric security member under official hsjday sh\\lday or sz\\lday, with category=1 GBBQ history, an allowed A-share code prefix, and at least one .day bar in the fixed window; this is a bounded A-share code-range proxy, not a complete listing-status contract",
+  "category1_decoded_total": 68642,
+  "filters": [
+    "retained official GBBQ category=1 history",
+    "official hsjday sh/sz lday member exists",
+    "SH prefixes 600/601/603/605/688/689; SZ prefixes 000/001/002/003/300/301",
+    "at least one .day bar in 2025-01-01..2026-09-10",
+    "exclude 600000 and 000001"
+  ],
+  "full_current_listing_status": "NOT_VERIFIED",
+  "official_artifact_boundary": "selection uses only retained local official artifacts; the A-share prefixes are a bounded code-range proxy, not proof of current listing status; event/category semantics remain community-decoder evidence and NOT_VERIFIED",
+  "rationale": [
+    {
+      "code": "600004",
+      "market": "sh",
+      "reason": "smallest sh candidate with category=1 history and fenhong != 0",
+      "stage": "fenhong_or_fallback"
+    },
+    {
+      "code": "000002",
+      "market": "sz",
+      "reason": "smallest sz candidate with category=1 history and fenhong != 0",
+      "stage": "fenhong_or_fallback"
+    },
+    {
+      "code": "600006",
+      "market": "sh",
+      "reason": "smallest sh candidate with category=1 history and songzhuangu != 0",
+      "stage": "songzhuangu_or_fallback"
+    },
+    {
+      "code": "000004",
+      "market": "sz",
+      "reason": "smallest sz candidate with category=1 history and songzhuangu != 0",
+      "stage": "songzhuangu_or_fallback"
+    }
+  ],
+  "schema": "x-data-mcp.issue-3.cross-stock.selection.v1",
+  "selected": [
+    {
+      "code": "600004",
+      "day": {
+        "bytes": 180128,
+        "first_date": "2003-04-28",
+        "last_date": "2026-09-11",
+        "record_count": 5629,
+        "sha256": "9fa246c023ca11c427d45aa527f01a64611cc40903ec5b636290d0986fe470a9",
+        "window_first_date": "2025-01-02",
+        "window_last_date": "2026-09-10",
+        "window_row_count": 411
+      },
+      "event_count_category_1": 22,
+      "market": "sh",
+      "member": "sh\\lday\\sh600004.day"
+    },
+    {
+      "code": "600006",
+      "day": {
+        "bytes": 206912,
+        "first_date": "1999-07-27",
+        "last_date": "2026-09-11",
+        "record_count": 6466,
+        "sha256": "91cb06b2ba0cca331f41f759e3aa0647e6eb5bd62c450cd0fca2e6b397362f7d",
+        "window_first_date": "2025-01-02",
+        "window_last_date": "2026-09-10",
+        "window_row_count": 411
+      },
+      "event_count_category_1": 28,
+      "market": "sh",
+      "member": "sh\\lday\\sh600006.day"
+    },
+    {
+      "code": "000002",
+      "day": {
+        "bytes": 271296,
+        "first_date": "1991-01-29",
+        "last_date": "2026-09-11",
+        "record_count": 8478,
+        "sha256": "69f117e439555018c64d77b75a359fe725c39a38423971cc03330d6d9b44bc19",
+        "window_first_date": "2025-01-02",
+        "window_last_date": "2026-09-10",
+        "window_row_count": 411
+      },
+      "event_count_category_1": 36,
+      "market": "sz",
+      "member": "sz\\lday\\sz000002.day"
+    },
+    {
+      "code": "000004",
+      "day": {
+        "bytes": 264032,
+        "first_date": "1991-01-14",
+        "last_date": "2026-07-13",
+        "record_count": 8251,
+        "sha256": "77a40ad72bf1a338a4a49a8586744127aa9f800496b095d231d30251f62b966b",
+        "window_first_date": "2025-01-02",
+        "window_last_date": "2026-07-13",
+        "window_row_count": 331
+      },
+      "event_count_category_1": 8,
+      "market": "sz",
+      "member": "sz\\lday\\sz000004.day"
+    }
+  ],
+  "selection_before_baostock": true,
+  "selection_rule": "per market: smallest candidate with fenhong != 0; then smallest unselected candidate with songzhuangu != 0; otherwise peigu != 0; otherwise smallest unselected candidate",
+  "window": {
+    "end": "2026-09-10",
+    "start": "2025-01-01"
+  }
+}

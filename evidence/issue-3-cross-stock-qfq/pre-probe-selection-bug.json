@@ -1,0 +1,137 @@
+{
+  "correction": "The six-digit .day-member proxy was too broad and admitted non-A-share instruments; the corrected selection uses explicit SH/SZ A-share code prefixes and remains fixed before any new probe.",
+  "excluded_from_validation_conclusions": true,
+  "incident": "PRE_PROBE_SELECTION_BUG",
+  "invalid_selection": [
+    "sh.000002",
+    "sh.000003",
+    "sz.000004",
+    "sz.000006"
+  ],
+  "occurred_before": "A-share code-range proxy was added to select_samples.py",
+  "queries": [
+    {
+      "error_code": "0",
+      "error_msg": "success",
+      "first_date": "2025-01-02",
+      "last_date": "2026-09-10",
+      "login": {
+        "error_code": "0",
+        "error_msg": "success",
+        "mode": "anonymous_handshake"
+      },
+      "query_status": "success",
+      "received_at": {
+        "asia_shanghai": "2026-09-11T21:18:25.648409+08:00",
+        "utc": "2026-09-11T13:18:25.648409Z"
+      },
+      "request": {
+        "adjustflag": "2",
+        "code": "sh.000002",
+        "end_date": "2026-09-10",
+        "fields": "date,code,open,high,low,close,preclose,volume,amount,adjustflag",
+        "frequency": "d",
+        "start_date": "2025-01-01"
+      },
+      "requested_at": {
+        "asia_shanghai": "2026-09-11T21:18:23.384423+08:00",
+        "utc": "2026-09-11T13:18:23.384423Z"
+      },
+      "row_count": 411,
+      "security": "sh.000002"
+    },
+    {
+      "error_code": "0",
+      "error_msg": "success",
+      "first_date": "2025-01-02",
+      "last_date": "2026-09-10",
+      "login": {
+        "error_code": "0",
+        "error_msg": "success",
+        "mode": "anonymous_handshake"
+      },
+      "query_status": "success",
+      "received_at": {
+        "asia_shanghai": "2026-09-11T21:18:25.938290+08:00",
+        "utc": "2026-09-11T13:18:25.938290Z"
+      },
+      "request": {
+        "adjustflag": "2",
+        "code": "sh.000003",
+        "end_date": "2026-09-10",
+        "fields": "date,code,open,high,low,close,preclose,volume,amount,adjustflag",
+        "frequency": "d",
+        "start_date": "2025-01-01"
+      },
+      "requested_at": {
+        "asia_shanghai": "2026-09-11T21:18:25.779458+08:00",
+        "utc": "2026-09-11T13:18:25.779458Z"
+      },
+      "row_count": 411,
+      "security": "sh.000003"
+    },
+    {
+      "error_code": "0",
+      "error_msg": "success",
+      "first_date": "2025-01-02",
+      "last_date": "2026-07-13",
+      "login": {
+        "error_code": "0",
+        "error_msg": "success",
+        "mode": "anonymous_handshake"
+      },
+      "query_status": "success",
+      "received_at": {
+        "asia_shanghai": "2026-09-11T21:18:27.659021+08:00",
+        "utc": "2026-09-11T13:18:27.659021Z"
+      },
+      "request": {
+        "adjustflag": "2",
+        "code": "sz.000004",
+        "end_date": "2026-09-10",
+        "fields": "date,code,open,high,low,close,preclose,volume,amount,adjustflag",
+        "frequency": "d",
+        "start_date": "2025-01-01"
+      },
+      "requested_at": {
+        "asia_shanghai": "2026-09-11T21:18:26.982956+08:00",
+        "utc": "2026-09-11T13:18:26.982956Z"
+      },
+      "row_count": 368,
+      "security": "sz.000004"
+    },
+    {
+      "error_code": "0",
+      "error_msg": "success",
+      "first_date": "2025-01-02",
+      "last_date": "2026-09-10",
+      "login": {
+        "error_code": "0",
+        "error_msg": "success",
+        "mode": "anonymous_handshake"
+      },
+      "query_status": "success",
+      "received_at": {
+        "asia_shanghai": "2026-09-11T21:18:28.662002+08:00",
+        "utc": "2026-09-11T13:18:28.662002Z"
+      },
+      "request": {
+        "adjustflag": "2",
+        "code": "sz.000006",
+        "end_date": "2026-09-10",
+        "fields": "date,code,open,high,low,close,preclose,volume,amount,adjustflag",
+        "frequency": "d",
+        "start_date": "2025-01-01"
+      },
+      "requested_at": {
+        "asia_shanghai": "2026-09-11T21:18:27.789251+08:00",
+        "utc": "2026-09-11T13:18:27.789251Z"
+      },
+      "row_count": 411,
+      "security": "sz.000006"
+    }
+  ],
+  "raw_rows_not_copied": true,
+  "schema": "x-data-mcp.issue-3.cross-stock.pre-probe-selection-bug.v1",
+  "selection_was_not_reused": true
+}
