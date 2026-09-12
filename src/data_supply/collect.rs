@@ -161,15 +161,13 @@ impl Contract for CollectionContract {
             base_daily_versions,
             ..
         } = &c
-        {
-            if base_daily_versions
+            && base_daily_versions
                 .iter()
                 .map(|v| v.entity.clone())
                 .collect::<Vec<_>>()
                 != entities
-            {
-                return Err(invalid("base daily version map must match selection"));
-            }
+        {
+            return Err(invalid("base daily version map must match selection"));
         }
         let mut items = vec![];
         let mut scopes = BTreeSet::new();
