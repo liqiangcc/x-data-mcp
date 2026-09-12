@@ -151,7 +151,15 @@ pub fn prepare(
             {
                 lost.push(bar.date);
             }
-            if previous != &bar {
+            // #4 AC-71: filling an unknown optional field is not a correction
+            // to a previously known value. Other simultaneous changes still are.
+            if previous.open != bar.open
+                || previous.high != bar.high
+                || previous.low != bar.low
+                || previous.close != bar.close
+                || previous.volume.zip(bar.volume).is_some_and(|(a, b)| a != b)
+                || previous.amount.zip(bar.amount).is_some_and(|(a, b)| a != b)
+            {
                 revised.push(bar.date);
             }
         }

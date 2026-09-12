@@ -13,6 +13,7 @@ market_update 是无 I/O 的应用判定核心，输入为 CheckedRecord（既�
 - update_refuses_whole_item_when_old_in_range_date_is_missing / update_empty_response_with_old_dates_is_needs_verification：缺旧日期或整个空响应均不发布。
 - update_decimal_format_change_reuses_fixed_version：格式不同但精确等价时不产生新版本。
 - update_requires_bound_basis_and_actual_revision_evidence：真实微小数值修订仍需证据；版本/digest/range 绑定错误拒绝。
+- update_unknown_field_enrichment_is_not_a_known_value_revision：#4 AC-71 允许核实后补充未知字段；同时变更已知价格仍按 AC-73 要求修订证据。
 - update_rejects_known_value_loss_even_with_revision_reference：已知成交量/额不得降为 unknown 后发布。
 - update_rejects_unknown_coverage_and_conflicting_units / update_rejects_invalid_identity_period_range_and_conflicting_duplicate：覆盖、单位及基础输入拒绝。
 

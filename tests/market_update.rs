@@ -213,3 +213,22 @@ fn update_empty_response_with_old_dates_is_needs_verification() {
         Decision::NeedsVerification(Reason::MissingOldDates(vec![range.start]))
     );
 }
+
+#[test]
+fn update_unknown_field_enrichment_is_not_a_known_value_revision() {
+    let (base, mut batch, range) = inputs();
+    batch.bars[0].volume = Some("100".parse().unwrap());
+    batch.unit_currency.volume_unit = EvidenceValue::confirmed("shares", "fixture");
+    let mut e = proof(&base, &batch, &range);
+    e.revision_ref = None;
+    assert!(matches!(
+        market_update::prepare(&base, &batch, &range, Some(&e)).unwrap(),
+        Decision::Candidate(_)
+    ));
+    batch.bars[0].close = "11".parse().unwrap();
+    e.candidate_sha256 = market_update::candidate_digest(&batch).unwrap();
+    assert_eq!(
+        market_update::prepare(&base, &batch, &range, Some(&e)).unwrap(),
+        Decision::NeedsVerification(Reason::RevisionUnverified(vec![range.start]))
+    );
+}
