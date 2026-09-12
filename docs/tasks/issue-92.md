@@ -57,3 +57,7 @@ update_data/backfill_data 的 v1 首个公共形状为 request_id、dataset=mark
 发现 registry 仅为这两个工具列 daily，implemented=true/readiness=blocked，说明仅显式范围受理、来源仍不可信且当前 worker 只记录拒绝。yearly/catalog/default selection 不伪装已实现；非本机所有者上下文不发现/调用写控制。既有 13 工具增加到 15，版本读取与 task 查询不改变语义。
 
 公共接线回归：real_range_stdio_acceptance_replay_conflicts_and_blocked_execution（真实 mcp_data 二进制的 schema/受理/幂等/冲突/拒绝来源执行/重试/取消，确认无新行情）；range_controls_are_not_discovered_or_callable_without_owner_access；range_storage_failure_is_not_reported_as_invalid_input_or_success。通用发现测试要求 15 工具与 registry 一致。Preview package 的离线 smoke 计数同步，不表示部署。
+
+### 更新结果只读查询（编码前边界）
+
+get_task_progress 增加 frozen_daily_ranges（每项已受理 base/digest/日期）及 range_results（原/结果 version ref、是否无变化、实际 acquired_at、result id）。已成功项仍可见这些关联，不把复用版本写成新发布。SQLite 在读取 task 的同一事务核验结果收据/关联及固定版本，cursor 续页也重新核验已返回结果；损坏拒绝，不换 latest。保留旧 publication_versions 字段表示原始发布，普通查询不补写/修复/执行。仅描述实际持久事实，不从来源拒绝或任务完成推断存在行情。

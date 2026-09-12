@@ -12,6 +12,7 @@ pub struct TaskFacts {
     pub request_id: String,
     pub snapshot: TaskSnapshot,
     pub publications: Vec<VersionRef>,
+    pub range_results: Vec<RangeExecutionResult>,
 }
 pub struct AvailabilityFacts {
     pub entity: Option<Security>,
@@ -61,6 +62,7 @@ pub trait ObservationRepository {
         access: &Access,
     ) -> Result<Vec<AvailabilityFacts>, Error>;
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error>;
+    fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error>;
 }
 pub fn entity(symbol: &str) -> Option<Security> {
     let (ex, code) = symbol.split_once('.')?;
@@ -316,14 +318,24 @@ impl<R: ObservationRepository> Observer<R> {
                 unfinished,
                 next_cursor: None,
                 page_complete: false,
+                frozen_daily_ranges: frozen_daily_ranges(&facts.snapshot)?,
                 publication_versions: facts.publications,
+                range_results: facts.range_results,
             };
+            if serde_json::to_vec(&p)
+                .map_err(|e| invalid(e.to_string()))?
+                .len()
+                > MAX_BYTES
+            {
+                return Err(invalid("progress snapshot byte budget exceeded"));
+            }
             self.start(key, access, Content::Progress(Box::new(p)))
         };
         let Content::Progress(p) = &s.content else {
             return Err(invalid("cursor category"));
         };
         self.repository.verify_versions(&p.publication_versions)?;
+        self.repository.verify_range_results(&p.range_results)?;
         let end = (s.offset + args.page_size).min(p.unfinished.len());
         let more = end < p.unfinished.len();
         let mut result = (**p).clone();
@@ -392,4 +404,26 @@ fn budget<T: serde::Serialize>(v: &[T]) -> Result<(), Error> {
     } else {
         Ok(())
     }
+}
+
+fn frozen_daily_ranges(task: &TaskSnapshot) -> Result<Vec<FrozenDailyRange>, Error> {
+    if !matches!(
+        task.task.key.operation.as_str(),
+        "update_data" | "backfill_data"
+    ) {
+        return Ok(vec![]);
+    }
+    if task.task.key.contract_version != crate::market_update::tasks::CONTRACT_VERSION {
+        return Err(Error::Integrity("unknown frozen range contract".into()));
+    }
+    task.items.iter().map(|item| {
+        let frozen=&item.spec.frozen_inputs;
+        let entity=item.spec.target["symbol"].as_str().and_then(entity)
+            .ok_or_else(||Error::Integrity("frozen range entity missing".into()))?;
+        serde_json::from_value(serde_json::json!({
+            "item_id":item.spec.item_id,"entity":entity,
+            "base_version_id":frozen["base_version_id"],"base_integrity_sha256":frozen["base_integrity_sha256"],
+            "start_date":frozen["range"]["start"],"end_date":frozen["range"]["end"]
+        })).map_err(|e|Error::Integrity(format!("frozen range: {e}")))
+    }).collect()
 }

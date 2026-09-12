@@ -74,7 +74,7 @@ impl RangeRepository for SqliteMarket {
         self.read(|c| read_result(c, id).map(|r| r.map(|(_, receipt)| receipt)))
     }
 }
-fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Receipt)>, Error> {
+pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Receipt)>, Error> {
     let mut stmt = c.prepare(
         "SELECT task_id,item_id,base_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM market_update_results WHERE result_id=?1",
     ).map_err(storage)?;

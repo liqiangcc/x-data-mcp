@@ -684,7 +684,7 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
     Ok(receipt)
 }
 
-mod update;
+pub(crate) mod update;
 
 #[cfg(test)]
 mod tests;

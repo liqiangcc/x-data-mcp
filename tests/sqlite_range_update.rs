@@ -666,3 +666,81 @@ fn explicit_range_same_request_competes_atomically_and_retry_keeps_frozen_inputs
     assert_eq!(f.count("scope_occupancy"), 1);
     assert_eq!(f.count("market_update_results"), 0);
 }
+
+#[test]
+fn range_progress_exposes_frozen_inputs_and_verified_reuse_or_publication() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    for changed in [false, true] {
+        let f = fixture(changed);
+        let api = DataApi::new(f.db.tasks.clone(), "range-run".into(), Access::local()).unwrap();
+        let input = json!({"task_id":f.command.task_id});
+        let pending = api.call("get_task_progress", input.clone()).unwrap();
+        assert_eq!(
+            pending["frozen_daily_ranges"][0]["base_version_id"],
+            "legacy-daily"
+        );
+        assert_eq!(
+            pending["frozen_daily_ranges"][0]["base_integrity_sha256"],
+            f.evidence.base_integrity_sha256
+        );
+        assert_eq!(
+            pending["frozen_daily_ranges"][0]["start_date"],
+            "2025-01-02"
+        );
+        assert_eq!(pending["range_results"], json!([]));
+        f.db.commit_range(&f.plan()).unwrap();
+        let completed = api.call("get_task_progress", input.clone()).unwrap();
+        assert_eq!(completed["range_results"][0]["no_change"], !changed);
+        assert_eq!(
+            completed["range_results"][0]["result_version"]["version_id"],
+            f.command.version_id
+        );
+        assert_eq!(
+            completed["range_results"][0]["base_version"]["version_id"],
+            "legacy-daily"
+        );
+        assert_eq!(
+            completed["range_results"][0]["acquired_at"],
+            serde_json::to_value(f.batch.provenance.acquired_at).unwrap()
+        );
+        assert_eq!(
+            completed["publication_versions"].as_array().unwrap().len(),
+            usize::from(changed)
+        );
+        assert_eq!(
+            completed["frozen_daily_ranges"],
+            pending["frozen_daily_ranges"]
+        );
+        assert_eq!(completed["unfinished"], json!([]));
+        f.sql("DELETE FROM market_update_results");
+        assert_eq!(
+            api.call("get_task_progress", input).unwrap_err().code,
+            "integrity_error"
+        );
+    }
+}
+#[test]
+fn range_progress_refuses_damaged_audit_and_immutable_base_without_fallback() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    for sql in [
+        "UPDATE market_update_results SET receipt_json='{}'",
+        "UPDATE daily_bars SET close='10.09' WHERE version_id='legacy-daily' AND trade_date='2025-01-02'",
+    ] {
+        let f = fixture(false);
+        f.db.commit_range(&f.plan()).unwrap();
+        let api = DataApi::new(f.db.tasks.clone(), "range-run".into(), Access::local()).unwrap();
+        f.sql(sql);
+        assert_eq!(
+            api.call("get_task_progress", json!({"task_id":f.command.task_id}))
+                .unwrap_err()
+                .code,
+            "integrity_error"
+        );
+    }
+}

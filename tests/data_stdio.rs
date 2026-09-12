@@ -306,6 +306,15 @@ fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
             false,
         );
         assert_eq!(progress["failed"], 1);
+        assert_eq!(
+            progress["frozen_daily_ranges"][0]["base_version_id"],
+            "legacy-daily"
+        );
+        assert_eq!(
+            progress["frozen_daily_ranges"][0]["start_date"],
+            "2025-01-02"
+        );
+        assert_eq!(progress["range_results"], json!([]));
         assert!(
             progress["unfinished"][0]["error"]
                 .as_str()

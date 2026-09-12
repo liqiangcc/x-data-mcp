@@ -336,6 +336,7 @@ fn task_facts(
             request_id: request,
             snapshot: s,
             publications: vec![],
+            range_results: vec![],
         });
     }
     let mut q = c
@@ -358,7 +359,40 @@ fn task_facts(
         };
         publications.push(market_ref(dataset, &e, &r));
     }
+    let mut q = c
+        .prepare("SELECT result_id FROM market_update_results WHERE task_id=?1 ORDER BY result_id")
+        .map_err(storage)?;
+    let result_ids = q
+        .query_map([id], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let range_results = result_ids
+        .iter()
+        .map(|id| range_result(c, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    if matches!(
+        s.task.key.operation.as_str(),
+        "update_data" | "backfill_data"
+    ) {
+        let successful = s
+            .items
+            .iter()
+            .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+            .map(|i| i.spec.item_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let evidenced = range_results
+            .iter()
+            .map(|r| r.item_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        if successful != evidenced {
+            return Err(Error::Integrity(
+                "successful range task lacks matching result evidence".into(),
+            ));
+        }
+    }
     Ok(TaskFacts {
+        range_results,
         request_id: request,
         snapshot: s,
         publications,
@@ -421,6 +455,21 @@ impl ObservationRepository for SqliteSupply {
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)
+    }
+    fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error> {
+        if results.is_empty() {
+            return Ok(());
+        }
+        self.market.read(|c| {
+            for expected in results {
+                if range_result(c, &expected.result_id)? != *expected {
+                    return Err(Error::Integrity(
+                        "range result changed since snapshot".into(),
+                    ));
+                }
+            }
+            Ok(())
+        })
     }
     fn availability(
         &self,
@@ -487,4 +536,32 @@ impl ObservationRepository for SqliteSupply {
             Ok(out)
         })
     }
+}
+
+fn range_result(c: &Connection, id: &str) -> Result<RangeExecutionResult, Error> {
+    let (audit, receipt) = crate::sqlite_market::update::read_result(c, id)?
+        .ok_or_else(|| Error::Integrity("range result missing".into()))?;
+    let base_id = audit["evidence"]["base_version_id"]
+        .as_str()
+        .ok_or_else(|| Error::Integrity("range base reference missing".into()))?;
+    // These reads share the task/receipt transaction; never query a latest head.
+    let base = read_record(c, base_id, true, true)?;
+    let result = read_record(c, &receipt.version_id, true, true)?;
+    if base.version().period != crate::market_data::Period::Day
+        || result.version().period != crate::market_data::Period::Day
+        || base.version().symbol != result.version().symbol
+    {
+        return Err(Error::Integrity(
+            "range result version identity/period mismatch".into(),
+        ));
+    }
+    let entity = crate::data_supply::observe::entity(&base.version().symbol)
+        .ok_or_else(|| Error::Integrity("range result entity missing".into()))?;
+    serde_json::from_value(serde_json::json!({
+        "result_id":id,"item_id":audit["command"]["item_id"],
+        "base_version":market_ref(Dataset::Daily,&entity,&base),
+        "result_version":market_ref(Dataset::Daily,&entity,&result),
+        "no_change":audit["no_change"],"acquired_at":audit["segment"]["provenance"]["acquired_at"]
+    }))
+    .map_err(|e| Error::Integrity(format!("range result projection: {e}")))
 }

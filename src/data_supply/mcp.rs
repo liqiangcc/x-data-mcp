@@ -232,6 +232,7 @@ impl DataApi {
                                         request_id: a.request_id.clone(),
                                         snapshot: *s,
                                         publications: vec![],
+                                        range_results: vec![],
                                     },
                                     &self.observer.run_id,
                                 ))
