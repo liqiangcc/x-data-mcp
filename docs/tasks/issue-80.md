@@ -41,3 +41,11 @@ WriteAcceptance 的 dataset/contract_version 返回原任务契约（含 legacy_
 不把 legacy 持久身份改写为 v1。旧 selected_scopes 分支与错误 shape 保留。
 
 依赖选择：schemars 1.2.2，仅从相同 Rust wire 类型生成 schema；锁文件其余既有版本保持。
+
+## 审查对照父 #5
+
+未完成清单包含 pending/running 和失败项，不仅是尚无 outcome 的项；失败结束仍返回稳定 item_id 与已知错误。
+是否可重试始终由 #78 retry 用例在受理时决定，列表不承诺自动可重试。
+进度分别返回 pending/running/finished/succeeded/failed，执行百分比为实际 finished/total ×100，
+显示最多两位十进制（half-even）；终态不强行改为 100，百分比不表示历史完整度。
+新接口错误附 outcome_certainty/next_actions；旧调用不增加这些字段。

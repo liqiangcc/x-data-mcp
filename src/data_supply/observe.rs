@@ -235,15 +235,16 @@ impl<R: ObservationRepository> Observer<R> {
                     if o.success {
                         succeeded += 1;
                     }
-                } else {
+                }
+                if !i.outcome.as_ref().is_some_and(|o| o.success) {
                     unfinished.push(ProgressItem {
                         item_id: i.spec.item_id.clone(),
                         entity: i.spec.target["symbol"].as_str().and_then(entity),
                         period: i.spec.target["period"].as_str().map(str::to_owned),
                         progress_unit: i.spec.progress_unit.clone(),
                         stage: format!("{:?}", i.stage).to_lowercase(),
-                        success: None,
-                        error: None,
+                        success: i.outcome.as_ref().map(|o| o.success),
+                        error: i.outcome.as_ref().and_then(|o| o.error.clone()),
                     });
                 }
             }
@@ -257,6 +258,23 @@ impl<R: ObservationRepository> Observer<R> {
                 finished,
                 succeeded,
                 failed: finished - succeeded,
+                pending: facts
+                    .snapshot
+                    .items
+                    .iter()
+                    .filter(|i| i.stage == crate::task_control::Stage::Pending)
+                    .count(),
+                running: facts
+                    .snapshot
+                    .items
+                    .iter()
+                    .filter(|i| i.stage == crate::task_control::Stage::Running)
+                    .count(),
+                execution_percent: ((rust_decimal::Decimal::from(finished)
+                    * rust_decimal::Decimal::from(100))
+                    / rust_decimal::Decimal::from(facts.snapshot.items.len()))
+                .round_dp(2)
+                .to_string(),
                 unfinished,
                 next_cursor: None,
                 page_complete: false,

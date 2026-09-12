@@ -153,7 +153,9 @@ fn real_task_list_and_progress_freeze_state_and_enforce_authorization() {
     assert_ne!(first.unfinished[0].item_id, second.unfinished[0].item_id);
     let latest = observer.progress(p, &Access::local()).unwrap();
     assert_eq!(latest.failed, 2);
-    assert!(latest.unfinished.is_empty());
+    assert_eq!(latest.unfinished.len(), 1);
+    assert_eq!(latest.unfinished[0].success, Some(false));
+    assert_eq!(latest.execution_percent, "100");
     let mut restricted = Access::local();
     restricted.securities = Some(Default::default());
     let list: TasksQuery = serde_json::from_value(json!({})).unwrap();
