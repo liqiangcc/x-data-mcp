@@ -23,7 +23,7 @@ pub fn run_once(
         "update_data" | "backfill_data"
     ) {
         // Compatibility collection tasks retain their existing source refusal.
-        return Ok(control.run_once(&crate::official_files::BlockedSource)?);
+        return Ok(control.run_selected(candidate, &crate::official_files::BlockedSource)?);
     }
     let runner = RangeRunner {
         repository: market.clone(),
