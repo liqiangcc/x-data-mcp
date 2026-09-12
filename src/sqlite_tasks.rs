@@ -345,9 +345,27 @@ fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), 
     }
     Ok(())
 }
+struct RequestRow {
+    command: String,
+    digest: String,
+    kind: String,
+    task_id: Option<String>,
+    terminal: Option<String>,
+}
 fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRecord>, Error> {
-    let row:Option<(String,String,String,Option<String>,Option<String>)>=c.query_row("SELECT command_json,command_digest,outcome_kind,task_id,terminal_json FROM requests WHERE request_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(storage)?;
-    let Some((raw, digest, kind, task_id, terminal)) = row else {
+    let row = c.query_row(
+        "SELECT command_json,command_digest,outcome_kind,task_id,terminal_json FROM requests WHERE request_id=?1",
+        [id],
+        |r| Ok(RequestRow {command:r.get(0)?,digest:r.get(1)?,kind:r.get(2)?,task_id:r.get(3)?,terminal:r.get(4)?}),
+    ).optional().map_err(storage)?;
+    let Some(RequestRow {
+        command: raw,
+        digest,
+        kind,
+        task_id,
+        terminal,
+    }) = row
+    else {
         return Ok(None);
     };
     if crate::day_file::sha256(raw.as_bytes()) != digest {
