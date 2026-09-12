@@ -6,9 +6,16 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use x_data_mcp::{
     market_data::Period,
-    market_storage::{Error, Range, Scope, compat},
+    market_storage::{
+        Error, MarketRepository, Publication, PublishIntent, PublishPlan, Publisher, Range, Scope,
+        compat,
+    },
     sqlite_market::SqliteMarket,
     sqlite_tasks::SqliteTasks,
+    task_control::{
+        Change, Contract, RequestOutcome, TaskRepository, legacy::LegacyCollection,
+        service::TaskControl,
+    },
 };
 
 mod frozen_legacy {
@@ -44,21 +51,60 @@ fn scope() -> Scope {
         period: Period::Day,
     }
 }
-// First read slice only: explicit test fixture makes the staged version published.
-// This is not publication atomicity evidence; that uses the next slice's real use case.
-fn published_fixture(db: &SqliteMarket, raw: &Value) {
+fn prepare(db: &SqliteMarket, raw: &Value, intent: PublishIntent) -> PublishPlan {
     db.stage(raw).unwrap();
-    let c = Connection::open(db.tasks.path()).unwrap();
-    c.execute(
-        "UPDATE data_versions SET state='published' WHERE version_id=?1",
-        [raw["version_id"].as_str().unwrap()],
+    let ctl = TaskControl::new(
+        db.tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
     )
     .unwrap();
-    c.execute(
-        "INSERT INTO effective_heads VALUES('sh.600006','day','qfq',?1)",
-        [raw["version_id"].as_str().unwrap()],
-    )
-    .unwrap();
+    let accepted=ctl.accept(raw["version_id"].as_str().unwrap(),LegacyCollection.key(),json!({"symbols":[raw["symbol"]],"periods":[if raw["period"]=="Day" {"day"}else{"year"}]})).unwrap();
+    let RequestOutcome::Task(task) = accepted.record.outcome else {
+        panic!()
+    };
+    let task = db
+        .tasks
+        .transition(&task.task.task_id, 0, "run", Change::Claim)
+        .unwrap();
+    let task = db
+        .tasks
+        .transition(
+            &task.task.task_id,
+            task.task.state_revision,
+            "run",
+            Change::StartItem(task.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    Publisher {
+        repository: db.clone(),
+    }
+    .prepare(Publication {
+        publication_id: format!("pub-{}", raw["version_id"].as_str().unwrap()),
+        version_id: raw["version_id"].as_str().unwrap().into(),
+        task_id: task.task.task_id,
+        item_id: task.items[0].spec.item_id.clone(),
+        run_id: "run".into(),
+        expected_revision: task.task.state_revision,
+        intent,
+    })
+    .unwrap()
+}
+fn published_fixture(db: &SqliteMarket, raw: &Value) {
+    let plan = prepare(
+        db,
+        raw,
+        PublishIntent::Daily {
+            expected_head: None,
+        },
+    );
+    db.commit(&plan).unwrap();
+}
+fn revised(raw: &Value, id: &str) -> Value {
+    let mut r = raw.clone();
+    r["version_id"] = json!(id);
+    r["integrity_sha256"] = json!(frozen_legacy::digest(&r));
+    r
 }
 #[test]
 fn frozen_old_digest_matches_independent_literals_and_preserves_missing_null() {
@@ -70,8 +116,17 @@ fn frozen_old_digest_matches_independent_literals_and_preserves_missing_null() {
         assert_eq!(compat::legacy_digest(raw).unwrap(), sample["expected"]);
         assert_eq!(compat::check(raw).unwrap().raw(), raw);
         let (_dir, store) = db();
+        if raw["period"] == "Year" {
+            published_fixture(&store, &samples()[0]["record"]);
+        }
         store.stage(raw).unwrap();
-        assert_eq!(store.candidate("legacy-daily").unwrap().raw(), raw);
+        assert_eq!(
+            store
+                .candidate(raw["version_id"].as_str().unwrap())
+                .unwrap()
+                .raw(),
+            raw
+        );
     }
 }
 #[test]
@@ -132,4 +187,337 @@ fn missing_digest_or_unverified_input_is_never_promoted_by_staging() {
     raw["integrity_sha256"] = json!(frozen_legacy::digest(&raw));
     assert!(store.stage(&raw).is_err());
     assert!(matches!(store.fixed("legacy-daily"), Err(Error::NotFound)));
+}
+fn yearly(id: &str, base: &str) -> Value {
+    let mut raw = samples()[2]["record"].clone();
+    raw["version_id"] = json!(id);
+    raw["yearly_derivation"]["base_daily_version_id"] = json!(base);
+    raw["batch"]["provenance"]["yearly_derivation"]["base_daily_version_id"] = json!(base);
+    raw["integrity_sha256"] = json!(frozen_legacy::digest(&raw));
+    raw
+}
+fn current_head(db: &SqliteMarket, period: Period) -> Option<String> {
+    let mut scope = scope();
+    scope.period = period;
+    match db.range(&scope, None, &range()) {
+        Ok(page) => Some(page.version.version_id),
+        Err(Error::NotFound) => None,
+        Err(e) => panic!("{e}"),
+    }
+}
+#[test]
+fn historical_fixed_base_publishes_but_never_promotes_even_after_daily_advances() {
+    let (_dir, store) = db();
+    let daily = samples()[0]["record"].clone();
+    published_fixture(&store, &daily);
+    let d2 = revised(&daily, "daily-2");
+    let plan = prepare(
+        &store,
+        &d2,
+        PublishIntent::Daily {
+            expected_head: Some("legacy-daily".into()),
+        },
+    );
+    store.commit(&plan).unwrap();
+    let current = prepare(
+        &store,
+        &yearly("current-year", "daily-2"),
+        PublishIntent::CurrentHead {
+            expected_daily_head: "daily-2".into(),
+            expected_yearly_head: None,
+        },
+    );
+    store.commit(&current).unwrap();
+    let historical = prepare(
+        &store,
+        &yearly("historical-year", "legacy-daily"),
+        PublishIntent::HistoricalFixedBase,
+    );
+    assert!(historical.head_promotion().is_none());
+    assert!(historical.head_preconditions().is_empty());
+    store.commit(&historical).unwrap();
+    assert_eq!(
+        current_head(&store, Period::Year).as_deref(),
+        Some("current-year")
+    );
+    assert_eq!(
+        current_head(&store, Period::Day).as_deref(),
+        Some("daily-2")
+    );
+    let mut scope = scope();
+    scope.period = Period::Year;
+    let mut r = range();
+    r.start = "2025-06-01".parse().unwrap();
+    r.end = "2025-06-30".parse().unwrap();
+    let page = store.range(&scope, Some("historical-year"), &r).unwrap();
+    assert_eq!(page.rows.len(), 1);
+    assert_eq!(
+        page.rows[0].date,
+        "2025-12-31".parse::<NaiveDate>().unwrap()
+    );
+    assert_eq!(
+        page.version
+            .yearly_derivation
+            .unwrap()
+            .base_daily_version_id,
+        "legacy-daily"
+    );
+    assert_eq!(store.versions(&scope).unwrap().len(), 2);
+}
+#[test]
+fn current_yearly_conflicts_when_daily_or_yearly_head_advances() {
+    for daily_changes in [true, false] {
+        let (_dir, store) = db();
+        let daily = samples()[0]["record"].clone();
+        published_fixture(&store, &daily);
+        let plan = prepare(
+            &store,
+            &yearly("losing-year", "legacy-daily"),
+            PublishIntent::CurrentHead {
+                expected_daily_head: "legacy-daily".into(),
+                expected_yearly_head: None,
+            },
+        );
+        if daily_changes {
+            let other = prepare(
+                &store,
+                &revised(&daily, "daily-2"),
+                PublishIntent::Daily {
+                    expected_head: Some("legacy-daily".into()),
+                },
+            );
+            store.commit(&other).unwrap();
+        } else {
+            store
+                .stage(&yearly("winning-year", "legacy-daily"))
+                .unwrap();
+            let other = Publisher {
+                repository: store.clone(),
+            }
+            .prepare(Publication {
+                publication_id: "other".into(),
+                version_id: "winning-year".into(),
+                ..plan.publication().clone()
+            })
+            .unwrap();
+            store.commit(&other).unwrap();
+        }
+        assert!(matches!(store.commit(&plan), Err(Error::Conflict(_))));
+        assert!(
+            store
+                .receipt(&plan.publication().publication_id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(store.fixed("losing-year"), Err(Error::NotFound)));
+        assert_eq!(
+            current_head(&store, Period::Year),
+            if daily_changes {
+                None
+            } else {
+                Some("winning-year".into())
+            }
+        );
+    }
+}
+#[test]
+fn two_real_connections_compete_for_expected_head_without_last_writer_wins() {
+    use std::sync::{Arc, Barrier};
+    let (_dir, store) = db();
+    let daily = samples()[0]["record"].clone();
+    let first = prepare(
+        &store,
+        &daily,
+        PublishIntent::Daily {
+            expected_head: None,
+        },
+    );
+    let other_raw = revised(&daily, "competitor");
+    store.stage(&other_raw).unwrap();
+    let second = Publisher {
+        repository: store.clone(),
+    }
+    .prepare(Publication {
+        publication_id: "competitor-pub".into(),
+        version_id: "competitor".into(),
+        ..first.publication().clone()
+    })
+    .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let handles: Vec<_> = [first, second]
+        .into_iter()
+        .map(|plan| {
+            let db = SqliteMarket::new(
+                store
+                    .tasks
+                    .clone()
+                    .with_busy_timeout(std::time::Duration::from_secs(3)),
+            );
+            let b = barrier.clone();
+            std::thread::spawn(move || {
+                b.wait();
+                db.commit(&plan)
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| matches!(r, Err(Error::Conflict(_))))
+            .count(),
+        1
+    );
+}
+#[test]
+fn head_task_and_batch_write_failures_roll_back_every_publication_fact() {
+    for trigger in [
+        "CREATE TRIGGER fail BEFORE INSERT ON publication_batches BEGIN SELECT RAISE(ABORT,'batch fail'); END;",
+        "CREATE TRIGGER fail BEFORE UPDATE ON tasks BEGIN SELECT RAISE(ABORT,'task fail'); END;",
+        "CREATE TRIGGER fail BEFORE UPDATE ON effective_heads BEGIN SELECT RAISE(ABORT,'head fail'); END;",
+    ] {
+        let (_dir, store) = db();
+        let raw = samples()[0]["record"].clone();
+        published_fixture(&store, &raw);
+        let plan = prepare(
+            &store,
+            &revised(&raw, "new"),
+            PublishIntent::Daily {
+                expected_head: Some("legacy-daily".into()),
+            },
+        );
+        let before = store.task(&plan.publication().task_id).unwrap();
+        Connection::open(store.tasks.path())
+            .unwrap()
+            .execute_batch(trigger)
+            .unwrap();
+        assert!(store.commit(&plan).is_err());
+        assert_eq!(
+            current_head(&store, Period::Day).as_deref(),
+            Some("legacy-daily")
+        );
+        assert!(
+            store
+                .receipt(&plan.publication().publication_id)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(store.task(&plan.publication().task_id).unwrap(), before);
+        assert!(matches!(store.fixed("new"), Err(Error::NotFound)));
+    }
+}
+#[test]
+fn cancellation_revision_and_occupancy_changes_block_publication() {
+    for missing_claim in [false, true] {
+        let (_dir, store) = db();
+        let raw = samples()[0]["record"].clone();
+        let plan = prepare(
+            &store,
+            &raw,
+            PublishIntent::Daily {
+                expected_head: None,
+            },
+        );
+        if missing_claim {
+            Connection::open(store.tasks.path())
+                .unwrap()
+                .execute("DELETE FROM scope_occupancy", [])
+                .unwrap();
+        } else {
+            let p = plan.publication();
+            store
+                .tasks
+                .transition(
+                    &p.task_id,
+                    p.expected_revision,
+                    "run",
+                    Change::RequestCancel,
+                )
+                .unwrap();
+        }
+        assert!(store.commit(&plan).is_err());
+        assert!(
+            store
+                .receipt(&plan.publication().publication_id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(store.fixed("legacy-daily"), Err(Error::NotFound)));
+    }
+}
+#[test]
+fn base_missing_corrupt_identity_period_and_adjustment_are_not_head_conflicts() {
+    for scenario in ["missing", "corrupt", "identity", "period", "adjustment"] {
+        let (_dir, store) = db();
+        let raw = samples()[0]["record"].clone();
+        published_fixture(&store, &raw);
+        let mut y = yearly("bad-year", "legacy-daily");
+        match scenario {
+            "missing" => {
+                y = yearly("bad-year", "absent");
+            }
+            "corrupt" => {
+                Connection::open(store.tasks.path())
+                    .unwrap()
+                    .execute("UPDATE daily_bars SET close='99'", [])
+                    .unwrap();
+            }
+            "identity" => {
+                y["symbol"] = json!("sz.000001");
+                y["batch"]["symbol"] = json!("sz.000001");
+                y["batch"]["provenance"]["symbol"] = json!("sz.000001");
+            }
+            "period" => {
+                let p = prepare(
+                    &store,
+                    &yearly("base-year", "legacy-daily"),
+                    PublishIntent::HistoricalFixedBase,
+                );
+                store.commit(&p).unwrap();
+                y = yearly("bad-year", "base-year");
+            }
+            "adjustment" => {
+                Connection::open(store.tasks.path())
+                    .unwrap()
+                    .execute(
+                        "UPDATE version_evidence SET value='raw' WHERE field='adjustment'",
+                        [],
+                    )
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        y["integrity_sha256"] = json!(frozen_legacy::digest(&y));
+        assert!(matches!(store.stage(&y), Err(Error::Base(_))), "{scenario}");
+    }
+}
+#[test]
+fn yearly_lineage_projection_tampering_and_forged_published_flag_are_rejected() {
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let plan = prepare(
+        &store,
+        &yearly("y", "legacy-daily"),
+        PublishIntent::HistoricalFixedBase,
+    );
+    store.commit(&plan).unwrap();
+    Connection::open(store.tasks.path())
+        .unwrap()
+        .execute("UPDATE yearly_lineage SET algorithm_version='forged'", [])
+        .unwrap();
+    assert!(store.fixed("y").is_err());
+    let other = revised(&samples()[0]["record"], "forged-state");
+    store.stage(&other).unwrap();
+    Connection::open(store.tasks.path())
+        .unwrap()
+        .execute(
+            "UPDATE data_versions SET state='published' WHERE version_id='forged-state'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.fixed("forged-state"),
+        Err(Error::Integrity(_))
+    ));
 }

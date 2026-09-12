@@ -195,6 +195,9 @@ impl<R: MarketRepository> Publisher<R> {
     }
 }
 impl PublishPlan {
+    pub fn publication(&self) -> &Publication {
+        &self.command
+    }
     pub fn head_preconditions(&self) -> &[(Scope, Option<String>)] {
         &self.required_heads
     }
@@ -273,6 +276,7 @@ pub(crate) fn validate_base(
         || daily.period != Period::Day
         || daily.adjustment != v.adjustment
         || daily.source != v.source
+        || daily.unit_currency != v.unit_currency
         || !daily.adjustment_evidence.is_confirmed()
         || daily.adjustment_evidence.value.as_deref() != Some("qfq")
     {

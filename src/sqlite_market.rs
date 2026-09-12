@@ -28,14 +28,29 @@ impl SqliteMarket {
         Ok(result)
     }
     fn write<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {
+        self.write_transaction(false, f)
+    }
+    fn write_transaction<T>(
+        &self,
+        _publication: bool,
+        f: impl FnOnce(&Connection) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         let mut c = self.tasks.connect(false)?;
         let tx = c
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
         crate::sqlite_tasks::check_schema(&tx, true)?;
         let result = f(&tx)?;
+        #[cfg(test)]
+        if _publication {
+            tests::crash_point("before_commit");
+        }
         tx.commit()
             .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
+        #[cfg(test)]
+        if _publication {
+            tests::crash_point("after_commit");
+        }
         Ok(result)
     }
     pub fn stage(&self, raw: &Value) -> Result<(), Error> {
@@ -64,6 +79,8 @@ impl SqliteMarket {
                 return Err(Error::Integrity("version/scope mismatch".into()));
             }
             // Full verification above is O(version rows). This SELECT is separately indexed/bounded.
+            #[cfg(test)]
+            tests::after_verification();
             let rows = range_rows(c, &id, scope.period, range)?;
             let more = rows.len() > range.limit;
             let rows = rows.into_iter().take(range.limit).collect::<Vec<_>>();
@@ -81,7 +98,7 @@ impl SqliteMarket {
     }
     pub fn versions(&self, scope: &Scope) -> Result<Vec<crate::publish::EffectiveVersion>, Error> {
         self.read(|c|{
-            let mut stmt=c.prepare("SELECT version_id FROM data_versions WHERE symbol=?1 AND period=?2 AND adjustment='qfq' AND state='published' ORDER BY published_at DESC,version_id DESC").map_err(storage)?;
+            let mut stmt=c.prepare("SELECT version_id FROM data_versions WHERE symbol=?1 AND period=?2 AND adjustment='qfq' AND state='published' ORDER BY published_at DESC,version_id ASC").map_err(storage)?;
             let ids=stmt.query_map(params![scope.symbol,period(scope.period)],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
             ids.into_iter().map(|id|read_record(c,&id,true,true).map(|r|r.version)).collect()
         })
@@ -301,6 +318,9 @@ fn read_record(
     if !allow_yearly && record.version.period != Period::Day {
         return Err(Error::Base("base period is not daily".into()));
     }
+    if state == "published" {
+        check_publication_link(c, id)?;
+    }
     let base = base_record(c, &record)?;
     validate_base(&record, base.as_ref())?;
     let actual = rows(
@@ -419,3 +439,105 @@ fn range_rows(c: &Connection, id: &str, p: Period, range: &Range) -> Result<Vec<
         })
         .collect()
 }
+
+fn check_publication_link(c: &Connection, version: &str) -> Result<(), Error> {
+    let row:Option<(String,String,String,String)>=c.query_row(
+        "SELECT b.publication_id,b.command_json,b.receipt_json,b.task_id FROM publication_batches b JOIN task_publications p ON p.publication_id=b.publication_id AND p.task_id=b.task_id AND p.version_id=b.version_id WHERE b.version_id=?1",[version],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
+    ).optional().map_err(storage)?;
+    let (id, command, receipt, task) =
+        row.ok_or_else(|| integrity("published version lacks atomic publication evidence"))?;
+    let command: Publication = serde_json::from_str(&command).map_err(integrity)?;
+    let receipt: Receipt = serde_json::from_str(&receipt).map_err(integrity)?;
+    if command.publication_id != id
+        || command.version_id != version
+        || command.task_id != task
+        || receipt.publication_id != id
+        || receipt.version_id != version
+        || receipt.task_id != task
+    {
+        return Err(integrity("publication association mismatch"));
+    }
+    Ok(())
+}
+impl MarketRepository for SqliteMarket {
+    fn stage(&self, raw: &Value) -> Result<(), Error> {
+        SqliteMarket::stage(self, raw)
+    }
+    fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
+        SqliteMarket::candidate(self, id)
+    }
+    fn fixed(&self, id: &str) -> Result<CheckedRecord, Error> {
+        SqliteMarket::fixed(self, id)
+    }
+    fn range(&self, scope: &Scope, id: Option<&str>, range: &Range) -> Result<ReadPage, Error> {
+        SqliteMarket::range(self, scope, id, range)
+    }
+    fn versions(&self, scope: &Scope) -> Result<Vec<crate::publish::EffectiveVersion>, Error> {
+        SqliteMarket::versions(self, scope)
+    }
+    fn task(&self, id: &str) -> Result<crate::task_control::TaskSnapshot, Error> {
+        self.read(|c| {
+            crate::sqlite_tasks::read_bound_task(c, id)?
+                .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))
+        })
+    }
+    fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error> {
+        self.write(|c|{
+            let current=read_record(c,&record.version.version_id,false,true)?;
+            if current.raw!=record.raw{return Err(integrity("candidate changed during validation"));}
+            let n=c.execute("UPDATE data_versions SET state='validated' WHERE version_id=?1 AND state IN ('staging','validated')",[&record.version.version_id]).map_err(storage)?;
+            if n!=1{return Err(Error::Conflict("candidate already published".into()));}Ok(())
+        })
+    }
+    fn receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
+        self.read(|c| {
+            let raw: Option<String> = c
+                .query_row(
+                    "SELECT receipt_json FROM publication_batches WHERE publication_id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage)?;
+            raw.map(|raw| {
+                let receipt: Receipt = serde_json::from_str(&raw).map_err(integrity)?;
+                read_record(c, &receipt.version_id, true, true)?;
+                Ok(receipt)
+            })
+            .transpose()
+        })
+    }
+    fn commit(&self, plan: &PublishPlan) -> Result<Receipt, Error> {
+        self.write_transaction(true,|c|{
+            let command=&plan.command;
+            let old:Option<(String,String)>=c.query_row("SELECT command_json,receipt_json FROM publication_batches WHERE publication_id=?1",[&command.publication_id],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(storage)?;
+            if let Some((raw,receipt))=old {
+                if serde_json::from_str::<Publication>(&raw).map_err(integrity)?!=*command{return Err(Error::Conflict("publication identity reused with different command".into()));}
+                let stored=read_record(c,&command.version_id,true,true)?;
+                if stored.raw!=plan.record.raw{return Err(integrity("published record differs from prepared command"));}
+                return serde_json::from_str(&receipt).map_err(integrity);
+            }
+            let record=read_record(c,&command.version_id,false,true)?;
+            if record.raw!=plan.record.raw{return Err(integrity("validated candidate changed"));}
+            let state:String=c.query_row("SELECT state FROM data_versions WHERE version_id=?1",[&command.version_id],|r|r.get(0)).map_err(storage)?;
+            if state!="validated"{return Err(Error::Conflict("candidate is not validated".into()));}
+            // Only the application plan chooses required heads and whether to promote.
+            for (scope,expected) in &plan.required_heads {if head(c,scope)?!=*expected{return Err(Error::Conflict("effective head changed".into()));}}
+            let task=crate::sqlite_tasks::read_bound_task(c,&command.task_id)?.ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
+            let next=plan.finish_task(task)?;
+            let receipt=Receipt{publication_id:command.publication_id.clone(),version_id:command.version_id.clone(),task_id:command.task_id.clone(),task_revision:next.task.state_revision};
+            c.execute("INSERT INTO publication_batches VALUES(?1,?2,?3,?4,?5,?6)",params![command.publication_id,command.version_id,command.task_id,command.item_id,text(command)?,text(&receipt)?]).map_err(storage)?;
+            c.execute("INSERT INTO task_publications VALUES(?1,?2,?3)",params![command.task_id,command.version_id,command.publication_id]).map_err(storage)?;
+            c.execute("UPDATE data_versions SET state='published' WHERE version_id=?1 AND state='validated'",[&command.version_id]).map_err(storage)?;
+            if let Some(scope)=&plan.promote {
+                c.execute("INSERT INTO effective_heads VALUES(?1,?2,'qfq',?3) ON CONFLICT(symbol,period,adjustment) DO UPDATE SET version_id=excluded.version_id",params![scope.symbol,period(scope.period),command.version_id]).map_err(storage)?;
+            }
+            crate::sqlite_tasks::write_task(c,&next,command.expected_revision)?;
+            read_record(c,&command.version_id,true,true)?;
+            Ok(receipt)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -399,7 +399,7 @@ fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRecord>, Error
         outcome,
     }))
 }
-fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
+pub(crate) fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
     let snapshot = read_task(c, id)?;
     let binding: Option<String> = c
         .query_row(
@@ -418,7 +418,7 @@ fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Err
         _ => Err(inconsistent("task binding/execution missing")),
     }
 }
-fn write_task(c: &Connection, s: &TaskSnapshot, expected: u64) -> Result<(), Error> {
+pub(crate) fn write_task(c: &Connection, s: &TaskSnapshot, expected: u64) -> Result<(), Error> {
     let changed=c.execute("UPDATE tasks SET status=?1,state_revision=?2,owner_run_id=?3,last_progress_at=?4,result_json=?5 WHERE task_id=?6 AND state_revision=?7",params![tag(&s.task.status),db_revision(s.task.state_revision)?,s.task.owner_run_id,s.task.last_progress_at.to_rfc3339(),s.task.result.as_ref().map(encode).transpose()?,s.task.task_id,db_revision(expected)?]).map_err(storage)?;
     if changed != 1 {
         return Err(Error::RevisionConflict);
