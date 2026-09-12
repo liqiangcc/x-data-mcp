@@ -195,7 +195,7 @@ where
     }
 }
 
-fn validate_snapshot(
+pub(crate) fn validate_snapshot(
     snapshot: &CatalogSnapshot,
     previous: Option<&CatalogVersion>,
 ) -> Result<(), RejectReason> {

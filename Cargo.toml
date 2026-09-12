@@ -13,3 +13,10 @@ thiserror = "2"
 tempfile = "3"
 sha2 = "0.11"
 rusqlite = { version = "0.40.2", features = ["bundled"], default-features = false }
+
+# Stage C: derive discoverable schemas from the same typed wire contracts.
+schemars = { version = "1", features = ["chrono04"] }
+
+[dev-dependencies]
+# Validate generated wire schemas against real stdio results; no HTTP schema resolution.
+jsonschema = { version = "0.33", default-features = false }

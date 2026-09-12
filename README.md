@@ -95,3 +95,19 @@ git diff --check
 行情发布已改为[batch与version单点提交](docs/publish-storage.md)；[任务受理](docs/task-storage.md)也以单一快照提交绑定、执行状态和范围占用；当前仍要求单写者运行。
 
 Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README.md)已保存：仅 evidence，官方 normalization 契约仍 NOT_VERIFIED，未解除生产门禁。
+
+## 通用 SQLite 数据入口（#80）
+
+`cargo run --locked --bin mcp_data -- <已初始化 SQLite 路径>` 提供独立数据入口；
+普通调用不建库、不升级、不导入 fixture。schema v4 升级仍由 `task_sqlite upgrade` 显式执行。
+原 `mcp_server` / `mcp_sqlite_dev` 兼容入口保留。
+
+新增 `get_data_capabilities`、`query_data`、`list_data_versions`、`get_data_availability`、
+`list_tasks`、`get_task_progress`；控制工具接受互斥的旧参数与显式 v1 参数。
+能力发现提供分层 schema/示例，读取固定版本与有界快照，行情批量任何已有版本损坏整体拒绝。
+新 daily/catalog/yearly 请求真实受理到 SQLite；source readiness 仍 blocked，受控 worker 记录未验证失败，
+不生成假行情。yearly 受理要求显式已发布 daily 及自然年；catalog fixture 只能显式测试装配。
+
+本地 stdio 使用本机所有者上下文；应用层权限过滤测试不代表远程认证已交付。
+已有版本的覆盖证据未明确证明请求范围时 availability=unknown，不从日期连续性推断完整。
+[Stage C 边界与验收](docs/tasks/issue-80.md)记录预算、固定输入及测试。
