@@ -29,7 +29,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<RawDayRecord>, DayFileError> {
         return Err(DayFileError::Truncated(bytes.len()));
     }
     let mut records: Vec<RawDayRecord> = Vec::with_capacity(bytes.len() / RECORD_BYTES);
-    for (index, chunk) in bytes.chunks_exact(RECORD_BYTES).enumerate() {
+    for (index, chunk) in bytes.as_chunks::<RECORD_BYTES>().0.iter().enumerate() {
         let words: [u32; 8] = std::array::from_fn(|i| {
             u32::from_le_bytes(chunk[i * 4..i * 4 + 4].try_into().unwrap())
         });
