@@ -182,8 +182,11 @@ impl MarketDataPublisher {
             || lineage.algorithm_version.trim().is_empty()
             || batch.provenance.source_period != "day"
             || batch.provenance.source != daily.source
-            || daily.records.first().map(|bar| bar.date) != Some(lineage.first_trading_date)
-            || daily.records.last().map(|bar| bar.date) != Some(lineage.last_trading_date)
+            // Issue #3 AC-147 permits selected historical years within this base.
+            // These are participation endpoints, not the whole version's bounds.
+            || lineage.first_trading_date > lineage.last_trading_date
+            || !daily.records.iter().any(|bar| bar.date == lineage.first_trading_date)
+            || !daily.records.iter().any(|bar| bar.date == lineage.last_trading_date)
             || !daily.adjustment_evidence.is_confirmed()
             || daily.adjustment_evidence.value.as_deref() != Some("qfq")
         {

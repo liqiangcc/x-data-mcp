@@ -252,3 +252,102 @@ fn collector_rejects_yearly_that_does_not_use_the_fixed_input() {
             .is_none()
     );
 }
+
+fn multi_year_daily_fixture(store: &JsonFileStore) -> EffectiveVersion {
+    let mut batch = daily_fixture();
+    batch.bars = [
+        (2024, 1, 2),
+        (2025, 1, 2),
+        (2025, 7, 1),
+        (2025, 12, 31),
+        (2026, 9, 10),
+    ]
+    .into_iter()
+    .map(|(year, month, day)| {
+        let mut bar = batch.bars[0].clone();
+        bar.date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+        bar
+    })
+    .collect();
+    match MarketDataPublisher::new(store.clone())
+        .publish(&batch)
+        .unwrap()
+    {
+        PublishOutcome::Published(version) => version,
+        outcome => panic!("unexpected fixture outcome: {outcome:?}"),
+    }
+}
+
+fn only_2025_fixture(daily: &EffectiveVersion) -> MarketDataBatch {
+    let mut batch = yearly_fixture(daily);
+    batch.bars[0].date = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+    let lineage = batch.provenance.yearly_derivation.as_mut().unwrap();
+    lineage.first_trading_date = NaiveDate::from_ymd_opt(2025, 1, 2).unwrap();
+    lineage.last_trading_date = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+    batch
+}
+
+/// Issue #3: selected historical years use their actual participating dates,
+/// not the outer boundaries of the fixed multi-year daily version.
+#[test]
+fn yearly_lineage_allows_one_year_within_a_multi_year_daily_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let daily = multi_year_daily_fixture(&store);
+    let yearly = only_2025_fixture(&daily);
+    let outcome = MarketDataPublisher::new(store.clone())
+        .publish(&yearly)
+        .unwrap();
+    let PublishOutcome::Published(version) = outcome else {
+        panic!("expected subset yearly publication");
+    };
+    assert_eq!(
+        version.yearly_derivation,
+        yearly.provenance.yearly_derivation
+    );
+    assert_eq!(version.records, yearly.bars);
+    assert_eq!(
+        store
+            .get_latest_effective("000001", Period::Day)
+            .unwrap()
+            .unwrap(),
+        daily
+    );
+}
+
+#[test]
+fn yearly_lineage_rejects_outside_reversed_or_absent_participating_dates() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = JsonFileStore::new(dir.path());
+    let daily = multi_year_daily_fixture(&store);
+    let publisher = MarketDataPublisher::new(store.clone());
+    for (first, last) in [
+        ((2023, 12, 29), (2025, 12, 31)), // before base coverage
+        ((2025, 1, 2), (2027, 1, 4)),     // after base coverage
+        ((2025, 12, 31), (2025, 1, 2)),   // reversed, both dates present
+        ((2025, 1, 3), (2025, 12, 31)),   // inside bounds, first date absent
+        ((2025, 1, 2), (2025, 12, 30)),   // inside bounds, last date absent
+    ] {
+        let mut yearly = only_2025_fixture(&daily);
+        let lineage = yearly.provenance.yearly_derivation.as_mut().unwrap();
+        lineage.first_trading_date = NaiveDate::from_ymd_opt(first.0, first.1, first.2).unwrap();
+        lineage.last_trading_date = NaiveDate::from_ymd_opt(last.0, last.1, last.2).unwrap();
+        assert!(
+            publisher.publish(&yearly).is_err(),
+            "unexpected acceptance: {first:?}..{last:?}"
+        );
+        assert!(
+            store
+                .get_latest_effective("000001", Period::Year)
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(
+        store
+            .get_latest_effective("000001", Period::Day)
+            .unwrap()
+            .unwrap(),
+        daily
+    );
+}
