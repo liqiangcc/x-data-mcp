@@ -26,7 +26,8 @@ impl QueryPlan {
                 },
                 Dataset::Daily,
             ) if start_date <= end_date
-                && *start_date >= NaiveDate::from_ymd_opt(1, 1, 1).unwrap() => {}
+                && *start_date >= NaiveDate::from_ymd_opt(1, 1, 1).unwrap()
+                && *end_date <= NaiveDate::from_ymd_opt(9999, 12, 31).unwrap() => {}
             (
                 Filter::Yearly {
                     start_year,

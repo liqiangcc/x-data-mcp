@@ -394,3 +394,46 @@ fn yearly_collection_requires_exact_fixed_base_map_and_stores_frozen_years() {
     assert!(api.call("start_collection", a).is_err());
     assert!(t.read_request("bad-map").unwrap().is_none());
 }
+
+#[test]
+fn yearly_query_returns_actual_participation_and_unfinished_semantics() {
+    use x_data_mcp::market_storage::{MarketRepository, PublishIntent};
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t);
+    market::published_fixture(&store, &market::samples()[0]["record"]);
+    let yearly = market::samples()[2]["record"].clone();
+    let plan = market::prepare(&store, &yearly, PublishIntent::HistoricalFixedBase);
+    store.commit(&plan).unwrap();
+    let mut a = args();
+    a.dataset = Dataset::Yearly;
+    a.filter = Filter::Yearly {
+        start_year: 2025,
+        end_year: 2025,
+    };
+    a.version = VersionChoice::ExplicitVersionMap {
+        versions: vec![VersionBinding {
+            entity: Security {
+                exchange: Exchange::Sh,
+                code: "600006".into(),
+            },
+            version_id: yearly["version_id"].as_str().unwrap().into(),
+        }],
+    };
+    let q = Queries::new(SqliteSupply { market: store });
+    let p = q.query(a, &Access::local()).unwrap();
+    match &p.records[0] {
+        Row::Market {
+            first_trading_date,
+            last_trading_date,
+            year_unfinished,
+            ..
+        } => {
+            assert_eq!(*first_trading_date, Some("2025-01-02".parse().unwrap()));
+            assert_eq!(*last_trading_date, Some("2025-12-31".parse().unwrap()));
+            assert_eq!(*year_unfinished, Some(false));
+        }
+        _ => panic!(),
+    }
+}

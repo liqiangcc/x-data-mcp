@@ -236,7 +236,22 @@ pub(crate) fn query(
                 plan.args.dataset.period().unwrap(),
                 &range,
             )? {
+                let (first_trading_date, last_trading_date, year_unfinished) = if plan.args.dataset
+                    == Dataset::Yearly
+                {
+                    let (first,last,finished):(String,String,bool)=c.query_row("SELECT first_trade_date,last_trade_date,is_finished FROM yearly_bars WHERE version_id=?1 AND trade_date=?2",params![id,b.date.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(storage)?;
+                    (
+                        Some(first.parse().map_err(storage)?),
+                        Some(last.parse().map_err(storage)?),
+                        Some(!finished),
+                    )
+                } else {
+                    (None, None, None)
+                };
                 result.rows.push(Row::Market {
+                    first_trading_date,
+                    last_trading_date,
+                    year_unfinished,
                     entity: entity.clone(),
                     version_ref: reference.clone(),
                     date: b.date,
