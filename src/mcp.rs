@@ -120,7 +120,7 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -505,7 +505,7 @@ pub fn public_tools() -> Value {
     tools
 }
 
-pub fn run_stdio<S: MarketDataPipeline>(api: McpApi<S>) -> io::Result<()> {
+pub fn run_stdio<H: ToolHandler>(api: H) -> io::Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::BufWriter::new(io::stdout().lock());
     for line in stdin.lock().lines() {
@@ -518,7 +518,7 @@ pub fn run_stdio<S: MarketDataPipeline>(api: McpApi<S>) -> io::Result<()> {
     Ok(())
 }
 
-pub fn handle_json<S: MarketDataPipeline>(api: &McpApi<S>, input: &str) -> Option<String> {
+pub fn handle_json<H: ToolHandler>(api: &H, input: &str) -> Option<String> {
     let request: Value = match serde_json::from_str(input) {
         Ok(request) => request,
         Err(error) => {
@@ -551,7 +551,7 @@ pub fn handle_json<S: MarketDataPipeline>(api: &McpApi<S>, input: &str) -> Optio
                 "serverInfo": {"name": "x-data-mcp", "version": "0.1.0"}
             }
         }),
-        "tools/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": public_tools()}}),
+        "tools/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": api.tools()}}),
         "tools/call" => {
             handle_tool_call(api, id, request.get("params").cloned().unwrap_or_default())
         }
@@ -565,7 +565,7 @@ pub fn handle_json<S: MarketDataPipeline>(api: &McpApi<S>, input: &str) -> Optio
     Some(serde_json::to_string(&response).unwrap())
 }
 
-fn handle_tool_call<S: MarketDataPipeline>(api: &McpApi<S>, id: Value, params: Value) -> Value {
+fn handle_tool_call<H: ToolHandler>(api: &H, id: Value, params: Value) -> Value {
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return rpc_error(id, -32602, "invalid_tool_call", "missing tool name");
     };
@@ -573,59 +573,7 @@ fn handle_tool_call<S: MarketDataPipeline>(api: &McpApi<S>, id: Value, params: V
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let result = match name {
-        "start_collection" => serde_json::from_value::<StartCollectionArgs>(args)
-            .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
-            .and_then(|args| {
-                api.start_collection(args)
-                    .map(|value| serde_json::to_value(value).unwrap())
-            }),
-        "get_task" => serde_json::from_value::<GetTaskArgs>(args)
-            .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
-            .and_then(|args| {
-                api.get_task(args)
-                    .map(|value| serde_json::to_value(value).unwrap())
-            }),
-        "run_worker_once" => serde_json::from_value::<EmptyArgs>(args)
-            .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
-            .and_then(|_| {
-                api.run_worker_once()
-                    .map(|value| serde_json::to_value(value).unwrap())
-            }),
-        "get_market_data" => serde_json::from_value::<crate::query::MarketQuery>(args)
-            .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
-            .and_then(|args| {
-                api.query
-                    .market(args, chrono::Utc::now())
-                    .map_err(query_error)
-            }),
-        "list_market_data_versions" => serde_json::from_value::<crate::query::VersionQuery>(args)
-            .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
-            .and_then(|args| {
-                api.query
-                    .versions(args, chrono::Utc::now())
-                    .map_err(query_error)
-            }),
-        "get_request" => serde_json::from_value::<GetRequestArgs>(args)
-            .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
-            .and_then(|args| api.get_request(args)),
-        "cancel_task" => serde_json::from_value::<CancelTaskArgs>(args)
-            .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
-            .and_then(|args| {
-                api.cancel_task(args)
-                    .map(|value| serde_json::to_value(value).unwrap())
-            }),
-        "retry_task" => serde_json::from_value::<RetryTaskArgs>(args)
-            .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
-            .and_then(|args| {
-                api.retry_task(args)
-                    .map(|value| serde_json::to_value(value).unwrap())
-            }),
-        _ => Err(ApiError::new(
-            "unknown_tool",
-            format!("unsupported tool: {name}"),
-        )),
-    };
+    let result = api.call(name, args);
     match result {
         Ok(value) => tool_result(id, value, false),
         Err(error) => tool_result(id, serde_json::to_value(error).unwrap(), true),
@@ -670,4 +618,71 @@ fn query_error(error: crate::query::QueryError) -> ApiError {
         crate::query::QueryError::Unavailable(_) => "published_data_unavailable",
     };
     ApiError::new(code, error.to_string())
+}
+
+pub trait ToolHandler {
+    fn tools(&self) -> Value;
+    fn call(&self, name: &str, args: Value) -> Result<Value, ApiError>;
+}
+impl<S: MarketDataPipeline> ToolHandler for McpApi<S> {
+    fn tools(&self) -> Value {
+        public_tools()
+    }
+    fn call(&self, name: &str, args: Value) -> Result<Value, ApiError> {
+        match name {
+            "start_collection" => serde_json::from_value::<StartCollectionArgs>(args)
+                .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
+                .and_then(|args| {
+                    self.start_collection(args)
+                        .map(|value| serde_json::to_value(value).unwrap())
+                }),
+            "get_task" => serde_json::from_value::<GetTaskArgs>(args)
+                .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
+                .and_then(|args| {
+                    self.get_task(args)
+                        .map(|value| serde_json::to_value(value).unwrap())
+                }),
+            "run_worker_once" => serde_json::from_value::<EmptyArgs>(args)
+                .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
+                .and_then(|_| {
+                    self.run_worker_once()
+                        .map(|value| serde_json::to_value(value).unwrap())
+                }),
+            "get_market_data" => serde_json::from_value::<crate::query::MarketQuery>(args)
+                .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
+                .and_then(|args| {
+                    self.query
+                        .market(args, chrono::Utc::now())
+                        .map_err(query_error)
+                }),
+            "list_market_data_versions" => {
+                serde_json::from_value::<crate::query::VersionQuery>(args)
+                    .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
+                    .and_then(|args| {
+                        self.query
+                            .versions(args, chrono::Utc::now())
+                            .map_err(query_error)
+                    })
+            }
+            "get_request" => serde_json::from_value::<GetRequestArgs>(args)
+                .map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
+                .and_then(|args| self.get_request(args)),
+            "cancel_task" => serde_json::from_value::<CancelTaskArgs>(args)
+                .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
+                .and_then(|args| {
+                    self.cancel_task(args)
+                        .map(|value| serde_json::to_value(value).unwrap())
+                }),
+            "retry_task" => serde_json::from_value::<RetryTaskArgs>(args)
+                .map_err(|error| ApiError::new("invalid_arguments", error.to_string()))
+                .and_then(|args| {
+                    self.retry_task(args)
+                        .map(|value| serde_json::to_value(value).unwrap())
+                }),
+            _ => Err(ApiError::new(
+                "unknown_tool",
+                format!("unsupported tool: {name}"),
+            )),
+        }
+    }
 }
