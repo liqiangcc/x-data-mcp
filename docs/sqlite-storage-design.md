@@ -177,14 +177,18 @@ WHERE c.catalog_version_id = :catalog_version_id
    在 Linux 实现中同步父目录。数据库只引用已经落盘的不可变文件。
 2. 解析、计算并分批写 staging 版本的行情行。staging 对普通查询不可见。
 3. 固定输入并完成数值、范围、来源一致性和 digest 校验；validated 后禁止修改行情。
-4. 在一个短写事务中重新验证发布资格、任务/取消状态、占用、预期旧 head，
-   同时提交 batch 结果、version 发布状态、effective head、task_publications。
-   若该发布恰为任务终结条件，终态和占用释放在同一事务完成；否则仅更新该项结果。
-5. COMMIT 是数据库内唯一发布可见点。版本与 head 更新失败整体回滚，旧有效版本保留。
+4. 在一个短写事务中重新验证发布资格、任务/取消状态、占用及发布意图要求的 head 前置条件，
+   同时提交 batch 结果、version 发布状态、task_publications；只有 `current-head` 派生满足全部
+   前置条件时才一并推进对应 yearly `effective_heads`。`historical-fixed-base` 派生只发布不可变版本，
+   不改变默认 head。若该发布恰为任务终结条件，终态和占用释放在同一事务完成；否则仅更新该项结果。
+5. COMMIT 是数据库内唯一发布可见点。需要推进 head 的事务任一前置条件或写入失败则整体回滚，
+   旧 effective head 保留；历史固定基础版本的发布不以 head 推进作为成功条件。
 
 批量多证券任务允许按既有规则部分完成；不将整个市场改成一个大事务。
 提交后不可改已发布行情、lineage 或原始输入，修订必须创建新版本。
-使用条件更新检查旧 head，避免过期候选覆盖较新版本；冲突明确报告，不最后写入者胜出。
+使用条件更新检查发布意图要求的旧 head，避免过期候选覆盖较新版本；冲突明确报告，不最后写入者胜出。
+`published` 与“当前默认版本”是不同事实：历史固定基础可以产生新的 published 版本，但只有明确的
+`current-head` 派生在提交时仍满足 daily/yearly head 前置条件，才能推进 yearly effective head。
 
 数据库与原始文件不能组成一个 SQLite 事务。“文件先落盘，数据库后引用”意味着
 崩溃可能产生未引用文件；扫描可报告孤儿，但本次不授权自动删除。
@@ -245,14 +249,29 @@ SQLite integrity_check 只能检查数据库结构，不能证明行情或来源
 | SQLite busy | 有界等待后明确冲突/暂不可用；不无界重试、不假定提交失败 |
 | 数据库不可读、摘要不匹配 | 明确存储/完整性错误，无旧 JSON 或空库 fallback |
 | 重启留下旧非终态或应有占用证据缺失 | 保守保留冲突保护，进入既定核实路径；不误伤正常已释放终态 |
-| 固定 base 完整但 daily head 前进 | 与 base 损坏、目标 yearly head 冲突分别判断；允许/拒绝矩阵由 #79 设计审查收敛，不自动重绑或称为损坏 |
+| 固定历史 base 完整但 daily head 前进 | 若请求明确为 historical-fixed-base，可发布绑定该 base 的不可变 yearly 版本，但不得推进 yearly effective head；不把“非最新”称为损坏 |
+| current-head 派生提交前 daily head 前进 | 前置条件冲突；不发布为当前版本、不自动重绑新 daily head，也不静默降级成历史发布 |
+| 提交前目标 yearly head 变化 | 前置条件冲突；不最后写入者胜出，不覆盖较新的默认 yearly |
 
-### 年线发布的局部设计未决项
+### 年线固定基础与 effective head 规则（已收敛）
 
-固定历史 daily 输入是否允许在 daily latest 已前进时发布，必须由 [#79](https://github.com/liqiangcc/x-data-mcp/issues/79)
-与 #69/#75 的设计审查明确。固定 base 不可用时拒绝，目标 yearly head 变化时条件提交冲突；
-仅 base 不再最新不是内容损坏，也不授权替换输入。原先笼统的“daily head 变化即拒绝过期候选”
-不足以描述显式历史基础操作，不能直接作为统一规则实现。此项只阻塞相关发布分支，不阻塞 #78。
+`published` 表示该版本本身通过发布门禁并成为不可变历史事实；`effective_heads` 表示普通未指定版本查询
+采用的当前默认版本。两者不得混为一个决定。所有 yearly 版本都必须把
+`yearly_lineage.base_daily_version_id` 固定到一个已发布且可核验的 QFQ daily version，发布后不改写。
+
+应用用例在进入提交前必须明确是哪一种发布意图；以下名称是内部设计标签，不是本轮新增公开 MCP 字段：
+
+| 发布意图 / 事实 | 处理 |
+|---|---|
+| base daily 不存在、损坏、口径/身份不匹配或不具发布资格 | 拒绝为基础版本不可用/完整性错误；不能归类为 head 冲突，也不能换用其他 base |
+| `historical-fixed-base`：显式绑定的 historical daily 仍有效，但 daily effective head 已前进 | 允许发布新的 immutable yearly version，并保留固定 lineage；**不得**推进 yearly effective head |
+| `current-head`：候选绑定的 expected daily head 在提交前已变化 | 返回前置条件冲突；本次不自动换 base、不重新计算、不把候选静默改成 historical 发布 |
+| 任一需要推进 head 的提交发现 expected yearly head 已变化 | 返回前置条件冲突；候选不能覆盖新 head |
+| `current-head` 的 expected daily head、expected yearly head、任务/占用/修订均仍匹配 | 在同一事务中发布版本、记录任务输出并推进 yearly effective head |
+
+因此“base 不再 latest”本身既不是损坏，也不是推进默认头的授权。显式历史版本仍可通过版本列表和
+指定 version_id 查询；普通未指定版本查询继续只跟随 effective head。若 `current-head` 提交因前置条件变化失败，
+后续要基于新 daily head 生成当前 yearly，必须重新形成候选/决定；不能在原事务内自动 rebase。
 
 ## 查询契约与分析入口
 
@@ -346,8 +365,8 @@ Schema 升级与业务查询分离，升级失败回滚；禁止普通查询自�
 - 受保护远程 MCP、后台 worker 与服务重启恢复的具体装配：由运行设计承接，
   SQLite 本身不提供远程认证或后台执行。
 
-截至本设计提交：SQLite Adapter、迁移、故障测试、真实性能、部署均 NOT_RUN；
-现有来源状态保持 NOT_PRODUCTION_READY。
+截至本设计修订：#78 的 SQLite 通用任务阶段已由 PR #82 合并；本文件的阶段 B 行情表、发布、
+verified read、迁移、真实性能与部署仍未由本设计提交验收。现有来源状态保持 NOT_PRODUCTION_READY。
 
 ## 通用任务模型实施入口
 
