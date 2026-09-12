@@ -1,0 +1,57 @@
+[
+  {
+    "repo": "injoyai/tdx",
+    "commit": "2b3dcae30c42cae1f5e2f3a33359d12b761ae7fe",
+    "path": "protocol/model_gbbq.go",
+    "url": "https://github.com/injoyai/tdx/blob/2b3dcae30c42cae1f5e2f3a33359d12b761ae7fe/protocol/model_gbbq.go",
+    "retained": "sources/protocol__model_gbbq.go.txt",
+    "sha256": "86859c72918e79f7d68b1473988a9e32b23be36b85cf2214b02f9e020562cbd4",
+    "bytes": 14078,
+    "license": "MIT",
+    "evidence_level": "COMMUNITY_SOURCE_NOT_OFFICIAL"
+  },
+  {
+    "repo": "injoyai/tdx",
+    "commit": "2b3dcae30c42cae1f5e2f3a33359d12b761ae7fe",
+    "path": "protocol/model_gbbq_test.go",
+    "url": "https://github.com/injoyai/tdx/blob/2b3dcae30c42cae1f5e2f3a33359d12b761ae7fe/protocol/model_gbbq_test.go",
+    "retained": "sources/protocol__model_gbbq_test.go.txt",
+    "sha256": "af353070ae93f8e4e80ea12471f2d64f331a1fcb9e0ca4842aec731e7de13e27",
+    "bytes": 12622,
+    "license": "MIT",
+    "evidence_level": "COMMUNITY_SOURCE_NOT_OFFICIAL"
+  },
+  {
+    "repo": "injoyai/tdx",
+    "commit": "2b3dcae30c42cae1f5e2f3a33359d12b761ae7fe",
+    "path": "LICENSE",
+    "url": "https://github.com/injoyai/tdx/blob/2b3dcae30c42cae1f5e2f3a33359d12b761ae7fe/LICENSE",
+    "retained": "sources/LICENSE.txt",
+    "sha256": "55b70210774ffc484b3ff977ccdca60931a00e10c90bb5df0927a9c372977dbf",
+    "bytes": 1064,
+    "license": "MIT",
+    "evidence_level": "COMMUNITY_SOURCE_NOT_OFFICIAL"
+  },
+  {
+    "repo": "yutiansut/QUANTAXIS",
+    "commit": "5006a009fba7b8e392e32f8b577f1bcb81deba5c",
+    "path": "QUANTAXIS/QAData/data_fq.py",
+    "url": "https://github.com/yutiansut/QUANTAXIS/blob/5006a009fba7b8e392e32f8b577f1bcb81deba5c/QUANTAXIS/QAData/data_fq.py",
+    "retained": "sources/qa__QUANTAXIS__QAData__data_fq.py.txt",
+    "sha256": "8ea6b152a4eff20bffba2216ae8dc88edbb3f0f11b0a220abb19c574cf459eff",
+    "bytes": 9120,
+    "license": "MIT",
+    "evidence_level": "COMMUNITY_SOURCE_NOT_OFFICIAL"
+  },
+  {
+    "repo": "yutiansut/QUANTAXIS",
+    "commit": "5006a009fba7b8e392e32f8b577f1bcb81deba5c",
+    "path": "LICENSE",
+    "url": "https://github.com/yutiansut/QUANTAXIS/blob/5006a009fba7b8e392e32f8b577f1bcb81deba5c/LICENSE",
+    "retained": "sources/qa__LICENSE.txt",
+    "sha256": "96ebf515d25a58bbd8be4543a5c198e576db52738f26c82270ececb1dc273318",
+    "bytes": 1091,
+    "license": "MIT",
+    "evidence_level": "COMMUNITY_SOURCE_NOT_OFFICIAL"
+  }
+]
