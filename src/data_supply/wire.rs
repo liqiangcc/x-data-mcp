@@ -417,3 +417,37 @@ pub struct RetryItems {
     pub new_request_id: String,
     pub item_ids: Vec<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskV1 {
+    pub contract_version: ContractVersion,
+    pub task_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RequestV1 {
+    pub contract_version: ContractVersion,
+    pub request_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RequestView {
+    pub request_id: String,
+    pub bound: bool,
+    pub task: Option<TaskSummary>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelV1 {
+    pub contract_version: ContractVersion,
+    pub task_id: String,
+    pub expected_revision: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Cancellation {
+    pub task_id: String,
+    pub status: TaskStatus,
+    pub state_revision: u64,
+}

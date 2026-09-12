@@ -11,6 +11,11 @@ pub enum Handler {
     Tasks,
     Progress,
     Capabilities,
+    Collection,
+    Retry,
+    Task,
+    Request,
+    Cancel,
 }
 pub struct Entry {
     pub name: &'static str,
@@ -67,6 +72,31 @@ fn entry<I: JsonSchema, O: JsonSchema>(
 pub fn entries() -> Vec<Entry> {
     let query = json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"}});
     vec![
+        entry::<Collection, WriteAcceptance>(
+            "start_collection",
+            Handler::Collection,
+            json!({"request_id":"example-daily","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600006"}]}}),
+        ),
+        entry::<RetryItems, WriteAcceptance>(
+            "retry_task",
+            Handler::Retry,
+            json!({"contract_version":"v1","original_task_id":"returned-task-id","new_request_id":"retry-request","item_ids":["returned-item-id"]}),
+        ),
+        entry::<TaskV1, TaskSummary>(
+            "get_task",
+            Handler::Task,
+            json!({"contract_version":"v1","task_id":"returned-task-id"}),
+        ),
+        entry::<RequestV1, RequestView>(
+            "get_request",
+            Handler::Request,
+            json!({"contract_version":"v1","request_id":"returned-request-id"}),
+        ),
+        entry::<CancelV1, Cancellation>(
+            "cancel_task",
+            Handler::Cancel,
+            json!({"contract_version":"v1","task_id":"returned-task-id","expected_revision":0}),
+        ),
         entry::<Query, DataPage>("query_data", Handler::Query, query.clone()),
         entry::<VersionsQuery, VersionPage>(
             "list_data_versions",

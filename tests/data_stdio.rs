@@ -78,6 +78,10 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
         if matches!(
             entry.handler,
             x_data_mcp::data_supply::registry::Handler::Progress
+                | x_data_mcp::data_supply::registry::Handler::Collection
+                | x_data_mcp::data_supply::registry::Handler::Retry
+                | x_data_mcp::data_supply::registry::Handler::Task
+                | x_data_mcp::data_supply::registry::Handler::Cancel
         ) {
             continue;
         }

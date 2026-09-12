@@ -1,5 +1,11 @@
 //! Protocol mapping only; read decisions live in query/observe applications.
-use super::{Access, observe::Observer, query::Queries, registry::*, wire::*};
+use super::{
+    Access,
+    observe::{ObservationRepository, Observer},
+    query::Queries,
+    registry::*,
+    wire::*,
+};
 use crate::{
     market_storage::Error,
     mcp::{ApiError, ToolHandler},
@@ -73,7 +79,7 @@ impl DataApi {
             }
             let datasets = if matches!(
                 e.handler,
-                Handler::Query | Handler::Versions | Handler::Availability
+                Handler::Query | Handler::Versions | Handler::Availability | Handler::Collection
             ) {
                 self.access
                     .datasets
@@ -92,8 +98,20 @@ impl DataApi {
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
-                    readiness: "ready".into(),
-                    blocking_reasons: vec![],
+                    readiness: if matches!(e.handler, Handler::Collection) {
+                        "blocked"
+                    } else {
+                        "ready"
+                    }
+                    .into(),
+                    blocking_reasons: if matches!(e.handler, Handler::Collection) {
+                        crate::official_files::PRODUCTION_BLOCKERS
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect()
+                    } else {
+                        vec![]
+                    },
                     input_schema: detailed.then(|| e.input.clone()),
                     output_schema: detailed.then(|| e.output.clone()),
                     example: detailed.then(|| e.example.clone()),
@@ -149,6 +167,70 @@ impl DataApi {
                 "forbidden",
                 "legacy control requires local-owner context",
             ));
+        }
+        if input.get("contract_version").is_some() {
+            match name {
+                "get_task" => {
+                    let a: TaskV1 = decode(input)?;
+                    let f = self
+                        .observer
+                        .repository
+                        .task(&a.task_id, &self.access)
+                        .map_err(mapped)?;
+                    return encode(super::observe::summary(&f, &self.observer.run_id));
+                }
+                "get_request" => {
+                    let a: RequestV1 = decode(input)?;
+                    let record = self
+                        .legacy
+                        .control
+                        .read_request(&a.request_id)
+                        .map_err(task_error)?;
+                    let task = match record {
+                        None => None,
+                        Some(r) => match r.outcome {
+                            crate::task_control::RequestOutcome::Task(s) => {
+                                Some(super::observe::summary(
+                                    &self
+                                        .observer
+                                        .repository
+                                        .task(&s.task.task_id, &self.access)
+                                        .map_err(mapped)?,
+                                    &self.observer.run_id,
+                                ))
+                            }
+                            crate::task_control::RequestOutcome::Terminal(_) => {
+                                return Err(ApiError::new(
+                                    "unsupported_request_outcome",
+                                    "request terminal contract not registered",
+                                ));
+                            }
+                        },
+                    };
+                    return encode(RequestView {
+                        request_id: a.request_id,
+                        bound: task.is_some(),
+                        task,
+                    });
+                }
+                "cancel_task" => {
+                    let a: CancelV1 = decode(input)?;
+                    let s = self
+                        .legacy
+                        .control
+                        .cancel(&a.task_id, a.expected_revision)
+                        .map_err(task_error)?;
+                    return encode(Cancellation {
+                        task_id: s.task.task_id.clone(),
+                        status: serde_json::from_value(
+                            serde_json::to_value(s.visible_status(&self.observer.run_id)).unwrap(),
+                        )
+                        .unwrap(),
+                        state_revision: s.task.state_revision,
+                    });
+                }
+                _ => {}
+            }
         }
         if name == "start_collection" && input.get("dataset").is_some() {
             use crate::task_control::Contract;
@@ -217,6 +299,15 @@ impl ToolHandler for DataApi {
                 Some("retry_task") => {
                     Some(serde_json::to_value(schemars::schema_for!(RetryItems)).unwrap())
                 }
+                Some("get_task") => {
+                    Some(serde_json::to_value(schemars::schema_for!(TaskV1)).unwrap())
+                }
+                Some("get_request") => {
+                    Some(serde_json::to_value(schemars::schema_for!(RequestV1)).unwrap())
+                }
+                Some("cancel_task") => {
+                    Some(serde_json::to_value(schemars::schema_for!(CancelV1)).unwrap())
+                }
                 _ => None,
             };
             if let Some(mut ty) = ty {
@@ -228,7 +319,7 @@ impl ToolHandler for DataApi {
                 }
             }
         }
-        tools.extend(entries().into_iter().map(|e|json!({"name":e.name,"description":"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities.","inputSchema":e.input,"outputSchema":e.output})));
+        tools.extend(entries().into_iter().filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel)).map(|e|json!({"name":e.name,"description":"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities.","inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
     fn call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
@@ -236,6 +327,11 @@ impl ToolHandler for DataApi {
             return self.legacy_call(name, input);
         };
         match entry.handler {
+            Handler::Collection
+            | Handler::Retry
+            | Handler::Task
+            | Handler::Request
+            | Handler::Cancel => self.legacy_call(name, input),
             Handler::Query => encode(
                 self.queries
                     .query(decode::<Query>(input)?, &self.access)
@@ -270,6 +366,7 @@ fn task_error(e: crate::task_control::Error) -> ApiError {
     use crate::task_control::Error as E;
     let code = match &e {
         E::RequestConflict => "request_conflict",
+        E::RevisionConflict => "precondition_conflict",
         E::RangeConflict(_) => "range_conflict",
         E::RetryRequestIdConflict => "retry_request_id_conflict",
         E::EmptyRequestId => "empty_request_id",
