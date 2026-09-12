@@ -80,6 +80,7 @@ pub struct PublishPlan {
     pub(crate) record: CheckedRecord,
     pub(crate) required_heads: Vec<(Scope, Option<String>)>,
     pub(crate) promote: Option<Scope>,
+    pub(crate) base_digest: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Receipt {
@@ -176,11 +177,12 @@ impl<R: MarketRepository> Publisher<R> {
             }
             _ => return Err(Error::Invalid("intent/period mismatch".into())),
         };
-        let plan = PublishPlan {
+        let mut plan = PublishPlan {
             command,
             record,
             required_heads,
             promote,
+            base_digest: None,
         };
         let base = if let Some(lineage) = &plan.record.version.yearly_derivation {
             Some(
@@ -192,6 +194,9 @@ impl<R: MarketRepository> Publisher<R> {
             None
         };
         validate_base(&plan.record, base.as_ref())?;
+        plan.base_digest = base
+            .as_ref()
+            .map(|r| r.raw["integrity_sha256"].as_str().unwrap().to_owned());
         plan.finish_task(self.repository.task(&plan.command.task_id)?)?;
         self.repository.mark_validated(&plan.record)?;
         Ok(plan)
@@ -259,7 +264,7 @@ impl PublishPlan {
 pub(crate) fn base_error(e: Error) -> Error {
     Error::Base(e.to_string())
 }
-pub(crate) fn validate_base(
+pub(crate) fn validate_base_identity(
     record: &CheckedRecord,
     base: Option<&CheckedRecord>,
 ) -> Result<(), Error> {
@@ -287,6 +292,19 @@ pub(crate) fn validate_base(
             "fixed base identity/period/adjustment/source mismatch".into(),
         ));
     }
+    Ok(())
+}
+pub(crate) fn validate_base(
+    record: &CheckedRecord,
+    base: Option<&CheckedRecord>,
+) -> Result<(), Error> {
+    validate_base_identity(record, base)?;
+    let v = &record.version;
+    if v.period == Period::Day {
+        return Ok(());
+    }
+    let lineage = v.yearly_derivation.as_ref().unwrap();
+    let daily = &base.unwrap().version;
     let years = v.records.iter().map(|b| b.date.year()).collect();
     let as_of = v
         .published_at

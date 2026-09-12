@@ -718,3 +718,27 @@ fn composite_task_keeps_protection_until_last_publication_commits() {
     );
     assert!(task.claims.is_empty());
 }
+#[test]
+fn fixed_base_change_after_prepare_is_rejected_without_recomputing_or_rebinding() {
+    let (_dir, store) = db();
+    let raw = samples()[0]["record"].clone();
+    published_fixture(&store, &raw);
+    let plan = prepare(
+        &store,
+        &yearly("y", "legacy-daily"),
+        PublishIntent::HistoricalFixedBase,
+    );
+    // Independently altered compat/projection with a matching new digest still violates the sealed input.
+    let mut changed = raw;
+    changed["batch"]["coverage"]["reason"] = json!("changed after validation");
+    changed["integrity_sha256"] = json!(frozen_legacy::digest(&changed));
+    Connection::open(store.tasks.path()).unwrap().execute("UPDATE data_versions SET compat_json=?1,content_digest=?2,coverage_reason='changed after validation' WHERE version_id='legacy-daily'",rusqlite::params![serde_json::to_string(&changed).unwrap(),changed["integrity_sha256"].as_str().unwrap()]).unwrap();
+    assert!(store.fixed("legacy-daily").is_ok());
+    assert!(matches!(store.commit(&plan), Err(Error::Base(_))));
+    assert!(
+        store
+            .receipt(&plan.publication().publication_id)
+            .unwrap()
+            .is_none()
+    );
+}

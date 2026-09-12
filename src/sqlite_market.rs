@@ -57,7 +57,7 @@ impl SqliteMarket {
         let record = compat::check(raw)?;
         self.write(|c| {
             let base = base_record(c, &record)?;
-            validate_base(&record, base.as_ref())?;
+            validate_base_identity(&record, base.as_ref())?;
             insert_record(c, &record, base.as_ref())
         })
     }
@@ -204,24 +204,32 @@ fn annual_values(
     r: &CheckedRecord,
     base: &CheckedRecord,
 ) -> Result<Vec<Vec<Option<String>>>, Error> {
-    let years = r.version.records.iter().map(|b| b.date.year()).collect();
-    crate::yearly::aggregate(&base.version, Some(&years), as_of(r))
-        .map_err(integrity)
-        .map(|a| {
-            a.records
-                .into_iter()
-                .map(|row| {
-                    let mut v = vec![Some(row.bar.date.year().to_string())];
-                    v.extend(bar_values(&row.bar));
-                    v.extend([
-                        Some(row.lineage.first_trading_date.to_string()),
-                        Some(row.lineage.last_trading_date.to_string()),
-                        Some(i32::from(!row.year_unfinished).to_string()),
-                    ]);
-                    v
-                })
-                .collect()
+    // Mapping of fixed dates/flags only; numeric aggregation belongs to application validation.
+    r.version
+        .records
+        .iter()
+        .map(|bar| {
+            let dates = base
+                .version
+                .records
+                .iter()
+                .filter(|b| b.date.year() == bar.date.year())
+                .map(|b| b.date)
+                .collect::<Vec<_>>();
+            let first = dates
+                .first()
+                .ok_or_else(|| Error::Base("year absent from fixed base".into()))?;
+            let last = dates.last().unwrap();
+            let mut row = vec![Some(bar.date.year().to_string())];
+            row.extend(bar_values(bar));
+            row.extend([
+                Some(first.to_string()),
+                Some(last.to_string()),
+                Some(i32::from(bar.date.year() < as_of(r).year()).to_string()),
+            ]);
+            Ok(row)
         })
+        .collect()
 }
 fn lineage_values(r: &CheckedRecord) -> Option<Vec<Option<String>>> {
     r.version.yearly_derivation.as_ref().map(|l| {
@@ -303,6 +311,17 @@ fn read_record(
     published: bool,
     allow_yearly: bool,
 ) -> Result<CheckedRecord, Error> {
+    let record = read_projection(c, id, published, allow_yearly)?;
+    let base = base_record(c, &record)?;
+    validate_base(&record, base.as_ref())?;
+    Ok(record)
+}
+fn read_projection(
+    c: &Connection,
+    id: &str,
+    published: bool,
+    allow_yearly: bool,
+) -> Result<CheckedRecord, Error> {
     let row:Option<(String,String,String,String)>=c.query_row("SELECT compat_json,content_digest,digest_format,state FROM data_versions WHERE version_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(storage)?;
     let (raw, digest, format, state) = row.ok_or(Error::NotFound)?;
     if published && state != "published" {
@@ -323,7 +342,7 @@ fn read_record(
         check_publication_link(c, id)?;
     }
     let base = base_record(c, &record)?;
-    validate_base(&record, base.as_ref())?;
+    validate_base_identity(&record, base.as_ref())?;
     let actual = rows(
         c,
         "SELECT symbol,period,adjustment,source,published_at,CAST(record_count AS TEXT),CAST(unique_count AS TEXT),CAST(duplicate_count AS TEXT),coverage_status,coverage_reason,first_date,last_date FROM data_versions WHERE version_id=?1",
@@ -491,7 +510,7 @@ impl MarketRepository for SqliteMarket {
     }
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error> {
         self.write(|c|{
-            let current=read_record(c,&record.version.version_id,false,true)?;
+            let current=read_projection(c,&record.version.version_id,false,true)?;
             if current.raw!=record.raw{return Err(integrity("candidate changed during validation"));}
             let n=c.execute("UPDATE data_versions SET state='validated' WHERE version_id=?1 AND state IN ('staging','validated')",[&record.version.version_id]).map_err(storage)?;
             if n!=1{return Err(Error::Conflict("candidate already published".into()));}Ok(())
@@ -521,14 +540,18 @@ impl MarketRepository for SqliteMarket {
             let old:Option<(String,String)>=c.query_row("SELECT command_json,receipt_json FROM publication_batches WHERE publication_id=?1",[&command.publication_id],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(storage)?;
             if let Some((raw,receipt))=old {
                 if serde_json::from_str::<Publication>(&raw).map_err(integrity)?!=*command{return Err(Error::Conflict("publication identity reused with different command".into()));}
-                let stored=read_record(c,&command.version_id,true,true)?;
+                let stored=read_projection(c,&command.version_id,true,true)?;
                 if stored.raw!=plan.record.raw{return Err(integrity("published record differs from prepared command"));}
                 return serde_json::from_str(&receipt).map_err(integrity);
             }
-            let record=read_record(c,&command.version_id,false,true)?;
+            let record=read_projection(c,&command.version_id,false,true)?;
             if record.raw!=plan.record.raw{return Err(integrity("validated candidate changed"));}
             let state:String=c.query_row("SELECT state FROM data_versions WHERE version_id=?1",[&command.version_id],|r|r.get(0)).map_err(storage)?;
             if state!="validated"{return Err(Error::Conflict("candidate is not validated".into()));}
+            let base = base_record(c, &record)?;
+            if base.as_ref().map(|r| r.raw["integrity_sha256"].as_str().unwrap().to_owned()) != plan.base_digest {
+                return Err(Error::Base("fixed base changed since validation".into()));
+            }
             // Only the application plan chooses required heads and whether to promote.
             for (scope,expected) in &plan.required_heads {if head(c,scope)?!=*expected{return Err(Error::Conflict("effective head changed".into()));}}
             let task=crate::sqlite_tasks::read_bound_task(c,&command.task_id)?.ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
@@ -541,7 +564,7 @@ impl MarketRepository for SqliteMarket {
                 c.execute("INSERT INTO effective_heads VALUES(?1,?2,'qfq',?3) ON CONFLICT(symbol,period,adjustment) DO UPDATE SET version_id=excluded.version_id",params![scope.symbol,period(scope.period),command.version_id]).map_err(storage)?;
             }
             crate::sqlite_tasks::write_task(c,&next,command.expected_revision)?;
-            read_record(c,&command.version_id,true,true)?;
+            read_projection(c,&command.version_id,true,true)?;
             Ok(receipt)
         })
     }
