@@ -295,7 +295,9 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
     }
 }
 
-use crate::data_supply::observe::{ObservationRepository, TaskFacts, authorized, summary};
+use crate::data_supply::observe::{
+    AvailabilityFacts, ObservationRepository, TaskFacts, authorized,
+};
 fn task_facts(
     c: &Connection,
     id: &str,
@@ -409,20 +411,65 @@ impl ObservationRepository for SqliteSupply {
         &self,
         plan: &QueryPlan,
         access: &Access,
-        run: &str,
-    ) -> Result<Vec<AvailabilityItem>, Error> {
-        self.market.read(|c|{
-        let tasks=task_list(c,access)?;let mut out=vec![];
-        let entities:Vec<Option<Security>>=if plan.args.dataset==Dataset::Catalog{vec![None]}else{plan.entities.iter().cloned().map(Some).collect()};
-        for entity in entities {
-            let mut single=plan.clone();if let Some(e)=&entity {single.entities=vec![e.clone()];}
-            let related_tasks=tasks.iter().filter(|f|f.snapshot.items.iter().any(|i|match &entity{Some(e)=>i.spec.target["symbol"]==e.symbol(),None=>f.snapshot.task.key.dataset=="securities.catalog"})).map(|f|summary(f,run)).collect();
-            match query(c,&single,access){
-                Ok(s)=>{let m=&s.manifest[0];let dates=s.rows.iter().filter_map(|r|match r{Row::Market{date,..}=>Some(*date),_=>None}).collect::<Vec<_>>();out.push(AvailabilityItem{entity,version_ref:m.version_ref.clone(),availability:if m.status==ManifestStatus::Absent{Availability::Absent}else if plan.args.dataset==Dataset::Catalog{Availability::Available}else{Availability::Unknown},coverage_evidence:m.metadata.as_ref().map(|m|m.coverage_reason.clone()).unwrap_or_else(||"no published version".into()),first_record:dates.first().copied(),last_record:dates.last().copied(),record_count:s.rows.len(),freshness:"unknown".into(),related_tasks,limitations:vec!["range completeness not inferred from contiguous dates or version coverage alone".into()]});},
-                Err(Error::Integrity(reason)|Error::Base(reason))=>out.push(AvailabilityItem{entity,version_ref:None,availability:Availability::Unavailable,coverage_evidence:reason,first_record:None,last_record:None,record_count:0,freshness:"unknown".into(),related_tasks,limitations:vec!["damaged existing input; no automatic collection or repair".into()]}),
-                Err(e)=>return Err(e),
+    ) -> Result<Vec<AvailabilityFacts>, Error> {
+        self.market.read(|c| {
+            let tasks = task_list(c, access)?;
+            let mut out = vec![];
+            let entities: Vec<Option<Security>> = if plan.args.dataset == Dataset::Catalog {
+                vec![None]
+            } else {
+                plan.entities.iter().cloned().map(Some).collect()
+            };
+            for entity in entities {
+                let mut single = plan.clone();
+                if let Some(e) = &entity {
+                    single.entities = vec![e.clone()];
+                }
+                let related_tasks = tasks
+                    .iter()
+                    .filter(|f| {
+                        f.snapshot.items.iter().any(|i| match &entity {
+                            Some(e) => i.spec.target["symbol"] == e.symbol(),
+                            None => f.snapshot.task.key.dataset == "securities.catalog",
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                match query(c, &single, access) {
+                    Ok(s) => {
+                        let dates = s
+                            .rows
+                            .iter()
+                            .filter_map(|r| match r {
+                                Row::Market { date, .. } => Some(*date),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        out.push(AvailabilityFacts {
+                            entity,
+                            manifest: s.manifest.into_iter().next(),
+                            first_record: dates.first().copied(),
+                            last_record: dates.last().copied(),
+                            record_count: s.rows.len(),
+                            integrity_failure: None,
+                            related_tasks,
+                        });
+                    }
+                    Err(Error::Integrity(reason) | Error::Base(reason)) => {
+                        out.push(AvailabilityFacts {
+                            entity,
+                            manifest: None,
+                            first_record: None,
+                            last_record: None,
+                            record_count: 0,
+                            integrity_failure: Some(reason),
+                            related_tasks,
+                        })
+                    }
+                    Err(e) => return Err(e),
+                }
             }
-        }Ok(out)
-    })
+            Ok(out)
+        })
     }
 }

@@ -13,6 +13,40 @@ pub struct TaskFacts {
     pub snapshot: TaskSnapshot,
     pub publications: Vec<VersionRef>,
 }
+pub struct AvailabilityFacts {
+    pub entity: Option<Security>,
+    pub manifest: Option<ManifestEntry>,
+    pub first_record: Option<chrono::NaiveDate>,
+    pub last_record: Option<chrono::NaiveDate>,
+    pub record_count: usize,
+    pub integrity_failure: Option<String>,
+    pub related_tasks: Vec<TaskFacts>,
+}
+/// Domain classification: storage reports facts, never decides availability policy.
+fn availability_item(f: AvailabilityFacts, dataset: Dataset, run: &str) -> AvailabilityItem {
+    let unavailable = f.integrity_failure.is_some();
+    let availability = if unavailable {
+        Availability::Unavailable
+    } else if f
+        .manifest
+        .as_ref()
+        .is_some_and(|m| m.status == ManifestStatus::Absent)
+    {
+        Availability::Absent
+    } else if dataset == Dataset::Catalog {
+        Availability::Available
+    } else {
+        Availability::Unknown
+    };
+    let coverage_evidence = f.integrity_failure.unwrap_or_else(|| {
+        f.manifest
+            .as_ref()
+            .and_then(|m| m.metadata.as_ref())
+            .map(|m| m.coverage_reason.clone())
+            .unwrap_or_else(|| "no published version".into())
+    });
+    AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks:f.related_tasks.iter().map(|f|summary(f,run)).collect(),limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]}
+}
 pub trait ObservationRepository {
     fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error>;
     fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error>;
@@ -20,8 +54,7 @@ pub trait ObservationRepository {
         &self,
         plan: &super::query::QueryPlan,
         access: &Access,
-        run: &str,
-    ) -> Result<Vec<AvailabilityItem>, Error>;
+    ) -> Result<Vec<AvailabilityFacts>, Error>;
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error>;
 }
 pub fn entity(symbol: &str) -> Option<Security> {
@@ -313,7 +346,12 @@ impl<R: ObservationRepository> Observer<R> {
         let mut s = if let Some(c) = cursor {
             self.resume(&c, &key, access)?
         } else {
-            let items = self.repository.availability(&plan, access, &self.run_id)?;
+            let items = self
+                .repository
+                .availability(&plan, access)?
+                .into_iter()
+                .map(|f| availability_item(f, plan.args.dataset, &self.run_id))
+                .collect::<Vec<_>>();
             budget(&items)?;
             self.start(key, access, Content::Availability(items))
         };
