@@ -355,3 +355,65 @@ pub struct AvailabilityPage {
     pub next_cursor: Option<String>,
     pub page_complete: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WriteSelection {
+    Explicit {
+        securities: Vec<Security>,
+    },
+    Catalog {
+        version_id: String,
+        industry_code: Option<String>,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "dataset", deny_unknown_fields)]
+pub enum Collection {
+    #[serde(rename = "market.daily")]
+    Daily {
+        request_id: String,
+        contract_version: ContractVersion,
+        selection: WriteSelection,
+    },
+    #[serde(rename = "securities.catalog")]
+    Catalog {
+        request_id: String,
+        contract_version: ContractVersion,
+        selection: CatalogSelection,
+    },
+    #[serde(rename = "market.yearly")]
+    Yearly {
+        request_id: String,
+        contract_version: ContractVersion,
+        selection: WriteSelection,
+        base_daily_versions: Vec<VersionBinding>,
+        years: Vec<i32>,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogSelection {
+    pub scope: CatalogScope,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteAcceptance {
+    pub request_id: String,
+    pub task_id: String,
+    pub dataset: String,
+    pub contract_version: String,
+    pub reused: bool,
+    pub status: TaskStatus,
+    pub item_ids: Vec<String>,
+    pub readiness: String,
+    pub blocking_reasons: Vec<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetryItems {
+    pub contract_version: ContractVersion,
+    pub original_task_id: String,
+    pub new_request_id: String,
+    pub item_ids: Vec<String>,
+}

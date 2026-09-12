@@ -26,3 +26,18 @@ coverage complete 本身没有显式范围证据时不能推断请求范围 avai
 
 验证：真实 SQLite、stdio、闭合 schema、跨工具引用、权限和分页竞争；Actions 稳定入口。
 真实采集/迁移/远程认证 NOT_RUN；生产来源 NOT_VERIFIED。部署另行单独验收。
+
+## 新写分支冻结
+
+`Collection` 为 dataset 判别的闭合联合：daily 接受 explicit securities 或固定 catalog version/行业筛选；
+catalog 接受 current_sh_sz_a；yearly 同时要求与选择精确匹配的 base_daily_versions 和显式自然年集合。
+完全相同写项、年度及映射去重排序；同实体不同 base 拒绝。catalog selector 与 explicit 永不合并幂等身份。
+解析目录为空拒绝、不推断退市；yearly 固定 base 必须可核验且身份/period 正确。
+工作项与原 legacy 使用同一证券×period scope，因此不同 dataset 日期不能绕开占用。
+受理结果明确 readiness=blocked；受控 worker 真实写失败结果，不采集/发布。
+
+retry 的 v1 item_ids 分支直接复用 #78 应用决策，仍全局 request_id；也可引用 legacy 任务的稳定 item_id。
+WriteAcceptance 的 dataset/contract_version 返回原任务契约（含 legacy_market_compound/task-acceptance-v1），
+不把 legacy 持久身份改写为 v1。旧 selected_scopes 分支与错误 shape 保留。
+
+依赖选择：schemars 1.2.2，仅从相同 Rust wire 类型生成 schema；锁文件其余既有版本保持。

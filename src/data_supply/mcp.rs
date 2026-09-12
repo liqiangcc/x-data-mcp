@@ -27,8 +27,28 @@ impl DataApi {
         };
         Ok(Self {
             queries: Queries::new(repository.clone()),
-            observer: Observer::new(repository, run_id.clone()),
-            legacy: SqliteTaskApi::new(tasks, run_id)?,
+            observer: Observer::new(repository.clone(), run_id.clone()),
+            legacy: SqliteTaskApi {
+                control: crate::task_control::service::TaskControl::new(
+                    tasks,
+                    run_id,
+                    vec![
+                        Box::new(crate::task_control::legacy::LegacyCollection),
+                        Box::new(super::collect::CollectionContract {
+                            dataset: Dataset::Daily,
+                            repository: repository.clone(),
+                        }),
+                        Box::new(super::collect::CollectionContract {
+                            dataset: Dataset::Yearly,
+                            repository: repository.clone(),
+                        }),
+                        Box::new(super::collect::CollectionContract {
+                            dataset: Dataset::Catalog,
+                            repository: repository.clone(),
+                        }),
+                    ],
+                )?,
+            },
             access,
         })
     }
@@ -96,6 +116,31 @@ impl DataApi {
             production_ready: false,
         })
     }
+    fn acceptance(&self, id: &str, a: crate::task_control::Acceptance) -> Result<Value, ApiError> {
+        let crate::task_control::RequestOutcome::Task(f) = a.record.outcome else {
+            return Err(ApiError::new(
+                "unsupported_request_outcome",
+                "task binding required",
+            ));
+        };
+        encode(WriteAcceptance {
+            request_id: id.into(),
+            task_id: f.task.task_id.clone(),
+            dataset: f.task.key.dataset.clone(),
+            contract_version: f.task.key.contract_version.clone(),
+            reused: a.reused,
+            status: serde_json::from_value(
+                serde_json::to_value(f.visible_status(&self.legacy.control.run_id)).unwrap(),
+            )
+            .unwrap(),
+            item_ids: f.items.iter().map(|i| i.spec.item_id.clone()).collect(),
+            readiness: "blocked".into(),
+            blocking_reasons: crate::official_files::PRODUCTION_BLOCKERS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        })
+    }
     fn legacy_call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
         // Legacy full-control compatibility is intentionally local-owner only. Restricted
         // application contexts retain the read discovery/query operations above.
@@ -104,6 +149,36 @@ impl DataApi {
                 "forbidden",
                 "legacy control requires local-owner context",
             ));
+        }
+        if name == "start_collection" && input.get("dataset").is_some() {
+            use crate::task_control::Contract;
+            let command: Collection = decode(input)?;
+            if command.request_id().trim().is_empty() {
+                return Err(ApiError::new("empty_request_id", "request_id required"));
+            }
+            let contract = super::collect::CollectionContract {
+                dataset: command.dataset(),
+                repository: self.queries.repository.clone(),
+            };
+            let accepted = self
+                .legacy
+                .control
+                .accept(command.request_id(), contract.key(), command.payload())
+                .map_err(task_error)?;
+            return self.acceptance(command.request_id(), accepted);
+        }
+        if name == "retry_task" && input.get("contract_version").is_some() {
+            let a: RetryItems = decode(input)?;
+            let accepted = self
+                .legacy
+                .control
+                .retry(
+                    &a.original_task_id,
+                    &a.new_request_id,
+                    a.item_ids.into_iter().collect(),
+                )
+                .map_err(task_error)?;
+            return self.acceptance(&a.new_request_id, accepted);
         }
         self.legacy.call(name, input)
     }
@@ -134,6 +209,25 @@ impl ToolHandler for DataApi {
         } else {
             vec![]
         };
+        for t in &mut tools {
+            let ty = match t["name"].as_str() {
+                Some("start_collection") => {
+                    Some(serde_json::to_value(schemars::schema_for!(Collection)).unwrap())
+                }
+                Some("retry_task") => {
+                    Some(serde_json::to_value(schemars::schema_for!(RetryItems)).unwrap())
+                }
+                _ => None,
+            };
+            if let Some(mut ty) = ty {
+                let old = t["inputSchema"].clone();
+                let defs = ty.as_object_mut().unwrap().remove("$defs");
+                t["inputSchema"] = json!({"oneOf":[old,ty]});
+                if let Some(defs) = defs {
+                    t["inputSchema"]["$defs"] = defs;
+                }
+            }
+        }
         tools.extend(entries().into_iter().map(|e|json!({"name":e.name,"description":"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities.","inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
@@ -170,4 +264,21 @@ impl ToolHandler for DataApi {
             Handler::Capabilities => self.capabilities(decode(input)?),
         }
     }
+}
+
+fn task_error(e: crate::task_control::Error) -> ApiError {
+    use crate::task_control::Error as E;
+    let code = match &e {
+        E::RequestConflict => "request_conflict",
+        E::RangeConflict(_) => "range_conflict",
+        E::RetryRequestIdConflict => "retry_request_id_conflict",
+        E::EmptyRequestId => "empty_request_id",
+        E::EmptyRetrySelection | E::RetrySelectionInvalid { .. } | E::InvalidRetrySelection => {
+            "invalid_retry_selection"
+        }
+        E::InvalidCommand(_) => "invalid_arguments",
+        E::OutcomeUnknown(_) => "outcome_unknown",
+        _ => "storage_error",
+    };
+    ApiError::new(code, e.to_string())
 }
