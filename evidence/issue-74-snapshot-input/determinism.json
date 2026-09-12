@@ -1,5 +1,5 @@
 {
-  "tested_commit": "3a4b518c6ccb0dd6db6d0ccc0015d3140876f84a",
+  "tested_commit": "43016cf356c4da128e36e12926ca689405eaafa1",
   "two_clean_checkouts": "BYTE_IDENTICAL",
   "binary_reused_from_tested_source": true,
   "binary_sha256": "afddc7106ece71eff0d5766dd200fea59a92b6208076497f6cdaf48b829d4630",
