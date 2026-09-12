@@ -26,3 +26,6 @@ pub mod hash;
 
 pub mod market_storage;
 pub mod sqlite_market;
+
+pub mod data_supply;
+pub mod sqlite_catalog;
