@@ -29,3 +29,19 @@ N 次变化需要 N+1 点。左界下界足阈值 true、不足 null；已知打
 
 AC→测试：独立手算向量、同一固定版本 SQLite/MCP 组合、schema 负例、篡改拒绝、精确半偶与预算拒绝。
 全部完整编译/测试在 Actions。本机来源、真实行情、迁移、远程认证 NOT_RUN；fixture 不解除生产门禁。
+
+## 验收矩阵与复核
+
+- AC-01/05：`compute_unknown_fields_mode_latest_and_budget_are_rejected`、`compute_real_stdio_roundtrips_schema_and_fixed_version_reference`，schema 从相同 Rust wire 类型生成；固定 yearly dataset 判别，不接受 task/request_id/自由 options。
+- AC-02/03：`independent_down_vectors_distinguish_exact_lower_bound_and_zero`、`completed_only_and_provisional_do_not_skip_unknown_middle`、`gaps_nonpositive_unknown_and_short_windows_are_not_false_metrics`、`up_symmetry_exact_decimal_equality_and_irrelevant_prefix`、`actual_input_includes_the_break_observation_but_not_irrelevant_prefix`。
+- AC-04：`exact_rational_rounding_has_one_half_even_step_in_both_directions`，独立正负中点与 2/3 向量；重复 SQLite 计算相同完整结构。
+- AC-05：`duplicated_unordered_and_excessive_windows_are_rejected`、`fixed_digest_or_projection_damage_never_switches_versions`。
+- AC-06：`verified_sqlite_completion_evidence_is_required_and_computation_is_read_only`、`sqlite_unfinished_tail_honors_both_explicit_modes`、真实 stdio 的 computed 与 `missing_completion_is_an_explicit_mcp_failure_with_diagnostics`。
+
+not_computable 在 MCP 返回 isError=true/code=not_computable，details 保留输入与诊断；
+lower_bound/matches=null 仍是正常 computed 结果。旧协议不增加诊断字段。
+actual_input_range 包含用来证明打断的那一个观察；anchor/first_change 分别表达 run 自身。
+没有通过算法反向生成独立预期，没有使用真实数据或重写历史失败证据。
+
+依赖：num-bigint/num-traits 从已有测试传递依赖显式提升为计算依赖；锁定既有版本。
+完整构建/测试由 Actions 执行，性能规模与真实来源仍 NOT_RUN/NOT_VERIFIED。

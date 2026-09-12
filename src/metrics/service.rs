@@ -32,7 +32,6 @@ impl<R: InputRepository> Metrics<R> {
         if input.input_id.trim().is_empty()
             || metric.metric_id.trim().is_empty()
             || metric.input_ids != vec![input.input_id.clone()]
-            || input.version_ref.dataset != Dataset::Yearly
             || input.version_ref.version_id.trim().is_empty()
             || input.version_ref.version_id == "latest"
             || input.version_ref.integrity_sha256.len() != 64
@@ -41,11 +40,7 @@ impl<R: InputRepository> Metrics<R> {
                 "fixed yearly identity/digest/input reference required".into(),
             ));
         }
-        let entity = input
-            .version_ref
-            .entity
-            .as_ref()
-            .ok_or_else(|| Error::Invalid("security entity required".into()))?;
+        let entity = &input.version_ref.entity;
         entity.validate().map_err(Error::Invalid)?;
         access.require(Dataset::Yearly, Some(entity))?;
         let range = &request.range;
@@ -57,7 +52,9 @@ impl<R: InputRepository> Metrics<R> {
         {
             return Err(Error::Invalid("computation resource/range budget".into()));
         }
-        let observations = self.repository.observations(&input.version_ref, range)?;
+        let observations = self
+            .repository
+            .observations(&input.version_ref.reference(), range)?;
         let mut result = evaluate(&observations, range, &metric.parameters)?;
         let (Outcome::Computed { limitations, .. } | Outcome::NotComputable { limitations, .. }) =
             &mut result;

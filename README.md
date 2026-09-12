@@ -111,3 +111,9 @@ Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README
 本地 stdio 使用本机所有者上下文；应用层权限过滤测试不代表远程认证已交付。
 已有版本的覆盖证据未明确证明请求范围时 availability=unknown，不从日期连续性推断完整。
 [Stage C 边界与验收](docs/tasks/issue-80.md)记录预算、固定输入及测试。
+
+`mcp_data` 同时提供 `compute_metrics`：一个固定 QFQ yearly version、明确年份窗口、
+`consecutive_direction` 有界 inline 计算。支持 completed_only 与 provisional；
+精确比较，累计变化按整数有理数一次 half-even 舍入至 12 位。
+缺少年度覆盖证据返回 `not_computable`，不会把 year_unfinished=false 当成完整性证据。
+当前完整性扩展仅供显式 fixture 验证，不解除真实来源门禁，见[Stage D](docs/tasks/issue-81.md)。

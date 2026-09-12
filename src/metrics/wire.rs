@@ -1,4 +1,4 @@
-use crate::data_supply::wire::{ContractVersion, VersionRef};
+use crate::data_supply::wire::{ContractVersion, Dataset, Security, VersionRef};
 use chrono::NaiveDate;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub enum Execution {
 #[serde(deny_unknown_fields)]
 pub struct Input {
     pub input_id: String,
-    pub version_ref: VersionRef,
+    pub version_ref: YearlyVersionRef,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -165,4 +165,31 @@ pub struct Computation {
     pub metric: Metric,
     pub requested_range: Years,
     pub result: Outcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum YearlyDataset {
+    #[serde(rename = "market.yearly")]
+    Yearly,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct YearlyVersionRef {
+    pub dataset: YearlyDataset,
+    pub contract_version: ContractVersion,
+    pub entity: Security,
+    pub version_id: String,
+    #[schemars(regex(pattern = r"^[0-9a-f]{64}$"))]
+    pub integrity_sha256: String,
+}
+impl YearlyVersionRef {
+    pub fn reference(&self) -> VersionRef {
+        VersionRef {
+            dataset: Dataset::Yearly,
+            contract_version: self.contract_version,
+            entity: Some(self.entity.clone()),
+            version_id: self.version_id.clone(),
+            integrity_sha256: self.integrity_sha256.clone(),
+        }
+    }
 }
