@@ -38,6 +38,14 @@
         "base.zip": true,
         "gbbq.zip": true
       }
+    },
+    {
+      "url": "https://www.tdx.com.cn/article/vipdata.html",
+      "sha256": "ab3bbe9c8bd1e4cba19145171e97aeb8aab57507fd3af923ae74a90673e3eca7",
+      "markers_present": {
+        "适用于通达信个人版PC端软件的盘后数据下载": true,
+        "hsjday.zip": true
+      }
     }
   ],
   "evidence_level": "OFFICIAL_PUBLIC_DOCUMENTS_SCOPE_UNRESOLVED",

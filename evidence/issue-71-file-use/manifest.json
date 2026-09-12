@@ -52,6 +52,17 @@
         "base.zip",
         "gbbq.zip"
       ]
+    },
+    {
+      "retained_name": "tdx-vipdata-page.html",
+      "url": "https://www.tdx.com.cn/article/vipdata.html",
+      "sha256": "ab3bbe9c8bd1e4cba19145171e97aeb8aab57507fd3af923ae74a90673e3eca7",
+      "bytes": 25274,
+      "retained_completion_utc": "2026-09-12T05:26:15.830924+00:00",
+      "markers": [
+        "适用于通达信个人版PC端软件的盘后数据下载",
+        "hsjday.zip"
+      ]
     }
   ]
 }
