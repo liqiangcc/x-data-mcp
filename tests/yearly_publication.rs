@@ -868,3 +868,60 @@ fn numerically_equal_yearly_from_a_different_daily_version_is_not_reuse() {
         "new-base"
     );
 }
+
+#[test]
+fn crossing_year_boundary_changes_version_state_without_claiming_full_coverage() {
+    let (_dir, store) = db();
+    let mut original = samples()[0]["record"].clone();
+    original["published_at"] = json!("2025-12-31T00:00:00Z");
+    original = revised(&original, "legacy-daily");
+    published_fixture(&store, &original);
+    let publisher = Publisher {
+        repository: store.clone(),
+    };
+    let (mut request, mut evidence) = inputs(&store, "unfinished");
+    request.derived_at = "2025-12-31T08:00:00Z".parse().unwrap();
+    evidence.as_of = "2025-12-31".parse().unwrap();
+    let first = publisher.derive_yearly(&request, &evidence).unwrap();
+    let cmd = command(
+        &store,
+        "unfinished",
+        PublishIntent::CurrentHead {
+            expected_daily_head: "legacy-daily".into(),
+            expected_yearly_head: None,
+        },
+    );
+    let plan = publisher.prepare_yearly_result(cmd, &first, None).unwrap();
+    store.commit_yearly(&plan).unwrap();
+    let (request, evidence) = inputs(&store, "crossed-year");
+    let next = publisher.derive_yearly(&request, &evidence).unwrap();
+    let cmd = command(
+        &store,
+        "crossed-year",
+        PublishIntent::CurrentHead {
+            expected_daily_head: "legacy-daily".into(),
+            expected_yearly_head: Some("unfinished".into()),
+        },
+    );
+    let plan = publisher
+        .prepare_yearly_result(cmd, &next, Some("unfinished"))
+        .unwrap();
+    assert!(!plan.is_no_change());
+    store.commit_yearly(&plan).unwrap();
+    let old = store.fixed("unfinished").unwrap();
+    let new = store.fixed("crossed-year").unwrap();
+    assert_eq!(old.version().records, new.version().records);
+    assert_eq!(
+        old.raw()["local_yearly_derivation_v1"]["annual"]["records"][0]["year_unfinished"],
+        true
+    );
+    assert_eq!(
+        new.raw()["local_yearly_derivation_v1"]["annual"]["records"][0]["year_unfinished"],
+        false
+    );
+    assert!(new.raw().get("analysis_coverage_v1").is_none());
+    assert_eq!(
+        old.raw()["batch"]["coverage"],
+        new.raw()["batch"]["coverage"]
+    );
+}
