@@ -89,13 +89,7 @@ pub fn prepare(
     if batch.bars.iter().any(|b| !range.contains(b.date)) {
         return Err(Error::Invalid("candidate outside explicit range".into()));
     }
-    let (bars, _) = crate::publish::validate_and_deduplicate(batch)
-        .map_err(|e| Error::Invalid(e.to_string()))?;
-    crate::publish::validate_unit_currency_evidence(batch)
-        .map_err(|e| Error::Invalid(e.to_string()))?;
-    crate::publish::validate_adjustment_evidence(batch)
-        .map_err(|e| Error::Invalid(e.to_string()))?;
-    let incoming: BTreeMap<_, _> = bars.iter().map(|b| (b.date, b)).collect();
+    let incoming: BTreeMap<_, _> = batch.bars.iter().map(|b| (b.date, b)).collect();
     let missing: Vec<_> = old
         .records
         .iter()
@@ -107,6 +101,12 @@ pub fn prepare(
             missing,
         )));
     }
+    let (bars, _) = crate::publish::validate_and_deduplicate(batch)
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    crate::publish::validate_unit_currency_evidence(batch)
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    crate::publish::validate_adjustment_evidence(batch)
+        .map_err(|e| Error::Invalid(e.to_string()))?;
     if batch.coverage.status != CoverageStatus::Complete {
         return Ok(Decision::NeedsVerification(Reason::CoverageUnknown));
     }

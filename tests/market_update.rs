@@ -150,7 +150,7 @@ fn update_rejects_invalid_identity_period_range_and_conflicting_duplicate() {
             1 => b.period = Period::Year,
             2 => r.end = "2024-01-01".parse().unwrap(),
             3 => b.bars[0].date = "2026-01-01".parse().unwrap(),
-            4 => b.bars.clear(),
+            4 => b.provenance.source_period = "year".into(),
             5 => {
                 let mut other = b.bars[0].clone();
                 other.close = "11".parse().unwrap();
@@ -181,5 +181,15 @@ fn update_adds_explicit_new_date_without_deleting_old_rows() {
     assert_eq!(
         result.affected_years.into_iter().collect::<Vec<_>>(),
         vec![2026]
+    );
+}
+
+#[test]
+fn update_empty_response_with_old_dates_is_needs_verification() {
+    let (base, mut batch, range) = inputs();
+    batch.bars.clear();
+    assert_eq!(
+        market_update::prepare(&base, &batch, &range, None).unwrap(),
+        Decision::NeedsVerification(Reason::MissingOldDates(vec![range.start]))
     );
 }
