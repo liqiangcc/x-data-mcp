@@ -1088,3 +1088,53 @@ fn range_runner_reconciles_lost_commit_response_and_preserves_unconfirmed_execut
         assert_eq!(provider.calls.get(), 1);
     }
 }
+
+#[test]
+fn public_range_request_to_fixture_execution_and_verified_query_is_connected() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        market_update::runner::{ItemExecution, RangeRunner},
+        mcp::ToolHandler,
+    };
+    for changed in [false, true] {
+        let f = fixture(false);
+        fail_range_without_publication(&f);
+        let api = DataApi::new(f.db.tasks.clone(), "range-run".into(), Access::local()).unwrap();
+        let accepted=api.call("backfill_data",json!({"request_id":"fixture-e2e","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"legacy-daily","start_date":"2025-01-02","end_date":"2025-01-02"}]})).unwrap();
+        assert_eq!(accepted["readiness"], "blocked");
+        // Explicit test composition only: no JSON/MCP flag can select this provider.
+        let provider = SyntheticRangeProvider::new(changed);
+        let runner = RangeRunner {
+            repository: f.db.clone(),
+            run_id: "range-run".into(),
+        };
+        let ItemExecution::Published(receipt) = runner
+            .run_item(
+                accepted["task_id"].as_str().unwrap(),
+                accepted["item_ids"][0].as_str().unwrap(),
+                &provider,
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        let progress = api
+            .call("get_task_progress", json!({"task_id":accepted["task_id"]}))
+            .unwrap();
+        assert_eq!(progress["succeeded"], 1);
+        assert_eq!(
+            progress["range_results"][0]["result_version"]["version_id"],
+            receipt.version_id
+        );
+        let page=api.call("query_data",json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-02","end_date":"2025-01-02"},"version":{"kind":"latest_per_entity"}})).unwrap();
+        assert_eq!(
+            page["records"][0]["close"],
+            if changed { "10.06" } else { "10.05" }
+        );
+        assert_eq!(
+            page["version_manifest"][0]["version_ref"]["version_id"],
+            receipt.version_id
+        );
+        assert_eq!(provider.calls.get(), 1);
+    }
+}

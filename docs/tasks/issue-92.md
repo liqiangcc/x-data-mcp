@@ -39,7 +39,7 @@ Actions 执行 fmt、clippy --all-targets --all-features --locked -D warnings、
 
 ## 尚未交付
 
-已接入公共显式 daily 受理与能力发现；仍缺默认范围/明确缺口冻结、发布感知执行器、yearly/catalog 更新编排及部署。SQLite 集成测试已使用内部 RangeContract 受理更新/补采；初始 published fixture 及退出故障测试仍用 legacy contract。内部契约不冒充公共 update/backfill 已实现。
+已接入公共显式 daily 受理与能力发现；仍缺默认范围/明确缺口冻结、yearly/catalog 更新编排及部署。显式 daily 单项 RangeRunner 及公共 worker 分发已实现，生产 provider 仍拒绝。SQLite 集成测试已使用内部 RangeContract 受理更新/补采；初始 published fixture 及退出故障测试仍用 legacy contract。内部契约不冒充公共 update/backfill 已实现。
 
 #4“已启动首次采集”的受理/实际执行定义已向用户提问，未据此擅自实现默认选择。日线现有模型实际截至日来自参与记录；更丰富的范围/覆盖结构不能仅凭 reason 字符串视为完整通用契约。
 #54/#71/#46/文件一致性仍未解决；live source、真实 normalization、真实行情闭环均 NOT_RUN/NOT_VERIFIED。没有来源采集，不部署此半成品。
@@ -67,3 +67,7 @@ get_task_progress 增加 frozen_daily_ranges（每项已受理 base/digest/日�
 应用 RangeRunner 显式执行一个已受理 daily 项。先核对 task/item 的持久结果；已有结果只返回收据，running 无结果不自动重做。仅当前 run 的 pending 项可 Claim/StartItem；固定 base/digest/范围在来源调用前后核对。有变化使用确定的候选 ID、独立完整候选和覆盖证据；无变化复用原版本。提交仍走 sealed plan/SQLite 短事务。
 
 可信同步 provider 只提供 batch/证据/候选，不负责发布；真实装配只能使用 OfficialFilePipeline，当前必然拒绝，不引入来源选择开关。显式 fixture provider 仅测试使用。已知未发布且来源停止的失败可记录原失败；提交/存储结果不明保留 running/占用，先核对收据，不能重采/换 ID。取消在开始前收尾，执行中取消阻止发布，按现有任务状态机记录实际未发布结果。该单项应用执行器尚不等于全部生产 worker/yearly 编排。
+
+RangeRunner 回归：range_runner_executes_and_replays_real_publication_without_reacquiring；range_runner_does_not_reexecute_running_or_old_run_items；range_runner_cancellation_and_official_gate_never_publish；range_runner_reconciles_lost_commit_response_and_preserves_unconfirmed_execution。最后一项在真实 SQLite 前后注入响应不确定，不把此包装器称为进程退出测试；实际进程退出证据仍来自 sqlite_market::update::tests。public_range_request_to_fixture_execution_and_verified_query_is_connected 验证公共 JSON 受理→显式测试 provider 执行→持久结果/行情查询；不存在 MCP 选择 fixture provider 的参数。
+
+取消沿用既有任务状态机：开始前取消可返回 cancelled；正在执行的单项若确认未发布并记录失败、且所有项均已结束，则返回实际 failed 终态和原因，不能把未发布当成功。存储/提交结果不明不执行这种失败收尾。
