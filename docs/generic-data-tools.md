@@ -344,3 +344,7 @@ get_data_capabilities 无过滤参数时返回简洁 dataset/operation 目录与
 
 目标工具目录现为 19 个业务工具（原 17 个加 availability、list_tasks），
 query_data 的批量/目录筛选不新增工具；export_data 未计入，run_worker_once 仍为运维能力。
+
+## 通用计算入口
+
+[计算能力与 AI 编排边界](compute-capabilities.md)新增 compute_metrics 目标设计，按 metric/algorithm_version 类型化扩展。它只处理明确的确定性计算，不隐式采集或发布派生数据。inline 与 task 显式区分，任务模式有持久副作用。目标业务工具总数调整为 20；候选指标尚未实现，export_data 仍是后续候选。此前“分析先由 AI/Python 完成”的说明收敛为：已注册确定性计算可由服务提供，研究解释和开放式编排由 AI 完成。
