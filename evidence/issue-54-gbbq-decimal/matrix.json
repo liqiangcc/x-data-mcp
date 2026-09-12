@@ -1,0 +1,1201 @@
+{
+  "full_four_stock_revalidation": "NOT_RUN_NO_OFFICIAL_NORMALIZATION_CONTRACT",
+  "inputs_sha256": "34af2d78b9071f8505e99ff5dfdf563bd9a833b76c5de7112d02cb997ec4d99c",
+  "live_source": "NOT_RUN",
+  "official_qfq_contract": "TDX_OFFICIAL_QFQ_CONTRACT_NOT_PROVEN",
+  "plan_sha256": "fe0e4a0855f3f4dd0c85a60cd74de41e67e6f5eb80b39d7dd9d484fea75f6106",
+  "row_count": 9,
+  "rows": [
+    {
+      "calculation_status": "DIAGNOSTIC_ONLY",
+      "candidates": {
+        "exact_binary": {
+          "C1_C2_C3_C4": [
+            "0.0500000007450580596923828125",
+            "0",
+            "0",
+            "0"
+          ],
+          "reference": "7.24499999992549419403076171875",
+          "reference_cent": "7.24",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.998621"
+        },
+        "fixed_2dp": {
+          "C1_C2_C3_C4": [
+            "0.05",
+            "0.00",
+            "0.00",
+            "0.00"
+          ],
+          "reference": "7.245",
+          "reference_cent": "7.25",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "1.000000"
+        },
+        "fixed_3dp": {
+          "C1_C2_C3_C4": [
+            "0.050",
+            "0.000",
+            "0.000",
+            "0.000"
+          ],
+          "reference": "7.245",
+          "reference_cent": "7.25",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "1.000000"
+        },
+        "fixed_4dp": {
+          "C1_C2_C3_C4": [
+            "0.0500",
+            "0.0000",
+            "0.0000",
+            "0.0000"
+          ],
+          "reference": "7.2450",
+          "reference_cent": "7.25",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "1.000000"
+        },
+        "fixed_6dp": {
+          "C1_C2_C3_C4": [
+            "0.050000",
+            "0.000000",
+            "0.000000",
+            "0.000000"
+          ],
+          "reference": "7.245000",
+          "reference_cent": "7.25",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "1.000000"
+        },
+        "frozen_repr": {
+          "C1_C2_C3_C4": [
+            "0.05000000074505806",
+            "0.0",
+            "0.0",
+            "0.0"
+          ],
+          "reference": "7.244999999925494194",
+          "reference_cent": "7.24",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.998621"
+        },
+        "shortest_roundtrip": {
+          "C1_C2_C3_C4": [
+            "0.05",
+            "0",
+            "0",
+            "0"
+          ],
+          "reference": "7.245",
+          "reference_cent": "7.25",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "1.000000"
+        }
+      },
+      "date": "2025-07-17",
+      "previous_close": "7.25",
+      "previous_date": 20250716,
+      "record_index": 127405,
+      "selection_reasons": [
+        "mandatory_half_cent"
+      ],
+      "symbol": "sh.600006"
+    },
+    {
+      "calculation_status": "DIAGNOSTIC_ONLY",
+      "candidates": {
+        "exact_binary": {
+          "C1_C2_C3_C4": [
+            "0.60000002384185791015625",
+            "0",
+            "5",
+            "0"
+          ],
+          "reference": "20.32666666507720947265625",
+          "reference_cent": "20.33",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.665466"
+        },
+        "fixed_2dp": {
+          "C1_C2_C3_C4": [
+            "0.60",
+            "0.00",
+            "5.00",
+            "0.00"
+          ],
+          "reference": "20.3266666666666666666666666666666666666666666666666666666667",
+          "reference_cent": "20.33",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.665466"
+        },
+        "fixed_3dp": {
+          "C1_C2_C3_C4": [
+            "0.600",
+            "0.000",
+            "5.000",
+            "0.000"
+          ],
+          "reference": "20.3266666666666666666666666666666666666666666666666666666667",
+          "reference_cent": "20.33",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.665466"
+        },
+        "fixed_4dp": {
+          "C1_C2_C3_C4": [
+            "0.6000",
+            "0.0000",
+            "5.0000",
+            "0.0000"
+          ],
+          "reference": "20.3266666666666666666666666666666666666666666666666666666667",
+          "reference_cent": "20.33",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.665466"
+        },
+        "fixed_6dp": {
+          "C1_C2_C3_C4": [
+            "0.600000",
+            "0.000000",
+            "5.000000",
+            "0.000000"
+          ],
+          "reference": "20.3266666666666666666666666666666666666666666666666666666667",
+          "reference_cent": "20.33",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.665466"
+        },
+        "frozen_repr": {
+          "C1_C2_C3_C4": [
+            "0.6000000238418579",
+            "0.0",
+            "5.0",
+            "0.0"
+          ],
+          "reference": "20.3266666650772094733333333333333333333333333333333333333333",
+          "reference_cent": "20.33",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.665466"
+        },
+        "shortest_roundtrip": {
+          "C1_C2_C3_C4": [
+            "0.6",
+            "0",
+            "5",
+            "0"
+          ],
+          "reference": "20.3266666666666666666666666666666666666666666666666666666667",
+          "reference_cent": "20.33",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.665466"
+        }
+      },
+      "date": "1993-04-05",
+      "previous_close": "30.55",
+      "previous_date": 19930402,
+      "record_index": 86,
+      "selection_reasons": [
+        "C1_tail"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "calculation_status": "DIAGNOSTIC_ONLY",
+      "candidates": {
+        "exact_binary": {
+          "C1_C2_C3_C4": [
+            "1.39999997615814208984375",
+            "0",
+            "1",
+            "0"
+          ],
+          "reference": "7.63636363853107799183238636363636363636363636363636363636364",
+          "reference_cent": "7.64",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.894614"
+        },
+        "fixed_2dp": {
+          "C1_C2_C3_C4": [
+            "1.40",
+            "0.00",
+            "1.00",
+            "0.00"
+          ],
+          "reference": "7.63636363636363636363636363636363636363636363636363636363636",
+          "reference_cent": "7.64",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.894614"
+        },
+        "fixed_3dp": {
+          "C1_C2_C3_C4": [
+            "1.400",
+            "0.000",
+            "1.000",
+            "0.000"
+          ],
+          "reference": "7.63636363636363636363636363636363636363636363636363636363636",
+          "reference_cent": "7.64",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.894614"
+        },
+        "fixed_4dp": {
+          "C1_C2_C3_C4": [
+            "1.4000",
+            "0.0000",
+            "1.0000",
+            "0.0000"
+          ],
+          "reference": "7.63636363636363636363636363636363636363636363636363636363636",
+          "reference_cent": "7.64",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.894614"
+        },
+        "fixed_6dp": {
+          "C1_C2_C3_C4": [
+            "1.400000",
+            "0.000000",
+            "1.000000",
+            "0.000000"
+          ],
+          "reference": "7.63636363636363636363636363636363636363636363636363636363636",
+          "reference_cent": "7.64",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.894614"
+        },
+        "frozen_repr": {
+          "C1_C2_C3_C4": [
+            "1.399999976158142",
+            "0.0",
+            "1.0",
+            "0.0"
+          ],
+          "reference": "7.636363638531078",
+          "reference_cent": "7.64",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.894614"
+        },
+        "shortest_roundtrip": {
+          "C1_C2_C3_C4": [
+            "1.4",
+            "0",
+            "1",
+            "0"
+          ],
+          "reference": "7.63636363636363636363636363636363636363636363636363636363636",
+          "reference_cent": "7.64",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.894614"
+        }
+      },
+      "date": "1996-08-06",
+      "previous_close": "8.54",
+      "previous_date": 19960805,
+      "record_index": 92,
+      "selection_reasons": [
+        "C1_tail"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "calculation_status": "DIAGNOSTIC_ONLY",
+      "candidates": {
+        "exact_binary": {
+          "C1_C2_C3_C4": [
+            "1.7999999523162841796875",
+            "0",
+            "0",
+            "0"
+          ],
+          "reference": "14.39000000476837158203125",
+          "reference_cent": "14.39",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.987646"
+        },
+        "fixed_2dp": {
+          "C1_C2_C3_C4": [
+            "1.80",
+            "0.00",
+            "0.00",
+            "0.00"
+          ],
+          "reference": "14.39",
+          "reference_cent": "14.39",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.987646"
+        },
+        "fixed_3dp": {
+          "C1_C2_C3_C4": [
+            "1.800",
+            "0.000",
+            "0.000",
+            "0.000"
+          ],
+          "reference": "14.390",
+          "reference_cent": "14.39",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.987646"
+        },
+        "fixed_4dp": {
+          "C1_C2_C3_C4": [
+            "1.8000",
+            "0.0000",
+            "0.0000",
+            "0.0000"
+          ],
+          "reference": "14.3900",
+          "reference_cent": "14.39",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.987646"
+        },
+        "fixed_6dp": {
+          "C1_C2_C3_C4": [
+            "1.800000",
+            "0.000000",
+            "0.000000",
+            "0.000000"
+          ],
+          "reference": "14.390000",
+          "reference_cent": "14.39",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.987646"
+        },
+        "frozen_repr": {
+          "C1_C2_C3_C4": [
+            "1.7999999523162842",
+            "0.0",
+            "0.0",
+            "0.0"
+          ],
+          "reference": "14.39000000476837158",
+          "reference_cent": "14.39",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.987646"
+        },
+        "shortest_roundtrip": {
+          "C1_C2_C3_C4": [
+            "1.8",
+            "0",
+            "0",
+            "0"
+          ],
+          "reference": "14.39",
+          "reference_cent": "14.39",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.987646"
+        }
+      },
+      "date": "2001-08-21",
+      "previous_close": "14.57",
+      "previous_date": 20010820,
+      "record_index": 106,
+      "selection_reasons": [
+        "C1_tail"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "calculation_status": "DIAGNOSTIC_ONLY",
+      "candidates": {
+        "exact_binary": {
+          "C1_C2_C3_C4": [
+            "0",
+            "0",
+            "1.89999997615814208984375",
+            "0"
+          ],
+          "reference": "6.71428572773790304948883507329643288238996794722654828950447",
+          "reference_cent": "6.71",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.839800"
+        },
+        "fixed_2dp": {
+          "C1_C2_C3_C4": [
+            "0.00",
+            "0.00",
+            "1.90",
+            "0.00"
+          ],
+          "reference": "6.71428571428571428571428571428571428571428571428571428571429",
+          "reference_cent": "6.71",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.839800"
+        },
+        "fixed_3dp": {
+          "C1_C2_C3_C4": [
+            "0.000",
+            "0.000",
+            "1.900",
+            "0.000"
+          ],
+          "reference": "6.71428571428571428571428571428571428571428571428571428571429",
+          "reference_cent": "6.71",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.839800"
+        },
+        "fixed_4dp": {
+          "C1_C2_C3_C4": [
+            "0.0000",
+            "0.0000",
+            "1.9000",
+            "0.0000"
+          ],
+          "reference": "6.71428571428571428571428571428571428571428571428571428571429",
+          "reference_cent": "6.71",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.839800"
+        },
+        "fixed_6dp": {
+          "C1_C2_C3_C4": [
+            "0.000000",
+            "0.000000",
+            "1.900000",
+            "0.000000"
+          ],
+          "reference": "6.71428571428571428571428571428571428571428571428571428571429",
+          "reference_cent": "6.71",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.839800"
+        },
+        "frozen_repr": {
+          "C1_C2_C3_C4": [
+            "0.0",
+            "0.0",
+            "1.899999976158142",
+            "0.0"
+          ],
+          "reference": "6.71428572773790310018098713716595543059976737904945451128817",
+          "reference_cent": "6.71",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.839800"
+        },
+        "shortest_roundtrip": {
+          "C1_C2_C3_C4": [
+            "0",
+            "0",
+            "1.9",
+            "0"
+          ],
+          "reference": "6.71428571428571428571428571428571428571428571428571428571429",
+          "reference_cent": "6.71",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.839800"
+        }
+      },
+      "date": "2005-12-20",
+      "previous_close": "7.99",
+      "previous_date": 20051111,
+      "record_index": 127306,
+      "selection_reasons": [
+        "C3_tail"
+      ],
+      "symbol": "sh.600004"
+    },
+    {
+      "calculation_status": "DIAGNOSTIC_ONLY",
+      "candidates": {
+        "exact_binary": {
+          "C1_C2_C3_C4": [
+            "0",
+            "0",
+            "3.2999999523162841796875",
+            "0"
+          ],
+          "reference": "2.73684211507539862107656457756359622913588699231788446067109",
+          "reference_cent": "2.74",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.752747"
+        },
+        "fixed_2dp": {
+          "C1_C2_C3_C4": [
+            "0.00",
+            "0.00",
+            "3.30",
+            "0.00"
+          ],
+          "reference": "2.73684210526315789473684210526315789473684210526315789473684",
+          "reference_cent": "2.74",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.752747"
+        },
+        "fixed_3dp": {
+          "C1_C2_C3_C4": [
+            "0.000",
+            "0.000",
+            "3.300",
+            "0.000"
+          ],
+          "reference": "2.73684210526315789473684210526315789473684210526315789473684",
+          "reference_cent": "2.74",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.752747"
+        },
+        "fixed_4dp": {
+          "C1_C2_C3_C4": [
+            "0.0000",
+            "0.0000",
+            "3.3000",
+            "0.0000"
+          ],
+          "reference": "2.73684210526315789473684210526315789473684210526315789473684",
+          "reference_cent": "2.74",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.752747"
+        },
+        "fixed_6dp": {
+          "C1_C2_C3_C4": [
+            "0.000000",
+            "0.000000",
+            "3.300000",
+            "0.000000"
+          ],
+          "reference": "2.73684210526315789473684210526315789473684210526315789473684",
+          "reference_cent": "2.74",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.752747"
+        },
+        "frozen_repr": {
+          "C1_C2_C3_C4": [
+            "0.0",
+            "0.0",
+            "3.299999952316284",
+            "0.0"
+          ],
+          "reference": "2.73684211507539865805222768401079233471491448297164835866969",
+          "reference_cent": "2.74",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.752747"
+        },
+        "shortest_roundtrip": {
+          "C1_C2_C3_C4": [
+            "0",
+            "0",
+            "3.3",
+            "0"
+          ],
+          "reference": "2.73684210526315789473684210526315789473684210526315789473684",
+          "reference_cent": "2.74",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.752747"
+        }
+      },
+      "date": "2006-11-13",
+      "previous_close": "3.64",
+      "previous_date": 20061020,
+      "record_index": 127384,
+      "selection_reasons": [
+        "C3_tail"
+      ],
+      "symbol": "sh.600006"
+    },
+    {
+      "calculation_status": "DIAGNOSTIC_ONLY",
+      "candidates": {
+        "exact_binary": {
+          "C1_C2_C3_C4": [
+            "0",
+            "4.5",
+            "0",
+            "2.36999988555908203125"
+          ],
+          "reference": "15.0820534527906152895504046177265468007772792681455428831572",
+          "reference_cent": "15.08",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.857305"
+        },
+        "fixed_2dp": {
+          "C1_C2_C3_C4": [
+            "0.00",
+            "4.50",
+            "0.00",
+            "2.37"
+          ],
+          "reference": "15.0820533548908649959579628132578819725141471301535974130962",
+          "reference_cent": "15.08",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.857305"
+        },
+        "fixed_3dp": {
+          "C1_C2_C3_C4": [
+            "0.000",
+            "4.500",
+            "0.000",
+            "2.370"
+          ],
+          "reference": "15.0820533548908649959579628132578819725141471301535974130962",
+          "reference_cent": "15.08",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.857305"
+        },
+        "fixed_4dp": {
+          "C1_C2_C3_C4": [
+            "0.0000",
+            "4.5000",
+            "0.0000",
+            "2.3700"
+          ],
+          "reference": "15.0820533548908649959579628132578819725141471301535974130962",
+          "reference_cent": "15.08",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.857305"
+        },
+        "fixed_6dp": {
+          "C1_C2_C3_C4": [
+            "0.000000",
+            "4.500000",
+            "0.000000",
+            "2.370000"
+          ],
+          "reference": "15.0820533548908649959579628132578819725141471301535974130962",
+          "reference_cent": "15.08",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.857305"
+        },
+        "frozen_repr": {
+          "C1_C2_C3_C4": [
+            "0.0",
+            "4.5",
+            "0.0",
+            "2.369999885559082"
+          ],
+          "reference": "15.0820534527906153162835633452183781356460876567879381205562",
+          "reference_cent": "15.08",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.857305"
+        },
+        "shortest_roundtrip": {
+          "C1_C2_C3_C4": [
+            "0",
+            "4.5",
+            "0",
+            "2.37"
+          ],
+          "reference": "15.0820533548908649959579628132578819725141471301535974130962",
+          "reference_cent": "15.08",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.857305"
+        }
+      },
+      "date": "1997-07-14",
+      "previous_close": "17.59",
+      "previous_date": 19970711,
+      "record_index": 97,
+      "selection_reasons": [
+        "C4_tail",
+        "C2_C4_combination"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "calculation_status": "DIAGNOSTIC_ONLY",
+      "candidates": {
+        "exact_binary": {
+          "C1_C2_C3_C4": [
+            "0",
+            "7.5",
+            "0",
+            "2.7269999980926513671875"
+          ],
+          "reference": "10.2422016190170766487725658164631784918903682172354246434966",
+          "reference_cent": "10.24",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.931756"
+        },
+        "fixed_2dp": {
+          "C1_C2_C3_C4": [
+            "0.00",
+            "7.50",
+            "0.00",
+            "2.73"
+          ],
+          "reference": "10.2415553809897879025923016496465043205027494108405341712490",
+          "reference_cent": "10.24",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            false
+          ],
+          "single_event_ratio_6dp": "0.931756"
+        },
+        "fixed_3dp": {
+          "C1_C2_C3_C4": [
+            "0.000",
+            "7.500",
+            "0.000",
+            "2.727"
+          ],
+          "reference": "10.2422016186061129881354600455724051229669207197297084937534",
+          "reference_cent": "10.24",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.931756"
+        },
+        "fixed_4dp": {
+          "C1_C2_C3_C4": [
+            "0.0000",
+            "7.5000",
+            "0.0000",
+            "2.7270"
+          ],
+          "reference": "10.2422016186061129881354600455724051229669207197297084937534",
+          "reference_cent": "10.24",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.931756"
+        },
+        "fixed_6dp": {
+          "C1_C2_C3_C4": [
+            "0.000000",
+            "7.500000",
+            "0.000000",
+            "2.727000"
+          ],
+          "reference": "10.2422016186061129881354600455724051229669207197297084937534",
+          "reference_cent": "10.24",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.931756"
+        },
+        "frozen_repr": {
+          "C1_C2_C3_C4": [
+            "0.0",
+            "7.5",
+            "0.0",
+            "2.7269999980926514"
+          ],
+          "reference": "10.2422016190170766417026757687313821201967255019267899827677",
+          "reference_cent": "10.24",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.931756"
+        },
+        "shortest_roundtrip": {
+          "C1_C2_C3_C4": [
+            "0",
+            "7.5",
+            "0",
+            "2.727"
+          ],
+          "reference": "10.2422016186061129881354600455724051229669207197297084937534",
+          "reference_cent": "10.24",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.931756"
+        }
+      },
+      "date": "2000-01-10",
+      "previous_close": "10.99",
+      "previous_date": 20000107,
+      "record_index": 103,
+      "selection_reasons": [
+        "C4_tail"
+      ],
+      "symbol": "sz.000002"
+    },
+    {
+      "calculation_status": "DIAGNOSTIC_ONLY",
+      "candidates": {
+        "exact_binary": {
+          "C1_C2_C3_C4": [
+            "0",
+            "4.400000095367431640625",
+            "0",
+            "5"
+          ],
+          "reference": "8.99333336512247721354166666666666666666666666666666666666667",
+          "reference_cent": "8.99",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.796280"
+        },
+        "fixed_2dp": {
+          "C1_C2_C3_C4": [
+            "0.00",
+            "4.40",
+            "0.00",
+            "5.00"
+          ],
+          "reference": "8.99333333333333333333333333333333333333333333333333333333333",
+          "reference_cent": "8.99",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.796280"
+        },
+        "fixed_3dp": {
+          "C1_C2_C3_C4": [
+            "0.000",
+            "4.400",
+            "0.000",
+            "5.000"
+          ],
+          "reference": "8.99333333333333333333333333333333333333333333333333333333333",
+          "reference_cent": "8.99",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.796280"
+        },
+        "fixed_4dp": {
+          "C1_C2_C3_C4": [
+            "0.0000",
+            "4.4000",
+            "0.0000",
+            "5.0000"
+          ],
+          "reference": "8.99333333333333333333333333333333333333333333333333333333333",
+          "reference_cent": "8.99",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.796280"
+        },
+        "fixed_6dp": {
+          "C1_C2_C3_C4": [
+            "0.000000",
+            "4.400000",
+            "0.000000",
+            "5.000000"
+          ],
+          "reference": "8.99333333333333333333333333333333333333333333333333333333333",
+          "reference_cent": "8.99",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.796280"
+        },
+        "frozen_repr": {
+          "C1_C2_C3_C4": [
+            "0.0",
+            "4.400000095367432",
+            "0.0",
+            "5.0"
+          ],
+          "reference": "8.99333336512247733333333333333333333333333333333333333333333",
+          "reference_cent": "8.99",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.796280"
+        },
+        "shortest_roundtrip": {
+          "C1_C2_C3_C4": [
+            "0",
+            "4.4",
+            "0",
+            "5"
+          ],
+          "reference": "8.99333333333333333333333333333333333333333333333333333333333",
+          "reference_cent": "8.99",
+          "roundtrip_to_original_bits": [
+            true,
+            true,
+            true,
+            true
+          ],
+          "single_event_ratio_6dp": "0.796280"
+        }
+      },
+      "date": "1991-06-01",
+      "previous_close": "11.29",
+      "previous_date": 19910527,
+      "record_index": 81,
+      "selection_reasons": [
+        "C2_C4_combination"
+      ],
+      "symbol": "sz.000002"
+    }
+  ],
+  "schema": "issue54.event-matrix.v1",
+  "status": "GBBQ_FLOAT32_BUSINESS_DECIMAL_NORMALIZATION_NOT_VERIFIED"
+}
