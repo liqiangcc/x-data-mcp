@@ -500,7 +500,10 @@ impl ToolHandler for DataApi {
         self.dispatch(name, input).map_err(|mut e| {
             if generic {
                 e.outcome_certainty = Some(
-                    if e.code == "outcome_unknown" {
+                    if e.code == "outcome_unknown"
+                        || (matches!(name, "update_data" | "backfill_data")
+                            && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
+                    {
                         "unknown"
                     } else if matches!(
                         name,
@@ -516,14 +519,19 @@ impl ToolHandler for DataApi {
                     }
                     .into(),
                 );
-                e.next_actions = Some(if e.code == "outcome_unknown" {
-                    vec![
+                e.next_actions = Some(
+                    if e.code == "outcome_unknown"
+                        || (matches!(name, "update_data" | "backfill_data")
+                            && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
+                    {
+                        vec![
                         "inspect the same request_id/task_id; do not invent a replacement identity"
                             .into(),
                     ]
-                } else {
-                    vec!["correct the request or inspect the reported storage evidence".into()]
-                });
+                    } else {
+                        vec!["correct the request or inspect the reported storage evidence".into()]
+                    },
+                );
             }
             e
         })

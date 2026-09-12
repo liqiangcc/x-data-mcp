@@ -476,3 +476,15 @@ fn range_controls_are_not_discovered_or_callable_without_owner_access() {
     }
     assert!(!path.exists());
 }
+
+#[test]
+fn range_storage_failure_is_not_reported_as_invalid_input_or_success() {
+    use x_data_mcp::{data_supply::mcp::DataApi, mcp::ToolHandler};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing");
+    let api = DataApi::new(SqliteTasks::new(&path), "run".into(), Access::local()).unwrap();
+    let error=api.call("update_data",json!({"request_id":"r","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"missing","start_date":"2025-01-01","end_date":"2025-12-31"}]})).unwrap_err();
+    assert_eq!(error.code, "storage_error");
+    assert_eq!(error.outcome_certainty.as_deref(), Some("unknown"));
+    assert!(!path.exists());
+}

@@ -90,7 +90,7 @@ impl<R: MarketRepository> Contract for RangeContract<R> {
             .map(|i| i.base_version_id.clone())
             .collect::<Vec<_>>();
         // One repository snapshot verifies every explicit base before admission.
-        let bases = self.repository.fixed_many(&ids).map_err(invalid)?;
+        let bases = self.repository.fixed_many(&ids).map_err(repository_error)?;
         if bases.len() != input.items.len() {
             return Err(invalid("incomplete fixed base lookup"));
         }
@@ -125,4 +125,20 @@ impl<R: MarketRepository> Contract for RangeContract<R> {
 }
 pub(crate) fn frozen(id: &str, digest: &str, range: &DateRange) -> Value {
     json!({"base_version_id":id,"base_integrity_sha256":digest,"range":range})
+}
+
+fn repository_error(error: crate::market_storage::Error) -> Error {
+    use crate::market_storage::Error as MarketError;
+    match error {
+        MarketError::Task(error) => error,
+        MarketError::Storage(message) => Error::StorageUnavailable(message),
+        MarketError::Integrity(message)
+        | MarketError::Base(message)
+        | MarketError::Conflict(message) => Error::NeedsVerification(message),
+        MarketError::OutcomeUnknown(message) => Error::OutcomeUnknown(message),
+        MarketError::Invalid(message) => Error::InvalidCommand(message),
+        MarketError::NotFound => {
+            Error::InvalidCommand("explicit published daily base unavailable".into())
+        }
+    }
 }

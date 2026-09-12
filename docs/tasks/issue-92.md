@@ -39,7 +39,7 @@ Actions 执行 fmt、clippy --all-targets --all-features --locked -D warnings、
 
 ## 尚未交付
 
-update/backfill 公共受理、默认范围/明确缺口冻结、MCP/schema/能力发现、发布感知执行器、后续 yearly 编排及部署。SQLite 集成测试已使用内部 RangeContract 受理更新/补采；初始 published fixture 及退出故障测试仍用 legacy contract。内部契约不冒充公共 update/backfill 已实现。
+已接入公共显式 daily 受理与能力发现；仍缺默认范围/明确缺口冻结、发布感知执行器、yearly/catalog 更新编排及部署。SQLite 集成测试已使用内部 RangeContract 受理更新/补采；初始 published fixture 及退出故障测试仍用 legacy contract。内部契约不冒充公共 update/backfill 已实现。
 
 #4“已启动首次采集”的受理/实际执行定义已向用户提问，未据此擅自实现默认选择。日线现有模型实际截至日来自参与记录；更丰富的范围/覆盖结构不能仅凭 reason 字符串视为完整通用契约。
 #54/#71/#46/文件一致性仍未解决；live source、真实 normalization、真实行情闭环均 NOT_RUN/NOT_VERIFIED。没有来源采集，不部署此半成品。
@@ -55,3 +55,5 @@ update/backfill 公共受理、默认范围/明确缺口冻结、MCP/schema/能�
 update_data/backfill_data 的 v1 首个公共形状为 request_id、dataset=market.daily、contract_version=v1、items（entity、base_version_id、start_date、end_date）。全部显式，不把空/省略列表当作全市场或默认范围；每实体一个范围。响应沿用 WriteAcceptance，其中 contract_version 标明实际持久化执行契约 explicit-range-task-v1。输入映射在应用契约模块，资格判定仍由 RangeContract 完成。
 
 发现 registry 仅为这两个工具列 daily，implemented=true/readiness=blocked，说明仅显式范围受理、来源仍不可信且当前 worker 只记录拒绝。yearly/catalog/default selection 不伪装已实现；非本机所有者上下文不发现/调用写控制。既有 13 工具增加到 15，版本读取与 task 查询不改变语义。
+
+公共接线回归：real_range_stdio_acceptance_replay_conflicts_and_blocked_execution（真实 mcp_data 二进制的 schema/受理/幂等/冲突/拒绝来源执行/重试/取消，确认无新行情）；range_controls_are_not_discovered_or_callable_without_owner_access；range_storage_failure_is_not_reported_as_invalid_input_or_success。通用发现测试要求 15 工具与 registry 一致。Preview package 的离线 smoke 计数同步，不表示部署。

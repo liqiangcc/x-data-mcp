@@ -492,6 +492,6 @@ pub struct RangeWrite {
     pub request_id: String,
     pub dataset: DailyDataset,
     pub contract_version: ContractVersion,
-    #[schemars(length(min = 1, max = 100))]
+    #[schemars(length(min = 1))]
     pub items: Vec<RangeWriteItem>,
 }

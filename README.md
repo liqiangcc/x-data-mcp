@@ -137,4 +137,6 @@ Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README
 ## 更新/补采开发中（#92，PR #93）
 
 应用层已有 daily 显式区间合并判定及 SQLite 条件提交：有变化使用新版本，无变化记录独立复用结果；两者均与任务完成/占用释放同事务。schema v5 只增加更新结果表，显式 init/upgrade 才生效，不升级已部署预览库。
-segment 完整不能代替合并全范围覆盖证据，旧 head/revision/固定版本变更均拒绝，不自动 rebase。当前只有可信 fixture 用例；update/backfill 受理、MCP 和真实文件执行仍未完成，不能通过提供证据字符串解除生产门禁。见 [#92 实施记录](docs/tasks/issue-92.md)。
+segment 完整不能代替合并全范围覆盖证据，旧 head/revision/固定版本变更均拒绝，不自动 rebase。当前仅 fixture 验证过发布链。MCP 已接入显式 daily 的 update_data/backfill_data 受理（共 15 工具），readiness=blocked；默认选择、自动缺口、yearly/catalog 更新及真实文件执行仍未完成，不能通过提供证据字符串解除生产门禁。见 [#92 实施记录](docs/tasks/issue-92.md)。
+
+更新/补采调用的 v1 输入为 request_id、dataset=market.daily、contract_version=v1、items；每项显式提供 entity、base_version_id、start_date、end_date。能力发现按 operation 返回准确 schema。受理响应的 contract_version 标识持久执行契约 explicit-range-task-v1；当前 worker 只记录 SOURCE_NOT_VERIFIED，不发布行情。已部署 preview.2 的 13 工具与本开发分支不同，本段不是重新部署完成声明。
