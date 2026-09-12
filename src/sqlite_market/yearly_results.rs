@@ -2,6 +2,16 @@
 use super::*;
 use crate::yearly_publication::results::{YearlyRepository, YearlyResultPlan, equivalent};
 impl YearlyRepository for SqliteMarket {
+    fn transition_task(
+        &self,
+        task: &str,
+        revision: u64,
+        run: &str,
+        change: crate::task_control::Change,
+    ) -> Result<crate::task_control::TaskSnapshot, Error> {
+        use crate::task_control::TaskRepository;
+        Ok(self.tasks.transition(task, revision, run, change)?)
+    }
     fn commit_yearly(&self, plan: &YearlyResultPlan) -> Result<Receipt, Error> {
         self.write_transaction(true, |c| {
             let command = plan.command();
@@ -122,12 +132,17 @@ pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Rec
             .iter()
             .map(|r| r.date.year())
             .collect();
-        let expected = crate::yearly_publication::tasks::frozen(
+        let mut expected = crate::yearly_publication::tasks::frozen(
             &base_id,
             base.raw["integrity_sha256"].as_str().unwrap(),
             &years,
             &command.intent,
         );
+        expected["comparison"] = if audit["prior_version_id"].is_null() {
+            Value::Null
+        } else {
+            serde_json::json!({"version_id":audit["prior_version_id"],"integrity_sha256":audit["prior_integrity_sha256"]})
+        };
         if task.task.key.contract_version != crate::yearly_publication::tasks::CONTRACT_VERSION
             || task.task.key.dataset != "market.yearly"
             || !task

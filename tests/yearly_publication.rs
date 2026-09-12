@@ -395,7 +395,7 @@ fn yearly_control(store: &SqliteMarket) -> TaskControl<SqliteTasks> {
         vec![Box::new(YearlyContract {
             operation: Operation::Update,
             repository: store.clone(),
-            today: "2026-09-12".parse().unwrap(),
+            today: || "2026-09-12".parse().unwrap(),
         })],
     )
     .unwrap()
@@ -404,7 +404,7 @@ fn yearly_key(store: &SqliteMarket) -> x_data_mcp::task_control::CommandKey {
     YearlyContract {
         operation: Operation::Update,
         repository: store.clone(),
-        today: "2026-09-12".parse().unwrap(),
+        today: || "2026-09-12".parse().unwrap(),
     }
     .key()
 }
@@ -924,4 +924,224 @@ fn crossing_year_boundary_changes_version_state_without_claiming_full_coverage()
         old.raw()["batch"]["coverage"],
         new.raw()["batch"]["coverage"]
     );
+}
+
+use x_data_mcp::yearly_publication::runner::{
+    OfficialYearlyVerifier, YearlyExecution, YearlyRunner, YearlyVerifier,
+};
+struct FixtureYearlyVerifier {
+    calls: std::cell::Cell<usize>,
+    cancel: Option<(SqliteTasks, String)>,
+}
+impl YearlyVerifier for FixtureYearlyVerifier {
+    fn verify(
+        &self,
+        base: &x_data_mcp::market_storage::compat::CheckedRecord,
+        years: &std::collections::BTreeSet<i32>,
+        at: chrono::DateTime<Utc>,
+    ) -> Result<DerivationEvidence, x_data_mcp::market_data::SourceError> {
+        self.calls.set(self.calls.get() + 1);
+        if let Some((store, id)) = &self.cancel {
+            let task = store.read_task(id).unwrap().unwrap();
+            store
+                .transition(id, task.task.state_revision, "run", Change::RequestCancel)
+                .unwrap();
+        }
+        Ok(DerivationEvidence {
+            base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
+            years: years.clone(),
+            as_of: at
+                .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                .date_naive(),
+            coverage: CoverageEvidence {
+                status: CoverageStatus::Complete,
+                reason: "fixture: selected input only".into(),
+            },
+        })
+    }
+}
+fn accept_yearly(
+    store: &SqliteMarket,
+    id: &str,
+    prior: Option<&str>,
+) -> Box<x_data_mcp::task_control::TaskSnapshot> {
+    let mut payload = yearly_payload(json!([2025]));
+    payload["items"][0]["intent"] = json!(PublishIntent::CurrentHead {
+        expected_daily_head: "legacy-daily".into(),
+        expected_yearly_head: prior.map(str::to_owned)
+    });
+    task_of(
+        yearly_control(store)
+            .accept(id, yearly_key(store), payload)
+            .unwrap(),
+    )
+}
+fn runner(store: &SqliteMarket) -> YearlyRunner<SqliteMarket> {
+    YearlyRunner {
+        repository: store.clone(),
+        run_id: "run".into(),
+        derived_at: "2026-09-12T00:00:00Z".parse().unwrap(),
+    }
+}
+#[test]
+fn yearly_runner_publishes_and_reuses_with_receipts_without_reverification() {
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let verifier = FixtureYearlyVerifier {
+        calls: 0.into(),
+        cancel: None,
+    };
+    let first = accept_yearly(&store, "worker-first", None);
+    let run = runner(&store);
+    let YearlyExecution::Published(receipt) = run
+        .run_item(&first.task.task_id, &first.items[0].spec.item_id, &verifier)
+        .unwrap()
+    else {
+        panic!()
+    };
+    let repeated = run
+        .run_item(&first.task.task_id, &first.items[0].spec.item_id, &verifier)
+        .unwrap();
+    assert!(matches!(repeated,YearlyExecution::Published(r) if r==receipt));
+    assert_eq!(verifier.calls.get(), 1);
+    let second = accept_yearly(&store, "worker-reuse", Some(&receipt.version_id));
+    assert_eq!(
+        second.items[0].spec.frozen_inputs["comparison"]["version_id"],
+        receipt.version_id
+    );
+    let YearlyExecution::Published(reused) = run
+        .run_item(
+            &second.task.task_id,
+            &second.items[0].spec.item_id,
+            &verifier,
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(receipt.version_id, reused.version_id);
+    assert_eq!(verifier.calls.get(), 2);
+    assert_eq!(
+        store
+            .versions(&Scope {
+                symbol: "sh.600006".into(),
+                period: Period::Year
+            })
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        store
+            .tasks
+            .read_task(&second.task.task_id)
+            .unwrap()
+            .unwrap()
+            .claims
+            .is_empty()
+    );
+}
+#[test]
+fn yearly_runner_keeps_running_and_old_run_protected_and_official_verifier_blocked() {
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let verifier = FixtureYearlyVerifier {
+        calls: 0.into(),
+        cancel: None,
+    };
+    let task = accept_yearly(&store, "protected-yearly", None);
+    let mut other = runner(&store);
+    other.run_id = "new-run".into();
+    assert!(
+        other
+            .run_item(&task.task.task_id, &task.items[0].spec.item_id, &verifier)
+            .is_err()
+    );
+    assert_eq!(verifier.calls.get(), 0);
+    let task = store
+        .tasks
+        .transition(&task.task.task_id, 0, "run", Change::Claim)
+        .unwrap();
+    let task = store
+        .tasks
+        .transition(
+            &task.task.task_id,
+            task.task.state_revision,
+            "run",
+            Change::StartItem(task.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    assert!(matches!(
+        runner(&store).run_item(&task.task.task_id, &task.items[0].spec.item_id, &verifier),
+        Err(Error::OutcomeUnknown(_))
+    ));
+    assert_eq!(verifier.calls.get(), 0);
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let task = accept_yearly(&store, "official-yearly", None);
+    let YearlyExecution::NotPublished(failed) = runner(&store)
+        .run_item(
+            &task.task.task_id,
+            &task.items[0].spec.item_id,
+            &OfficialYearlyVerifier,
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(failed.task.status, x_data_mcp::task_control::Status::Failed);
+    assert!(
+        failed.items[0]
+            .outcome
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("SOURCE_NOT_VERIFIED")
+    );
+    assert!(
+        store
+            .versions(&Scope {
+                symbol: "sh.600006".into(),
+                period: Period::Year
+            })
+            .unwrap()
+            .is_empty()
+    );
+}
+#[test]
+fn yearly_runner_cancellation_before_or_during_verification_does_not_publish() {
+    for during in [false, true] {
+        let (_dir, store) = db();
+        published_fixture(&store, &samples()[0]["record"]);
+        let task = accept_yearly(&store, "cancel-yearly", None);
+        if !during {
+            yearly_control(&store)
+                .cancel(&task.task.task_id, 0)
+                .unwrap();
+        }
+        let verifier = FixtureYearlyVerifier {
+            calls: 0.into(),
+            cancel: during.then(|| (store.tasks.clone(), task.task.task_id.clone())),
+        };
+        let YearlyExecution::NotPublished(cancelled) = runner(&store)
+            .run_item(&task.task.task_id, &task.items[0].spec.item_id, &verifier)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            cancelled.task.status,
+            x_data_mcp::task_control::Status::Cancelled
+        );
+        assert!(cancelled.claims.is_empty());
+        assert_eq!(verifier.calls.get(), usize::from(during));
+        assert!(
+            store
+                .yearly_item_receipt(&task.task.task_id, &task.items[0].spec.item_id)
+                .unwrap()
+                .is_none()
+        );
+    }
 }

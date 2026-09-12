@@ -49,3 +49,11 @@ AC → 测试（tests/yearly_publication.rs）：
 新增真实 SQLite 测试覆盖无变化/变化、coverage/年度状态变更、head冲突回滚、结果篡改拒绝、重放与显式 v5→v6 升级；既有 v4→最新测试同步从真正 v4 schema 构造，不伪造 migration 历史。完整编译仍走 Actions。
 
 真实退出测试 yearly_real_exit_rolls_back_or_replays_committed_reuse_and_new_publication：父进程启动限定子测试，分别在 commit 前/后退出 79，覆盖新版本与无变化两条路径；重新打开 SQLite 验证结果/发布条数、task/occupancy，重放同一批准计划不重复版本。单独空跑 child 不是验证证据。
+
+## 接线切片（编码前记录）
+
+yearly worker 先核验已有 item 收据；旧 run/未确认 running 不重新执行。只接受已冻结的 yearly task，固定本次 derived_at；可信 YearlyVerifier 返回绑定 digest/years/as_of 的范围证据后才调用本地聚合与结果提交。生产仅装配 OfficialFilePipeline 的拒绝门禁，不通过重新下载 daily 或外部 year 获取证据。fixture verifier 只能由 Rust 测试注入，无 MCP provider 参数。
+
+公开 update_data/backfill_data 增加封闭 market.yearly 分支，保留已有 daily 输入。每项 entity/base_daily_version_id/years/publication 明确；publication 的 mode 为 historical_fixed_base 或 current_head，后者显式 expected_yearly_head（可空），expected daily 恒为该固定 base。historical 可指定 comparison_version_id 以核验并复用原 immutable yearly。比较版本与 digest 在受理时冻结；current 比较版本就是 expected yearly head。禁止通过字段切换来源或声明覆盖通过。新请求的未来年校验读取调用时服务器上海日期，不把进程启动日永久缓存。
+
+进度只读返回 frozen_yearly_inputs/yearly_results，并在同一快照核验 task、收据和固定版本；成功项缺收据、cursor 后证据损坏均拒绝。能力发现仍 blocked/NOT_PRODUCTION_READY，接口就绪不代表真实覆盖 verifier 已实现。

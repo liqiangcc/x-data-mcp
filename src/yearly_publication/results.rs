@@ -23,6 +23,13 @@ impl YearlyResultPlan {
     }
 }
 pub trait YearlyRepository: MarketRepository {
+    fn transition_task(
+        &self,
+        task: &str,
+        revision: u64,
+        run: &str,
+        change: crate::task_control::Change,
+    ) -> Result<crate::task_control::TaskSnapshot, Error>;
     fn commit_yearly(&self, plan: &YearlyResultPlan) -> Result<Receipt, Error>;
     fn yearly_receipt(&self, id: &str) -> Result<Option<Receipt>, Error>;
     fn yearly_item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error>;
@@ -57,6 +64,18 @@ impl<R: MarketRepository> Publisher<R> {
             return Err(Error::Base("fixed base changed after derivation".into()));
         }
         let prior = prior_id.map(|id| self.repository.fixed(id)).transpose()?;
+        let task = self.repository.task(&command.task_id)?;
+        if task.task.key.contract_version == super::tasks::CONTRACT_VERSION {
+            let comparison = prior.as_ref().map(|p|json!({"version_id":p.version().version_id,"integrity_sha256":p.raw()["integrity_sha256"]})).unwrap_or(Value::Null);
+            if !task.items.iter().any(|i| {
+                i.spec.item_id == command.item_id
+                    && i.spec.frozen_inputs["comparison"] == comparison
+            }) {
+                return Err(Error::Conflict(
+                    "comparison differs from accepted fixed version".into(),
+                ));
+            }
+        }
         let next = compat::check(&candidate.raw)?;
         crate::market_storage::validate_base(&next, Some(&base))?;
         if prior.as_ref().is_some_and(|p| {
