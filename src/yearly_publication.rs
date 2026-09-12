@@ -186,7 +186,16 @@ impl<R: MarketRepository> Publisher<R> {
                 ));
             }
         }
-        self.repository.stage(&candidate.raw)?;
+        match self.repository.candidate(&command.version_id) {
+            Ok(existing) if existing.raw() == candidate.raw() => {}
+            Ok(_) => {
+                return Err(Error::Conflict(
+                    "yearly candidate id has different content".into(),
+                ));
+            }
+            Err(Error::NotFound) => self.repository.stage(&candidate.raw)?,
+            Err(error) => return Err(error),
+        }
         let plan = self.prepare(command)?;
         if plan.record.raw() != candidate.raw()
             || plan.base_digest.as_deref() != Some(candidate.base_integrity_sha256.as_str())
