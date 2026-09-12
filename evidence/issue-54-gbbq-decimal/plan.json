@@ -1,0 +1,32 @@
+{
+  "schema": "issue54.normalization-plan.v1",
+  "fixed_before_matrix_evaluation": true,
+  "status": "DIAGNOSTIC_CANDIDATES_NOT_OFFICIAL_CONTRACTS",
+  "baseline_commit": "9adcee4ebb1c6b07a281c747c4bdc61d377b582a",
+  "input_scope": "Existing #53 four selected securities category-1 events only; reuse local official hsjday and gbbq, do not reselect securities or query BaoStock",
+  "selection": [
+    "Always include sh.600006 2025-07-17",
+    "For each of C1, C3, C4, select the first three events ordered by market/code/date/index with a nonzero finite value whose exact binary value differs from its shortest float32 roundtrip decimal",
+    "Add first two events in the same order with both C2 and C4 nonzero",
+    "Deduplicate the selected event identities; maximum 12 rows; retain an unresolved previous close rather than skip an event"
+  ],
+  "candidates": [
+    {"id": "frozen_repr", "rule": "Decimal(repr(decoded float32 promoted to Python float)); existing frozen diagnostic input"},
+    {"id": "exact_binary", "rule": "Decimal.from_float(decoded float32 promoted exactly to float64)"},
+    {"id": "shortest_roundtrip", "rule": "For n=1..9 use Python format(value, .ng); select first decimal that struct.pack(<f, float(decimal)) maps back to original bits; no field or security exception"},
+    {"id": "fixed_2dp", "rule": "exact_binary.quantize(0.01, ROUND_HALF_UP), same scale on C1/C2/C3/C4"},
+    {"id": "fixed_3dp", "rule": "exact_binary.quantize(0.001, ROUND_HALF_UP), same scale on C1/C2/C3/C4"},
+    {"id": "fixed_4dp", "rule": "exact_binary.quantize(0.0001, ROUND_HALF_UP), same scale on C1/C2/C3/C4"},
+    {"id": "fixed_6dp", "rule": "exact_binary.quantize(0.000001, ROUND_HALF_UP), same scale on C1/C2/C3/C4"}
+  ],
+  "calculation": {
+    "precision": 60,
+    "reference": "(previous_close*10-C1+C4*C2)/(10+C4+C3)",
+    "reference_rounding": "ROUND_HALF_UP to 0.01 (frozen research rule, not official semantics)",
+    "ratio": "reference_cent/previous_close",
+    "single_event_ratio_diagnostic": "ROUND_HALF_UP to 0.000001; not a replacement for a full cumulative factor chain",
+    "unknown_policy": "Unresolved previous close remains explicit; cannot support a production conclusion"
+  },
+  "acceptance": "Only independently auditable official business field/normalization/rounding evidence can establish a production contract. Matrix compatibility, shortest roundtrip or any fitted decimal alone is insufficient.",
+  "full_four_stock_revalidation": "Only if a normalization contract is established; otherwise NOT_RUN and #53 aggregate remains CROSS_MARKET_VALIDATION_HAS_MISMATCH"
+}
