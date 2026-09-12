@@ -377,3 +377,113 @@ evidence_refs、retained_protections。
 授权客户端/后台生命周期 → 真实来源与服务器。
 文档示例中的股票和任务 ID 仅说明形状，不是已采集行情、已存在任务或生产测试证据。
 本次不改变当前八工具，不新增远程端口、不迁移、不部署。
+
+## AI 可组合能力（目标契约补充，尚未实现）
+
+本节收敛后续设计，不更改“当前八工具”的 schema 快照。
+目标是让 AI 选择并组合明确业务操作，无需了解 SQL、文件布局和内部事务步骤。
+
+### 统一身份和传递类型
+
+| 类型 | 目标字段 | 组合用途 |
+|---|---|---|
+| SecurityRef | exchange:"sh"或"sz", code:六位 string | get_catalog 输出直接传采集/更新，不要求 AI 拼接 symbol |
+| ScopeRef | security:SecurityRef, period:"day"或"year" | 进度未完成项直接传 retry |
+| VersionRef | security:SecurityRef, period, adjustment:"qfq", version_id | 版本列表直接定位查询/核实目标 |
+| TaskRef | task_id | 受理输出直接传进度/取消工具 |
+| RequestRef | request_id | 超时或响应丢失后查询持久结果 |
+
+这些对象的嵌套位置须由各目标 inputSchema 明确，不能要求 AI 从描述推断字段名。
+scope、version 与 request 引用是定位信息，不是授权凭证。
+未来写工具使用 securities:SecurityRef[]；现有 symbols:string[] 和 selected_scopes
+保持其当前契约，切换需显式版本化及兼容处理，不能静默改变旧 request_id 的含义。
+查询现有 exchange/code 可由 SecurityRef 无损展开；若后续改成嵌套对象，同样版本化。
+当前 Bar/AnnualRecord 不强行合并：周期决定输出类型，客户端不猜测结构。
+
+### 统一结果及操作建议
+
+异步受理结果保留 WriteAcceptance，并增加明确的 operation/outcome。
+outcome 区分 accepted、reused、request_terminal；任务成功只在任务结果中表达。
+目标错误上下文包含：
+
+- category：validation、conflict、source、unavailable、verification_required、
+  storage、internal 之一；具体 code 继续标识细分原因。
+- outcome_certainty：not_accepted、committed、unknown，避免把网络失败当业务失败。
+- target：适用的请求/任务/版本引用。
+- next_actions：当前证据下适用的操作建议，包含 tool、可安全预填的 arguments、
+  reason、requires_explicit_request。无可确认动作时为空，并列出缺少的证据。
+- retry_eligibility：allowed、not_allowed 或 unknown，附原因；不等于自动重试授权。
+
+字段按错误场景提供，不能为了统一伪造未知引用或作出不可靠的提交判断。
+next_actions 仅建议，不自动执行、不包含凭据、不决定权限；服务再次受理时
+重新校验状态、范围与证据，快照中的 allowed 可能已经过期。
+响应丢失时客户端没有错误体，因此提交前仍需自行保存 request_id。
+错误字符串保留面向人解释，AI 不应从 message 提取标识或猜测下一步。
+
+### 组合 A：目录选择 → 采集 → 进度 → 显式重试
+
+这是目标调用流程，包含尚未实现工具，不是当前可运行脚本。
+
+1. get_catalog 返回固定 catalog_version_id、SecurityRef 成员及分类/覆盖限制。
+2. AI 显式选择成员，将 securities 和 periods 传给新版 start_collection，
+   使用保存好的 request_id；受理返回冻结范围与 task_id。
+   如果意图是“按目录快照采集”，请求还应绑定 catalog_version_id；
+   显式成员请求与动态目录选择器不能因为结果相同而视为同一幂等操作。
+3. 独立 worker 执行；AI 调 get_task_progress，固定一次 snapshot_id 读取所有页。
+   普通交互不调用 run_worker_once 驱动后台。
+4. 从 unfinished_items 选择 retry_eligibility=allowed 的 ScopeRef，
+   在用户已授权的重试范围内调用新版 retry_task，传新 request_id 和原 task_id。
+5. 重试前服务重新检查当前完成事实；已完成、被占用或不可重试项按规则拒绝，
+   不仅相信旧快照。原任务保留原结果，新任务通过 retry_of 关联。
+
+目录分页未读完时不得声称选中了全目录；任务执行 100% 不意味着行情覆盖完整。
+来源限制、覆盖未知和普通执行失败分开，不把未完成清单作为自动重试队列。
+
+### 组合 B：版本列表 → 固定查询 → 可复核研究
+
+当前 list_market_data_versions 与 get_market_data 已支持核心链路：
+
+1. 指定 exchange/code/period 查询版本列表，选择一个明确 version_id。
+2. 将相同证券、周期和所选 version_id 传 get_market_data，另给闭日期区间。
+3. 后续页重复原条件与 page_size，只替换 cursor；缓存失效时重新发起固定版本查询，
+   不切到默认最新版本后接在旧页后面。
+4. 记录实际 version_id、来源、单位、查询时点；跨证券再记录目录版本与每证券版本清单。
+
+版本列表读完不表示来源历史完整。year 查询保留 base_daily_version_id 与计算 as_of，
+不能拿当前日期改写旧年线完成性。固定版本损坏则停止该次组合并返回不可用。
+
+### 组合 C：受理响应丢失 → 请求查询
+
+1. AI 在调用前保存 request_id 与原参数；RPC id 不作持久恢复身份。
+2. 响应丢失后用 get_request 查询该标识，不立即生成新标识重发。
+3. 若已绑定任务，继续读取该 task_id；若为可靠请求级终态，返回该历史结论。
+4. 若可靠判定未绑定，可用同一 request_id 和原参数重发，由幂等受理解决竞争。
+5. 若存储不可读/受理结果待核实，保留 unknown；需要时显式发起
+   verify_request_acceptance，不能推断未受理或释放占用。
+
+第 3 步请求级终态与第 5 步核实仍属目标能力。当前 get_request 仅覆盖任务绑定。
+
+### 组合 D：版本不可用 → 副本恢复 → 核实 → 原版本查询
+
+显式版本查询失败后先解释原因；只有存在可识别可靠副本且恢复操作已获授权时，
+才用 restore_market_data_version 创建独立任务。AI 不自行生成 backup_reference，
+副本登记/发现由受保护的运维流程提供，缺少时明确阻塞。
+结果不明通过 verify_restoration_result 核实，不重复恢复。
+恢复证据确认一致后，仍以原 version_id 查询；副本不一致时原版本保持不可用。
+若要重采，另行显式创建任务并生成新版本，不能冒充恢复成功。
+
+### 组合验收
+
+| 场景 | 预期 |
+|---|---|
+| 目录输出传新版采集 | SecurityRef 无字符串拼接，未知身份拒绝 |
+| 未完成页传新版重试 | ScopeRef 无猜测转换，服务拒绝过期资格 |
+| 列表传历史查询 | 版本、证券、周期一致；不匹配明确拒绝 |
+| 调用成功但响应丢失 | 原 request_id 找到唯一事实，不重复任务 |
+| 组合在任一步中断 | 已完成步骤保持事实，下次从持久引用恢复读取 |
+| next_actions 已过期 | 服务再次校验并拒绝；不越权、不隐式扩大范围 |
+| 非技术 AI 执行正常流程 | 无需调用 SQL、文件写入、head 切换或 worker 步进 |
+| 核实/恢复前置条件不足 | 明确阻塞，不补造证据或自动执行替代操作 |
+
+实现任务应以跨工具契约测试证明组合成立，同时分别验证单工具原子边界。
+不能只测试每个工具单独返回 JSON 就宣称可组合。
