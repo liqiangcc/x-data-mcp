@@ -16,3 +16,7 @@ rusqlite = { version = "0.40.2", features = ["bundled"], default-features = fals
 
 # Stage C: derive discoverable schemas from the same typed wire contracts.
 schemars = { version = "1", features = ["chrono04"] }
+
+[dev-dependencies]
+# Validate generated wire schemas against real stdio results; no HTTP schema resolution.
+jsonschema = { version = "0.33", default-features = false }
