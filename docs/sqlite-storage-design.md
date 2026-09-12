@@ -1,0 +1,311 @@
+# SQLite 行情存储与分析查询设计
+
+## 状态与决策来源
+
+设计任务：[Issue #69](https://github.com/liqiangcc/x-data-mcp/issues/69)。编写日期：2026-09-12。
+核对代码基线：`84e5a2bdbf04ba37793f969d311627ab97bb4d13`。
+本文为待实现的设计基线，不是数据库迁移、真实来源或部署的验收记录。
+
+用户已确认：首期使用 SQLite；结构化行情应便于后续分析和查询。
+用户已授权本次编写并提交设计。下文表划分、事务和实现顺序属于本次设计决定，
+不能反推所有具体字段、性能指标或迁移范围都已由用户逐项确认。
+
+当前代码仍采用 JSON 文件，已有[发布单点提交](publish-storage.md)、
+[任务受理单点提交](task-storage.md)和 #67 历史版本完整性读取。
+[#68](https://github.com/liqiangcc/x-data-mcp/issues/68) 正在承接 MCP 查询。
+SQLite 实现替换持久化机制，须保留这些用例的可观察语义。
+
+本文是首期存储目标设计的入口；既有文档保留其对应提交的实现证据。
+[官方文件架构](production-source.md)继续负责来源边界，部分 stage-1 状态为历史记录，
+实际已实现能力以 README 与关联提交为准。本文不解除任何来源门禁。
+
+## 目标与范围
+
+主要使用路径：
+
+1. 采集和解析结果经过独立质量检查，保存为可追溯版本。
+2. 用户或 AI 按证券、日期、行业、版本查询行情。
+3. 分析程序取得固定版本数据，以精确十进制计算或显式近似方式开展统计。
+4. 更新产生新版本，旧查询和研究结果仍能解释其输入。
+
+首期采用一个本地 SQLite 数据库保存结构化数据，原始下载文件独立保留。
+不要求先引入 PostgreSQL、Parquet 或对象存储服务。不按股票创建数据库或动态表。
+SQLite 文件位于存储服务所在主机的持久磁盘；跨主机计算通过受保护的服务接口
+或一致性备份副本读取，不把活动数据库放到网络共享盘实现存算分离。
+SQLite 的选择本身不构成远程数据库服务。
+
+本次仅交付文档。不修改 d2 工作区、不迁移旧仓库数据、不实现或部署新服务。
+来源与首期市场范围沿用 #1/#55/#6：当前沪深 A 股、TDX 研究行业二级、
+官方文件本地 QFQ daily，以及从固定 daily version 派生的 yearly。
+
+## 职责和依赖
+
+| 边界 | 职责 | 不承担的职责 |
+|---|---|---|
+| 领域计算 | 精确数值、质量规则、QFQ、自然年聚合 | SQL、下载、MCP 参数 |
+| 应用用例 | 固定输入、编排采集/校验/发布、查询与任务状态转换 | 具体数据库连接和文件布局 |
+| 存储能力契约 | 原子受理、原子发布、固定版本读取、来源查询 | 业务规则的第二套实现 |
+| SQLite Adapter | 表映射、事务、约束、索引、完整性核验 | 放宽门禁、猜测字段单位 |
+| 原始文件 Adapter | 临时下载、校验、不可变文件落盘、哈希读取 | 决定数据可发布 |
+| MCP / 分析读取入口 | 权限、参数校验、结果和限制表达 | 隐式采集、任意 SQL 写入 |
+| 装配与运行 | 连接配置、schema 升级、worker 生命周期 | 隐藏恢复、自动解除待核实 |
+
+复用现有领域类型和用例契约；必要时增加具体的事务能力方法，不建立通用仓储框架。
+应用层不得依赖 rusqlite 连接或 Transaction 类型。Rust SQLite 绑定在实现任务中
+核对维护状态与 bundled 构建方式、锁定版本，不在本文凭空指定依赖版本。
+原始下载和计算在数据库写事务外执行。
+
+## 数据布局与逻辑模型
+
+建议在现有 `X_DATA_MCP_STORE` 目录下使用 `market-data.sqlite3` 与 `raw/`。
+路径为实现设计，不表示当前二进制已经支持。迁移前后后端由装配明确选择。
+
+以下是逻辑 schema；最终 DDL、CHECK、外键和迁移脚本由实现 PR 提交。
+所有 ID 使用稳定 TEXT；证券代码保留六位字符串，不能转换为整数。
+日期用经过领域校验的 ISO `YYYY-MM-DD`，交易日和自然年按 Asia/Shanghai。
+获取/发布时间用统一 UTC 时间戳，来源时间允许 NULL，三者不互相替代。
+
+| 表 | 关键字段 / 键 | 含义与约束 |
+|---|---|---|
+| schema_migrations | version PK, checksum, applied_at | 有序迁移及脚本身份；未知新 schema 拒绝启动写入 |
+| securities | security_id PK, exchange, code; UNIQUE(exchange,code) | 稳定证券身份；名称和当前行业来自目录版本 |
+| catalog_versions | catalog_version_id PK, manifest_id, digest | 不可变目录快照、来源与校验状态 |
+| catalog_members | (catalog_version_id,security_id) PK, name, industry_code, classification_status | 目录成员与分类；缺失/冲突显式表达，不伪造历史有效期 |
+| raw_files | file_id PK, sha256 UNIQUE, relative_path, byte_size | 原始字节的内容身份；不在大 BLOB 中重复保存原文件 |
+| raw_acquisitions | acquisition_id PK, file_id FK, source_url, acquired_at, source_updated_at?, etag? | 相同内容可有多次获取记录 |
+| raw_members | (archive_file_id,member_path) PK, member_file_id | 压缩包与成员关系，分别保留哈希 |
+| source_manifests | manifest_id PK, contract_version, parser_version, evidence_refs | 不可变来源/规则清单；仅小型扩展证据可用 JSON |
+| manifest_inputs | (manifest_id,input_role,input_id) PK | 固定 catalog、day、gbbq 与一致性证据的身份 |
+| event_versions | event_version_id PK, manifest_id, status, digest | 公司行动事件快照；未确认语义的解析结果不可发布 |
+| corporate_actions | (event_version_id,event_id) PK, security_id, event_date, event_type, raw_member_id, record_offset | 事件身份与原始位置；业务十进制字段须 #54 确认后定稿 |
+| data_versions | version_id PK, security_id, period, adjustment, state, published_at?, manifest_id, content_digest, digest_format, row_count, first_date, last_date, coverage_status | 每证券/周期/口径的不可变完整逻辑快照 |
+| version_inputs | (version_id,input_role,input_version_id) PK, algorithm_version, basis_date? | raw daily、事件版本、目录与复权基准；用具体外键或约束验证输入类型 |
+| daily_bars | (version_id,trade_date) PK, open, high, low, close, volume?, amount? | 每行一根日线，关联唯一版本；raw 与 QFQ 由版本口径区分 |
+| yearly_bars | (version_id,year) PK, open, high, low, close, volume?, amount?, first_trade_date, last_trade_date, is_finished | 每年一行；逐年保存实际参与日期与是否结束 |
+| yearly_lineage | version_id PK/FK, base_daily_version_id FK, algorithm_version, as_of | 每个年线版本固定同一个已发布 QFQ daily 输入 |
+| publication_batches | batch_id PK, task_id?, candidate_version_id, outcome, evidence_refs | 保存候选/发布结果，不能与有效版本事实矛盾 |
+| effective_heads | (security_id,period,adjustment) PK, version_id FK | 当前版本指针；只指向已发布且身份匹配的版本 |
+| requests | request_id PK, canonical_payload, contract_version, task_id?, request_outcome | 保留幂等规范化载荷与无需任务的请求级终态 |
+| tasks | task_id PK, status, result, created_at, updated_at | 任务状态；合法转换由用例决定 |
+| task_scopes | (task_id,scope_key) PK, normalized_scope | 首次受理固化的完整范围 |
+| scope_occupancy | scope_key PK, task_id FK | 写范围占用；范围相交按现有业务规则检查 |
+| task_publications | (task_id,version_id) PK | 将已提交输出与任务结果关联，支持结果核实 |
+
+`scope_key` 必须来自业务定义的冲突粒度；如果范围含日期区间，不能仅比较 key 相等
+来判断是否重叠。须在同一受理写事务内完成相交检查，批量范围任一冲突整体拒绝。
+表格不穷举 #3/#4/#5 的核实记录字段；实现时逐项映射既有状态和持久证据，不能因简表遗漏而删除能力。
+
+版本保存完整逻辑快照，首期允许按版本复制完整行情行，以简化历史读取和修订。
+不提前实现行级增量链或共享分片。存储增长随证券数、交易日数和保留版本数增长；
+保留期限未确认，首期不自动删除已发布版本。后续实测空间后再决定压缩、共享或归档。
+
+行情主键防止同版本重复日期/年度。外键验证版本存在，Adapter 另检查周期、口径、
+证券、单位/币种一致。价格单位、币种、成交量/额单位与契约版本作为版本元数据保存，
+不根据列名默认为元、股或手。原始整数和浮点位模式仍可从固定原始文件及位置恢复；
+未经确认的 raw bits 不冒充标准价格。
+
+## 精确小数与分析能力
+
+首期精确数值统一使用规范化十进制 TEXT，经 Rust 精确十进制类型校验后写入：
+不使用科学计数法，去除无意义尾零，零统一为 `0`，不擅自固定两位或六位小数。
+输入超出当前领域数值范围时拒绝并报告，不能截断。源格式有特殊值时由解析契约拒绝或
+保留原始证据，不能把 NaN/Infinity 放进标准行情。未知值使用 SQL NULL。
+
+SQLite REAL 为近似浮点；仅声明 DECIMAL/NUMERIC 不能保证精确十进制语义。
+参见 [SQLite 数值说明](https://www.sqlite.org/floatingpoint.html)。
+
+TEXT 的普通排序是字典序，内建 SUM/AVG 或 CAST AS REAL 也不能作为精确业务计算。
+因此首期查询分为：
+
+- 日期、身份、版本、行业过滤与关联：直接用索引 SQL。
+- 精确价格比较、求和、OHLC 聚合：取出规范化文本，由 Rust Decimal 或 Python Decimal 计算。
+- 探索性近似统计：分析者显式 CAST AS REAL，结果标注近似，不回写标准行情或发布校验。
+
+若后来确需数据库内精确数值范围过滤，再以实际分析用例增加精确函数/排序规则，
+或确定可验证的定点整数编码；不是首期 schema 的隐含可用能力。
+
+示例：应用先确认 `:version_id` 为该证券已发布且可核验的日线版本，再执行：
+
+```sql
+SELECT trade_date, open, high, low, close, volume, amount
+FROM daily_bars
+WHERE version_id = :version_id
+  AND trade_date >= :start_date
+  AND trade_date <= :end_date
+  AND (:after_date IS NULL OR trade_date > :after_date)
+ORDER BY trade_date
+LIMIT :page_size;
+```
+
+示例：以明确目录快照查询某行业当前选定版本的数据（示例中的当前指针应在同一读快照解析）：
+
+```sql
+SELECT s.exchange, s.code, b.trade_date, b.close, h.version_id
+FROM catalog_members AS c
+JOIN securities AS s ON s.security_id = c.security_id
+JOIN effective_heads AS h ON h.security_id = s.security_id
+JOIN data_versions AS v ON v.version_id = h.version_id
+JOIN daily_bars AS b ON b.version_id = v.version_id
+WHERE c.catalog_version_id = :catalog_version_id
+  AND c.industry_code = :industry_code
+  AND h.period = 'day' AND h.adjustment = 'qfq'
+  AND v.state = 'published'
+  AND b.trade_date BETWEEN :start_date AND :end_date;
+```
+
+这是“给定目录快照的行业成员”分析，不是行情日期当时的行业归属，
+也不保证当时可获得这些资料。跨股票研究应记录每只股票的 version_id 清单、
+目录版本及查询时点；各股票最新版本并不自动构成全市场同步快照。
+直接 SQL 示例不替代服务完整性核验；研究入口应输出所用版本清单与核验结果。
+
+最小索引：行情主键；`data_versions(security_id,period,adjustment,published_at,version_id)`；
+`catalog_members(catalog_version_id,industry_code,security_id)`；`tasks(status,created_at,task_id)`。
+跨全市场按日期扫描是否增加日期优先索引，由 EXPLAIN QUERY PLAN 和实测决定。
+
+## 发布事务与完整性
+
+版本阶段为 staging → validated → published；失败候选保留诊断或按明确清理规则处置。
+这是目标存储状态，不是重命名现有公共任务状态。
+
+1. 下载到临时文件，校验字节数/哈希，完成文件同步后原子移到内容寻址位置；
+   在 Linux 实现中同步父目录。数据库只引用已经落盘的不可变文件。
+2. 解析、计算并分批写 staging 版本的行情行。staging 对普通查询不可见。
+3. 固定输入并完成数值、范围、来源一致性和 digest 校验；validated 后禁止修改行情。
+4. 在一个短写事务中重新验证发布资格、任务/取消状态、占用、预期旧 head，
+   同时提交 batch 结果、version 发布状态、effective head、task_publications。
+   若该发布恰为任务终结条件，终态和占用释放在同一事务完成；否则仅更新该项结果。
+5. COMMIT 是数据库内唯一发布可见点。版本与 head 更新失败整体回滚，旧有效版本保留。
+
+批量多证券任务允许按既有规则部分完成；不将整个市场改成一个大事务。
+提交后不可改已发布行情、lineage 或原始输入，修订必须创建新版本。
+使用条件更新检查旧 head，避免过期候选覆盖较新版本；冲突明确报告，不最后写入者胜出。
+
+数据库与原始文件不能组成一个 SQLite 事务。“文件先落盘，数据库后引用”意味着
+崩溃可能产生未引用文件；扫描可报告孤儿，但本次不授权自动删除。
+若引用文件缺失或损坏，依赖核验明确失败，不静默重下载替换或改用其他版本。
+
+content_digest 使用带版本号的规范序列化，包含有序行情、单位/币种、证券/口径和 lineage，
+排除可变诊断字段。沿用 #67 的摘要契约；变更算法须显式格式版本，不能把旧摘要重新标成新格式。
+SQLite integrity_check 只能检查数据库结构，不能证明行情或来源正确。
+
+首期 verified read 按固定版本重算摘要并检查行数与元数据，不仅相信 published 标志。
+分页核验可能需要扫描整个版本，这与仅返回一页的 SQL 成本不同，必须单独测量。
+不以无效的永久 verified 标记优化；若未来缓存，须定义能够检测后续变更/损坏的失效依据。
+显式版本损坏、摘要缺失或类型不匹配都拒绝；默认读取也不自动跳到更旧版本冒充最新。
+
+## 任务事务和故障恢复
+
+受理在一个 `BEGIN IMMEDIATE` 事务内进行：读取 request_id、比较规范化参数及契约版本、
+固化范围、检查全部冲突，再写 request/task/scopes/occupancy。
+同请求同参数返回已有结果，异参按原规则拒绝；缺少绑定或占用证据时返回待核实，
+不能重造任务。SQL UNIQUE 是最后一道竞争防线，不替代幂等业务判断。
+
+网络下载、QFQ 计算和等待不可持有写事务。worker 领取任务和状态转换使用条件更新，
+首期保留单写 worker 的运行约束。取消、重试、终态与释放条件复用现有用例；
+重启对未结束执行遵循待核实规则，不自动重新执行或释放范围。
+数据库自身事务能力不证明多 worker 执行、外部写入或恢复协议已经正确。
+
+| 故障点 | 可观察结果 / 恢复依据 |
+|---|---|
+| 受理事务提交前退出 | 无半条绑定；重发按实际持久状态判断 |
+| 提交成功但响应丢失 | request_id 查询返回持久结果，不新增任务 |
+| 计算或 staging 写入失败 | 旧 published 仍可读；新候选不可见 |
+| 发布事务失败/磁盘满 | 回滚数据库变更；错误不冒充无数据 |
+| 发布成功、任务响应丢失 | 用 task_publications 和版本证据核实，不重复发布 |
+| SQLite busy | 有界等待后明确冲突/暂不可用；不无界重试、不假定提交失败 |
+| 数据库不可读、摘要不匹配 | 明确存储/完整性错误，无旧 JSON 或空库 fallback |
+| 重启留下 Running 或不完整占用 | 保守保留冲突保护，进入既定核实路径 |
+| 年线生成期间 daily head 改变 | 发布时检查当前契约，拒绝过期候选；历史年线仍保留其原始 base 引用 |
+
+## 查询契约与分析入口
+
+保持 #68 的显式版本、日期区间、稳定排序、page_size 和实例内 cursor 规则。
+首个请求解析一次默认版本并固定查询条件、查询时点；续页使用 keyset，
+不重新读取 latest、不用 OFFSET 漂移。year 按自然年选择，不能用月份裁剪年度 OHLC。
+
+版本列表在首个请求固定条目清单，不能仅用发布时间上界假定能恢复同一列表。
+cursor 仅在当前实例有效，重启/淘汰/条件改变须明确重新查询。
+不把每次用户翻页之间的等待保持为一个长期数据库读事务。
+返回分页结束不证明历史完整；实际末交易日、发布时间、覆盖状态分开表达。
+
+SQLite Adapter 必须支持范围读取，不能继续把整个 JSON 文件搬进内存后切片并宣称索引生效。
+完整性核验的全版本扫描另计，保留上述诚实成本边界。
+
+本人本机分析可用只读连接；重型或长时间研究优先使用一致性备份。
+MCP 暴露类型化查询，不因采用 SQLite 就新增任意 SQL 执行工具。
+查询不隐式初始化数据库、升级 schema、采集或修复数据。
+只读验收以无业务表变更为准；WAL/SHM 的连接管理不是业务数据写入，不能宣称所有文件字节不变。
+
+## 连接、备份与运维
+
+设计采用本地文件、WAL、`foreign_keys=ON`（每个连接）、`synchronous=FULL`，
+验证实际设置返回值；busy 超时有界且配置可见，具体默认值由实现说明。
+保持一个业务写入者、多个只读连接。WAL 仍只有一个同时写入者，长读事务会影响 checkpoint；
+监测 WAL 大小、busy、磁盘余量和备份结果，不预设无依据吞吐或延迟目标。
+参见 [SQLite WAL](https://www.sqlite.org/wal.html)。实际耐久性还需目标文件系统故障测试。
+
+备份使用 [SQLite Online Backup API](https://www.sqlite.org/backup.html) 生成一致性副本，
+不能仅复制活动 .sqlite3 而遗漏 WAL。
+从备份数据库枚举 raw_files 引用，复制对应不可变原始文件并验证哈希，
+一起形成备份清单（schema、应用版本、数据库摘要、原始文件列表）。
+备份与清理必须互斥或固定引用保护；首期无自动删除策略。
+
+恢复到独立目录：校验备份清单、数据库结构/外键、行情摘要、文件哈希和版本引用，
+以只读方式核对关键查询后再显式切换服务配置。失败保留原库；
+不把恢复副本当作最新生产事实。备份周期、保留期、RPO/RTO 尚未确认，不写成已经保障。
+
+## JSON 到 SQLite 的迁移
+
+迁移工具的开发与实际导入分开验收；本设计提交不执行导入，也不授权迁移旧 x 仓库数据。
+
+1. 核对现有后端与版本，暂停写入并制作一致性备份；新建独立 SQLite 候选库。
+2. dry-run 列出任务/版本/原始引用的数量、重复、损坏和缺失；不可解释的记录隔离并报告。
+3. 按稳定来源身份导入，保存迁移批次与源哈希，重复运行不得重复建版本或消费 request_id。
+4. 旧数据缺摘要、来源或 lineage 时保留“未验证”，不能导入后自动升级为生产发布。
+   待核实任务与保守占用必须保留，不能从缺失执行记录推断 Pending。
+5. 比较规范化内容、ID、任务状态、未知值、版本关系以及固定版本查询结果；
+   旧 verified API 不接受的记录，新 verified API 也不得放行。
+6. 验证通过后显式切换后端配置，旧文件保留只读。选择 SQLite 后缺库/坏库即失败，
+   不自动建空库或回退 JSON。
+7. 若切换后尚无新写入，可停止服务恢复原配置；若已有新写入，须先保全新增事实并制定
+   数据对账/恢复步骤，不能直接切回旧 JSON 丢失新请求和行情。
+
+Schema 升级与业务查询分离，升级失败回滚；禁止普通查询自动迁移。
+首期不做长期双写，避免两个后端互相矛盾。
+
+## 实施顺序与验收
+
+本设计可在来源门禁未通过时实现并用 fixture 验证；这不允许发布真实 QFQ。
+现有 #68 可继续交付查询契约，后续 SQLite Adapter 运行相同契约测试。
+实施任务应引用本设计与原业务 AC，不以表定义替代业务验收。
+
+| 顺序 | 独立可验收结果 | 验证重点 |
+|---|---|---|
+| 1 | SQLite schema、迁移入口与原子任务受理 | 同 request 并发、异参拒绝、范围相交、崩溃后无半绑定、错误不回退 |
+| 2 | 行情逐行存储及原子发布 | 半批不可见、失败保留旧版本、head 冲突、摘要/lineage、终态关联 |
+| 3 | 固定版本 MCP 读取与分析示例 | 发布期间分页稳定、版本损坏拒绝、year 语义、行业快照、NULL 与精确小数往返 |
+| 4 | JSON dry-run/导入和备份恢复工具 | 重复导入、缺摘要不升级、待核实占用、WAL 备份、引用文件缺失 |
+| 5 | 真实来源接线和服务器验收 | #54/#6 来源证据、独立快照一致性、少量证券后全范围验证 |
+
+测试至少包含：价格 `0.1` 与不同小数位往返、TEXT 字典序误用的防护、
+大值超范围拒绝、未知量额、进程在受理/发布提交前后退出、SQLite busy/磁盘满、
+坏库、缺失原文件、数据内容变更、基础日线修订与年线血缘。
+使用真实 SQLite 临时库验证事务，Fake 仅用于应用编排。
+执行 README 已有 fmt/clippy/test/diff 入口；文档提交只做文档与示例核对，
+不得把这些未来测试写成已通过。
+
+性能报告记录提交、SQLite 版本、主机/磁盘、证券数/交易日/版本数、库和 WAL 大小、
+冷/热读取、并发、查询计划、写入耗时与完整性核验耗时。
+先测量，再讨论目标；SQLite 选型不等待虚构规模证明，也不意味着容量已验收。
+
+## 未决项与依赖
+
+- #54：GBBQ 数值、单位、舍入、事件字段与 QFQ 基准，阻塞对应标准字段和真实计算发布。
+- #6/#46：官方目录及研究行业二级映射，阻塞真实目录可用性。
+- 官方文件获取/使用边界与独立快照一致性：继续按 production-source.md 验证。
+- 历史时点可见性、版本保留期限、备份周期及性能阈值：未确认，不推断无前视回测能力。
+- 受保护远程 MCP、后台 worker 与服务重启恢复的具体装配：由运行设计承接，
+  SQLite 本身不提供远程认证或后台执行。
+
+截至本设计提交：SQLite Adapter、迁移、故障测试、真实性能、部署均 NOT_RUN；
+现有来源状态保持 NOT_PRODUCTION_READY。
