@@ -37,3 +37,13 @@ AC → 测试（tests/yearly_publication.rs）：
 不新增 DDL。prepare_derived_yearly 对 update/backfill 任务要求匹配此内部契约及精确冻结输入（包括 intent）；无法扩大年度/更换 base/改变 head 策略。旧首次采集 fixture 契约仅继续验证原发布基础设施，不被当作新受理证据。
 
 测试计划：真实 SQLite 同语义乱序/重复幂等、异参 request 冲突、不同年度占用冲突；缺失/未来年度无绑定；两连接同时受理一个 request；取消/重试保持冻结事实；有效任务可发布，扩大年度或改变意图拒绝。
+
+## 无变化执行结果（编码前记录）
+
+#4 AC-84—89 要求同一口径/数值/截至日期/覆盖只记录执行，不能重复行情版本。新 schema v6 仅增加 yearly_execution_results，关联固定 daily、结果 yearly、task/item、no_change、完整候选审计与收据摘要。已有 publication_batches/task_publications 的“一个 immutable version 一次发布”约束不改。
+
+应用层精确比较已有 yearly 与候选：固定 base/lineage、bars、单位/口径、覆盖说明、逐年参与日和未结束标记；仅 derived_at/as_of 日期改变且所有这些事实一致时复用。没有新版逐年证据的旧记录不能推断等价。base 变化、未结束标记或 coverage 变化均不是无变化。当前 head 意图的 prior 必须等于 expected_yearly_head；historical 显式 prior 可复用，但不推进 head。
+
+复用路径不 stage 新版本，只把收据/审计与任务完成、占用释放同事务提交。变化路径复用已有条件发布并在同事务写结果。base/prior/result 完整性、head/revision/occupancy 仍须满足；提交后丢失响应按已持久化的同结果 ID 核验，不重复发布。
+
+新增真实 SQLite 测试覆盖无变化/变化、coverage/年度状态变更、head冲突回滚、结果篡改拒绝、重放与显式 v5→v6 升级；既有 v4→最新测试同步从真正 v4 schema 构造，不伪造 migration 历史。完整编译仍走 Actions。

@@ -631,3 +631,183 @@ fn yearly_publication_is_bound_to_accepted_years_base_and_intent() {
         1
     );
 }
+
+use x_data_mcp::yearly_publication::results::{YearlyRepository, YearlyResultPlan};
+fn result_plan(
+    store: &SqliteMarket,
+    id: &str,
+    prior: Option<&str>,
+    coverage: &str,
+) -> YearlyResultPlan {
+    let intent = PublishIntent::CurrentHead {
+        expected_daily_head: "legacy-daily".into(),
+        expected_yearly_head: prior.map(str::to_owned),
+    };
+    let mut payload = yearly_payload(json!([2025]));
+    payload["items"][0]["intent"] = json!(intent);
+    let ctl = yearly_control(store);
+    let task = task_of(ctl.accept(id, yearly_key(store), payload).unwrap());
+    let task = store
+        .tasks
+        .transition(
+            &task.task.task_id,
+            task.task.state_revision,
+            "run",
+            Change::Claim,
+        )
+        .unwrap();
+    let task = store
+        .tasks
+        .transition(
+            &task.task.task_id,
+            task.task.state_revision,
+            "run",
+            Change::StartItem(task.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let (mut request, mut evidence) = inputs(store, id);
+    if id.starts_with("reuse") {
+        request.derived_at += chrono::Duration::days(1);
+        evidence.as_of = evidence.as_of.succ_opt().unwrap();
+    }
+    evidence.coverage.reason = coverage.into();
+    let publisher = Publisher {
+        repository: store.clone(),
+    };
+    let candidate = publisher.derive_yearly(&request, &evidence).unwrap();
+    publisher
+        .prepare_yearly_result(
+            Publication {
+                publication_id: format!("result-{id}"),
+                version_id: id.into(),
+                task_id: task.task.task_id,
+                item_id: task.items[0].spec.item_id.clone(),
+                run_id: "run".into(),
+                expected_revision: task.task.state_revision,
+                intent,
+            },
+            &candidate,
+            prior,
+        )
+        .unwrap()
+}
+#[test]
+fn yearly_no_change_reuses_version_atomically_but_coverage_changes_publish() {
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let first = result_plan(&store, "first-yearly", None, "fixture range");
+    assert!(!first.is_no_change());
+    store.commit_yearly(&first).unwrap();
+    let original = store.fixed("first-yearly").unwrap().raw().clone();
+    let reuse = result_plan(
+        &store,
+        "reuse-yearly",
+        Some("first-yearly"),
+        "fixture range",
+    );
+    assert!(reuse.is_no_change());
+    assert!(store.candidate("reuse-yearly").is_err());
+    let receipt = store.commit_yearly(&reuse).unwrap();
+    assert_eq!(receipt.version_id, "first-yearly");
+    assert_eq!(store.commit_yearly(&reuse).unwrap(), receipt);
+    assert_eq!(
+        store.yearly_receipt("result-reuse-yearly").unwrap(),
+        Some(receipt.clone())
+    );
+    assert_eq!(
+        store
+            .yearly_item_receipt(&reuse.command().task_id, &reuse.command().item_id)
+            .unwrap(),
+        Some(receipt)
+    );
+    assert!(
+        store
+            .tasks
+            .read_task(&reuse.command().task_id)
+            .unwrap()
+            .unwrap()
+            .claims
+            .is_empty()
+    );
+    let changed = result_plan(
+        &store,
+        "new-coverage",
+        Some("first-yearly"),
+        "fixture newly verified coverage",
+    );
+    assert!(!changed.is_no_change());
+    store.commit_yearly(&changed).unwrap();
+    assert_eq!(store.fixed("first-yearly").unwrap().raw(), &original);
+    assert_eq!(
+        store
+            .versions(&Scope {
+                symbol: "sh.600006".into(),
+                period: Period::Year
+            })
+            .unwrap()
+            .len(),
+        2
+    );
+    let count: i64 = Connection::open(store.tasks.path())
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM task_publications WHERE task_id=?1",
+            [&reuse.command().task_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    Connection::open(store.tasks.path()).unwrap().execute_batch("UPDATE yearly_execution_results SET audit_json='{}' WHERE result_id='result-reuse-yearly'").unwrap();
+    assert!(matches!(
+        store.yearly_receipt("result-reuse-yearly"),
+        Err(Error::Integrity(_))
+    ));
+}
+#[test]
+fn yearly_reuse_head_conflict_preserves_task_and_old_result() {
+    let (_dir, store) = db();
+    let original = samples()[0]["record"].clone();
+    published_fixture(&store, &original);
+    let first = result_plan(&store, "first-yearly", None, "fixture");
+    store.commit_yearly(&first).unwrap();
+    let reuse = result_plan(&store, "reuse", Some("first-yearly"), "fixture");
+    let daily = revised(&original, "advanced-daily");
+    let plan = prepare(
+        &store,
+        &daily,
+        PublishIntent::Daily {
+            expected_head: Some("legacy-daily".into()),
+        },
+    );
+    store.commit(&plan).unwrap();
+    assert!(matches!(
+        store.commit_yearly(&reuse),
+        Err(Error::Conflict(_))
+    ));
+    assert!(store.yearly_receipt("result-reuse").unwrap().is_none());
+    let task = store
+        .tasks
+        .read_task(&reuse.command().task_id)
+        .unwrap()
+        .unwrap();
+    assert!(!task.claims.is_empty());
+    assert_eq!(task.task.state_revision, reuse.command().expected_revision);
+    assert!(store.fixed("first-yearly").is_ok());
+}
+#[test]
+fn yearly_result_schema_requires_explicit_upgrade_and_read_does_not_upgrade() {
+    let (_dir, store) = db();
+    let c = Connection::open(store.tasks.path()).unwrap();
+    c.execute_batch("DROP TABLE yearly_execution_results; DELETE FROM schema_migrations WHERE version=6; PRAGMA user_version=5;").unwrap();
+    assert!(store.yearly_receipt("absent").is_err());
+    let version: i64 = c
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 5);
+    store.tasks.upgrade().unwrap();
+    assert!(store.yearly_receipt("absent").unwrap().is_none());
+    let version: i64 = c
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 6);
+}

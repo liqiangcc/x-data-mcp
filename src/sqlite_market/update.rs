@@ -17,7 +17,7 @@ impl RangeRepository for SqliteMarket {
             // Do not attach a range result retroactively to another publication.
             let exists: bool = c
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM publication_batches WHERE publication_id=?1)",
+                    "SELECT EXISTS(SELECT 1 FROM publication_batches WHERE publication_id=?1 UNION ALL SELECT 1 FROM yearly_execution_results WHERE result_id=?1)",
                     [&command.publication_id],
                     |r| r.get(0),
                 )

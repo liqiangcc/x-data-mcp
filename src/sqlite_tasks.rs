@@ -8,13 +8,14 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 5;
-const MIGRATIONS: [&str; 5] = [
+pub const SCHEMA_VERSION: u32 = 6;
+const MIGRATIONS: [&str; 6] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
     include_str!("../migrations/tasks/003_market.sql"),
     include_str!("../migrations/tasks/004_catalog.sql"),
     include_str!("../migrations/tasks/005_update_results.sql"),
+    include_str!("../migrations/tasks/006_yearly_results.sql"),
 ];
 #[derive(Clone)]
 pub struct SqliteTasks {

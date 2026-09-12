@@ -134,10 +134,20 @@ pub struct Publisher<R> {
 }
 impl<R: MarketRepository> Publisher<R> {
     pub fn prepare(&self, command: Publication) -> Result<PublishPlan, Error> {
+        let record = self.repository.candidate(&command.version_id)?;
+        let plan = self.plan_record(command, record)?;
+        self.repository.mark_validated(&plan.record)?;
+        Ok(plan)
+    }
+    /// Shared application eligibility for a staged candidate or a verified reuse.
+    pub(crate) fn plan_record(
+        &self,
+        command: Publication,
+        record: CheckedRecord,
+    ) -> Result<PublishPlan, Error> {
         if command.publication_id.trim().is_empty() {
             return Err(Error::Invalid("empty publication_id".into()));
         }
-        let record = self.repository.candidate(&command.version_id)?;
         let v = &record.version;
         let scope = Scope::of(v);
         let (required_heads, promote) = match (&command.intent, v.period) {
@@ -198,7 +208,6 @@ impl<R: MarketRepository> Publisher<R> {
             .as_ref()
             .map(|r| r.raw["integrity_sha256"].as_str().unwrap().to_owned());
         plan.finish_task(self.repository.task(&plan.command.task_id)?)?;
-        self.repository.mark_validated(&plan.record)?;
         Ok(plan)
     }
 }

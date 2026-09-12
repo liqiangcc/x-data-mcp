@@ -1,4 +1,5 @@
 //! Fixed published daily -> locally derived yearly candidate. No source or MCP wiring.
+pub mod results;
 pub mod tasks;
 use std::collections::BTreeSet;
 
