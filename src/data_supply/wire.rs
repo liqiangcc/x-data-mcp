@@ -348,6 +348,9 @@ pub struct AvailabilityItem {
     pub entity: Option<Security>,
     pub version_ref: Option<VersionRef>,
     pub availability: Availability,
+    pub integrity: String,
+    pub confirmed_gaps: Vec<ConfirmedGap>,
+    pub unresolved_ranges: Vec<Filter>,
     pub coverage_evidence: String,
     pub first_record: Option<NaiveDate>,
     pub last_record: Option<NaiveDate>,
@@ -460,4 +463,11 @@ pub struct Cancellation {
     pub task_id: String,
     pub status: TaskStatus,
     pub state_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmedGap {
+    pub range: Filter,
+    pub evidence: String,
 }

@@ -350,7 +350,7 @@ impl<R: ObservationRepository> Observer<R> {
                 .repository
                 .availability(&plan, access)?
                 .into_iter()
-                .map(|f| availability_item(f, plan.args.dataset, &self.run_id))
+                .map(|f| availability_item(f, plan.args.dataset, &self.run_id, &plan.args.filter))
                 .collect::<Vec<_>>();
             budget(&items)?;
             self.start(key, access, Content::Availability(items))

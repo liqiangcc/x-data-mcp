@@ -92,7 +92,7 @@ pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<
     }
     Ok(e)
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub struct QuerySnapshot {
     pub manifest: Vec<ManifestEntry>,
     pub rows: Vec<Row>,
@@ -174,9 +174,7 @@ impl<R: ReadRepository> Queries<R> {
             self.resume(&cursor, &key, access)?
         } else {
             let data = self.repository.query(&plan, access)?;
-            if data.rows.len() > MAX_ROWS
-                || serde_json::to_vec(&data.rows).unwrap().len() > MAX_BYTES
-            {
+            if data.rows.len() > MAX_ROWS || serde_json::to_vec(&data).unwrap().len() > MAX_BYTES {
                 return Err(invalid("snapshot budget exceeded"));
             }
             Saved {
