@@ -121,18 +121,28 @@ fn update_requires_bound_basis_and_actual_revision_evidence() {
 }
 #[test]
 fn update_rejects_known_value_loss_even_with_revision_reference() {
-    let mut r = raw();
-    r["records"][1]["volume"] = json!("100");
-    r["batch"]["bars"][1]["volume"] = json!("100");
-    let unit = serde_json::to_value(EvidenceValue::confirmed("shares", "fixture")).unwrap();
-    r["unit_currency"]["volume_unit"] = unit.clone();
-    r["batch"]["unit_currency"]["volume_unit"] = unit;
-    let base = checked(r);
-    let (_, batch, range) = inputs();
-    assert_eq!(
-        market_update::prepare(&base, &batch, &range, Some(&proof(&base, &batch, &range))).unwrap(),
-        Decision::NeedsVerification(Reason::KnownValueLost(vec![range.start]))
-    );
+    for field in ["volume", "amount"] {
+        let mut r = raw();
+        r["records"][1][field] = json!("100");
+        r["batch"]["bars"][1][field] = json!("100");
+        let units = if field == "volume" {
+            vec![("volume_unit", "shares")]
+        } else {
+            vec![("amount_currency", "CNY"), ("amount_unit", "yuan")]
+        };
+        for (key, value) in units {
+            let unit = serde_json::to_value(EvidenceValue::confirmed(value, "fixture")).unwrap();
+            r["unit_currency"][key] = unit.clone();
+            r["batch"]["unit_currency"][key] = unit;
+        }
+        let base = checked(r);
+        let (_, batch, range) = inputs();
+        assert_eq!(
+            market_update::prepare(&base, &batch, &range, Some(&proof(&base, &batch, &range)))
+                .unwrap(),
+            Decision::NeedsVerification(Reason::KnownValueLost(vec![range.start]))
+        );
+    }
 }
 #[test]
 fn update_rejects_unknown_coverage_and_conflicting_units() {
