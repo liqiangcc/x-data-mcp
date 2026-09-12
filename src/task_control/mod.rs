@@ -195,6 +195,14 @@ pub enum Error {
     TaskNotFound,
     #[error("INVALID_RETRY_SELECTION")]
     InvalidRetrySelection,
+    #[error("retry request_id must differ from the original task request_id")]
+    RetryRequestIdConflict,
+    #[error("retry selected_scopes must not be empty")]
+    EmptyRetrySelection,
+    #[error("request_id must not be empty")]
+    EmptyRequestId,
+    #[error("retry selected scopes are invalid, outside the original range, or already completed")]
+    RetrySelectionInvalid { items: BTreeSet<String> },
 }
 /// Contract codecs own defaults, ordered vs set semantics, and dynamic resolution.
 pub trait Contract {

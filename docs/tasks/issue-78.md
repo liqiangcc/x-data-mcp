@@ -131,3 +131,16 @@ retry 的普通验证沿用旧 Adapter 的 period→原任务→原 ID→空选�
 公共事务仍再次检查重试资格与占用。没有修改旧协议，也没有改变默认生产装配。
 全部新测试由现有 `cargo test --locked` 发现，无需新 workflow 或本地 bundled 构建。
 PR 继续 Draft，等待 Coordinator 二次审查；断电、全部 CAS 窗口、多 worker、性能和真实来源边界保持未验证。
+
+## Coordinator 第二轮：retry 决策归属修正
+
+依据 [review 5645168509](https://github.com/liqiangcc/x-data-mcp/pull/82#issuecomment-5645168509)，
+将原任务/绑定读取、原请求 ID 冲突、空选择、越界/已成功项判断和空新 ID 校验统一移到 `TaskControl::retry`，保留原可观察顺序。
+应用层返回 `RetryRequestIdConflict`、`EmptyRetrySelection`、`EmptyRequestId`、
+`RetrySelectionInvalid { items }`；MCP 只解码 period/参数形状，将 item 身份和 typed 错误映射为旧 code/scopes，不读取 outcomes 或重算资格。
+SQLite 原子受理中的修订/资格复核、事务与状态模型不变。
+
+新增 `application_retry_owns_legacy_precedence_and_typed_ineligible_items_without_mcp`：
+直接调用应用层，在真实临时 SQLite 上验证校验优先级、越界/已成功项的类型化结果及拒绝不新增任务。
+既有两项真实 old/new stdio parity 测试保持，验证应用层返回经协议映射后仍兼容。
+准确 HEAD/run/job 与实际结果在本轮 PR/#78 交付评论固定；此前绿灯不替代本轮验证。

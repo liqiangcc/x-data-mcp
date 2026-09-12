@@ -62,24 +62,35 @@ fn mapped(e: Error, request: bool) -> ApiError {
         Error::RequestConflict => "request_conflict",
         Error::RangeConflict(_) => "range_conflict",
         Error::TaskNotFound => "task_not_found",
-        Error::InvalidRetrySelection => "invalid_retry_selection",
+        Error::InvalidRetrySelection | Error::RetrySelectionInvalid { .. } => {
+            "invalid_retry_selection"
+        }
+        Error::RetryRequestIdConflict => "retry_request_id_conflict",
+        Error::EmptyRetrySelection => "empty_selected_scopes",
+        Error::EmptyRequestId => "empty_request_id",
         Error::NeedsVerification(_) if request => "request_needs_verification",
         _ => "storage_error",
     };
     let mut error = ApiError::new(code, e.to_string());
-    if let Error::RangeConflict(scopes) = e {
-        error.scopes = Some(
-            scopes
-                .iter()
-                .filter_map(|s| serde_json::from_str::<Vec<String>>(s).ok())
-                .filter(|p| p.len() == 3 && p[0] == "market")
-                .map(|p| crate::mcp::ScopeView {
-                    symbol: p[1].clone(),
-                    period: p[2].clone(),
-                })
-                .collect(),
-        );
+    let scopes = match e {
+        Error::RangeConflict(scopes) => Some(scopes),
+        Error::RetrySelectionInvalid { items } => Some(items.into_iter().collect()),
+        _ => None,
+    };
+    if let Some(scopes) = scopes {
+        let mut views: Vec<_> = scopes
+            .iter()
+            .filter_map(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .filter(|p| p.len() == 3 && p[0] == "market")
+            .map(|p| crate::mcp::ScopeView {
+                symbol: p[1].clone(),
+                period: p[2].clone(),
+            })
+            .collect();
+        views.sort_by(|a, b| (&a.symbol, &a.period).cmp(&(&b.symbol, &b.period)));
+        error.scopes = Some(views);
     }
+
     error
 }
 struct BlockedSource;
@@ -178,55 +189,6 @@ impl ToolHandler for SqliteTaskApi {
                     .any(|s| !matches!(s.period.as_str(), "day" | "year"))
                 {
                     return Err(ApiError::new("invalid_period", "unsupported period"));
-                }
-                let original = self
-                    .control
-                    .read_task(&a.original_task_id)
-                    .map_err(|e| mapped(e, false))?;
-                let binding = self
-                    .control
-                    .read_request(&a.new_request_id)
-                    .map_err(|e| mapped(e, false))?;
-                if binding.as_ref().is_some_and(|r| matches!(&r.outcome, RequestOutcome::Task(s) if s.task.task_id == a.original_task_id)) {
-                    return Err(ApiError::new("retry_request_id_conflict", "retry request_id must differ from the original task request_id"));
-                }
-                if a.selected_scopes.is_empty() {
-                    return Err(ApiError::new(
-                        "empty_selected_scopes",
-                        "retry selected_scopes must not be empty",
-                    ));
-                }
-                let selected: std::collections::BTreeSet<_> = a
-                    .selected_scopes
-                    .iter()
-                    .map(|s| (s.symbol.clone(), s.period.clone()))
-                    .collect();
-                let invalid: Vec<_> = selected
-                    .iter()
-                    .filter(|(symbol, period)| {
-                        !original.items.iter().any(|i| {
-                            i.spec.item_id == scope_id(symbol, period)
-                                && !i.outcome.as_ref().is_some_and(|o| o.success)
-                        })
-                    })
-                    .map(|(symbol, period)| crate::mcp::ScopeView {
-                        symbol: symbol.clone(),
-                        period: period.clone(),
-                    })
-                    .collect();
-                if !invalid.is_empty() {
-                    let mut error = ApiError::new(
-                        "invalid_retry_selection",
-                        "retry selected scopes are invalid, outside the original range, or already completed",
-                    );
-                    error.scopes = Some(invalid);
-                    return Err(error);
-                }
-                if a.new_request_id.trim().is_empty() {
-                    return Err(ApiError::new(
-                        "empty_request_id",
-                        "request_id must not be empty",
-                    ));
                 }
                 self.control
                     .retry(

@@ -455,7 +455,7 @@ fn completion_during_cancellation_uses_actual_outcomes_and_keeps_unfinished_item
                 "bad-retry",
                 BTreeSet::from([succeeded.spec.item_id.clone()])
             ),
-            Err(Error::InvalidRetrySelection)
+            Err(Error::RetrySelectionInvalid { .. })
         ));
         assert!(db.read_request("bad-retry").unwrap().is_none());
     }
@@ -670,4 +670,40 @@ fn disjoint_dates_do_not_narrow_security_period_occupancy() {
     assert!(db.read_request("2025").unwrap().is_none());
     assert_eq!(count(&db, "tasks"), 1);
     assert_eq!(count(&db, "scope_occupancy"), 1);
+}
+
+#[test]
+fn application_retry_owns_legacy_precedence_and_typed_ineligible_items_without_mcp() {
+    let (_dir, db) = database();
+    let ctl = control(&db, "run-a");
+    let original = snapshot(accept(&db, "original", &["a"]));
+    let id = &original.task.task_id;
+    let valid = BTreeSet::from([original.items[0].spec.item_id.clone()]);
+    assert!(matches!(
+        ctl.retry("missing", "original", BTreeSet::new()),
+        Err(Error::TaskNotFound)
+    ));
+    assert!(matches!(
+        ctl.retry(id, "original", BTreeSet::new()),
+        Err(Error::RetryRequestIdConflict)
+    ));
+    assert!(matches!(
+        ctl.retry(id, "", BTreeSet::new()),
+        Err(Error::EmptyRetrySelection)
+    ));
+    let outside = BTreeSet::from(["outside-item".to_owned()]);
+    assert!(
+        matches!(ctl.retry(id, "", outside.clone()), Err(Error::RetrySelectionInvalid { items }) if items == outside)
+    );
+    assert!(matches!(
+        ctl.retry(id, "", valid.clone()),
+        Err(Error::EmptyRequestId)
+    ));
+    ctl.run_once(&Complete(true)).unwrap();
+    let selected = valid.union(&outside).cloned().collect::<BTreeSet<_>>();
+    assert!(
+        matches!(ctl.retry(id, "retry", selected.clone()), Err(Error::RetrySelectionInvalid { items }) if items == selected)
+    );
+    assert!(db.read_request("retry").unwrap().is_none());
+    assert_eq!(count(&db, "tasks"), 1);
 }

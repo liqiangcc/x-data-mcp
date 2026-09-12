@@ -97,12 +97,34 @@ impl<R: TaskRepository> TaskControl<R> {
         id: &str,
         selected: BTreeSet<String>,
     ) -> Result<Acceptance, Error> {
-        if id.trim().is_empty() || selected.is_empty() {
-            return Err(Error::InvalidRetrySelection);
+        // Legacy-observable precedence belongs to the retry use case, not its wire Adapter.
+        let old = self.read_task(original)?;
+        let existing = self.read_request(id)?;
+        if existing.as_ref().is_some_and(
+            |r| matches!(&r.outcome, RequestOutcome::Task(s) if s.task.task_id == original),
+        ) {
+            return Err(Error::RetryRequestIdConflict);
+        }
+        if selected.is_empty() {
+            return Err(Error::EmptyRetrySelection);
+        }
+        let invalid: BTreeSet<_> = selected
+            .iter()
+            .filter(|id| {
+                !old.items.iter().any(|i| {
+                    &i.spec.item_id == *id && !i.outcome.as_ref().is_some_and(|o| o.success)
+                })
+            })
+            .cloned()
+            .collect();
+        if !invalid.is_empty() {
+            return Err(Error::RetrySelectionInvalid { items: invalid });
+        }
+        if id.trim().is_empty() {
+            return Err(Error::EmptyRequestId);
         }
         let intent = serde_json::json!({"original_task_id":original,"selected_items":selected});
-        if let Some(record) = self.repository.read_request(id)? {
-            self.known(&record)?;
+        if let Some(record) = existing {
             if record.command.key.operation != "retry_task" || record.command.intent != intent {
                 return Err(Error::RequestConflict);
             }
@@ -111,7 +133,6 @@ impl<R: TaskRepository> TaskControl<R> {
                 reused: true,
             });
         }
-        let old = self.read_task(original)?;
         let guard = RetryGuard {
             original_task_id: original.into(),
             expected_revision: old.task.state_revision,
@@ -123,13 +144,6 @@ impl<R: TaskRepository> TaskControl<R> {
             .filter(|i| selected.contains(&i.spec.item_id))
             .map(|i| i.spec.clone())
             .collect::<Vec<_>>();
-        if items.len() != selected.len()
-            || old.items.iter().any(|i| {
-                selected.contains(&i.spec.item_id) && i.outcome.as_ref().is_some_and(|o| o.success)
-            })
-        {
-            return Err(Error::InvalidRetrySelection);
-        }
         // Each item owns its explicit resource keys through the frozen work.
         // Explicit resource bindings support any task kind, not security field inference.
         let scopes = items
