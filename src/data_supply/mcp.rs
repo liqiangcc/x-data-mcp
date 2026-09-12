@@ -74,6 +74,12 @@ impl DataApi {
         }
         let mut items = vec![];
         for e in entries() {
+            if matches!(e.handler, Handler::Compute)
+                && (!self.access.allows(Dataset::Yearly, None)
+                    || args.dataset.is_some_and(|d| d != Dataset::Yearly))
+            {
+                continue;
+            }
             if self.access != Access::local()
                 && matches!(
                     e.handler,
@@ -354,6 +360,24 @@ impl DataApi {
             return self.legacy_call(name, input);
         };
         match entry.handler {
+            Handler::Compute => {
+                let computed = crate::metrics::service::Metrics {
+                    repository: crate::sqlite_metrics::SqliteMetrics {
+                        market: self.queries.repository.market.clone(),
+                    },
+                }
+                .compute(decode(input)?, &self.access)
+                .map_err(mapped)?;
+                if let crate::metrics::wire::Outcome::NotComputable { reason, .. } =
+                    &computed.result
+                {
+                    let mut error = ApiError::new("not_computable", format!("{reason:?}"));
+                    error.details = Some(Box::new(serde_json::to_value(computed).unwrap()));
+                    Err(error)
+                } else {
+                    encode(computed)
+                }
+            }
             Handler::Collection
             | Handler::Retry
             | Handler::Task
@@ -425,6 +449,7 @@ impl ToolHandler for DataApi {
                     | "list_tasks"
                     | "get_task_progress"
                     | "get_data_capabilities"
+                    | "compute_metrics"
             );
         self.dispatch(name, input).map_err(|mut e| {
             if generic {

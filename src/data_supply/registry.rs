@@ -16,6 +16,7 @@ pub enum Handler {
     Task,
     Request,
     Cancel,
+    Compute,
 }
 pub struct Entry {
     pub name: &'static str,
@@ -72,6 +73,11 @@ fn entry<I: JsonSchema, O: JsonSchema>(
 pub fn entries() -> Vec<Entry> {
     let query = json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"}});
     vec![
+        entry::<crate::metrics::wire::Compute, crate::metrics::wire::Computation>(
+            "compute_metrics",
+            Handler::Compute,
+            json!({"contract_version":"v1","execution":"inline","inputs":[{"input_id":"prices","version_ref":{"dataset":"market.yearly","contract_version":"v1","entity":{"exchange":"sh","code":"600006"},"version_id":"published-yearly-id","integrity_sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}],"range":{"start_year":2020,"end_year":2023},"metrics":[{"metric_id":"down","name":"consecutive_direction","algorithm_version":"local-consecutive-direction-v1","input_ids":["prices"],"parameters":{"direction":"down","min_periods":3}}]}),
+        ),
         entry::<Collection, WriteAcceptance>(
             "start_collection",
             Handler::Collection,
