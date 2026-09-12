@@ -1210,3 +1210,129 @@ fn public_yearly_request_to_fixture_execution_progress_and_query_preserves_reuse
             .is_err()
     );
 }
+
+#[path = "support/yearly_response_fault.rs"]
+mod yearly_response_fault;
+#[test]
+fn yearly_runner_reconciles_response_loss_and_never_reexecutes_unknown_commit() {
+    for reuse in [false, true] {
+        for commit_first in [false, true] {
+            let (_dir, store) = db();
+            published_fixture(&store, &samples()[0]["record"]);
+            let verifier = FixtureYearlyVerifier {
+                calls: 0.into(),
+                cancel: None,
+            };
+            let prior = if reuse {
+                let task = accept_yearly(&store, "initial", None);
+                let YearlyExecution::Published(receipt) = runner(&store)
+                    .run_item(&task.task.task_id, &task.items[0].spec.item_id, &verifier)
+                    .unwrap()
+                else {
+                    panic!()
+                };
+                Some(receipt.version_id)
+            } else {
+                None
+            };
+            let task = accept_yearly(&store, "uncertain", prior.as_deref());
+            let faulty = YearlyRunner {
+                repository: yearly_response_fault::ResponseFault {
+                    db: store.clone(),
+                    commit_first,
+                    fired: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                },
+                run_id: "run".into(),
+                derived_at: "2026-09-12T00:00:00Z".parse().unwrap(),
+            };
+            let outcome =
+                faulty.run_item(&task.task.task_id, &task.items[0].spec.item_id, &verifier);
+            assert_eq!(
+                matches!(outcome, Ok(YearlyExecution::Published(_))),
+                commit_first
+            );
+            if !commit_first {
+                assert!(matches!(outcome, Err(Error::OutcomeUnknown(_))));
+            }
+            let current = store.tasks.read_task(&task.task.task_id).unwrap().unwrap();
+            assert_eq!(current.claims.is_empty(), commit_first);
+            let calls = verifier.calls.get();
+            let repeated =
+                faulty.run_item(&task.task.task_id, &task.items[0].spec.item_id, &verifier);
+            assert_eq!(
+                matches!(repeated, Ok(YearlyExecution::Published(_))),
+                commit_first
+            );
+            assert_eq!(verifier.calls.get(), calls);
+            assert_eq!(
+                store
+                    .versions(&Scope {
+                        symbol: "sh.600006".into(),
+                        period: Period::Year
+                    })
+                    .unwrap()
+                    .len(),
+                usize::from(reuse || commit_first)
+            );
+        }
+    }
+}
+#[test]
+fn yearly_progress_cursor_rechecks_committed_result_and_missing_results_fail_closed() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let (_dir, store) = db();
+    let mut items = vec![];
+    for code in ["600006", "600007", "600008"] {
+        let mut raw = samples()[0]["record"].clone();
+        let symbol = format!("sh.{code}");
+        raw["symbol"] = json!(symbol);
+        raw["batch"]["symbol"] = json!(symbol);
+        raw["batch"]["provenance"]["symbol"] = json!(symbol);
+        raw = revised(&raw, &format!("daily-{code}"));
+        published_fixture(&store, &raw);
+        items.push(json!({"entity":{"exchange":"sh","code":code},"base_daily_version_id":format!("daily-{code}"),"years":[2025],"publication":{"mode":"historical_fixed_base","comparison_version_id":null}}));
+    }
+    let api = DataApi::new(store.tasks.clone(), "run".into(), Access::local()).unwrap();
+    let accepted=api.call("backfill_data",json!({"request_id":"progress-years","dataset":"market.yearly","contract_version":"v1","items":items})).unwrap();
+    let verifier = FixtureYearlyVerifier {
+        calls: 0.into(),
+        cancel: None,
+    };
+    runner(&store)
+        .run_item(
+            accepted["task_id"].as_str().unwrap(),
+            accepted["item_ids"][0].as_str().unwrap(),
+            &verifier,
+        )
+        .unwrap();
+    let progress = api
+        .call(
+            "get_task_progress",
+            json!({"task_id":accepted["task_id"],"page_size":1}),
+        )
+        .unwrap();
+    assert_eq!(progress["succeeded"], 1);
+    assert!(progress["next_cursor"].is_string());
+    assert_eq!(
+        progress["frozen_yearly_inputs"].as_array().unwrap().len(),
+        3
+    );
+    Connection::open(store.tasks.path())
+        .unwrap()
+        .execute_batch("DELETE FROM yearly_execution_results")
+        .unwrap();
+    assert!(
+        api.call(
+            "get_task_progress",
+            json!({"task_id":accepted["task_id"],"page_size":1,"cursor":progress["next_cursor"]})
+        )
+        .is_err()
+    );
+    assert!(
+        api.call("get_task_progress", json!({"task_id":accepted["task_id"]}))
+            .is_err()
+    );
+}

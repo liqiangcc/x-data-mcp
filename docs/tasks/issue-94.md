@@ -21,8 +21,8 @@ AC → 测试（tests/yearly_publication.rs）：
 - AC-04 historical_base_can_publish_after_daily_advances_but_current_intent_conflicts。
 - 既有 tests/sqlite_market.rs 继续覆盖双 head、task/occupancy、篡改与真实进程退出矩阵；不是新范围/worker 的证明。
 
-显式内部 yearly 更新受理、范围保护及无变化原子结果已实现。尚未交付：public wire/worker/进度与部署。
-内部受理/候选/结果可以分别测试，但尚未连成 public update_data(yearly) 执行链。
+显式内部 yearly 更新受理、范围保护及无变化原子结果已实现。public wire/worker/进度已接线，部署尚未执行。
+public update/backfill yearly 受理通过显式 fixture verifier 完成发布/复用/查询测试；实际生产装配仍只拒绝，不能宣称真实行情闭环。
 真实 verifier/source 尚未实现，#54/#71/#46/#6/文件一致性 NOT_VERIFIED，live source 与四股复验 NOT_RUN。
 所有新增测试只使用固定 fixture；NOT_PRODUCTION_READY。不扩展到目录、来源研究或迁移。
 
