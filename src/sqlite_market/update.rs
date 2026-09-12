@@ -70,6 +70,34 @@ impl RangeRepository for SqliteMarket {
                 .ok_or_else(|| integrity("range receipt missing after insert"))
         })
     }
+    fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
+        self.read(|c| {
+            let id: Option<String> = c
+                .query_row(
+                    "SELECT result_id FROM market_update_results WHERE task_id=?1 AND item_id=?2",
+                    params![task, item],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage)?;
+            id.map(|id| {
+                read_result(c, &id)?
+                    .map(|(_, r)| r)
+                    .ok_or_else(|| integrity("range item receipt missing"))
+            })
+            .transpose()
+        })
+    }
+    fn transition_task(
+        &self,
+        task: &str,
+        revision: u64,
+        run: &str,
+        change: crate::task_control::Change,
+    ) -> Result<crate::task_control::TaskSnapshot, Error> {
+        use crate::task_control::TaskRepository;
+        Ok(self.tasks.transition(task, revision, run, change)?)
+    }
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
         self.read(|c| read_result(c, id).map(|r| r.map(|(_, receipt)| receipt)))
     }

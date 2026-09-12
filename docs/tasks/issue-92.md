@@ -61,3 +61,9 @@ update_data/backfill_data 的 v1 首个公共形状为 request_id、dataset=mark
 ### 更新结果只读查询（编码前边界）
 
 get_task_progress 增加 frozen_daily_ranges（每项已受理 base/digest/日期）及 range_results（原/结果 version ref、是否无变化、实际 acquired_at、result id）。已成功项仍可见这些关联，不把复用版本写成新发布。SQLite 在读取 task 的同一事务核验结果收据/关联及固定版本，cursor 续页也重新核验已返回结果；损坏拒绝，不换 latest。保留旧 publication_versions 字段表示原始发布，普通查询不补写/修复/执行。仅描述实际持久事实，不从来源拒绝或任务完成推断存在行情。
+
+### 单项发布执行器（编码前边界）
+
+应用 RangeRunner 显式执行一个已受理 daily 项。先核对 task/item 的持久结果；已有结果只返回收据，running 无结果不自动重做。仅当前 run 的 pending 项可 Claim/StartItem；固定 base/digest/范围在来源调用前后核对。有变化使用确定的候选 ID、独立完整候选和覆盖证据；无变化复用原版本。提交仍走 sealed plan/SQLite 短事务。
+
+可信同步 provider 只提供 batch/证据/候选，不负责发布；真实装配只能使用 OfficialFilePipeline，当前必然拒绝，不引入来源选择开关。显式 fixture provider 仅测试使用。已知未发布且来源停止的失败可记录原失败；提交/存储结果不明保留 running/占用，先核对收据，不能重采/换 ID。取消在开始前收尾，执行中取消阻止发布，按现有任务状态机记录实际未发布结果。该单项应用执行器尚不等于全部生产 worker/yearly 编排。

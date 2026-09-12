@@ -819,3 +819,230 @@ fn range_progress_cursor_rechecks_evidence_after_partial_task_snapshot() {
         .unwrap_err();
     assert_eq!(error.code, "integrity_error");
 }
+
+fn runner_fixture() -> Fixture {
+    use x_data_mcp::market_update::tasks::Operation;
+    let mut f = fixture(false);
+    fail_range_without_publication(&f);
+    let accepted = range_control(&f)
+        .accept(
+            "runner",
+            Operation::Backfill.key(),
+            range_payload("legacy-daily"),
+        )
+        .unwrap();
+    let RequestOutcome::Task(task) = accepted.record.outcome else {
+        panic!()
+    };
+    f.command.task_id = task.task.task_id;
+    f.command.item_id = task.items[0].spec.item_id.clone();
+    f.command.expected_revision = 0;
+    f
+}
+struct SyntheticRangeProvider {
+    changed: bool,
+    calls: std::cell::Cell<usize>,
+    during_acquisition: Option<Box<dyn Fn()>>,
+}
+impl SyntheticRangeProvider {
+    fn new(changed: bool) -> Self {
+        Self {
+            changed,
+            calls: std::cell::Cell::new(0),
+            during_acquisition: None,
+        }
+    }
+}
+impl x_data_mcp::market_update::runner::RangeProvider for SyntheticRangeProvider {
+    fn acquire(
+        &self,
+        base: &compat::CheckedRecord,
+        range: &DateRange,
+        candidate_id: &str,
+    ) -> Result<x_data_mcp::market_update::runner::Acquisition, x_data_mcp::market_data::SourceError>
+    {
+        use x_data_mcp::market_update::runner::{Acquisition, CombinedCandidate};
+        self.calls.set(self.calls.get() + 1);
+        if let Some(hook) = &self.during_acquisition {
+            hook();
+        }
+        let mut batch: MarketDataBatch =
+            serde_json::from_value(base.raw()["batch"].clone()).unwrap();
+        batch
+            .bars
+            .retain(|bar| bar.date >= range.start && bar.date <= range.end);
+        if self.changed {
+            batch.bars[0].close = "10.06".parse().unwrap();
+        }
+        let evidence = Evidence {
+            base_version_id: base.version().version_id.clone(),
+            base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
+            candidate_sha256: market_update::candidate_digest(&batch).unwrap(),
+            range: range.clone(),
+            same_qfq_basis_ref: "fixture:runner-basis".into(),
+            revision_ref: Some("fixture:runner-revision".into()),
+        };
+        let combined = if self.changed {
+            let mut raw = base.raw().clone();
+            raw["version_id"] = json!(candidate_id);
+            raw["records"][1]["close"] = json!("10.06");
+            raw["batch"]["bars"][1]["close"] = json!("10.06");
+            raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+            let proof = CombinedEvidence {
+                base_integrity_sha256: evidence.base_integrity_sha256.clone(),
+                segment_sha256: evidence.candidate_sha256.clone(),
+                combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
+                complete_coverage_ref: "fixture:runner-full".into(),
+            };
+            Some(CombinedCandidate {
+                record: raw,
+                evidence: proof,
+            })
+        } else {
+            None
+        };
+        Ok(Acquisition {
+            batch,
+            evidence,
+            combined,
+        })
+    }
+}
+#[test]
+fn range_runner_executes_and_replays_real_publication_without_reacquiring() {
+    use x_data_mcp::market_update::runner::{ItemExecution, RangeRunner};
+    for changed in [false, true] {
+        let f = runner_fixture();
+        let provider = SyntheticRangeProvider::new(changed);
+        let runner = RangeRunner {
+            repository: f.db.clone(),
+            run_id: "range-run".into(),
+        };
+        let ItemExecution::Published(receipt) = runner
+            .run_item(&f.command.task_id, &f.command.item_id, &provider)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(provider.calls.get(), 1);
+        assert_eq!(f.count("data_versions"), if changed { 2 } else { 1 });
+        let ItemExecution::Published(replayed) = runner
+            .run_item(&f.command.task_id, &f.command.item_id, &provider)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(receipt, replayed);
+        assert_eq!(provider.calls.get(), 1);
+        assert!(f.db.task(&f.command.task_id).unwrap().claims.is_empty());
+        assert_eq!(f.count("market_update_results"), 1);
+    }
+}
+#[test]
+fn range_runner_does_not_reexecute_running_or_old_run_items() {
+    use x_data_mcp::market_update::runner::RangeRunner;
+    let f = runner_fixture();
+    let provider = SyntheticRangeProvider::new(true);
+    let old = RangeRunner {
+        repository: f.db.clone(),
+        run_id: "new-process".into(),
+    };
+    assert!(
+        old.run_item(&f.command.task_id, &f.command.item_id, &provider)
+            .is_err()
+    );
+    assert_eq!(
+        f.db.task(&f.command.task_id).unwrap().task.state_revision,
+        0
+    );
+    let task =
+        f.db.tasks
+            .transition(&f.command.task_id, 0, "range-run", Change::Claim)
+            .unwrap();
+    f.db.tasks
+        .transition(
+            &f.command.task_id,
+            task.task.state_revision,
+            "range-run",
+            Change::StartItem(f.command.item_id.clone()),
+        )
+        .unwrap();
+    let same = RangeRunner {
+        repository: f.db.clone(),
+        run_id: "range-run".into(),
+    };
+    assert!(matches!(
+        same.run_item(&f.command.task_id, &f.command.item_id, &provider),
+        Err(Error::OutcomeUnknown(_))
+    ));
+    assert_eq!(provider.calls.get(), 0);
+    assert_eq!(f.count("scope_occupancy"), 1);
+    assert_eq!(f.count("market_update_results"), 0);
+}
+#[test]
+fn range_runner_cancellation_and_official_gate_never_publish() {
+    use x_data_mcp::market_update::runner::{ItemExecution, OfficialRangeProvider, RangeRunner};
+    let f = runner_fixture();
+    let runner = RangeRunner {
+        repository: f.db.clone(),
+        run_id: "range-run".into(),
+    };
+    let ItemExecution::NotPublished(task) = runner
+        .run_item(
+            &f.command.task_id,
+            &f.command.item_id,
+            &OfficialRangeProvider,
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(
+        task.items[0]
+            .outcome
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("SOURCE_NOT_VERIFIED")
+    );
+    assert_eq!(f.count("market_update_results"), 0);
+    assert_eq!(f.count("data_versions"), 1);
+    for started in [false, true] {
+        let f = runner_fixture();
+        let runner = RangeRunner {
+            repository: f.db.clone(),
+            run_id: "range-run".into(),
+        };
+        let mut provider = SyntheticRangeProvider::new(true);
+        if started {
+            let db = f.db.clone();
+            let task = f.command.task_id.clone();
+            provider.during_acquisition = Some(Box::new(move || {
+                let snapshot = db.task(&task).unwrap();
+                db.tasks
+                    .transition(
+                        &task,
+                        snapshot.task.state_revision,
+                        "range-run",
+                        Change::RequestCancel,
+                    )
+                    .unwrap();
+            }));
+        } else {
+            range_control(&f).cancel(&f.command.task_id, 0).unwrap();
+        }
+        let ItemExecution::NotPublished(task) = runner
+            .run_item(&f.command.task_id, &f.command.item_id, &provider)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(task.task.status.terminal());
+        assert!(task.claims.is_empty());
+        assert_eq!(provider.calls.get(), usize::from(started));
+        assert_eq!(f.count("market_update_results"), 0);
+        assert_eq!(f.count("data_versions"), 1);
+    }
+}

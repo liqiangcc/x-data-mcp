@@ -44,6 +44,14 @@ impl RangePlan {
 pub trait RangeRepository: MarketRepository {
     fn commit_range(&self, plan: &RangePlan) -> Result<Receipt, Error>;
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error>;
+    fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error>;
+    fn transition_task(
+        &self,
+        task: &str,
+        revision: u64,
+        run: &str,
+        change: crate::task_control::Change,
+    ) -> Result<crate::task_control::TaskSnapshot, Error>;
 }
 impl<R: MarketRepository> Publisher<R> {
     pub fn prepare_range(

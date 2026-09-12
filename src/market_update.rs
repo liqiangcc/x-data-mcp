@@ -5,6 +5,7 @@ use crate::{
     market_storage::{Error, compat::CheckedRecord},
 };
 pub mod publication;
+pub mod runner;
 pub mod tasks;
 use chrono::{Datelike, NaiveDate};
 use serde::Serialize;
