@@ -1046,3 +1046,45 @@ fn range_runner_cancellation_and_official_gate_never_publish() {
         assert_eq!(f.count("data_versions"), 1);
     }
 }
+
+#[path = "support/range_response_fault.rs"]
+mod response_fault;
+#[test]
+fn range_runner_reconciles_lost_commit_response_and_preserves_unconfirmed_execution() {
+    use x_data_mcp::market_update::runner::{ItemExecution, RangeRunner};
+    for commit_first in [false, true] {
+        let f = runner_fixture();
+        let provider = SyntheticRangeProvider::new(true);
+        let runner = RangeRunner {
+            repository: response_fault::ResponseFault {
+                db: f.db.clone(),
+                commit_first,
+                fired: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
+            run_id: "range-run".into(),
+        };
+        let result = runner.run_item(&f.command.task_id, &f.command.item_id, &provider);
+        assert_eq!(provider.calls.get(), 1);
+        if commit_first {
+            let ItemExecution::Published(receipt) = result.unwrap() else {
+                panic!()
+            };
+            assert_eq!(
+                f.db.item_receipt(&f.command.task_id, &f.command.item_id)
+                    .unwrap(),
+                Some(receipt)
+            );
+            assert!(f.db.task(&f.command.task_id).unwrap().claims.is_empty());
+        } else {
+            assert!(matches!(result, Err(Error::OutcomeUnknown(_))));
+            assert_eq!(
+                f.db.task(&f.command.task_id).unwrap().task.status,
+                x_data_mcp::task_control::Status::Running
+            );
+            assert_eq!(f.count("scope_occupancy"), 1);
+            assert_eq!(f.count("market_update_results"), 0);
+        }
+        let _ = runner.run_item(&f.command.task_id, &f.command.item_id, &provider);
+        assert_eq!(provider.calls.get(), 1);
+    }
+}
