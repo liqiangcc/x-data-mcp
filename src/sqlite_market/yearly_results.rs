@@ -160,3 +160,6 @@ pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Rec
 fn digest(audit: &str, receipt: &str) -> String {
     crate::hash::sha256(serde_json::json!([audit, receipt]).to_string().as_bytes())
 }
+
+#[cfg(test)]
+mod tests;

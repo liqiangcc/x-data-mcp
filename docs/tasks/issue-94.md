@@ -47,3 +47,5 @@ AC → 测试（tests/yearly_publication.rs）：
 复用路径不 stage 新版本，只把收据/审计与任务完成、占用释放同事务提交。变化路径复用已有条件发布并在同事务写结果。base/prior/result 完整性、head/revision/occupancy 仍须满足；提交后丢失响应按已持久化的同结果 ID 核验，不重复发布。
 
 新增真实 SQLite 测试覆盖无变化/变化、coverage/年度状态变更、head冲突回滚、结果篡改拒绝、重放与显式 v5→v6 升级；既有 v4→最新测试同步从真正 v4 schema 构造，不伪造 migration 历史。完整编译仍走 Actions。
+
+真实退出测试 yearly_real_exit_rolls_back_or_replays_committed_reuse_and_new_publication：父进程启动限定子测试，分别在 commit 前/后退出 79，覆盖新版本与无变化两条路径；重新打开 SQLite 验证结果/发布条数、task/occupancy，重放同一批准计划不重复版本。单独空跑 child 不是验证证据。
