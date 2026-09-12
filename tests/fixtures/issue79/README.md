@@ -1,7 +1,7 @@
 # #79 independent legacy digest fixture
 
 `legacy_record_digest.rs.txt` is the exact function from
-`1e270c648e7884fffd65ef13cfe9f47e0dab22ad:src/storage.rs` (lines 264–276).
+`1e270c648e7884fffd65ef13cfe9f47e0dab22ad:src/storage.rs`.
 The integration test executes this frozen implementation as an independent oracle;
 production Stage B does not call this copy.
 

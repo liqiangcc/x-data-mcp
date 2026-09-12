@@ -8,6 +8,3 @@ fn record_digest(value: &Value) -> io::Result<String> {
         &serde_json::to_vec(&payload).map_err(io::Error::other)?,
     ))
 }
-
-fn verified_record(
-    value: &Value,
