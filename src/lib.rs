@@ -37,3 +37,4 @@ pub mod metrics;
 pub mod sqlite_metrics;
 
 pub mod market_update;
+pub mod yearly_publication;
