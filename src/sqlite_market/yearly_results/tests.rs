@@ -105,7 +105,7 @@ fn yearly_crash_child() {
 fn yearly_real_exit_rolls_back_or_replays_committed_reuse_and_new_publication() {
     for changed in [false, true] {
         for point in ["before_commit", "after_commit"] {
-            let (_dir, db, daily) = super::super::super::tests::setup();
+            let (_dir, db, daily) = super::super::tests::setup();
             db.commit(&daily).unwrap();
             let first = approve(&db, command(&db, "first", None), false);
             db.commit_yearly(&first).unwrap();
