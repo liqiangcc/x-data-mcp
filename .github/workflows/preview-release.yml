@@ -1,0 +1,44 @@
+name: Preview package
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/preview-release.yml'
+      - 'scripts/build_release.sh'
+      - 'scripts/smoke_release.py'
+      - 'src/bin/create_demo.rs'
+      - 'build.rs'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/preview-release.yml'
+      - 'scripts/build_release.sh'
+      - 'scripts/smoke_release.py'
+      - 'src/bin/create_demo.rs'
+      - 'build.rs'
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: preview-release
+      - name: Build labelled release package
+        run: scripts/build_release.sh
+      - name: Exercise packaged binaries using an isolated synthetic database
+        run: |
+          package_dir=$(find dist -maxdepth 1 -type d -name 'x-data-mcp-*' -print -quit)
+          (cd "$package_dir" && sha256sum --check SHA256SUMS)
+          python3 "$package_dir/check.py" --bin-dir "$package_dir/bin" --report dist/smoke-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x-data-mcp-preview-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/smoke-report.json
+          if-no-files-found: error

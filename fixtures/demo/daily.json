@@ -1,0 +1,170 @@
+{
+  "version_id": "demo-daily",
+  "symbol": "sh.600006",
+  "period": "Day",
+  "adjustment": "Forward",
+  "source": "fixture:release-demo",
+  "records": [
+    {
+      "date": "2020-12-30",
+      "open": "100",
+      "high": "100",
+      "low": "100",
+      "close": "100",
+      "volume": null,
+      "amount": null
+    },
+    {
+      "date": "2021-12-30",
+      "open": "90",
+      "high": "90",
+      "low": "90",
+      "close": "90",
+      "volume": null,
+      "amount": null
+    },
+    {
+      "date": "2022-12-30",
+      "open": "80",
+      "high": "80",
+      "low": "80",
+      "close": "80",
+      "volume": null,
+      "amount": null
+    },
+    {
+      "date": "2023-12-30",
+      "open": "70",
+      "high": "70",
+      "low": "70",
+      "close": "70",
+      "volume": null,
+      "amount": null
+    }
+  ],
+  "published_at": "2024-01-01T00:00:00Z",
+  "validation": {
+    "record_count": 4,
+    "unique_record_count": 4,
+    "duplicate_count": 0
+  },
+  "unit_currency": {
+    "price_currency": {
+      "status": "Confirmed",
+      "value": "CNY",
+      "reason": "bounded fixture"
+    },
+    "price_unit": {
+      "status": "Confirmed",
+      "value": "yuan",
+      "reason": "bounded fixture"
+    },
+    "volume_unit": {
+      "status": "Unknown",
+      "value": null,
+      "reason": "bounded fixture"
+    },
+    "amount_currency": {
+      "status": "Unknown",
+      "value": null,
+      "reason": "bounded fixture"
+    },
+    "amount_unit": {
+      "status": "Unknown",
+      "value": null,
+      "reason": "bounded fixture"
+    }
+  },
+  "adjustment_evidence": {
+    "status": "Confirmed",
+    "value": "qfq",
+    "reason": "bounded fixture"
+  },
+  "batch": {
+    "symbol": "sh.600006",
+    "period": "Day",
+    "adjustment": "Forward",
+    "bars": [
+      {
+        "date": "2020-12-30",
+        "open": "100",
+        "high": "100",
+        "low": "100",
+        "close": "100",
+        "volume": null,
+        "amount": null
+      },
+      {
+        "date": "2021-12-30",
+        "open": "90",
+        "high": "90",
+        "low": "90",
+        "close": "90",
+        "volume": null,
+        "amount": null
+      },
+      {
+        "date": "2022-12-30",
+        "open": "80",
+        "high": "80",
+        "low": "80",
+        "close": "80",
+        "volume": null,
+        "amount": null
+      },
+      {
+        "date": "2023-12-30",
+        "open": "70",
+        "high": "70",
+        "low": "70",
+        "close": "70",
+        "volume": null,
+        "amount": null
+      }
+    ],
+    "provenance": {
+      "source": "fixture:release-demo",
+      "source_period": "day",
+      "source_adjustment": "qfq",
+      "symbol": "sh.600006",
+      "acquired_at": "2024-01-01T00:00:00Z",
+      "adapter_version": "fixture"
+    },
+    "coverage": {
+      "status": "Complete",
+      "reason": "fixture only"
+    },
+    "unit_currency": {
+      "price_currency": {
+        "status": "Confirmed",
+        "value": "CNY",
+        "reason": "bounded fixture"
+      },
+      "price_unit": {
+        "status": "Confirmed",
+        "value": "yuan",
+        "reason": "bounded fixture"
+      },
+      "volume_unit": {
+        "status": "Unknown",
+        "value": null,
+        "reason": "bounded fixture"
+      },
+      "amount_currency": {
+        "status": "Unknown",
+        "value": null,
+        "reason": "bounded fixture"
+      },
+      "amount_unit": {
+        "status": "Unknown",
+        "value": null,
+        "reason": "bounded fixture"
+      }
+    },
+    "adjustment_evidence": {
+      "status": "Confirmed",
+      "value": "qfq",
+      "reason": "bounded fixture"
+    }
+  }
+}
