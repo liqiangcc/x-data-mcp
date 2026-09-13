@@ -13,7 +13,7 @@ pub trait Repository: TaskRepository {
     fn probe_execution(&self, facts: &Facts) -> Result<Probe, Error>;
     fn commit_inspection(&self, plan: &Plan, probe: &Probe) -> Result<Acceptance, Error>;
 }
-pub fn inspect<R: Repository>(
+fn attempt<R: Repository>(
     repository: &R,
     request: &str,
     target: &str,
@@ -66,5 +66,21 @@ pub fn inspect<R: Repository>(
             }
             Err(error)
         }
+    }
+}
+
+/// A known rollback due to a precondition conflict gets one fresh inspection.
+/// The first Probe has dropped before another lock attempt; never self-block,
+/// auto-retry an unknown commit, or reuse a stale stopping decision.
+pub fn inspect<R: Repository>(
+    repository: &R,
+    request: &str,
+    target: &str,
+    run: &str,
+    actor: &str,
+) -> Result<Acceptance, Error> {
+    match attempt(repository, request, target, run, actor) {
+        Err(Error::RevisionConflict) => attempt(repository, request, target, run, actor),
+        result => result,
     }
 }

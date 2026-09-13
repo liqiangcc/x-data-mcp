@@ -79,6 +79,7 @@ pub fn prepare(
             "inspection identity/command missing or inconsistent".into(),
         ));
     }
+    validate_facts(&facts)?;
     let target = &facts.target;
     let supported = crate::verification_execution::supported(&target.task.key);
     let old = target.visible_status(run) == Status::NeedsVerification;
@@ -186,6 +187,40 @@ pub(crate) fn validate(a: &Audit) -> Result<(), Error> {
     if expected.audit != *a {
         return Err(Error::NeedsVerification(
             "inspection audit projections differ".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_facts(f: &Facts) -> Result<(), Error> {
+    if !crate::verification_execution::supported(&f.target.task.key) {
+        return Ok(());
+    }
+    let original = f
+        .original
+        .as_ref()
+        .ok_or_else(|| Error::NeedsVerification("inspection original target absent".into()))?;
+    let scope = crate::task_verification::verification_scope(&original.task.task_id);
+    let expected_scopes = [scope]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected_item = if f.target.task.key == crate::task_verification::command_key() {
+        "stopped-writes"
+    } else {
+        "publication-results"
+    };
+    if f.target.items.len() != 1
+        || f.target.task.work.scopes != expected_scopes
+        || f.target.items[0].spec.scope_keys != expected_scopes
+        || f.target.items[0].spec.item_id != expected_item
+        || f.target.items[0].spec.progress_unit != "evidence_check"
+        || f.target.items[0].spec.target != json!({"task_id":original.task.task_id})
+        || f.target.items[0].spec.frozen_inputs["target_task_id"] != json!(original.task.task_id)
+        || f.finished != f.target.task.status.terminal()
+        || (!f.finished && f.completion_digest.is_some())
+    {
+        return Err(Error::NeedsVerification(
+            "inspection target/work/serial protection association differs".into(),
         ));
     }
     Ok(())

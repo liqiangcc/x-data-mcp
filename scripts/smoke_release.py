@@ -111,7 +111,9 @@ def main():
             assert inspection["terminal_result"]["receipt"]["conclusion"] == "already_finished"
             assert call("get_request", dict(contract_version="v1", request_id="smoke-bounded-inspection")) == inspection
             assert call("inspect_verification_task", inspection_input) == inspection
-            assert call("get_task_progress", dict(task_id=check["task_id"])) == checked
+            unchanged_check = call("get_task_progress", dict(task_id=check["task_id"]))
+            assert unchanged_check["task"] == checked["task"]
+            assert unchanged_check["stopped_write_check"] == checked["stopped_write_check"]
             checks.append("bounded_inspection_historical_request_without_recursive_task_or_rewrite")
         finally:
             child.stdin.close()

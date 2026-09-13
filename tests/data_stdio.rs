@@ -119,6 +119,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
                 | x_data_mcp::data_supply::registry::Handler::Progress
                 | x_data_mcp::data_supply::registry::Handler::VerifyStopped
                 | x_data_mcp::data_supply::registry::Handler::VerifyPublication
+                | x_data_mcp::data_supply::registry::Handler::InspectVerification
                 | x_data_mcp::data_supply::registry::Handler::Collection
                 | x_data_mcp::data_supply::registry::Handler::Range(_)
                 | x_data_mcp::data_supply::registry::Handler::Retry
