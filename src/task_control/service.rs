@@ -282,4 +282,61 @@ mod selected_tests {
         assert_eq!(remaining[0].task.state_revision, 0);
         assert_eq!(remaining[0].items[0].stage, Stage::Pending);
     }
+    #[test]
+    fn stale_selected_executor_is_never_called_after_never_started_interruption() {
+        use crate::task_verification::{
+            StopVerification, never_started::NeverStarted, runner::StopRunner,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::sqlite_tasks::SqliteTasks::new(dir.path().join("fence.sqlite"));
+        db.initialize().unwrap();
+        let old = TaskControl::new(
+            db.clone(),
+            "old".into(),
+            vec![Box::new(legacy::LegacyCollection)],
+        )
+        .unwrap();
+        old.accept(
+            "target",
+            legacy::LegacyCollection.key(),
+            serde_json::json!({"symbols":["sh.600006"],"periods":["day"]}),
+        )
+        .unwrap();
+        let stale = db.candidates("old").unwrap().remove(0);
+        let current = TaskControl::new(
+            db.clone(),
+            "new".into(),
+            vec![Box::new(
+                StopVerification::new(db.clone(), "new".into()).unwrap(),
+            )],
+        )
+        .unwrap();
+        let accepted = current
+            .accept(
+                "check",
+                crate::task_verification::command_key(),
+                serde_json::json!({"target_task_id":stale.task.task_id}),
+            )
+            .unwrap();
+        let RequestOutcome::Task(check) = accepted.record.outcome else {
+            panic!("check required")
+        };
+        StopRunner {
+            repository: db.clone(),
+            run_id: "new".into(),
+            actor: "test-owner".into(),
+        }
+        .run(&check.task.task_id, &NeverStarted { repository: db })
+        .unwrap();
+        struct MustNotExecute;
+        impl Executor for MustNotExecute {
+            fn execute(&self, _: &CommandKey, _: &ItemSpec) -> ItemOutcome {
+                panic!("old executor must not reach source or effects")
+            }
+        }
+        assert!(matches!(
+            old.run_selected(stale, &MustNotExecute),
+            Err(Error::RevisionConflict)
+        ));
+    }
 }

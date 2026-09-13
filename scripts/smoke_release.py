@@ -92,9 +92,9 @@ def main():
             assert check["blocking_reasons"] == ["STOP_EVIDENCE_NOT_VERIFIED"]
             assert call("run_worker_once", {})["task_id"] == check["task_id"]
             checked = call("get_task_progress", dict(task_id=check["task_id"]))
-            assert checked["stopped_write_check"]["conclusion"] == "insufficient_evidence"
-            assert call("get_task", dict(contract_version="v1", task_id=original["task_id"]))["status"] == "needs_verification"
-            checks.append("stopping_inspection_reports_insufficient_and_preserves_original")
+            assert checked["stopped_write_check"]["conclusion"] == "interrupted"
+            assert call("get_task", dict(contract_version="v1", task_id=original["task_id"]))["status"] == "interrupted"
+            checks.append("stopping_inspection_proves_never_started_without_source_execution")
         finally:
             child.stdin.close()
             if child.wait(timeout=20) != 0:

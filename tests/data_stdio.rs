@@ -513,6 +513,16 @@ fn real_stop_verification_stdio_is_strict_discoverable_and_keeps_original_claims
     else {
         panic!()
     };
+    // A claimed old task is not covered by the never-started proof.
+    let original = Box::new(
+        db.transition(
+            &original.task.task_id,
+            0,
+            "old-process",
+            x_data_mcp::task_control::Change::Claim,
+        )
+        .unwrap(),
+    );
     let mut s = Session::new(&path);
     s.request("initialize", json!({}));
     let cap = s.call(

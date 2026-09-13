@@ -26,7 +26,9 @@ pub fn run_once(
         }
         .run(
             &candidate.task.task_id,
-            &crate::task_verification::decision::UnverifiedStopInspector,
+            &crate::task_verification::never_started::NeverStarted {
+                repository: control.repository.clone(),
+            },
         )?;
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
     }
