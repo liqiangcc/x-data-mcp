@@ -120,3 +120,6 @@ impl StopRepository for SqliteTasks {
         self.read(|c| read_receipt(c, id).map(|r| r.map(|(_, receipt)| receipt)))
     }
 }
+
+#[cfg(test)]
+mod tests;

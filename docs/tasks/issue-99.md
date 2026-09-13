@@ -51,3 +51,7 @@ SQLite 比较原/核实完整快照，在一个事务内保存原任务中断（
 第二切片测试包括停止/不足分支、真实两连接条件提交、busy、审计插入前失败回滚、
 陈旧原任务与取消修订、成功项保留/重试、不重释放新 claims、审计篡改及显式旧 v6 升级。
 真实子进程退出、自动收据核对 runner、公共 MCP 及终态重复核实分支尚待后续补齐。
+
+真实退出回归已加入 sqlite_verification::tests::stopped_check_real_exit_before_commit_and_after_commit_preserves_exact_facts：
+停止成立/证据不足 × before/after commit 四组子进程必须实际 exit(78)，重新连接核对双任务、
+原占用、核实收据和同计划重放。child 单独空跑不是退出证据；测试已提交，尚待 Actions 实际结果。
