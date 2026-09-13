@@ -1,0 +1,212 @@
+{
+  "schema": "x-data-mcp.official-gbbq-archive-evidence.v1",
+  "source_url": "https://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+  "retrieved_utc_start": "2026-09-13T14:49:39.505296Z",
+  "retrieved_utc_end": "2026-09-13T14:50:02.790983Z",
+  "http_status": 200,
+  "content_length_header": 6350205,
+  "actual_bytes": 6350205,
+  "last_modified": "Fri, 11 Sep 2026 12:43:38 GMT",
+  "etag": "\"6aa3f77a-60e57d\"",
+  "accept_ranges": "bytes",
+  "archive_sha256": "6b77f598004c2d651e86b7ec20e44ac42c8988132e389c9ce2d7c638e0dc924c",
+  "member_count": 26,
+  "members": [
+    {
+      "name": "gbbq",
+      "compressed_bytes": 3395082,
+      "bytes": 5966087,
+      "crc32": "77203f74",
+      "sha256": "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60"
+    },
+    {
+      "name": "gbbq.map",
+      "compressed_bytes": 26958,
+      "bytes": 96083,
+      "crc32": "afe9b169",
+      "sha256": "b2c83ef38462e1716ea33e3ef326d38ab287c13b8b50c92e960c2b932a6ae400"
+    },
+    {
+      "name": "infoharbor.lst",
+      "compressed_bytes": 497,
+      "bytes": 1105,
+      "crc32": "7b9b807b",
+      "sha256": "3d0d706fb0489f2c40dddbf3910dd0820e4a09103ad3821c3af348c295f73972"
+    },
+    {
+      "name": "infoharbor_1.txt",
+      "compressed_bytes": 905,
+      "bytes": 1538,
+      "crc32": "5da49c1c",
+      "sha256": "72df83686d09d8cafcd2691dd6f40d1ceab403f69519f7257df805b9844e2f30"
+    },
+    {
+      "name": "infoharbor_10.txt",
+      "compressed_bytes": 20333,
+      "bytes": 85414,
+      "crc32": "ca21e055",
+      "sha256": "ff303b63e257e99effa6f7ae0e7c39f10f34f4c1a9994c8ffbc8c2cdf7bc330b"
+    },
+    {
+      "name": "infoharbor_11.txt",
+      "compressed_bytes": 832,
+      "bytes": 2234,
+      "crc32": "9d1b5d56",
+      "sha256": "d0d821fe68d8ed537fdbb7d68a8aa86c305fb80fe19750a9f4a9d9f750ccb8af"
+    },
+    {
+      "name": "infoharbor_13.txt",
+      "compressed_bytes": 886,
+      "bytes": 3100,
+      "crc32": "23eb0441",
+      "sha256": "ceeb310c0b28004ff7056ae234376b0ff2e9ac2febb4285b9f10a042cbd8de1b"
+    },
+    {
+      "name": "infoharbor_14.txt",
+      "compressed_bytes": 1664,
+      "bytes": 6222,
+      "crc32": "7dd4c365",
+      "sha256": "bf6be53399b861baa438b0590b5967557c1eaef25161d32ad6425cfb505f0d6f"
+    },
+    {
+      "name": "infoharbor_15.txt",
+      "compressed_bytes": 604,
+      "bytes": 3224,
+      "crc32": "24e1fd28",
+      "sha256": "bf214b43e719e91808516dd93d4c4c1fa5476ca00d50011827d69414027fcc85"
+    },
+    {
+      "name": "infoharbor_16.txt",
+      "compressed_bytes": 5417,
+      "bytes": 13884,
+      "crc32": "9393773e",
+      "sha256": "83cbf12f8c1aa53ace1abf575c19d1e723972878848f0940d94c785909a5ce82"
+    },
+    {
+      "name": "infoharbor_17.txt",
+      "compressed_bytes": 5426,
+      "bytes": 10298,
+      "crc32": "e24cb407",
+      "sha256": "8a5700b78ab705a93883c07a4fb01602014996679399062342e2b7a605d9648e"
+    },
+    {
+      "name": "infoharbor_18.txt",
+      "compressed_bytes": 6371,
+      "bytes": 13422,
+      "crc32": "4cc2ca80",
+      "sha256": "2249f81a278ac96643aa4af961f7665d2f532cfd95275e395842127b1d5416a5"
+    },
+    {
+      "name": "infoharbor_19.txt",
+      "compressed_bytes": 2401,
+      "bytes": 3760,
+      "crc32": "07d96f8d",
+      "sha256": "e874415da45d6d4544e7621ffbfa95a68b50b96d6a40978dd77f5d5b037ef241"
+    },
+    {
+      "name": "infoharbor_20.txt",
+      "compressed_bytes": 12876,
+      "bytes": 23910,
+      "crc32": "f2430ce8",
+      "sha256": "de541b9ed676c17cabd6f5f0719e264023e6bd44d3ae08071ee951e3bddfa2aa"
+    },
+    {
+      "name": "infoharbor_21.txt",
+      "compressed_bytes": 12984,
+      "bytes": 23627,
+      "crc32": "9b00c79a",
+      "sha256": "680ae46a4890f40d5494bae13042e289c9cfb81d33340087c01b00a3e26613d3"
+    },
+    {
+      "name": "infoharbor_22.txt",
+      "compressed_bytes": 6242,
+      "bytes": 12992,
+      "crc32": "043b26e0",
+      "sha256": "4a039ae5928b56e03dbb7fe40bea8c1643695a1d7a8a2bdac8cdc2199e46c306"
+    },
+    {
+      "name": "infoharbor_23.txt",
+      "compressed_bytes": 9717,
+      "bytes": 20539,
+      "crc32": "1e796a21",
+      "sha256": "2142f1a58607e569132bef1be60c8ef271f59773d7b15be1b767f0f1ec789386"
+    },
+    {
+      "name": "infoharbor_3.txt",
+      "compressed_bytes": 720,
+      "bytes": 1308,
+      "crc32": "11de759a",
+      "sha256": "29a93947c832ff28086c0b6d84613862a6ae23e72417742d6ca62120364911d7"
+    },
+    {
+      "name": "infoharbor_6.txt",
+      "compressed_bytes": 6577,
+      "bytes": 20324,
+      "crc32": "70d4d59f",
+      "sha256": "882ba48cf5e804772db8e285d9eb4c3c72bc7ad1f2b143afb97171c1182a91ce"
+    },
+    {
+      "name": "infoharbor_7.txt",
+      "compressed_bytes": 2351,
+      "bytes": 6300,
+      "crc32": "7035a413",
+      "sha256": "9a1fecbf5e96bfe718fc71a79a41ddc0c1114bfe54b8475b1066de385f413bbe"
+    },
+    {
+      "name": "infoharbor_8.txt",
+      "compressed_bytes": 537692,
+      "bytes": 2601007,
+      "crc32": "59885c12",
+      "sha256": "6dc50d04252fef795fb6fe15350bc076c17bbd215aa147eb313291ebdb10272b"
+    },
+    {
+      "name": "infoharbor_9.txt",
+      "compressed_bytes": 844,
+      "bytes": 2070,
+      "crc32": "849e316e",
+      "sha256": "3ae09f9496ae059d6fe2d80773054a0da2736d6ebf09b1ce20785fb69811e036"
+    },
+    {
+      "name": "infoharbor_block.dat",
+      "compressed_bytes": 178334,
+      "bytes": 742813,
+      "crc32": "6fecc9ee",
+      "sha256": "26e832d123710b80d5f6f943250b9b55a92ff5ec1c24b5df07feb371874cb399"
+    },
+    {
+      "name": "tend_std.zip",
+      "compressed_bytes": 717356,
+      "bytes": 717356,
+      "crc32": "be834d8a",
+      "sha256": "2aa2447841acef02bff5f67d6de492ecad3feb9298f1c5759d779f6830a6a5db"
+    },
+    {
+      "name": "zhb.txt",
+      "compressed_bytes": 14,
+      "bytes": 14,
+      "crc32": "57baee67",
+      "sha256": "d6a0f0e5843fe0a229cf26db2c3c9386bc16abea965b05278b29b8a36ff4f138"
+    },
+    {
+      "name": "zhb.zip",
+      "compressed_bytes": 1393410,
+      "bytes": 1393410,
+      "crc32": "c64e94c4",
+      "sha256": "4247785b5bb6b08cfba8730dafb25a991a99bd03db555f6d3fbb1bdbd4b3afb1"
+    }
+  ],
+  "gbbq_structural": {
+    "count": 205727,
+    "expected_bytes": 5966087,
+    "record_width": 29,
+    "format": "observed container shape only"
+  },
+  "semantic_status": "NOT_VERIFIED",
+  "qfq_status": "NOT_RUN",
+  "production": "NOT_PRODUCTION_READY",
+  "limits": [
+    "Current archive is a separate acquisition from the retained 2026-09-11 archive; no cross-file .day consistency is claimed.",
+    "Record/category/value semantics remain community evidence only; no official normalization contract.",
+    "No server-use authorization or production import is claimed."
+  ]
+}
