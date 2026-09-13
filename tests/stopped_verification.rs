@@ -636,7 +636,7 @@ fn stopped_schema_upgrade_uses_real_v6_ddl_preserves_bindings_and_rejects_broken
             assert_eq!(
                 c.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
                     .unwrap(),
-                7
+                x_data_mcp::sqlite_tasks::SCHEMA_VERSION
             );
             assert!(
                 !c.prepare("PRAGMA foreign_key_check")

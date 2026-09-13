@@ -1392,3 +1392,134 @@ fn publication_decision_records_insufficiency_or_confirmed_commit_without_changi
         .is_err()
     );
 }
+
+fn running_publication_check(f: &Fixture, request: &str) -> x_data_mcp::task_control::TaskSnapshot {
+    use x_data_mcp::publication_verification::admission::{PublicationVerification, command_key};
+    let ctl = TaskControl::new(
+        f.db.tasks.clone(),
+        "inspection-run".into(),
+        vec![Box::new(
+            PublicationVerification::new(f.db.tasks.clone(), "inspection-run".into()).unwrap(),
+        )],
+    )
+    .unwrap();
+    let RequestOutcome::Task(check) = ctl
+        .accept(
+            request,
+            command_key(),
+            json!({"target_task_id":f.command.task_id}),
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!()
+    };
+    let check =
+        f.db.tasks
+            .transition(&check.task.task_id, 0, "inspection-run", Change::Claim)
+            .unwrap();
+    f.db.tasks
+        .transition(
+            &check.task.task_id,
+            check.task.state_revision,
+            "inspection-run",
+            Change::StartItem("publication-results".into()),
+        )
+        .unwrap()
+}
+#[test]
+fn publication_check_audit_is_atomic_replayable_and_never_mutates_original() {
+    use x_data_mcp::publication_verification::{
+        EvidenceRepository,
+        decision::{AuditStore, Conclusion, prepare},
+    };
+    for published in [false, true] {
+        let f = fixture(true);
+        let check = running_publication_check(&f, "audit-check");
+        if published {
+            f.db.commit_range(&f.plan()).unwrap();
+        }
+        let original = f.db.task(&f.command.task_id).unwrap();
+        let plan = prepare(
+            check.clone(),
+            f.db.publication_facts(&f.command.task_id).unwrap(),
+            "inspection-run",
+            "test-owner",
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let c = Connection::open(f.db.tasks.path()).unwrap();
+        c.execute_batch("CREATE TRIGGER refuse_check BEFORE INSERT ON publication_checks BEGIN SELECT RAISE(ABORT,'injected audit failure'); END").unwrap();
+        assert!(f.db.commit_check(&plan).is_err());
+        assert_eq!(
+            f.db.tasks.read_task(&check.task.task_id).unwrap().unwrap(),
+            check
+        );
+        assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+        assert!(f.db.check_receipt(&check.task.task_id).unwrap().is_none());
+        c.execute_batch("DROP TRIGGER refuse_check").unwrap();
+        let receipt = f.db.commit_check(&plan).unwrap();
+        assert_eq!(
+            receipt.conclusion,
+            if published {
+                Conclusion::AllRecorded
+            } else {
+                Conclusion::InsufficientEvidence
+            }
+        );
+        assert_eq!(f.db.commit_check(&plan).unwrap(), receipt);
+        assert_eq!(
+            f.db.check_receipt(&check.task.task_id).unwrap(),
+            Some(receipt)
+        );
+        assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+        assert!(
+            f.db.tasks
+                .read_task(&check.task.task_id)
+                .unwrap()
+                .unwrap()
+                .claims
+                .is_empty()
+        );
+        c.execute("UPDATE publication_checks SET audit_sha256='damaged'", [])
+            .unwrap();
+        assert!(f.db.check_receipt(&check.task.task_id).is_err());
+        assert!(f.db.tasks.read_task(&check.task.task_id).is_err());
+    }
+}
+#[test]
+fn publication_check_rejects_changed_target_or_cancelled_check_before_recording() {
+    use x_data_mcp::publication_verification::{
+        EvidenceRepository,
+        decision::{AuditStore, prepare},
+    };
+    for cancel in [false, true] {
+        let f = fixture(true);
+        let check = running_publication_check(&f, "stale-check");
+        let plan = prepare(
+            check.clone(),
+            f.db.publication_facts(&f.command.task_id).unwrap(),
+            "inspection-run",
+            "test-owner",
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        if cancel {
+            f.db.tasks
+                .transition(
+                    &check.task.task_id,
+                    check.task.state_revision,
+                    "inspection-run",
+                    Change::RequestCancel,
+                )
+                .unwrap();
+        } else {
+            f.db.commit_range(&f.plan()).unwrap();
+        }
+        let original = f.db.task(&f.command.task_id).unwrap();
+        assert!(matches!(f.db.commit_check(&plan), Err(Error::Conflict(_))));
+        assert_eq!(f.count("publication_checks"), 0);
+        assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+    }
+}
