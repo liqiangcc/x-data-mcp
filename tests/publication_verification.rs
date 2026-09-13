@@ -178,3 +178,126 @@ fn publication_check_preserves_mixed_published_running_and_never_started_items()
         &records[0]["record"]
     );
 }
+
+#[test]
+fn malformed_evidence_port_result_cannot_leave_check_looking_normally_running() {
+    // This is an application-port fault, not a claim that SQLite returned these facts.
+    struct IncompletePort {
+        market: SqliteMarket,
+        reads: std::cell::Cell<usize>,
+    }
+    impl EvidenceRepository for IncompletePort {
+        fn publication_facts(
+            &self,
+            id: &str,
+        ) -> Result<x_data_mcp::publication_verification::Facts, x_data_mcp::market_storage::Error>
+        {
+            self.reads.set(self.reads.get() + 1);
+            let mut facts = self.market.publication_facts(id)?;
+            facts.items.clear();
+            Ok(facts)
+        }
+    }
+    impl AuditStore for IncompletePort {
+        fn commit_check(
+            &self,
+            _: &x_data_mcp::publication_verification::decision::Plan,
+        ) -> Result<
+            x_data_mcp::publication_verification::decision::Receipt,
+            x_data_mcp::market_storage::Error,
+        > {
+            panic!("invalid evidence must not reach audit commit");
+        }
+        fn check_receipt(
+            &self,
+            id: &str,
+        ) -> Result<
+            Option<x_data_mcp::publication_verification::decision::Receipt>,
+            x_data_mcp::market_storage::Error,
+        > {
+            self.market.check_receipt(id)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(dir.path().join("invalid-port.sqlite"));
+    tasks.initialize().unwrap();
+    let old = TaskControl::new(
+        tasks.clone(),
+        "old".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    let RequestOutcome::Task(original) = old
+        .accept(
+            "original",
+            LegacyCollection.key(),
+            json!({"symbols":["sh.600006"],"periods":["day"]}),
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!()
+    };
+    let original = tasks
+        .transition(&original.task.task_id, 0, "old", Change::Claim)
+        .unwrap();
+    let original = tasks
+        .transition(
+            &original.task.task_id,
+            original.task.state_revision,
+            "old",
+            Change::StartItem(original.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let control = TaskControl::new(
+        tasks.clone(),
+        "check".into(),
+        vec![Box::new(
+            PublicationVerification::new(tasks.clone(), "check".into()).unwrap(),
+        )],
+    )
+    .unwrap();
+    let RequestOutcome::Task(check) = control
+        .accept(
+            "inspect",
+            command_key(),
+            json!({"target_task_id":original.task.task_id}),
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!()
+    };
+    let runner = Runner {
+        tasks: tasks.clone(),
+        evidence: IncompletePort {
+            market: SqliteMarket::new(tasks.clone()),
+            reads: std::cell::Cell::new(0),
+        },
+        run_id: "check".into(),
+        actor: "test-owner".into(),
+    };
+    assert!(runner.run(&check.task.task_id).is_err());
+    let unresolved = tasks.read_task(&check.task.task_id).unwrap().unwrap();
+    assert_eq!(
+        unresolved.task.status,
+        x_data_mcp::task_control::Status::NeedsVerification
+    );
+    assert!(unresolved.execution_uncertainty().unwrap().is_some());
+    assert!(!unresolved.claims.is_empty());
+    assert!(
+        runner
+            .evidence
+            .check_receipt(&check.task.task_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(runner.run(&check.task.task_id).is_err());
+    assert_eq!(runner.evidence.reads.get(), 1);
+    assert_eq!(
+        tasks.read_task(&original.task.task_id).unwrap().unwrap(),
+        original
+    );
+}
