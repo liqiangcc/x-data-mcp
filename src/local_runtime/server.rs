@@ -2,7 +2,7 @@ use super::{DatabaseLease, Endpoint, WorkerGate};
 use crate::mcp::{ToolHandler, handle_json};
 use serde_json::json;
 use std::{
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{self, BufReader, Write},
     net::Shutdown,
     os::unix::net::UnixStream,
     sync::{
@@ -115,7 +115,7 @@ where
                         drop(stream);
                         continue;
                     }
-                    stream.set_read_timeout(Some(config.io_timeout))?;
+                    stream.set_read_timeout(Some(config.io_timeout.min(Duration::from_secs(1))))?;
                     stream.set_write_timeout(Some(config.io_timeout))?;
                     active.fetch_add(1, Ordering::SeqCst);
                     let slot = Slot(active.clone());
@@ -130,19 +130,15 @@ where
                         let mut writer = stream.try_clone()?;
                         let mut reader = BufReader::new(stream);
                         while !stop.load(Ordering::SeqCst) {
-                            let mut frame = Vec::new();
-                            let n = reader
-                                .by_ref()
-                                .take((cfg.max_frame_bytes + 1) as u64)
-                                .read_until(b'\n', &mut frame)?;
-                            if n == 0 {
+                            let Some(frame) = super::frame::read_frame(
+                                &mut reader,
+                                &stop,
+                                cfg.max_frame_bytes,
+                                cfg.io_timeout,
+                            )?
+                            else {
                                 break;
-                            }
-                            if n > cfg.max_frame_bytes || frame.last() != Some(&b'\n') {
-                                return Err(io::Error::other(
-                                    "IPC frame exceeds limit or is incomplete",
-                                ));
-                            }
+                            };
                             db.validate()?;
                             let input = std::str::from_utf8(&frame).map_err(io::Error::other)?;
                             if let Some(response) = handle_json(&api, input) {

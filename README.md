@@ -196,5 +196,6 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 旧非终态不自动续跑。socket 目录需本人所有且0700，库文件需0600；不自动修改权限、建库或升级。
 默认 worker 轮询100ms，只执行显式受理任务。读取及取消可使用其他会话，手动 worker 与后台串行，
 忙时返回 `worker_busy`，停止中返回 `worker_stopping`。工程预算与实际证据见 [#110](docs/tasks/issue-110.md)。
+IPC正常空闲不会结束会话；30秒读取预算从收到未完整帧的第一字节起计算，修复见 [#112](docs/tasks/issue-112.md)。
 此入口尚未部署到 tunnel；旧 `mcp_data` 等兼容开发入口不与服务同库混用。
 仍 NOT_PRODUCTION_READY，来源门禁不变。源码/fixture 不代表真实来源或新版 ChatGPT 调用通过。
