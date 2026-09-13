@@ -350,6 +350,9 @@ fn encode<T: Serialize>(v: T) -> Result<Value, ApiError> {
     serde_json::to_value(v).map_err(|e| ApiError::new("internal_error", e.to_string()))
 }
 fn mapped(e: Error) -> ApiError {
+    if let Error::Task(task) = e {
+        return task_error(task);
+    }
     let code = match &e {
         Error::Invalid(s) if s == "forbidden" => "forbidden",
         Error::Invalid(_) => "invalid_arguments",
@@ -357,7 +360,6 @@ fn mapped(e: Error) -> ApiError {
         Error::NotFound => "version_not_found",
         Error::Conflict(_) => "precondition_conflict",
         Error::OutcomeUnknown(_) => "outcome_unknown",
-        Error::Task(crate::task_control::Error::TaskNotFound) => "task_not_found",
         _ => "storage_error",
     };
     ApiError::new(code, e.to_string())
