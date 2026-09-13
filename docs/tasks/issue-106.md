@@ -59,3 +59,8 @@
 边界核对补充：检查时验证核实的单项类型、原目标和唯一 verification:task:<原目标> scope，通用任务结构合法不等于核实串行身份合法。两次已知条件冲突后返回 precondition_conflict，不循环等待；第一次 Probe 在重新读证据前销毁，避免自持锁造成假 Busy。实际子进程测试分别验证仍活跃时保留保护、exit106 后允许条件收尾、旧 insufficient 请求仍固定历史结果。
 
 CI 修正历史：b4316ac 的首轮 stdio 通用示例测试未分类新有状态入口，且 smoke 比较包含每次变化的 snapshot_id/time；9c7fe69 修正为验证有状态入口的专门 fixture 和稳定 task/receipt。后续 release_smoke Rust 断言仍期待 17 工具/8 项检查，已同步为 18 工具/9 项，保留全部旧检查并新增 bounded inspection 检查。失败日志保留，不修改旧来源 evidence。
+
+
+最终回归补充：`actual_live_execution_is_protected_and_only_actual_exit_allows_check_finish` 使用真实子进程和 exit106，覆盖运行中不足、退出后收尾与旧结果不重写；`application_rechecks_a_changed_sqlite_snapshot_once_without_reusing_old_plan` 在真实 SQLite 中变更状态，验证至多两次条件提交。已补 v8→v9 显式升级、同/异参两连接竞争、一致 snapshot 中并发 Claim/登记、坏库/未知 schema/busy、请求/audit 缺失或篡改、scope 身份和原业务/行情字节保持测试。测试使用的坏绑定由独立 fixture 连接关闭外键后注入，生产连接始终开启外键。
+
+执行者自查补充：有检查审计的 request 不能改挂其他已注册契约或异步 task outcome；通用读取现在拒绝此类错绑，并避免由错误 task outcome 回到检查目标造成递归读取。此规则不放宽旧任务请求契约。真实来源仍未运行，所有 PASS 须引用确切最终 HEAD 的 Actions。

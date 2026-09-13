@@ -448,7 +448,14 @@ fn inspection_rejects_missing_binding_occupancy_or_forged_serial_scope() {
 }
 #[test]
 fn inspection_historical_request_rejects_missing_audit_or_orphan_binding() {
-    for fault in ["audit", "binding", "terminal", "target", "command"] {
+    for fault in [
+        "audit",
+        "binding",
+        "terminal",
+        "target",
+        "command",
+        "task_outcome",
+    ] {
         let (_dir, db, _original, check) = fixture();
         inspect(&db, "inspect", &check.task.task_id, "manager", "owner").unwrap();
         let c = Connection::open(db.path()).unwrap();
@@ -469,6 +476,11 @@ fn inspection_historical_request_rejects_missing_audit_or_orphan_binding() {
                     [],
                 )
                 .unwrap();
+            }
+            "task_outcome" => {
+                c.execute("DELETE FROM requests WHERE request_id='check'", [])
+                    .unwrap();
+                c.execute("UPDATE requests SET outcome_kind='task',task_id=?1,terminal_json=NULL WHERE request_id='inspect'", [&check.task.task_id]).unwrap();
             }
             "command" => {
                 let command = crate::task_control::Command {
