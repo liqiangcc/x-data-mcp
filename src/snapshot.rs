@@ -178,9 +178,9 @@ fn declared_official_url(role: FileRole, url: &str) -> bool {
         return false;
     };
     let expected_path = match role {
-        FileRole::BaseIndustry => "/products/data/data/dbf/base.zip",
-        FileRole::Gbbq => "/products/data/data/dbf/gbbq.zip",
-        FileRole::Day => "/vipdoc/hsjday.zip",
+        FileRole::BaseIndustry => "products/data/data/dbf/base.zip",
+        FileRole::Gbbq => "products/data/data/dbf/gbbq.zip",
+        FileRole::Day => "vipdoc/hsjday.zip",
     };
     let host_allowed = match role {
         FileRole::Day => host == "data.tdx.com.cn",
