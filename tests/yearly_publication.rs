@@ -1256,6 +1256,10 @@ fn yearly_runner_reconciles_response_loss_and_never_reexecutes_unknown_commit() 
             }
             let current = store.tasks.read_task(&task.task.task_id).unwrap().unwrap();
             assert_eq!(current.claims.is_empty(), commit_first);
+            assert_eq!(
+                current.execution_uncertainty().unwrap().is_some(),
+                !commit_first
+            );
             let calls = verifier.calls.get();
             let repeated =
                 faulty.run_item(&task.task.task_id, &task.items[0].spec.item_id, &verifier);

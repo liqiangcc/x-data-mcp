@@ -169,6 +169,41 @@ pub struct RetryGuard {
     pub expected_revision: u64,
     pub selected_items: BTreeSet<String>,
 }
+/// Internal execution observation, never an externally supplied approval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionUncertainty {
+    pub item_id: String,
+    pub reason: String,
+    pub previous_result: Option<Value>,
+}
+impl TaskSnapshot {
+    pub fn execution_uncertainty(&self) -> Result<Option<ExecutionUncertainty>, Error> {
+        let Some(value) = self
+            .task
+            .result
+            .as_ref()
+            .and_then(|r| r.get("execution_uncertainty"))
+        else {
+            return Ok(None);
+        };
+        let marker: ExecutionUncertainty = serde_json::from_value(value.clone())
+            .map_err(|e| Error::NeedsVerification(format!("invalid execution uncertainty: {e}")))?;
+        if self.task.status != Status::NeedsVerification
+            || self.task.owner_run_id.is_none()
+            || marker.reason.trim().is_empty()
+            || !self
+                .items
+                .iter()
+                .any(|i| i.spec.item_id == marker.item_id && i.stage == Stage::Running)
+        {
+            return Err(Error::NeedsVerification(
+                "execution uncertainty does not bind unresolved running item".into(),
+            ));
+        }
+        Ok(Some(marker))
+    }
+}
 #[derive(Debug, Clone)]
 pub enum Change {
     Claim,

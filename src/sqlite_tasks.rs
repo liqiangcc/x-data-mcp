@@ -297,6 +297,7 @@ fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
     Ok(Some(s))
 }
 fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), Error> {
+    s.execution_uncertainty()?;
     s.task
         .work
         .validate()

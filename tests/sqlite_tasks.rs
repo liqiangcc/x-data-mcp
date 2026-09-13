@@ -785,3 +785,46 @@ fn execution_uncertainty_is_persisted_without_finishing_items_or_releasing_claim
         Err(Error::RangeConflict(_))
     ));
 }
+
+#[test]
+fn uncertainty_write_failure_preserves_old_state_and_bad_marker_is_rejected() {
+    let (_dir, db) = database();
+    let initial = snapshot(accept(&db, "uncertain-failure", &["sh.600006"]));
+    let s = db
+        .transition(&initial.task.task_id, 0, "run-a", Change::Claim)
+        .unwrap();
+    let s = db
+        .transition(
+            &s.task.task_id,
+            s.task.state_revision,
+            "run-a",
+            Change::StartItem(s.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let c = Connection::open(db.path()).unwrap();
+    c.execute_batch("CREATE TRIGGER reject_uncertainty BEFORE UPDATE ON tasks WHEN NEW.status='needs_verification' BEGIN SELECT RAISE(ABORT,'injected uncertainty write failure'); END").unwrap();
+    let change = Change::RequireVerification {
+        item_id: s.items[0].spec.item_id.clone(),
+        reason: "unknown result".into(),
+    };
+    assert!(
+        db.transition(
+            &s.task.task_id,
+            s.task.state_revision,
+            "run-a",
+            change.clone()
+        )
+        .is_err()
+    );
+    assert_eq!(db.read_task(&s.task.task_id).unwrap().unwrap(), s);
+    c.execute_batch("DROP TRIGGER reject_uncertainty").unwrap();
+    let marked = db
+        .transition(&s.task.task_id, s.task.state_revision, "run-a", change)
+        .unwrap();
+    assert!(marked.execution_uncertainty().unwrap().is_some());
+    c.execute("UPDATE tasks SET result_json=?1 WHERE task_id=?2", params![json!({"execution_uncertainty":{"item_id":"other-item","reason":"unknown","previous_result":null}}).to_string(),s.task.task_id]).unwrap();
+    assert!(matches!(
+        db.read_task(&s.task.task_id),
+        Err(Error::NeedsVerification(_))
+    ));
+}
