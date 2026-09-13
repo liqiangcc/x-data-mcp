@@ -1821,3 +1821,80 @@ fn publication_runner_read_integrity_failure_marks_check_unresolved_without_fals
         Err(Error::OutcomeUnknown(_))
     ));
 }
+
+#[test]
+fn known_publication_request_replays_without_new_task_and_rejects_damaged_evidence() {
+    use x_data_mcp::publication_verification::{
+        admission::PublicationVerification,
+        existing,
+        runner::{Outcome, Runner},
+    };
+    let f = fixture(true);
+    let check = pending_publication_check(&f, "known-check");
+    f.db.commit_range(&f.plan()).unwrap();
+    let Outcome::Completed(receipt) = (Runner {
+        tasks: f.db.tasks.clone(),
+        evidence: f.db.clone(),
+        run_id: "inspection-run".into(),
+        actor: "test-owner".into(),
+    })
+    .run(&check.task.task_id)
+    .unwrap() else {
+        panic!()
+    };
+    let control = TaskControl::new(
+        f.db.tasks.clone(),
+        "inspection-run".into(),
+        vec![Box::new(
+            PublicationVerification::new(f.db.tasks.clone(), "inspection-run".into()).unwrap(),
+        )],
+    )
+    .unwrap();
+    let original = f.db.task(&f.command.task_id).unwrap();
+    let counts = || {
+        let c = Connection::open(f.db.tasks.path()).unwrap();
+        [
+            "tasks",
+            "task_items",
+            "scope_occupancy",
+            "publication_checks",
+        ]
+        .map(|table| {
+            c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap()
+        })
+    };
+    let before = counts();
+    let accepted = existing::accept(&control, "known-request", &f.command.task_id).unwrap();
+    let RequestOutcome::Terminal(value) = &accepted.record.outcome else {
+        panic!()
+    };
+    let result: existing::TerminalResult = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(result.receipt(), &receipt);
+    let replay = existing::accept(&control, "known-request", &f.command.task_id).unwrap();
+    assert_eq!(replay.record, accepted.record);
+    assert!(matches!(
+        existing::accept(&control, "known-request", "another-task"),
+        Err(x_data_mcp::task_control::Error::RequestConflict)
+    ));
+    assert_eq!(counts(), before);
+    assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+    Connection::open(f.db.tasks.path())
+        .unwrap()
+        .execute(
+            "UPDATE publication_checks SET audit_sha256='damaged' WHERE verification_task_id=?1",
+            [&check.task.task_id],
+        )
+        .unwrap();
+    assert!(f.db.tasks.read_request("known-request").is_err());
+    assert!(existing::accept(&control, "new-known-request", &f.command.task_id).is_err());
+    assert!(
+        f.db.tasks
+            .read_request("new-known-request")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(counts(), before);
+}
