@@ -162,7 +162,11 @@ where
             let mut index = 0;
             while index < clients.len() {
                 if clients[index].thread.is_finished() {
-                    let _ = clients.swap_remove(index).thread.join();
+                    if clients.swap_remove(index).thread.join().is_err() {
+                        return Err(io::Error::other(
+                            "MCP session panicked; stop this run without automatic retry",
+                        ));
+                    }
                 } else {
                     index += 1;
                 }
@@ -187,11 +191,15 @@ where
             "shutdown budget expired; unfinished task state retained for verification",
         ));
     }
+    let mut client_panicked = false;
     for client in clients {
-        let _ = client.thread.join();
+        client_panicked |= client.thread.join().is_err();
+    }
+    if client_panicked {
+        return Err(io::Error::other("MCP session panicked; no automatic retry"));
     }
     let work = worker
         .join()
         .map_err(|_| io::Error::other("worker panicked; no automatic retry"))?;
-    result.and(work)
+    work.and(result)
 }

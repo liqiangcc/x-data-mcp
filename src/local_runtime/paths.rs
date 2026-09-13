@@ -32,14 +32,25 @@ fn private_metadata(path: &Path, directory: bool) -> io::Result<fs::Metadata> {
     Ok(m)
 }
 fn parent(path: &Path) -> io::Result<()> {
-    private_metadata(
-        path.parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .ok_or_else(|| invalid("socket requires an explicit private parent directory"))?,
-        true,
-    )?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| invalid("socket requires an explicit private parent directory"))?;
+    let expected = private_metadata(parent, true)?;
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+        .open(parent)?;
+    if Identity::of(&expected) != Identity::of(&directory.metadata()?)
+        || !crate::local_filesystem::supported_file(&directory)?
+    {
+        return Err(invalid(
+            "socket directory changed or is not a supported local filesystem",
+        ));
+    }
     Ok(())
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Identity {
@@ -71,6 +82,9 @@ impl DatabaseLease {
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(path)?;
+        if !crate::local_filesystem::supported_file(&file)? {
+            return Err(invalid("service requires a supported local filesystem"));
+        }
         file.try_lock().map_err(|e| {
             invalid(&format!(
                 "database service already active or lock unavailable: {e}"
@@ -159,24 +173,16 @@ impl Endpoint {
         if fs::symlink_metadata(path).is_ok() && fs::symlink_metadata(&owner).is_err() {
             return Err(invalid("unregistered existing endpoint; no clobber"));
         }
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&owner)
-        {
-            Ok(mut file) => {
-                // A pre-existing socket without our owner record is never adopted.
-                if fs::symlink_metadata(path).is_ok() {
-                    return Err(invalid("unregistered existing endpoint; no clobber"));
-                }
-                file.write_all(&serde_json::to_vec(&db.identity)?)?;
-                file.sync_all()?;
-            }
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+        // Publish a complete owner marker, never an empty partially-written
+        // final file. Temporary files belong solely to this bind attempt.
+        let mut pending = tempfile::NamedTempFile::new_in(owner.parent().unwrap())?;
+        pending.write_all(&serde_json::to_vec(&db.identity)?)?;
+        pending.as_file().sync_all()?;
+        match pending.persist_noclobber(&owner) {
+            Ok(_) => {}
+            Err(e) if e.error.kind() == io::ErrorKind::AlreadyExists => {
                 let m = private_metadata(&owner, false)?;
-                if !m.is_file() || m.nlink() != 1 {
+                if !m.is_file() {
                     return Err(invalid("invalid endpoint owner file"));
                 }
                 let mut raw = Vec::new();
@@ -190,7 +196,7 @@ impl Endpoint {
                     return Err(invalid("endpoint belongs to another database"));
                 }
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.error),
         }
         match fs::symlink_metadata(path) {
             Ok(m) => {

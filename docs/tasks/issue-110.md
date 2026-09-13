@@ -42,3 +42,9 @@ worker 轮询支持 CLI `--poll-ms 10..60000`（默认100），用于显式运�
 c9d5095：Actions 34750700088 / rust103706627884，fmt/clippy 已通过，测试失败。真实服务 fixture 使用 tempfile 默认目录权限，未显式0700，被正确拒绝；7ac1abb 只修 fixture 目录准备，不放宽 owner-only 规则。
 补齐真实 SQLite 在途 fixture：断连后仍 Running；另一个会话可读/申请取消，手动 worker 忙拒绝；停止新领取后仅在途项结束，排队任务继续保留。独立测试子进程实际以79退出证明 stop budget 不捏造终态；重启仍待核实。测试-only 阻塞执行器不进入生产 binary/配置。
 代理自查发现服务 EOF 时不应等待调用方仍打开的 stdin，改为主线程负责响应方向，加入真实 proxy 退出回归。输入超限/会话上限关闭仅该连接；source仍NOT_RUN。
+
+## 完整回归与执行者自查补充
+
+a1c844f 的 CI 34751008701 / rust103707433413 SUCCESS，包含真实在途取消/退出预算/重启、proxy服务EOF 和稳定入口。此前7dd3268 的34750915938在测试SQL count读取误用u64处编译失败，已按SQLite i64修正；没有降低断言。
+执行者自查继续处理与本任务直接相关的运行边界：服务锁与IPC目录复用已有FD级本地文件系统白名单；现有 verification guard 的拒绝语义保留。owner marker 完整写后无覆盖发布，避免空标记；会话panic令当前服务停止，不能忽略后继续旧run。跨UID真实调用尚未运行，不把同UID SO_PEERCRED检查外推为跨UID验收。
+发布脚本携带 data_service/mcp_connect；现有9项 packaged检查保留，增加第10项真实服务/代理发现、受理后重连与来源拒绝。新版包/线上服务/ChatGPT消费尚未验证，不冒充已部署。

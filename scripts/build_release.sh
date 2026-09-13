@@ -10,7 +10,7 @@ if [[ -e "$stage" ]]; then
 fi
 cargo build --release --locked --bins
 mkdir -p "$stage/bin"
-for binary in mcp_data mcp_server mcp_sqlite_dev task_sqlite inspect_day inspect_snapshot create_demo; do
+for binary in data_service mcp_connect mcp_data mcp_server mcp_sqlite_dev task_sqlite inspect_day inspect_snapshot create_demo; do
   cp "target/release/$binary" "$stage/bin/"
 done
 cp README.md "$stage/README.md"

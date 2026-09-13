@@ -49,6 +49,7 @@ impl ToolHandler for FixtureApi {
         self.api.tools()
     }
     fn call(&self, name: &str, args: Value) -> Result<Value, x_data_mcp::mcp::ApiError> {
+        assert_ne!(name, "test_only_panic", "test-only request handler panic");
         if name != "run_worker_once" || args != json!({}) {
             return self.api.call(name, args);
         }
@@ -290,5 +291,33 @@ fn ipc_frame_and_client_limits_close_only_the_session_without_database_writes() 
         c.query_row("select count(*) from requests", [], |r| r.get::<_, i64>(0))
             .unwrap(),
         0
+    );
+}
+
+#[test]
+fn session_panic_stops_service_instead_of_silently_continuing_the_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(dir.path());
+    let socket = dir.path().join("socket");
+    let stop = Arc::new(AtomicBool::new(false));
+    let server = fixture_server(
+        &db,
+        &socket,
+        Arc::new(Blocking::default()),
+        stop,
+        Config::default(),
+    );
+    let mut session = Session::new(&socket);
+    writeln!(session.stream,"{}",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"test_only_panic","arguments":{}}})).unwrap();
+    let mut line = String::new();
+    assert_eq!(session.reader.read_line(&mut line).unwrap(), 0);
+    drop(session);
+    assert!(
+        server
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("session panicked")
     );
 }
