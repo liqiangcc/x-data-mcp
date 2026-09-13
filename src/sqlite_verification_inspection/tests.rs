@@ -552,3 +552,168 @@ fn verified_finished_result_is_not_rewritten_and_inspection_preserves_market_byt
     );
     assert_eq!(market_rows(&db), before);
 }
+
+#[test]
+fn active_inspection_execution_child() {
+    use std::io::Write;
+    let Ok(path) = std::env::var("X_DATA_MCP_TEST_INSPECTION_ACTIVE_DB") else {
+        return;
+    };
+    let target = std::env::var("X_DATA_MCP_TEST_INSPECTION_ACTIVE_TASK").unwrap();
+    let db = SqliteTasks::new(path);
+    let check = db.read_task(&target).unwrap().unwrap();
+    let _tasks = claimed(&db, &check);
+    println!("EXECUTION_READY");
+    std::io::stdout().flush().unwrap();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).unwrap();
+    // Bypass Rust Drop. Only actual process exit releases the kernel guard.
+    std::process::exit(106);
+}
+#[test]
+fn actual_live_execution_is_protected_and_only_actual_exit_allows_check_finish() {
+    use std::io::{BufRead, BufReader, Write};
+    let (_dir, db, original, check) = fixture();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "sqlite_verification_inspection::tests::active_inspection_execution_child",
+            "--nocapture",
+        ])
+        .env("X_DATA_MCP_TEST_INSPECTION_ACTIVE_DB", db.path())
+        .env(
+            "X_DATA_MCP_TEST_INSPECTION_ACTIVE_TASK",
+            &check.task.task_id,
+        )
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut ready = false;
+    for _ in 0..6 {
+        let mut line = String::new();
+        if output.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        if line.trim() == "EXECUTION_READY" {
+            ready = true;
+            break;
+        }
+    }
+    assert!(ready);
+    assert!(child.try_wait().unwrap().is_none());
+    let live = inspect(&db, "live", &check.task.task_id, "manager", "owner").unwrap();
+    assert_eq!(receipt(&live).conclusion, Conclusion::InsufficientEvidence);
+    assert!(
+        !db.read_task(&check.task.task_id)
+            .unwrap()
+            .unwrap()
+            .claims
+            .is_empty()
+    );
+    writeln!(child.stdin.as_mut().unwrap(), "exit").unwrap();
+    assert_eq!(child.wait().unwrap().code(), Some(106));
+    let after = inspect(&db, "after-exit", &check.task.task_id, "manager", "owner").unwrap();
+    assert_eq!(receipt(&after).conclusion, Conclusion::Interrupted);
+    assert_eq!(
+        inspect(&db, "live", &check.task.task_id, "manager", "owner")
+            .unwrap()
+            .record,
+        live.record
+    );
+    assert_eq!(
+        db.read_task(&original.task.task_id).unwrap(),
+        Some(original)
+    );
+}
+
+#[test]
+fn application_rechecks_a_changed_sqlite_snapshot_once_without_reusing_old_plan() {
+    use crate::task_control::{Command, FrozenWork, RequestRecord, RetryGuard};
+    struct Racing {
+        db: SqliteTasks,
+        target: String,
+        calls: std::cell::Cell<usize>,
+        twice: bool,
+    }
+    impl TaskRepository for Racing {
+        fn read_request(&self, id: &str) -> Result<Option<RequestRecord>, Error> {
+            self.db.read_request(id)
+        }
+        fn read_task(&self, id: &str) -> Result<Option<TaskSnapshot>, Error> {
+            self.db.read_task(id)
+        }
+        fn accept(
+            &self,
+            _: &str,
+            _: &Command,
+            _: &FrozenWork,
+            _: &str,
+            _: Option<&RetryGuard>,
+        ) -> Result<Acceptance, Error> {
+            panic!("inspection must not accept async work")
+        }
+        fn transition(&self, _: &str, _: u64, _: &str, _: Change) -> Result<TaskSnapshot, Error> {
+            panic!("inspection must use its sealed conditional plan")
+        }
+        fn candidates(&self, _: &str) -> Result<Vec<TaskSnapshot>, Error> {
+            panic!("inspection must not dispatch work")
+        }
+        fn reconcile(&self, _: &str) -> Result<usize, Error> {
+            panic!("inspection must not reconcile unrelated tasks")
+        }
+    }
+    impl Repository for Racing {
+        fn inspection_facts(&self, id: &str) -> Result<Facts, Error> {
+            self.db.inspection_facts(id)
+        }
+        fn probe_execution(&self, f: &Facts) -> Result<Probe, Error> {
+            self.db.probe_execution(f)
+        }
+        fn commit_inspection(&self, p: &Plan, probe: &Probe) -> Result<Acceptance, Error> {
+            let call = self.calls.get() + 1;
+            self.calls.set(call);
+            assert!(call <= 2);
+            if call == 1 {
+                self.db
+                    .transition(&self.target, 0, "check-run", Change::RequestCancel)?;
+            } else if self.twice {
+                self.db
+                    .transition(&self.target, 1, "manager", Change::Reconcile)?;
+            }
+            self.db.commit_inspection(p, probe)
+        }
+    }
+    for twice in [false, true] {
+        let (_dir, db, original, check) = fixture();
+        let repo = Racing {
+            db: db.clone(),
+            target: check.task.task_id.clone(),
+            calls: std::cell::Cell::new(0),
+            twice,
+        };
+        let result = inspect(&repo, "inspect", &check.task.task_id, "manager", "owner");
+        assert_eq!(repo.calls.get(), 2);
+        if twice {
+            assert!(matches!(result, Err(Error::RevisionConflict)));
+            assert!(db.read_request("inspect").unwrap().is_none());
+        } else {
+            assert_eq!(
+                receipt(&result.unwrap()).conclusion,
+                Conclusion::InsufficientEvidence
+            );
+        }
+        assert!(
+            !db.read_task(&check.task.task_id)
+                .unwrap()
+                .unwrap()
+                .claims
+                .is_empty()
+        );
+        assert_eq!(
+            db.read_task(&original.task.task_id).unwrap(),
+            Some(original)
+        );
+    }
+}
