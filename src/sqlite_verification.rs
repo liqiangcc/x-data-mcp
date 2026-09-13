@@ -72,6 +72,26 @@ pub(crate) fn read_receipt(c: &Connection, id: &str) -> Result<Option<(Audit, Re
     {
         return Err(integrity("interrupted target differs"));
     }
+    if audit.receipt.conclusion == crate::task_verification::decision::Conclusion::AlreadyVerified {
+        let prior_id = audit
+            .target_before
+            .task
+            .result
+            .as_ref()
+            .and_then(|r| r["interruption"]["verification_task_id"].as_str())
+            .ok_or_else(|| integrity("prior check link missing"))?;
+        let prior = read_audit(c, prior_id)?
+            .ok_or_else(|| integrity("prior interruption audit missing"))?;
+        if prior_id == id
+            || prior.receipt.conclusion
+                != crate::task_verification::decision::Conclusion::Interrupted
+            || prior.receipt.target_task_id != audit.receipt.target_task_id
+        {
+            return Err(integrity("prior interruption association differs"));
+        }
+        read_receipt(c, prior_id)?
+            .ok_or_else(|| integrity("prior interruption receipt missing"))?;
+    }
     let receipt = audit.receipt.clone();
     Ok(Some((audit, receipt)))
 }
@@ -123,3 +143,71 @@ impl StopRepository for SqliteTasks {
 
 #[cfg(test)]
 mod tests;
+
+use crate::task_control::{Acceptance, Command, RequestOutcome, RequestRecord};
+use crate::task_verification::existing::{ExistingPlan, ExistingStopRepository, TerminalResult};
+pub(crate) fn validate_terminal(
+    c: &Connection,
+    command: &Command,
+    value: &serde_json::Value,
+) -> Result<(), Error> {
+    if command.key != crate::task_verification::command_key() {
+        return Ok(());
+    }
+    let result: TerminalResult = serde_json::from_value(value.clone()).map_err(integrity)?;
+    let expected = result.receipt();
+    if command.intent != serde_json::json!({"target_task_id":expected.target_task_id}) {
+        return Err(integrity("known stop request intent differs"));
+    }
+    if read_receipt(c, &expected.verification_task_id)?
+        .map(|(_, r)| r)
+        .as_ref()
+        != Some(expected)
+    {
+        return Err(integrity("known stop receipt missing or changed"));
+    }
+    if expected.conclusion != crate::task_verification::decision::Conclusion::Interrupted {
+        return Err(integrity("known stop request has no interruption"));
+    }
+    Ok(())
+}
+impl ExistingStopRepository for SqliteTasks {
+    fn bind_existing_stop(&self, plan: &ExistingPlan) -> Result<Acceptance, Error> {
+        self.write(|c| {
+            if let Some(record) = crate::sqlite_tasks::read_request(c, &plan.request_id)? {
+                if record.command != plan.command {
+                    return Err(Error::RequestConflict);
+                }
+                return Ok(Acceptance {
+                    record,
+                    reused: true,
+                });
+            }
+            if read_bound_task(c, &plan.target.task.task_id)?.as_ref() != Some(&plan.target) {
+                return Err(Error::RevisionConflict);
+            }
+            let value = serde_json::to_value(&plan.result).map_err(integrity)?;
+            validate_terminal(c, &plan.command, &value)?;
+            let command = serde_json::to_string(&plan.command).map_err(integrity)?;
+            let result = serde_json::to_string(&value).map_err(integrity)?;
+            c.execute(
+                "INSERT INTO requests VALUES(?1,?2,?3,'terminal',NULL,?4)",
+                params![
+                    plan.request_id,
+                    command,
+                    crate::hash::sha256(command.as_bytes()),
+                    result
+                ],
+            )
+            .map_err(storage)?;
+            Ok(Acceptance {
+                record: RequestRecord {
+                    request_id: plan.request_id.clone(),
+                    command: plan.command.clone(),
+                    outcome: RequestOutcome::Terminal(value),
+                },
+                reused: false,
+            })
+        })
+    }
+}

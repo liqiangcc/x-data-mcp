@@ -393,7 +393,7 @@ struct RequestRow {
     task_id: Option<String>,
     terminal: Option<String>,
 }
-fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRecord>, Error> {
+pub(crate) fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRecord>, Error> {
     let row = c.query_row(
         "SELECT command_json,command_digest,outcome_kind,task_id,terminal_json FROM requests WHERE request_id=?1",
         [id],
@@ -430,7 +430,11 @@ fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRecord>, Error
             }
             RequestOutcome::Task(Box::new(s))
         }
-        ("terminal", None, Some(v)) => RequestOutcome::Terminal(decode(v)?),
+        ("terminal", None, Some(v)) => {
+            let value = decode(v)?;
+            crate::sqlite_verification::validate_terminal(c, &command, &value)?;
+            RequestOutcome::Terminal(value)
+        }
         _ => return Err(inconsistent("request outcome incomplete")),
     };
     Ok(Some(RequestRecord {

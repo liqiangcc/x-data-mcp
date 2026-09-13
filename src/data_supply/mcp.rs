@@ -243,6 +243,7 @@ impl DataApi {
                         .control
                         .read_request(&a.request_id)
                         .map_err(task_error)?;
+                    let mut terminal_result = None;
                     let task = match record {
                         None => None,
                         Some(r) => match r.outcome {
@@ -258,18 +259,23 @@ impl DataApi {
                                     &self.observer.run_id,
                                 ))
                             }
-                            crate::task_control::RequestOutcome::Terminal(_) => {
-                                return Err(ApiError::new(
-                                    "unsupported_request_outcome",
-                                    "request terminal contract not registered",
-                                ));
+                            crate::task_control::RequestOutcome::Terminal(value) => {
+                                terminal_result =
+                                    Some(serde_json::from_value(value).map_err(|e| {
+                                        ApiError::new(
+                                            "unsupported_request_outcome",
+                                            format!("terminal contract: {e}"),
+                                        )
+                                    })?);
+                                None
                             }
                         },
                     };
                     return encode(RequestView {
                         request_id: a.request_id,
-                        bound: task.is_some(),
+                        bound: task.is_some() || terminal_result.is_some(),
                         task,
+                        terminal_result,
                     });
                 }
                 "cancel_task" => {
@@ -418,16 +424,27 @@ impl DataApi {
                     ));
                 }
                 let command: crate::task_verification::wire::VerifyStopped = decode(input)?;
-                let accepted = self
-                    .legacy
-                    .control
-                    .accept(
-                        &command.request_id,
-                        crate::task_verification::command_key(),
-                        json!({"target_task_id":command.target_task_id}),
-                    )
-                    .map_err(task_error)?;
-                self.acceptance(&command.request_id, accepted)
+                let accepted = crate::task_verification::existing::accept(
+                    &self.legacy.control,
+                    &command.request_id,
+                    &command.target_task_id,
+                )
+                .map_err(task_error)?;
+                if let crate::task_control::RequestOutcome::Terminal(value) =
+                    &accepted.record.outcome
+                {
+                    let terminal_result = serde_json::from_value(value.clone()).map_err(|e| {
+                        ApiError::new("internal_error", format!("terminal contract: {e}"))
+                    })?;
+                    encode(RequestView {
+                        request_id: command.request_id,
+                        bound: true,
+                        task: None,
+                        terminal_result: Some(terminal_result),
+                    })
+                } else {
+                    self.acceptance(&command.request_id, accepted)
+                }
             }
             Handler::Range(operation) => {
                 if self.access != Access::local() {

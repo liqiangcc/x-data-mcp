@@ -455,6 +455,7 @@ pub struct RequestView {
     pub request_id: String,
     pub bound: bool,
     pub task: Option<TaskSummary>,
+    pub terminal_result: Option<crate::task_verification::existing::TerminalResult>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

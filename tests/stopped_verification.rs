@@ -1054,3 +1054,144 @@ fn stopping_controls_and_task_facts_are_hidden_from_non_owner_context() {
     assert_eq!(api.call("verify_stopped_writes",json!({"contract_version":"v1","request_id":"forbidden","target_task_id":target.task.task_id})).unwrap_err().code,"forbidden");
     assert!(r.read_request("forbidden").unwrap().is_none());
 }
+
+#[test]
+fn already_interrupted_requests_bind_terminal_results_without_new_tasks_or_checks() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+        task_verification::existing,
+    };
+    let (_d, r) = db();
+    let target = original_task(&r, "sh.600006");
+    let check = task(
+        control(&r, "new-run")
+            .accept(
+                "inspection",
+                key(&r),
+                json!({"target_task_id":target.task.task_id}),
+            )
+            .unwrap(),
+    );
+    runner(&r)
+        .run(&check.task.task_id, &FixtureStopped)
+        .unwrap();
+    let before = r.read_task(&target.task.task_id).unwrap().unwrap();
+    let ctl = control(&r, "new-run");
+    let result = existing::accept(&ctl, "known-result", &target.task.task_id).unwrap();
+    assert!(!result.reused);
+    assert!(matches!(result.record.outcome, RequestOutcome::Terminal(_)));
+    let replay = existing::accept(&ctl, "known-result", &target.task.task_id).unwrap();
+    assert!(replay.reused);
+    assert_eq!(replay.record, result.record);
+    assert!(matches!(
+        existing::accept(&ctl, "known-result", "missing-different-target"),
+        Err(Error::RequestConflict)
+    ));
+    assert!(matches!(
+        existing::accept(&ctl, "sh.600006", &target.task.task_id),
+        Err(Error::RequestConflict)
+    ));
+    let api = DataApi::new(r.clone(), "new-run".into(), Access::local()).unwrap();
+    let returned=api.call("verify_stopped_writes",json!({"contract_version":"v1","request_id":"public-known","target_task_id":target.task.task_id})).unwrap();
+    assert_eq!(returned["bound"], true);
+    assert!(returned["task"].is_null());
+    assert_eq!(returned["terminal_result"]["kind"], "already_verified");
+    assert_eq!(
+        api.call(
+            "get_request",
+            json!({"contract_version":"v1","request_id":"public-known"})
+        )
+        .unwrap(),
+        returned
+    );
+    assert_eq!(api.call("verify_stopped_writes",json!({"contract_version":"v1","request_id":"public-known","target_task_id":target.task.task_id})).unwrap(),returned);
+    let caps = api
+        .call(
+            "get_data_capabilities",
+            json!({"operation":"verify_stopped_writes"}),
+        )
+        .unwrap();
+    jsonschema::validator_for(&caps["items"][0]["output_schema"])
+        .unwrap()
+        .validate(&returned)
+        .unwrap();
+    let c = rusqlite::Connection::open(r.path()).unwrap();
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM tasks", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), before);
+    c.execute_batch("DELETE FROM stopped_write_checks").unwrap();
+    assert!(r.read_request("known-result").is_err());
+    assert!(
+        api.call(
+            "get_request",
+            json!({"contract_version":"v1","request_id":"public-known"})
+        )
+        .is_err()
+    );
+}
+#[test]
+fn already_interrupted_request_two_connections_bind_one_terminal_and_never_release_again() {
+    use x_data_mcp::task_verification::existing;
+    let (_d, r) = db();
+    let target = original_task(&r, "first");
+    let check = checking(&r, &target, "inspection");
+    r.commit_stop_check(&plan(check, target.clone(), &FixtureStopped))
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let r = r
+                .clone()
+                .with_busy_timeout(std::time::Duration::from_secs(5));
+            let b = barrier.clone();
+            let id = target.task.task_id.clone();
+            std::thread::spawn(move || {
+                b.wait();
+                existing::accept(&control(&r, "new-run"), "same-result", &id).unwrap()
+            })
+        })
+        .collect();
+    let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert_eq!(results[0].record, results[1].record);
+    assert_eq!(results.iter().filter(|a| a.reused).count(), 1);
+}
+#[test]
+fn queued_inspection_rechecks_an_original_that_already_finished_without_inspecting() {
+    let (_d, r) = db();
+    let target = original_task(&r, "first");
+    let contract = StopVerification::new(r.clone(), "new-run".into()).unwrap();
+    let intent = contract
+        .normalize(json!({"target_task_id":target.task.task_id}))
+        .unwrap();
+    let frozen = contract.resolve(&intent).unwrap();
+    let first = checking(&r, &target, "first-check");
+    r.commit_stop_check(&plan(first, target.clone(), &FixtureStopped))
+        .unwrap();
+    let after = r.read_task(&target.task.task_id).unwrap().unwrap();
+    // The generic acceptance transaction may observe a newer target after the
+    // application resolved this frozen identity: execution must recheck it.
+    let second = task(
+        r.accept(
+            "accepted-race",
+            &Command {
+                key: key(&r),
+                intent,
+            },
+            &frozen,
+            "new-run",
+            None,
+        )
+        .unwrap(),
+    );
+    let RunOutcome::Completed(receipt) =
+        runner(&r).run(&second.task.task_id, &NeverInspect).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(receipt.conclusion, Conclusion::AlreadyVerified);
+    assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), after);
+}

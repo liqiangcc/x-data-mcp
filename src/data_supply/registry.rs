@@ -89,7 +89,10 @@ fn entry<I: JsonSchema, O: JsonSchema>(
 pub fn entries() -> Vec<Entry> {
     let query = json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"}});
     vec![
-        entry::<crate::task_verification::wire::VerifyStopped, WriteAcceptance>(
+        entry::<
+            crate::task_verification::wire::VerifyStopped,
+            crate::task_verification::wire::VerificationReply,
+        >(
             "verify_stopped_writes",
             Handler::VerifyStopped,
             json!({"contract_version":"v1","request_id":"verification-request","target_task_id":"original-task-id"}),

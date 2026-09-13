@@ -41,6 +41,8 @@ pub fn snapshot_digest(target: &TaskSnapshot) -> Result<String, Error> {
 pub enum Conclusion {
     Interrupted,
     InsufficientEvidence,
+    AlreadyVerified,
+    NotApplicable,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Receipt {
@@ -115,22 +117,38 @@ pub fn prepare(
     {
         return Err(Error::RevisionConflict);
     }
-    if target.task.key.dataset == DATASET || target.visible_status(run) != Status::NeedsVerification
-    {
+    if target.task.key.dataset == DATASET {
         return Err(Error::RevisionConflict);
     }
-    let observation = inspector.inspect(&target)?;
+    let observation = if target.visible_status(run) == Status::NeedsVerification {
+        Some(inspector.inspect(&target)?)
+    } else {
+        None
+    };
     let (mut after, conclusion, reason, evidence_ref) = match observation {
-        Observation::Insufficient { reason } => {
+        None => (
+            None,
+            if target.task.status == Status::Interrupted {
+                Conclusion::AlreadyVerified
+            } else {
+                Conclusion::NotApplicable
+            },
+            format!(
+                "target state {:?}; no new inspection or original-task mutation",
+                target.task.status
+            ),
+            None,
+        ),
+        Some(Observation::Insufficient { reason }) => {
             if reason.trim().is_empty() {
                 return Err(Error::InvalidCommand("missing insufficiency reason".into()));
             }
             (None, Conclusion::InsufficientEvidence, reason, None)
         }
-        Observation::Stopped {
+        Some(Observation::Stopped {
             snapshot_sha256,
             evidence_ref,
-        } => {
+        }) => {
             if snapshot_sha256 != snapshot_digest(&target)? || evidence_ref.trim().is_empty() {
                 return Err(Error::NeedsVerification(
                     "stop evidence does not bind inspected target".into(),

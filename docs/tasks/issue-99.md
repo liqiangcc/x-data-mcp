@@ -93,3 +93,13 @@ get_task/get_request/list_tasks 仍读一致任务事实；受限上下文不暴
 真实 stdio 测试覆盖 schema/额外字段/权限边界、受理/重放/目标忙碌、默认执行不足和取消；
 打包 smoke 第七项在隔离 fixture 库真实重启子进程后检查原任务，确认保持待核实。
 这些是开发实现，当前代码的新公共入口尚待 Actions；没有更新线上 preview.3。
+
+### 已核实收尾重复请求（编码前固定）
+
+依据 #3“已核实并收尾返回现有结果、不重复释放”。新请求指向已可靠 interrupted 目标时，
+不新建核实任务、不执行 inspector；同事务核对原目标/原收据并将该请求绑定为请求级终态
+already_verified。保存规范化完整命令及原收据；同 ID 同参重读，异参冲突。
+响应沿用 RequestView（bound=true、task=null、terminal_result=already_verified），
+get_request 返回同一历史结果；普通前置拒绝仍无绑定。目标/审计损坏不能当成已核实或未绑定。
+若已受理的检查排队期间目标先被合法收尾，执行时按实际终态完成 not_applicable/already_verified 检查，
+不再调 inspector、不改原终态、不重复释放；同目标条件检查仍有效。
