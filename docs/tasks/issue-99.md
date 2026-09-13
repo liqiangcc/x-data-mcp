@@ -113,3 +113,7 @@ get_request 返回同一历史结果；普通前置拒绝仍无绑定。目标/�
 （或实际原终态的不适用/已有结论），不重新调用 inspector。再次竞争不循环，保留未知保护。
 stopped_runner_rechecks_late_cancel_and_target_change_without_using_stale_approval 使用真实 SQLite
 在 commit 边界注入两种变化，验证不会误释放原业务占用。
+
+34739508941 的新增 list_tasks 回归实际发现 SQLite 列表的预筛选仍只认识行情/目录种类，
+导致已授权核实任务被漏掉（期望1，实际0）。现在补 task.verification 的本机所有者准入，
+保留后续完整任务授权/快照核验；没有改测试期望或向受限调用者放行。
