@@ -87,6 +87,10 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
                 || command.item_id != item
                 || command.publication_id != id
                 || command.version_id != version
+                || task.task.owner_run_id.as_deref() != Some(&command.run_id)
+                || !matches!((&command.intent, record.version.period),
+                    (PublishIntent::Daily { .. }, Period::Day)
+                    | (PublishIntent::HistoricalFixedBase | PublishIntent::CurrentHead { .. }, Period::Year))
                 || receipt.task_revision <= command.expected_revision
                 || receipt.task_revision > task.task.state_revision
                 || found.contains_key(&item)
@@ -94,6 +98,8 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
                     i.spec.item_id == item
                         && i.stage == Stage::Finished
                         && i.outcome.as_ref().is_some_and(|o| o.success)
+                        && i.spec.target == serde_json::json!({"symbol":record.version.symbol,"period":period(record.version.period)})
+                        && i.spec.scope_keys.contains(&Scope::of(&record.version).occupancy_key())
                 })
             {
                 return Err(integrity(
@@ -205,5 +211,28 @@ mod tests {
         };
         assert_eq!(actual, &receipt);
         assert!(db.publication_facts(&receipt.task_id).is_err());
+    }
+    #[test]
+    fn legacy_publication_evidence_rejects_changed_execution_owner_or_period_intent() {
+        for wrong_owner in [false, true] {
+            let (_dir, db, plan) = super::super::tests::setup();
+            db.commit(&plan).unwrap();
+            let mut command = plan.command.clone();
+            if wrong_owner {
+                command.run_id = "unrelated-writer".into();
+            } else {
+                command.intent = PublishIntent::HistoricalFixedBase;
+            }
+            let c = Connection::open(db.tasks.path()).unwrap();
+            c.execute(
+                "UPDATE publication_batches SET command_json=?1 WHERE publication_id=?2",
+                params![
+                    serde_json::to_string(&command).unwrap(),
+                    command.publication_id
+                ],
+            )
+            .unwrap();
+            assert!(db.publication_facts(&command.task_id).is_err());
+        }
     }
 }
