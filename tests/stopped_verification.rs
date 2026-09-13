@@ -578,7 +578,10 @@ fn stopped_schema_upgrade_uses_real_v6_ddl_preserves_bindings_and_rejects_broken
             c.execute_batch(sql).unwrap();
             c.execute(
                 "INSERT INTO schema_migrations VALUES(?1,?2,'fixture')",
-                rusqlite::params![index + 1, x_data_mcp::hash::sha256(sql.as_bytes())],
+                rusqlite::params![
+                    u32::try_from(index + 1).unwrap(),
+                    x_data_mcp::hash::sha256(sql.as_bytes())
+                ],
             )
             .unwrap();
         }

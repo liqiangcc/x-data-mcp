@@ -809,7 +809,7 @@ fn yearly_result_schema_requires_explicit_upgrade_and_read_does_not_upgrade() {
     let version: i64 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, x_data_mcp::sqlite_tasks::SCHEMA_VERSION);
+    assert_eq!(version, i64::from(x_data_mcp::sqlite_tasks::SCHEMA_VERSION));
 }
 
 #[test]
