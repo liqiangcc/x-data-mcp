@@ -91,6 +91,21 @@ pub fn inspect(
                 "artifact path must be relative without parent/current components",
             ));
         }
+        let expected_name = match input.role {
+            FileRole::BaseIndustry => "base.zip",
+            FileRole::Day => "hsjday.zip",
+            FileRole::Gbbq => "gbbq.zip",
+        };
+        if input
+            .relative_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            != Some(expected_name)
+        {
+            return Err(InspectionError::Invalid(
+                "artifact filename does not match its official-file role",
+            ));
+        }
         if !declared_official_url(input.role, &input.source_url) {
             return Err(InspectionError::Invalid(
                 "expected role-specific declared TDX http(s) URL",

@@ -89,6 +89,25 @@ fn role_must_match_the_declared_official_download_path() {
         assert!(inspect(&serde_json::to_vec(&manifest).unwrap(), dir.path(), now()).is_err());
     }
 }
+
+#[test]
+fn role_must_match_the_local_archive_filename() {
+    let (dir, original) = fixture();
+    for (index, wrong_name) in [(0, "gbbq.zip"), (1, "base.zip"), (2, "hsjday.zip")] {
+        let mut manifest = original.clone();
+        manifest["files"][index]["relative_path"] = json!(wrong_name);
+        assert!(inspect(&serde_json::to_vec(&manifest).unwrap(), dir.path(), now()).is_err());
+    }
+    let mut nested = original;
+    nested["files"][0]["relative_path"] = json!("private/archive/base.zip");
+    std::fs::create_dir_all(dir.path().join("private/archive")).unwrap();
+    std::fs::copy(
+        dir.path().join("base.zip"),
+        dir.path().join("private/archive/base.zip"),
+    )
+    .unwrap();
+    assert!(inspect(&serde_json::to_vec(&nested).unwrap(), dir.path(), now()).is_ok());
+}
 #[test]
 fn altered_bytes_missing_file_and_external_symlink_reject() {
     let (dir, m) = fixture();
