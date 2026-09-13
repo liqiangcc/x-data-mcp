@@ -4,7 +4,7 @@
 
 ## 运行期证明协议
 
-采用 `verification-file-guard-v1`，面向同一 Linux 内核、可信本地 SQLite 及同目录 guard 文件，不泛化到远程文件系统/分布式执行。使用 [Rust File::try_lock](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock) 的非阻塞独占锁；该 API 从 Rust 1.89 提供，当前项目使用 Actions stable，不因此宣称整仓 MSRV。无新增依赖。
+采用 `verification-file-guard-v1`，面向同一 Linux 内核、可信本地 SQLite 及同目录 guard 文件，不泛化到远程文件系统/分布式执行。使用 [Rust File::try_lock](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock) 的非阻塞独占锁；该 API 从 Rust 1.89 提供，当前项目使用 Actions stable，不因此宣称整仓 MSRV。锁本身不需外部依赖。为确保“本地文件系统”不是配置声明，Linux 直接依赖复用 Cargo.lock 已有的 libc 0.2.189，通过 [fstatfs](https://docs.rs/libc/0.2.189/libc/fn.fstatfs.html) 检查实际打开的 DB/目录/guard 句柄；没有新增包版本或传递依赖升级。文件系统白名单来自 [Linux UAPI magic.h](https://github.com/torvalds/linux/blob/master/include/uapi/linux/magic.h)：ext 系、XFS、Btrfs、tmpfs；远程、overlay、FUSE 或未知类型不产生停止证明。具体文件系统的实际运行覆盖以 CI/部署报告为准，不把类型分类单测当作所有文件系统实测。
 
 1. 执行核实前取得每任务独立 guard；Descriptor 绑定 task/run、规范化数据库路径及 device/inode、guard 路径及 device/inode、Linux boot_id、协议版本。guard 不克隆、不显式提前解锁，RAII 持有期覆盖核实的读证据、提交/取消/异常处理全部路径。
 2. guard 描述先写入并同步独立新文件，再在主 SQLite 中把 Descriptor/digest 与 Claim 状态转换原子登记；领取失败不留下半登记。协议只证明真正通过此入口执行的任务，不能给既有未登记历史执行补写证明。

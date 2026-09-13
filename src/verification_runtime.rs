@@ -9,6 +9,7 @@ use std::{
     os::unix::fs::{DirBuilderExt, FileExt, MetadataExt},
     path::{Path, PathBuf},
 };
+mod filesystem;
 pub const PROTOCOL: &str = "verification-file-guard-v1";
 const MAX_DESCRIPTOR_BYTES: u64 = 16 * 1024;
 
@@ -80,6 +81,7 @@ impl Context {
             return Err(unverified("empty task/run identity"));
         }
         let database = database.canonicalize()?;
+        filesystem::require_local(&File::open(&database)?)?;
         let identity = FileIdentity::path(&database)?;
         let mut name = database.as_os_str().to_os_string();
         name.push(".verification-guards");
@@ -97,6 +99,7 @@ impl Context {
         if !std::fs::symlink_metadata(&self.directory)?.is_dir() {
             return Err(unverified("runtime directory is not a direct directory"));
         }
+        filesystem::require_local(&File::open(&self.directory)?)?;
         Ok(())
     }
     fn matches(&self, descriptor: &GuardDescriptor) -> bool {
@@ -142,6 +145,7 @@ impl ExecutionGuard {
     pub fn verify_binding(&self, database: &Path) -> Result<(), Error> {
         let context = Context::new(database, &self.descriptor.task_id, &self.descriptor.run_id)?;
         context.check_directory()?;
+        filesystem::require_local(&self.file)?;
         if !context.matches(&self.descriptor)
             || FileIdentity::from_metadata(self.file.metadata()?)? != self.descriptor.lock_identity
             || FileIdentity::path(&context.lock)? != self.descriptor.lock_identity
