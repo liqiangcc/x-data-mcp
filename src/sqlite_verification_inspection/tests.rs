@@ -452,6 +452,8 @@ fn inspection_historical_request_rejects_missing_audit_or_orphan_binding() {
         let (_dir, db, _original, check) = fixture();
         inspect(&db, "inspect", &check.task.task_id, "manager", "owner").unwrap();
         let c = Connection::open(db.path()).unwrap();
+        // Simulate out-of-band corruption. Production connections keep FK on.
+        c.pragma_update(None, "foreign_keys", false).unwrap();
         match fault {
             "audit" => {
                 c.execute("DELETE FROM verification_inspections", [])
