@@ -1595,3 +1595,129 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
     assert_eq!(f.db.publication_facts(&f.command.task_id).unwrap(), before);
     assert_eq!(f.count("publication_checks"), 0);
 }
+
+fn pending_publication_check(f: &Fixture, id: &str) -> x_data_mcp::task_control::TaskSnapshot {
+    use x_data_mcp::publication_verification::admission::{PublicationVerification, command_key};
+    let control = TaskControl::new(
+        f.db.tasks.clone(),
+        "inspection-run".into(),
+        vec![Box::new(
+            PublicationVerification::new(f.db.tasks.clone(), "inspection-run".into()).unwrap(),
+        )],
+    )
+    .unwrap();
+    let RequestOutcome::Task(check) = control
+        .accept(
+            id,
+            command_key(),
+            json!({"target_task_id":f.command.task_id}),
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!()
+    };
+    *check
+}
+#[test]
+fn publication_runner_records_actual_conclusion_and_replays_it_without_target_mutation() {
+    use x_data_mcp::publication_verification::{
+        decision::Conclusion,
+        runner::{Outcome, Runner},
+    };
+    for published in [false, true] {
+        let f = fixture(true);
+        let check = pending_publication_check(&f, "runner-check");
+        if published {
+            f.db.commit_range(&f.plan()).unwrap();
+        }
+        let original = f.db.task(&f.command.task_id).unwrap();
+        let runner = Runner {
+            tasks: f.db.tasks.clone(),
+            evidence: f.db.clone(),
+            run_id: "inspection-run".into(),
+            actor: "test-owner".into(),
+        };
+        let Outcome::Completed(first) = runner.run(&check.task.task_id).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            first.conclusion,
+            if published {
+                Conclusion::AllRecorded
+            } else {
+                Conclusion::InsufficientEvidence
+            }
+        );
+        let Outcome::Completed(repeated) = runner.run(&check.task.task_id).unwrap() else {
+            panic!()
+        };
+        assert_eq!(first, repeated);
+        assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+        if !published {
+            f.db.commit_range(&f.plan()).unwrap();
+            let Outcome::Completed(history) = runner.run(&check.task.task_id).unwrap() else {
+                panic!()
+            };
+            assert_eq!(history, first);
+        }
+    }
+}
+#[test]
+fn publication_runner_cancels_only_pending_check_and_does_not_reexecute_old_or_running_checks() {
+    use x_data_mcp::publication_verification::runner::{Outcome, Runner};
+    for mode in ["cancel", "old", "running"] {
+        let f = fixture(true);
+        let mut check = pending_publication_check(&f, "runner-guard");
+        let original = f.db.task(&f.command.task_id).unwrap();
+        if mode == "cancel" {
+            check =
+                f.db.tasks
+                    .transition(
+                        &check.task.task_id,
+                        0,
+                        "inspection-run",
+                        Change::RequestCancel,
+                    )
+                    .unwrap();
+        }
+        if mode == "running" {
+            check =
+                f.db.tasks
+                    .transition(&check.task.task_id, 0, "inspection-run", Change::Claim)
+                    .unwrap();
+            check =
+                f.db.tasks
+                    .transition(
+                        &check.task.task_id,
+                        check.task.state_revision,
+                        "inspection-run",
+                        Change::StartItem("publication-results".into()),
+                    )
+                    .unwrap();
+        }
+        let runner = Runner {
+            tasks: f.db.tasks.clone(),
+            evidence: f.db.clone(),
+            run_id: if mode == "old" {
+                "another-run".into()
+            } else {
+                "inspection-run".into()
+            },
+            actor: "test-owner".into(),
+        };
+        let outcome = runner.run(&check.task.task_id);
+        if mode == "cancel" {
+            assert!(matches!(outcome, Ok(Outcome::Cancelled(_))));
+        } else {
+            assert!(matches!(outcome, Err(Error::OutcomeUnknown(_))));
+            assert_eq!(
+                f.db.tasks.read_task(&check.task.task_id).unwrap().unwrap(),
+                check
+            );
+        }
+        assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+        assert_eq!(f.count("publication_checks"), 0);
+    }
+}
