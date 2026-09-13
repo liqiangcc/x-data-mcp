@@ -1721,3 +1721,67 @@ fn publication_runner_cancels_only_pending_check_and_does_not_reexecute_old_or_r
         assert_eq!(f.count("publication_checks"), 0);
     }
 }
+
+#[path = "support/publication_check_fault.rs"]
+mod publication_check_fault;
+#[test]
+fn publication_runner_reconciles_response_loss_cancellation_and_bounded_conflicts() {
+    use publication_check_fault::{Fault, Mode};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use x_data_mcp::publication_verification::runner::{Outcome, Runner};
+    for mode in [
+        Mode::CancelRead,
+        Mode::CancelCommit,
+        Mode::LostBefore,
+        Mode::LostAfter,
+        Mode::ChangeTarget,
+        Mode::ConflictTwice,
+    ] {
+        let f = fixture(true);
+        let check = pending_publication_check(&f, "fault-check");
+        let before = f.db.task(&f.command.task_id).unwrap();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let commits = Arc::new(AtomicUsize::new(0));
+        let runner = Runner {
+            tasks: f.db.tasks.clone(),
+            evidence: Fault {
+                db: f.db.clone(),
+                check_id: check.task.task_id.clone(),
+                mode,
+                reads: reads.clone(),
+                commits: commits.clone(),
+            },
+            run_id: "inspection-run".into(),
+            actor: "test-owner".into(),
+        };
+        let result = runner.run(&check.task.task_id);
+        match mode {
+            Mode::CancelRead | Mode::CancelCommit => {
+                assert!(matches!(result, Ok(Outcome::Cancelled(_))))
+            }
+            Mode::LostAfter | Mode::ChangeTarget => {
+                assert!(matches!(result, Ok(Outcome::Completed(_))))
+            }
+            Mode::LostBefore => assert!(matches!(result, Err(Error::OutcomeUnknown(_)))),
+            Mode::ConflictTwice => assert!(matches!(result, Err(Error::Conflict(_)))),
+        }
+        let task = f.db.tasks.read_task(&check.task.task_id).unwrap().unwrap();
+        assert_eq!(
+            task.claims.is_empty(),
+            !matches!(mode, Mode::LostBefore | Mode::ConflictTwice)
+        );
+        if !matches!(mode, Mode::ChangeTarget | Mode::ConflictTwice) {
+            assert_eq!(f.db.task(&f.command.task_id).unwrap(), before);
+        } else {
+            assert_eq!(reads.load(Ordering::SeqCst), 2);
+            assert_eq!(commits.load(Ordering::SeqCst), 2);
+        }
+        let count = reads.load(Ordering::SeqCst);
+        let _ = runner.run(&check.task.task_id);
+        assert_eq!(reads.load(Ordering::SeqCst), count);
+        assert_eq!(f.head(), "legacy-daily");
+    }
+}
