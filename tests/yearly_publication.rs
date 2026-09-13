@@ -1336,3 +1336,44 @@ fn yearly_progress_cursor_rechecks_committed_result_and_missing_results_fail_clo
             .is_err()
     );
 }
+
+#[test]
+fn publication_facts_verify_yearly_new_and_reuse_after_head_advances() {
+    use x_data_mcp::publication_verification::{Evidence, EvidenceRepository};
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let first = result_plan(&store, "first-yearly", None, "fixture range");
+    let first_receipt = store.commit_yearly(&first).unwrap();
+    let reuse = result_plan(
+        &store,
+        "reuse-yearly",
+        Some("first-yearly"),
+        "fixture range",
+    );
+    let reuse_receipt = store.commit_yearly(&reuse).unwrap();
+    let changed = result_plan(
+        &store,
+        "new-coverage",
+        Some("first-yearly"),
+        "fixture new coverage",
+    );
+    store.commit_yearly(&changed).unwrap();
+    for (plan, expected, reused) in [
+        (&first, first_receipt, false),
+        (&reuse, reuse_receipt, true),
+    ] {
+        let facts = store.publication_facts(&plan.command().task_id).unwrap();
+        let Evidence::Committed {
+            receipt,
+            reused_version,
+        } = &facts.items[0].evidence
+        else {
+            panic!("committed evidence required")
+        };
+        assert_eq!(receipt, &expected);
+        assert_eq!(*reused_version, reused);
+    }
+    Connection::open(store.tasks.path()).unwrap().execute("UPDATE yearly_lineage SET base_daily_version_id='missing' WHERE version_id='first-yearly'", []).unwrap();
+    assert!(store.publication_facts(&first.command().task_id).is_err());
+    assert!(store.publication_facts(&reuse.command().task_id).is_err());
+}

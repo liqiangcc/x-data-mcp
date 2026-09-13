@@ -17,3 +17,5 @@
 6. Actions fmt/clippy --all-targets --all-features --locked -- -D warnings/test --locked/build --locked/diff-check；本机仅轻量检查，不clean、不删缓存。fixture/live明确区分。
 
 真实来源/#53四股 NOT_RUN，已执行写入器停止协议 NOT_VERIFIED，NOT_PRODUCTION_READY。没有新采集/部署/真实库导入；完整Goal仍包括其他核实/恢复与数据闭环，不由本任务缩小。
+
+首个切片当前只实现显式 daily/yearly update/backfill 的 EvidenceRepository；legacy 初次发布仍明确 UnsupportedContract，不能据此宣称 AC1 全部完成。读取无写入，不创建核实任务、不产生最终核实结论。第一批真实 SQLite 回归覆盖新发布/复用、缺收据/摘要损坏/typed 数据损坏；yearly 增补 head 前进后仍读固定证据、lineage 损坏拒绝。完整核实受理/条件审计/runner/stdio 尚 NOT_RUN。
