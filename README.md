@@ -148,3 +148,10 @@ segment 完整不能代替合并全范围覆盖证据，旧 head/revision/固定
 yearly 内部任务契约现已冻结年度、base digest 与发布意图；schema v6 新增 yearly 执行结果，无变化复用已有版本、变化原子发布。两者均保留本次执行审计，不重写旧版本。显式 task_sqlite upgrade 才升级；线上预览库未迁移。公开 yearly 分支逐项传入 entity、base_daily_version_id、years、publication；mode 为 historical_fixed_base（可指定 comparison_version_id）或 current_head（expected_yearly_head 可空）。get_task_progress 返回 frozen_yearly_inputs/yearly_results，缺证据或篡改拒绝；生产 readiness 仍 blocked。
 
 显式 daily 更新/补采的新请求按服务器 Asia/Shanghai 当日拒绝未来日期；批量任一越界整体拒绝并列明范围，不裁剪、不预约、不留下 request/task/占用。已受理同请求重放仍返回原冻结事实。
+
+## preview.3 发布候选（#97）
+
+此候选集成 15 工具、显式 daily/yearly 更新与补采、未来日期拒绝及 schema v6。
+当前线上 preview.2 的升级尚待发布包检查、数据库备份和显式迁移完成；本段不表示已部署。
+包检查使用隔离 synthetic fixture，不向普通库导入数据。真实来源仍 blocked，
+NOT_PRODUCTION_READY；新版 ChatGPT 消费侧调用在实际验证前为 NOT_RUN。
