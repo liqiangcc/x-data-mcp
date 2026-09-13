@@ -35,7 +35,7 @@
 
 ## 当前切片和未验证项
 
-原子 Claim 登记、运行期 guard、有界检查/条件收尾、MCP 与回归已实现，正在完成 Actions 和执行者自查。本文不把未执行测试标为 PASS，不把本切片等同于整体交付。线上仍 preview.4/schema7；不因本任务自动升级。
+原子 Claim 登记、运行期 guard、有界检查/条件收尾、MCP 与回归已实现；Actions 和执行者自查以 PR 中准确 HEAD 的验证记录为准。本文不把未执行测试标为 PASS，不把本切片等同于整体交付。线上仍 preview.4/schema7；不因本任务自动升级。
 
 真实来源/#53 四股/新版 ChatGPT 消费侧 NOT_RUN；#54/#6/#46/#71/文件一致性仍 NOT_VERIFIED，NOT_PRODUCTION_READY。没有新的数据源、真实采集或迁移，不更改历史 evidence。
 
@@ -64,3 +64,6 @@ CI 修正历史：b4316ac 的首轮 stdio 通用示例测试未分类新有状�
 最终回归补充：`actual_live_execution_is_protected_and_only_actual_exit_allows_check_finish` 使用真实子进程和 exit106，覆盖运行中不足、退出后收尾与旧结果不重写；`application_rechecks_a_changed_sqlite_snapshot_once_without_reusing_old_plan` 在真实 SQLite 中变更状态，验证至多两次条件提交。已补 v8→v9 显式升级、同/异参两连接竞争、一致 snapshot 中并发 Claim/登记、坏库/未知 schema/busy、请求/audit 缺失或篡改、scope 身份和原业务/行情字节保持测试。测试使用的坏绑定由独立 fixture 连接关闭外键后注入，生产连接始终开启外键。
 
 执行者自查补充：有检查审计的 request 不能改挂其他已注册契约或异步 task outcome；通用读取现在拒绝此类错绑，并避免由错误 task outcome 回到检查目标造成递归读取。此规则不放宽旧任务请求契约。真实来源仍未运行，所有 PASS 须引用确切最终 HEAD 的 Actions。
+
+
+实现 HEAD 7bae523cb6bf7789bc8d8910a9697fc7acc524da 已通过 CI 34748668909 / rust 103701181061，以及 package 34748668898 / package 103701178917（18 工具、9 项 synthetic smoke）。真实 SQLite/进程退出/stdio 回归在该 HEAD 全部通过。此后纯文档状态同步仍由新 HEAD 的 Actions 验证，最终合并依据见 PR review；不把旧 HEAD 的 PASS 复制给新 SHA。

@@ -178,4 +178,4 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 
 当前核实 worker 在 Claim 同事务登记实际 Linux 本地文件 guard，并持锁覆盖整个执行。检查分别核验执行已结束与持久收尾事实；足够证据时只中断核实自身、释放核实串行保护，不改原业务任务、行情或 head。未登记旧执行、缺失/替换 guard、内核或文件系统边界不符均不能产生停止证明；已有合法结果不回滚。正常运行不强制中断。条件冲突至多重新检查一次，未知提交先读持久请求，不盲目重试。
 
-本切片仍在 Actions 验证及执行者自查，准确 HEAD/结果见 [#106 记录](docs/tasks/issue-106.md) 和 PR。线上仍为已部署 preview.4/schema7/16 工具，本段不是新版部署声明。真实来源、#53 四股及新版 ChatGPT 消费侧 NOT_RUN；生产仍 NOT_PRODUCTION_READY，来源门禁未解除。
+本切片的 Actions 验证及执行者自查按准确 HEAD 记录，结果见 [#106 记录](docs/tasks/issue-106.md) 和 PR。线上仍为已部署 preview.4/schema7/16 工具，本段不是新版部署声明。真实来源、#53 四股及新版 ChatGPT 消费侧 NOT_RUN；生产仍 NOT_PRODUCTION_READY，来源门禁未解除。
