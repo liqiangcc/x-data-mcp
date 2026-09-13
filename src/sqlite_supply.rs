@@ -319,6 +319,17 @@ fn task_facts(
     access: &Access,
     verify_outputs: bool,
 ) -> Result<TaskFacts, Error> {
+    // Owner-only check evidence must not leak integrity diagnostics to a reader.
+    // This early check can only deny; verified authorization below still applies.
+    if *access != Access::local() {
+        let private: bool = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE task_id=?1 AND json_extract(command_key_json,'$.dataset')='task.verification')",
+            [id], |r| r.get(0),
+        ).map_err(storage)?;
+        if private {
+            return Err(invalid("forbidden"));
+        }
+    }
     let s = crate::sqlite_tasks::read_bound_task(c, id)?
         .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
     if !authorized(&s, access) {

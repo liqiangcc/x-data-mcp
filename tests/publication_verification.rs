@@ -177,6 +177,39 @@ fn publication_check_preserves_mixed_published_running_and_never_started_items()
         market.fixed("legacy-daily").unwrap().raw(),
         &records[0]["record"]
     );
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let mut access = Access::local();
+    access.principal = "restricted-reader".into();
+    let reader = DataApi::new(tasks.clone(), "reader".into(), access).unwrap();
+    for corrupt in [false, true] {
+        if corrupt {
+            rusqlite::Connection::open(tasks.path())
+                .unwrap()
+                .execute("UPDATE publication_checks SET audit_sha256='bad'", [])
+                .unwrap();
+        }
+        assert_eq!(
+            reader
+                .call("get_task_progress", json!({"task_id":check.task.task_id}))
+                .unwrap_err()
+                .code,
+            "forbidden"
+        );
+        assert!(
+            reader
+                .call(
+                    "list_tasks",
+                    json!({"operation":"verify_publication_result"})
+                )
+                .unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 #[test]
