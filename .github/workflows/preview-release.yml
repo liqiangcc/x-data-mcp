@@ -8,6 +8,8 @@ on:
       - 'scripts/smoke_release.py'
       - 'src/bin/create_demo.rs'
       - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
   push:
     branches: [main]
     paths:
@@ -16,6 +18,8 @@ on:
       - 'scripts/smoke_release.py'
       - 'src/bin/create_demo.rs'
       - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
 permissions:
   contents: read
 jobs:
