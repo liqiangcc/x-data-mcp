@@ -73,7 +73,7 @@
 
 [PR #83](https://github.com/liqiangcc/x-data-mcp/pull/83) 提供库内 fixture/dry-run 能力：
 结构化 daily/yearly、完整 legacy JSON/digest 核验、固定版本 SQL 范围读取，以及同库条件发布和任务输出关联。
-Stage B 引入 schema v3；当前显式 task_sqlite init/upgrade 使用 schema v8；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
+Stage B 引入 schema v3；当前显式 task_sqlite init/upgrade 使用 schema v9；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
 历史固定 daily 可派生 immutable yearly，但不推进 yearly head；current-head 同时核对 daily/yearly head、任务修订与占用。
 实现、完整性扫描成本、测试入口及未验证项见 [Stage B 记录](docs/tasks/issue-79.md)。
 当前仍 NOT_PRODUCTION_READY；该切片不解除 #54/#6/#46/#71 来源门禁。

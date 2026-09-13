@@ -15,7 +15,7 @@
 
 ## 最小 DDL 与内部类型（实施前约定）
 
-计划显式 schema v9（只增加本任务所需表，实施时固定 migration 字节）：
+显式 schema v9（只增加本任务所需表，既有 migration 字节保持）：
 
 - `verification_runtime_guards(task_id TEXT PRIMARY KEY REFERENCES tasks, claim_revision INTEGER NOT NULL, descriptor_json TEXT NOT NULL, descriptor_sha256 TEXT NOT NULL)` STRICT；只有持有真实 guard 的 Adapter 能随 Claim 插入，不改普通历史 Claim。
 - `verification_inspections(request_id TEXT PRIMARY KEY REFERENCES requests, target_task_id TEXT NOT NULL REFERENCES tasks, audit_json TEXT NOT NULL, audit_sha256 TEXT NOT NULL)` STRICT；请求级 terminal outcome、审计与必要核实收尾在同一短事务提交，无递归 task。
@@ -38,3 +38,11 @@
 先交付底层 guard/跨进程证明试验，再接入原子领取登记、有界检查/条件收尾、MCP 及审查。本文记录设计，不宣称任一未执行测试 PASS 或功能已完整交付。线上仍 preview.4/schema7；不因本任务自动升级。
 
 真实来源/#53 四股/新版 ChatGPT 消费侧 NOT_RUN；#54/#6/#46/#71/文件一致性仍 NOT_VERIFIED，NOT_PRODUCTION_READY。没有新的数据源、真实采集或迁移，不更改历史 evidence。
+
+### 运行期接线切片
+
+58a61757572e20fe671e541626d8496e04a5eef5 的原子 Claim 登记与真实退出测试已由 Actions 34747397721 / rust 103697727987 验证成功；打包 34747397719 / package 103697727428 成功。此结果仅覆盖该 SHA。
+
+后续接线使用 runner 拥有的 GuardedTasks，Claim 使用应用 sealed plan + SQLite 原子登记，锁覆盖整个 runner 生命周期。限定该包装器不能受理新任务、reconcile 或修改其他任务；非 Linux 明确拒绝，未登记历史执行不补写登记。新增真实 SQLite 测试验证持锁证据读取、提交后仍持锁、返回后释放、异常保留串行占用和待执行取消不伪造 Claim；实际 stdio publication worker 验证登记及响应后的锁释放。新增测试结果以相应 HEAD Actions 为准。
+
+有界检查请求、历史结果重放、条件安全收尾和 inspect_verification_task 协议仍未完成；底层 runtime guard 不代替收尾证据核验。本次没有线上部署或库升级。

@@ -282,3 +282,95 @@ fn guarded_repository_cannot_transition_another_task_or_claim_twice() {
         Some(original)
     );
 }
+
+#[test]
+fn guarded_runner_error_retains_claims_but_releases_only_runtime_lock_on_return() {
+    use crate::task_verification::decision::{Observation, StopInspector};
+    struct Failing;
+    impl StopInspector for Failing {
+        fn inspect(&self, _: &TaskSnapshot) -> Result<Observation, Error> {
+            Err(Error::StorageUnavailable(
+                "fixture evidence read failure".into(),
+            ))
+        }
+    }
+    let (_dir, db, original, check) = fixture();
+    {
+        let runner = crate::task_verification::runner::StopRunner {
+            repository: super::guarded::GuardedTasks::open(
+                db.clone(),
+                &check.task.task_id,
+                "check-run",
+            )
+            .unwrap(),
+            run_id: "check-run".into(),
+            actor: "test-owner".into(),
+        };
+        assert!(runner.run(&check.task.task_id, &Failing).is_err());
+        let registration = db
+            .runtime_registration(&check.task.task_id)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            try_acquire(db.path(), &registration.descriptor),
+            Err(crate::verification_runtime::Error::Busy)
+        ));
+    }
+    let registration = db
+        .runtime_registration(&check.task.task_id)
+        .unwrap()
+        .unwrap();
+    let _ended = try_acquire(db.path(), &registration.descriptor).unwrap();
+    let retained = db.read_task(&check.task.task_id).unwrap().unwrap();
+    assert!(!retained.task.status.terminal());
+    assert_eq!(retained.claims, check.claims);
+    assert_eq!(
+        db.read_task(&original.task.task_id).unwrap(),
+        Some(original)
+    );
+}
+
+#[test]
+fn pending_verification_cancellation_does_not_invent_runtime_claim() {
+    let (_dir, db, original, check) = fixture();
+    db.transition(
+        &check.task.task_id,
+        0,
+        "check-run",
+        crate::task_control::Change::RequestCancel,
+    )
+    .unwrap();
+    let runner = crate::task_verification::runner::StopRunner {
+        repository: super::guarded::GuardedTasks::open(
+            db.clone(),
+            &check.task.task_id,
+            "check-run",
+        )
+        .unwrap(),
+        run_id: "check-run".into(),
+        actor: "test-owner".into(),
+    };
+    runner
+        .run(
+            &check.task.task_id,
+            &crate::task_verification::decision::UnverifiedStopInspector,
+        )
+        .unwrap();
+    assert!(
+        db.runtime_registration(&check.task.task_id)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        db.read_task(&check.task.task_id)
+            .unwrap()
+            .unwrap()
+            .task
+            .status,
+        crate::task_control::Status::Cancelled
+    );
+    assert_eq!(
+        db.read_task(&original.task.task_id).unwrap(),
+        Some(original)
+    );
+}

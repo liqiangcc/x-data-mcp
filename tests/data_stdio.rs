@@ -904,6 +904,15 @@ fn real_publication_stdio_inspects_fixed_evidence_without_changing_original_task
             s.call("run_worker_once", json!({}), false)["task_id"],
             check["task_id"]
         );
+        #[cfg(target_os = "linux")]
+        {
+            let registration = db
+                .runtime_registration(check["task_id"].as_str().unwrap())
+                .unwrap()
+                .expect("actual stdio worker must atomically register its runtime");
+            x_data_mcp::verification_runtime::try_acquire(db.path(), &registration.descriptor)
+                .expect("worker response must follow release of its execution guard");
+        }
         let progress = s.call(
             "get_task_progress",
             json!({"task_id":check["task_id"]}),
