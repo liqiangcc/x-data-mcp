@@ -117,3 +117,6 @@ stopped_runner_rechecks_late_cancel_and_target_change_without_using_stale_approv
 34739508941 的新增 list_tasks 回归实际发现 SQLite 列表的预筛选仍只认识行情/目录种类，
 导致已授权核实任务被漏掉（期望1，实际0）。现在补 task.verification 的本机所有者准入，
 保留后续完整任务授权/快照核验；没有改测试期望或向受限调用者放行。
+
+请求级已有结论也有独立真实退出回归：known_stopping_result_real_exit_keeps_terminal_binding_atomic_and_original_unchanged
+在绑定提交前/后实际 exit78，重连核对无半绑定、已提交原样重读、tasks 数不增加且原中断事实不变。

@@ -166,3 +166,84 @@ fn stopped_check_real_exit_before_commit_and_after_commit_preserves_exact_facts(
         }
     }
 }
+
+#[test]
+fn known_stopping_result_crash_child() {
+    let Ok(path) = std::env::var("X_DATA_MCP_TEST_KNOWN_STOP_DB") else {
+        return;
+    };
+    let db = SqliteTasks::new(path);
+    let ctl = TaskControl::new(
+        db.clone(),
+        "new".into(),
+        vec![Box::new(StopVerification::new(db, "new".into()).unwrap())],
+    )
+    .unwrap();
+    crate::task_verification::existing::accept(
+        &ctl,
+        "known-result",
+        &std::env::var("X_DATA_MCP_TEST_KNOWN_STOP_TARGET").unwrap(),
+    )
+    .unwrap();
+    panic!("expected real exit seam");
+}
+#[test]
+fn known_stopping_result_real_exit_keeps_terminal_binding_atomic_and_original_unchanged() {
+    for point in ["before_commit", "after_commit"] {
+        let d = tempfile::tempdir().unwrap();
+        let db = SqliteTasks::new(d.path().join("db"));
+        db.initialize().unwrap();
+        let plan = setup(&db, true);
+        db.commit_stop_check(&plan).unwrap();
+        let target = db
+            .read_task(&plan.receipt().target_task_id)
+            .unwrap()
+            .unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sqlite_verification::tests::known_stopping_result_crash_child",
+                "--nocapture",
+            ])
+            .env("X_DATA_MCP_TEST_KNOWN_STOP_DB", db.path())
+            .env("X_DATA_MCP_TEST_KNOWN_STOP_TARGET", &target.task.task_id)
+            .env("X_DATA_MCP_TEST_SQLITE_CRASH", point)
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(78));
+        let re = SqliteTasks::new(db.path());
+        let original = re.read_request("known-result").unwrap();
+        assert_eq!(original.is_some(), point == "after_commit");
+        assert_eq!(re.read_task(&target.task.task_id).unwrap().unwrap(), target);
+        let ctl = TaskControl::new(
+            re.clone(),
+            "new".into(),
+            vec![Box::new(
+                StopVerification::new(re.clone(), "new".into()).unwrap(),
+            )],
+        )
+        .unwrap();
+        let accepted =
+            crate::task_verification::existing::accept(&ctl, "known-result", &target.task.task_id)
+                .unwrap();
+        assert_eq!(accepted.reused, point == "after_commit");
+        if let Some(original) = original {
+            assert_eq!(original, accepted.record);
+        }
+        assert!(matches!(
+            accepted.record.outcome,
+            RequestOutcome::Terminal(_)
+        ));
+        let c = Connection::open(re.path()).unwrap();
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM tasks", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM requests", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+    }
+}
