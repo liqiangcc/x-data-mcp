@@ -1,23 +1,31 @@
-## 目标与权威
-实现 #3 显式发布结果核实、重复/状态变化保护及四类核实串行；依据 #75 固定设计 2c706325aa2020382631355f802403c05b9662d8。关联 #79/#92/#94/#99。主线 7172ba5dc64b425cbde66b4950c41ae6c03b2c4f，线上 preview.4；不回退来源调查或改生产门禁。
+# 显式发布结果核实（#104）
 
-## 设计边界
-- 独立 request_id/核实任务、target_task_id，复用 verification:task:<id> 与停止核实串行，进度 evidence_check。MCP 只做形状/授权映射，不接收成功/失败/强制结论。
-- 应用层判资格/结论；SQLite 以单次读快照核验 task/items、publication/执行收据、固定版本 compat/typed projection/lineage。没有收据仅表示缺少提交证据，不能断言未发布；部分成功、未执行、结果未知分别保留。
-- 停止写入证据不能替代发布证据，发布证据也不自动释放原占用。不隐式发布、回滚、重试或移动 head。
-- 核实结论/完整审计在条件事务记录，绑定目标 revision 和核验过的证据；重放读原结果，状态/证据改变不使用过时结论。未知运行保留保护，不递归创建异常核实任务。
-- first slice 先统一真实 SQLite 发布事实端口及篡改/缺证据回归、触发 CI；再受理/决策/审计/runner/公开入口及完整审核。首个端口不等于整个核实用例完成。
+父业务规则是 #3 的显式发布结果核实、重复/状态变化保护及核实串行规则；固定设计为 #75 的 2c706325aa2020382631355f802403c05b9662d8。基于 main 7172ba5dc64b425cbde66b4950c41ae6c03b2c4f，关联 #79/#92/#94/#99。本任务不解除来源门禁，不扩大为恢复或异常核实处置实现。
 
-## AC→测试要求
-1. 已提交新版本和 no-change 复用都有可核验收据；daily/yearly/legacy publication 正确区分，固定 base 非最新不是损坏。
-2. 缺收据不猜失败；成功项缺必要关联、错 item/任务/version、坏摘要/投影/lineage拒绝；核验与返回同一读快照，后续损坏停止读取。
-3. 真 SQLite 同目标/跨核实类型竞争；请求重放/异参；条件 revision 与证据变化；提交前退出回滚、提交后响应丢失重查。
-4. 核实不写行情/head，不释放原占用或修改已成功项；取消仅本核实；旧运行无收据不自动重跑。
-5. 实际 stdio schema/权限/发现/受理/worker/结果重放及不足/错误；记录操作者时间依据结果。
-6. Actions fmt/clippy --all-targets --all-features --locked -- -D warnings/test --locked/build --locked/diff-check；本机仅轻量检查，不clean、不删缓存。fixture/live明确区分。
+## 已实现的边界
 
-真实来源/#53四股 NOT_RUN，已执行写入器停止协议 NOT_VERIFIED，NOT_PRODUCTION_READY。没有新采集/部署/真实库导入；完整Goal仍包括其他核实/恢复与数据闭环，不由本任务缩小。
+- `verify_publication_result` 接受 v1、独立 request_id、target_task_id；拒绝额外证据/成功声明/强制参数，仅本地所有者可调用。共有 17 个公开工具，registry 与 tools/list 同源。接口 ready 仅表示能检查既有 SQLite 证据，不表示 production_ready。
+- 受支持的 market 初次采集及显式 daily/yearly 更新任务只有执行结果待核实时才创建独立任务；普通运行和从未开始不受干预。核实任务使用 `verification:task:<目标>` 和一个 evidence_check 项，与停止核实共用串行保护，不占用或释放原行情范围。
+- EvidenceRepository 在同一 SQLite 读快照取得任务、完整项集合及固定版本证据。验证初次发布、新版本和 no-change 复用的收据/审计、compat digest、typed projection、yearly lineage 与任务身份；不查询 latest 来替代坏版本。旧式发布额外核对任务目标/范围、执行者与日/年发布意图。
+- 应用层形成 sealed Plan。schema v8 的 `publication_checks` 保存 actor/time、完整 facts、核实前后快照及 receipt/digest。Adapter 在短写事务复查核实 revision/占用、原任务和证据指纹；只提交核实审计及核实终态，不写原任务、行情或 head。
+- `AllRecorded` 表示所有项都有可核验提交证据，不表示写入者已停止。`InsufficientEvidence` 明确列出缺收据项并说明不能由缺失推断失败/未发布。原任务不再适用时记录 `NotApplicable`。部分已发布、运行中和未开始的事实不混同。
+- runner 先查持久收据；提交响应丢失按实际收据核对。条件变化最多一次重新读取事实和条件提交，不循环、不重发原发布。取消只结束本次检查；旧运行/已运行无收据不自动重跑。证据损坏或检查异常且无可靠收据时显式保持 needs_verification 和串行保护，不伪造完整审计。
+- 已有 AllRecorded 的新全局请求绑定请求级终态，不新建检查、不改写审计、不释放原占用；同请求重放、异参冲突及后续证据损坏拒绝均保留。get_request 的旧停止核实 wire 形状兼容，publication_check 通过 get_task_progress 读取并核验；非所有者不能借损坏诊断读取核实信息。
+- init/upgrade 才显式建立/升级 v8；普通读取不迁移。生产执行仍为 OfficialFilePipeline，无调用者开关。线上 preview.4/schema7 不因本 PR 自动更新。
 
-首个切片当前只实现显式 daily/yearly update/backfill 的 EvidenceRepository；legacy 初次发布仍明确 UnsupportedContract，不能据此宣称 AC1 全部完成。读取无写入，不创建核实任务、不产生最终核实结论。第一批真实 SQLite 回归覆盖新发布/复用、缺收据/摘要损坏/typed 数据损坏；yearly 增补 head 前进后仍读固定证据、lineage 损坏拒绝。完整核实受理/条件审计/runner/stdio 尚 NOT_RUN。
+## AC 与验证入口
 
-后续切片现已补初次发布证据、证据指纹、真实 SQLite 并发一致读与独立受理；详见 PR 最新 HEAD/Actions。应用 prepare 只形成 sealed Plan，不执行原任务收尾。显式 schema8 publication_checks 保存完整 facts/双核实快照/actor/time/receipt/digest；条件事务复查 facts 和核实 snapshot，仅写核实任务及审计。当前新增回归覆盖回滚、重放、状态/取消/指纹变化、审计损坏与 v7→v8 显式升级。真实退出、完整runner/MCP及最终Review仍待补齐，线上不变。历史 34743324844 失败为旧 v6 升级测试写死目标7，现改为当前schema版本；旧v6数据/坏FK回滚断言保留。
+所有 Rust 测试随 `cargo test --locked` 进入 Actions；完整验证还包含 fmt、clippy --all-targets --all-features --locked -- -D warnings、build --locked、diff-check，以及离线 evidence 回归。服务器磁盘有限，本机只做格式/差异检查。准确 HEAD/run/job 与最终结果在 PR #105 / Issue #104 评论记录，本文不是独立的 PASS 声明。
+
+1. AC1：`publication_facts_verify_new_and_reused_versions_without_mutating_tasks`、`publication_facts_verify_yearly_new_and_reuse_after_head_advances`、`publication_facts_verify_legacy_initial_publish_and_reject_receipt_damage`；初次发布、daily/yearly 新发布/复用及 fixed base 非 latest。
+2. AC2：`publication_facts_reject_missing_success_receipt_and_damaged_fixed_data`、`legacy_publication_evidence_rejects_changed_execution_owner_or_period_intent`、两个 `publication_fact_snapshot_*` 真实两连接一致读；`publication_check_preserves_mixed_published_running_and_never_started_items` 验证混合事实及非所有者拒绝。
+3. AC3：`publication_check_accepts_persisted_uncertainty_and_two_connections_replay_one_request`、`known_publication_two_connections_share_one_binding_and_failed_insert_leaves_none`；`publication_check_rejects_changed_target_or_cancelled_check_before_recording`、`publication_check_rejects_changed_evidence_even_when_receipt_and_task_are_unchanged`；`publication_check_real_exit_keeps_audit_and_completion_atomic_without_target_mutation`（真实 exit79）、`known_publication_real_exit_binds_only_after_commit_and_replays_without_new_check`（真实 exit78）。空的子进程入口测试不单独作为退出证据，父测试断言真实退出码及重开库状态。
+4. AC4：`publication_runner_records_actual_conclusion_and_replays_it_without_target_mutation`、`publication_runner_cancels_only_pending_check_and_does_not_reexecute_old_or_running_checks`、`publication_runner_reconciles_response_loss_cancellation_and_bounded_conflicts`、`publication_runner_read_integrity_failure_marks_check_unresolved_without_false_receipt`；`malformed_evidence_port_result_cannot_leave_check_looking_normally_running` 是显式应用端口故障注入，不声称真实 SQLite 返回了伪造 facts。
+5. AC5：`real_publication_stdio_inspects_fixed_evidence_without_changing_original_task` 使用真实 mcp_data 子进程验证 schema/发现/受理/worker/结果/取消/重放/错误；既有停止核实 stdio 保持。`range_controls_are_not_discovered_or_callable_without_owner_access` 同时覆盖两类核实。`scripts/smoke_release.py` 用隔离 synthetic 库实际检查 17 工具及从未开始任务拒绝，无未绑定任务副作用。
+6. AC6：完整 CI 和 Preview package 的实际检查/报告；`publication_check_schema_upgrade_is_explicit_and_preserves_published_facts` 及既有 v6 升级/FK/回滚测试覆盖显式升级与旧数据保留。
+
+## 尚未验证与后续边界
+
+真实行情来源、#53 四股及新版 ChatGPT 消费侧调用是 NOT_RUN；fixture/stdout/tunnel health 不能代替真实来源或消费者验收。#54、#6/#46、#71 和 .day/gbbq 一致性门禁仍 NOT_VERIFIED，系统仍 NOT_PRODUCTION_READY。已开始写入者的停止协议、异常核实任务的显式处置、其他核实/恢复及数据闭环由后续任务推进；本核实不会自动解除这些保护。完整目标仍包括后续开发、重新部署与最终测试。
+
+历史失败日志保留在对应 Actions：34743324844 为旧 v6 升级测试写死目标7；34744665115 为测试模块顺序 clippy；34745224699 为可折叠 if；34745325993 为新示例缺目标前置条件和待核实错误映射；34745703275 为 smoke 新增实际检查后旧计数断言未同步。修复未重写既有来源 evidence 或把未运行场景标 PASS。
