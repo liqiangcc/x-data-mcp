@@ -43,32 +43,22 @@ impl DataApi {
                         Box::new(crate::market_update::tasks::RangeContract {
                             operation: crate::market_update::tasks::Operation::Update,
                             repository: repository.market.clone(),
+                            today: crate::calendar::shanghai_today,
                         }),
                         Box::new(crate::market_update::tasks::RangeContract {
                             operation: crate::market_update::tasks::Operation::Backfill,
                             repository: repository.market.clone(),
+                            today: crate::calendar::shanghai_today,
                         }),
                         Box::new(crate::yearly_publication::tasks::YearlyContract {
                             operation: crate::market_update::tasks::Operation::Update,
                             repository: repository.market.clone(),
-                            today: || {
-                                chrono::Utc::now()
-                                    .with_timezone(
-                                        &chrono::FixedOffset::east_opt(8 * 3600).unwrap(),
-                                    )
-                                    .date_naive()
-                            },
+                            today: crate::calendar::shanghai_today,
                         }),
                         Box::new(crate::yearly_publication::tasks::YearlyContract {
                             operation: crate::market_update::tasks::Operation::Backfill,
                             repository: repository.market.clone(),
-                            today: || {
-                                chrono::Utc::now()
-                                    .with_timezone(
-                                        &chrono::FixedOffset::east_opt(8 * 3600).unwrap(),
-                                    )
-                                    .date_naive()
-                            },
+                            today: crate::calendar::shanghai_today,
                         }),
                         Box::new(super::collect::CollectionContract {
                             dataset: Dataset::Daily,

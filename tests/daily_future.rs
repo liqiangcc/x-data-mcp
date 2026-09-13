@@ -86,3 +86,58 @@ fn daily_future_single_request_must_not_be_accepted() {
         1
     );
 }
+
+#[test]
+fn daily_today_is_allowed_and_accepted_replay_does_not_reconsult_clock_or_base() {
+    use x_data_mcp::{
+        market_update::tasks::{Operation, RangeContract},
+        task_control::{Contract, RequestOutcome, service::TaskControl},
+    };
+    let (_dir, market, _api) = setup();
+    fn today() -> chrono::NaiveDate {
+        "2026-09-13".parse().unwrap()
+    }
+    let contract = RangeContract {
+        operation: Operation::Update,
+        repository: market.clone(),
+        today,
+    };
+    let key = contract.key();
+    let control = TaskControl::new(
+        market.tasks.clone(),
+        "future-run".into(),
+        vec![Box::new(contract)],
+    )
+    .unwrap();
+    let input = json!({"items":[{"symbol":"sh.600006","base_version_id":"legacy-daily","start_date":"2025-01-02","end_date":"2026-09-13"}]});
+    let accepted = control.accept("today", key.clone(), input.clone()).unwrap();
+    let RequestOutcome::Task(original) = accepted.record.outcome else {
+        panic!()
+    };
+    assert_eq!(
+        original.items[0].spec.frozen_inputs["range"]["end"],
+        "2026-09-13"
+    );
+    rusqlite::Connection::open(market.tasks.path())
+        .unwrap()
+        .execute_batch("UPDATE daily_bars SET close='0' WHERE version_id='legacy-daily'")
+        .unwrap();
+    let earlier = TaskControl::new(
+        market.tasks.clone(),
+        "future-run".into(),
+        vec![Box::new(RangeContract {
+            operation: Operation::Update,
+            repository: market.clone(),
+            today: || "2026-09-12".parse().unwrap(),
+        })],
+    )
+    .unwrap();
+    let replay = earlier.accept("today", key.clone(), input.clone()).unwrap();
+    assert!(replay.reused);
+    let RequestOutcome::Task(replayed) = replay.record.outcome else {
+        panic!()
+    };
+    assert_eq!(replayed.task.task_id, original.task.task_id);
+    assert!(earlier.accept("new-future", key, input).is_err());
+    assert!(earlier.read_request("new-future").unwrap().is_none());
+}

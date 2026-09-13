@@ -1,3 +1,4 @@
+pub mod calendar;
 pub mod catalog;
 pub mod collector;
 pub mod execution;
