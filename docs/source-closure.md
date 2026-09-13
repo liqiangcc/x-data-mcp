@@ -38,6 +38,16 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
 - [全品类数据库](https://www.tdx.com.cn/tdxdata.html)：介绍面向客户的数据库和文件包推送；没有将该产品合同范围授予当前公开 base/hsjday/gbbq 使用，不能作为许可替代。
 这是有界文档检查，不声称所有官方资料均不存在所需契约。旧 evidence 保持原样。
 
+## 最新官方文件字节证据（2026-09-13）
+
+新增的有界快照证据已经合并：
+
+- [官方 `.day` 单成员](../evidence/issue-64-day-parser/official-sh600006-range.json)：通过 HTTP Range 读取 `hsjday.zip` 的 `sh/lday/sh600006.day`，成员 SHA-256 `91cb06b2ba0cca331f41f759e3aa0647e6eb5bd62c450cd0fca2e6b397362f7d`，仅证明 32 字节记录结构和日期边界。
+- [官方 GBBQ 归档](../evidence/issue-54-gbbq-decimal/official/archive-20260913.json)：归档 SHA-256 `6b77f598004c2d651e86b7ec20e44ac42c8988132e389c9ce2d7c638e0dc924c`，`gbbq` 成员 SHA-256 `24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60`，仅证明归档字节和观察到的 29 字节容器形状。
+- [官方 base 归档](../evidence/issue-6-tdx-dbf-source/official/archive-20260913.json)：归档 SHA-256 `39de51e26c0ee8fb3fd970ee870f4cb955b8fbbd7f84d752157f3998e49b71d9`，包含 542 个成员及结构化 `base.dbf` 摘要，仅证明本次归档事实。
+
+三份快照来自独立获取时点；这些证据没有证明业务字段、GBBQ/QFQ 语义、目录行业映射、跨文件一致性、服务器使用边界或生产 pipeline。门禁状态保持 `NOT_VERIFIED`，不得据此接入生产。
+
 ## 最小实施与验收计划（尚未执行）
 
 A. 在 #54/#71/#46 补齐上述证据；跨文件一致性须有独立契约后才能组合。证据不足继续 blocked。
