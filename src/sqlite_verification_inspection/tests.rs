@@ -485,7 +485,7 @@ fn inspection_historical_request_rejects_missing_audit_or_orphan_binding() {
 }
 #[test]
 fn verified_finished_result_is_not_rewritten_and_inspection_preserves_market_bytes() {
-    use crate::{market_storage::MarketRepository, task_verification::runner::StopRunner};
+    use crate::task_verification::runner::StopRunner;
     let (_dir, db, original, check) = fixture();
     let market = crate::sqlite_market::SqliteMarket::new(db.clone());
     let samples: serde_json::Value = serde_json::from_str(include_str!(
