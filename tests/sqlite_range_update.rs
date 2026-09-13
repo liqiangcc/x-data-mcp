@@ -1310,3 +1310,85 @@ fn publication_commit_and_uncertainty_marker_compete_on_the_same_revision() {
         }
     }
 }
+
+#[test]
+fn publication_decision_records_insufficiency_or_confirmed_commit_without_changing_original() {
+    use x_data_mcp::publication_verification::{
+        EvidenceRepository,
+        admission::{PublicationVerification, command_key},
+        decision::{Conclusion, prepare},
+    };
+    let f = fixture(true);
+    let control = TaskControl::new(
+        f.db.tasks.clone(),
+        "inspection-run".into(),
+        vec![Box::new(
+            PublicationVerification::new(f.db.tasks.clone(), "inspection-run".into()).unwrap(),
+        )],
+    )
+    .unwrap();
+    let accepted = control
+        .accept(
+            "inspect",
+            command_key(),
+            json!({"target_task_id":f.command.task_id}),
+        )
+        .unwrap();
+    let RequestOutcome::Task(check) = accepted.record.outcome else {
+        panic!()
+    };
+    let check =
+        f.db.tasks
+            .transition(&check.task.task_id, 0, "inspection-run", Change::Claim)
+            .unwrap();
+    let check =
+        f.db.tasks
+            .transition(
+                &check.task.task_id,
+                check.task.state_revision,
+                "inspection-run",
+                Change::StartItem("publication-results".into()),
+            )
+            .unwrap();
+    let original = f.db.task(&f.command.task_id).unwrap();
+    let insufficient = prepare(
+        check.clone(),
+        f.db.publication_facts(&f.command.task_id).unwrap(),
+        "inspection-run",
+        "test-owner",
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    assert_eq!(
+        insufficient.receipt().conclusion,
+        Conclusion::InsufficientEvidence
+    );
+    assert!(insufficient.finished_check().claims.is_empty());
+    assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+    assert!(!original.claims.is_empty());
+    f.db.commit_range(&f.plan()).unwrap();
+    let published = f.db.task(&f.command.task_id).unwrap();
+    let facts = f.db.publication_facts(&f.command.task_id).unwrap();
+    let confirmed = prepare(
+        check.clone(),
+        facts.clone(),
+        "inspection-run",
+        "test-owner",
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    assert_eq!(confirmed.receipt().conclusion, Conclusion::AllRecorded);
+    assert_eq!(f.db.task(&f.command.task_id).unwrap(), published);
+    let mut incomplete = facts;
+    incomplete.items.clear();
+    assert!(
+        prepare(
+            check,
+            incomplete,
+            "inspection-run",
+            "test-owner",
+            chrono::Utc::now()
+        )
+        .is_err()
+    );
+}
