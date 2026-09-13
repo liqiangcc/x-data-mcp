@@ -106,3 +106,121 @@ impl AuditStore for SqliteMarket {
         self.read(|c| read_receipt(c, id).map(|r| r.map(|(_, receipt)| receipt)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::publication_verification::{
+        EvidenceRepository,
+        admission::{PublicationVerification, command_key},
+        decision::prepare,
+    };
+    use crate::task_control::{Change, RequestOutcome, TaskRepository, service::TaskControl};
+    #[test]
+    fn crash_child() {
+        let Ok(path) = std::env::var("X_DATA_MCP_TEST_CHECK_PATH") else {
+            return;
+        };
+        let audit: Audit =
+            serde_json::from_str(&std::env::var("X_DATA_MCP_TEST_CHECK_AUDIT").unwrap()).unwrap();
+        validate_audit(&audit).unwrap();
+        SqliteMarket::new(SqliteTasks::new(path))
+            .commit_check(&Plan { audit })
+            .unwrap();
+        panic!("expected real process exit");
+    }
+    #[test]
+    fn publication_check_real_exit_keeps_audit_and_completion_atomic_without_target_mutation() {
+        for published in [false, true] {
+            for point in ["before_commit", "after_commit"] {
+                let (_dir, db, publication) = super::super::tests::setup();
+                let id = publication.command.task_id.clone();
+                let control = TaskControl::new(
+                    db.tasks.clone(),
+                    "check-run".into(),
+                    vec![Box::new(
+                        PublicationVerification::new(db.tasks.clone(), "check-run".into()).unwrap(),
+                    )],
+                )
+                .unwrap();
+                let RequestOutcome::Task(check) = control
+                    .accept(
+                        "inspect",
+                        command_key(),
+                        serde_json::json!({"target_task_id":id}),
+                    )
+                    .unwrap()
+                    .record
+                    .outcome
+                else {
+                    panic!()
+                };
+                let check = db
+                    .tasks
+                    .transition(&check.task.task_id, 0, "check-run", Change::Claim)
+                    .unwrap();
+                let check = db
+                    .tasks
+                    .transition(
+                        &check.task.task_id,
+                        check.task.state_revision,
+                        "check-run",
+                        Change::StartItem("publication-results".into()),
+                    )
+                    .unwrap();
+                if published {
+                    db.commit(&publication).unwrap();
+                }
+                let original = db.task(&id).unwrap();
+                let plan = prepare(
+                    check.clone(),
+                    db.publication_facts(&id).unwrap(),
+                    "check-run",
+                    "test-owner",
+                    chrono::Utc::now(),
+                )
+                .unwrap();
+                let status = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "sqlite_market::publication_checks::tests::crash_child",
+                        "--nocapture",
+                    ])
+                    .env("X_DATA_MCP_TEST_CHECK_PATH", db.tasks.path())
+                    .env(
+                        "X_DATA_MCP_TEST_CHECK_AUDIT",
+                        serde_json::to_string(&plan.audit).unwrap(),
+                    )
+                    .env("X_DATA_MCP_TEST_MARKET_CRASH", point)
+                    .status()
+                    .unwrap();
+                assert_eq!(status.code(), Some(79));
+                let reopened = SqliteMarket::new(SqliteTasks::new(db.tasks.path()));
+                let committed = point == "after_commit";
+                assert_eq!(
+                    reopened
+                        .check_receipt(&check.task.task_id)
+                        .unwrap()
+                        .is_some(),
+                    committed
+                );
+                assert_eq!(reopened.task(&id).unwrap(), original);
+                assert_eq!(
+                    reopened
+                        .tasks
+                        .read_task(&check.task.task_id)
+                        .unwrap()
+                        .unwrap(),
+                    if committed {
+                        plan.finished_check().clone()
+                    } else {
+                        check.clone()
+                    }
+                );
+                assert_eq!(reopened.commit_check(&plan).unwrap(), *plan.receipt());
+                assert_eq!(reopened.commit_check(&plan).unwrap(), *plan.receipt());
+                assert_eq!(reopened.task(&id).unwrap(), original);
+            }
+        }
+    }
+}
