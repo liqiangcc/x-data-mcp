@@ -51,7 +51,7 @@ def runtime_smoke(binaries):
             # read budget. This caught the preview.5 deployment regression.
             time.sleep(32)
             assert client.poll() is None, "idle MCP proxy exited while stdin remained open"
-            assert rpc("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
+            assert call("get_data_capabilities", {})["production_ready"] is False
             assert {t["name"] for t in tools} == {c["tool_name"] for c in cap["items"]}
             args = dict(request_id="runtime-smoke", symbols=["sh.600000"], periods=["day"])
             accepted = call("start_collection", args)
