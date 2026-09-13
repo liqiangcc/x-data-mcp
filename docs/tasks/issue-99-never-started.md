@@ -16,3 +16,6 @@
 真实 SQLite 两连接竞态回归覆盖旧 Claim 与停止提交只有一个成功；stale_selected_executor_is_never_called_after_never_started_interruption 直接断言预先选中的旧执行器不会调用源端。四种关联表分别注入异常，均须拒绝。已领取旧任务的实际 stdio 仍检查不足与保留占用；包 smoke 的未领取旧任务现在经真实默认入口收尾 interrupted。
 
 这只证明无执行曾开始，不能核实一个正在执行或结果未知的写入器。未知契约、revision 非零（包括仅取消过）、owner 非空及已有 outcome 一概不凭本规则批准。能力总览保持 blocked，描述明确部分适用性，受理不是承诺检查通过。关联存在性查询可能扫描表，尚无规模/延迟性能证据；不声称高性能或恒定成本。完整停止证据、其他核实类型及生产来源链路仍未交付。本分支尚未部署。
+
+
+CI 34740501362 / package 34740501427 在真实包 smoke 暴露契约清单遗漏：公开 CollectionContract 使用 start_collection + daily/yearly/catalog + v1，不是 legacy compound key。已核对它们均由 data_supply::worker → TaskControl::run_selected → Claim/StartItem → BlockedSource 执行，纳入同一条件规则；不新增目录采集/发布实现。未知 key 仍拒绝。该失败不属于来源语义失败，旧日志保留。
