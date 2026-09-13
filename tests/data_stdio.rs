@@ -443,3 +443,44 @@ fn real_yearly_update_stdio_has_closed_schema_frozen_inputs_and_blocked_worker()
         );
     }
 }
+
+#[test]
+fn real_daily_future_stdio_rejects_without_binding_and_accepts_today() {
+    for operation in ["update_data", "backfill_data"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let tasks = x_data_mcp::sqlite_tasks::SqliteTasks::new(&path);
+        tasks.initialize().unwrap();
+        let market = x_data_mcp::sqlite_market::SqliteMarket::new(tasks);
+        range_fixture::published_fixture(&market, &range_fixture::samples()[0]["record"]);
+        let mut s = Session::new(&path);
+        s.request("initialize", json!({}));
+        let today = x_data_mcp::calendar::shanghai_today();
+        let future = today.succ_opt().unwrap();
+        let mut input = json!({"request_id":"future-day","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"legacy-daily","start_date":"2025-01-02","end_date":future}]});
+        let error = s.call(operation, input.clone(), true);
+        assert_eq!(error["code"], "invalid_arguments");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains(&future.to_string())
+        );
+        assert_eq!(
+            s.call(
+                "get_request",
+                json!({"contract_version":"v1","request_id":"future-day"}),
+                false
+            )["bound"],
+            false
+        );
+        input["request_id"] = json!("today-day");
+        input["items"][0]["end_date"] = json!(today);
+        let accepted = s.call(operation, input.clone(), false);
+        assert_eq!(accepted["status"], "pending");
+        assert_eq!(
+            s.call(operation, input, false)["task_id"],
+            accepted["task_id"]
+        );
+    }
+}

@@ -73,3 +73,11 @@ RangeRunner 回归：range_runner_executes_and_replays_real_publication_without_
 按 live #3 显式取消/终态保护规则，增加内部 FinishCancellation：执行器确认已停止且未发布后，可在 cancel_requested、无 running 项时取消收尾；不开放用户 stopped 标记，不改写已有终态。已知来源失败仍按失败记录，已发布成功仍由收据返回；存储/提交结果不明不执行取消或失败收尾。range_cancel_ack_requires_stopped_items_and_does_not_rewrite_terminals 覆盖写入未结束及终态保护。
 
 取消确认结果内部持久化 cancellation_acknowledged，仅由 FinishCancellation 写入；SQLite 校验器在全部项都已尝试结束的 cancelled 情况要求该收尾证据，缺失拒绝，不放宽普通 failed/succeeded 校验。该字段不是 MCP 输入或来源门禁开关。
+
+## 未来 daily 写范围修正（PR #96）
+
+依据 #4 AC-92 / #3 AC-152—155。RangeContract.resolve 在任何固定版本加载和受理写入之前，按一次服务器 Shanghai 日期检查所有规范化项；任一 end_date 晚于当日整体拒绝，错误列出 symbol/start/end。没有裁剪、预约、绑定或占用副作用。normalize 保持纯结构/集合语义，已受理 request 重放在 resolve 前返回既有事实，不随时钟或 base 后续变化重新受理。
+
+Calendar helper 明确 UTC→UTC+8 日期，并用于 daily/yearly admission 的服务端时钟装配；每次新请求重新取值，无 MCP today/clock 参数。schema、来源门禁与线上状态不变。
+
+修复前 Actions 34708363832（d7bd35f67af5d3afc51c142850c01c6c320e8a77）实际复现：daily_future_single_request_must_not_be_accepted 被受理为 pending；batch 测试仅报告缺失 base，未指出未来范围。同两测试保留修复后重跑，不能把未执行验证称 PASS。补充上海午夜/跨年、当日边界、时钟回退及 base 损坏后的已受理重放测试。

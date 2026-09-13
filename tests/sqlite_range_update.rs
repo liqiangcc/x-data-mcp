@@ -35,6 +35,7 @@ fn command(db: &SqliteMarket, request: &str, version: &str, expected: Option<&st
             Box::new(RangeContract {
                 operation: Operation::Backfill,
                 repository: db.clone(),
+                today: || "2026-09-12".parse().unwrap(),
             }),
         ],
     )
@@ -475,10 +476,12 @@ fn range_control(f: &Fixture) -> TaskControl<SqliteTasks> {
             Box::new(RangeContract {
                 operation: Operation::Backfill,
                 repository: f.db.clone(),
+                today: || "2026-09-12".parse().unwrap(),
             }),
             Box::new(RangeContract {
                 operation: Operation::Update,
                 repository: f.db.clone(),
+                today: || "2026-09-12".parse().unwrap(),
             }),
         ],
     )
@@ -643,6 +646,7 @@ fn explicit_range_same_request_competes_atomically_and_retry_keeps_frozen_inputs
                     vec![Box::new(RangeContract {
                         operation: Operation::Update,
                         repository: db,
+                        today: || "2026-09-12".parse().unwrap(),
                     })],
                 )
                 .unwrap();

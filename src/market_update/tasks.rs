@@ -48,6 +48,8 @@ fn invalid(message: impl ToString) -> Error {
 pub struct RangeContract<R> {
     pub operation: Operation,
     pub repository: R,
+    /// Server clock, sampled once per new request resolution; not a wire field.
+    pub today: fn() -> NaiveDate,
 }
 impl<R: MarketRepository> Contract for RangeContract<R> {
     fn key(&self) -> CommandKey {
@@ -84,6 +86,19 @@ impl<R: MarketRepository> Contract for RangeContract<R> {
     }
     fn resolve(&self, raw: &Value) -> Result<FrozenWork, Error> {
         let input: ExplicitRanges = serde_json::from_value(raw.clone()).map_err(invalid)?;
+        let today = (self.today)();
+        let future: Vec<_> = input
+            .items
+            .iter()
+            .filter(|i| i.end_date > today)
+            .map(|i| json!({"symbol":i.symbol,"start_date":i.start_date,"end_date":i.end_date}))
+            .collect();
+        if !future.is_empty() {
+            return Err(invalid(format!(
+                "future daily write rejected on {today}: {}",
+                json!(future)
+            )));
+        }
         let ids = input
             .items
             .iter()
