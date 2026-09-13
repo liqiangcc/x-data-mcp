@@ -306,7 +306,7 @@ mod tests {
         let files = vec![
             file(FileRole::Day, b'd'),
             file(FileRole::BaseIndustry, b'b'),
-            file(FileRole::Gbbq, b'g'),
+            file(FileRole::Gbbq, b'c'),
         ];
         let decision = validate(ConsistencyInput {
             compatibility: Some(evidence(&files)),
@@ -322,7 +322,7 @@ mod tests {
         let files = vec![
             file(FileRole::BaseIndustry, b'b'),
             file(FileRole::Day, b'd'),
-            file(FileRole::Gbbq, b'g'),
+            file(FileRole::Gbbq, b'c'),
         ];
         let decision = validate(ConsistencyInput {
             files,
@@ -357,7 +357,7 @@ mod tests {
         let files = vec![
             file(FileRole::BaseIndustry, b'b'),
             file(FileRole::Day, b'd'),
-            file(FileRole::Gbbq, b'g'),
+            file(FileRole::Gbbq, b'c'),
         ];
         let mut proof = evidence(&files);
         proof.file_hashes.insert(FileRole::Day, hash(b'x'));
@@ -398,7 +398,7 @@ mod tests {
         let files = vec![
             file(FileRole::BaseIndustry, b'b'),
             file(FileRole::Day, b'd'),
-            file(FileRole::Gbbq, b'g'),
+            file(FileRole::Gbbq, b'c'),
         ];
         let proof = evidence(&files);
         let mut reordered = files.clone();
@@ -418,14 +418,14 @@ mod tests {
     #[test]
     fn divergent_duplicate_role_is_conflict() {
         let mut day = file(FileRole::Day, b'd');
-        day.sha256 = hash(b'x');
+        day.sha256 = hash(b'e');
         let files = vec![
             file(FileRole::BaseIndustry, b'b'),
             file(FileRole::Day, b'd'),
             day,
-            file(FileRole::Gbbq, b'g'),
+            file(FileRole::Gbbq, b'c'),
         ];
-        let proof = evidence(&files[..3]);
+        let proof = evidence(&[files[0].clone(), files[1].clone(), files[3].clone()]);
         let decision = validate(ConsistencyInput {
             files,
             compatibility: Some(proof),
