@@ -149,19 +149,17 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 
 显式 daily 更新/补采的新请求按服务器 Asia/Shanghai 当日拒绝未来日期；批量任一越界整体拒绝并列明范围，不裁剪、不预约、不留下 request/task/占用。已受理同请求重放仍返回原冻结事实。
 
-## preview.3 发布候选（#97）
+## preview.4 发布候选（#102）
 
-此候选集成 15 工具、显式 daily/yearly 更新与补采、未来日期拒绝及 schema v6。
-当前线上 preview.2 的升级尚待发布包检查、数据库备份和显式迁移完成；本段不表示已部署。
-包检查使用隔离 synthetic fixture，不向普通库导入数据。真实来源仍 blocked，
-NOT_PRODUCTION_READY；新版 ChatGPT 消费侧调用在实际验证前为 NOT_RUN。
+此候选集成 16 工具、schema v7 与显式 verify_stopped_writes。关联 [#99](docs/tasks/issue-99.md) 与[从未执行证明](docs/tasks/issue-99-never-started.md)。
+独立核实受理、审计、条件原子收尾、只读进度和既有结果重放已实现。
+默认仅能核实受支持契约的从未开始任务：revision=0、无 owner/执行结果及发布关联，
+收尾事务排除旧执行器后来领取。已开始或未知执行仍 STOP_EVIDENCE_NOT_VERIFIED，保留占用。
+能力总体 blocked，具体适用边界见工具描述；检查 succeeded 不表示原任务已停止，须读取 stopped_write_check 结论。
+公共参数不能提供“已停止”声明或强制解锁，其他核实/恢复类型仍待实现。
 
-停止写入核实正在 [#99](docs/tasks/issue-99.md) 开发：独立受理、条件原子中断收尾和审计已实现，
-公共入口现已接线；开发分支新增从未领取任务的真实 SQLite 证明：revision=0、无 owner/执行结果及发布关联，收尾事务排除旧执行器后来领取。已开始或未知执行仍证据不足，不释放占用。
-
-#99 开发分支的显式 schema v7 增加核实审计与 interrupted 状态；原/核实任务条件收尾已接入真实 SQLite 测试。已开始写入的停止证据仍未实现，不提供强制解锁。线上 preview.3/schema v6 不因开发分支变更而迁移。
-
-#99 开发入口新增 verify_stopped_writes（共 16 工具）：显式核实任务、只读 inspector 和条件收尾。
-默认仅能核实受支持契约的从未开始任务；其他任务报告 STOP_EVIDENCE_NOT_VERIFIED。能力总体仍 blocked，详情见工具描述。get_task_progress 的 stopped_write_check 表示检查结论，
-检查 succeeded 不代表原任务已停止。公共参数不能提供“已停止”声明或强制解锁开关。
-当前线上仍 preview.3 的 15 工具，此开发分支尚未重新部署。
+候选准备时线上为 preview.3 / schema v6 / 15 工具；本段不宣称已经部署。
+发布须校验包与精确 SHA、隔离 synthetic smoke、停目标服务后备份、显式 v6→v7 升级再切换。
+旧库/旧包/旧 demo 保留，普通库不导入演示数据。实际部署证据维护在 Issue #102。
+真实来源仍 blocked，NOT_PRODUCTION_READY；#54/#6/#46/#71/文件一致性门禁不解除。
+新版 ChatGPT 消费侧调用在实际验证前为 NOT_RUN，本机 stdio 或 tunnel health 不能替代。
