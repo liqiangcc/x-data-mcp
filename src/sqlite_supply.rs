@@ -485,17 +485,16 @@ impl ObservationRepository for SqliteSupply {
         receipt: &Option<crate::publication_verification::decision::Receipt>,
     ) -> Result<(), Error> {
         use crate::publication_verification::decision::AuditStore;
-        if let Some(expected) = receipt {
-            if self
+        if let Some(expected) = receipt
+            && self
                 .market
                 .check_receipt(&expected.verification_task_id)?
                 .as_ref()
                 != Some(expected)
-            {
-                return Err(Error::Integrity(
-                    "publication check changed since snapshot".into(),
-                ));
-            }
+        {
+            return Err(Error::Integrity(
+                "publication check changed since snapshot".into(),
+            ));
         }
         Ok(())
     }
