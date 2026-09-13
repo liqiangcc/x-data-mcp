@@ -1377,3 +1377,32 @@ fn publication_facts_verify_yearly_new_and_reuse_after_head_advances() {
     assert!(store.publication_facts(&first.command().task_id).is_err());
     assert!(store.publication_facts(&reuse.command().task_id).is_err());
 }
+
+#[test]
+fn publication_facts_verify_legacy_initial_publish_and_reject_receipt_damage() {
+    use x_data_mcp::publication_verification::{Evidence, EvidenceRepository};
+    let (_dir, store) = db();
+    let plan = prepare(
+        &store,
+        &samples()[0]["record"],
+        PublishIntent::Daily {
+            expected_head: None,
+        },
+    );
+    let receipt = store.commit(&plan).unwrap();
+    let facts = store.publication_facts(&receipt.task_id).unwrap();
+    let Evidence::Committed {
+        receipt: actual,
+        reused_version,
+    } = &facts.items[0].evidence
+    else {
+        panic!("legacy evidence required")
+    };
+    assert_eq!(actual, &receipt);
+    assert!(!reused_version);
+    Connection::open(store.tasks.path())
+        .unwrap()
+        .execute("UPDATE publication_batches SET receipt_json='{}'", [])
+        .unwrap();
+    assert!(store.publication_facts(&receipt.task_id).is_err());
+}
