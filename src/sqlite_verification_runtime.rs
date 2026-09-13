@@ -124,3 +124,5 @@ impl SqliteTasks {
 }
 #[cfg(test)]
 mod tests;
+
+pub(crate) mod guarded;

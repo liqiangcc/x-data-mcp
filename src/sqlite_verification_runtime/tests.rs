@@ -175,3 +175,110 @@ fn actual_exit_during_runtime_claim_never_leaves_half_registered_execution() {
         );
     }
 }
+
+#[test]
+fn guarded_runner_keeps_exclusion_through_evidence_and_commit() {
+    use crate::task_verification::decision::{Observation, StopInspector};
+    struct Probe {
+        db: SqliteTasks,
+        check: String,
+    }
+    impl StopInspector for Probe {
+        fn inspect(&self, _: &TaskSnapshot) -> Result<Observation, Error> {
+            let registration = self.db.runtime_registration(&self.check)?.unwrap();
+            assert!(matches!(
+                try_acquire(self.db.path(), &registration.descriptor),
+                Err(crate::verification_runtime::Error::Busy)
+            ));
+            Ok(Observation::Insufficient {
+                reason: "fixture has no business writer proof".into(),
+            })
+        }
+    }
+    let (_dir, db, original, check) = fixture();
+    {
+        let tasks =
+            super::guarded::GuardedTasks::open(db.clone(), &check.task.task_id, "check-run")
+                .unwrap();
+        let runner = crate::task_verification::runner::StopRunner {
+            repository: tasks,
+            run_id: "check-run".into(),
+            actor: "test-owner".into(),
+        };
+        runner
+            .run(
+                &check.task.task_id,
+                &Probe {
+                    db: db.clone(),
+                    check: check.task.task_id.clone(),
+                },
+            )
+            .unwrap();
+        let registration = db
+            .runtime_registration(&check.task.task_id)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            try_acquire(db.path(), &registration.descriptor),
+            Err(crate::verification_runtime::Error::Busy)
+        ));
+        assert!(
+            db.read_task(&check.task.task_id)
+                .unwrap()
+                .unwrap()
+                .task
+                .status
+                .terminal()
+        );
+        assert_eq!(
+            db.read_task(&original.task.task_id).unwrap(),
+            Some(original)
+        );
+    }
+    let registration = db
+        .runtime_registration(&check.task.task_id)
+        .unwrap()
+        .unwrap();
+    try_acquire(db.path(), &registration.descriptor).unwrap();
+}
+
+#[test]
+fn guarded_repository_cannot_transition_another_task_or_claim_twice() {
+    let (_dir, db, original, check) = fixture();
+    let tasks =
+        super::guarded::GuardedTasks::open(db.clone(), &check.task.task_id, "check-run").unwrap();
+    assert!(
+        tasks
+            .transition(
+                &original.task.task_id,
+                0,
+                "old",
+                crate::task_control::Change::Claim
+            )
+            .is_err()
+    );
+    assert!(
+        super::guarded::GuardedTasks::open(db.clone(), &check.task.task_id, "check-run").is_err()
+    );
+    tasks
+        .transition(
+            &check.task.task_id,
+            0,
+            "check-run",
+            crate::task_control::Change::Claim,
+        )
+        .unwrap();
+    assert!(
+        db.transition(
+            &check.task.task_id,
+            0,
+            "check-run",
+            crate::task_control::Change::Claim
+        )
+        .is_err()
+    );
+    assert_eq!(
+        db.read_task(&original.task.task_id).unwrap(),
+        Some(original)
+    );
+}

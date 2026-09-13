@@ -19,29 +19,7 @@ pub fn run_once(
         return Ok(None);
     };
     if candidate.task.key.dataset == crate::task_verification::DATASET {
-        if candidate.task.key == crate::publication_verification::admission::command_key() {
-            crate::publication_verification::runner::Runner {
-                tasks: control.repository.clone(),
-                evidence: market.clone(),
-                run_id: control.run_id.clone(),
-                actor: "local-owner".into(),
-            }
-            .run(&candidate.task.task_id)?;
-        } else if candidate.task.key == crate::task_verification::command_key() {
-            crate::task_verification::runner::StopRunner {
-                repository: control.repository.clone(),
-                run_id: control.run_id.clone(),
-                actor: "local-owner".into(),
-            }
-            .run(
-                &candidate.task.task_id,
-                &crate::task_verification::never_started::NeverStarted {
-                    repository: control.repository.clone(),
-                },
-            )?;
-        } else {
-            return Err(crate::task_control::Error::UnsupportedContract.into());
-        }
+        run_verification(control, market, &candidate)?;
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
     }
     if !matches!(
@@ -78,4 +56,55 @@ pub fn run_once(
         )?;
     }
     Ok(Some(control.read_task(&candidate.task.task_id)?))
+}
+
+#[cfg(target_os = "linux")]
+fn run_verification(
+    control: &TaskControl<SqliteTasks>,
+    market: &SqliteMarket,
+    candidate: &TaskSnapshot,
+) -> Result<(), Error> {
+    if !crate::verification_execution::supported(&candidate.task.key) {
+        return Err(crate::task_control::Error::UnsupportedContract.into());
+    }
+    // Owned by the runner, so Claim, evidence I/O, receipt reconciliation and
+    // cancellation/error handling all finish before the kernel guard is dropped.
+    let tasks = crate::sqlite_verification_runtime::guarded::GuardedTasks::open(
+        control.repository.clone(),
+        &candidate.task.task_id,
+        &control.run_id,
+    )?;
+    if candidate.task.key == crate::publication_verification::admission::command_key() {
+        crate::publication_verification::runner::Runner {
+            tasks,
+            evidence: market.clone(),
+            run_id: control.run_id.clone(),
+            actor: "local-owner".into(),
+        }
+        .run(&candidate.task.task_id)?;
+    } else {
+        crate::task_verification::runner::StopRunner {
+            repository: tasks,
+            run_id: control.run_id.clone(),
+            actor: "local-owner".into(),
+        }
+        .run(
+            &candidate.task.task_id,
+            &crate::task_verification::never_started::NeverStarted {
+                repository: control.repository.clone(),
+            },
+        )?;
+    }
+    Ok(())
+}
+#[cfg(not(target_os = "linux"))]
+fn run_verification(
+    _: &TaskControl<SqliteTasks>,
+    _: &SqliteMarket,
+    _: &TaskSnapshot,
+) -> Result<(), Error> {
+    Err(crate::task_control::Error::NeedsVerification(
+        "verification runtime exclusion is unsupported on this platform".into(),
+    )
+    .into())
 }
