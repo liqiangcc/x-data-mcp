@@ -287,7 +287,7 @@ fn ipc_frame_and_client_limits_close_only_the_session_without_database_writes() 
     assert!(server.join().unwrap().is_ok());
     let c = rusqlite::Connection::open(&db).unwrap();
     assert_eq!(
-        c.query_row("select count(*) from requests", [], |r| r.get::<_, u64>(0))
+        c.query_row("select count(*) from requests", [], |r| r.get::<_, i64>(0))
             .unwrap(),
         0
     );
