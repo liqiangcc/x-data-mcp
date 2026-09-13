@@ -231,6 +231,9 @@ impl<R: ObservationRepository> Observer<R> {
                 .filter(|s| {
                     args.dataset
                         .is_none_or(|d| serde_json::to_value(d).unwrap() == s.dataset)
+                        && args
+                            .operation
+                            .is_none_or(|op| serde_json::to_value(op).unwrap() == s.operation)
                         && args.status.as_ref().is_none_or(|v| v.contains(&s.status))
                         && args.created_from.is_none_or(|t| s.created_at >= t)
                         && args.created_to.is_none_or(|t| s.created_at <= t)

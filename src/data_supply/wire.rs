@@ -260,6 +260,7 @@ pub struct TasksQuery {
 #[serde(rename_all = "snake_case")]
 pub enum TaskOperation {
     StartCollection,
+    VerifyStoppedWrites,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

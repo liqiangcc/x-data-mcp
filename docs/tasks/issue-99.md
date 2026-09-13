@@ -103,3 +103,7 @@ already_verified。保存规范化完整命令及原收据；同 ID 同参重读
 get_request 返回同一历史结果；普通前置拒绝仍无绑定。目标/审计损坏不能当成已核实或未绑定。
 若已受理的检查排队期间目标先被合法收尾，执行时按实际终态完成 not_applicable/already_verified 检查，
 不再调 inspector、不改原终态、不重复释放；同目标条件检查仍有效。
+
+公共任务列表新增 verify_stopped_writes 操作过滤。接线检查发现原 operation 字段虽被解码却未用于筛选；
+本次将其实际应用到同一已授权快照，回归 verify 与 start_collection 的区分及受限身份不见核实任务。
+真实二进制另验证已有可信 fixture 中断结论→无新任务的请求级终态→原样重放/get_request/异参冲突。

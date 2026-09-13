@@ -622,3 +622,100 @@ fn real_stop_verification_stdio_is_strict_discoverable_and_keeps_original_claims
         *original
     );
 }
+
+#[test]
+fn real_stopping_stdio_reuses_a_verified_conclusion_as_a_bound_request_terminal() {
+    use x_data_mcp::task_control::{
+        Contract, RequestOutcome, TaskRepository, legacy::LegacyCollection, service::TaskControl,
+    };
+    use x_data_mcp::task_verification::{
+        StopVerification,
+        decision::{Observation, StopInspector, snapshot_digest},
+        runner::StopRunner,
+    };
+    struct Fixture;
+    impl StopInspector for Fixture {
+        fn inspect(
+            &self,
+            s: &x_data_mcp::task_control::TaskSnapshot,
+        ) -> Result<Observation, x_data_mcp::task_control::Error> {
+            Ok(Observation::Stopped {
+                snapshot_sha256: snapshot_digest(s)?,
+                evidence_ref: "offline fixture: known writer".into(),
+            })
+        }
+    }
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("db");
+    let db = x_data_mcp::sqlite_tasks::SqliteTasks::new(&path);
+    db.initialize().unwrap();
+    let old = TaskControl::new(db.clone(), "old".into(), vec![Box::new(LegacyCollection)]).unwrap();
+    let RequestOutcome::Task(original) = old
+        .accept(
+            "original",
+            LegacyCollection.key(),
+            json!({"symbols":["sh.600006"],"periods":["day"]}),
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!()
+    };
+    let contract = StopVerification::new(db.clone(), "fixture-run".into()).unwrap();
+    let key = contract.key();
+    let control =
+        TaskControl::new(db.clone(), "fixture-run".into(), vec![Box::new(contract)]).unwrap();
+    let RequestOutcome::Task(check) = control
+        .accept(
+            "fixture-check",
+            key,
+            json!({"target_task_id":original.task.task_id}),
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!()
+    };
+    StopRunner {
+        repository: db.clone(),
+        run_id: "fixture-run".into(),
+        actor: "fixture-owner".into(),
+    }
+    .run(&check.task.task_id, &Fixture)
+    .unwrap();
+    let unchanged = db.read_task(&original.task.task_id).unwrap().unwrap();
+    let mut s = Session::new(&path);
+    s.request("initialize", json!({}));
+    let input = json!({"contract_version":"v1","request_id":"read-known-result","target_task_id":original.task.task_id});
+    let result = s.call("verify_stopped_writes", input.clone(), false);
+    assert_eq!(result["bound"], true);
+    assert!(result["task"].is_null());
+    assert_eq!(result["terminal_result"]["kind"], "already_verified");
+    assert_eq!(
+        result["terminal_result"]["receipt"]["verification_task_id"],
+        check.task.task_id
+    );
+    assert_eq!(s.call("verify_stopped_writes", input, false), result);
+    assert_eq!(
+        s.call(
+            "get_request",
+            json!({"contract_version":"v1","request_id":"read-known-result"}),
+            false
+        ),
+        result
+    );
+    assert_eq!(s.call("verify_stopped_writes",json!({"contract_version":"v1","request_id":"read-known-result","target_task_id":"changed"}),true)["code"],"request_conflict");
+    assert_eq!(
+        db.read_task(&original.task.task_id).unwrap().unwrap(),
+        unchanged
+    );
+    assert_eq!(
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT count(*) FROM tasks", [], |r| r.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+}

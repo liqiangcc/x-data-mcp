@@ -1195,3 +1195,55 @@ fn queued_inspection_rechecks_an_original_that_already_finished_without_inspecti
     assert_eq!(receipt.conclusion, Conclusion::AlreadyVerified);
     assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), after);
 }
+
+#[test]
+fn verification_task_listing_filters_operation_and_excludes_it_for_non_owner() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let (_d, r) = db();
+    let target = original_task(&r, "sh.600006");
+    let check = task(
+        control(&r, "new-run")
+            .accept(
+                "inspection",
+                key(&r),
+                json!({"target_task_id":target.task.task_id}),
+            )
+            .unwrap(),
+    );
+    let api = DataApi::new(r.clone(), "new-run".into(), Access::local()).unwrap();
+    let listed = api
+        .call("list_tasks", json!({"operation":"verify_stopped_writes"}))
+        .unwrap();
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["items"][0]["task_id"], check.task.task_id);
+    let originals = api
+        .call("list_tasks", json!({"operation":"start_collection"}))
+        .unwrap();
+    assert_eq!(originals["items"].as_array().unwrap().len(), 1);
+    assert_eq!(originals["items"][0]["task_id"], target.task.task_id);
+    let mut restricted = Access::local();
+    restricted.securities = Some(
+        [x_data_mcp::data_supply::wire::Security {
+            exchange: x_data_mcp::data_supply::wire::Exchange::Sh,
+            code: "600006".into(),
+        }]
+        .into(),
+    );
+    let view = DataApi::new(r, "new-run".into(), restricted).unwrap();
+    assert!(
+        view.call("list_tasks", json!({"operation":"verify_stopped_writes"}))
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        view.call("get_task_progress", json!({"task_id":check.task.task_id}))
+            .unwrap_err()
+            .code,
+        "forbidden"
+    );
+}
