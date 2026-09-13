@@ -1523,3 +1523,75 @@ fn publication_check_rejects_changed_target_or_cancelled_check_before_recording(
         assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
     }
 }
+
+#[test]
+fn publication_check_rejects_changed_evidence_even_when_receipt_and_task_are_unchanged() {
+    use x_data_mcp::publication_verification::{
+        EvidenceRepository,
+        decision::{AuditStore, prepare},
+    };
+    let f = fixture(false);
+    let check = running_publication_check(&f, "fingerprint-check");
+    f.db.commit_range(&f.plan()).unwrap();
+    let original = f.db.task(&f.command.task_id).unwrap();
+    let facts = f.db.publication_facts(&f.command.task_id).unwrap();
+    let plan = prepare(
+        check.clone(),
+        facts,
+        "inspection-run",
+        "test-owner",
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    let c = Connection::open(f.db.tasks.path()).unwrap();
+    let (raw, receipt): (String, String) = c
+        .query_row(
+            "SELECT audit_json,receipt_json FROM market_update_results",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    let mut audit: Value = serde_json::from_str(&raw).unwrap();
+    audit["inspection_annotation"] = json!("updated after prepare");
+    let raw = audit.to_string();
+    let digest = x_data_mcp::hash::sha256(json!([raw, receipt]).to_string().as_bytes());
+    c.execute(
+        "UPDATE market_update_results SET audit_json=?1,result_sha256=?2",
+        rusqlite::params![raw, digest],
+    )
+    .unwrap();
+    assert!(f.db.publication_facts(&f.command.task_id).is_ok());
+    assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+    assert!(matches!(f.db.commit_check(&plan), Err(Error::Conflict(_))));
+    assert_eq!(f.count("publication_checks"), 0);
+    assert_eq!(
+        f.db.tasks.read_task(&check.task.task_id).unwrap().unwrap(),
+        check
+    );
+}
+
+#[test]
+fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() {
+    use x_data_mcp::publication_verification::EvidenceRepository;
+    let f = fixture(true);
+    f.db.commit_range(&f.plan()).unwrap();
+    let before = f.db.publication_facts(&f.command.task_id).unwrap();
+    // Remove only the new v8 migration from this isolated fixture. The retained
+    // v1-v7 DDL and checksums are exactly those used by the deployed schema7.
+    f.sql("DROP TABLE publication_checks; DELETE FROM schema_migrations WHERE version=8; PRAGMA user_version=7;");
+    assert!(f.db.publication_facts(&f.command.task_id).is_err());
+    let c = Connection::open(f.db.tasks.path()).unwrap();
+    assert_eq!(
+        c.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+            .unwrap(),
+        7
+    );
+    f.db.tasks.upgrade().unwrap();
+    assert_eq!(
+        c.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+            .unwrap(),
+        x_data_mcp::sqlite_tasks::SCHEMA_VERSION
+    );
+    assert_eq!(f.db.publication_facts(&f.command.task_id).unwrap(), before);
+    assert_eq!(f.count("publication_checks"), 0);
+}

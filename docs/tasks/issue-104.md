@@ -19,3 +19,5 @@
 真实来源/#53四股 NOT_RUN，已执行写入器停止协议 NOT_VERIFIED，NOT_PRODUCTION_READY。没有新采集/部署/真实库导入；完整Goal仍包括其他核实/恢复与数据闭环，不由本任务缩小。
 
 首个切片当前只实现显式 daily/yearly update/backfill 的 EvidenceRepository；legacy 初次发布仍明确 UnsupportedContract，不能据此宣称 AC1 全部完成。读取无写入，不创建核实任务、不产生最终核实结论。第一批真实 SQLite 回归覆盖新发布/复用、缺收据/摘要损坏/typed 数据损坏；yearly 增补 head 前进后仍读固定证据、lineage 损坏拒绝。完整核实受理/条件审计/runner/stdio 尚 NOT_RUN。
+
+后续切片现已补初次发布证据、证据指纹、真实 SQLite 并发一致读与独立受理；详见 PR 最新 HEAD/Actions。应用 prepare 只形成 sealed Plan，不执行原任务收尾。显式 schema8 publication_checks 保存完整 facts/双核实快照/actor/time/receipt/digest；条件事务复查 facts 和核实 snapshot，仅写核实任务及审计。当前新增回归覆盖回滚、重放、状态/取消/指纹变化、审计损坏与 v7→v8 显式升级。真实退出、完整runner/MCP及最终Review仍待补齐，线上不变。历史 34743324844 失败为旧 v6 升级测试写死目标7，现改为当前schema版本；旧v6数据/坏FK回滚断言保留。

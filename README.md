@@ -163,3 +163,7 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 旧库/旧包/旧 demo 保留，普通库不导入演示数据。实际部署证据维护在 Issue #102。
 真实来源仍 blocked，NOT_PRODUCTION_READY；#54/#6/#46/#71/文件一致性门禁不解除。
 新版 ChatGPT 消费侧调用在实际验证前为 NOT_RUN，本机 stdio 或 tunnel health 不能替代。
+
+开发中的 #104 / PR #105 增加发布核实证据读取、独立受理与条件审计（显式 schema v8）。
+核实任务记录检查结论，不修改原任务或行情/head；缺收据不等于未发布。
+公开 runner/MCP 尚未完成，线上 preview.4/schema v7 不会自动升级；完整能力与部署以 Issue #104 的实际验证为准。
