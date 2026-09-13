@@ -156,7 +156,7 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 包检查使用隔离 synthetic fixture，不向普通库导入数据。真实来源仍 blocked，
 NOT_PRODUCTION_READY；新版 ChatGPT 消费侧调用在实际验证前为 NOT_RUN。
 
-停止写入核实的应用受理契约正在 [#99](docs/tasks/issue-99.md) 开发：独立核实范围不会接管原任务占用。
-尚未注册公共工具，尚无停止证据或中断收尾实现；不能用该契约释放重启遗留任务。
+停止写入核实正在 [#99](docs/tasks/issue-99.md) 开发：独立受理、条件原子中断收尾和审计已实现，
+通过路径仅由可信 fixture 验证。尚未注册公共工具，也未安装真实停止证据协议；默认核实器只报告证据不足，不会释放重启遗留任务。
 
 #99 开发分支的显式 schema v7 增加核实审计与 interrupted 状态；原/核实任务条件收尾已接入真实 SQLite 测试。默认停止证据仍未实现，不提供强制解锁。线上 preview.3/schema v6 不因开发分支变更而迁移。
