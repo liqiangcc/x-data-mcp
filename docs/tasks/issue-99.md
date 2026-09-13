@@ -1,7 +1,7 @@
 # #99 停止写入核实（开发中）
 
 当前进度：受理、schema v7、封闭条件收尾、审计/收据核验和真实退出测试已实现；
-公共 MCP、runner 与重复已收尾响应尚未完成。下文各切片保留当时边界，完整任务仍未交付。
+公共 MCP、runner 与重复已收尾响应现已实现，仍待最终审查。下文各切片保留当时边界；真实停止/副作用证据协议仍未实现，完整生产能力未交付。
 
 父 #3 的重启/停止核实及四类异步核实串行规则；设计 #75 固定提交
 2c706325aa2020382631355f802403c05b9662d8。实现 base 为 main
@@ -107,3 +107,9 @@ get_request 返回同一历史结果；普通前置拒绝仍无绑定。目标/�
 公共任务列表新增 verify_stopped_writes 操作过滤。接线检查发现原 operation 字段虽被解码却未用于筛选；
 本次将其实际应用到同一已授权快照，回归 verify 与 start_collection 的区分及受限身份不见核实任务。
 真实二进制另验证已有可信 fixture 中断结论→无新任务的请求级终态→原样重放/get_request/异参冲突。
+
+提交前最后一刻的 revision 冲突现在有界重查一次：若核实收到取消，确认本 inspector 已返回后
+只收尾核实；若原目标变化，丢弃旧停止观察，记录 TARGET_CHANGED_DURING_CHECK 的不足结论
+（或实际原终态的不适用/已有结论），不重新调用 inspector。再次竞争不循环，保留未知保护。
+stopped_runner_rechecks_late_cancel_and_target_change_without_using_stale_approval 使用真实 SQLite
+在 commit 边界注入两种变化，验证不会误释放原业务占用。

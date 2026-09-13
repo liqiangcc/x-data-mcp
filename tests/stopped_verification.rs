@@ -956,6 +956,7 @@ fn stopped_runner_reconciles_committed_response_loss_and_keeps_unknown_execution
             repository: stop_fault::Fault {
                 db: r.clone(),
                 commit,
+                mutation: None,
             },
             run_id: "new-run".into(),
             actor: "fixture-owner".into(),
@@ -1246,4 +1247,47 @@ fn verification_task_listing_filters_operation_and_excludes_it_for_non_owner() {
             .code,
         "forbidden"
     );
+}
+
+#[test]
+fn stopped_runner_rechecks_late_cancel_and_target_change_without_using_stale_approval() {
+    for cancel in [false, true] {
+        let (_d, r) = db();
+        let target = original_task(&r, "first");
+        let check = task(
+            control(&r, "new-run")
+                .accept(
+                    "inspection",
+                    key(&r),
+                    json!({"target_task_id":target.task.task_id}),
+                )
+                .unwrap(),
+        );
+        let worker = StopRunner {
+            repository: stop_fault::Fault {
+                db: r.clone(),
+                commit: false,
+                mutation: Some(cancel),
+            },
+            run_id: "new-run".into(),
+            actor: "fixture-owner".into(),
+        };
+        let result = worker.run(&check.task.task_id, &FixtureStopped).unwrap();
+        if cancel {
+            let RunOutcome::Cancelled(s) = result else {
+                panic!()
+            };
+            assert_eq!(s.task.status, Status::Cancelled);
+            assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
+        } else {
+            let RunOutcome::Completed(receipt) = result else {
+                panic!()
+            };
+            assert_eq!(receipt.conclusion, Conclusion::InsufficientEvidence);
+            assert!(receipt.reason.contains("TARGET_CHANGED_DURING_CHECK"));
+            let target = r.read_task(&target.task.task_id).unwrap().unwrap();
+            assert_eq!(target.task.status, Status::Running);
+            assert!(!target.claims.is_empty());
+        }
+    }
 }

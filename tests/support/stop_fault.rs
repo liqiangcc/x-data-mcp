@@ -7,9 +7,36 @@ use x_data_mcp::{
 pub struct Fault {
     pub db: SqliteTasks,
     pub commit: bool,
+    pub mutation: Option<bool>, // true: cancellation, false: target starts before commit
 }
 impl StopRepository for Fault {
     fn commit_stop_check(&self, p: &StopPlan) -> Result<Receipt, Error> {
+        if let Some(cancel) = self.mutation {
+            let id = if cancel {
+                &p.receipt().verification_task_id
+            } else {
+                &p.receipt().target_task_id
+            };
+            let state = self.db.read_task(id)?.unwrap();
+            if cancel {
+                self.db.transition(
+                    id,
+                    state.task.state_revision,
+                    "new-run",
+                    Change::RequestCancel,
+                )?;
+            } else if state.task.status == Status::Pending {
+                self.db.transition(
+                    id,
+                    state.task.state_revision,
+                    &state.task.accepted_run_id,
+                    Change::Claim,
+                )?;
+            } else {
+                return self.db.commit_stop_check(p);
+            }
+            return Err(Error::RevisionConflict);
+        }
         if self.commit {
             self.db.commit_stop_check(p)?;
         }

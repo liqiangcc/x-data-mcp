@@ -98,6 +98,44 @@ impl<R: TaskRepository + StopRepository> StopRunner<R> {
                 // release claims. Consult the committed fact first, once.
                 if let Some(receipt) = self.repository.stop_receipt(id)? {
                     Ok(RunOutcome::Completed(receipt))
+                } else if matches!(error, Error::RevisionConflict) {
+                    let current = self.task(id)?;
+                    if current.task.status == Status::CancelRequested {
+                        return self.cancel_stopped_check(current);
+                    }
+                    if current != plan.audit.verification_before {
+                        return Err(error);
+                    }
+                    // One bounded state recheck, without repeating external
+                    // inspection or reusing the stale stopping conclusion.
+                    struct Changed;
+                    impl StopInspector for Changed {
+                        fn inspect(
+                            &self,
+                            _: &TaskSnapshot,
+                        ) -> Result<super::decision::Observation, Error> {
+                            Ok(super::decision::Observation::Insufficient { reason: "TARGET_CHANGED_DURING_CHECK: inspect new evidence with a new request_id".into() })
+                        }
+                    }
+                    let fresh_target = self.task(&target_id)?;
+                    let rechecked = prepare(
+                        current,
+                        fresh_target,
+                        &self.run_id,
+                        &self.actor,
+                        Utc::now(),
+                        &Changed,
+                    )?;
+                    match self.repository.commit_stop_check(&rechecked) {
+                        Ok(receipt) => Ok(RunOutcome::Completed(receipt)),
+                        Err(error) => {
+                            if let Some(receipt) = self.repository.stop_receipt(id)? {
+                                Ok(RunOutcome::Completed(receipt))
+                            } else {
+                                Err(error)
+                            }
+                        }
+                    }
                 } else {
                     Err(error)
                 }
