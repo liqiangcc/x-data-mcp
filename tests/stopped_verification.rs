@@ -1380,3 +1380,98 @@ fn never_started_stop_commit_fences_the_original_claim_and_preserves_receipt() {
         Some(receipt)
     );
 }
+
+#[test]
+fn never_started_two_connections_allow_only_claim_or_interruption() {
+    use x_data_mcp::task_verification::{
+        decision::{StopRepository, prepare},
+        never_started::NeverStarted,
+    };
+    for index in 0..8 {
+        let (_d, r) = db();
+        let original = original_task(&r, &format!("race-{index}"));
+        let ctl = control(&r, "new-run");
+        let check = task(
+            ctl.accept(
+                "check",
+                key(&r),
+                json!({"target_task_id":original.task.task_id}),
+            )
+            .unwrap(),
+        );
+        let check = r
+            .transition(&check.task.task_id, 0, "new-run", Change::Claim)
+            .unwrap();
+        let check = r
+            .transition(
+                &check.task.task_id,
+                check.task.state_revision,
+                "new-run",
+                Change::StartItem("stopped-writes".into()),
+            )
+            .unwrap();
+        let plan = prepare(
+            check,
+            original.clone(),
+            "new-run",
+            "test-owner",
+            chrono::Utc::now(),
+            &NeverStarted {
+                repository: r.clone(),
+            },
+        )
+        .unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let other = SqliteTasks::new(r.path()).with_busy_timeout(std::time::Duration::from_secs(5));
+        let id = original.task.task_id.clone();
+        let go = barrier.clone();
+        let old = std::thread::spawn(move || {
+            go.wait();
+            other.transition(&id, 0, "old-run", Change::Claim)
+        });
+        barrier.wait();
+        let committed = r
+            .clone()
+            .with_busy_timeout(std::time::Duration::from_secs(5))
+            .commit_stop_check(&plan);
+        let claimed = old.join().unwrap();
+        match (committed, claimed) {
+            (Ok(_), Err(Error::RevisionConflict)) => {
+                assert_eq!(
+                    r.read_task(&original.task.task_id)
+                        .unwrap()
+                        .unwrap()
+                        .task
+                        .status,
+                    Status::Interrupted
+                );
+            }
+            (Err(Error::RevisionConflict), Ok(_)) => {
+                let target = r.read_task(&original.task.task_id).unwrap().unwrap();
+                assert_eq!(target.task.status, Status::Running);
+                assert_eq!(target.claims.len(), original.claims.len());
+            }
+            other => panic!("exactly one conditional transition must win: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn never_started_rejects_durable_associations_even_with_pristine_task_fields() {
+    use x_data_mcp::task_verification::{decision::StopInspector, never_started::NeverStarted};
+    let (_d, r) = db();
+    let original = original_task(&r, "unexpected-effects");
+    let c = rusqlite::Connection::open(r.path()).unwrap();
+    // Deliberately damaged fixture only. The production adapter never disables
+    // foreign keys for reads or evidence inspection.
+    c.pragma_update(None, "foreign_keys", false).unwrap();
+    c.execute(
+        "INSERT INTO task_publications VALUES(?1,'missing-version','missing-batch')",
+        [&original.task.task_id],
+    )
+    .unwrap();
+    assert!(matches!(
+        NeverStarted { repository: r }.inspect(&original),
+        Err(Error::NeedsVerification(_))
+    ));
+}
