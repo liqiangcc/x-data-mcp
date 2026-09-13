@@ -24,7 +24,7 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
     );
     let value: serde_json::Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
     assert_eq!(value["status"], "PASS");
-    assert_eq!(value["checks"].as_array().unwrap().len(), 6);
+    assert_eq!(value["checks"].as_array().unwrap().len(), 7);
     assert!(
         value["checks"]
             .as_array()

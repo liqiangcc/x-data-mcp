@@ -798,7 +798,7 @@ fn yearly_reuse_head_conflict_preserves_task_and_old_result() {
 fn yearly_result_schema_requires_explicit_upgrade_and_read_does_not_upgrade() {
     let (_dir, store) = db();
     let c = Connection::open(store.tasks.path()).unwrap();
-    c.execute_batch("DROP TABLE yearly_execution_results; DELETE FROM schema_migrations WHERE version=6; PRAGMA user_version=5;").unwrap();
+    c.execute_batch("DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DELETE FROM schema_migrations WHERE version>=6; PRAGMA user_version=5;").unwrap();
     assert!(store.yearly_receipt("absent").is_err());
     let version: i64 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -809,7 +809,7 @@ fn yearly_result_schema_requires_explicit_upgrade_and_read_does_not_upgrade() {
     let version: i64 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, i64::from(x_data_mcp::sqlite_tasks::SCHEMA_VERSION));
 }
 
 #[test]

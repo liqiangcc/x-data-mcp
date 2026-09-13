@@ -39,3 +39,7 @@ pub mod sqlite_metrics;
 
 pub mod market_update;
 pub mod yearly_publication;
+
+pub mod task_verification;
+
+pub mod sqlite_verification;

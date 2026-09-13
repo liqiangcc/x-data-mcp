@@ -73,12 +73,17 @@ pub enum Status {
     PartiallyFailed,
     Failed,
     Cancelled,
+    Interrupted,
 }
 impl Status {
     pub fn terminal(self) -> bool {
         matches!(
             self,
-            Self::Succeeded | Self::PartiallyFailed | Self::Failed | Self::Cancelled
+            Self::Succeeded
+                | Self::PartiallyFailed
+                | Self::Failed
+                | Self::Cancelled
+                | Self::Interrupted
         )
     }
 }

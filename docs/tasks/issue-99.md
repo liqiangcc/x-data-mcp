@@ -1,0 +1,122 @@
+# #99 停止写入核实（开发中）
+
+当前进度：受理、schema v7、封闭条件收尾、审计/收据核验和真实退出测试已实现；
+公共 MCP、runner 与重复已收尾响应现已实现，仍待最终审查。下文各切片保留当时边界；真实停止/副作用证据协议仍未实现，完整生产能力未交付。
+
+父 #3 的重启/停止核实及四类异步核实串行规则；设计 #75 固定提交
+2c706325aa2020382631355f802403c05b9662d8。实现 base 为 main
+e04681b801db002958a3407d3ea4d612b4ffe688。完整 AC/实现顺序已先记录 #99。
+
+第一切片提供 StopVerification 应用契约，通过现有真实 SQLite 原子受理建立独立核实任务。
+内部 dataset=task.verification、operation=verify_stopped_writes、
+contract_version=stopped-writes-task-v1。输入只有 target_task_id；调用者不能提供停止证明。
+核实有一个 evidence_check 执行项，不以股票/周期计数。
+
+所有核实类型共同使用 verification:task:<target_task_id> 资源，不接管原业务 scope。
+受理冻结目标 ID、初见修订与快照摘要/执行身份；这些只是审计输入，不能证明已停止。
+正常目标/缺失/残缺记录分别拒绝；核实任务不能递归成为目标，须未来独立有界处置。
+同 request 重放读取原受理事实，异参冲突；不同目标可分别受理，同目标其他类型不能绕过保护。
+原范围和待核实状态在受理后不改变。
+
+真实 SQLite 测试 tests/stopped_verification.rs：
+- verification_admission_never_takes_original_claims_or_reinterprets_replay
+- verification_missing_normal_recursive_and_untrusted_flags_never_bind
+- verification_two_connections_replay_same_request_and_reject_competing_ids
+- verification_serial_scope_is_shared_across_types_and_survives_cancel_and_restart
+- verification_corrupt_original_is_not_missing_or_permission_to_unlock
+
+这还不是公共 MCP 或完整核实执行器。可信停止证据协议、interrupted 显式 schema 迁移、
+原任务/核实收据同事务收尾、取消与退出故障测试及公共 schema 待实现；不会据本切片宣称 #99 完成。
+当前无 schema/线上改动，真实停止核实 NOT_RUN，来源门禁仍 NOT_VERIFIED。
+本机只做 fmt/diff-check；完整编译测试提交 Actions 后按实际结果记录。
+
+## 条件收尾与 schema v7（第二切片）
+
+显式 migration 007 重建 tasks 的状态约束以容纳 interrupted，并增加 stopped_write_checks
+（核实 task PK、原 task FK、完整审计 JSON 与 SHA256）。旧迁移字节不改。显式 upgrade
+使用私有连接，在事务外暂关 FK enforcement，事务内完整迁移并执行 foreign_key_check；
+失败回滚全部 schema/记录，成功后恢复 FK；普通读写连接一直启用 FK 且不会迁移。
+独立旧 v6 DDL 的真实临时 SQLite 测试验证引用保留及坏 FK 不允许升级。
+
+StopInspector 是可信应用端口；输出 Observation 不可从 JSON Deserialize。
+默认 UnverifiedStopInspector 明确 STOP_EVIDENCE_NOT_VERIFIED；非空引用本身不是证据，
+没有安装真实进程/副作用证据协议。FixtureStopped 仅测试中提供受控实验结论。
+prepare 核对原任务、核实任务、执行身份、快照摘要及严格停止结果，产生封闭 StopPlan。
+SQLite 比较原/核实完整快照，在一个事务内保存原任务中断（通过时）、检查结论、审计和占用释放。
+结果未知先查 stop_receipt；同计划重放返回原收据，不释放后来任务的 claims。
+
+核实执行成功但证据不足时 conclusion=insufficient_evidence，原任务和业务占用完全不变；
+“检查已完成”不等于“原任务已停止”。成功中断保留已有单项结果，running 项转未完成，
+原最后已知 stage/owner/修订保留在审计；只允许新请求显式重试，原任务不复活。
+普通原任务/检查结果读取均要求审计存在、摘要/关联/前后投影一致，缺失或损坏明确拒绝。
+旧历史 insufficient 检查可读，不强求其目标现在仍保持旧状态。
+
+第二切片测试包括停止/不足分支、真实两连接条件提交、busy、审计插入前失败回滚、
+陈旧原任务与取消修订、成功项保留/重试、不重释放新 claims、审计篡改及显式旧 v6 升级。
+真实子进程退出、自动收据核对 runner、公共 MCP 及终态重复核实分支尚待后续补齐。
+
+真实退出回归已加入 sqlite_verification::tests::stopped_check_real_exit_before_commit_and_after_commit_preserves_exact_facts：
+停止成立/证据不足 × before/after commit 四组子进程必须实际 exit(78)，重新连接核对双任务、
+原占用、核实收据和同计划重放。child 单独空跑不是退出证据；测试已提交，尚待 Actions 实际结果。
+
+CI 实际反馈：34738145667 在测试整数类型编译错误处停止；6452529 修复后，
+34738319436 已执行并通过真实退出四场景、停止/不足、并发、busy、审计篡改等测试。
+该 run 全局仍 FAIL：坏外键 fixture 的构造被 FK 约束提前拒绝，未进入该分支的升级检查。
+现仅在测试造坏库连接显式关闭 FK 来插入孤立行；生产连接/升级后的完整 FK 检查不放宽。
+另加入 stopped_compound_task_retains_verified_published_daily_and_its_original_head：
+真实 SQLite compound task 已发布 daily、yearly 尚未完成，中断后核验旧 daily 全量兼容记录与有效 head 不变。
+
+## 核实执行器
+
+StopRunner 每次只执行一个已受理核实任务，先核对持久收据，再检查准确契约/本次 run。
+旧 run 或已有 running 项而无收据不自动执行。可信 inspector 为同步只读端口；
+只在它返回后允许确认本核实已停止。开始前取消及检查期间取消均只收尾核实，
+不使用已取得但未提交的停止结论释放原业务占用。
+提交返回异常时一次重查收据；实际已提交返回该收据，否则保留未知状态/保护，不重新检查。
+目标在核实期间变化时条件提交拒绝，不能使用过时结论释放占用；后续有界处置入口仍待实现。
+
+stopped_runner_* 覆盖通过/默认不足、重放不调用 inspector、旧 run/running 保护、
+开始前/检查期间取消，以及真实 SQLite 提交前后注入响应丢失；这类包装器不是退出测试，
+实际 exit78 证据仍由 sqlite_verification::tests 的四组子进程提供。
+
+## 公共 v1 入口（闭合形状，开发中）
+
+verify_stopped_writes 输入仅 contract_version=v1、request_id、target_task_id，返回 WriteAcceptance。
+不接收 dataset/actor/evidence/stopped/force；本人所有者上下文才发现/调用。
+能力发现 implemented=true/readiness=blocked，唯一 blocker 为 STOP_EVIDENCE_NOT_VERIFIED，
+不能混成官方行情 blocker。总工具变为 16；task.verification 仅内部任务种类，不是新增行情 dataset。
+受理后显式 run_worker_once 分发 StopRunner/默认不足核实器；不接管原 task、不自动后台执行。
+
+get_task_progress 新增可空 stopped_write_check，明确区分“检查成功完成”与 insufficient_evidence。
+原 interrupted 任务也关联原核实收据，cursor 续页重新核验该收据，缺审计拒绝。
+get_task/get_request/list_tasks 仍读一致任务事实；受限上下文不暴露管理任务。
+真实 stdio 测试覆盖 schema/额外字段/权限边界、受理/重放/目标忙碌、默认执行不足和取消；
+打包 smoke 第七项在隔离 fixture 库真实重启子进程后检查原任务，确认保持待核实。
+这些是开发实现，当前代码的新公共入口尚待 Actions；没有更新线上 preview.3。
+
+### 已核实收尾重复请求（编码前固定）
+
+依据 #3“已核实并收尾返回现有结果、不重复释放”。新请求指向已可靠 interrupted 目标时，
+不新建核实任务、不执行 inspector；同事务核对原目标/原收据并将该请求绑定为请求级终态
+already_verified。保存规范化完整命令及原收据；同 ID 同参重读，异参冲突。
+响应沿用 RequestView（bound=true、task=null、terminal_result=already_verified），
+get_request 返回同一历史结果；普通前置拒绝仍无绑定。目标/审计损坏不能当成已核实或未绑定。
+若已受理的检查排队期间目标先被合法收尾，执行时按实际终态完成 not_applicable/already_verified 检查，
+不再调 inspector、不改原终态、不重复释放；同目标条件检查仍有效。
+
+公共任务列表新增 verify_stopped_writes 操作过滤。接线检查发现原 operation 字段虽被解码却未用于筛选；
+本次将其实际应用到同一已授权快照，回归 verify 与 start_collection 的区分及受限身份不见核实任务。
+真实二进制另验证已有可信 fixture 中断结论→无新任务的请求级终态→原样重放/get_request/异参冲突。
+
+提交前最后一刻的 revision 冲突现在有界重查一次：若核实收到取消，确认本 inspector 已返回后
+只收尾核实；若原目标变化，丢弃旧停止观察，记录 TARGET_CHANGED_DURING_CHECK 的不足结论
+（或实际原终态的不适用/已有结论），不重新调用 inspector。再次竞争不循环，保留未知保护。
+stopped_runner_rechecks_late_cancel_and_target_change_without_using_stale_approval 使用真实 SQLite
+在 commit 边界注入两种变化，验证不会误释放原业务占用。
+
+34739508941 的新增 list_tasks 回归实际发现 SQLite 列表的预筛选仍只认识行情/目录种类，
+导致已授权核实任务被漏掉（期望1，实际0）。现在补 task.verification 的本机所有者准入，
+保留后续完整任务授权/快照核验；没有改测试期望或向受限调用者放行。
+
+请求级已有结论也有独立真实退出回归：known_stopping_result_real_exit_keeps_terminal_binding_atomic_and_original_unchanged
+在绑定提交前/后实际 exit78，重连核对无半绑定、已提交原样重读、tasks 数不增加且原中断事实不变。

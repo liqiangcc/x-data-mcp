@@ -438,6 +438,7 @@ fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts>, Error> {
     for (id, key, work) in rows {
         let key: crate::task_control::CommandKey = serde_json::from_str(&key).map_err(storage)?;
         let allowed = match key.dataset.as_str() {
+            "task.verification" => *access == Access::local(),
             "market.daily" => access.allows(Dataset::Daily, None),
             "market.yearly" => access.allows(Dataset::Yearly, None),
             "securities.catalog" => access.allows(Dataset::Catalog, None),
@@ -478,6 +479,25 @@ impl ObservationRepository for SqliteSupply {
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)
+    }
+    fn verify_stopped_check(
+        &self,
+        receipt: &Option<crate::task_verification::decision::Receipt>,
+    ) -> Result<(), Error> {
+        if let Some(expected) = receipt {
+            self.market.read(|c| {
+                let actual =
+                    crate::sqlite_verification::read_receipt(c, &expected.verification_task_id)?
+                        .map(|(_, r)| r);
+                if actual.as_ref() != Some(expected) {
+                    return Err(Error::Integrity(
+                        "stopped check changed since snapshot".into(),
+                    ));
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
     fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error> {
         if results.is_empty() {

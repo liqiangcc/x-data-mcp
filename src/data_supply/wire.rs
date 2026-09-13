@@ -260,6 +260,7 @@ pub struct TasksQuery {
 #[serde(rename_all = "snake_case")]
 pub enum TaskOperation {
     StartCollection,
+    VerifyStoppedWrites,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -272,6 +273,7 @@ pub enum TaskStatus {
     PartiallyFailed,
     Failed,
     Cancelled,
+    Interrupted,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -336,6 +338,7 @@ pub struct ProgressPage {
     pub range_results: Vec<RangeExecutionResult>,
     pub frozen_yearly_inputs: Vec<FrozenYearlyInput>,
     pub yearly_results: Vec<YearlyExecutionResult>,
+    pub stopped_write_check: Option<crate::task_verification::decision::Receipt>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -453,6 +456,7 @@ pub struct RequestView {
     pub request_id: String,
     pub bound: bool,
     pub task: Option<TaskSummary>,
+    pub terminal_result: Option<crate::task_verification::existing::TerminalResult>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

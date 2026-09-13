@@ -73,7 +73,7 @@
 
 [PR #83](https://github.com/liqiangcc/x-data-mcp/pull/83) 提供库内 fixture/dry-run 能力：
 结构化 daily/yearly、完整 legacy JSON/digest 核验、固定版本 SQL 范围读取，以及同库条件发布和任务输出关联。
-Stage B 引入 schema v3；当前显式 task_sqlite init/upgrade 使用 schema v6；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
+Stage B 引入 schema v3；当前显式 task_sqlite init/upgrade 使用 schema v7；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
 历史固定 daily 可派生 immutable yearly，但不推进 yearly head；current-head 同时核对 daily/yearly head、任务修订与占用。
 实现、完整性扫描成本、测试入口及未验证项见 [Stage B 记录](docs/tasks/issue-79.md)。
 当前仍 NOT_PRODUCTION_READY；该切片不解除 #54/#6/#46/#71 来源门禁。
@@ -101,7 +101,7 @@ Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README
 ## 通用 SQLite 数据入口（#80）
 
 `cargo run --locked --bin mcp_data -- <已初始化 SQLite 路径>` 提供独立数据入口；
-普通调用不建库、不升级、不导入 fixture。schema v6 升级仍由 `task_sqlite upgrade` 显式执行。
+普通调用不建库、不升级、不导入 fixture。schema v7 升级仍由 `task_sqlite upgrade` 显式执行。
 原 `mcp_server` / `mcp_sqlite_dev` 兼容入口保留。
 
 新增 `get_data_capabilities`、`query_data`、`list_data_versions`、`get_data_availability`、
@@ -155,3 +155,13 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 当前线上 preview.2 的升级尚待发布包检查、数据库备份和显式迁移完成；本段不表示已部署。
 包检查使用隔离 synthetic fixture，不向普通库导入数据。真实来源仍 blocked，
 NOT_PRODUCTION_READY；新版 ChatGPT 消费侧调用在实际验证前为 NOT_RUN。
+
+停止写入核实正在 [#99](docs/tasks/issue-99.md) 开发：独立受理、条件原子中断收尾和审计已实现，
+通过路径仅由可信 fixture 验证。公共入口现已接线，但未安装真实停止证据协议；默认核实器只报告证据不足，不会释放重启遗留任务。
+
+#99 开发分支的显式 schema v7 增加核实审计与 interrupted 状态；原/核实任务条件收尾已接入真实 SQLite 测试。默认停止证据仍未实现，不提供强制解锁。线上 preview.3/schema v6 不因开发分支变更而迁移。
+
+#99 开发入口新增 verify_stopped_writes（共 16 工具）：显式核实任务、只读 inspector 和条件收尾。
+默认只报告 STOP_EVIDENCE_NOT_VERIFIED；get_task_progress 的 stopped_write_check 表示检查结论，
+检查 succeeded 不代表原任务已停止。公共参数不能提供“已停止”声明或强制解锁开关。
+当前线上仍 preview.3 的 15 工具，此开发分支尚未重新部署。

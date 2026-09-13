@@ -36,9 +36,12 @@ impl DataApi {
             observer: Observer::new(repository.clone(), run_id.clone()),
             legacy: SqliteTaskApi {
                 control: crate::task_control::service::TaskControl::new(
-                    tasks,
-                    run_id,
+                    tasks.clone(),
+                    run_id.clone(),
                     vec![
+                        Box::new(crate::task_verification::StopVerification::new(
+                            tasks, run_id,
+                        )?),
                         Box::new(crate::task_control::legacy::LegacyCollection),
                         Box::new(crate::market_update::tasks::RangeContract {
                             operation: crate::market_update::tasks::Operation::Update,
@@ -110,6 +113,7 @@ impl DataApi {
                         | Handler::Request
                         | Handler::Cancel
                         | Handler::Worker
+                        | Handler::VerifyStopped
                 )
             {
                 continue;
@@ -143,17 +147,17 @@ impl DataApi {
                 let detailed = args.operation.is_some();
                 items.push(Capability {
                     tool_name: e.name.into(),
-                    description: if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
+                    description: if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
-                    readiness: if matches!(e.handler, Handler::Collection | Handler::Range(_)) {
+                    readiness: if matches!(e.handler, Handler::Collection | Handler::Range(_) | Handler::VerifyStopped) {
                         "blocked"
                     } else {
                         "ready"
                     }
                     .into(),
-                    blocking_reasons: if matches!(e.handler, Handler::Collection | Handler::Range(_)) {
+                    blocking_reasons: if matches!(e.handler, Handler::VerifyStopped) { vec![crate::task_verification::wire::BLOCKER.into()] } else if matches!(e.handler, Handler::Collection | Handler::Range(_)) {
                         crate::official_files::PRODUCTION_BLOCKERS
                             .iter()
                             .map(|s| s.to_string())
@@ -202,10 +206,14 @@ impl DataApi {
             .unwrap(),
             item_ids: f.items.iter().map(|i| i.spec.item_id.clone()).collect(),
             readiness: "blocked".into(),
-            blocking_reasons: crate::official_files::PRODUCTION_BLOCKERS
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            blocking_reasons: if f.task.key.dataset == crate::task_verification::DATASET {
+                vec![crate::task_verification::wire::BLOCKER.into()]
+            } else {
+                crate::official_files::PRODUCTION_BLOCKERS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            },
         })
     }
     fn legacy_call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
@@ -235,6 +243,7 @@ impl DataApi {
                         .control
                         .read_request(&a.request_id)
                         .map_err(task_error)?;
+                    let mut terminal_result = None;
                     let task = match record {
                         None => None,
                         Some(r) => match r.outcome {
@@ -250,18 +259,23 @@ impl DataApi {
                                     &self.observer.run_id,
                                 ))
                             }
-                            crate::task_control::RequestOutcome::Terminal(_) => {
-                                return Err(ApiError::new(
-                                    "unsupported_request_outcome",
-                                    "request terminal contract not registered",
-                                ));
+                            crate::task_control::RequestOutcome::Terminal(value) => {
+                                terminal_result =
+                                    Some(serde_json::from_value(value).map_err(|e| {
+                                        ApiError::new(
+                                            "unsupported_request_outcome",
+                                            format!("terminal contract: {e}"),
+                                        )
+                                    })?);
+                                None
                             }
                         },
                     };
                     return encode(RequestView {
                         request_id: a.request_id,
-                        bound: task.is_some(),
+                        bound: task.is_some() || terminal_result.is_some(),
                         task,
+                        terminal_result,
                     });
                 }
                 "cancel_task" => {
@@ -379,7 +393,7 @@ impl DataApi {
                 }
             }
         }
-        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_))).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
+        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
@@ -402,6 +416,36 @@ impl DataApi {
             return self.legacy_call(name, input);
         };
         match entry.handler {
+            Handler::VerifyStopped => {
+                if self.access != Access::local() {
+                    return Err(ApiError::new(
+                        "forbidden",
+                        "verification requires local owner access",
+                    ));
+                }
+                let command: crate::task_verification::wire::VerifyStopped = decode(input)?;
+                let accepted = crate::task_verification::existing::accept(
+                    &self.legacy.control,
+                    &command.request_id,
+                    &command.target_task_id,
+                )
+                .map_err(task_error)?;
+                if let crate::task_control::RequestOutcome::Terminal(value) =
+                    &accepted.record.outcome
+                {
+                    let terminal_result = serde_json::from_value(value.clone()).map_err(|e| {
+                        ApiError::new("internal_error", format!("terminal contract: {e}"))
+                    })?;
+                    encode(RequestView {
+                        request_id: command.request_id,
+                        bound: true,
+                        task: None,
+                        terminal_result: Some(terminal_result),
+                    })
+                } else {
+                    self.acceptance(&command.request_id, accepted)
+                }
+            }
             Handler::Range(operation) => {
                 if self.access != Access::local() {
                     return Err(ApiError::new(
