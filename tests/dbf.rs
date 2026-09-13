@@ -20,7 +20,7 @@ fn fixture() -> Vec<u8> {
     }
     bytes[header_length - 1] = 0x0d;
     bytes.extend_from_slice(b" 00000120260815??");
-    bytes.extend_from_slice(b"*600000 20250717!!");
+    bytes.extend_from_slice(b"*60000020250717!!");
     bytes.push(0x1a);
     bytes
 }
