@@ -297,7 +297,7 @@ fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
     Ok(Some(s))
 }
 fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), Error> {
-    s.execution_uncertainty()?;
+    let uncertainty = s.execution_uncertainty()?;
     s.task
         .work
         .validate()
@@ -374,6 +374,7 @@ fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), 
                         .and_then(|r| r.get("cancellation_acknowledged"))
                         == Some(&serde_json::Value::Bool(true)))
         }
+        Status::NeedsVerification => s.task.result.is_none() || uncertainty.is_some(),
         _ => s.task.result.is_none(),
     };
     if !valid
