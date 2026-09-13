@@ -759,3 +759,37 @@ fn stopped_compound_task_retains_verified_published_daily_and_its_original_head(
         1
     );
 }
+
+#[test]
+fn stopped_plan_requires_frozen_contract_identity_and_verification_only_scope() {
+    struct MustNotInspect;
+    impl StopInspector for MustNotInspect {
+        fn inspect(&self, _: &TaskSnapshot) -> Result<Observation, Error> {
+            panic!("invalid execution contract must reject before external evidence inspection")
+        }
+    }
+    let (_d, r) = db();
+    let target = original_task(&r, "first");
+    let check = checking(&r, &target, "inspection");
+    for change in 0..4 {
+        let mut changed = check.clone();
+        match change {
+            0 => changed.task.key.contract_version = "unknown".into(),
+            1 => changed.task.work.scopes = target.task.work.scopes.clone(),
+            2 => changed.items[0].spec.scope_keys = target.task.work.scopes.clone(),
+            _ => changed.items[0].spec.frozen_inputs["accepted_run_id"] = json!("different-target"),
+        }
+        assert!(matches!(
+            decision::prepare(
+                changed,
+                target.clone(),
+                "new-run",
+                "actor",
+                chrono::Utc::now(),
+                &MustNotInspect
+            ),
+            Err(Error::RevisionConflict)
+        ));
+    }
+    assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
+}

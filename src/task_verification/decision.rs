@@ -94,12 +94,23 @@ pub fn prepare(
             "verification actor/run missing".into(),
         ));
     }
+    let expected_scopes: std::collections::BTreeSet<String> =
+        [super::verification_scope(&target.task.task_id)]
+            .into_iter()
+            .collect();
     if verification.task.key.dataset != DATASET
         || verification.task.key.operation != "verify_stopped_writes"
+        || verification.task.key.contract_version != super::CONTRACT_VERSION
+        || verification.task.work.scopes != expected_scopes
         || verification.task.owner_run_id.as_deref() != Some(run)
         || verification.visible_status(run) != Status::Running
         || verification.items.len() != 1
         || verification.items[0].stage != Stage::Running
+        || verification.items[0].spec.item_id != "stopped-writes"
+        || verification.items[0].spec.progress_unit != "evidence_check"
+        || verification.items[0].spec.scope_keys != expected_scopes
+        || verification.items[0].spec.frozen_inputs["accepted_run_id"]
+            != target.task.accepted_run_id
         || verification.items[0].spec.frozen_inputs["target_task_id"] != target.task.task_id
     {
         return Err(Error::RevisionConflict);
