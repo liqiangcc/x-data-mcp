@@ -1373,7 +1373,7 @@ fn publication_facts_verify_yearly_new_and_reuse_after_head_advances() {
         assert_eq!(receipt, &expected);
         assert_eq!(*reused_version, reused);
     }
-    Connection::open(store.tasks.path()).unwrap().execute("UPDATE yearly_lineage SET base_daily_version_id='missing' WHERE version_id='first-yearly'", []).unwrap();
+    Connection::open(store.tasks.path()).unwrap().execute("UPDATE yearly_lineage SET algorithm_version='tampered' WHERE version_id='first-yearly'", []).unwrap();
     assert!(store.publication_facts(&first.command().task_id).is_err());
     assert!(store.publication_facts(&reuse.command().task_id).is_err());
 }
