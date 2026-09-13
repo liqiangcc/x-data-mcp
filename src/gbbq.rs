@@ -49,8 +49,10 @@ pub fn parse(bytes: &[u8]) -> Result<RawFile, Error> {
         });
     }
     let records = bytes[4..]
-        .chunks_exact(RECORD_BYTES)
-        .map(|chunk| chunk.try_into().expect("chunks_exact has fixed width"))
+        .as_chunks::<RECORD_BYTES>()
+        .0
+        .iter()
+        .map(|chunk| *chunk)
         .collect();
     Ok(RawFile {
         record_count,
