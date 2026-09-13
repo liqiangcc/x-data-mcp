@@ -128,6 +128,21 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
                                 | crate::task_control::Error::OutcomeUnknown(_)
                         )
                 ) {
+                    let current = self.repository.task(task_id)?;
+                    if let Err(recording) = self.repository.transition_task(
+                        task_id, current.task.state_revision, &self.run_id,
+                        Change::RequireVerification {
+                            item_id: item_id.into(),
+                            reason: "item execution result not confirmed after acquisition/derivation/publication; committed receipt not yet established".into(),
+                        },
+                    ) {
+                        // A concurrent commit may have won before the marker.
+                        // Consult its fact once; never overwrite that success.
+                        if let Some(receipt) = self.repository.yearly_item_receipt(task_id, item_id)? {
+                            return Ok(YearlyExecution::Published(receipt));
+                        }
+                        return Err(recording);
+                    }
                     return Err(error);
                 }
                 let current = self.repository.task(task_id)?;

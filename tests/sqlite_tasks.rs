@@ -719,3 +719,69 @@ fn application_retry_owns_legacy_precedence_and_typed_ineligible_items_without_m
     assert!(db.read_request("retry").unwrap().is_none());
     assert_eq!(count(&db, "tasks"), 1);
 }
+
+#[test]
+fn execution_uncertainty_is_persisted_without_finishing_items_or_releasing_claims() {
+    let (_dir, db) = database();
+    let accepted = snapshot(accept(&db, "uncertain", &["sh.600006"]));
+    let started = db
+        .transition(&accepted.task.task_id, 0, "run-a", Change::Claim)
+        .unwrap();
+    let started = db
+        .transition(
+            &started.task.task_id,
+            started.task.state_revision,
+            "run-a",
+            Change::StartItem(started.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let item = started.items[0].spec.item_id.clone();
+    let marked = db
+        .transition(
+            &started.task.task_id,
+            started.task.state_revision,
+            "run-a",
+            Change::RequireVerification {
+                item_id: item.clone(),
+                reason: "result uncertain".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(marked.task.status, Status::NeedsVerification);
+    assert_eq!(marked.items, started.items);
+    assert_eq!(marked.claims.len(), started.claims.len());
+    assert_eq!(marked.task.owner_run_id, started.task.owner_run_id);
+    assert_eq!(
+        marked.task.result.as_ref().unwrap()["execution_uncertainty"]["item_id"],
+        item
+    );
+    let reopened = SqliteTasks::new(db.path());
+    assert_eq!(
+        reopened.read_task(&marked.task.task_id).unwrap().unwrap(),
+        marked
+    );
+    assert!(reopened.candidates("run-a").unwrap().is_empty());
+    assert!(matches!(
+        reopened.transition(
+            &marked.task.task_id,
+            marked.task.state_revision,
+            "run-a",
+            Change::FinishItem(
+                item,
+                ItemOutcome {
+                    success: true,
+                    error: None
+                }
+            )
+        ),
+        Err(Error::NeedsVerification(_))
+    ));
+    assert!(matches!(
+        control(&db, "run-a").accept(
+            "overlap",
+            LegacyCollection.key(),
+            payload(&["sh.600006"], &["day"])
+        ),
+        Err(Error::RangeConflict(_))
+    ));
+}

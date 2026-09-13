@@ -1095,7 +1095,7 @@ fn range_runner_reconciles_lost_commit_response_and_preserves_unconfirmed_execut
             assert!(matches!(result, Err(Error::OutcomeUnknown(_))));
             assert_eq!(
                 f.db.task(&f.command.task_id).unwrap().task.status,
-                x_data_mcp::task_control::Status::Running
+                x_data_mcp::task_control::Status::NeedsVerification
             );
             assert_eq!(f.count("scope_occupancy"), 1);
             assert_eq!(f.count("market_update_results"), 0);

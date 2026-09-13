@@ -180,6 +180,11 @@ pub enum Change {
     /// Never mapped from a user-supplied stopped/approval flag.
     FinishCancellation,
     Reconcile,
+    /// Internal application report, not a caller-supplied outcome or stop flag.
+    RequireVerification {
+        item_id: String,
+        reason: String,
+    },
 }
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -281,6 +286,23 @@ pub fn decide(
             Change::Claim if s.task.status == Status::Pending && s.task.owner_run_id.is_none() => {
                 s.task.status = Status::Running;
                 s.task.owner_run_id = Some(run.into());
+            }
+            Change::RequireVerification { item_id, reason } => {
+                if reason.trim().is_empty()
+                    || s.task.owner_run_id.as_deref() != Some(run)
+                    || !matches!(s.task.status, Status::Running | Status::CancelRequested)
+                    || !s
+                        .items
+                        .iter()
+                        .any(|i| i.spec.item_id == item_id && i.stage == Stage::Running)
+                {
+                    return Err(Error::RevisionConflict);
+                }
+                let previous = s.task.result.take();
+                s.task.status = Status::NeedsVerification;
+                s.task.result = Some(serde_json::json!({"execution_uncertainty":{
+                    "item_id":item_id,"reason":reason,"previous_result":previous
+                }}));
             }
             Change::RequestCancel => {
                 if s.task.status == Status::CancelRequested {
