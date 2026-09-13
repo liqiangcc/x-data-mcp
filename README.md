@@ -73,7 +73,7 @@
 
 [PR #83](https://github.com/liqiangcc/x-data-mcp/pull/83) 提供库内 fixture/dry-run 能力：
 结构化 daily/yearly、完整 legacy JSON/digest 核验、固定版本 SQL 范围读取，以及同库条件发布和任务输出关联。
-Stage B 引入 schema v3；当前显式 task_sqlite init/upgrade 使用 schema v7；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
+Stage B 引入 schema v3；当前显式 task_sqlite init/upgrade 使用 schema v8；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
 历史固定 daily 可派生 immutable yearly，但不推进 yearly head；current-head 同时核对 daily/yearly head、任务修订与占用。
 实现、完整性扫描成本、测试入口及未验证项见 [Stage B 记录](docs/tasks/issue-79.md)。
 当前仍 NOT_PRODUCTION_READY；该切片不解除 #54/#6/#46/#71 来源门禁。
@@ -101,7 +101,7 @@ Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README
 ## 通用 SQLite 数据入口（#80）
 
 `cargo run --locked --bin mcp_data -- <已初始化 SQLite 路径>` 提供独立数据入口；
-普通调用不建库、不升级、不导入 fixture。schema v7 升级仍由 `task_sqlite upgrade` 显式执行。
+普通调用不建库、不升级、不导入 fixture。schema v8 升级仍由 `task_sqlite upgrade` 显式执行。
 原 `mcp_server` / `mcp_sqlite_dev` 兼容入口保留。
 
 新增 `get_data_capabilities`、`query_data`、`list_data_versions`、`get_data_availability`、
