@@ -719,3 +719,118 @@ fn application_retry_owns_legacy_precedence_and_typed_ineligible_items_without_m
     assert!(db.read_request("retry").unwrap().is_none());
     assert_eq!(count(&db, "tasks"), 1);
 }
+
+#[test]
+fn execution_uncertainty_is_persisted_without_finishing_items_or_releasing_claims() {
+    let (_dir, db) = database();
+    let accepted = snapshot(accept(&db, "uncertain", &["sh.600006"]));
+    let started = db
+        .transition(&accepted.task.task_id, 0, "run-a", Change::Claim)
+        .unwrap();
+    let started = db
+        .transition(
+            &started.task.task_id,
+            started.task.state_revision,
+            "run-a",
+            Change::StartItem(started.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let item = started.items[0].spec.item_id.clone();
+    let marked = db
+        .transition(
+            &started.task.task_id,
+            started.task.state_revision,
+            "run-a",
+            Change::RequireVerification {
+                item_id: item.clone(),
+                reason: "result uncertain".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(marked.task.status, Status::NeedsVerification);
+    assert_eq!(marked.items, started.items);
+    assert_eq!(marked.claims.len(), started.claims.len());
+    assert_eq!(marked.task.owner_run_id, started.task.owner_run_id);
+    assert_eq!(
+        marked.task.result.as_ref().unwrap()["execution_uncertainty"]["item_id"],
+        item
+    );
+    let reopened = SqliteTasks::new(db.path());
+    assert_eq!(
+        reopened.read_task(&marked.task.task_id).unwrap().unwrap(),
+        marked
+    );
+    assert!(reopened.candidates("run-a").unwrap().is_empty());
+    assert!(matches!(
+        reopened.transition(
+            &marked.task.task_id,
+            marked.task.state_revision,
+            "run-a",
+            Change::FinishItem(
+                item,
+                ItemOutcome {
+                    success: true,
+                    error: None
+                }
+            )
+        ),
+        Err(Error::NeedsVerification(_))
+    ));
+    assert!(matches!(
+        control(&db, "run-a").accept(
+            "overlap",
+            LegacyCollection.key(),
+            payload(&["sh.600006"], &["day"])
+        ),
+        Err(Error::RangeConflict(_))
+    ));
+}
+
+#[test]
+fn uncertainty_write_failure_preserves_old_state_and_bad_marker_is_rejected() {
+    let (_dir, db) = database();
+    let initial = snapshot(accept(&db, "uncertain-failure", &["sh.600006"]));
+    let s = db
+        .transition(&initial.task.task_id, 0, "run-a", Change::Claim)
+        .unwrap();
+    let s = db
+        .transition(
+            &s.task.task_id,
+            s.task.state_revision,
+            "run-a",
+            Change::StartItem(s.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let c = Connection::open(db.path()).unwrap();
+    c.execute_batch("CREATE TRIGGER reject_uncertainty BEFORE UPDATE ON tasks WHEN NEW.status='needs_verification' BEGIN SELECT RAISE(ABORT,'injected uncertainty write failure'); END").unwrap();
+    let change = Change::RequireVerification {
+        item_id: s.items[0].spec.item_id.clone(),
+        reason: "unknown result".into(),
+    };
+    assert!(
+        db.transition(
+            &s.task.task_id,
+            s.task.state_revision,
+            "run-a",
+            change.clone()
+        )
+        .is_err()
+    );
+    assert_eq!(db.read_task(&s.task.task_id).unwrap().unwrap(), s);
+    c.execute_batch("DROP TRIGGER reject_uncertainty").unwrap();
+    let marked = db
+        .transition(&s.task.task_id, s.task.state_revision, "run-a", change)
+        .unwrap();
+    assert!(marked.execution_uncertainty().unwrap().is_some());
+    let mut damaged = marked.task.result.clone().unwrap();
+    damaged["execution_uncertainty"]["item_id"] = json!("other-item");
+    c.execute(
+        "UPDATE tasks SET result_json=?1 WHERE task_id=?2",
+        params![damaged.to_string(), s.task.task_id],
+    )
+    .unwrap();
+    assert!(matches!(
+        db.read_task(&s.task.task_id),
+        Err(Error::NeedsVerification(_))
+    ));
+}

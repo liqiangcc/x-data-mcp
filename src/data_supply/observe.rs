@@ -65,6 +65,10 @@ pub trait ObservationRepository {
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error>;
     fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error>;
     fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error>;
+    fn verify_publication_check(
+        &self,
+        receipt: &Option<crate::publication_verification::decision::Receipt>,
+    ) -> Result<(), Error>;
     fn verify_stopped_check(
         &self,
         receipt: &Option<crate::task_verification::decision::Receipt>,
@@ -334,6 +338,16 @@ impl<R: ObservationRepository> Observer<R> {
                 publication_versions: facts.publications,
                 range_results: facts.range_results,
                 yearly_results: facts.yearly_results,
+                publication_check: facts
+                    .snapshot
+                    .task
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.get("publication_check"))
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|e| Error::Integrity(format!("publication check result: {e}")))?,
                 stopped_write_check: facts
                     .snapshot
                     .task
@@ -363,6 +377,8 @@ impl<R: ObservationRepository> Observer<R> {
         self.repository.verify_yearly_results(&p.yearly_results)?;
         self.repository
             .verify_stopped_check(&p.stopped_write_check)?;
+        self.repository
+            .verify_publication_check(&p.publication_check)?;
         let end = (s.offset + args.page_size).min(p.unfinished.len());
         let more = end < p.unfinished.len();
         let mut result = (**p).clone();

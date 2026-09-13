@@ -457,7 +457,12 @@ fn range_controls_are_not_discovered_or_callable_without_owner_access() {
     let mut access = Access::local();
     access.principal = "reader".into();
     let api = DataApi::new(SqliteTasks::new(&path), "run".into(), access).unwrap();
-    for name in ["update_data", "backfill_data"] {
+    for name in [
+        "update_data",
+        "backfill_data",
+        "verify_stopped_writes",
+        "verify_publication_result",
+    ] {
         assert!(
             !api.tools()
                 .as_array()

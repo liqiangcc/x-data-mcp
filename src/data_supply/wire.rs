@@ -261,6 +261,7 @@ pub struct TasksQuery {
 pub enum TaskOperation {
     StartCollection,
     VerifyStoppedWrites,
+    VerifyPublicationResult,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -339,6 +340,7 @@ pub struct ProgressPage {
     pub frozen_yearly_inputs: Vec<FrozenYearlyInput>,
     pub yearly_results: Vec<YearlyExecutionResult>,
     pub stopped_write_check: Option<crate::task_verification::decision::Receipt>,
+    pub publication_check: Option<crate::publication_verification::decision::Receipt>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -456,7 +458,7 @@ pub struct RequestView {
     pub request_id: String,
     pub bound: bool,
     pub task: Option<TaskSummary>,
-    pub terminal_result: Option<crate::task_verification::existing::TerminalResult>,
+    pub terminal_result: Option<RequestTerminal>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -573,4 +575,12 @@ pub struct YearlyExecutionResult {
     pub result_version: VersionRef,
     pub no_change: bool,
     pub derived_at: DateTime<Utc>,
+}
+
+/// Untagged wrapper preserves the existing stopped-result wire shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum RequestTerminal {
+    Stopped(crate::task_verification::existing::TerminalResult),
+    Publication(crate::publication_verification::existing::TerminalResult),
 }

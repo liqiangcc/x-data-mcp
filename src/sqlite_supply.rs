@@ -319,6 +319,17 @@ fn task_facts(
     access: &Access,
     verify_outputs: bool,
 ) -> Result<TaskFacts, Error> {
+    // Owner-only check evidence must not leak integrity diagnostics to a reader.
+    // This early check can only deny; verified authorization below still applies.
+    if *access != Access::local() {
+        let private: bool = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE task_id=?1 AND json_extract(command_key_json,'$.dataset')='task.verification')",
+            [id], |r| r.get(0),
+        ).map_err(storage)?;
+        if private {
+            return Err(invalid("forbidden"));
+        }
+    }
     let s = crate::sqlite_tasks::read_bound_task(c, id)?
         .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
     if !authorized(&s, access) {
@@ -479,6 +490,24 @@ impl ObservationRepository for SqliteSupply {
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)
+    }
+    fn verify_publication_check(
+        &self,
+        receipt: &Option<crate::publication_verification::decision::Receipt>,
+    ) -> Result<(), Error> {
+        use crate::publication_verification::decision::AuditStore;
+        if let Some(expected) = receipt
+            && self
+                .market
+                .check_receipt(&expected.verification_task_id)?
+                .as_ref()
+                != Some(expected)
+        {
+            return Err(Error::Integrity(
+                "publication check changed since snapshot".into(),
+            ));
+        }
+        Ok(())
     }
     fn verify_stopped_check(
         &self,

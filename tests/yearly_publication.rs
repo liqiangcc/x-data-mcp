@@ -798,7 +798,7 @@ fn yearly_reuse_head_conflict_preserves_task_and_old_result() {
 fn yearly_result_schema_requires_explicit_upgrade_and_read_does_not_upgrade() {
     let (_dir, store) = db();
     let c = Connection::open(store.tasks.path()).unwrap();
-    c.execute_batch("DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DELETE FROM schema_migrations WHERE version>=6; PRAGMA user_version=5;").unwrap();
+    c.execute_batch("DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DELETE FROM schema_migrations WHERE version>=6; PRAGMA user_version=5;").unwrap();
     assert!(store.yearly_receipt("absent").is_err());
     let version: i64 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -1256,6 +1256,10 @@ fn yearly_runner_reconciles_response_loss_and_never_reexecutes_unknown_commit() 
             }
             let current = store.tasks.read_task(&task.task.task_id).unwrap().unwrap();
             assert_eq!(current.claims.is_empty(), commit_first);
+            assert_eq!(
+                current.execution_uncertainty().unwrap().is_some(),
+                !commit_first
+            );
             let calls = verifier.calls.get();
             let repeated =
                 faulty.run_item(&task.task.task_id, &task.items[0].spec.item_id, &verifier);
@@ -1335,4 +1339,169 @@ fn yearly_progress_cursor_rechecks_committed_result_and_missing_results_fail_clo
         api.call("get_task_progress", json!({"task_id":accepted["task_id"]}))
             .is_err()
     );
+}
+
+#[test]
+fn publication_facts_verify_yearly_new_and_reuse_after_head_advances() {
+    use x_data_mcp::publication_verification::{Evidence, EvidenceRepository};
+    let (_dir, store) = db();
+    published_fixture(&store, &samples()[0]["record"]);
+    let first = result_plan(&store, "first-yearly", None, "fixture range");
+    let first_receipt = store.commit_yearly(&first).unwrap();
+    let reuse = result_plan(
+        &store,
+        "reuse-yearly",
+        Some("first-yearly"),
+        "fixture range",
+    );
+    let reuse_receipt = store.commit_yearly(&reuse).unwrap();
+    let changed = result_plan(
+        &store,
+        "new-coverage",
+        Some("first-yearly"),
+        "fixture new coverage",
+    );
+    store.commit_yearly(&changed).unwrap();
+    for (plan, expected, reused) in [
+        (&first, first_receipt, false),
+        (&reuse, reuse_receipt, true),
+    ] {
+        let facts = store.publication_facts(&plan.command().task_id).unwrap();
+        let Evidence::Committed {
+            receipt,
+            reused_version,
+            ..
+        } = &facts.items[0].evidence
+        else {
+            panic!("committed evidence required")
+        };
+        assert_eq!(receipt, &expected);
+        assert_eq!(*reused_version, reused);
+    }
+    Connection::open(store.tasks.path()).unwrap().execute("UPDATE yearly_lineage SET algorithm_version='tampered' WHERE version_id='first-yearly'", []).unwrap();
+    assert!(store.publication_facts(&first.command().task_id).is_err());
+    assert!(store.publication_facts(&reuse.command().task_id).is_err());
+}
+
+#[test]
+fn publication_facts_verify_legacy_initial_publish_and_reject_receipt_damage() {
+    use x_data_mcp::publication_verification::{Evidence, EvidenceRepository};
+    let (_dir, store) = db();
+    let plan = prepare(
+        &store,
+        &samples()[0]["record"],
+        PublishIntent::Daily {
+            expected_head: None,
+        },
+    );
+    let receipt = store.commit(&plan).unwrap();
+    let facts = store.publication_facts(&receipt.task_id).unwrap();
+    let Evidence::Committed {
+        receipt: actual,
+        reused_version,
+        ..
+    } = &facts.items[0].evidence
+    else {
+        panic!("legacy evidence required")
+    };
+    assert_eq!(actual, &receipt);
+    assert!(!reused_version);
+    Connection::open(store.tasks.path())
+        .unwrap()
+        .execute("UPDATE publication_batches SET receipt_json='{}'", [])
+        .unwrap();
+    assert!(store.publication_facts(&receipt.task_id).is_err());
+}
+
+#[test]
+fn publication_evidence_fingerprint_detects_changed_audit_with_identical_receipt() {
+    use x_data_mcp::publication_verification::{Evidence, EvidenceRepository};
+    let (_dir, store) = db();
+    let plan = prepare(
+        &store,
+        &samples()[0]["record"],
+        PublishIntent::Daily {
+            expected_head: None,
+        },
+    );
+    let receipt = store.commit(&plan).unwrap();
+    let first = store.publication_facts(&receipt.task_id).unwrap();
+    assert_eq!(store.publication_facts(&receipt.task_id).unwrap(), first);
+    let c = Connection::open(store.tasks.path()).unwrap();
+    let raw: String = c
+        .query_row("SELECT command_json FROM publication_batches", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let mut command: Value = serde_json::from_str(&raw).unwrap();
+    command["audit_annotation"] = json!("changed after inspection");
+    c.execute(
+        "UPDATE publication_batches SET command_json=?1",
+        [command.to_string()],
+    )
+    .unwrap();
+    let second = store.publication_facts(&receipt.task_id).unwrap();
+    let Evidence::Committed {
+        receipt: old_receipt,
+        evidence_sha256: old_digest,
+        ..
+    } = &first.items[0].evidence
+    else {
+        panic!()
+    };
+    let Evidence::Committed {
+        receipt: new_receipt,
+        evidence_sha256: new_digest,
+        ..
+    } = &second.items[0].evidence
+    else {
+        panic!()
+    };
+    assert_eq!(old_receipt, new_receipt);
+    assert_ne!(old_digest, new_digest);
+    assert_ne!(first, second);
+}
+
+#[test]
+fn publication_facts_verify_legacy_yearly_modes_against_fixed_daily_after_head_moves() {
+    use x_data_mcp::publication_verification::{Evidence, EvidenceRepository};
+    for historical in [false, true] {
+        let (_dir, store) = db();
+        let records = samples();
+        published_fixture(&store, &records[0]["record"]);
+        let year = prepare(
+            &store,
+            &records[2]["record"],
+            if historical {
+                PublishIntent::HistoricalFixedBase
+            } else {
+                PublishIntent::CurrentHead {
+                    expected_daily_head: "legacy-daily".into(),
+                    expected_yearly_head: None,
+                }
+            },
+        );
+        let receipt = store.commit(&year).unwrap();
+        let next = prepare(
+            &store,
+            &revised(&records[0]["record"], "later-daily"),
+            PublishIntent::Daily {
+                expected_head: Some("legacy-daily".into()),
+            },
+        );
+        store.commit(&next).unwrap();
+        let facts = store.publication_facts(&receipt.task_id).unwrap();
+        let Evidence::Committed {
+            receipt: actual,
+            reused_version,
+            ..
+        } = &facts.items[0].evidence
+        else {
+            panic!()
+        };
+        assert_eq!(actual, &receipt);
+        assert!(!reused_version);
+        Connection::open(store.tasks.path()).unwrap().execute("UPDATE yearly_lineage SET algorithm_version='damaged' WHERE version_id='legacy-yearly'", []).unwrap();
+        assert!(store.publication_facts(&receipt.task_id).is_err());
+    }
 }

@@ -40,9 +40,9 @@ def main():
         try:
             assert request("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
             tools = request("tools/list", {})["tools"]
-            assert len(tools) == 16
+            assert len(tools) == 17
             assert call("get_data_capabilities", {})["production_ready"] is False
-            checks.append("initialize_discovery_16_tools")
+            checks.append("initialize_discovery_17_tools")
             catalog = call("query_data", dict(dataset="securities.catalog", contract_version="v1", selection=dict(kind="catalog", scope="current_sh_sz_a"), filter=dict(kind="catalog"), version=dict(kind="latest_per_entity")))
             entity = catalog["records"][0]["entity"]
             assert catalog["records"][0]["industry"]["status"] == "missing"
@@ -88,6 +88,15 @@ def main():
             assert child.wait(timeout=20) == 0
             child = subprocess.Popen([binaries / "mcp_data", db], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             request("initialize", {})
+            publication_caps = call("get_data_capabilities", dict(operation="verify_publication_result"))
+            assert len(publication_caps["items"]) == 1 and publication_caps["items"][0]["readiness"] == "ready"
+            assert publication_caps["production_ready"] is False
+            publication_input = dict(contract_version="v1", request_id="smoke-publication-check", target_task_id=original["task_id"])
+            assert call("verify_publication_result", dict(publication_input, published=True), error=True)["code"] == "invalid_arguments"
+            rejected = call("verify_publication_result", publication_input, error=True)
+            assert rejected["code"] == "invalid_arguments" and "verification_not_applicable" in rejected["message"]
+            assert call("get_request", dict(contract_version="v1", request_id="smoke-publication-check"))["bound"] is False
+            checks.append("publication_inspection_discovery_and_never_started_refusal_without_binding")
             check = call("verify_stopped_writes", dict(contract_version="v1", request_id="smoke-stopping-check", target_task_id=original["task_id"]))
             assert check["blocking_reasons"] == ["STOP_EVIDENCE_NOT_VERIFIED"]
             assert call("run_worker_once", {})["task_id"] == check["task_id"]

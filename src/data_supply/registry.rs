@@ -19,6 +19,7 @@ pub enum Handler {
     Compute,
     Worker,
     VerifyStopped,
+    VerifyPublication,
     Range(crate::market_update::tasks::Operation),
 }
 pub struct Entry {
@@ -62,7 +63,7 @@ pub struct Capabilities {
     pub production_ready: bool,
 }
 pub const RANGE_DESCRIPTION: &str = "Explicit market.daily ranges or market.yearly natural-year sets, each bound to a published daily version. Yearly publication mode and comparison are explicit and frozen; historical mode never advances head. Default selection, automatic gap discovery and catalog updates are not implemented. Production source remains blocked; the installed worker only records SOURCE_NOT_VERIFIED and does not publish.";
-pub const WORKER_DESCRIPTION: &str = "Stage A development-only control: synchronously executes at most one locally owned pending task, mutating task outcomes and occupancy. Installed market executors record SOURCE_NOT_VERIFIED; stopping inspections may interrupt proven never-started tasks; started or unsupported executions retain their claims with insufficient evidence. It never downloads or publishes market data or forcibly unlocks original tasks. Not a background scheduler or production pipeline.";
+pub const WORKER_DESCRIPTION: &str = "Stage A development-only control: synchronously executes at most one locally owned pending task, mutating task outcomes and occupancy. Installed market executors record SOURCE_NOT_VERIFIED; stopping inspections may interrupt proven never-started tasks; started or unsupported executions retain their claims with insufficient evidence. Publication inspections record fixed durable evidence without changing original tasks. It never downloads or publishes market data or forcibly unlocks original tasks. Not a background scheduler or production pipeline.";
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerInput {}
@@ -89,6 +90,14 @@ fn entry<I: JsonSchema, O: JsonSchema>(
 pub fn entries() -> Vec<Entry> {
     let query = json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"}});
     vec![
+        entry::<
+            crate::publication_verification::wire::VerifyPublication,
+            crate::task_verification::wire::VerificationReply,
+        >(
+            "verify_publication_result",
+            Handler::VerifyPublication,
+            json!({"contract_version":"v1","request_id":"publication-check-request","target_task_id":"original-task-id"}),
+        ),
         entry::<
             crate::task_verification::wire::VerifyStopped,
             crate::task_verification::wire::VerificationReply,
