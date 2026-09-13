@@ -1256,3 +1256,56 @@ fn publication_facts_reject_missing_success_receipt_and_damaged_fixed_data() {
         );
     }
 }
+
+#[test]
+fn publication_commit_and_uncertainty_marker_compete_on_the_same_revision() {
+    use std::sync::{Arc, Barrier};
+    use x_data_mcp::task_control::Status;
+    for changed in [false, true] {
+        let f = fixture(changed);
+        let plan = f.plan();
+        let task = f.db.task(&f.command.task_id).unwrap();
+        let other = SqliteTasks::new(f.db.tasks.path())
+            .with_busy_timeout(std::time::Duration::from_secs(5));
+        let gate = Arc::new(Barrier::new(2));
+        let go = gate.clone();
+        let id = task.task.task_id.clone();
+        let item = f.command.item_id.clone();
+        let marker = std::thread::spawn(move || {
+            go.wait();
+            other.transition(
+                &id,
+                task.task.state_revision,
+                "range-run",
+                Change::RequireVerification {
+                    item_id: item,
+                    reason: "commit outcome uncertain".into(),
+                },
+            )
+        });
+        gate.wait();
+        let published = f.db.commit_range(&plan);
+        let marked = marker.join().unwrap();
+        match (published, marked) {
+            (Ok(receipt), Err(x_data_mcp::task_control::Error::RevisionConflict)) => {
+                assert_eq!(
+                    f.db.range_receipt(&f.command.publication_id).unwrap(),
+                    Some(receipt)
+                );
+                assert!(f.db.task(&f.command.task_id).unwrap().claims.is_empty());
+            }
+            (Err(Error::Conflict(_)), Ok(task)) => {
+                assert_eq!(task.task.status, Status::NeedsVerification);
+                assert!(!task.claims.is_empty());
+                assert!(task.execution_uncertainty().unwrap().is_some());
+                assert!(
+                    f.db.range_receipt(&f.command.publication_id)
+                        .unwrap()
+                        .is_none()
+                );
+                assert_eq!(f.head(), "legacy-daily");
+            }
+            other => panic!("exactly one revision-conditional outcome must win: {other:?}"),
+        }
+    }
+}
