@@ -1785,3 +1785,39 @@ fn publication_runner_reconciles_response_loss_cancellation_and_bounded_conflict
         assert_eq!(f.head(), "legacy-daily");
     }
 }
+
+#[test]
+fn publication_runner_read_integrity_failure_marks_check_unresolved_without_false_receipt() {
+    use x_data_mcp::publication_verification::{decision::AuditStore, runner::Runner};
+    let f = fixture(true);
+    let check = pending_publication_check(&f, "bad-evidence-check");
+    f.db.commit_range(&f.plan()).unwrap();
+    let original = f.db.task(&f.command.task_id).unwrap();
+    Connection::open(f.db.tasks.path())
+        .unwrap()
+        .execute("UPDATE daily_bars SET close='999'", [])
+        .unwrap();
+    let runner = Runner {
+        tasks: f.db.tasks.clone(),
+        evidence: f.db.clone(),
+        run_id: "inspection-run".into(),
+        actor: "test-owner".into(),
+    };
+    assert!(matches!(
+        runner.run(&check.task.task_id),
+        Err(Error::Integrity(_))
+    ));
+    let unresolved = f.db.tasks.read_task(&check.task.task_id).unwrap().unwrap();
+    assert_eq!(
+        unresolved.task.status,
+        x_data_mcp::task_control::Status::NeedsVerification
+    );
+    assert!(unresolved.execution_uncertainty().unwrap().is_some());
+    assert!(!unresolved.claims.is_empty());
+    assert!(f.db.check_receipt(&check.task.task_id).unwrap().is_none());
+    assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+    assert!(matches!(
+        runner.run(&check.task.task_id),
+        Err(Error::OutcomeUnknown(_))
+    ));
+}

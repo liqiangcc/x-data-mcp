@@ -51,6 +51,29 @@ impl<T: TaskRepository, E: EvidenceRepository + AuditStore> Runner<T, E> {
             Change::FinishCancellation,
         )?)))
     }
+    fn preserve_unresolved(&self, id: &str) -> Result<(), Error> {
+        let check = self.task(id)?;
+        if matches!(
+            check.visible_status(&self.run_id),
+            Status::Running | Status::CancelRequested
+        ) {
+            self.tasks.transition(id, check.task.state_revision, &self.run_id,
+                Change::RequireVerification {
+                    item_id: "publication-results".into(),
+                    reason: "publication inspection ended without a reliable committed check receipt; original task unchanged".into(),
+                })?;
+        }
+        Ok(())
+    }
+    fn facts(&self, check: &str, target: &str) -> Result<super::Facts, Error> {
+        match self.evidence.publication_facts(target) {
+            Ok(facts) => Ok(facts),
+            Err(error) => {
+                self.preserve_unresolved(check)?;
+                Err(error)
+            }
+        }
+    }
     pub fn run(&self, id: &str) -> Result<Outcome, Error> {
         if self.run_id.trim().is_empty() || self.actor.trim().is_empty() {
             return Err(Error::Invalid(
@@ -95,7 +118,7 @@ impl<T: TaskRepository, E: EvidenceRepository + AuditStore> Runner<T, E> {
             &self.run_id,
             Change::StartItem("publication-results".into()),
         )?;
-        let facts = self.evidence.publication_facts(&target)?;
+        let facts = self.facts(id, &target)?;
         let plan = prepare(check, facts, &self.run_id, &self.actor, chrono::Utc::now())?;
         let current = self.task(id)?;
         if current.task.status == Status::CancelRequested {
@@ -108,6 +131,7 @@ impl<T: TaskRepository, E: EvidenceRepository + AuditStore> Runner<T, E> {
                     return Ok(Outcome::Completed(receipt));
                 }
                 if !matches!(error, Error::Conflict(_)) {
+                    self.preserve_unresolved(id)?;
                     return Err(error);
                 }
                 let current = self.task(id)?;
@@ -118,7 +142,7 @@ impl<T: TaskRepository, E: EvidenceRepository + AuditStore> Runner<T, E> {
                     return Err(error);
                 }
                 // One fresh verified read, never the stale proof or a loop.
-                let facts = self.evidence.publication_facts(&target)?;
+                let facts = self.facts(id, &target)?;
                 let fresh = prepare(
                     current,
                     facts,
@@ -130,7 +154,10 @@ impl<T: TaskRepository, E: EvidenceRepository + AuditStore> Runner<T, E> {
                     Ok(receipt) => Ok(Outcome::Completed(receipt)),
                     Err(error) => match self.evidence.check_receipt(id)? {
                         Some(receipt) => Ok(Outcome::Completed(receipt)),
-                        None => Err(error),
+                        None => {
+                            self.preserve_unresolved(id)?;
+                            Err(error)
+                        }
                     },
                 }
             }
