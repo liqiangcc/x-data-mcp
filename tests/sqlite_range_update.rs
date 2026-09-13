@@ -1898,3 +1898,79 @@ fn known_publication_request_replays_without_new_task_and_rejects_damaged_eviden
     );
     assert_eq!(counts(), before);
 }
+
+#[test]
+fn known_publication_two_connections_share_one_binding_and_failed_insert_leaves_none() {
+    use x_data_mcp::publication_verification::{
+        admission::PublicationVerification, existing, runner::Runner,
+    };
+    let f = fixture(true);
+    let check = pending_publication_check(&f, "known-race-check");
+    f.db.commit_range(&f.plan()).unwrap();
+    Runner {
+        tasks: f.db.tasks.clone(),
+        evidence: f.db.clone(),
+        run_id: "inspection-run".into(),
+        actor: "test-owner".into(),
+    }
+    .run(&check.task.task_id)
+    .unwrap();
+    let original = f.db.task(&f.command.task_id).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let db =
+                f.db.tasks
+                    .clone()
+                    .with_busy_timeout(std::time::Duration::from_secs(5));
+            let barrier = barrier.clone();
+            let target = f.command.task_id.clone();
+            std::thread::spawn(move || {
+                let control = TaskControl::new(
+                    db.clone(),
+                    "inspection-run".into(),
+                    vec![Box::new(
+                        PublicationVerification::new(db, "inspection-run".into()).unwrap(),
+                    )],
+                )
+                .unwrap();
+                barrier.wait();
+                existing::accept(&control, "known-race", &target).unwrap()
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(results[0].record, results[1].record);
+    assert_eq!(results.iter().filter(|r| !r.reused).count(), 1);
+    let c = Connection::open(f.db.tasks.path()).unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM requests WHERE request_id='known-race'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    c.execute_batch("CREATE TRIGGER reject_known_request BEFORE INSERT ON requests WHEN NEW.request_id='known-failure' BEGIN SELECT RAISE(ABORT,'fixture reject binding'); END;").unwrap();
+    let control = TaskControl::new(
+        f.db.tasks.clone(),
+        "inspection-run".into(),
+        vec![Box::new(
+            PublicationVerification::new(f.db.tasks.clone(), "inspection-run".into()).unwrap(),
+        )],
+    )
+    .unwrap();
+    assert!(existing::accept(&control, "known-failure", &f.command.task_id).is_err());
+    assert!(f.db.tasks.read_request("known-failure").unwrap().is_none());
+    c.execute_batch("DROP TRIGGER reject_known_request")
+        .unwrap();
+    assert!(matches!(
+        existing::accept(&control, "known-failure", &f.command.task_id)
+            .unwrap()
+            .record
+            .outcome,
+        RequestOutcome::Terminal(_)
+    ));
+    assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+}

@@ -327,4 +327,105 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn known_crash_child() {
+        let Ok(path) = std::env::var("X_DATA_MCP_TEST_KNOWN_CHECK_PATH") else {
+            return;
+        };
+        let target = std::env::var("X_DATA_MCP_TEST_KNOWN_CHECK_TARGET").unwrap();
+        let db = SqliteTasks::new(path);
+        let control = TaskControl::new(
+            db.clone(),
+            "check-run".into(),
+            vec![Box::new(
+                PublicationVerification::new(db, "check-run".into()).unwrap(),
+            )],
+        )
+        .unwrap();
+        crate::publication_verification::existing::accept(&control, "known-exit-request", &target)
+            .unwrap();
+        panic!("expected request commit process exit");
+    }
+    #[test]
+    fn known_publication_real_exit_binds_only_after_commit_and_replays_without_new_check() {
+        for point in ["before_commit", "after_commit"] {
+            let (_dir, db, publication) = super::super::tests::setup();
+            let target = publication.command.task_id.clone();
+            let control = TaskControl::new(
+                db.tasks.clone(),
+                "check-run".into(),
+                vec![Box::new(
+                    PublicationVerification::new(db.tasks.clone(), "check-run".into()).unwrap(),
+                )],
+            )
+            .unwrap();
+            let RequestOutcome::Task(check) = control
+                .accept(
+                    "check-before-publish",
+                    command_key(),
+                    serde_json::json!({"target_task_id":target}),
+                )
+                .unwrap()
+                .record
+                .outcome
+            else {
+                panic!()
+            };
+            db.commit(&publication).unwrap();
+            crate::publication_verification::runner::Runner {
+                tasks: db.tasks.clone(),
+                evidence: db.clone(),
+                run_id: "check-run".into(),
+                actor: "test-owner".into(),
+            }
+            .run(&check.task.task_id)
+            .unwrap();
+            let before = db.task(&target).unwrap();
+            let receipt = db.check_receipt(&check.task.task_id).unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sqlite_market::publication_checks::tests::known_crash_child",
+                    "--nocapture",
+                ])
+                .env("X_DATA_MCP_TEST_KNOWN_CHECK_PATH", db.tasks.path())
+                .env("X_DATA_MCP_TEST_KNOWN_CHECK_TARGET", &target)
+                .env("X_DATA_MCP_TEST_SQLITE_CRASH", point)
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(78));
+            let reopened = SqliteTasks::new(db.tasks.path());
+            assert_eq!(
+                reopened
+                    .read_request("known-exit-request")
+                    .unwrap()
+                    .is_some(),
+                point == "after_commit"
+            );
+            let actual = crate::publication_verification::existing::accept(
+                &control,
+                "known-exit-request",
+                &target,
+            )
+            .unwrap();
+            let replay = crate::publication_verification::existing::accept(
+                &control,
+                "known-exit-request",
+                &target,
+            )
+            .unwrap();
+            assert_eq!(actual.record, replay.record);
+            assert!(replay.reused);
+            assert_eq!(db.task(&target).unwrap(), before);
+            assert_eq!(db.check_receipt(&check.task.task_id).unwrap(), receipt);
+            let c = Connection::open(db.tasks.path()).unwrap();
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM publication_checks", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+            assert_eq!(c.query_row("SELECT count(*) FROM tasks WHERE json_extract(command_key_json,'$.operation')='verify_publication_result'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        }
+    }
 }
