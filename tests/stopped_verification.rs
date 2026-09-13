@@ -1477,3 +1477,168 @@ fn never_started_rejects_durable_associations_even_with_pristine_task_fields() {
         ));
     }
 }
+
+#[test]
+fn publication_check_admission_is_independent_serialized_and_never_claims_original_work() {
+    use x_data_mcp::publication_verification::admission::{PublicationVerification, command_key};
+    let (_dir, r) = db();
+    let original = original_task(&r, "publication-target");
+    let check = TaskControl::new(
+        r.clone(),
+        "new-run".into(),
+        vec![
+            Box::new(PublicationVerification::new(r.clone(), "new-run".into()).unwrap()),
+            Box::new(StopVerification::new(r.clone(), "new-run".into()).unwrap()),
+        ],
+    )
+    .unwrap();
+    let input = json!({"target_task_id":original.task.task_id});
+    assert!(matches!(
+        check.accept("not-started", command_key(), input.clone()),
+        Err(Error::InvalidCommand(_))
+    ));
+    assert!(r.read_request("not-started").unwrap().is_none());
+    let running = r
+        .transition(&original.task.task_id, 0, "old-run", Change::Claim)
+        .unwrap();
+    let running = r
+        .transition(
+            &running.task.task_id,
+            running.task.state_revision,
+            "old-run",
+            Change::StartItem(running.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let same_run = TaskControl::new(
+        r.clone(),
+        "old-run".into(),
+        vec![Box::new(
+            PublicationVerification::new(r.clone(), "old-run".into()).unwrap(),
+        )],
+    )
+    .unwrap();
+    assert!(matches!(
+        same_run.accept("normal", command_key(), input.clone()),
+        Err(Error::InvalidCommand(_))
+    ));
+    let accepted = task(
+        check
+            .accept("pub-check", command_key(), input.clone())
+            .unwrap(),
+    );
+    assert_eq!(accepted.items[0].spec.progress_unit, "evidence_check");
+    assert_eq!(
+        accepted.task.work.scopes,
+        [verification_scope(&original.task.task_id)]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(
+        r.read_task(&running.task.task_id).unwrap().unwrap(),
+        running
+    );
+    assert!(
+        check
+            .accept("pub-check", command_key(), input.clone())
+            .unwrap()
+            .reused
+    );
+    assert!(matches!(
+        check.accept(
+            "pub-check",
+            command_key(),
+            json!({"target_task_id":"other"})
+        ),
+        Err(Error::RequestConflict)
+    ));
+    assert!(matches!(
+        check.accept("stop-check", key(&r), input.clone()),
+        Err(Error::RangeConflict(_))
+    ));
+    assert!(matches!(
+        check.accept("pub-check", key(&r), input.clone()),
+        Err(Error::RequestConflict)
+    ));
+    let cancelling = check.cancel(&accepted.task.task_id, 0).unwrap();
+    assert!(matches!(
+        check.accept("second", command_key(), input.clone()),
+        Err(Error::RangeConflict(_))
+    ));
+    r.transition(
+        &accepted.task.task_id,
+        cancelling.task.state_revision,
+        "new-run",
+        Change::FinishCancellation,
+    )
+    .unwrap();
+    assert_eq!(
+        r.read_task(&running.task.task_id).unwrap().unwrap(),
+        running
+    );
+    check
+        .accept("stop-after-cancel", key(&r), input.clone())
+        .unwrap();
+    assert!(matches!(
+        check.accept("publication-after-stop", command_key(), input),
+        Err(Error::RangeConflict(_))
+    ));
+}
+
+#[test]
+fn publication_check_accepts_persisted_uncertainty_and_two_connections_replay_one_request() {
+    use x_data_mcp::publication_verification::admission::{PublicationVerification, command_key};
+    let (_dir, r) = db();
+    let original = original_task(&r, "same-run-uncertainty");
+    let s = r
+        .transition(&original.task.task_id, 0, "old-run", Change::Claim)
+        .unwrap();
+    let s = r
+        .transition(
+            &s.task.task_id,
+            s.task.state_revision,
+            "old-run",
+            Change::StartItem(s.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let s = r
+        .transition(
+            &s.task.task_id,
+            s.task.state_revision,
+            "old-run",
+            Change::RequireVerification {
+                item_id: s.items[0].spec.item_id.clone(),
+                reason: "unconfirmed commit".into(),
+            },
+        )
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let db = SqliteTasks::new(r.path()).with_busy_timeout(std::time::Duration::from_secs(5));
+        let gate = barrier.clone();
+        let target = s.task.task_id.clone();
+        handles.push(std::thread::spawn(move || {
+            let ctl = TaskControl::new(
+                db.clone(),
+                "old-run".into(),
+                vec![Box::new(
+                    PublicationVerification::new(db, "old-run".into()).unwrap(),
+                )],
+            )
+            .unwrap();
+            gate.wait();
+            ctl.accept(
+                "concurrent-publication-check",
+                command_key(),
+                json!({"target_task_id":target}),
+            )
+            .unwrap()
+        }));
+    }
+    let mut results = handles.into_iter().map(|h| h.join().unwrap());
+    let first = results.next().unwrap();
+    let second = results.next().unwrap();
+    assert_ne!(first.reused, second.reused);
+    assert_eq!(task(first).task.task_id, task(second).task.task_id);
+    assert_eq!(r.read_task(&s.task.task_id).unwrap().unwrap(), s);
+}

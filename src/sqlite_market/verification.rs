@@ -1,7 +1,7 @@
 //! Read all task publication facts from one verified SQLite snapshot.
 use super::*;
 use crate::publication_verification::{Evidence, EvidenceRepository, Facts, ItemFact};
-use crate::task_control::{Contract, Error as TaskError, Stage, legacy::LegacyCollection};
+use crate::task_control::{Error as TaskError, Stage};
 impl EvidenceRepository for SqliteMarket {
     fn publication_facts(&self, task_id: &str) -> Result<Facts, Error> {
         self.read(|c| read_facts(c, task_id))
@@ -10,21 +10,10 @@ impl EvidenceRepository for SqliteMarket {
 pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> {
     let task = crate::sqlite_tasks::read_bound_task(c, task_id)?
         .ok_or(Error::Task(TaskError::TaskNotFound))?;
-    let key = &task.task.key;
-    let daily = key.dataset == "market.daily"
-        && key.contract_version == crate::market_update::tasks::CONTRACT_VERSION;
-    let yearly = key.dataset == "market.yearly"
-        && key.contract_version == crate::yearly_publication::tasks::CONTRACT_VERSION;
-    let legacy = key == &LegacyCollection.key()
-        || (key.operation == "start_collection"
-            && key.contract_version == "v1"
-            && matches!(key.dataset.as_str(), "market.daily" | "market.yearly"));
-    if !legacy
-        && (!matches!(key.operation.as_str(), "update_data" | "backfill_data")
-            || !(daily || yearly))
-    {
-        return Err(Error::Task(TaskError::UnsupportedContract));
-    }
+    use crate::publication_verification::{FactContract, contract_kind};
+    let kind = contract_kind(&task.task.key).ok_or(Error::Task(TaskError::UnsupportedContract))?;
+    let daily = matches!(kind, FactContract::Daily);
+    let legacy = matches!(kind, FactContract::Legacy);
     let mut stmt = c.prepare("SELECT 0,result_id,item_id FROM market_update_results WHERE task_id=?1 UNION ALL SELECT 1,result_id,item_id FROM yearly_execution_results WHERE task_id=?1").map_err(storage)?;
     let rows = stmt
         .query_map([task_id], |r| {
