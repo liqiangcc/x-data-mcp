@@ -827,3 +827,113 @@ fn inspection_facts_use_one_snapshot_when_claim_and_registration_commit_concurre
         Conclusion::InsufficientEvidence
     );
 }
+
+#[test]
+fn publication_verification_inspection_checks_its_own_finish_without_deciding_original_publication()
+{
+    use crate::publication_verification::{
+        admission::{PublicationVerification, command_key},
+        runner::Runner,
+    };
+    for completed in [false, true] {
+        let (_dir, db, original, stop_check) = fixture();
+        db.transition(
+            &stop_check.task.task_id,
+            0,
+            "check-run",
+            Change::RequestCancel,
+        )
+        .unwrap();
+        db.transition(
+            &stop_check.task.task_id,
+            1,
+            "check-run",
+            Change::FinishCancellation,
+        )
+        .unwrap();
+        let mut original = db
+            .transition(&original.task.task_id, 0, "old", Change::Claim)
+            .unwrap();
+        original = db
+            .transition(
+                &original.task.task_id,
+                1,
+                "old",
+                Change::StartItem(original.items[0].spec.item_id.clone()),
+            )
+            .unwrap();
+        let control = TaskControl::new(
+            db.clone(),
+            "check-run".into(),
+            vec![Box::new(
+                PublicationVerification::new(db.clone(), "check-run".into()).unwrap(),
+            )],
+        )
+        .unwrap();
+        let RequestOutcome::Task(check) = control
+            .accept(
+                "publication-check",
+                command_key(),
+                json!({"target_task_id":original.task.task_id}),
+            )
+            .unwrap()
+            .record
+            .outcome
+        else {
+            panic!()
+        };
+        {
+            let tasks = crate::sqlite_verification_runtime::guarded::GuardedTasks::open(
+                db.clone(),
+                &check.task.task_id,
+                "check-run",
+            )
+            .unwrap();
+            if completed {
+                Runner {
+                    tasks,
+                    evidence: crate::sqlite_market::SqliteMarket::new(db.clone()),
+                    run_id: "check-run".into(),
+                    actor: "owner".into(),
+                }
+                .run(&check.task.task_id)
+                .unwrap();
+            } else {
+                tasks
+                    .transition(&check.task.task_id, 0, "check-run", Change::Claim)
+                    .unwrap();
+                tasks
+                    .transition(
+                        &check.task.task_id,
+                        1,
+                        "check-run",
+                        Change::StartItem("publication-results".into()),
+                    )
+                    .unwrap();
+            }
+        }
+        let result = inspect(
+            &db,
+            "inspect-publication",
+            &check.task.task_id,
+            "check-run",
+            "owner",
+        )
+        .unwrap();
+        assert_eq!(
+            receipt(&result).conclusion,
+            if completed {
+                Conclusion::AlreadyFinished
+            } else {
+                Conclusion::Interrupted
+            }
+        );
+        assert_eq!(
+            db.read_task(&original.task.task_id).unwrap(),
+            Some(original)
+        );
+        assert_eq!(count(&db, "publication_batches"), 0);
+        assert_eq!(count(&db, "task_publications"), 0);
+        assert_eq!(count(&db, "effective_heads"), 0);
+    }
+}

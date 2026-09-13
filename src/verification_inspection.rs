@@ -53,6 +53,8 @@ pub enum Conclusion {
 pub struct Receipt {
     pub request_id: String,
     pub target_task_id: String,
+    pub actor: String,
+    pub checked_at: chrono::DateTime<chrono::Utc>,
     pub conclusion: Conclusion,
     pub target_revision: u64,
     pub target_status: String,

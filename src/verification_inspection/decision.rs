@@ -153,6 +153,8 @@ pub fn prepare(
         receipt: Receipt {
             request_id: id.into(),
             target_task_id: target.task.task_id.clone(),
+            actor: actor.into(),
+            checked_at: now,
             conclusion,
             target_revision: actual.task.state_revision,
             target_status: status.as_str().unwrap_or("unknown").into(),
