@@ -1461,3 +1461,47 @@ fn publication_evidence_fingerprint_detects_changed_audit_with_identical_receipt
     assert_ne!(old_digest, new_digest);
     assert_ne!(first, second);
 }
+
+#[test]
+fn publication_facts_verify_legacy_yearly_modes_against_fixed_daily_after_head_moves() {
+    use x_data_mcp::publication_verification::{Evidence, EvidenceRepository};
+    for historical in [false, true] {
+        let (_dir, store) = db();
+        let records = samples();
+        published_fixture(&store, &records[0]["record"]);
+        let year = prepare(
+            &store,
+            &records[2]["record"],
+            if historical {
+                PublishIntent::HistoricalFixedBase
+            } else {
+                PublishIntent::CurrentHead {
+                    expected_daily_head: "legacy-daily".into(),
+                    expected_yearly_head: None,
+                }
+            },
+        );
+        let receipt = store.commit(&year).unwrap();
+        let next = prepare(
+            &store,
+            &revised(&records[0]["record"], "later-daily"),
+            PublishIntent::Daily {
+                expected_head: Some("legacy-daily".into()),
+            },
+        );
+        store.commit(&next).unwrap();
+        let facts = store.publication_facts(&receipt.task_id).unwrap();
+        let Evidence::Committed {
+            receipt: actual,
+            reused_version,
+            ..
+        } = &facts.items[0].evidence
+        else {
+            panic!()
+        };
+        assert_eq!(actual, &receipt);
+        assert!(!reused_version);
+        Connection::open(store.tasks.path()).unwrap().execute("UPDATE yearly_lineage SET algorithm_version='damaged' WHERE version_id='legacy-yearly'", []).unwrap();
+        assert!(store.publication_facts(&receipt.task_id).is_err());
+    }
+}
