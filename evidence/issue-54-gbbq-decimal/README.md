@@ -5,6 +5,12 @@
 or runtime change is introduced. #54 remains open; the official-file gate remains
 closed. Compatibility with a diagnostic candidate is not official semantics.
 
+The current official archive byte evidence is retained in
+[`official/archive-20260913.json`](official/archive-20260913.json), with its
+scope and semantic limits explained in [`official/README.md`](official/README.md).
+It confirms only the downloaded archive/member bytes and observed 29-byte
+container shape; it does not change the normalization conclusion below.
+
 ## Frozen experiment and provenance
 
 The baseline is main `9adcee4ebb1c6b07a281c747c4bdc61d377b582a` (merged #56).
