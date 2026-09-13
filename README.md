@@ -166,4 +166,7 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 
 开发中的 #104 / PR #105 增加发布核实证据读取、独立受理与条件审计（显式 schema v8）。
 核实任务记录检查结论，不修改原任务或行情/head；缺收据不等于未发布。
-公开 runner/MCP 尚未完成，线上 preview.4/schema v7 不会自动升级；完整能力与部署以 Issue #104 的实际验证为准。
+开发分支现接入第 17 个工具 verify_publication_result、类型化 worker 分派与 publication_check 进度。
+该核实接口 ready 仅表示可检查已有 SQLite 发布证据；缺收据为 insufficient_evidence，损坏/异常检查保留保护。
+已知 all_recorded 可绑定新请求且不新建检查；调用者不能提供证据/强制结论。完整回归与审核仍在进行。
+线上 preview.4/schema v7 不会自动升级；完整能力与部署以 Issue #104 的实际验证为准。

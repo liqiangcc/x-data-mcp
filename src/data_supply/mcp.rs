@@ -40,6 +40,9 @@ impl DataApi {
                     run_id.clone(),
                     vec![
                         Box::new(crate::task_verification::StopVerification::new(
+                            tasks.clone(), run_id.clone(),
+                        )?),
+                        Box::new(crate::publication_verification::admission::PublicationVerification::new(
                             tasks, run_id,
                         )?),
                         Box::new(crate::task_control::legacy::LegacyCollection),
@@ -114,6 +117,7 @@ impl DataApi {
                         | Handler::Cancel
                         | Handler::Worker
                         | Handler::VerifyStopped
+                        | Handler::VerifyPublication
                 )
             {
                 continue;
@@ -147,7 +151,7 @@ impl DataApi {
                 let detailed = args.operation.is_some();
                 items.push(Capability {
                     tool_name: e.name.into(),
-                    description: if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
+                    description: if matches!(e.handler, Handler::VerifyPublication) { crate::publication_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
@@ -205,8 +209,17 @@ impl DataApi {
             )
             .unwrap(),
             item_ids: f.items.iter().map(|i| i.spec.item_id.clone()).collect(),
-            readiness: "blocked".into(),
-            blocking_reasons: if f.task.key.dataset == crate::task_verification::DATASET {
+            readiness: if f.task.key == crate::publication_verification::admission::command_key() {
+                "ready"
+            } else {
+                "blocked"
+            }
+            .into(),
+            blocking_reasons: if f.task.key
+                == crate::publication_verification::admission::command_key()
+            {
+                vec![]
+            } else if f.task.key.dataset == crate::task_verification::DATASET {
                 vec![crate::task_verification::wire::BLOCKER.into()]
             } else {
                 crate::official_files::PRODUCTION_BLOCKERS
@@ -393,7 +406,7 @@ impl DataApi {
                 }
             }
         }
-        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
+        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped|Handler::VerifyPublication)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::VerifyPublication){crate::publication_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
@@ -416,6 +429,37 @@ impl DataApi {
             return self.legacy_call(name, input);
         };
         match entry.handler {
+            Handler::VerifyPublication => {
+                if self.access != Access::local() {
+                    return Err(ApiError::new(
+                        "forbidden",
+                        "verification requires local owner access",
+                    ));
+                }
+                let command: crate::publication_verification::wire::VerifyPublication =
+                    decode(input)?;
+                let accepted = crate::publication_verification::existing::accept(
+                    &self.legacy.control,
+                    &command.request_id,
+                    &command.target_task_id,
+                )
+                .map_err(task_error)?;
+                if let crate::task_control::RequestOutcome::Terminal(value) =
+                    &accepted.record.outcome
+                {
+                    let terminal_result = serde_json::from_value(value.clone()).map_err(|e| {
+                        ApiError::new("internal_error", format!("terminal contract: {e}"))
+                    })?;
+                    encode(RequestView {
+                        request_id: command.request_id,
+                        bound: true,
+                        task: None,
+                        terminal_result: Some(terminal_result),
+                    })
+                } else {
+                    self.acceptance(&command.request_id, accepted)
+                }
+            }
             Handler::VerifyStopped => {
                 if self.access != Access::local() {
                     return Err(ApiError::new(
@@ -577,6 +621,7 @@ impl ToolHandler for DataApi {
                     | "get_task_progress"
                     | "get_data_capabilities"
                     | "compute_metrics"
+                    | "verify_publication_result"
                     | "update_data"
                     | "backfill_data"
             );
@@ -584,8 +629,10 @@ impl ToolHandler for DataApi {
             if generic {
                 e.outcome_certainty = Some(
                     if e.code == "outcome_unknown"
-                        || (matches!(name, "update_data" | "backfill_data")
-                            && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
+                        || (matches!(
+                            name,
+                            "update_data" | "backfill_data" | "verify_publication_result"
+                        ) && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
                     {
                         "unknown"
                     } else if matches!(
@@ -595,6 +642,7 @@ impl ToolHandler for DataApi {
                             | "cancel_task"
                             | "update_data"
                             | "backfill_data"
+                            | "verify_publication_result"
                     ) {
                         "not_committed"
                     } else {
@@ -604,8 +652,10 @@ impl ToolHandler for DataApi {
                 );
                 e.next_actions = Some(
                     if e.code == "outcome_unknown"
-                        || (matches!(name, "update_data" | "backfill_data")
-                            && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
+                        || (matches!(
+                            name,
+                            "update_data" | "backfill_data" | "verify_publication_result"
+                        ) && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
                     {
                         vec![
                         "inspect the same request_id/task_id; do not invent a replacement identity"

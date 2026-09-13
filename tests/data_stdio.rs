@@ -67,7 +67,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     assert!(s.request("initialize", json!({}))["result"]["serverInfo"].is_object());
     let listing = s.request("tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 16);
+    assert_eq!(tools.len(), 17);
     let caps = s.call("get_data_capabilities", json!({}), false);
     let listed: std::collections::BTreeSet<_> =
         tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -775,5 +775,216 @@ fn real_two_live_stdio_processes_fence_never_started_public_collection() {
         let known = current.call("verify_stopped_writes", json!({"contract_version":"v1","request_id":format!("known-{dataset}"),"target_task_id":original["task_id"]}), false);
         assert_eq!(known["terminal_result"]["kind"], "already_verified");
         assert!(known["task"].is_null());
+    }
+}
+
+#[test]
+fn real_publication_stdio_inspects_fixed_evidence_without_changing_original_task() {
+    use x_data_mcp::{
+        market_storage::{MarketRepository, Publication, PublishIntent, Publisher},
+        sqlite_market::SqliteMarket,
+        sqlite_tasks::SqliteTasks,
+        task_control::{
+            Change, Contract, RequestOutcome, TaskRepository, legacy::LegacyCollection,
+            service::TaskControl,
+        },
+    };
+    for published in [false, true] {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("db");
+        let db = SqliteTasks::new(&path);
+        db.initialize().unwrap();
+        let old = TaskControl::new(
+            db.clone(),
+            "old-publisher".into(),
+            vec![Box::new(LegacyCollection)],
+        )
+        .unwrap();
+        let RequestOutcome::Task(original) = old
+            .accept(
+                "original",
+                LegacyCollection.key(),
+                json!({"symbols":["sh.600006"],"periods":["day"]}),
+            )
+            .unwrap()
+            .record
+            .outcome
+        else {
+            panic!()
+        };
+        let original = db
+            .transition(&original.task.task_id, 0, "old-publisher", Change::Claim)
+            .unwrap();
+        let original = db
+            .transition(
+                &original.task.task_id,
+                original.task.state_revision,
+                "old-publisher",
+                Change::StartItem(original.items[0].spec.item_id.clone()),
+            )
+            .unwrap();
+        let mut s = Session::new(&path);
+        s.request("initialize", json!({}));
+        let cap = s.call(
+            "get_data_capabilities",
+            json!({"operation":"verify_publication_result"}),
+            false,
+        );
+        let descriptor = &cap["items"][0];
+        assert_eq!(descriptor["readiness"], "ready");
+        assert_eq!(cap["production_ready"], false);
+        let input = json!({"contract_version":"v1","request_id":"publication-check","target_task_id":original.task.task_id});
+        for field in [
+            "published",
+            "force",
+            "evidence",
+            "actor",
+            "approved",
+            "provider",
+            "clock",
+        ] {
+            let mut bad = input.clone();
+            bad[field] = json!(true);
+            assert_eq!(
+                s.call("verify_publication_result", bad, true)["code"],
+                "invalid_arguments"
+            );
+            assert!(db.read_request("publication-check").unwrap().is_none());
+        }
+        assert_eq!(
+            s.call(
+                "verify_publication_result",
+                json!({"contract_version":"v1","request_id":"missing","target_task_id":"missing"}),
+                true
+            )["code"],
+            "task_not_found"
+        );
+        let check = s.call("verify_publication_result", input.clone(), false);
+        jsonschema::validator_for(&descriptor["input_schema"])
+            .unwrap()
+            .validate(&input)
+            .unwrap();
+        jsonschema::validator_for(&descriptor["output_schema"])
+            .unwrap()
+            .validate(&check)
+            .unwrap();
+        assert_eq!(check["readiness"], "ready");
+        assert_eq!(check["blocking_reasons"], json!([]));
+        assert_eq!(
+            s.call("verify_publication_result", input, false)["task_id"],
+            check["task_id"]
+        );
+        assert_eq!(s.call("verify_stopped_writes", json!({"contract_version":"v1","request_id":"conflicting-stop","target_task_id":original.task.task_id}), true)["code"], "range_conflict");
+        assert!(db.read_request("conflicting-stop").unwrap().is_none());
+        if published {
+            let records: Value =
+                serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+            let market = SqliteMarket::new(db.clone());
+            market.stage(&records[0]["record"]).unwrap();
+            let plan = (Publisher {
+                repository: market.clone(),
+            })
+            .prepare(Publication {
+                publication_id: "fixture-publication".into(),
+                version_id: records[0]["record"]["version_id"].as_str().unwrap().into(),
+                task_id: original.task.task_id.clone(),
+                item_id: original.items[0].spec.item_id.clone(),
+                run_id: "old-publisher".into(),
+                expected_revision: original.task.state_revision,
+                intent: PublishIntent::Daily {
+                    expected_head: None,
+                },
+            })
+            .unwrap();
+            market.commit(&plan).unwrap();
+        }
+        let unchanged = db.read_task(&original.task.task_id).unwrap().unwrap();
+        assert_eq!(
+            s.call("run_worker_once", json!({}), false)["task_id"],
+            check["task_id"]
+        );
+        let progress = s.call(
+            "get_task_progress",
+            json!({"task_id":check["task_id"]}),
+            false,
+        );
+        assert_eq!(
+            progress["publication_check"]["conclusion"],
+            if published {
+                "all_recorded"
+            } else {
+                "insufficient_evidence"
+            }
+        );
+        assert_eq!(progress["stopped_write_check"], Value::Null);
+        assert_eq!(progress["task"]["status"], "succeeded");
+        let listed = s.call(
+            "list_tasks",
+            json!({"operation":"verify_publication_result"}),
+            false,
+        );
+        assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            db.read_task(&original.task.task_id).unwrap().unwrap(),
+            unchanged
+        );
+        if published {
+            let known = json!({"contract_version":"v1","request_id":"known-publication","target_task_id":original.task.task_id});
+            let first = s.call("verify_publication_result", known.clone(), false);
+            assert_eq!(
+                first["terminal_result"]["receipt"],
+                progress["publication_check"]
+            );
+            assert_eq!(first["task"], Value::Null);
+            jsonschema::validator_for(&descriptor["output_schema"])
+                .unwrap()
+                .validate(&first)
+                .unwrap();
+            assert_eq!(s.call("verify_publication_result", known, false), first);
+            assert_eq!(
+                s.call(
+                    "get_request",
+                    json!({"contract_version":"v1","request_id":"known-publication"}),
+                    false
+                ),
+                first
+            );
+            rusqlite::Connection::open(&path)
+                .unwrap()
+                .execute("UPDATE publication_checks SET audit_sha256='bad'", [])
+                .unwrap();
+            assert_eq!(
+                s.call(
+                    "get_task_progress",
+                    json!({"task_id":check["task_id"]}),
+                    true
+                )["code"],
+                "needs_verification"
+            );
+            assert_eq!(
+                s.call(
+                    "get_request",
+                    json!({"contract_version":"v1","request_id":"known-publication"}),
+                    true
+                )["code"],
+                "needs_verification"
+            );
+        } else {
+            let cancelled = s.call("verify_publication_result", json!({"contract_version":"v1","request_id":"cancel-check","target_task_id":original.task.task_id}), false);
+            s.call("cancel_task", json!({"contract_version":"v1","task_id":cancelled["task_id"],"expected_revision":0}), false);
+            s.call("run_worker_once", json!({}), false);
+            assert_eq!(
+                s.call(
+                    "get_task",
+                    json!({"contract_version":"v1","task_id":cancelled["task_id"]}),
+                    false
+                )["status"],
+                "cancelled"
+            );
+            assert_eq!(
+                db.read_task(&original.task.task_id).unwrap().unwrap(),
+                unchanged
+            );
+        }
     }
 }

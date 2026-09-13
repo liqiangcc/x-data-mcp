@@ -480,6 +480,25 @@ impl ObservationRepository for SqliteSupply {
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)
     }
+    fn verify_publication_check(
+        &self,
+        receipt: &Option<crate::publication_verification::decision::Receipt>,
+    ) -> Result<(), Error> {
+        use crate::publication_verification::decision::AuditStore;
+        if let Some(expected) = receipt {
+            if self
+                .market
+                .check_receipt(&expected.verification_task_id)?
+                .as_ref()
+                != Some(expected)
+            {
+                return Err(Error::Integrity(
+                    "publication check changed since snapshot".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
     fn verify_stopped_check(
         &self,
         receipt: &Option<crate::task_verification::decision::Receipt>,

@@ -8,7 +8,7 @@ use crate::task_control::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TerminalResult {
     AlreadyVerified { receipt: Receipt },

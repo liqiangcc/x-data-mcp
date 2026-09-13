@@ -19,17 +19,29 @@ pub fn run_once(
         return Ok(None);
     };
     if candidate.task.key.dataset == crate::task_verification::DATASET {
-        crate::task_verification::runner::StopRunner {
-            repository: control.repository.clone(),
-            run_id: control.run_id.clone(),
-            actor: "local-owner".into(),
-        }
-        .run(
-            &candidate.task.task_id,
-            &crate::task_verification::never_started::NeverStarted {
+        if candidate.task.key == crate::publication_verification::admission::command_key() {
+            crate::publication_verification::runner::Runner {
+                tasks: control.repository.clone(),
+                evidence: market.clone(),
+                run_id: control.run_id.clone(),
+                actor: "local-owner".into(),
+            }
+            .run(&candidate.task.task_id)?;
+        } else if candidate.task.key == crate::task_verification::command_key() {
+            crate::task_verification::runner::StopRunner {
                 repository: control.repository.clone(),
-            },
-        )?;
+                run_id: control.run_id.clone(),
+                actor: "local-owner".into(),
+            }
+            .run(
+                &candidate.task.task_id,
+                &crate::task_verification::never_started::NeverStarted {
+                    repository: control.repository.clone(),
+                },
+            )?;
+        } else {
+            return Err(crate::task_control::Error::UnsupportedContract.into());
+        }
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
     }
     if !matches!(

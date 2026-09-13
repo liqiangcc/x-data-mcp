@@ -61,3 +61,5 @@ pub(crate) fn contract_kind(key: &crate::task_control::CommandKey) -> Option<Fac
 pub mod decision;
 pub mod existing;
 pub mod runner;
+
+pub mod wire;

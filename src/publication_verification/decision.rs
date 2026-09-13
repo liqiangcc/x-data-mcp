@@ -4,14 +4,14 @@ use crate::task_control::{Error, ItemOutcome, Stage, Status, TaskSnapshot};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Conclusion {
     AllRecorded,
     InsufficientEvidence,
     NotApplicable,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Receipt {
     pub verification_task_id: String,
     pub target_task_id: String,
