@@ -101,7 +101,7 @@ Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README
 ## 通用 SQLite 数据入口（#80）
 
 `cargo run --locked --bin mcp_data -- <已初始化 SQLite 路径>` 提供独立数据入口；
-普通调用不建库、不升级、不导入 fixture。schema v8 升级仍由 `task_sqlite upgrade` 显式执行。
+普通调用不建库、不升级、不导入 fixture。schema v9 升级仍由 `task_sqlite upgrade` 显式执行。
 原 `mcp_server` / `mcp_sqlite_dev` 兼容入口保留。
 
 新增 `get_data_capabilities`、`query_data`、`list_data_versions`、`get_data_availability`、
@@ -164,9 +164,18 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 真实来源仍 blocked，NOT_PRODUCTION_READY；#54/#6/#46/#71/文件一致性门禁不解除。
 新版 ChatGPT 消费侧调用在实际验证前为 NOT_RUN，本机 stdio 或 tunnel health 不能替代。
 
-开发中的 #104 / PR #105 增加发布核实证据读取、独立受理与条件审计（显式 schema v8）。
+已合并的 #104 / PR #105 增加发布核实证据读取、独立受理与条件审计（显式 schema v8）。
 核实任务记录检查结论，不修改原任务或行情/head；缺收据不等于未发布。
 开发分支现接入第 17 个工具 verify_publication_result、类型化 worker 分派与 publication_check 进度。
 该核实接口 ready 仅表示可检查已有 SQLite 发布证据；缺收据为 insufficient_evidence，损坏/异常检查保留保护。
 已知 all_recorded 可绑定新请求且不新建检查；调用者不能提供证据/强制结论。完整回归与审核仍在进行。
 线上 preview.4/schema v7 不会自动升级；完整能力与部署以 Issue #104 的实际验证为准。
+
+
+## 异常核实任务有界检查（#106 / PR #107）
+
+本开发分支的 Linux mcp_data 有 18 个工具、显式 schema v9。新增 `inspect_verification_task` 仅供所有者：参数为 contract_version=v1、request_id、target_task_id（核实任务）。它不递归创建任务；每次可靠结果（包括 insufficient_evidence）都消费 request_id。同 ID 返回历史结果，新 ID 才重查。`get_request` 可读该无任务终态；请求结束不代表目标结束。
+
+当前核实 worker 在 Claim 同事务登记实际 Linux 本地文件 guard，并持锁覆盖整个执行。检查分别核验执行已结束与持久收尾事实；足够证据时只中断核实自身、释放核实串行保护，不改原业务任务、行情或 head。未登记旧执行、缺失/替换 guard、内核或文件系统边界不符均不能产生停止证明；已有合法结果不回滚。正常运行不强制中断。条件冲突至多重新检查一次，未知提交先读持久请求，不盲目重试。
+
+本切片仍在 Actions 验证及执行者自查，准确 HEAD/结果见 [#106 记录](docs/tasks/issue-106.md) 和 PR。线上仍为已部署 preview.4/schema7/16 工具，本段不是新版部署声明。真实来源、#53 四股及新版 ChatGPT 消费侧 NOT_RUN；生产仍 NOT_PRODUCTION_READY，来源门禁未解除。

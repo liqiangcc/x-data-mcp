@@ -35,7 +35,7 @@
 
 ## 当前切片和未验证项
 
-先交付底层 guard/跨进程证明试验，再接入原子领取登记、有界检查/条件收尾、MCP 及审查。本文记录设计，不宣称任一未执行测试 PASS 或功能已完整交付。线上仍 preview.4/schema7；不因本任务自动升级。
+原子 Claim 登记、运行期 guard、有界检查/条件收尾、MCP 与回归已实现，正在完成 Actions 和执行者自查。本文不把未执行测试标为 PASS，不把本切片等同于整体交付。线上仍 preview.4/schema7；不因本任务自动升级。
 
 真实来源/#53 四股/新版 ChatGPT 消费侧 NOT_RUN；#54/#6/#46/#71/文件一致性仍 NOT_VERIFIED，NOT_PRODUCTION_READY。没有新的数据源、真实采集或迁移，不更改历史 evidence。
 
@@ -45,7 +45,7 @@
 
 后续接线使用 runner 拥有的 GuardedTasks，Claim 使用应用 sealed plan + SQLite 原子登记，锁覆盖整个 runner 生命周期。限定该包装器不能受理新任务、reconcile 或修改其他任务；非 Linux 明确拒绝，未登记历史执行不补写登记。新增真实 SQLite 测试验证持锁证据读取、提交后仍持锁、返回后释放、异常保留串行占用和待执行取消不伪造 Claim；实际 stdio publication worker 验证登记及响应后的锁释放。新增测试结果以相应 HEAD Actions 为准。
 
-有界检查请求、历史结果重放、条件安全收尾和 inspect_verification_task 协议仍未完成；底层 runtime guard 不代替收尾证据核验。本次没有线上部署或库升级。
+运行期接线切片完成时，有界检查协议尚未实现；后续实现见下节。底层 runtime guard 不代替收尾证据核验。本次没有线上部署或库升级。
 
 ### 有界检查实现切片
 
@@ -54,3 +54,8 @@
 应用根据一致 facts 决定结果；SQLite 只核对 sealed Plan 的快照、实际 guard 和当前请求绑定，再写入请求/审计/必要核实收尾。注册执行已排除且无已提交收尾时，或确证旧任务从未领取且没有副作用时，可只中断核实任务；原业务目标仍验证但不写入。已合法结束只返回既有结果，旧未登记执行或缺失 guard 保持待核实。历史请求重放核验其不可变审计，不依据目标后续状态重新算结果。
 
 当前这组新增代码和真实 SQLite/stdio/synthetic package 测试以对应 HEAD 的 Actions 为准；不因函数已实现宣称所有 AC 已完成审查。既有 schema v9 migration 未再修改。线上仍 preview.4/schema7。
+
+
+边界核对补充：检查时验证核实的单项类型、原目标和唯一 verification:task:<原目标> scope，通用任务结构合法不等于核实串行身份合法。两次已知条件冲突后返回 precondition_conflict，不循环等待；第一次 Probe 在重新读证据前销毁，避免自持锁造成假 Busy。实际子进程测试分别验证仍活跃时保留保护、exit106 后允许条件收尾、旧 insufficient 请求仍固定历史结果。
+
+CI 修正历史：b4316ac 的首轮 stdio 通用示例测试未分类新有状态入口，且 smoke 比较包含每次变化的 snapshot_id/time；9c7fe69 修正为验证有状态入口的专门 fixture 和稳定 task/receipt。后续 release_smoke Rust 断言仍期待 17 工具/8 项检查，已同步为 18 工具/9 项，保留全部旧检查并新增 bounded inspection 检查。失败日志保留，不修改旧来源 evidence。
