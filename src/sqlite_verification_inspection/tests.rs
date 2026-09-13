@@ -351,3 +351,204 @@ fn inspection_actual_exit_is_atomic_and_lost_response_replays_without_duplicate_
         );
     }
 }
+
+#[test]
+fn inspection_storage_failure_busy_and_unknown_schema_do_not_consume_or_release() {
+    let (_dir, db, _original, check) = fixture();
+    let db = db.with_busy_timeout(std::time::Duration::from_millis(1));
+    let c = Connection::open(db.path()).unwrap();
+    c.execute_batch("BEGIN IMMEDIATE").unwrap();
+    assert!(matches!(
+        inspect(&db, "busy", &check.task.task_id, "manager", "owner"),
+        Err(Error::StorageUnavailable(_))
+    ));
+    c.execute_batch("ROLLBACK").unwrap();
+    assert!(db.read_request("busy").unwrap().is_none());
+    c.execute_batch("CREATE TRIGGER reject_inspection BEFORE INSERT ON verification_inspections BEGIN SELECT RAISE(ABORT,'fixture rejected audit'); END;").unwrap();
+    assert!(inspect(&db, "failed", &check.task.task_id, "manager", "owner").is_err());
+    assert!(db.read_request("failed").unwrap().is_none());
+    assert_eq!(
+        db.read_task(&check.task.task_id).unwrap(),
+        Some(check.clone())
+    );
+    c.execute_batch("DROP TRIGGER reject_inspection; PRAGMA user_version=999;")
+        .unwrap();
+    assert!(matches!(
+        inspect(&db, "unknown", &check.task.task_id, "manager", "owner"),
+        Err(Error::StorageUnavailable(_))
+    ));
+    c.pragma_update(None, "user_version", crate::sqlite_tasks::SCHEMA_VERSION)
+        .unwrap();
+    assert!(db.read_request("unknown").unwrap().is_none());
+    assert_eq!(db.read_task(&check.task.task_id).unwrap(), Some(check));
+    let dir = tempfile::tempdir().unwrap();
+    let bad = SqliteTasks::new(dir.path().join("bad"));
+    assert!(inspect(&bad, "absent", "target", "manager", "owner").is_err());
+    assert!(!bad.path().exists());
+    std::fs::write(bad.path(), b"not SQLite").unwrap();
+    assert!(inspect(&bad, "bad", "target", "manager", "owner").is_err());
+    assert_eq!(std::fs::read(bad.path()).unwrap(), b"not SQLite");
+}
+#[test]
+fn inspection_rejects_missing_binding_occupancy_or_forged_serial_scope() {
+    for fault in ["binding", "occupancy", "serial_scope"] {
+        let (_dir, db, _original, check) = fixture();
+        let c = Connection::open(db.path()).unwrap();
+        match fault {
+            "binding" => {
+                c.execute(
+                    "DELETE FROM requests WHERE task_id=?1",
+                    [&check.task.task_id],
+                )
+                .unwrap();
+            }
+            "occupancy" => {
+                c.execute(
+                    "DELETE FROM scope_occupancy WHERE task_id=?1",
+                    [&check.task.task_id],
+                )
+                .unwrap();
+            }
+            _ => {
+                let mut work = check.task.work.clone();
+                let scopes = ["wrong:business:resource".to_owned()].into_iter().collect();
+                work.scopes = scopes;
+                work.items[0].scope_keys = work.scopes.clone();
+                c.execute(
+                    "UPDATE tasks SET frozen_work_json=?1 WHERE task_id=?2",
+                    params![serde_json::to_string(&work).unwrap(), check.task.task_id],
+                )
+                .unwrap();
+                c.execute(
+                    "UPDATE task_items SET scope_keys_json=?1 WHERE task_id=?2",
+                    params![
+                        serde_json::to_string(&work.scopes).unwrap(),
+                        check.task.task_id
+                    ],
+                )
+                .unwrap();
+                c.execute(
+                    "UPDATE task_scopes SET scope_key='wrong:business:resource' WHERE task_id=?1",
+                    [&check.task.task_id],
+                )
+                .unwrap();
+                c.execute("UPDATE scope_occupancy SET scope_key='wrong:business:resource' WHERE task_id=?1",[&check.task.task_id]).unwrap();
+            }
+        }
+        assert!(
+            matches!(
+                inspect(&db, "rejected", &check.task.task_id, "manager", "owner"),
+                Err(Error::NeedsVerification(_))
+            ),
+            "{fault}"
+        );
+        assert!(db.read_request("rejected").unwrap().is_none());
+        assert_eq!(count(&db, "verification_inspections"), 0);
+    }
+}
+#[test]
+fn inspection_historical_request_rejects_missing_audit_or_orphan_binding() {
+    for fault in ["audit", "binding", "terminal", "target"] {
+        let (_dir, db, _original, check) = fixture();
+        inspect(&db, "inspect", &check.task.task_id, "manager", "owner").unwrap();
+        let c = Connection::open(db.path()).unwrap();
+        match fault {
+            "audit" => {
+                c.execute("DELETE FROM verification_inspections", [])
+                    .unwrap();
+            }
+            "binding" => {
+                c.execute("DELETE FROM requests WHERE request_id='inspect'", [])
+                    .unwrap();
+            }
+            "terminal" => {
+                c.execute(
+                    "UPDATE requests SET terminal_json='{}' WHERE request_id='inspect'",
+                    [],
+                )
+                .unwrap();
+            }
+            _ => {
+                c.execute(
+                    "UPDATE verification_inspections SET target_task_id='other'",
+                    [],
+                )
+                .unwrap();
+            }
+        }
+        assert!(
+            matches!(db.read_request("inspect"), Err(Error::NeedsVerification(_))),
+            "{fault}"
+        );
+        assert!(inspect(&db, "inspect", &check.task.task_id, "manager", "owner").is_err());
+    }
+}
+#[test]
+fn verified_finished_result_is_not_rewritten_and_inspection_preserves_market_bytes() {
+    use crate::{market_storage::MarketRepository, task_verification::runner::StopRunner};
+    let (_dir, db, original, check) = fixture();
+    let market = crate::sqlite_market::SqliteMarket::new(db.clone());
+    let samples: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/issue79/legacy-records.json"
+    ))
+    .unwrap();
+    market.stage(&samples[0]["record"]).unwrap();
+    fn market_rows(db: &SqliteTasks) -> Vec<Vec<String>> {
+        let c = Connection::open(db.path()).unwrap();
+        let mut all = vec![];
+        for table in [
+            "data_versions",
+            "daily_bars",
+            "yearly_bars",
+            "version_evidence",
+            "yearly_lineage",
+            "effective_heads",
+            "publication_batches",
+            "task_publications",
+        ] {
+            let mut statement = c
+                .prepare(&format!("SELECT * FROM {table} ORDER BY 1"))
+                .unwrap();
+            let columns = statement.column_count();
+            all.extend(
+                statement
+                    .query_map([], |row| {
+                        Ok((0..columns)
+                            .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                            .collect::<Vec<_>>())
+                    })
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap(),
+            );
+        }
+        all
+    }
+    let before = market_rows(&db);
+    let runner = StopRunner {
+        repository: crate::sqlite_verification_runtime::guarded::GuardedTasks::open(
+            db.clone(),
+            &check.task.task_id,
+            "check-run",
+        )
+        .unwrap(),
+        run_id: "check-run".into(),
+        actor: "owner".into(),
+    };
+    runner
+        .run(
+            &check.task.task_id,
+            &crate::task_verification::decision::UnverifiedStopInspector,
+        )
+        .unwrap();
+    drop(runner);
+    let finished = db.read_task(&check.task.task_id).unwrap().unwrap();
+    let result = inspect(&db, "inspect", &check.task.task_id, "manager", "owner").unwrap();
+    assert_eq!(receipt(&result).conclusion, Conclusion::AlreadyFinished);
+    assert_eq!(db.read_task(&check.task.task_id).unwrap(), Some(finished));
+    assert_eq!(
+        db.read_task(&original.task.task_id).unwrap(),
+        Some(original)
+    );
+    assert_eq!(market_rows(&db), before);
+}
