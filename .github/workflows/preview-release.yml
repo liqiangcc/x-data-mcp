@@ -38,6 +38,10 @@ jobs:
           package_dir=$(find dist -maxdepth 1 -type d -name 'x-data-mcp-*' -print -quit)
           (cd "$package_dir" && sha256sum --check SHA256SUMS)
           python3 "$package_dir/check.py" --bin-dir "$package_dir/bin" --report dist/smoke-report.json
+      - name: Packaged runtime cross-UID boundary on an isolated fixture
+        run: |
+          package_dir=$(find dist -maxdepth 1 -type d -name 'x-data-mcp-*' -print -quit)
+          sudo -n python3 "$package_dir/check_peer.py" --bin-dir "$PWD/$package_dir/bin"
       - uses: actions/upload-artifact@v4
         with:
           name: x-data-mcp-preview-${{ github.sha }}

@@ -6,6 +6,80 @@ import json
 import pathlib
 import subprocess
 import tempfile
+import socket
+import time
+import select
+
+
+def runtime_smoke(binaries):
+    """Actual packaged service/proxy, isolated source-refusal data only."""
+    with tempfile.TemporaryDirectory(prefix="x-data-mcp-runtime-smoke-") as tmp:
+        root = pathlib.Path(tmp)
+        db, endpoint = root / "db.sqlite", root / "mcp.sock"
+        subprocess.run([binaries / "task_sqlite", "init", db], check=True, capture_output=True)
+        db.chmod(0o600)
+        service = subprocess.Popen([binaries / "data_service", db, endpoint], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        client = None
+        def rpc(method, params):
+            client.stdin.write(json.dumps(dict(jsonrpc="2.0", id=1, method=method, params=params)) + "\n")
+            client.stdin.flush()
+            assert select.select([client.stdout], [], [], 10)[0], "IPC response deadline"
+            response = json.loads(client.stdout.readline())
+            assert response["id"] == 1 and "error" not in response, response
+            return response["result"]
+        def call(name, arguments):
+            result = rpc("tools/call", dict(name=name, arguments=arguments))
+            assert not result["isError"], result
+            return result["structuredContent"]
+        try:
+            deadline = time.monotonic() + 10
+            while True:
+                assert service.poll() is None, service.stderr.read()
+                with socket.socket(socket.AF_UNIX) as probe:
+                    try:
+                        probe.connect(str(endpoint))
+                        break
+                    except (FileNotFoundError, ConnectionRefusedError):
+                        assert time.monotonic() < deadline, "service startup deadline"
+                        time.sleep(0.02)
+            client = subprocess.Popen([binaries / "mcp_connect", endpoint], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            assert rpc("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
+            tools = rpc("tools/list", {})["tools"]
+            cap = call("get_data_capabilities", {})
+            assert len(tools) == 18 and not cap["production_ready"]
+            assert {t["name"] for t in tools} == {c["tool_name"] for c in cap["items"]}
+            args = dict(request_id="runtime-smoke", symbols=["sh.600000"], periods=["day"])
+            accepted = call("start_collection", args)
+            client.stdin.close()
+            assert client.wait(timeout=10) == 0
+            client = subprocess.Popen([binaries / "mcp_connect", endpoint], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            deadline = time.monotonic() + 10
+            while True:
+                task = call("get_task", dict(task_id=accepted["task_id"]))
+                if task["status"] == "failed":
+                    break
+                assert time.monotonic() < deadline, task
+                time.sleep(0.02)
+            assert "SOURCE_NOT_VERIFIED" in json.dumps(task)
+            replay = call("start_collection", args)
+            assert replay["reused"] and replay["task_id"] == accepted["task_id"]
+        finally:
+            if client is not None:
+                if not client.stdin.closed:
+                    client.stdin.close()
+                try:
+                    client.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    client.kill()
+                    client.wait()
+            service.terminate()
+            try:
+                status = service.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                service.kill()
+                service.wait()
+                raise
+            assert status == 0, service.stderr.read()
 
 
 def main():
@@ -119,6 +193,8 @@ def main():
             child.stdin.close()
             if child.wait(timeout=20) != 0:
                 raise RuntimeError("stdio process exited unsuccessfully")
+    runtime_smoke(binaries)
+    checks.append("persistent_service_proxy_discovery_and_reconnect")
     report = dict(status="PASS", version=version, binary_sha256=hashlib.sha256((binaries / "mcp_data").read_bytes()).hexdigest(), checks=checks, live_source="NOT_RUN", production="NOT_PRODUCTION_READY", data="SYNTHETIC_FIXTURE_ONLY")
     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(report, ensure_ascii=False))

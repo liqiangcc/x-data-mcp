@@ -21,6 +21,8 @@ pub struct DataApi {
     pub observer: Observer<SqliteSupply>,
     pub legacy: SqliteTaskApi,
     pub access: Access,
+    #[cfg(target_os = "linux")]
+    worker_gate: Option<std::sync::Arc<crate::local_runtime::WorkerGate>>,
 }
 impl DataApi {
     pub fn new(
@@ -84,7 +86,17 @@ impl DataApi {
                 )?,
             },
             access,
+            #[cfg(target_os = "linux")]
+            worker_gate: None,
         })
+    }
+    #[cfg(target_os = "linux")]
+    pub fn with_worker_gate(
+        mut self,
+        gate: std::sync::Arc<crate::local_runtime::WorkerGate>,
+    ) -> Self {
+        self.worker_gate = Some(gate);
+        self
     }
     fn capabilities(&self, args: CapabilitiesQuery) -> Result<Value, ApiError> {
         if let Some(d) = args.dataset {
@@ -586,6 +598,18 @@ impl DataApi {
                     ));
                 }
                 let _: WorkerInput = decode(input)?;
+                #[cfg(target_os = "linux")]
+                let _permit = self
+                    .worker_gate
+                    .as_ref()
+                    .map(|gate| gate.acquire())
+                    .transpose()
+                    .map_err(|code| {
+                        ApiError::new(
+                            code,
+                            "service execution is busy or stopping; no additional worker started",
+                        )
+                    })?;
                 let snapshot =
                     super::worker::run_once(&self.legacy.control, &self.queries.repository.market)
                         .map_err(mapped)?;

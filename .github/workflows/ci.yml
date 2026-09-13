@@ -20,6 +20,8 @@ jobs:
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --locked
       - run: cargo build --locked
+      - name: Runtime cross-UID boundary on an isolated fixture (not live source)
+        run: sudo -n python3 scripts/test_runtime_peer.py --bin-dir "$PWD/target/debug"
       - name: Issue 54 offline diagnostic evidence (not live source validation)
         run: |
           python3 -B evidence/issue-54-gbbq-decimal/analyze_matrix.py --check
