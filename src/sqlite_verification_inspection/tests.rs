@@ -448,7 +448,7 @@ fn inspection_rejects_missing_binding_occupancy_or_forged_serial_scope() {
 }
 #[test]
 fn inspection_historical_request_rejects_missing_audit_or_orphan_binding() {
-    for fault in ["audit", "binding", "terminal", "target"] {
+    for fault in ["audit", "binding", "terminal", "target", "command"] {
         let (_dir, db, _original, check) = fixture();
         inspect(&db, "inspect", &check.task.task_id, "manager", "owner").unwrap();
         let c = Connection::open(db.path()).unwrap();
@@ -469,6 +469,14 @@ fn inspection_historical_request_rejects_missing_audit_or_orphan_binding() {
                     [],
                 )
                 .unwrap();
+            }
+            "command" => {
+                let command = crate::task_control::Command {
+                    key: LegacyCollection.key(),
+                    intent: json!({"symbols":["sh.600006"],"periods":["day"]}),
+                };
+                let raw = serde_json::to_string(&command).unwrap();
+                c.execute("UPDATE requests SET command_json=?1,command_digest=?2 WHERE request_id='inspect'",params![raw,crate::hash::sha256(raw.as_bytes())]).unwrap();
             }
             _ => {
                 c.execute(

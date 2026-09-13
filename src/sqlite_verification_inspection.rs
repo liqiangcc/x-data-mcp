@@ -57,7 +57,8 @@ pub(crate) fn validate_terminal(
     value: &serde_json::Value,
 ) -> Result<(), Error> {
     if command.key != command_key() {
-        return Ok(());
+        // An inspection audit may not hide behind another registered contract.
+        return validate_absent_request(c, id);
     }
     let result: TerminalResult = serde_json::from_value(value.clone()).map_err(integrity)?;
     let audit = read_audit(c, id)?.ok_or_else(|| integrity("inspection audit missing"))?;
@@ -264,3 +265,16 @@ impl Repository for SqliteTasks {
 }
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn validate_task_request(
+    c: &Connection,
+    id: &str,
+    command: &Command,
+) -> Result<(), Error> {
+    if command.key == command_key() {
+        return Err(integrity(
+            "bounded inspection must not bind an asynchronous task",
+        ));
+    }
+    validate_absent_request(c, id)
+}

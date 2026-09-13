@@ -421,9 +421,11 @@ pub(crate) fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRec
     }
     let command: Command = decode(raw)?;
     let outcome = match (kind.as_str(), task_id, terminal) {
-        ("task", Some(id), None) => {
-            let s =
-                read_task(c, &id)?.ok_or_else(|| inconsistent("bound execution record missing"))?;
+        ("task", Some(bound_task_id), None) => {
+            #[cfg(target_os = "linux")]
+            crate::sqlite_verification_inspection::validate_task_request(c, id, &command)?;
+            let s = read_task(c, &bound_task_id)?
+                .ok_or_else(|| inconsistent("bound execution record missing"))?;
             let expected = if s.task.retry_of.is_some() {
                 CommandKey {
                     operation: "retry_task".into(),
