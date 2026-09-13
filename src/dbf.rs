@@ -168,7 +168,9 @@ pub fn parse(bytes: &[u8]) -> Result<DbfFile, DbfError> {
         let record = &bytes[start..start + usize::from(record_length)];
         records.push(DbfRecord {
             deleted: record[0] == b'*',
-            raw: record[1..1 + field_bytes].to_vec(),
+            // Keep the complete payload, including any vendor-specific
+            // trailing bytes beyond the declared fields.
+            raw: record[1..].to_vec(),
         });
     }
     Ok(DbfFile {
