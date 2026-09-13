@@ -211,3 +211,28 @@ impl ExistingStopRepository for SqliteTasks {
         })
     }
 }
+
+impl crate::task_verification::never_started::EvidenceRepository for SqliteTasks {
+    fn never_started_facts(
+        &self,
+        task_id: &str,
+    ) -> Result<crate::task_verification::never_started::Facts, Error> {
+        self.read(|c| {
+            let snapshot = read_bound_task(c, task_id)?.ok_or(Error::TaskNotFound)?;
+            let has_durable_effects = c
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM publication_batches WHERE task_id=?1
+                 UNION ALL SELECT 1 FROM task_publications WHERE task_id=?1
+                 UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1
+                 UNION ALL SELECT 1 FROM yearly_execution_results WHERE task_id=?1)",
+                    [task_id],
+                    |r| r.get(0),
+                )
+                .map_err(storage)?;
+            Ok(crate::task_verification::never_started::Facts {
+                snapshot,
+                has_durable_effects,
+            })
+        })
+    }
+}

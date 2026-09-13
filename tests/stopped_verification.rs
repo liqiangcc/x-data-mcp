@@ -1291,3 +1291,92 @@ fn stopped_runner_rechecks_late_cancel_and_target_change_without_using_stale_app
         }
     }
 }
+
+#[test]
+fn never_started_sqlite_proof_rejects_claimed_changed_and_unknown_execution() {
+    use x_data_mcp::task_verification::{
+        decision::{Observation, StopInspector},
+        never_started::NeverStarted,
+    };
+    let (_d, r) = db();
+    let original = original_task(&r, "never-started");
+    let inspector = NeverStarted {
+        repository: r.clone(),
+    };
+    assert!(matches!(
+        inspector.inspect(&original).unwrap(),
+        Observation::Stopped { .. }
+    ));
+    let mut unknown = original.clone();
+    unknown.task.key.contract_version = "future-unknown".into();
+    assert!(matches!(
+        inspector.inspect(&unknown).unwrap(),
+        Observation::Insufficient { .. }
+    ));
+    let claimed = r
+        .transition(&original.task.task_id, 0, "old-run", Change::Claim)
+        .unwrap();
+    assert!(matches!(
+        inspector.inspect(&original),
+        Err(Error::RevisionConflict)
+    ));
+    assert!(matches!(
+        inspector.inspect(&claimed).unwrap(),
+        Observation::Insufficient { .. }
+    ));
+}
+
+#[test]
+fn never_started_stop_commit_fences_the_original_claim_and_preserves_receipt() {
+    use x_data_mcp::task_verification::{
+        decision::{Conclusion, StopRepository},
+        never_started::NeverStarted,
+        runner::{RunOutcome, StopRunner},
+    };
+    let (_d, r) = db();
+    let original = original_task(&r, "never-started-fence");
+    let ctl = control(&r, "new-run");
+    let check = task(
+        ctl.accept(
+            "check",
+            key(&r),
+            json!({"target_task_id":original.task.task_id}),
+        )
+        .unwrap(),
+    );
+    let runner = StopRunner {
+        repository: r.clone(),
+        run_id: "new-run".into(),
+        actor: "test-owner".into(),
+    };
+    let RunOutcome::Completed(receipt) = runner
+        .run(
+            &check.task.task_id,
+            &NeverStarted {
+                repository: r.clone(),
+            },
+        )
+        .unwrap()
+    else {
+        panic!("completed check required")
+    };
+    assert_eq!(receipt.conclusion, Conclusion::Interrupted);
+    let second = SqliteTasks::new(r.path());
+    assert!(matches!(
+        second.transition(&original.task.task_id, 0, "old-run", Change::Claim),
+        Err(Error::RevisionConflict)
+    ));
+    let stopped = second.read_task(&original.task.task_id).unwrap().unwrap();
+    assert_eq!(stopped.task.status, Status::Interrupted);
+    assert!(stopped.claims.is_empty());
+    assert!(
+        stopped
+            .items
+            .iter()
+            .all(|i| i.stage == Stage::Pending && i.outcome.is_none())
+    );
+    assert_eq!(
+        second.stop_receipt(&check.task.task_id).unwrap(),
+        Some(receipt)
+    );
+}
