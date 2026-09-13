@@ -265,7 +265,7 @@ mod tests {
     }
 
     fn hash(byte: u8) -> String {
-        std::iter::repeat(byte as char).take(64).collect()
+        std::iter::repeat_n(byte as char, 64).collect()
     }
 
     fn file(role: FileRole, byte: u8) -> FileFact {
