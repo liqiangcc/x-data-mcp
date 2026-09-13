@@ -18,6 +18,18 @@ pub fn run_once(
     else {
         return Ok(None);
     };
+    if candidate.task.key.dataset == crate::task_verification::DATASET {
+        crate::task_verification::runner::StopRunner {
+            repository: control.repository.clone(),
+            run_id: control.run_id.clone(),
+            actor: "local-owner".into(),
+        }
+        .run(
+            &candidate.task.task_id,
+            &crate::task_verification::decision::UnverifiedStopInspector,
+        )?;
+        return Ok(Some(control.read_task(&candidate.task.task_id)?));
+    }
     if !matches!(
         candidate.task.key.operation.as_str(),
         "update_data" | "backfill_data"

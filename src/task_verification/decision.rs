@@ -36,13 +36,13 @@ pub fn snapshot_digest(target: &TaskSnapshot) -> Result<String, Error> {
         &serde_json::to_vec(target).map_err(|e| Error::NeedsVerification(e.to_string()))?,
     ))
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Conclusion {
     Interrupted,
     InsufficientEvidence,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Receipt {
     pub verification_task_id: String,
     pub target_task_id: String,
@@ -120,7 +120,7 @@ pub fn prepare(
         return Err(Error::RevisionConflict);
     }
     let observation = inspector.inspect(&target)?;
-    let (after, conclusion, reason, evidence_ref) = match observation {
+    let (mut after, conclusion, reason, evidence_ref) = match observation {
         Observation::Insufficient { reason } => {
             if reason.trim().is_empty() {
                 return Err(Error::InvalidCommand("missing insufficiency reason".into()));
@@ -176,6 +176,9 @@ pub fn prepare(
     // A successful CHECK with insufficient evidence does not make the target
     // successful. Its explicit conclusion is persisted and queried separately.
     finished.task.result = Some(json!({"stopped_write_check":receipt}));
+    if let Some(target) = &mut after {
+        target.task.result.as_mut().unwrap()["stopped_write_check"] = json!(receipt);
+    }
     Ok(StopPlan {
         audit: Audit {
             actor: actor.into(),

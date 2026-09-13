@@ -980,3 +980,77 @@ fn stopped_runner_reconciles_committed_response_loss_and_keeps_unknown_execution
         }
     }
 }
+
+#[test]
+fn public_stopped_progress_preserves_conclusion_and_rechecks_audit_on_cursor() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let (_d, r) = db();
+    let target = original_task(&r, "sh.600006");
+    let check = task(
+        control(&r, "new-run")
+            .accept(
+                "inspection",
+                key(&r),
+                json!({"target_task_id":target.task.task_id}),
+            )
+            .unwrap(),
+    );
+    runner(&r)
+        .run(&check.task.task_id, &FixtureStopped)
+        .unwrap();
+    let api = DataApi::new(r.clone(), "new-run".into(), Access::local()).unwrap();
+    let first = api
+        .call(
+            "get_task_progress",
+            json!({"task_id":target.task.task_id,"page_size":1}),
+        )
+        .unwrap();
+    assert_eq!(first["task"]["status"], "interrupted");
+    assert_eq!(first["stopped_write_check"]["conclusion"], "interrupted");
+    assert!(first["next_cursor"].is_string());
+    rusqlite::Connection::open(r.path())
+        .unwrap()
+        .execute("DELETE FROM stopped_write_checks", [])
+        .unwrap();
+    assert!(
+        api.call(
+            "get_task_progress",
+            json!({"task_id":target.task.task_id,"page_size":1,"cursor":first["next_cursor"]})
+        )
+        .is_err()
+    );
+}
+#[test]
+fn stopping_controls_and_task_facts_are_hidden_from_non_owner_context() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let (_d, r) = db();
+    let target = original_task(&r, "first");
+    let mut restricted = Access::local();
+    restricted.securities = Some(Default::default());
+    let api = DataApi::new(r.clone(), "new-run".into(), restricted).unwrap();
+    assert!(
+        !api.tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "verify_stopped_writes")
+    );
+    assert!(
+        api.call(
+            "get_data_capabilities",
+            json!({"operation":"verify_stopped_writes"})
+        )
+        .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(api.call("verify_stopped_writes",json!({"contract_version":"v1","request_id":"forbidden","target_task_id":target.task.task_id})).unwrap_err().code,"forbidden");
+    assert!(r.read_request("forbidden").unwrap().is_none());
+}

@@ -40,9 +40,9 @@ def main():
         try:
             assert request("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
             tools = request("tools/list", {})["tools"]
-            assert len(tools) == 15
+            assert len(tools) == 16
             assert call("get_data_capabilities", {})["production_ready"] is False
-            checks.append("initialize_discovery_15_tools")
+            checks.append("initialize_discovery_16_tools")
             catalog = call("query_data", dict(dataset="securities.catalog", contract_version="v1", selection=dict(kind="catalog", scope="current_sh_sz_a"), filter=dict(kind="catalog"), version=dict(kind="latest_per_entity")))
             entity = catalog["records"][0]["entity"]
             assert catalog["records"][0]["industry"]["status"] == "missing"
@@ -83,6 +83,18 @@ def main():
             computed_after = call("compute_metrics", computation)
             assert computed_after == computed
             checks.append("yearly_update_frozen_input_and_blocked_worker_preserves_fixture")
+            original = call("start_collection", dict(request_id="smoke-stopping-target", dataset="market.daily", contract_version="v1", selection=dict(kind="explicit", securities=[entity])))
+            child.stdin.close()
+            assert child.wait(timeout=20) == 0
+            child = subprocess.Popen([binaries / "mcp_data", db], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            request("initialize", {})
+            check = call("verify_stopped_writes", dict(contract_version="v1", request_id="smoke-stopping-check", target_task_id=original["task_id"]))
+            assert check["blocking_reasons"] == ["STOP_EVIDENCE_NOT_VERIFIED"]
+            assert call("run_worker_once", {})["task_id"] == check["task_id"]
+            checked = call("get_task_progress", dict(task_id=check["task_id"]))
+            assert checked["stopped_write_check"]["conclusion"] == "insufficient_evidence"
+            assert call("get_task", dict(contract_version="v1", task_id=original["task_id"]))["status"] == "needs_verification"
+            checks.append("stopping_inspection_reports_insufficient_and_preserves_original")
         finally:
             child.stdin.close()
             if child.wait(timeout=20) != 0:

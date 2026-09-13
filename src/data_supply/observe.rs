@@ -65,6 +65,10 @@ pub trait ObservationRepository {
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error>;
     fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error>;
     fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error>;
+    fn verify_stopped_check(
+        &self,
+        receipt: &Option<crate::task_verification::decision::Receipt>,
+    ) -> Result<(), Error>;
 }
 pub fn entity(symbol: &str) -> Option<Security> {
     let (ex, code) = symbol.split_once('.')?;
@@ -78,6 +82,9 @@ pub fn entity(symbol: &str) -> Option<Security> {
     })
 }
 pub fn authorized(s: &TaskSnapshot, a: &Access) -> bool {
+    if s.task.key.dataset == crate::task_verification::DATASET {
+        return *a == Access::local();
+    }
     let datasets = match s.task.key.dataset.as_str() {
         "market.daily" => vec![Dataset::Daily],
         "market.yearly" => vec![Dataset::Yearly],
@@ -324,6 +331,16 @@ impl<R: ObservationRepository> Observer<R> {
                 publication_versions: facts.publications,
                 range_results: facts.range_results,
                 yearly_results: facts.yearly_results,
+                stopped_write_check: facts
+                    .snapshot
+                    .task
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.get("stopped_write_check"))
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|e| Error::Integrity(format!("stopped check result: {e}")))?,
                 frozen_yearly_inputs: frozen_yearly_inputs(&facts.snapshot)?,
             };
             if serde_json::to_vec(&p)
@@ -341,6 +358,8 @@ impl<R: ObservationRepository> Observer<R> {
         self.repository.verify_versions(&p.publication_versions)?;
         self.repository.verify_range_results(&p.range_results)?;
         self.repository.verify_yearly_results(&p.yearly_results)?;
+        self.repository
+            .verify_stopped_check(&p.stopped_write_check)?;
         let end = (s.offset + args.page_size).min(p.unfinished.len());
         let more = end < p.unfinished.len();
         let mut result = (**p).clone();

@@ -1,4 +1,4 @@
-use super::{CONTRACT_VERSION, DATASET};
+use super::DATASET;
 use crate::task_control::{
     CommandKey, Contract, Error, FrozenWork, ItemSpec, Status, TaskRepository,
 };
@@ -32,11 +32,7 @@ impl<R: TaskRepository> StopVerification<R> {
 }
 impl<R: TaskRepository> Contract for StopVerification<R> {
     fn key(&self) -> CommandKey {
-        CommandKey {
-            operation: "verify_stopped_writes".into(),
-            dataset: DATASET.into(),
-            contract_version: CONTRACT_VERSION.into(),
-        }
+        super::command_key()
     }
     fn normalize(&self, payload: Value) -> Result<Value, Error> {
         let input: Input = serde_json::from_value(payload).map_err(invalid)?;

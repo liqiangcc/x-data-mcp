@@ -78,3 +78,18 @@ StopRunner 每次只执行一个已受理核实任务，先核对持久收据，
 stopped_runner_* 覆盖通过/默认不足、重放不调用 inspector、旧 run/running 保护、
 开始前/检查期间取消，以及真实 SQLite 提交前后注入响应丢失；这类包装器不是退出测试，
 实际 exit78 证据仍由 sqlite_verification::tests 的四组子进程提供。
+
+## 公共 v1 入口（闭合形状，开发中）
+
+verify_stopped_writes 输入仅 contract_version=v1、request_id、target_task_id，返回 WriteAcceptance。
+不接收 dataset/actor/evidence/stopped/force；本人所有者上下文才发现/调用。
+能力发现 implemented=true/readiness=blocked，唯一 blocker 为 STOP_EVIDENCE_NOT_VERIFIED，
+不能混成官方行情 blocker。总工具变为 16；task.verification 仅内部任务种类，不是新增行情 dataset。
+受理后显式 run_worker_once 分发 StopRunner/默认不足核实器；不接管原 task、不自动后台执行。
+
+get_task_progress 新增可空 stopped_write_check，明确区分“检查成功完成”与 insufficient_evidence。
+原 interrupted 任务也关联原核实收据，cursor 续页重新核验该收据，缺审计拒绝。
+get_task/get_request/list_tasks 仍读一致任务事实；受限上下文不暴露管理任务。
+真实 stdio 测试覆盖 schema/额外字段/权限边界、受理/重放/目标忙碌、默认执行不足和取消；
+打包 smoke 第七项在隔离 fixture 库真实重启子进程后检查原任务，确认保持待核实。
+这些是开发实现，当前代码的新公共入口尚待 Actions；没有更新线上 preview.3。

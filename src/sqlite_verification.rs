@@ -57,7 +57,7 @@ pub(crate) fn validate_task_link(c: &Connection, s: &TaskSnapshot) -> Result<(),
     }
     Ok(())
 }
-fn read_receipt(c: &Connection, id: &str) -> Result<Option<(Audit, Receipt)>, Error> {
+pub(crate) fn read_receipt(c: &Connection, id: &str) -> Result<Option<(Audit, Receipt)>, Error> {
     let Some(audit) = read_audit(c, id)? else {
         // A committed check with a missing audit is not an unexecuted check.
         read_bound_task(c, id)?;

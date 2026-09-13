@@ -337,6 +337,7 @@ pub struct ProgressPage {
     pub range_results: Vec<RangeExecutionResult>,
     pub frozen_yearly_inputs: Vec<FrozenYearlyInput>,
     pub yearly_results: Vec<YearlyExecutionResult>,
+    pub stopped_write_check: Option<crate::task_verification::decision::Receipt>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

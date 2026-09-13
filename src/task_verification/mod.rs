@@ -5,3 +5,11 @@ pub const DATASET: &str = "task.verification";
 pub const CONTRACT_VERSION: &str = "stopped-writes-task-v1";
 pub mod decision;
 pub mod runner;
+pub mod wire;
+pub fn command_key() -> crate::task_control::CommandKey {
+    crate::task_control::CommandKey {
+        operation: "verify_stopped_writes".into(),
+        dataset: DATASET.into(),
+        contract_version: CONTRACT_VERSION.into(),
+    }
+}
