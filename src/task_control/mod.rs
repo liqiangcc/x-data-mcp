@@ -338,7 +338,7 @@ pub fn decide(
                     return Err(Error::RevisionConflict);
                 }
                 let previous = s.task.result.take();
-                let previous_status = s.task.status.clone();
+                let previous_status = s.task.status;
                 s.task.status = Status::NeedsVerification;
                 s.task.result = Some(serde_json::json!({"execution_uncertainty":{
                     "item_id":item_id,"reason":reason,"previous_result":previous,"previous_status":previous_status

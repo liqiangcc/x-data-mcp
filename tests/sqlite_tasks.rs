@@ -822,7 +822,13 @@ fn uncertainty_write_failure_preserves_old_state_and_bad_marker_is_rejected() {
         .transition(&s.task.task_id, s.task.state_revision, "run-a", change)
         .unwrap();
     assert!(marked.execution_uncertainty().unwrap().is_some());
-    c.execute("UPDATE tasks SET result_json=?1 WHERE task_id=?2", params![json!({"execution_uncertainty":{"item_id":"other-item","reason":"unknown","previous_result":null}}).to_string(),s.task.task_id]).unwrap();
+    let mut damaged = marked.task.result.clone().unwrap();
+    damaged["execution_uncertainty"]["item_id"] = json!("other-item");
+    c.execute(
+        "UPDATE tasks SET result_json=?1 WHERE task_id=?2",
+        params![damaged.to_string(), s.task.task_id],
+    )
+    .unwrap();
     assert!(matches!(
         db.read_task(&s.task.task_id),
         Err(Error::NeedsVerification(_))
