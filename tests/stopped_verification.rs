@@ -793,3 +793,190 @@ fn stopped_plan_requires_frozen_contract_identity_and_verification_only_scope() 
     }
     assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
 }
+
+use x_data_mcp::task_verification::runner::{RunOutcome, StopRunner};
+fn runner(r: &SqliteTasks) -> StopRunner<SqliteTasks> {
+    StopRunner {
+        repository: r.clone(),
+        run_id: "new-run".into(),
+        actor: "fixture-owner".into(),
+    }
+}
+struct NeverInspect;
+impl StopInspector for NeverInspect {
+    fn inspect(&self, _: &TaskSnapshot) -> Result<Observation, Error> {
+        panic!("must not inspect")
+    }
+}
+#[test]
+fn stopped_runner_executes_once_replays_receipt_and_defaults_to_insufficient() {
+    for verified in [false, true] {
+        let (_d, r) = db();
+        let target = original_task(&r, "first");
+        let check = task(
+            control(&r, "new-run")
+                .accept(
+                    "inspection",
+                    key(&r),
+                    json!({"target_task_id":target.task.task_id}),
+                )
+                .unwrap(),
+        );
+        let inspector: &dyn StopInspector = if verified {
+            &FixtureStopped
+        } else {
+            &UnverifiedStopInspector
+        };
+        let RunOutcome::Completed(receipt) =
+            runner(&r).run(&check.task.task_id, inspector).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            receipt.conclusion,
+            if verified {
+                Conclusion::Interrupted
+            } else {
+                Conclusion::InsufficientEvidence
+            }
+        );
+        let RunOutcome::Completed(replay) =
+            runner(&r).run(&check.task.task_id, &NeverInspect).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(receipt, replay);
+        if !verified {
+            assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
+        }
+    }
+}
+#[test]
+fn stopped_runner_never_reexecutes_running_or_old_run_checks() {
+    for running in [false, true] {
+        let (_d, r) = db();
+        let target = original_task(&r, "first");
+        let check = if running {
+            checking(&r, &target, "inspection")
+        } else {
+            task(
+                control(&r, "new-run")
+                    .accept(
+                        "inspection",
+                        key(&r),
+                        json!({"target_task_id":target.task.task_id}),
+                    )
+                    .unwrap(),
+            )
+        };
+        let mut worker = runner(&r);
+        if !running {
+            worker.run_id = "restarted".into();
+        }
+        assert!(matches!(
+            worker.run(&check.task.task_id, &NeverInspect),
+            Err(Error::NeedsVerification(_))
+        ));
+        assert_eq!(r.read_task(&check.task.task_id).unwrap().unwrap(), check);
+        assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
+    }
+}
+#[test]
+fn stopped_runner_cancellation_before_or_during_inspection_does_not_touch_target() {
+    struct CancelDuring {
+        db: SqliteTasks,
+        id: String,
+    }
+    impl StopInspector for CancelDuring {
+        fn inspect(&self, target: &TaskSnapshot) -> Result<Observation, Error> {
+            let s = self.db.read_task(&self.id)?.unwrap();
+            self.db.transition(
+                &self.id,
+                s.task.state_revision,
+                "new-run",
+                Change::RequestCancel,
+            )?;
+            FixtureStopped.inspect(target)
+        }
+    }
+    for during in [false, true] {
+        let (_d, r) = db();
+        let target = original_task(&r, "first");
+        let check = task(
+            control(&r, "new-run")
+                .accept(
+                    "inspection",
+                    key(&r),
+                    json!({"target_task_id":target.task.task_id}),
+                )
+                .unwrap(),
+        );
+        let cancel = CancelDuring {
+            db: r.clone(),
+            id: check.task.task_id.clone(),
+        };
+        if !during {
+            control(&r, "new-run")
+                .cancel(&check.task.task_id, check.task.state_revision)
+                .unwrap();
+        }
+        let result = runner(&r)
+            .run(
+                &check.task.task_id,
+                if during { &cancel } else { &NeverInspect },
+            )
+            .unwrap();
+        let RunOutcome::Cancelled(s) = result else {
+            panic!()
+        };
+        assert_eq!(s.task.status, Status::Cancelled);
+        assert!(s.claims.is_empty());
+        assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
+        assert!(r.stop_receipt(&check.task.task_id).unwrap().is_none());
+    }
+}
+
+#[path = "support/stop_fault.rs"]
+mod stop_fault;
+#[test]
+fn stopped_runner_reconciles_committed_response_loss_and_keeps_unknown_execution_protected() {
+    for commit in [true, false] {
+        let (_d, r) = db();
+        let target = original_task(&r, "first");
+        let check = task(
+            control(&r, "new-run")
+                .accept(
+                    "inspection",
+                    key(&r),
+                    json!({"target_task_id":target.task.task_id}),
+                )
+                .unwrap(),
+        );
+        let worker = StopRunner {
+            repository: stop_fault::Fault {
+                db: r.clone(),
+                commit,
+            },
+            run_id: "new-run".into(),
+            actor: "fixture-owner".into(),
+        };
+        let result = worker.run(&check.task.task_id, &FixtureStopped);
+        if commit {
+            let RunOutcome::Completed(receipt) = result.unwrap() else {
+                panic!()
+            };
+            assert_eq!(r.stop_receipt(&check.task.task_id).unwrap(), Some(receipt));
+        } else {
+            assert!(matches!(result, Err(Error::OutcomeUnknown(_))));
+            assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
+            assert_eq!(
+                r.read_task(&check.task.task_id).unwrap().unwrap().items[0].stage,
+                Stage::Running
+            );
+            assert!(matches!(
+                worker.run(&check.task.task_id, &NeverInspect),
+                Err(Error::NeedsVerification(_))
+            ));
+        }
+    }
+}

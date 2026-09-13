@@ -4,3 +4,4 @@ pub use admission::{StopVerification, verification_scope};
 pub const DATASET: &str = "task.verification";
 pub const CONTRACT_VERSION: &str = "stopped-writes-task-v1";
 pub mod decision;
+pub mod runner;

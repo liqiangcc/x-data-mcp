@@ -65,3 +65,16 @@ CI 实际反馈：34738145667 在测试整数类型编译错误处停止；64525
 现仅在测试造坏库连接显式关闭 FK 来插入孤立行；生产连接/升级后的完整 FK 检查不放宽。
 另加入 stopped_compound_task_retains_verified_published_daily_and_its_original_head：
 真实 SQLite compound task 已发布 daily、yearly 尚未完成，中断后核验旧 daily 全量兼容记录与有效 head 不变。
+
+## 核实执行器
+
+StopRunner 每次只执行一个已受理核实任务，先核对持久收据，再检查准确契约/本次 run。
+旧 run 或已有 running 项而无收据不自动执行。可信 inspector 为同步只读端口；
+只在它返回后允许确认本核实已停止。开始前取消及检查期间取消均只收尾核实，
+不使用已取得但未提交的停止结论释放原业务占用。
+提交返回异常时一次重查收据；实际已提交返回该收据，否则保留未知状态/保护，不重新检查。
+目标在核实期间变化时条件提交拒绝，不能使用过时结论释放占用；后续有界处置入口仍待实现。
+
+stopped_runner_* 覆盖通过/默认不足、重放不调用 inspector、旧 run/running 保护、
+开始前/检查期间取消，以及真实 SQLite 提交前后注入响应丢失；这类包装器不是退出测试，
+实际 exit78 证据仍由 sqlite_verification::tests 的四组子进程提供。
