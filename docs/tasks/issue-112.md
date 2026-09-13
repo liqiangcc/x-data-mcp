@@ -24,3 +24,7 @@ AC-04：Actions稳定fmt/clippy/test/build/diff-check、packaged smoke及跨UID�
 
 worktree `/root/x-data-mcp-runtime-idle`，branch `runtime-idle-session`，base3dda98a，Draft PR #113。新增同一真实代理32秒空闲后调用get_data_capabilities的packaged回归；数据/schema/来源未改。
 13271ed 的CI/包通过；6065395 的package34753399410通过，CI34753399396在既有#106两连接同request成功重放测试遇到StorageUnavailable(database is locked)失败。失败发生在旧测试的250ms默认busy预算，不是IPC空闲或来源语义失败。仅给该“成功竞争后重放”fixture明确5s测试等待预算，所有结果/唯一审计/异参冲突断言原样；生产默认250ms和专门busy拒绝测试不变、不捕获跳过错误，也不让应用自动重试。完整结果待新Actions。
+
+## 修正版版本与门槛
+
+ca404ad：CI34753613473/rust103714164653、package34753613467/package103714164569全部SUCCESS，包含11项packaged检查与跨UID验证。发布使用新的v0.2.0-preview.6：仅更新Cargo项目版本/lock根条目，不升级依赖；README明确preview.5已部署但空闲验收失败，preview.6尚未部署。准确最终HEAD仍需完整Actions、自查和main包校验，再备份/切换既有两个service；schema仍9、单位/来源/行情/旧evidence均不修改。
