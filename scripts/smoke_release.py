@@ -40,9 +40,9 @@ def main():
         try:
             assert request("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
             tools = request("tools/list", {})["tools"]
-            assert len(tools) == 17
+            assert len(tools) == 18
             assert call("get_data_capabilities", {})["production_ready"] is False
-            checks.append("initialize_discovery_17_tools")
+            checks.append("initialize_discovery_18_tools")
             catalog = call("query_data", dict(dataset="securities.catalog", contract_version="v1", selection=dict(kind="catalog", scope="current_sh_sz_a"), filter=dict(kind="catalog"), version=dict(kind="latest_per_entity")))
             entity = catalog["records"][0]["entity"]
             assert catalog["records"][0]["industry"]["status"] == "missing"
@@ -104,6 +104,15 @@ def main():
             assert checked["stopped_write_check"]["conclusion"] == "interrupted"
             assert call("get_task", dict(contract_version="v1", task_id=original["task_id"]))["status"] == "interrupted"
             checks.append("stopping_inspection_proves_never_started_without_source_execution")
+            inspection_input = dict(contract_version="v1", request_id="smoke-bounded-inspection", target_task_id=check["task_id"])
+            assert call("inspect_verification_task", dict(inspection_input, force=True), error=True)["code"] == "invalid_arguments"
+            inspection = call("inspect_verification_task", inspection_input)
+            assert inspection["task"] is None and inspection["bound"] is True
+            assert inspection["terminal_result"]["receipt"]["conclusion"] == "already_finished"
+            assert call("get_request", dict(contract_version="v1", request_id="smoke-bounded-inspection")) == inspection
+            assert call("inspect_verification_task", inspection_input) == inspection
+            assert call("get_task_progress", dict(task_id=check["task_id"])) == checked
+            checks.append("bounded_inspection_historical_request_without_recursive_task_or_rewrite")
         finally:
             child.stdin.close()
             if child.wait(timeout=20) != 0:

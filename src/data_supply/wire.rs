@@ -583,4 +583,15 @@ pub struct YearlyExecutionResult {
 pub enum RequestTerminal {
     Stopped(crate::task_verification::existing::TerminalResult),
     Publication(crate::publication_verification::existing::TerminalResult),
+    #[cfg(target_os = "linux")]
+    Inspection(crate::verification_inspection::TerminalResult),
+}
+
+/// No caller-supplied proof, force flag, actor or clock.
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InspectVerification {
+    pub contract_version: ContractVersion,
+    pub request_id: String,
+    pub target_task_id: String,
 }

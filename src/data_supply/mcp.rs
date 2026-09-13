@@ -39,6 +39,8 @@ impl DataApi {
                     tasks.clone(),
                     run_id.clone(),
                     vec![
+                        #[cfg(target_os = "linux")]
+                        Box::new(crate::verification_inspection::InspectionContract),
                         Box::new(crate::task_verification::StopVerification::new(
                             tasks.clone(), run_id.clone(),
                         )?),
@@ -118,6 +120,7 @@ impl DataApi {
                         | Handler::Worker
                         | Handler::VerifyStopped
                         | Handler::VerifyPublication
+                        | Handler::InspectVerification
                 )
             {
                 continue;
@@ -151,7 +154,7 @@ impl DataApi {
                 let detailed = args.operation.is_some();
                 items.push(Capability {
                     tool_name: e.name.into(),
-                    description: if matches!(e.handler, Handler::VerifyPublication) { crate::publication_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
+                    description: if matches!(e.handler, Handler::InspectVerification) { INSPECTION_DESCRIPTION } else if matches!(e.handler, Handler::VerifyPublication) { crate::publication_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
@@ -408,7 +411,7 @@ impl DataApi {
                 }
             }
         }
-        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped|Handler::VerifyPublication)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::VerifyPublication){crate::publication_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
+        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped|Handler::VerifyPublication|Handler::InspectVerification)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::InspectVerification){INSPECTION_DESCRIPTION}else if matches!(e.handler,Handler::VerifyPublication){crate::publication_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
@@ -431,6 +434,52 @@ impl DataApi {
             return self.legacy_call(name, input);
         };
         match entry.handler {
+            Handler::InspectVerification => {
+                if self.access != Access::local() {
+                    return Err(ApiError::new(
+                        "forbidden",
+                        "verification inspection requires local owner access",
+                    ));
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    let command: InspectVerification = decode(input)?;
+                    let accepted = crate::verification_inspection::service::inspect(
+                        &self.legacy.control.repository,
+                        &command.request_id,
+                        &command.target_task_id,
+                        &self.legacy.control.run_id,
+                        &self.access.principal,
+                    )
+                    .map_err(task_error)?;
+                    let crate::task_control::RequestOutcome::Terminal(value) =
+                        accepted.record.outcome
+                    else {
+                        return Err(ApiError::new(
+                            "needs_verification",
+                            "bounded inspection has an invalid task outcome",
+                        ));
+                    };
+                    encode(RequestView {
+                        request_id: command.request_id,
+                        bound: true,
+                        task: None,
+                        terminal_result: Some(serde_json::from_value(value).map_err(|e| {
+                            ApiError::new(
+                                "needs_verification",
+                                format!("inspection terminal contract: {e}"),
+                            )
+                        })?),
+                    })
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Err(ApiError::new(
+                        "unsupported_contract",
+                        "verification runtime protocol requires Linux",
+                    ))
+                }
+            }
             Handler::VerifyPublication => {
                 if self.access != Access::local() {
                     return Err(ApiError::new(
@@ -624,6 +673,7 @@ impl ToolHandler for DataApi {
                     | "get_data_capabilities"
                     | "compute_metrics"
                     | "verify_publication_result"
+                    | "inspect_verification_task"
                     | "update_data"
                     | "backfill_data"
             );
@@ -633,7 +683,10 @@ impl ToolHandler for DataApi {
                     if e.code == "outcome_unknown"
                         || (matches!(
                             name,
-                            "update_data" | "backfill_data" | "verify_publication_result"
+                            "update_data"
+                                | "backfill_data"
+                                | "verify_publication_result"
+                                | "inspect_verification_task"
                         ) && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
                     {
                         "unknown"
@@ -645,6 +698,7 @@ impl ToolHandler for DataApi {
                             | "update_data"
                             | "backfill_data"
                             | "verify_publication_result"
+                            | "inspect_verification_task"
                     ) {
                         "not_committed"
                     } else {
@@ -656,7 +710,10 @@ impl ToolHandler for DataApi {
                     if e.code == "outcome_unknown"
                         || (matches!(
                             name,
-                            "update_data" | "backfill_data" | "verify_publication_result"
+                            "update_data"
+                                | "backfill_data"
+                                | "verify_publication_result"
+                                | "inspect_verification_task"
                         ) && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
                     {
                         vec![

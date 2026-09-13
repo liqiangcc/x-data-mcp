@@ -46,3 +46,11 @@
 后续接线使用 runner 拥有的 GuardedTasks，Claim 使用应用 sealed plan + SQLite 原子登记，锁覆盖整个 runner 生命周期。限定该包装器不能受理新任务、reconcile 或修改其他任务；非 Linux 明确拒绝，未登记历史执行不补写登记。新增真实 SQLite 测试验证持锁证据读取、提交后仍持锁、返回后释放、异常保留串行占用和待执行取消不伪造 Claim；实际 stdio publication worker 验证登记及响应后的锁释放。新增测试结果以相应 HEAD Actions 为准。
 
 有界检查请求、历史结果重放、条件安全收尾和 inspect_verification_task 协议仍未完成；底层 runtime guard 不代替收尾证据核验。本次没有线上部署或库升级。
+
+### 有界检查实现切片
+
+`inspect_verification_task` 参数仅 contract_version=v1、request_id、target_task_id（目标是核实任务）；仅 local owner，actor/run/时间由服务提供。该操作返回无 task 的 RequestView + verification_inspection 历史结果；InsufficientEvidence 也在同一 SQLite 事务持久化并消费 request_id。该请求的 terminal 不代表目标 terminal。InspectionContract 只登记标准化/历史查询，resolve 拒绝异步工作，因此不创建递归任务。
+
+应用根据一致 facts 决定结果；SQLite 只核对 sealed Plan 的快照、实际 guard 和当前请求绑定，再写入请求/审计/必要核实收尾。注册执行已排除且无已提交收尾时，或确证旧任务从未领取且没有副作用时，可只中断核实任务；原业务目标仍验证但不写入。已合法结束只返回既有结果，旧未登记执行或缺失 guard 保持待核实。历史请求重放核验其不可变审计，不依据目标后续状态重新算结果。
+
+当前这组新增代码和真实 SQLite/stdio/synthetic package 测试以对应 HEAD 的 Actions 为准；不因函数已实现宣称所有 AC 已完成审查。既有 schema v9 migration 未再修改。线上仍 preview.4/schema7。

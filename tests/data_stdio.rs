@@ -67,7 +67,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     assert!(s.request("initialize", json!({}))["result"]["serverInfo"].is_object());
     let listing = s.request("tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 17);
+    assert_eq!(tools.len(), if cfg!(target_os = "linux") { 18 } else { 17 });
     let caps = s.call("get_data_capabilities", json!({}), false);
     let listed: std::collections::BTreeSet<_> =
         tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -1011,4 +1011,131 @@ fn real_publication_stdio_inspects_fixed_evidence_without_changing_original_task
             );
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bounded_inspection_stdio_replays_history_without_recursive_tasks() {
+    use x_data_mcp::{
+        sqlite_tasks::SqliteTasks,
+        task_control::{
+            Contract, RequestOutcome, TaskRepository, legacy::LegacyCollection,
+            service::TaskControl,
+        },
+        task_verification::StopVerification,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let db = SqliteTasks::new(dir.path().join("inspect.sqlite"));
+    db.initialize().unwrap();
+    let old = TaskControl::new(db.clone(), "old".into(), vec![Box::new(LegacyCollection)]).unwrap();
+    let RequestOutcome::Task(original) = old
+        .accept(
+            "original",
+            LegacyCollection.key(),
+            json!({"symbols":["sh.600006"],"periods":["day"]}),
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!()
+    };
+    let control = TaskControl::new(
+        db.clone(),
+        "check-run".into(),
+        vec![Box::new(
+            StopVerification::new(db.clone(), "check-run".into()).unwrap(),
+        )],
+    )
+    .unwrap();
+    let RequestOutcome::Task(check) = control
+        .accept(
+            "check",
+            x_data_mcp::task_verification::command_key(),
+            json!({"target_task_id":original.task.task_id}),
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!()
+    };
+    let input =
+        json!({"contract_version":"v1","request_id":"inspect","target_task_id":check.task.task_id});
+    let mut s = Session::new(db.path());
+    s.request("initialize", json!({}));
+    let caps = s.call(
+        "get_data_capabilities",
+        json!({"operation":"inspect_verification_task"}),
+        false,
+    );
+    assert_eq!(caps["production_ready"], false);
+    assert_eq!(caps["items"][0]["readiness"], "ready");
+    for key in [
+        "force", "stopped", "approved", "provider", "clock", "actor", "evidence",
+    ] {
+        let mut bad = input.clone();
+        bad[key] = json!(true);
+        assert_eq!(
+            s.call("inspect_verification_task", bad, true)["code"],
+            "invalid_arguments"
+        );
+        assert!(db.read_request("inspect").unwrap().is_none());
+    }
+    let result = s.call("inspect_verification_task", input.clone(), false);
+    jsonschema::validator_for(&caps["items"][0]["input_schema"])
+        .unwrap()
+        .validate(&input)
+        .unwrap();
+    jsonschema::validator_for(&caps["items"][0]["output_schema"])
+        .unwrap()
+        .validate(&result)
+        .unwrap();
+    assert_eq!(result["task"], Value::Null);
+    assert_eq!(result["bound"], true);
+    assert_eq!(
+        result["terminal_result"]["receipt"]["conclusion"],
+        "interrupted"
+    );
+    assert_eq!(
+        s.call(
+            "get_request",
+            json!({"contract_version":"v1","request_id":"inspect"}),
+            false
+        ),
+        result
+    );
+    assert_eq!(
+        s.call(
+            "get_task",
+            json!({"contract_version":"v1","task_id":check.task.task_id}),
+            false
+        )["status"],
+        "interrupted"
+    );
+    assert_eq!(
+        db.read_task(&original.task.task_id).unwrap().as_ref(),
+        Some(original.as_ref())
+    );
+    assert_eq!(s.call("inspect_verification_task",json!({"contract_version":"v1","request_id":"inspect","target_task_id":original.task.task_id}),true)["code"],"request_conflict");
+    assert_eq!(
+        s.call(
+            "inspect_verification_task",
+            json!({"contract_version":"v1","request_id":"missing","target_task_id":"absent"}),
+            true
+        )["code"],
+        "task_not_found"
+    );
+    drop(s);
+    let mut restarted = Session::new(db.path());
+    restarted.request("initialize", json!({}));
+    assert_eq!(
+        restarted.call("inspect_verification_task", input, false),
+        result
+    );
+    let count: i64 = rusqlite::Connection::open(db.path())
+        .unwrap()
+        .query_row("SELECT count(*) FROM tasks", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 2);
 }
