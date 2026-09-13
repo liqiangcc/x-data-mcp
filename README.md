@@ -155,3 +155,6 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 当前线上 preview.2 的升级尚待发布包检查、数据库备份和显式迁移完成；本段不表示已部署。
 包检查使用隔离 synthetic fixture，不向普通库导入数据。真实来源仍 blocked，
 NOT_PRODUCTION_READY；新版 ChatGPT 消费侧调用在实际验证前为 NOT_RUN。
+
+停止写入核实的应用受理契约正在 [#99](docs/tasks/issue-99.md) 开发：独立核实范围不会接管原任务占用。
+尚未注册公共工具，尚无停止证据或中断收尾实现；不能用该契约释放重启遗留任务。
