@@ -173,6 +173,7 @@ pub struct RetryGuard {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionUncertainty {
+    pub previous_status: Status,
     pub item_id: String,
     pub reason: String,
     pub previous_result: Option<Value>,
@@ -189,7 +190,10 @@ impl TaskSnapshot {
         };
         let marker: ExecutionUncertainty = serde_json::from_value(value.clone())
             .map_err(|e| Error::NeedsVerification(format!("invalid execution uncertainty: {e}")))?;
-        if self.task.status != Status::NeedsVerification
+        if !matches!(
+            marker.previous_status,
+            Status::Running | Status::CancelRequested
+        ) || self.task.status != Status::NeedsVerification
             || self.task.owner_run_id.is_none()
             || marker.reason.trim().is_empty()
             || !self
@@ -334,9 +338,10 @@ pub fn decide(
                     return Err(Error::RevisionConflict);
                 }
                 let previous = s.task.result.take();
+                let previous_status = s.task.status.clone();
                 s.task.status = Status::NeedsVerification;
                 s.task.result = Some(serde_json::json!({"execution_uncertainty":{
-                    "item_id":item_id,"reason":reason,"previous_result":previous
+                    "item_id":item_id,"reason":reason,"previous_result":previous,"previous_status":previous_status
                 }}));
             }
             Change::RequestCancel => {
