@@ -92,7 +92,7 @@ git diff --check
 `./scripts/verify` 尚未实现，不调用不存在的命令。
 测试覆盖核心、发布门禁及真实 stdio 二进制的离线拒绝行为；Fake 不证明真实 parser/QFQ/yearly。
 归档在线测试不进入 Cargo，真实官方来源验证为 NOT_RUN；全市场覆盖和性能为 NOT_VERIFIED。
-预览包本机离线部署检查已 PASS；用户报告 ChatGPT 当前会话能调用 13 工具，普通库没有已发布数据。
+预览包本机离线部署检查已 PASS；用户于2026-09-12报告 ChatGPT 当时会话能调用 13 工具，普通库没有已发布数据。
 这不证明真实采集/发布闭环完成，见[闭环门禁与实施顺序](docs/source-closure.md)。
 行情发布已改为[batch与version单点提交](docs/publish-storage.md)；[任务受理](docs/task-storage.md)也以单一快照提交绑定、执行状态和范围占用；当前仍要求单写者运行。
 
@@ -196,5 +196,14 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 旧非终态不自动续跑。socket 目录需本人所有且0700，库文件需0600；不自动修改权限、建库或升级。
 默认 worker 轮询100ms，只执行显式受理任务。读取及取消可使用其他会话，手动 worker 与后台串行，
 忙时返回 `worker_busy`，停止中返回 `worker_stopping`。工程预算与实际证据见 [#110](docs/tasks/issue-110.md)。
+IPC正常空闲不会结束会话；30秒读取预算从收到未完整帧的第一字节起计算，修复见 [#112](docs/tasks/issue-112.md)。
 此入口尚未部署到 tunnel；旧 `mcp_data` 等兼容开发入口不与服务同库混用。
 仍 NOT_PRODUCTION_READY，来源门禁不变。源码/fixture 不代表真实来源或新版 ChatGPT 调用通过。
+
+## 当前预览部署与空闲修复（#108/#112）
+
+服务器已部署 preview.5 / `3dda98aa2bc8115e158674ac1a50dfc020e1448a`，普通库schema9、独立worker及18工具。
+但实际上线检查发现空闲32秒后代理退出；健康接口成功不代表工具连接仍可用。
+本分支准备不可变修正版 `v0.2.0-preview.6`，保留空闲会话、只给未完整帧设置读取预算；
+真实打包回归在同一代理空闲超过30秒后再次调用工具。修正版尚未部署，准确结果见 [#112](https://github.com/liqiangcc/x-data-mcp/issues/112)。
+普通库仍为空，来源门禁未解除，新版ChatGPT消费侧NOT_RUN；完整目标与最终部署验收未完成。

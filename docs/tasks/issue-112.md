@@ -1,0 +1,30 @@
+## 真实复现与范围
+
+#110/PR #111 已合并，#108部署v0.2.0-preview.5（main 3dda98aa2bc8115e158674ac1a50dfc020e1448a）后的本机真实验收发现：mcp_connect 成功initialize后，调用方stdin保持打开，等待32秒，proxy_exit_code=0。记录 `/opt/x-data-mcp-preview/reports/preview5-idle-observation.json`；只做initialize，无业务写入。普通库schema9、数据为空，data_service仍运行。tunnel健康/控制面轮询正常不能替代MCP工具连接持续可用的证据。
+
+根因：serve的read_until把正常空闲的socket读超时当成连接结束。代理只是传输Adapter，应保持原stdio可在用户思考后继续调用的行为，不能依赖未确认的外部SDK自动重建MCP会话。依据 #1/#5 的持续MCP访问、#75固定设计2c706325aa2020382631355f802403c05b9662d8的入口/执行生命周期，以及#110长期服务目标。
+
+## 最小修复
+
+只修IPC帧读取：没有半帧时允许空闲，仍周期检查停止；从第一字节开始对未完整帧执行有界超时，保持4MiB帧、16会话、写超时及owner/peer检查。不加新工具/业务资格/来源/schema，不自动重连、重试或重新受理业务请求。
+沿用Rust数据服务/代理；现行30秒读预算修订为“未完整帧预算”，不作为空闲MCP会话寿命；记录这是运行兼容性修正。
+
+## AC
+
+AC-01：真实Socket+SQLite会话在短配置预算多倍空闲后仍可initialize/调用；真实打包data_service+mcp_connect在超过默认30秒空闲后仍能请求，stdin保持打开。
+AC-02：半帧超时、超大帧、EOF半帧/非法UTF8仍拒绝，不写任务/请求；碎片化合法帧只分发一次，不丢片段。
+AC-03：停止可打断空闲读取，有界停止/在途取消/旧非终态保护/同库锁/跨UID回归保持；客户端死亡不取消已受理任务。
+AC-04：Actions稳定fmt/clippy/test/build/diff-check、packaged smoke及跨UID全部通过，执行者自查和准确SHA/证据；发布新的不可变预览版本后，本机实际>30秒空闲调用与tunnel后端进程持续性验收。v0.2.0-preview.5及旧失败记录保留，不覆盖旧tag/assets。
+
+## 排除与状态
+
+不清理工作区/cache/历史、不改真实来源或QFQ算法、不采集/迁移真实行情、不改reading-mcp/其他会话。#54/#6/#46/#71/文件一致性仍NOT_VERIFIED，来源/#53四股/ChatGPT消费侧NOT_RUN，NOT_PRODUCTION_READY。用户完整开发/部署/测试目标继续；不是把剩余来源闭环和其他业务任务缩减掉。
+
+## 实施与首次结果
+
+worktree `/root/x-data-mcp-runtime-idle`，branch `runtime-idle-session`，base3dda98a，Draft PR #113。新增同一真实代理32秒空闲后调用get_data_capabilities的packaged回归；数据/schema/来源未改。
+13271ed 的CI/包通过；6065395 的package34753399410通过，CI34753399396在既有#106两连接同request成功重放测试遇到StorageUnavailable(database is locked)失败。失败发生在旧测试的250ms默认busy预算，不是IPC空闲或来源语义失败。仅给该“成功竞争后重放”fixture明确5s测试等待预算，所有结果/唯一审计/异参冲突断言原样；生产默认250ms和专门busy拒绝测试不变、不捕获跳过错误，也不让应用自动重试。完整结果待新Actions。
+
+## 修正版版本与门槛
+
+ca404ad：CI34753613473/rust103714164653、package34753613467/package103714164569全部SUCCESS，包含11项packaged检查与跨UID验证。发布使用新的v0.2.0-preview.6：仅更新Cargo项目版本/lock根条目，不升级依赖；README明确preview.5已部署但空闲验收失败，preview.6尚未部署。准确最终HEAD仍需完整Actions、自查和main包校验，再备份/切换既有两个service；schema仍9、单位/来源/行情/旧evidence均不修改。

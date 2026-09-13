@@ -1,6 +1,7 @@
 //! Linux owner-only IPC and process lifetime. Business decisions remain in DataApi.
 mod paths;
 pub use paths::{DatabaseLease, Endpoint, connect};
+mod frame;
 mod server;
 pub use server::{Config, serve};
 

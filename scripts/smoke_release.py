@@ -47,6 +47,11 @@ def runtime_smoke(binaries):
             tools = rpc("tools/list", {})["tools"]
             cap = call("get_data_capabilities", {})
             assert len(tools) == 18 and not cap["production_ready"]
+            # Keep the same actual proxy stdin open beyond the default 30s
+            # read budget. This caught the preview.5 deployment regression.
+            time.sleep(32)
+            assert client.poll() is None, "idle MCP proxy exited while stdin remained open"
+            assert call("get_data_capabilities", {})["production_ready"] is False
             assert {t["name"] for t in tools} == {c["tool_name"] for c in cap["items"]}
             args = dict(request_id="runtime-smoke", symbols=["sh.600000"], periods=["day"])
             accepted = call("start_collection", args)
@@ -195,6 +200,7 @@ def main():
                 raise RuntimeError("stdio process exited unsuccessfully")
     runtime_smoke(binaries)
     checks.append("persistent_service_proxy_discovery_and_reconnect")
+    checks.append("same_proxy_idle_over_30_seconds_then_calls_again")
     report = dict(status="PASS", version=version, binary_sha256=hashlib.sha256((binaries / "mcp_data").read_bytes()).hexdigest(), checks=checks, live_source="NOT_RUN", production="NOT_PRODUCTION_READY", data="SYNTHETIC_FIXTURE_ONLY")
     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(report, ensure_ascii=False))

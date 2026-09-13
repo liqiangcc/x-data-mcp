@@ -27,6 +27,7 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
     for required in [
         "initialize_discovery_18_tools",
         "persistent_service_proxy_discovery_and_reconnect",
+        "same_proxy_idle_over_30_seconds_then_calls_again",
         "publication_inspection_discovery_and_never_started_refusal_without_binding",
         "bounded_inspection_historical_request_without_recursive_task_or_rewrite",
     ] {
@@ -38,7 +39,7 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
                 .any(|v| v == required)
         );
     }
-    assert_eq!(value["checks"].as_array().unwrap().len(), 10);
+    assert_eq!(value["checks"].as_array().unwrap().len(), 11);
     assert!(
         value["checks"]
             .as_array()

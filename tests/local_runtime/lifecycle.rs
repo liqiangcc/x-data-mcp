@@ -321,3 +321,98 @@ fn session_panic_stops_service_instead_of_silently_continuing_the_run() {
             .contains("session panicked")
     );
 }
+
+#[test]
+fn idle_session_survives_multiple_read_budgets_and_stops_without_business_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(dir.path());
+    let socket = dir.path().join("socket");
+    let stop = Arc::new(AtomicBool::new(false));
+    let server = fixture_server(
+        &db,
+        &socket,
+        Arc::new(Blocking::default()),
+        stop.clone(),
+        Config {
+            io_timeout: Duration::from_millis(40),
+            ..Config::default()
+        },
+    );
+    let mut session = Session::new(&socket);
+    assert!(session.request("initialize", json!({}))["result"].is_object());
+    std::thread::sleep(Duration::from_millis(160));
+    assert_eq!(
+        session.call("get_data_capabilities", json!({}), false)["production_ready"],
+        false
+    );
+    // Keep the connection idle and open while service stop interrupts its read.
+    stop.store(true, Ordering::SeqCst);
+    assert!(server.join().unwrap().is_ok());
+    let mut line = String::new();
+    assert_eq!(session.reader.read_line(&mut line).unwrap(), 0);
+    let c = rusqlite::Connection::open(&db).unwrap();
+    assert_eq!(
+        c.query_row("select count(*) from requests", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+#[test]
+fn fragmented_frames_are_preserved_and_partial_timeout_eof_utf8_are_rejected() {
+    use std::io::Read;
+    use std::net::Shutdown;
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(dir.path());
+    let socket = dir.path().join("socket");
+    let stop = Arc::new(AtomicBool::new(false));
+    let server = fixture_server(
+        &db,
+        &socket,
+        Arc::new(Blocking::default()),
+        stop.clone(),
+        Config {
+            io_timeout: Duration::from_millis(120),
+            ..Config::default()
+        },
+    );
+    let mut valid = Session::new(&socket);
+    valid
+        .stream
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":7,")
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    valid
+        .stream
+        .write_all(b"\"method\":\"initialize\",\"params\":{}}\n")
+        .unwrap();
+    let mut line = String::new();
+    assert!(valid.reader.read_line(&mut line).unwrap() > 0);
+    assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["id"], 7);
+    // The next request has its own ID and gets exactly its own response: no
+    // duplicate distribution or fragments remaining from the prior request.
+    assert!(valid.request("initialize", json!({}))["result"].is_object());
+    drop(valid);
+    for scenario in ["deadline", "eof", "utf8"] {
+        let mut bad = Session::new(&socket);
+        if scenario == "utf8" {
+            bad.stream.write_all(&[0xff, b'\n']).unwrap();
+        } else {
+            bad.stream.write_all(b"{\"jsonrpc\":\"2.0\",").unwrap();
+            if scenario == "eof" {
+                bad.stream.shutdown(Shutdown::Write).unwrap();
+            } else {
+                std::thread::sleep(Duration::from_millis(180));
+            }
+        }
+        let mut byte = [0];
+        assert_eq!(bad.reader.read(&mut byte).unwrap(), 0, "{scenario}");
+    }
+    stop.store(true, Ordering::SeqCst);
+    assert!(server.join().unwrap().is_ok());
+    let c = rusqlite::Connection::open(&db).unwrap();
+    assert_eq!(
+        c.query_row("select count(*) from requests", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
