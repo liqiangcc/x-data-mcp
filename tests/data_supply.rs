@@ -462,6 +462,7 @@ fn range_controls_are_not_discovered_or_callable_without_owner_access() {
         "backfill_data",
         "verify_stopped_writes",
         "verify_publication_result",
+        "inspect_verification_task",
     ] {
         assert!(
             !api.tools()

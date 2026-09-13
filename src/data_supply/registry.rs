@@ -20,6 +20,7 @@ pub enum Handler {
     Worker,
     VerifyStopped,
     VerifyPublication,
+    InspectVerification,
     Range(crate::market_update::tasks::Operation),
 }
 pub struct Entry {
@@ -90,6 +91,12 @@ fn entry<I: JsonSchema, O: JsonSchema>(
 pub fn entries() -> Vec<Entry> {
     let query = json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"}});
     vec![
+        #[cfg(target_os = "linux")]
+        entry::<InspectVerification, RequestView>(
+            "inspect_verification_task",
+            Handler::InspectVerification,
+            json!({"contract_version":"v1","request_id":"bounded-inspection-request","target_task_id":"verification-task-id"}),
+        ),
         entry::<
             crate::publication_verification::wire::VerifyPublication,
             crate::task_verification::wire::VerificationReply,
@@ -167,3 +174,5 @@ pub fn entries() -> Vec<Entry> {
         ),
     ]
 }
+
+pub const INSPECTION_DESCRIPTION: &str = "Owner-only bounded management of an abnormal verification task, not a recursive asynchronous task. Each reliably persisted result, including insufficient evidence, consumes request_id; the same ID replays its historical result without re-inspecting. A new ID is needed for fresh evidence. Checks registered local execution exclusion and durable finish separately; may close only the verification task, never the original business task or its claims. Missing/unregistered runtime proof retains protection. No force/evidence flags, waiting, implicit retry or production source approval.";

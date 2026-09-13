@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 8;
-const MIGRATIONS: [&str; 8] = [
+pub const SCHEMA_VERSION: u32 = 9;
+const MIGRATIONS: [&str; 9] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
     include_str!("../migrations/tasks/003_market.sql"),
@@ -18,6 +18,7 @@ const MIGRATIONS: [&str; 8] = [
     include_str!("../migrations/tasks/006_yearly_results.sql"),
     include_str!("../migrations/tasks/007_stopped_checks.sql"),
     include_str!("../migrations/tasks/008_publication_checks.sql"),
+    include_str!("../migrations/tasks/009_verification_inspections.sql"),
 ];
 #[derive(Clone)]
 pub struct SqliteTasks {
@@ -411,6 +412,8 @@ pub(crate) fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRec
         terminal,
     }) = row
     else {
+        #[cfg(target_os = "linux")]
+        crate::sqlite_verification_inspection::validate_absent_request(c, id)?;
         return Ok(None);
     };
     if crate::hash::sha256(raw.as_bytes()) != digest {
@@ -418,9 +421,11 @@ pub(crate) fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRec
     }
     let command: Command = decode(raw)?;
     let outcome = match (kind.as_str(), task_id, terminal) {
-        ("task", Some(id), None) => {
-            let s =
-                read_task(c, &id)?.ok_or_else(|| inconsistent("bound execution record missing"))?;
+        ("task", Some(bound_task_id), None) => {
+            #[cfg(target_os = "linux")]
+            crate::sqlite_verification_inspection::validate_task_request(c, id, &command)?;
+            let s = read_task(c, &bound_task_id)?
+                .ok_or_else(|| inconsistent("bound execution record missing"))?;
             let expected = if s.task.retry_of.is_some() {
                 CommandKey {
                     operation: "retry_task".into(),
@@ -437,6 +442,8 @@ pub(crate) fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRec
         ("terminal", None, Some(v)) => {
             let value = decode(v)?;
             crate::sqlite_verification::validate_terminal(c, &command, &value)?;
+            #[cfg(target_os = "linux")]
+            crate::sqlite_verification_inspection::validate_terminal(c, id, &command, &value)?;
             crate::sqlite_market::publication_checks::validate_terminal(c, &command, &value)?;
             RequestOutcome::Terminal(value)
         }

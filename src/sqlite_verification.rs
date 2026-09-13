@@ -27,6 +27,10 @@ fn read_audit(c: &Connection, id: &str) -> Result<Option<Audit>, Error> {
     Ok(Some(audit))
 }
 pub(crate) fn validate_task_link(c: &Connection, s: &TaskSnapshot) -> Result<(), Error> {
+    #[cfg(target_os = "linux")]
+    if crate::sqlite_verification_inspection::validate_task_link(c, s)? {
+        return Ok(());
+    }
     let Some(result) = &s.task.result else {
         return Ok(());
     };

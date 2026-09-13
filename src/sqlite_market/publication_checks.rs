@@ -43,7 +43,10 @@ pub(crate) fn validate_task_link(
     }
     Ok(())
 }
-fn read_receipt(c: &Connection, id: &str) -> Result<Option<(Audit, CheckReceipt)>, Error> {
+pub(crate) fn read_receipt(
+    c: &Connection,
+    id: &str,
+) -> Result<Option<(Audit, CheckReceipt)>, Error> {
     let Some(audit) = read_audit(c, id)? else {
         crate::sqlite_tasks::read_bound_task(c, id)?;
         return Ok(None);
