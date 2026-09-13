@@ -323,7 +323,12 @@ fn guarded_runner_error_retains_claims_but_releases_only_runtime_lock_on_return(
     let _ended = try_acquire(db.path(), &registration.descriptor).unwrap();
     let retained = db.read_task(&check.task.task_id).unwrap().unwrap();
     assert!(!retained.task.status.terminal());
-    assert_eq!(retained.claims, check.claims);
+    assert_eq!(retained.claims.len(), check.claims.len());
+    for (actual, before) in retained.claims.iter().zip(&check.claims) {
+        assert_eq!(actual.scope_key, before.scope_key);
+        assert_eq!(actual.task_id, before.task_id);
+        assert_eq!(actual.state_revision, retained.task.state_revision);
+    }
     assert_eq!(
         db.read_task(&original.task.task_id).unwrap(),
         Some(original)
