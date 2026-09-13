@@ -717,3 +717,113 @@ fn application_rechecks_a_changed_sqlite_snapshot_once_without_reusing_old_plan(
         );
     }
 }
+
+#[test]
+fn inspection_v8_requires_explicit_upgrade_and_preserves_existing_task_binding() {
+    let (_dir, db, original, check) = fixture();
+    let c = Connection::open(db.path()).unwrap();
+    c.execute_batch("DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DELETE FROM schema_migrations WHERE version=9; PRAGMA user_version=8;").unwrap();
+    assert!(matches!(
+        inspect(&db, "inspect", &check.task.task_id, "manager", "owner"),
+        Err(Error::StorageUnavailable(_))
+    ));
+    let version: u32 = c
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 8);
+    db.upgrade().unwrap();
+    assert_eq!(
+        db.read_task(&original.task.task_id).unwrap(),
+        Some(original)
+    );
+    assert_eq!(
+        db.read_task(&check.task.task_id).unwrap(),
+        Some(check.clone())
+    );
+    assert!(db.read_request("inspect").unwrap().is_none());
+    assert_eq!(count(&db, "verification_inspections"), 0);
+    inspect(&db, "inspect", &check.task.task_id, "manager", "owner").unwrap();
+    db.upgrade().unwrap();
+    assert_eq!(count(&db, "verification_inspections"), 1);
+}
+#[test]
+fn inspection_two_connections_different_parameters_cannot_share_one_global_request() {
+    use std::sync::{Arc, Barrier};
+    let (_dir, db, original, check) = fixture();
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = [original.task.task_id, check.task.task_id]
+        .into_iter()
+        .map(|target| {
+            let db = db.clone();
+            let b = barrier.clone();
+            std::thread::spawn(move || {
+                b.wait();
+                inspect(&db, "same", &target, "manager", "owner")
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| matches!(r, Err(Error::RequestConflict)))
+            .count(),
+        1
+    );
+    assert_eq!(count(&db, "verification_inspections"), 1);
+    assert_eq!(count(&db, "tasks"), 2);
+}
+#[test]
+fn inspection_facts_use_one_snapshot_when_claim_and_registration_commit_concurrently() {
+    let (_dir, db, _original, check) = fixture();
+    let guard =
+        crate::verification_runtime::create(db.path(), &check.task.task_id, "check-run").unwrap();
+    let claim = crate::verification_execution::prepare_claim(
+        check.clone(),
+        guard.descriptor().clone(),
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    let facts = db
+        .read(|c| {
+            assert_eq!(
+                read_bound_task(c, &check.task.task_id)?,
+                Some(check.clone())
+            );
+            db.claim_with_runtime_guard(&claim, &guard)?;
+            read_facts(c, &check.task.task_id)
+        })
+        .unwrap();
+    assert_eq!(facts.target, check);
+    assert!(facts.registration.is_none());
+    let plan = prepare(
+        "stale",
+        crate::verification_inspection::command(&check.task.task_id).unwrap(),
+        facts,
+        Observation::NotNeeded,
+        "manager",
+        "owner",
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    assert!(matches!(
+        db.commit_inspection(
+            &plan,
+            &Probe {
+                observation: Observation::NotNeeded,
+                guard: None
+            }
+        ),
+        Err(Error::RevisionConflict)
+    ));
+    assert!(db.read_request("stale").unwrap().is_none());
+    let result = inspect(&db, "fresh", &check.task.task_id, "manager", "owner").unwrap();
+    assert_eq!(
+        receipt(&result).conclusion,
+        Conclusion::InsufficientEvidence
+    );
+}
