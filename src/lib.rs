@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod collector;
 pub mod dbf;
 pub mod execution;
+pub mod gbbq;
 pub mod market_data;
 pub mod mcp;
 pub mod official_files;
