@@ -214,3 +214,5 @@ preview.5空闲退出、preview.6首次检查发现profile仍指向旧入口的�
 本节更新此前各版本准备段落中的历史线上状态；旧段落不是当前版本声明。
 普通库仍为空，来源门禁未解除，ChatGPT本次消费侧NOT_RUN。
 NOT_PRODUCTION_READY：本机部署检查通过不代表真实数据闭环或完整目标已完成。
+
+2026-09-13 已将主线 `2b92fa71884283bc8176511b7b8b7d886b7fc2a2` 发布为 [v0.2.0-preview.7](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.7) 并切换预览服务；运行时和隧道验收通过，普通库仍为空，真实来源与 ChatGPT 消费侧均 `NOT_RUN`。详见[preview.7 部署结果](docs/tasks/preview7-results.md)。这不解除 #54/#6/#46/#71 或文件一致性门禁，系统继续 `NOT_PRODUCTION_READY`。
