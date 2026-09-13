@@ -157,11 +157,11 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 NOT_PRODUCTION_READY；新版 ChatGPT 消费侧调用在实际验证前为 NOT_RUN。
 
 停止写入核实正在 [#99](docs/tasks/issue-99.md) 开发：独立受理、条件原子中断收尾和审计已实现，
-通过路径仅由可信 fixture 验证。公共入口现已接线，但未安装真实停止证据协议；默认核实器只报告证据不足，不会释放重启遗留任务。
+公共入口现已接线；开发分支新增从未领取任务的真实 SQLite 证明：revision=0、无 owner/执行结果及发布关联，收尾事务排除旧执行器后来领取。已开始或未知执行仍证据不足，不释放占用。
 
-#99 开发分支的显式 schema v7 增加核实审计与 interrupted 状态；原/核实任务条件收尾已接入真实 SQLite 测试。默认停止证据仍未实现，不提供强制解锁。线上 preview.3/schema v6 不因开发分支变更而迁移。
+#99 开发分支的显式 schema v7 增加核实审计与 interrupted 状态；原/核实任务条件收尾已接入真实 SQLite 测试。已开始写入的停止证据仍未实现，不提供强制解锁。线上 preview.3/schema v6 不因开发分支变更而迁移。
 
 #99 开发入口新增 verify_stopped_writes（共 16 工具）：显式核实任务、只读 inspector 和条件收尾。
-默认只报告 STOP_EVIDENCE_NOT_VERIFIED；get_task_progress 的 stopped_write_check 表示检查结论，
+默认仅能核实受支持契约的从未开始任务；其他任务报告 STOP_EVIDENCE_NOT_VERIFIED。能力总体仍 blocked，详情见工具描述。get_task_progress 的 stopped_write_check 表示检查结论，
 检查 succeeded 不代表原任务已停止。公共参数不能提供“已停止”声明或强制解锁开关。
 当前线上仍 preview.3 的 15 工具，此开发分支尚未重新部署。
