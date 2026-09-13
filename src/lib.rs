@@ -49,6 +49,10 @@ pub mod sqlite_verification;
 pub mod verification_runtime;
 
 #[cfg(target_os = "linux")]
+pub mod sqlite_verification_inspection;
+#[cfg(target_os = "linux")]
 pub mod sqlite_verification_runtime;
 #[cfg(target_os = "linux")]
 pub mod verification_execution;
+#[cfg(target_os = "linux")]
+pub mod verification_inspection;

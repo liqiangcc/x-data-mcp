@@ -412,6 +412,8 @@ pub(crate) fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRec
         terminal,
     }) = row
     else {
+        #[cfg(target_os = "linux")]
+        crate::sqlite_verification_inspection::validate_absent_request(c, id)?;
         return Ok(None);
     };
     if crate::hash::sha256(raw.as_bytes()) != digest {
@@ -438,6 +440,8 @@ pub(crate) fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRec
         ("terminal", None, Some(v)) => {
             let value = decode(v)?;
             crate::sqlite_verification::validate_terminal(c, &command, &value)?;
+            #[cfg(target_os = "linux")]
+            crate::sqlite_verification_inspection::validate_terminal(c, id, &command, &value)?;
             crate::sqlite_market::publication_checks::validate_terminal(c, &command, &value)?;
             RequestOutcome::Terminal(value)
         }
