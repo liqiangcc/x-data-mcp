@@ -19,6 +19,7 @@ use x_data_mcp::{
     },
 };
 fn database(dir: &Path) -> PathBuf {
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
     let path = dir.join("db.sqlite");
     SqliteTasks::new(&path).initialize().unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
