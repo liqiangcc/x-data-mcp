@@ -404,7 +404,7 @@ fn range_candidates_compete_on_the_same_real_task_and_head() {
 fn range_schema_v4_requires_explicit_upgrade_and_preserves_published_records() {
     let f = fixture(false);
     let original = f.db.fixed("legacy-daily").unwrap().raw().clone();
-    f.sql("DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
+    f.sql("DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
     assert!(f.db.fixed("legacy-daily").is_err());
     assert!(f.db.range_receipt("absent").is_err());
     let version: u32 = Connection::open(f.db.tasks.path())
@@ -1578,7 +1578,7 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
     let before = f.db.publication_facts(&f.command.task_id).unwrap();
     // Remove only the new v8 migration from this isolated fixture. The retained
     // v1-v7 DDL and checksums are exactly those used by the deployed schema7.
-    f.sql("DROP TABLE publication_checks; DELETE FROM schema_migrations WHERE version=8; PRAGMA user_version=7;");
+    f.sql("DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DELETE FROM schema_migrations WHERE version>=8; PRAGMA user_version=7;");
     assert!(f.db.publication_facts(&f.command.task_id).is_err());
     let c = Connection::open(f.db.tasks.path()).unwrap();
     assert_eq!(
