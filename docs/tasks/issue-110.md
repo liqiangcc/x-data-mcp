@@ -36,3 +36,9 @@ worker 轮询支持 CLI `--poll-ms 10..60000`（默认100），用于显式运�
 现有兼容 stdio 入口保留，不与 service 同库运行；本机 owner 对库的直接修改不属于 IPC 授权协议。
 
 首轮提交本地 fmt/diff 检查，完整 compile/test/clippy 与真实进程测试尚待 Actions。首次测试包括真实 service/proxy 客户端死亡后 source-refusal 任务完成、新启动身份保护旧非终态、同库实例冲突、坏库/未知schema/不建库、私有路径及执行 gate；fixture 阻塞执行、取消/停止预算测试继续补齐，不把未跑场景写 PASS。
+
+## 首轮 Actions 发现与修正
+
+c9d5095：Actions 34750700088 / rust103706627884，fmt/clippy 已通过，测试失败。真实服务 fixture 使用 tempfile 默认目录权限，未显式0700，被正确拒绝；7ac1abb 只修 fixture 目录准备，不放宽 owner-only 规则。
+补齐真实 SQLite 在途 fixture：断连后仍 Running；另一个会话可读/申请取消，手动 worker 忙拒绝；停止新领取后仅在途项结束，排队任务继续保留。独立测试子进程实际以79退出证明 stop budget 不捏造终态；重启仍待核实。测试-only 阻塞执行器不进入生产 binary/配置。
+代理自查发现服务 EOF 时不应等待调用方仍打开的 stdin，改为主线程负责响应方向，加入真实 proxy 退出回归。输入超限/会话上限关闭仅该连接；source仍NOT_RUN。

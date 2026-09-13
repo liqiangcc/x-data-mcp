@@ -273,7 +273,9 @@ fn real_service_restart_does_not_resume_old_nonterminal_tasks() {
             .unwrap(),
     );
     drop(session);
-    service.stop();
+    service.child.kill().unwrap();
+    assert!(!service.child.wait().unwrap().success());
+    assert!(socket.exists()); // Our stale socket remains after actual SIGKILL.
     let mut restarted = Service::start(&db, &socket, 10);
     let mut session = Session::new(&socket);
     let new = session.call(
@@ -393,4 +395,44 @@ fn shared_execution_gate_keeps_invalid_wire_validation_and_read_access() {
         api.call("run_worker_once", json!({})).unwrap_err().code,
         "worker_stopping"
     );
+}
+
+#[path = "local_runtime/lifecycle.rs"]
+mod lifecycle;
+
+#[test]
+fn real_proxy_exits_on_service_eof_even_when_client_stdin_stays_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(dir.path());
+    let socket = dir.path().join("socket");
+    let mut service = Service::start(&db, &socket, 100);
+    let mut proxy = Command::new(env!("CARGO_BIN_EXE_mcp_connect"))
+        .arg(&socket)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        proxy.stdin.as_mut().unwrap(),
+        "{}",
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})
+    )
+    .unwrap();
+    let mut reader = BufReader::new(proxy.stdout.take().unwrap());
+    let mut line = String::new();
+    assert!(reader.read_line(&mut line).unwrap() > 0);
+    service.stop();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = proxy.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "proxy waited for still-open client stdin after service EOF"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(proxy.stdin.is_some());
 }
