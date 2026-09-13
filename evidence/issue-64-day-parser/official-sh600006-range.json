@@ -1,0 +1,39 @@
+{
+  "schema": "x-data-mcp.bounded-official-day-member.v1",
+  "retrieved_utc": "2026-09-13",
+  "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+  "retrieval": {
+    "method": "HTTP Range; no full archive download",
+    "archive_size": 549205235,
+    "archive_last_modified": "Fri, 11 Sep 2026 07:58:57 GMT",
+    "archive_sha256": "611ea3ccc1e64717aebc9a14ce9c8b1ed06526b5fd69bd14275fc376f4f44272",
+    "tail_range": "bytes=544205235-549205234",
+    "central_directory_range": "bytes=548386417-549205212",
+    "member_range": "bounded compressed range for sh\\lday\\sh600006.day"
+  },
+  "member": {
+    "path": "sh/lday/sh600006.day",
+    "compression": 8,
+    "compressed_bytes": 112488,
+    "bytes": 206912,
+    "crc32": "c9a42878",
+    "sha256": "91cb06b2ba0cca331f41f759e3aa0647e6eb5bd62c450cd0fca2e6b397362f7d",
+    "record_width": 32,
+    "record_count": 6466,
+    "first_date": "1999-07-27",
+    "last_date": "2026-09-11"
+  },
+  "rust_inspect_day": {
+    "binary": "v0.2.0-preview.9",
+    "schema": "x-data-mcp.day-structural-inspection.v1",
+    "sha256": "91cb06b2ba0cca331f41f759e3aa0647e6eb5bd62c450cd0fca2e6b397362f7d",
+    "record_count": 6466,
+    "first_date": "1999-07-27",
+    "last_date": "2026-09-11",
+    "business_semantics": "NOT_VERIFIED",
+    "production_ready": false
+  },
+  "qfq": "NOT_RUN",
+  "live_source": "BOUNDED_MEMBER_ONLY",
+  "production": "NOT_PRODUCTION_READY"
+}
