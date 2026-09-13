@@ -1459,19 +1459,21 @@ fn never_started_two_connections_allow_only_claim_or_interruption() {
 #[test]
 fn never_started_rejects_durable_associations_even_with_pristine_task_fields() {
     use x_data_mcp::task_verification::{decision::StopInspector, never_started::NeverStarted};
-    let (_d, r) = db();
-    let original = original_task(&r, "unexpected-effects");
-    let c = rusqlite::Connection::open(r.path()).unwrap();
-    // Deliberately damaged fixture only. The production adapter never disables
-    // foreign keys for reads or evidence inspection.
-    c.pragma_update(None, "foreign_keys", false).unwrap();
-    c.execute(
+    for sql in [
         "INSERT INTO task_publications VALUES(?1,'missing-version','missing-batch')",
-        [&original.task.task_id],
-    )
-    .unwrap();
-    assert!(matches!(
-        NeverStarted { repository: r }.inspect(&original),
-        Err(Error::NeedsVerification(_))
-    ));
+        "INSERT INTO publication_batches VALUES('batch','missing-version',?1,'missing-item','{}','{}')",
+        "INSERT INTO market_update_results VALUES('result',?1,'missing-item','missing-base','missing-result',1,'{}','digest','{}')",
+        "INSERT INTO yearly_execution_results VALUES('result',?1,'missing-item','missing-base','missing-result',1,'{}','digest','{}')",
+    ] {
+        let (_d, r) = db();
+        let original = original_task(&r, "unexpected-effects");
+        let c = rusqlite::Connection::open(r.path()).unwrap();
+        // Deliberately damaged fixture only. Production reads never disable FKs.
+        c.pragma_update(None, "foreign_keys", false).unwrap();
+        c.execute(sql, [&original.task.task_id]).unwrap();
+        assert!(matches!(
+            NeverStarted { repository: r }.inspect(&original),
+            Err(Error::NeedsVerification(_))
+        ));
+    }
 }
