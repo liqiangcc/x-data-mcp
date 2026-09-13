@@ -32,8 +32,8 @@ fn preserves_header_fields_deletion_and_raw_field_bytes() {
     assert_eq!(parsed.record_count, 2);
     assert_eq!(parsed.code_page, 0x7a);
     assert_eq!(parsed.fields[0].name, "GPDM");
-    assert_eq!(parsed.records[0].deleted, false);
-    assert_eq!(parsed.records[1].deleted, true);
+    assert!(!parsed.records[0].deleted);
+    assert!(parsed.records[1].deleted);
     assert_eq!(
         parsed.records[0].field_bytes(&parsed.fields, 0),
         Some(b"000001".as_slice())
