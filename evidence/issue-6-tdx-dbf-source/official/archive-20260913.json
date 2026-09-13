@@ -1,0 +1,3829 @@
+{
+  "schema": "x-data-mcp.official-base-archive-evidence.v1",
+  "source_url": "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+  "retrieved_utc_start": "2026-09-13T15:06:57.342143Z",
+  "retrieved_utc_end": "2026-09-13T15:07:59.594173Z",
+  "http_status": 200,
+  "content_length_header": 16099192,
+  "actual_bytes": 16099192,
+  "last_modified": "Fri, 11 Sep 2026 13:40:20 GMT",
+  "etag": "\"6aa404c4-f5a778\"",
+  "accept_ranges": "bytes",
+  "archive_sha256": "39de51e26c0ee8fb3fd970ee870f4cb955b8fbbd7f84d752157f3998e49b71d9",
+  "member_count": 542,
+  "members": [
+    {
+      "name": "infoharbor_1_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_1_mdp.dat",
+      "compressed_bytes": 15833,
+      "bytes": 17379,
+      "crc32": "4b24f8fe",
+      "sha256": "be583dbc6cb0af8fa48af6a006adc9aa0eff3158c076181efbbd979784d6a100"
+    },
+    {
+      "name": "infoharbor_1_xgd.dat",
+      "compressed_bytes": 135242,
+      "bytes": 633324,
+      "crc32": "49da6851",
+      "sha256": "7e6d5f1b5b6e22f1fd3e6d7890f4a17d7a2fa74b6c5cf09a28ab5d4f6885820e"
+    },
+    {
+      "name": "infoharbor_2_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_2_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_2_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_2_mdp.dat",
+      "compressed_bytes": 15746,
+      "bytes": 17291,
+      "crc32": "584edab7",
+      "sha256": "c27cf780ab8d9989b6695ea94e175a5ba5af28a052b79373a41a405637c71e7d"
+    },
+    {
+      "name": "infoharbor_2_xgd.dat",
+      "compressed_bytes": 137742,
+      "bytes": 632859,
+      "crc32": "3294d5da",
+      "sha256": "eabc8329c0d90b2a94ce7ef5e728eff4717e3db78a1705c3d069256199461a31"
+    },
+    {
+      "name": "infoharbor_3_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_3_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_3_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_3_mdp.dat",
+      "compressed_bytes": 15746,
+      "bytes": 17291,
+      "crc32": "e028f1af",
+      "sha256": "d6fe4768edf6641f99e509c3285a2d3e8af6080f352b221424b0a6cfcc6185ca"
+    },
+    {
+      "name": "infoharbor_3_xgd.dat",
+      "compressed_bytes": 137740,
+      "bytes": 632859,
+      "crc32": "ea714af7",
+      "sha256": "78b048e691588ccd8d3ebdc78e46a8abc7b47f1130c80cc2a52ff25c7a222f6d"
+    },
+    {
+      "name": "infoharbor_4_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_4_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_4_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_4_mdp.dat",
+      "compressed_bytes": 15908,
+      "bytes": 17400,
+      "crc32": "9ee272d8",
+      "sha256": "5900c7ba7c48c5d2d19fd1e7b15075949e5c13cf840468eea55c419c396d065b"
+    },
+    {
+      "name": "infoharbor_4_xgd.dat",
+      "compressed_bytes": 137739,
+      "bytes": 632859,
+      "crc32": "e2b0ddb0",
+      "sha256": "33c79ae37db8836e27ec08ee92ae7750935485f4d4b6ac3989d44046f52b3408"
+    },
+    {
+      "name": "infoharbor_7_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_7_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_7_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_7_mdp.dat",
+      "compressed_bytes": 14985,
+      "bytes": 16393,
+      "crc32": "07c91d69",
+      "sha256": "8092fb1798e9664bf0557af7d078aaeec5bd0eaea16b4ab70ee22059636b07c3"
+    },
+    {
+      "name": "infoharbor_7_xgd.dat",
+      "compressed_bytes": 136716,
+      "bytes": 629557,
+      "crc32": "e0c4d81a",
+      "sha256": "417bd6fe7298530d0faf98cf5604d3b37fe3c4540700bae2a0b39c4127cd4478"
+    },
+    {
+      "name": "infoharbor_12_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_12_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_12_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_12_mdp.dat",
+      "compressed_bytes": 6548,
+      "bytes": 6842,
+      "crc32": "2e6768c8",
+      "sha256": "5bcb9c64dcb7e4cd5177859b82bd018015e6f768b7fa2fce6fc57c16ca570197"
+    },
+    {
+      "name": "infoharbor_12_xgd.dat",
+      "compressed_bytes": 39610,
+      "bytes": 162973,
+      "crc32": "d8dc5344",
+      "sha256": "cc4e11a00fce91cb8e5ca9e841c4f824ba48588be7e433e62222dadb3f7da116"
+    },
+    {
+      "name": "infoharbor_13_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_13_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_13_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_13_mdp.dat",
+      "compressed_bytes": 3394,
+      "bytes": 3485,
+      "crc32": "4153ed6f",
+      "sha256": "25eea72e95e5f201b100eaff526894bbde592004fa5394da84351456c805c458"
+    },
+    {
+      "name": "infoharbor_13_xgd.dat",
+      "compressed_bytes": 5362,
+      "bytes": 10237,
+      "crc32": "ff049a6a",
+      "sha256": "0341bfcd91871faa02514a9fbc0edc9e1bf4f9e4787dbc37d85ba0b563c7dcde"
+    },
+    {
+      "name": "infoharbor_14_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_14_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_14_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_14_mdp.dat",
+      "compressed_bytes": 21356,
+      "bytes": 23448,
+      "crc32": "dc07b04e",
+      "sha256": "c37f38bdcceebdb7817d2191b51920e32754fc4053c405d2ce41c2ae5de92326"
+    },
+    {
+      "name": "infoharbor_14_xgd.dat",
+      "compressed_bytes": 146940,
+      "bytes": 651969,
+      "crc32": "08b11a36",
+      "sha256": "31f5d705af694ea0b3d4e7fbdb605e7835a163d09c225337fb445cfd5382e779"
+    },
+    {
+      "name": "infoharbor_15_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_15_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_15_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_15_mdp.dat",
+      "compressed_bytes": 21357,
+      "bytes": 23448,
+      "crc32": "87a15e31",
+      "sha256": "98835d0e3dbf6001ea0f7f171480ca6af69f5100d8db7b2bf890822fa79da1dd"
+    },
+    {
+      "name": "infoharbor_15_xgd.dat",
+      "compressed_bytes": 146969,
+      "bytes": 651969,
+      "crc32": "527b8838",
+      "sha256": "8de300a80ca9e93d36460009f45e22744410f7f63d67dd48135a9281510ada5b"
+    },
+    {
+      "name": "infoharbor_16_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_16_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_16_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_16_mdp.dat",
+      "compressed_bytes": 15936,
+      "bytes": 17318,
+      "crc32": "87654449",
+      "sha256": "f4e449de1350c98f924f463a8c5414ed8e4979b96fe1504c820a3bef1db0b6a2"
+    },
+    {
+      "name": "infoharbor_16_xgd.dat",
+      "compressed_bytes": 133123,
+      "bytes": 608853,
+      "crc32": "0e6f8f7f",
+      "sha256": "ce1f8de6f221082e0b9a705db8f2badb33a391f233207061f01c2a35f69959ee"
+    },
+    {
+      "name": "infoharbor_17_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_17_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_17_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_17_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "df311b67",
+      "sha256": "be931db624472fb6d1c0c9c4b8c3f59764ec16c691116b0363b6e6d4fdb08631"
+    },
+    {
+      "name": "infoharbor_17_xgd.dat",
+      "compressed_bytes": 137745,
+      "bytes": 632859,
+      "crc32": "9e6dbcfb",
+      "sha256": "2dfff1e04d0176807a5478312331030dbc68f2495b8d883e9475300b4d122c22"
+    },
+    {
+      "name": "infoharbor_18_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_18_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_18_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_18_mdp.dat",
+      "compressed_bytes": 15912,
+      "bytes": 17375,
+      "crc32": "a456dc5a",
+      "sha256": "8bf10c4976dee1f1fa05d0c03594d37329c851c5d1b8580082af059c103157fa"
+    },
+    {
+      "name": "infoharbor_18_xgd.dat",
+      "compressed_bytes": 137735,
+      "bytes": 632859,
+      "crc32": "04f7f710",
+      "sha256": "ad04e9e0859c912c81cffc82e271a3af554546829908e58e83339a4b9897c9bf"
+    },
+    {
+      "name": "infoharbor_19_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_19_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_19_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_19_mdp.dat",
+      "compressed_bytes": 9327,
+      "bytes": 9877,
+      "crc32": "302d41ac",
+      "sha256": "a4374c8af34901680763329235acae1132cec0b7c0dd8fbb3e1aaafde9f3d9ff"
+    },
+    {
+      "name": "infoharbor_19_xgd.dat",
+      "compressed_bytes": 63981,
+      "bytes": 299911,
+      "crc32": "335989e5",
+      "sha256": "d0bcdeb27a8eceec609dd1dacdac38038a825612c59e07c0a04f41056c408caf"
+    },
+    {
+      "name": "infoharbor_20_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_20_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_20_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_20_mdp.dat",
+      "compressed_bytes": 21324,
+      "bytes": 23358,
+      "crc32": "7e557b81",
+      "sha256": "2177d9afd65e145f3ab92e3b18525616c70fd30213fd45f17e3304a74ba883c7"
+    },
+    {
+      "name": "infoharbor_20_xgd.dat",
+      "compressed_bytes": 149071,
+      "bytes": 648096,
+      "crc32": "8571ada5",
+      "sha256": "753791306564ac3a4cfcc6ce0d3a7e72bef376a5ac16477b15c74ef6ded25593"
+    },
+    {
+      "name": "infoharbor_21_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_21_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_21_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_21_mdp.dat",
+      "compressed_bytes": 13773,
+      "bytes": 15022,
+      "crc32": "07aca29d",
+      "sha256": "a9166653a5f7cbbccaa5910bd1ea01be29d65190399708db1443872c142392d7"
+    },
+    {
+      "name": "infoharbor_21_xgd.dat",
+      "compressed_bytes": 113210,
+      "bytes": 502408,
+      "crc32": "f9ccfa3b",
+      "sha256": "95525624f754e34ae05024b471b372f7623ca55cd6eab689868aac8bc2c784e9"
+    },
+    {
+      "name": "infoharbor_22_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_22_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_22_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_22_mdp.dat",
+      "compressed_bytes": 21327,
+      "bytes": 23364,
+      "crc32": "ebed41db",
+      "sha256": "58353e1efd661a7241bdcf5b8f70c6625e1b3549be6a3bf4c0ac78f461481add"
+    },
+    {
+      "name": "infoharbor_22_xgd.dat",
+      "compressed_bytes": 146950,
+      "bytes": 651969,
+      "crc32": "1b4fc6e1",
+      "sha256": "d211960dc38fcc71d25b9645dc1a8a01494519cddab5cf5b21480ee1ca543806"
+    },
+    {
+      "name": "infoharbor_23_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_23_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_23_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_23_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "b49431c0",
+      "sha256": "128545dc883398bb65422878e2c80184174b06d0de52a6daf43205cebb240cc0"
+    },
+    {
+      "name": "infoharbor_23_xgd.dat",
+      "compressed_bytes": 137741,
+      "bytes": 632859,
+      "crc32": "619bd02d",
+      "sha256": "a7658d5e77cf68e993cada34b9f720e27ee1ce3098405a14ebec0752fe94321b"
+    },
+    {
+      "name": "infoharbor_24_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_24_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_24_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_24_mdp.dat",
+      "compressed_bytes": 16211,
+      "bytes": 17732,
+      "crc32": "e9f5f459",
+      "sha256": "5e7abdd37c8b9b7cdcd0ed7a74f38afe8ba7b2f71c2d1110fe82561da0f63dbf"
+    },
+    {
+      "name": "infoharbor_24_xgd.dat",
+      "compressed_bytes": 137750,
+      "bytes": 632859,
+      "crc32": "16ecb689",
+      "sha256": "541e7586ef5b07cf6add54df415a99db7448886add4561f686ff23d4bc471040"
+    },
+    {
+      "name": "infoharbor_25_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_25_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_25_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_25_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "73184900",
+      "sha256": "dbb56fbf7229ba96efd048d70b55269e35edc6f6f542c33afaffa95c8c33e668"
+    },
+    {
+      "name": "infoharbor_25_xgd.dat",
+      "compressed_bytes": 137742,
+      "bytes": 632859,
+      "crc32": "721b2aec",
+      "sha256": "1ef9ea0dc36aa83379098fe5796aadd48afa7fd44cc4b7ddfaf833ddea026858"
+    },
+    {
+      "name": "infoharbor_26_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_26_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_26_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_26_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "d220f170",
+      "sha256": "2d5a8a5ec06daa6e2df3f0e0ff737926c1edaffdd31e45f19e6d088791dc7c74"
+    },
+    {
+      "name": "infoharbor_26_xgd.dat",
+      "compressed_bytes": 137741,
+      "bytes": 632859,
+      "crc32": "5c09a45b",
+      "sha256": "0da48a95b808314b8194505db95ccdb74876d600a0b6becc95604032952f873d"
+    },
+    {
+      "name": "infoharbor_27_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_27_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_27_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_27_mdp.dat",
+      "compressed_bytes": 22817,
+      "bytes": 24888,
+      "crc32": "a61298e1",
+      "sha256": "4103604a7cac51ef6d1cc253766ccfb63ef3c3025f184c981606e7ead28e9f79"
+    },
+    {
+      "name": "infoharbor_27_xgd.dat",
+      "compressed_bytes": 130294,
+      "bytes": 733986,
+      "crc32": "4137eeca",
+      "sha256": "b5f3efe278e994fda26e55ed0b4a880e7711d685f5180e72d8693c961de0dc05"
+    },
+    {
+      "name": "infoharbor_28_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_28_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_28_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_28_mdp.dat",
+      "compressed_bytes": 15340,
+      "bytes": 16756,
+      "crc32": "3aa9705f",
+      "sha256": "e17bd844b2fa0544ccc6a3d5cd842bcccfb67f6334065bc5085130f5600a2d05"
+    },
+    {
+      "name": "infoharbor_28_xgd.dat",
+      "compressed_bytes": 129224,
+      "bytes": 589526,
+      "crc32": "8c043127",
+      "sha256": "8286a9d4a8e5f7d63e5825ef8afb619fad2cd812caefff1082246292fe0438a2"
+    },
+    {
+      "name": "infoharbor_29_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_29_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_29_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_29_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "b335300f",
+      "sha256": "1b248f21602cfea1014ef9129f49f2ceccdafa38e04acf3a8f0c3c4918bfc20c"
+    },
+    {
+      "name": "infoharbor_29_xgd.dat",
+      "compressed_bytes": 137749,
+      "bytes": 632859,
+      "crc32": "92ff2b5f",
+      "sha256": "75471eedc71bf898ec85877a747a4fe882eaa17afadeff245a661bc4a96c1ccc"
+    },
+    {
+      "name": "infoharbor_30_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_30_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_30_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_30_mdp.dat",
+      "compressed_bytes": 15823,
+      "bytes": 17287,
+      "crc32": "6efe84db",
+      "sha256": "25f95a46a090a4d77db8c81eb7d6d9c63747aa74e2d8e91783f04f5aa03014db"
+    },
+    {
+      "name": "infoharbor_30_xgd.dat",
+      "compressed_bytes": 137742,
+      "bytes": 632859,
+      "crc32": "d4e18864",
+      "sha256": "f054751b0bf9423bbae7845337c2e833454a63999057a2b39a54453c92e19b08"
+    },
+    {
+      "name": "infoharbor_31_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_31_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_31_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_31_mdp.dat",
+      "compressed_bytes": 15822,
+      "bytes": 17287,
+      "crc32": "440d9a41",
+      "sha256": "6ca563b0f0abedd907c19ef26870fdf4fcff5fa656b67ef3d71948a7abd30986"
+    },
+    {
+      "name": "infoharbor_31_xgd.dat",
+      "compressed_bytes": 137739,
+      "bytes": 632859,
+      "crc32": "f83cf82d",
+      "sha256": "df84ba1db643427676db4917277f978423737d54d5481a63f2aa5c69168ed0d2"
+    },
+    {
+      "name": "infoharbor_32_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_32_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_32_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_32_mdp.dat",
+      "compressed_bytes": 16304,
+      "bytes": 17742,
+      "crc32": "851c5156",
+      "sha256": "57dd63ff61942cf0e386f343572bb88134000e18d1e9af04d670c392e86894ff"
+    },
+    {
+      "name": "infoharbor_32_xgd.dat",
+      "compressed_bytes": 148584,
+      "bytes": 633580,
+      "crc32": "3ce95351",
+      "sha256": "449ff1e44d34204b3e9988c1bc733ad6eb909db82501a3b548137c91f5a9395f"
+    },
+    {
+      "name": "infoharbor_33_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_33_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_33_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_33_mdp.dat",
+      "compressed_bytes": 15789,
+      "bytes": 17289,
+      "crc32": "5b0e16c1",
+      "sha256": "bfbd5fd842824801f7b1bebe5cf3ae69d66c49a18855e7283518dca8afe6ddcc"
+    },
+    {
+      "name": "infoharbor_33_xgd.dat",
+      "compressed_bytes": 137753,
+      "bytes": 632859,
+      "crc32": "0085c810",
+      "sha256": "c3becefccfae137c649731afdc3b4ed3f14691f62756ec35f4af51e108ffdb18"
+    },
+    {
+      "name": "infoharbor_34_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_34_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_34_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_34_mdp.dat",
+      "compressed_bytes": 15821,
+      "bytes": 17379,
+      "crc32": "a59b0ddb",
+      "sha256": "6a46198eaec4c46f536593ba5476edf312b24f230ce57108198b04fe2fd6ea9d"
+    },
+    {
+      "name": "infoharbor_34_xgd.dat",
+      "compressed_bytes": 134874,
+      "bytes": 633324,
+      "crc32": "a7ffddc5",
+      "sha256": "60336239e1538665ce65475921290a6d86098ce9e33c092fb4380a8c481f49aa"
+    },
+    {
+      "name": "infoharbor_35_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_35_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_35_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_35_mdp.dat",
+      "compressed_bytes": 16150,
+      "bytes": 17623,
+      "crc32": "b2dfdca9",
+      "sha256": "8d8b9655b78308e232f9e58f2ea911eb7754a9e74085c1638688c690f67fa247"
+    },
+    {
+      "name": "infoharbor_35_xgd.dat",
+      "compressed_bytes": 137744,
+      "bytes": 632859,
+      "crc32": "fa44a465",
+      "sha256": "54a5556cc8ca53092be0b45623297123ac2ff0c714f4c8bcbb75b4d875ff8bf0"
+    },
+    {
+      "name": "infoharbor_36_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_36_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_36_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_36_mdp.dat",
+      "compressed_bytes": 21438,
+      "bytes": 23607,
+      "crc32": "4abbd922",
+      "sha256": "4c8a7bb6b899ceeb56601978f349e6dd58d650f923648df246ae8fb4c98f8024"
+    },
+    {
+      "name": "infoharbor_36_xgd.dat",
+      "compressed_bytes": 147301,
+      "bytes": 651083,
+      "crc32": "6ec85564",
+      "sha256": "2b801134f005bcdb51ef61b3a66605bf18a77bc5b45e426b60ec3e244302d5f5"
+    },
+    {
+      "name": "infoharbor_37_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_37_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_37_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_37_mdp.dat",
+      "compressed_bytes": 21361,
+      "bytes": 23448,
+      "crc32": "df55df83",
+      "sha256": "34de0590641a7032cb40663ee1ab3c788206795c246414966760d974c322835c"
+    },
+    {
+      "name": "infoharbor_37_xgd.dat",
+      "compressed_bytes": 146942,
+      "bytes": 651969,
+      "crc32": "ed25c164",
+      "sha256": "65f3bdf7c7793c396ab898a36408fbf78eaf3b281878a2d2368177be6fae8d24"
+    },
+    {
+      "name": "infoharbor_38_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_38_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_38_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_38_mdp.dat",
+      "compressed_bytes": 8448,
+      "bytes": 9051,
+      "crc32": "c3c54ea2",
+      "sha256": "77e204615110d13351477dd83a144a73badbbbb74352bdfae8568c51c82ffc4b"
+    },
+    {
+      "name": "infoharbor_38_xgd.dat",
+      "compressed_bytes": 64888,
+      "bytes": 256834,
+      "crc32": "8195590d",
+      "sha256": "1bb9267d222239d83b1cd451c37250bc801314eeccdfb6c8aa6a60d63d44dbdf"
+    },
+    {
+      "name": "infoharbor_39_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_39_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_39_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_39_mdp.dat",
+      "compressed_bytes": 15791,
+      "bytes": 17289,
+      "crc32": "3e32cc6a",
+      "sha256": "5169babd4acc2b097f65bcad9e7f8527657041e38733b9fb0967babd28ba292b"
+    },
+    {
+      "name": "infoharbor_39_xgd.dat",
+      "compressed_bytes": 137746,
+      "bytes": 632859,
+      "crc32": "7992354a",
+      "sha256": "97d9019dda3a4c66a8650636e24ff64b6189b76056672c7555b5ead6fe4b435a"
+    },
+    {
+      "name": "infoharbor_40_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_40_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_40_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_40_mdp.dat",
+      "compressed_bytes": 15789,
+      "bytes": 17289,
+      "crc32": "82930b82",
+      "sha256": "d2462781d918d7d613f03833fceb63e7a0624dac9b2ee37b5a7b9cfd73bb2499"
+    },
+    {
+      "name": "infoharbor_40_xgd.dat",
+      "compressed_bytes": 137751,
+      "bytes": 632859,
+      "crc32": "53253071",
+      "sha256": "247ee43c0b318ba9f5ad1e589d687faff942deb05b26f9916ab2ba934043b04b"
+    },
+    {
+      "name": "infoharbor_41_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_41_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_41_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_41_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "20e64ba6",
+      "sha256": "ad441a302fb3134c1890c7376f700dbc3f300ac31f0d40da9f86e436c6da4351"
+    },
+    {
+      "name": "infoharbor_41_xgd.dat",
+      "compressed_bytes": 137752,
+      "bytes": 632859,
+      "crc32": "2c1f37fd",
+      "sha256": "e3a2d14e817e0686deee21efd308a8ec5b89757cb626a87349c73e5e70b4b7ab"
+    },
+    {
+      "name": "infoharbor_42_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_42_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_42_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_42_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "33aea721",
+      "sha256": "12da273c04897b3060c391d603b48b9a54ac382b5cc7cf8a630f8f894eef6d8b"
+    },
+    {
+      "name": "infoharbor_42_xgd.dat",
+      "compressed_bytes": 137738,
+      "bytes": 632859,
+      "crc32": "ff49909e",
+      "sha256": "76d5e9642d8433b309134ebfd9dfa2aaf984e12dcc002c6a476ed53bfd970ff0"
+    },
+    {
+      "name": "infoharbor_43_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_43_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_43_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_43_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "20d99231",
+      "sha256": "dde441f0da9963500c5407487588d6ae2d9bab1f7b98d46ff72fc1cf25ddd369"
+    },
+    {
+      "name": "infoharbor_43_xgd.dat",
+      "compressed_bytes": 137751,
+      "bytes": 632859,
+      "crc32": "12c9e989",
+      "sha256": "4a3d56a941bdbae4297db8603aeddfe8006f0f5cf49789fc3ce65836baafaa80"
+    },
+    {
+      "name": "infoharbor_44_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_44_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_44_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_44_mdp.dat",
+      "compressed_bytes": 21356,
+      "bytes": 23448,
+      "crc32": "46887a6b",
+      "sha256": "2a68682f05b1505e1d5e01534f60b237b56ee4f1e708684e10aee4df7ac01369"
+    },
+    {
+      "name": "infoharbor_44_xgd.dat",
+      "compressed_bytes": 146953,
+      "bytes": 651969,
+      "crc32": "ad9422ca",
+      "sha256": "dd73ccbe29f39996cc8aa65a703c94279c6d789c6537dd75971efeffef358772"
+    },
+    {
+      "name": "infoharbor_45_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_45_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_45_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_45_mdp.dat",
+      "compressed_bytes": 15789,
+      "bytes": 17289,
+      "crc32": "dade7bad",
+      "sha256": "0234a5b16eab4523bdff74e8ffa404a5883716af69e6ab4f99099dfe7fc35e7d"
+    },
+    {
+      "name": "infoharbor_45_xgd.dat",
+      "compressed_bytes": 137745,
+      "bytes": 632859,
+      "crc32": "19fe4959",
+      "sha256": "edfa47cccc34dd374ada07eccd0dc2631881779a6c1cf668b7c432a0fb797a99"
+    },
+    {
+      "name": "infoharbor_46_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_46_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_46_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_46_mdp.dat",
+      "compressed_bytes": 8443,
+      "bytes": 9051,
+      "crc32": "644dabb9",
+      "sha256": "6d1777b29a2b3c94b498fba6cb39184f637d53b8093a6a8503c1360f89c6ca62"
+    },
+    {
+      "name": "infoharbor_46_xgd.dat",
+      "compressed_bytes": 64888,
+      "bytes": 256834,
+      "crc32": "c4b8532e",
+      "sha256": "244f907583a169a492dabf1cbabce892300b907bb6f31d38f208fda2cc1f9233"
+    },
+    {
+      "name": "infoharbor_47_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_47_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_47_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_47_mdp.dat",
+      "compressed_bytes": 14709,
+      "bytes": 15886,
+      "crc32": "3dd5f491",
+      "sha256": "322e4b7c609dda9c242b2536c6d07d68df9d7eedd3a0e4db080f7e5a62ed9a32"
+    },
+    {
+      "name": "infoharbor_47_xgd.dat",
+      "compressed_bytes": 115198,
+      "bytes": 547340,
+      "crc32": "2ad99ba2",
+      "sha256": "c5af427641ddd398d5acc425ba8d4b5083c9fe6f236844e28c08308ca463bcdc"
+    },
+    {
+      "name": "infoharbor_48_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_48_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_48_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_48_mdp.dat",
+      "compressed_bytes": 15823,
+      "bytes": 17287,
+      "crc32": "619ca016",
+      "sha256": "a09fbc856d5e6a3e146e025d5e0e639b176f2fe89f113e18c8a1cdc18cd6a6ed"
+    },
+    {
+      "name": "infoharbor_48_xgd.dat",
+      "compressed_bytes": 137743,
+      "bytes": 632859,
+      "crc32": "f67c3f60",
+      "sha256": "ac03372728f7c183178558034ca43bc996022ac0dee0429d90a582f5a8f13e59"
+    },
+    {
+      "name": "infoharbor_49_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_49_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_49_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_49_mdp.dat",
+      "compressed_bytes": 16210,
+      "bytes": 17732,
+      "crc32": "19f46623",
+      "sha256": "88dd710c9f28edf397d65f53e4b70df04535a2ec75b732808a32d0fc29e819f1"
+    },
+    {
+      "name": "infoharbor_49_xgd.dat",
+      "compressed_bytes": 137739,
+      "bytes": 632859,
+      "crc32": "dd922017",
+      "sha256": "2ed03744ed17e1869d372dd9b40bfde6db093aba43315d6ee16acd8653b0815f"
+    },
+    {
+      "name": "infoharbor_50_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_50_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_50_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_50_mdp.dat",
+      "compressed_bytes": 15553,
+      "bytes": 17123,
+      "crc32": "590eea44",
+      "sha256": "12308838ab4dc0ba6b5a753eec0bb353f434db99cb3f4bfa9757f7e6984612e8"
+    },
+    {
+      "name": "infoharbor_50_xgd.dat",
+      "compressed_bytes": 146587,
+      "bytes": 632693,
+      "crc32": "f758115d",
+      "sha256": "7eab8cdf9cc37573e8455414045f9b4e5f6724e89007e1572e48102d6c0b8310"
+    },
+    {
+      "name": "infoharbor_51_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_51_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_51_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_51_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "16eace4b",
+      "sha256": "0e65cfa2bca320addb6f8041ab71a4ecbf950637b2ea38139b7903f0ea6089ee"
+    },
+    {
+      "name": "infoharbor_51_xgd.dat",
+      "compressed_bytes": 137740,
+      "bytes": 632859,
+      "crc32": "28abcaa4",
+      "sha256": "74fc43af5c27053787030d6619e052b1ee92af27b1346dfae7b11ca58423b2b2"
+    },
+    {
+      "name": "infoharbor_52_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_52_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_52_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_52_mdp.dat",
+      "compressed_bytes": 14664,
+      "bytes": 16057,
+      "crc32": "3ac200ea",
+      "sha256": "b377555548f38971cdbb217dd5b18865740fc0d56b9e7a9b308ae955e6fc1170"
+    },
+    {
+      "name": "infoharbor_52_xgd.dat",
+      "compressed_bytes": 136714,
+      "bytes": 629557,
+      "crc32": "4399a738",
+      "sha256": "a0b3a5c32aedccf57d28ec3eb3a2869dc3c084ad585be45dd8e6abd113bbc812"
+    },
+    {
+      "name": "infoharbor_53_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_53_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_53_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_53_mdp.dat",
+      "compressed_bytes": 16984,
+      "bytes": 18734,
+      "crc32": "1a27e3a3",
+      "sha256": "fb1797bfd70621fa82ab60cec526990c6f3a300a469f67bcc46557623253c2a2"
+    },
+    {
+      "name": "infoharbor_53_xgd.dat",
+      "compressed_bytes": 140596,
+      "bytes": 750060,
+      "crc32": "a30a66ed",
+      "sha256": "4b5e262f48ee75cf83cb4cf66017079e742f3501f4fcbeca009f9168610508c6"
+    },
+    {
+      "name": "infoharbor_54_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_54_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_54_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_54_mdp.dat",
+      "compressed_bytes": 13577,
+      "bytes": 14820,
+      "crc32": "ee26c4d8",
+      "sha256": "b92e5dbd86dd0931ea79c09f61b71254734d68552118865cae1b2d93b52caf4b"
+    },
+    {
+      "name": "infoharbor_54_xgd.dat",
+      "compressed_bytes": 117549,
+      "bytes": 572133,
+      "crc32": "42989eee",
+      "sha256": "eb65afe7d7a1f70a46d3dd8275b152ce5347a5368b9fcf73ebb2cfed7b232e2a"
+    },
+    {
+      "name": "infoharbor_55_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_55_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_55_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_55_mdp.dat",
+      "compressed_bytes": 2260,
+      "bytes": 2255,
+      "crc32": "956cc20b",
+      "sha256": "0d2025754e8663c1b9f206fb9368e7acdb70727d62bd57cf20ddfad8b279f326"
+    },
+    {
+      "name": "infoharbor_55_xgd.dat",
+      "compressed_bytes": 3818,
+      "bytes": 6975,
+      "crc32": "89b4aec8",
+      "sha256": "d93f851b960e2f39c870c0839b1a44b92930a56d628f087589fc68e879991ed9"
+    },
+    {
+      "name": "infoharbor_56_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_56_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_56_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_56_mdp.dat",
+      "compressed_bytes": 14666,
+      "bytes": 16057,
+      "crc32": "6f5ad3a0",
+      "sha256": "33303830609c071a6f3b69ffdd9ab2955a9a7404b93b666e6a77c47b7864167f"
+    },
+    {
+      "name": "infoharbor_56_xgd.dat",
+      "compressed_bytes": 136715,
+      "bytes": 629557,
+      "crc32": "fc75594b",
+      "sha256": "b8b73546a324c5fdab5eeb89591ee5d0c09588ec12a04a4003686257864d34fc"
+    },
+    {
+      "name": "infoharbor_57_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_57_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_57_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_57_mdp.dat",
+      "compressed_bytes": 14665,
+      "bytes": 16057,
+      "crc32": "2a571730",
+      "sha256": "2a677f74664ad3fa1960a4faf6e8049b9e616ef48db867a9ae0476616c8f3af6"
+    },
+    {
+      "name": "infoharbor_57_xgd.dat",
+      "compressed_bytes": 136711,
+      "bytes": 629557,
+      "crc32": "0baeb24c",
+      "sha256": "b39f56ff34ee033ff9717969e4bf38f2d1427f593bc7b49c69938a5584f1c4b5"
+    },
+    {
+      "name": "infoharbor_58_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_58_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_58_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_58_mdp.dat",
+      "compressed_bytes": 14665,
+      "bytes": 16057,
+      "crc32": "10c312fe",
+      "sha256": "c9239ff498d333911f3aa2a38118e1bec66d1ec9e3c96a1035cb7078b1ba1b04"
+    },
+    {
+      "name": "infoharbor_58_xgd.dat",
+      "compressed_bytes": 136716,
+      "bytes": 629557,
+      "crc32": "fa5d236b",
+      "sha256": "c50642804f9e73b24abaa5767493e42706fda78988fb92d137b241d6b59dafb7"
+    },
+    {
+      "name": "infoharbor_59_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_59_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_59_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_59_mdp.dat",
+      "compressed_bytes": 14665,
+      "bytes": 16057,
+      "crc32": "52f12859",
+      "sha256": "df6993d3dffb283ff60efbbcd44e5c1347e33cb59898b8e6a311b5cdcf9329d0"
+    },
+    {
+      "name": "infoharbor_59_xgd.dat",
+      "compressed_bytes": 136715,
+      "bytes": 629557,
+      "crc32": "8510fe99",
+      "sha256": "96bd1c26d19871858237c661ac31d4ca216c7708ed91845776aa4cf7c71de5e5"
+    },
+    {
+      "name": "infoharbor_60_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_60_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_60_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_60_mdp.dat",
+      "compressed_bytes": 14665,
+      "bytes": 16057,
+      "crc32": "69bcec9d",
+      "sha256": "c6be272cd6ea18ffa8f2a8e0bfa5ad92246ad16d44fffa53d30ee27b307ca535"
+    },
+    {
+      "name": "infoharbor_60_xgd.dat",
+      "compressed_bytes": 136718,
+      "bytes": 629557,
+      "crc32": "92ca4021",
+      "sha256": "ec6bb42091c831e03eb987a1dacd29bcff7c531ad1df32092e518357f961c02d"
+    },
+    {
+      "name": "infoharbor_61_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_61_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_61_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_61_mdp.dat",
+      "compressed_bytes": 13787,
+      "bytes": 15101,
+      "crc32": "039728a9",
+      "sha256": "2c3900b8f0005b182f765d8e5f5d99c12fe123dfe9f978a572aaff7097f9ca4e"
+    },
+    {
+      "name": "infoharbor_61_xgd.dat",
+      "compressed_bytes": 125592,
+      "bytes": 584142,
+      "crc32": "d936b40d",
+      "sha256": "e34c0f20f72123e913fd63fa4b6ea637a1d51c476596b736e8799d9cced67926"
+    },
+    {
+      "name": "infoharbor_62_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_62_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_62_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_62_mdp.dat",
+      "compressed_bytes": 14666,
+      "bytes": 16057,
+      "crc32": "68fad534",
+      "sha256": "99da333ad8189b69f23b3224b26296423579a57c6a4611a15d47166abb5c7a91"
+    },
+    {
+      "name": "infoharbor_62_xgd.dat",
+      "compressed_bytes": 136713,
+      "bytes": 629557,
+      "crc32": "de73842d",
+      "sha256": "66f88b7e932cdbeff65bc6aa62a76894615db68f3aac9e3bbc1236b9e663c4b8"
+    },
+    {
+      "name": "infoharbor_68_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_68_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_68_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_68_mdp.dat",
+      "compressed_bytes": 20217,
+      "bytes": 22216,
+      "crc32": "7b841d3f",
+      "sha256": "3576efc3a19f9358709de7028740ffe56b13ca8ca8e35b6b188f99bd5e72cdd8"
+    },
+    {
+      "name": "infoharbor_68_xgd.dat",
+      "compressed_bytes": 145441,
+      "bytes": 647781,
+      "crc32": "14e8f271",
+      "sha256": "108884aa43963a1b1b602f2ac395415c5a7df65ceb81816465953dd021948f4b"
+    },
+    {
+      "name": "infoharbor_69_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_69_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_69_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_69_mdp.dat",
+      "compressed_bytes": 14665,
+      "bytes": 16057,
+      "crc32": "4f62cb4e",
+      "sha256": "86eb707ce809f9210710fde1cafa521eafb85d67ac02c06e4d8daea68d30fc2e"
+    },
+    {
+      "name": "infoharbor_69_xgd.dat",
+      "compressed_bytes": 136719,
+      "bytes": 629557,
+      "crc32": "cf386478",
+      "sha256": "857b08c88f3bc0f9a447d3a37ddd79e8e0fe6be13739ce54d757ad488a610b1b"
+    },
+    {
+      "name": "infoharbor_71_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_71_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_71_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_71_mdp.dat",
+      "compressed_bytes": 15082,
+      "bytes": 16500,
+      "crc32": "b35c9113",
+      "sha256": "2f153afe2d2d63d982d69b4191171be0184acf8d295c8dbb057f77cdbcd8f7bd"
+    },
+    {
+      "name": "infoharbor_71_xgd.dat",
+      "compressed_bytes": 136715,
+      "bytes": 629557,
+      "crc32": "ea63119c",
+      "sha256": "b0143759c4212ccef292dcafc4b5cdfa4aeefbcb1adca29e579c5ad523141955"
+    },
+    {
+      "name": "infoharbor_72_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_72_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_72_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_72_mdp.dat",
+      "compressed_bytes": 14666,
+      "bytes": 16057,
+      "crc32": "353ea100",
+      "sha256": "8411e19dd15f39fb502a6d3f4408199ffacd20cd8e1129cdc0901e05971162fd"
+    },
+    {
+      "name": "infoharbor_72_xgd.dat",
+      "compressed_bytes": 136717,
+      "bytes": 629557,
+      "crc32": "b67f3142",
+      "sha256": "6d3260ec4766301ef666c2f4f0ab61ac71d0ba39b321fa8139c96c491c856ff1"
+    },
+    {
+      "name": "infoharbor_73_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_73_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_73_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_73_mdp.dat",
+      "compressed_bytes": 14666,
+      "bytes": 16057,
+      "crc32": "c01285e8",
+      "sha256": "d91ddc5ae02626310a530f2f1ea3778bd03a6e64d3f79d8cb3750faeb01f5ab8"
+    },
+    {
+      "name": "infoharbor_73_xgd.dat",
+      "compressed_bytes": 136713,
+      "bytes": 629557,
+      "crc32": "423e0fe9",
+      "sha256": "125dddac771fa89114cc26dd9fa8ab4d475569ed18ad0c7a488780f74d160f05"
+    },
+    {
+      "name": "infoharbor_75_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_75_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_75_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_75_mdp.dat",
+      "compressed_bytes": 15153,
+      "bytes": 16668,
+      "crc32": "9dd34c97",
+      "sha256": "ad5bd8d83877e0ad422cb1307ea759576e21caee890205989eb031f07c1679ca"
+    },
+    {
+      "name": "infoharbor_75_xgd.dat",
+      "compressed_bytes": 135198,
+      "bytes": 629723,
+      "crc32": "cfcd3e13",
+      "sha256": "a910748d1f08c6164add4e282e641d7ef3d5c4c7a43760f799c4c6713d9b2118"
+    },
+    {
+      "name": "infoharbor_76_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_76_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_76_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_76_mdp.dat",
+      "compressed_bytes": 6568,
+      "bytes": 6823,
+      "crc32": "55a22658",
+      "sha256": "e163a8327b808005ba919616d5caa15c2144251795ac456221c90e76f2ca6820"
+    },
+    {
+      "name": "infoharbor_76_xgd.dat",
+      "compressed_bytes": 46296,
+      "bytes": 213878,
+      "crc32": "1bf26b4b",
+      "sha256": "c0cb10125c77504fbe55ab2d8e2d0d52e406891eb5f71d8b701e610042d3cebc"
+    },
+    {
+      "name": "infoharbor_77_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_77_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_77_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_77_mdp.dat",
+      "compressed_bytes": 14666,
+      "bytes": 16057,
+      "crc32": "2bed1fc6",
+      "sha256": "d27901d0f99009eee7c19f670adfcc09538c17d023f3d2d9194033872d7dc3b3"
+    },
+    {
+      "name": "infoharbor_77_xgd.dat",
+      "compressed_bytes": 136718,
+      "bytes": 629557,
+      "crc32": "21700ddb",
+      "sha256": "159a7691b8856c42e6cf21db2706b028e87429ef386e72317cad0375b6aaf15f"
+    },
+    {
+      "name": "infoharbor_78_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_78_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_78_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_78_mdp.dat",
+      "compressed_bytes": 14666,
+      "bytes": 16057,
+      "crc32": "195e5961",
+      "sha256": "73de7f628b6868ba61686ae2bd77bcb73e817ccc226c2273185b491e5fd00623"
+    },
+    {
+      "name": "infoharbor_78_xgd.dat",
+      "compressed_bytes": 136721,
+      "bytes": 629557,
+      "crc32": "8ee3c090",
+      "sha256": "2a25c19b194eca1f1ed2715e027993d1d57da4fac276edea33d6fe507d67d16a"
+    },
+    {
+      "name": "infoharbor_79_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_79_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_79_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_79_mdp.dat",
+      "compressed_bytes": 15083,
+      "bytes": 16500,
+      "crc32": "a7dd173f",
+      "sha256": "24144d09dcd4ff087ae0a998ac98be7845ae4ba24d688fd88d6dc8434ef09680"
+    },
+    {
+      "name": "infoharbor_79_xgd.dat",
+      "compressed_bytes": 136719,
+      "bytes": 629557,
+      "crc32": "f7160458",
+      "sha256": "57adbd9bebe4481a4b0cdd13a7533adcc02193144e2a3fb524a7972c513575e3"
+    },
+    {
+      "name": "infoharbor_80_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_80_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_80_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_80_mdp.dat",
+      "compressed_bytes": 14667,
+      "bytes": 16055,
+      "crc32": "74fe7af9",
+      "sha256": "bc464956d894b87a7767d76af57dc25e1a4608479d332fddb9fddc5b60d73c81"
+    },
+    {
+      "name": "infoharbor_80_xgd.dat",
+      "compressed_bytes": 136711,
+      "bytes": 629557,
+      "crc32": "78ebd43a",
+      "sha256": "364ded5c9d2fda703aff287555dcbdcc9ecc8accbb048fed6fe50bcdc44db096"
+    },
+    {
+      "name": "infoharbor_81_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_81_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_81_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_81_mdp.dat",
+      "compressed_bytes": 13593,
+      "bytes": 14810,
+      "crc32": "50ea620a",
+      "sha256": "2380e70a3455e02eb44d26420803e25142063dbc0f27f8ac2122a18564dd4114"
+    },
+    {
+      "name": "infoharbor_81_xgd.dat",
+      "compressed_bytes": 123668,
+      "bytes": 577830,
+      "crc32": "f9cf65d2",
+      "sha256": "1013709de3d866b204d0924b7d6688af246fb8fb5a4559e80b244dc386f4b00e"
+    },
+    {
+      "name": "infoharbor_82_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_82_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_82_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_82_mdp.dat",
+      "compressed_bytes": 2241,
+      "bytes": 2253,
+      "crc32": "3a721221",
+      "sha256": "8d7459ed6bca6d169b7b59b3e6ac7993c64205ce9698881c970e576a695e7a04"
+    },
+    {
+      "name": "infoharbor_82_xgd.dat",
+      "compressed_bytes": 3776,
+      "bytes": 6935,
+      "crc32": "68a607f5",
+      "sha256": "988dc3be58a88ba047cf619d22849282f388bd991e9686275384f809fb8084e7"
+    },
+    {
+      "name": "infoharbor_83_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_83_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_83_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_83_mdp.dat",
+      "compressed_bytes": 14665,
+      "bytes": 16057,
+      "crc32": "3d0dea35",
+      "sha256": "3c9658c5e53f9f2093e874afbb173d086e6a7bf914f8b1d6ffa2efe73d7e76fa"
+    },
+    {
+      "name": "infoharbor_83_xgd.dat",
+      "compressed_bytes": 136717,
+      "bytes": 629557,
+      "crc32": "8032d512",
+      "sha256": "601918552122db84092a36bf991b7cb354de1aa27ba0743a5b5e649f10cf09eb"
+    },
+    {
+      "name": "infoharbor_85_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_85_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_85_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_85_mdp.dat",
+      "compressed_bytes": 2241,
+      "bytes": 2253,
+      "crc32": "3a721221",
+      "sha256": "8d7459ed6bca6d169b7b59b3e6ac7993c64205ce9698881c970e576a695e7a04"
+    },
+    {
+      "name": "infoharbor_85_xgd.dat",
+      "compressed_bytes": 3818,
+      "bytes": 6975,
+      "crc32": "89b4aec8",
+      "sha256": "d93f851b960e2f39c870c0839b1a44b92930a56d628f087589fc68e879991ed9"
+    },
+    {
+      "name": "infoharbor_89_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_89_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_89_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_89_mdp.dat",
+      "compressed_bytes": 14665,
+      "bytes": 16057,
+      "crc32": "cc3f5612",
+      "sha256": "582b16fefbcedf2e10d7579a16c8eed0d1048010bc19511c6df4298963d75b61"
+    },
+    {
+      "name": "infoharbor_89_xgd.dat",
+      "compressed_bytes": 136720,
+      "bytes": 629557,
+      "crc32": "7bb1d4a1",
+      "sha256": "edc202e0b792ddd417c8aaa2787e08069ab7cba73ec79b0cb0bbf211aa47fee9"
+    },
+    {
+      "name": "infoharbor_90_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_90_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_90_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_90_mdp.dat",
+      "compressed_bytes": 14666,
+      "bytes": 16057,
+      "crc32": "0a606556",
+      "sha256": "4879d17343f5d9bcf81a5d1d40cbba4d30c4f1363f317a48139e75d4f1165ccb"
+    },
+    {
+      "name": "infoharbor_90_xgd.dat",
+      "compressed_bytes": 136720,
+      "bytes": 629557,
+      "crc32": "9746a593",
+      "sha256": "9ef66096bd440c25c8d10a652bf06c0745f27f1019ab69a57bd94e76c2d3293b"
+    },
+    {
+      "name": "infoharbor_92_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_92_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_92_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_92_mdp.dat",
+      "compressed_bytes": 13646,
+      "bytes": 14947,
+      "crc32": "df34d923",
+      "sha256": "5abaceb7ec4531c786c938eb45a9b3b4836efb7fd9dd5db657e02283cdbdf2e2"
+    },
+    {
+      "name": "infoharbor_92_xgd.dat",
+      "compressed_bytes": 126998,
+      "bytes": 577734,
+      "crc32": "fc92695c",
+      "sha256": "afc70411acc22d8b131ec74e589ee2e82d8b0793baba45dc7ee6d632562ff35b"
+    },
+    {
+      "name": "infoharbor_93_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_93_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_93_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_93_mdp.dat",
+      "compressed_bytes": 13594,
+      "bytes": 14810,
+      "crc32": "751bf152",
+      "sha256": "484e07892a44e85c3b719737ae31769697f0cd79e5d9a4f87a12cf343d01630a"
+    },
+    {
+      "name": "infoharbor_93_xgd.dat",
+      "compressed_bytes": 123662,
+      "bytes": 577830,
+      "crc32": "65ec320f",
+      "sha256": "78650da785767d7c78571944a9500f731031fe8f377f72abfde2c14b0a506f5e"
+    },
+    {
+      "name": "infoharbor_94_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_94_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_94_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_94_mdp.dat",
+      "compressed_bytes": 15082,
+      "bytes": 16500,
+      "crc32": "6f4a128d",
+      "sha256": "6bf6a71a3a2b3ad2010d918710c4f42bc3cfebb5651f37db622cea3ec3db1d8d"
+    },
+    {
+      "name": "infoharbor_94_xgd.dat",
+      "compressed_bytes": 136718,
+      "bytes": 629557,
+      "crc32": "3108f13d",
+      "sha256": "ece163769e512dfac2b5d4842b4d4ca3e097d6eff2d3877ca9e26f97aa68d5a5"
+    },
+    {
+      "name": "infoharbor_95_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_95_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_95_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_95_mdp.dat",
+      "compressed_bytes": 20222,
+      "bytes": 22216,
+      "crc32": "f700a694",
+      "sha256": "f14da7292600114f0df0aa18ced9f6b7725fca4de54c3e62821ae98920fcd29d"
+    },
+    {
+      "name": "infoharbor_95_xgd.dat",
+      "compressed_bytes": 145942,
+      "bytes": 648667,
+      "crc32": "6d84c3f1",
+      "sha256": "85bba6549ce60b98febdc23454a51e47e846c51ba060214e7735287b5010466c"
+    },
+    {
+      "name": "infoharbor_96_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_96_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_96_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_96_mdp.dat",
+      "compressed_bytes": 14665,
+      "bytes": 16057,
+      "crc32": "8b8a9674",
+      "sha256": "6b7998da439bf5866be67231e30b15e336b37455e9a4b9ad399a3dc281ef15db"
+    },
+    {
+      "name": "infoharbor_96_xgd.dat",
+      "compressed_bytes": 136722,
+      "bytes": 629557,
+      "crc32": "8ea90268",
+      "sha256": "b431b19617c76674ff43ab6952cfbcebe71ac4158ddce81179bfe2f2c7b618e7"
+    },
+    {
+      "name": "infoharbor_98_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_98_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_98_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_98_mdp.dat",
+      "compressed_bytes": 14666,
+      "bytes": 16057,
+      "crc32": "53ff1c3c",
+      "sha256": "dde6fa2398ac6e5f0ce48b23953ec4aeab787af3d463db46b9901ee039009e8a"
+    },
+    {
+      "name": "infoharbor_98_xgd.dat",
+      "compressed_bytes": 136712,
+      "bytes": 629557,
+      "crc32": "4b659ec7",
+      "sha256": "7b8d4f18379772ca4385706e08713e347110a193b740af93616c0f3183093230"
+    },
+    {
+      "name": "infoharbor_102_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_102_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_102_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_102_mdp.dat",
+      "compressed_bytes": 15823,
+      "bytes": 17287,
+      "crc32": "930125ce",
+      "sha256": "f06aa09b4dc85cb3de92887f3b4ea9c56ed419fd2da316c4a9f685adf913d9a9"
+    },
+    {
+      "name": "infoharbor_102_xgd.dat",
+      "compressed_bytes": 137739,
+      "bytes": 632859,
+      "crc32": "fe0f228e",
+      "sha256": "556214127a1ca17d0f0a1d6f00f5389d04ce9fc2fe38c7ba33923558e5fbb3c1"
+    },
+    {
+      "name": "infoharbor_103_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_103_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_103_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_103_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "699f297d",
+      "sha256": "35858f5b23132a9e93544c78f4ad2d556fe0d0a13c53c2191644f1312d095e4e"
+    },
+    {
+      "name": "infoharbor_103_xgd.dat",
+      "compressed_bytes": 137743,
+      "bytes": 632859,
+      "crc32": "d9f6e65c",
+      "sha256": "969e738e3a59ef12c65877ef7dd97d67400d199713b9d96b48d4e3c95535624a"
+    },
+    {
+      "name": "infoharbor_104_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_104_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_104_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_104_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "02aec64c",
+      "sha256": "e0bf116f3fa49924d672615a3077f9ba9bfea5e7a142f110a2e475e45f8c9c66"
+    },
+    {
+      "name": "infoharbor_104_xgd.dat",
+      "compressed_bytes": 137744,
+      "bytes": 632859,
+      "crc32": "49da743a",
+      "sha256": "21cb7033f47481de0ab2bf4ac2b5c690e29df89a26477c67f358ffd6700c8286"
+    },
+    {
+      "name": "infoharbor_106_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_106_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_106_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_106_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "edf9385a",
+      "sha256": "c3be6103cb43c2444f43b33ea9cbc3423d4f35d21a6288f4ae1c6ae1b2463a9b"
+    },
+    {
+      "name": "infoharbor_106_xgd.dat",
+      "compressed_bytes": 137743,
+      "bytes": 632859,
+      "crc32": "c454e3d7",
+      "sha256": "c06198e13926a8d1502fbff9002058ce28aa2261f61599ea350d44c0030f55fd"
+    },
+    {
+      "name": "infoharbor_107_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_107_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_107_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_107_mdp.dat",
+      "compressed_bytes": 15789,
+      "bytes": 17289,
+      "crc32": "a8fa1a3d",
+      "sha256": "35d705bac165bd02244e03be24c7f22b457f2fbb668c8b371abc8c3744b8ea46"
+    },
+    {
+      "name": "infoharbor_107_xgd.dat",
+      "compressed_bytes": 137745,
+      "bytes": 632859,
+      "crc32": "63a91ef4",
+      "sha256": "cc8cd10d55988c51d224dcb0c7838fac182e1a0b0563b915575f61cc47406048"
+    },
+    {
+      "name": "infoharbor_109_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_109_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_109_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_109_mdp.dat",
+      "compressed_bytes": 21355,
+      "bytes": 23448,
+      "crc32": "4d3adca5",
+      "sha256": "4ca0688c4455bb69fd9bbb1757ef0722c4dc652aa3569a8e2517c845accc3bc6"
+    },
+    {
+      "name": "infoharbor_109_xgd.dat",
+      "compressed_bytes": 146952,
+      "bytes": 651969,
+      "crc32": "96eb657a",
+      "sha256": "272aaffb39053dbb520fcf73fb3339faa3af55f467ffd00c97f35c74b23402e4"
+    },
+    {
+      "name": "infoharbor_110_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_110_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_110_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_110_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "abfb5926",
+      "sha256": "e935073e08c16115eeba6ae0bb5c7f74c575dba546891cc9fe7848b6340f4461"
+    },
+    {
+      "name": "infoharbor_110_xgd.dat",
+      "compressed_bytes": 137744,
+      "bytes": 632859,
+      "crc32": "90604b49",
+      "sha256": "b4c37e98d4597dc5d4287ef589b47193465caf23980a5b6fa1d4ad2a2f7bc60a"
+    },
+    {
+      "name": "infoharbor_111_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_111_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_111_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_111_mdp.dat",
+      "compressed_bytes": 15791,
+      "bytes": 17289,
+      "crc32": "a4dcafb4",
+      "sha256": "5b86cb47122914ff885ebc55e85077a4d24370aa30273ce4887d15198f794557"
+    },
+    {
+      "name": "infoharbor_111_xgd.dat",
+      "compressed_bytes": 137740,
+      "bytes": 632859,
+      "crc32": "de518c66",
+      "sha256": "81ada81dcc5709e248f0d0498f222c0f8224be7162571a791f612fd8c83c068e"
+    },
+    {
+      "name": "infoharbor_114_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_114_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_114_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_114_mdp.dat",
+      "compressed_bytes": 6329,
+      "bytes": 6569,
+      "crc32": "0d3e1101",
+      "sha256": "b2d26eb302fb40f8b624739af47c7a25fb0025ad520a939c5d443077095afa89"
+    },
+    {
+      "name": "infoharbor_114_xgd.dat",
+      "compressed_bytes": 43661,
+      "bytes": 146388,
+      "crc32": "7565e93a",
+      "sha256": "ff190d28ac8ad60d7b09aac1ba77cc69046a95d3f8a1e7ffd43f19e3ae0749a6"
+    },
+    {
+      "name": "infoharbor_116_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_116_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_116_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_116_mdp.dat",
+      "compressed_bytes": 21360,
+      "bytes": 23448,
+      "crc32": "7efd0a62",
+      "sha256": "0bdf80ec079a3c94b8c50e86ddcd478dc4c2121672d981fa909d50fdf33fa12e"
+    },
+    {
+      "name": "infoharbor_116_xgd.dat",
+      "compressed_bytes": 146960,
+      "bytes": 651969,
+      "crc32": "7f4a280d",
+      "sha256": "95a982282ddbe388141fb82e933554f17a024bce2f4ac2a8ed67bee22f937049"
+    },
+    {
+      "name": "infoharbor_117_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_117_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_117_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_117_mdp.dat",
+      "compressed_bytes": 15789,
+      "bytes": 17289,
+      "crc32": "154761a4",
+      "sha256": "6226b0325d1855fff8cc7e00d02841e94653b7a93d19733bad42dc5c5541afa9"
+    },
+    {
+      "name": "infoharbor_117_xgd.dat",
+      "compressed_bytes": 137744,
+      "bytes": 632859,
+      "crc32": "c465db73",
+      "sha256": "f4da32585dd188eb43557c9a187572034519c2377e36a0493ea2e636e3b05982"
+    },
+    {
+      "name": "infoharbor_118_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_118_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_118_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_118_mdp.dat",
+      "compressed_bytes": 16118,
+      "bytes": 17625,
+      "crc32": "49f164ae",
+      "sha256": "44d89c420e0e134ee050303097f3af753bed244aecbac387b262bbdecc2cf9e1"
+    },
+    {
+      "name": "infoharbor_118_xgd.dat",
+      "compressed_bytes": 137750,
+      "bytes": 632859,
+      "crc32": "1807ecb8",
+      "sha256": "554d690d2566e80dfc7c3b2c548a904cee1146e48c2de827a634efbc0831e214"
+    },
+    {
+      "name": "infoharbor_121_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_121_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_121_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_121_mdp.dat",
+      "compressed_bytes": 15791,
+      "bytes": 17289,
+      "crc32": "28d26ef7",
+      "sha256": "696dd6dad9de8e40137d9c084679aafcb3ceb6f025dd13ce16fbda91d193b0bb"
+    },
+    {
+      "name": "infoharbor_121_xgd.dat",
+      "compressed_bytes": 137743,
+      "bytes": 632859,
+      "crc32": "b49e3899",
+      "sha256": "593f0779e742b0ff49a346ed918fa645cd7de606750947ef6b8f737872981bdd"
+    },
+    {
+      "name": "infoharbor_122_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_122_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_122_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_122_mdp.dat",
+      "compressed_bytes": 12423,
+      "bytes": 13481,
+      "crc32": "c6c45120",
+      "sha256": "7f77ec3b013dc15b2e150f3a1a55fbf1a49768b38ba528baa389ba44c501f8d7"
+    },
+    {
+      "name": "infoharbor_122_xgd.dat",
+      "compressed_bytes": 98189,
+      "bytes": 465393,
+      "crc32": "002b81a9",
+      "sha256": "4800ef2e673d50fda0a77fe96371e4197b23bfb8051f9899b0d951ed3497edf8"
+    },
+    {
+      "name": "infoharbor_123_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_123_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_123_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_123_mdp.dat",
+      "compressed_bytes": 15790,
+      "bytes": 17289,
+      "crc32": "84a47b44",
+      "sha256": "0dc42c438273152bfe1b14c7da588602a592f4b2d8f977065e25c8afd9ba4e52"
+    },
+    {
+      "name": "infoharbor_123_xgd.dat",
+      "compressed_bytes": 137743,
+      "bytes": 632859,
+      "crc32": "89744347",
+      "sha256": "da9854df59149b4a7950beda22bfbcaf0efab4d321247f5c9d2299fba40bb7f9"
+    },
+    {
+      "name": "infoharbor_127_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_127_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_127_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_127_mdp.dat",
+      "compressed_bytes": 15824,
+      "bytes": 17287,
+      "crc32": "89893c0c",
+      "sha256": "086011a75e4c018d75acc280e0b4ce4cbd71c89d621b6af22220f6eba34a23ea"
+    },
+    {
+      "name": "infoharbor_127_xgd.dat",
+      "compressed_bytes": 137739,
+      "bytes": 632859,
+      "crc32": "ccf3f441",
+      "sha256": "c2d162a8bb1b9fd14145d4439894970d11c1959a1f743da7fee6f2a25c881427"
+    },
+    {
+      "name": "infoharbor_128_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_128_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_128_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_128_mdp.dat",
+      "compressed_bytes": 15789,
+      "bytes": 17289,
+      "crc32": "f304d622",
+      "sha256": "7d714bfe703e18e5b3942a8c3a7cc873bbf190a677c40257630cc85c3473125e"
+    },
+    {
+      "name": "infoharbor_128_xgd.dat",
+      "compressed_bytes": 137741,
+      "bytes": 632859,
+      "crc32": "56ea57af",
+      "sha256": "cc39aac4c3d7fe367acdad15fabf0e7e96338adf63e846b6f8d034bbe16bfe86"
+    },
+    {
+      "name": "infoharbor_130_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_130_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_130_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_130_mdp.dat",
+      "compressed_bytes": 15789,
+      "bytes": 17289,
+      "crc32": "447cbfc2",
+      "sha256": "192b70d7c41693048de212df31e56a1ff788abf0dc32a95500dd895dc45e6e06"
+    },
+    {
+      "name": "infoharbor_130_xgd.dat",
+      "compressed_bytes": 137746,
+      "bytes": 632859,
+      "crc32": "5410b0d6",
+      "sha256": "5588509f122336be107324e39ec3f54975b06fed964a537b2b6dff2d0c92284e"
+    },
+    {
+      "name": "infoharbor_132_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_132_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_132_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_132_mdp.dat",
+      "compressed_bytes": 11646,
+      "bytes": 12501,
+      "crc32": "eea95f27",
+      "sha256": "d69a845cea8c713b85705c4e0a1d94d72512295c61b78d8653812b040d187fe7"
+    },
+    {
+      "name": "infoharbor_132_xgd.dat",
+      "compressed_bytes": 90907,
+      "bytes": 422070,
+      "crc32": "640bb9e7",
+      "sha256": "873942f634d1e0fdbcf184c2014273e98d7450959dd6c39c5c26f4c785f6dbfb"
+    },
+    {
+      "name": "infoharbor_136_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_136_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_136_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_136_mdp.dat",
+      "compressed_bytes": 14317,
+      "bytes": 15517,
+      "crc32": "16893c99",
+      "sha256": "e321cae94cddb370bb4cdf60e5d79c2c9a60d9baa8f4199703b87ee4e279a2d7"
+    },
+    {
+      "name": "infoharbor_136_xgd.dat",
+      "compressed_bytes": 116093,
+      "bytes": 544903,
+      "crc32": "8627d4d5",
+      "sha256": "c56b22e75b4954c2af89d977bdafafde280cbb846cfde20827247e65593a01b5"
+    },
+    {
+      "name": "infoharbor_139_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_139_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_139_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_139_mdp.dat",
+      "compressed_bytes": 11180,
+      "bytes": 11974,
+      "crc32": "54d77314",
+      "sha256": "83350638cfeab8f5988c5b461f6dc15fc89306e46ad63dd98897b7f1f026dfd7"
+    },
+    {
+      "name": "infoharbor_139_xgd.dat",
+      "compressed_bytes": 86466,
+      "bytes": 398061,
+      "crc32": "ecce85a8",
+      "sha256": "d9b226218aae54ab4f47923c1f0a58dcd8f453609fb504a0127a324aa349dbed"
+    },
+    {
+      "name": "infoharbor_140_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_140_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_140_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_140_mdp.dat",
+      "compressed_bytes": 11177,
+      "bytes": 11974,
+      "crc32": "a1a2c700",
+      "sha256": "2851198c3cd3bd675e764c6f3da6ffd4247c699d0a18c0c9c02566fbd60d7dba"
+    },
+    {
+      "name": "infoharbor_140_xgd.dat",
+      "compressed_bytes": 86468,
+      "bytes": 398061,
+      "crc32": "4526bdb8",
+      "sha256": "9161e87b97c8ebe9c9a8a9e9662463766d9dfbff4e16e6021d34e8508defb855"
+    },
+    {
+      "name": "infoharbor_141_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_141_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_141_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_141_mdp.dat",
+      "compressed_bytes": 11181,
+      "bytes": 11974,
+      "crc32": "89d2fd70",
+      "sha256": "bd873631b86f6c44a7ef962701a39d4baf54266f111836047462c1075c8d989b"
+    },
+    {
+      "name": "infoharbor_141_xgd.dat",
+      "compressed_bytes": 86465,
+      "bytes": 398061,
+      "crc32": "d8c6bcc7",
+      "sha256": "8743d6259f0de01ade6d8bb88a5b39401fc42db022ce6cbef34d33c8db54392a"
+    },
+    {
+      "name": "infoharbor_142_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_142_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_142_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_142_mdp.dat",
+      "compressed_bytes": 8775,
+      "bytes": 9314,
+      "crc32": "f589c3db",
+      "sha256": "0b9031cd71b27c34edccc29a0637248cc12d9e6dde10e60839a748d84880ff64"
+    },
+    {
+      "name": "infoharbor_142_xgd.dat",
+      "compressed_bytes": 57636,
+      "bytes": 276283,
+      "crc32": "0f684e28",
+      "sha256": "e9cafc7a58d34752777acfa24d88cdf55f4c313ab451e1534625452670d3907f"
+    },
+    {
+      "name": "infoharbor_1001_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_1001_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_1001_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_1001_mdp.dat",
+      "compressed_bytes": 13159,
+      "bytes": 14271,
+      "crc32": "3078f815",
+      "sha256": "e7d02930dce9b435d44013d976bfe41f25e6b0fd9db7f5a1a9a03c1fa28cebeb"
+    },
+    {
+      "name": "infoharbor_1001_xgd.dat",
+      "compressed_bytes": 104719,
+      "bytes": 501198,
+      "crc32": "65a32a7a",
+      "sha256": "d254688229e26c23ed18be69950bbe2d7f93d6236b9f434905c37d6070bab811"
+    },
+    {
+      "name": "infoharbor_1002_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_1002_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    },
+    {
+      "name": "infoharbor_1002_aui_std.dat",
+      "compressed_bytes": 24,
+      "bytes": 21,
+      "crc32": "7b1e9917",
+      "sha256": "997d87bd75c903537122d6f93897a6197848551d2b3cea73b370d2db1acb2d8b"
+    },
+    {
+      "name": "infoharbor_1002_mdp.dat",
+      "compressed_bytes": 5450,
+      "bytes": 5640,
+      "crc32": "71cc2ae6",
+      "sha256": "c91e10307fc95dae7bf1472008ee659d809b5abd2ba86895b3a6939c873df217"
+    },
+    {
+      "name": "infoharbor_1002_xgd.dat",
+      "compressed_bytes": 27602,
+      "bytes": 109793,
+      "crc32": "ee84e72c",
+      "sha256": "d77af05db285819b2cd40aa99a4e3199a35cfaa9e780098f9a7246c60935ecb6"
+    },
+    {
+      "name": "infoharbor_ex.code",
+      "compressed_bytes": 104070,
+      "bytes": 182154,
+      "crc32": "e40f6904",
+      "sha256": "43dc108e4c8b98707f2761c940db9bd47967f75bd7fe4654ed5b624bb76cd6e5"
+    },
+    {
+      "name": "infoharbor_ex.name",
+      "compressed_bytes": 25962,
+      "bytes": 81704,
+      "crc32": "c2cf0fd9",
+      "sha256": "551223de88b808dec1c98fdc06d59e1ae74f3000a8818f1cd05eaa36fd90b6aa"
+    },
+    {
+      "name": "infoharbor_qsid.txt",
+      "compressed_bytes": 709,
+      "bytes": 1374,
+      "crc32": "a3554328",
+      "sha256": "d410836c3c47844597ef2b00a6b8b4357f55f35acbeeaa98192098814a338a40"
+    },
+    {
+      "name": "infoharbor_riskips_tdx.ini",
+      "compressed_bytes": 291,
+      "bytes": 831,
+      "crc32": "545d319b",
+      "sha256": "9ec0d6a59b75f0be9e4c03c6525d09e58888db467a06c2b2646065873c20893b"
+    },
+    {
+      "name": "infoharbor_short.cfg",
+      "compressed_bytes": 14087,
+      "bytes": 42239,
+      "crc32": "1296ffc0",
+      "sha256": "074b4f44e691be728e08c48fb24a5d6fdda76c6319f5cee28f3219b587e7c9b3"
+    },
+    {
+      "name": "infoharbor_spec.cfg",
+      "compressed_bytes": 1166,
+      "bytes": 4986,
+      "crc32": "dd4682b9",
+      "sha256": "71a265b74ba752c51942d014b7980e9d3eb250db0b619d8f1e38d93e72662d48"
+    },
+    {
+      "name": "tdxhy.cfg",
+      "compressed_bytes": 25480,
+      "bytes": 150332,
+      "crc32": "d9e703ee",
+      "sha256": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6"
+    },
+    {
+      "name": "tdxhy2.cfg",
+      "compressed_bytes": 41341,
+      "bytes": 249145,
+      "crc32": "55b21e4e",
+      "sha256": "401cfc600e74a95ea750713b96d2caa348157f70f52703478785981810cee480"
+    },
+    {
+      "name": "tdxzsbase.cfg",
+      "compressed_bytes": 105222,
+      "bytes": 238540,
+      "crc32": "ceeca24a",
+      "sha256": "a8245fab99ac5586bd0588336e4614abaf3a2f980ce47badf6edcaaffc048eba"
+    },
+    {
+      "name": "tdxzsbase2.cfg",
+      "compressed_bytes": 26161,
+      "bytes": 68663,
+      "crc32": "d8f6b8ed",
+      "sha256": "05e38dd4335078e7f8e51c6086b8a13f7f0b174c5e9e236dd648e722ff68348f"
+    },
+    {
+      "name": "xgcode.cfg",
+      "compressed_bytes": 956,
+      "bytes": 1934,
+      "crc32": "bb4e0e5d",
+      "sha256": "37049186e83546c777e5604a9ea1ef83b8449b65d0a99f28acb5bf05568bdb02"
+    },
+    {
+      "name": "base.dbf",
+      "compressed_bytes": 973293,
+      "bytes": 4268265,
+      "crc32": "62e7feef",
+      "sha256": "bdee117a65d74087dc3ec6e3dbf43608f636839eb58b74bc8ee2e6c982594652"
+    },
+    {
+      "name": "base.map",
+      "compressed_bytes": 27737,
+      "bytes": 123684,
+      "crc32": "4129f9a8",
+      "sha256": "2c14ae32e070d9f7dcdf848ded74722ad554d02fc31580d1cf9f1706975e5a37"
+    },
+    {
+      "name": "block.dat",
+      "compressed_bytes": 37709,
+      "bytes": 281686,
+      "crc32": "5b24ef31",
+      "sha256": "3345227bc13b5453a702f9ec7d86c6b6e3ca3a0b01737eb80ebd908d24f96c4d"
+    },
+    {
+      "name": "block_fg.dat",
+      "compressed_bytes": 50529,
+      "bytes": 453279,
+      "crc32": "868dbab9",
+      "sha256": "e1668bb5f2e9f1ed236f218d82659d23401901f7afe5944bcd502860b1404714"
+    },
+    {
+      "name": "block_gn.dat",
+      "compressed_bytes": 96201,
+      "bytes": 757083,
+      "crc32": "37adda53",
+      "sha256": "e3ee21d6407138019d7b333fb661ae899a7beadc4d4bfebf1292ff5a78b5e853"
+    },
+    {
+      "name": "block_zs.dat",
+      "compressed_bytes": 25011,
+      "bytes": 329507,
+      "crc32": "6c482732",
+      "sha256": "4e4c2db66bafa0710109b66d01eb80f868def47fbef723cb4aa8907647e6c9ad"
+    },
+    {
+      "name": "infoharbor_1_aud_std.dat",
+      "compressed_bytes": 112,
+      "bytes": 107,
+      "crc32": "8b604644",
+      "sha256": "0adf1a4d2aca6f4f10024a279b4238621f8532a88be3e354cd628046c3a57af3"
+    },
+    {
+      "name": "infoharbor_1_aud_std.md5",
+      "compressed_bytes": 34,
+      "bytes": 32,
+      "crc32": "a251036f",
+      "sha256": "117bb576c89fa2d919b2d76d5b56f77de861ee8010f50e737175d9b8512b1b3c"
+    }
+  ],
+  "base_dbf": {
+    "bytes": 4268265,
+    "sha256": "bdee117a65d74087dc3ec6e3dbf43608f636839eb58b74bc8ee2e6c982594652",
+    "version_byte": "0x03",
+    "last_update_y": 26,
+    "last_update_m": 9,
+    "last_update_d": 11,
+    "record_count": 8871,
+    "header_length": 1313,
+    "record_length": 481,
+    "format": "DBF structural facts; field/business semantics remain unverified"
+  },
+  "semantic_status": "NOT_VERIFIED",
+  "production": "NOT_PRODUCTION_READY",
+  "limits": [
+    "Current archive is a separate acquisition from the retained 2026-09-11 archive.",
+    "tdxhy.cfg codes and base.dbf fields are not assigned a documented TDX research-industry hierarchy or complete market-range contract.",
+    "No production import, authorization, or .day/GBBQ consistency is claimed."
+  ]
+}
