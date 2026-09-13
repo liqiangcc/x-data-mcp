@@ -1,0 +1,34 @@
+{
+  "schema": "x-data-mcp.catalog-industry-crosscheck.v1",
+  "status": "NOT_VERIFIED",
+  "comparison": {
+    "security": "688318",
+    "official_tq_get_stock_info_document": {
+      "url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h10jj7r7jol4.html",
+      "retrieved_utc": "2026-09-13T15:23:53.920768Z",
+      "bytes": 35360,
+      "sha256": "a5e49bc3f031a91bc2e877bd72828833048b268192286e88ff0d9b4c7388c05f",
+      "documented_fields": {
+        "rs_hycode_sim": "通达信行业代码",
+        "rs_hyname": "通达信行业"
+      },
+      "sample": {
+        "rs_hycode_sim": "X4202",
+        "rs_hyname": "软件服务"
+      }
+    },
+    "official_base_archive": {
+      "url": "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+      "archive_sha256": "39de51e26c0ee8fb3fd970ee870f4cb955b8fbbd7f84d752157f3998e49b71d9",
+      "member": "tdxhy.cfg",
+      "raw_line_for_688318": "1|688318|T1205|||X420202"
+    }
+  },
+  "interpretation": "The official document sample and the local file line expose different code strings for the same security. This may reflect level, revision, or field-mapping differences, but no equivalence is assumed.",
+  "limits": [
+    "The document does not define the local tdxhy.cfg columns, hierarchy, code revision, or name dictionary.",
+    "This is one security and cannot prove complete Shanghai/Shenzhen A coverage or level-2 mapping.",
+    "No production directory adapter, fallback source, or semantic mapping was added."
+  ],
+  "production": "NOT_PRODUCTION_READY"
+}

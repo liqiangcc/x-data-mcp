@@ -13,3 +13,9 @@ the older retained snapshot, so no cross-file version claim is made.
 
 Status remains `NOT_VERIFIED` and `NOT_PRODUCTION_READY`; no directory
 production adapter or data import was added.
+
+The bounded `688318` comparison in
+[`research-industry-crosscheck-688318.json`](research-industry-crosscheck-688318.json)
+records a documented TQ sample (`X4202`) beside the local `tdxhy.cfg` raw
+value (`X420202`). The difference is retained as an unresolved mapping
+observation, not normalized or treated as proof of hierarchy equivalence.
