@@ -729,3 +729,51 @@ fn real_stopping_stdio_reuses_a_verified_conclusion_as_a_bound_request_terminal(
         2
     );
 }
+
+#[test]
+fn real_two_live_stdio_processes_fence_never_started_public_collection() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("db");
+    x_data_mcp::sqlite_tasks::SqliteTasks::new(&path)
+        .initialize()
+        .unwrap();
+    let mut old = Session::new(&path);
+    let mut current = Session::new(&path);
+    old.request("initialize", json!({}));
+    current.request("initialize", json!({}));
+    for (dataset, selection) in [
+        (
+            "market.daily",
+            json!({"kind":"explicit","securities":[{"exchange":"sh","code":"600006"}]}),
+        ),
+        ("securities.catalog", json!({"scope":"current_sh_sz_a"})),
+    ] {
+        let original = old.call("start_collection", json!({"contract_version":"v1","request_id":dataset,"dataset":dataset,"selection":selection}), false);
+        let check = current.call("verify_stopped_writes", json!({"contract_version":"v1","request_id":format!("check-{dataset}"),"target_task_id":original["task_id"]}), false);
+        assert_eq!(
+            current.call("run_worker_once", json!({}), false)["task_id"],
+            check["task_id"]
+        );
+        let progress = current.call(
+            "get_task_progress",
+            json!({"task_id":check["task_id"]}),
+            false,
+        );
+        assert_eq!(progress["stopped_write_check"]["conclusion"], "interrupted");
+        // The original process is STILL alive. Its lack of an eligible task is
+        // a committed lifecycle fact, not a PID/dead-process assumption.
+        assert!(old.child.try_wait().unwrap().is_none());
+        assert_eq!(old.call("run_worker_once", json!({}), false)["idle"], true);
+        assert_eq!(
+            old.call(
+                "get_task",
+                json!({"contract_version":"v1","task_id":original["task_id"]}),
+                false
+            )["status"],
+            "interrupted"
+        );
+        let known = current.call("verify_stopped_writes", json!({"contract_version":"v1","request_id":format!("known-{dataset}"),"target_task_id":original["task_id"]}), false);
+        assert_eq!(known["terminal_result"]["kind"], "already_verified");
+        assert!(known["task"].is_null());
+    }
+}
