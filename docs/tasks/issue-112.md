@@ -19,3 +19,8 @@ AC-04：Actions稳定fmt/clippy/test/build/diff-check、packaged smoke及跨UID�
 ## 排除与状态
 
 不清理工作区/cache/历史、不改真实来源或QFQ算法、不采集/迁移真实行情、不改reading-mcp/其他会话。#54/#6/#46/#71/文件一致性仍NOT_VERIFIED，来源/#53四股/ChatGPT消费侧NOT_RUN，NOT_PRODUCTION_READY。用户完整开发/部署/测试目标继续；不是把剩余来源闭环和其他业务任务缩减掉。
+
+## 实施与首次结果
+
+worktree `/root/x-data-mcp-runtime-idle`，branch `runtime-idle-session`，base3dda98a，Draft PR #113。新增同一真实代理32秒空闲后调用get_data_capabilities的packaged回归；数据/schema/来源未改。
+13271ed 的CI/包通过；6065395 的package34753399410通过，CI34753399396在既有#106两连接同request成功重放测试遇到StorageUnavailable(database is locked)失败。失败发生在旧测试的250ms默认busy预算，不是IPC空闲或来源语义失败。仅给该“成功竞争后重放”fixture明确5s测试等待预算，所有结果/唯一审计/异参冲突断言原样；生产默认250ms和专门busy拒绝测试不变、不捕获跳过错误，也不让应用自动重试。完整结果待新Actions。

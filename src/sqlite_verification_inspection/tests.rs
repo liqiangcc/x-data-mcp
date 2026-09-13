@@ -224,6 +224,9 @@ fn stale_finish_and_stale_inspection_plans_cannot_commit() {
 fn inspection_two_connections_same_request_replay_and_different_target_conflicts() {
     use std::sync::{Arc, Barrier};
     let (_dir, db, original, check) = fixture();
+    // This asserts the successful concurrent replay contract, not a 250ms
+    // performance promise. Keep the dedicated busy/refusal test unchanged.
+    let db = db.with_busy_timeout(std::time::Duration::from_secs(5));
     let barrier = Arc::new(Barrier::new(2));
     let handles = (0..2)
         .map(|_| {
