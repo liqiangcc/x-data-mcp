@@ -52,6 +52,9 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
         found.insert(
             item,
             Evidence::Committed {
+                evidence_sha256: crate::hash::sha256(
+                    serde_json::json!([audit, receipt]).to_string().as_bytes(),
+                ),
                 receipt,
                 reused_version,
             },
@@ -72,7 +75,9 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
             .map_err(storage)?;
         for row in rows {
             let (id, version, item, command, raw_receipt) = row.map_err(storage)?;
-            let command: Publication = serde_json::from_str(&command).map_err(integrity)?;
+            let command_value: Value = serde_json::from_str(&command).map_err(integrity)?;
+            let command: Publication =
+                serde_json::from_value(command_value.clone()).map_err(integrity)?;
             let receipt: Receipt = serde_json::from_str(&raw_receipt).map_err(integrity)?;
             let record = read_record(c, &version, true, true)?;
             if receipt.publication_id != id
@@ -103,6 +108,11 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
             found.insert(
                 item,
                 Evidence::Committed {
+                    evidence_sha256: crate::hash::sha256(
+                        serde_json::json!([record.raw, command_value, receipt])
+                            .to_string()
+                            .as_bytes(),
+                    ),
                     receipt,
                     reused_version: false,
                 },

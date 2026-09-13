@@ -3,23 +3,24 @@ use crate::{
     market_storage::{Error, Receipt},
     task_control::TaskSnapshot,
 };
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Facts {
     pub task: TaskSnapshot,
     pub items: Vec<ItemFact>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ItemFact {
     pub item_id: String,
     pub evidence: Evidence,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Evidence {
     /// No committed evidence was found in this snapshot. NOT "not published".
     Missing,
     Committed {
         receipt: Receipt,
         reused_version: bool,
+        evidence_sha256: String,
     },
 }
 pub trait EvidenceRepository {

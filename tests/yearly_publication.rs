@@ -1370,6 +1370,7 @@ fn publication_facts_verify_yearly_new_and_reuse_after_head_advances() {
         let Evidence::Committed {
             receipt,
             reused_version,
+            ..
         } = &facts.items[0].evidence
         else {
             panic!("committed evidence required")
@@ -1398,6 +1399,7 @@ fn publication_facts_verify_legacy_initial_publish_and_reject_receipt_damage() {
     let Evidence::Committed {
         receipt: actual,
         reused_version,
+        ..
     } = &facts.items[0].evidence
     else {
         panic!("legacy evidence required")
@@ -1409,4 +1411,53 @@ fn publication_facts_verify_legacy_initial_publish_and_reject_receipt_damage() {
         .execute("UPDATE publication_batches SET receipt_json='{}'", [])
         .unwrap();
     assert!(store.publication_facts(&receipt.task_id).is_err());
+}
+
+#[test]
+fn publication_evidence_fingerprint_detects_changed_audit_with_identical_receipt() {
+    use x_data_mcp::publication_verification::{Evidence, EvidenceRepository};
+    let (_dir, store) = db();
+    let plan = prepare(
+        &store,
+        &samples()[0]["record"],
+        PublishIntent::Daily {
+            expected_head: None,
+        },
+    );
+    let receipt = store.commit(&plan).unwrap();
+    let first = store.publication_facts(&receipt.task_id).unwrap();
+    assert_eq!(store.publication_facts(&receipt.task_id).unwrap(), first);
+    let c = Connection::open(store.tasks.path()).unwrap();
+    let raw: String = c
+        .query_row("SELECT command_json FROM publication_batches", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let mut command: Value = serde_json::from_str(&raw).unwrap();
+    command["audit_annotation"] = json!("changed after inspection");
+    c.execute(
+        "UPDATE publication_batches SET command_json=?1",
+        [command.to_string()],
+    )
+    .unwrap();
+    let second = store.publication_facts(&receipt.task_id).unwrap();
+    let Evidence::Committed {
+        receipt: old_receipt,
+        evidence_sha256: old_digest,
+        ..
+    } = &first.items[0].evidence
+    else {
+        panic!()
+    };
+    let Evidence::Committed {
+        receipt: new_receipt,
+        evidence_sha256: new_digest,
+        ..
+    } = &second.items[0].evidence
+    else {
+        panic!()
+    };
+    assert_eq!(old_receipt, new_receipt);
+    assert_ne!(old_digest, new_digest);
+    assert_ne!(first, second);
 }

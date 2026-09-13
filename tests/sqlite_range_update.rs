@@ -1225,6 +1225,7 @@ fn publication_facts_verify_new_and_reused_versions_without_mutating_tasks() {
         let Evidence::Committed {
             receipt: actual,
             reused_version,
+            ..
         } = &facts.items[0].evidence
         else {
             panic!("committed evidence required")
