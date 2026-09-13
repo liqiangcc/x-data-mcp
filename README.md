@@ -179,3 +179,12 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 当前核实 worker 在 Claim 同事务登记实际 Linux 本地文件 guard，并持锁覆盖整个执行。检查分别核验执行已结束与持久收尾事实；足够证据时只中断核实自身、释放核实串行保护，不改原业务任务、行情或 head。未登记旧执行、缺失/替换 guard、内核或文件系统边界不符均不能产生停止证明；已有合法结果不回滚。正常运行不强制中断。条件冲突至多重新检查一次，未知提交先读持久请求，不盲目重试。
 
 本切片的 Actions 验证及执行者自查按准确 HEAD 记录，结果见 [#106 记录](docs/tasks/issue-106.md) 和 PR。线上仍为已部署 preview.4/schema7/16 工具，本段不是新版部署声明。真实来源、#53 四股及新版 ChatGPT 消费侧 NOT_RUN；生产仍 NOT_PRODUCTION_READY，来源门禁未解除。
+
+
+## preview.5 发布准备（#108）
+
+本版本集成已合并 #104/#106：18 工具、显式 schema v9，包含发布结果核实与异常核实任务的有界处置。运行期 guard 仅适用于已登记的 Linux 本地执行；不为旧未登记执行补造停止证明。
+
+发布准备基线为 main ec50623dc385b873339273e5d8c97ad9dda12ee5。当前线上仍 preview.4/schema7；本节不是部署完成声明。正式切换前须验证发布 SHA 对应包/manifest/binary、隔离 synthetic smoke，暂停目标服务后保留库/配置备份，显式升级 schema7→9，再切换同一 tunnel。普通库不导入 demo，旧包/备份保留。
+
+准确 tag、SHA、升级与 stdio/tunnel 验收记录见 [#108](https://github.com/liqiangcc/x-data-mcp/issues/108) 和[发布操作记录](docs/tasks/issue-108.md)。ChatGPT 消费侧在实际调用前为 NOT_RUN；来源/#53 四股仍 NOT_RUN，#54/#6/#46/#71/文件一致性 NOT_VERIFIED，NOT_PRODUCTION_READY。其他恢复、目录和真实数据闭环继续未完成。
