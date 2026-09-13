@@ -7,9 +7,13 @@ fn now() -> DateTime<Utc> {
 }
 fn fixture() -> (TempDir, Value) {
     let dir = tempfile::tempdir().unwrap();
-    let files=[("base_industry","base.zip",b"base".as_slice()),("day","hsjday.zip",b"day".as_slice()),("gbbq","gbbq.zip",b"gbbq".as_slice())].into_iter().map(|(role,name,bytes)| {
+    let files=[
+        ("base_industry","base.zip", "http://www.tdx.com.cn/products/data/data/dbf/base.zip", b"base".as_slice()),
+        ("day","hsjday.zip", "https://data.tdx.com.cn/vipdoc/hsjday.zip", b"day".as_slice()),
+        ("gbbq","gbbq.zip", "http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip", b"gbbq".as_slice()),
+    ].into_iter().map(|(role,name,url,bytes)| {
         std::fs::write(dir.path().join(name),bytes).unwrap();
-        json!({"role":role,"relative_path":name,"source_url":format!("https://data.tdx.com.cn/{name}"),"acquisition_started_at":"2026-09-11T01:00:00Z","acquisition_completed_at":"2026-09-11T02:00:00Z","last_modified":null,"etag":null,"bytes":bytes.len(),"sha256":x_data_mcp::day_file::sha256(bytes)})
+        json!({"role":role,"relative_path":name,"source_url":url,"acquisition_started_at":"2026-09-11T01:00:00Z","acquisition_completed_at":"2026-09-11T02:00:00Z","last_modified":null,"etag":null,"bytes":bytes.len(),"sha256":x_data_mcp::day_file::sha256(bytes)})
     }).collect::<Vec<_>>();
     (
         dir,
@@ -69,6 +73,20 @@ fn invalid_manifest_roles_intervals_hashes_and_paths_reject() {
             inspect(&serde_json::to_vec(&m).unwrap(), dir.path(), now()).is_err(),
             "{m}"
         );
+    }
+}
+
+#[test]
+fn role_must_match_the_declared_official_download_path() {
+    let (dir, original) = fixture();
+    for (index, wrong_url) in [
+        (0, "https://data.tdx.com.cn/vipdoc/hsjday.zip"),
+        (1, "http://www.tdx.com.cn/products/data/data/dbf/base.zip"),
+        (2, "http://www.tdx.com.cn/products/data/data/dbf/base.zip"),
+    ] {
+        let mut manifest = original.clone();
+        manifest["files"][index]["source_url"] = json!(wrong_url);
+        assert!(inspect(&serde_json::to_vec(&manifest).unwrap(), dir.path(), now()).is_err());
     }
 }
 #[test]

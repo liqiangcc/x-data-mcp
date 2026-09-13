@@ -91,9 +91,9 @@ pub fn inspect(
                 "artifact path must be relative without parent/current components",
             ));
         }
-        if !declared_official_url(&input.source_url) {
+        if !declared_official_url(input.role, &input.source_url) {
             return Err(InspectionError::Invalid(
-                "expected declared TDX http(s) URL",
+                "expected role-specific declared TDX http(s) URL",
             ));
         }
         if input.acquisition_started_at > input.acquisition_completed_at
@@ -167,7 +167,7 @@ pub fn inspect(
         live_source: "NOT_RUN",
     })
 }
-fn declared_official_url(url: &str) -> bool {
+fn declared_official_url(role: FileRole, url: &str) -> bool {
     let Some(rest) = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
@@ -177,8 +177,18 @@ fn declared_official_url(url: &str) -> bool {
     let Some((host, path)) = rest.split_once('/') else {
         return false;
     };
+    let expected_path = match role {
+        FileRole::BaseIndustry => "/products/data/data/dbf/base.zip",
+        FileRole::Gbbq => "/products/data/data/dbf/gbbq.zip",
+        FileRole::Day => "/vipdoc/hsjday.zip",
+    };
+    let host_allowed = match role {
+        FileRole::Day => host == "data.tdx.com.cn",
+        FileRole::BaseIndustry | FileRole::Gbbq => host == "tdx.com.cn" || host == "www.tdx.com.cn",
+    };
     !path.is_empty()
         && !url.chars().any(char::is_whitespace)
         && !host.contains(['@', ':', '?', '#'])
-        && (host == "tdx.com.cn" || host.ends_with(".tdx.com.cn"))
+        && host_allowed
+        && path == expected_path
 }
