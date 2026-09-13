@@ -30,6 +30,12 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
 5. LOCAL_PIPELINE：已有独立 .day parser、yearly core、snapshot inspector 和 SQLite 条件发布。
    尚无通过以上门禁的真实目录、GBBQ/QFQ 和生产装配。接口/fixture 测试不能填补来源证据。
 
+## 跨文件一致性 validator（#131）
+
+逐文件 `FILE_BYTES_VERIFIED` 与跨文件可组合性是两个独立门禁。`src/file_consistency.rs` 只接受显式、不可变的兼容性证明：证明必须绑定 base、hsjday、GBBQ 三个角色的精确 SHA-256、来源身份、来源修订和适用时间窗。相同 URL、下载日期、ETag、Last-Modified 或分别正确的摘要不会被推断为兼容。
+
+validator 的结果是 `VERIFIED_COMPATIBLE`、`NOT_VERIFIED` 或 `CONFLICT`，输入顺序与完全相同的重复事实不改变结果，并保留角色/摘要/来源元数据和证据引用。保留的 #74 快照没有跨文件证明，测试明确返回 `NOT_VERIFIED`；当前状态没有生产放行，也不改变 #54、#46/#6 或 #71 的结论。该模块不增加 MCP 工具、不联网、不提供 fallback/force 开关。
+
 ## 本轮官方公开文档复核（2026-09-12）
 
 只读取网页，不运行 SDK、不下载新行情、不登录或联系厂商。
