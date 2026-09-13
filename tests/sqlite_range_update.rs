@@ -1208,3 +1208,51 @@ fn range_cancel_ack_requires_stopped_items_and_does_not_rewrite_terminals() {
     );
     assert_eq!(completed.db.task(&terminal.task.task_id).unwrap(), terminal);
 }
+
+#[test]
+fn publication_facts_verify_new_and_reused_versions_without_mutating_tasks() {
+    use x_data_mcp::publication_verification::{Evidence, EvidenceRepository};
+    for changed in [false, true] {
+        let f = fixture(changed);
+        let before = f.db.task(&f.command.task_id).unwrap();
+        let missing = f.db.publication_facts(&f.command.task_id).unwrap();
+        assert_eq!(missing.task, before);
+        assert!(matches!(missing.items[0].evidence, Evidence::Missing));
+        let receipt = f.db.commit_range(&f.plan()).unwrap();
+        let after = f.db.task(&f.command.task_id).unwrap();
+        let facts = f.db.publication_facts(&f.command.task_id).unwrap();
+        assert_eq!(facts.task, after);
+        let Evidence::Committed {
+            receipt: actual,
+            reused_version,
+        } = &facts.items[0].evidence
+        else {
+            panic!("committed evidence required")
+        };
+        assert_eq!(actual, &receipt);
+        assert_eq!(*reused_version, !changed);
+        assert_eq!(f.db.task(&f.command.task_id).unwrap(), after);
+        assert_eq!(f.head(), f.command.version_id);
+    }
+}
+
+#[test]
+fn publication_facts_reject_missing_success_receipt_and_damaged_fixed_data() {
+    use x_data_mcp::publication_verification::EvidenceRepository;
+    for damage in [
+        "DELETE FROM market_update_results",
+        "UPDATE market_update_results SET result_sha256='broken'",
+        "UPDATE daily_bars SET close='999'",
+    ] {
+        let f = fixture(false);
+        f.db.commit_range(&f.plan()).unwrap();
+        Connection::open(f.db.tasks.path())
+            .unwrap()
+            .execute(damage, [])
+            .unwrap();
+        assert!(
+            f.db.publication_facts(&f.command.task_id).is_err(),
+            "{damage}"
+        );
+    }
+}
