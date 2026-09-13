@@ -1,0 +1,238 @@
+{
+  "baseline_commit": "b3fe2b3bae22d558c3f193e668773728a2e0df34",
+  "status": "current implementation snapshot; not runtime configuration",
+  "tools": [
+    {
+      "name": "start_collection",
+      "description": "Accept local official-file processing: day is QFQ daily; year derives from one published QFQ daily version. Production source is NOT_VERIFIED.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "symbols",
+          "periods"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "symbols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "periods": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "day",
+                "year"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "get_task",
+      "description": "Read a task status, frozen range, and scope results.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "run_worker_once",
+      "description": "Process at most one pending or recovering task.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
+      "name": "cancel_task",
+      "description": "Request cancellation of a pending or running task.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "retry_task",
+      "description": "Retry explicitly selected unfinished scopes as a new linked task.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "original_task_id",
+          "new_request_id",
+          "selected_scopes"
+        ],
+        "properties": {
+          "original_task_id": {
+            "type": "string"
+          },
+          "new_request_id": {
+            "type": "string"
+          },
+          "selected_scopes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "symbol",
+                "period"
+              ],
+              "properties": {
+                "symbol": {
+                  "type": "string"
+                },
+                "period": {
+                  "type": "string",
+                  "enum": [
+                    "day",
+                    "year"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "get_market_data",
+      "description": "Read integrity-checked published storage only. No collection, repair or source fallback. Cursors fix the version and query within this process.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "exchange",
+          "code",
+          "period",
+          "start_date",
+          "end_date"
+        ],
+        "properties": {
+          "exchange": {
+            "type": "string",
+            "enum": [
+              "sh",
+              "sz"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          },
+          "period": {
+            "type": "string",
+            "enum": [
+              "day",
+              "year"
+            ]
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "version_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "list_market_data_versions",
+      "description": "Read integrity-checked published storage only. No collection, repair or source fallback. Cursors fix the version and query within this process.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "exchange",
+          "code",
+          "period"
+        ],
+        "properties": {
+          "exchange": {
+            "type": "string",
+            "enum": [
+              "sh",
+              "sz"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          },
+          "period": {
+            "type": "string",
+            "enum": [
+              "day",
+              "year"
+            ]
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          "cursor": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "get_request",
+      "description": "Read the actual request_id binding and task state without accepting work.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
+}

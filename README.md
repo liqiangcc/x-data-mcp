@@ -17,6 +17,12 @@
 
 研发以 [GitHub Issues](https://github.com/liqiangcc/x-data-mcp/issues) 为任务入口：先明确需求、主要 Use Case、Business Rule 和 Acceptance Criteria，再进行设计、实现与验证。每个任务保留实际提交及验证证据。
 
+## 设计入口
+
+[整体设计](docs/design.md)串联业务流程、模块职责、版本/任务和运行验收；
+[MCP tools 契约](docs/mcp-tools.md)区分当前八工具与后续能力，附当前输入 schema 快照。
+SQLite 专项入口由整体设计统一引用。设计目标不表示实现、来源或部署已经验收。
+
 ## 与旧项目的关系
 
 [liqiangcc/x](https://github.com/liqiangcc/x) 是需求线索、历史实现、数据契约与回归场景的参考。旧行为不能替代已确认业务要求；不整体复制旧仓库的数据、运行记录或实现。

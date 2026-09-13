@@ -1,0 +1,26 @@
+{
+  "schema": "generic-start-collection-v1.json",
+  "status": "design-only; does not prove runtime idempotency, source access or complete tool schemas",
+  "cases": [
+    {"id":"daily-single","valid":true,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}},
+    {"id":"identical-write-members-accepted","valid":true,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"},{"exchange":"sh","code":"600000"}]}}},
+    {"id":"leading-zero-preserved","valid":true,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"},{"exchange":"sz","code":"000001"}]}}},
+    {"id":"reordered-write-members-accepted","valid":true,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sz","code":"000001"},{"exchange":"sh","code":"600000"}]}}},
+    {"id":"catalog","valid":true,"input":{"request_id":"catalog-001","dataset":"securities.catalog","contract_version":"v1","selection":{"scope":"current_sh_sz_a"}}},
+    {"id":"empty-request-id","valid":false,"input":{"request_id":"","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}},
+    {"id":"whitespace-request-id","valid":false,"input":{"request_id":" \t\n","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}},
+    {"id":"unsupported-dataset-in-this-slice","valid":false,"input":{"request_id":"daily-001","dataset":"market.yearly","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}},
+    {"id":"unsupported-contract","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v999","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}},
+    {"id":"mixed-legacy-new","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","symbols":["sh.600000"],"periods":["day"],"selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}},
+    {"id":"unknown-top-field","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","options":{},"selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}},
+    {"id":"empty-securities","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[]}}},
+    {"id":"unknown-selection-field","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","source":"other","securities":[{"exchange":"sh","code":"600000"}]}}},
+    {"id":"unknown-entity-field","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000","name":"example"}]}}},
+    {"id":"wrong-exchange","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"bj","code":"600000"}]}}},
+    {"id":"integer-code","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":600000}]}}},
+    {"id":"short-code","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"00001"}]}}},
+    {"id":"missing-request-id","valid":false,"input":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}},
+    {"id":"null-selection","valid":false,"input":{"request_id":"daily-001","dataset":"market.daily","contract_version":"v1","selection":null}},
+    {"id":"catalog-rejects-market-fields","valid":false,"input":{"request_id":"catalog-001","dataset":"securities.catalog","contract_version":"v1","selection":{"scope":"current_sh_sz_a","securities":[]}}}
+  ]
+}
