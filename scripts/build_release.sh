@@ -16,6 +16,7 @@ done
 cp README.md "$stage/README.md"
 cp fixtures/demo/README.md "$stage/DEMO_DATA.md"
 cp scripts/smoke_release.py "$stage/check.py"
+cp scripts/test_runtime_peer.py "$stage/check_peer.py"
 python3 - "$stage" "$version" "$revision" <<'PY'
 import json,pathlib,subprocess,sys
 stage,version,revision=sys.argv[1:]
@@ -23,7 +24,7 @@ manifest=dict(version=version,git_sha=revision,target="x86_64-unknown-linux-gnu"
 pathlib.Path(stage,"manifest.json").write_text(json.dumps(manifest,indent=2)+"\n")
 PY
 "$stage/bin/mcp_data" --version | python3 -c 'import sys; assert sys.argv[1] in sys.stdin.read(), "binary build SHA does not match package"' "$revision"
-(cd "$stage" && sha256sum bin/* README.md DEMO_DATA.md check.py manifest.json > SHA256SUMS)
+(cd "$stage" && sha256sum bin/* README.md DEMO_DATA.md check.py check_peer.py manifest.json > SHA256SUMS)
 tar -czf "dist/${name}.tar.gz" -C dist "$name"
 (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
 printf '%s\n' "$stage"

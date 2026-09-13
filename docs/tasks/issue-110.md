@@ -48,3 +48,8 @@ c9d5095：Actions 34750700088 / rust103706627884，fmt/clippy 已通过，测试
 a1c844f 的 CI 34751008701 / rust103707433413 SUCCESS，包含真实在途取消/退出预算/重启、proxy服务EOF 和稳定入口。此前7dd3268 的34750915938在测试SQL count读取误用u64处编译失败，已按SQLite i64修正；没有降低断言。
 执行者自查继续处理与本任务直接相关的运行边界：服务锁与IPC目录复用已有FD级本地文件系统白名单；现有 verification guard 的拒绝语义保留。owner marker 完整写后无覆盖发布，避免空标记；会话panic令当前服务停止，不能忽略后继续旧run。跨UID真实调用尚未运行，不把同UID SO_PEERCRED检查外推为跨UID验收。
 发布脚本携带 data_service/mcp_connect；现有9项 packaged检查保留，增加第10项真实服务/代理发现、受理后重连与来源拒绝。新版包/线上服务/ChatGPT消费尚未验证，不冒充已部署。
+
+## 跨 UID 直接验收入口
+
+为验证实际 SO_PEERCRED 而非只看代码/同UID连接，新增 `scripts/test_runtime_peer.py`：仅 root 显式运行、仅新建私有临时库，使用系统已有 nobody UID，不建账号。先验证0700/0600的文件系统拒绝，再仅在该临时fixture放宽目录/socket权限，确认真实不同UID连接被peer检查拒绝；最后复核owner可连接且tasks/requests均0。非root退出NOT_RUN，不把跳过记PASS。探针不继承环境凭据。
+Actions在稳定build后使用sudo -n执行该有界测试；package workflow对实际打包binary也执行。该验证不涉及线上库/tunnel/来源/业务写入，也不证明ChatGPT远程认证。准确结果以新run为准。
