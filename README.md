@@ -188,3 +188,13 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 发布准备基线为 main ec50623dc385b873339273e5d8c97ad9dda12ee5。当前线上仍 preview.4/schema7；本节不是部署完成声明。正式切换前须验证发布 SHA 对应包/manifest/binary、隔离 synthetic smoke，暂停目标服务后保留库/配置备份，显式升级 schema7→9，再切换同一 tunnel。普通库不导入 demo，旧包/备份保留。
 
 准确 tag、SHA、升级与 stdio/tunnel 验收记录见 [#108](https://github.com/liqiangcc/x-data-mcp/issues/108) 和[发布操作记录](docs/tasks/issue-108.md)。ChatGPT 消费侧在实际调用前为 NOT_RUN；来源/#53 四股仍 NOT_RUN，#54/#6/#46/#71/文件一致性 NOT_VERIFIED，NOT_PRODUCTION_READY。其他恢复、目录和真实数据闭环继续未完成。
+
+## 长期服务与本机 IPC（#110，开发中）
+
+新增 Linux `data_service <已初始化库> <私有目录/socket> [--poll-ms <10..60000>]` 与
+`mcp_connect <私有目录/socket>` 独立入口。后者只代理协议，服务持有共同启动身份及单 worker；
+旧非终态不自动续跑。socket 目录需本人所有且0700，库文件需0600；不自动修改权限、建库或升级。
+默认 worker 轮询100ms，只执行显式受理任务。读取及取消可使用其他会话，手动 worker 与后台串行，
+忙时返回 `worker_busy`，停止中返回 `worker_stopping`。工程预算与实际证据见 [#110](docs/tasks/issue-110.md)。
+此入口尚未部署到 tunnel；旧 `mcp_data` 等兼容开发入口不与服务同库混用。
+仍 NOT_PRODUCTION_READY，来源门禁不变。源码/fixture 不代表真实来源或新版 ChatGPT 调用通过。
