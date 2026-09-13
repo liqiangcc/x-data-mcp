@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 7;
-const MIGRATIONS: [&str; 7] = [
+pub const SCHEMA_VERSION: u32 = 8;
+const MIGRATIONS: [&str; 8] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
     include_str!("../migrations/tasks/003_market.sql"),
@@ -17,6 +17,7 @@ const MIGRATIONS: [&str; 7] = [
     include_str!("../migrations/tasks/005_update_results.sql"),
     include_str!("../migrations/tasks/006_yearly_results.sql"),
     include_str!("../migrations/tasks/007_stopped_checks.sql"),
+    include_str!("../migrations/tasks/008_publication_checks.sql"),
 ];
 #[derive(Clone)]
 pub struct SqliteTasks {
@@ -294,6 +295,7 @@ fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
     };
     validate_snapshot(&s, &scopes)?;
     crate::sqlite_verification::validate_task_link(c, &s)?;
+    crate::sqlite_market::publication_checks::validate_task_link(c, &s)?;
     Ok(Some(s))
 }
 fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), Error> {

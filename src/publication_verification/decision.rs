@@ -155,3 +155,29 @@ pub fn prepare(
         },
     })
 }
+
+pub(crate) fn validate_audit(audit: &Audit) -> Result<(), Error> {
+    let run = audit
+        .verification_before
+        .task
+        .owner_run_id
+        .as_deref()
+        .unwrap_or("");
+    let expected = prepare(
+        audit.verification_before.clone(),
+        audit.facts.clone(),
+        run,
+        &audit.actor,
+        audit.checked_at,
+    )?;
+    if expected.audit != *audit {
+        return Err(Error::NeedsVerification(
+            "publication check audit projections differ".into(),
+        ));
+    }
+    Ok(())
+}
+pub trait AuditStore {
+    fn commit_check(&self, plan: &Plan) -> Result<Receipt, crate::market_storage::Error>;
+    fn check_receipt(&self, id: &str) -> Result<Option<Receipt>, crate::market_storage::Error>;
+}
