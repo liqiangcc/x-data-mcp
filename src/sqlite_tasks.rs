@@ -437,6 +437,7 @@ pub(crate) fn read_request(c: &Connection, id: &str) -> Result<Option<RequestRec
         ("terminal", None, Some(v)) => {
             let value = decode(v)?;
             crate::sqlite_verification::validate_terminal(c, &command, &value)?;
+            crate::sqlite_market::publication_checks::validate_terminal(c, &command, &value)?;
             RequestOutcome::Terminal(value)
         }
         _ => return Err(inconsistent("request outcome incomplete")),

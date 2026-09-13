@@ -224,3 +224,107 @@ mod tests {
         }
     }
 }
+
+use crate::publication_verification::existing::{KnownPlan, KnownRepository, TerminalResult};
+fn task_error(error: Error) -> crate::task_control::Error {
+    match error {
+        Error::Task(e) => e,
+        Error::Storage(s) => crate::task_control::Error::StorageUnavailable(s),
+        Error::OutcomeUnknown(s) => crate::task_control::Error::OutcomeUnknown(s),
+        other => crate::task_control::Error::NeedsVerification(other.to_string()),
+    }
+}
+pub(crate) fn validate_terminal(
+    c: &Connection,
+    command: &crate::task_control::Command,
+    value: &Value,
+) -> Result<(), crate::task_control::Error> {
+    if command.key != crate::publication_verification::admission::command_key() {
+        return Ok(());
+    }
+    let result: TerminalResult =
+        serde_json::from_value(value.clone()).map_err(|e| task_error(integrity(e)))?;
+    let receipt = result.receipt();
+    if receipt.conclusion != Conclusion::AllRecorded
+        || command.intent != serde_json::json!({"target_task_id":receipt.target_task_id})
+    {
+        return Err(task_error(integrity(
+            "known publication request intent/conclusion differs",
+        )));
+    }
+    if read_receipt(c, &receipt.verification_task_id)
+        .map_err(task_error)?
+        .map(|(_, r)| r)
+        .as_ref()
+        != Some(receipt)
+    {
+        return Err(task_error(integrity(
+            "known publication receipt missing or changed",
+        )));
+    }
+    Ok(())
+}
+impl KnownRepository for SqliteTasks {
+    fn known_publication(
+        &self,
+        target: &str,
+    ) -> Result<Option<CheckReceipt>, crate::task_control::Error> {
+        self.read(|c| {
+            let mut stmt=c.prepare("SELECT verification_task_id AS id FROM publication_checks WHERE target_task_id=?1 UNION SELECT t.task_id FROM tasks t JOIN task_items i ON i.task_id=t.task_id WHERE t.status='succeeded' AND json_extract(t.command_key_json,'$.operation')='verify_publication_result' AND json_extract(i.target_json,'$.task_id')=?1 ORDER BY id").map_err(|e|task_error(storage(e)))?;
+            let ids=stmt.query_map([target],|r|r.get::<_,String>(0)).map_err(|e|task_error(storage(e)))?;
+            for id in ids {
+                let id=id.map_err(|e|task_error(storage(e)))?;
+                if let Some((_,receipt))=read_receipt(c,&id).map_err(task_error)? {
+                    if receipt.target_task_id!=target {return Err(task_error(integrity("known check targets another task")));}
+                    if receipt.conclusion==Conclusion::AllRecorded {return Ok(Some(receipt));}
+                }
+            }
+            Ok(None)
+        })
+    }
+    fn bind_known_publication(
+        &self,
+        plan: &KnownPlan,
+    ) -> Result<crate::task_control::Acceptance, crate::task_control::Error> {
+        use crate::task_control::{Acceptance, Error as TaskError, RequestOutcome, RequestRecord};
+        self.write(|c| {
+            if let Some(record) = crate::sqlite_tasks::read_request(c, &plan.request_id)? {
+                if record.command != plan.command {
+                    return Err(TaskError::RequestConflict);
+                }
+                return Ok(Acceptance {
+                    record,
+                    reused: true,
+                });
+            }
+            if crate::sqlite_tasks::read_bound_task(c, &plan.target.task.task_id)?.as_ref()
+                != Some(&plan.target)
+            {
+                return Err(TaskError::RevisionConflict);
+            }
+            let value = serde_json::to_value(&plan.result).map_err(|e| task_error(integrity(e)))?;
+            validate_terminal(c, &plan.command, &value)?;
+            let command =
+                serde_json::to_string(&plan.command).map_err(|e| task_error(integrity(e)))?;
+            let raw = serde_json::to_string(&value).map_err(|e| task_error(integrity(e)))?;
+            c.execute(
+                "INSERT INTO requests VALUES(?1,?2,?3,'terminal',NULL,?4)",
+                params![
+                    plan.request_id,
+                    command,
+                    crate::hash::sha256(command.as_bytes()),
+                    raw
+                ],
+            )
+            .map_err(|e| task_error(storage(e)))?;
+            Ok(Acceptance {
+                record: RequestRecord {
+                    request_id: plan.request_id.clone(),
+                    command: plan.command.clone(),
+                    outcome: RequestOutcome::Terminal(value),
+                },
+                reused: false,
+            })
+        })
+    }
+}
