@@ -48,12 +48,7 @@ pub fn parse(bytes: &[u8]) -> Result<RawFile, Error> {
             expected,
         });
     }
-    let records = bytes[4..]
-        .as_chunks::<RECORD_BYTES>()
-        .0
-        .iter()
-        .copied()
-        .collect();
+    let records = bytes[4..].as_chunks::<RECORD_BYTES>().0.to_vec();
     Ok(RawFile {
         record_count,
         records,
