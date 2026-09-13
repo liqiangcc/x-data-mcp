@@ -360,7 +360,7 @@ mod tests {
             file(FileRole::Gbbq, b'c'),
         ];
         let mut proof = evidence(&files);
-        proof.file_hashes.insert(FileRole::Day, hash(b'x'));
+        proof.file_hashes.insert(FileRole::Day, hash(b'e'));
         assert_eq!(
             validate(ConsistencyInput {
                 files: files.clone(),
