@@ -189,7 +189,7 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 
 准确 tag、SHA、升级与 stdio/tunnel 验收记录见 [#108](https://github.com/liqiangcc/x-data-mcp/issues/108) 和[发布操作记录](docs/tasks/issue-108.md)。ChatGPT 消费侧在实际调用前为 NOT_RUN；来源/#53 四股仍 NOT_RUN，#54/#6/#46/#71/文件一致性 NOT_VERIFIED，NOT_PRODUCTION_READY。其他恢复、目录和真实数据闭环继续未完成。
 
-## 长期服务与本机 IPC（#110，开发中）
+## 长期服务与本机 IPC（#110）
 
 新增 Linux `data_service <已初始化库> <私有目录/socket> [--poll-ms <10..60000>]` 与
 `mcp_connect <私有目录/socket>` 独立入口。后者只代理协议，服务持有共同启动身份及单 worker；
@@ -197,13 +197,19 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 默认 worker 轮询100ms，只执行显式受理任务。读取及取消可使用其他会话，手动 worker 与后台串行，
 忙时返回 `worker_busy`，停止中返回 `worker_stopping`。工程预算与实际证据见 [#110](docs/tasks/issue-110.md)。
 IPC正常空闲不会结束会话；30秒读取预算从收到未完整帧的第一字节起计算，修复见 [#112](docs/tasks/issue-112.md)。
-此入口尚未部署到 tunnel；旧 `mcp_data` 等兼容开发入口不与服务同库混用。
+preview.6 已将实际 tunnel profile 接到 `mcp_connect`；旧 `mcp_data` 等兼容开发入口不与服务同库混用。
 仍 NOT_PRODUCTION_READY，来源门禁不变。源码/fixture 不代表真实来源或新版 ChatGPT 调用通过。
 
 ## 当前预览部署与空闲修复（#108/#112）
 
-服务器已部署 preview.5 / `3dda98aa2bc8115e158674ac1a50dfc020e1448a`，普通库schema9、独立worker及18工具。
-但实际上线检查发现空闲32秒后代理退出；健康接口成功不代表工具连接仍可用。
-本分支准备不可变修正版 `v0.2.0-preview.6`，保留空闲会话、只给未完整帧设置读取预算；
-真实打包回归在同一代理空闲超过30秒后再次调用工具。修正版尚未部署，准确结果见 [#112](https://github.com/liqiangcc/x-data-mcp/issues/112)。
-普通库仍为空，来源门禁未解除，新版ChatGPT消费侧NOT_RUN；完整目标与最终部署验收未完成。
+2026-09-13 已部署 [v0.2.0-preview.6](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.6)，
+二进制代码 `7e37d27a8d85e921d8162d7e49377ad1700d6ada`，普通库schema9、独立worker及18工具。
+同一实际代理stdin保持打开32秒后再次调用工具通过；实际tunnel profile已由旧式 `mcp_data` 改接
+`mcp_connect`，数据服务保持同一进程，tunnel后端代理及控制面轮询检查通过。
+单独修改mcp.json不足以证明tunnel装配改变，必须检查其实际profile与进程。
+
+preview.5空闲退出、preview.6首次检查发现profile仍指向旧入口的失败记录均保留。
+准确CI、包摘要、备份、调用与运行边界见[部署结果](docs/tasks/preview6-results.md)。
+本节更新此前各版本准备段落中的历史线上状态；旧段落不是当前版本声明。
+普通库仍为空，来源门禁未解除，ChatGPT本次消费侧NOT_RUN。
+NOT_PRODUCTION_READY：本机部署检查通过不代表真实数据闭环或完整目标已完成。
