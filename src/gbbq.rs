@@ -52,7 +52,7 @@ pub fn parse(bytes: &[u8]) -> Result<RawFile, Error> {
         .as_chunks::<RECORD_BYTES>()
         .0
         .iter()
-        .map(|chunk| *chunk)
+        .copied()
         .collect();
     Ok(RawFile {
         record_count,
