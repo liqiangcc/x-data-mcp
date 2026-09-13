@@ -916,6 +916,20 @@ fn real_publication_stdio_inspects_fixed_evidence_without_changing_original_task
                 "insufficient_evidence"
             }
         );
+        assert!(
+            !progress["publication_check"]["reason"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            progress["publication_check"]["missing_receipt_item_ids"],
+            if published {
+                json!([])
+            } else {
+                json!([original.items[0].spec.item_id])
+            }
+        );
         assert_eq!(progress["stopped_write_check"], Value::Null);
         assert_eq!(progress["task"]["status"], "succeeded");
         let listed = s.call(

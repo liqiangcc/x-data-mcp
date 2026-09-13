@@ -18,6 +18,8 @@ pub struct Receipt {
     pub verification_revision: u64,
     pub target_revision: u64,
     pub conclusion: Conclusion,
+    pub reason: String,
+    pub missing_receipt_item_ids: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Audit {
@@ -122,6 +124,17 @@ pub fn prepare(
     } else {
         Conclusion::NotApplicable
     };
+    let missing_receipt_item_ids = facts
+        .items
+        .iter()
+        .filter(|f| matches!(f.evidence, Evidence::Missing))
+        .map(|f| f.item_id.clone())
+        .collect();
+    let reason = match conclusion {
+        Conclusion::AllRecorded => "all task items have verified fixed publication evidence; this does not prove writers stopped",
+        Conclusion::InsufficientEvidence => "one or more task items lack a committed publication receipt; absence does not prove failure or non-publication; original protection retained",
+        Conclusion::NotApplicable => "target no longer requires publication inspection; missing receipts are not classified as publication failure",
+    }.into();
     let mut after = check.clone();
     after.task.status = Status::Succeeded;
     after.task.state_revision = after
@@ -142,6 +155,8 @@ pub fn prepare(
         verification_revision: after.task.state_revision,
         target_revision: target.task.state_revision,
         conclusion,
+        reason,
+        missing_receipt_item_ids,
     };
     after.task.result = Some(json!({"publication_check":receipt}));
     Ok(Plan {

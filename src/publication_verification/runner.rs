@@ -74,6 +74,20 @@ impl<T: TaskRepository, E: EvidenceRepository + AuditStore> Runner<T, E> {
             }
         }
     }
+    fn prepare(
+        &self,
+        check: TaskSnapshot,
+        facts: super::Facts,
+    ) -> Result<super::decision::Plan, Error> {
+        let id = check.task.task_id.clone();
+        match prepare(check, facts, &self.run_id, &self.actor, chrono::Utc::now()) {
+            Ok(plan) => Ok(plan),
+            Err(error) => {
+                self.preserve_unresolved(&id)?;
+                Err(error.into())
+            }
+        }
+    }
     pub fn run(&self, id: &str) -> Result<Outcome, Error> {
         if self.run_id.trim().is_empty() || self.actor.trim().is_empty() {
             return Err(Error::Invalid(
@@ -119,7 +133,7 @@ impl<T: TaskRepository, E: EvidenceRepository + AuditStore> Runner<T, E> {
             Change::StartItem("publication-results".into()),
         )?;
         let facts = self.facts(id, &target)?;
-        let plan = prepare(check, facts, &self.run_id, &self.actor, chrono::Utc::now())?;
+        let plan = self.prepare(check, facts)?;
         let current = self.task(id)?;
         if current.task.status == Status::CancelRequested {
             return self.cancel(current);
@@ -139,17 +153,12 @@ impl<T: TaskRepository, E: EvidenceRepository + AuditStore> Runner<T, E> {
                     return self.cancel(current);
                 }
                 if current != plan.audit.verification_before {
+                    self.preserve_unresolved(id)?;
                     return Err(error);
                 }
                 // One fresh verified read, never the stale proof or a loop.
                 let facts = self.facts(id, &target)?;
-                let fresh = prepare(
-                    current,
-                    facts,
-                    &self.run_id,
-                    &self.actor,
-                    chrono::Utc::now(),
-                )?;
+                let fresh = self.prepare(current, facts)?;
                 match self.evidence.commit_check(&fresh) {
                     Ok(receipt) => Ok(Outcome::Completed(receipt)),
                     Err(error) => match self.evidence.check_receipt(id)? {
