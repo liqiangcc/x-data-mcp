@@ -603,6 +603,8 @@ fn stopped_schema_upgrade_uses_real_v6_ddl_preserves_bindings_and_rejects_broken
         }
         c.execute_batch("DETACH DATABASE source").unwrap();
         if broken {
+            // Deliberately construct corruption outside the production Adapter.
+            c.pragma_update(None, "foreign_keys", false).unwrap();
             c.execute("INSERT INTO task_scopes VALUES('nonexistent','orphan')", [])
                 .unwrap();
         }
@@ -652,4 +654,108 @@ fn stopped_schema_upgrade_uses_real_v6_ddl_preserves_bindings_and_rejects_broken
             old.upgrade().unwrap();
         }
     }
+}
+
+#[path = "support/market.rs"]
+mod market_fixture;
+#[test]
+fn stopped_compound_task_retains_verified_published_daily_and_its_original_head() {
+    use x_data_mcp::{
+        market_data::Period,
+        market_storage::{MarketRepository, Publication, PublishIntent, Publisher, Scope},
+        sqlite_market::SqliteMarket,
+    };
+    let (_d, r) = db();
+    let market = SqliteMarket::new(r.clone());
+    let raw = market_fixture::samples()[0]["record"].clone();
+    market.stage(&raw).unwrap();
+    let business = TaskControl::new(
+        r.clone(),
+        "old-run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    let target = task(
+        business
+            .accept(
+                "compound",
+                LegacyCollection.key(),
+                json!({"symbols":["sh.600006"],"periods":["day","year"]}),
+            )
+            .unwrap(),
+    );
+    let target = r
+        .transition(&target.task.task_id, 0, "old-run", Change::Claim)
+        .unwrap();
+    let day = target
+        .items
+        .iter()
+        .find(|i| i.spec.target["period"] == "day")
+        .map(|i| i.spec.item_id.clone())
+        .expect("compound fixture must contain a daily item");
+    let target = r
+        .transition(
+            &target.task.task_id,
+            target.task.state_revision,
+            "old-run",
+            Change::StartItem(day.clone()),
+        )
+        .unwrap();
+    let publisher = Publisher {
+        repository: market.clone(),
+    };
+    let candidate = publisher
+        .prepare(Publication {
+            publication_id: "published-before-interruption".into(),
+            version_id: "legacy-daily".into(),
+            task_id: target.task.task_id.clone(),
+            item_id: day,
+            run_id: "old-run".into(),
+            expected_revision: target.task.state_revision,
+            intent: PublishIntent::Daily {
+                expected_head: None,
+            },
+        })
+        .unwrap();
+    market.commit(&candidate).unwrap();
+    let before = market.fixed("legacy-daily").unwrap();
+    let scope = Scope {
+        symbol: "sh.600006".into(),
+        period: Period::Day,
+    };
+    let range = x_data_mcp::market_storage::Range {
+        start: "2025-01-01".parse().unwrap(),
+        end: "2025-12-31".parse().unwrap(),
+        after: None,
+        limit: 10,
+    };
+    let head = market
+        .range(&scope, None, &range)
+        .unwrap()
+        .version
+        .version_id;
+    let target = r.read_task(&target.task.task_id).unwrap().unwrap();
+    assert_eq!(target.task.status, Status::Running);
+    let check = checking(&r, &target, "inspection");
+    r.commit_stop_check(&plan(check, target.clone(), &FixtureStopped))
+        .unwrap();
+    assert_eq!(market.fixed("legacy-daily").unwrap().raw(), before.raw());
+    assert_eq!(
+        market
+            .range(&scope, None, &range)
+            .unwrap()
+            .version
+            .version_id,
+        head
+    );
+    let after = r.read_task(&target.task.task_id).unwrap().unwrap();
+    assert_eq!(after.task.status, Status::Interrupted);
+    assert_eq!(
+        after
+            .items
+            .iter()
+            .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+            .count(),
+        1
+    );
 }

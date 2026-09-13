@@ -55,3 +55,10 @@ SQLite 比较原/核实完整快照，在一个事务内保存原任务中断（
 真实退出回归已加入 sqlite_verification::tests::stopped_check_real_exit_before_commit_and_after_commit_preserves_exact_facts：
 停止成立/证据不足 × before/after commit 四组子进程必须实际 exit(78)，重新连接核对双任务、
 原占用、核实收据和同计划重放。child 单独空跑不是退出证据；测试已提交，尚待 Actions 实际结果。
+
+CI 实际反馈：34738145667 在测试整数类型编译错误处停止；6452529 修复后，
+34738319436 已执行并通过真实退出四场景、停止/不足、并发、busy、审计篡改等测试。
+该 run 全局仍 FAIL：坏外键 fixture 的构造被 FK 约束提前拒绝，未进入该分支的升级检查。
+现仅在测试造坏库连接显式关闭 FK 来插入孤立行；生产连接/升级后的完整 FK 检查不放宽。
+另加入 stopped_compound_task_retains_verified_published_daily_and_its_original_head：
+真实 SQLite compound task 已发布 daily、yearly 尚未完成，中断后核验旧 daily 全量兼容记录与有效 head 不变。
