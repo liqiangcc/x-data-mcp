@@ -8,14 +8,15 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 6;
-const MIGRATIONS: [&str; 6] = [
+pub const SCHEMA_VERSION: u32 = 7;
+const MIGRATIONS: [&str; 7] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
     include_str!("../migrations/tasks/003_market.sql"),
     include_str!("../migrations/tasks/004_catalog.sql"),
     include_str!("../migrations/tasks/005_update_results.sql"),
     include_str!("../migrations/tasks/006_yearly_results.sql"),
+    include_str!("../migrations/tasks/007_stopped_checks.sql"),
 ];
 #[derive(Clone)]
 pub struct SqliteTasks {
@@ -64,6 +65,10 @@ impl SqliteTasks {
     }
     pub fn upgrade(&self) -> Result<(), Error> {
         let mut c = self.connect(false)?;
+        // SQLite table rebuild requires enforcement off OUTSIDE the transaction.
+        // The connection is private to this explicit schema operation only.
+        c.pragma_update(None, "foreign_keys", false)
+            .map_err(storage)?;
         let tx = c
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
@@ -71,8 +76,19 @@ impl SqliteTasks {
         for (index, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
             apply_migration(&tx, index + 1, sql)?;
         }
+        let broken: bool = tx
+            .prepare("PRAGMA foreign_key_check")
+            .map_err(storage)?
+            .exists([])
+            .map_err(storage)?;
+        if broken {
+            return Err(inconsistent("schema upgrade found foreign key violations"));
+        }
         tx.commit()
-            .map_err(|e| Error::OutcomeUnknown(e.to_string()))
+            .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
+        c.pragma_update(None, "foreign_keys", true)
+            .map_err(storage)?;
+        Ok(())
     }
     pub(crate) fn connect(&self, readonly: bool) -> Result<Connection, Error> {
         let flag = if readonly {
@@ -87,7 +103,10 @@ impl SqliteTasks {
         }
         Ok(c)
     }
-    fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {
+    pub(crate) fn read<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         let mut c = self.connect(true)?;
         let tx = c.transaction().map_err(storage)?;
         check_schema(&tx, true)?;
@@ -95,7 +114,10 @@ impl SqliteTasks {
         tx.commit().map_err(storage)?;
         Ok(value)
     }
-    fn write<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {
+    pub(crate) fn write<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         let mut c = self.connect(false)?;
         let tx = c
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -271,6 +293,7 @@ fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
         claims,
     };
     validate_snapshot(&s, &scopes)?;
+    crate::sqlite_verification::validate_task_link(c, &s)?;
     Ok(Some(s))
 }
 fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), Error> {
@@ -335,6 +358,12 @@ fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), 
         Status::Succeeded => finished == total && success == total,
         Status::Failed => finished == total && success == 0,
         Status::PartiallyFailed => finished == total && success > 0 && success < total,
+        Status::Interrupted => s
+            .task
+            .result
+            .as_ref()
+            .and_then(|r| r.get("interruption"))
+            .is_some(),
         Status::Cancelled => {
             finished < total
                 || (success < total
@@ -539,7 +568,7 @@ impl TaskRepository for SqliteTasks {
     }
     fn reconcile(&self, run: &str) -> Result<usize, Error> {
         self.write(|c|{
-        let mut stmt=c.prepare("SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1))").map_err(storage)?;
+        let mut stmt=c.prepare("SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled','interrupted') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1))").map_err(storage)?;
         let ids=stmt.query_map([run],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
         let mut count=0;for id in ids{let old=read_bound_task(c,&id)?.ok_or(Error::TaskNotFound)?;let rev=old.task.state_revision;let next=decide(old,run,Change::Reconcile,Utc::now())?;if next.task.state_revision!=rev{write_task(c,&next,rev)?;count+=1;}}Ok(count)
     })

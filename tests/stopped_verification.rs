@@ -281,3 +281,372 @@ fn verification_corrupt_original_is_not_missing_or_permission_to_unlock() {
     ));
     assert!(r.read_request("inspect").unwrap().is_none());
 }
+
+use x_data_mcp::task_verification::decision::{
+    self, Conclusion, Observation, StopInspector, StopPlan, StopRepository, UnverifiedStopInspector,
+};
+struct FixtureStopped;
+impl StopInspector for FixtureStopped {
+    fn inspect(&self, target: &TaskSnapshot) -> Result<Observation, Error> {
+        Ok(Observation::Stopped {
+            snapshot_sha256: decision::snapshot_digest(target)?,
+            evidence_ref: "fixture-only: controlled writer/effects".into(),
+        })
+    }
+}
+fn checking(r: &SqliteTasks, target: &TaskSnapshot, id: &str) -> TaskSnapshot {
+    let accepted = task(
+        control(r, "new-run")
+            .accept(id, key(r), json!({"target_task_id":target.task.task_id}))
+            .unwrap(),
+    );
+    let claimed = r
+        .transition(&accepted.task.task_id, 0, "new-run", Change::Claim)
+        .unwrap();
+    r.transition(
+        &claimed.task.task_id,
+        claimed.task.state_revision,
+        "new-run",
+        Change::StartItem("stopped-writes".into()),
+    )
+    .unwrap()
+}
+fn plan(check: TaskSnapshot, target: TaskSnapshot, inspector: &dyn StopInspector) -> StopPlan {
+    decision::prepare(
+        check,
+        target,
+        "new-run",
+        "fixture-owner",
+        "2026-09-13T00:00:00Z".parse().unwrap(),
+        inspector,
+    )
+    .unwrap()
+}
+#[test]
+fn stopped_check_is_atomic_preserves_successes_and_retry_uses_new_task() {
+    let (_d, r) = db();
+    let old = original_task(&r, "first");
+    let mut target = r
+        .transition(&old.task.task_id, 0, "old-run", Change::Claim)
+        .unwrap();
+    target = r
+        .transition(
+            &target.task.task_id,
+            target.task.state_revision,
+            "old-run",
+            Change::StartItem(target.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    target = r
+        .transition(
+            &target.task.task_id,
+            target.task.state_revision,
+            "old-run",
+            Change::FinishItem(
+                target.items[0].spec.item_id.clone(),
+                ItemOutcome {
+                    success: true,
+                    error: None,
+                },
+            ),
+        )
+        .unwrap();
+    target = r
+        .transition(
+            &target.task.task_id,
+            target.task.state_revision,
+            "old-run",
+            Change::StartItem(target.items[1].spec.item_id.clone()),
+        )
+        .unwrap();
+    let check = checking(&r, &target, "inspection");
+    let p = plan(check.clone(), target.clone(), &FixtureStopped);
+    let receipt = r.commit_stop_check(&p).unwrap();
+    assert_eq!(receipt.conclusion, Conclusion::Interrupted);
+    let after = r.read_task(&target.task.task_id).unwrap().unwrap();
+    assert_eq!(after.task.status, Status::Interrupted);
+    assert!(after.claims.is_empty());
+    assert_eq!(after.items[0], target.items[0]);
+    assert_eq!(after.items[1].stage, Stage::Pending);
+    assert_eq!(
+        r.stop_receipt(&check.task.task_id).unwrap(),
+        Some(receipt.clone())
+    );
+    assert_eq!(r.commit_stop_check(&p).unwrap(), receipt);
+    let business = TaskControl::new(
+        r.clone(),
+        "new-run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    let retried = task(
+        business
+            .retry(
+                &target.task.task_id,
+                "explicit-retry",
+                [target.items[1].spec.item_id.clone()].into(),
+            )
+            .unwrap(),
+    );
+    assert_eq!(
+        retried.task.retry_of.as_deref(),
+        Some(target.task.task_id.as_str())
+    );
+    assert_ne!(retried.task.task_id, target.task.task_id);
+    let claims = retried.claims.clone();
+    r.commit_stop_check(&p).unwrap();
+    assert_eq!(
+        r.read_task(&retried.task.task_id).unwrap().unwrap().claims,
+        claims
+    );
+    assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), after);
+    assert!(matches!(
+        r.transition(
+            &target.task.task_id,
+            after.task.state_revision,
+            "old-run",
+            Change::StartItem(target.items[1].spec.item_id.clone())
+        ),
+        Err(Error::RevisionConflict)
+    ));
+    assert_eq!(r.reconcile("another-run").unwrap(), 1); // Only the new retry; never the old interrupted target.
+}
+#[test]
+fn insufficient_stopping_evidence_completes_only_the_check_and_keeps_business_protection() {
+    let (_d, r) = db();
+    let target = original_task(&r, "first");
+    let check = checking(&r, &target, "inspection");
+    let p = plan(check.clone(), target.clone(), &UnverifiedStopInspector);
+    let receipt = r.commit_stop_check(&p).unwrap();
+    assert_eq!(receipt.conclusion, Conclusion::InsufficientEvidence);
+    assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
+    assert!(
+        r.read_task(&check.task.task_id)
+            .unwrap()
+            .unwrap()
+            .claims
+            .is_empty()
+    );
+    let next = checking(&r, &target, "new-inspection");
+    assert_ne!(next.task.task_id, check.task.task_id);
+    assert_eq!(r.stop_receipt(&check.task.task_id).unwrap(), Some(receipt));
+}
+#[test]
+fn stopped_plan_rejects_stale_proof_state_and_cancellation_without_partial_release() {
+    struct Wrong;
+    impl StopInspector for Wrong {
+        fn inspect(&self, _: &TaskSnapshot) -> Result<Observation, Error> {
+            Ok(Observation::Stopped {
+                snapshot_sha256: "wrong".into(),
+                evidence_ref: "fixture".into(),
+            })
+        }
+    }
+    let (_d, r) = db();
+    let target = original_task(&r, "first");
+    let check = checking(&r, &target, "inspection");
+    assert!(
+        decision::prepare(
+            check.clone(),
+            target.clone(),
+            "new-run",
+            "actor",
+            chrono::Utc::now(),
+            &Wrong
+        )
+        .is_err()
+    );
+    let p = plan(check.clone(), target.clone(), &FixtureStopped);
+    let changed = r
+        .transition(&target.task.task_id, 0, "old-run", Change::Claim)
+        .unwrap();
+    assert!(matches!(
+        r.commit_stop_check(&p),
+        Err(Error::RevisionConflict)
+    ));
+    assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), changed);
+    let p = plan(check.clone(), changed, &FixtureStopped);
+    let cancelled = control(&r, "new-run")
+        .cancel(&check.task.task_id, check.task.state_revision)
+        .unwrap();
+    assert!(matches!(
+        r.commit_stop_check(&p),
+        Err(Error::RevisionConflict)
+    ));
+    assert_eq!(
+        r.read_task(&check.task.task_id).unwrap().unwrap(),
+        cancelled
+    );
+    assert!(r.stop_receipt(&check.task.task_id).unwrap().is_none());
+}
+#[test]
+fn stopped_audit_insertion_failure_rolls_back_both_tasks_and_all_claims() {
+    let (_d, r) = db();
+    let target = original_task(&r, "first");
+    let check = checking(&r, &target, "inspection");
+    let p = plan(check.clone(), target.clone(), &FixtureStopped);
+    let c = rusqlite::Connection::open(r.path()).unwrap();
+    c.execute_batch("CREATE TRIGGER fail_stop BEFORE INSERT ON stopped_write_checks BEGIN SELECT RAISE(ABORT,'fixture before commit failure'); END;").unwrap();
+    assert!(r.commit_stop_check(&p).is_err());
+    assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
+    assert_eq!(r.read_task(&check.task.task_id).unwrap().unwrap(), check);
+    assert!(r.stop_receipt(&check.task.task_id).unwrap().is_none());
+    c.execute_batch("DROP TRIGGER fail_stop").unwrap();
+    r.commit_stop_check(&p).unwrap();
+}
+#[test]
+fn stopped_receipts_and_normal_reads_reject_missing_or_changed_audit() {
+    for delete in [true, false] {
+        let (_d, r) = db();
+        let target = original_task(&r, "first");
+        let check = checking(&r, &target, "inspection");
+        r.commit_stop_check(&plan(check.clone(), target.clone(), &FixtureStopped))
+            .unwrap();
+        let c = rusqlite::Connection::open(r.path()).unwrap();
+        c.execute_batch(if delete {
+            "DELETE FROM stopped_write_checks"
+        } else {
+            "UPDATE stopped_write_checks SET audit_json='{}'"
+        })
+        .unwrap();
+        assert!(r.read_task(&target.task.task_id).is_err());
+        assert!(r.read_task(&check.task.task_id).is_err());
+        assert!(r.stop_receipt(&check.task.task_id).is_err());
+    }
+}
+#[test]
+fn stopped_check_busy_and_two_connection_commit_preserve_single_receipt() {
+    let (_d, r) = db();
+    let target = original_task(&r, "first");
+    let check = checking(&r, &target, "inspection");
+    let c = rusqlite::Connection::open(r.path()).unwrap();
+    c.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let p = plan(check.clone(), target.clone(), &FixtureStopped);
+    assert!(matches!(
+        r.clone()
+            .with_busy_timeout(std::time::Duration::from_millis(1))
+            .commit_stop_check(&p),
+        Err(Error::StorageUnavailable(_))
+    ));
+    c.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(r.read_task(&target.task.task_id).unwrap().unwrap(), target);
+    let barrier = Arc::new(Barrier::new(2));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let r = r
+                .clone()
+                .with_busy_timeout(std::time::Duration::from_secs(5));
+            let b = barrier.clone();
+            let target = target.clone();
+            let check = check.clone();
+            std::thread::spawn(move || {
+                let p = plan(check, target, &FixtureStopped);
+                b.wait();
+                r.commit_stop_check(&p).unwrap()
+            })
+        })
+        .collect();
+    let receipts: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert_eq!(receipts[0], receipts[1]);
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM stopped_write_checks", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn stopped_schema_upgrade_uses_real_v6_ddl_preserves_bindings_and_rejects_broken_foreign_keys() {
+    for broken in [false, true] {
+        let (d, current) = db();
+        let target = original_task(&current, "original");
+        let path = d.path().join("v6.sqlite");
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.pragma_update(None, "journal_mode", "WAL").unwrap();
+        for (index, sql) in [
+            include_str!("../migrations/tasks/001.sql"),
+            include_str!("../migrations/tasks/002.sql"),
+            include_str!("../migrations/tasks/003_market.sql"),
+            include_str!("../migrations/tasks/004_catalog.sql"),
+            include_str!("../migrations/tasks/005_update_results.sql"),
+            include_str!("../migrations/tasks/006_yearly_results.sql"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            c.execute_batch(sql).unwrap();
+            c.execute(
+                "INSERT INTO schema_migrations VALUES(?1,?2,'fixture')",
+                rusqlite::params![index + 1, x_data_mcp::hash::sha256(sql.as_bytes())],
+            )
+            .unwrap();
+        }
+        c.pragma_update(None, "user_version", 6).unwrap();
+        c.execute(
+            "ATTACH DATABASE ?1 AS source",
+            [current.path().to_str().unwrap()],
+        )
+        .unwrap();
+        for table in [
+            "tasks",
+            "requests",
+            "task_items",
+            "task_scopes",
+            "scope_occupancy",
+        ] {
+            c.execute_batch(&format!("INSERT INTO {table} SELECT * FROM source.{table}"))
+                .unwrap();
+        }
+        c.execute_batch("DETACH DATABASE source").unwrap();
+        if broken {
+            c.execute("INSERT INTO task_scopes VALUES('nonexistent','orphan')", [])
+                .unwrap();
+        }
+        let old = SqliteTasks::new(&path);
+        assert!(old.read_request("original").is_err());
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+                .unwrap(),
+            6
+        );
+        let upgraded = old.upgrade();
+        assert_eq!(upgraded.is_err(), broken);
+        if broken {
+            assert_eq!(
+                c.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                6
+            );
+            assert_eq!(
+                c.query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name='stopped_write_checks'",
+                    [],
+                    |r| r.get::<_, u32>(0)
+                )
+                .unwrap(),
+                0
+            );
+        } else {
+            assert_eq!(
+                c.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                7
+            );
+            assert!(
+                !c.prepare("PRAGMA foreign_key_check")
+                    .unwrap()
+                    .exists([])
+                    .unwrap()
+            );
+            assert_eq!(
+                old.read_task(&target.task.task_id).unwrap().unwrap(),
+                target
+            );
+            let checking = checking(&old, &target, "inspection");
+            old.commit_stop_check(&plan(checking, target, &FixtureStopped))
+                .unwrap();
+            old.upgrade().unwrap();
+        }
+    }
+}

@@ -272,6 +272,7 @@ pub enum TaskStatus {
     PartiallyFailed,
     Failed,
     Cancelled,
+    Interrupted,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
