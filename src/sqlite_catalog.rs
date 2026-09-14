@@ -100,9 +100,75 @@ pub(crate) fn read(c: &Connection, id: &str) -> Result<CatalogVersion, Error> {
     }
     Ok(v)
 }
+/// Mechanical durable fact row: one committed StartItem marker plus the raw
+/// command key of its task. No contract filtering happens at this layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionStartFact {
+    pub task_id: String,
+    pub item_id: String,
+    pub run_id: String,
+    pub start_revision: u64,
+    pub started_at: String,
+    /// Raw tasks row fields. command_key_json already carries the executable
+    /// contract key (retry tasks store the original key); retry_of is the
+    /// direct parent linkage, returned as evidence, not classification input.
+    pub command_key_json: String,
+    pub retry_of: Option<String>,
+}
+/// Raw facts for the application-level default selector: current catalog head,
+/// its integrity-verified version, and every execution-start marker. All rows
+/// come from one read-transaction snapshot; nothing here decides membership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectionFacts {
+    pub catalog_head: Option<String>,
+    pub catalog: Option<CatalogVersion>,
+    pub starts: Vec<ExecutionStartFact>,
+}
+pub(crate) fn selection_facts_on(c: &Connection) -> Result<SelectionFacts, Error> {
+    let head_id = head(c)?;
+    let catalog = head_id.as_deref().map(|id| read(c, id)).transpose()?;
+    let mut q = c
+        .prepare(
+            "SELECT s.task_id,s.item_id,s.run_id,s.start_revision,s.started_at,t.command_key_json,t.retry_of \
+             FROM task_item_execution_starts s JOIN tasks t ON t.task_id=s.task_id \
+             ORDER BY s.task_id,s.item_id",
+        )
+        .map_err(storage)?;
+    let starts = q
+        .query_map([], |r| {
+            Ok(ExecutionStartFact {
+                task_id: r.get(0)?,
+                item_id: r.get(1)?,
+                run_id: r.get(2)?,
+                start_revision: r.get::<_, i64>(3)? as u64,
+                started_at: r.get(4)?,
+                command_key_json: r.get(5)?,
+                retry_of: r.get(6)?,
+            })
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    Ok(SelectionFacts {
+        catalog_head: head_id,
+        catalog,
+        starts,
+    })
+}
 impl SqliteCatalog {
     pub fn new(tasks: SqliteTasks) -> Self {
         Self { tasks }
+    }
+    /// One bounded read-transaction snapshot of raw selection facts. The
+    /// catalog read re-verifies digest and member projection inside the same
+    /// snapshot; contract-family filtering belongs to the application layer.
+    pub fn selection_facts(&self) -> Result<SelectionFacts, Error> {
+        let mut c = self.tasks.connect(true).map_err(storage)?;
+        let tx = c.transaction().map_err(storage)?;
+        crate::sqlite_tasks::check_schema(&tx, true)?;
+        let result = selection_facts_on(&tx)?;
+        tx.commit().map_err(storage)?;
+        Ok(result)
     }
     pub fn fixed(&self, id: &str) -> Result<CatalogVersion, Error> {
         let mut c = self.tasks.connect(true)?;

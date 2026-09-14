@@ -3,6 +3,8 @@
 状态：设计冻结，供协调决策评审。**本文件不落任何代码、不改 wire/schema、不创建 PR。**
 基线：`origin/main` = `01643ba092adc3c038dc6023108e4c7eb366f432`；分支 `issue-92-default-selection`。
 
+**第三阶段状态修正（实现期追加）**：1.1 的 `EVER_STARTED_FACT_NOT_AVAILABLE` 为第一阶段历史结论；机械 durable fact 缺口已由 #137/第二阶段解决（schema v10 `task_item_execution_starts`，随 `Change::StartItem` 同事务原子提交，INSERT-only 单调）。D1 的判定来源随之落地，契约族精确口径与 retry 语义见下方 D1 修正。
+
 协调口径（#92 评论 + 本轮边界裁定）：
 - 首次采集"已启动" = 至少一个对应 collection item 发生过真实执行 / 获得实际执行 claim；`accepted`/`pending` 不算；之后的 `failed`/`cancelled`/`interrupted` 不抹去 ever-started 历史。
 - default 动态选择首次受理时必须冻结。
@@ -54,20 +56,24 @@
 
 ## 2. 设计冻结
 
-### D1. `first_collection_started` 判定来源：依赖最小 durable fact，落地前 NOT_IMPLEMENTED
+### D1. `first_collection_started` 判定来源：`task_item_execution_starts` 单调启动标记（最小 durable fact 已由 #137 落地）
 
-目标语义（标记落地后生效）——在受理的**同一个 SQLite 事务快照**内求值：
+目标语义（标记已落地后生效）——在受理的**同一个 SQLite 事务快照**内求值：
 
 ```
-ever_started(S,P) ⟺ EXISTS task_item_starts 行（或等价单调标记）
+ever_started(S,P) ⟺ EXISTS task_item_execution_starts 行
   WHERE item_id = '["market","S","P"]'                       -- scope_id 序列化
-    AND json_extract(tasks.command_key_json,'$.operation') = 'start_collection'
-    AND json_extract(tasks.command_key_json,'$.dataset')   = 'market.daily'
+    AND tasks.command_key_json 的契约族 ∈ 首次采集（下述精确 key）
 ```
 
-- `item_id = ["market",symbol,period]` 被 collection、`update_data`、`backfill_data` 共享（`src/task_control/legacy.rs`、`src/market_update/tasks.rs`）——契约族过滤**强制**；重试任务携带原 command key，自然覆盖。
+- 契约族精确口径（application 层判定，SQL 只取 raw `command_key_json` 事实、不做业务过滤）：
+  - typed 首次采集：`operation="start_collection"`、`dataset="market.daily"`、`contract_version="v1"`（public `start_collection` 带 `dataset` 字段 → `Collection::Daily` → `CollectionContract`，见 `src/data_supply/mcp.rs`、`src/data_supply/collect.rs`）。
+  - legacy 首次采集：`operation="start_collection"`、`dataset="legacy_market_compound"`、`contract_version="task-acceptance-v1"`（public `start_collection` 不带 `dataset` 字段 → local-owner 兼容路径 `src/sqlite_task_mcp.rs`）。
+- retry 语义修正：retry 请求的 `requests.command_json` 记 `operation="retry_task"`，但 `tasks.command_key_json` 存的是**原任务的执行契约 key**（`sqlite_tasks` accept 中 `execution_key = old.task.key`，逐代展平到根契约）——retry-of-collection 的 marker 按上述 key 自然计入，无需 `retry_of` 链追溯；`retry_of`（直接父）仅作 evidence 返回。
+- item 规则：`item_id` 必须解析为 `["market",symbol,period]` 三字符串，否则 fail-closed；typed daily 只允许 `period="day"`，非 day 为 inconsistency → fail-closed；legacy `day` 计入、`year` 合法跳过、其它 period → fail-closed。
+- `item_id = ["market",symbol,period]` 被 collection、`update_data`、`backfill_data` 共享（`src/task_control/legacy.rs`、`src/market_update/tasks.rs`）——契约族过滤**强制**。
 - fail-closed：无标记行 → 未曾启动；存储/完整性错误 → 受理整体失败；pending/accepted/occupancy/owner/核实审计/调用方声明 → 永不作为证据；`cancelled`/`failed`/`interrupted` 终态不抹去已存在标记。
-- 标记落地前：依赖 ever-started 的默认选择一律 `not_implemented` 拒绝，不做退化实现。
+- 标记落地前（Phase1 历史结论，已由 #137 supersede）：依赖 ever-started 的默认选择一律 `not_implemented` 拒绝，不做退化实现。
 
 ### D2. 默认证券选择器 = 当前有效 catalog ∩ ever-started（#4 已确认规则）
 
