@@ -58,7 +58,12 @@ The fixed mechanical totals are:
 
 The committed result was generated only from the fixed archive and target
 members. Two independent clean-checkout runs must be byte-identical; their
-output SHA-256 values are recorded in the Issue/PR evidence comment.
+output SHA-256 values are recorded in the Issue/PR evidence comment. At
+`e08411131612834e5380813491e7e78f1b4cf051`, detached clean checkouts `a` and
+`b` both produced SHA-256
+`f4d36f0e8356b8df1ddbcd1c50b963fdbf22349e4dca424599daac82899e8ddb`; `cmp`
+reported identical output. Each scanner run independently revalidated the
+fixed archive and target member identities before scanning.
 
 ## Scope exclusions
 
