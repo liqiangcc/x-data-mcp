@@ -3,42 +3,42 @@
 状态：设计冻结，供协调决策评审。**本文件不落任何代码、不改 wire/schema、不创建 PR。**
 基线：`origin/main` = `01643ba092adc3c038dc6023108e4c7eb366f432`；分支 `issue-92-default-selection`。
 
-协调口径（#92 评论）：
+协调口径（#92 评论 + 本轮边界裁定）：
 - 首次采集"已启动" = 至少一个对应 collection item 发生过真实执行 / 获得实际执行 claim；`accepted`/`pending` 不算；之后的 `failed`/`cancelled`/`interrupted` 不抹去 ever-started 历史。
 - default 动态选择首次受理时必须冻结。
 - gap 只能来自可靠持久证据，不能按日期不连续猜测。
+- **合格事实边界**：只有普通 collection execution/claim 路径**必然持久写入且终态后保留**的事实才可作为 default selector 的通用 ever-started 依据；仅在特定核实操作后出现的审计（含 running-before 快照）不合格——未做核实的正常执行同样必须可判定。
 
 ## 1. 可实现性结论
 
-### 1.1 ever-started：`EVER_STARTED_DURABLE_FACT_AVAILABLE`
+### 1.1 ever-started：`EVER_STARTED_FACT_NOT_AVAILABLE`
 
-当前模型存在**持久、跨重启、可复核**的事实来源，但它是组合事实，不能只看 `task_items.stage` 当前值。
+按上述边界逐条核对普通执行路径的全部持久写入，**不存在满足条件的通用事实**：
 
-**主证据：`task_items.stage ∈ {'running','finished'}`**（`migrations/tasks/001.sql`）
+**普通路径写入且终态保留的候选事实**
 
-- `Change::StartItem` 提交 pending→running；`Change::FinishItem` 提交 running→finished 并带 outcome（`src/task_control/mod.rs` 状态转移；执行顺序 `src/task_control/service.rs`：Claim → StartItem → execute → FinishItem → FinishExecution）。
-- `finished` 终态无任何重置路径。
-- `running` 跨进程死亡保留：reconcile/失联检测将任务置 `needs_verification` 但**不重置 item stage**；`FinishExecution`/`FinishCancellation` 在任一 item 仍 running 时直接拒绝（`mod.rs` FinishExecution 分支 `NeedsVerification("execution has not safely ended")`），正常收尾路径不会静默改写 running item。
+| 事实 | 写入路径 | 终态保留 | 证明力 |
+|---|---|---|---|
+| `task_items.stage='finished'` + `outcome` | `FinishItem`（必经） | 永久 | 证明该 item 曾启动（FinishItem 要求前置 running），但**仅覆盖已结束 item** |
+| `task_items.stage='running'` | `StartItem`（必经） | 进程死亡后保留（needs_verification 不改 stage） | 证明读取时已启动，但 verified interruption 可将其重置为 pending——**非单调保留** |
+| `execution_uncertainty` marker（task.result_json） | 失联/结果未知时写入 | 中断时随 result 改写 | 仅绑定当前 running item，非常设历史 |
+| `market_update_results`/`yearly_execution_results`/`publication_batches`/`task_publications` | 各契约执行/发布提交 | 永久 | 仅属 update/yearly/发布契约的**成功结果**见证，不覆盖 start_collection 的失败/中断 item |
 
-**唯一重置路径与独立兜底证据：`stopped_write_checks.audit_json`**（`migrations/tasks/007_stopped_checks.sql`）
+**关键不可判定状态（覆盖缺口）**
 
-- 对 collection item 而言，verified interruption 是唯一把 running item 改回 pending 的路径（`src/task_verification/decision.rs`："A previously running item is now unfinished, with its last known stage retained in audit"）。
-- 该重置与 `stopped_write_checks` 审计行**同一原子提交**（`src/sqlite_verification.rs::commit_stop_check`），`audit_json` 内含完整 `Audit{target_before: TaskSnapshot, target_after}`——`target_before.items[].stage` 保留重置前的 `running`，`audit_sha256` 绑定；读取侧 `read_receipt`/`validate_audit` 重新校验快照一致性，篡改即 integrity 错误。
-- `verification_inspections`（009，`src/verification_inspection/decision.rs`）的 `Interrupted` 结论同样重置 running→pending 并在 `audit_json.facts.target` 保留重置前快照，但 `verification_execution::supported` 限定其目标仅为两个 verification 契约族——**不作用于 collection item**，仅列为同类先例。
-- `task_items` 无任何 DELETE 路径；`FinishExecution`/`FinishCancellation` 在任一 item running 时拒绝；reconcile 只置 `needs_verification` 不改 stage。除上述审计路径外不存在无审计的 stage 回退。
-- 因此即使当前 `task_items.stage` 被重置为 pending，`stopped_write_checks` 审计行仍是独立的、不可被覆盖的 ever-started 历史事实。
+- collection item 曾 `StartItem`→running，之后经 verified interruption 收尾：`stage` 被重置为 `pending`（`src/task_verification/decision.rs` 唯一业务任务重置路径），`outcome` 为空。
+- 该终态与**从未启动**的 pending item 在普通路径数据上完全相同；`task.result_json.interruption.unfinished_items` 同时包含"曾 running"与"从未 pending"两类 item，无法区分（never-started 中断产生同形 result）。
+- 唯一能区分两者的见证是 `stopped_write_checks.audit_json.target_before` 快照——但它**仅在核实操作实际执行后才存在**，属核实条件事实，按协调边界不合格。
+- 正常路径无其它候选：`requests`/`accepted_run_id`/`owner_run_id`/`scope_occupancy`/`task_scopes` 证明受理或当前占用而非启动；`task_items` 无 DELETE 路径但 stage 本身可回退。
 
-**旁证持久事实（非唯一来源，仅作旁证）**
+**结论**：存在可达状态（已启动→核实中断→pending）使该 item 的启动历史在合格事实集合中不可恢复 ⇒ 通用 ever-started durable fact 不可得 ⇒ `EVER_STARTED_FACT_NOT_AVAILABLE`。
 
-- `execution_uncertainty` marker（`task.result_json`）：持久绑定 outcome 未知时仍 running 的具体 `item_id`，读取时校验该 item 必须仍为 running。
-- `market_update_results` / `yearly_execution_results`（migrations 005/006）：按 `(task_id,item_id)` 的执行回执，仅属 update/yearly 契约族。
-- `publication_batches` / `task_publications`：成功执行产生的发布绑定。
+**最小 durable fact 需求（设计提案，待评审，不在本阶段实现）**
 
-**永不构成 ever-started 证据**
-
-- `requests` 行（受理事实）、`tasks.status='pending'`、`task_items.stage='pending'`、`accepted_run_id`、单独的 `owner_run_id`（claim 先于 StartItem）、`scope_occupancy`（受理时即写入、终态清除，pending 任务也占有）。
-
-**契约族过滤（强制）**：`item_id = scope_id(symbol,period) = ["market",symbol,period]` 被 collection、`update_data`、`backfill_data` 共享（`src/task_control/legacy.rs`、`src/market_update/tasks.rs`）。判定"对应 collection item"必须 join `tasks.command_key_json`，限定 `operation='start_collection'` 且 `dataset='market.daily'`（重试任务携带原 command key，自然覆盖）。update/backfill item 的启动**不**计入首次采集已启动。
+- 一个随 `Change::StartItem` **同一事务原子提交**的单调启动标记：例如 `task_item_starts(task_id, item_id, run_id, state_revision, started_at)` INSERT-only 表，或 `task_items` 上不可回退的 `ever_started` 标记列。
+- 任何后续转移（含 verified interruption 的 running→pending 重置、取消、收尾、重试）**不得**删除/回退该标记；优先 schema 级保证而非代码约定。
+- 经 `task_id → tasks.command_key_json` 限定 collection 契约族后，该标记即 `first_collection_started` 的唯一判定来源。
+- 在该标记落地并通过评审前，默认选择器保持 **NOT_IMPLEMENTED / fail-closed**，不得以审计、`stage` 当前值或任何旁证代替。
 
 ### 1.2 proven-gap：`PROVEN_GAP_FACT_NOT_AVAILABLE`
 
@@ -54,36 +54,25 @@
 
 ## 2. 设计冻结
 
-### D1. `first_collection_started` 唯一判定来源
+### D1. `first_collection_started` 判定来源：依赖最小 durable fact，落地前 NOT_IMPLEMENTED
 
-ever_started(security S, period P) 为**读取时派生事实**，必须在受理的**同一个 SQLite 事务快照**内求值：
+目标语义（标记落地后生效）——在受理的**同一个 SQLite 事务快照**内求值：
 
 ```
-ever_started(S,P) ⟺ 存在持久证据表明 collection item scope_id(S,P) 获得过真实执行 claim：
-  (a) task_items JOIN tasks ON task_items.task_id=tasks.task_id
-      WHERE task_items.item_id = '["market","S","P"]'          -- scope_id 序列化
-        AND json_extract(tasks.command_key_json,'$.operation') = 'start_collection'
-        AND json_extract(tasks.command_key_json,'$.dataset')   = 'market.daily'
-        AND task_items.stage IN ('running','finished')
-  OR
-  (b) stopped_write_checks 行（target_task_id = 该 collection 任务）
-      其 audit_json.target_before / target_after 快照中
-      该 item stage ∈ {running,finished}
-      —— 覆盖唯一会把 running item 重置回 pending 的路径；
-      后续若有新增"针对业务任务的重置/审计"路径，必须纳入 (b) 集合并经评审
+ever_started(S,P) ⟺ EXISTS task_item_starts 行（或等价单调标记）
+  WHERE item_id = '["market","S","P"]'                       -- scope_id 序列化
+    AND json_extract(tasks.command_key_json,'$.operation') = 'start_collection'
+    AND json_extract(tasks.command_key_json,'$.dataset')   = 'market.daily'
 ```
 
-fail-closed 条件：
-
-- 无 (a)/(b) 证据 → 判定为**未曾启动**。
-- 存储错误、audit digest 不一致、快照校验失败 → **受理整体失败**，不得按任一方向猜测。
-- pending/accepted/occupancy/owner/调用方声明 → 永不作为证据。
-- `cancelled`/`failed`/`interrupted` 终态不抹去已存在的 (a)/(b) 证据（协调口径）。
+- `item_id = ["market",symbol,period]` 被 collection、`update_data`、`backfill_data` 共享（`src/task_control/legacy.rs`、`src/market_update/tasks.rs`）——契约族过滤**强制**；重试任务携带原 command key，自然覆盖。
+- fail-closed：无标记行 → 未曾启动；存储/完整性错误 → 受理整体失败；pending/accepted/occupancy/owner/核实审计/调用方声明 → 永不作为证据；`cancelled`/`failed`/`interrupted` 终态不抹去已存在标记。
+- 标记落地前：依赖 ever-started 的默认选择一律 `not_implemented` 拒绝，不做退化实现。
 
 ### D2. 默认证券选择器 = 当前有效 catalog + ever-started
 
 - "当前有效 catalog" 唯一来源：`catalog_head.version_id`（singleton）→ `read(version_id)`（compat_json sha256 + catalog_members 投影全量校验，见 `src/sqlite_catalog.rs`）。无 head 或校验失败 → 受理失败，fail-closed。
-- 默认候选 = 该 catalog 版本成员中 `ever_started(S,'day') = false` 的证券（即仍需首次采集者）；每个证券产生一个 item（沿用现有 item 派生与 `scope_id` 占用语义）。
+- 默认候选 = 该 catalog 版本成员中 `ever_started(S,'day') = false` 的证券（即仍需首次采集者）；每个证券产生一个 item（沿用现有 item 派生与 `scope_id` 占用语义）。**受 D1 阻塞：ever-started 事实落地前本选择器整体 NOT_IMPLEMENTED。**
 - 候选为空 → `invalid_arguments` 拒绝，不建空任务（与显式选择 1..100 预算同风格；默认选择是否沿用相同预算上限由实现阶段按契约评审确定，设计冻结不放宽上限）。
 - 解析所得实体集合、`catalog_version_id`、`catalog_digest` 写入每个 item 的 `frozen_inputs.selection_evidence`（沿用 `WriteSelection::Catalog` 已建立的冻结先例 `src/data_supply/collect.rs`）。
 
@@ -106,23 +95,23 @@ fail-closed 条件：
 ### D6. proven-gap 输入契约：NOT_IMPLEMENTED / fail-closed
 
 - 因 1.2 结论，**本阶段不为 gap 选择设计任何实现路径**：wire 不新增 gap 参数，application 不做 gap 选择，SQLite adapter 不提供 gap 查询。
-- 未来若引入，输入契约必须满足：每条约数为持久证据（专用 gap 事实表或等价物，带证据绑定与 digest），逐条可在快照内复核；缺失即拒绝。
+- 未来若引入，输入契约必须满足：每条 gap 为持久证据（专用 gap 事实表或等价物，带证据绑定与 digest），逐条可在快照内复核；缺失即拒绝。
 - 明确禁止：交易日不连续、缺失行、日期范围、版本缺席、当前日期——任何启发式推断。
 
 ### D7. 关注点分离（冻结边界）
 
 - **MCP adapter**：只映射 selector 输入并透传；不含选择语义、不解析 catalog、不判 ever-started。
-- **application（data_supply / task_control）**：解析动态选择、执行 guard、在受理事务内冻结 FrozenWork 与 selection_evidence。
-- **SQLite adapter**：只提供事实——`catalog_head`/`catalog_versions`/`catalog_members` 读取、`task_items`/`tasks`/audit 表查询、`scope_occupancy` 占用检查；**不**决定业务选择、不推断 gap。
-- 与未来 inspector/verification 的关系不变：审计表是事实来源之一，不产生选择决策。
+- **application（data_supply / task_control）**：解析动态选择、执行 guard、在受理事务内冻结 FrozenWork 与 selection_evidence；ever-started 标记写入属于 `StartItem` 转移的持久化部分，不在 MCP 层。
+- **SQLite adapter**：只提供事实——`catalog_head`/`catalog_versions`/`catalog_members` 读取、`task_items`/`tasks`/标记表查询、`scope_occupancy` 占用检查；**不**决定业务选择、不推断 gap。
+- 核实审计表不是 default selector 的事实来源；审计用于核实回放，不产生选择决策。
 
 ## 3. 验证证据索引（current main）
 
 | 断言 | 证据 |
 |---|---|
-| stage 持久且 finished 不重置 | `migrations/tasks/001.sql`；`src/task_control/mod.rs` Change 转移 |
-| running→pending 唯一业务路径 + 审计兜底 | `src/task_verification/decision.rs`（target_before 快照保留）；`src/sqlite_verification.rs::commit_stop_check`/`read_receipt` 原子提交与读校验 |
-| verification_inspections 同类重置仅限核实契约 | `src/verification_inspection/decision.rs`；`src/verification_execution.rs::supported` |
+| StartItem/FinishItem 持久转移，finished 不重置 | `migrations/tasks/001.sql`；`src/task_control/mod.rs` Change 转移 |
+| running→pending 唯一业务任务重置路径 | `src/task_verification/decision.rs`（verified interruption）；`src/sqlite_verification.rs::commit_stop_check` |
+| 中断后 pending 与 never-started 不可区分 | `decision.rs` interruption result：`unfinished_items` 含两类 item；never-started 中断同形 |
 | FinishExecution 拒绝 running item | `src/task_control/mod.rs` FinishExecution 分支 |
 | 受理时占用插入+冲突拒绝 | `src/sqlite_tasks.rs` accept 路径（scope_occupancy 检查与插入同事务） |
 | catalog 当前版本来源 | `src/sqlite_catalog.rs::head`/`read`（digest+投影校验） |
@@ -133,6 +122,7 @@ fail-closed 条件：
 
 ## 4. 显式未决事项（留待协调决策，不属本设计）
 
+- ever-started 最小 durable fact 的具体形态（独立 INSERT-only 表 vs `task_items` 不可回退列）——需 schema 评审；落地前默认选择器整体 NOT_IMPLEMENTED。
 - 默认选择器在公共 wire 上的具体参数形态（`start_collection` 新 selection 变体）——本冻结只定语义与事实来源，wire 形态评审后定。
 - ever-started 证券进入默认集合后的业务动作（补采范围如何确定）——依赖 gap 契约，当前 NOT_IMPLEMENTED。
 - 默认选择的数量预算是否与显式 1..100 相同。
