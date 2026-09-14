@@ -18,6 +18,7 @@ pub mod day_file;
 
 pub mod query;
 
+pub mod file_consistency;
 pub mod snapshot;
 
 pub mod sqlite_tasks;

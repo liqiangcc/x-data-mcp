@@ -1,0 +1,617 @@
+//! Cross-file compatibility is a separate gate from per-file byte integrity.
+//!
+//! This module deliberately accepts compatibility only from an explicit,
+//! immutable proof that binds all required file roles to their exact hashes,
+//! source identity and revision window. Matching URLs, dates, ETags, or
+//! hashes alone are retained as evidence but never inferred as compatibility.
+
+use crate::snapshot::FileRole;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+pub const CONTRACT_VERSION: &str = "official-file-consistency-v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ByteIntegrity {
+    Verified,
+    Unverified,
+}
+
+/// Facts produced by the per-file input verifier. This type contains no
+/// semantic assertion that the three files can be used together.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileFact {
+    pub role: FileRole,
+    pub bytes: u64,
+    pub sha256: String,
+    pub source_url: String,
+    pub acquisition_started_at: DateTime<Utc>,
+    pub acquisition_completed_at: DateTime<Utc>,
+    pub last_modified: Option<String>,
+    pub etag: Option<String>,
+    pub byte_integrity: ByteIntegrity,
+    /// Optional file-level annotations. They are checked against the proof
+    /// when present, never used to infer a proof when absent.
+    pub source_revision: Option<String>,
+    pub source_identity: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompatibilityWindow {
+    pub valid_from: DateTime<Utc>,
+    pub valid_until: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberBinding {
+    pub sha256: String,
+    pub source_revision: Option<String>,
+    pub source_identity: Option<String>,
+}
+
+/// A fact from an independently retained audit stating that the exact file
+/// set is composable. Callers must only construct this from that auditable
+/// evidence; this type does not authenticate arbitrary strings or fetch a
+/// proof. A URL, download date, ETag, or common hash does not constitute it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompatibilityEvidence {
+    pub evidence_ref: String,
+    pub rule_version: String,
+    /// Identity and revision of the audited compatibility set, rather than a
+    /// claim that the independently published files share one source.
+    pub compatibility_set_revision: String,
+    pub compatibility_set_identity: String,
+    pub member_bindings: BTreeMap<FileRole, MemberBinding>,
+    pub valid_window: CompatibilityWindow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsistencyInput {
+    pub files: Vec<FileFact>,
+    pub compatibility: Option<CompatibilityEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ConsistencyStatus {
+    VerifiedCompatible,
+    NotVerified,
+    Conflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "code")]
+pub enum ConsistencyReason {
+    MissingRole { role: FileRole },
+    ConflictingDuplicate { role: FileRole },
+    MissingCompatibilityEvidence,
+    FileIntegrityNotVerified { role: FileRole },
+    InvalidFileHash { role: FileRole },
+    InvalidFileInterval { role: FileRole },
+    IncompleteCompatibilityEvidence,
+    InvalidCompatibilityWindow,
+    HashMismatch { role: FileRole },
+    SourceRevisionMismatch { role: FileRole },
+    SourceIdentityMismatch { role: FileRole },
+    MissingBoundSourceRevision { role: FileRole },
+    MissingBoundSourceIdentity { role: FileRole },
+    AcquisitionOutsideCompatibilityWindow { role: FileRole },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConsistencyDecision {
+    pub contract_version: &'static str,
+    pub status: ConsistencyStatus,
+    pub reasons: Vec<ConsistencyReason>,
+    pub evidence_refs: Vec<String>,
+    /// Sorted, de-duplicated facts are returned so callers retain the exact
+    /// role/hash/source evidence used by this decision.
+    pub files: Vec<FileFact>,
+}
+
+const REQUIRED_ROLES: [FileRole; 3] = [FileRole::BaseIndustry, FileRole::Day, FileRole::Gbbq];
+
+pub fn validate(input: ConsistencyInput) -> ConsistencyDecision {
+    let mut files = input.files;
+    files.sort();
+    files.dedup();
+
+    let mut reasons = Vec::new();
+    let mut by_role: BTreeMap<FileRole, Vec<&FileFact>> = BTreeMap::new();
+    for file in &files {
+        by_role.entry(file.role).or_default().push(file);
+    }
+
+    for role in REQUIRED_ROLES {
+        match by_role.get(&role) {
+            None => reasons.push(ConsistencyReason::MissingRole { role }),
+            Some(facts) if facts.len() > 1 => {
+                reasons.push(ConsistencyReason::ConflictingDuplicate { role })
+            }
+            Some(_) => {}
+        }
+    }
+
+    for file in &files {
+        if file.byte_integrity != ByteIntegrity::Verified {
+            reasons.push(ConsistencyReason::FileIntegrityNotVerified { role: file.role });
+        }
+        if file.acquisition_started_at > file.acquisition_completed_at {
+            reasons.push(ConsistencyReason::InvalidFileInterval { role: file.role });
+        }
+        if !canonical_sha256(&file.sha256) {
+            reasons.push(ConsistencyReason::InvalidFileHash { role: file.role });
+        }
+    }
+
+    let Some(evidence) = input.compatibility else {
+        reasons.push(ConsistencyReason::MissingCompatibilityEvidence);
+        return decision(status_for_reasons(&reasons), reasons, files, Vec::new());
+    };
+
+    let evidence_ref = evidence.evidence_ref.clone();
+    let mut evidence_refs = vec![evidence_ref];
+    if evidence.evidence_ref.trim().is_empty()
+        || evidence.rule_version != CONTRACT_VERSION
+        || evidence.compatibility_set_revision.trim().is_empty()
+        || evidence.compatibility_set_identity.trim().is_empty()
+        || evidence.member_bindings.len() != REQUIRED_ROLES.len()
+        || REQUIRED_ROLES
+            .iter()
+            .any(|role| !evidence.member_bindings.contains_key(role))
+        || evidence
+            .member_bindings
+            .values()
+            .any(|binding| !canonical_sha256(&binding.sha256))
+    {
+        reasons.push(ConsistencyReason::IncompleteCompatibilityEvidence);
+        return decision(
+            status_for_reasons(&reasons),
+            reasons,
+            files,
+            std::mem::take(&mut evidence_refs),
+        );
+    }
+    if evidence.valid_window.valid_from > evidence.valid_window.valid_until {
+        reasons.push(ConsistencyReason::InvalidCompatibilityWindow);
+        return decision(
+            status_for_reasons(&reasons),
+            reasons,
+            files,
+            std::mem::take(&mut evidence_refs),
+        );
+    }
+
+    for role in REQUIRED_ROLES {
+        let Some(facts) = by_role.get(&role) else {
+            continue;
+        };
+        if facts.len() != 1 {
+            continue;
+        }
+        let file = facts[0];
+        let binding = &evidence.member_bindings[&role];
+        if binding.sha256 != file.sha256 {
+            reasons.push(ConsistencyReason::HashMismatch { role });
+        }
+        if let Some(expected) = &binding.source_revision {
+            if let Some(actual) = &file.source_revision {
+                if actual != expected {
+                    reasons.push(ConsistencyReason::SourceRevisionMismatch { role });
+                }
+            } else {
+                reasons.push(ConsistencyReason::MissingBoundSourceRevision { role });
+            }
+        }
+        if let Some(expected) = &binding.source_identity {
+            if let Some(actual) = &file.source_identity {
+                if actual != expected {
+                    reasons.push(ConsistencyReason::SourceIdentityMismatch { role });
+                }
+            } else {
+                reasons.push(ConsistencyReason::MissingBoundSourceIdentity { role });
+            }
+        }
+        if file.acquisition_started_at < evidence.valid_window.valid_from
+            || file.acquisition_completed_at > evidence.valid_window.valid_until
+        {
+            reasons.push(ConsistencyReason::AcquisitionOutsideCompatibilityWindow { role });
+        }
+    }
+
+    let status = status_for_reasons(&reasons);
+    evidence_refs.sort();
+    decision(status, reasons, files, evidence_refs)
+}
+
+fn status_for_reasons(reasons: &[ConsistencyReason]) -> ConsistencyStatus {
+    if reasons.iter().any(ConsistencyReason::is_conflict) {
+        ConsistencyStatus::Conflict
+    } else if reasons.is_empty() {
+        ConsistencyStatus::VerifiedCompatible
+    } else {
+        ConsistencyStatus::NotVerified
+    }
+}
+
+fn decision(
+    status: ConsistencyStatus,
+    mut reasons: Vec<ConsistencyReason>,
+    files: Vec<FileFact>,
+    mut evidence_refs: Vec<String>,
+) -> ConsistencyDecision {
+    reasons.sort_by_key(|reason| serde_json::to_string(reason).unwrap_or_default());
+    evidence_refs.sort();
+    ConsistencyDecision {
+        contract_version: CONTRACT_VERSION,
+        status,
+        reasons,
+        evidence_refs,
+        files,
+    }
+}
+
+fn canonical_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+impl ConsistencyReason {
+    fn is_conflict(&self) -> bool {
+        matches!(
+            self,
+            Self::ConflictingDuplicate { .. }
+                | Self::InvalidFileInterval { .. }
+                | Self::InvalidCompatibilityWindow
+                | Self::HashMismatch { .. }
+                | Self::SourceRevisionMismatch { .. }
+                | Self::SourceIdentityMismatch { .. }
+                | Self::AcquisitionOutsideCompatibilityWindow { .. }
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn instant(hour: i64) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(&format!("2026-09-10T{hour:02}:00:00Z"))
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn hash(byte: u8) -> String {
+        std::iter::repeat_n(byte as char, 64).collect()
+    }
+
+    fn file(role: FileRole, byte: u8) -> FileFact {
+        FileFact {
+            role,
+            bytes: 10,
+            sha256: hash(byte),
+            source_url: "https://tdx.example.invalid/file".into(),
+            acquisition_started_at: instant(1),
+            acquisition_completed_at: instant(2),
+            last_modified: Some("revision-1".into()),
+            etag: Some("etag-1".into()),
+            byte_integrity: ByteIntegrity::Verified,
+            source_revision: Some("r1".into()),
+            source_identity: Some("tdx-public-set".into()),
+        }
+    }
+
+    fn evidence(files: &[FileFact]) -> CompatibilityEvidence {
+        CompatibilityEvidence {
+            evidence_ref: "fixture:compatible-set".into(),
+            rule_version: CONTRACT_VERSION.into(),
+            compatibility_set_revision: "r1".into(),
+            compatibility_set_identity: "tdx-public-set".into(),
+            member_bindings: files
+                .iter()
+                .map(|file| {
+                    (
+                        file.role,
+                        MemberBinding {
+                            sha256: file.sha256.clone(),
+                            source_revision: file.source_revision.clone(),
+                            source_identity: file.source_identity.clone(),
+                        },
+                    )
+                })
+                .collect(),
+            valid_window: CompatibilityWindow {
+                valid_from: instant(0),
+                valid_until: instant(3),
+            },
+        }
+    }
+
+    #[test]
+    fn explicit_hash_revision_identity_and_window_are_required_for_compatibility() {
+        let files = vec![
+            file(FileRole::Day, b'd'),
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Gbbq, b'c'),
+        ];
+        let decision = validate(ConsistencyInput {
+            compatibility: Some(evidence(&files)),
+            files,
+        });
+        assert_eq!(decision.status, ConsistencyStatus::VerifiedCompatible);
+        assert!(decision.reasons.is_empty());
+        assert_eq!(decision.evidence_refs, ["fixture:compatible-set"]);
+    }
+
+    #[test]
+    fn independently_published_roles_use_their_own_bound_revision_and_identity() {
+        let mut base = file(FileRole::BaseIndustry, b'b');
+        base.source_revision = Some("base-r1".into());
+        base.source_identity = Some("base-origin".into());
+        let mut day = file(FileRole::Day, b'd');
+        day.source_revision = Some("day-r7".into());
+        day.source_identity = Some("day-origin".into());
+        let mut gbbq = file(FileRole::Gbbq, b'c');
+        gbbq.source_revision = Some("gbbq-r3".into());
+        gbbq.source_identity = Some("gbbq-origin".into());
+        let files = vec![base, day, gbbq];
+
+        let mut proof = evidence(&files);
+        assert_eq!(
+            validate(ConsistencyInput {
+                files: files.clone(),
+                compatibility: Some(proof.clone()),
+            })
+            .status,
+            ConsistencyStatus::VerifiedCompatible
+        );
+
+        proof
+            .member_bindings
+            .get_mut(&FileRole::Day)
+            .unwrap()
+            .source_revision = Some("day-r8".into());
+        let revision_conflict = validate(ConsistencyInput {
+            files: files.clone(),
+            compatibility: Some(proof),
+        });
+        assert_eq!(revision_conflict.status, ConsistencyStatus::Conflict);
+        assert!(
+            revision_conflict
+                .reasons
+                .contains(&ConsistencyReason::SourceRevisionMismatch {
+                    role: FileRole::Day
+                })
+        );
+
+        let mut proof = evidence(&files);
+        proof
+            .member_bindings
+            .get_mut(&FileRole::Gbbq)
+            .unwrap()
+            .source_identity = Some("other-gbbq-origin".into());
+        let identity_conflict = validate(ConsistencyInput {
+            files,
+            compatibility: Some(proof),
+        });
+        assert_eq!(identity_conflict.status, ConsistencyStatus::Conflict);
+        assert!(
+            identity_conflict
+                .reasons
+                .contains(&ConsistencyReason::SourceIdentityMismatch {
+                    role: FileRole::Gbbq
+                })
+        );
+    }
+
+    #[test]
+    fn matching_metadata_without_explicit_proof_remains_not_verified() {
+        let files = vec![
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Day, b'd'),
+            file(FileRole::Gbbq, b'c'),
+        ];
+        let decision = validate(ConsistencyInput {
+            files,
+            compatibility: None,
+        });
+        assert_eq!(decision.status, ConsistencyStatus::NotVerified);
+        assert!(
+            decision
+                .reasons
+                .contains(&ConsistencyReason::MissingCompatibilityEvidence)
+        );
+    }
+
+    #[test]
+    fn explicit_conflicts_remain_conflict_without_compatibility_evidence() {
+        let mut day_variant = file(FileRole::Day, b'd');
+        day_variant.etag = Some("different-etag".into());
+        let duplicate_decision = validate(ConsistencyInput {
+            files: vec![
+                file(FileRole::BaseIndustry, b'b'),
+                file(FileRole::Day, b'd'),
+                day_variant,
+                file(FileRole::Gbbq, b'c'),
+            ],
+            compatibility: None,
+        });
+        assert_eq!(duplicate_decision.status, ConsistencyStatus::Conflict);
+
+        let mut invalid_interval = file(FileRole::Day, b'd');
+        invalid_interval.acquisition_started_at = instant(3);
+        invalid_interval.acquisition_completed_at = instant(2);
+        let interval_decision = validate(ConsistencyInput {
+            files: vec![
+                file(FileRole::BaseIndustry, b'b'),
+                invalid_interval,
+                file(FileRole::Gbbq, b'c'),
+            ],
+            compatibility: None,
+        });
+        assert_eq!(interval_decision.status, ConsistencyStatus::Conflict);
+    }
+
+    #[test]
+    fn explicit_conflict_is_not_downgraded_by_incomplete_compatibility_evidence() {
+        let mut day_variant = file(FileRole::Day, b'd');
+        day_variant.etag = Some("different-etag".into());
+        let files = vec![
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Day, b'd'),
+            day_variant,
+            file(FileRole::Gbbq, b'c'),
+        ];
+        let mut proof = evidence(&[files[0].clone(), files[1].clone(), files[3].clone()]);
+        proof.compatibility_set_identity.clear();
+        let decision = validate(ConsistencyInput {
+            files,
+            compatibility: Some(proof),
+        });
+        assert_eq!(decision.status, ConsistencyStatus::Conflict);
+    }
+
+    #[test]
+    fn missing_role_is_not_verified_and_does_not_infer_latest() {
+        let files = vec![
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Day, b'd'),
+        ];
+        let decision = validate(ConsistencyInput {
+            files,
+            compatibility: None,
+        });
+        assert_eq!(decision.status, ConsistencyStatus::NotVerified);
+        assert!(decision.reasons.contains(&ConsistencyReason::MissingRole {
+            role: FileRole::Gbbq
+        }));
+    }
+
+    #[test]
+    fn member_binding_hash_and_window_conflicts_are_rejected() {
+        let files = vec![
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Day, b'd'),
+            file(FileRole::Gbbq, b'c'),
+        ];
+        let mut proof = evidence(&files);
+        proof
+            .member_bindings
+            .get_mut(&FileRole::Day)
+            .unwrap()
+            .sha256 = hash(b'e');
+        assert_eq!(
+            validate(ConsistencyInput {
+                files: files.clone(),
+                compatibility: Some(proof),
+            })
+            .status,
+            ConsistencyStatus::Conflict
+        );
+
+        let mut proof = evidence(&files);
+        proof.valid_window.valid_from = instant(2);
+        assert_eq!(
+            validate(ConsistencyInput {
+                files,
+                compatibility: Some(proof),
+            })
+            .status,
+            ConsistencyStatus::Conflict
+        );
+    }
+
+    #[test]
+    fn compatibility_set_identity_and_revision_are_not_member_constraints() {
+        let files = vec![
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Day, b'd'),
+            file(FileRole::Gbbq, b'c'),
+        ];
+        let mut proof = evidence(&files);
+        proof.compatibility_set_revision = "another-audit-revision".into();
+        proof.compatibility_set_identity = "another-audit-set".into();
+        assert_eq!(
+            validate(ConsistencyInput {
+                files: files.clone(),
+                compatibility: Some(proof.clone()),
+            })
+            .status,
+            ConsistencyStatus::VerifiedCompatible
+        );
+
+        proof.compatibility_set_identity.clear();
+        let decision = validate(ConsistencyInput {
+            files,
+            compatibility: Some(proof),
+        });
+        assert_eq!(decision.status, ConsistencyStatus::NotVerified);
+        assert!(
+            decision
+                .reasons
+                .contains(&ConsistencyReason::IncompleteCompatibilityEvidence)
+        );
+    }
+
+    #[test]
+    fn order_and_exact_duplicates_do_not_change_decision_or_evidence() {
+        let files = vec![
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Day, b'd'),
+            file(FileRole::Gbbq, b'c'),
+        ];
+        let proof = evidence(&files);
+        let mut reordered = files.clone();
+        reordered.reverse();
+        reordered.push(files[1].clone());
+        let expected = validate(ConsistencyInput {
+            files,
+            compatibility: Some(proof.clone()),
+        });
+        let actual = validate(ConsistencyInput {
+            files: reordered,
+            compatibility: Some(proof),
+        });
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn divergent_duplicate_role_is_conflict() {
+        let mut day = file(FileRole::Day, b'd');
+        day.sha256 = hash(b'e');
+        let files = vec![
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Day, b'd'),
+            day,
+            file(FileRole::Gbbq, b'c'),
+        ];
+        let proof = evidence(&[files[0].clone(), files[1].clone(), files[3].clone()]);
+        let decision = validate(ConsistencyInput {
+            files,
+            compatibility: Some(proof),
+        });
+        assert_eq!(decision.status, ConsistencyStatus::Conflict);
+        assert!(
+            decision
+                .reasons
+                .contains(&ConsistencyReason::ConflictingDuplicate {
+                    role: FileRole::Day
+                })
+        );
+    }
+
+    #[test]
+    fn all_required_roles_are_explicit() {
+        let roles: BTreeSet<_> = REQUIRED_ROLES.into_iter().collect();
+        assert_eq!(roles.len(), 3);
+    }
+}
