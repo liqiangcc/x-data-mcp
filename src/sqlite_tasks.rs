@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 9;
-const MIGRATIONS: [&str; 9] = [
+pub const SCHEMA_VERSION: u32 = 10;
+const MIGRATIONS: [&str; 10] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
     include_str!("../migrations/tasks/003_market.sql"),
@@ -19,6 +19,7 @@ const MIGRATIONS: [&str; 9] = [
     include_str!("../migrations/tasks/007_stopped_checks.sql"),
     include_str!("../migrations/tasks/008_publication_checks.sql"),
     include_str!("../migrations/tasks/009_verification_inspections.sql"),
+    include_str!("../migrations/tasks/010_execution_starts.sql"),
 ];
 #[derive(Clone)]
 pub struct SqliteTasks {
@@ -38,6 +39,18 @@ impl SqliteTasks {
     }
     pub fn path(&self) -> &Path {
         &self.path
+    }
+    /// Mechanical durable fact only: whether this item's StartItem transition
+    /// committed a start marker. No contract or business filtering here.
+    pub fn item_execution_started(&self, task_id: &str, item_id: &str) -> Result<bool, Error> {
+        self.read(|c| {
+            c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_item_execution_starts WHERE task_id=?1 AND item_id=?2)",
+                params![task_id, item_id],
+                |r| r.get(0),
+            )
+            .map_err(storage)
+        })
     }
     pub fn initialize(&self) -> Result<(), Error> {
         // Explicit create-new only. No clobber, migration or import of an existing file.
@@ -568,9 +581,27 @@ impl TaskRepository for SqliteTasks {
             if old.task.state_revision != revision {
                 return Err(Error::RevisionConflict);
             }
-            let next = decide(old, run, change, Utc::now())?;
+            let started_item = match &change {
+                Change::StartItem(item_id) => Some(item_id.clone()),
+                _ => None,
+            };
+            let now = Utc::now();
+            let next = decide(old, run, change, now)?;
             if next.task.state_revision != revision {
                 write_task(c, &next, revision)?;
+                if let Some(item_id) = started_item {
+                    c.execute(
+                        "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
+                        params![
+                            id,
+                            item_id,
+                            run,
+                            db_revision(next.task.state_revision)?,
+                            now.to_rfc3339()
+                        ],
+                    )
+                    .map_err(storage)?;
+                }
             }
             read_bound_task(c, id)?.ok_or(Error::TaskNotFound)
         })

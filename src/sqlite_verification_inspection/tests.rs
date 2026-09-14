@@ -747,7 +747,7 @@ fn application_rechecks_a_changed_sqlite_snapshot_once_without_reusing_old_plan(
 fn inspection_v8_requires_explicit_upgrade_and_preserves_existing_task_binding() {
     let (_dir, db, original, check) = fixture();
     let c = Connection::open(db.path()).unwrap();
-    c.execute_batch("DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DELETE FROM schema_migrations WHERE version=9; PRAGMA user_version=8;").unwrap();
+    c.execute_batch("DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE task_item_execution_starts; DELETE FROM schema_migrations WHERE version>=9; PRAGMA user_version=8;").unwrap();
     assert!(matches!(
         inspect(&db, "inspect", &check.task.task_id, "manager", "owner"),
         Err(Error::StorageUnavailable(_))
