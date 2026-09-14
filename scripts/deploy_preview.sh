@@ -17,7 +17,7 @@
 #                        release's .sha256 asset digest.
 set -euo pipefail
 
-DEPLOY_ROOT=/opt/x-data-mcp-preview
+DEPLOY_ROOT=${XDM_DEPLOY_ROOT:-/opt/x-data-mcp-preview}
 DB="$DEPLOY_ROOT/state/preview.sqlite"
 SOCK="$DEPLOY_ROOT/run/mcp.sock"
 SERVICE=x-data-mcp-data.service
@@ -52,6 +52,7 @@ markers_after=0
 counts_before="{}"
 current_before=""
 MUTATING=0
+INSTALLED_NEW=0
 WORK=$(mktemp -d "/tmp/deploy-${TAG}-XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
@@ -107,6 +108,12 @@ rollback() {  # best-effort restore of pre-switch state; returns outcome string
 fail() {
     local outcome
     outcome=$(rollback)
+    # Pre-mutation install cleanup: remove a release dir this run created iff
+    # current does not point at it. A pre-existing release dir is never removed.
+    if [[ "$DRY_RUN" != "1" && "$INSTALLED_NEW" == "1" && -n "$RELEASE_DIR" \
+          && "$(readlink "$DEPLOY_ROOT/current" 2>/dev/null || true)" != "$RELEASE_DIR" ]]; then
+        rm -rf "$RELEASE_DIR" || true
+    fi
     # --dry-run is strictly read-only: no report files, no state changes.
     [[ "$DRY_RUN" == "1" ]] || report "FAILED_AT_$step" "$outcome"
     echo "FAILED_AT_$step: $1 (rollback: $outcome)" >&2
@@ -215,6 +222,7 @@ tar -xzf "$WORK/$TARBALL" -C "$WORK/stage" --strip-components=1 || fail "unpack"
 step=install_release
 if [[ ! -d "$RELEASE_DIR" ]]; then
     mv "$WORK/stage" "$RELEASE_DIR" || fail "install release dir"
+    INSTALLED_NEW=1
 fi
 
 # --- 4. consistent backup (sqlite3 backup API, not cp of db+wal/shm) ---------
@@ -350,10 +358,19 @@ def exe_sha(pid):
 expected_data=hashlib.sha256(pathlib.Path(rel+"/bin/data_service").read_bytes()).hexdigest()
 expected_proxy=hashlib.sha256(pathlib.Path(rel+"/bin/mcp_connect").read_bytes()).hexdigest()
 services={n:svc(n) for n in ["x-data-mcp-data.service","x-data-mcp-tunnel.service"]}
+# Cgroup-specific proxy binding: enumerate only the tunnel service's cgroup.
+# Manual/client mcp_connect processes elsewhere must not influence the check.
+tunnel_cg=services["x-data-mcp-tunnel.service"].get("ControlGroup","")
+cg_procs_path=f"/sys/fs/cgroup{tunnel_cg}/cgroup.procs" if tunnel_cg else ""
 procs=[]
-for l in subprocess.run(["bash","-c","for p in /proc/[0-9]*; do e=$(readlink $p/exe 2>/dev/null); case $e in /opt/x-data-mcp-preview/*) echo $(basename $p) $(basename $e);; esac; done"],capture_output=True,text=True).stdout.splitlines():
-    pid,name=l.split()
-    procs.append({"pid":int(pid),"binary":name,"sha256":exe_sha(pid)})
+cg_error=None
+try:
+    for pid in pathlib.Path(cg_procs_path).read_text().split():
+        exe=pathlib.Path(f"/proc/{pid}/exe").resolve()
+        if exe.name=="mcp_connect":
+            procs.append({"pid":int(pid),"binary":exe.name,"exe":str(exe),"sha256":exe_sha(pid)})
+except Exception as e:
+    cg_error=str(e)
 data_sha=exe_sha(services["x-data-mcp-data.service"]["MainPID"])
 health={"locator":{"kind":"url_file","url_file":"/root/.local/state/tunnel-client/health/x-data-mcp.url"}}
 checks={}
@@ -370,14 +387,17 @@ except Exception as e:
     health["error"]=str(e)
 checks["services_active"]=all(s["ActiveState"]=="active" for s in services.values())
 checks["data_process_matches_release"]=data_sha==expected_data
-proxy_pids=[p for p in procs if p["binary"]=="mcp_connect"]
-checks["tunnel_proxy_matches_release"]=bool(proxy_pids) and all(p["sha256"]==expected_proxy for p in proxy_pids)
+# >=1 mcp_connect inside the tunnel cgroup, all matching the new release.
+checks["tunnel_cgroup_readable"]=cg_error is None
+checks["tunnel_proxy_matches_release"]=bool(procs) and all(p["sha256"]==expected_proxy for p in procs)
 checks["healthz"]=health.get("healthz",{}).get("ok") is True
 checks["readyz"]=health.get("readyz",{}).get("ok") is True
 checks["control_plane_poll"]=health.get("metrics",{}).get("ok") is True
 status="PASS" if all(checks.values()) else "FAIL"
 rep={"status":status,"code_sha":sha,"services":services,
- "actual_release_processes":procs,"data_process_sha256":data_sha,
+ "tunnel_cgroup":tunnel_cg,"cgroup_procs_path":cg_procs_path,
+ "cgroup_error":cg_error,"tunnel_cgroup_mcp_connect":procs,
+ "data_process_sha256":data_sha,
  "expected_data_sha256":expected_data,"expected_proxy_sha256":expected_proxy,
  "assertions":checks,"health":health,
  "consumer":"NOT_RUN","live_source":"NOT_RUN","production":"NOT_PRODUCTION_READY"}
