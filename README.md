@@ -226,3 +226,7 @@ NOT_PRODUCTION_READY：本机部署检查通过不代表真实数据闭环或完
 随后主线 `1f62813d45223f0926457aff07e5344c419f39f1` 已发布为 [v0.2.0-preview.8](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.8) 并切换预览服务；本版本增加官方快照角色—路径绑定，运行时和隧道验收通过，普通库仍为空。详见 [preview.8 部署结果](docs/tasks/preview8-results.md)。真实来源、ChatGPT 消费侧和所有 QFQ/目录/授权门禁仍未解除，系统继续 `NOT_PRODUCTION_READY`。
 
 随后主线 `fca27058d6608b2d5ae4af87798cebba43cccb58` 已发布为 [v0.2.0-preview.9](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.9) 并切换预览服务；本版本再增加官方快照角色—文件名绑定，运行时和隧道验收通过，普通库仍为空。详见 [preview.9 部署结果](docs/tasks/preview9-results.md)。真实来源、ChatGPT 消费侧和所有 QFQ/目录/授权门禁仍未解除，系统继续 `NOT_PRODUCTION_READY`。
+
+随后主线 `22c2255210c68b49d08ffd24a6cfb3468274f07a` 已发布为 [v0.2.0-preview.10](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.10) 并切换预览服务；普通库按显式 `task_sqlite upgrade` 由 schema9 升级到 schema10（无回填），运行时和隧道验收通过，普通库仍为空。
+
+随后主线 `feca5e2448dc8bd7da7d8a8e530d239fc358712a` 已发布为 [v0.2.0-preview.11](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.11)。自本版本起发布走 #140 流水线：向 main 上的提交推送 `v0.2.0-preview.N` tag 即触发 `release.yml` 自动构建、校验并创建 prerelease（tag 版本与 `Cargo.toml` 不一致或 tag 不在 main 上时拒绝），同 workflow 把验证过的包推到 `refs/dist/<tag>`；部署使用 `scripts/deploy_preview.sh <tag>`（`--force-git-transport` 经 `refs/dist` git 取包），完成一致备份、显式 schema 检查、原子 `current` 切换、data/tunnel 重启与五份报告，失败自动回滚并写 `FAILED_AT_*` 报告。preview.11 部署与 `--from-report` 回滚均已实操通过。详见 [preview.11 部署结果](docs/tasks/preview11-results.md)。真实来源、ChatGPT 消费侧和所有 QFQ/目录/授权门禁仍未解除，系统继续 `NOT_PRODUCTION_READY`。
