@@ -37,8 +37,9 @@
   `task_item_execution_starts` 均为 0 行。脚本完成一致 sqlite3 备份
   `state/backup-v0.2.0-preview.11-20260914T103904Z.sqlite`、`task_sqlite`
   schema 检查（10→10 不变）、原子 `current` 切换、data/tunnel 重启、
-  package smoke、live stdio、tunnel cgroup 断言；`preview11-*.json`
-  五份报告 PASS。
+  package smoke、live stdio、tunnel cgroup 断言；
+  `preview11-deployment.json`=DEPLOYED，
+  `preview11-{smoke,stdio,tunnel-observation,final-verification}.json`=PASS。
 - 回滚验证：`rollback_preview.sh --from-report=preview11-deployment.json`
   恢复到 preview.10，rollback 报告 PASS（integrity、current 精确指向旧
   release、恢复 release 自带 schema 检查接受、双服务 active、tunnel cgroup
