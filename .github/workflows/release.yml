@@ -1,0 +1,71 @@
+name: Release
+# Tag pushes only: build, smoke, and create the GitHub prerelease on Actions so
+# the deploy server never uploads release assets (object CDN path is the known
+# bottleneck). The existing `Preview package` workflow stays the PR/main gate.
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify tag binds to a labelled main commit
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          [[ "$tag" == "v$version" ]] || { echo "tag $tag does not match Cargo version $version" >&2; exit 1; }
+          git fetch --depth 200 origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || { echo "tag $tag is not on main" >&2; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: preview-release
+      - name: Build labelled release package
+        run: scripts/build_release.sh
+      - name: Exercise packaged binaries using an isolated synthetic database
+        run: |
+          package_dir=$(find dist -maxdepth 1 -type d -name 'x-data-mcp-*' -print -quit)
+          (cd "$package_dir" && sha256sum --check SHA256SUMS)
+          python3 "$package_dir/check.py" --bin-dir "$package_dir/bin" --report dist/smoke-report.json
+      - name: Packaged runtime cross-UID boundary on an isolated fixture
+        run: |
+          package_dir=$(find dist -maxdepth 1 -type d -name 'x-data-mcp-*' -print -quit)
+          sudo -n python3 "$package_dir/check_peer.py" --bin-dir "$PWD/$package_dir/bin"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x-data-mcp-release-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/smoke-report.json
+          if-no-files-found: error
+      - name: Bind release evidence and publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          package_dir=$(find dist -maxdepth 1 -type d -name 'x-data-mcp-*' -print -quit)
+          tarball_sha=$(sha256sum dist/*.tar.gz | cut -d' ' -f1)
+          manifest_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_sha"])' "$package_dir/manifest.json")
+          tag_sha="$GITHUB_SHA"
+          [[ "$manifest_sha" == "$tag_sha" ]] || { echo "manifest git_sha $manifest_sha != tag $tag_sha" >&2; exit 1; }
+          {
+            echo "tag: $tag_sha"
+            echo "manifest git_sha: $manifest_sha"
+            echo "tarball sha256: $tarball_sha"
+          } >> "$GITHUB_STEP_SUMMARY"
+          version=${GITHUB_REF_NAME#v}
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --clobber dist/*.tar.gz dist/*.sha256 dist/smoke-report.json
+          else
+            gh release create "$GITHUB_REF_NAME" --prerelease --target "$GITHUB_SHA" --title "x-data-mcp $version" dist/*.tar.gz dist/*.sha256 dist/smoke-report.json
+          fi
