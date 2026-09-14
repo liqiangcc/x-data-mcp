@@ -198,9 +198,14 @@ fn execution_start_marker_failure_rolls_back_start_item() {
     let tid = t.task.task_id.clone();
     let item = t.items[0].spec.item_id.clone();
     let s = db.transition(&tid, 0, "run-a", Change::Claim).unwrap();
+    let before = db.read_task(&tid).unwrap().unwrap();
     Connection::open(db.path())
         .unwrap()
-        .execute("DROP TABLE task_item_execution_starts", [])
+        .execute(
+            "CREATE TRIGGER fixture_marker_failure BEFORE INSERT ON task_item_execution_starts \
+             BEGIN SELECT RAISE(ABORT,'fixture marker failure'); END",
+            [],
+        )
         .unwrap();
     assert!(
         db.transition(
@@ -211,9 +216,26 @@ fn execution_start_marker_failure_rolls_back_start_item() {
         )
         .is_err()
     );
-    let s = db.read_task(&tid).unwrap().unwrap();
-    assert_eq!(s.task.state_revision, 1);
-    assert!(s.items.iter().all(|i| i.stage == Stage::Pending));
+    let after = db.read_task(&tid).unwrap().unwrap();
+    assert_eq!(after.task.status, before.task.status);
+    assert_eq!(after.task.state_revision, before.task.state_revision);
+    assert_eq!(after.task.owner_run_id, before.task.owner_run_id);
+    assert_eq!(after.task.last_progress_at, before.task.last_progress_at);
+    assert_eq!(after.items, before.items);
+    assert_eq!(marker_count(&db), 0);
+    Connection::open(db.path())
+        .unwrap()
+        .execute("DROP TRIGGER fixture_marker_failure", [])
+        .unwrap();
+    drop(db);
+    let re = SqliteTasks::new(dir.path().join("t.sqlite"));
+    let after = re.read_task(&tid).unwrap().unwrap();
+    assert_eq!(after.task.status, before.task.status);
+    assert_eq!(after.task.state_revision, before.task.state_revision);
+    assert_eq!(after.task.owner_run_id, before.task.owner_run_id);
+    assert_eq!(after.task.last_progress_at, before.task.last_progress_at);
+    assert_eq!(after.items, before.items);
+    assert_eq!(marker_count(&re), 0);
 }
 #[test]
 fn finish_cancel_and_failed_states_retain_execution_start() {
@@ -287,7 +309,34 @@ fn verified_interruption_reset_retains_execution_start() {
     let dir = tempfile::tempdir().unwrap();
     let db = SqliteTasks::new(dir.path().join("t.sqlite"));
     db.initialize().unwrap();
-    let (tid, item, target) = started_item(&db, "old");
+    let ctl = TaskControl::new(db.clone(), "old".into(), vec![Box::new(LegacyCollection)]).unwrap();
+    let RequestOutcome::Task(t) = ctl
+        .accept(
+            "req",
+            LegacyCollection.key(),
+            serde_json::json!({"symbols":["a","b"],"periods":["day"]}),
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!()
+    };
+    let tid = t.task.task_id.clone();
+    let started = t.items[0].spec.item_id.clone();
+    let sibling = t.items[1].spec.item_id.clone();
+    let s = db.transition(&tid, 0, "old", Change::Claim).unwrap();
+    let target = db
+        .transition(
+            &tid,
+            s.task.state_revision,
+            "old",
+            Change::StartItem(started.clone()),
+        )
+        .unwrap();
+    // only the started item proves ever-started; its sibling never ran
+    assert!(db.item_execution_started(&tid, &started).unwrap());
+    assert!(!db.item_execution_started(&tid, &sibling).unwrap());
     let contract = StopVerification::new(db.clone(), "new".into()).unwrap();
     let key = contract.key();
     let ctl = TaskControl::new(db.clone(), "new".into(), vec![Box::new(contract)]).unwrap();
@@ -322,8 +371,16 @@ fn verified_interruption_reset_retains_execution_start() {
     db.commit_stop_check(&plan).unwrap();
     let after = db.read_task(&tid).unwrap().unwrap();
     assert_eq!(after.task.status, Status::Interrupted);
-    assert_eq!(after.items[0].stage, Stage::Pending);
-    assert!(db.item_execution_started(&tid, &item).unwrap());
+    assert!(after.items.iter().all(|i| i.stage == Stage::Pending));
+    assert!(db.item_execution_started(&tid, &started).unwrap());
+    assert!(!db.item_execution_started(&tid, &sibling).unwrap());
+    drop(db);
+    let re = SqliteTasks::new(dir.path().join("t.sqlite"));
+    let after = re.read_task(&tid).unwrap().unwrap();
+    assert_eq!(after.task.status, Status::Interrupted);
+    assert!(after.items.iter().all(|i| i.stage == Stage::Pending));
+    assert!(re.item_execution_started(&tid, &started).unwrap());
+    assert!(!re.item_execution_started(&tid, &sibling).unwrap());
 }
 #[test]
 fn execution_start_survives_reopen() {
@@ -333,6 +390,56 @@ fn execution_start_survives_reopen() {
     let (tid, item, _) = started_item(&db, "run-a");
     drop(db);
     let re = SqliteTasks::new(dir.path().join("t.sqlite"));
+    assert!(re.item_execution_started(&tid, &item).unwrap());
+}
+#[test]
+fn execution_start_marker_row_is_immutable() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = SqliteTasks::new(dir.path().join("t.sqlite"));
+    db.initialize().unwrap();
+    let (tid, item, _) = started_item(&db, "run-a");
+    let row = |db: &SqliteTasks| {
+        Connection::open(db.path())
+            .unwrap()
+            .query_row(
+                "SELECT task_id,item_id,run_id,start_revision,started_at \
+                 FROM task_item_execution_starts WHERE task_id=?1 AND item_id=?2",
+                params![&tid, &item],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .unwrap()
+    };
+    let before = row(&db);
+    let c = Connection::open(db.path()).unwrap();
+    assert!(
+        c.execute(
+            "UPDATE task_item_execution_starts SET run_id='x' WHERE task_id=?1",
+            [&tid]
+        )
+        .is_err()
+    );
+    assert!(
+        c.execute(
+            "DELETE FROM task_item_execution_starts WHERE task_id=?1",
+            [&tid]
+        )
+        .is_err()
+    );
+    drop(c);
+    assert_eq!(row(&db), before);
+    assert_eq!(marker_count(&db), 1);
+    drop(db);
+    let re = SqliteTasks::new(dir.path().join("t.sqlite"));
+    assert_eq!(row(&re), before);
+    assert_eq!(marker_count(&re), 1);
     assert!(re.item_execution_started(&tid, &item).unwrap());
 }
 #[test]
