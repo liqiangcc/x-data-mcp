@@ -4,11 +4,11 @@
 
 ## 边界
 
-`snapshot::inspect` 负责逐文件字节核验并输出 `FILE_BYTES_VERIFIED`。`file_consistency::validate` 负责另一个问题：只有一份明确、不可变的兼容性证明同时绑定 base/hsjday/GBBQ 的角色、精确 SHA-256、来源身份、来源修订和适用时间窗时，才返回 `VERIFIED_COMPATIBLE`。相同下载日期、URL、ETag、Last-Modified 或分别正确的字节摘要不会被推断为可组合。
+`snapshot::inspect` 负责逐文件字节核验并输出 `FILE_BYTES_VERIFIED`。`file_consistency::validate` 负责另一个问题：只有一份明确、不可变的兼容性证明同时绑定 base/hsjday/GBBQ 的角色、精确 SHA-256、兼容集合自身的 identity/revision 和适用时间窗时，才返回 `VERIFIED_COMPATIBLE`。证明中的 `compatibility_set_identity` / `compatibility_set_revision` 是审计过的组合事实，不是声称三个独立文件共享同一来源版本；每个 `FileFact` 的可选 `source_identity` / `source_revision` 仍表示该角色自身的来源事实。相同下载日期、URL、ETag、Last-Modified 或分别正确的字节摘要不会被推断为可组合。
 
-验证结果为 `VERIFIED_COMPATIBLE`、`NOT_VERIFIED` 或 `CONFLICT`。缺少角色、缺少兼容性证据或证据字段不足会稳定返回 `NOT_VERIFIED`；明确的摘要、身份、修订或时间窗矛盾返回 `CONFLICT`。决定会按角色排序并去除完全相同的重复事实，同时保留角色、摘要和来源元数据，保证输入顺序稳定。
+验证结果为 `VERIFIED_COMPATIBLE`、`NOT_VERIFIED` 或 `CONFLICT`。缺少角色、缺少兼容性证据或证据字段不足会稳定返回 `NOT_VERIFIED`；明确的摘要、身份、修订或时间窗矛盾返回 `CONFLICT`，且冲突优先于证据不足。决定会按角色排序并去除完全相同的重复事实，同时保留角色、摘要和来源元数据，保证输入顺序稳定。
 
-`VERIFIED_COMPATIBLE` 只允许进入后续 #54/#46/#71 门禁，不代表 GBBQ 规范化、沪深 A/行业目录、服务器使用范围或生产就绪。没有新增 MCP 工具、fallback/force 开关、网络获取、真实行情导入或生产装配。
+`VERIFIED_COMPATIBLE` 只允许进入后续 #54/#46/#71 门禁，不代表 GBBQ 规范化、沪深 A/行业目录、服务器使用范围或生产就绪。`CompatibilityEvidence` 只能由已验证、可审计的 evidence fact 构造；validator 不把调用方填写字符串当作事实，也不从缺失字段猜测批准。没有新增 MCP 工具、fallback/force 开关、网络获取、真实行情导入或生产装配。
 
 ## AC → 实现/测试
 

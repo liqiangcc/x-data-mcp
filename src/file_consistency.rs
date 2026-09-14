@@ -46,16 +46,19 @@ pub struct CompatibilityWindow {
     pub valid_until: DateTime<Utc>,
 }
 
-/// An independently retained statement that the exact file set is
-/// composable. A URL, download date, ETag, or common hash does not constitute
-/// this proof.
+/// A fact from an independently retained audit stating that the exact file
+/// set is composable. Callers must only construct this from that auditable
+/// evidence; this type does not authenticate arbitrary strings or fetch a
+/// proof. A URL, download date, ETag, or common hash does not constitute it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompatibilityEvidence {
     pub evidence_ref: String,
     pub rule_version: String,
-    pub source_revision: String,
-    pub source_identity: String,
+    /// Identity and revision of the audited compatibility set, rather than a
+    /// claim that the independently published files share one source.
+    pub compatibility_set_revision: String,
+    pub compatibility_set_identity: String,
     pub file_hashes: BTreeMap<FileRole, String>,
     pub valid_window: CompatibilityWindow,
 }
@@ -139,15 +142,15 @@ pub fn validate(input: ConsistencyInput) -> ConsistencyDecision {
 
     let Some(evidence) = input.compatibility else {
         reasons.push(ConsistencyReason::MissingCompatibilityEvidence);
-        return decision(ConsistencyStatus::NotVerified, reasons, files, Vec::new());
+        return decision(status_for_reasons(&reasons), reasons, files, Vec::new());
     };
 
     let evidence_ref = evidence.evidence_ref.clone();
     let mut evidence_refs = vec![evidence_ref];
     if evidence.evidence_ref.trim().is_empty()
         || evidence.rule_version != CONTRACT_VERSION
-        || evidence.source_revision.trim().is_empty()
-        || evidence.source_identity.trim().is_empty()
+        || evidence.compatibility_set_revision.trim().is_empty()
+        || evidence.compatibility_set_identity.trim().is_empty()
         || evidence.file_hashes.len() != REQUIRED_ROLES.len()
         || REQUIRED_ROLES
             .iter()
@@ -159,7 +162,7 @@ pub fn validate(input: ConsistencyInput) -> ConsistencyDecision {
     {
         reasons.push(ConsistencyReason::IncompleteCompatibilityEvidence);
         return decision(
-            ConsistencyStatus::NotVerified,
+            status_for_reasons(&reasons),
             reasons,
             files,
             std::mem::take(&mut evidence_refs),
@@ -168,7 +171,7 @@ pub fn validate(input: ConsistencyInput) -> ConsistencyDecision {
     if evidence.valid_window.valid_from > evidence.valid_window.valid_until {
         reasons.push(ConsistencyReason::InvalidCompatibilityWindow);
         return decision(
-            ConsistencyStatus::Conflict,
+            status_for_reasons(&reasons),
             reasons,
             files,
             std::mem::take(&mut evidence_refs),
@@ -187,12 +190,12 @@ pub fn validate(input: ConsistencyInput) -> ConsistencyDecision {
             reasons.push(ConsistencyReason::HashMismatch { role });
         }
         if let Some(revision) = &file.source_revision
-            && revision != &evidence.source_revision
+            && revision != &evidence.compatibility_set_revision
         {
             reasons.push(ConsistencyReason::SourceRevisionMismatch { role });
         }
         if let Some(identity) = &file.source_identity
-            && identity != &evidence.source_identity
+            && identity != &evidence.compatibility_set_identity
         {
             reasons.push(ConsistencyReason::SourceIdentityMismatch { role });
         }
@@ -203,15 +206,19 @@ pub fn validate(input: ConsistencyInput) -> ConsistencyDecision {
         }
     }
 
-    let status = if reasons.iter().any(ConsistencyReason::is_conflict) {
+    let status = status_for_reasons(&reasons);
+    evidence_refs.sort();
+    decision(status, reasons, files, evidence_refs)
+}
+
+fn status_for_reasons(reasons: &[ConsistencyReason]) -> ConsistencyStatus {
+    if reasons.iter().any(ConsistencyReason::is_conflict) {
         ConsistencyStatus::Conflict
     } else if reasons.is_empty() {
         ConsistencyStatus::VerifiedCompatible
     } else {
         ConsistencyStatus::NotVerified
-    };
-    evidence_refs.sort();
-    decision(status, reasons, files, evidence_refs)
+    }
 }
 
 fn decision(
@@ -288,8 +295,8 @@ mod tests {
         CompatibilityEvidence {
             evidence_ref: "fixture:compatible-set".into(),
             rule_version: CONTRACT_VERSION.into(),
-            source_revision: "r1".into(),
-            source_identity: "tdx-public-set".into(),
+            compatibility_set_revision: "r1".into(),
+            compatibility_set_identity: "tdx-public-set".into(),
             file_hashes: files
                 .iter()
                 .map(|file| (file.role, file.sha256.clone()))
@@ -337,6 +344,54 @@ mod tests {
     }
 
     #[test]
+    fn explicit_conflicts_remain_conflict_without_compatibility_evidence() {
+        let mut day_variant = file(FileRole::Day, b'd');
+        day_variant.etag = Some("different-etag".into());
+        let duplicate_decision = validate(ConsistencyInput {
+            files: vec![
+                file(FileRole::BaseIndustry, b'b'),
+                file(FileRole::Day, b'd'),
+                day_variant,
+                file(FileRole::Gbbq, b'c'),
+            ],
+            compatibility: None,
+        });
+        assert_eq!(duplicate_decision.status, ConsistencyStatus::Conflict);
+
+        let mut invalid_interval = file(FileRole::Day, b'd');
+        invalid_interval.acquisition_started_at = instant(3);
+        invalid_interval.acquisition_completed_at = instant(2);
+        let interval_decision = validate(ConsistencyInput {
+            files: vec![
+                file(FileRole::BaseIndustry, b'b'),
+                invalid_interval,
+                file(FileRole::Gbbq, b'c'),
+            ],
+            compatibility: None,
+        });
+        assert_eq!(interval_decision.status, ConsistencyStatus::Conflict);
+    }
+
+    #[test]
+    fn explicit_conflict_is_not_downgraded_by_incomplete_compatibility_evidence() {
+        let mut day_variant = file(FileRole::Day, b'd');
+        day_variant.etag = Some("different-etag".into());
+        let files = vec![
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Day, b'd'),
+            day_variant,
+            file(FileRole::Gbbq, b'c'),
+        ];
+        let mut proof = evidence(&[files[0].clone(), files[1].clone(), files[3].clone()]);
+        proof.compatibility_set_identity.clear();
+        let decision = validate(ConsistencyInput {
+            files,
+            compatibility: Some(proof),
+        });
+        assert_eq!(decision.status, ConsistencyStatus::Conflict);
+    }
+
+    #[test]
     fn missing_role_is_not_verified_and_does_not_infer_latest() {
         let files = vec![
             file(FileRole::BaseIndustry, b'b'),
@@ -371,7 +426,18 @@ mod tests {
         );
 
         let mut proof = evidence(&files);
-        proof.source_revision = "r2".into();
+        proof.compatibility_set_revision = "r2".into();
+        assert_eq!(
+            validate(ConsistencyInput {
+                files: files.clone(),
+                compatibility: Some(proof),
+            })
+            .status,
+            ConsistencyStatus::Conflict
+        );
+
+        let mut proof = evidence(&files);
+        proof.compatibility_set_identity = "other-source".into();
         assert_eq!(
             validate(ConsistencyInput {
                 files: files.clone(),
