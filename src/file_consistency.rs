@@ -380,13 +380,17 @@ mod tests {
             .get_mut(&FileRole::Day)
             .unwrap()
             .source_revision = Some("day-r8".into());
-        assert_eq!(
-            validate(ConsistencyInput {
-                files: files.clone(),
-                compatibility: Some(proof),
-            })
-            .status,
-            ConsistencyStatus::Conflict
+        let revision_conflict = validate(ConsistencyInput {
+            files: files.clone(),
+            compatibility: Some(proof),
+        });
+        assert_eq!(revision_conflict.status, ConsistencyStatus::Conflict);
+        assert!(
+            revision_conflict
+                .reasons
+                .contains(&ConsistencyReason::SourceRevisionMismatch {
+                    role: FileRole::Day
+                })
         );
 
         let mut proof = evidence(&files);
@@ -395,13 +399,17 @@ mod tests {
             .get_mut(&FileRole::Gbbq)
             .unwrap()
             .source_identity = Some("other-gbbq-origin".into());
-        assert_eq!(
-            validate(ConsistencyInput {
-                files,
-                compatibility: Some(proof),
-            })
-            .status,
-            ConsistencyStatus::Conflict
+        let identity_conflict = validate(ConsistencyInput {
+            files,
+            compatibility: Some(proof),
+        });
+        assert_eq!(identity_conflict.status, ConsistencyStatus::Conflict);
+        assert!(
+            identity_conflict
+                .reasons
+                .contains(&ConsistencyReason::SourceIdentityMismatch {
+                    role: FileRole::Gbbq
+                })
         );
     }
 
@@ -489,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_hash_revision_identity_or_window_conflict_is_rejected() {
+    fn member_binding_hash_and_window_conflicts_are_rejected() {
         let files = vec![
             file(FileRole::BaseIndustry, b'b'),
             file(FileRole::Day, b'd'),
@@ -511,28 +519,6 @@ mod tests {
         );
 
         let mut proof = evidence(&files);
-        proof.compatibility_set_revision = "r2".into();
-        assert_eq!(
-            validate(ConsistencyInput {
-                files: files.clone(),
-                compatibility: Some(proof),
-            })
-            .status,
-            ConsistencyStatus::Conflict
-        );
-
-        let mut proof = evidence(&files);
-        proof.compatibility_set_identity = "other-source".into();
-        assert_eq!(
-            validate(ConsistencyInput {
-                files: files.clone(),
-                compatibility: Some(proof),
-            })
-            .status,
-            ConsistencyStatus::Conflict
-        );
-
-        let mut proof = evidence(&files);
         proof.valid_window.valid_from = instant(2);
         assert_eq!(
             validate(ConsistencyInput {
@@ -541,6 +527,38 @@ mod tests {
             })
             .status,
             ConsistencyStatus::Conflict
+        );
+    }
+
+    #[test]
+    fn compatibility_set_identity_and_revision_are_not_member_constraints() {
+        let files = vec![
+            file(FileRole::BaseIndustry, b'b'),
+            file(FileRole::Day, b'd'),
+            file(FileRole::Gbbq, b'c'),
+        ];
+        let mut proof = evidence(&files);
+        proof.compatibility_set_revision = "another-audit-revision".into();
+        proof.compatibility_set_identity = "another-audit-set".into();
+        assert_eq!(
+            validate(ConsistencyInput {
+                files: files.clone(),
+                compatibility: Some(proof.clone()),
+            })
+            .status,
+            ConsistencyStatus::VerifiedCompatible
+        );
+
+        proof.compatibility_set_identity.clear();
+        let decision = validate(ConsistencyInput {
+            files,
+            compatibility: Some(proof),
+        });
+        assert_eq!(decision.status, ConsistencyStatus::NotVerified);
+        assert!(
+            decision
+                .reasons
+                .contains(&ConsistencyReason::IncompleteCompatibilityEvidence)
         );
     }
 

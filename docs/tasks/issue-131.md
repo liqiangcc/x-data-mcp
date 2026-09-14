@@ -14,9 +14,9 @@
 
 - AC-01/02/03：`file_consistency::validate` 要求三种角色和显式 proof；`retained_issue_74_snapshot_has_byte_evidence_but_no_cross_file_approval` 证明既有 #74 清单即使逐文件字节已核验，仍返回 `NOT_VERIFIED`。
 - AC-04/05：`explicit_hash_revision_identity_and_window_are_required_for_compatibility`、`missing_role_is_not_verified_and_does_not_infer_latest`、`matching_metadata_without_explicit_proof_remains_not_verified`。
-- AC-06/07：`proof_hash_revision_identity_or_window_conflict_is_rejected` 覆盖摘要、修订、identity、时间窗矛盾；缺少逐文件 byte proof 会保持 `NOT_VERIFIED`。
+- AC-06/07：`member_binding_hash_and_window_conflicts_are_rejected` 覆盖成员摘要和时间窗矛盾；`independently_published_roles_use_their_own_bound_revision_and_identity` 覆盖按成员绑定的 revision/identity 矛盾；缺少逐文件 byte proof 会保持 `NOT_VERIFIED`。
 - AC-07（按 role 绑定）：`independently_published_roles_use_their_own_bound_revision_and_identity` 证明三类文件可有不同来源 revision/identity，proof 按 role 正确绑定时通过，任一成员绑定变更即 `CONFLICT`。
-- AC-08：`order_and_exact_duplicates_do_not_change_decision_or_evidence`、`divergent_duplicate_role_is_conflict` 覆盖顺序稳定、等价重复稳定和冲突重复拒绝。
+- AC-08：`order_and_exact_duplicates_do_not_change_decision_or_evidence`、`divergent_duplicate_role_is_conflict` 覆盖顺序稳定、等价重复稳定和冲突重复拒绝；`explicit_conflicts_remain_conflict_without_compatibility_evidence` 与 `explicit_conflict_is_not_downgraded_by_incomplete_compatibility_evidence` 覆盖冲突优先级。
 - AC-09：决定保留完整 role/hash/source 元数据和 evidence refs；不把兼容状态提升为 production-ready。
 - AC-10：本模块为领域层，未修改 MCP、SQLite、官方来源路径或既有 #54/#46/#71 结论；完整 fmt/clippy/test/diff-check 由 CI 执行。
 
