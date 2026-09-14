@@ -16,8 +16,12 @@ The required probes occur as follows:
 - `T1205` occurs in `tdxhy.cfg` as another raw token from the retained `688318` line evidence.
 - `688318` occurs in `tdxhy.cfg`, `tdxhy2.cfg`, `base.dbf`, `base.map`, and `infoharbor_ex.code`, and also in `block.dat`, `block_fg.dat`, `block_gn.dat`, and `block_zs.dat`. These are context locator hits in v2 and cannot change `FOUND_CANDIDATE`.
 
-The scan found locator candidates (`tdxhy.cfg`, `tdxhy2.cfg`, `base.dbf`, `base.map`, `infoharbor_ex.code`) but did not decode any member or establish code→name, parent/child hierarchy, field meaning, version equivalence, or complete research-industry level-2 coverage. Candidate status is evidence only and does not close #46/#6 or change production readiness. No archive bytes are committed; no network access or production import was used.
+The v2 industry probes locate only `candidate_classes=["PRIMARY_CLASSIFICATION"]`: a primary classification locator was found in `tdxhy.cfg` (431 industry/candidate hits). `DICTIONARY_CANDIDATE` has 0 industry-probe hits, a negative observation bounded to this archive and the fixed token set. The dictionary members listed above occur only through context or other raw locator facts. This does not mean a dictionary, hierarchy, or code→name candidate has been established.
+
+The scan did not decode any member or establish code→name, parent/child hierarchy, field meaning, version equivalence, or complete research-industry level-2 coverage. Candidate status is evidence only and does not close #46/#6 or change production readiness. No archive bytes are committed; no network access or production import was used.
 
 The v2 runner is `scan_base_v2.py`; it independently records `industry_hits`, `context_hits`, `candidate_hits`, and `candidate_classes` for every member. Both v1 and v2 results are preserved; v2 is the current classification under the newly frozen executable rules.
 
-The two output files generated from independent runs were byte-identical (SHA-256 `1a0aec42f61be53dc2ec44147d003e5c20f02ebd1e90a1640a99bf24120ee05f`).
+The v1 raw-result output is reproducible with SHA-256 `1a0aec42f61be53dc2ec44147d003e5c20f02ebd1e90a1640a99bf24120ee05f`; that output's overall classification remains `INVALID_FOR_CONCLUSION`.
+
+Two independent clean-checkout v2 runs were byte-identical (SHA-256 `93319b27d917c361a8bb179b21359c6c2492f595c0a47b41dcaac7732ced57b0` for each output, `cmp` succeeded). The committed `scan-result-v2.json` has the same SHA-256.
