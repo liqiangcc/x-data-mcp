@@ -93,3 +93,5 @@ Calendar helper 明确 UTC→UTC+8 日期，并用于 daily/yearly admission 的
 只读能力：`SqliteTasks::item_execution_started(task_id,item_id) -> Result<bool>` 在单个只读事务快照内返回标记存在性；不含契约族过滤、catalog、default 等业务判断。升级兼容：旧库经显式 upgrade 获得空表，历史任务无标记即"不可证明曾启动"，不从 stage/audit 回填。
 
 本切片不实现 default selector、catalog 交集、wire 参数、gap 表/启发式与部署。
+
+已按上述边界实现（PR #137）：`SqliteTasks::transition` 在 `Change::StartItem` 生效的同一事务内写标记；只读能力 `item_execution_started(task_id,item_id)`。测试：accepted_and_pending_items_have_no_execution_start、start_item_commits_marker_atomically_with_running、execution_start_marker_failure_rolls_back_start_item、finish_cancel_and_failed_states_retain_execution_start、verified_interruption_reset_retains_execution_start、execution_start_survives_reopen、only_the_committed_start_writes_the_marker（stale revision + 两连接真实竞争）、upgraded_v9_database_has_no_fabricated_execution_starts、start_item_real_exit_keeps_marker_commit_atomic（真实子进程 exit 78）。CI run 34805982307 全绿；既有降级模拟测试同步补 DROP TABLE。
