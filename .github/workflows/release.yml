@@ -23,7 +23,9 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
           [[ "$tag" == "v$version" ]] || { echo "tag $tag does not match Cargo version $version" >&2; exit 1; }
-          git fetch --depth 200 origin +refs/heads/main:refs/remotes/origin/main
+          # Full main history, not a bounded depth: a legitimate old tag must
+          # never fail AC-02 just because it sits beyond a fetch window.
+          git fetch origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || { echo "tag $tag is not on main" >&2; exit 1; }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -64,7 +66,13 @@ jobs:
             echo "tarball sha256: $tarball_sha"
           } >> "$GITHUB_STEP_SUMMARY"
           version=${GITHUB_REF_NAME#v}
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          if existing=$(gh release view "$GITHUB_REF_NAME" --json targetCommitish,tagName 2>/dev/null); then
+            # Rerun path: only overwrite assets when the existing release is
+            # still bound to this exact tag SHA; a retagged release fails.
+            existing_target=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["targetCommitish"])' <<<"$existing")
+            existing_tag=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tagName"])' <<<"$existing")
+            [[ "$existing_target" == "$tag_sha" && "$existing_tag" == "$GITHUB_REF_NAME" ]] \
+              || { echo "existing release $GITHUB_REF_NAME binds $existing_tag@$existing_target, expected $tag_sha" >&2; exit 1; }
             gh release upload "$GITHUB_REF_NAME" --clobber dist/*.tar.gz dist/*.sha256 dist/smoke-report.json
           else
             gh release create "$GITHUB_REF_NAME" --prerelease --target "$GITHUB_SHA" --title "x-data-mcp $version" dist/*.tar.gz dist/*.sha256 dist/smoke-report.json
