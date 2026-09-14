@@ -27,7 +27,7 @@
 **关键不可判定状态（覆盖缺口）**
 
 - collection item 曾 `StartItem`→running，之后经 verified interruption 收尾：`stage` 被重置为 `pending`（`src/task_verification/decision.rs` 唯一业务任务重置路径），`outcome` 为空。
-- 该终态与**从未启动**的 pending item 在普通路径数据上完全相同；`task.result_json.interruption.unfinished_items` 同时包含"曾 running"与"从未 pending"两类 item，无法区分（never-started 中断产生同形 result）。
+- 该终态与**从未启动**的 pending item 在普通路径数据上完全相同；`task.result_json.interruption.unfinished_items` 同时包含"曾 running"与"从未启动的 pending"两类 item，无法区分（never-started 中断产生同形 result）。
 - 唯一能区分两者的见证是 `stopped_write_checks.audit_json.target_before` 快照——但它**仅在核实操作实际执行后才存在**，属核实条件事实，按协调边界不合格。
 - 正常路径无其它候选：`requests`/`accepted_run_id`/`owner_run_id`/`scope_occupancy`/`task_scopes` 证明受理或当前占用而非启动；`task_items` 无 DELETE 路径但 stage 本身可回退。
 
@@ -69,10 +69,12 @@ ever_started(S,P) ⟺ EXISTS task_item_starts 行（或等价单调标记）
 - fail-closed：无标记行 → 未曾启动；存储/完整性错误 → 受理整体失败；pending/accepted/occupancy/owner/核实审计/调用方声明 → 永不作为证据；`cancelled`/`failed`/`interrupted` 终态不抹去已存在标记。
 - 标记落地前：依赖 ever-started 的默认选择一律 `not_implemented` 拒绝，不做退化实现。
 
-### D2. 默认证券选择器 = 当前有效 catalog + ever-started
+### D2. 默认证券选择器 = 当前有效 catalog ∩ ever-started（#4 已确认规则）
 
+- 语义：本选择器服务**默认 update/backfill**——默认证券集合 = 当前有效 catalog 成员 ∩ `ever_started(S,'day') = true`。
+- **正反边界（不可反转）**：`ever_started = false` 表示首次采集尚未启动，该证券必须被**排除**出默认更新集合，继续由 #3 首次采集路径处理；update/backfill **不得**对未启动首次采集的证券自动代采。
 - "当前有效 catalog" 唯一来源：`catalog_head.version_id`（singleton）→ `read(version_id)`（compat_json sha256 + catalog_members 投影全量校验，见 `src/sqlite_catalog.rs`）。无 head 或校验失败 → 受理失败，fail-closed。
-- 默认候选 = 该 catalog 版本成员中 `ever_started(S,'day') = false` 的证券（即仍需首次采集者）；每个证券产生一个 item（沿用现有 item 派生与 `scope_id` 占用语义）。**受 D1 阻塞：ever-started 事实落地前本选择器整体 NOT_IMPLEMENTED。**
+- 默认候选 = 该 catalog 版本成员中 `ever_started(S,'day') = true` 的证券；每个证券产生一个 item（沿用现有 item 派生与 `scope_id` 占用语义）。**受 D1 阻塞：ever-started 事实落地前本选择器整体 NOT_IMPLEMENTED。**
 - 候选为空 → `invalid_arguments` 拒绝，不建空任务（与显式选择 1..100 预算同风格；默认选择是否沿用相同预算上限由实现阶段按契约评审确定，设计冻结不放宽上限）。
 - 解析所得实体集合、`catalog_version_id`、`catalog_digest` 写入每个 item 的 `frozen_inputs.selection_evidence`（沿用 `WriteSelection::Catalog` 已建立的冻结先例 `src/data_supply/collect.rs`）。
 
@@ -123,6 +125,6 @@ ever_started(S,P) ⟺ EXISTS task_item_starts 行（或等价单调标记）
 ## 4. 显式未决事项（留待协调决策，不属本设计）
 
 - ever-started 最小 durable fact 的具体形态（独立 INSERT-only 表 vs `task_items` 不可回退列）——需 schema 评审；落地前默认选择器整体 NOT_IMPLEMENTED。
-- 默认选择器在公共 wire 上的具体参数形态（`start_collection` 新 selection 变体）——本冻结只定语义与事实来源，wire 形态评审后定。
-- ever-started 证券进入默认集合后的业务动作（补采范围如何确定）——依赖 gap 契约，当前 NOT_IMPLEMENTED。
+- 默认选择器在公共 wire 上的具体参数形态（`update_data`/`backfill_data` 的默认 selection 变体或其他入口）——本冻结只定语义与事实来源，wire 形态评审后定。
+- `ever_started=true` 证券的默认 update/backfill 范围如何确定——依赖 proven-gap/范围契约，当前 NOT_IMPLEMENTED；`ever_started=false` 证券不属于默认更新范围，由 #3 首次采集处理。
 - 默认选择的数量预算是否与显式 1..100 相同。
