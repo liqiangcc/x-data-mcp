@@ -405,8 +405,8 @@ fn outside_catalog_and_unstarted_members_are_excluded() {
     start(&tasks, "run-a", &tx, &ix[0]);
     let s = resolve(&catalog).unwrap();
     assert_eq!(s.securities, vec!["sh.600006"]);
-    assert!(s.starts.get("sz.000002").is_none());
-    assert!(s.starts.get("sh.600007").is_none());
+    assert!(!s.starts.contains_key("sz.000002"));
+    assert!(!s.starts.contains_key("sh.600007"));
 }
 #[test]
 fn failed_cancelled_and_interrupted_tasks_keep_their_marker() {
