@@ -62,8 +62,11 @@ output SHA-256 values are recorded in the Issue/PR evidence comment. At
 `e08411131612834e5380813491e7e78f1b4cf051`, detached clean checkouts `a` and
 `b` both produced SHA-256
 `f4d36f0e8356b8df1ddbcd1c50b963fdbf22349e4dca424599daac82899e8ddb`; `cmp`
-reported identical output. Each scanner run independently revalidated the
-fixed archive and target member identities before scanning.
+reported identical output. Both checkouts were detached at exact HEAD
+`e08411131612834e5380813491e7e78f1b4cf051`; mechanical comparison with the
+committed result reported `MECHANICAL_MATCH=PASS`. Each scanner run
+independently revalidated the fixed archive and target member identities before
+scanning.
 
 ## Scope exclusions
 
