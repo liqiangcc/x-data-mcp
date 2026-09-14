@@ -6,8 +6,10 @@
 #                                     deployment report written by the run
 #                                     being rolled back;
 #   --backup=<sqlite> --previous-release=<sha-or-dir>   manual, both required.
+# Every mutation step failure writes reports/rollback-*.json status=FAIL
+# with failed_at and exits non-zero; only full verification writes PASS.
 set -euo pipefail
-DEPLOY_ROOT=/opt/x-data-mcp-preview
+DEPLOY_ROOT=${XDM_DEPLOY_ROOT:-/opt/x-data-mcp-preview}
 DB="$DEPLOY_ROOT/state/preview.sqlite"
 SERVICE=x-data-mcp-data.service
 TUNNEL=x-data-mcp-tunnel.service
@@ -26,21 +28,43 @@ done
 if [[ -n "$FROM_REPORT" ]]; then
     read -r BACKUP PREV < <(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("backup") or "", r.get("previous_release") or "")' "$FROM_REPORT")
 fi
+# --- input validation: all errors here exit before any mutation --------------
 [[ -n "$BACKUP" && -f "$BACKUP" ]] || { echo "no explicit backup; refusing to guess" >&2; exit 1; }
 [[ -n "$PREV" ]] || { echo "no previous release bound to this backup; refusing" >&2; exit 1; }
 # Normalize previous release to a directory inside releases/.
 [[ "$PREV" != /* ]] && PREV="$DEPLOY_ROOT/releases/$PREV"
 [[ -d "$PREV" ]] || { echo "previous release dir missing: $PREV" >&2; exit 1; }
+[[ -x "$PREV/bin/task_sqlite" && -x "$PREV/bin/mcp_connect" ]] \
+    || { echo "previous release $PREV lacks executable bin/task_sqlite or bin/mcp_connect" >&2; exit 1; }
 
-systemctl stop "$TUNNEL" 2>/dev/null || true
-systemctl stop "$SERVICE"
-cp "$BACKUP" "$DB"
+# --- mutation phase: failures write a FAIL report, never bare-exit -----------
+rollback_step=init
+rfail() {
+    python3 - "$BACKUP" "$PREV" "$1" "$2" "$REPORTS" <<'PY' || true
+import json, pathlib, sys
+backup, prev, step, msg, reports = sys.argv[1:]
+rep = {"status": "FAIL", "failed_at": step, "error": msg,
+       "restored_backup": backup, "previous_release": prev,
+       "production": "NOT_PRODUCTION_READY"}
+pathlib.Path(f"{reports}/rollback-{pathlib.Path(backup).stem}.json").write_text(
+    json.dumps(rep, indent=2))
+PY
+    echo "rollback FAILED_AT_$1: $2" >&2
+    exit 1
+}
+rollback_step=stop_tunnel;   systemctl stop "$TUNNEL"  || rfail "$rollback_step" "systemctl stop $TUNNEL"
+rollback_step=stop_service;  systemctl stop "$SERVICE" || rfail "$rollback_step" "systemctl stop $SERVICE"
+rollback_step=restore_db
+cp "$BACKUP" "$DB"                            || rfail "$rollback_step" "cp backup -> $DB"
 rm -f "$DB-shm" "$DB-wal"  # restored snapshot pairs with no WAL journal
-ln -sfn "$PREV" "$DEPLOY_ROOT/current"
-systemctl start "$SERVICE"
-systemctl try-restart "$TUNNEL" 2>/dev/null || true
+rollback_step=switch_current
+ln -sfn "$PREV" "$DEPLOY_ROOT/current"        || rfail "$rollback_step" "current -> $PREV"
+rollback_step=start_service; systemctl start "$SERVICE" || rfail "$rollback_step" "systemctl start $SERVICE"
+rollback_step=restart_tunnel; systemctl restart "$TUNNEL" || rfail "$rollback_step" "systemctl restart $TUNNEL"
 
-python3 - "$BACKUP" "$PREV" "$REPORTS" "$DEPLOY_ROOT" "$SERVICE" "$TUNNEL" <<'PY'
+rollback_step=revalidate
+python3 - "$BACKUP" "$PREV" "$REPORTS" "$DEPLOY_ROOT" "$SERVICE" "$TUNNEL" <<'PY' \
+    || rfail "$rollback_step" "post-rollback verification"
 import hashlib, json, pathlib, shutil, sqlite3, subprocess, sys, tempfile
 backup, prev, reports, root, svc, tun = sys.argv[1:]
 db_path = f"{root}/state/preview.sqlite"

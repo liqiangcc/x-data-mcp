@@ -98,8 +98,13 @@ rollback() {  # best-effort restore of pre-switch state; returns outcome string
             rm -f "$DB-shm" "$DB-wal"  # snapshot file pairs with no WAL journal
         fi
         if systemctl start "$SERVICE" 2>/dev/null && systemctl is-active --quiet "$SERVICE"; then
-            systemctl try-restart "$TUNNEL" 2>/dev/null || true
-            outcome="restored_previous_current_and_db"
+            if systemctl try-restart "$TUNNEL" 2>/dev/null && systemctl is-active --quiet "$TUNNEL"; then
+                outcome="restored_previous_current_and_db"
+            else
+                outcome="failed_tunnel_inactive_after_restore"
+            fi
+        else
+            outcome="failed_service_not_restored"
         fi
     fi
     echo "$outcome"
