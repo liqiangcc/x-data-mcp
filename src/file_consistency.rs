@@ -46,6 +46,14 @@ pub struct CompatibilityWindow {
     pub valid_until: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberBinding {
+    pub sha256: String,
+    pub source_revision: Option<String>,
+    pub source_identity: Option<String>,
+}
+
 /// A fact from an independently retained audit stating that the exact file
 /// set is composable. Callers must only construct this from that auditable
 /// evidence; this type does not authenticate arbitrary strings or fetch a
@@ -59,7 +67,7 @@ pub struct CompatibilityEvidence {
     /// claim that the independently published files share one source.
     pub compatibility_set_revision: String,
     pub compatibility_set_identity: String,
-    pub file_hashes: BTreeMap<FileRole, String>,
+    pub member_bindings: BTreeMap<FileRole, MemberBinding>,
     pub valid_window: CompatibilityWindow,
 }
 
@@ -91,6 +99,8 @@ pub enum ConsistencyReason {
     HashMismatch { role: FileRole },
     SourceRevisionMismatch { role: FileRole },
     SourceIdentityMismatch { role: FileRole },
+    MissingBoundSourceRevision { role: FileRole },
+    MissingBoundSourceIdentity { role: FileRole },
     AcquisitionOutsideCompatibilityWindow { role: FileRole },
 }
 
@@ -151,14 +161,14 @@ pub fn validate(input: ConsistencyInput) -> ConsistencyDecision {
         || evidence.rule_version != CONTRACT_VERSION
         || evidence.compatibility_set_revision.trim().is_empty()
         || evidence.compatibility_set_identity.trim().is_empty()
-        || evidence.file_hashes.len() != REQUIRED_ROLES.len()
+        || evidence.member_bindings.len() != REQUIRED_ROLES.len()
         || REQUIRED_ROLES
             .iter()
-            .any(|role| !evidence.file_hashes.contains_key(role))
+            .any(|role| !evidence.member_bindings.contains_key(role))
         || evidence
-            .file_hashes
+            .member_bindings
             .values()
-            .any(|hash| !canonical_sha256(hash))
+            .any(|binding| !canonical_sha256(&binding.sha256))
     {
         reasons.push(ConsistencyReason::IncompleteCompatibilityEvidence);
         return decision(
@@ -186,18 +196,27 @@ pub fn validate(input: ConsistencyInput) -> ConsistencyDecision {
             continue;
         }
         let file = facts[0];
-        if evidence.file_hashes.get(&role) != Some(&file.sha256) {
+        let binding = &evidence.member_bindings[&role];
+        if binding.sha256 != file.sha256 {
             reasons.push(ConsistencyReason::HashMismatch { role });
         }
-        if let Some(revision) = &file.source_revision
-            && revision != &evidence.compatibility_set_revision
-        {
-            reasons.push(ConsistencyReason::SourceRevisionMismatch { role });
+        if let Some(expected) = &binding.source_revision {
+            if let Some(actual) = &file.source_revision {
+                if actual != expected {
+                    reasons.push(ConsistencyReason::SourceRevisionMismatch { role });
+                }
+            } else {
+                reasons.push(ConsistencyReason::MissingBoundSourceRevision { role });
+            }
         }
-        if let Some(identity) = &file.source_identity
-            && identity != &evidence.compatibility_set_identity
-        {
-            reasons.push(ConsistencyReason::SourceIdentityMismatch { role });
+        if let Some(expected) = &binding.source_identity {
+            if let Some(actual) = &file.source_identity {
+                if actual != expected {
+                    reasons.push(ConsistencyReason::SourceIdentityMismatch { role });
+                }
+            } else {
+                reasons.push(ConsistencyReason::MissingBoundSourceIdentity { role });
+            }
         }
         if file.acquisition_started_at < evidence.valid_window.valid_from
             || file.acquisition_completed_at > evidence.valid_window.valid_until
@@ -297,9 +316,18 @@ mod tests {
             rule_version: CONTRACT_VERSION.into(),
             compatibility_set_revision: "r1".into(),
             compatibility_set_identity: "tdx-public-set".into(),
-            file_hashes: files
+            member_bindings: files
                 .iter()
-                .map(|file| (file.role, file.sha256.clone()))
+                .map(|file| {
+                    (
+                        file.role,
+                        MemberBinding {
+                            sha256: file.sha256.clone(),
+                            source_revision: file.source_revision.clone(),
+                            source_identity: file.source_identity.clone(),
+                        },
+                    )
+                })
                 .collect(),
             valid_window: CompatibilityWindow {
                 valid_from: instant(0),
@@ -322,6 +350,59 @@ mod tests {
         assert_eq!(decision.status, ConsistencyStatus::VerifiedCompatible);
         assert!(decision.reasons.is_empty());
         assert_eq!(decision.evidence_refs, ["fixture:compatible-set"]);
+    }
+
+    #[test]
+    fn independently_published_roles_use_their_own_bound_revision_and_identity() {
+        let mut base = file(FileRole::BaseIndustry, b'b');
+        base.source_revision = Some("base-r1".into());
+        base.source_identity = Some("base-origin".into());
+        let mut day = file(FileRole::Day, b'd');
+        day.source_revision = Some("day-r7".into());
+        day.source_identity = Some("day-origin".into());
+        let mut gbbq = file(FileRole::Gbbq, b'c');
+        gbbq.source_revision = Some("gbbq-r3".into());
+        gbbq.source_identity = Some("gbbq-origin".into());
+        let files = vec![base, day, gbbq];
+
+        let mut proof = evidence(&files);
+        assert_eq!(
+            validate(ConsistencyInput {
+                files: files.clone(),
+                compatibility: Some(proof.clone()),
+            })
+            .status,
+            ConsistencyStatus::VerifiedCompatible
+        );
+
+        proof
+            .member_bindings
+            .get_mut(&FileRole::Day)
+            .unwrap()
+            .source_revision = Some("day-r8".into());
+        assert_eq!(
+            validate(ConsistencyInput {
+                files: files.clone(),
+                compatibility: Some(proof),
+            })
+            .status,
+            ConsistencyStatus::Conflict
+        );
+
+        let mut proof = evidence(&files);
+        proof
+            .member_bindings
+            .get_mut(&FileRole::Gbbq)
+            .unwrap()
+            .source_identity = Some("other-gbbq-origin".into());
+        assert_eq!(
+            validate(ConsistencyInput {
+                files,
+                compatibility: Some(proof),
+            })
+            .status,
+            ConsistencyStatus::Conflict
+        );
     }
 
     #[test]
@@ -415,7 +496,11 @@ mod tests {
             file(FileRole::Gbbq, b'c'),
         ];
         let mut proof = evidence(&files);
-        proof.file_hashes.insert(FileRole::Day, hash(b'e'));
+        proof
+            .member_bindings
+            .get_mut(&FileRole::Day)
+            .unwrap()
+            .sha256 = hash(b'e');
         assert_eq!(
             validate(ConsistencyInput {
                 files: files.clone(),

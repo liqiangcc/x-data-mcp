@@ -32,7 +32,7 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
 
 ## 跨文件一致性 validator（#131）
 
-逐文件 `FILE_BYTES_VERIFIED` 与跨文件可组合性是两个独立门禁。`src/file_consistency.rs` 只接受显式、不可变的兼容性证明：证明必须绑定 base、hsjday、GBBQ 三个角色的精确 SHA-256、兼容集合自身的 identity/revision 和适用时间窗。`compatibility_set_identity` / `compatibility_set_revision` 是已审计组合事实，不表示三个独立发布文件天然共享同一来源版本；`FileFact` 中的可选 source identity/revision 仍属于各自角色。相同 URL、下载日期、ETag、Last-Modified 或分别正确的摘要不会被推断为兼容。
+逐文件 `FILE_BYTES_VERIFIED` 与跨文件可组合性是两个独立门禁。`src/file_consistency.rs` 只接受显式、不可变的兼容性证明：证明必须绑定 base、hsjday、GBBQ 三个角色的精确 SHA-256、兼容集合自身的 identity/revision 和适用时间窗。`compatibility_set_identity` / `compatibility_set_revision` 只标识已审计组合事实，不表示三个独立发布文件天然共享同一来源版本；`member_bindings` 按角色保存各自摘要及可选 source identity/revision，`FileFact` 中的 source identity/revision 仍属于各自角色。相同 URL、下载日期、ETag、Last-Modified 或分别正确的摘要不会被推断为兼容。
 
 validator 的结果是 `VERIFIED_COMPATIBLE`、`NOT_VERIFIED` 或 `CONFLICT`；明确矛盾优先于证据不足。输入顺序与完全相同的重复事实不改变结果，并保留角色/摘要/来源元数据和证据引用。`CompatibilityEvidence` 只应承载已验证、可审计的 evidence fact，不把调用方填入的字符串当作批准依据。保留的 #74 快照没有跨文件证明，测试明确返回 `NOT_VERIFIED`；当前状态没有生产放行，也不改变 #54、#46/#6 或 #71 的结论。该模块不增加 MCP 工具、不联网、不提供 fallback/force 开关。
 
