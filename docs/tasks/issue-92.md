@@ -81,3 +81,15 @@ RangeRunner 回归：range_runner_executes_and_replays_real_publication_without_
 Calendar helper 明确 UTC→UTC+8 日期，并用于 daily/yearly admission 的服务端时钟装配；每次新请求重新取值，无 MCP today/clock 参数。schema、来源门禁与线上状态不变。
 
 修复前 Actions 34708363832（d7bd35f67af5d3afc51c142850c01c6c320e8a77）实际复现：daily_future_single_request_must_not_be_accepted 被受理为 pending；batch 测试仅报告缺失 base，未指出未来范围。同两测试保留修复后重跑，不能把未执行验证称 PASS。补充上海午夜/跨年、当日边界、时钟回退及 base 损坏后的已受理重放测试。
+
+### 执行启动持久事实（编码前边界）
+
+依 `docs/tasks/issue-92-default-selection.md` 已审冻结的"最小 durable fact 需求"，schema v10 新增 `task_item_execution_starts(task_id,item_id,run_id,start_revision,started_at)`：INSERT-only 机械事实表，PRIMARY KEY(task_id,item_id) 引用 task_items，BEFORE UPDATE/DELETE 触发器在 schema 层禁止改写与删除。
+
+标记只在 `TaskRepository::transition` 对 `Change::StartItem` 生效时写入，与 Pending→Running 处于同一 Immediate 事务：`write_task` 提交快照成功后同事务 INSERT；标记写失败（含表缺失/键冲突等存储错误）使整体回滚，item 保持 pending、revision 不变。decide 仅允许 task Running 且无其它 running item 时启动，单任务内每 item 至多一次启动；中断后任务为终态不可再启动，重试产生新 task_id 形成独立事实，故唯一键同时是幂等与矛盾检测。
+
+单调性：FinishItem、RequestCancel/FinishCancellation、failed、verified interruption 的 Running→Pending、Reconcile/needs_verification、stop/publication verification 提交均不触碰本表（这些路径只写 task_items/audit 表）。后续任何新增"业务任务状态改写"路径同样不得删除或回退标记。
+
+只读能力：`SqliteTasks::item_execution_started(task_id,item_id) -> Result<bool>` 在单个只读事务快照内返回标记存在性；不含契约族过滤、catalog、default 等业务判断。升级兼容：旧库经显式 upgrade 获得空表，历史任务无标记即"不可证明曾启动"，不从 stage/audit 回填。
+
+本切片不实现 default selector、catalog 交集、wire 参数、gap 表/启发式与部署。
