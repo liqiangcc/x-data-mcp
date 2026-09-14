@@ -43,6 +43,11 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B \
   evidence/issue-135-tdxhy-structure/test_scan_tdxhy_structure.py
 ```
 
+The self-test checks both synthetic archive tampering
+(`INPUT_IDENTITY_NOT_VERIFIED` / `ARCHIVE_IDENTITY_MISMATCH`) and a tampered
+retained binding for `tdxhy.cfg` (`INPUT_IDENTITY_NOT_VERIFIED` /
+`TARGET_MEMBER_IDENTITY_MISMATCH`).
+
 ## Result
 
 `scan-result.json` records the complete byte structure, line endings, records,
@@ -72,15 +77,16 @@ The fixed mechanical totals are:
 
 The committed result was generated only from the fixed archive and target
 members. Two independent clean-checkout runs must be byte-identical; their
-output SHA-256 values are recorded in the Issue/PR evidence comment. At
-`e08411131612834e5380813491e7e78f1b4cf051`, detached clean checkouts `a` and
-`b` both produced SHA-256
-`f4d36f0e8356b8df1ddbcd1c50b963fdbf22349e4dca424599daac82899e8ddb`; `cmp`
-reported identical output. Both checkouts were detached at exact HEAD
-`e08411131612834e5380813491e7e78f1b4cf051`; mechanical comparison with the
-committed result reported `MECHANICAL_MATCH=PASS`. Each scanner run
-independently revalidated the fixed archive and target member identities before
-scanning.
+output SHA-256 values are recorded in the Issue/PR evidence comment. The final
+two detached clean checkouts were both based on exact HEAD
+`c3a4870f0b9538aea9ccbb2a9a8074c275f3c0b5` and both produced SHA-256
+`ca5c26983c3ce744b825c16999ecb13cd8e8f896317574dde06f68525f2486b8`; `cmp`
+reported identical output and mechanical comparison with the committed result
+reported `MECHANICAL_MATCH=PASS`. The earlier
+`f4d36f0e8356b8df1ddbcd1c50b963fdbf22349e4dca424599daac82899e8ddb` belongs to
+the superseded pre-identity-test HEAD `e084111...` and is retained only as
+historical evidence. Each scanner run independently revalidated the fixed
+archive and target member identities before scanning.
 
 ## Scope exclusions
 
