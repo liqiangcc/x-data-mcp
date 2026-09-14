@@ -24,7 +24,10 @@ python3 evidence/issue-135-tdxhy-structure/scan_tdxhy_structure.py \
 The scanner validates archive bytes/SHA and both target member bytes/SHA against
 the retained index before producing output. Every retained sample line and
 six-digit token hit carries deterministic raw hex; optional ASCII is display
-metadata only. No unknown encoding is guessed.
+metadata only. In complete token statistics, each hit tuple is
+`[member_offset, line_number, line_offset, field_index, raw_hex]`; fixed sample
+hits additionally retain the complete raw line hex. No unknown encoding is
+guessed.
 
 ## Result
 
@@ -32,11 +35,26 @@ metadata only. No unknown encoding is guessed.
 blank lines, literal-`|` field-count distribution, fixed sample locations, and
 six-digit token set/overlap/occurrence/cardinality facts. The mechanically
 selected classification is `STRUCTURAL_RELATION_AMBIGUOUS` because the two
-member token sets overlap and at least one intersecting token occurs on more
-than one line in a member. The output reports the exact overlap and cardinality;
-it does not infer security identity, parent/child hierarchy, industry level,
-code-to-name semantics, or encoding. It does not close #46/#6 or establish
-production readiness.
+member token sets overlap and at least one intersecting token has more than one
+line occurrence on one side under the frozen rule. This is a structural
+classification only; it does not infer security identity, parent/child
+hierarchy, industry level, code-to-name semantics, or encoding. It does not
+close #46/#6 or establish production readiness.
+
+The fixed mechanical totals are:
+
+- `tdxhy.cfg`: 150332 bytes, SHA-256
+  `df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6`;
+  5659 CRLF-terminated lines/records, 0 blank lines, field-count distribution
+  `{6: 5659}`, and 6020 distinct six-digit tokens.
+- `tdxhy2.cfg`: 249145 bytes, SHA-256
+  `401cfc600e74a95ea750713b96d2caa348157f70f52703478785981810cee480`;
+  6753 CRLF-terminated lines/records, 0 blank lines, field-count distribution
+  `{5: 6753}`, and 7338 distinct six-digit tokens.
+- Fixed samples `688318`, `600000`, and `000001` occur once in each member.
+- Token sets: left/right/intersection cardinalities `6020/7338/5660`, with
+  only-left `360` and only-right `1678`; maximum intersecting-token line
+  Cartesian cardinality is `116`.
 
 The committed result was generated only from the fixed archive and target
 members. Two independent clean-checkout runs must be byte-identical; their

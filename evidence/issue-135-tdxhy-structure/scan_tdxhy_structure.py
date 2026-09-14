@@ -137,7 +137,13 @@ def member_report(name: str, data: bytes, expected: dict[str, object]) -> dict[s
     for token in sorted(by_token):
         hits = sorted(by_token[token], key=lambda item: (item["member_offset"], item["line_number"]))
         compact_hits = [
-            {key: value for key, value in hit.items() if key not in {"raw_line_hex", "raw_line_ascii"}}
+            [
+                hit["member_offset"],
+                hit["line_number"],
+                hit["line_offset"],
+                hit["field_index"],
+                hit["raw_hex"],
+            ]
             for hit in hits
         ]
         line_numbers = sorted({int(hit["line_number"]) for hit in hits})
@@ -147,6 +153,13 @@ def member_report(name: str, data: bytes, expected: dict[str, object]) -> dict[s
                 "occurrence_count": len(hits),
                 "line_count": len(line_numbers),
                 "line_numbers": line_numbers,
+                "hit_tuple_fields": [
+                    "member_offset",
+                    "line_number",
+                    "line_offset",
+                    "field_index",
+                    "raw_hex",
+                ],
                 "hits": compact_hits,
             }
         )
@@ -261,7 +274,10 @@ def main() -> None:
     )
     args = parser.parse_args()
     result = scan(args.archive, args.retained_index)
-    args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(result, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
