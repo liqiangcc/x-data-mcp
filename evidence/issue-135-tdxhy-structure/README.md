@@ -29,6 +29,20 @@ metadata only. In complete token statistics, each hit tuple is
 hits additionally retain the complete raw line hex. No unknown encoding is
 guessed.
 
+Each nonblank record is retained with line number, line-start byte offset,
+byte length, explicit EOL form (`CRLF`, `LF`, `CR`, or `NO_TERMINATOR`), field
+count, and raw line hex. The output always includes a `NO_TERMINATOR` count;
+for this archive it is zero for both members. If archive or member identity
+verification fails, the scanner writes a deterministic JSON result with
+`classification=INPUT_IDENTITY_NOT_VERIFIED` and a machine-readable reason,
+without producing a structural classification. Offline synthetic/tamper checks
+are run with:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B \
+  evidence/issue-135-tdxhy-structure/test_scan_tdxhy_structure.py
+```
+
 ## Result
 
 `scan-result.json` records the complete byte structure, line endings, records,

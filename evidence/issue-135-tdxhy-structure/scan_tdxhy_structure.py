@@ -18,6 +18,13 @@ TOKEN_RE = re.compile(rb"(?<![0-9])([0-9]{6})(?![0-9])")
 RULES_VERSION = "structure-rules-v1"
 
 
+class InputIdentityError(ValueError):
+    def __init__(self, reason: str, detail: str):
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
+
+
 def sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -29,17 +36,17 @@ def optional_ascii(value: bytes) -> str | None:
 def retained_members(path: Path) -> dict[str, dict[str, object]]:
     index = json.loads(path.read_text(encoding="utf-8"))
     if index.get("archive_sha256") != ARCHIVE_SHA256:
-        raise ValueError("retained archive SHA mismatch")
+        raise InputIdentityError("RETAINED_ARCHIVE_SHA_MISMATCH", "retained archive SHA mismatch")
     if index.get("actual_bytes") != ARCHIVE_BYTES:
-        raise ValueError("retained archive byte count mismatch")
+        raise InputIdentityError("RETAINED_ARCHIVE_BYTES_MISMATCH", "retained archive byte count mismatch")
     if index.get("member_count") != 542 or len(index.get("members", [])) != 542:
-        raise ValueError("retained index must contain 542 members")
+        raise InputIdentityError("RETAINED_MEMBER_COUNT_MISMATCH", "retained index must contain 542 members")
     members = {str(item["name"]): item for item in index["members"]}
     if len(members) != 542:
-        raise ValueError("retained index has duplicate member names")
+        raise InputIdentityError("RETAINED_MEMBER_NAMES_NOT_UNIQUE", "retained index has duplicate member names")
     missing = [name for name in TARGETS if name not in members]
     if missing:
-        raise ValueError(f"retained index missing target: {missing}")
+        raise InputIdentityError("RETAINED_TARGET_MISSING", f"retained index missing target: {missing}")
     return members
 
 
@@ -121,7 +128,7 @@ def token_observations(data: bytes, lines: list[dict[str, object]]) -> list[dict
 def member_report(name: str, data: bytes, expected: dict[str, object]) -> dict[str, object]:
     actual_sha = sha256(data)
     if len(data) != expected["bytes"] or actual_sha != expected["sha256"]:
-        raise ValueError(f"member identity mismatch: {name}")
+        raise InputIdentityError("TARGET_MEMBER_IDENTITY_MISMATCH", f"member identity mismatch: {name}")
     lines = parse_lines(data)
     eol_counts = Counter(str(line["eol"]) for line in lines if line["eol"] is not None)
     blank_count = sum(1 for line in lines if line["content"] == b"")
@@ -129,6 +136,21 @@ def member_report(name: str, data: bytes, expected: dict[str, object]) -> dict[s
     field_counts = Counter(
         len(line["content"].split(b"|")) for line in nonblank
     )
+    records = []
+    for line in nonblank:
+        content = line["content"]
+        assert isinstance(content, bytes)
+        records.append(
+            {
+                "line_number": line["line_number"],
+                "line_start_offset": line["line_start_offset"],
+                "byte_length": len(content),
+                "eol": line["eol"] if line["eol"] is not None else "NO_TERMINATOR",
+                "field_count": len(content.split(b"|")),
+                "raw_hex": content.hex(),
+                "raw_ascii": optional_ascii(content),
+            }
+        )
     observations = token_observations(data, lines)
     by_token: dict[str, list[dict[str, object]]] = defaultdict(list)
     for observation in observations:
@@ -174,12 +196,48 @@ def member_report(name: str, data: bytes, expected: dict[str, object]) -> dict[s
         "line_count": len(lines),
         "record_count": len(nonblank),
         "blank_line_count": blank_count,
-        "line_ending_counts": dict(sorted(eol_counts.items())),
+        "line_ending_counts": dict(
+            sorted(
+                {
+                    **eol_counts,
+                    "NO_TERMINATOR": sum(1 for line in lines if line["eol"] is None),
+                }.items()
+            )
+        ),
         "final_line_terminated": bool(lines and lines[-1]["eol"] is not None),
         "field_count_distribution": {str(k): field_counts[k] for k in sorted(field_counts)},
+        "records": records,
         "sample_hits": sample_hits,
         "six_digit_token_set": sorted(by_token),
         "six_digit_token_stats": token_stats,
+    }
+
+
+def input_failure(
+    archive_path: Path,
+    reason: str,
+    detail: str,
+    archive_bytes: int | None = None,
+    archive_sha: str | None = None,
+) -> dict[str, object]:
+    return {
+        "schema": "x-data-mcp.issue-135.tdxhy-structure.v1",
+        "rules_version": RULES_VERSION,
+        "classification": "INPUT_IDENTITY_NOT_VERIFIED",
+        "input_identity": {
+            "verified": False,
+            "reason": reason,
+            "detail": detail,
+            "archive_path": str(archive_path),
+            "actual_archive_bytes": archive_bytes,
+            "actual_archive_sha256": archive_sha,
+            "expected_archive_bytes": ARCHIVE_BYTES,
+            "expected_archive_sha256": ARCHIVE_SHA256,
+        },
+        "limits": [
+            "Input identity failure is deterministic and produces no structural classification.",
+            "No target member content is used after an identity gate failure.",
+        ],
     }
 
 
@@ -187,16 +245,28 @@ def scan(archive_path: Path, retained_path: Path) -> dict[str, object]:
     archive_data = archive_path.read_bytes()
     archive_sha = sha256(archive_data)
     if len(archive_data) != ARCHIVE_BYTES or archive_sha != ARCHIVE_SHA256:
-        raise ValueError(f"archive identity mismatch: bytes={len(archive_data)} sha256={archive_sha}")
-    retained = retained_members(retained_path)
-    with zipfile.ZipFile(archive_path) as archive:
-        infos = {info.filename: info for info in archive.infolist()}
-        if len(infos) != 542 or set(infos) != set(retained):
-            raise ValueError("archive member table does not match retained 542-member index")
-        reports = []
-        for name in TARGETS:
-            # Only the two frozen target members are read for content evidence.
-            reports.append(member_report(name, archive.read(infos[name]), retained[name]))
+        return input_failure(
+            archive_path,
+            "ARCHIVE_IDENTITY_MISMATCH",
+            f"archive identity mismatch: bytes={len(archive_data)} sha256={archive_sha}",
+            len(archive_data),
+            archive_sha,
+        )
+    try:
+        retained = retained_members(retained_path)
+        with zipfile.ZipFile(archive_path) as archive:
+            infos = {info.filename: info for info in archive.infolist()}
+            if len(infos) != 542 or set(infos) != set(retained):
+                raise InputIdentityError(
+                    "ARCHIVE_MEMBER_TABLE_MISMATCH",
+                    "archive member table does not match retained 542-member index",
+                )
+            reports = []
+            for name in TARGETS:
+                # Only the two frozen target members are read for content evidence.
+                reports.append(member_report(name, archive.read(infos[name]), retained[name]))
+    except InputIdentityError as error:
+        return input_failure(archive_path, error.reason, error.detail, len(archive_data), archive_sha)
     reports.sort(key=lambda item: item["name"])
     left, right = (set(report["six_digit_token_set"]) for report in reports)
     by_name = {report["name"]: report for report in reports}
