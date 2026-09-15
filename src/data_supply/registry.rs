@@ -22,6 +22,7 @@ pub enum Handler {
     VerifyPublication,
     InspectVerification,
     Range(crate::market_update::tasks::Operation),
+    VerifyGap,
 }
 pub struct Entry {
     pub name: &'static str,
@@ -112,6 +113,11 @@ pub fn entries() -> Vec<Entry> {
             "verify_stopped_writes",
             Handler::VerifyStopped,
             json!({"contract_version":"v1","request_id":"verification-request","target_task_id":"original-task-id"}),
+        ),
+        entry::<crate::gap_verification::wire::VerifyDataGap, WriteAcceptance>(
+            "verify_data_gap",
+            Handler::VerifyGap,
+            json!({"contract_version":"v1","request_id":"gap-check-request","target":{"symbol":"sh.600006","period":"day","start_date":"2025-01-01","end_date":"2025-01-10"}}),
         ),
         entry::<RangeWrite, WriteAcceptance>(
             "update_data",

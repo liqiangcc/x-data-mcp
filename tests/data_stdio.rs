@@ -67,7 +67,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     assert!(s.request("initialize", json!({}))["result"]["serverInfo"].is_object());
     let listing = s.request("tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), if cfg!(target_os = "linux") { 18 } else { 17 });
+    assert_eq!(tools.len(), if cfg!(target_os = "linux") { 19 } else { 18 });
     let caps = s.call("get_data_capabilities", json!({}), false);
     let listed: std::collections::BTreeSet<_> =
         tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -120,6 +120,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
                 | x_data_mcp::data_supply::registry::Handler::VerifyStopped
                 | x_data_mcp::data_supply::registry::Handler::VerifyPublication
                 | x_data_mcp::data_supply::registry::Handler::InspectVerification
+                | x_data_mcp::data_supply::registry::Handler::VerifyGap
                 | x_data_mcp::data_supply::registry::Handler::Collection
                 | x_data_mcp::data_supply::registry::Handler::Range(_)
                 | x_data_mcp::data_supply::registry::Handler::Retry

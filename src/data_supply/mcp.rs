@@ -80,6 +80,9 @@ impl DataApi {
                             repository: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
                         }),
+                        Box::new(crate::gap_verification::contract::GapVerificationContract {
+                            store: repository.market.clone(),
+                        }),
                         Box::new(super::collect::CollectionContract {
                             dataset: Dataset::Daily,
                             repository: repository.clone(),
@@ -143,6 +146,7 @@ impl DataApi {
                         | Handler::VerifyStopped
                         | Handler::VerifyPublication
                         | Handler::InspectVerification
+                        | Handler::VerifyGap
                 )
             {
                 continue;
@@ -176,17 +180,17 @@ impl DataApi {
                 let detailed = args.operation.is_some();
                 items.push(Capability {
                     tool_name: e.name.into(),
-                    description: if matches!(e.handler, Handler::InspectVerification) { INSPECTION_DESCRIPTION } else if matches!(e.handler, Handler::VerifyPublication) { crate::publication_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
+                    description: if matches!(e.handler, Handler::InspectVerification) { INSPECTION_DESCRIPTION } else if matches!(e.handler, Handler::VerifyPublication) { crate::publication_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyGap) { crate::gap_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
-                    readiness: if matches!(e.handler, Handler::Collection | Handler::Range(_) | Handler::VerifyStopped) {
+                    readiness: if matches!(e.handler, Handler::Collection | Handler::Range(_) | Handler::VerifyStopped | Handler::VerifyGap) {
                         "blocked"
                     } else {
                         "ready"
                     }
                     .into(),
-                    blocking_reasons: if matches!(e.handler, Handler::VerifyStopped) { vec![crate::task_verification::wire::BLOCKER.into()] } else if matches!(e.handler, Handler::Collection | Handler::Range(_)) {
+                    blocking_reasons: if matches!(e.handler, Handler::VerifyStopped) { vec![crate::task_verification::wire::BLOCKER.into()] } else if matches!(e.handler, Handler::VerifyGap) { vec![crate::gap_verification::wire::BLOCKER.into()] } else if matches!(e.handler, Handler::Collection | Handler::Range(_)) {
                         crate::official_files::PRODUCTION_BLOCKERS
                             .iter()
                             .map(|s| s.to_string())
@@ -246,6 +250,8 @@ impl DataApi {
                 vec![]
             } else if f.task.key.dataset == crate::task_verification::DATASET {
                 vec![crate::task_verification::wire::BLOCKER.into()]
+            } else if f.task.key.dataset == crate::gap_verification::DATASET {
+                vec![crate::gap_verification::wire::BLOCKER.into()]
             } else {
                 crate::official_files::PRODUCTION_BLOCKERS
                     .iter()
@@ -433,7 +439,7 @@ impl DataApi {
                 }
             }
         }
-        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped|Handler::VerifyPublication|Handler::InspectVerification)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::InspectVerification){INSPECTION_DESCRIPTION}else if matches!(e.handler,Handler::VerifyPublication){crate::publication_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
+        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped|Handler::VerifyPublication|Handler::InspectVerification|Handler::VerifyGap)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::InspectVerification){INSPECTION_DESCRIPTION}else if matches!(e.handler,Handler::VerifyPublication){crate::publication_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyGap){crate::gap_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
@@ -562,6 +568,25 @@ impl DataApi {
                 } else {
                     self.acceptance(&command.request_id, accepted)
                 }
+            }
+            Handler::VerifyGap => {
+                if self.access != Access::local() {
+                    return Err(ApiError::new(
+                        "forbidden",
+                        "write controls require local owner access",
+                    ));
+                }
+                let command: crate::gap_verification::wire::VerifyDataGap = decode(input)?;
+                let accepted = self
+                    .legacy
+                    .control
+                    .accept(
+                        command.request_id(),
+                        crate::gap_verification::command_key(),
+                        command.payload(),
+                    )
+                    .map_err(task_error)?;
+                self.acceptance(command.request_id(), accepted)
             }
             Handler::Range(operation) => {
                 if self.access != Access::local() {
@@ -708,6 +733,7 @@ impl ToolHandler for DataApi {
                     | "compute_metrics"
                     | "verify_publication_result"
                     | "inspect_verification_task"
+                    | "verify_data_gap"
                     | "update_data"
                     | "backfill_data"
             );
@@ -721,6 +747,7 @@ impl ToolHandler for DataApi {
                                 | "backfill_data"
                                 | "verify_publication_result"
                                 | "inspect_verification_task"
+                                | "verify_data_gap"
                         ) && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
                     {
                         "unknown"
@@ -733,6 +760,7 @@ impl ToolHandler for DataApi {
                             | "backfill_data"
                             | "verify_publication_result"
                             | "inspect_verification_task"
+                            | "verify_data_gap"
                     ) {
                         "not_committed"
                     } else {
@@ -748,6 +776,7 @@ impl ToolHandler for DataApi {
                                 | "backfill_data"
                                 | "verify_publication_result"
                                 | "inspect_verification_task"
+                                | "verify_data_gap"
                         ) && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
                     {
                         vec![

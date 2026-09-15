@@ -8,6 +8,7 @@ use x_data_mcp::{
     sqlite_market::SqliteMarket,
     sqlite_supply::SqliteSupply,
     sqlite_tasks::SqliteTasks,
+    task_control::TaskRepository,
 };
 fn args() -> Query {
     serde_json::from_value(json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1})).unwrap()
@@ -938,4 +939,223 @@ mod default_selection_wire {
             .unwrap();
         assert_eq!(replay["reused"], json!(true));
     }
+}
+#[test]
+fn verify_data_gap_wire_is_closed_and_freezes_subject() {
+    use x_data_mcp::{data_supply::mcp::DataApi, mcp::ToolHandler};
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t.clone());
+    market::published_fixture(&store, &market::samples()[0]["record"]);
+    let api = DataApi::new(t.clone(), "run".into(), Access::local()).unwrap();
+    // The tool is on the public surface with a closed schema.
+    let tools = api.tools();
+    assert!(
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "verify_data_gap")
+    );
+    let payload = |id: &str| json!({"contract_version":"v1","request_id":id,"target":{"symbol":"sh.600006","period":"day","start_date":"2025-01-01","end_date":"2025-01-05"}});
+    // Any caller pass-through field fails decode, top-level or nested.
+    for field in [
+        "conclusion",
+        "basis_sha256",
+        "decision_sha256",
+        "decided_by",
+        "verifier_id",
+        "subject_version_id",
+        "subject_version_digest",
+    ] {
+        let mut top = payload("pt");
+        top[field] = json!("x");
+        assert_eq!(
+            api.call("verify_data_gap", top).unwrap_err().code,
+            "invalid_arguments",
+            "top-level {field}"
+        );
+        let mut nested = payload("pn");
+        nested["target"][field] = json!("x");
+        assert_eq!(
+            api.call("verify_data_gap", nested).unwrap_err().code,
+            "invalid_arguments",
+            "nested {field}"
+        );
+    }
+    // period=year and inverted/bad targets reject before persistence.
+    let mut year = payload("year");
+    year["target"]["period"] = json!("year");
+    assert_eq!(
+        api.call("verify_data_gap", year).unwrap_err().code,
+        "invalid_arguments"
+    );
+    let mut inverted = payload("inv");
+    inverted["target"]["start_date"] = json!("2025-01-05");
+    inverted["target"]["end_date"] = json!("2025-01-01");
+    assert_eq!(
+        api.call("verify_data_gap", inverted).unwrap_err().code,
+        "invalid_arguments"
+    );
+    assert!(t.read_request("year").unwrap().is_none());
+    assert!(t.read_request("inv").unwrap().is_none());
+    // Acceptance freezes the published subject head into item inputs.
+    let accepted = api.call("verify_data_gap", payload("g1")).unwrap();
+    assert_eq!(
+        accepted["contract_version"],
+        json!("gap-verification-task-v1")
+    );
+    assert_eq!(accepted["dataset"], json!("market.gap_verification"));
+    assert_eq!(accepted["reused"], json!(false));
+    assert_eq!(accepted["readiness"], json!("blocked"));
+    let snap = t
+        .read_task(accepted["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    let frozen = &snap.items[0].spec.frozen_inputs;
+    assert_eq!(frozen["subject_version_id"], json!("legacy-daily"));
+    assert_eq!(frozen["subject_version_digest"].as_str().unwrap().len(), 64);
+    assert_eq!(frozen["target"]["symbol"], json!("sh.600006"));
+    // Same request_id replays the original acceptance.
+    let replay = api.call("verify_data_gap", payload("g1")).unwrap();
+    assert_eq!(replay["reused"], json!(true));
+    assert_eq!(replay["task_id"], accepted["task_id"]);
+}
+#[test]
+fn verify_data_gap_worker_official_stub_fails_closed() {
+    use x_data_mcp::{data_supply::mcp::DataApi, mcp::ToolHandler};
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t.clone());
+    market::published_fixture(&store, &market::samples()[0]["record"]);
+    let api = DataApi::new(t.clone(), "run".into(), Access::local()).unwrap();
+    let accepted = api
+        .call(
+            "verify_data_gap",
+            json!({"contract_version":"v1","request_id":"g-official","target":{"symbol":"sh.600006","period":"day","start_date":"2025-01-01","end_date":"2025-01-05"}}),
+        )
+        .unwrap();
+    let worked = api.call("run_worker_once", json!({})).unwrap();
+    assert_eq!(worked["task_id"], accepted["task_id"]);
+    let snap = t
+        .read_task(accepted["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    let outcome = snap.items[0].outcome.as_ref().unwrap();
+    assert!(!outcome.success);
+    assert!(
+        outcome
+            .error
+            .as_ref()
+            .unwrap()
+            .starts_with("GAP_BASIS_NOT_VERIFIED")
+    );
+    let c = rusqlite::Connection::open(t.path()).unwrap();
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM gap_verification_decisions", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM proven_gaps", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+#[test]
+fn verify_data_gap_fixture_verifier_end_to_end_reports_open_gap() {
+    use x_data_mcp::{
+        data_supply::mcp::DataApi,
+        gap_verification::{
+            GapBasis, GapTarget, SourceGapVerifier, SubjectBinding,
+            runner::{GapVerifyRunner, gap_decision_id},
+        },
+        market_storage::Error,
+        mcp::ToolHandler,
+    };
+    struct Fixture;
+    impl SourceGapVerifier for Fixture {
+        fn verifier_id(&self) -> &str {
+            "fixture-verifier"
+        }
+        fn verify(&self, target: &GapTarget, subject: &SubjectBinding) -> Result<GapBasis, Error> {
+            let mut basis = GapBasis {
+                source_identity: "fixture-source".into(),
+                source_contract: "fixture-source-v1".into(),
+                symbol: target.symbol.clone(),
+                start_date: target.start_date,
+                end_date: target.end_date,
+                subject_version_id: subject.version_id.clone(),
+                subject_version_digest: subject.integrity_sha256.clone(),
+                artifact_identity: "fixture:source-facts".into(),
+                artifact_sha256: "a".repeat(64),
+                conclusion: "confirmed_missing_range".into(),
+                observed_at: "2026-09-15T00:00:00Z".parse().unwrap(),
+                verifier_id: "fixture-verifier".into(),
+                basis_sha256: String::new(),
+            };
+            basis.basis_sha256 = basis.content_digest();
+            Ok(basis)
+        }
+    }
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t.clone());
+    market::published_fixture(&store, &market::samples()[0]["record"]);
+    let api = DataApi::new(t.clone(), "run".into(), Access::local()).unwrap();
+    let accepted = api
+        .call(
+            "verify_data_gap",
+            json!({"contract_version":"v1","request_id":"g-e2e","target":{"symbol":"sh.600006","period":"day","start_date":"2025-01-01","end_date":"2025-01-05"}}),
+        )
+        .unwrap();
+    let task_id = accepted["task_id"].as_str().unwrap().to_owned();
+    let snap = t.read_task(&task_id).unwrap().unwrap();
+    let decision_id = gap_decision_id(&task_id, &snap.items[0].spec.item_id);
+    let runner = GapVerifyRunner {
+        repository: store.clone(),
+        run_id: "run".into(),
+    };
+    runner.run(&task_id, &Fixture, chrono::Utc::now()).unwrap();
+    // Decision + proven gap committed atomically under the derived id.
+    let decision = store
+        .gap_verification_decision(&decision_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(decision.conclusion, "confirmed_missing_range");
+    assert_eq!(decision.verifier_id, "fixture-verifier");
+    // Availability reports the open gap for the verified range.
+    let availability = api
+        .call(
+            "get_data_availability",
+            json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-01-05"},"version":{"kind":"latest_per_entity"}}),
+        )
+        .unwrap();
+    let gaps = availability["items"][0]["confirmed_gaps"]
+        .as_array()
+        .unwrap();
+    assert_eq!(gaps.len(), 1);
+    assert_eq!(gaps[0]["range"]["start_date"], json!("2025-01-01"));
+    assert_eq!(gaps[0]["range"]["end_date"], json!("2025-01-05"));
+    assert_eq!(
+        gaps[0]["evidence"],
+        json!(format!(
+            "{{\"kind\":\"gap_verification_decision\",\"id\":\"{decision_id}\",\"sha256\":\"{}\"}}",
+            decision.decision_sha256
+        ))
+    );
+    // A decision never schedules update/backfill work by itself.
+    let replay = api
+        .call(
+            "verify_data_gap",
+            json!({"contract_version":"v1","request_id":"g-e2e","target":{"symbol":"sh.600006","period":"day","start_date":"2025-01-01","end_date":"2025-01-05"}}),
+        )
+        .unwrap();
+    assert_eq!(replay["reused"], json!(true));
 }

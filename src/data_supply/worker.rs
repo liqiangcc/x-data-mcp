@@ -22,6 +22,18 @@ pub fn run_once(
         run_verification(control, market, &candidate)?;
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
     }
+    if candidate.task.key.dataset == crate::gap_verification::DATASET {
+        let runner = crate::gap_verification::runner::GapVerifyRunner {
+            repository: market.clone(),
+            run_id: control.run_id.clone(),
+        };
+        runner.run(
+            &candidate.task.task_id,
+            &crate::gap_verification::UnverifiedGapVerifier,
+            chrono::Utc::now(),
+        )?;
+        return Ok(Some(control.read_task(&candidate.task.task_id)?));
+    }
     if !matches!(
         candidate.task.key.operation.as_str(),
         "update_data" | "backfill_data"
