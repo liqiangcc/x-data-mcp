@@ -1,0 +1,23421 @@
+通达信量化平台
+TdxQuant
+
+简介
+
+是由深圳市财富趋势科技股份有限公司研发的专业量化投研平台，专注于为国内量化投资
+者提供从策略研究到投资决策的全流程解决方案。平台以高效、简洁为核心设计理念，致力于降低
+量化交易门槛，提升策略开发与执行的效率。
+依托通达信近三十余年在金融科技领域的深厚积累，TdxQuant集成了完备的实时和历史行情数据、
+金融数据库及稳定的交易系统基础设施，为策略的研发、回测、验证和执行提供了坚实可靠的技术
+支持。
+平台采用分层化、模块化的服务体系，可灵活适配从高校学生、独立研究者、个人投资者到专业机
+构等不同用户的需求，实现从策略构思到交易落地的无缝衔接。
+TdxQuant
+
+TdxQuant
+
+服务介绍
+
+是一套基于通达信金融终端构建的 Python 量化策略运行框架。该框架通过 API 接口形
+式，为策略交易提供所需的行情数据获取与交易指令执行功能。
+TdxQuant
+
+运行环境要求
+TdxQuant 支持 64 位 Python 3.7、3.8、3.9、3.10、3.11、3.12、3.13、3.14等版本，系统会自动适配
+当前 Python 版本，建议使用3.13版本。
+请注意：运行 TdxQuant 程序前，需预先启动支持TQ策略功能的 通达信金融终端、通达信专业研
+究、量化模拟版或期货通等版本。
+核心运行逻辑
+TdxQuant 以 tqcenter 行情模块为核心，专注于为量化交易者提供高效、直接的数据服务，主要包
+含以下内容：
+行情数据：实时与历史的快照、K 线、分笔（Tick）数据
+基本面数据：除权除息、基本财务、专业财务、股票交易数据、市场数据等
+新股和合约等信息：标的基础信息、可转债、新股申购等
+分类数据：市场类型、行业分类、自定义板块等
+
+核心应用场景
+TdxQuant
+
+1.
+
+提供覆盖量化投研全流程的核心功能模块，主要应用场景包括：
+
+策略研发与历史回测
+
+平台提供“即用型”标准化数据。所有历史与实时数据均在服务端完成清洗、对齐，并预加载至客户
+端。支持用户快速获取指定时间维度的历史数据，并进行策略信号计算与回测分析。既提供复权因
+子，也提供各种类型的复权后的数据。
+实时监控与信号预警
+支持实时行情数据订阅，用户可基于自定义的指标与因子模型进行在线计算。当预设条件触发时，
+系统通过信号接口实时推送预警信息至客户端，助力研究者及时捕捉市场动态与交易机会。
+2.
+
+交易模拟与实盘执行
+平台构建了完整的策略交易闭环，提供模拟交易、券商实盘等两种执行环境：
+模拟交易：在仿真市场环境中，使用实时行情数据对策略进行持续跟踪与验证，评估其实际表
+现，全程无资金风险。
+实盘交易：通过稳定的交易总线，安全对接券商报盘系统，实现策略信号的自动化、高可靠性下
+单与交易管理。
+3.
+
+量化交易的核心价值
+利用历史数据高效验证策略，提升研究效率数百倍
+在验证交易策略时，历史回测是评估其有效性的关键环节，但传统人工方式难以处理海量数据与复
+杂计算。量化交易可在几分钟内完成一次全面回测，快速获得统计验证结果，极大提升了策略研发
+的迭代效率。
+1.
+
+实时捕捉基于概率的获胜机会
+量化交易借助计算机强大的数据处理能力，能够从海量市场信息中发掘人工难以察觉的规律与机
+会。面对全市场数千只股票的实时波动，量化系统可同时监控多重条件，避免机会错失。它能够综
+合考量选股、择时、资产配置与风险管理，构建并执行具有较大概率的投资组合，追求收益最大
+化。
+2.
+
+实现科学、客观的投资决策
+与传统主观投资不同，量化交易将投资理念、经验甚至市场直觉转化为严谨的数学模型。通过系统
+化的信号生成与执行机制，有效克服人性中的情绪偏差，使投资决策过程更具纪律性、可重复性与
+可优化性。
+3.
+
+量化交易的工具挑战
+工欲善其事，必先利其器。 对于个人投资者而言，独立搭建一套完整的量化交易体系，复杂繁琐，
+涉及数据、系统、策略等多层面的巨大投入。
+一、需要准确、全面的金融数据基础
+量化交易依赖于高质量的历史与实时数据，包括行情、财务、宏观及基本面数据等。构建和维护这
+样一个数据仓库，不仅需要持续的数据采购、清洗、更新与运维成本，还需在数据存储、访问速度
+
+与系统稳定性方面进行深入的技术投入。
+二、需要易用、可靠的量化交易系统
+一个成熟的量化平台需要支持多样的策略开发语言、具备高速的回测与模拟引擎、提供科学的策略
+评估体系，并为实盘交易提供全方位的保障。过往，研究者往往需要兼具复杂的金融数据知识与工
+程构建能力。如今，TdxQuant让您只需专注于策略逻辑本身，其余复杂工作交给平台。
+
+的核心优势
+
+TdxQuant
+
+是一款集金融数据与策略投研工具于一体的量化平台，结构清晰，简洁易上手，数据获取
+快捷，算法资源丰富。我们的目标是为投资者提供"开箱即用"的完整解决方案。
+TdxQuant
+
+1.
+
+2.
+
+3.
+
+全方位保障策略安全与自主
+支持策略在本地IDE环境中开发与运行，保障代码安全与私密性
+分离式模块化架构，策略的编码和调试更加自由和灵活
+大幅降低量化交易门槛
+提供高质量、高精度、快速接入的金融元数据
+支持多种策略类型的便捷编写、回测、模拟与实盘
+助力构建专业量化成长路径
+通过"投资学院"系统学习量化交易相关知识体系
+通过"宽客社区"交流心得、解答疑惑
+全程助力用户从入门到精通，成为专业的量化投资者
+
+通达信量化平台
+#
+
+版本更新说明
+
+📋 更新日志
+📅 2026-06-19 更新说明(内测版)
+
+支持直接调用计数
+2.自动交易函数增加返回错误
+3.download_file支持经营分析数据文件
+4.部分函数的完善
+📅 2026-06-12 更新说明
+1.修正撤单等细节,支持交易弹框中的市价显示
+2.get_match_stkinfo支持全部品种
+3.AI平台中,支持通达信TQ-Python和通达信TQ-Local两种Skill调用
+📅 2026-06-05 更新说明
+1.支持批量内部运行，断开连接，删除策略，打开编辑、消息筛选
+2.修复了内部启动处理带有空格的路径时会截断的问题，优化断开连接细节
+3.底层逻辑优化，提升数据返回速度
+4.新增接口：检索证券信息get_match_stkinfo
+5.全面支持AI平台直接调用TQ数据(无需Python代码)
+📅 2026-05-22 更新说明
+1.新增函数：get_pricevol 批量获取价格和成交量
+2.新增函数：formula_get_all 获取对应种类的全部公式名称和代码
+3.新增函数：formula_get_info 获取公式相关信息
+4.新增函数：formula_process_mul_exp
+5.新增逻辑：formula_process_mul系列count=-1时，可以根据start_time和end_time返回结果
+📅 2026-05-15 更新说明
+1.策略管理器新增“新建文件”按钮，并优化相应体验
+2.断开连接功能优化，可以主动退出策略
+3.修复get_market_data获取数据时如果传入的代码包含尚未上市代码会报错的问题
+4.新增get_gb_info_by_date，可以仅根据start和end获取指定时间段的股本
+📅 2026-05-09 更新说明
+1.支持信用还券等下单类型
+2.加入内部编辑器
+📅 2026-04-16 更新说明
+1.下单函数支持期货期权等类型
+1.
+
+支持多头持仓,期货动态权益等持仓资金栏目
+3.增加.QHZ期货指数类型
+4.支持880096,880097,880098等成份股
+📅 2026-03-27 更新说明
+新增函数：获取股票所属板块get_relation
+新增函数：调用客户端功能接口exec_to_tdx
+新增函数：撤单cancel_order_stock
+新增函数：账户资产查询query_stock_asset
+更新函数：交易类账户函数逻辑更新
+更新函数：调用通达信公式返回值字段名由"Data"改为"Value"
+更新函数：order_stock对于模拟账户自动下单
+更新函数：order_stock新增信用交易：担保品买入、担保品卖出，融资买入，融券卖出
+更新函数：get_stock_list_in_sector访问空的自定义板块会返回空集而不是报错
+问题修复：修复了get_market_data、refresh_kline等函数无法处理期权的问题
+其他更新：期货期权类型支持，新增相关宏定义（常量枚举）
+📅 2026-03-20 更新说明
+新增函数：获取资金账户句柄stock_account
+新增函数：查询账户委托信息query_stock_orders
+新增函数：查询账户持仓信息query_stock_positions
+新增函数：交易执行函数order_stock
+更新函数：get_stock_list_in_sector新增block_type=2，可取对应期货代码
+更新函数：get_more_info新增字段QHMainYYMM
+更新函数：get_stock_list新增参数92: 国内期货主力合约
+更新函数：get_cb_info改名为get_kzz_info
+📅 2026-03-06 更新说明
+新增函数：获取跟踪指数的ETF信息get_trackzs_etf_info
+更新函数：refresh_cache新增参数 'ZS' 表示沪深京指数
+更新函数：get_stock_list新增参数91 跟踪指数的ETF信息
+其他修正：未识别的市场后缀由默认的SZ改为OT
+其他修正：修复get_market_data某些情况下会报NoneType的bug
+📅 2026-02-28 更新说明
+问题修复：修复了formula_process_mul_zb等入参retrun_count拼写错误问题
+更新函数：get_more_info，get_cb_info，get_market_snapshot加上了字段筛选功能
+更新函数：get_more_info等支持更多行情数据项，输出顺序进行归整
+其他修正：tqcenter几处细节修改
+📅 2026-02-12 更新说明
+更新函数：send_user_block可以添加股票进自选股，自选股简称为ZXG
+其他更新：批量调用公式内部优化提速
+其他更新：新增港股指数（.HI）
+其他更新：解决多个客户端同时运行时的TQ冲突的问题
+📅 2026-02-07 更新说明
+2.
+
+新增函数：批量调用选股公式formula_process_mul_xg
+新增函数：批量调用指标公式formula_process_mul_zb
+更新函数：get_stock_list、 get_sector_list、 get_stock_list_in_sector新增参数list_type，可以选择
+返回股票名称
+更新函数：tdx_formula返回做出修改，条件选股和专家选股只返回'1'和'0'
+更新函数：formula_zb新增参数xsflag，可以设置返回数据的小数位数
+更新函数：download_file新增下载：最近舆情、综合信息文件
+更新函数：get_stock_info新增部分数据字段输出
+📅 2026-01-31 更新说明
+新增功能：支持调用通达信公式进行计算
+新增函数：格式化K线数据formula_format_data
+新增函数：向通达信公式系统设置数据formula_set_data
+新增函数：向通达信公式系统设置数据信息formula_set_data_info
+新增函数：获取公式中的设置数据formula_get_data
+新增函数：调用通达信技术指标公式formula_zb
+新增函数：调用通达信条件选股公式formula_xg
+新增函数：调用通达信专家系统公式formula_exp
+新增函数：获取股票更多信息get_more_info
+新增函数：获取每天的股本数据get_gb_info
+更新函数：刷新行情缓存refresh_cache，新增参数force和market，可指定强制刷新或指定市场刷
+新
+其他更新：新增中证指数（.CSI），中金所期货（.CFF），宏观数据（.HG）等市场后缀识别和数据
+获取
+其他更新：获取非指定日期的股票交易数据，板块交易数据等数据时增加了对应日期返回。
+问题修复：修复了部分市场数据返回时小数位数不对导致的精度问题。
+问题修复：修复了获取Python3.9以及之前版本依赖库错误问题。
+📅 2026-01-17 正式发布
+安装Python及开发环境 →
+
+通达信量化平台
+安装Python及VSCode等开发环境
+安装 Python 环境
+
+1.
+
+安装Python：建议使用Python3.7及以上版本
+下载地址：Python官网
+特别提示：安装时候务必勾选Add Python to PATH（将Python添加到环境变量）
+1.1
+
+安装IDE 建议VSCode、PyCharm或Trae
+
+2.
+
+下载地址：Visual Studio Code官网
+2.2 安装 Python 插件（Extensions）
+VSCode安装好后，在VSCode终端-扩展-输入下文，分别添加相关扩展：
+简体中文
+2.1
+
+python
+
+选择Python解释器：选择python3.13安装路径的exe
+使用 Ctrl+Shift+P 快捷键打开 command palette 窗口
+输入关键字 python select 并找到 Python: Select Interpreter 一项， 点击该项并在随后弹出
+的 Python 解释器列表中选择目标解释器：
+
+2.3
+
+2.4
+
+在VSCode终端-扩展-分别输入下文，常用库建议安装：
+
+pip install numpy -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install pandas -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+pip install backtrader -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install vectorbt -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install ta-lib -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install matplotlib -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+在 VSCode 中打开要调试的文件（如 tdxdemo.py）
+在代码行号左侧单击，出现红点即表示断点已设置。
+选择调试配置：点击左侧活动栏的“运行和调试”图标（或按 Ctrl+Shift+D),选择并启动调试配置
+（调试器类型选择 “Python Debugger” ）
+自动生成配置：完成以上步骤后，VSCode会自动在项目根目录创建一个 .vscode 文件夹，并在里
+面生成 launch.json 文件.同时，调试下拉菜单就会出现，默认选中了“Python 文件”这个配置。
+启动调试：按 F5 或点击绿色的“开始调试”按钮。
+
+显示选择调试配置-“ Python文件 ”，调试打开的 Python 文件。
+
+可以查看变量等等。
+
+用户py的文件位置
+
+3.
+
+在策略管理器界面，点击[文件位置]。
+用户的py文件一般在客户端PYPlugins下面的user目录下面。py运行过程的生成的文件一般在
+PYPlugins下面的data和file目录下。
+←
+
+版本更新说明
+
+安装通达信终端并获取数据 →
+
+通达信量化平台
+1.
+
+安装通达信终端
+
+1.1
+
+下载地址
+
+内测版下载入口： 通达信金融终端内测版
+量化模拟下载入口： 金融终端(量化模拟)
+正式版下载入口： 通达信金融终端、通达信专业研究版、期货通
+1.2
+
+登录通达信客户端
+
+1.3
+
+系统-盘后数据下载
+
+进行日线和分钟线等数据下载
+
+使用VSCode集成环境
+
+2.
+2.1
+
+使用VSCode运行py
+
+打开py文件
+在 VS Code 中点击打开一个本地文件夹，“文件”->"打开文件夹"。
+
+2.1.1
+
+2.1.2
+
+运行py文件
+
+在VSCode中打开通达信终端目录 .../PYPlugins/user 文件夹，运行tdxdata_test.py文件。
+
+注意：客户端安装目录下面的 .../PYPlugins/user 文件夹中的 tqcenter.py 是最主要的TQData支
+撑文件，请勿修改或删除，否则需要重新下载。
+2.2
+
+使用VSCode编辑新文件
+
+新建py文件
+在打开的文件夹中鼠标右键创建新的".py" python 文件，文件名例如tdxdemo.py。
+2.2.1
+
+2.2.2
+
+编辑py文件
+py
+
+1
+
+使用tqcenter的API函数查看平安银行日线数据示例
+
+2
+
+#
+
+3
+
+from tqcenter import tq
+
+4
+
+初始化
+
+5
+
+#
+
+6
+
+tq.initialize(__file__) #
+
+所有策略连接通达信客户端都必须调用此函数进行初始化
+
+7
+
+获取平安银行日线前复权收盘数据
+
+8
+
+#
+
+9
+
+df = tq.get_market_data(
+
+10
+
+field_list = ['Close'],
+
+11
+
+stock_list = ["000001.SZ"],
+
+12
+
+start_time = '20251219',
+
+13
+
+end_time = '20251225',
+
+14
+
+dividend_type='front',
+
+15
+
+period='1d',
+
+16
+
+)
+
+17
+
+print(df)
+
+18
+
+运行结果如图：
+
+←
+
+安装Python及开发环境
+
+快速开始第一个策略 →
+
+通达信量化平台
+步骤分解
+一个完整选股入自定义板块策略只需要两步:
+
+客户端新增自定义板块
+
+1.
+
+在
+
+里面运行以下python代码
+
+2. VSCode
+
+实现运行函数：在这个策略里, 我们会根据运行结果做出相应操作:
+策略说明：如果运行时间点价格高出昨收5%, 则进入涨幅选股板块，否则清空该板块
+
+1
+
+#
+
+2
+
+import pandas as pd
+
+3
+
+import numpy as np
+
+4
+
+from datetime import datetime
+
+5
+
+from tqcenter import tq
+
+6
+
+py
+
+初始化tq
+
+7
+
+#
+
+8
+
+tq.initialize(__file__)
+
+9
+
+基础配置
+
+10
+
+# 1.
+
+11
+
+batch_codes = tq.get_stock_list_in_sector('
+
+12
+
+start_time = "20251025"
+
+13
+
+target_end = datetime.now().strftime("%Y%m%d")
+
+14
+
+target_gain = 5.0
+
+15
+
+target_block_name = 'ZFXG'
+
+16
+
+获取并整理收盘价数据
+
+17
+
+# 2.
+
+18
+
+df_real = tq.get_market_data(
+
+通达信88')
+
+目标板块
+数据起始日期
+# 数据结束日期（当前日期）
+# 目标涨幅（%）
+，可修改
+# 目标自定义板块简称
+#
+
+#
+
+19
+
+field_list=['Close'],
+
+20
+
+stock_list=batch_codes,
+
+21
+
+start_time=start_time,
+
+22
+
+end_time=target_end,
+
+23
+
+dividend_type='front',
+
+24
+
+period='1d',
+
+25
+
+fill_data=True
+
+前复权
+日线
+# 填充缺失数据
+#
+#
+
+26
+
+)
+
+27
+
+#
+
+28
+
+close_df = tq.price_df(df_real, 'Close', column_names=batch_codes)
+
+29
+30
+31
+
+转换为「日期×股票代码」的收盘价宽表
+
+核心：计算当日相较于昨日的涨幅（%）
+# 昨日收盘价（向下平移1行）
+# 3.
+
+32
+
+prev_close = close_df.shift(1)
+
+33
+
+#
+
+34
+
+daily_gain = (close_df - prev_close) / prev_close * 100
+
+35
+
+计算涨幅：(当日收盘价 - 昨日收盘价) / 昨日收盘价 × 100%
+
+筛选符合条件的股票（最新交易日涨幅超target_gain%）
+# 最新交易日
+latest_daily_gain = daily_gain.loc[latest_date] # 每只股票最新交易日的涨幅
+# 筛选条件：涨幅 > target_gain%（排除NaN，避免数据异常）
+
+36
+
+# 4.
+
+37
+
+latest_date = daily_gain.index[-1]
+
+38
+39
+40
+
+target_stocks = latest_daily_gain[latest_daily_gain >
+
+41
+
+target_gain].sort_values(ascending=False)
+
+42
+
+target_stocks_list = target_stocks.index.tolist()
+
+43
+
+#
+
+提取符合条件的股票代码列表
+
+45
+
+结果输出与自定义板块操作（可按需注释）
+print(f"\n=== 筛选结果（当日涨幅＞{target_gain}%）===")
+
+46
+
+if not target_stocks.empty:
+
+47
+
+# =====================
+
+44
+
+48
+49
+50
+51
+
+# 5.
+
+模块1：打印筛选结果 =====================
+print("【模块1：打印筛选结果】")
+print(f"符合条件的股票共 {len(target_stocks)} 只：")
+print(f"{'股票代码':<12} {'昨日收盘价':<12} {'当日收盘价':<12} {'当日涨幅':
+
+<10}")
+
+52
+
+print("-" * 50)
+
+53
+
+for stock_code, gain in target_stocks.items():
+
+54
+
+prev_price = prev_close.loc[latest_date, stock_code]
+
+55
+
+curr_price = close_df.loc[latest_date, stock_code]
+print(f"{stock_code:<12} {prev_price:<12.2f} {curr_price:<12.2f} {gain:
+
+56
+57
+58
+
+<.2f}%")
+print("-" * 50)
+
+59
+60
+
+# =====================
+
+61
+
+try:
+
+模块2：添加至自定义板块 =====================
+
+【模块2：自定义板块操作】")
+
+62
+
+print("
+
+63
+
+tq.send_user_block(block_code=target_block_name,
+
+64
+
+stocks=target_stocks_list, show=True)
+print(f"✅
+
+65
+66
+
+已成功将股票添加至自定义板块「{target_block_name}」")
+
+except Exception as e:
+
+67
+
+print(f"❌
+
+68
+
+print("-" * 50)
+
+添加自定义板块失败：{e}")
+
+69
+70
+71
+72
+
+else:
+
+模块1：打印空结果 =====================
+【模块1：打印筛选结果】")
+
+73
+
+# =====================
+
+74
+
+print("
+
+暂无当日涨幅＞{target_gain}%的股票")
+
+75
+
+print(f"
+
+76
+
+print("-" * 50)
+
+77
+78
+
+# =====================
+
+79
+
+try:
+
+模块2：清空自定义选板块 =====================
+
+【模块2：自定义板块操作】")
+
+80
+
+print("
+
+81
+
+tq.send_user_block(block_code=target_block_name, stocks=[],show=True)
+print(f"✅
+
+82
+
+print(f"❌
+print("-" * 50)
+
+结果示例
+VSCode
+
+已清空自定义板块「{target_block_name}」")
+
+except Exception as e:
+
+83
+
+端
+
+通达信终端
+
+清空自定义板块失败：{e}")
+
+←
+
+安装通达信终端并获取数据
+
+初始化initialize →
+
+通达信量化平台
+通用函数
+数据订阅函数：包括对行情数据进行订阅/取消订阅、刷新和缓存等函数。
+与客户端交互函数：包括发生消息到TQ策略管理器界面、发生信号到客户端个股界面、发送预警到
+客户端TQ策略信号等。
+数据信息文件包：我们提供各类特定的数据信息文件包。具体见download_file。
+
+通达信量化平台
+初始化initialize
+1
+
+所有策略连接通达信客户端都必须调用此函数进行初始化
+
+initialize(__file__) #
+
+py
+
+调用方法:
+1
+
+from tqcenter import tq
+
+py
+
+2
+3
+
+tq.initialize(__file__)
+
+注意事项:
+
+不可修改。
+2.该函数用于初始化，任何一个策略都必须有该函数。
+1."initialize"
+
+←
+
+快速开始第一个策略
+
+订阅行情subscribe_hq →
+
+通达信量化平台
+订阅行情subscribe_hq
+订阅股票实时更新
+1
+
+subscribe_hq(stock_list: List[str] = [],callback = None):
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+callback
+
+Y
+
+str
+
+参数说明
+订阅的证券代码
+回调函数
+
+订阅股票更新 传入回调函数，订阅的股票有更新时，系统会调用回调函数，最多订阅100条
+回调函数格式定义为on_data(datas) datas格式为 {"Code":"XXXXXX.XX","ErrorId":"0"}
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+
+回调函数 功能为收到更新后请求最新的report数据
+
+5
+
+#
+
+6
+
+def my_callback_func(data_str):
+
+7
+
+print("Callback received data:", data_str)
+
+8
+
+code_json = json.loads(data_str)
+
+9
+
+print(f"codes = {code_json.get('Code')}")
+
+10
+
+report_ptr = tq.get_report_data(code_json.get('Code'))
+
+11
+
+print(report_ptr)
+
+12
+
+return None
+
+13
+14
+
+sub_hq = tq.subscribe_hq(stock_list=['688318.SH'], callback=my_callback_func)
+
+15
+
+print(sub_hq)
+
+16
+
+收到更新时策略需要正在运行
+
+17
+
+#
+
+18
+
+#while True:
+
+19
+
+#
+
+20
+
+数据样本
+
+time.sleep(1)
+
+py
+
+1
+
+订阅688318.SH更新成功.",
+
+2
+
+"Error" : "
+
+3
+
+"ErrorId" : "0",
+
+4
+
+"run_id" : "1"
+
+5
+
+←
+
+{
+
+}
+
+初始化initialize
+
+取消订阅更新unsubscribe_hq →
+
+通达信量化平台
+取消订阅更新unsubscribe_hq
+取消订阅股票实时更新
+1
+
+py
+
+unsubscribe_hq(stock_list: List[str] = []):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+参数说明
+证券代码
+
+订阅股票更新 传入回调函数，订阅的股票有更新时，系统会调用回调函数，最多订阅100条
+回调函数格式定义为on_data(datas) datas格式为 {"Code":"XXXXXX.XX","ErrorId":"0"}
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+un_sub_ptr = tq.unsubscribe_hq(stock_list=['688318.SH'])
+
+4
+
+print(un_sub_ptr)
+
+数据样本
+1
+
+{
+
+"Error" : "
+
+3
+
+"ErrorId" : "0",
+"run_id" : "1"
+
+4
+5
+
+←
+
+取消全部订阅更新失败.",
+
+2
+
+}
+
+订阅行情subscribe_hq
+
+获得订阅列表get_subscribe_hq_stock_list →
+
+通达信量化平台
+获得订阅列表get_subscribe_hq_stock_list
+获得当前策略订阅的股票列表
+1
+
+get_subscribe_hq_stock_list():
+
+py
+
+接口使用
+1
+
+from tqcenter import tq
+
+py
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+sub_list = tq.get_subscribe_hq_stock_list()
+
+6
+
+print(sub_list)
+
+数据样本
+1
+
+←
+
+['600519.SH']
+
+取消订阅更新unsubscribe_hq
+
+刷新行情缓存refresh_cache →
+
+通达信量化平台
+刷新行情缓存(最新snapshot和K线数据)refresh_cache
+刷新行情缓存(最新snapshot和K线数据)。如果不调用，首次取snapshot和K线时系统会自动刷新一
+次行情
+1
+
+def refresh_cache(market: str = 'AG',
+
+py
+
+force: bool = False):
+
+2
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+force
+
+Y
+
+bool
+
+market
+
+Y
+
+str
+
+参数说明
+是否强制刷新
+指定刷新的市场
+
+为false时距离上次刷新不足10分钟则不会刷新，为true时强制刷新。
+market赋值： 'AG'表示A股，'HK'表示港股，'US'表示美股，'QH'表示国内期货，'QQ'表示股票期
+权，'NQ'表示新三板，'ZZ'表示中证和国证等指数，'OF'表示基金净值，'ZS' 表示沪深京指
+数，'OJ' 表示期货期权。
+force
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+
+refresh_cache = tq.refresh_cache()
+
+5
+
+print(refresh_cache)
+
+数据样本
+使用后会在客户端弹出刷新数据的加载界面，加载完成后才会有返回
+1
+
+{
+
+2
+
+"Error" : "Refresh Cache Success.",
+
+3
+
+"ErrorId" : "0",
+
+4
+
+"run_id" : "1"
+
+5
+
+}
+
+py
+
+←
+
+获得订阅列表get_subscribe_hq_stock_list
+
+缓存历史K线refresh_kline →
+
+通达信量化平台
+刷新历史K线缓存refresh_kline
+根据股票和周期刷新历史K线缓存，如果本地没有下载完整的日线等数据，则可以调用这个函数定向
+下载某些品种某些周期的历史K线数据
+1
+
+refresh_kline(stock_list: List[str] = [], period: str = '')
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+period
+
+Y
+
+str
+
+参数说明
+证券代码列表，证券代码格式为6
+位数+市场后缀（.SH/.SZ/.BJ等）
+周期 1d为日线、1m为一分钟线、
+5m为五分钟线，只支持这三种，
+其它周期的数据均由这三种数据生
+成
+
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+refresh_kline = tq.refresh_kline(stock_list=['688318.SH'],period='1d')
+
+4
+
+print(refresh_kline)
+
+数据样本
+注：如果在盘中交易时间段下载1m和5m分钟线，只能下载到截止上个交易日的数据
+使用后会在客户端弹出刷新数据的加载界面，加载完成后才会有返回
+1
+2
+
+"Error" : "refresh kline cache success.",
+
+3
+
+"ErrorId" : "0",
+
+4
+
+"run_id" : "1"
+
+5
+
+←
+
+{
+
+}
+
+刷新行情缓存refresh_cache
+
+下载特定数据文件download_file →
+
+通达信量化平台
+发送消息到通达信客户端send_message
+发送消息给通达信客户端的TQ策略界面
+1
+
+py
+
+send_message(msg_str: str) -> Dict:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+msg_str
+
+Y
+
+str
+
+参数说明
+消息字符串
+
+传入的字符串使用 | 可以让客户端将其分为两条（插入 \n 也可以分行显示）
+接口使用
+
+←
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+msg_str = "
+
+4
+
+tq.send_message(msg_str)
+
+py
+
+这是第一行. | 这是第二行. "
+
+获取交易日列表get_trading_dates
+
+发送预警信号到客户端send_warn →
+
+通达信量化平台
+发送预警信号send_warn
+往客户端发送指定股票的预警信号
+1
+
+send_warn(stock_list:
+
+List[str] = [],
+
+2
+
+time_list:
+
+List[str] = [],
+
+3
+
+price_list:
+
+List[str] = [],
+
+4
+
+close_list:
+
+List[str] = [],
+
+5
+
+volum_list:
+
+List[str] = [],
+
+6
+
+bs_flag_list:
+
+List[str] = [],
+
+7
+
+warn_type_list:
+
+List[str] = [],
+
+8
+
+reason_list:
+
+List[str] = [],
+
+9
+
+count:
+
+int
+
+= 1) -> Dict:
+
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+time_list
+
+Y
+
+List[str]
+
+price_list
+
+N
+
+List[str]
+
+close_list
+
+N
+
+List[str]
+
+volum_list
+
+N
+
+List[str]
+
+bs_flag_list
+
+N
+
+List[str]
+
+warn_type_list
+
+N
+
+List[str]
+
+reason_list
+
+N
+
+List[str]
+
+count
+
+N
+
+int
+
+py
+
+输入参数
+
+、
+
+参数说明
+证券代码列表
+时间列表
+现价列表
+收盘价列表
+成交额列表
+买卖标志：0买1卖2未知
+预警类型：0常规预警（目前仅支
+持）
+预警原因
+有效数据个数
+
+、volum_list、bs_flag_list、warn_type_list 均要求为纯数字字符串List
+bs_flag_list 0买1卖2未知，长度小于count的会自动补为2。
+reason_list每个元素有效长度为25个汉字（50个英文）|
+count限定入参中每个list中的有效数据个数，即每个list前count个数据会传给客户端
+stock_list与其他list的元素数据是一一对应的，即stock_list的第一个元素对应的预警信息是其他list
+的第一个元素，同一只股票的多个预警信息，则在stock_list中加入多次该股票
+price_list close_list
+
+接口使用
+
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+warn_res = tq.send_warn(stock_list = ['688318.SH','688318.SH','600519.SH'],
+
+4
+
+time_list = ['20251215141115','20251215142100','20251215143101'],
+
+5
+
+price_list= ['123.45','133.45','1823.45'],
+
+6
+
+close_list= ['122.50','132.50','1822.50'],
+
+7
+
+volum_list= ['1000','2000','15000'],
+
+8
+
+bs_flag_list= ['0'],
+
+9
+
+warn_type_list= ['0'],
+
+10
+
+reason_list= ['
+
+11
+
+count=3)
+
+12
+
+价格突破预警线','收盘价突破预警线','成交量突破预警线'],
+
+print(warn_res)
+
+数据样本
+1
+
+←
+
+发送预警信号成功.', 'ErrorId': '0', 'run_id': '1'}
+
+{'Error': '
+
+发送消息到TQ策略界面send_message
+
+发送文件到客户端send_file →
+
+通达信量化平台
+发送文件到客户端send_file
+往通达信客户端发送文件名，可由TQ策略数据浏览中打开
+1
+
+send_file(file: str) -> Dict:
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+file
+
+Y
+
+str
+
+参数说明
+文件路径
+
+文件放于 .\PYPlugins\file\ 文件夹中时，file可仅传入文件名
+文件放于其他位置时，file需要传入绝对路径
+目前支持的文件类型：txt，pdf，html
+接口使用
+
+←
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+file = "test.txt"
+
+4
+
+tq.send_file(file)
+
+发送预警信号到客户端send_warn
+
+py
+
+发送回测数据send_bt_data →
+
+通达信量化平台
+发送回测数据send_bt_data
+往客户端发送指定股票的回测数据
+1
+
+send_bt_data(stock_code:
+
+str
+
+2
+
+time_list:
+
+List[str] = [],
+
+3
+
+data_list:
+
+List[List[str]] = [],
+
+4
+
+count:
+
+py
+
+= '',
+
+int
+
+= 1) -> Dict:
+
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+List[str]
+
+time_list
+
+Y
+
+List[str]
+
+data_list
+
+N
+
+List[List[str]]
+
+count
+
+N
+
+int
+
+输入参数
+参数说明
+证券代码
+时间列表
+回测数据列表
+有效数据个数
+
+为二维List，每个子元素对应time_list的一个元素时间点，且每个子元素最多有16个有效
+纯数字字符串，即data_list每个子List的前16个数据为一个时间点的有效数据
+count限定入参中每个list中的有效数据个数，即每个list前count个数据会传给客户端
+data_list
+
+接口使用
+1
+
+py
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+bt_data = tq.send_bt_data(stock_code = '688318.SH',
+
+6
+
+time_list = ['20251215141115'],
+
+7
+
+data_list = [['11']],
+count = 1)
+
+8
+9
+
+print(bt_data)
+
+数据样本
+1
+
+发送回测结果成功.', 'ErrorId': '0', 'run_id': '1'}
+
+{'Error': '
+
+←
+
+发送文件到客户端send_file
+
+打印数据到客户端print_to_tdx →
+
+通达信量化平台
+下载特定数据文件download_file
+10
+
+大股东数据文件、ETF申赎清单文件、最近舆情信息文件、股票综合信息文件、经营分析数据文件
+1
+
+py
+
+download_file(stock_code: str = '',
+
+2
+
+down_time:str = '',
+
+3
+
+down_type:int = 1):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+List[str]
+
+down_time
+
+Y
+
+List[str]
+
+down_type
+
+Y
+
+List[str]
+
+参数说明
+证券代码
+指定日期
+指定下载类型
+
+时，下载10大股东数据文件，down_time为指定日期
+down_type=2时，下载ETF申赎清单文件，down_time为指定日期
+down_type=3时，下载最近舆情信息文件，其余两项无效
+down_type=4时，下载股票综合信息文件，其余两项无效
+down_type=5时，下载经营分析数据文件，down_time为指定日期
+下载的文件保存在 .\PYPlugins\data 文件夹
+down_type=1时，下载的文件中含指定日期所在年度的所有10大股东数据和流通股东数据
+down_type=5时，下载的文件中含指定日期所在年度的所有经营分析数据
+down_type=1
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+#
+
+4
+
+down_ptr_10 = tq.download_file(stock_code='688318.SH',
+
+5
+
+down_time='20241231',down_type=1)
+
+6
+
+print(down_ptr_10)
+
+7
+
+#
+
+8
+
+dowm_ptr_etf = tq.download_file(stock_code='159109.SH',
+
+下载10大股东数据
+下载ETF申赎数据
+
+down_time='20260227',down_type=2)
+print(dowm_ptr_etf)
+
+数据样本
+
+py
+
+1
+
+{
+
+2
+
+"ErrorId" : "0",
+
+3
+
+"Msg" : "
+
+4
+
+"run_id" : "1"
+
+5
+
+下载十大股东数据[2025]成功。",
+
+}
+
+6
+7
+
+{
+
+8
+
+"ErrorId" : "0",
+
+9
+
+"Msg" : "
+
+下载ETF申述清单[20250101]成功。",
+
+"run_id" : "1"
+
+10
+11
+
+←
+
+}
+
+缓存历史K线refresh_kline
+
+获取交易日列表get_trading_dates →
+
+通达信量化平台
+获取交易日列表get_trading_dates
+根据指定时间段获取交易日列表
+1
+
+py
+
+get_trading_dates(market: str,
+
+2
+
+start_time: str,
+
+3
+
+end_time: str,
+
+4
+
+count:int = -1) -> List:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+market
+
+Y
+
+str
+
+start_time
+
+N
+
+str
+
+end_time
+
+N
+
+str
+
+count
+
+N
+
+int
+
+参数说明
+市场代码（暂固定为SH）
+起始日期
+结束日期
+返回最近的count个交易日
+
+需要先在客户端下载上证指数（999999）的盘后数据 目前仅支持A股
+count > 0时，限制返回从结束日期往前最近的count个在限定时间段中的交易日
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+trade_dates = tq.get_trading_dates(market = 'SH', start_time = '20220101',
+
+6
+
+end_time = '', count = 10);
+print(trade_dates)
+
+数据样本
+1
+
+['20251211', '20251212', '20251215', '20251216', '20251217', '20251218',
+'20251219', '20251222', '20251223', '20251224']
+
+py
+
+←
+
+下载特定数据文件download_file
+
+发送消息到TQ策略界面send_message →
+
+通达信量化平台
+导出多组数据到通达信客户端 print_to_tdx
+将计算数据导出到通达信客户端展示
+1
+
+print_to_tdx(df_list:
+
+list[pd.DataFrame] = [],
+
+2
+
+sp_name:
+
+str
+
+= "",
+
+3
+
+xml_filename:
+
+str
+
+= "",
+
+4
+
+jsn_filenames:
+
+list[str] = None,
+
+5
+
+vertical:
+
+int
+
+= None,
+
+6
+
+horizontal:
+
+int
+
+= None,
+
+7
+
+height:
+
+list[str | float] = None,
+
+8
+
+table_names:
+
+list[str] = None) -> None:
+
+py
+
+9
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+df_list
+
+Y
+
+list[pd.DataFrame]
+
+sp_name
+
+N
+
+str
+
+xml_filename
+
+N
+
+str
+
+jsn_filenames
+
+Y
+
+list[str]
+
+vertical
+
+N
+
+int
+
+参数说明
+多组数据的DataF
+表，每组table对应
+DataFrame；每个
+DataFrame非空且
+日期（datetime64
+符串类型），后续列
+因子名称；列表长
+组数
+生成.sp文件的名称
+空时默认生成pyth
+生成的xml文件名
+含.xml后缀），为空
+达信面板配置关联
+填
+每组数据对应的.js
+表，列表非空且长
+组数（与df_list一
+名建议包含.jsn后缀
+纵向排列的table组
+（≥1），与horizo
+一，horizontal优先
+
+参数
+
+是否必选
+
+参数类型
+
+horizontal
+
+N
+
+int
+
+height
+
+N
+
+list[str | float]
+
+table_names
+
+N
+
+list[str]
+
+、
+
+df_list jsn_filenames
+
+异常
+
+height
+
+参数说明
+横向排列的table组
+（≥1），优先级高
+vertical，未指定时
+vertical或1组
+自定义每组gridct
+表，长度需等于组
+为数值/字符串（高
+比），未指定时自动
+组数，最后一组高
+每组展示面板的标
+长度需等于组数；
+时自动使用对应
+jsn_filenames的前
+题
+
+长度必须与vertical/horizontal指定的组数完全一致，否则会抛出ValueError
+
+参数值为高度占比（如0.3/"0.3"），表示该面板占整体展示区域的比例，仅支持0-1之间的数
+
+值
+未指定vertical/horizontal时，默认按1组纵向排列展示，自动计算面板高度
+←
+
+发送回测数据send_bt_data
+
+调用客户端功能exec_to_tdx →
+
+通达信量化平台
+调用客户端功能
+客户端根据入参执行指定功能
+py
+
+def exec_to_tdx(url:str = ''):
+
+1
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+url
+
+Y
+
+str
+
+参数说明
+功能调用串或网址
+
+若是功能串，请以 http://www.treeid 开头
+主要功能串
+功能串
+inhttp
+
+dlghttp
+
+说明和示例
+内部打开 比如：http://www.treeid/inhttp://.......
+内部对话框打开 比如：
+
+localurl
+
+内部打开(非对话框) 比如：
+
+dlglocalurl
+
+内部打开(对话框) 比如：
+
+code_
+
+breed_
+
+zb_
+exp_
+padcode_
+ZXG
+
+标题
+
+http://www.treeid/dlghttp://.......&tdxmyietitle=
+&tdxmyiewidth=500&tdxmyieheight=300&noborder=0
+
+http://www.treeid/localurlc:\pa\tips.html.......
+
+http://www.treeid/dlglocalurlc:\pa\tips.mht.......
+
+进入某只股票(只传入代码)
+到某个品种(可以传入市场和代码,如果不清楚市场,在代码前
+加-即可进行模糊处理), 比如到财富趋势
+http://www.treeid/breed_1#688318 市场：0#为深市 1#为沪
+市 2#为京市
+指标公式 比如：http://www.treeid/zb_MACD
+专家系统公式
+进入用户定制版面,后面是版面简称
+自选股列表
+
+功能串
+ETF
+HK
+QH
+MAINQH
+SORT67
+
+说明和示例
+ETF基金
+显示港股
+显示期货
+显示为主力期货合约
+排行(67)
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+py
+
+3
+4
+
+exec_res1 = tq.exec_to_tdx(url='http://www.treeid/MAINQH')
+
+5
+6
+
+exec_res2 = tq.exec_to_tdx(url='http://www.treeid/dlghttp://www.tdx.com.cn')
+
+7
+
+print(exec_res2)
+
+数据样本
+1
+
+{'ErrorId': '0', 'Msg': 'http://www.treeid/dlghttp://www.tdx.com.cn', 'run_id':
+'1'}
+
+←
+
+打印数据到客户端print_to_tdx
+
+检索证券信息get_match_stkinfo →
+
+通达信量化平台
+检索证券信息get_match_stkinfo
+检索证券信息
+py
+
+def get_match_stkinfo(key_word:str = ''):
+
+1
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+key_word
+
+Y
+
+str
+
+参数说明
+关键词
+
+输出数据
+名称
+
+类型
+
+数值
+
+Code
+
+Y
+
+str
+
+Name
+
+Y
+
+str
+
+说明
+证券代码
+证券名称
+
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+match_stkinfo = tq.get_match_stkinfo(key_word='
+
+4
+
+print(match_stkinfo)
+
+通达信')
+
+数据样本
+[{'Code': '880515.SH', 'Name': '
+
+2
+
+{'Code': '880818.SH', 'Name': '
+
+3
+
+←
+
+通达信88'},
+通达信热股'},
+{'Code': '688318.SH', 'Name': '财富趋势'}]
+
+1
+
+调用客户端功能exec_to_tdx
+
+获取K线数据get_market_data →
+
+通达信量化平台
+通达信TQ可以获取如下数据
+股票数据：我们拥有所有A股、港股、美股、新三板等上市公司的股票行情数据、基本信息、财务数
+据、市场交易数据等。
+基金数据：我们目前提供了多种在交易所上市的基金的行情、净值等数据，包含ETF、LOF、REITs
+等。
+指数数据：我们支持沪深京指数、板块指数、港股指数、中证国证指数，包括指数的行情数据以及
+成分股数据。具体见get_index_stocks。
+行业等板块：我们支持按通达信行业、概念、风格板块获取成分股，具体见获取A股板块代码列表
+get_sector_list及获取板块成份股get_stock_list_in_sector。
+期货数据：我们支持中金所、郑商所、大商所、上期所、上期能源、广期所的行情数据，并包含历
+史产品的数据。
+宏观数据：我们提供全方位的宏观数据（.HG），为投资者决策提供有力数据支持。
+可转债和期权等数据：我们提供完整的沪深京可转债类数据、沪深个股期权等数据。
+数据信息文件包：我们提供各类特定的数据信息文件包。具体见download_file。
+
+通达信量化平台
+获取K线行情get_market_data
+根据股票，获取历史行情
+1
+
+py
+
+get_market_data(field_list: List[str] = [],
+
+2
+
+stock_list: List[str] = [],
+
+3
+
+period: str = '',
+
+4
+
+start_time: str = '',
+
+5
+
+end_time: str = '',
+
+6
+
+count: int = -1,
+
+7
+
+dividend_type: Optional[str] = None,
+
+8
+
+fill_data: bool = True) -> Dict:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+field_list
+
+N
+
+List[str]
+
+stock_list
+
+Y
+
+List[str]
+
+period
+
+Y
+
+str
+
+start_time
+
+N
+
+str
+
+end_time
+
+N
+
+str
+
+count
+
+N
+
+int
+
+dividend_type
+
+N
+
+str
+
+fill_data
+
+N
+
+bool
+
+小于等于0或者count为空：
+1、开始日期结束日期数据数据；
+2、开始日期无值， 从第一根k取到 结束日期
+3、结束日期无值，从开始日期取到最后一根
+4、都没值取全部本地数据
+count大于0时：
+1、结束日期往前n个数据
+2、结束日期无时从最后一根k线往前取n。
+count
+
+返回数据
+
+参数说明
+字段筛选，传空则返回全部
+证券代码列表
+周期
+起始时间
+结束时间
+返回数据个数（每只股票）
+复权类型 ：none不复权、front
+前复权、back后复权
+是否向后填充空缺数据
+
+返回dict { field1 : value1, field2 : value2, ... }
+field1, field2, ... ：数据字段
+value1, value2, ... ：pd.DataFrame 数据集，index为stock_list，columns为time_list
+各字段对应的DataFrame维度相同、索引相同
+只有dividend_type传入为none时，会返回有效的前复权因子ForwardFactor
+后复权数据与取的数据个数有关，只在返回的数据中进行后复权
+一次最多返回24000条数据，要获取完整分钟线需要多次分批获取
+返回复权数据时，若该组数据时间内未发生权息变动，则复权价与未复权价相同，
+数据
+
+默认返回
+
+数据类型
+
+Date
+
+Y
+
+str
+
+Time
+
+Y
+
+str
+
+Open
+
+Y
+
+str
+
+High
+
+Y
+
+str
+
+Low
+
+Y
+
+str
+
+Close
+
+Y
+
+str
+
+Volume
+
+Y
+
+str
+
+Amount
+
+Y
+
+str
+
+ForwardFactor
+
+Y
+
+str
+
+VolInStock
+
+N
+
+str
+
+数据说明
+日期
+时间
+开盘价
+最高价
+最低价
+收盘价
+成交量
+成交额
+前复权因子，当
+dividend_type=none时候返回有
+效值
+持仓量
+
+期货数据时Amount为0，非期货数据时VolInStock为0
+接口使用
+获取688318.SH从2025-12-20到今为止最新一条日K线的不复权数据
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+df = tq.get_market_data(
+
+4
+
+field_list=[],
+
+5
+
+stock_list=['688318.SH'],
+
+6
+
+start_time='20251220',
+
+7
+
+end_time='',
+
+8
+
+count=1,
+
+9
+
+dividend_type='none',
+
+10
+
+period='1d',
+fill_data=True
+
+11
+)
+
+py
+
+12
+
+print(df)
+
+13
+
+数据样本
+
+←
+
+1
+
+{'Amount':
+
+688318.SH
+
+2
+
+2025-12-24
+
+3
+
+'Low':
+
+4
+
+2025-12-24
+
+5
+
+'Date':
+
+6
+
+2025-12-24
+
+7
+
+'Volume':
+
+8
+
+2025-12-24
+
+9
+
+'Close':
+
+10
+
+2025-12-24
+
+11
+
+'Open':
+
+12
+
+2025-12-24
+
+13
+
+'Time':
+
+14
+
+2025-12-24
+
+15
+
+'High':
+
+16
+
+2025-12-24
+
+17
+
+'ForwardFactor':
+
+18
+
+2025-12-24
+
+29394.81,
+688318.SH
+128.0,
+688318.SH
+20251224.0,
+688318.SH
+2257325.0,
+688318.SH
+131.58,
+688318.SH
+128.01,
+688318.SH
+0.0,
+688318.SH
+131.87,
+688318.SH
+1.0}
+
+检索证券信息get_match_stkinfo
+
+获取快照数据get_market_snapshot →
+
+通达信量化平台
+获取快照数据get_market_snapshot
+根据股票，获取最新行情数据
+1
+
+py
+
+def get_market_snapshot(stock_code: str,
+
+2
+
+field_list: List = []) -> Dict:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+field_list
+
+N
+
+List[str]
+
+数据
+
+默认返回
+
+数据类型
+
+ItemNum
+
+Y
+
+str
+
+LastClose
+
+Y
+
+str
+
+Open
+
+Y
+
+str
+
+Max
+
+Y
+
+str
+
+Min
+
+Y
+
+str
+
+Now
+
+Y
+
+str
+
+Volume
+
+Y
+
+str
+
+NowVol
+
+Y
+
+str
+
+Amount
+
+Y
+
+str
+
+Inside
+
+Y
+
+str
+
+Outside
+
+Y
+
+str
+
+TickDiff
+
+Y
+
+str
+
+InOutFlag
+
+Y
+
+str
+
+参数说明
+证券代码
+字段筛选，传空则返回全部
+
+返回数据
+数据说明
+快照笔数
+前收盘价
+开盘价
+最高价
+最低价
+现价
+总手
+现手
+总成交金额
+内盘 板块指数时为跌停家数
+外盘 板块指数时为涨停家数
+笔涨跌
+内外盘标志 0:Buy 1:Sell
+2:Unknown
+
+数据
+
+默认返回
+
+数据类型
+
+数据说明
+
+Jjjz
+
+Y
+
+str
+
+Buyp
+
+Y
+
+List[str]
+
+Buyv
+
+Y
+
+List[str]
+
+Sellp
+
+Y
+
+List[str]
+
+Sellv
+
+Y
+
+List[str]
+
+UpHome
+
+Y
+
+str
+
+DownHome
+
+Y
+
+str
+
+五个买价
+对应的五个买盘量
+五个卖价
+对应的五个卖盘量
+上涨家数 对于指数有效
+下跌家数 对于指数有效
+
+Before5MinNow
+
+Y
+
+str
+
+5
+
+Average
+
+Y
+
+str
+
+XsFlag
+
+Y
+
+str
+
+Zangsu
+
+Y
+
+str
+
+ZAFPre3
+
+Y
+
+str
+
+基金净值
+
+分钟前价格
+均价
+小数位数
+涨速
+3日涨幅
+
+接口使用
+获取688318.SH从2025-12-20到今为止最新一条日K线的不复权数据
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+market_snapshot = tq.get_market_snapshot(stock_code = '688260.SH', field_list=
+
+6
+
+[])
+print(market_snapshot)
+
+数据样本
+1
+
+{'ItemNum': '3342',
+
+2
+
+'LastClose': '34.21',
+
+3
+
+'Open': '33.78',
+
+4
+
+'Max': '36.49',
+
+5
+
+'Min': '32.50',
+
+6
+
+'Now': '35.06',
+
+7
+
+'Volume': '122881',
+
+8
+
+'NowVol': '1449',
+
+9
+
+'Amount': '43068.48',
+
+10
+
+'Inside': '60373',
+
+py
+
+←
+
+11
+
+'Outside': '62509',
+
+12
+
+'TickDiff': '0.00',
+
+13
+
+'InOutFlag': '2',
+
+14
+
+'Jjjz': '0.00',
+
+15
+
+'Buyp': ['35.05', '35.04', '35.02', '35.01', '35.00'],
+
+16
+
+'Buyv': ['154', '9', '49', '136', '154'],
+
+17
+
+'Sellp': ['35.06', '35.07', '35.08', '35.09', '35.10'],
+
+18
+
+'Sellv': ['4', '31', '139', '4', '4'],
+
+19
+
+'UpHome': '0',
+
+20
+
+'DownHome': '0',
+
+21
+
+'Before5MinNow': '35.15',
+
+22
+
+'Average': '35.05',
+
+23
+
+'XsFlag': '2',
+
+24
+
+'Zangsu': '-0.25',
+
+25
+
+'ZAFPre3': '-1.83',
+
+26
+
+'ErrorId': '0'}
+
+获取K线数据get_market_data
+
+获取证券基本信息get_stock_info →
+
+通达信量化平台
+获取证券基本信息get_stock_info
+根据股票，获取股票基础的财务数据
+1
+
+py
+
+get_stock_info(cls,
+
+2
+
+stock_code:str,
+
+3
+
+field_list: List = []) -> Dict:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+field_list
+
+Y
+
+List[str]
+
+数据
+
+默认返回
+
+数据类型
+
+Name
+
+Y
+
+str
+
+Unit
+
+Y
+
+str
+
+VolBase
+
+Y
+
+str
+
+MinPrice
+
+Y
+
+str
+
+XsFlag
+
+Y
+
+str
+
+Fz[8]
+
+Y
+
+List[str]
+
+DelayMin
+
+Y
+
+str
+
+QHVolBaseRate
+
+Y
+
+str
+
+HKVolBaseRate
+
+Y
+
+str
+
+BelongHS300
+
+Y
+
+str
+
+BelongHasKQZ
+
+Y
+
+str
+
+BelongRZRQ
+
+Y
+
+str
+
+BelongHSGT
+
+Y
+
+str
+
+参数说明
+证券代码
+字段筛选，不能为空
+
+返回数据
+数据说明
+证券名称
+交易单位
+量比的基量
+最小价格变动
+价格小数位数
+开收市时间（4段）
+延时分钟数
+期货期权的每手乘数
+港股/日股/新加坡股 每手股数
+是否属于沪深300
+是否含可转债
+是否是融资融券标的
+是否属于沪深股通
+
+数据
+
+默认返回
+
+数据类型
+
+IsHKGP
+
+Y
+
+str
+
+IsQH
+
+Y
+
+str
+
+IsQQ
+
+Y
+
+str
+
+IsSTGP
+
+Y
+
+str
+
+IsQuitGP
+
+Y
+
+str
+
+TodayDRFlag
+
+Y
+
+str
+
+HSStockKind
+
+Y
+
+str
+
+ActiveCapital
+
+Y
+
+str
+
+J_zgb
+
+Y
+
+str
+
+J_bg
+
+Y
+
+str
+
+J_hg
+
+Y
+
+str
+
+J_zzc
+
+Y
+
+str
+
+J_ldzc
+
+Y
+
+str
+
+J_gdzc
+
+Y
+
+str
+
+J_wxzc
+
+Y
+
+str
+
+J_ldfz
+
+Y
+
+str
+
+J_cqfz
+
+Y
+
+str
+
+J_zbgjj
+
+Y
+
+str
+
+J_jzc
+
+Y
+
+str
+
+J_yysy
+
+Y
+
+str
+
+J_yycb
+
+Y
+
+str
+
+J_yszk
+
+Y
+
+str
+
+J_yyly
+
+Y
+
+str
+
+J_tzsy
+
+Y
+
+str
+
+J_jyxjl
+
+Y
+
+str
+
+数据说明
+是否是港股
+是否是期货
+是否是期权
+是否是ST股票
+是否是退市整理板股票
+当天是否有除权除息(沪深京)
+沪深京品种类型 0:指数,1:A股主
+板,2:北证A股,3:创业板,4:科创
+板,5:B股,6:债券,7:基金,8:权证,9:其
+它,10:非沪深京品种
+流通股本(万股)
+总股本(万股)
+B股(万股)
+H股(万股)
+总资产(万元)
+流动资产(万元)
+固定资产(万元)
+无形资产(万元)
+流动负债(万元)
+少数股东权益(万元)
+资本公积金(万元)
+股东权益/净资产(万元)
+营业收入(万元)
+营业成本(万元)
+应收账款(万元)
+营业利润(万元)
+投资收益(万元)
+经营现金净流量(万元)
+
+数据
+
+默认返回
+
+数据类型
+
+J_zxjl
+
+Y
+
+str
+
+J_ch
+
+Y
+
+str
+
+J_lyze
+
+Y
+
+str
+
+J_shly
+
+Y
+
+str
+
+J_jly
+
+Y
+
+str
+
+J_wfply
+
+Y
+
+str
+
+J_jyl
+
+Y
+
+str
+
+J_mgwfp
+
+Y
+
+str
+
+J_mgsy
+
+Y
+
+str
+
+J_mgsy2
+
+Y
+
+str
+
+J_mggjj
+
+Y
+
+str
+
+J_mgjzc
+
+Y
+
+str
+
+J_mgjzc2
+
+Y
+
+str
+
+J_gdqyb
+
+Y
+
+str
+
+J_gdrs
+
+Y
+
+str
+
+J_HalfYearFlag
+
+Y
+
+str
+
+J_start
+
+Y
+
+str
+
+tdx_dycode
+
+Y
+
+str
+
+tdx_dyname
+
+Y
+
+str
+
+rs_hycode_sim
+
+Y
+
+str
+
+rs_hyname
+
+Y
+
+str
+
+blockzscode
+
+Y
+
+str
+
+underly_setcode
+
+Y
+
+str
+
+underly_code
+
+Y
+
+str
+
+数据说明
+总现金净流量(万元)
+存货(万元)
+利润总额(万元)
+税后利润(万元)
+净利润(万元)
+未分配利益(万元)
+净资产收益率
+每股未分配
+每股收益（折算为全年）
+季报每股收益 (财报中提供的每股
+收益)
+每股公积金
+每股净资产
+季报每股净资产 (财报中提供的每
+股收益)
+股东权益比
+股东人数
+报告期月份(3,6,9,12)
+上市日期
+通达信地域代码
+通达信地域
+通达信行业代码
+通达信行业
+所属的行业板块指数代码
+标的市场代码(比如：当前ETF跟踪
+的指数市场)
+标的代码(比如：当前ETF跟踪的指
+数代码)
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+fdc = tq.get_stock_info(stock_code='688318.SH', field_list=[])
+
+4
+
+print(fdc)
+
+数据样本
+财富趋势',
+
+1
+
+{'Name': '
+
+2
+
+'Unit': '100',
+
+3
+
+'VolBase': '102.22',
+
+4
+
+'MinPrice': '0.01',
+
+5
+
+'XsFlag': '2',
+
+6
+
+'Fz': ['570', '690', '780', '900', '900', '900', '900', '900'],
+
+7
+
+'DelayMin': '0',
+
+8
+
+'QHVolBaseRate': '0',
+
+9
+
+'HKVolBaseRate': '0',
+
+10
+
+'BelongHS300': '0',
+
+11
+
+'BelongHasKQZ': '0',
+
+12
+
+'BelongRZRQ': '1',
+
+13
+
+'BelongHSGT': '1',
+
+14
+
+'IsHKGP': '0',
+
+15
+
+'IsQH': '0',
+
+16
+
+'IsQQ': '0',
+
+17
+
+'IsSTGP': '0',
+
+18
+
+'IsQuitGP': '0',
+
+19
+
+'TodayDRFlag': '0',
+
+20
+
+'HSStockKind': '4',
+
+21
+
+'ActiveCapital': '25611.94',
+
+22
+
+'J_zgb': '25611.94',
+
+23
+
+'J_bg': '0.00',
+
+24
+
+'J_hg': '0.00',
+
+25
+
+'J_zzc': '389036.97',
+
+26
+
+'J_ldzc': '235598.84',
+
+27
+
+'J_gdzc': '972.62',
+
+28
+
+'J_wxzc': '1184.64',
+
+29
+
+'J_ldfz': '17412.97',
+
+30
+
+'J_cqfz': '73.15',
+
+31
+
+'J_zbgjj': '157998.02',
+
+32
+
+'J_jzc': '370454.03',
+
+33
+
+'J_yysy': '19827.85',
+
+34
+
+'J_yycb': '4258.70',
+
+35
+
+'J_yszk': '2726.99',
+
+36
+
+'J_yyly': '20836.07',
+
+37
+
+'J_tzsy': '5091.96',
+
+38
+
+'J_jyxjl': '5432.08',
+
+39
+
+'J_zxjl': '9779.30',
+
+40
+
+'J_ch': '61.84',
+
+41
+
+'J_lyze': '20829.85',
+
+py
+
+←
+
+42
+
+'J_shly': '18421.45',
+
+43
+
+'J_jly': '18421.34',
+
+44
+
+'J_wfply': '175521.63',
+
+45
+
+'J_jyl': '4.97',
+
+46
+
+'J_mgwfp': '6.85',
+
+47
+
+'J_mgsy': '0.96',
+
+48
+
+'J_mgsy2': '0.00',
+
+49
+
+'J_mggjj': '6.17',
+
+50
+
+'J_mgjzc': '14.46',
+
+51
+
+'J_mgjzc2': '14.46',
+
+52
+
+'J_gdqyb': '0.95',
+
+53
+
+'J_gdrs': '24154.00',
+
+54
+
+'J_HalfYearFlag': '9',
+
+55
+
+'J_start': '20200427',
+
+56
+
+'tdx_dycode': '18',
+
+57
+
+'tdx_dyname': '
+
+58
+
+'rs_hycode_sim': 'X4202',
+
+59
+
+'rs_hyname': '
+
+60
+
+'blockzscode': '881355',
+
+61
+
+'underly_setcode': '0',
+
+62
+
+'underly_code': '',
+
+63
+
+'ErrorId': '0'}
+
+深圳板块',
+
+软件服务',
+
+获取快照数据get_market_snapshot
+
+获取股票更多信息get_more_info →
+
+通达信量化平台
+获取股票更多信息get_more_info
+获取指定股票更细节的信息
+1
+
+py
+
+def get_more_info(stock_code:str = '',
+
+2
+
+field_list: List = []):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+field_list
+
+N
+
+List[str]
+
+数据
+
+默认返回
+
+数据类型
+
+MainBusiness
+
+Y
+
+str
+
+SafeValue
+
+Y
+
+str
+
+ShineValue
+
+Y
+
+str
+
+ShapeValue
+
+Y
+
+str
+
+TPFlag
+
+Y
+
+str
+
+ZTPrice
+
+Y
+
+str
+
+DTPrice
+
+Y
+
+str
+
+HqDate
+
+Y
+
+str
+
+fHSL
+
+Y
+
+str
+
+fLianB
+
+Y
+
+str
+
+Wtb
+
+Y
+
+str
+
+Zsz
+
+Y
+
+str
+
+参数说明
+股票代码
+字段筛选，传空则返回全部
+
+返回数据
+数据说明
+主营构成
+安全分
+亮点数
+短期形态+中期形态+长期形态 编
+号
+停牌标识
+涨停价
+跌停价
+行情日期
+换手率
+量比
+委比
+总市值(亿)
+
+数据
+
+默认返回
+
+数据类型
+
+Ltsz
+
+Y
+
+str
+
+vzangsu
+
+Y
+
+str
+
+Fzhsl
+
+Y
+
+str
+
+FzAmo
+
+Y
+
+str
+
+VOpenZAF
+
+Y
+
+str
+
+ZAF
+
+Y
+
+str
+
+ZAFYesterday
+
+Y
+
+str
+
+ZAFPre2D
+
+Y
+
+str
+
+ZAFPre5
+
+Y
+
+str
+
+ZAFPre10
+
+Y
+
+str
+
+ZAFPre20
+
+Y
+
+str
+
+ZAFPre30
+
+Y
+
+str
+
+ZAFPre60
+
+Y
+
+str
+
+ZAFYear
+
+Y
+
+str
+
+ZAFPreMyMonth
+
+Y
+
+str
+
+ZAFPreOneYear
+
+Y
+
+str
+
+Zjl
+
+Y
+
+str
+
+Zjl_HB
+
+Y
+
+str
+
+TotalBVol
+
+Y
+
+str
+
+TotalSVol
+
+Y
+
+str
+
+BCancel
+
+Y
+
+str
+
+SCancel
+
+Y
+
+str
+
+L2TicNum
+
+Y
+
+str
+
+L2OrderNum
+
+Y
+
+str
+
+FCAmo
+
+Y
+
+str
+
+数据说明
+流通市值(亿)
+量涨速
+分钟换手率
+2分钟金额(万元)
+抢筹涨幅
+涨幅
+昨日涨幅
+前天涨幅
+5日涨幅
+10日涨幅
+20日涨幅
+30日涨幅
+60日涨幅
+年初至今涨幅
+涨幅(本月来)
+涨幅(一年来)
+主买净额(万元)
+主力净流入(万元)
+总买量
+总卖量
+总撤买量
+总撤卖量
+L2逐笔成交数
+L2逐笔委托数
+封单额(万元)
+
+数据
+
+默认返回
+
+数据类型
+
+FCb
+
+Y
+
+str
+
+OpenAmo
+
+Y
+
+str
+
+OpenZTBuy
+
+Y
+
+str
+
+OpenAmoPre1
+
+Y
+
+str
+
+OpenVolPre1
+
+Y
+
+str
+
+CJJEPre1
+
+Y
+
+str
+
+CJJEPre3
+
+Y
+
+str
+
+FDEPre1
+
+Y
+
+str
+
+FDEPre2
+
+Y
+
+str
+
+ZTGPNum
+
+Y
+
+str
+
+LastStartZT
+
+Y
+
+str
+
+LastZTHzNum
+
+Y
+
+str
+
+EverZTCount
+
+Y
+
+str
+
+ConZAFDateNum
+
+Y
+
+str
+
+YearZTDay
+
+Y
+
+str
+
+MA5Value
+
+Y
+
+str
+
+HisHigh
+
+Y
+
+str
+
+HisLow
+
+Y
+
+str
+
+IPO_Price
+
+Y
+
+str
+
+More_YJL
+
+Y
+
+str
+
+BetaValue
+
+Y
+
+str
+
+DynaPE
+
+Y
+
+str
+
+MorePE
+
+Y
+
+str
+
+StaticPE_TTM
+
+Y
+
+str
+
+DYRatio
+
+Y
+
+str
+
+数据说明
+封成比
+开盘金额(万元)(A股和板块指数有
+效)
+竞价涨停买入金额(万元)
+昨开盘金额(万元)
+昨开盘量
+昨成交额(万元)
+3日成交额(万元)
+昨封单额(万元)
+前封单额(万元)
+板块指数的涨停家数
+几天
+几板
+连板天
+连涨天数
+年涨停天数
+日均价
+52周最高
+52周最低
+发行价
+5
+
+溢价率
+贝塔系数
+动态市盈率
+市盈率(港股:动,其他扩展:静)
+市盈率(TTM)
+股息率
+ETF,LOF
+
+数据
+
+默认返回
+
+数据类型
+
+PB_MRQ
+
+Y
+
+str
+
+IsT0Fund
+
+Y
+
+str
+
+IsZCZGP
+
+Y
+
+str
+
+IsKzz
+
+Y
+
+str
+
+Kzz_HSCode
+
+Y
+
+str
+
+QHMainYYMM
+
+Y
+
+str
+
+FreeLtgb
+
+Y
+
+str
+
+Yield
+
+Y
+
+str
+
+KfEarnMoney
+
+Y
+
+str
+
+RDInputFee
+
+Y
+
+str
+
+CashZJ
+
+Y
+
+str
+
+PreReceiveZJ
+
+Y
+
+str
+
+OtherQYJzc
+
+Y
+
+str
+
+StaffNum
+
+Y
+
+str
+
+RecentGGJYDate
+
+Y
+
+str
+
+RecentHGDate
+
+Y
+
+str
+
+RecentIncentDate
+
+Y
+
+str
+
+NoticeDate_Recent
+
+Y
+
+str
+
+RecentReleaseDate
+
+Y
+
+str
+
+RecentDZDate
+
+Y
+
+str
+
+ReportDate
+
+Y
+
+str
+
+ZTDate_Recent
+
+Y
+
+str
+
+DTDate_Recent
+
+Y
+
+str
+
+TopDate_Recent
+
+Y
+
+str
+
+StopJYDate_Recent
+
+Y
+
+str
+
+数据说明
+市净率(MRQ)
+是否是T+0基金
+是否是注册制A股
+是否是可转债
+可转债对应的正股代码
+主力合约关联的月份(期货),主力和
+次主力
+自由流通股本(万)
+应计利息(债券),占款天数(回购)
+扣非净利润(万元)
+研发费用(万元)
+货币资金(万元)
+合同负债(万元)
+其它权益工具(万元)
+员工人数
+最近北上大额交易日
+最近回购预案日
+最近股权激励预案日
+最近业绩预告日
+最近解禁日
+最近定增日
+最近财报公告日期
+近2年最近涨停板日期
+近2年最近跌停板日期
+近2年最近龙虎榜日期
+最近停牌日期
+
+提示：
+涨停跌停的判断：用get_more_info取FCAmo来判断涨停跌停，大于0是涨停，小于0是跌停。
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+more_info = tq.get_more_info(stock_code = '688318.SH', field_list=[])
+
+4
+
+print(more_info)
+
+数据样本
+软件服务收入',
+
+1
+
+{'MainBusiness': '
+
+2
+
+'SafeValue': '98',
+
+3
+
+'ShineValue': '3',
+
+4
+
+'ShapeValue': '101308',
+
+5
+
+'TPFlag': '0',
+
+6
+
+'ZTPrice': '151.62',
+
+7
+
+'DTPrice': '101.08',
+
+8
+
+'HqDate': '20260227',
+
+9
+
+'fHSL': '0.86',
+
+10
+
+'fLianB': '0.89',
+
+11
+
+'Wtb': '-0.66',
+
+12
+
+'Zsz': '326.91',
+
+13
+
+'Ltsz': '326.91',
+
+14
+
+'vzangsu': '2.17',
+
+15
+
+'Fzhsl': '0.12',
+
+16
+
+'FzAmo': '514.92',
+
+17
+
+'VOpenZAF': '0.00',
+
+18
+
+'ZAF': '1.02',
+
+19
+
+'ZAFYesterday': '-1.21',
+
+20
+
+'ZAFPre2D': '1.99',
+
+21
+
+'ZAFPre5': '-1.56',
+
+22
+
+'ZAFPre10': '-3.44',
+
+23
+
+'ZAFPre20': '-10.76',
+
+24
+
+'ZAFPre30': '-10.13',
+
+25
+
+'ZAFPre60': '-1.59',
+
+26
+
+'ZAFYear': '-3.54',
+
+27
+
+'ZAFPreMyMonth': '-5.23',
+
+28
+
+'ZAFPreOneYear': '10.27',
+
+29
+
+'Zjl': '0.00',
+
+30
+
+'Zjl_HB': '0.00',
+
+31
+
+'TotalBVol': '1295.00',
+
+32
+
+'TotalSVol': '3555.00',
+
+33
+
+'BCancel': '42606.00',
+
+34
+
+'SCancel': '40266.00',
+
+35
+
+'L2TicNum': '6880',
+
+36
+
+'L2OrderNum': '29448',
+
+37
+
+'FCAmo': '0.00',
+
+38
+
+'FCb': '0.00',
+
+39
+
+'OpenAmo': '1069400.00',
+
+40
+
+'OpenFDE': '0.00',
+
+py
+
+←
+
+41
+
+'OpenAmoPre1': '77.93',
+
+42
+
+'OpenVolPre1': '61.00',
+
+43
+
+'CJJEPre1': '26056.68',
+
+44
+
+'CJJEPre3': '89751.03',
+
+45
+
+'FDEPre1': '0.00',
+
+46
+
+'FDEPre2': '0.00',
+
+47
+
+'ZTGPNum': '0',
+
+48
+
+'LastStartZT': '0',
+
+49
+
+'LastZTHzNum': '0',
+
+50
+
+'EverZTCount': '0',
+
+51
+
+'ConZAFDateNum': '1',
+
+52
+
+'YearZTDay': '0',
+
+53
+
+'MA5Value': '126.56',
+
+54
+
+'HisHigh': '180.86',
+
+55
+
+'HisLow': '83.41',
+
+56
+
+'IPO_Price': '107.41',
+
+57
+
+'More_YJL': '0.00',
+
+58
+
+'BetaValue': '2.31',
+
+59
+
+'DynaPE': '133.10',
+
+60
+
+'MorePE': '107.56',
+
+61
+
+'StaticPE_TTM': '94.99',
+
+62
+
+'DYRatio': '0.28',
+
+63
+
+'PB_MRQ': '8.82',
+
+64
+
+'IsT0Fund': '0',
+
+65
+
+'IsZCZGP': '1',
+
+66
+
+'IsKzz': '0',
+
+67
+
+'Kzz_HSCode': '0',
+
+68
+
+'FreeLtgb': '7935.14',
+
+69
+
+'Yield': '106.94',
+
+70
+
+'KfEarnMoney': '9778.22',
+
+71
+
+'RDInputFee': '5894.58',
+
+72
+
+'CashZJ': '60954.52',
+
+73
+
+'PreReceiveZJ': '11281.48',
+
+74
+
+'OtherQYJzc': '0.00',
+
+75
+
+'StaffNum': '446',
+
+76
+
+'RecentGGJYDate': '0',
+
+77
+
+'RecentHGDate': '0',
+
+78
+
+'RecentIncentDate': '0',
+
+79
+
+'NoticeDate_Recent': '0',
+
+80
+
+'RecentReleaseDate': '20230427',
+
+81
+
+'RecentDZDate': '0',
+
+82
+
+'ReportDate': '20251031',
+
+83
+
+'ZTDate_Recent': '20241008',
+
+84
+
+'DTDate_Recent': '0',
+
+85
+
+'TopDate_Recent': '20250625',
+
+86
+
+'StopJYDate_Recent': '0'}
+
+获取证券基本信息get_stock_info
+
+批量获取价格和成交量get_pricevol →
+
+通达信量化平台
+批量获取价量get_pricevol
+批量获取指定股票集的前收盘价、现价和总成交量
+py
+
+def get_pricevol(stock_list: List[str] = []):
+
+1
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+参数说明
+证券代码列表
+
+输出数据
+名称
+
+类型
+
+数值
+
+LastClose
+
+Y
+
+str
+
+Now
+
+Y
+
+str
+
+Volume
+
+Y
+
+str
+
+说明
+前收盘价
+现价
+成交量
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+all_stocks = tq.get_stock_list(market='23')
+
+4
+
+pv_info = tq.get_pricevol(stock_list=all_stocks)
+
+5
+
+print(pv_info)
+
+数据样本
+1
+
+{'000001.SZ': {'LastClose': '10.70', 'Now': '10.71', 'Volume': '422239'},
+
+2
+
+'000002.SZ': {'LastClose': '3.47', 'Now': '3.46', 'Volume': '423677'},
+
+3
+
+'000063.SZ': {'LastClose': '34.83', 'Now': '34.99', 'Volume': '587361'},
+
+4
+
+'000100.SZ': {'LastClose': '4.37', 'Now': '4.17', 'Volume': '10003565'},
+
+5
+
+'000157.SZ': {'LastClose': '7.27', 'Now': '7.20', 'Volume': '227512'},
+
+6
+
+'000166.SZ': {'LastClose': '4.47', 'Now': '4.42', 'Volume': '445736'},
+
+7
+
+'000301.SZ': {'LastClose': '12.52', 'Now': '12.53', 'Volume': '100953'},
+
+8
+
+'000333.SZ': {'LastClose': '81.50', 'Now': '80.45', 'Volume': '99257'},
+
+9
+
+'000338.SZ': {'LastClose': '32.28', 'Now': '33.13', 'Volume': '422523'},
+
+10
+
+'000408.SZ': {'LastClose': '78.19', 'Now': '78.99', 'Volume': '36197'},
+
+py
+
+←
+
+11
+
+'000425.SZ': {'LastClose': '9.57', 'Now': '9.62', 'Volume': '418614'},
+
+12
+
+'000538.SZ': {'LastClose': '50.13', 'Now': '49.87', 'Volume': '33429'},...}
+
+获取股票更多信息get_more_info
+
+获取分红送配数据get_divid_factors →
+
+通达信量化平台
+获取分红送配数据get_divid_factors
+根据股票，获取指定时间段内的分红送配等数据
+1
+
+py
+
+get_divid_factors(stock_code: str,
+
+2
+
+start_time: str,
+
+3
+
+end_time: str) -> pd.DataFrame:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+start_time
+
+N
+
+str
+
+end_time
+
+N
+
+str
+
+数据
+
+默认返回
+
+数据类型
+
+Type
+
+Y
+
+str
+
+Bonus
+
+Y
+
+str
+
+AlloPrice
+
+Y
+
+str
+
+ShareBonus
+
+Y
+
+str
+
+Allotment
+
+Y
+
+str
+
+参数说明
+证券代码
+起始时间
+结束时间
+
+返回数据
+数据说明
+类型 1:除权除息 11:扩缩股 15:重
+新调整
+红利
+配股价
+送股/扩缩股比例
+配股
+
+接口使用
+注：此接口只支持沪深京的分红送配数据
+例如：获取688318.SH全部分红配送数据
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+divid_factors = tq.get_divid_factors(
+
+4
+
+stock_code='688318.SH',
+
+py
+
+start_time='',
+
+5
+6
+
+end_time='')
+
+7
+
+print(divid_factors)
+
+数据样本
+Type
+
+1
+
+←
+
+Bonus
+
+AllotPrice
+
+ShareBonus
+
+Allotment
+
+2
+
+Date
+
+3
+
+2020-09-29
+
+1
+
+6.0
+
+0.0
+
+0.0
+
+0.0
+
+4
+
+2021-05-27
+
+1
+
+10.0
+
+0.0
+
+0.0
+
+0.0
+
+5
+
+2022-06-20
+
+1
+
+14.0
+
+0.0
+
+4.0
+
+0.0
+
+6
+
+2023-06-13
+
+1
+
+5.0
+
+0.0
+
+4.0
+
+0.0
+
+7
+
+2024-06-14
+
+1
+
+8.0
+
+0.0
+
+4.0
+
+0.0
+
+批量获取价格和成交量get_pricevol
+
+获取股票所属板块get_relation →
+
+通达信量化平台
+获取股票所属板块
+获取指定股票所属板块信息
+py
+
+def get_relation(stock_code:str = ''):
+
+1
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+数据说明
+板块代码
+板块名称
+板块类型
+成份股数量
+
+参数说明
+股票代码
+
+返回数据
+数据
+
+默认返回
+
+数据类型
+
+BlockCode
+
+Y
+
+str
+
+BlockName
+
+Y
+
+str
+
+BlockType
+
+Y
+
+str
+
+GPNume
+
+Y
+
+str
+
+没有板块代码的板块的BlockCode字段返回"0"
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+from tqcenter import tqconst
+
+3
+
+tq.initialize(__file__)
+
+py
+
+4
+5
+
+gp_block_res = tq.get_relation(stock_code='688318.SH')
+
+6
+
+print(gp_block_res)
+
+数据样本
+软件服务', 'BlockType': '行业',
+
+1
+
+[{'BlockCode': '881355.SH', 'BlockName': '
+
+2
+
+'GPNume': '234'},
+
+3
+
+{'BlockCode': '880218.SH', 'BlockName': '
+
+4
+
+'427'},
+
+5
+
+{'BlockCode': '880592.SH', 'BlockName': '
+
+深圳板块', 'BlockType': '地区', 'GPNume':
+互联金融', 'BlockType': '概念', 'GPNume':
+
+6
+
+'211'},
+
+7
+
+{'BlockCode': '880722.SH', 'BlockName': '
+
+8
+
+'262'},
+
+9
+
+{'BlockCode': '880916.SH', 'BlockName': '
+
+10
+
+'266'},
+
+11
+
+{'BlockCode': '880948.SH', 'BlockName': '
+
+12
+
+'1049'},
+
+13
+
+{'BlockCode': '880956.SH', 'BlockName': '
+
+14
+
+'295'},
+
+15
+
+{'BlockName': '
+
+16
+
+{'BlockName': '
+
+17
+
+华为鸿蒙', 'BlockType': '概念', 'GPNume':
+国产软件', 'BlockType': '概念', 'GPNume':
+人工智能', 'BlockType': '概念', 'GPNume':
+腾讯概念', 'BlockType': '概念', 'GPNume':
+
+沪股通标的', 'BlockType': '风格', 'GPNume': '1763'},
+融资融券', 'BlockType': '风格', 'GPNume': '4354'},
+{'BlockCode': '880805.SH', 'BlockName': '保险重仓', 'BlockType': '风格', 'GPNume':
+'200'},
+{'BlockCode': '880878.SH', 'BlockName': '
+'220'},
+
+百元股', 'BlockType': '风格', 'GPNume':
+
+中证500', 'BlockType': '指数', 'GPNume': '500'},
+中证800', 'BlockType': '指数', 'GPNume': '800'},
+{'BlockName': '上证380', 'BlockType': '指数', 'GPNume': '380'},
+{'BlockName': '金融科技', 'BlockType': '指数', 'GPNume': '59'},
+{'BlockName': '科创100', 'BlockType': '指数', 'GPNume': '100'},
+{'BlockName': '科创信息', 'BlockType': '指数', 'GPNume': '50'}]
+{'BlockName': '
+{'BlockName': '
+
+←
+
+获取分红送配数据get_divid_factors
+
+获取新股申购信息get_ipo_info →
+
+通达信量化平台
+获取新股申购信息get_ipo_info
+获取今天及未来的新股或新发债申购信息
+py
+
+1
+
+get_ipo_info(ipo_type:int = 0,
+
+2
+
+ipo_date:int = 0):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+ipo_type
+
+Y
+
+str
+
+ipo_date
+
+Y
+
+int
+
+参数说明
+自定义板块简称
+自定义板块名称
+
+表示获取新股申购信息
+ipo_type=1 表示获取新发债信息
+ipo_type=2 表示获取新股和新发债信息
+ipo_date=0 表示只获取今天信息
+ipo_date=1 表示获取今天及以后信息
+ipo_type=0
+
+返回数据
+数据
+
+默认返回
+
+数据类型
+
+Code
+
+Y
+
+str
+
+Name
+
+Y
+
+str
+
+SGDate
+
+Y
+
+str
+
+SGPrice
+
+Y
+
+str
+
+SGCode
+
+Y
+
+str
+
+MaxSG
+
+Y
+
+str
+
+PE_Issue
+
+Y
+
+str
+
+数据说明
+证券代码
+证券名称
+申购日期
+申购价格
+申购代码
+申购上限
+发行市盈率
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+py
+
+3
+
+ipo_info = tq.get_ipo_info(ipo_type=2, ipo_date=1)
+
+4
+
+print(ipo_info)
+
+数据样本
+华润新能源', 'SGDate': '20260622', 'SGPrice':
+
+1
+
+[{'Code': '001248.SZ', 'Name': '
+
+2
+
+'0.00', 'SGCode': '1248', 'MaxSG': '0.00', 'PE_Issue': '0.00'},
+
+3
+
+{'Code': '920072.BJ', 'Name': '
+
+4
+
+'0.00', 'SGCode': '920072', 'MaxSG': '0.00', 'PE_Issue': '0.00'},
+
+5
+
+{'Code': '001399.SZ', 'Name': '
+
+6
+
+'10.12', 'SGCode': '1399', 'MaxSG': '21.85', 'PE_Issue': '25.45'},
+
+科莱瑞迪', 'SGDate': '20260615', 'SGPrice':
+惠科股份', 'SGDate': '20260612', 'SGPrice':
+臻宝科技', 'SGDate': '20260612', 'SGPrice':
+
+{'Code': '688797.SH', 'Name': '
+
+'44.56', 'SGCode': '787797', 'MaxSG': '0.90', 'PE_Issue': '31.31'},
+
+金帝转债', 'SGDate': '20260615', 'SGPrice':
+
+{'Code': '603270.SH', 'Name': '
+
+'100.00', 'SGCode': '754270', 'MaxSG': '0.00', 'PE_Issue': '0.00'},
+
+豪 转债', 'SGDate': '20260615', 'SGPrice':
+
+{'Code': '603809.SH', 'Name': ' 26
+
+'100.00', 'SGCode': '754809', 'MaxSG': '0.00', 'PE_Issue': '0.00'}]
+
+←
+
+获取股票所属板块get_relation
+
+获取每天的股本数据get_gb_info →
+
+通达信量化平台
+获取每天的股本数据get_gb_info
+获取指定股票的股本数据
+1
+
+py
+
+def get_gb_info(stock_code:str = '',
+
+2
+
+date_list: List[str] = [],
+
+3
+
+count: int = 1):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+date_list
+
+Y
+
+List[str]
+
+count
+
+Y
+
+int
+
+参数说明
+股票代码
+日期数组
+日期有效个数
+
+传入的日期须从小到大排序
+date_list有效数据个数须不小于count，且不能小于1
+date_list
+
+输出数据
+名称
+
+类型
+
+Date
+
+double
+
+Zgb
+
+double
+
+Ltgb
+
+double
+
+数值
+
+说明
+日期
+总股本
+流通股本
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+gb_info = tq.get_gb_info(stock_code = '688318.SH', date_list=
+
+4
+
+['20250101','20250601'], count=2)
+print(gb_info)
+
+数据样本
+
+py
+
+←
+
+1
+
+[{'Date': 20250101, 'Zgb': 182942480.0, 'Ltgb': 182942480.0},
+
+2
+
+{'Date': 20250601,
+
+'Zgb': 182942480.0, 'Ltgb': 182942480.0}]
+
+获取新股申购信息get_ipo_info
+
+根据时间段获取股本数据get_gb_info_by_date →
+
+通达信量化平台
+根据时间段获取股本数据get_gb_info_by_date
+获取指定股票的股本数据
+py
+
+def get_gb_info_by_date( stock_code:str = '',
+
+1
+2
+
+start_date: str = '',
+
+3
+
+end_date: str = ''):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+start_date
+
+Y
+
+str
+
+end_date
+
+Y
+
+str
+
+参数说明
+股票代码
+开始日期
+截止日期
+
+须通过客户端或refresh_kline下载对应股票的日K线数据
+输出数据
+名称
+
+类型
+
+Date
+
+double
+
+Zgb
+
+double
+
+Ltgb
+
+double
+
+数值
+
+说明
+日期
+总股本
+流通股本
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+gb_info_date = tq.get_gb_info_by_date(stock_code='688318.SH',
+
+4
+
+start_date='20260101', end_date='')
+print(gb_info_date)
+
+数据样本
+1
+
+[{'Date': 20260105, 'Ltgb': 256119392.0, 'Zgb': 256119392.0},
+
+2
+
+{'Date': 20260106, 'Ltgb': 256119392.0, 'Zgb': 256119392.0},
+
+py
+
+←
+
+3
+
+...,{'Date': 20260513, 'Ltgb': 256119392.0, 'Zgb': 256119392.0},
+
+4
+
+{'Date': 20260514, 'Ltgb': 256119392.0, 'Zgb': 256119392.0},
+
+5
+
+{'Date': 20260518, 'Ltgb': 256119392.0, 'Zgb': 256119392.0}]
+
+获取每天的股本数据get_gb_info
+
+获取专业财务数据get_financial_data →
+
+通达信量化平台
+财务类数据
+
+通达信量化平台
+获取专业财务数据get_financial_data
+根据股票，获取指定时间段内的专业财务数据，与基础财务数据不同，需要先在客户端中下载专业
+财务数据
+1
+
+py
+
+get_financial_data(stock_list: List[str] = [],
+
+2
+
+field_list: List[str] = [],
+
+3
+
+start_time: str = '',
+
+4
+
+end_time: str = '',
+
+5
+
+report_type: str = 'report_time') -> Dict:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+field_list
+
+Y
+
+List[str]
+
+start_time
+
+Y
+
+str
+
+end_time
+
+N
+
+str
+
+report_type
+
+N
+
+bool
+
+参数说明
+证券代码列表例如
+["600519.SH"]
+
+字段筛选，不能为空，字段名须与
+系统定义一致（如 FN193 ）
+起始时间，格式 YYYYMMDD ，如
+'20250101'
+
+结束时间，格式 YYYYMMDD ，为
+空表示无结束限制
+按截止日期还是公告日期筛选，可
+选值： 'announce_time' （按公
+告日期筛选）或 'tag_time' （按
+报告期筛选）
+
+输出数据
+名称
+
+类型
+
+announce_time
+
+int
+
+tag_time
+
+int
+
+FN1
+
+double
+
+FN2
+
+double
+
+FN3
+
+double
+
+数值
+
+说明
+公告日期
+报告期
+基本每股收益
+扣除非经常性损益每股收益
+每股未分配利润
+
+名称
+
+类型
+
+FN4
+
+double
+
+FN5
+
+double
+
+FN6
+
+double
+
+FN7
+
+double
+
+FN8
+
+double
+
+FN9
+
+double
+
+FN10
+
+double
+
+FN11
+
+double
+
+FN12
+
+double
+
+FN13
+
+double
+
+FN14
+
+double
+
+FN15
+
+double
+
+FN16
+
+double
+
+FN17
+
+double
+
+FN18
+
+double
+
+FN19
+
+double
+
+FN20
+
+double
+
+FN21
+
+double
+
+FN22
+
+double
+
+FN23
+
+double
+
+FN24
+
+double
+
+FN25
+
+double
+
+FN26
+
+double
+
+FN27
+
+double
+
+FN28
+
+double
+
+FN29
+
+double
+
+FN30
+
+double
+
+数值
+
+说明
+每股净资产
+每股资本公积金
+净资产收益率
+每股经营现金流量
+货币资金
+交易性金融资产
+应收票据
+应收账款
+预付款项
+其他应收款
+应收关联公司款
+应收利息
+应收股利
+存货
+其中：消耗性生物资产
+一年内到期的非流动资产
+其他流动资产
+流动资产合计
+可供出售金融资产
+持有至到期投资
+长期应收款
+长期股权投资
+投资性房地产
+固定资产
+在建工程
+工程物资
+固定资产清理
+
+名称
+
+类型
+
+FN31
+
+double
+
+FN32
+
+double
+
+FN33
+
+double
+
+FN34
+
+double
+
+FN35
+
+double
+
+FN36
+
+double
+
+FN37
+
+double
+
+FN38
+
+double
+
+FN39
+
+double
+
+FN40
+
+double
+
+FN41
+
+double
+
+FN42
+
+double
+
+FN43
+
+double
+
+FN44
+
+double
+
+FN45
+
+double
+
+FN46
+
+double
+
+FN47
+
+double
+
+FN48
+
+double
+
+FN49
+
+double
+
+FN50
+
+double
+
+FN51
+
+double
+
+FN52
+
+double
+
+FN53
+
+double
+
+FN54
+
+double
+
+FN55
+
+double
+
+FN56
+
+double
+
+FN57
+
+double
+
+数值
+
+说明
+生产性生物资产
+油气资产
+无形资产
+开发支出
+商誉
+长期待摊费用
+递延所得税资产
+其他非流动资产
+非流动资产合计
+资产总计
+短期借款
+交易性金融负债
+应付票据
+应付账款
+预收款项
+应付职工薪酬
+应交税费
+应付利息
+应付股利
+其他应付款
+应付关联公司款
+一年内到期的非流动负债
+其他流动负债
+流动负债合计
+长期借款
+应付债券
+长期应付款
+
+名称
+
+类型
+
+FN58
+
+double
+
+FN59
+
+double
+
+FN60
+
+double
+
+FN61
+
+double
+
+FN62
+
+double
+
+FN63
+
+double
+
+FN64
+
+double
+
+FN65
+
+double
+
+FN66
+
+double
+
+FN67
+
+double
+
+FN68
+
+double
+
+FN69
+
+double
+
+FN70
+
+double
+
+FN71
+
+double
+
+FN72
+
+double
+
+FN73
+
+double
+
+FN98
+
+double
+
+FN99
+
+double
+
+FN100
+
+double
+
+FN101
+
+double
+
+FN102
+
+double
+
+FN103
+
+double
+
+FN104
+
+double
+
+FN105
+
+double
+
+FN106
+
+double
+
+FN107
+
+double
+
+FN108
+
+double
+
+数值
+
+说明
+专项应付款
+预计负债 （非流动负债）
+递延所得税负债
+其他非流动负债
+非流动负债合计
+负债合计
+实收资本（或股本）
+资本公积
+盈余公积
+减：库存股
+未分配利润
+少数股东权益
+外币报表折算价差
+非正常经营项目收益调整
+所有者权益（或股东权益）合计
+负债和所有者（或股东权益）合计
+销售商品、提供劳务收到的现金
+收到的税费返还
+收到其他与经营活动有关的现金
+经营活动现金流入小计
+购买商品、接受劳务支付的现金
+支付给职工以及为职工支付的现金
+支付的各项税费
+支付其他与经营活动有关的现金
+经营活动现金流出小计
+经营活动产生的现金流量净额
+收回投资收到的现金
+
+名称
+
+类型
+
+FN109
+
+double
+
+FN110
+
+double
+
+FN111
+
+double
+
+FN112
+
+double
+
+FN113
+
+double
+
+FN114
+
+double
+
+FN115
+
+double
+
+FN116
+
+double
+
+FN117
+
+double
+
+FN118
+
+double
+
+FN119
+
+double
+
+FN120
+
+double
+
+FN121
+
+double
+
+FN122
+
+double
+
+FN123
+
+double
+
+FN124
+
+double
+
+FN125
+
+double
+
+FN126
+
+double
+
+FN127
+
+double
+
+FN128
+
+double
+
+FN129
+
+double
+
+FN130
+
+double
+
+FN131
+
+double
+
+FN132
+
+double
+
+FN133
+
+double
+
+数值
+
+说明
+取得投资收益收到的现金
+处置固定资产、无形资产和其他长期资
+产收回的现金净额
+处置子公司及其他营业单位收到的现金
+净额
+收到其他与投资活动有关的现金
+投资活动现金流入小计
+购建固定资产、无形资产和其他长期资
+产支付的现金
+投资支付的现金
+取得子公司及其他营业单位支付的现金
+净额
+支付其他与投资活动有关的现金
+投资活动现金流出小计
+投资活动产生的现金流量净额
+吸收投资收到的现金
+取得借款收到的现金
+收到其他与筹资活动有关的现金
+筹资活动现金流入小计
+偿还债务支付的现金
+分配股利、利润或偿付利息支付的现金
+支付其他与筹资活动有关的现金
+筹资活动现金流出小计
+筹资活动产生的现金流量净额
+四、汇率变动对现金的影响
+四(2)、其他原因对现金的影响
+五、现金及现金等价物净增加额
+期初现金及现金等价物余额
+期末现金及现金等价物余额
+
+名称
+
+类型
+
+FN134
+
+double
+
+FN135
+
+double
+
+FN136
+
+double
+
+FN137
+
+double
+
+FN138
+
+double
+
+FN139
+
+double
+
+FN140
+
+double
+
+FN141
+
+double
+
+FN142
+
+double
+
+FN143
+
+double
+
+FN144
+
+double
+
+FN145
+
+double
+
+FN146
+
+double
+
+FN147
+
+double
+
+FN148
+
+double
+
+FN149
+
+double
+
+FN150
+
+double
+
+FN151
+
+double
+
+FN152
+
+double
+
+FN153
+
+double
+
+FN154
+
+double
+
+FN155
+
+double
+
+FN156
+
+double
+
+FN157
+
+double
+
+FN158
+
+double
+
+FN159
+
+double
+
+数值
+
+说明
+净利润
+加：资产减值准备
+固定资产折旧、油气资产折耗、生产性
+生物资产折旧
+无形资产摊销
+长期待摊费用摊销
+处置固定资产、无形资产和其他长期资
+产的损失
+固定资产报废损失
+公允价值变动损失
+财务费用
+投资损失
+递延所得税资产减少
+递延所得税负债增加
+存货的减少
+经营性应收项目的减少
+经营性应付项目的增加
+其他
+经营活动产生的现金流量净额2
+债务转为资本
+一年内到期的可转换公司债券
+融资租入固定资产
+现金的期末余额
+减：现金的期初余额
+加：现金等价物的期末余额
+减：现金等价物的期初余额
+现金及现金等价物净增加额
+流动比率(非金融类指标)
+
+名称
+
+类型
+
+FN160
+
+double
+
+FN161
+
+double
+
+FN162
+
+double
+
+FN163
+
+double
+
+FN164
+
+double
+
+FN166
+
+double
+
+FN167
+
+double
+
+FN168
+
+double
+
+FN169
+
+double
+
+FN170
+
+double
+
+FN171
+
+double
+
+FN172
+
+double
+
+FN173
+
+double
+
+FN174
+
+double
+
+FN175
+
+double
+
+FN176
+
+double
+
+FN177
+
+double
+
+FN178
+
+double
+
+FN179
+
+double
+
+FN180
+
+double
+
+FN181
+
+double
+
+FN182
+
+double
+
+FN183
+
+double
+
+FN184
+
+double
+
+FN185
+
+double
+
+FN186
+
+double
+
+FN187
+
+double
+
+数值
+
+说明
+速动比率(非金融类指标)
+现金比率(%)(非金融类指标)
+利息保障倍数(非金融类指标)
+非流动负债比率(%)(非金融类指标)
+流动负债比率(%)(非金融类指标)
+有形资产净值债务率(%)
+权益乘数(%)
+股东的权益/负债合计(%)
+有形资产/负债合计(%)
+经营活动产生的现金流量净额/负债合计
+(%)(非金融类指标)
+EBITDA/负债合计(%)(非金融类指标)
+应收帐款周转率(非金融类指标)
+存货周转率(非金融类指标)
+运营资金周转率(非金融类指标)
+总资产周转率(非金融类指标)
+固定资产周转率(非金融类指标)
+应收帐款周转天数(非金融类指标)
+存货周转天数(非金融类指标)
+流动资产周转率(非金融类指标)
+流动资产周转天数(非金融类指标)
+总资产周转天数(非金融类指标)
+股东权益周转率(非金融类指标)
+营业收入增长率(%)
+净利润增长率(%)
+净资产增长率(%)
+固定资产增长率(%)
+总资产增长率(%)
+
+名称
+
+类型
+
+FN188
+
+double
+
+FN189
+
+double
+
+FN190
+
+double
+
+FN191
+
+double
+
+FN192
+
+double
+
+FN193
+
+double
+
+FN194
+
+double
+
+FN195
+
+double
+
+FN196
+
+double
+
+FN197
+
+double
+
+FN198
+
+double
+
+FN199
+
+double
+
+FN200
+
+double
+
+FN201
+
+double
+
+FN202
+
+double
+
+FN203
+
+double
+
+FN204
+
+double
+
+FN205
+
+double
+
+FN206
+
+double
+
+FN207
+
+double
+
+FN208
+
+double
+
+FN209
+
+double
+
+FN210
+
+double
+
+FN211
+
+double
+
+FN212
+
+double
+
+FN213
+
+double
+
+FN214
+
+double
+
+数值
+
+说明
+投资收益增长率(%)
+营业利润增长率(%)
+扣非每股收益同比(%)
+扣非净利润同比(%)
+暂无
+成本费用利润率(%)
+营业利润率(非金融类指标)
+营业税金率(非金融类指标)
+营业成本率(非金融类指标)
+净资产收益率
+投资收益率
+销售净利率(%)
+总资产净利率
+净利润率(非金融类指标)
+销售毛利率(%)(非金融类指标)
+三费比重(非金融类指标)
+管理费用率(非金融类指标)
+财务费用率(非金融类指标)
+扣除非经常性损益后的净利润
+息税前利润(EBIT)
+息税折旧摊销前利润(EBITDA)
+EBITDA/营业总收入(%)(非金融类指标)
+资产负债率(%)
+流动资产比率(非金融类指标)
+货币资金比率(非金融类指标)
+存货比率(非金融类指标)
+固定资产比率
+
+名称
+
+类型
+
+FN215
+
+double
+
+FN216
+
+double
+
+FN217
+
+double
+
+FN218
+
+double
+
+FN219
+
+double
+
+FN220
+
+double
+
+FN221
+
+double
+
+FN222
+
+double
+
+FN223
+
+double
+
+FN224
+
+double
+
+FN225
+
+double
+
+FN226
+
+double
+
+FN227
+
+double
+
+FN228
+
+double
+
+FN229
+
+double
+
+FN230
+
+double
+
+FN231
+
+double
+
+FN232
+
+double
+
+FN233
+
+double
+
+FN234
+
+double
+
+FN235
+
+double
+
+FN236
+
+double
+
+FN237
+
+double
+
+FN238
+
+double
+
+FN239
+
+double
+
+FN240
+
+double
+
+数值
+
+说明
+负债结构比(非金融类指标)
+归属于母公司股东权益/全部投入资本(%)
+股东的权益/带息债务(%)
+有形资产/净债务(%)
+每股经营性现金流(元)
+营业收入现金含量(%)(非金融类指标)
+经营活动产生的现金流量净额/经营活动
+净收益(%)
+销售商品提供劳务收到的现金/营业收入
+(%)
+
+经营活动产生的现金流量净额/营业收入
+资本支出/折旧和摊销
+每股现金流量净额(元)
+经营净现金比率（短期债务）(非金融类
+指标)
+经营净现金比率（全部债务）
+经营活动现金净流量与净利润比率
+全部资产现金回收率
+营业收入
+营业利润
+归属于母公司所有者的净利润
+扣除非经常性损益后的净利润
+经营活动产生的现金流量净额
+投资活动产生的现金流量净额
+筹资活动产生的现金流量净额
+现金及现金等价物净增加额
+总股本
+已上市流通A股
+已上市流通B股
+
+名称
+
+类型
+
+FN241
+
+double
+
+FN242
+
+double
+
+FN243
+
+double
+
+FN244
+
+double
+
+FN245
+
+double
+
+FN246
+
+double
+
+FN247
+
+double
+
+FN248
+
+double
+
+FN249
+
+double
+
+FN250
+
+double
+
+FN251
+
+double
+
+FN252
+
+double
+
+FN253
+
+double
+
+FN254
+
+double
+
+FN255
+
+double
+
+FN256
+
+double
+
+FN257
+
+double
+
+FN258
+
+double
+
+FN259
+
+double
+
+FN260
+
+double
+
+FN261
+
+double
+
+FN262
+
+double
+
+FN263
+
+double
+
+FN264
+
+double
+
+FN265
+
+double
+
+数值
+
+说明
+已上市流通H股
+股东人数(户)
+第一大股东的持股数量
+十大流通股东持股数量合计(股)
+十大股东持股数量合计(股)
+机构总量（家）
+机构持股总量(股)
+QFII机构数
+QFII持股量
+券商机构数
+券商持股量
+保险机构数
+保险持股量
+基金机构数
+基金持股量
+社保机构数
+社保持股量
+私募机构数
+私募持股量
+财务公司机构数
+财务公司持股量
+年金机构数
+年金持股量
+十大流通股东持有的流通A股合计(股)[
+注：2019半年报之前，季度报告中，若
+股东持股除了流通A股、还有流通B股或
+流通H股，指标264取的是包含流通B股或
+流通H股的流通股数]
+第一大流通股东持股量(股)
+
+名称
+
+类型
+
+FN266
+
+double
+
+FN267
+
+double
+
+FN268
+
+double
+
+FN269
+
+double
+
+FN270
+
+double
+
+FN271
+
+double
+
+FN272
+
+double
+
+FN273
+
+double
+
+FN274
+
+double
+
+FN275
+
+double
+
+FN276
+
+double
+
+FN277
+
+double
+
+FN278
+
+double
+
+FN279
+
+double
+
+FN280
+
+double
+
+FN281
+
+double
+
+FN282
+
+double
+
+FN283
+
+double
+
+FN284
+
+double
+
+FN285
+
+double
+
+数值
+
+说明
+自由流通股(股)[注：1.自由流通股=已流
+通A股-持股5%以上股东的流通A股（一
+致行动人算一起）；2.指标按报告期展
+示，新股在上市日的下个报告期才有数
+据]
+受限流通A股(股)
+一般风险准备(金融类)
+其他综合收益(利润表)
+综合收益总额(利润表)
+归属于母公司股东权益(资产负债表)
+银行机构数(家)(机构持股)
+银行持股量(股)(机构持股)
+一般法人机构数(家)(机构持股)
+一般法人持股量(股)(机构持股)
+近一年净利润(元)
+信托机构数(家)(机构持股)
+信托持股量(股)(机构持股)
+特殊法人机构数(家)(机构持股)
+特殊法人持股量(股)(机构持股)
+加权净资产收益率(每股指标)
+扣非每股收益(单季度财务指标)
+最近一年营业收入(万元)
+国家队持股数量（万股)[注：本指标统计
+包含汇金公司、证金公司、外汇管理局
+旗下投资平台、国家队基金、国开、养
+老金以及中科汇通等国家队机构持股数
+量]
+业绩预告-本期归母净利润同比增幅下
+限%[注：指标285至294展示未来一个报
+告期的数据。例，3月31日至6月29日这
+段时间内展示的是中报的数据；如果最
+新的财务报告后面有多个报告期的业绩
+预告/快报，只能展示最新的财务报告后
+面的一个报告期的业绩预告/快报]
+
+名称
+
+类型
+
+FN286
+
+double
+
+FN287
+
+double
+
+FN288
+
+double
+
+FN289
+
+double
+
+FN290
+
+double
+
+FN291
+
+double
+
+FN292
+
+double
+
+FN293
+
+double
+
+FN294
+
+double
+
+FN295
+
+double
+
+FN296
+
+double
+
+FN297
+
+double
+
+FN298
+
+double
+
+FN299
+
+double
+
+FN300
+
+double
+
+FN301
+
+double
+
+FN302
+
+double
+
+FN303
+
+double
+
+FN304
+
+double
+
+FN305
+
+double
+
+FN306
+
+double
+
+FN307
+
+double
+
+FN308
+
+double
+
+FN309
+
+double
+
+FN310
+
+double
+
+FN311
+
+double
+
+FN312
+
+double
+
+数值
+
+说明
+业绩预告-本期归母净利润同比增幅上
+限%
+业绩快报-归母净利润
+业绩快报-扣非净利润
+业绩快报-总资产
+业绩快报-净资产
+业绩快报-每股收益
+业绩快报-摊薄净资产收益率
+业绩快报-加权净资产收益率
+业绩快报-每股净资产
+应付票据及应付账款(资产负债表)
+应收票据及应收账款(资产负债表)
+递延收益(资产负债表-非流动负债)
+其他综合收益(资产负债表)
+其他权益工具(资产负债表)
+其他收益(利润表)
+资产处置收益(利润表)
+持续经营净利润(利润表)
+终止经营净利润(利润表)
+研发费用(利润表)
+其中:利息费用(利润表-财务费用)
+其中:利息收入(利润表-财务费用)
+近一年经营活动现金流净额
+近一年归母净利润(万元)
+近一年扣非净利润(万元)
+近一年现金净流量(万元)
+基本每股收益（单季度）
+营业总收入(单季度)(万元)
+
+名称
+
+类型
+
+FN313
+
+double
+
+FN314
+
+double
+
+FN315
+
+double
+
+FN316
+
+double
+
+FN317
+
+double
+
+FN318
+
+double
+
+FN319
+
+double
+
+FN320
+
+double
+
+FN321
+
+double
+
+FN322
+
+double
+
+FN323
+
+double
+
+FN324
+
+double
+
+FN325
+
+double
+
+FN326
+
+double
+
+FN327
+
+double
+
+数值
+
+说明
+业绩预告公告日期 [注：本指标展示未来
+一个报告期的数据。例,3月31日至6月29
+日这段时间内展示的是中报的数据；如
+果最新的财务报告后面有多个报告期的
+业绩预告/快报，只能展示最新的财务报
+告后面的一个报告期的业绩预告/快报的
+数据；公告日期格式为YYMMDD，例：
+190101代表2019年1月1日]
+财报公告日期 [注：日期格式为
+YYMMDD,例：190101代表2019年1月1
+日]
+业绩快报公告日期 [注：本指标展示未来
+一个报告期的数据。例,3月31日至6月29
+日这段时间内展示的是中报的数据；如
+果最新的财务报告后面有多个报告期的
+业绩预告/快报，只能展示最新的财务报
+告后面的一个报告期的业绩预告/快报的
+数据；公告日期格式为YYMMDD，例：
+190101代表2019年1月1日]
+近一年投资活动现金流净额(万元)
+业绩预告-本期归母净利润下限(万元)
+[注：指标317至318展示未来一个报告期
+的数据。例，3月31日至6月29日这段时
+间内展示的是中报的数据；如果最新的
+财务报告后面有多个报告期的业绩预告/
+快报，只能展示最新的财务报告后面的
+一个报告期的业绩预告/快报]
+业绩预告-本期归母净利润上限(万元)
+营业总收入TTM(万元)
+员工总数(人)
+每股企业自由现金流
+每股股东自由现金流
+近一年营业利润(万元)
+净利润（单季度）(万元)
+北上资金数（家）(机构持股）
+北上资金持股量（股）(机构持股）
+有息负债率
+
+名称
+
+类型
+
+FN328
+
+double
+
+FN329
+
+double
+
+FN330
+
+double
+
+FN331
+
+double
+
+FN332
+
+double
+
+FN333
+
+double
+
+FN334
+
+double
+
+FN335
+
+double
+
+FN336
+
+double
+
+FN337
+
+double
+
+FN338
+
+double
+
+FN339
+
+double
+
+FN340
+
+double
+
+FN341
+
+double
+
+FN342
+
+double
+
+FN343
+
+double
+
+FN344
+
+double
+
+FN345
+
+double
+
+FN346
+
+double
+
+FN347
+
+double
+
+FN348
+
+double
+
+FN349
+
+double
+
+数值
+
+说明
+营业成本（单季度）(万元)
+投入资本回报率（ROIC）(获利能力分析)
+业绩快报-营业收入（本期）
+业绩快报-营业收入（上期）
+业绩快报-营业利润（本期）
+业绩快报-营业利润（上期）
+业绩快报-利润总额（本期）
+业绩快报-利润总额（上期）
+审计意见 [注：0-未审计,1-无保留意见,2带强调事项段的无保留意见,3-保留意
+见,4-无法表示意见,5-否定意见及其他]
+股利支付率（%）
+近一年营业成本-非金融类(万元)
+近一年营业成本-金融类(万元)
+业绩预告-本期扣非后净利润下限(万元)
+业绩预告-本期扣非后净利润上限(万元)
+业绩预告-本期扣非后净利润同比增长下
+限（%）
+业绩预告-本期扣非后净利润同比增长上
+限（%）
+业绩预告-预告基本每股收益下限(元)
+业绩预告-预告基本每股收益上限(元)
+业绩预告-预告基本每股收益同比增长下
+限（%）
+业绩预告-预告基本每股收益同比增长上
+限（%）
+业绩预告-预告扣非后基本每股收益下限
+(元)
+业绩预告-预告扣非后基本每股收益上限
+(元)
+
+名称
+
+类型
+
+FN350
+
+double
+
+FN351
+
+double
+
+FN352
+
+double
+
+FN353
+
+double
+
+FN354
+
+double
+
+FN355
+
+double
+
+FN356
+
+double
+
+FN357
+
+double
+
+FN358
+
+double
+
+FN359
+
+double
+
+FN360
+
+double
+
+FN361
+
+double
+
+FN362
+
+double
+
+FN401
+
+double
+
+FN402
+
+double
+
+FN403
+
+double
+
+FN404
+
+double
+
+FN405
+
+double
+
+FN406
+
+double
+
+FN407
+
+double
+
+FN408
+
+double
+
+FN409
+
+double
+
+FN410
+
+double
+
+FN411
+
+double
+
+数值
+
+说明
+业绩预告-预告扣非后基本每股收益同比
+增长下限（%）
+业绩预告-预告扣非后基本每股收益同比
+增长上限（%）
+业绩预告-预告营业收入下限(万元)
+业绩预告-预告营业收入上限(万元)
+业绩预告-预告营业收入同比增长下限
+（%）
+业绩预告-预告营业收入同比增长上限
+（%）
+业绩预告-预告扣除后营业收入下限(万
+元)
+业绩预告-预告扣除后营业收入上限(万
+元)
+主营业务收入(内销)(万元)
+主营业务收入(外销)(万元)
+资管计划机构数(家)
+资管计划持股量(股)
+财务总评分
+专项储备(万元)
+结算备付金(万元)
+拆出资金(万元)
+发放贷款及垫款(万元)(流动资产科目)
+衍生金融资产(万元)
+应收保费(万元)
+应收分保账款(万元)
+应收分保合同准备金(万元)
+买入返售金融资产(万元)
+划分为持有待售的资产(万元)
+发放贷款及垫款(万元)(非流动资产科目)
+
+名称
+
+类型
+
+FN412
+
+double
+
+FN413
+
+double
+
+FN414
+
+double
+
+FN415
+
+double
+
+FN416
+
+double
+
+FN417
+
+double
+
+FN418
+
+double
+
+FN419
+
+double
+
+FN420
+
+double
+
+FN421
+
+double
+
+FN422
+
+double
+
+FN423
+
+double
+
+FN424
+
+double
+
+FN425
+
+double
+
+FN426
+
+double
+
+FN427
+
+double
+
+FN428
+
+double
+
+FN429
+
+double
+
+FN430
+
+double
+
+FN431
+
+double
+
+FN432
+
+double
+
+FN433
+
+double
+
+FN434
+
+double
+
+FN435
+
+double
+
+FN436
+
+double
+
+FN437
+
+double
+
+数值
+
+说明
+向中央银行借款(万元)
+吸收存款及同业存放(万元)
+拆入资金(万元)
+衍生金融负债(万元)
+卖出回购金融资产款(万元)
+应付手续费及佣金(万元)
+应付分保账款(万元)
+保险合同准备金(万元)
+代理买卖证券款(万元)
+代理承销证券款(万元)
+划分为持有待售的负债(万元)
+预计负债(万元) （流动负债）
+递延收益(万元)（流动负债科目，公告此
+科目的股票较少，大部分公司没有此数
+据）
+其中:优先股(万元)(非流动负债科目)
+永续债(万元)(非流动负债科目)
+长期应付职工薪酬(万元)
+其中:优先股(万元)(所有者权益科目)
+永续债(万元)(所有者权益科目)
+债权投资(万元)
+其他债权投资(万元)
+其他权益工具投资(万元)
+其他非流动金融资产(万元)
+合同负债(万元)
+合同资产(万元)
+其他资产(万元)
+应收款项融资(万元)
+
+名称
+
+类型
+
+FN438
+
+double
+
+FN439
+
+double
+
+FN440
+
+double
+
+FN441
+
+double
+
+FN442
+
+double
+
+FN443
+
+double
+
+FN444
+
+double
+
+FN445
+
+double
+
+FN446
+
+double
+
+FN447
+
+double
+
+FN448
+
+double
+
+FN449
+
+double
+
+FN450
+
+double
+
+FN451
+
+double
+
+FN452
+
+double
+
+FN453
+
+double
+
+FN501
+
+double
+
+FN502
+
+double
+
+FN503
+
+double
+
+FN504
+
+double
+
+FN505
+
+double
+
+FN506
+
+double
+
+FN507
+
+double
+
+FN508
+
+double
+
+FN509
+
+double
+
+数值
+
+说明
+使用权资产(万元)
+租赁负债(万元)
+发放贷款及垫款(万元) [注：金融类科目]
+应收款项(万元) [注：证券类指标]
+存出保证金(万元) [注：证券类指标]
+现金及存放中央银行款项(万元) [注：金
+融类科目]
+贵金属(万元) [注：金融类科目]
+以公允价值计量且其变动计入当期损益
+的金融资产(万元) [注：金融类科目]
+代理业务资产(万元) [注：金融类科目]
+应收款项类投资(万元) [注：金融类科目]
+同业及其它金融机构存放款项(万元)
+[注：金融类科目]
+以公允价值计量且其变动计入当期损益
+的金融负债(万元) [注：金融类科目]
+吸收存款(万元) [注：金融类科目]
+代理业务负债(万元) [注：金融类科目]
+其他负债(万元) [注：金融类科目]
+发放贷款及垫款(万元) [注：金融类科目]
+稀释每股收益(元)
+营业总收入(万元)
+汇兑收益(万元)
+其中:归属于母公司综合收益(万元)
+其中:归属于少数股东综合收益(万元)
+利息收入(万元)
+已赚保费(万元)
+手续费及佣金收入(万元)
+利息支出(万元)
+
+名称
+
+类型
+
+FN510
+
+double
+
+FN511
+
+double
+
+FN512
+
+double
+
+FN513
+
+double
+
+FN514
+
+double
+
+FN515
+
+double
+
+FN516
+
+double
+
+FN517
+
+double
+
+FN518
+
+double
+
+FN519
+
+double
+
+FN520
+
+double
+
+FN521
+
+double
+
+FN522
+
+double
+
+FN523
+
+double
+
+FN524
+
+double
+
+FN561
+
+double
+
+FN562
+
+double
+
+FN563
+
+double
+
+FN564
+
+double
+
+FN565
+
+double
+
+FN566
+
+double
+
+FN567
+
+double
+
+FN568
+
+double
+
+FN569
+
+double
+
+FN570
+
+double
+
+FN571
+
+double
+
+数值
+
+说明
+手续费及佣金支出(万元)
+退保金(万元)
+赔付支出净额(万元)
+提取保险合同准备金净额(万元)
+保单红利支出(万元)
+分保费用(万元)
+其中:非流动资产处置利得(万元)
+信用减值损失(万元)
+净敞口套期收益(万元)
+营业总成本(万元)
+信用减值损失(万元、2019格式)
+资产减值损失(万元、2019格式)
+其他业务收入(万元) [注：金融类科目]
+业务及管理费(万元) [注：金融类科目]
+其他业务成本(万元) [注：金融类科目]
+加:其他原因对现金的影响2(万元)(现金的
+期末余额科目)
+客户存款和同业存放款项净增加额(万元)
+向中央银行借款净增加额(万元)
+向其他金融机构拆入资金净增加额(万元)
+收到原保险合同保费取得的现金(万元)
+收到再保险业务现金净额(万元)
+保户储金及投资款净增加额(万元)
+处置以公允价值计量且其变动计入当期
+损益的金融资产净增加额(万元)
+收取利息、手续费及佣金的现金(万元)
+拆入资金净增加额(万元)
+回购业务资金净增加额(万元)
+
+名称
+
+类型
+
+FN572
+
+double
+
+FN573
+
+double
+
+FN574
+
+double
+
+FN575
+
+double
+
+FN576
+
+double
+
+FN577
+
+double
+
+FN578
+
+double
+
+FN579
+
+double
+
+FN580
+
+double
+
+FN581
+
+double
+
+FN582
+
+double
+
+FN583
+
+double
+
+FN584
+
+double
+
+数值
+
+说明
+客户贷款及垫款净增加额(万元)
+存放中央银行和同业款项净增加额(万元)
+支付原保险合同赔付款项的现金(万元)
+支付利息、手续费及佣金的现金(万元)
+支付保单红利的现金(万元)
+其中:子公司吸收少数股东投资收到的现
+金(万元)
+其中:子公司支付给少数股东的股利、利
+润(万元)
+投资性房地产的折旧及摊销(万元)
+信用减值损失(万元)
+使用权资产折旧（万元）
+收取利息和手续费净增加额(万元) [注：
+金融类科目]
+支付手续费的现金(万元) [注：金融类科
+目]
+发行债券支付的现金(万元) [注：金融类
+科目]
+
+返回值说明
+返回类型： dict ，键为股票代码（如 '600519.SH' ），值为 pandas.DataFrame。
+DataFrame 列：
+用户请求的财务字段（如 FN193 , FN194 … 大写）。
+announce_time ：公告日期，格式 YYYYMMDD 。
+tag_time ：报告期截止日期，格式 YYYYMMDD 。
+行：按时间顺序排列的财务数据记录。
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+fd = tq.get_financial_data(
+
+6
+
+stock_list=['688318.SH'],
+
+7
+
+field_list=['Fn193','Fn194','Fn195','Fn196','Fn197'],
+
+8
+
+start_time='20250101',
+
+py
+
+end_time='',
+
+9
+
+report_type='announce_time')
+
+10
+11
+
+print(fd)
+
+数据样本
+
+←
+
+1
+
+{'600519.SH':
+
+FN193
+
+FN194
+
+FN195 FN196
+
+2
+
+0
+
+164.82
+
+70.03
+
+15.76
+
+8.07
+
+36.99
+
+20250403
+
+FN197 announce_time
+20241231
+
+3
+
+1
+
+193.43
+
+73.19
+
+14.16
+
+8.03
+
+10.39
+
+20250430
+
+20250331
+
+4
+
+2
+
+166.69
+
+70.22
+
+15.60
+
+8.70
+
+19.02
+
+20250813
+
+20250630
+
+5
+
+3
+
+162.47
+
+69.67
+
+16.07
+
+8.71
+
+25.14
+
+20251030
+
+20250930}
+
+tag_time
+
+根据时间段获取股本数据get_gb_info_by_date 获取指定日期财务数据get_financial_data_by_date →
+
+通达信量化平台
+获取指定日期专业财务数据get_financial_data_by_date
+根据股票，获取指定日期的专业财务数据，与基础财务数据不同，需要先在客户端中下载专业财务
+数据
+1
+
+get_financial_data_by_date(stock_list: List[str] = [],
+
+2
+
+field_list: List[str] = [],
+
+3
+
+year: int = 0,
+
+4
+
+mmdd: int = 0) -> Dict:
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+field_list
+
+Y
+
+List[str]
+
+year
+
+Y
+
+int
+
+mmdd
+
+Y
+
+int
+
+参数说明
+证券代码列表
+字段筛选，不能为空（如
+FN193 ）
+指定年份
+指定月日
+
+如果year和mmdd都为0,表示最新的财报;
+如果year为0,mmdd为小于300的数字,表示最近一期向前推mmdd期的数据,如果是
+331,630,930,1231这些,表示最近一期的对应季报的数据;
+如果mmdd为0,year为一数字,表示最近一期向前推year年的同期数据;
+季报分界点为:0331,0630,0930,1231
+需要先在客户端中下载财务数据包
+输出数据
+同get_financial_data一样。
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+fd = tq.get_financial_data_by_date(
+
+6
+
+stock_list=['688318.SH'],
+
+7
+
+field_list=['Fn193','Fn194','Fn195','Fn196','Fn197'],
+
+8
+
+year=0,
+
+py
+
+9
+10
+
+mmdd=0)
+print(fd)
+
+数据样本
+
+←
+
+1
+
+{'600519.SH':
+
+2
+
+{'FN193': '162.47',
+
+3
+
+'FN194': '69.67',
+
+4
+
+'FN195': '16.07',
+
+5
+
+'FN196': '8.71',
+
+6
+
+'FN197': '25.14'}}
+
+获取专业财务数据get_financial_data
+
+获取股票交易数据get_gpjy_value →
+
+通达信量化平台
+获取股票交易数据get_gpjy_value
+根据股票，获取指定时间段内的股票交易数据，需要先在客户端中下载股票数据包
+1
+
+py
+
+get_gpjy_value(stock_list: List[str] = [],
+
+2
+
+field_list: List[str] = [],
+
+3
+
+start_time: str = '',
+
+4
+
+end_time: str = '') -> Dict:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+field_list
+
+Y
+
+List[str]
+
+start_time
+
+N
+
+str
+
+end_time
+
+N
+
+str
+
+参数说明
+证券代码列表
+字段筛选，不能为空
+起始时间
+结束时间
+
+输出数据
+名称
+
+类型
+
+GP01
+
+double
+
+GP02
+
+double
+
+GP03
+
+double
+
+GP04
+
+double
+
+GP05
+
+double
+
+GP06
+
+double
+
+GP07
+
+double
+
+GP08
+
+double
+
+GP09
+
+double
+
+数值
+
+说明
+股东人数 股东户数(户)
+龙虎榜 买入总计(万元) 卖出总计(万元)[注：该指标展示
+20230717日之后的数据]
+融资融券1 融资余额(万元) 融券余量(股)
+大宗交易 成交均价(元) 成交额(万元)
+增减持1 成交均价(元) 变动股数(股)
+陆股通持股量 持股数量(股)[注：该指标展示20170317日之后的
+数据]
+陆股通市场成交净额 陆股通市场净买入(万元)[注：官方只公布
+了每日的前十名数据]
+龙虎榜机构(卖方)数据 卖方机构个数 机构卖出金额(万元)
+龙虎榜机构(买方)数据 买方机构个数 机构买入金额(万元)
+
+名称
+
+类型
+
+GP10
+
+double
+
+GP11
+
+double
+
+GP12
+
+double
+
+GP13
+
+double
+
+GP14
+
+double
+
+GP15
+
+double
+
+GP16
+
+double
+
+GP17
+
+double
+
+GP18
+
+double
+
+GP19
+
+double
+
+GP20
+
+double
+
+GP21
+
+double
+
+GP22
+
+double
+
+GP23
+
+double
+
+GP24
+
+double
+
+GP25
+
+double
+
+GP26
+
+double
+
+GP27
+
+double
+
+GP28
+
+double
+
+GP29
+
+double
+
+数值
+
+说明
+近3月机构调研情况 近3月机构调研次数 近3月调研机构数量
+融资融券2 融资买入额(万元) 融资偿还额(万元)
+融资融券3 融券卖出量(股) 融券偿还量(股)
+融资融券4 融资净买入(万元) 融券净卖出(股)
+涨停数据 涨停金额(即板上成交,万元) 开板次数[注：该指标展示
+20180319日之后的数据]
+涨跌停 涨跌停状态 封单金额(万元)[注：涨停取2,曾涨停取1,跌停
+取-2,曾跌停取-1;跌停和曾跌停时,封单金额取负值 该指标展示
+20160926日之后的数据]
+总市值 总市值(万元)
+龙虎榜营业部数据 买入金额(万元) 卖出金额(万元)
+龙虎榜沪深股通数据 买入金额(万元) 卖出金额(万元)
+每周股票质押数量 无限售股份质押数(万) 有限售股份质押数(万)
+[注：该指标展示20180316日之后的数据]
+每周股票质押比例 质押比例(%)[注：该指标展示20180316日之
+后的数据]
+股息率 股息率(%)
+涨跌停 封成比 封流比[注：该指标展示20180319日之后的数据]
+拟增减持 拟增持数量(万股) 拟减持数量(万股)
+涨停 首次涨停时间 涨停最大封单额(万) [注：首次涨停时间展示
+20160301之后的数据，涨停最大封单额展示20200730之后的数
+据]
+盘前盘后成交量 开盘成交量(手) 盘后固定成交量(手) [注：盘后
+固定成交量只包含科创板和创业板]
+拟增减持金额 拟增持金额(万元) 拟减持金额(万元)
+人气排名 市场人气排名 行业人气排名 [注：行业排名为通达信
+二级研究行业排名]
+股票回购 回购均价(元) 回购数量(万股)
+证券信息 是否复牌日 是否更名日 [注：是否复牌日说明：0-不是
+复牌日，n(n>0)-停牌n个交易日之后的复牌日；是否更名日说
+明：0-未更名，1-常规更名，2-加ST，3-加*ST，4-摘帽，5-其
+他]
+
+名称
+
+类型
+
+数值
+
+GP30
+
+double
+
+GP31
+
+double
+
+GP32
+
+double
+
+GP33
+
+double
+
+GP34
+
+double
+
+GP35
+
+double
+
+GP36
+
+double
+
+GP37
+
+double
+
+GP38
+
+double
+
+GP39
+
+double
+
+GP40
+
+double
+
+GP41
+
+double
+
+GP42
+
+double
+
+GP43
+
+double
+
+GP44
+
+double
+
+GP45
+
+double
+
+GP46
+
+double
+
+说明
+分红送转 派息金额(万元) 送转数量(股) [注：对应展示日期为除
+权除息日]
+转融券 期初余量(股) 期末余量(股)
+转融券 融出数量(股) 融出市值(元)
+跌停数据 跌停金额(万元) 开板次数 [注：该指标展示20180319日
+之后的数据,暂无跌停金额数据]
+跌停 首次跌停时间 跌停最大封单额(万) [注：首次跌停时间展示
+20160301之后的数据，跌停最大封单额展示20200730之后的数
+据]
+增减持2 增持数量(股) 减持数量(股)
+竞价涨停买 买入金额(万元) [注：该指标展示20241101日之后的
+数据]
+龙虎榜2 上榜类型连续交易日(天) [注：该指标展示上榜类型中指
+代的连续交易日类型]
+涨停相关1 近1年涨停次数 近1年溢价5%次数
+涨停相关2 近1年首板封板率(%) 近1年次日红盘率(%)
+涨停相关3 近1年连板率(%) 最后涨停时间
+股权登记日 配股股权登记日
+龙虎榜专业机构买卖净额 买方成交净额(万元) 卖方成交净额(万
+元)
+配股实施 配股价格(元) 配股数量(万股)
+股票评分 综合评分
+评级系数 评级系数
+拟询价转让 拟转让股数(万股) 拟转让占总股本(%)
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+gp_val = tq.get_gpjy_value(
+
+6
+
+stock_list=['688318.SH'],
+
+7
+
+field_list=['GP1','GP2','GP3','GP4','GP5'],
+
+8
+
+start_time='20250101',
+end_time='20250102')
+
+py
+
+9
+
+print(gp_val)
+
+10
+
+数据样本
+1
+
+{'688318.SH': {'GP3': [{'Date': '20250102', 'Value': ['141405.89',
+'11113.00']}]}}
+
+←
+
+获取指定日期财务数据get_financial_data_by_date
+获取指定日期股票交易数据get_gpjy_value_by_date →
+
+通达信量化平台
+获取指定日期股票交易数据get_gpjy_value_by_date
+根据股票，获取指定时间段内的股票交易数据，需要先在客户端中下载股票数据包
+1
+
+def get_gpjy_value_by_date(stock_list: List[str] = [],
+
+2
+
+field_list: List[str] = [],
+
+3
+
+year: int = 0,
+
+4
+
+mmdd: int = 0) -> Dict:
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+field_list
+
+Y
+
+List[str]
+
+year
+
+Y
+
+int
+
+mmdd
+
+Y
+
+int
+
+参数说明
+证券代码列表
+字段筛选，不能为空
+指定年份
+指定月日
+
+如果year为0,mmdd为0,表示最新数据,mmdd为1,2,3...,表示倒数第2,3,4...个数据。
+需要先在客户端中下载股票数据包
+输出数据
+同get_gpjy_value一样。
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+gp_one = tq.get_gpjy_value_by_date(
+
+6
+
+stock_list=['688318.SH'],
+
+7
+
+field_list=['GP1','GP2','GP3','GP4','GP5'],
+
+8
+9
+
+数据样本
+
+year=0,mmdd=0)
+print(gp_one)
+
+py
+
+1
+
+{'688318.SH': {'GP1': ['24154.00', '0.00'], 'GP2': ['20574.12', '18728.85'],
+'GP3': ['140464.83', '55043.00'], 'GP4': ['169.80', '5943.00'], 'GP5':
+['103.00', '-7000.00']}}
+
+←
+
+获取股票交易数据get_gpjy_value
+
+获取板块交易数据get_bkjy_value →
+
+通达信量化平台
+获取板块交易数据get_bkjy_value
+根据板块代码，获取指定时间段内的板块交易数据，需要先在客户端中下载股票数据包
+1
+
+py
+
+get_bkjy_value(stock_list: List[str] = [],
+
+2
+
+field_list: List[str] = [],
+
+3
+
+start_time: str = '',
+
+4
+
+end_time: str = '') -> Dict:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+field_list
+
+Y
+
+List[str]
+
+start_time
+
+N
+
+str
+
+end_time
+
+N
+
+str
+
+参数说明
+证券代码列表
+字段筛选，不能为空
+起始时间
+结束时间
+
+输出数据
+名称
+
+类型
+
+BK5
+
+double
+
+BK6
+
+double
+
+BK7
+
+double
+
+BK8
+
+double
+
+BK9
+
+double
+
+BK10
+
+double
+
+BK11
+
+double
+
+BK12
+
+double
+
+BK13
+
+double
+
+数值
+
+说明
+市盈率TTM 整体法 算术平均
+市净率MRQ 整体法 算术平均
+市销率TTM 整体法 算术平均
+市现率TTM 整体法 算术平均
+涨跌数 上涨家数 下跌家数
+板块总市值(亿元) 整体法 算术平均
+板块流通市值(亿元) 整体法 算术平均
+涨停数 涨停家数 曾涨停家数[注：该指标展示20160926日之后的
+数据]
+跌停数 跌停家数 曾跌停家数[注：该指标展示20160926日之后的
+数据]
+
+名称
+
+类型
+
+数值
+
+BK14
+
+double
+
+BK15
+
+double
+
+BK16
+
+double
+
+BK17
+
+double
+
+BK18
+
+double
+
+BK19
+
+double
+
+说明
+涨停数据 市场高度(不含ST股和未开板新股) 2板及以上涨停个数
+(不含ST股和未开板新股)[注：该指标展示20180319日之后的数
+据]
+融资融券 沪深京融资余额(万元) 沪深京融券余额(万元)
+陆股通资金流入 沪股通流入金额(亿元) 深股通流入金额(亿元)
+[注：该指标展示20170320日之后的数据]
+开盘成交数 开盘成交额(万元) 开盘成交量(万股)
+板块股息率(%) 算数平均 整体法
+板块自由流通市值(亿元) 整体法 算术平均
+
+接口使用
+1
+
+from tqcenter import tq
+
+py
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+bk_data = tq.get_bkjy_value(stock_list=['880660.SH'],
+
+6
+
+field_list=['BK5','BK6','BK7','BK8','BK9'],
+
+7
+
+start_time='20250101',
+
+8
+
+end_time='20250102')
+
+9
+
+print(bk_data)
+
+数据样本
+1
+
+{'880660.SH': {'BK5': [{'Date': '20250102', 'Value': ['55.28', '55.50']}],
+
+2
+
+'BK6': [{'Date': '20250102', 'Value': ['4.62', '3.79']}],
+
+3
+
+'BK7': [{'Date': '20250102', 'Value': ['5.25', '8.22']}],
+
+4
+
+'BK8': [{'Date': '20250102', 'Value': ['46.52', '312.41']}],
+
+5
+
+'BK9': [{'Date': '20250102', 'Value': ['0.00', '35.00']}, {'Date': '20260130',
+'Value': ['10.00', '25.00']}]}}
+
+←
+
+获取指定日期股票交易数据get_gpjy_value_by_date
+获取指定日期板块交易数据get_bkjy_value_by_date →
+
+通达信量化平台
+获取指定日期板块交易数据get_bkjy_value_by_date
+根据板块代码，获取指定日期的板块交易数据，需要先在客户端中下载股票数据包
+1
+
+get_bkjy_value_by_date(stock_list: List[str] = [],
+
+2
+
+field_list: List[str] = [],
+
+3
+
+year: int = 0,
+
+4
+
+mmdd: int = 0) -> Dict:
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+field_list
+
+Y
+
+List[str]
+
+year
+
+Y
+
+int
+
+mmdd
+
+Y
+
+int
+
+参数说明
+证券代码列表
+字段筛选，不能为空
+指定年份
+指定月日
+
+如果year为0,mmdd为0,表示最新数据,mmdd为1,2,3...,表示倒数第2,3,4...个数据。
+需要先在客户端中下载股票数据包
+输出数据
+同get_bkjy_value一样。
+接口使用
+1
+
+py
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+bk_one = tq.get_bkjy_value_by_date(stock_list=['880660.SH'],
+field_list=
+
+6
+7
+
+['BK9','BK10','BK11','BK12','BK13'],
+year=0,mmdd=0)
+
+8
+print(bk_one)
+
+数据样本
+
+1
+
+{'880660.SH': {'BK10': ['6705.83', '191.60'], 'BK11': ['6183.65', '176.68'],
+'BK12': ['0.00', '0.00'], 'BK13': ['0.00', '0.00'], 'BK9': ['3.00', '31.00']}}
+
+←
+
+获取板块交易数据get_bkjy_value
+
+获取市场交易数据get_scjy_value →
+
+通达信量化平台
+获取市场交易数据
+获取指定时间段内的市场交易数据，需要先在客户端中下载股票数据包
+1
+
+py
+
+get_scjy_value(field_list: List[str] = [],
+
+2
+
+start_time: str = '',
+
+3
+
+end_time: str = '') -> Dict:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+field_list
+
+Y
+
+List[str]
+
+start_time
+
+N
+
+str
+
+end_time
+
+N
+
+str
+
+参数说明
+字段筛选，不能为空
+起始时间
+结束时间
+
+输出数据
+名称
+
+类型
+
+SC01
+
+double
+
+SC02
+
+double
+
+SC03
+
+double
+
+SC04
+
+double
+
+SC05
+
+double
+
+SC06
+
+double
+
+SC07
+
+double
+
+SC08
+
+double
+
+数值
+
+说明
+融资融券 沪深京融资余额(万元) 沪深京融券余额(万元)
+陆股通资金流入 沪股通流入金额(亿元) 深股通流入金额(亿元)
+[注：沪股通限制展示2000条数据，深股通展示自20161205以后
+的数据]
+沪深京涨停股个数 涨停股个数 曾涨停股个数 [注：该指标展示
+20160926日之后的数据]
+沪深京跌停股个数 跌停股个数 曾跌停股个数 [注：该指标展示
+20160926日之后的数据]
+上证50股指期货 净持仓(手)[注：该指标展示20171009日之后的
+数据]
+沪深300股指期货 净持仓(手) [注：该指标展示20171009日之后
+的数据]
+中证500股指期货 净持仓(手) [注：该指标展示20171009日之后
+的数据]
+ETF基金规模份额数据 ETF基金规模(亿份) ETF净申赎(亿份)
+
+名称
+
+类型
+
+SC09
+
+double
+
+SC10
+
+double
+
+SC11
+
+double
+
+SC12
+
+double
+
+SC13
+
+double
+
+SC14
+
+double
+
+SC15
+
+double
+
+SC16
+
+double
+
+SC17
+
+double
+
+SC18
+
+double
+
+SC19
+
+double
+
+SC20
+
+double
+
+SC21
+
+double
+
+SC22
+
+double
+
+SC23
+
+double
+
+SC24
+
+double
+
+SC25
+
+double
+
+SC26
+
+double
+
+SC27
+
+double
+
+SC28
+
+double
+
+SC29
+
+double
+
+数值
+
+说明
+沪月新开A股账户 沪月新开A股账户(万户)
+增减持统计 增持额(万元) 减持额(万元)[注：部分公司公告滞后,
+造成每天查看的数据可能会不一样]
+大宗交易 溢价的大宗交易额(万元) 折价的大宗交易额(万元)
+限售解禁 限售解禁计划额(亿元) 限售解禁股份实际上市金额(亿
+元)[注：该指标展示201802月之后的数据;部分股票的解禁日期延
+后，造成不同日期提取的某天的计划额可能不同]
+分红 市场总分红额(亿元)[注：除权派息日的A股市场总分红额]
+募资 市场总募资额(亿元)[注：发行日期/除权日期的首发、配股
+和增发的总募资额]
+打板资金 封板成功资金(亿元) 封板失败资金(亿元) [注：该指标
+展示20160926日之后的数据]
+龙虎榜 买入总金额(亿元) 卖出总金额(亿元)
+龙虎榜机构数据 买入金额(亿元) 卖出金额(亿元)
+龙虎榜营业部数据 买入金额(亿元) 卖出金额(亿元)
+龙虎榜沪深股通数据 买入金额(亿元) 卖出金额(亿元)
+陆股通净买入 沪股通净买入额(亿元) 深股通净买入额(亿元)
+每周无限售质押率 深市质押率(%) 沪市质押率(%)[注：该指标展
+示20180128日之后的数据]
+每周有限售质押率 深市质押率(%) 沪市质押率(%)[注：该指标展
+示20180128日之后的数据]
+连板家数 连板股个数(包含ST和未开板新股) 连板股个数(不含ST
+股和未开板新股）[注：该指标展示20180319日之后的数据]
+沪深京涨跌停股个数 涨停股个数(不含ST股和未开板新股) 跌停
+股个数（不含ST股）[注：该指标展示20160926日之后的数据]
+融资融券 沪深京融资买入额（万元）沪深京融券卖出量（万股）
+每周市场质押比 每周市场质押比例（%）[注：该指标展示
+20180316日之后的数据]
+央行公开市场净投放 央行公开市场净投放 (亿元)
+历史A股新高新低数 历史新高A股股票个数 历史新低A股股票个
+数(上市满一年的股票)
+120天A股新高新低数 120天新高A股股票个数 120天新低A股股
+票个数(上市满一年的股票)
+
+名称
+
+类型
+
+数值
+
+SC30
+
+double
+
+SC31
+
+double
+
+SC32
+
+double
+
+SC33
+
+double
+
+SC34
+
+double
+
+SC35
+
+double
+
+SC36
+
+double
+
+SC37
+
+double
+
+SC38
+
+double
+
+SC39
+
+double
+
+SC40
+
+double
+
+SC41
+
+double
+
+SC42
+
+double
+
+说明
+涨停数据 市场高度(不含ST股和未开板新股) 2板以上涨停个数(不
+含ST股和未开板新股)[注：该指标展示20180319日之后的数据]
+涨跌家数 涨家数（剔除停牌） 跌家数（剔除停牌）
+20天A股新高新低数 20天新高A股股票个数 20天新低A股股票个
+数(上市满一年的股票)
+市场总封单金额 涨停封单金额（亿元）跌停封单金额（亿元）
+[注：该指标展示20160926日之后的数据]
+涨跌股成交量 上涨股成交量(万手) 下跌股成交量(万手)
+涨停数据 换手板家数 回封率(%) [注：两个指标都剔除了未开板
+新股，换手板家数展示20190605日之后的数据，回封率展示
+20180927日之后的数据]
+曾涨跌停股个数 曾涨停股个数(剔除ST股和未开板新股) 曾跌停
+股个数(剔除ST股) [注：该指标展示20160926日之后的数据]
+转融券 融出市值(亿元) 期末余额(亿元)
+ETF基金规模金额数据 ETF基金规模(亿元) ETF净申赎(亿元)
+涨跌5%家数 涨幅大于等于5%家数 跌幅大于等于5%家数
+陆股通成交 陆股通成交总额(亿元) 陆股通成交总笔(万笔)
+中证1000股指期货 净持仓(手) [注：该指标展示20220722日之后
+的数据]
+沪深股通成交金额 沪股通成交总额(亿元) 深股通成交总额(亿元)
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+6
+7
+
+sc_val = tq.get_scjy_value(field_list=['SC1','SC2','SC3','SC4','SC5'],
+start_time='20250101',end_time='20250102')
+print(sc_val)
+
+数据样本
+1
+
+{'SC1': [{'Date': '20250102', 'Value': ['184712288.00', '999820.06']}],
+
+2
+
+'SC2': [{'Date': '20250102', 'Value': ['0.00', '0.00']}],
+
+3
+
+'SC3': [{'Date': '20250102', 'Value': ['67.00', '49.00']}],
+'SC4': [{'Date': '20250102', 'Value': ['32.00', '30.00']}],
+
+py
+
+4
+
+'SC5': [{'Date': '20250102', 'Value': ['-21204.00', '0.00']}]}
+
+5
+
+←
+
+获取指定日期板块交易数据get_bkjy_value_by_date
+获取指定日期市场交易数据get_scjy_value_by_date →
+
+通达信量化平台
+获取指定日期市场交易数据get_scjy_value_by_date
+获取指定时间的市场交易数据，需要先在客户端中下载股票数据包
+1
+
+get_scjy_value_by_date(field_list: List[str] = [],
+
+2
+
+year: int = 0,
+
+3
+
+mmdd: int = 0) -> Dict:
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+field_list
+
+Y
+
+List[str]
+
+year
+
+Y
+
+int
+
+mmdd
+
+Y
+
+int
+
+参数说明
+字段筛选，不能为空
+指定年份
+指定月日
+
+如果year为0,mmdd为0,表示最新数据,mmdd为1,2,3...,表示倒数第2,3,4...个数据。
+需要先在客户端中下载股票数据包
+输出数据
+同get_scjy_value一样。
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+sc_one = tq.get_scjy_value_by_date(field_list=
+
+6
+
+['SC6','SC7','SC8','SC9','SC10'],year=0,mmdd=0)
+print(sc_one)
+
+数据样本
+1
+
+{'SC10': ['0.00', '181415.13'], 'SC6': ['-30479.00', '0.00'], 'SC7':
+['-26449.00', '0.00'], 'SC8': ['31752.86', '84.22'], 'SC9': ['993000.00',
+'2900.00']}
+
+py
+
+←
+
+获取市场交易数据get_scjy_value
+
+获取股票的单个数据(非序列)get_gp_one_data →
+
+通达信量化平台
+获取股票的单个财务数据get_gp_one_data
+根据证券代码，获取股票的单个数据
+1
+
+py
+
+get_gp_one_data(stock_list: List[str] = [],
+field_list: List[str] = []) -> Dict:
+
+2
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_list
+
+Y
+
+List[str]
+
+field_list
+
+Y
+
+List[str]
+
+参数说明
+证券代码列表
+字段筛选，不能为空（如 GO47
+表示是第47号个股数据最新业绩
+预告 本期扣非净利润预计同比增
+减幅上限%）这个值，GO为gp
+one的首字母大写
+
+输出数据
+名称
+
+类型
+
+GO1
+
+double
+
+GO2
+
+double
+
+GO3
+
+double
+
+GO4
+
+double
+
+GO5
+
+double
+
+GO6
+
+double
+
+GO7
+
+double
+
+GO8
+
+double
+
+GO9
+
+double
+
+GO10
+
+double
+
+GO11
+
+double
+
+数值
+
+说明
+发行价(元)
+总发行数量(万股)
+一致预期目标价(元)[注：一致预期值均为近半年内各家机构预
+测数值的平均值]
+一致预期T年度
+一致预期T年每股收益
+一致预期T+1年每股收益
+一致预期T+2年每股收益
+一致预期T年净利润(万元)
+一致预期T+1年净利润(万元)
+一致预期T+2年净利润(万元)
+一致预期T年营业收入(万元)
+
+名称
+
+类型
+
+GO12
+
+double
+
+GO13
+
+double
+
+GO14
+
+double
+
+GO15
+
+double
+
+GO16
+
+double
+
+GO17
+
+double
+
+GO18
+
+double
+
+GO19
+
+double
+
+GO20
+
+double
+
+GO21
+
+double
+
+GO22
+
+double
+
+GO23
+
+double
+
+GO24
+
+double
+
+GO25
+
+double
+
+GO26
+
+double
+
+GO27
+
+double
+
+GO28
+
+double
+
+GO29
+
+double
+
+GO30
+
+double
+
+GO31
+
+double
+
+GO32
+
+double
+
+GO33
+
+double
+
+GO34
+
+double
+
+GO35
+
+double
+
+GO36
+
+double
+
+GO37
+
+double
+
+GO38
+
+double
+
+数值
+
+说明
+一致预期T+1年营业收入(万元)
+一致预期T+2年营业收入(万元)
+一致预期T年营业利润(万元)
+一致预期T+1年营业利润(万元)
+一致预期T+2年营业利润(万元)
+一致预期T年每股净资产(元)
+一致预期T+1年每股净资产(元)
+一致预期T+2年每股净资产(元)
+一致预期T年净资产收益率(%)
+一致预期T+1年净资产收益率(%)
+一致预期T+2年净资产收益率(%)
+一致预期T年PE
+一致预期T+1年PE
+一致预期T+2年PE
+最新解禁日(YYMMDD格式)
+最新解禁数量（万股）
+下一报告期的预约披露时间
+最新持股机构家数
+最新机构持股总量（万股）
+最新持股基金家数
+最新基金持股量（万股）
+最新总股本（万股）
+最新实际流通A股（万股）
+最新业绩预告 报告期(YYMMDD格式)
+最新业绩预告 本期归母净利润下限（万元）
+最新业绩预告 本期归母净利润上限（万元）
+最新业绩预告 本期归母净利润预计同比增减幅下限%
+
+名称
+
+类型
+
+GO39
+
+double
+
+GO40
+
+double
+
+GO41
+
+double
+
+GO42
+
+double
+
+GO43
+
+double
+
+GO44
+
+double
+
+GO45
+
+double
+
+GO46
+
+double
+
+GO47
+
+double
+
+数值
+
+说明
+最新业绩预告 本期归母净利润预计同比增减幅上限%
+最新业绩快报 报告期
+最新业绩快报 归母净利润（万元）
+分红募资 派现总额（万元）
+分红募资 募资总额（万元）
+最新业绩预告 本期扣非净利润下限(万元)
+最新业绩预告 本期扣非净利润上限(万元)
+最新业绩预告 本期扣非净利润预计同比增减幅下限%
+最新业绩预告 本期扣非净利润预计同比增减幅上限%
+
+接口使用
+1
+
+py
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+go = tq.get_gp_one_data(stock_list=['688318.SH'],field_list=
+
+6
+
+['GO1','GO2','GO3','GO4','GO5'])
+print(go)
+
+数据样本
+1
+
+{'688318.SH': {'GO1': '107.41', 'GO2': '1667.00', 'GO3': '0.00', 'GO4':
+'2025.00', 'GO5': '1.74'}}
+
+←
+
+获取指定日期市场交易数据get_scjy_value_by_date
+
+获取系统分类成份股get_stock_list →
+
+通达信量化平台
+分类/板块成份股
+
+通达信量化平台
+获取系统分类成份股get_stock_list
+根据入参返回指定证券代码列表
+def get_stock_list(market = None,
+
+1
+
+py
+
+list_type: int = 0) -> List:
+
+2
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+market
+
+Y
+
+str
+
+list_type
+
+Y
+
+int
+
+list_type = 0
+
+只返回代码，list_type = 1 返回代码和名称
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+
+参数说明
+指定代码
+返回数据类型
+
+默认为全部A股
+0:自选股 1:持仓股
+5:所有A股 6:上证指数成份股 7:上证主板 8:深证主板 9:重点指数
+10:所有板块指数 11:缺省行业板块 12:概念板块 13:风格板块 14:地区板块 15:缺省行业分
+类+概念板块 16:研究行业一级 17:研究行业二级 18:研究行业三级
+21:含H股 22:含可转债 23:沪深300 24:中证500 25:中证1000 26:国证2000 27:中证2000
+28:中证A500
+30:REITs 31:ETF基金 32:可转债 33:LOF基金 34:所有可交易基金 35:所有沪深基金
+36:T+0基金
+49:金融类企业 50:沪深A股 51:创业板 52:科创板 53:北交所
+101:国内期货 102:港股 103:美股
+91:ETF追踪的指数
+92:国内期货主力合约
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+stock_list = tq.get_stock_list('16')
+
+4
+
+print(stock_list)
+
+5
+6
+
+stock_list2 = tq.get_stock_list('16',list_type=1)
+
+7
+
+print(stock_list2)
+
+数据样本
+
+py
+
+1
+
+['881001.SH', '881006.SH', '881015.SH', '881061.SH', '881070.SH', '881090.SH',
+
+2
+
+'881105.SH', '881129.SH', '881150.SH', '881166.SH', '881183.SH', '881199.SH',
+
+3
+
+'881211.SH', '881230.SH', '881260.SH', '881286.SH', '881292.SH', '881318.SH',
+'881337.SH', '881351.SH', '881368.SH', '881385.SH', '881393.SH', '881405.SH',
+'881417.SH', '881426.SH', '881441.SH', '881458.SH', '881469.SH', '881477.SH']
+
+煤炭'}, {'Code': '881006.SH', 'Name': '石油'},
+{'Code': '881015.SH', 'Name': '化工'}, {'Code': '881061.SH', 'Name': '钢铁'},
+{'Code': '881070.SH', 'Name': '有色'}, {'Code': '881090.SH', 'Name': '建材'},
+{'Code': '881105.SH', 'Name': '农林牧渔'}, {'Code': '881129.SH', 'Name': '食品饮
+料'}, {'Code': '881150.SH', 'Name': '纺织服饰'}, {'Code': '881166.SH', 'Name': '轻
+工制造'}, {'Code': '881183.SH', 'Name': '家电'}, {'Code': '881199.SH', 'Name': '商
+贸'}, {'Code': '881211.SH', 'Name': '汽车'}, {'Code': '881230.SH', 'Name': '医药医
+疗'}, {'Code': '881260.SH', 'Name': '电力设备'}, {'Code': '881286.SH', 'Name': '国
+防军工'}, {'Code': '881292.SH', 'Name': '机械设备'}, {'Code': '881318.SH', 'Name':
+'电子'}, {'Code': '881337.SH', 'Name': '通信'}, {'Code': '881351.SH', 'Name': '计
+算机'}, {'Code': '881368.SH', 'Name': '传媒'}, {'Code': '881385.SH', 'Name': '银
+行'}, {'Code': '881393.SH', 'Name': '非银金融'}, {'Code': '881405.SH', 'Name': '建
+筑'}, {'Code': '881417.SH', 'Name': '房地产'}, {'Code': '881426.SH', 'Name': '社会
+服务'}, {'Code': '881441.SH', 'Name': '交通运输'}, {'Code': '881458.SH', 'Name':
+'公用事业'}, {'Code': '881469.SH', 'Name': '环保'}, {'Code': '881477.SH', 'Name':
+'综合'}]
+[{'Code': '881001.SH', 'Name': '
+
+←
+
+获取股票的单个数据(非序列)get_gp_one_data
+
+获取A股板块代码列表get_sector_list →
+
+通达信量化平台
+获取A股板块代码列表get_sector_list
+获取A股全部板块代码列表
+1
+
+def get_sector_list(list_type: int = 0) -> List:
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+参数说明
+返回数据类型
+
+list_type
+
+Y
+
+int
+
+list_type = 0
+
+只返回代码，list_type = 1 返回代码和名称
+
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+block_list = tq.get_sector_list()
+
+4
+
+print(block_list)
+
+5
+
+block_list2 = tq.get_sector_list(list_type = 1)
+
+6
+
+print(block_list2)
+
+注：此接口相当于 get_stock_list('10')
+数据样本
+1
+
+['880081.SH', '880082.SH', '880201.SH', '880202.SH', '880203.SH', '880204.SH',
+
+2
+
+'880205.SH', '880206.SH', '880207.SH', '880208.SH', ...]
+
+3
+
+轮动趋势'}, {'Code': '880082.SH', 'Name': '板块趋
+势'}, {'Code': '880201.SH', 'Name': '黑龙江'}, {'Code': '880202.SH', 'Name': '新疆
+板块'}, {'Code': '880203.SH', 'Name': '吉林板块'}, {'Code': '880204.SH', 'Name':
+'甘肃板块'}, {'Code': '880205.SH', 'Name': '辽宁板块'}, {'Code': '880206.SH',
+'Name': '青海板块'}, {'Code': '880207.SH', 'Name': '北京板块'},...]
+[{'Code': '880081.SH', 'Name': '
+
+←
+
+获取系统分类成份股get_stock_list
+
+获取板块成份股get_stock_list_in_sector →
+
+通达信量化平台
+获取板块成份股get_stock_list_in_sector
+根据板块代码获取其成份股列表
+py
+
+1
+
+def get_stock_list_in_sector(block_code: str,
+
+2
+
+block_type: int = 0,
+
+3
+
+list_type: int = 0) -> List:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+block_code
+
+Y
+
+str
+
+block_type
+
+N
+
+str
+
+list_type
+
+Y
+
+int
+
+参数说明
+板块代码
+板块类型
+返回数据类型
+
+获取A股成份股时支持板块名称或板块代码两种方式传入
+block_type=0 表示传入板块指数代码或板块指数名称（默认）
+block_type=1 表示传入自定义板块简称 需要是客户端中预先定义好自定义板块的简称 如果是ZXG
+表示是自选股；TJG表示是临时条件股
+list_type = 0 只返回代码，list_type = 1 返回代码和名称
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+#
+
+4
+
+block_stocks = tq.get_stock_list_in_sector('880081.SH')
+
+5
+
+print(block_stocks)
+
+6
+
+print(len(block_stocks))
+
+7
+
+通过板块代码获取成份股
+
+通过板块名获取成份股
+
+8
+
+#
+
+9
+
+block_stocks = tq.get_stock_list_in_sector('
+
+10
+
+print(block_stocks)
+
+11
+
+print(len(block_stocks))
+
+12
+
+钛金属')
+钛金属',list_type=1)
+
+13
+
+block_stocks2 = tq.get_stock_list_in_sector('
+
+14
+
+print(block_stocks2)
+
+15
+
+获取自定义板块成份股
+
+16
+
+#
+
+17
+
+block_stocks = tq.get_stock_list_in_sector('CSBK', block_type = 1)
+print(block_stocks)
+
+18
+
+print(len(block_stocks))
+
+19
+
+数据样本
+1
+
+['159922.SZ', '510500.SH', '512500.SH']
+
+2
+
+3
+
+3
+
+['000545.SZ', '000629.SZ', '000635.SZ', '000688.SZ', '000709.SZ', '000962.SZ',
+
+4
+
+'002136.SZ', '002140.SZ', '002145.SZ', '002149.SZ', '002167.SZ', '002386.SZ',
+
+5
+
+'002601.SZ', '002978.SZ', '300402.SZ', '300891.SZ', '600456.SH', '600727.SH',
+
+6
+
+'603067.SH', '603826.SH', '688122.SH', '688750.SH', '920068.BJ']
+
+7
+
+23
+
+金浦钛业'}, {'Code': '000629.SZ', 'Name': '钒钛股
+份'}, {'Code': '000635.SZ', 'Name': '英 力 特'}, {'Code': '000688.SZ', 'Name':
+'国城矿业'}, {'Code': '000709.SZ', 'Name': '河钢股份'}, {'Code': '000962.SZ',
+'Name': '东方钽业'}, {'Code': '002136.SZ', 'Name': '安 纳 达'}, {'Code':
+'002140.SZ', 'Name': '东华科技'}, {'Code': '002145.SZ', 'Name': '钛能化学'},
+{'Code': '002149.SZ', 'Name': '西部材料'}, {'Code': '002167.SZ', 'Name': '东方锆
+业'}, {'Code': '002386.SZ', 'Name': '天原股份'}, {'Code': '002601.SZ', 'Name': '龙
+佰集团'}, {'Code': '002978.SZ', 'Name': '安宁股份'}, {'Code': '300402.SZ', 'Name':
+'宝色股份'}, {'Code': '300891.SZ', 'Name': '惠云钛业'}, {'Code': '600456.SH',
+'Name': '宝钛股份'}, {'Code': '600727.SH', 'Name': '鲁北化工'}, {'Code':
+'603067.SH', 'Name': '振华股份'}, {'Code': '603389.SH', 'Name': '*ST亚振'},
+{'Code': '603826.SH', 'Name': '坤彩科技'}, {'Code': '688122.SH', 'Name': '西部超
+导'}, {'Code': '688750.SH', 'Name': '金天钛业'}, {'Code': '920068.BJ', 'Name': '天
+工股份'}]
+[{'Code': '000545.SZ', 'Name': '
+
+['600000.SH', '600004.SH', '600006.SH', '600007.SH', '600008.SH', '600009.SH',
+'600010.SH']
+7
+
+注意
+
+入参的板块只能是自定义板块或者15板块指数
+不支持系统 全部A股 沪深A股等板块
+get_stock_list_in_sector
+
+←
+
+获取A股板块代码列表get_sector_list
+
+获取自定义板块列表get_user_sector →
+
+通达信量化平台
+自选股/自定义板块
+
+通达信量化平台
+获取自定义板块列表get_user_sector
+获取自定义板块代码列表
+1
+
+py
+
+get_user_sector(cls) -> List:
+
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+user_list = tq.get_user_sector()
+
+4
+
+print(user_list)
+
+5
+
+print(len(user_list))
+
+数据样本
+1
+
+←
+
+测试板块'}, {'Code': 'CSBK2', 'Name': '测试板块2'}]
+
+[{'Code': 'CSBK', 'Name': '
+
+获取板块成份股get_stock_list_in_sector
+
+添加自定义板块成份股send_user_block →
+
+通达信量化平台
+添加自定义板块成份股
+往指定自定义板块中添加成份股
+1
+
+py
+
+send_user_block(block_code: str = '',
+
+2
+
+stock_list: List[str] = [],
+
+3
+
+show: bool = False) -> Dict:
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+block_code
+
+Y
+
+str
+
+stock_list
+
+Y
+
+List[str]
+
+show
+
+N
+
+bool
+
+参数说明
+自定义板块简称
+添加的自选股
+客户端是否切换至对应板块界面
+
+为客户端已有的自定义板块简称，如果不存在则无效果，空则为添加到临时条件股
+block_code存在，传入空列表则表示清空该板块所有股票，否则为添加新股票
+自选股的block_code为ZXG
+block_code
+
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+zxg_result = tq.send_user_block(block_code='CSBK', stock_list=
+["600000.SH","600004.SH","000001.SZ","000002.SZ"])
+
+数据样本
+1
+
+←
+
+{'Error': 'Add User Block Completed', 'ErrorId': '0', 'run_id': '1'}
+
+获取自定义板块列表get_user_sector
+
+清空自定义板块成份股clear_sector →
+
+通达信量化平台
+清空自定义板块成份股
+清空指定通达信客户端自定义板块的成份股
+1
+
+py
+
+clear_sector(block_code:str = ''):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+block_code
+
+Y
+
+str
+
+参数说明
+自定义板块简称
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+clear_ptr = tq.clear_sector(block_code='CSBK')
+
+4
+
+print(clear_ptr)
+
+py
+
+数据样本
+1
+
+清空CSBK板块成功",
+
+2
+
+"Error" : "
+
+3
+
+"ErrorId" : "0",
+
+4
+
+"run_id" : "1"
+
+5
+
+←
+
+{
+
+}
+
+添加自定义板块成份股send_user_block
+
+创建自定义板块create_sector →
+
+通达信量化平台
+创建自定义板块
+在通达信客户端中创建自定义板块
+1
+
+py
+
+create_sector(block_code:str = '',
+block_name:str = ''):
+
+2
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+block_code
+
+Y
+
+str
+
+block_name
+
+Y
+
+str
+
+参数说明
+自定义板块简称
+自定义板块名称
+
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+create_ptr = tq.create_sector(block_code='CSBK2', block_name='
+
+4
+
+print(create_ptr)
+
+测试板块2')
+
+数据样本
+1
+
+创建CSBK2板块成功",
+
+2
+
+"Error" : "
+
+3
+
+"ErrorId" : "0",
+
+4
+
+"run_id" : "1"
+
+5
+
+←
+
+{
+
+}
+
+清空自定义板块成份股clear_sector
+
+删除自定义板块delete_sector →
+
+通达信量化平台
+删除自定义板块
+删除通达信客户端中的自定义板块
+1
+
+py
+
+delete_sector(block_code:str = ''):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+block_code
+
+Y
+
+str
+
+参数说明
+自定义板块简称
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+delete_ptr = tq.delete_sector(block_code='CSBK')
+
+4
+
+print(delete_ptr)
+
+py
+
+数据样本
+1
+
+删除CSBK板块成功",
+
+2
+
+"Error" : "
+
+3
+
+"ErrorId" : "0",
+
+4
+
+"run_id" : "1"
+
+5
+
+←
+
+{
+
+}
+
+创建自定义板块create_sector
+
+重命名自定义板块rename_sector →
+
+通达信量化平台
+重命名自定义板块
+重命名通达信客户端中的自定义板块
+1
+
+py
+
+rename_sector(block_code:str = '',
+block_name:str = ''):
+
+2
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+block_code
+
+Y
+
+str
+
+block_name
+
+Y
+
+str
+
+参数说明
+自定义板块简称
+重命名后的自定义板块名称
+
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+rename_ptr = tq.rename_sector(block_code='CSBK', block_name='
+
+4
+
+print(rename_ptr)
+
+测试板块重命名')
+
+数据样本
+1
+
+重命名CSBK板块成功",
+
+2
+
+"Error" : "
+
+3
+
+"ErrorId" : "0",
+
+4
+
+"run_id" : "1"
+
+5
+
+←
+
+{
+
+}
+
+删除自定义板块delete_sector
+
+跟踪指数的ETF信息get_trackzs_etf_info →
+
+通达信量化平台
+可转债/期货数据
+
+ETF/
+
+通达信量化平台
+获取跟踪指数的ETF信息get_trackzs_etf_info
+根据指数代码获取跟踪它的ETF的信息
+def get_trackzs_etf_info(zs_code: str = ''):
+
+1
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+zs_code
+
+Y
+
+str
+
+参数说明
+指数代码
+
+输出数据
+名称
+
+类型
+
+Code
+
+str
+
+Name
+
+str
+
+NowPrice
+
+str
+
+PreClose
+
+str
+
+IOPV
+
+str
+
+Zgb
+
+str
+
+Sz
+
+str
+
+说明
+证券代码
+证券名称
+现价
+昨收
+净值
+净额（万份）
+规模（亿元）
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+py
+
+3
+4
+
+trackzs_etf_info = tq.get_trackzs_etf_info(zs_code='950162.CSI')
+
+5
+
+print(trackzs_etf_info)
+
+数据样本
+科创芯片设计ETF', 'NowPrice': '1.208', 'PreClose':
+
+1
+
+[{'Code': '589210.SH', 'Name': '
+
+2
+
+'1.192', 'IOPV': '1.2071', 'Zgb': '7646.90', 'Sz': '0.92'},
+
+科创芯片设计ETF', 'NowPrice': '0.954', 'PreClose':
+
+3
+
+{'Code': '589070.SH', 'Name': '
+
+4
+
+'0.942', 'IOPV': '0.9547', 'Zgb': '65129.30', 'Sz': '6.21'},
+
+5
+
+{'Code': '588780.SH', 'Name': '
+
+6
+
+'0.866', 'IOPV': '0.8756', 'Zgb': '106790.20', 'Sz': '9.34'},
+
+科创芯片设计ETF', 'NowPrice': '0.875', 'PreClose':
+
+科创芯片设计ETF', 'NowPrice': '0.969', 'PreClose':
+
+{'Code': '589170.SH', 'Name': '
+
+'0.956', 'IOPV': '0.9685', 'Zgb': '37890.90', 'Sz': '3.67'},
+
+芯设计PY', 'NowPrice': '0.000', 'PreClose':
+
+{'Code': '589250.SH', 'Name': '
+
+'0.000', 'IOPV': '0.0000', 'Zgb': '0.00', 'Sz': '0.00'},
+
+科创芯片设计ETF', 'NowPrice': '1.013', 'PreClose':
+
+{'Code': '589030.SH', 'Name': '
+
+'1.000', 'IOPV': '1.0130', 'Zgb': '48407.70', 'Sz': '4.90'}]
+
+←
+
+重命名自定义板块rename_sector
+
+可转债信息get_kzz_info →
+
+通达信量化平台
+获取可转债信息get_kzz_info
+根据可转债代码获取可转债信息
+1
+
+py
+
+def get_kzz_info(stock_code:str = '',
+
+2
+
+field_list: List[str] = []):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+field_list
+
+N
+
+List[str]
+
+输出数据
+名称
+
+类型
+
+SetCode
+
+str
+
+KZZCode
+
+str
+
+HSCode
+
+str
+
+ZGPrice
+
+str
+
+CurRate
+
+str
+
+RestScope
+
+str
+
+PutBack
+
+str
+
+ForceRedeem
+
+str
+
+ZGDate
+
+str
+
+EndPrice
+
+str
+
+EndDate
+
+str
+
+ZGRate
+
+str
+
+RealValue
+
+str
+
+说明
+证券市场
+可转债代码
+正股代码
+转股价格
+当期利率
+剩余规模(万)
+回售触发价
+强赎触发价
+转股日
+到期价
+到期日期
+转股比率%
+纯债价值
+
+参数说明
+可转债代码
+字段筛选，传空则返回全部
+
+名称
+
+类型
+
+ExpireYield
+
+str
+
+KZZScore
+
+str
+
+HSScore
+
+str
+
+RedeemDate
+
+str
+
+RedeemPrice
+
+str
+
+PutDate
+
+str
+
+PutPrice
+
+str
+
+ZGCode
+
+str
+
+AGPrice
+
+str
+
+KZZPrice
+
+str
+
+KZZYj
+
+str
+
+ZGValue
+
+str
+
+说明
+到期收益率%
+可转债评级
+主体评级
+赎回登记日期
+赎回价格
+回售申报起始日期
+回售价格
+转股代码
+正股当前价格
+可转债当前价格
+溢价率
+转股价值
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+kzz_info = tq.get_kzz_info(stock_code = '123039.SZ')
+
+4
+
+print(kzz_info)
+
+数据样本
+1
+
+{'CurRate': '2.80',
+
+2
+
+'EndDate': '20251226',
+
+3
+
+'EndPrice': '115.00',
+
+4
+
+'ExpireYield': '0.00',
+
+5
+
+'ForceRedeem': '37.90',
+
+6
+
+'HSCode': '300577',
+
+7
+
+'HSScore': 'A+',
+
+8
+
+'KZZCode': '123039',
+
+9
+
+'KZZScore': 'A+',
+
+10
+
+'PutBack': '20.41',
+
+11
+
+'PutDate': '0',
+
+12
+
+'PutPrice': '0.00',
+
+13
+
+'RealValue': '0.00',
+
+14
+
+'RedeemDate': '0',
+
+15
+
+'RedeemPrice': '0.00',
+
+16
+
+'RestScope': '22044.02',
+
+py
+
+←
+
+17
+
+'ZGCode': '123039',
+
+18
+
+'ZGDate': '20200702',
+
+19
+
+'ZGPrice': '29.15',
+
+20
+
+'ZGRate': '1.15',
+
+21
+
+'setcode': '0'}
+
+跟踪指数的ETF信息get_trackzs_etf_info
+
+格式化K线数据formula_format_data →
+
+通达信量化平台
+调用通达信公式
+
+通达信量化平台
+格式化K线数据formula_format_data
+格式化get_market_data获取的K线数据
+def formula_format_data(data_dict: Dict = {}):
+
+1
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+data_dict
+
+Y
+
+Dict
+
+参数说明
+get_market_data获取格式的K线Dict
+
+获取的K线数据不能直接用于设置公式参数，须先调用formula_format_data进行
+
+get_market_data
+
+格式化
+
+返回值为List[Dict]，其中Dict的Key须有["Amount", "Volume", "Close",
+"Open", "High", "Low"]，用户可以直接提供符合条件的List提供给tdx_formula_set_data。
+formula_format_data
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+test_md = tq.get_market_data(stock_list=['688318.SH'], count=5, period='1d')
+
+6
+
+format_md = tq.formula_format_data(test_md)
+
+7
+
+print(format_md)
+
+数据样本
+1
+
+{'688318.SH': [
+
+2
+
+{'Date': '2026-01-20 00:00:00', 'Amount': 33930.29, 'Volume': 2345401.0,
+
+3
+
+'Close': 144.4, 'Open': 146.5, 'High': 146.98, 'Low': 142.65},
+
+4
+
+{'Date': '2026-01-21 00:00:00', 'Amount': 35841.09, 'Volume': 2472760.0,
+
+5
+
+'Close': 144.77, 'Open': 144.49, 'High': 146.5, 'Low': 143.1},
+
+6
+
+{'Date': '2026-01-22 00:00:00', 'Amount': 41598.79, 'Volume': 2878793.0,
+'Close': 143.03, 'Open': 145.0, 'High': 147.0, 'Low': 142.5},
+{'Date': '2026-01-23 00:00:00', 'Amount': 47131.04, 'Volume': 3256538.0,
+'Close': 144.39, 'Open': 142.58, 'High': 146.88, 'Low': 142.58},
+{'Date': '2026-01-26 00:00:00', 'Amount': 54141.73, 'Volume': 3761141.0,
+'Close': 141.84, 'Open': 143.7, 'High': 146.77, 'Low': 141.8}]}
+
+py
+
+←
+
+可转债信息get_kzz_info
+
+向通达信公式设置数据formula_set_data →
+
+通达信量化平台
+向通达信公式设置数据formula_set_data
+在调用公式前须先设置公式参数，此接口与formula_set_data_info作用一样，会互相覆盖
+1
+
+def formula_set_data(stock_code: str = '',
+
+2
+
+stock_period: str = '1d',
+
+3
+
+stock_data: List = [],
+
+4
+
+count: int = 1,
+
+5
+
+dividend_type: int = 0):
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+stock_period
+
+Y
+
+str
+
+stock_data
+
+Y
+
+List
+
+count
+
+Y
+
+int
+
+dividend_type
+
+Y
+
+int
+
+参数说明
+股票代码
+K线周期
+指定格式的K线数据
+选取的K线数量
+复权类型
+
+需要先在下载对应的盘后数据
+dividend_type的取值为：0不复权 1前复权 2后复权
+count为设定stock_data中生效的K线数据，即stock_data中有效数据不能小于count
+count须大于0，且最大不超过24000
+设置的数据在断开连接前一直生效，后设置的数据会覆盖前面设置的数据
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+test_md = tq.get_market_data(stock_list=['688318.SH'], count=5, period='1d')
+
+6
+
+format_md = tq.tdx_formula_format_data(test_md)
+
+7
+
+formula_set_k = tq.formula_set_data(stock_code='688318.SH', stock_period='1d',
+
+8
+
+stock_data=format_md['688318.SH'], count=len(format_md['688318.SH']))
+print(formula_set_k)
+
+数据样本
+
+py
+
+1
+
+←
+
+向通达信公式系统设置数据成功！', 'run_id': '1'}
+
+{'ErrorId': '0', 'Msg': '
+
+格式化K线数据formula_format_data
+
+向通达信公式设置数据信息formula_set_data_info →
+
+通达信量化平台
+向通达信公式设置数据信息formula_set_data_info
+在调用公式前须先设置公式参数，此接口与formula_set_data作用一样，会互相覆盖
+def formula_set_data_info(stock_code: str = '',
+
+1
+2
+
+stock_period: str = '1d',
+
+3
+
+start_time: str = '',
+
+4
+
+end_time: str = '',
+
+5
+
+count: int = -1,
+
+6
+
+dividend_type: int = 0):
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+stock_code
+
+Y
+
+str
+
+stock_period
+
+Y
+
+str
+
+start_time
+
+Y
+
+str
+
+end_time
+
+Y
+
+str
+
+count
+
+Y
+
+int
+
+dividend_type
+
+Y
+
+int
+
+参数说明
+股票代码
+K线周期
+起始时间
+结束时间
+截取K线数量
+复权类型
+
+需要先在下载对应的盘后数据
+dividend_type的取值为：0不复权 1前复权 2后复权
+count为截取最新交易日开始往前的n条K线，当count参数不为0时，start_time和end_time失效
+count=-1时，获取所有数据，count=-2时，使用无序列数据
+当count为0时，start_time和end_time生效，指定K线为对应时间段内
+count最大值为24000，count为-1时为获取对应股票全部K线
+设置的数据在断开连接前一直生效，后设置的数据会覆盖前面设置的数据
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+formula_set_res =
+
+6
+
+tq.formula_set_data_info(stock_code='688318.SH',stock_period='1d',
+count=100,dividend_type=1)
+
+py
+
+print(formula_set_res)
+
+数据样本
+1
+
+←
+
+向通达信公式系统设置数据信息成功！', 'run_id': '1'}
+
+{'ErrorId': '0', 'Msg': '
+
+向通达信公式设置数据formula_set_data
+
+获取公式中的设置数据formula_get_data →
+
+通达信量化平台
+获取公式中的设置数据formula_get_data
+获取目前公式设置中的K线数据，使用前须先调用formula_set_data或formula_set_data_info设置公
+式数据
+1
+
+def formula_get_data(cls):
+
+py
+
+需要先在下载对应的盘后数据
+接口使用
+1
+
+from tqcenter import tq
+
+py
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+formula_set_res =
+
+6
+
+tq.formula_set_data_info(stock_code='688318.SH',stock_period='1d',
+
+7
+
+count=5,dividend_type=1)
+formula_kline = tq.formula_get_data()
+print(formula_kline)
+
+数据样本
+1
+
+{'Code': '688318.SH', 'Data': [
+
+2
+
+{'Amount': 339302880.0, 'Close': 144.4, 'Date': '2026-01-20 00:00:00', 'High':
+
+3
+
+146.98, 'Low': 142.65, 'Open': 146.5, 'Volume': 2345401.0},
+
+4
+
+{'Amount': 358410880.0, 'Close': 144.77, 'Date': '2026-01-21 00:00:00', 'High':
+
+5
+
+146.5, 'Low': 143.1, 'Open': 144.49, 'Volume': 2472760.0},
+
+6
+
+{'Amount': 415987840.0, 'Close': 143.03, 'Date': '2026-01-22 00:00:00', 'High':
+147.0, 'Low': 142.5, 'Open': 145.0, 'Volume': 2878793.0},
+{'Amount': 471310432.0, 'Close': 144.39, 'Date': '2026-01-23 00:00:00', 'High':
+146.88, 'Low': 142.58, 'Open': 142.58, 'Volume': 3256538.0},
+{'Amount': 541417344.0, 'Close': 141.84, 'Date': '2026-01-26 00:00:00', 'High':
+146.77, 'Low': 141.8, 'Open': 143.7, 'Volume': 3761141.0}], 'ErrorId': '0'}
+
+←
+
+向通达信公式设置数据信息formula_set_data_info 调用通达信公式进行计算formula_zb/xg/exp →
+
+通达信量化平台
+调用通达信公式进行计算formula_zb/xg/exp
+调用通达信三种类型的公式
+py
+
+调用技术指标公式
+
+1
+
+#
+
+2
+
+def formula_zb(formula_name: str = '',
+
+3
+
+formula_arg: str = '',
+
+4
+
+xsflag: int = -1):
+
+调用条件选股公式
+
+5
+
+#
+
+6
+
+def formula_xg(formula_name: str = '',
+
+7
+
+formula_arg: str = ''):
+
+调用专家系统公式
+
+8
+
+#
+
+9
+
+def formula_exp(formula_name: str = '',
+
+10
+
+formula_arg: str = ''):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+formula_name
+
+Y
+
+str
+
+formula_arg
+
+Y
+
+str
+
+xsflag
+
+Y
+
+int
+
+参数说明
+公式名称
+公式参数
+数据精度
+
+需要先在下载对应的盘后数据
+目前支持调用技术指标公式、条件选股公式和专家系统公式，调用公式时请注意对应不同的调用
+接口和公式名
+formula_arg格式为"arg1,arg2,arg3,arg4,arg5"，arg须为纯数字字符串，最多支持16个。
+xsflag小于0时返回默认精度，最大可返回8位小数。
+请注意一定要完整下载对应的盘后数据（或使用refresh_kline），得到结果与客户端不一致通常是
+由于设置的K线数量不足导致。
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+formula_set_res =
+
+6
+
+tq.formula_set_data_info(stock_code='688318.SH',stock_period='1d',
+
+7
+
+count=20,dividend_type=1)
+
+8
+
+#
+
+9
+
+formula_zb = tq.formula_zb(formula_name='MACD', formula_arg='12,26,9')
+
+技术指标公式MACD
+
+py
+
+10
+
+print(formula_zb)
+
+11
+
+#
+
+12
+
+formula_xg = tq.formula_xg(formula_name='UPN', formula_arg='3')
+
+13
+
+print(formula_xg)
+
+14
+
+#
+
+条件选股公式UPN
+专家系统公式CCI
+
+formula_exp = tq.formula_zb(formula_name='CCI', formula_arg='12')
+print(formula_exp)
+
+数据样本
+1
+
+{'Value': {'DEA': [0.0, 0.01, -0.01, 0.03, 0.29, 0.63, 0.93, 1.25, 1.77, 2.27,
+
+2
+
+2.72, 3.08, 3.4, 3.57, 3.62, 3.58, 3.46, 3.3, 3.09, 2.83], 'DIF': [0.0, 0.05,
+
+3
+
+-0.07, 0.19, 1.33, 1.96, 2.16, 2.52, 3.84, 4.25, 4.55, 4.54, 4.64, 4.27, 3.81,
+3.44, 2.97, 2.68, 2.21, 1.83], 'MACD': [0.0, 0.07, -0.13, 0.32, 2.07, 2.67,
+2.46, 2.54, 4.13, 3.98, 3.65, 2.91, 2.49, 1.39, 0.38, -0.29, -0.98, -1.25,
+-1.74, -2.02]}, 'ErrorId': '0'}
+{'Value': {'UP3': [None, None, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}, 'ErrorId': '0'}
+{'Value': {'ENTERLONG': [None, None, None, None, None, None, None, None, None,
+None, None, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 'EXITLONG': [None,
+None, None, None, None, None, None, None, None, None, None, 0.0, 0.0, 0.0, 0.0,
+0.0, 0.0, 0.0, 0.0, 0.0]}, 'ErrorId': '0'}
+
+←
+
+获取公式中的设置数据formula_get_data
+
+批量调用通达信公式formula_process_mul_xg/zb →
+
+通达信量化平台
+批量调用通达信公式formula_process_mul_xg/zb/exp
+批量调用通达信公式无需使用formula_set_data和formula_set_data_info提前设置，
+formula_set_data和formula_set_data_info的设置也对批量调用不生效
+py
+
+批量调用选股公式
+
+1
+
+#
+
+2
+
+def formula_process_mul_xg(formula_name: str = '',
+
+3
+
+formula_arg: str = '',
+
+4
+
+return_count: int = 1,
+
+5
+
+return_date:bool = False,
+
+6
+
+stock_list: List[str] = [],
+
+7
+
+stock_period: str = '1d',
+
+8
+
+start_time: str = '',
+
+9
+
+end_time: str = '',
+
+10
+
+count: int = 0,
+
+11
+
+dividend_type: int = 0):
+
+批量调用指标公式
+
+12
+
+#
+
+13
+
+def formula_process_mul_zb(formula_name: str = '',
+
+14
+
+formula_arg: str = '',
+
+15
+
+xsflag: int = -1,
+
+16
+
+return_count: int = 1,
+
+17
+
+return_date:bool = False,
+
+18
+
+stock_list: List[str] = [],
+
+19
+
+stock_period: str = '1d',
+
+20
+
+start_time: str = '',
+
+21
+
+end_time: str = '',
+
+22
+
+count: int = 0,
+
+23
+
+dividend_type: int = 0):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+formula_name
+
+Y
+
+str
+
+formula_arg
+
+Y
+
+str
+
+xsflag
+
+Y
+
+int
+
+retrun_count
+
+Y
+
+int
+
+formula_arg
+
+Y
+
+bool
+
+stock_list
+
+Y
+
+List[str]
+
+stock_period
+
+Y
+
+str
+
+参数说明
+公式名称
+公式参数
+数据精度
+设置每个返回值的返回数
+设置是否返回日期
+股票代码列表
+K线周期
+
+参数
+
+是否必选
+
+参数类型
+
+start_time
+
+Y
+
+str
+
+end_time
+
+Y
+
+str
+
+count
+
+Y
+
+int
+
+dividend_type
+
+Y
+
+int
+
+参数说明
+起始时间
+结束时间
+截取K线数量
+复权类型
+
+需要先在下载对应的盘后数据
+dividend_type的取值为：0不复权 1前复权 2后复权
+count为截取最新交易日开始往前的n条K线，当count参数不为0时，start_time和end_time失效
+count=-1时，获取所有数据，count=-2时，使用无序列数据
+count=-1时如果 return_count=0，返回结果的日期区间受start_time和end_time限制
+当count为0时，start_time和end_time生效，指定K线为对应时间段内
+count最大值为24000，count为-1时为获取对应股票全部K线
+正常每个返回值的数据个数应该与count相同，但是return_count可以限制返回个数，去掉用不到
+的数据，以此提高能够返回的有效数据量；对于选股和多股指标排行场景，一般只需要返回最后
+一个数据进行判断股票是否选中或显示最后一个指标数据，return_count为1就可以。
+xsflag小于0时返回默认精度，最大可返回8位小数。
+请注意一定要完整下载对应的盘后数据（或使用refresh_kline），以及retrun_count设置正确，保
+证结果都能返回。
+得到结果与客户端不一致通常是由于设置的K线数量不足导致。
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+4
+
+tq.initialize(__file__)
+
+批量调用UPN 选股公式
+
+5
+
+#
+
+6
+
+mul_xg_res = tq.formula_process_mul_xg(
+
+7
+
+formula_name='UPN',
+
+8
+
+formula_arg='3',
+
+9
+
+return_count=3,
+
+10
+
+return_date=True,
+
+11
+
+stock_list=['688318.SH','600519.SH','000001.SZ'],
+
+12
+
+stock_period='1d',
+
+13
+
+count=5,
+dividend_type=1)
+
+14
+15
+16
+
+print(mul_xg_res)
+
+批量调用CYX 指标公式
+
+17
+
+#
+
+18
+
+mul_zb_res = tq.formula_process_mul_zb(
+
+19
+
+formula_name='CYX',
+
+20
+
+formula_arg='12',
+
+21
+
+return_count=3,
+
+22
+
+return_date=True,
+
+23
+
+stock_list=['688318.SH','600519.SH','000001.SZ'],
+
+24
+
+stock_period='1d',
+
+py
+
+25
+26
+27
+
+count=5,
+dividend_type=1)
+print(mul_zb_res)
+
+数据样本
+1
+
+{'000001.SZ': {'UP3': [{'Date': '20260203', 'Value': '0'}, {'Date': '20260204',
+
+2
+
+'Value': '0'}, {'Date': '20260205', 'Value': '0'}]},
+
+3
+
+'600519.SH': {'UP3': [{'Date': '20260203', 'Value': '0'}, {'Date': '20260204',
+
+4
+
+'Value': '1'}, {'Date': '20260205', 'Value': '1'}]},
+
+5
+
+'688318.SH': {'UP3': [{'Date': '20260203', 'Value': '0'}, {'Date': '20260204',
+
+6
+
+'Value': '0'}, {'Date': '20260205', 'Value': '0'}]}, 'ErrorId': '0'}
+
+7
+{'000001.SZ': {'NOTEXT1': [{'Date': '20260203', 'Value': '11.06'}, {'Date':
+'20260204', 'Value': '11.08'}, {'Date': '20260205', 'Value': '11.11'}],
+'NOTEXT2': [{'Date': '20260203', 'Value': '10.85'}, {'Date': '20260204',
+'Value': '10.91'}, {'Date': '20260205', 'Value': '10.96'}], 'OUTPUT1': ['
+
+行 深圳板块 跨境支付CIPS ']},
+
+全国性银
+
+'600519.SH': {'NOTEXT1': [{'Date': '20260203', 'Value': '1494.05'}, {'Date':
+'20260204', 'Value': '1529.53'}, {'Date': '20260205', 'Value': '1565.00'}],
+'NOTEXT2': [{'Date': '20260203', 'Value': '1446.08'}, {'Date': '20260204',
+'Value': '1480.54'}, {'Date': '20260205', 'Value': '1515.00'}], 'OUTPUT1': ['
+
+贵州板块 通达信88 白酒概念 ']},
+
+酿酒
+
+'688318.SH': {'NOTEXT1': [{'Date': '20260203', 'Value': '136.60'}, {'Date':
+'20260204', 'Value': '135.30'}, {'Date': '20260205', 'Value': '134.00'}],
+'NOTEXT2': [{'Date': '20260203', 'Value': '131.74'}, {'Date': '20260204',
+
+软件服
+
+'Value': '131.48'}, {'Date': '20260205', 'Value': '131.22'}], 'OUTPUT1': ['
+
+务 深圳板块 腾讯概念 华为鸿蒙 国产软件 互联金融 人工智能 ']}, 'ErrorId': '0'}
+
+←
+
+调用通达信公式进行计算formula_zb/xg/exp
+
+获取指定种类的公式列表formula_get_all →
+
+通达信量化平台
+获取指定种类的公式列表formula_get_all
+获取指定种类的公式列表
+py
+
+def formula_get_all(formula_type: int = 0):
+
+1
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+formula_type
+
+Y
+
+int
+
+0
+
+参数说明
+公式种类标识
+
+技术指标公式 1 条件选股公式 2 专家系统公式
+
+输出数据
+名称
+
+类型
+
+数值
+
+acCode
+
+Y
+
+str
+
+acName
+
+Y
+
+str
+
+isSys
+
+Y
+
+int
+
+说明
+公式代码
+公式名称
+是否为系统公式
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+
+formule_all = tq.formula_get_all(formula_type=0)
+
+5
+
+print(formule_all)
+
+数据样本
+1
+2
+3
+4
+5
+
+均线', 'isSys': 1},
+{'acCode': 'MA2', 'acName': '均线', 'isSys': 1},
+{'acCode': 'ABI', 'acName': '绝对广量指标', 'isSys': 1},
+{'acCode': 'ADL', 'acName': '腾落指标', 'isSys': 1},
+{'acCode': 'ADR', 'acName': '涨跌比率', 'isSys': 1},...]
+[{'acCode': 'MA', 'acName': '
+
+py
+
+←
+
+批量调用通达信公式formula_process_mul_xg/zb
+
+获取指定公式信息formula_get_info →
+
+通达信量化平台
+获取指定公式信息formula_get_info
+获取指定公式信息
+def formula_get_info(formula_type: int = 0, formula_code: str = ''):
+
+1
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+formula_type
+
+Y
+
+int
+
+formula_code
+
+Y
+
+int
+
+0
+
+技术指标公式 1 条件选股公式 2 专家系统公式
+
+输出数据
+名称
+
+类型
+
+数值
+
+acCode
+
+Y
+
+str
+
+acName
+
+Y
+
+str
+
+isSys
+
+Y
+
+int
+
+ParaNum
+
+Y
+
+int
+
+Para
+
+Y
+
+Set
+
+ParaName
+
+Y
+
+Set
+
+Min
+
+Y
+
+Set
+
+Max
+
+Y
+
+Set
+
+Default
+
+Y
+
+Set
+
+LineNum
+
+Y
+
+int
+
+Line
+
+Y
+
+Set
+
+LineName
+
+Y
+
+Set
+
+接口使用
+
+说明
+公式代码
+公式名称
+是否为系统公式
+入参数量
+公式入参参数
+公式入参名称
+公式入参最小值
+公式入参最大值
+公式入参默认值
+出参数量
+公式出参参数
+公式出参名称
+
+参数说明
+公式种类标识
+公式代码
+
+py
+
+1
+
+py
+
+from tqcenter import tq
+
+2
+3
+
+tq.initialize(__file__)
+
+4
+
+formule_all = tq.formula_get_all(formula_type=0)
+
+5
+
+print(formule_all)
+
+数据样本
+
+←
+
+1
+
+{'acCode': 'MACD',
+
+2
+
+'acName': '
+
+3
+
+'isSys': 1,
+
+4
+
+'ParaNum': 3,
+
+5
+
+'Para': [
+
+6
+
+{'ParaName': 'SHORT','Min': '2.0000','Max': '200.0000','Default': '12.0000'},
+
+7
+
+{'ParaName': 'LONG','Min': '2.0000', 'Max': '200.0000', 'Default': '26.0000'},
+
+8
+
+{'ParaName': 'MID', 'Min': '2.0000', 'Max': '200.0000', 'Default': '9.0000'}],
+
+9
+
+'LineNum': 3,
+
+10
+
+'Line': [{'LineName': 'DIF'}, {'LineName': 'DEA'}, {'LineName': 'MACD'}]}
+
+平滑异同平均线',
+
+获取指定种类的公式列表formula_get_all
+
+获取资金账户句柄stock_account →
+
+通达信量化平台
+交易函数
+
+通达信量化平台
+获取资金账户句柄
+获取指定资金账户的句柄
+py
+
+def stock_account(account:str = '',
+
+1
+
+account_type: str = 'stock') -> int:
+
+2
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+account
+
+Y
+
+str
+
+account_type
+
+Y
+
+str
+
+参数说明
+资金账号
+账号类型
+
+获取句柄须先在客户端登陆指定账号
+返回值大于或等于0时为有效句柄，小于0时为无效句柄
+涉及到交易函数的调用前，必须要先使用stock_account函数得到account句柄
+account为空时，默认为当前登陆账户
+account_type当前可选：'STOCK' 股票交易, 'CREDIT' 信用交易 'FUTURE' 期货交易 'OPTION' 期权
+交易。如果不设成参数，就是'STOCK'
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+myAccount = tq.stock_account(account="1190008847", account_type="STOCK")
+
+4
+
+print(myAccount)
+
+数据样本
+1
+
+←
+
+0
+
+获取指定公式信息formula_get_info
+
+查询账户资产query_stock_asset →
+
+通达信量化平台
+查询账户资产信息
+查询指定账户的今日委托信息
+py
+
+def query_stock_asset(account_id:int = -1):
+
+1
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+account_id
+
+Y
+
+int
+
+数据
+
+默认返回
+
+数据类型
+
+Currency
+
+Y
+
+str
+
+Balance
+
+Y
+
+str
+
+Cash
+
+Y
+
+str
+
+Asset
+
+Y
+
+str
+
+MarketValue
+
+Y
+
+str
+
+TotalFreeze
+
+Y
+
+str
+
+CloseProfit
+
+Y
+
+str
+
+CurrentEquity
+
+Y
+
+str
+
+PreviousEquity
+
+Y
+
+str
+
+ProfitLoss
+
+Y
+
+str
+
+TotalMargin
+
+Y
+
+str
+
+参数说明
+资金账号句柄
+
+返回数据
+数据说明
+币种
+余额
+可用余额
+资产
+总市值
+期货冻结资金
+期货平仓盈亏
+期货动态权益
+期货静态权益
+期货持仓盈亏
+期货持仓保证金
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+myAccount = tq.stock_account(account="1190008847", account_type="STOCK")
+
+4
+
+print(myAccount)
+
+py
+
+5
+
+zc_res = tq.query_stock_asset(account_id=myAccount)
+
+6
+
+print(zc_res)
+
+数据样本
+1
+
+人民币', 'Balance': '30234.070', 'Cash': '30234.070', 'Asset':
+
+{'Currency': '
+
+'1233041.070', 'MarketValue': '1201690.000', 'ErrorId': '0'}
+
+←
+
+获取资金账户句柄stock_account
+
+查询账户委托信息query_stock_orders →
+
+通达信量化平台
+查询账户委托信息
+查询指定账户的今日委托信息
+py
+
+1
+
+def query_stock_orders(account_id:int = -1,
+
+2
+
+stock_code: str = '',
+
+3
+
+cancelable_only: bool = False):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+account_id
+
+Y
+
+int
+
+stock_code
+
+Y
+
+str
+
+cancelable_only
+
+Y
+
+str
+
+参数说明
+资金账号句柄
+证券代码
+是否仅查询可撤委托（暂未生效）
+
+Status
+
+无效单(0)
+WTSTATUS_NOCJ 未成交(1)
+WTSTATUS_PARTCJ 部分成交(2)
+WTSTATUS_ALLCJ 全部成交(3)
+WTSTATUS_BCBC 部分成交部分撤单(4)
+WTSTATUS_ALLCD 全部撤单(5)
+委托查询只能查询当日委托
+WTSTATUS_NULL
+
+返回数据
+数据
+
+默认返回
+
+数据类型
+
+Wtbh
+
+Y
+
+str
+
+Code
+
+Y
+
+str
+
+Time
+
+Y
+
+str
+
+BSFlag
+
+Y
+
+int
+
+KPFlag
+
+Y
+
+int
+
+WTFS
+
+Y
+
+str
+
+Status
+
+Y
+
+int
+
+数据说明
+委托编号
+股票代码
+时间，HHMMSS
+买卖标志,0买 1卖 -1撤单
+开平标志，0开仓1平仓2平今
+市价方式，根据沪深市场不一样
+委托状态
+
+数据
+
+默认返回
+
+数据类型
+
+WtDate
+
+Y
+
+int
+
+CjPric
+
+Y
+
+str
+
+CJVol
+
+Y
+
+str
+
+WtPrice
+
+Y
+
+str
+
+WtVol
+
+Y
+
+str
+
+数据说明
+撤单标志，为1表示已撤,为2表示是夜盘单
+成交价
+成交数量 如果是撤,则为负值
+委托价
+委托数量 如果是撤,则为负值
+
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+3
+
+myAccount = tq.stock_account(account="1190008847", account_type="STOCK")
+
+4
+
+print(myAccount)
+
+5
+
+stock_orders = tq.query_stock_orders(account_id=myAccount, stock_code="")
+
+6
+
+print(stock_orders)
+
+数据样本
+1
+
+[{'Wtbh': '48957', 'Code': '688318.SH', 'Time': '93605', 'BSFlag': -1, 'KPFlag':
+
+2
+
+0, 'WTFS': 0, 'Status': 0, 'WtPrice': '125.000', 'CjPrice': '0.000', 'CjVol':
+'0', 'WtVol': '1000'},
+{'Wtbh': '58545', 'Code': '688318.SH', 'Time': '93853', 'BSFlag': -1, 'KPFlag':
+0, 'WTFS': 0, 'Status': 0, 'WtPrice': '125.000', 'CjPrice': '0.000', 'CjVol':
+'0', 'WtVol': '1000'}]
+
+←
+
+查询账户资产query_stock_asset
+
+查询账户持仓信息query_stock_positions →
+
+通达信量化平台
+查询账户持仓信息
+查询指定账户的持仓信息
+py
+
+def query_stock_positions(account_id:int = -1):
+
+1
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+account_id
+
+Y
+
+int
+
+数据
+
+默认返回
+
+数据类型
+
+Code
+
+Y
+
+str
+
+Cbj
+
+Y
+
+str
+
+TotalVol
+
+Y
+
+str
+
+CanUseVol
+
+Y
+
+str
+
+BuyPosition
+
+Y
+
+str
+
+BuyAvgPrice
+
+Y
+
+str
+
+BuyProfitLoss
+
+Y
+
+str
+
+SellPosition
+
+Y
+
+str
+
+SellAvgPrice
+
+Y
+
+str
+
+SellProfitLoss
+
+Y
+
+str
+
+TodayBuyPosition
+
+Y
+
+str
+
+TodaySellPosition
+
+Y
+
+str
+
+参数说明
+资金账号句柄
+
+返回数据
+数据说明
+证券代码
+成本价
+总持仓
+可用持仓
+多头持仓（期货或期权）
+多头持仓均价（期货或期权）
+多头持仓盈亏（期货或期权）
+空头持仓（期货或期权）
+空头持仓均价（期货或期权）
+空头持仓盈亏（期货或期权）
+当日买入持仓（期货或期权）
+当日卖出持仓（期货或期权）
+
+接口使用
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+py
+
+3
+
+myAccount = tq.stock_account(account="1190008847", account_type="STOCK")
+
+4
+
+print(myAccount)
+
+5
+
+stock_positions = tq.query_stock_positions(account_id=myAccount)
+
+6
+
+print(stock_positions)
+
+数据样本
+1
+
+[{'Code': '000001.SZ', 'Cbj': '10.693', 'TotalVol': '100', 'CanUseVol': '100'},
+
+2
+
+{'Code': '000501.SZ', 'Cbj': '8.663', 'TotalVol': '1000', 'CanUseVol': '1000'},
+
+3
+
+{'Code': '000716.SZ', 'Cbj': '7.832', 'TotalVol': '100', 'CanUseVol': '100'},
+
+4
+
+{'Code': '000800.SZ', 'Cbj': '6.642', 'TotalVol': '1000', 'CanUseVol': '1000'},
+
+5
+
+{'Code': '000858.SZ', 'Cbj': '102.939', 'TotalVol': '500', 'CanUseVol': '500'},
+
+6
+
+{'Code': '002029.SZ', 'Cbj': '6.106', 'TotalVol': '100', 'CanUseVol': '100'},
+
+7
+
+{'Code': '002174.SZ', 'Cbj': '7.233', 'TotalVol': '10000', 'CanUseVol':
+
+8
+
+'10000'},
+
+9
+
+{'Code': '002251.SZ', 'Cbj': '5.262', 'TotalVol': '100', 'CanUseVol': '100'},
+
+10
+
+{'Code': '002555.SZ', 'Cbj': '24.648', 'TotalVol': '100', 'CanUseVol': '100'},
+
+11
+
+{'Code': '002558.SZ', 'Cbj': '13.392', 'TotalVol': '100', 'CanUseVol': '100'},
+
+12
+
+{'Code': '002624.SZ', 'Cbj': '7.405', 'TotalVol': '10000', 'CanUseVol':
+
+13
+
+'10000'},
+
+14
+
+{'Code': '159850.SZ', 'Cbj': '0.609', 'TotalVol': '100000', 'CanUseVol':
+
+15
+
+'100000'},
+
+16
+
+{'Code': '160416.SZ', 'Cbj': '1.678', 'TotalVol': '100000', 'CanUseVol':
+'100000'},
+{'Code': '300459.SZ', 'Cbj': '3.351', 'TotalVol': '10000', 'CanUseVol':
+'10000'},
+{'Code': '603444.SH', 'Cbj': '163.975', 'TotalVol': '100', 'CanUseVol': '100'},
+{'Code': '688318.SH', 'Cbj': '117.425', 'TotalVol': '4000', 'CanUseVol':
+'4000'}]
+
+←
+
+查询账户委托信息query_stock_orders
+
+交易执行函数order_stock →
+
+通达信量化平台
+交易执行函数
+对指定品种执行买卖下单操作
+1
+
+py
+
+def order_stock(cls,
+
+2
+
+account_id:int = -1,
+
+3
+
+stock_code:str = '',
+
+4
+
+order_type:int = 0,
+
+5
+
+order_volume:int = 0,
+
+6
+
+price_type:int = 0,
+
+7
+
+price:float = 0.0,
+
+8
+
+notify:int = 0):
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+account_id
+
+Y
+
+int
+
+stock_code
+
+Y
+
+str
+
+order_type
+
+Y
+
+int
+
+order_volume
+
+Y
+
+int
+
+price_type
+
+Y
+
+int
+
+price
+
+Y
+
+float
+
+notify
+
+Y
+
+int
+
+参数说明
+资金账号句柄
+证券代码
+委托类型
+委托数量
+报价类型
+委托价格
+是否手动确认
+
+可选类型： STOCK_BUY买(0)，STOCK_SELL卖(1)，CREDIT_BUY担保品买入(0)，
+CREDIT_SELL担保品卖出(1) ，CREDIT_FIN_BUY融资买入(69)，CREDIT_SLO_SELL融券卖出(70)，
+CREDIT_COV_BUY(71)，CREDIT_STK_REPAY(76)，ETF相关，FUNTURE相关，OPTION相关
+price_type可选类型：PRICE_MY自填价格(0)，PRICE_SJ市价(1)，PRICE_ZTJ涨停价(2)，PRICE_DTJ
+跌停价(3)
+如果price_type为市价类型，具体是哪种市价，请在客户端->系统设置->参数中 进行设置
+order_type
+
+注：对于实盘交易账户是提示下单让用户确认。
+注：交易需满足交易所规则。对于沪深交易所可转债品种，不支持市价交易方式。
+实盘交易账户的自动下单请联系你的开户券商，开通并使用对应的支持TQ的版本。
+返回数据
+
+数据
+
+默认返回
+
+数据类型
+
+Value
+
+Y
+
+int
+
+Wtbh
+
+Y
+
+str
+
+Msg
+
+Y
+
+str
+
+数据说明
+成功标志，0失败，1待用户确认，2成功
+委托编号，只有成功时才会返回
+返回提示信息
+
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+from tqcenter import tqconst
+
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+myAccount = tq.stock_account(account="1190008847", account_type="STOCK")
+
+6
+
+print(myAccount)
+
+7
+
+order_res = tq.order_stock(account_id=myAccount,
+
+8
+
+stock_code="688318.SH",
+
+9
+
+order_type=tqconst.STOCK_BUY,
+
+10
+
+order_volume=200,
+
+11
+
+price_type=tqconst.PRICE_MY,
+price=160.0)
+
+12
+13
+
+print(order_res)
+
+数据样本
+1
+
+←
+
+已发送信号至客户端，待用户确认！', 'Value': 1}
+
+{'ErrorId': '0', 'Msg': '
+
+查询账户持仓信息query_stock_positions
+
+撤单cancel_order_stock →
+
+通达信量化平台
+撤单
+根据委托编号撤单
+1
+
+def cancel_order_stock(account_id:int = -1,
+
+2
+
+stock_code:str = '',
+
+3
+
+order_id:str = ''):
+
+py
+
+输入参数
+参数
+
+是否必选
+
+参数类型
+
+account_id
+
+Y
+
+int
+
+stock_code
+
+Y
+
+str
+
+order_id
+
+Y
+
+int
+
+参数说明
+资金账号句柄
+证券代码
+委托编号
+
+返回数据
+数据
+
+默认返回
+
+数据类型
+
+Value
+
+Y
+
+int
+
+Msg
+
+Y
+
+str
+
+数据说明
+成功标志，0失败，1成功
+返回提示信息
+
+撤单成功后Status状态会变成WTSTATUS_NULL无效单(0)、WTSTATUS_BCBC部分成交部分撤单(4)
+或WTSTATUS_ALLCD全部撤单(5)
+接口使用
+py
+
+1
+
+from tqcenter import tq
+
+2
+
+from tqcenter import tqconst
+
+3
+
+tq.initialize(__file__)
+
+4
+5
+
+myAccount = tq.stock_account(account="1190008847", account_type="STOCK")
+
+6
+
+print(myAccount)
+
+7
+8
+
+stock_orders = tq.query_stock_orders(account_id=myAccount, stock_code="")
+
+9
+
+print(stock_orders)
+
+10
+11
+12
+
+cancel_res = tq.cancel_order_stock(account_id=myAccount,
+stock_code=stock_orders[0]['Code'],
+order_id=stock_orders[0]['Wtbh'])
+
+13
+
+print(cancel_res)
+
+14
+
+数据样本
+1
+
+←
+
+{'Value': 1, 'ErrorId': '0', 'Msg': '
+
+交易执行函数order_stock
+
+提交撤单成功！'}
+
+HTTP
+
+方式调用 →
+
+通达信量化平台
+方式调用
+
+HTTP
+
+除了tqcenter的调用方式，也可以直接通过以下方式调用。
+POST http://127.0.0.1:17709/
+
+使用时需要先开启支持TQ的通达信客户端。
+method为TdxQuant中的函数方法，params为函数参数。
+例如：
+1
+
+{
+
+2
+
+"id":1,
+
+3
+
+"method": "get_market_data",
+
+4
+
+"params": {
+
+5
+
+"stock_list":["688318.SH"],
+
+6
+
+"count":5,
+
+7
+
+"dividend_type":"none",
+
+8
+
+"period":"1d"
+}
+
+9
+10
+
+}
+
+返回：
+1
+
+{
+
+2
+
+"id": 1,
+
+3
+
+"result": {
+
+4
+
+"ErrorId": "0",
+
+5
+
+"KlinePaged": true,
+
+6
+
+"KlineTotal": {
+"688318.SH": 5
+
+7
+8
+
+},
+
+9
+
+"Value": {
+
+10
+
+"688318.SH": {
+
+11
+
+"Amount": [
+
+12
+
+"61995.09",
+
+13
+
+"62455.38",
+
+14
+
+"59548.38",
+
+15
+
+"58073.54",
+"38680.98"
+
+16
+17
+
+],
+
+18
+
+"Close": [
+
+19
+
+"122.45",
+
+20
+
+"120.32",
+
+21
+
+"117.84",
+
+22
+
+"112.00",
+
+"82.70"
+
+23
+24
+
+],
+
+25
+
+"Date": [
+
+26
+
+"20260526",
+
+27
+
+"20260527",
+
+28
+
+"20260528",
+
+29
+
+"20260529",
+"20260605"
+
+30
+31
+
+],
+
+32
+
+"ErrorId": "0",
+
+33
+
+"ForwardFactor": [
+
+34
+
+"0.711862",
+
+35
+
+"0.711862",
+
+36
+
+"0.711862",
+
+37
+
+"0.711862",
+"1.000000"
+
+38
+39
+
+],
+
+40
+
+"High": [
+
+41
+
+"124.58",
+
+42
+
+"125.61",
+
+43
+
+"120.32",
+
+44
+
+"120.20",
+
+45
+
+"85.24"
+
+46
+
+],
+
+47
+
+"Low": [
+
+48
+
+"117.70",
+
+49
+
+"120.02",
+
+50
+
+"113.88",
+
+51
+
+"111.25",
+"81.22"
+
+52
+53
+
+],
+
+54
+
+"Open": [
+
+55
+
+"119.71",
+
+56
+
+"121.28",
+
+57
+
+"120.30",
+
+58
+
+"118.19",
+
+59
+
+"84.00"
+
+60
+
+],
+
+61
+
+"Time": [
+
+62
+
+"0",
+
+63
+
+"0",
+
+64
+
+"0",
+
+65
+
+"0",
+"0"
+
+66
+67
+
+],
+
+68
+
+"VolInStock": [
+
+69
+
+"0",
+
+70
+
+"0",
+
+71
+
+"0",
+
+72
+
+"0",
+
+73
+
+"0"
+
+74
+
+],
+
+75
+
+"Volume": [
+
+76
+
+"5086297.00",
+
+77
+
+"5081741.00",
+
+78
+
+"5104389.00",
+
+"5017581.00",
+
+79
+
+"4627644.00"
+
+80
+]
+
+81
+}
+
+82
+83
+
+},
+
+84
+
+"has_more": false,
+
+85
+
+"next_stock_page_index": 1,
+
+86
+
+"stock_page_count": 1,
+
+87
+
+"stock_page_index": 0,
+
+88
+
+"stock_page_size": 100,
+"stock_total": 1
+
+89
+}
+
+90
+91
+
+←
+
+}
+
+撤单cancel_order_stock
+
+平台调用 →
+
+AI
+
+通达信量化平台
+提供2个Skills包供各智能体平台安装
+通达信TQ-Python
+
+https://www.tdx.com.cn/products/autoup/skills/tdx-quant.zip
+
+通达信TQ-Local
+
+https://www.tdx.com.cn/products/autoup/skills/tdx-tq-local.zip
+
+将以上zip解压后，在WorkBuddy,CodeX或TdxClaw等AI平台中安装。
+使用时需要先开启支持TQ的通达信客户端。
+
+通达信TQ-Python介绍
+AI
+
+会根据此Skill编写Python代码文件并执行。
+
+通达信TQ-Local调用介绍
+AI
+
+平台中直接调取本地的TQ数据，不需要编写Python代码。
+
+直接告诉AI安装这2个技能
+
+例如：
+
+使用通达信TQ-Local技能
+
+例如：
+
+← HTTP
+
+方式调用
+
+常量枚举 →
+
+通达信量化平台
+市场类型
+名称
+
+类型
+
+数值
+
+.SZ
+
+int
+
+0
+
+.SH
+
+int
+
+1
+
+.BJ
+
+int
+
+2
+
+.NQ
+
+int
+
+44
+
+.SHO
+
+int
+
+8
+
+.SZO
+
+int
+
+9
+
+.HK
+
+int
+
+31
+
+.US
+
+int
+
+74
+
+.CSI
+
+int
+
+62
+
+.CNI
+
+int
+
+102
+
+.HG
+
+int
+
+38
+
+.CFF
+
+int
+
+47
+
+.CZC
+
+int
+
+28
+
+.DCE
+
+int
+
+29
+
+.SHF
+
+int
+
+30
+
+.GFE
+
+int
+
+66
+
+.INE
+
+int
+
+30
+
+.HI
+
+int
+
+27
+
+.OF
+
+int
+
+33
+
+.CFFO
+
+int
+
+7
+
+.CZCO
+
+int
+
+4
+
+.DCEO
+
+int
+
+5
+
+.SHFO
+
+int
+
+6
+
+说明
+深圳交易所
+上海交易所
+北京交易所
+新三板
+上海个股期权
+深圳个股期权
+香港交易所
+美国股票
+中证指数
+国证指数
+国内宏观指标
+中金期货
+郑州期货
+大连期货
+上海期货
+广州期货
+上海能源
+港股指数
+开放式基金净值
+中金所期权
+郑州期货期权
+大连期货期权
+上海期货期权
+
+名称
+
+类型
+
+数值
+
+.GFEO
+
+int
+
+67
+
+.QHZ
+
+int
+
+42
+
+dividend_type
+
+复权类型
+
+名称
+
+类型
+
+数值
+
+type
+
+str
+
+none
+
+type
+
+str
+
+front
+
+type
+
+str
+
+back
+
+period
+
+说明
+广州期货期权
+期货类指数
+说明
+不复权
+前复权
+后复权
+
+周期入参类型
+
+名称
+
+类型
+
+数值
+
+period
+
+str
+
+1m
+
+period
+
+str
+
+5m
+
+period
+
+str
+
+15m
+
+period
+
+str
+
+30m
+
+period
+
+str
+
+1h
+
+period
+
+str
+
+1d
+
+period
+
+str
+
+1w
+
+period
+
+str
+
+1mon
+
+period
+
+str
+
+1q
+
+period
+
+str
+
+1y
+
+period
+
+str
+
+tick
+
+order_type
+
+类型
+
+说明
+分钟
+5分钟
+15分钟
+30分钟
+60分钟（1小时）
+1天
+1周
+1月
+1季
+1年
+分笔
+1
+
+名称
+
+类型
+
+数值
+
+STOCK_BUY
+
+int
+
+0
+
+STOCK_SELL
+
+int
+
+1
+
+CREDIT_BUY
+
+int
+
+0
+
+说明
+买
+卖
+担保品买入
+
+名称
+
+类型
+
+数值
+
+CREDIT_SELL
+
+int
+
+1
+
+CREDIT_FIN_BUY
+
+int
+
+69
+
+CREDIT_SLO_SELL
+
+int
+
+70
+
+CREDIT_COV_BUY
+
+int
+
+71
+
+CREDIT_STK_REPAY
+
+int
+
+76
+
+ETF_PURCHASE
+
+int
+
+45
+
+ETF_REDEMPTION
+
+int
+
+46
+
+FUTURE_OPEN_LONG
+
+int
+
+101
+
+FUTURE_OPEN_SHORT
+
+int
+
+102
+
+FUTURE_CLOSE_LONG
+
+int
+
+103
+
+FUTURE_CLOSE_SHORT
+
+int
+
+104
+
+OPTION_OPEN_LONG
+
+int
+
+201
+
+OPTION_OPEN_SHORT
+
+int
+
+202
+
+OPTION_CLOSE_LONG
+
+int
+
+203
+
+OPTION_CLOSE_SHORT
+
+int
+
+204
+
+price_type
+
+类型
+
+名称
+
+类型
+
+数值
+
+PRICE_MY
+
+int
+
+0
+
+PRICE_SJ
+
+int
+
+1
+
+PRICE_ZTJ
+
+int
+
+2
+
+PRICE_DTJ
+
+int
+
+3
+
+Status
+
+说明
+担保品卖出
+融资买入
+融券卖出
+买券还券
+卖券还款
+基金申购
+基金赎回
+期货开多
+期货开空
+期货平多
+期货平空
+期权开多
+期权开空
+期权平多
+期权平空
+
+说明
+自填价
+市价
+涨停价/笼子上限
+跌停价/笼子下限
+
+类型
+
+名称
+
+类型
+
+数值
+
+WTSTATUS_NULL
+
+int
+
+0
+
+WTSTATUS_NOCJ
+
+int
+
+1
+
+WTSTATUS_PARTCJ
+
+int
+
+2
+
+说明
+无效单
+未成交
+部分成交
+
+名称
+
+类型
+
+数值
+
+WTSTATUS_ALLCJ
+
+int
+
+3
+
+WTSTATUS_BCBC
+
+int
+
+4
+
+WTSTATUS_ALLCD
+
+int
+
+5
+
+平台调用
+
+← AI
+
+说明
+全部成交
+部分成交部分撤单
+全部撤单
+回测及模拟交易 →
+
+通达信量化平台
+什么是量化交易
+量化交易是指利用计算机科技并采用一定的数学模型去实现投资理念、实现投资策略的过程。简单
+的说，量化交易主要是做这样的事：
+一个简单的投资想法 => 可执行的交易策略 => 可执行的代码程序 => 检验交易策略效果 => 实盘交
+易验证改进
+：从一个简单的投资想法开始
+投资想法即我们认为可能会盈利的投资方法、理念，比如熊市时期银行股是潜力股、复制基金经理
+的增强指数、金叉买入死叉卖出等等。这些想法通常以网络、书本和讲座等为载体，来源于投顾、
+同行以及自己的经验总结等等。
+以一个简单的投资想法为例：
+Step 1
+
+1
+2
+
+如果遇到股价金叉，则买入
+如果遇到股价死叉，则卖出
+
+py
+
+：完善这个想法，形成明确的可执行的交易策略
+简单的投资想法通常比较模糊，我们需要将其细化成明确的可执行的策略，目的是为了能得到确定
+的信号进行交易操作。
+一个可执行的交易策略至少需要明确以下几点:
+1. Security：确定投资品种或范围
+2. Condition：确定触发买/卖的具体条件
+3. Quantity：确定买卖的数量/金额等
+明确的可执行的交易策略的判断基准：根据交易策略的描述，不同的人在相同情形下，都能做出相
+同的交易操作。
+上述关于金叉死叉的投资想法，显然它是不够明确的（可度量/可计算）。所以我们进一步细化：
+Step 2
+
+1
+2
+3
+
+监测沪深300指数的所有成分股的收盘价
+如果收盘价上穿收盘价的5日简单移动平均，则用全部可用资金买入该股票
+如果收盘价的5日简单移动平均上穿收盘价，则卖出该股票所有持仓
+
+py
+
+现在，我们基本已经把之前的想法细化成了明确的可执行的交易策略。当然，可能还有些地方不够
+明确或者参数需要改动，这些可以随时想到随时修正，不必一次做到完美。
+现在，我们想知道这样操作究竟会不会赚钱？
+
+：编写一段代码，把交易策略转成可执行的代码程序
+为了验证这个策略是否赚钱，我们需要把明确后的交易策略通过编程转成程序，计算机能根据历史
+数据/实时数据执行该策略产生模拟交易，或者根据实时数据执行该策略产生实盘交易。
+把上述策略翻译成计算机可以识别的代码语言，即类似这样的代码：
+Step 3
+
+py
+
+1
+2
+
+import pandas as pd
+
+3
+
+import vectorbt as vbt
+
+4
+
+from tqcenter import tq
+
+5
+6
+
+tq.initialize(__file__)
+
+7
+
+解决 pandas future warning
+
+8
+
+#
+
+9
+
+pd.set_option('future.no_silent_downcasting', True)
+
+10
+11
+12
+13
+14
+15
+
+核心配置（用户可直接修改这里）=========================
+target_start = '20240930' # 【目标回测开始时间】
+（真正想回测的起始日）
+target_end = '20250930'
+# 【目标回测结束时间】
+stock_code_list = ['688318.SH']
+# 股票代码
+window = 5
+# MA指标周期（如MA5、MA10、MA20，改这里自动适配历史数据）
+# =========================
+
+16
+
+#
+
+17
+
+================================================================================
+
+18
+19
+
+start_time = (pd.to_datetime(target_start) - pd.Timedelta(days=window +
+
+20
+
+10)).strftime('%Y%m%d')
+
+21
+
+获取价格数据
+
+22
+
+# 1.
+
+23
+
+df_real = tq.get_market_data(
+
+24
+
+field_list=['Close', 'Open'],
+
+25
+
+stock_list=stock_code_list,
+
+26
+
+start_time=start_time,
+
+27
+
+end_time=target_end,
+
+28
+
+dividend_type='front',
+
+29
+
+period='1d',
+
+30
+
+fill_data=True
+
+31
+
+)
+
+32
+
+close_df = tq.price_df(df_real, 'Close', column_names=stock_code_list)
+
+33
+
+open_df = tq.price_df(df_real, 'Open', column_names=stock_code_list)
+
+34
+35
+
+买卖信号计算与生成
+
+36
+
+# 2.
+
+37
+
+ma5_dynamic = vbt.MA.run(close_df, window=window).ma
+
+38
+
+ma5_dynamic.columns = close_df.columns
+
+39
+40
+
+entries_raw = close_df.vbt.crossed_above(ma5_dynamic)
+
+41
+
+exits_raw = close_df.vbt.crossed_below(ma5_dynamic)
+
+42
+
+信号移位+1
+
+43
+
+#
+
+44
+
+entries_df = entries_raw.shift(1).fillna(False).astype(bool)
+
+45
+
+exits_df = exits_raw.shift(1).fillna(False).astype(bool)
+
+46
+47
+
+执行回测
+
+48
+
+# 3.
+
+49
+
+portfolio = vbt.Portfolio.from_signals(
+
+50
+
+close=close_df,
+
+51
+
+entries=entries_df,
+
+52
+
+exits=exits_df,
+
+53
+
+price=open_df,
+
+54
+
+init_cash=100000,
+
+55
+
+fees=0.0003,
+
+56
+
+freq='D',
+
+57
+
+size_granularity=100
+
+58
+
+净值计算用未复权收盘价
+# 延迟后的买入信号
+# 延迟后的卖出信号
+# 含滑点的成交价格
+# 初始资金10万元
+# 手续费0.03%（双边）
+# 日线频率
+# A股最小交易单位100股
+
+#
+
+)
+
+59
+60
+
+输出回测结果
+
+61
+
+# 4.
+
+62
+
+print(f"\n======
+
+63
+
+print(portfolio.stats())
+
+64
+
+print(f"\n======
+
+投资组合回测表现=====")
+投资组合回测记录======")
+
+print(portfolio.trades.records_readable)
+
+这样一来，刚才细化好的策略转成了代码，计算机就能理解并执行了。
+：回测或者模拟交易，检验策略效果
+基本的检验策略方法有回测和模拟交易两种方法。核心区别是：回测是用历史数据模拟执行策略，
+模拟交易是用未来的实际数据模拟执行策略。。
+**回测是让计算机能根据一段时间区间内的历史的数据来模拟执行该策略，根据结果评价并改进策
+略。**如果结果不好，则需要分析原因并改进。如果结果不错，则可以考虑用模拟交易进一步验
+证。
+**模拟交易是让计算机能根据未来的实际数据模拟执行该策略一段时间区间，根据结果评价并改进
+策略。**如果策略在回测与模拟交易的表现都非常好，我们可以考虑进行完全真金白银的实盘交
+易。
+回测举例说明：
+1. 策略环境：设定初始虚拟资产100万元；选择一段历史时间区间：20100101到20200101；把该时
+间区间的各种数据如收盘股价行情等发给计算机。
+2. 策略执行：计算机利用这些数据模仿历史真实的市场，执行我们编写的策略程序。
+3. 策略评估：计算机会出具一份报告，根据这个报告我们知道，在20100101期初的100万元，按照
+我们的策略交易到期末20200101，会怎样？一般包括盈亏情况，下单情况，持仓变化，以及一些
+统计指标等，根据此评估交易策略的好坏。
+模拟交易举例说明：
+1. 策略环境：设定初始的虚拟资产比如100万元，选择开始执行模拟交易的时间点，比如下周一。
+那么从下周一开始，股市开始交易，真实的行情数据就会实时地发送到计算机。
+2. 策略执行：计算机利用真实的数据模仿真实的市场，执行你的策略代码输出买卖队列，模拟系统
+会记录每一笔买卖记录。
+Step 4
+
+3.
+
+策略评估：我们可以得到一份实时更新的策略评估报告，这报告类似于回测得到的报告，不同的
+是会根据实际行情变化更新；同样我们能据此评估交易策略的好坏。
+
+：实盘执行交易策略，并持续优化改进策略
+实盘交易就是让计算机能根据实际行情，用真实资金账号来自动下单交易。注意，这时不再是用虚
+拟资产进行模拟交易，实盘交易账户上的盈亏都是真金白银。
+实盘交易一般也会给出一份类似模拟交易的投资分析报告，通过实时观察策略的实盘表现、根据投
+资理念的变化、市场状况的变化及时修正、改善和优化策略，使之保持持续盈利能力。
+Step 5
+
+←
+
+常量枚举
+
+执行选股入板块 →
+
+通达信量化平台
+场景化示例
+
+通达信量化平台
+执行选股策略并加入客户端自定义板块
+第一步：执行选股策略
+py
+
+1
+
+import pandas as pd
+
+2
+
+import numpy as np
+
+3
+
+from datetime import datetime
+
+4
+
+from tqcenter import tq
+
+5
+
+初始化tq
+
+6
+
+#
+
+7
+
+tq.initialize(__file__)
+
+8
+
+基础配置（可修改项）
+
+9
+
+# 1.
+
+10
+
+batch_codes = tq.get_stock_list_in_sector('
+
+#
+
+11
+
+start_time = "20251025"
+
+#
+
+12
+
+target_end = datetime.now().strftime("%Y%m%d")
+
+13
+
+N = 3
+
+14
+
+block_code = 'LZXG'
+
+15
+
+block_name = '
+
+通达信88')
+
+连涨选股'
+
+16
+
+获取并整理收盘价数据
+
+17
+
+# 2.
+
+18
+
+df_real = tq.get_market_data(
+
+19
+
+field_list=['Close'],
+
+20
+
+stock_list=batch_codes,
+
+21
+
+start_time=start_time,
+
+22
+
+end_time=target_end,
+
+23
+
+dividend_type='front',
+
+24
+
+period='1d',
+fill_data=True
+
+25
+
+目标板块
+数据起始日期
+# 数据结束日期（当前日期）
+# 目标连续上涨天数
+# 自定义板块简称（必选）
+# 自定义板块名称（必选）
+
+前复权
+# 日线
+# 填充缺失数据
+#
+
+26
+
+)
+
+27
+
+#
+
+28
+
+close_df = tq.price_df(df_real, 'Close', column_names=batch_codes)
+
+转换为「日期×股票代码」的收盘价宽表
+
+29
+
+标记每日是否上涨（核心判断逻辑）
+
+30
+
+# 3.
+
+31
+
+is_up = close_df > close_df.shift(1)
+
+32
+
+当日上涨，False=当日非上涨
+
+# True=
+
+核心：计算连续上涨天数
+步骤1：上涨日标记为1，非上涨日标记为NaN
+
+33
+
+# 4.
+
+34
+
+#
+
+35
+
+up_mask = np.where(is_up, 1, np.nan)
+
+36
+
+up_mask_df = pd.DataFrame(up_mask, index=close_df.index,
+
+37
+
+columns=close_df.columns)
+
+38
+
+步骤2：前向填充 → 连续上涨阶段的非上涨日（NaN）会被1填充
+
+39
+
+#
+
+40
+
+filled_df = up_mask_df.ffill()
+
+41
+
+步骤3：累计非NaN值的数量（初步计数）
+
+42
+
+#
+
+43
+
+consec_up_days = filled_df.notna().cumsum()
+
+44
+
+步骤4：非上涨日重置计数（关键步骤，实现“连续”效果）
+
+45
+
+#
+
+46
+
+reset_counts = consec_up_days.where(~is_up).ffill().fillna(0)
+
+47
+
+consec_up_days = (consec_up_days - reset_counts).astype(int)
+
+48
+
+筛选符合条件的股票（连续上涨≥N天）
+
+49
+
+# 5.
+
+50
+
+latest_date = consec_up_days.index[-1]
+
+51
+
+latest_consec_up = consec_up_days.loc[latest_date]
+
+52
+
+target_stocks = latest_consec_up[latest_consec_up >=
+
+53
+
+N].sort_values(ascending=False)
+
+54
+
+target_stocks_list = target_stocks.index.tolist()
+
+55
+56
+57
+58
+59
+
+#
+
+最新交易日
+#
+
+#
+
+每只股票最新的连续上涨天数
+
+提取符合条件的股票代码列表
+
+先创建自定义板块，再执行添加/清空操作
+print(f"\n=== 筛选结果（连续上涨≥{N}天）===")
+# 第一步：创建自定义板块
+# 6.
+
+try:
+
+60
+
+tq.create_sector(block_code=block_code, block_name=block_name)
+
+61
+
+print(f"✅
+
+62
+
+已成功创建自定义板块「{block_name}（{block_code}）」")
+
+except Exception as e:
+
+板块已存在时可能报错，此处捕获异常不中断流程
+自定义板块创建提示：{e}（若提示已存在，可忽略此信息）")
+
+63
+
+#
+
+64
+
+print(f"ℹ️
+
+65
+
+第二步：处理板块成份股（添加/清空）
+
+66
+
+#
+
+67
+
+if not target_stocks.empty:
+
+打印筛选结果
+符合条件的股票共 {len(target_stocks)} 只：")
+
+68
+
+#
+
+69
+
+print(f"
+
+70
+
+for stock_code, days in target_stocks.items():
+print(f"{stock_code}
+
+71
+72
+
+：连续上涨 {days} 天")
+
+发送至自定义板块
+
+73
+
+#
+
+74
+
+try:
+
+75
+
+tq.send_user_block(block_code=block_code, stocks=target_stocks_list)
+
+76
+
+print(f"\n✅
+
+77
+
+except Exception as e:
+
+78
+
+print(f"\n❌
+
+79
+80
+81
+82
+83
+
+发送提示消息至TQ策略管理器
+筛选结果：{start_time}至{target_end}，连续上涨≥{N}天的股票共
+{len(target_stocks)}只，已添加至「{block_name}（{block_code}）
+」"
+msg = f"MSG,
+try:
+tq.send_message(msg)
+print("✅
+
+85
+
+print(f"❌
+
+88
+
+else:
+
+89
+
+#
+
+91
+
+try:
+
+tq.send_user_block(block_code=block_code, stocks=[])
+print(f"✅
+
+93
+
+97
+98
+99
+
+已清空自定义板块「{block_name}（{block_code}）」")
+
+except Exception as e:
+print(f"❌
+
+95
+96
+
+消息发送失败：{e}")
+
+无符合条件股票时清空板块
+print("暂无符合条件的股票")
+
+92
+94
+
+提示消息发送成功")
+
+except Exception as e:
+
+87
+
+90
+
+添加自定义板块失败：{e}")
+
+#
+
+84
+86
+
+已成功将股票添加至自定义板块「{block_name}（{block_code}）」")
+
+清空自定义板块失败：{e}")
+
+发送空结果提示
+筛选结果：{start_time}至{target_end}，连续上涨≥{N}天的股票共0只，已
+清空「{block_name}（{block_code}）」"
+#
+
+msg = f"MSG,
+try:
+
+tq.send_message(msg)
+except Exception as e:
+print(f"❌
+
+消息发送失败：{e}")
+
+第二步：客户端查看执行效果
+
+←
+
+回测及模拟交易
+
+订阅行情涨幅突破实时预警 →
+
+通达信量化平台
+订阅行情涨幅突破实时预计
+第一步：设置预警条件，并发送预警结果到客户端
+订阅板块成分股行情，涨幅突破实时预警，首次突破后取消该证券行情订阅监控
+
+1
+
+#
+
+2
+
+import json
+
+3
+
+import time
+
+4
+
+import signal
+
+5
+
+import sys
+
+6
+
+from datetime import datetime, timedelta
+
+7
+
+from collections import defaultdict
+
+8
+
+from tqcenter import tq
+
+9
+
+全局配置 =====================
+板块配置：支持多个板块/自定义板块
+SECTOR_NAMES = ['通达信88'] # 可扩展为其他板块名称或代码
+PRICE_RISE_THRESHOLD = 5.0 # 涨幅阈值>5%
+ANTI_SHAKE_SECONDS = 10
+# 防抖间隔
+BATCH_SUBSCRIBE_SIZE = 50
+# 分批订阅大小（避免单次订阅过多）
+
+10
+
+# =====================
+
+11
+
+#
+
+12
+13
+14
+15
+16
+
+全局变量
+
+17
+
+#
+
+18
+
+SUBSCRIBE_CODES = []
+
+19
+
+last_warn_time = defaultdict(int)
+
+20
+
+EXIT_FLAG = False
+
+21
+
+TRIGGERED_STOCKS = set()
+
+22
+
+#
+
+#
+
+动态获取的监控股票列表
+记录已首次触发预警的股票（避免重复监控/推送）
+
+信号处理函数 =====================
+
+23
+
+# =====================
+
+24
+
+def signal_handler(signum, frame):
+
+处理Ctrl+C（SIGINT）信号"""
+
+25
+
+"""
+
+26
+
+global EXIT_FLAG
+
+27
+28
+
+print(f"\n\n[{datetime.now().strftime('%H:%M:%S')}]
+
+开始清理资源...")
+
+29
+
+EXIT_FLAG = True
+
+30
+
+#
+
+31
+
+try:
+
+强制取消订阅+关闭TDX
+unsubscribe_stocks()
+
+32
+33
+
+except Exception as e:
+
+取消订阅失败：{e}")
+
+print(f"
+
+34
+35
+
+资源清理完成，程序退出！")
+
+36
+
+print("
+
+37
+
+sys.exit(0)
+
+38
+
+工具函数（新增） =====================
+
+39
+
+# =====================
+
+40
+
+def get_valid_stock_codes(sector_names):
+
+41
+42
+43
+44
+
+接收到退出信号（Ctrl+C），
+
+"""
+
+从指定板块获取有效股票代码列表
+:param sector_names: 板块名称列表
+:return: 去重后的有效股票代码列表
+
+py
+
+45
+
+"""
+
+46
+
+valid_codes = set()
+
+47
+
+for sector in sector_names:
+
+#
+
+用集合去重
+
+48
+
+try:
+
+49
+
+#
+
+50
+
+sector_codes = tq.get_stock_list_in_sector(sector)
+
+51
+
+if not sector_codes:
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+
+52
+53
+
+获取板块股票列表（TDX初始化后调用）
+
+{sector}
+
+未获取到股票列表")
+continue
+
+54
+55
+
+过滤无效代码（空值、格式错误）
+
+56
+
+#
+
+57
+
+for code in sector_codes:
+if code and isinstance(code, str) and (code.endswith('.SH') or
+
+58
+59
+
+code.endswith('.SZ')):
+valid_codes.add(code)
+
+60
+
+else:
+
+61
+
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+
+62
+63
+
+警告：板块
+
+{code}")
+
+过滤无效代码：
+
+64
+except Exception as e:
+
+65
+66
+67
+
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+
+表失败：{e}")
+
+68
+
+import traceback
+
+69
+
+traceback.print_exc()
+
+70
+
+转为列表并排序
+
+71
+
+#
+
+72
+
+valid_codes_list = sorted(list(valid_codes))
+
+73
+74
+75
+
+获取板块{sector}股票列
+
+从板块{sector_names}获取到有效
+股票{len(valid_codes_list)}只：{valid_codes_list[:10]}...") # 只打印前10个
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+return valid_codes_list
+
+76
+77
+78
+
+def batch_subscribe(stocks, batch_size):
+"""
+
+82
+
+分批订阅股票（避免单次订阅过多）
+:param stocks: 股票列表
+:param batch_size: 每批订阅数量
+:return: 整体订阅结果（True/False）
+
+83
+
+"""
+
+84
+
+total_success = True
+
+85
+
+for i in range(0, len(stocks), batch_size):
+
+79
+80
+81
+
+86
+
+batch = stocks[i:i+batch_size]
+
+87
+
+try:
+print(f"\n[{datetime.now().strftime('%H:%M:%S')}]
+
+88
+89
+
+{i//batch_size + 1}
+
+callback=price_rise_callback)
+if not sub_res:
+
+92
+
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+
+93
+94
+
++ 1}
+
+else:
+
+96
+
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+
+97
+99
+100
+
+批订阅失败：{sub_res}")
+
+第{i//batch_size
+
+total_success = False
+
+95
+
+98
+
+订阅第
+
+sub_res = tq.subscribe_hq(stock_list=batch,
+
+90
+91
+
+批股票（{len(batch)}只）：{batch[:5]}...")
+
++ 1}
+
+批订阅成功：{sub_res}")
+
+except Exception as e:
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+
+第{i//batch_size
+
+第{i//batch_size + 1}
+
+101
+
+批订阅异常：{e}")
+
+total_success = False
+
+102
+103
+
+return total_success
+
+104
+105
+106
+
+def unsubscribe_single_stock(stock_code):
+"""
+
+109
+
+取消单只股票的订阅（首次触发后不再监控）
+:param stock_code: 股票代码
+:return: 取消结果（True/False）
+
+110
+
+"""
+
+111
+
+try:
+
+107
+108
+
+112
+
+un_sub_res = tq.unsubscribe_hq(stock_list=[stock_code])
+
+113
+
+if un_sub_res:
+
+从全局订阅列表中移除
+
+114
+
+#
+
+115
+
+if stock_code in SUBSCRIBE_CODES:
+SUBSCRIBE_CODES.remove(stock_code)
+
+116
+
+return True
+
+117
+118
+
+return False
+
+119
+
+except Exception as e:
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+
+120
+121
+122
+
+{e}")
+return False
+
+123
+
+核心回调函数 =====================
+
+124
+
+# =====================
+
+125
+
+def price_rise_callback(data_str):
+
+126
+
+取消{stock_code}订阅失败：
+
+try:
+
+127
+
+code_json = json.loads(data_str)
+
+128
+
+code = code_json.get('Code')
+
+129
+
+前置过滤：无效数据/非监控股票/已触发过的股票（直接返回，不输出日志）
+
+130
+
+#
+
+131
+
+if (code_json.get('ErrorId') != "0" or not code) or \
+
+132
+
+(code not in SUBSCRIBE_CODES) or \
+
+133
+
+(code in TRIGGERED_STOCKS):
+
+134
+
+return
+
+135
+
+获取最新行情数据
+
+136
+
+#
+
+137
+
+report_ptr = tq.get_full_tick(code)
+
+138
+139
+
+latest_price = 0.0
+
+140
+
+pre_close = 0.0
+
+141
+142
+
+if report_ptr:
+
+143
+
+latest_price = round(float(report_ptr['Now']), 2)
+
+144
+
+pre_close = round(float(report_ptr['LastClose']), 2)
+
+145
+146
+
+if pre_close <= 0 and latest_price > 0:
+
+147
+
+pre_close = latest_price - 0.01
+
+148
+
+过滤最新价/昨收价无效的情况
+
+149
+
+#
+
+150
+
+if latest_price <= 0 or pre_close <= 0:
+return
+
+151
+152
+
+计算涨幅
+
+153
+
+#
+
+154
+
+rise_rate = round(((latest_price - pre_close) / pre_close) * 100, 2) if
+
+155
+156
+
+pre_close > 0 else 0.0
+
+仅处理满足涨幅阈值+防抖的情况
+
+157
+
+#
+
+158
+
+if rise_rate > PRICE_RISE_THRESHOLD:
+
+159
+
+current_time = int(time.time())
+
+160
+
+if current_time - last_warn_time[code] < ANTI_SHAKE_SECONDS:
+return
+
+161
+162
+
+标记为已触发，后续不再处理
+
+163
+
+#
+
+164
+
+TRIGGERED_STOCKS.add(code)
+
+165
+
+last_warn_time[code] = current_time
+
+166
+
+取消该股票的订阅（不再监控）
+
+167
+
+#
+
+168
+
+unsubscribe_single_stock(code)
+
+169
+
+发送预警
+
+170
+
+#
+
+171
+
+warn_time = datetime.now().strftime("%Y%m%d%H%M%S")
+
+172
+
+reason = (
+
+173
+
+f"
+
+涨幅突破"
+
+)
+
+174
+175
+176
+
+try:
+
+177
+
+#
+
+178
+
+volume = report_ptr.get('Volume', '0') if report_ptr else '0'
+
+179
+
+warn_res = tq.send_warn(
+
+180
+
+stock_list=[code],
+
+181
+
+time_list=[warn_time],
+
+182
+
+price_list=[str(latest_price)],
+
+183
+
+close_list=[str(pre_close)],
+
+184
+
+volum_list=[volume],
+
+185
+
+bs_flag_list=['0'],
+
+186
+
+warn_type_list=['3'],
+
+187
+
+reason_list=[reason],
+
+188
+
+count=1
+
+成交量用实际值，无则填0
+
+189
+
+)
+
+190
+
+print(f"[{datetime.now().strftime('%H:%M:%S')}] {reason}")
+
+191
+192
+193
+194
+
+197
+
+预警发送结果：
+
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+
+已取消{code}订
+
+阅，后续不再监控")
+
+except Exception as e:
+
+195
+196
+
+print(f"[{datetime.now().strftime('%H:%M:%S')}]
+{warn_res}")
+
+失败：{e}")
+
+print(f"\n[{datetime.now().strftime('%H:%M:%S')}] {code}
+
+发送预警
+
+198
+199
+
+except Exception as e:
+
+200
+
+print(f"\n[{datetime.now().strftime('%H:%M:%S')}]
+
+201
+
+import traceback
+
+202
+
+traceback.print_exc()
+
+回调函数执行异常：{e}")
+
+203
+204
+
+return None
+
+205
+206
+
+# =====================
+
+207
+
+def subscribe_stocks():
+
+订阅/取消订阅函数=====================
+
+订阅股票（分批订阅+容错）"""
+
+208
+
+"""
+
+209
+
+if not SUBSCRIBE_CODES:
+
+210
+211
+212
+
+阅流程")
+
+print(f"\n[{datetime.now().strftime('%H:%M:%S')}]
+return False
+
+无有效股票可订阅，跳过订
+
+213
+
+开始批量订阅股票（总计{len(SUBSCRIBE_CODES)}只）")
+
+214
+
+print(f"\n
+
+215
+
+sub_result = batch_subscribe(SUBSCRIBE_CODES, BATCH_SUBSCRIBE_SIZE)
+
+216
+
+print(f"
+
+217
+
+return sub_result
+
+批量订阅最终结果：{'成功' if sub_result else '部分/全部失败'}")
+
+218
+219
+
+def unsubscribe_stocks():
+
+取消订阅（分批取消）"""
+
+220
+
+"""
+
+221
+
+if not SUBSCRIBE_CODES:
+
+222
+223
+
+阅流程")
+
+224
+
+print(f"\n[{datetime.now().strftime('%H:%M:%S')}]
+
+无已订阅股票，跳过取消订
+
+return False
+
+225
+
+开始批量取消订阅股票（总计{len(SUBSCRIBE_CODES)}只）")
+
+226
+
+print(f"\n
+
+227
+
+total_success = True
+
+228
+
+for i in range(0, len(SUBSCRIBE_CODES), BATCH_SUBSCRIBE_SIZE):
+
+229
+
+batch = SUBSCRIBE_CODES[i:i+BATCH_SUBSCRIBE_SIZE]
+
+230
+
+try:
+
+取消第{i//BATCH_SUBSCRIBE_SIZE + 1}批订阅：{batch[:5]}...")
+
+231
+
+print(f"
+
+232
+
+un_sub_ptr = tq.unsubscribe_hq(stock_list=batch)
+
+233
+
+if not un_sub_ptr:
+
+234
+
+print(f"
+
+235
+
+total_success = False
+
+第{i//BATCH_SUBSCRIBE_SIZE + 1}批取消失败：{un_sub_ptr}")
+
+except Exception as e:
+
+236
+
+第{i//BATCH_SUBSCRIBE_SIZE + 1}批取消异常：{e}")
+
+237
+
+print(f"
+
+238
+
+total_success = False
+
+批量取消订阅最终结果：{'成功' if total_success else '部分/全部失败'}")
+
+239
+
+print(f"
+
+240
+
+return total_success
+
+241
+
+主程序 =====================
+
+242
+
+# =====================
+
+243
+
+if __name__ == "__main__":
+
+注册SIGINT信号处理（优先于默认的KeyboardInterrupt）
+
+244
+
+#
+
+245
+
+signal.signal(signal.SIGINT, signal_handler)
+
+246
+247
+
+# 1.
+
+248
+
+try:
+
+初始化TDX（仅执行1次，无重试）
+
+249
+
+tq.initialize(__file__)
+
+250
+
+print(f"
+
+251
+
+print(f"TDX
+
+252
+
+程序启动时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+初始化成功")
+
+except Exception as e:
+
+初始化失败：{e}")
+
+253
+
+print(f"TDX
+
+254
+
+exit(1)
+
+255
+
+获取板块股票列表
+
+256
+
+# 2.
+
+257
+
+SUBSCRIBE_CODES = get_valid_stock_codes(SECTOR_NAMES)
+
+258
+
+if not SUBSCRIBE_CODES:
+
+未获取到任何有效股票代码，程序退出")
+
+259
+
+print("
+
+260
+
+exit(1)
+
+261
+
+订阅股票
+
+262
+
+# 3.
+
+263
+
+subscribe_stocks()
+
+264
+# 4.
+
+运行提示
+
+涨幅监控启动 ===")
+print(f"监控板块：{SECTOR_NAMES}")
+print(f"监控股票总数：{len(SUBSCRIBE_CODES)}")
+print(f"\n===
+
+涨幅阈值：>{PRICE_RISE_THRESHOLD}%")
+print(f"防抖间隔：{ANTI_SHAKE_SECONDS}秒")
+print(f"分批订阅大小：{BATCH_SUBSCRIBE_SIZE}只/批")
+print("按 Ctrl+C 退出程序...\n")
+print(f"
+
+# 5.
+try:
+
+通过全局标记控制退出
+
+while not EXIT_FLAG:
+time.sleep(0.1)
+except Exception as e:
+
+主循环异常：{e}")
+兜底清理
+
+print(f"
+#
+
+unsubscribe_stocks()
+
+第二步：打开通达信金融终端查看运行结果
+通达信金融终端
+
+←
+
+执行选股入板块
+
+计算调仓信号并快速买卖 →
+
+通达信量化平台
+计算调仓信号并快速买卖
+第一步：计算信号并发送预警，以
+1
+
+from datetime import datetime, timedelta
+
+2
+
+from tqcenter import tq as tdxdata
+
+3
+
+import vectorbt as vbt
+
+4
+
+import pandas as pd
+
+5
+
+py
+
+初始化
+
+6
+
+#
+
+7
+
+tdxdata.initialize(__file__)
+
+8
+
+run_time = datetime.now()
+
+9
+
+run_time_str = run_time.strftime("%Y-%m-%d %H:%M:%S")
+
+10
+
+#
+
+11
+
+warn_time = run_time.strftime("%Y%m%d%H%M%S")
+
+预警时间戳（格式：YYYYMMDDHHMMSS）
+
+12
+
+配置参数 =====================
+
+13
+
+# ===================== 1.
+
+14
+
+N = 5
+
+15
+
+batch_codes = tdxdata.get_stock_list_in_sector('
+
+16
+
+end_date = run_time.strftime("%Y%m%d")
+
+17
+
+start_date = (run_time - timedelta(days=2 * N + 20)).strftime("%Y%m%d")
+
+18
+
+#
+
+均线周期
+
+通达信88')
+
+获取并处理数据 =====================
+获取日线Close数据（保留完整索引用于日期筛选）
+
+19
+
+# ===================== 2.
+
+20
+
+#
+
+21
+
+df_real = tdxdata.get_market_data(
+
+22
+
+field_list=['Close'],
+
+23
+
+stock_list=batch_codes,
+
+24
+
+start_time=start_date,
+
+25
+
+end_time=end_date,
+
+26
+
+dividend_type='front',
+
+27
+
+period='1d',
+fill_data=True
+
+28
+29
+
+)
+
+30
+
+close_df = tdxdata.price_df(df_real, 'Close', column_names=batch_codes)
+
+31
+
+计算均线+生成信号
+
+32
+
+#
+
+33
+
+ma = vbt.MA.run(close_df, window=N).ma
+
+34
+
+ma.columns = close_df.columns
+
+35
+
+entries = close_df.vbt.crossed_above(ma)
+
+#
+
+36
+
+exits = close_df.vbt.crossed_below(ma)
+
+#
+
+38
+
+上穿（买入）
+下穿（卖出）
+latest_date = close_df.index[-1] # 今日日期（DataFrame最后一行）
+# 获取上一个工作日日期
+
+39
+
+prev_date = close_df.index[-2] if len(close_df.index) >= 2 else latest_date
+
+37
+
+40
+41
+
+# ===================== 3.
+
+42
+
+buy_signals = {}
+
+43
+
+sell_signals = {}
+
+44
+
+筛选最新买卖信号 =====================
+
+遍历股票筛选信号
+
+45
+
+#
+
+46
+
+for code in batch_codes:
+
+确保股票有足够的交易数据
+
+47
+
+#
+
+48
+
+if code not in close_df.columns:
+continue
+
+49
+50
+
+今日收盘价
+
+51
+
+#
+
+52
+
+today_close = close_df.loc[latest_date, code]
+
+53
+
+#
+
+prev_close = close_df.loc[prev_date, code] if len(close_df.index) >= 2 else
+
+54
+55
+
+上一个工作日收盘价
+
+today_close
+
+56
+
+买入信号：最新日期Close上穿均线
+
+57
+
+#
+
+58
+
+if entries.loc[latest_date, code]:
+buy_signals[code] = {
+
+59
+60
+
+'today_close': round(today_close, 2),
+
+#
+
+61
+
+'prev_close': round(prev_close, 2),
+
+#
+
+'ma_price': round(ma.loc[latest_date, code], 2)
+
+62
+}
+
+63
+
+卖出信号：最新日期Close下穿均线
+
+64
+
+#
+
+65
+
+if exits.loc[latest_date, code]:
+
+66
+
+sell_signals[code] = {
+
+67
+
+'today_close': round(today_close, 2),
+
+68
+
+'prev_close': round(prev_close, 2),
+
+今日close
+# 上一个工作日close
+#
+
+'ma_price': round(ma.loc[latest_date, code], 2)
+
+69
+}
+
+70
+71
+72
+
+# ===================== 4.
+
+73
+
+def send_msg(content):
+
+74
+
+msg = f"MSG,{content}"
+
+75
+
+print(msg)
+
+76
+
+try:
+
+生成并发送MSG =====================
+
+tdxdata.send_message(msg)
+
+77
+
+except Exception as e:
+
+78
+
+发送失败: {e}")
+
+print(f"
+
+79
+80
+
+统计行
+
+81
+
+#
+
+82
+
+stat_line = (
+
+运行时间：{run_time_str}，均线周期：{N}天，"
+买入信号数：{len(buy_signals)} 只，卖出信号数：{len(sell_signals)} 只"
+
+83
+
+f"
+
+84
+
+f"
+
+85
+
+今日close
+上一个工作日close
+
+)
+
+86
+
+格式（TQ策略管理器显示区域）===")
+
+87
+
+print("\n=== MSG
+
+88
+
+send_msg(stat_line)
+
+89
+
+处理买入信号
+
+90
+
+#
+
+91
+
+if buy_signals:
+
+买入信号（Close上穿{N}日均线）===")
+
+92
+
+send_msg(f"===
+
+93
+
+for idx, (code, info) in enumerate(buy_signals.items(), 1):
+line = f"{idx}. {code}
+
+94
+95
+
+send_msg(line)
+
+96
+97
+
+处理卖出信号
+
+98
+
+#
+
+99
+
+if sell_signals:
+
+100
+
+：买入信号，今日Close:{info['today_close']}，昨日
+
+Close:{info['prev_close']}"
+
+send_msg(f"===
+
+卖出信号（Close下穿{N}日均线）===")
+
+for idx, (code, info) in enumerate(sell_signals.items(), 1):
+
+101
+
+line = f"{idx}. {code}
+
+102
+103
+
+：卖出信号，今日Close:{info['today_close']}，昨日
+
+Close:{info['prev_close']}"
+send_msg(line)
+
+104
+105
+
+无信号的情况
+
+106
+
+#
+
+107
+
+if not buy_signals and not sell_signals:
+
+108
+
+运行时间：{run_time_str}，均线周期：{N}天，无买入或卖出信号")
+
+send_msg(f"
+
+109
+110
+
+# ===================== 5.
+
+111
+
+def send_trade_warn():
+
+112
+113
+
+发送买卖信号对应的预警（精简版，仅保留核心逻辑）"""
+# 合并所有信号用于发送预警
+"""
+
+114
+
+all_signals = []
+
+115
+
+if buy_signals:
+
+买入') for code, info in
+
+all_signals.extend([(code, info, '
+
+116
+117
+
+buy_signals.items()])
+
+118
+
+if sell_signals:
+
+卖出') for code, info in
+
+all_signals.extend([(code, info, '
+
+119
+120
+
+调用send_warn接口发送预警 =====================
+
+sell_signals.items()])
+
+121
+122
+
+if not all_signals:
+
+123
+
+print("\n
+
+124
+
+return
+
+125
+
+无预警信息需要发送")
+
+构造预警参数列表
+
+126
+
+#
+
+127
+
+codes = []
+
+128
+
+time_list = []
+
+129
+
+price_list = []
+
+130
+
+close_list = []
+
+131
+
+volum_list = []
+
+132
+
+bs_flag_list = []
+
+133
+
+warn_type_list = []
+
+134
+
+reason_list = []
+
+今日close
+# 上一个工作日close
+#
+
+135
+136
+
+for code, info, trade_type in all_signals:
+
+137
+
+codes.append(code)
+
+138
+
+time_list.append(warn_time)
+
+139
+
+price_list.append(str(info['today_close']))
+
+#
+
+140
+
+close_list.append(str(info['prev_close']))
+
+#
+
+141
+
+volum_list.append('0')
+
+142
+
+bs_flag_list.append('0' if trade_type == '
+
+143
+
+warn_type_list.append('1')
+
+144
+
+reason_list.append(f"{trade_type}
+
+145
+#
+
+147
+
+try:
+
+148
+
+买入' else '1')
+
+信号")
+
+调用预警接口
+
+146
+
+替换为今日close
+替换为上一个工作日close
+
+warn_res = tdxdata.send_warn(
+
+149
+
+stock_list=codes,
+
+150
+
+time_list=time_list,
+
+151
+
+price_list=price_list,
+
+152
+
+close_list=close_list,
+
+153
+
+volum_list=volum_list,
+
+154
+
+bs_flag_list=bs_flag_list,
+
+155
+
+warn_type_list=warn_type_list,
+
+156
+
+reason_list=reason_list,
+
+count=len(codes)
+
+157
+)
+
+158
+
+except Exception as e:
+
+160
+
+预警发送失败：{e}")
+
+print(f"\n
+
+161
+162
+163
+
+预警发送完成，共发送 {len(codes)} 条预警，接口返回：{warn_res}")
+
+print(f"\n
+
+159
+
+#
+
+执行预警发送
+
+send_trade_warn()
+
+所有消息发送完成！")
+
+print("\n
+
+tdxdata.close()
+
+第二步:双击TQ策略信号，快速打开闪电买卖，根据输出的买/卖信号打开买/卖界面
+注意：须保证交易账号已登录。
+
+←
+
+订阅行情涨幅突破实时预警
+
+结合VBT回测示例 →
+
+通达信量化平台
+VBT
+1
+2
+3
+
+简单回测并输出图形
+py
+注意：
+# 1/目前调用的vectorbt三方库函数vbt.Portfolio.from_signals不支持分红送股等权益变动，
+该demo仅做示例。
+
+#
+
+4
+5
+
+import pandas as pd
+
+6
+
+import vectorbt as vbt
+
+8
+
+终端安装1. pip install vectorbt -i
+https://pypi.tuna.tsinghua.edu.cn/simple
+安装2.pip install plotly 用于打印html
+交互式图形
+
+9
+
+from tqcenter import tq
+
+10
+
+from datetime import datetime
+
+7
+
+#VSCODE-
+
+11
+12
+13
+
+tq.initialize(__file__)
+
+14
+
+解决 pandas future warning
+
+15
+
+#
+
+16
+
+pd.set_option('future.no_silent_downcasting', True)
+
+17
+
+pd.set_option('display.float_format', lambda x: f"
+
+18
+
+{x:.10f}".rstrip('0').rstrip('.') if '.' in f"{x:.10f}" else f"{x}")
+
+19
+
+24
+
+核心配置（用户可直接修改这里）=========================
+【目标回测开始时间】（真正想回测的起始日）
+target_end = '20251231'
+# 【目标回测结束时间】
+stock_code_list = ['688318.SH']
+# 股票代码
+window = 5
+# MA指标周期（如MA5、MA10、MA20，改这里自动适配历史数据）
+
+25
+
+# ==========================================================
+
+26
+
+start_time = (pd.to_datetime(target_start) - pd.Timedelta(days=window +
+
+27
+
+10)).strftime('%Y%m%d')
+
+20
+
+# =========================
+
+21
+
+target_start = '20250701'
+
+22
+23
+
+28
+
+#
+
+获取价格数据
+
+29
+
+# 1.
+
+30
+
+df_real = tq.get_market_data(
+
+31
+
+field_list=['Close', 'Open'],
+
+32
+
+stock_list=stock_code_list,
+
+33
+
+start_time=start_time,
+
+34
+
+end_time=target_end,
+
+35
+
+dividend_type='front',
+
+36
+
+period='1d',
+fill_data=True
+
+37
+38
+
+)
+
+39
+
+close_df = tq.price_df(df_real, 'Close', column_names=stock_code_list)
+
+40
+
+open_df = tq.price_df(df_real, 'Open', column_names=stock_code_list)
+
+41
+
+买卖信号计算与生成
+
+42
+
+# 2.
+
+43
+
+ma5_dynamic = vbt.MA.run(close_df, window=window).ma.ffill()
+
+44
+
+ma5_dynamic.columns = close_df.columns
+
+45
+46
+
+entries_df =
+
+47
+
+close_df.vbt.crossed_above(ma5_dynamic).shift(1).fillna(False).astype(bool)
+
+48
+
+exits_df =
+
+49
+
+close_df.vbt.crossed_below(ma5_dynamic).shift(1).fillna(False).astype(bool)
+
+50
+51
+52
+53
+
+信号生成统计:")
+print(f"买入信号总数: {entries_df.sum().sum()}")
+print(f"卖出信号总数: {exits_df.sum().sum()}")
+print(f"\n
+
+54
+
+执行回测
+
+55
+
+# 3.
+
+56
+
+portfolio = vbt.Portfolio.from_signals(
+
+57
+
+close=close_df,
+
+58
+
+entries=entries_df,
+
+59
+
+exits=exits_df,
+
+60
+
+price=open_df,
+
+61
+
+init_cash=100000,
+
+62
+
+fees=0.0003,
+
+63
+
+freq='D',
+
+64
+
+size_granularity=100
+
+65
+
+净值计算用未复权收盘价
+延迟后的买入信号
+# 延迟后的卖出信号
+# 含滑点的成交价格
+# 初始资金10万元
+# 手续费0.03%（双边）
+# 日线频率
+# A股最小交易单位100股
+#
+
+#
+
+)
+
+66
+
+绘图 ==========
+
+67
+
+# ========== vbt
+
+68
+
+portfolio[stock_code_list[0]].plot().show()
+
+69
+
+输出回测结果
+
+70
+
+# 4.
+
+71
+
+print(f"\n" + "="*60)
+
+72
+
+print(f"
+
+73
+
+print("="*60)
+
+74
+
+stats_df = portfolio.stats()
+
+投资组合回测表现")
+
+print(stats_df)
+print(f"\n" + "="*60)
+
+投资组合回测记录")
+
+print(f"
+
+print("="*60)
+
+trades_df_original = portfolio.trades.records_readable.copy()
+print(trades_df_original.to_string())
+
+←
+
+计算调仓信号并快速买卖
+
+20260122
+
+公众号文章 →
+
+通达信量化平台
+通达信TQ策略介绍和应用示例
+以下是20250122通达信趋势财经公众号发布文章 涉及的策略py文件；
+发送序列数据的TQMA510技术指标在stratexldata.py 下面的注释中。
+fiststrategy.py
+py
+
+1
+
+import numpy as np
+
+2
+
+import pandas as pd
+
+3
+
+from tqcenter import tq
+
+4
+
+import time
+
+5
+
+import json
+
+6
+
+import os
+
+7
+
+#
+
+8
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+9
+
+#
+
+将工作目录切换到当前脚本文件所在的目录
+
+之后，相对路径就会基于脚本所在目录进行解析
+
+10
+11
+12
+
+"""
+
+13
+14
+15
+16
+
+"""
+
+这里是tq的简单使用示例
+使用时请确保已经启动通达信客户端并登录
+取消对应注释即可运行对应功能
+
+17
+18
+
+"""
+
+19
+
+参数设置
+
+20
+
+"""
+
+21
+
+codes = ["688318.SH"] #
+
+22
+
+传入的股票代码格式必须是标准格式：6位数+市场后缀（.SH/.SZ/.JJ
+
+等）
+
+传入的时间格式必须是：YYYYMMDD 或 YYYYMMDDHHMMSS
+
+23
+
+startime = "20250620" #
+
+24
+
+endtime = "20250801"
+
+25
+
+period = '1d' #K
+
+26
+
+dividend_type='none' #
+
+27
+
+线周期：1d/1w/1m/5m/15m/30m/60m等
+复权类型：none-不复权，front-前复权，back-后复权
+
+初始化
+
+28
+
+#
+
+29
+
+tq.initialize(__file__) #
+
+所有策略连接通达信客户端都必须调用此函数进行初始化
+
+30
+31
+
+'''
+
+32
+
+刷新行情缓存 刷新后5分钟内取最新report和k线数据不会触发刷新
+
+33
+
+'''
+
+34
+
+# refresh_cache = tq.refresh_cache()
+
+35
+
+# print(refresh_cache)
+
+36
+37
+
+'''
+
+38
+
+缓存历史K线 目前仅支持1m 5m 1d三种类型数据 不建议一次更新太多，会堵塞策略和客户端
+
+39
+
+'''
+
+40
+
+# refresh_kline = tq.refresh_kline(stock_list=['688318.SH'],period='1d')
+
+41
+
+# print(refresh_kline)
+
+42
+43
+
+'''
+
+50
+
+获取K线数据 获取K线数据需要先在客户端中下载对应盘后数据，调用会触发客户端刷新数据，
+耗时过长请耐心等待
+field_list可以筛选返回字段，默认返回全部字段 比如 field_list=['Open','Close'] 就
+是只取开盘价和收盘价
+count可以设置每只股票取的数据量
+暂时不支持获取分笔数据
+开高低收单位为元，成交量单位为手，成交额单位为万元
+
+51
+
+'''
+
+52
+
+df = tq.get_market_data(
+
+44
+45
+46
+47
+48
+49
+
+53
+
+field_list=[],
+
+54
+
+stock_list=['600519.SH'],
+
+55
+
+start_time='20251208',
+
+56
+
+end_time='20251210',
+
+57
+
+count=-1,
+
+58
+
+dividend_type='none',
+
+59
+
+period='1d',
+fill_data=False
+
+60
+)
+
+61
+
+print(df)
+
+strategywarn.py
+py
+
+1
+
+import numpy as np
+
+2
+
+import pandas as pd
+
+3
+
+from tqcenter import tq
+
+4
+
+import time
+
+5
+
+import json
+
+6
+7
+
+"""
+
+8
+9
+10
+11
+
+"""
+
+这里是tq的简单使用示例
+使用时请确保已经启动通达信客户端并登录
+取消对应注释即可运行对应功能
+
+12
+13
+
+"""
+
+14
+
+参数设置
+
+15
+
+"""
+
+16
+
+codes = ["688318.SH"] #
+
+17
+
+传入的股票代码格式必须是标准格式：6位数+市场后缀（.SH/.SZ/.JJ
+
+等）
+
+传入的时间格式必须是：YYYYMMDD 或 YYYYMMDDHHMMSS
+
+18
+
+startime = "20250620" #
+
+19
+
+endtime = "20250801"
+
+20
+
+period = '1d' #K
+
+21
+
+dividend_type='none' #
+
+22
+
+线周期：1d/1w/1m/5m/15m/30m/60m等
+复权类型：none-不复权，front-前复权，back-后复权
+
+初始化
+
+23
+
+#
+
+24
+
+tq.initialize(__file__) #
+
+所有策略连接通达信客户端都必须调用此函数进行初始化
+
+25
+26
+27
+
+'''
+
+28
+
+发送预警信号给通达信客户端的TQ策略界面
+
+29
+
+price_list close_list volum_list bs_flag_list warn_type_list
+
+均要求为纯数字字
+
+30
+
+符串List
+
+买 卖 未知
+每个元素有效长度为25个汉字（50个英文）
+
+31
+
+bs_flag_list 0 1 2
+
+32
+
+reason_list
+
+33
+
+'''
+
+34
+
+warn_res = tq.send_warn(stock_list =
+
+35
+
+['688318.SH','688318.SH','600519.SH','600519.SH'],
+time_list =
+
+36
+37
+
+['20251215141115','20251215142100','20251215143101','20251215145001'],
+
+38
+
+price_list= ['123.45','133.45','1823.45','1853.45'],
+
+39
+
+close_list= ['122.50','132.50','1822.50','1822.50'],
+
+40
+
+volum_list= ['1000','2000','15000','15000'],
+
+41
+
+bs_flag_list= ['0','','2','1'],
+warn_type_list= ['0','','2','1'],
+
+价格突破预警线','收盘价突破预警线','成交量突破预警线','价
+
+reason_list= ['
+
+格下破预警线'],
+
+count=4)
+print(warn_res)
+
+TQHuiCe.py
+py
+
+1
+
+import numpy as np
+
+2
+
+import pandas as pd
+
+3
+
+from tqcenter import tq
+
+4
+
+import time
+
+5
+
+import json
+
+6
+
+"""
+
+7
+8
+9
+
+这里是tq的简单使用示例
+使用时请确保已经启动通达信客户端并登录
+取消对应注释即可运行对应功能
+
+10
+
+"""
+
+11
+
+#
+
+12
+
+tq.initialize(__file__) #
+
+13
+
+bt_data = tq.send_bt_data(stock_code = '688318.SH',
+
+初始化
+
+所有策略连接通达信客户端都必须调用此函数进行初始化
+time_list = ['20260120141100','20260120141400'],
+
+14
+
+data_list = [['1','143.41','200','0','0','0'],
+
+15
+16
+
+['0','0','0','1','143.48','200']],
+count = 2)
+
+17
+print(bt_data)
+
+stratexldata.py
+
+展示每日持仓量能看数据 验证开仓和手续费的
+
+1
+
+#
+
+2
+
+from tqcenter import tq
+
+3
+
+import pandas as pd
+
+4
+
+import numpy as np
+
+5
+
+import math
+
+6
+
+from datetime import datetime
+
+7
+
+import sys
+
+用悬挂目录的时候 读不出来
+
+#
+
+8
+9
+
+技术指标计算函数 ====================
+
+10
+
+# ====================
+
+11
+
+def calculate_ema(series, window):
+
+12
+
+计算指数移动平均"""
+
+"""
+
+py
+
+13
+
+return series.ewm(span=window, adjust=False).mean()
+
+14
+15
+
+def calculate_sma(series, window):
+
+计算简单移动平均"""
+
+16
+
+"""
+
+17
+
+return series.rolling(window=window).mean()
+
+18
+19
+
+def calculate_llv(series, window):
+
+计算周期内最低值"""
+
+20
+
+"""
+
+21
+
+return series.rolling(window=window).min()
+
+22
+23
+
+def calculate_hhv(series, window):
+
+计算周期内最高值"""
+
+24
+
+"""
+
+25
+
+return series.rolling(window=window).max()
+
+26
+27
+
+def calculate_ma(series, window):
+
+计算简单移动平均 (别名，与calculate_sma功能相同)"""
+
+28
+
+"""
+
+29
+
+return calculate_sma(series, window)
+
+30
+31
+
+def ref(series, periods):
+
+引用若干周期前的数据"""
+
+32
+
+"""
+
+33
+
+return series.shift(periods)
+
+34
+35
+36
+
+def calculate_cross_signal(fast_series, slow_series):
+"""
+
+39
+
+计算金叉信号序列。
+规则：当快线从下方上穿慢线时，标记为1（金叉），否则为0。
+注意：这是一个简单的信号，未考虑信号持续期。
+
+40
+
+"""
+
+41
+
+#
+
+37
+38
+
+42
+43
+44
+
+判断条件：今日快线 > 慢线，且昨日快线 <= 慢线
+
+cross_up = (fast_series > slow_series) & (ref(fast_series, 1) <=
+ref(slow_series, 1))
+return cross_up.astype(int)
+
+45
+46
+47
+48
+
+def get_benchmark_data(benchmark_code='000300.SH', count=60):
+"""
+
+获取基准品种数据
+
+49
+
+"""
+
+50
+
+try:
+
+51
+
+#
+
+52
+
+benchmark_data = tq.get_market_data(
+
+获取基准市场数据
+
+53
+
+field_list=['Open', 'High', 'Low', 'Close'],
+
+54
+
+stock_list=[benchmark_code],
+
+55
+
+period='1d',
+
+56
+
+count=count,
+
+57
+
+dividend_type='front'
+
+58
+
+#
+
+前复权数据
+
+)
+
+59
+
+提取收盘价序列
+
+60
+
+#
+
+61
+
+benchmark_close = benchmark_data['Close'][benchmark_code]
+
+62
+
+计算基准收益率序列
+
+63
+
+#
+
+64
+
+benchmark_returns = benchmark_close.pct_change().fillna(0)
+
+65
+
+计算基准净值（从1开始）
+
+66
+
+#
+
+67
+
+benchmark_net_value = (1 + benchmark_returns).cumprod()
+
+68
+
+计算基准年化收益率
+
+69
+
+#
+
+70
+
+trading_days = len(benchmark_net_value)
+
+71
+
+if trading_days > 0:
+benchmark_total_return = benchmark_net_value.iloc[-1] - 1
+
+72
+
+benchmark_annual_return = (1 + benchmark_total_return) ** (252 /
+
+73
+74
+
+trading_days) - 1
+else:
+
+75
+76
+
+benchmark_total_return = 0
+
+77
+
+benchmark_annual_return = 0
+
+78
+return {
+
+79
+80
+
+'close': benchmark_close,
+
+81
+
+'returns': benchmark_returns,
+
+82
+
+'net_value': benchmark_net_value,
+
+83
+
+'total_return': benchmark_total_return,
+'annual_return': benchmark_annual_return
+
+84
+}
+
+85
+86
+87
+
+except Exception as e:
+
+获取基准数据时发生错误: {e}")
+# 返回空数据
+print(f"
+
+88
+89
+
+return {
+
+90
+91
+
+'close': pd.Series(),
+
+92
+
+'returns': pd.Series(),
+
+93
+
+'net_value': pd.Series(),
+
+94
+
+'total_return': 0,
+'annual_return': 0
+
+95
+}
+
+96
+97
+98
+
+def calculate_daily_statistics(df, benchmark_data, initial_capital=100000,
+
+99
+
+fee_rate=0.0003):
+
+100
+101
+102
+103
+104
+105
+106
+107
+
+"""
+
+计算每日的回测统计指标序列
+输入：
+df: 包含价格数据、买卖信号的DataFrame
+benchmark_data: 基准数据字典
+initial_capital: 初始资金
+fee_rate: 手续费率（双边）
+输出：包含每日统计指标的DataFrame
+
+108
+
+"""
+
+109
+
+#
+
+110
+
+capital = initial_capital
+
+111
+
+position = 0
+
+112
+113
+
+初始化变量
+
+持仓数量
+rest_cash = capital # 剩余现金
+hold = False # 是否持仓
+
+114
+
+#
+
+创建结果列表
+
+115
+
+#
+
+116
+
+daily_stats = []
+
+117
+
+open_count = 0
+
+#
+
+118
+
+close_count = 0
+
+#
+
+119
+120
+
+累计开仓次数
+累计平仓次数
+win_count = 0 # 累计盈利交易次数
+trade_records = [] # 交易记录
+
+121
+
+获取基准数据
+
+122
+
+#
+
+123
+
+benchmark_close = benchmark_data['close']
+
+124
+
+benchmark_net_value = benchmark_data['net_value']
+
+125
+
+确保基准数据与策略数据时间对齐
+
+126
+
+#
+
+127
+
+if len(benchmark_close) != len(df):
+
+128
+129
+
+不一致")
+
+警告：基准数据长度({len(benchmark_close)})与策略数据长度({len(df)})
+
+print(f"
+
+这里简单处理，取相同长度的数据
+
+130
+
+#
+
+131
+
+min_len = min(len(benchmark_close), len(df))
+
+132
+
+benchmark_close = benchmark_close.iloc[:min_len]
+
+133
+
+benchmark_net_value = benchmark_net_value.iloc[:min_len]
+
+134
+
+df = df.iloc[:min_len]
+
+135
+
+遍历数据执行交易
+
+136
+
+#
+
+137
+
+for i in range(len(df)):
+
+138
+
+current_price = df['close'].iloc[i]
+
+139
+
+buy_signal = df['buyxh'].iloc[i] if i < len(df) else 0
+
+140
+
+sell_signal = df['sellxh'].iloc[i] if i < len(df) else 0
+
+141
+
+记录交易前的状态
+
+142
+
+#
+
+143
+
+pre_open_count = open_count
+
+144
+
+pre_close_count = close_count
+
+145
+
+pre_win_count = win_count
+
+146
+
+金叉买入信号
+
+147
+
+#
+
+148
+
+if buy_signal == 1 and not hold:
+
+计算可买整百股数量
+
+149
+
+#
+
+150
+
+max_shares = int(rest_cash / current_price / 100) * 100
+
+151
+
+if max_shares > 0:
+
+计算手续费
+
+152
+
+#
+
+153
+
+trade_amount = max_shares * current_price
+
+154
+
+fee = trade_amount * fee_rate
+
+155
+
+执行买入
+
+156
+
+#
+
+157
+
+position = max_shares
+
+158
+
+rest_cash = rest_cash - trade_amount - fee
+
+159
+
+hold = True
+
+160
+
+open_count += 1
+
+161
+
+记录交易
+
+162
+
+#
+
+163
+
+trade_records.append({
+
+164
+
+'date': df.index[i],
+
+165
+
+'type': 'buy',
+
+166
+
+'price': current_price,
+
+167
+
+'shares': position,
+'fee': fee
+
+168
+})
+
+169
+170
+
+死叉卖出信号
+
+171
+
+#
+
+172
+
+elif sell_signal == 1 and hold:
+
+计算卖出金额
+
+173
+
+#
+
+174
+
+trade_amount = position * current_price
+
+175
+
+fee = trade_amount * fee_rate
+
+176
+
+执行卖出
+
+177
+
+#
+
+178
+
+rest_cash = rest_cash + trade_amount - fee
+
+179
+
+position = 0
+
+180
+
+hold = False
+
+close_count += 1
+
+181
+182
+
+检查交易是否盈利
+
+183
+
+#
+
+184
+
+if len(trade_records) > 0 and trade_records[-1]['type'] == 'buy':
+
+185
+
+buy_price = trade_records[-1]['price']
+
+186
+
+if current_price > buy_price:
+win_count += 1
+
+187
+188
+
+记录交易
+
+189
+
+#
+
+190
+
+trade_records.append({
+
+191
+
+'date': df.index[i],
+
+192
+
+'type': 'sell',
+
+193
+
+'price': current_price,
+
+194
+
+'shares': position,
+
+195
+
+'fee': fee
+})
+
+196
+197
+
+计算当日市值和净值
+
+198
+
+#
+
+199
+
+if hold:
+
+daily_value = rest_cash + position * current_price
+
+200
+201
+
+else:
+daily_value = rest_cash
+
+202
+203
+204
+
+daily_net_value = daily_value / initial_capital
+
+205
+
+计算胜率（到当前日期为止）
+
+206
+
+#
+
+207
+
+total_trades_to_date = open_count + close_count
+
+208
+209
+
+win_rate_to_date = (win_count / total_trades_to_date * 100) if
+total_trades_to_date > 0 else 0
+
+210
+
+计算年化收益率（到当前日期为止）
+
+211
+
+#
+
+212
+
+if i > 0:
+
+213
+
+total_return_to_date = daily_net_value - 1
+
+214
+
+trading_days_to_date = i + 1
+annual_return_to_date = (1 + total_return_to_date) ** (252 /
+
+215
+216
+217
+
+trading_days_to_date) - 1 if trading_days_to_date > 0 else 0
+else:
+annual_return_to_date = 0
+
+218
+219
+
+获取基准净值（使用真实的基准数据）
+
+220
+
+#
+
+221
+
+if i < len(benchmark_net_value):
+current_benchmark_net_value = benchmark_net_value.iloc[i]
+
+222
+223
+
+else:
+current_benchmark_net_value = 1.0
+
+224
+225
+
+计算基准年化收益率（到当前日期为止）
+
+226
+
+#
+
+227
+
+if i > 0 and i < len(benchmark_net_value):
+benchmark_total_return_to_date = current_benchmark_net_value - 1
+
+228
+
+benchmark_annual_return_to_date = (1 +
+
+229
+230
+231
+
+benchmark_total_return_to_date) ** (252 / (i + 1)) - 1 if i > 0 else 0
+else:
+benchmark_annual_return_to_date = 0
+
+232
+233
+
+计算贝塔值（到当前日期为止）
+
+234
+
+#
+
+235
+
+if i > 1:
+
+236
+
+#
+
+计算策略收益率序列
+
+237
+
+strategy_returns = []
+
+238
+
+for j in range(i + 1):
+if j == 0:
+
+239
+
+strategy_returns.append(0)
+
+240
+
+else:
+
+241
+
+prev_capital = daily_stats[j-1]['capital'] if j > 0 else
+
+242
+243
+
+initial_capital
+curr_capital = daily_value if j == i else daily_stats[j]
+
+244
+245
+
+['capital']
+
+246
+
+strategy_return = (curr_capital / prev_capital) - 1
+
+247
+
+strategy_returns.append(strategy_return)
+
+248
+
+计算基准收益率序列
+
+249
+
+#
+
+250
+
+benchmark_returns_to_date =
+
+251
+
+benchmark_close.iloc[:i+1].pct_change().fillna(0).values
+
+252
+
+计算协方差和方差
+
+253
+
+#
+
+254
+
+if len(strategy_returns) > 1 and len(benchmark_returns_to_date) > 1:
+
+255
+
+cov_matrix = np.cov(strategy_returns, benchmark_returns_to_date)
+
+256
+
+beta = cov_matrix[0, 1] / cov_matrix[1, 1] if cov_matrix[1, 1]
+
+257
+
+!= 0 else 1.0
+else:
+
+258
+
+beta = 1.0
+
+259
+else:
+
+260
+
+beta = 1.0
+
+261
+262
+
+收集每日统计数据
+
+263
+
+#
+
+264
+
+daily_stats.append({
+
+265
+
+'date': df.index[i],
+
+266
+
+'capital': daily_value,
+
+267
+
+'net_value': daily_net_value,
+
+268
+
+'open_count': open_count,
+
+269
+
+'close_count': close_count,
+
+270
+
+'win_rate': win_rate_to_date,
+
+271
+
+'annual_return': annual_return_to_date * 100,
+
+272
+
+'benchmark_net_value': current_benchmark_net_value,
+
+273
+
+'benchmark_annual_return': benchmark_annual_return_to_date * 100,
+
+274
+
+'beta': beta,
+
+275
+
+'position': position,
+
+276
+
+'hold': hold
+
+#
+
+持仓量
+
+})
+
+277
+278
+
+转换为DataFrame
+
+279
+
+#
+
+280
+
+stats_df = pd.DataFrame(daily_stats)
+
+281
+
+stats_df.set_index('date', inplace=True)
+
+282
+
+计算最大回撤序列
+
+283
+
+#
+
+284
+
+if len(stats_df) > 0:
+stats_df['rolling_max'] = stats_df['net_value'].cummax()
+
+285
+
+stats_df['drawdown'] = (stats_df['net_value'] - stats_df['rolling_max'])
+
+286
+287
+
+/ stats_df['rolling_max']
+stats_df['max_drawdown'] = stats_df['drawdown'].cummin()
+
+288
+289
+
+计算夏普比率序列
+
+290
+
+#
+
+291
+
+if len(stats_df) > 1:
+
+292
+
+#
+
+计算策略收益率
+
+293
+
+returns_list = []
+
+294
+
+for i in range(len(stats_df)):
+if i == 0:
+
+295
+
+returns_list.append(0)
+
+296
+
+else:
+
+297
+298
+
+prev_capital = stats_df['capital'].iloc[i-1]
+
+299
+
+curr_capital = stats_df['capital'].iloc[i]
+
+300
+
+returns_list.append((curr_capital / prev_capital) - 1)
+
+301
+stats_df['returns'] = returns_list
+
+302
+303
+
+计算滚动夏普比率
+
+304
+
+#
+
+305
+
+sharpe_list = []
+
+306
+
+for i in range(len(stats_df)):
+if i == 0:
+
+307
+
+sharpe_list.append(0)
+
+308
+
+else:
+
+309
+310
+
+returns_to_date = stats_df['returns'].iloc[:i+1]
+
+311
+
+#
+
+312
+
+risk_free_rate = 0.02
+
+313
+
+excess_returns = returns_to_date - risk_free_rate/252
+sharpe = excess_returns.mean() * math.sqrt(252) /
+
+314
+315
+
+使用2%作为无风险利率
+
+returns_to_date.std() if returns_to_date.std() != 0 else 0
+sharpe_list.append(sharpe)
+
+316
+
+stats_df['sharpe_ratio'] = sharpe_list
+
+317
+318
+319
+
+return stats_df, trade_records
+
+320
+
+主程序 ====================
+
+321
+
+# ====================
+
+322
+
+def main():
+
+323
+
+#
+
+324
+
+tq.initialize(__file__)
+
+325
+
+初始化TQ
+
+股票列表（示例）
+
+326
+
+#
+
+327
+
+stocks = ['688800.SH', '688318.SH', '688981.SH']
+
+328
+
+#
+
+329
+
+benchmark_code = '000300.SH'
+
+330
+
+基准品种代码
+
+使用for循环遍历股票列表
+
+331
+
+#
+
+332
+
+for stock_code in stocks:
+
+处理股票: {stock_code}")
+
+333
+
+print(f"
+
+334
+
+print("-" * 50)
+
+335
+336
+
+try:
+
+337
+
+#
+
+338
+
+market_data = tq.get_market_data(
+
+获取股票市场数据
+
+339
+
+field_list=['Open', 'High', 'Low', 'Close'],
+
+340
+
+stock_list=[stock_code],
+
+341
+
+period='1d',
+
+342
+
+count=60,
+
+343
+
+dividend_type='front'
+
+344
+
+)
+
+345
+
+前复权数据
+
+构建DataFrame
+
+346
+
+#
+
+347
+
+df = pd.DataFrame({
+
+348
+
+#
+
+'open': market_data['Open'][stock_code],
+
+349
+
+'high': market_data['High'][stock_code],
+
+350
+
+'low': market_data['Low'][stock_code],
+'close': market_data['Close'][stock_code]
+
+351
+352
+
+})
+
+353
+
+原始K线数据前5行:")
+
+354
+
+print("
+
+355
+
+print(df.head())
+
+356
+
+print("-" * 50)
+
+357
+
+计算技术指标
+
+358
+
+#
+
+359
+
+df['ma5'] = calculate_ma(df['close'], 5)
+
+360
+
+df['ma10'] = calculate_ma(df['close'], 10)
+
+361
+
+计算金叉信号
+
+362
+
+#
+
+363
+
+df['buyxh'] = calculate_cross_signal(df['ma5'], df['ma10'])
+
+364
+
+df['sellxh'] = calculate_cross_signal(df['ma10'], df['ma5'])
+
+365
+
+添加技术指标与信号后的数据前15行:")
+
+366
+
+print("
+
+367
+
+print(df[['close', 'ma5', 'ma10', 'buyxh', 'sellxh']].head(15))
+
+368
+
+print("-" * 50)
+
+369
+
+获取基准数据
+获取基准品种 {benchmark_code} 数据...")
+
+370
+
+#
+
+371
+
+print(f"
+
+372
+
+benchmark_data = get_benchmark_data(benchmark_code, count=len(df))
+
+373
+374
+
+if len(benchmark_data['close']) == 0:
+
+警告：未能获取基准数据，使用简化计算")
+使用简化基准计算
+
+375
+
+print("
+
+376
+
+#
+
+377
+
+benchmark_close = df['close']
+
+378
+
+benchmark_returns = benchmark_close.pct_change().fillna(0)
+
+379
+
+benchmark_net_value = (1 + benchmark_returns).cumprod()
+
+380
+
+benchmark_data = {
+
+381
+
+'close': benchmark_close,
+
+382
+
+'returns': benchmark_returns,
+
+383
+
+'net_value': benchmark_net_value,
+'total_return': benchmark_net_value.iloc[-1] - 1 if
+
+384
+385
+
+len(benchmark_net_value) > 0 else 0,
+'annual_return': 0
+
+386
+}
+
+387
+388
+
+391
+
+基准数据获取成功，共{len(benchmark_data['close'])}个交易日")
+基准总收益率: {benchmark_data['total_return']*100:.2f}%")
+print(f"基准年化收益率: {benchmark_data['annual_return']*100:.2f}%")
+
+392
+
+print("-" * 50)
+
+389
+
+print(f"
+
+390
+
+print(f"
+
+393
+
+计算每日回测统计指标序列
+
+394
+
+#
+
+395
+
+stats_df, trade_records = calculate_daily_statistics(
+
+396
+
+df,
+
+397
+
+benchmark_data,
+
+398
+
+initial_capital=100000,
+
+399
+
+fee_rate=0.0003
+
+400
+
+)
+
+401
+
+输出最后一天的统计结果
+
+402
+
+#
+
+403
+
+if len(stats_df) > 0:
+
+404
+
+手续费
+
+# 0.03%
+
+last_stats = stats_df.iloc[-1]
+
+最终回测统计指标:")
+print(f"开仓次数: {last_stats['open_count']}")
+print(f"平仓次数: {last_stats['close_count']}")
+print(f"单位净值: {last_stats['net_value']:.4f}")
+print(f"基准净值: {last_stats['benchmark_net_value']:.4f}")
+print(f"胜率: {last_stats['win_rate']:.2f}%")
+print(f"年化收益率: {last_stats['annual_return']:.2f}%")
+print(f"基准年化收益率:
+print("
+
+405
+406
+407
+408
+409
+410
+411
+412
+413
+
+{last_stats['benchmark_annual_return']:.2f}%")
+
+贝塔值: {last_stats['beta']:.4f}")
+最大回撤: {last_stats['max_drawdown']*100:.2f}%")
+print(f"夏普比率: {last_stats['sharpe_ratio']:.4f}")
+print(f"持仓量: {last_stats['position']}股")
+
+414
+
+print(f"
+
+415
+
+print(f"
+
+416
+417
+
+print("-" * 50)
+
+418
+419
+
+准备发送给TQ的数据
+
+420
+
+#
+
+421
+
+time_list = df.index.strftime('%Y%m%d').tolist()
+
+422
+
+# print(time_list)
+
+423
+
+#
+
+424
+
+data_list = []
+
+425
+
+for i, (_, row) in enumerate(df.iterrows()):
+
+扩展data_list，包含所有需要的指标（每日序列）
+基础技术指标
+
+426
+
+#
+
+427
+
+ma5_value = row['ma5'] if not pd.isna(row['ma5']) else 0.0
+
+428
+
+ma10_value = row['ma10'] if not pd.isna(row['ma10']) else 0.0
+
+429
+
+buyxh_value = row['buyxh'] if not pd.isna(row['buyxh']) else 0
+
+430
+
+sellxh_value = row['sellxh'] if not pd.isna(row['sellxh']) else
+
+431
+
+0
+
+432
+
+获取该日期的回测指标
+
+433
+
+#
+
+434
+
+if i < len(stats_df):
+
+435
+
+daily_stats = stats_df.iloc[i]
+
+436
+
+open_count_val = daily_stats['open_count']
+
+437
+
+close_count_val = daily_stats['close_count']
+
+438
+
+net_value_val = daily_stats['net_value']
+
+439
+
+benchmark_net_val = daily_stats['benchmark_net_value']
+
+440
+
+win_rate_val = daily_stats['win_rate']
+
+441
+
+annual_return_val = daily_stats['annual_return']
+benchmark_annual_val =
+
+442
+443
+
+daily_stats['benchmark_annual_return']
+beta_val = daily_stats['beta']
+
+444
+445
+446
+447
+448
+449
+450
+
+为百分比
+
+max_drawdown_val = daily_stats['max_drawdown'] * 100
+
+#
+
+转换
+
+sharpe_val = daily_stats['sharpe_ratio'] if 'sharpe_ratio'
+
+in daily_stats else 0
+capital_val = daily_stats['capital']
+position_val = daily_stats['position']
+
+451
+
+else:
+
+452
+
+#
+
+453
+
+open_count_val = 0
+
+454
+
+close_count_val = 0
+
+455
+
+net_value_val = 1.0
+
+456
+
+benchmark_net_val = 1.0
+
+457
+
+win_rate_val = 0
+
+458
+
+annual_return_val = 0
+
+459
+
+benchmark_annual_val = 0
+
+460
+
+beta_val = 1.0
+
+默认值
+
+#
+
+持仓量
+
+461
+
+max_drawdown_val = 0
+
+462
+
+sharpe_val = 0
+
+463
+
+capital_val = 100000
+
+464
+
+position_val = 0
+
+465
+
+构建数据条目
+
+466
+
+#
+
+467
+
+formatted_entry = [
+
+468
+
+f"{ma5_value:.2f}",
+
+# ID 1: MA5
+
+469
+
+f"{ma10_value:.2f}",
+
+# ID 2: MA10
+
+470
+
+str(int(buyxh_value)),
+
+471
+
+str(int(sellxh_value)),
+
+472
+
+f"{open_count_val}",
+
+买入信号
+卖出信号
+# ID 5: 开仓次数（累计
+
+f"{close_count_val}",
+
+# ID 6:
+
+平仓次数（累计
+
+f"{net_value_val:.4f}",
+
+# ID 7:
+
+单位净值（当前
+
+f"{benchmark_net_val:.4f}",
+
+# ID 8:
+
+基准净值（当前
+
+f"{win_rate_val:.2f}",
+
+# ID 9:
+
+胜率（累计到当
+
+f"{annual_return_val:.2f}",
+
+# ID 10:
+
+年化收益率（累
+
+f"{benchmark_annual_val:.2f}",
+
+# ID 11:
+
+基准年化收益率
+
+f"{beta_val:.4f}",
+
+# ID 12:
+
+473
+474
+475
+476
+477
+478
+479
+480
+481
+482
+483
+484
+485
+
+到当前日期）
+到当前日期）
+日期）
+日期）
+前日期）
+计到当前日期）
+（累计到当前日期）
+
+486
+487
+488
+489
+490
+
+到当前日期）
+到当前日期）
+
+# ID 3:
+
+# ID 4:
+
+f"{max_drawdown_val:.2f}",
+
+贝塔值
+# ID 13: 最大回撤（累计
+
+f"{sharpe_val:.4f}",
+
+# ID 14:
+
+491
+
+f"{capital_val:.2f}",
+
+# ID 15:
+
+492
+
+f"{position_val}"
+
+# ID 16:
+
+493
+
+仓数量）
+
+494
+
+]
+
+495
+
+data_list.append(formatted_entry)
+
+496
+
+夏普比率（累计
+每日资金
+持仓量（每日持
+
+准备发送的data_list (前5个周期，共{len(data_list)}个周期):")
+
+497
+
+print(f"
+
+498
+
+for i in range(min(5, len(data_list))):
+
+日期 {time_list[i]}: {data_list[i]}")
+
+499
+
+print(f"
+
+500
+
+print("-" * 50)
+
+501
+
+发送回测数据到TQ
+
+502
+
+#
+
+503
+
+bt_data = tq.send_bt_data(
+
+504
+
+stock_code,
+
+505
+
+time_list=time_list,
+
+506
+
+data_list=data_list,
+count=60
+
+507
+508
+
+)
+
+509
+
+print("
+
+510
+
+print(bt_data)
+
+511
+
+print("-" * 50)
+
+512
+
+发送回测数据结果:")
+
+输出交易记录
+
+513
+
+#
+
+514
+
+if trade_records:
+
+515
+
+print("
+
+516
+
+for record in trade_records:
+
+交易记录:")
+
+print(f"{record['date']}: {record['type']}
+
+517
+518
+
+{record['shares']}
+
+股 @ {record['price']:.2f}, 手续费: {record['fee']:.2f}")
+
+519
+
+股票 {stock_code} 处理完成！")
+
+520
+
+print(f"
+
+521
+
+print("=" * 60)
+
+522
+except Exception as e:
+
+523
+
+处理股票 {stock_code} 时发生错误: {e}")
+跳过该股票，继续处理下一个...")
+
+524
+
+print(f"
+
+525
+
+print("
+
+526
+
+print("-" * 50)
+
+527
+
+continue
+
+528
+
+关闭TQ连接
+
+529
+
+#
+
+530
+
+tq.close()
+
+531
+
+print("
+
+所有股票处理完毕！")
+print("程序执行完毕。")
+
+532
+533
+534
+
+# ====================
+
+535
+
+print("\n" + "="*60)
+
+536
+
+print("
+
+537
+
+print("="*60)
+
+538
+539
+540
+541
+542
+
+通达信公式使用提示 ====================
+
+通达信公式管理器中使用提示:")
+
+print("""
+
+将数据发送到TQ策略界面后，您可以在通达信公式管理器中创建技术指标公式，
+使用 SIGNALS_TQ(ID, TYPE) 函数来引用这些序列数据并在K线上展示。
+例如，创建一个名为"TQMA510"的公式，代码可以如下：
+
+543
+
+引用ID=1的数据(MA5)}
+引用ID=2的数据(MA10)}
+
+544
+
+MA5:SIGNALS_TQ(1,0);
+
+{
+
+545
+
+MA10:SIGNALS_TQ(2,0);
+
+{
+
+546
+
+交易信号}
+
+547
+
+{
+
+548
+
+BUY_SIGNAL:=SIGNALS_TQ(3,0); {
+
+549
+550
+551
+552
+
+买入信号}
+SELL_SIGNAL:=SIGNALS_TQ(4,0);{卖出信号}
+回测指标展示 - 这些指标会随着时间轴移动而动态变化}
+开仓次数:SIGNALS_TQ(5,0),COLORRED;
+平仓次数:SIGNALS_TQ(6,0),COLORGREEN;
+单位净值:SIGNALS_TQ(7,0),COLORWHITE;
+基准净值:SIGNALS_TQ(8,0),COLORYELLOW;
+胜率:SIGNALS_TQ(9,0),COLORMAGENTA;
+年化收益率:SIGNALS_TQ(10,0),COLORCYAN;
+基准年化收益率:SIGNALS_TQ(11,0),COLORLIBLUE;
+贝塔值:SIGNALS_TQ(12,0),COLORBROWN;
+最大回撤:SIGNALS_TQ(13,0),COLORGRAY;
+夏普比率:SIGNALS_TQ(14,0),COLORLIMAGENTA;
+每日资金:SIGNALS_TQ(15,0),COLORLIGRAY;
+持仓量:SIGNALS_TQ(16,0),COLORLIRED; {显示每日持仓量}
+{
+
+绘制交易信号图标}
+
+{
+
+DRAWICON(BUY_SIGNAL, LOW, 1);
+DRAWICON(SELL_SIGNAL, HIGH, 2);
+
+函数说明：
+
+SIGNALS_TQ(ID, TYPE)
+
+数据中的序号 (1-16)，对应data_list子列表中的位置。
+
+ID: TQ
+
+处理方式。
+1 - 平滑处理，没有自定义数据的周期返回上一周期的值。
+0 - 不做平滑处理。
+2 - 没有数据则为0。
+
+TYPE:
+
+""")
+print("="*60)
+if __name__ == "__main__":
+main()
+
+sendfile.py
+py
+
+1
+2
+
+import numpy as np
+
+3
+
+import pandas as pd
+
+4
+
+from tqcenter import tq
+
+5
+
+import time
+
+6
+
+import json
+
+7
+
+"""
+
+8
+9
+10
+
+这里是tq的简单使用示例
+使用时请确保已经启动通达信客户端并登录
+取消对应注释即可运行对应功能
+
+11
+
+"""
+
+12
+
+#
+
+13
+
+tq.initialize(__file__) #
+
+14
+
+file = "513100.txt"
+
+15
+
+tq.send_file(file)
+
+初始化
+
+所有策略连接通达信客户端都必须调用此函数进行初始化
+
+sendfilepdf.py
+1
+
+import numpy as np
+
+2
+
+import pandas as pd
+
+3
+
+from tqcenter import tq
+
+4
+
+import time
+
+5
+
+import json
+
+6
+
+"""
+
+7
+8
+9
+
+←
+
+py
+
+这里是tq的简单使用示例
+使用时请确保已经启动通达信客户端并登录
+取消对应注释即可运行对应功能
+
+10
+
+"""
+
+11
+
+#
+
+12
+
+tq.initialize(__file__) #
+
+13
+
+file = "min.pdf"
+
+14
+
+tq.send_file(file)
+
+初始化
+
+结合VBT回测示例
+
+所有策略连接通达信客户端都必须调用此函数进行初始化
+
+20260302
+
+公众号文章 →
+
+通达信量化平台
+打通通达信量化任督二脉：公式与Python双向数据互通闭环
+以下是[20250122通达信趋势财经公众号发布文章] 涉及的策略例子的完整代码。
+📄 利用MACD公式筛选金叉信号.py
+用途：批量处理版本，一次计算全市场MACD指标，筛选金叉股票
+1
+
+from tqcenter import tq
+
+2
+3
+
+'''
+
+4
+5
+6
+
+'''
+
+利用此示例需要先在客户端下载全A股盘后数据，不然结果不准确
+通过MACD指标公式选出最新交易日金叉的股票
+
+7
+8
+9
+
+tq.initialize(__file__)
+
+先获取A股全部股票
+
+10
+
+#
+
+11
+
+all_stocks = tq.get_stock_list(market='5')
+
+12
+
+正在处理，请等待...")
+
+13
+
+print("
+
+14
+
+import time
+
+15
+
+开始计时
+
+16
+
+#
+
+17
+
+start_time = time.time()
+
+18
+19
+
+macd_stocks = []
+
+20
+
+mul_zb_result = tq.formula_process_mul_zb(
+
+21
+
+formula_name='MACD',
+
+22
+
+formula_arg='12,26,9',
+
+23
+
+xsflag=6,
+
+24
+
+return_count=2,
+
+25
+
+return_date=False,
+
+26
+
+stock_list=all_stocks,
+
+27
+
+# stock_list=['600722.SH'],
+
+28
+
+stock_period='1d',
+
+29
+
+count=100,
+
+30
+
+dividend_type=1)
+
+31
+
+# print(mul_zb_result)
+
+32
+33
+
+if mul_zb_result:
+
+34
+
+for key in mul_zb_result:
+
+35
+
+if key != "ErrorId":
+
+36
+37
+38
+
+if len(mul_zb_result[key]['DIF']) >= 2 and len(mul_zb_result[key]
+['DEA']) >= 2:
+if float(mul_zb_result[key]['DIF'][-2]) <
+
+39
+
+float(mul_zb_result[key]['DEA'][-2]) and float(mul_zb_result[key]['DIF'][-1]) >=
+
+40
+
+float(mul_zb_result[key]['DEA'][-1]):
+
+41
+
+macd_stocks.append(key)
+
+py
+
+42
+43
+
+今日MACD金叉股票列表：")
+
+44
+
+print("
+
+45
+
+print(macd_stocks)
+
+46
+
+print("
+
+47
+
+#
+
+48
+
+end_time = time.time()
+
+49
+
+符合MACD金叉条件的股票数量：", len(macd_stocks))
+结束计时
+计算时间差
+
+50
+
+#
+
+51
+
+execution_time = end_time - start_time
+
+52
+
+print(f"
+
+执行时间: {execution_time:.6f} 秒") # 保留6位小数
+执行时间: {execution_time * 1000:.2f} 毫秒") # 转换为毫秒
+
+print(f"
+
+zxg_result = tq.send_user_block(block_code='', stocks=macd_stocks)
+
+📄 利用MACD公式筛选金叉信号for单.py
+
+用途：for循环版本，逐只股票计算MACD指标，适合小数量测试对比
+1
+
+py
+
+from tqcenter import tq
+
+2
+3
+
+'''
+
+4
+
+利用此示例需要先在客户端下载全A股盘后数据，不然结果不准确
+
+5
+6
+
+通过MACD指标公式选出最新交易日金叉的股票
+
+7
+8
+9
+
+'''
+
+10
+
+tq.initialize(__file__)
+
+11
+12
+
+先获取A股全部股票
+
+#
+
+13
+14
+
+all_stocks = tq.get_stock_list(market='5')
+
+15
+16
+
+正在处理，请等待...")
+
+print("
+
+17
+18
+
+import time
+
+19
+20
+
+#
+
+开始计时
+
+21
+22
+
+start_time = time.time()
+
+23
+24
+
+macd_stocks = []
+
+25
+26
+
+for stock in all_stocks:
+
+27
+28
+
+try:
+
+29
+30
+
+# 1.
+
+设置股票数据
+
+31
+32
+
+tq.formula_set_data_info(
+
+33
+
+stock_code=stock,
+
+34
+
+stock_period='1d',
+
+35
+
+count=100,
+
+36
+
+dividend_type=1
+
+#
+
+需要足够的数据计算MACD
+# 前复权
+
+)
+
+37
+38
+
+# 2.
+
+39
+
+获取MACD指标
+
+40
+41
+
+macd_result = tq.formula_zb(
+
+42
+
+formula_name='MACD',
+
+43
+
+formula_arg='12,26,9',
+xsflag=6
+
+44
+)
+
+45
+46
+
+# 3.
+
+47
+
+获取DIF和DEA值，判断金叉
+
+48
+if macd_result and 'Data' in macd_result:
+
+49
+50
+
+dif_values = macd_result['Data']['DIF']
+
+51
+
+dea_values = macd_result['Data']['DEA']
+
+52
+if len(dif_values) >= 2 and len(dea_values) >= 2:
+
+53
+
+前一天的DIF
+今天的DIF
+dea_prev = float(dea_values[-2]) # 前一天的DEA
+dea_now = float(dea_values[-1])
+# 今天的DEA
+
+54
+
+dif_prev = float(dif_values[-2])
+
+#
+
+55
+
+dif_now = float(dif_values[-1])
+
+#
+
+56
+57
+58
+
+金叉信号：昨天DIF<DEA，今天DIF>=DEA
+
+59
+
+# MACD
+
+60
+
+if dif_prev < dea_prev and dif_now >= dea_now:
+
+61
+
+macd_stocks.append(stock)
+
+62
+
+print(f"MACD
+
+63
+
+→{dif_now:.4f}, DEA: {dea_prev:.4f}→{dea_now:.4f}")
+
+金叉信号: {stock}, DIF: {dif_prev:.4f}
+
+64
+except Exception as e:
+
+65
+
+处理股票 {stock} 时出错: {e}")
+
+66
+
+print(f"
+
+67
+
+continue
+
+68
+
+今日MACD金叉股票列表：")
+
+69
+
+print("
+
+70
+
+print(macd_stocks)
+
+71
+
+print("
+
+符合MACD金叉条件的股票数量：", len(macd_stocks))
+
+72
+73
+
+#
+
+结束计时
+
+74
+75
+
+end_time = time.time()
+
+76
+77
+
+#
+
+计算时间差
+
+78
+79
+80
+81
+82
+
+execution_time = end_time - start_time
+
+执行时间: {execution_time:.6f} 秒") # 保留6位小数
+print(f"执行时间: {execution_time * 1000:.2f} 毫秒") # 转换为毫秒
+print(f"
+
+83
+zxg_result = tq.send_user_block(block_code='', stocks=macd_stocks)
+
+📄 订阅Handlebar.py
+
+用途：订阅方式实时预警，使用subscribe_hq，每6秒运行一次回调（适合100只以内股票）
+1
+2
+
+import datetime
+
+py
+
+3
+
+import json
+
+4
+5
+
+import sys
+
+6
+7
+
+sys.path.append('C:/new_tdx_test2025/PYPlugins/user')
+
+8
+9
+
+from tqcenter import tq
+
+10
+11
+
+订阅Handlebar.py')
+
+tq.initialize('
+
+12
+13
+14
+15
+16
+
+"""
+
+这里是外部运行的初始化模式把tqcenter目录加上，再import它，
+准的py文件名就行
+
+17
+18
+
+"""
+
+19
+20
+
+#
+
+获取A股全部股票（测试时限制数量）# 订阅不能超过100只
+
+21
+22
+
+all_stocks = tq.get_stock_list(market='5')[:50]
+
+23
+24
+
+def get_real_time_data(stock_code):
+
+25
+26
+27
+28
+29
+30
+
+"""
+
+获取股票的实时行情数据
+根据通达信TQ接口文档，这里需要调用相应的数据获取函数
+
+31
+32
+
+"""
+
+33
+34
+
+try:
+
+35
+36
+
+#
+
+获取最近两天的数据，用于获取前一日收盘价
+
+37
+38
+
+market_data = tq.get_market_data(
+
+39
+field_list=['Close', 'Volume'],
+
+40
+41
+
+stock_list=[stock_code],
+
+42
+43
+
+count=2,
+
+44
+
+#
+
+获取2天数据，用于获取前一日收盘价
+
+45
+period='1d',
+
+46
+47
+
+dividend_type='none',
+
+48
+49
+
+fill_data=True
+
+50
+51
+52
+
+)
+
+53
+54
+
+if market_data and 'Close' in market_data:
+
+55
+56
+
+close_df = market_data['Close']
+
+57
+58
+
+if not close_df.empty:
+
+参数****.py标
+
+initialize
+
+59
+60
+
+#
+
+获取最新收盘价
+
+61
+62
+
+last_price = close_df.iloc[-1][stock_code]
+
+63
+64
+
+#
+
+获取前一日收盘价
+
+65
+66
+
+if len(close_df) >= 2:
+
+67
+prev_close = close_df.iloc[-2][stock_code]
+
+68
+69
+70
+
+else:
+
+71
+prev_close = '0.00'
+
+72
+73
+74
+
+#
+
+获取成交量
+
+75
+76
+
+if 'Volume' in market_data:
+
+77
+volume_df = market_data['Volume']
+
+78
+79
+
+volume = volume_df.iloc[-1][stock_code] if not
+
+80
+81
+
+volume_df.empty else '0'
+
+82
+83
+
+else:
+
+84
+volume = '0'
+
+85
+86
+87
+
+return str(last_price), str(prev_close), str(volume)
+
+88
+89
+90
+91
+
+except Exception as e:
+
+获取{stock_code}实时数据失败: {e}")
+
+print(f"
+
+92
+93
+
+return '0.00', '0.00', '0'
+
+94
+95
+
+def my_callback_func(data_str):
+
+96
+97
+
+print("Callback received data:", data_str)
+
+98
+99
+
+code_json = json.loads(data_str)
+
+100
+101
+
+print(f"codes = {code_json.get('Code')}")
+
+102
+103
+
+upn_stocks = []
+
+#
+
+用于存放符合UPN公式选股条件的股票列表
+
+104
+105
+
+for stock in all_stocks:
+
+106
+107
+
+formula_set_res = tq.formula_set_data_info(
+
+108
+109
+
+stock_code=stock,
+
+110
+111
+
+stock_period='1d',
+
+112
+113
+114
+
+count=20,
+
+dividend_type=1
+
+115
+116
+)
+
+117
+118
+
+if formula_set_res:
+
+119
+120
+
+#
+
+121
+
+使用UPN公式选股，参数'3'表示3日上涨
+
+122
+formula_xg = tq.formula_xg(formula_name='UPN', formula_arg='3')
+
+123
+124
+
+print(f"formula_xg = {formula_xg}")
+
+125
+126
+
+if formula_xg and 'Data' in formula_xg and 'UP3' in
+
+127
+128
+
+formula_xg['Data']:
+
+129
+up3_data = formula_xg['Data']['UP3']
+
+130
+131
+
+if up3_data and len(up3_data) > 0 and up3_data[-1] is not None:
+
+132
+133
+
+if up3_data[-1] != '0':
+
+134
+
+之前版本是0.00也行 这里要改一下
+
+#
+
+135
+upn_stocks.append(stock)
+
+136
+137
+138
+
+符合UPN公式选股条件的股票列表：")
+
+print("
+
+139
+140
+
+print(upn_stocks)
+
+141
+142
+
+符合UPN公式选股条件的股票数量：", len(upn_stocks))
+
+print("
+
+143
+144
+
+#
+
+为选出的股票发送预警
+
+145
+146
+
+if upn_stocks:
+
+147
+send_warnings_for_stocks(upn_stocks)
+
+148
+149
+150
+
+return None
+
+151
+152
+
+def send_warnings_for_stocks(stock_list):
+
+153
+154
+
+为股票列表发送预警信息"""
+
+"""
+
+155
+156
+
+if not stock_list:
+
+157
+return
+
+158
+159
+160
+
+#
+
+获取当前时间，格式化为YYYYMMDDHHMMSS
+
+161
+162
+
+current_time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+163
+164
+
+#
+
+准备预警参数列表
+
+165
+166
+
+stock_count = len(stock_list)
+
+167
+168
+
+#
+
+初始化列表
+
+169
+170
+
+time_list = []
+
+171
+172
+
+price_list = []
+
+173
+174
+
+close_list = []
+
+175
+176
+
+volum_list = []
+
+177
+178
+
+#
+
+为每只股票获取实时数据
+
+179
+180
+
+for stock in stock_list:
+
+181
+last_price, prev_close, volume = get_real_time_data(stock)
+
+182
+183
+
+time_list.append(current_time)
+
+184
+185
+
+price_list.append(last_price)
+
+186
+187
+
+close_list.append(prev_close)
+
+188
+189
+
+volum_list.append(volume)
+
+190
+191
+192
+
+#
+
+其他固定参数
+
+193
+194
+
+天连涨"] * stock_count # 根据实际选股条件修改
+
+reason_list = ["3
+
+195
+196
+
+bs_flag_list = ['0'] * stock_count
+
+#
+
+买卖标志：0
+
+197
+198
+
+warn_type_list = ['0'] * stock_count
+
+199
+200
+
+#
+
+调用send_warn函数发送预警
+
+201
+202
+
+try:
+
+203
+204
+
+warn_res = tq.send_warn(
+
+205
+stock_list=stock_list,
+
+206
+207
+
+time_list=time_list,
+
+208
+209
+
+price_list=price_list,
+
+210
+211
+
+close_list=close_list,
+
+212
+213
+
+volum_list=volum_list,
+
+214
+215
+
+bs_flag_list=bs_flag_list,
+
+216
+217
+
+warn_type_list=warn_type_list,
+
+218
+219
+
+reason_list=reason_list,
+
+220
+221
+
+count=stock_count
+
+222
+223
+224
+225
+226
+
+)
+
+预警发送结果：", warn_res)
+
+print("
+
+#
+
+预警类型：0
+
+227
+#
+
+228
+229
+230
+231
+
+根据搜索结果[6](@ref)，预警发送成功后会在TQ策略信号窗口展示
+
+预警图标对应bs_flag_list的每个元素的整数值，0买为红色B，1卖为绿色S，2未知为
+黄色双叠三角形
+#
+
+232
+#
+
+233
+
+双击买卖预警信号记录可以直接打开闪电下单进行买卖操作
+
+234
+except Exception as e:
+
+235
+236
+
+发送预警失败: {e}")
+
+print(f"
+
+237
+238
+239
+
+#
+
+订阅行情
+
+240
+241
+
+sub_hq = tq.subscribe_hq(stock_list=all_stocks, callback=my_callback_func)
+
+242
+243
+
+订阅结果：", sub_hq)
+
+print("
+
+244
+245
+
+#
+
+可选：设置定时执行或保持运行
+
+246
+247
+
+import time
+
+248
+249
+
+try:
+
+250
+
+程序运行中，按Ctrl+C停止...")
+
+print("
+
+251
+252
+
+while True:
+
+253
+254
+
+time.sleep(60)
+
+255
+
+#
+
+每分钟检查一次
+
+256
+257
+
+except KeyboardInterrupt:
+
+258
+
+程序终止")
+
+print("
+
+259
+260
+
+#
+
+261
+
+取消订阅
+
+262
+if sub_hq:
+
+263
+
+tq.unsubscribe_hq(stock_list=all_stocks)
+tq.close()
+
+📄 定时器实时预警Handlebar效果.py
+
+用途：定时器方式实时预警，每分钟运行一次（可覆盖全市场几千只股票）
+1
+2
+
+定时器实时预警
+
+#
+
+3
+
+定时器实时预警Handlebar效果.py
+
+4
+
+```python
+
+5
+
+#
+
+定时器实时预警
+
+6
+7
+
+import datetime
+
+8
+9
+
+import json
+
+py
+
+10
+11
+
+import sys
+
+12
+13
+
+import time
+
+14
+15
+
+sys.path.append('C:/new_tdx_test2025/PYPlugins/user')
+
+16
+17
+
+from tqcenter import tq
+
+18
+19
+
+定时器实时预警Handlebar效果.py')
+
+tq.initialize('
+
+20
+21
+
+#
+
+获取A股全部股票（测试时限制数量）
+
+22
+23
+
+all_stocks = tq.get_stock_list(market='5')[:150]
+
+24
+25
+
+def get_real_time_data(stock_code):
+
+26
+27
+28
+29
+30
+31
+
+"""
+
+获取股票的实时行情数据
+根据通达信TQ接口文档，这里需要调用相应的数据获取函数
+
+32
+33
+
+"""
+
+34
+35
+
+try:
+
+36
+37
+
+#
+
+获取最近两天的数据，用于获取前一日收盘价
+
+38
+39
+
+market_data = tq.get_market_data(
+
+40
+field_list=['Close', 'Volume'],
+
+41
+42
+
+stock_list=[stock_code],
+
+43
+44
+
+count=2,
+
+45
+
+#
+
+获取2天数据，用于获取前一日收盘价
+
+46
+period='1d',
+
+47
+48
+
+dividend_type='none',
+
+49
+50
+
+fill_data=True
+
+51
+52
+53
+
+)
+
+54
+55
+
+if market_data and 'Close' in market_data:
+
+56
+57
+
+close_df = market_data['Close']
+
+58
+59
+
+if not close_df.empty:
+
+60
+61
+
+#
+
+获取最新收盘价
+
+62
+63
+
+last_price = close_df.iloc[-1][stock_code]
+
+64
+65
+
+#
+
+获取前一日收盘价
+
+66
+if len(close_df) >= 2:
+
+67
+68
+
+prev_close = close_df.iloc[-2][stock_code]
+
+69
+70
+
+else:
+
+71
+72
+
+prev_close = '0.00'
+
+73
+74
+#
+
+75
+
+获取成交量
+
+76
+if 'Volume' in market_data:
+
+77
+78
+
+volume_df = market_data['Volume']
+
+79
+80
+
+volume = volume_df.iloc[-1][stock_code] if not
+
+81
+82
+
+volume_df.empty else '0'
+
+83
+else:
+
+84
+85
+
+volume = '0'
+
+86
+87
+
+return str(last_price), str(prev_close), str(volume)
+
+88
+89
+90
+
+except Exception as e:
+
+91
+
+获取{stock_code}实时数据失败: {e}")
+
+print(f"
+
+92
+93
+94
+
+return '0.00', '0.00', '0'
+
+95
+96
+
+def run_upn_selection():
+
+97
+98
+99
+100
+101
+102
+
+"""
+
+执行UPN公式选股并发送预警
+这个函数将每分钟执行一次
+
+103
+104
+
+"""
+
+105
+106
+107
+108
+
+print(f"\n{'='*50}")
+
+执行时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+print(f"
+
+109
+110
+
+print(f"{'='*50}")
+
+111
+112
+
+upn_stocks = []
+
+#
+
+用于存放符合UPN公式选股条件的股票列表
+
+113
+114
+
+for stock in all_stocks:
+
+115
+116
+
+formula_set_res = tq.formula_set_data_info(
+
+117
+118
+
+stock_code=stock,
+
+119
+120
+121
+
+stock_period='1d',
+
+count=5,
+
+122
+123
+
+dividend_type=1
+
+124
+125
+)
+
+126
+127
+
+if formula_set_res:
+
+128
+129
+
+#
+
+130
+
+使用UPN公式选股，参数'3'表示3日上涨
+
+131
+formula_xg = tq.formula_xg(formula_name='UPN', formula_arg='3')
+
+132
+133
+
+if formula_xg and 'Data' in formula_xg and 'UP3' in
+
+134
+135
+
+formula_xg['Data']:
+
+136
+up3_data = formula_xg['Data']['UP3']
+
+137
+138
+
+if up3_data and len(up3_data) > 0 and up3_data[-1] is not None:
+
+139
+140
+
+if up3_data[-1] != '0':
+
+141
+142
+
+upn_stocks.append(stock)
+
+143
+144
+145
+
+符合UPN公式选股条件的股票列表：")
+
+print("
+
+146
+147
+
+print(upn_stocks)
+
+148
+149
+
+符合UPN公式选股条件的股票数量：", len(upn_stocks))
+
+print("
+
+150
+151
+
+#
+
+为选出的股票发送预警
+
+152
+153
+
+if upn_stocks:
+
+154
+send_warnings_for_stocks(upn_stocks)
+
+155
+156
+157
+
+else:
+
+158
+
+本次选股未发现符合条件的股票")
+
+print("
+
+159
+160
+161
+
+def send_warnings_for_stocks(stock_list):
+
+162
+163
+
+为股票列表发送预警信息"""
+
+"""
+
+164
+165
+
+if not stock_list:
+
+166
+return
+
+167
+168
+169
+
+#
+
+获取当前时间，格式化为YYYYMMDDHHMMSS
+
+170
+171
+
+current_time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+172
+173
+
+#
+
+准备预警参数列表
+
+174
+175
+
+stock_count = len(stock_list)
+
+176
+177
+
+#
+
+初始化列表
+
+178
+179
+
+time_list = []
+
+180
+181
+
+price_list = []
+
+182
+183
+
+close_list = []
+
+184
+185
+
+volum_list = []
+
+186
+187
+
+#
+
+为每只股票获取实时数据
+
+188
+189
+
+for stock in stock_list:
+
+190
+last_price, prev_close, volume = get_real_time_data(stock)
+
+191
+192
+
+time_list.append(current_time)
+
+193
+194
+
+price_list.append(last_price)
+
+195
+196
+
+close_list.append(prev_close)
+
+197
+198
+
+volum_list.append(volume)
+
+199
+200
+201
+
+#
+
+其他固定参数
+
+202
+203
+
+天连涨"] * stock_count # 根据实际选股条件修改
+
+reason_list = ["3
+
+204
+205
+
+bs_flag_list = ['0'] * stock_count
+
+#
+
+买卖标志：0
+
+206
+207
+
+warn_type_list = ['0'] * stock_count
+
+208
+209
+
+#
+
+调用send_warn函数发送预警
+
+210
+211
+
+try:
+
+212
+213
+
+warn_res = tq.send_warn(
+
+214
+stock_list=stock_list,
+
+215
+216
+
+time_list=time_list,
+
+217
+218
+
+price_list=price_list,
+
+219
+220
+
+close_list=close_list,
+
+221
+222
+
+volum_list=volum_list,
+
+223
+224
+
+bs_flag_list=bs_flag_list,
+
+225
+226
+
+warn_type_list=warn_type_list,
+
+227
+228
+
+reason_list=reason_list,
+
+229
+230
+
+count=stock_count
+
+231
+232
+233
+
+)
+
+#
+
+预警类型：0
+
+234
+
+预警发送结果：", warn_res)
+
+print("
+
+235
+236
+
+#
+
+237
+238
+239
+240
+
+根据搜索结果[5](@ref)，预警发送成功后会在TQ策略信号窗口展示
+
+# 预警图标对应bs_flag_list的每个元素的整数值，0买为红色B，1卖为绿色S，2未知为
+黄色双叠三角形
+
+241
+#
+
+242
+
+双击买卖预警信号记录可以直接打开闪电下单进行买卖操作
+
+243
+except Exception as e:
+
+244
+245
+
+发送预警失败: {e}")
+
+print(f"
+
+246
+247
+248
+
+#
+
+主循环：每分钟执行一次选股
+
+249
+250
+
+def main_loop():
+
+251
+252
+253
+254
+255
+256
+
+"""
+
+主循环函数，每分钟执行一次选股
+使用time.sleep()实现定时执行[6](@ref)
+
+257
+258
+
+"""
+
+259
+260
+
+选股预警系统启动")
+
+print("UPN
+
+261
+262
+
+开始时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+print(f"
+
+263
+264
+
+监控股票数量: {len(all_stocks)}")
+
+print(f"
+
+265
+266
+
+print("="*50)
+
+267
+268
+
+execution_count = 0
+
+269
+270
+
+try:
+
+271
+272
+
+while True:
+
+273
+274
+
+execution_count += 1
+
+275
+276
+
+第{execution_count}次执行选股...")
+
+print(f"\n
+
+277
+278
+
+#
+
+执行选股逻辑
+
+279
+280
+
+run_upn_selection()
+
+281
+282
+
+#
+
+计算下次执行时间
+
+283
+284
+
+next_time = datetime.datetime.now() + datetime.timedelta(minutes=1)
+
+285
+286
+
+下次执行时间: {next_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+print(f"
+
+287
+288
+289
+
+#
+
+等待60秒[6](@ref)
+
+time.sleep(60)
+
+290
+291
+
+except KeyboardInterrupt:
+
+292
+293
+
+程序被用户中断")
+
+print("\n
+
+294
+295
+
+except Exception as e:
+
+296
+297
+
+程序运行出错: {e}")
+
+print(f"
+
+298
+299
+
+finally:
+
+300
+301
+
+选股预警系统已停止")
+
+print("UPN
+
+302
+303
+304
+
+#
+
+启动主循环
+
+305
+if __name__ == "__main__":
+main_loop()
+
+📄 利用UPN公式筛选出近期连涨股.py
+
+用途：批量处理版本，使用UPN公式筛选3日连涨股票
+1
+
+from tqcenter import tq
+
+2
+3
+
+import time
+
+4
+5
+
+'''
+
+6
+
+利用此示例需要先在客户端下载全A股盘后数据，不然结果不准确
+
+7
+8
+9
+
+'''
+
+10
+11
+12
+13
+
+tq.initialize(__file__)
+
+先获取A股全部股票
+
+#
+
+14
+15
+16
+17
+
+all_stocks = tq.get_stock_list(market='5')
+
+正在处理，请等待...")
+
+print("
+
+18
+19
+
+upn_stocks = []
+
+20
+21
+
+mul_xg_result = tq.formula_process_mul_xg(
+
+22
+23
+
+formula_name='UPN',
+
+24
+25
+
+formula_arg='3',
+
+26
+27
+
+return_count=1,
+
+28
+29
+
+return_date=False,
+
+30
+31
+
+stock_list=all_stocks,
+
+py
+
+32
+stock_period='1d',
+
+33
+34
+
+count=5,
+
+35
+36
+
+dividend_type=1)
+
+37
+38
+39
+
+# print(mul_xg_result)
+
+40
+41
+
+if mul_xg_result:
+
+42
+for key in mul_xg_result:
+
+43
+44
+
+if key != "ErrorId":
+
+45
+46
+
+if mul_xg_result[key]['UP3'] and mul_xg_result[key]['UP3'][-1] ==
+
+47
+48
+
+'1':
+
+49
+upn_stocks.append(key)
+
+50
+51
+52
+
+符合UPN公式选股条件的股票列表：")
+
+print("
+
+53
+54
+
+print(upn_stocks)
+
+55
+56
+
+符合UPN公式选股条件的股票数量：", len(upn_stocks))
+
+print("
+
+57
+zxg_result = tq.send_user_block(block_code='', stocks=upn_stocks)
+
+← 20260122
+
+公众号文章
+
+常见问题 →
+
+通达信量化平台
+：运行的python文件可不可以随便放，不一定在PYPlugins\user目录下？
+
+Q
+
+： 可以。在import tqcenter前添加通达信安装目录\PYPlugins\user这个绝对路径。
+
+A
+
+1
+
+import sys
+
+2
+
+sys.path.append('C:/new_tdx64/PYPlugins/user')
+
+3
+
+from tqcenter import tq
+
+4
+
+tq.initialize(__file__)
+
+py
+
+：无法内部执行策略之如何把python路径添加到PATH中
+
+Q
+
+： 内部执行python策略时，会寻找用户设定的默认python解释器执行python策略，所以必须在操
+作系统<高级系统设置>--->环境变量设置里，配置python路径。
+A
+
+如图所示，环境变量中分为用户变量和系统变量，都有PATH，在这两个中添加python路径都可生
+效，但是用户变量的优先级高于系统变量，所以图中仅在用户变量中的PATH中添加python路径。
+
+图中可见，PATH中可以配置多个版本的python，但是最后生效为最上面的，每个版本的python需要
+配置两个路径。
+
+：出现类似以下的报错怎么办？
+
+Q
+
+1
+
+FileNotFoundError: Could not find module
+
+py
+
+'F:\tdx\new_tdx_600\PYPlugins\TPythClient.dll' (or one of its dependencies). Try
+using the full path with constructor syntax.
+
+： 这通常是TPythClient.dll缺少依赖库导致的，请检查TPythClient.dll同目录下（../PYPlugins/）是
+否有tdxrpcx64.dll，通常是杀毒软件误杀此dll导致，需要重装或给予白名单确保tdxrpcx64.dll不会被
+杀毒软件误杀。
+A
+
+：外部运行的py文件报已经存在运行的，怎么处理？
+
+Q
+
+： 请在TQ策略管理器找到这个正在运行的已经运行出错的OutSide策略，点删除策略删除它。
+
+A
+
+：菜单一直显示“正在开启TQ策略..”
+
+Q
+
+： 是否有以下这个提示？如果有，请允许访问。
+
+A
+
+：获取的数据count=5，返回的指标值怎么前面的是none？
+
+Q
+
+： formula_set_res = tq.formula_set_data_info(stock_code=stock,stock_period='1d',
+count=4,dividend_type=1)这里的count=4 是获取最近4根k线的数据用于计算指标，所以最近4根k的
+数据
+ZF:(C-REF(C,1))/REF(C,1)*100;这个式子的只能计算出 最后4根k的涨幅值。
+所以在获取指标值时注意获取k线数目要覆盖到最大参数值，否则计算结果会为空。
+A
+
+：为什么同一个选股公式，用formula_process_mul_xg选股的结果比客户
+端条件选股中得到的结果少？
+Q
+
+： 请确认formula_process_mul_xg中的count参数是否合理？数据个数要满足公式计算中的数据要
+求。客户端的条件选股中使用了所有的本地数据。
+A
+
+：如何选出分钟内主力净额排名靠前的股票？
+
+Q
+
+： 可以用一定时间间隔获取主力净额输出值，然后用这次值减上次值的差额排序筛选全市场找出
+来。
+{ZLJE 自定义指标}
+超B:=L2_AMO(0,0)/10000.0;
+大B:=L2_AMO(1,0)/10000.0;
+中B:=L2_AMO(2,0)/10000.0;
+小B:=L2_AMO(3,0)/10000.0;
+超S:=L2_AMO(0,1)/10000.0;
+大S:=L2_AMO(1,1)/10000.0;
+A
+
+中S:=L2_AMO(2,1)/10000.0;
+小S:=L2_AMO(3,1)/10000.0;
+主力净额:(超B+大B)-(超S+大S),NODRAW;
+实现示例完整代码
+1
+
+import sys
+
+2
+
+import time
+
+py
+
+3
+4
+
+sys.path.append('C:/new_tdx_test2025/PYPlugins/user')
+
+5
+
+from tqcenter import tq
+
+6
+7
+
+tq.initialize('0303zlje.py')
+
+8
+
+先获取A股全部股票
+
+9
+
+#
+
+10
+
+all_stocks = tq.get_stock_list(market='5')[:100]
+
+11
+
+# all_stocks=['300911.SZ', '600635.SH', '000890.SZ', '603155.SH', '301448.SZ',
+
+12
+
+'600010.SH', '600011.SH', '600012.SH', '600013.SH', '600014.SH']
+
+13
+
+print("
+
+14
+
+start_date = '20240601'
+
+15
+
+end_date = '20240630'
+
+正在处理，请等待...")
+
+16
+
+开始计时
+
+17
+
+#
+
+18
+
+start_time = time.time()
+
+19
+20
+
+macd_stocks = []
+
+21
+
+pre_mul_zb_result = {}
+
+22
+
+mul_zb_result = {}
+
+23
+
+curr_val = 0
+
+24
+
+countjs = 1
+
+25
+
+pre_val=0
+
+26
+
+ce_val=0
+
+27
+
+#
+
+28
+
+max_iterations = 10
+
+添加最大循环次数限制，防止无限循环
+# 设置最大迭代次数
+
+29
+30
+
+while countjs <= max_iterations:
+
+保存之前的值
+
+31
+
+#
+
+32
+
+pre_mul_zb_result = mul_zb_result.copy()
+
+33
+
+获取新的值
+
+34
+
+#
+
+35
+
+mul_zb_result = tq.formula_process_mul_zb(
+
+36
+
+formula_name='ZLJE',
+
+37
+
+formula_arg='',
+
+38
+
+xsflag=6,
+
+39
+
+return_count=2,
+
+40
+
+return_date=True,
+
+41
+
+stock_list=all_stocks,
+
+42
+
+stock_period='1d',
+
+43
+
+count=-1,
+
+44
+
+start_time=start_date,
+
+45
+
+end_time=end_date,
+dividend_type=1
+
+46
+47
+48
+
+)
+
+#
+
+使用copy()避免引用问题
+
+当前结果:", mul_zb_result)
+print("前一结果:", pre_mul_zb_result)
+print("
+
+49
+50
+51
+
+countjs += 1
+
+52
+53
+
+检查是否有有效的数据
+
+54
+
+#
+
+55
+
+if mul_zb_result and countjs >= 2:
+
+56
+
+diff_list = []
+
+57
+
+for key in mul_zb_result:
+
+58
+
+if key != "ErrorId":
+
+#
+
+至少需要两次才能比较
+
+安全检查
+
+59
+
+#
+
+60
+
+if (key in mul_zb_result and
+
+主力净额' in mul_zb_result[key] and
+主力净额']) >= 1 and
+
+61
+
+'
+
+62
+
+len(mul_zb_result[key]['
+
+63
+
+key in pre_mul_zb_result and
+
+64
+
+'
+
+65
+
+len(pre_mul_zb_result[key]['
+
+主力净额' in pre_mul_zb_result[key] and
+主力净额']) >= 1):
+
+66
+
+主力净额'][-1]['Value']
+主力净额'][-1]['Value']
+
+67
+
+curr_val = mul_zb_result[key]['
+
+68
+
+pre_val = pre_mul_zb_result[key]['
+
+69
+
+ce_val = float(curr_val) - float(pre_val)
+
+70
+
+diff_list.append((key, ce_val))
+
+71
+
+股票 {key}: 当前值={curr_val}, 前值={pre_val}, 差值=
+
+print(f"
+
+72
+73
+
+{ce_val}")
+
+74
+
+#
+
+75
+
+if diff_list:
+
+按差值从大到小排序，输出前5名
+
+76
+
+diff_list.sort(key=lambda x: x[1], reverse=True)
+
+77
+
+print("
+
+78
+
+for i, (code, diff) in enumerate(diff_list[:5], 1):
+
+主力净额变化前5名:")
+
+print(f"{i}. {code}: {diff:.2f}")
+
+79
+else:
+
+80
+
+无有效差值数据")
+
+print("
+
+81
+82
+83
+
+等待一段时间再下一次循环
+
+84
+
+#
+
+85
+
+time.sleep(180)
+
+86
+87
+
+处理完成")
+
+print("
+
+： 策略弹框，这个双击之后默认弹出下单窗口，能不能设置为不弹出窗
+口，双击只是显示该票的K线或者分时！？
+Q tq
+
+： 可以
+
+A
+
+入参bs_flag_list N List[str] 买卖标志：0买1卖2未知 其中2就是普通预警，双击打开个股界
+
+send_warn
+
+面
+
+：
+致？
+
+Q TDXQUANT
+
+个别日期的OHLC和通达信金融终端64位客户端数据不一
+
+1
+
+#tdxmytest.py
+
+2
+
+from tqcenter import tq
+
+3
+
+tq.initialize(__file__)
+
+4
+
+df = tq.get_market_data(
+
+5
+
+field_list=[],
+
+6
+
+stock_list=['000656.SZ'],
+
+7
+
+start_time='20020402',
+
+8
+
+end_time='20020402',
+
+9
+
+count=1,
+
+10
+
+dividend_type='front',
+
+11
+
+period='1d',
+
+12
+
+fill_data=True
+
+13
+
+)
+
+14
+
+print(df)
+
+运行输出
+
+PS D:\projects\PlatformIOProjects\mutouren123> &
+C:/Users/PC/AppData/Local/Python/pythoncore-3.14-64/python.exe
+d:/stock/new_tdx64/PYPlugins/user/tdxmytest.py
+TQ
+
+数据接口初始化成功，使用路径: d:\stock\new_tdx64\PYPlugins\user\tdxmytest.py
+
+{'High': 000656.SZ
+
+2002-04-02 9.5, 'Amount': 000656.SZ
+2002-04-02 5608.31, 'Close': 000656.SZ
+2002-04-02 9.21, 'ForwardFactor': 000656.SZ
+2002-04-02 0.0, 'Open': 000656.SZ
+2002-04-02 9.45, 'Low': 000656.SZ
+2002-04-02 8.91, 'Volume': 000656.SZ
+2002-04-02 6110600.0}
+TQ
+
+数据连接已关闭
+
+客户端日线前复权显示
+日期(OHLC)
+
+20020402(0.05,0.06,-0.06,0.00)
+
+py
+
+：你要获取到全部k线信息下的 某日前复权数据 必须取全部数据
+
+A
+
+1
+
+df = tq.get_market_data(
+
+2
+
+field_list=['High','Low','Open','Close'],
+
+3
+
+stock_list=['000656.SZ'],
+
+4
+
+start_time='',
+
+5
+
+end_time='',
+
+6
+
+count=-1,
+
+7
+
+dividend_type='front',
+
+8
+
+period='1d',
+
+9
+
+)
+
+py
+
+10
+11
+
+print(df['High'].loc['2002-04-02'])
+
+12
+
+print(df['Open'].loc['2002-04-02'])
+
+13
+
+print(df['Low'].loc['2002-04-02'])
+
+14
+
+print(df['Close'].loc['2002-04-02'])
+
+取全数据信息后(count=-1)才能和你客户端全部k线加载下的前复权数据对比
+
+： 打开个股详情页的功能调用怎么写？
+
+Q TQ
+
+：下面是两种进入个股打开个股界面的方式
+
+A
+
+1
+
+from tqcenter import tq
+
+2
+
+tq.initialize(__file__)
+
+py
+
+3
+
+# exec_res1 = tq.exec_to_tdx(url='http://www.treeid/breed_1#688318')
+
+4
+5
+
+# print(exec_res1)
+
+6
+7
+
+exec_res2 =tq.exec_to_tdx(url='http://www.treeid/code_688318')
+
+8
+9
+
+print(exec_res2)
+
+：为什么市价下单和涨停下单，交易信号弹窗里面的委托看着像反了？
+
+Q
+
+：
+市价下单，需要手动确认为了怎么都能成功直接取了涨停价为弹窗委托价，实际真正下单选择了市
+价委托方式。采取的是图5市价相关的设置。
+涨停价下单，大概率为了买到股票，但是限价单本身是受笼子价格限制的品种，你用涨停价委托就
+废单，所以委托价采取了图4地方涨跌停价下单相关设置。
+A
+
+← 20260302
+
+公众号文章
+
+

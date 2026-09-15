@@ -1,0 +1,20 @@
+{
+ "runs": [
+  {
+   "checkout": "/home/box/x-data-mcp-anchor-binding",
+   "commit": "3a59948",
+   "sha256": "67508fca508362eae967a40777fd117e580c47ab7dc101f494e1e3f6960d42e0"
+  },
+  {
+   "checkout": "/tmp/anchorb-repro",
+   "commit": "3a59948",
+   "sha256": "67508fca508362eae967a40777fd117e580c47ab7dc101f494e1e3f6960d42e0"
+  }
+ ],
+ "byte_identical": true,
+ "result_sha256": "67508fca508362eae967a40777fd117e580c47ab7dc101f494e1e3f6960d42e0",
+ "result_bytes": 332823,
+ "python": "3.13.5",
+ "network_during_replay": 0,
+ "command": "python3 scan_anchor_binding.py --output binding.json; python3 scan_anchor_binding.py --check binding.json"
+}

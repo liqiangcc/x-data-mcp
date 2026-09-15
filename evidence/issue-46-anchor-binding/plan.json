@@ -1,0 +1,88 @@
+{
+  "plan_id": "issue-46-anchor-binding",
+  "issues": ["#46", "#54"],
+  "frozen_at_utc": "2026-09-15",
+  "upstream_evidence": "evidence/issue-54-46-authority-discovery (merged bf1fda7)",
+  "purpose": "Anchor-binding verification: upgrade candidate anchors from coverage-consistency to formalized per-code binding tests. Mechanical evidence only; no contract claims.",
+  "scope": {
+    "in": [
+      "Parse the official industry-classification PDF table (via committed -raw extract) into structured code->name->level->index entries for the T table and X/研究行业 table.",
+      "Per-code three-way comparison: PDF extract vs gbbq.zip!zhb.zip!incon.dat (TDXNHY/TDXRSHY sections) vs tdxzs3.cfg; plus field-token presence in tdxhy.cfg f2/f5 and tdxhy2.cfg f2/f3/f4.",
+      "Every mismatch listed per-code (code, PDF value, file value, diff type). Binding candidate requires zero UNEXPLAINED items (wording variants and documented asymmetries are explained classes).",
+      "Declared-vs-tabulated self-check: PDF states T 13/56/109 and X 30/128/352; compare against tabulated code counts.",
+      "GBBQ binding search: scan ALL staged official documents for any statement binding GBBQ binary record fields C1-C4 (order/unit/float32/rounding).",
+      "Explicit UNANCHORED list for items no source covers (A-share scope semantics, market/exchange field, tdxhy.cfg f1-f4 meanings)."
+    ],
+    "out": [
+      "No semantic contract claims; binding is graded (see strength_levels).",
+      "No new downloads. All inputs from /home/box/retained-inputs/ or committed derived extracts.",
+      "No src/ changes. No fitting, no new candidates."
+    ]
+  },
+  "inputs": {
+    "retained_dir": "/home/box/retained-inputs/",
+    "files": {
+      "official-base.zip": {"sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6"},
+      "official-gbbq.zip": {"sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"},
+      "official-tq-docs/industry-classification.pdf": {"sha256": "11c384a7029163b11e6632f0d67f69286596fd692c4e869d0b8dbd35081865a3"},
+      "official-tq-docs/tq-interface.pdf": {"sha256": "77f6d7c6c2807686b887dbe635d715650339a7478b8a4309f1af261201e27b6a"},
+      "official-tq-docs/calc-rules.doc": {"sha256": "faa4cc9e98ad1aef8ba6760c4964c05d28c8ea91542a587ed3b19f5efa2f7dd8"},
+      "official-tq-docs/1h10hsiat36k4.html": {"sha256": "743a333f0687507998897dd1d250b5688f19e110935060b32dd9e14fa4942b81", "doc": "get_divid_factors"},
+      "official-tq-docs/1h10g60jt68sc.html": {"sha256": "97a495f8b559ad585c15a3122fcf94346b8ab3164d049ac82d28a609086a159c", "doc": "get_market_data"},
+      "official-tq-docs/1h10jj7r7jol4.html": {"sha256": "3e552aad6a9555375858f86e13ae50e3189772111c3efdd47dac352a1c538ae6", "doc": "get_stock_info"}
+    },
+    "committed_extracts": {
+      "industry-classification-extract-raw.txt": {
+        "sha256": "015d80793110934d59c52edce03470be1bdc7f14c1fb716eb848a401c397411d",
+        "produced_by": "pdftotext -raw -enc UTF-8 industry-classification.pdf"
+      },
+      "tq-interface-extract.txt": {
+        "sha256": "9a8b4c9f911193e78c5443bcd786097ef9ab43715eee362d9d99ec597bb03350",
+        "produced_by": "pdftotext -enc UTF-8 tq-interface.pdf"
+      }
+    }
+  },
+  "frozen_rules": {
+    "pdf_parse": {
+      "code_regex": "\\b[TX][0-9]{2,6}\\b",
+      "level_map": {"code_total_len_3": 1, "code_total_len_5": 2, "code_total_len_7": 3},
+      "name": "leading CJK/letter token run after code on same line; codeless continuation lines belong to the most recently seen code: digit-led lines contribute index tokens, CJK-led lines contribute a name only when the code lacks one",
+      "index_regex": "\\b88[0-9]{4,5}\\b",
+      "display_alias_rule": "tdxzs3.cfg names starting with 'TDX ' are level-1 aggregate display aliases -> NAME_DISPLAY_ALIAS (explained, not conflict)",
+      "regions": "T table between '通达信行业分为三个级别' and '研究行业分为三个级别' markers; X table from research-industry marker to '概念板块' marker"
+    },
+    "compare_statuses": [
+      "MATCH",
+      "NAME_WORDING_VARIANT",
+      "NAME_CONFLICT",
+      "IDX_MATCH",
+      "IDX_MISMATCH",
+      "NAME_DISPLAY_ALIAS",
+      "PDF_MISSING_CODE",
+      "PDF_CODE_NO_ROW",
+      "INCON_MISSING",
+      "TDXZS3_MISSING",
+      "FILE_ONLY",
+      "EXTRACTION_AMBIGUOUS"
+    ],
+    "unexplained_rule": "a binding candidate passes only if every code in the union resolves to MATCH or an explained diff class; any unclassifiable diff is UNEXPLAINED and fails the candidate",
+    "wording_variant_rule": "names differing only by truncation, synonym, or class-suffix (类/其他) are NAME_WORDING_VARIANT — listed per-code, counted as explained",
+    "gbbq_binding_search": {
+      "documents": ["tq-interface-extract.txt", "calc-rules.doc", "all staged official-tq-docs/*.html"],
+      "patterns": ["gbbq", "GBBQ", "C1", "C2", "C3", "C4", "float32", "单精度",
+                    "记录结构", "二进制", "偏移", "字节", "除权除息", "复权",
+                    "分红送配", "参考价"],
+      "bind_test": "a binding statement must name a binary member/record field AND its business meaning/unit; keyword presence alone is CLUE_ONLY"
+    },
+    "strength_levels": {
+      "S1_CODE_SPACE_BOUND": "PDF table declares the code space (codes+names+levels+index codes) — anchors what the namespace means",
+      "S2_DICT_AGREES": "in-package dictionary covers the same namespace with consistent names/index codes (explained diffs allowed)",
+      "S3_FILE_FIELD_BINDING": "tdxhy.cfg field values are a subset of the anchored code space — necessary but NOT sufficient to claim the field IS that namespace",
+      "UNANCHORED": "no source binds the item"
+    }
+  },
+  "outputs": {
+    "result": "binding.json",
+    "determinism": "two clean-checkout runs, byte-identical; determinism.json"
+  }
+}
