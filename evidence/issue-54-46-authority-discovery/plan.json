@@ -1,0 +1,111 @@
+{
+  "plan_id": "issue-54-46-authority-discovery",
+  "issues": ["#54", "#46"],
+  "frozen_at_utc": "2026-09-15",
+  "purpose": "Source-first feasibility inventory for independent authoritative semantic anchors. This task is discovery/classification only; it produces NO semantic contract claims.",
+  "final_gate_context": {
+    "issue54_comment": "5677537392",
+    "issue46_comment": "5677541616",
+    "rule": "Fitting/structural-inference paths are sealed. Only independent authoritative anchors (official documentation binding fields, or official behavior output reproducible against the same frozen snapshot) can advance either issue."
+  },
+  "scope": {
+    "in": [
+      "Retained official archives: member inventory + doc-like member classification (base.zip, gbbq.zip incl. nested zips, hsjday.zip member table).",
+      "In-package documentation/dictionary members: incon.dat section coverage vs tdxhy.cfg/tdxhy2.cfg token namespaces; infoharbor.lst manifest parse; infoharbor_*.txt keyword scan.",
+      "Official public web sources: help.tdx.com.cn TQ doc pages, www.tdx.com.cn 红宝书 userdoc documents, public data-zip endpoints. Each recorded with URL, HTTP status, Last-Modified, sha256 of fetched bytes, staged path.",
+      "Consistency probes (mechanical only): token-namespace coverage and doc-sample vs in-package dictionary agreement for a frozen probe set.",
+      "Official-behavior feasibility assessment for this Linux box."
+    ],
+    "out": [
+      "No semantic contract claims; every source record carries status and gaps.",
+      "No new decimal/rounding/affine candidates; no structural inference of field semantics.",
+      "No src/ changes. No login, no key application, no vendor contact, no Wine install.",
+      "No official Windows client execution (expected NOT_RUN on Linux)."
+    ]
+  },
+  "inputs": {
+    "retained_dir": "/home/box/retained-inputs/",
+    "manifest": "/home/box/retained-inputs/manifest-sha256.txt",
+    "files": {
+      "official-base.zip": {"sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6", "bytes": 16411232, "source_url": "https://www.tdx.com.cn/products/data/data/dbf/base.zip", "generation": "gen-2", "last_modified": "Mon, 14 Sep 2026 10:10:10 GMT"},
+      "official-gbbq.zip": {"sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9", "bytes": 6358077, "source_url": "https://www.tdx.com.cn/products/data/data/dbf/gbbq.zip", "generation": "gen-2", "last_modified": "Mon, 14 Sep 2026 10:10:10 GMT"},
+      "official-gbbq-member": {"sha256": "4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77", "bytes": 5967508, "generation": "gen-2"},
+      "official-hsjday.zip": {"sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892", "bytes": 549387306, "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip", "generation": "gen-2", "last_modified_at_download": "Mon, 14 Sep 2026 10:10:10 GMT", "last_modified_head_2026_09_15": "Tue, 15 Sep 2026 07:58:56 GMT", "note": "upstream regenerated after our download; pinned retained bytes differ from current upstream"}
+    },
+    "tq_docs_dir": "official-tq-docs/",
+    "tq_docs": {
+      "industry-classification.pdf": {"sha256": "11c384a7029163b11e6632f0d67f69286596fd692c4e869d0b8dbd35081865a3", "bytes": 623814, "source_url": "https://www.tdx.com.cn/products/userdoc/%E9%80%9A%E8%BE%BE%E4%BF%A1%E6%9D%BF%E5%9D%97%E6%8C%87%E6%95%B0%E5%92%8C%E8%A1%8C%E4%B8%9A%E5%88%86%E7%B1%BB.pdf", "last_modified": "Tue, 30 Jun 2026 01:13:04 GMT", "via": "redbook-index"},
+      "industry-whitepaper.pdf": {"sha256": "ce6deb860ae55d26a72855c05a81c740c33eeec5bf205dafc07e211fec98700e", "bytes": 3470293, "source_url": "https://www.tdx.com.cn/products/userdoc/%E9%80%9A%E8%BE%BE%E4%BF%A1%E8%A1%8C%E4%B8%9A%E6%9D%BF%E5%9D%97%E7%99%BD%E7%9A%AE%E4%B9%A6.pdf", "last_modified": "Wed, 26 Dec 2018 07:06:22 GMT"},
+      "calc-rules.doc": {"sha256": "faa4cc9e98ad1aef8ba6760c4964c05d28c8ea91542a587ed3b19f5efa2f7dd8", "bytes": 119296, "source_url": "https://www.tdx.com.cn/products/userdoc/%E7%BA%A2%E5%AE%9D%E4%B9%A6-%E9%80%9A%E8%BE%BE%E4%BF%A1%E8%A1%8C%E6%83%85%E7%B3%BB%E7%BB%9F%E8%AE%A1%E7%AE%97%E8%A7%84%E5%88%99%E8%A7%A3%E9%87%8A.doc", "last_modified": "Sun, 27 Apr 2025 04:40:42 GMT"},
+      "tq-interface.pdf": {"sha256": "77f6d7c6c2807686b887dbe635d715650339a7478b8a4309f1af261201e27b6a", "bytes": 30781149, "source_url": "https://www.tdx.com.cn/products/userdoc/TdxQuant%E6%8E%A5%E5%8F%A3%E8%AF%B4%E6%98%8E%E6%96%87%E6%A1%A3.pdf", "last_modified": "Tue, 30 Jun 2026 01:13:21 GMT"},
+      "redbook.html": {"sha256": "7e964d7e253b6df2645be32d2fdaf777f64e24898913b8aa3c5625e3a8f24210", "source_url": "https://www.tdx.com.cn/products/user_redbook_style2.html", "last_modified": "Tue, 15 Sep 2026 09:33:04 GMT"},
+      "help-index.html": {"sha256": "bbe82592b72b2bc08339cd6d6fc32d03923d55834d47257c47beb1ca81b1a4e2", "source_url": "https://help.tdx.com.cn/index.html", "last_modified": "Mon, 10 Nov 2025 00:51:54 GMT"},
+      "help-book.html": {"sha256": "9500ea40da7fe4d73eff217b4b1393d116587906361ed5a039ff1a0e931c6ec5", "source_url": "https://help.tdx.com.cn/book.html", "last_modified": "Tue, 20 Jan 2026 03:28:08 GMT"},
+      "help-question.html": {"sha256": "6dbb8970bb8648e8545f116157f054b9661b1fa1bc416ecea694bc8cf43bca55", "source_url": "https://help.tdx.com.cn/question.html", "last_modified": "Mon, 10 Nov 2025 00:52:57 GMT"},
+      "help-function.html": {"sha256": "bd2cd3b03b81a78db2ad9fbba653e662af091da58de9f5d6faf20a48484baa78", "source_url": "https://help.tdx.com.cn/function.html", "last_modified": "Mon, 10 Nov 2025 00:52:10 GMT"},
+      "tq-api-index.html": {"sha256": "f5881158ea2895148a618971cfc9b975b97b542ffd875b89d8e682ead58cabc4", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg", "last_modified": "Tue, 15 Sep 2026 06:20:04 GMT"},
+      "sectors-index.html": {"sha256": "de533f0691642f65e865d50acb3e726777005c7c0fd08c496f451c3a1d5ecb79", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhttn72svo", "last_modified": "Tue, 15 Sep 2026 06:20:04 GMT"},
+      "dict.html": {"sha256": "6b15410a5bce73d81c7eb7d4c22c688a5fb975fe107f739a340199f32f7dd919", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/Dict.html", "last_modified": "Tue, 15 Sep 2026 06:20:03 GMT"},
+      "ctx-stock.html": {"sha256": "b3065fe70d1930c452de5911ac48adfe00c7fbc231f5a7a5bf9aa5f118c30b3d", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/ctx.stock.md", "last_modified": "Tue, 15 Sep 2026 06:20:04 GMT"},
+      "tdxquant-fin.html": {"sha256": "840a60a0855215b68ebcfe537334472b16499f84616eb22f2d6af2a747807c99", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/TdxQuant.md", "last_modified": "Tue, 15 Sep 2026 06:20:04 GMT"},
+      "1h10g60jt68sc.html": {"sha256": "97a495f8b559ad585c15a3122fcf94346b8ab3164d049ac82d28a609086a159c", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h10g60jt68sc.html", "last_modified": "Tue, 15 Sep 2026 06:20:03 GMT", "doc": "get_market_data"},
+      "1h10hsiat36k4.html": {"sha256": "743a333f0687507998897dd1d250b5688f19e110935060b32dd9e14fa4942b81", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h10hsiat36k4.html", "last_modified": "Tue, 15 Sep 2026 06:20:04 GMT", "doc": "get_divid_factors"},
+      "1h10jj7r7jol4.html": {"sha256": "3e552aad6a9555375858f86e13ae50e3189772111c3efdd47dac352a1c538ae6", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h10jj7r7jol4.html", "last_modified": "Tue, 15 Sep 2026 06:20:03 GMT", "doc": "get_stock_info"},
+      "1h84ec4p26qus.html": {"sha256": "9331c3292385a23d54dec478615947b6267b466eaaa073b30403fb2a1088cc62", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h84ec4p26qus.html", "last_modified": "Tue, 15 Sep 2026 06:20:04 GMT", "doc": "get_relation"},
+      "1h10iig4pb6e0.html": {"sha256": "19ce7358f278410a752163a9da3884460dc77aab9b7b0036684df679d642c1c8", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h10iig4pb6e0.html", "doc": "get_market_snapshot"},
+      "1h3rtq1hij0ac.html": {"sha256": "dcc22984722b1245d131c6ff9c26b986f2229aa2f0c368e2dd678fe672a8985b", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h3rtq1hij0ac.html", "doc": "get_more_info"},
+      "1h3ru0b1tssrc.html": {"sha256": "f7da98f739aadaf66af1eabcd66d377d5548485f3894b30b016bfcd8e9892d98", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h3ru0b1tssrc.html", "doc": "get_gb_info"},
+      "1hc4303vsv1fk.html": {"sha256": "cb596bc396bbac808a41f60933332ad15459444fc230599afd00e5af47528d33", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1hc4303vsv1fk.html", "doc": "get_gb_info_by_date"},
+      "1hce2o96aktmk.html": {"sha256": "735ef2df6c57647995df66dd7a233df0715c41b9083d9497becf69e7120b9477", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1hce2o96aktmk.html", "doc": "get_pricevol"},
+      "1hh9gktmqsv5c.html": {"sha256": "d98c52e90af82749ef92c7de995fcfb9c8783f5f241eec40d90258fdcedf3e7e", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1hh9gktmqsv5c.html", "doc": "get_exday_data"},
+      "1hh9i0av0gtok.html": {"sha256": "31602beac02ff009e2078d7d6a0920e71dcf5899cc7c4efb45277999dc6d53b0", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1hh9i0av0gtok.html", "doc": "get_zdt_data"},
+      "1h137jr3khrqo.html": {"sha256": "31c0195ba785331c031bd1352ab1015ac0b3ead34a38473f79d6055dab4386e0", "source_url": "https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h137jr3khrqo.html", "doc": "get_ipo_info"}
+    },
+    "derived_extract": {
+      "file": "industry-classification-extract.txt",
+      "sha256": "c7682ac5608d930521aa5062ff37e9ab3170e7fb341401db1e61a99cb854b5e4",
+      "produced_by": "pdftotext -enc UTF-8 industry-classification.pdf (poppler-utils; one-time derivation, committed as derived evidence)",
+      "note": "PDF text layout interleaves table columns; the scanner uses regex token extraction, not column alignment."
+    }
+  },
+  "url_probes_no_fetch": [
+    {"url": "https://www.tdx.com.cn/products/data/", "status": 403, "note": "directory listing denied"},
+    {"url": "https://www.tdx.com.cn/products/data/data/dbf/", "status": 403, "note": "directory listing denied"},
+    {"url": "https://data.tdx.com.cn/vipdoc/", "status": 403, "note": "directory listing denied"},
+    {"url": "https://www.tdx.com.cn/products/data/data/dbf/boost.zip", "status": 404},
+    {"url": "https://www.tdx.com.cn/products/data/data/dbf/block.zip", "status": 404},
+    {"url": "https://www.tdx.com.cn/products/data/data/dbf/incon.dat", "status": 404},
+    {"url": "https://www.tdx.com.cn/products/data/data/dbf/tdxhy.cfg", "status": 404},
+    {"url": "https://data.tdx.com.cn/vipdoc/sjshq.zip", "status": 404},
+    {"url": "https://data.tdx.com.cn/vipdoc/sjszhq.zip", "status": 404},
+    {"url": "https://data.tdx.com.cn/vipdoc/sjsgbj.zip", "status": 404},
+    {"url": "https://www.tdx.com.cn/article/datacenter.html", "status": 200, "note": "official data-center page (links to paid/premium products; lists 行情数据下载 entry)"},
+    {"url": "https://www.tdx.com.cn/soft.html", "status": 200, "note": "official download-center page"}
+  ],
+  "frozen_rules": {
+    "doc_like_extensions": [".txt", ".md", ".chm", ".hlp", ".ini", ".lst", ".pdf", ".doc", ".docx", ".html", ".cfg", ".dat"],
+    "dat_note": ".dat is data-bearing by default; classified doc-like only when decoded text contains >=2 keyword hits",
+    "keywords": ["除权", "除息", "复权", "分红", "配股", "送转", "股本", "权息", "参考价", "行业", "证券代码", "gbbq", "tdxhy", "沪深", "A股"],
+    "regex_tokens": ["\\bC[1-4]\\b", "\\bT[0-9]{2,6}\\b", "\\bX[0-9]{2,6}\\b", "\\bZX[0-9]{6}\\b", "\\bCJ[0-9]{6}\\b", "\\bZZ[0-9]{2,8}\\b"],
+    "decode_attempts": ["utf-8", "gb18030"],
+    "hsjday_member_rule": "record name/size/CRC32 only (no sha256) for *.day members; sha256 for non-.day members",
+    "probe_codes": ["X4202", "X420202", "X500102", "T1205", "T010101", "T00"],
+    "status_enum": ["VERIFIED", "CLUE_ONLY", "NOT_VERIFIED", "UNREACHABLE", "LOGIN_REQUIRED", "KEY_REQUIRED", "NOT_RUN"],
+    "anchor_enum": ["DIRECT_ANCHOR", "PARTIAL_ANCHOR", "CLUE_ONLY", "NONE"]
+  },
+  "consistency_probes": [
+    "incon.dat section coverage vs tdxhy.cfg f2(T)/f5(X) and tdxhy2.cfg f2(ZX)/f3(CJ)/f4(ZZ) token sets",
+    "industry-classification-extract.txt T/X token coverage vs the same field token sets",
+    "probe-code chain: doc sample (rs_hycode_sim=X4202/blockzscode=881355/软件服务) vs incon.dat name vs tdxzs3.cfg index binding",
+    "tdxhy.cfg f0 distinct values vs Dict.html market-enum (SZ=0/SH=1/BJ=2) — mechanical overlap only"
+  ],
+  "outputs": {
+    "sources_json": "sources.json",
+    "determinism": "two clean-checkout runs must produce byte-identical sources.json; result sha256 recorded in determinism.json"
+  },
+  "non_goals_reiterated": [
+    "sources.json records availability and potential semantic scope; it does not assert that any source is authoritative for any field.",
+    "Package-internal dictionaries (incon.dat/tdxzs3.cfg) and doc field names remain CANDIDATE anchors until an official binding statement links them to tdxhy.cfg/gbbq member fields.",
+    "Official client/TQ API behavior on this Linux box is NOT_RUN; no Wine, no login, no key."
+  ]
+}
