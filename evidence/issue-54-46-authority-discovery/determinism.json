@@ -1,0 +1,20 @@
+{
+ "runs": [
+  {
+   "checkout": "/home/box/x-data-mcp-authority-scan",
+   "commit": "2ae5f6c",
+   "sha256": "70ac4c9979bef3e8db084b6d503eb74e07e59fc9cd6d114801e93d0654fd2cdc"
+  },
+  {
+   "checkout": "/tmp/authscan-repro",
+   "commit": "2ae5f6c",
+   "sha256": "70ac4c9979bef3e8db084b6d503eb74e07e59fc9cd6d114801e93d0654fd2cdc"
+  }
+ ],
+ "byte_identical": true,
+ "result_sha256": "70ac4c9979bef3e8db084b6d503eb74e07e59fc9cd6d114801e93d0654fd2cdc",
+ "result_bytes": 2504711,
+ "python": "3.13.5",
+ "network_during_replay": 0,
+ "command": "python3 scan_authority.py --output sources.json; python3 scan_authority.py --check sources.json"
+}
