@@ -494,3 +494,180 @@ fn range_storage_failure_is_not_reported_as_invalid_input_or_success() {
     assert_eq!(error.outcome_certainty.as_deref(), Some("unknown"));
     assert!(!path.exists());
 }
+
+#[test]
+fn availability_reports_open_proven_gaps_with_canonical_evidence() {
+    use x_data_mcp::{
+        data_supply::observe::Observer,
+        market_data::Period,
+        market_storage::{GapCovering, ProvenGap},
+    };
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t);
+    market::published_fixture(&store, &market::samples()[0]["record"]);
+    let gap = |id: &str, start: &str, end: &str| ProvenGap {
+        gap_id: id.into(),
+        symbol: "sh.600006".into(),
+        period: Period::Day,
+        start_date: start.parse().unwrap(),
+        end_date: end.parse().unwrap(),
+        evidence_kind: "fixture_evidence".into(),
+        evidence_id: format!("object-{id}"),
+        evidence_digest: "a".repeat(64),
+        observed_at: "2026-09-15T00:00:00Z".parse().unwrap(),
+    };
+    store
+        .record_proven_gap(&gap("g1", "2025-03-01", "2025-03-10"))
+        .unwrap();
+    store
+        .record_proven_gap(&gap("g2", "2025-01-05", "2025-01-06"))
+        .unwrap();
+    let o = Observer::new(
+        SqliteSupply {
+            market: store.clone(),
+        },
+        "run".into(),
+    );
+    let first = o.availability(args(), &Access::local()).unwrap();
+    let gaps = &first.items[0].confirmed_gaps;
+    assert_eq!(gaps.len(), 2);
+    assert_eq!(
+        gaps[0].range,
+        Filter::Daily {
+            start_date: "2025-01-05".parse().unwrap(),
+            end_date: "2025-01-06".parse().unwrap()
+        }
+    );
+    assert_eq!(
+        gaps[0].evidence,
+        format!(
+            "{{\"kind\":\"fixture_evidence\",\"id\":\"object-g2\",\"sha256\":\"{}\"}}",
+            "a".repeat(64)
+        )
+    );
+    assert_eq!(
+        gaps[1].range,
+        Filter::Daily {
+            start_date: "2025-03-01".parse().unwrap(),
+            end_date: "2025-03-10".parse().unwrap()
+        }
+    );
+    store
+        .cover_gap(&GapCovering {
+            gap_id: "g1".into(),
+            version_id: "legacy-daily".into(),
+            covered_at: chrono::Utc::now(),
+        })
+        .unwrap();
+    let covered = o.availability(args(), &Access::local()).unwrap();
+    let remaining = &covered.items[0].confirmed_gaps;
+    assert_eq!(
+        remaining.as_slice(),
+        &[ConfirmedGap {
+            range: Filter::Daily {
+                start_date: "2025-01-05".parse().unwrap(),
+                end_date: "2025-01-06".parse().unwrap()
+            },
+            evidence: format!(
+                "{{\"kind\":\"fixture_evidence\",\"id\":\"object-g2\",\"sha256\":\"{}\"}}",
+                "a".repeat(64)
+            ),
+        }]
+    );
+}
+
+#[test]
+fn availability_maps_yearly_gaps_and_fails_closed_on_unnatural_year_range() {
+    use x_data_mcp::{
+        data_supply::observe::Observer, market_data::Period, market_storage::ProvenGap,
+    };
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t);
+    let mut yearly = ProvenGap {
+        gap_id: "y1".into(),
+        symbol: "sh.600006".into(),
+        period: Period::Year,
+        start_date: "2024-01-01".parse().unwrap(),
+        end_date: "2025-12-31".parse().unwrap(),
+        evidence_kind: "fixture_evidence".into(),
+        evidence_id: "year-object".into(),
+        evidence_digest: "b".repeat(64),
+        observed_at: "2026-09-15T00:00:00Z".parse().unwrap(),
+    };
+    store.record_proven_gap(&yearly).unwrap();
+    let o = Observer::new(
+        SqliteSupply {
+            market: store.clone(),
+        },
+        "run".into(),
+    );
+    let mut a = args();
+    a.dataset = Dataset::Yearly;
+    a.filter = Filter::Yearly {
+        start_year: 2024,
+        end_year: 2025,
+    };
+    let page = o.availability(a.clone(), &Access::local()).unwrap();
+    assert_eq!(
+        page.items[0].confirmed_gaps.as_slice(),
+        &[ConfirmedGap {
+            range: Filter::Yearly {
+                start_year: 2024,
+                end_year: 2025
+            },
+            evidence: format!(
+                "{{\"kind\":\"fixture_evidence\",\"id\":\"year-object\",\"sha256\":\"{}\"}}",
+                "b".repeat(64)
+            ),
+        }]
+    );
+    yearly.gap_id = "y2".into();
+    yearly.start_date = "2024-03-01".parse().unwrap();
+    store.record_proven_gap(&yearly).unwrap();
+    assert!(o.availability(a, &Access::local()).is_err());
+}
+
+#[test]
+fn catalog_availability_never_reports_proven_gaps() {
+    use x_data_mcp::{catalog::*, data_supply::observe::Observer, sqlite_catalog::SqliteCatalog};
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    SqliteCatalog::new(t.clone())
+        .publish_fixture(
+            "catalog-1",
+            CatalogSnapshot {
+                source: "fixture:catalog".into(),
+                acquired_at: chrono::Utc::now(),
+                completeness: CompletenessEvidence::Complete { expected_count: 1 },
+                records: vec![SecurityRecord {
+                    symbol: "600006".into(),
+                    name: "股票600006".into(),
+                    exchange: x_data_mcp::catalog::Exchange::Shanghai,
+                    security_type: SecurityType::AShare,
+                    source_security_id: "600006".into(),
+                    industry: IndustryInfo::Missing {
+                        reason: "not mapped".into(),
+                    },
+                    source: "fixture:catalog".into(),
+                    acquired_at: chrono::Utc::now(),
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    let o = Observer::new(
+        SqliteSupply {
+            market: SqliteMarket::new(t),
+        },
+        "run".into(),
+    );
+    let a: Query = serde_json::from_value(json!({"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"catalog"},"version":{"kind":"catalog_version","version_id":"catalog-1"}})).unwrap();
+    let page = o.availability(a, &Access::local()).unwrap();
+    assert_eq!(page.items[0].availability, Availability::Available);
+    assert!(page.items[0].confirmed_gaps.is_empty());
+}

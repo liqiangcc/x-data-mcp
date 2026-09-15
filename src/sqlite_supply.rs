@@ -586,6 +586,12 @@ impl ObservationRepository for SqliteSupply {
                     })
                     .cloned()
                     .collect();
+                let proven_gaps = match (&entity, plan.args.dataset.period()) {
+                    (Some(e), Some(period)) => {
+                        crate::sqlite_market::gaps::read_open_gaps(c, &e.symbol(), period)?
+                    }
+                    _ => vec![],
+                };
                 match query(c, &single, access) {
                     Ok(s) => {
                         let dates = s
@@ -603,6 +609,7 @@ impl ObservationRepository for SqliteSupply {
                             last_record: dates.last().copied(),
                             record_count: s.rows.len(),
                             integrity_failure: None,
+                            proven_gaps,
                             related_tasks,
                         });
                     }
@@ -614,6 +621,7 @@ impl ObservationRepository for SqliteSupply {
                             last_record: None,
                             record_count: 0,
                             integrity_failure: Some(reason),
+                            proven_gaps,
                             related_tasks,
                         })
                     }

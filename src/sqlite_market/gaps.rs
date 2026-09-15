@@ -64,19 +64,7 @@ impl SqliteMarket {
     }
     /// Gaps without any covering binding for one security/period.
     pub fn open_proven_gaps(&self, symbol: &str, period: Period) -> Result<Vec<ProvenGap>, Error> {
-        self.read(|c| {
-            let mut stmt = c
-                .prepare(
-                    "SELECT g.gap_id,g.symbol,g.period,g.start_date,g.end_date,g.evidence_kind,g.evidence_id,g.evidence_digest,g.observed_at FROM proven_gaps g WHERE g.symbol=?1 AND g.period=?2 AND NOT EXISTS(SELECT 1 FROM gap_coverings c WHERE c.gap_id=g.gap_id) ORDER BY g.start_date,g.end_date,g.gap_id",
-                )
-                .map_err(storage)?;
-            stmt.query_map(params![symbol, super::period(period)], gap_row)
-                .map_err(storage)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(storage)?
-                .into_iter()
-                .collect()
-        })
+        self.read(|c| read_open_gaps(c, symbol, period))
     }
     /// Audit read: all covering bindings for one gap, in append order.
     pub fn gap_coverings(&self, gap_id: &str) -> Result<Vec<GapCovering>, Error> {
@@ -162,6 +150,25 @@ fn covering_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<GapCovering, E
             .map_err(|_| integrity("stored gap covering violates invariants"))?;
         Ok(covering)
     }())
+}
+/// Same-transaction read of gaps without any covering binding; callers that
+/// already hold a read snapshot use this instead of `open_proven_gaps`.
+pub(crate) fn read_open_gaps(
+    c: &Connection,
+    symbol: &str,
+    period: Period,
+) -> Result<Vec<ProvenGap>, Error> {
+    let mut stmt = c
+        .prepare(
+            "SELECT g.gap_id,g.symbol,g.period,g.start_date,g.end_date,g.evidence_kind,g.evidence_id,g.evidence_digest,g.observed_at FROM proven_gaps g WHERE g.symbol=?1 AND g.period=?2 AND NOT EXISTS(SELECT 1 FROM gap_coverings c WHERE c.gap_id=g.gap_id) ORDER BY g.start_date,g.end_date,g.gap_id",
+        )
+        .map_err(storage)?;
+    stmt.query_map(params![symbol, super::period(period)], gap_row)
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?
+        .into_iter()
+        .collect()
 }
 fn read_gap(c: &Connection, gap_id: &str) -> Result<Option<ProvenGap>, Error> {
     c.query_row(

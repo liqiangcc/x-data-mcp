@@ -366,6 +366,22 @@ fn upgraded_v10_database_has_no_fabricated_gaps() {
     assert_eq!(counts(&db), (1, 0));
 }
 #[test]
+fn read_open_gaps_inside_caller_snapshot_matches_public_read() {
+    let (_dir, db) = setup();
+    let mut earlier = gap("g2", "sh.600006");
+    earlier.start_date = "2025-01-01".parse().unwrap();
+    earlier.end_date = "2025-01-02".parse().unwrap();
+    db.record_proven_gap(&gap("g1", "sh.600006")).unwrap();
+    db.record_proven_gap(&earlier).unwrap();
+    let c = Connection::open(db.tasks.path()).unwrap();
+    let shared = read_open_gaps(&c, "sh.600006", Period::Day).unwrap();
+    assert_eq!(
+        shared,
+        db.open_proven_gaps("sh.600006", Period::Day).unwrap()
+    );
+    assert_eq!(shared[0].gap_id, "g2");
+}
+#[test]
 fn corrupt_stored_rows_fail_closed() {
     let (_dir, db) = setup();
     db.record_proven_gap(&gap("g1", "sh.600006")).unwrap();
