@@ -5,7 +5,7 @@ use super::{
     wire::*,
 };
 use crate::{market_storage::Error, task_control::TaskSnapshot};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use std::{cell::RefCell, collections::VecDeque};
 #[derive(Clone)]
 pub struct TaskFacts {
@@ -22,6 +22,7 @@ pub struct AvailabilityFacts {
     pub last_record: Option<chrono::NaiveDate>,
     pub record_count: usize,
     pub integrity_failure: Option<String>,
+    pub proven_gaps: Vec<crate::market_storage::ProvenGap>,
     pub related_tasks: Vec<TaskFacts>,
 }
 /// Domain classification: storage reports facts, never decides availability policy.
@@ -30,7 +31,7 @@ fn availability_item(
     dataset: Dataset,
     run: &str,
     range: &Filter,
-) -> AvailabilityItem {
+) -> Result<AvailabilityItem, Error> {
     let unavailable = f.integrity_failure.is_some();
     let availability = if unavailable {
         Availability::Unavailable
@@ -52,7 +53,51 @@ fn availability_item(
             .map(|m| m.coverage_reason.clone())
             .unwrap_or_else(|| "no published version".into())
     });
-    AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),integrity:if unavailable{"failed"}else if availability==Availability::Absent{"not_applicable"}else{"verified"}.into(),confirmed_gaps:vec![],unresolved_ranges:if availability==Availability::Unknown{vec![range.clone()]}else{vec![]},availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks:f.related_tasks.iter().map(|f|summary(f,run)).collect(),limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]}
+    let confirmed_gaps = f
+        .proven_gaps
+        .iter()
+        .map(confirmed_gap)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),integrity:if unavailable{"failed"}else if availability==Availability::Absent{"not_applicable"}else{"verified"}.into(),confirmed_gaps,unresolved_ranges:if availability==Availability::Unknown{vec![range.clone()]}else{vec![]},availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks:f.related_tasks.iter().map(|f|summary(f,run)).collect(),limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]})
+}
+/// Canonical wire projection of a stored proven gap: the evidence string only
+/// references durable evidence identity (kind/id/sha256, fixed order) and never
+/// verifies or interprets the evidence object itself.
+fn confirmed_gap(g: &crate::market_storage::ProvenGap) -> Result<ConfirmedGap, Error> {
+    #[derive(serde::Serialize)]
+    struct EvidenceRef<'a> {
+        kind: &'a str,
+        id: &'a str,
+        sha256: &'a str,
+    }
+    let range = match g.period {
+        crate::market_data::Period::Day => Filter::Daily {
+            start_date: g.start_date,
+            end_date: g.end_date,
+        },
+        crate::market_data::Period::Year => {
+            let start = chrono::NaiveDate::from_ymd_opt(g.start_date.year(), 1, 1);
+            let end = chrono::NaiveDate::from_ymd_opt(g.end_date.year(), 12, 31);
+            if start != Some(g.start_date) || end != Some(g.end_date) {
+                return Err(Error::Integrity(
+                    "yearly proven gap is not a natural-year range".into(),
+                ));
+            }
+            Filter::Yearly {
+                start_year: g.start_date.year(),
+                end_year: g.end_date.year(),
+            }
+        }
+    };
+    Ok(ConfirmedGap {
+        range,
+        evidence: serde_json::to_string(&EvidenceRef {
+            kind: &g.evidence_kind,
+            id: &g.evidence_id,
+            sha256: &g.evidence_digest,
+        })
+        .map_err(|e| Error::Integrity(format!("proven gap evidence: {e}")))?,
+    })
 }
 pub trait ObservationRepository {
     fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error>;
@@ -411,7 +456,7 @@ impl<R: ObservationRepository> Observer<R> {
                 .availability(&plan, access)?
                 .into_iter()
                 .map(|f| availability_item(f, plan.args.dataset, &self.run_id, &plan.args.filter))
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, _>>()?;
             budget(&items)?;
             self.start(key, access, Content::Availability(items))
         };
