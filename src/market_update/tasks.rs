@@ -250,6 +250,9 @@ pub(crate) fn repository_error(error: crate::market_storage::Error) -> Error {
         | MarketError::Base(message)
         | MarketError::Conflict(message) => Error::NeedsVerification(message),
         MarketError::OutcomeUnknown(message) => Error::OutcomeUnknown(message),
+        MarketError::BasisNotVerified(message) => {
+            Error::NeedsVerification(format!("GAP_BASIS_NOT_VERIFIED: {message}"))
+        }
         MarketError::Invalid(message) => Error::InvalidCommand(message),
         MarketError::NotFound => {
             Error::InvalidCommand("explicit published daily base unavailable".into())

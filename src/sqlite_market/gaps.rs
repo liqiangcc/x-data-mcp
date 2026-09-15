@@ -15,6 +15,25 @@ impl SqliteMarket {
     /// fails closed. This is a pure fact layer: it stores the sealed
     /// decision verbatim and never decides which gaps exist.
     pub fn record_gap_decision(&self, decision: &GapVerificationDecision) -> Result<bool, Error> {
+        self.write_gap_decision(decision, false)
+    }
+    /// Guarded variant for the trusted producer (#155 §3.2-2): the same
+    /// atomic write, plus the current effective qfq head for the
+    /// decision's symbol+period must still equal `subject_version_id`
+    /// inside the SAME write transaction. A moved head fails closed and
+    /// rolls back decision and gap together — no gap is ever committed
+    /// from a stale subject snapshot.
+    pub fn record_gap_decision_guarded(
+        &self,
+        decision: &GapVerificationDecision,
+    ) -> Result<bool, Error> {
+        self.write_gap_decision(decision, true)
+    }
+    fn write_gap_decision(
+        &self,
+        decision: &GapVerificationDecision,
+        guard_subject_head: bool,
+    ) -> Result<bool, Error> {
         decision.validate()?;
         let gap = ProvenGap {
             gap_id: derive_gap_id(decision),
@@ -39,6 +58,18 @@ impl SqliteMarket {
                     None => return Err(insert),
                 },
             };
+            // The stale-head guard gates only a NEW commit; an identical
+            // already-committed decision replays as a no-op even if the
+            // head has since moved.
+            if guard_subject_head && inserted {
+                let scope = Scope {
+                    symbol: decision.symbol.clone(),
+                    period: decision.period,
+                };
+                if head(c, &scope)?.as_deref() != Some(decision.subject_version_id.as_str()) {
+                    return Err(integrity("gap decision subject head moved"));
+                }
+            }
             if decision.conclusion == CONFIRMED_MISSING_RANGE {
                 match insert_gap(c, &gap) {
                     Ok(()) => Ok(true),
