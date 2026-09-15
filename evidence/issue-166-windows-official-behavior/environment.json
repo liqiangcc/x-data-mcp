@@ -1,0 +1,41 @@
+{
+  "recorded_at_local": "2026-09-15T22:05+08:00",
+  "os": {
+    "caption": "Microsoft Windows",
+    "version": "10.0.26200.8875",
+    "current_build": "26200",
+    "ubr": "8875",
+    "arch": "x86_64"
+  },
+  "timezone": {"name": "China Standard Time", "offset": "+08:00", "date": "2026-09-15", "weekday": "Tuesday"},
+  "client": {
+    "product": "通达信金融终端 64-bit (TdxW.exe)",
+    "install_dir": "C:\\new_tdx64",
+    "installer_wizard_title": "通达信金融终端64--V7.73安装程序",
+    "installer_internal_name": "TdxIntall.EXE",
+    "exe_version_info": "FileVersion/ProductVersion 1.0.0.1 (generic stub; marketing version carried by installer title V7.73)",
+    "files_written_local": "2026-09-15 21:49-21:51 +08:00",
+    "running_processes": ["TdxW.exe (C:\\new_tdx64\\TdxW.exe)", "tdxcef.exe x2 (C:\\new_tdx64\\chrome\\tdxcef.exe)"],
+    "login_state": "logged in (top-bar account masked 190****7027); quote server shown as 上海双线主站10",
+    "stale_residue": "registry uninstall entry -> C:\\new_tdx\\ (empty except system.uid, 2024-12); not part of this install"
+  },
+  "installer": {
+    "url": "https://data.tdx.com.cn/level2/new_tdx64.exe",
+    "download_page": "https://www.tdx.com.cn/products/singledown.html",
+    "http": {"status": 200, "content_length": 185469360, "last_modified_gmt": "Tue, 04 Aug 2026 08:28:37 GMT", "etag": "\"6a71a2b5-b0e09b0\""},
+    "sha256": "10c523db57546e91a3b84bda7243ee47c949aa379e13c3ceae6c42c964ae0ce0",
+    "fetched_local": "2026-09-15T21:42+08:00",
+    "download_seconds": 41.6,
+    "local_copy": "C:\\Users\\liqia\\tdx-official\\new_tdx64.exe"
+  },
+  "tq": {
+    "menu_present": "TQ策略 top-level menu present in client UI",
+    "components": ["C:\\new_tdx64\\NewTc\\ (TC.exe trading client)", "C:\\new_tdx64\\PYPlugins\\ (TPyth.dll, tdxrpcx64.dll)", "C:\\new_tdx64\\TcApi_Cache\\"],
+    "usable": "UNKNOWN at plan-freeze time; TQ programmatic interface requires TQ-enabled account — outcome recorded in result.json"
+  },
+  "tooling": {
+    "python": "C:\\veighna_studio\\python.exe 3.10.9",
+    "gui_automation": "pywinauto 0.6.9 (installed this session), PIL ImageGrab screenshots",
+    "note": "client process runs non-elevated for capture tooling; installer elevation avoided via __COMPAT_LAYER=RunAsInvoker for the second wizard instance"
+  }
+}
