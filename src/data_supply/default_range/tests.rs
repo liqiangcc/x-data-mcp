@@ -37,6 +37,14 @@ fn open(dir: &tempfile::TempDir) -> (SqliteTasks, SqliteCatalog, SqliteMarket) {
     )
 }
 fn publish_catalog(catalog: &SqliteCatalog, id: &str, codes: &[&str]) {
+    publish_catalog_expected(catalog, id, codes, None);
+}
+fn publish_catalog_expected(
+    catalog: &SqliteCatalog,
+    id: &str,
+    codes: &[&str],
+    expected: Option<&str>,
+) {
     let records = codes
         .iter()
         .map(|code| SecurityRecord {
@@ -63,7 +71,7 @@ fn publish_catalog(catalog: &SqliteCatalog, id: &str, codes: &[&str]) {
                 },
                 records,
             },
-            None,
+            expected,
         )
         .unwrap();
 }
@@ -170,6 +178,57 @@ fn resolve(
 ) -> Result<DefaultWork, SelectionError> {
     let c = Connection::open(db.tasks.path()).unwrap();
     resolve_default_work_on(&c, op, today)
+}
+/// Acceptance control carrying the default contracts plus the legacy
+/// collection the fixtures need for execution-start markers.
+fn acceptance_ctl(
+    tasks: &SqliteTasks,
+    db: &SqliteMarket,
+    clock: fn() -> NaiveDate,
+) -> TaskControl<SqliteTasks> {
+    TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![
+            Box::new(LegacyCollection),
+            Box::new(DefaultRangeContract {
+                operation: crate::market_update::tasks::Operation::Update,
+                resolver: db.clone(),
+                today: clock,
+            }),
+            Box::new(DefaultRangeContract {
+                operation: crate::market_update::tasks::Operation::Backfill,
+                resolver: db.clone(),
+                today: clock,
+            }),
+        ],
+    )
+    .unwrap()
+}
+fn default_key(op: crate::market_update::tasks::Operation, db: &SqliteMarket) -> task::CommandKey {
+    DefaultRangeContract {
+        operation: op,
+        resolver: db.clone(),
+        today,
+    }
+    .key()
+}
+fn occupancy_and_request_rows(db: &SqliteMarket, request_id: &str) -> (i64, i64) {
+    let c = Connection::open(db.tasks.path()).unwrap();
+    let requests: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM requests WHERE request_id=?1",
+            [request_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let occupancy: i64 = c
+        .query_row("SELECT COUNT(*) FROM scope_occupancy", [], |r| r.get(0))
+        .unwrap();
+    (requests, occupancy)
+}
+fn intent() -> Value {
+    json!({"selection":{"kind":"default"}})
 }
 #[test]
 fn update_freezes_refresh_range_base_identity_and_gap_provenance() {
@@ -412,4 +471,337 @@ fn same_snapshot_and_clock_replays_identical_work() {
     let first = resolve_default_work_on(&c, DefaultOperation::Update, today()).unwrap();
     let second = resolve_default_work_on(&c, DefaultOperation::Update, today()).unwrap();
     assert_eq!(first, second);
+}
+#[test]
+fn update_acceptance_freezes_minimal_intent_and_both_provenance_classes() {
+    use crate::market_update::tasks::{DEFAULT_CONTRACT_VERSION, Operation};
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006"]);
+    let setup = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    publish_daily(&db, &setup, "600006", 0);
+    db.record_proven_gap(&gap("g1", "sh.600006", "2025-02-01", "2025-02-10"))
+        .unwrap();
+    let ctl = acceptance_ctl(&tasks, &db, today);
+    let accepted = ctl
+        .accept("r-default", default_key(Operation::Update, &db), intent())
+        .unwrap();
+    assert!(!accepted.reused);
+    // The persisted command stays the minimal deterministic intent: resolved
+    // securities, ranges and evidence never enter request identity.
+    assert_eq!(accepted.record.command.intent, intent());
+    let RequestOutcome::Task(snap) = &accepted.record.outcome else {
+        panic!()
+    };
+    assert_eq!(snap.task.key.contract_version, DEFAULT_CONTRACT_VERSION);
+    assert_eq!(snap.task.key.dataset, "market.daily");
+    assert_eq!(snap.items.len(), 1);
+    // Item scope/occupancy identical to explicit daily: symbol x day.
+    assert_eq!(snap.items[0].spec.item_id, scope_id("sh.600006", "day"));
+    let f = &snap.items[0].spec.frozen_inputs;
+    // Class 1: selection/catalog/execution-start provenance.
+    let ev = &f["selection_evidence"];
+    assert_eq!(ev["catalog_version_id"], json!("c1"));
+    assert_eq!(ev["catalog_digest"].as_str().unwrap().len(), 64);
+    assert_eq!(ev["securities"], json!(["sh.600006"]));
+    assert!(ev["starts"]["sh.600006"].is_array());
+    assert_eq!(ev["evidence_digest"].as_str().unwrap().len(), 64);
+    // Verified base identity.
+    assert_eq!(f["base_version_id"], json!("daily-600006"));
+    assert_eq!(f["base_integrity_sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(
+        f["refresh_range"],
+        json!({"start_date":"2024-12-31","end_date":TODAY})
+    );
+    // Class 2: per-gap provenance stays a distinct list.
+    assert_eq!(
+        f["proven_gap_ranges"],
+        json!([{
+            "gap_id":"g1",
+            "range":{"start_date":"2025-02-01","end_date":"2025-02-10"},
+            "evidence_digest":"e".repeat(64)
+        }])
+    );
+}
+#[test]
+fn acceptance_rejects_caller_overrides_and_shape_violations() {
+    use crate::market_update::tasks::Operation;
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006"]);
+    let setup = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    publish_daily(&db, &setup, "600006", 0);
+    let ctl = acceptance_ctl(&tasks, &db, today);
+    let key = default_key(Operation::Update, &db);
+    for (i, bad) in [
+        json!({"selection":{"kind":"default","base_version_id":"x"}}),
+        json!({"selection":{"kind":"default","start_date":"2025-01-01"}}),
+        json!({"selection":{"kind":"default","end_date":"2025-12-31"}}),
+        json!({"selection":{"kind":"default","gap_ids":["g1"]}}),
+        json!({"selection":{"kind":"default"},"base_version_id":"x"}),
+        json!({"selection":{"kind":"explicit","securities":[]}}),
+        json!({"selection":{"kind":"catalog","version_id":"c1"}}),
+        json!({"selection":{"kind":"future"}}),
+        json!({}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request_id = format!("bad-{i}");
+        assert!(matches!(
+            ctl.accept(&request_id, key.clone(), bad),
+            Err(task::Error::InvalidCommand(_))
+        ));
+        assert!(ctl.repository.read_request(&request_id).unwrap().is_none());
+    }
+}
+#[test]
+fn replay_returns_original_task_without_recompute() {
+    use crate::market_update::tasks::Operation;
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006"]);
+    let setup = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    publish_daily(&db, &setup, "600006", 0);
+    db.record_proven_gap(&gap("g1", "sh.600006", "2025-02-01", "2025-02-10"))
+        .unwrap();
+    let ctl = acceptance_ctl(&tasks, &db, today);
+    let key = default_key(Operation::Update, &db);
+    let first = ctl.accept("r1", key.clone(), intent()).unwrap();
+    let RequestOutcome::Task(before) = &first.record.outcome else {
+        panic!()
+    };
+    let frozen_before = before.items[0].spec.frozen_inputs.clone();
+    // Catalog head, gap set and selection facts change after acceptance.
+    publish_catalog_expected(&catalog, "c2", &["600006", "600008"], Some("c1"));
+    db.record_proven_gap(&gap("g9", "sh.600006", "2025-03-01", "2025-03-02"))
+        .unwrap();
+    let replay = ctl.accept("r1", key.clone(), intent()).unwrap();
+    assert!(replay.reused);
+    let RequestOutcome::Task(after) = &replay.record.outcome else {
+        panic!()
+    };
+    assert_eq!(after.task.task_id, before.task.task_id);
+    assert_eq!(after.items[0].spec.frozen_inputs, frozen_before);
+    // Same request_id with different arguments conflicts.
+    assert!(matches!(
+        ctl.accept("r1", default_key(Operation::Backfill, &db), intent()),
+        Err(task::Error::RequestConflict)
+    ));
+    assert!(matches!(
+        ctl.accept("r1", Operation::Update.key(), json!({"items":[]})),
+        Err(task::Error::RequestConflict)
+    ));
+}
+#[test]
+fn backfill_acceptance_creates_only_gap_items_without_refresh_range() {
+    use crate::market_update::tasks::Operation;
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006", "600007"]);
+    let setup = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    publish_daily(&db, &setup, "600006", 0);
+    publish_daily(&db, &setup, "600007", 1);
+    db.record_proven_gap(&gap("g1", "sh.600006", "2025-02-01", "2025-02-10"))
+        .unwrap();
+    let ctl = acceptance_ctl(&tasks, &db, today);
+    let accepted = ctl
+        .accept("r-bf", default_key(Operation::Backfill, &db), intent())
+        .unwrap();
+    let RequestOutcome::Task(snap) = &accepted.record.outcome else {
+        panic!()
+    };
+    assert_eq!(snap.items.len(), 1);
+    assert_eq!(snap.items[0].spec.item_id, scope_id("sh.600006", "day"));
+    let f = &snap.items[0].spec.frozen_inputs;
+    assert!(f.get("refresh_range").is_none());
+    assert_eq!(f["proven_gap_ranges"].as_array().unwrap().len(), 1);
+    assert_eq!(f["proven_gap_ranges"][0]["gap_id"], json!("g1"));
+    assert_eq!(f["base_version_id"], json!("daily-600006"));
+}
+#[test]
+fn zero_gap_backfill_rejects_before_persistence() {
+    use crate::market_update::tasks::Operation;
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006"]);
+    let setup = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    publish_daily(&db, &setup, "600006", 0);
+    let ctl = acceptance_ctl(&tasks, &db, today);
+    let (requests, occupancy) = occupancy_and_request_rows(&db, "r-empty");
+    assert!(matches!(
+        ctl.accept("r-empty", default_key(Operation::Backfill, &db), intent()),
+        Err(task::Error::InvalidCommand(_))
+    ));
+    assert_eq!(
+        occupancy_and_request_rows(&db, "r-empty"),
+        (requests, occupancy)
+    );
+}
+#[test]
+fn over_budget_default_rejects_before_persistence() {
+    use crate::market_update::tasks::Operation;
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    let setup = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    let codes: Vec<String> = (0..=MAX_DEFAULT_SECURITIES)
+        .map(|i| format!("6{i:05}"))
+        .collect();
+    let refs: Vec<&str> = codes.iter().map(String::as_str).collect();
+    publish_catalog(&catalog, "c1", &refs);
+    for (i, code) in codes.iter().enumerate() {
+        publish_daily(&db, &setup, code, i);
+    }
+    let ctl = acceptance_ctl(&tasks, &db, today);
+    let (requests, occupancy) = occupancy_and_request_rows(&db, "r-big");
+    assert!(matches!(
+        ctl.accept("r-big", default_key(Operation::Update, &db), intent()),
+        Err(task::Error::InvalidCommand(_))
+    ));
+    assert_eq!(
+        occupancy_and_request_rows(&db, "r-big"),
+        (requests, occupancy)
+    );
+}
+#[test]
+fn future_resolution_rejects_before_persistence() {
+    use crate::market_update::tasks::Operation;
+    fn early() -> NaiveDate {
+        "2025-12-30".parse().unwrap()
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006"]);
+    let setup = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    publish_daily(&db, &setup, "600006", 0);
+    // The fixture head's last bar (2025-12-31) is beyond this clock's
+    // acceptance date: the whole batch rejects before any rows persist.
+    let ctl = acceptance_ctl(&tasks, &db, early);
+    let (requests, occupancy) = occupancy_and_request_rows(&db, "r-future");
+    assert!(matches!(
+        ctl.accept("r-future", default_key(Operation::Update, &db), intent()),
+        Err(task::Error::InvalidCommand(_))
+    ));
+    assert_eq!(
+        occupancy_and_request_rows(&db, "r-future"),
+        (requests, occupancy)
+    );
+}
+#[test]
+fn runner_fails_closed_on_default_contract_before_execution() {
+    use crate::market_update::tasks::Operation;
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006"]);
+    let setup = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    publish_daily(&db, &setup, "600006", 0);
+    let ctl = acceptance_ctl(&tasks, &db, today);
+    let accepted = ctl
+        .accept("r-run", default_key(Operation::Update, &db), intent())
+        .unwrap();
+    let RequestOutcome::Task(snap) = &accepted.record.outcome else {
+        panic!()
+    };
+    let task_id = snap.task.task_id.clone();
+    // The installed runner rejects the new contract/frozen shape loudly at
+    // its contract gate instead of executing partial work; the inner
+    // `frozen["range"]` Integrity guard is never even reached.
+    let runner = crate::market_update::runner::RangeRunner {
+        repository: db.clone(),
+        run_id: "run".into(),
+    };
+    assert!(matches!(
+        runner.run_item(
+            &task_id,
+            &snap.items[0].spec.item_id,
+            &crate::market_update::runner::OfficialRangeProvider,
+        ),
+        Err(crate::market_storage::Error::Invalid(ref m))
+            if m.contains("unsupported range execution contract")
+    ));
+    assert!(matches!(
+        crate::data_supply::worker::run_once(&ctl, &db),
+        Err(crate::market_storage::Error::Invalid(ref m))
+            if m.contains("unsupported range execution contract")
+    ));
+    let after = ctl.repository.read_task(&task_id).unwrap().unwrap();
+    assert!(after.items.iter().all(|i| i.outcome.is_none()));
+}
+#[test]
+fn explicit_daily_acceptance_still_uses_the_explicit_contract() {
+    use crate::market_update::tasks::{CONTRACT_VERSION, Operation, RangeContract};
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006"]);
+    let ctl = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![
+            Box::new(LegacyCollection),
+            Box::new(RangeContract {
+                operation: Operation::Update,
+                repository: db.clone(),
+                today,
+            }),
+        ],
+    )
+    .unwrap();
+    publish_daily(&db, &ctl, "600006", 0);
+    let accepted = ctl
+        .accept(
+            "r-explicit",
+            Operation::Update.key(),
+            json!({"items":[{
+                "symbol":"sh.600006",
+                "base_version_id":"daily-600006",
+                "start_date":"2025-12-01",
+                "end_date":"2025-12-31"
+            }]}),
+        )
+        .unwrap();
+    let RequestOutcome::Task(snap) = &accepted.record.outcome else {
+        panic!()
+    };
+    assert_eq!(snap.task.key.contract_version, CONTRACT_VERSION);
+    assert!(snap.items[0].spec.frozen_inputs["range"].is_object());
 }

@@ -671,3 +671,271 @@ fn catalog_availability_never_reports_proven_gaps() {
     assert_eq!(page.items[0].availability, Availability::Available);
     assert!(page.items[0].confirmed_gaps.is_empty());
 }
+
+/// #147 Slice 3 wire: `selection {"kind":"default"}` for market.daily
+/// update/backfill — closed shape, snapshot resolution, replay identity.
+mod default_selection_wire {
+    use super::market;
+    use serde_json::json;
+    use x_data_mcp::{
+        catalog::{
+            CatalogSnapshot, CompletenessEvidence, Exchange, IndustryInfo, SecurityRecord,
+            SecurityType,
+        },
+        data_supply::{Access, mcp::DataApi, wire::*},
+        market_data::Period,
+        market_storage::ProvenGap,
+        mcp::ToolHandler,
+        sqlite_catalog::SqliteCatalog,
+        sqlite_market::SqliteMarket,
+        sqlite_tasks::SqliteTasks,
+        task_control::TaskRepository,
+    };
+    fn catalog(catalog: &SqliteCatalog, id: &str, codes: &[&str]) {
+        let records = codes
+            .iter()
+            .map(|code| SecurityRecord {
+                symbol: (*code).into(),
+                name: (*code).into(),
+                exchange: Exchange::Shanghai,
+                security_type: SecurityType::AShare,
+                source_security_id: (*code).into(),
+                industry: IndustryInfo::Missing {
+                    reason: "fixture".into(),
+                },
+                source: "fixture:catalog".into(),
+                acquired_at: chrono::Utc::now(),
+            })
+            .collect::<Vec<_>>();
+        catalog
+            .publish_fixture(
+                id,
+                CatalogSnapshot {
+                    source: "fixture:catalog".into(),
+                    acquired_at: chrono::Utc::now(),
+                    completeness: CompletenessEvidence::Complete {
+                        expected_count: records.len(),
+                    },
+                    records,
+                },
+                None,
+            )
+            .unwrap();
+    }
+    fn gap(id: &str, symbol: &str, start: &str, end: &str) -> ProvenGap {
+        ProvenGap {
+            gap_id: id.into(),
+            symbol: symbol.into(),
+            period: Period::Day,
+            start_date: start.parse().unwrap(),
+            end_date: end.parse().unwrap(),
+            evidence_kind: "gap_verification_decision".into(),
+            evidence_id: format!("evidence-{id}"),
+            evidence_digest: "e".repeat(64),
+            observed_at: "2026-09-15T00:00:00Z".parse().unwrap(),
+        }
+    }
+    fn daily_write(request_id: &str) -> serde_json::Value {
+        json!({"request_id":request_id,"dataset":"market.daily","contract_version":"v1","selection":{"kind":"default"}})
+    }
+    #[test]
+    fn default_selection_is_closed_and_in_the_registered_schema() {
+        // Serde level: the variant exists and override fields fail decode.
+        assert_eq!(
+            serde_json::from_value::<WriteSelection>(json!({"kind":"default"})).unwrap(),
+            WriteSelection::Default
+        );
+        for field in ["base_version_id", "start_date", "end_date", "gap_ids"] {
+            let mut v = json!({"kind":"default"});
+            v[field] = json!("x");
+            assert!(serde_json::from_value::<RangeWriteSelection>(v).is_err());
+        }
+        assert!(serde_json::from_value::<RangeWriteSelection>(json!({"kind":"explicit"})).is_err());
+        // Registered tool schema advertises the closed variant.
+        let d = tempfile::tempdir().unwrap();
+        let api = DataApi::new(
+            SqliteTasks::new(d.path().join("db")),
+            "run".into(),
+            Access::local(),
+        )
+        .unwrap();
+        let detail = api
+            .call(
+                "get_data_capabilities",
+                json!({"dataset":"market.daily","operation":"update_data"}),
+            )
+            .unwrap();
+        let schema = &detail["items"][0]["input_schema"];
+        assert!(schema.to_string().contains("\"default\""));
+        jsonschema::validator_for(schema)
+            .unwrap()
+            .validate(&detail["items"][0]["example"])
+            .unwrap();
+    }
+    #[test]
+    fn daily_default_wire_rejects_overrides_conflicts_and_other_kinds() {
+        let d = tempfile::tempdir().unwrap();
+        let t = SqliteTasks::new(d.path().join("db"));
+        t.initialize().unwrap();
+        let api = DataApi::new(t, "run".into(), Access::local()).unwrap();
+        for (i, mut a) in [
+            json!({"dataset":"market.daily","contract_version":"v1","request_id":"w0","selection":{"kind":"default","base_version_id":"x"}}),
+            json!({"dataset":"market.daily","contract_version":"v1","request_id":"w1","selection":{"kind":"default","start_date":"2025-01-01"}}),
+            json!({"dataset":"market.daily","contract_version":"v1","request_id":"w2","selection":{"kind":"default","gap_ids":["g"]}}),
+            json!({"dataset":"market.daily","contract_version":"v1","request_id":"w3","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600006"}]}}),
+            json!({"dataset":"market.daily","contract_version":"v1","request_id":"w4","selection":{"kind":"catalog","version_id":"c1"}}),
+            json!({"dataset":"market.daily","contract_version":"v1","request_id":"w5","selection":{"kind":"default"},"items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"v","start_date":"2025-01-01","end_date":"2025-02-01"}]}),
+            json!({"dataset":"market.daily","contract_version":"v1","request_id":"w6"}),
+            json!({"dataset":"market.yearly","contract_version":"v1","request_id":"w7","selection":{"kind":"default"},"items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"v","years":[2025],"publication":{"mode":"current_head"}}]}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            a["request_id"] = json!(format!("w{i}"));
+            assert_eq!(
+                api.call("update_data", a).unwrap_err().code,
+                "invalid_arguments"
+            );
+        }
+        // start_collection does not accept the default selection either.
+        assert_eq!(
+            api.call(
+                "start_collection",
+                json!({"request_id":"c0","dataset":"market.daily","contract_version":"v1","selection":{"kind":"default"}})
+            )
+            .unwrap_err()
+            .code,
+            "invalid_arguments"
+        );
+        assert_eq!(
+            api.call(
+                "start_collection",
+                json!({"request_id":"c1","dataset":"market.yearly","contract_version":"v1","selection":{"kind":"default"},"base_daily_versions":[],"years":[2025]})
+            )
+            .unwrap_err()
+            .code,
+            "invalid_arguments"
+        );
+    }
+    #[test]
+    fn update_default_freezes_snapshot_evidence_and_replays_without_recompute() {
+        let d = tempfile::tempdir().unwrap();
+        let t = SqliteTasks::new(d.path().join("db"));
+        t.initialize().unwrap();
+        let store = SqliteMarket::new(t.clone());
+        catalog(&SqliteCatalog::new(t.clone()), "catalog-1", &["600006"]);
+        market::published_fixture(&store, &market::samples()[0]["record"]);
+        store
+            .record_proven_gap(&gap("g1", "sh.600006", "2025-02-01", "2025-02-10"))
+            .unwrap();
+        let api = DataApi::new(t.clone(), "run".into(), Access::local()).unwrap();
+        let first = api.call("update_data", daily_write("d1")).unwrap();
+        assert_eq!(first["reused"], json!(false));
+        assert_eq!(first["contract_version"], json!("default-range-task-v1"));
+        let task_id = first["task_id"].as_str().unwrap().to_owned();
+        // Frozen per-item inputs carry both provenance classes.
+        let snap = t.read_task(&task_id).unwrap().unwrap();
+        let f = &snap.items[0].spec.frozen_inputs;
+        assert_eq!(
+            f["selection_evidence"]["catalog_version_id"],
+            json!("catalog-1")
+        );
+        assert_eq!(f["selection_evidence"]["securities"], json!(["sh.600006"]));
+        assert_eq!(f["base_version_id"], json!("legacy-daily"));
+        assert_eq!(f["base_integrity_sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(f["refresh_range"]["start_date"], json!("2024-12-31"));
+        assert_eq!(f["proven_gap_ranges"][0]["gap_id"], json!("g1"));
+        assert_eq!(
+            f["proven_gap_ranges"][0]["evidence_digest"],
+            json!("e".repeat(64))
+        );
+        // Progress projects refresh + gap ranges from the default frozen
+        // shape instead of failing closed on the new contract version.
+        let progress = api
+            .call(
+                "get_task_progress",
+                json!({"task_id":task_id,"page_size":100}),
+            )
+            .unwrap();
+        let ranges = progress["frozen_daily_ranges"].as_array().unwrap();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0]["start_date"], json!("2024-12-31"));
+        assert_eq!(ranges[1]["start_date"], json!("2025-02-01"));
+        // Facts change after acceptance; the same request replays the
+        // original task instead of recomputing.
+        store
+            .record_proven_gap(&gap("g9", "sh.600006", "2025-03-01", "2025-03-02"))
+            .unwrap();
+        let replay = api.call("update_data", daily_write("d1")).unwrap();
+        assert_eq!(replay["reused"], json!(true));
+        assert_eq!(replay["task_id"], json!(task_id));
+        let after = t
+            .read_task(replay["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.items[0].spec.frozen_inputs, *f);
+        // Same request_id with different arguments conflicts.
+        let mut different = daily_write("d1");
+        different.as_object_mut().unwrap().remove("selection");
+        different["items"] = json!([{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"legacy-daily","start_date":"2025-01-01","end_date":"2025-12-31"}]);
+        assert_eq!(
+            api.call("update_data", different).unwrap_err().code,
+            "request_conflict"
+        );
+    }
+    #[test]
+    fn backfill_default_creates_only_gap_items_and_empty_fails_closed() {
+        let d = tempfile::tempdir().unwrap();
+        let t = SqliteTasks::new(d.path().join("db"));
+        t.initialize().unwrap();
+        let store = SqliteMarket::new(t.clone());
+        catalog(&SqliteCatalog::new(t.clone()), "catalog-1", &["600006"]);
+        market::published_fixture(&store, &market::samples()[0]["record"]);
+        let api = DataApi::new(t.clone(), "run".into(), Access::local()).unwrap();
+        // No open proven gaps -> fail closed, nothing persisted.
+        assert_eq!(
+            api.call("backfill_data", daily_write("b0"))
+                .unwrap_err()
+                .code,
+            "invalid_arguments"
+        );
+        assert!(t.read_request("b0").unwrap().is_none());
+        store
+            .record_proven_gap(&gap("g1", "sh.600006", "2025-02-01", "2025-02-10"))
+            .unwrap();
+        let first = api.call("backfill_data", daily_write("b1")).unwrap();
+        assert_eq!(first["contract_version"], json!("default-range-task-v1"));
+        let snap = t
+            .read_task(first["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(snap.items.len(), 1);
+        let f = &snap.items[0].spec.frozen_inputs;
+        assert!(f.get("refresh_range").is_none());
+        assert_eq!(f["proven_gap_ranges"].as_array().unwrap().len(), 1);
+    }
+    #[test]
+    fn explicit_daily_update_is_unchanged() {
+        let d = tempfile::tempdir().unwrap();
+        let t = SqliteTasks::new(d.path().join("db"));
+        t.initialize().unwrap();
+        let store = SqliteMarket::new(t.clone());
+        catalog(&SqliteCatalog::new(t.clone()), "catalog-1", &["600006"]);
+        market::published_fixture(&store, &market::samples()[0]["record"]);
+        let api = DataApi::new(t, "run".into(), Access::local()).unwrap();
+        let first = api
+            .call(
+                "update_data",
+                json!({"request_id":"e1","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"legacy-daily","start_date":"2025-12-01","end_date":"2025-12-31"}]}),
+            )
+            .unwrap();
+        assert_eq!(first["contract_version"], json!("explicit-range-task-v1"));
+        let replay = api
+            .call(
+                "update_data",
+                json!({"request_id":"e1","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"legacy-daily","start_date":"2025-12-01","end_date":"2025-12-31"}]}),
+            )
+            .unwrap();
+        assert_eq!(replay["reused"], json!(true));
+    }
+}

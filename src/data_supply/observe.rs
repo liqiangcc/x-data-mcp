@@ -504,19 +504,45 @@ fn frozen_daily_ranges(task: &TaskSnapshot) -> Result<Vec<FrozenDailyRange>, Err
     ) {
         return Ok(vec![]);
     }
-    if task.task.key.contract_version != crate::market_update::tasks::CONTRACT_VERSION {
+    let explicit = task.task.key.contract_version == crate::market_update::tasks::CONTRACT_VERSION;
+    let default =
+        task.task.key.contract_version == crate::market_update::tasks::DEFAULT_CONTRACT_VERSION;
+    if !explicit && !default {
         return Err(Error::Integrity("unknown frozen range contract".into()));
     }
-    task.items.iter().map(|item| {
-        let frozen=&item.spec.frozen_inputs;
-        let entity=item.spec.target["symbol"].as_str().and_then(entity)
-            .ok_or_else(||Error::Integrity("frozen range entity missing".into()))?;
-        serde_json::from_value(serde_json::json!({
-            "item_id":item.spec.item_id,"entity":entity,
-            "base_version_id":frozen["base_version_id"],"base_integrity_sha256":frozen["base_integrity_sha256"],
-            "start_date":frozen["range"]["start"],"end_date":frozen["range"]["end"]
-        })).map_err(|e|Error::Integrity(format!("frozen range: {e}")))
-    }).collect()
+    let mut out = vec![];
+    for item in &task.items {
+        let frozen = &item.spec.frozen_inputs;
+        let entity = item.spec.target["symbol"]
+            .as_str()
+            .and_then(entity)
+            .ok_or_else(|| Error::Integrity("frozen range entity missing".into()))?;
+        let mut ranges: Vec<serde_json::Value> = vec![];
+        if explicit {
+            let range = &frozen["range"];
+            ranges.push(serde_json::json!({
+                "start_date":range["start"],"end_date":range["end"]
+            }));
+        } else {
+            if let Some(refresh) = frozen.get("refresh_range") {
+                ranges.push(refresh.clone());
+            }
+            for gap in frozen["proven_gap_ranges"]
+                .as_array()
+                .ok_or_else(|| Error::Integrity("frozen proven gap ranges missing".into()))?
+            {
+                ranges.push(gap["range"].clone());
+            }
+        }
+        for range in ranges {
+            out.push(serde_json::from_value(serde_json::json!({
+                "item_id":item.spec.item_id,"entity":entity,
+                "base_version_id":frozen["base_version_id"],"base_integrity_sha256":frozen["base_integrity_sha256"],
+                "start_date":range["start_date"],"end_date":range["end_date"]
+            })).map_err(|e|Error::Integrity(format!("frozen range: {e}")))?);
+        }
+    }
+    Ok(out)
 }
 
 fn frozen_yearly_inputs(task: &TaskSnapshot) -> Result<Vec<FrozenYearlyInput>, Error> {

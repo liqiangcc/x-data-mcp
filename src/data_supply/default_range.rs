@@ -24,11 +24,14 @@ use super::default_selection::{DefaultDailySelection, SelectionError, resolve_de
 use crate::{
     market_data::Period,
     market_storage::Scope,
-    sqlite_market::{gaps::read_open_gaps, head, read_record},
+    sqlite_market::{SqliteMarket, gaps::read_open_gaps, head, read_record},
+    task_control::{self as task, Contract, FrozenWork, ItemSpec, legacy::scope_id},
 };
 use chrono::NaiveDate;
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
 /// Maximum securities in one resolved default selection; matches the explicit
 /// selection budget. Never truncated or paginated into multiple write tasks.
 pub const MAX_DEFAULT_SECURITIES: usize = 100;
@@ -180,6 +183,124 @@ pub fn resolve_default_work_on(
         return Err(SelectionError::EmptySelection);
     }
     Ok(DefaultWork { selection, items })
+}
+/// Resolution port for the default-range contract: implementors run
+/// `resolve_default_work_on` inside one repository-owned SQLite read
+/// snapshot so catalog, heads and open gaps are mutually consistent. This
+/// keeps `Contract::resolve(&self, &Value)` unchanged — the snapshot scope
+/// lives inside the port, not the trait signature.
+pub trait DefaultRangeSource {
+    fn resolve_default_work(
+        &self,
+        op: DefaultOperation,
+        today: NaiveDate,
+    ) -> Result<DefaultWork, crate::market_storage::Error>;
+}
+impl DefaultRangeSource for SqliteMarket {
+    fn resolve_default_work(
+        &self,
+        op: DefaultOperation,
+        today: NaiveDate,
+    ) -> Result<DefaultWork, crate::market_storage::Error> {
+        self.read(|c| {
+            resolve_default_work_on(c, op, today).map_err(|e| match e {
+                SelectionError::EmptySelection => {
+                    crate::market_storage::Error::Invalid("EMPTY_SELECTION".into())
+                }
+                SelectionError::Invalid(message) => crate::market_storage::Error::Invalid(message),
+            })
+        })
+    }
+}
+/// Closed normalized intent for `selection.kind=default`: the command
+/// payload stays the deterministic minimal `{"selection":{"kind":"default"}}`
+/// and resolved securities, ranges and evidence never enter it, so
+/// request_id replay matching stays deterministic across later catalog,
+/// gap or clock changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DefaultIntent {
+    selection: DefaultMarker,
+}
+/// Struct marker rather than a tagged unit variant: serde
+/// `deny_unknown_fields` does not reject extra keys on internally-tagged
+/// unit enum variants, so caller override fields must fail decode here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DefaultMarker {
+    kind: DefaultKind,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum DefaultKind {
+    Default,
+}
+fn task_invalid(message: impl ToString) -> task::Error {
+    task::Error::InvalidCommand(message.to_string())
+}
+/// Frozen per-item inputs (serde-stable evidence shape):
+/// `selection_evidence` (catalog + execution-start provenance), verified
+/// base identity, `refresh_range` for update only (absent for backfill),
+/// and `proven_gap_ranges` as a distinct gap-provenance class.
+fn frozen_default(selection: &DefaultDailySelection, item: &FrozenSecurityWork) -> Value {
+    let mut frozen = json!({
+        "selection_evidence": selection,
+        "base_version_id": item.base_version_id,
+        "base_integrity_sha256": item.base_integrity_sha256,
+        "proven_gap_ranges": item.proven_gap_ranges,
+    });
+    if let Some(range) = &item.refresh_range {
+        frozen["refresh_range"] = serde_json::to_value(range).unwrap();
+    }
+    frozen
+}
+/// Application contract for `selection.kind=default` market.daily
+/// update/backfill: first acceptance resolves and freezes snapshot-derived
+/// work; callers only pick the operation. Item scope/occupancy match the
+/// explicit daily contract (`symbol` x `day`).
+pub struct DefaultRangeContract<R> {
+    pub operation: crate::market_update::tasks::Operation,
+    pub resolver: R,
+    /// Asia/Shanghai acceptance date, sampled once per first-time
+    /// resolution; injected so tests can pin the clock.
+    pub today: fn() -> NaiveDate,
+}
+impl<R: DefaultRangeSource> Contract for DefaultRangeContract<R> {
+    fn key(&self) -> task::CommandKey {
+        let mut key = self.operation.key();
+        key.contract_version = crate::market_update::tasks::DEFAULT_CONTRACT_VERSION.into();
+        key
+    }
+    fn normalize(&self, raw: Value) -> Result<Value, task::Error> {
+        let intent: DefaultIntent = serde_json::from_value(raw).map_err(task_invalid)?;
+        serde_json::to_value(intent).map_err(task_invalid)
+    }
+    fn resolve(&self, intent: &Value) -> Result<FrozenWork, task::Error> {
+        let _checked: DefaultIntent =
+            serde_json::from_value(intent.clone()).map_err(task_invalid)?;
+        let op = match self.operation {
+            crate::market_update::tasks::Operation::Update => DefaultOperation::Update,
+            crate::market_update::tasks::Operation::Backfill => DefaultOperation::Backfill,
+        };
+        let work = self
+            .resolver
+            .resolve_default_work(op, (self.today)())
+            .map_err(crate::market_update::tasks::repository_error)?;
+        let mut items = Vec::with_capacity(work.items.len());
+        let mut scopes = BTreeSet::new();
+        for w in &work.items {
+            let scope = scope_id(&w.symbol, "day");
+            scopes.insert(scope.clone());
+            items.push(ItemSpec {
+                item_id: scope.clone(),
+                scope_keys: BTreeSet::from([scope]),
+                target: json!({"symbol":w.symbol,"period":"day"}),
+                progress_unit: "security_period".into(),
+                frozen_inputs: frozen_default(&work.selection, w),
+            });
+        }
+        Ok(FrozenWork { items, scopes })
+    }
 }
 #[cfg(test)]
 mod tests;
