@@ -1,0 +1,27 @@
+{
+  "schema": "issue46.tdxhy-inventory-determinism.v1",
+  "tested_commit": "36d0d74abc788e3f86cbaed05001fe7733ff5757",
+  "checkouts": [
+    "/home/box/x-data-mcp-tdxhy46",
+    "/tmp/issue46-repro-b"
+  ],
+  "runs": 2,
+  "byte_identical": true,
+  "plan_sha256": "fc08cba8c78ecf1e618a521b783d998925f9bb5010f498dfb3d32ea64b7478ff",
+  "result_sha256": "7b2e94c305b9e767f854bc8644704ce38ea9c48f24f664cf2179939e886451ac",
+  "result_bytes": 5710102,
+  "runner_sha256": "9870029732d11620b4e05ba2eef36220ec627648da151f2c5b58ccbaa7c0b661",
+  "python": "3.13.5",
+  "network_requests_during_replay": 0,
+  "regression_tests_per_checkout": 6,
+  "input_pins": {
+    "base_zip_sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+    "base_zip_bytes": 16411232,
+    "tdxhy_cfg_sha256": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6",
+    "tdxhy2_cfg_sha256": "f496dcd9af9c6681682cc25d621b2ada195f555e9a9834ef75878dfeb0a0be4a"
+  },
+  "generation": "gen-2 official base.zip re-downloaded 2026-09-15 under issue #71 comment-5676627357 authorization; gen-1 retained index preserved unchanged",
+  "field_semantics": "NOT_VERIFIED",
+  "production": "NOT_PRODUCTION_READY",
+  "scope": "Field-level mechanical inventory of six pinned members; no semantic contract claimed"
+}

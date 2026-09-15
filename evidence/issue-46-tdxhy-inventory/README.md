@@ -65,3 +65,30 @@ python3 -B evidence/issue-46-tdxhy-inventory/scan_tdxhy_inventory.py \
 The scanner fails closed on any archive/member/plan hash mismatch. Two runs
 from independent checkouts must be byte-identical; the result SHA-256 is
 recorded in `determinism.json`.
+
+## Status
+
+**GEN2_RESULT_COMMITTED.** `result.json` (SHA-256
+`7b2e94c305b9e767f854bc8644704ce38ea9c48f24f664cf2179939e886451ac`,
+5,710,102 bytes) replayed byte-identically from two independent checkouts.
+
+Headline mechanical findings:
+
+- #135 `STRUCTURAL_RELATION_AMBIGUOUS` attributed at field level: every
+  code-position (field-1) token is univalent in both members (5,625 shared
+  codes, one line each side); all 965 multi-line tokens sit in non-code
+  fields (T/X/ZX/CJ suffix digit-runs). Verdict
+  `CODE_POSITION_TOKENS_UNIVALENT`.
+- `tdxhy.cfg` code set ⊆ `tdxhy2.cfg` code set (all 5,659 shared; tdxhy2
+  covers 1,095 more codes incl. the +1 gen-2 record); field-0 bytes agree on
+  all 5,659 shared codes.
+- `infoharbor_ex.code` code set (5,571) ⊆ `tdxhy.cfg`, ⊆ `base.dbf` GPDM,
+  ⊆ `base.map`; `base.dbf` GPDM set == `base.map` head6 set (8,873; two
+  duplicate rows); ordered pairing 8,875/8,875.
+- `infoharbor_ex.name` covers a different universe (3,244 codes incl. bond
+  tokens); only 651 shared with `infoharbor_ex.code`; `infoharbor_ex.dat`
+  is absent from the archive (recorded finding).
+- Fixed sample `000004` is absent from `tdxhy.cfg` and
+  `infoharbor_ex.code` but present in `tdxhy2.cfg`, `base.map`, `base.dbf`.
+- 35 six-digit values collide across code and non-code positions.
+- All semantic questions remain `UNPROVEN` per the frozen label set.
