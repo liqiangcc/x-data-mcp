@@ -31,7 +31,9 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 
 ## 当前状态
 
-**NOT_PRODUCTION_READY — production source convergence stage 1。**
+**NOT_PRODUCTION_READY / BLOCKED_EXTERNAL_EVIDENCE — production source convergence stage 1。**
+
+2026-09-15 Final Gate 终局裁定（[#46](https://github.com/liqiangcc/x-data-mcp/issues/46#issuecomment-5679530150) / [#54](https://github.com/liqiangcc/x-data-mcp/issues/54#issuecomment-5679532508)）：本机可达公开官方材料的 source-first 证据路线已穷尽；#46 `FIELD_SEMANTICS_NOT_VERIFIED`、#54 `GBBQ_FLOAT32_BUSINESS_DECIMAL_NORMALIZATION_NOT_VERIFIED` 继续，原生产契约不降级。唯一可解锁的新证据类别：①可运行官方 Windows 客户端/TQ 终端产生的版本绑定行为输出（zero unexplained semantic mismatch）；②新出现的官方公开文件格式/字段规范。在此之前停止一切同类本机结构推断/拟合切片。
 
 已有 Rust 核心、任务受理/取消/重试、发布校验、目录核心和 stdio MCP 原型。
 生产来源决策见 [Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)，
