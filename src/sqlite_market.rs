@@ -689,7 +689,7 @@ pub(crate) mod update;
 pub(crate) mod yearly_results;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod verification;
 
 pub(crate) mod publication_checks;

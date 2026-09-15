@@ -27,6 +27,8 @@ pub enum Error {
     Invalid(String),
     #[error("PUBLISH_OUTCOME_UNKNOWN: {0}; inspect the same publication_id")]
     OutcomeUnknown(String),
+    #[error("GAP_BASIS_NOT_VERIFIED: {0}")]
+    BasisNotVerified(String),
     #[error(transparent)]
     Task(#[from] task_control::Error),
 }
@@ -207,6 +209,34 @@ impl GapVerificationDecision {
             return Err(Error::Invalid("invalid gap verification decision".into()));
         }
         Ok(())
+    }
+    /// Canonical digest over every bound field except `decision_sha256`
+    /// (`gap-decision-v1` domain-separated). The producer sets
+    /// `decision_sha256` to this value; audits replay it.
+    pub fn content_digest(&self) -> String {
+        crate::hash::sha256(
+            serde_json::json!([
+                "gap-decision-v1",
+                self.decision_id,
+                self.symbol,
+                match self.period {
+                    Period::Day => "day",
+                    Period::Year => "year",
+                },
+                self.start_date.to_string(),
+                self.end_date.to_string(),
+                self.subject_version_id,
+                self.subject_version_digest,
+                self.conclusion,
+                self.basis_kind,
+                self.basis_ref,
+                self.basis_sha256,
+                self.verifier_id,
+                self.decided_at.to_rfc3339(),
+            ])
+            .to_string()
+            .as_bytes(),
+        )
     }
 }
 /// The only `proven_gaps.evidence_kind` a decision may produce.

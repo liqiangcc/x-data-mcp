@@ -60,6 +60,8 @@ pub mod verification_execution;
 #[cfg(target_os = "linux")]
 pub mod verification_inspection;
 
+pub mod gap_verification;
+
 #[cfg(target_os = "linux")]
 pub mod local_runtime;
 
