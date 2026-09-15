@@ -22,3 +22,5 @@
 使用项目已有稳定验证入口；当前可执行能力见 README，不运行不存在的命令，不伪造 PASS。建立验证入口时，按上游语义明确 target 范围、结果、退出码和未验证项。
 
 实际开发暴露的规范歧义、冲突或不必要成本，按 `docs/conventions.md` 的反馈流程记录；不静默绕过，也不为了满足形式增加无价值抽象。
+
+Box（cursor）环境事实：`/home` 与 `/tmp` 为 overlayfs，runtime-guard 契约对其 fail-closed，全量测试须以 `TMPDIR=/dev/shm`（tmpfs）运行；Box 自带 cargo 1.85.1 无法编译本仓库，使用 rustup stable 1.98.1（`~/.cargo/bin`）。
