@@ -480,6 +480,8 @@ fn non_gap_conclusion_stores_decision_without_gap() {
     let mut d = decision("d1");
     d.conclusion = "source_not_available".into();
     assert!(db.record_gap_decision(&d).unwrap());
+    // Replaying a non-gap decision inserts nothing: not newly written.
+    assert!(!db.record_gap_decision(&d).unwrap());
     assert_eq!(db.gap_verification_decision("d1").unwrap(), Some(d));
     assert_eq!(decision_count(&db), 1);
     assert_eq!(counts(&db), (0, 0));
@@ -488,6 +490,30 @@ fn non_gap_conclusion_stores_decision_without_gap() {
             .unwrap()
             .is_empty()
     );
+}
+#[test]
+fn decision_insert_with_preexisting_identical_gap_reports_written() {
+    let (_dir, db) = setup();
+    let d = decision("d1");
+    // The derived gap row already exists verbatim (e.g. a pre-decision fact
+    // recorded through the same binding): the decision insert still counts.
+    let preexisting = ProvenGap {
+        gap_id: derive_gap_id(&d),
+        symbol: d.symbol.clone(),
+        period: d.period,
+        start_date: d.start_date,
+        end_date: d.end_date,
+        evidence_kind: GAP_DECISION_EVIDENCE_KIND.into(),
+        evidence_id: d.decision_id.clone(),
+        evidence_digest: d.decision_sha256.clone(),
+        observed_at: d.decided_at,
+    };
+    assert!(db.record_proven_gap(&preexisting).unwrap());
+    assert!(db.record_gap_decision(&d).unwrap());
+    assert_eq!(decision_count(&db), 1);
+    assert_eq!(counts(&db), (1, 0));
+    // Full replay afterwards is a no-op again.
+    assert!(!db.record_gap_decision(&d).unwrap());
 }
 #[test]
 fn invalid_decision_or_gap_writes_neither_row() {

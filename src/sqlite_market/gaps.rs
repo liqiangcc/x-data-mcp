@@ -29,27 +29,27 @@ impl SqliteMarket {
         };
         gap.validate()?;
         self.write(|c| {
-            match insert_decision(c, decision) {
-                Ok(()) => {}
+            let inserted = match insert_decision(c, decision) {
+                Ok(()) => true,
                 Err(insert) => match read_decision(c, &decision.decision_id)? {
-                    Some(existing) if existing == *decision => {}
+                    Some(existing) if existing == *decision => false,
                     Some(_) => {
                         return Err(integrity("gap decision identity conflict"));
                     }
                     None => return Err(insert),
                 },
-            }
+            };
             if decision.conclusion == CONFIRMED_MISSING_RANGE {
                 match insert_gap(c, &gap) {
                     Ok(()) => Ok(true),
                     Err(insert) => match read_gap(c, &gap.gap_id)? {
-                        Some(existing) if existing == gap => Ok(false),
+                        Some(existing) if existing == gap => Ok(inserted),
                         Some(_) => Err(integrity("proven gap identity conflict")),
                         None => Err(insert),
                     },
                 }
             } else {
-                Ok(true)
+                Ok(inserted)
             }
         })
     }
