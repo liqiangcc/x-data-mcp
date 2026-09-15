@@ -124,15 +124,42 @@ impl Session {
     }
 }
 fn wait_terminal(db: &Path, id: &str) -> x_data_mcp::task_control::TaskSnapshot {
-    let tasks = SqliteTasks::new(db);
+    // The restarted service ticks its worker every few milliseconds and may
+    // hold the SQLite write lock across the poller's busy budget — WAL-index
+    // recovery after a SIGKILL makes a fresh read connection especially
+    // sensitive. Transient lock contention is not a missing terminal state,
+    // so transient storage errors are retried within the deadline.
+    let tasks = SqliteTasks::new(db).with_busy_timeout(Duration::from_secs(5));
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let task = tasks.read_task(id).unwrap().unwrap();
-        if task.task.status.terminal() {
-            return task;
+        match tasks.read_task(id) {
+            Ok(Some(task)) => {
+                if task.task.status.terminal() {
+                    return task;
+                }
+            }
+            Ok(None) => panic!("task missing: {id}"),
+            Err(x_data_mcp::task_control::Error::StorageUnavailable(_)) => {}
+            Err(e) => panic!("task read failed: {e}"),
         }
-        assert!(Instant::now() < deadline, "task not terminal: {task:?}");
+        assert!(Instant::now() < deadline, "task not terminal");
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+/// Same transient-contention tolerance for snapshot reads taken while a
+/// fast-ticking restarted service may hold the write lock.
+fn read_task_retried(tasks: &SqliteTasks, id: &str) -> x_data_mcp::task_control::TaskSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match tasks.read_task(id) {
+            Ok(Some(task)) => return task,
+            Ok(None) => panic!("task missing: {id}"),
+            Err(x_data_mcp::task_control::Error::StorageUnavailable(_)) => {
+                assert!(Instant::now() < deadline, "task read deadline");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => panic!("task read failed: {e}"),
+        }
     }
 }
 #[test]
@@ -185,7 +212,7 @@ fn real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal()
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(tools.len(), 18);
+    assert_eq!(tools.len(), 19);
     let caps = session.call("get_data_capabilities", json!({}), false);
     assert_eq!(caps["production_ready"], false);
     let names: std::collections::BTreeSet<_> =
@@ -284,8 +311,9 @@ fn real_service_restart_does_not_resume_old_nonterminal_tasks() {
         false,
     );
     wait_terminal(&db, new["task_id"].as_str().unwrap());
+    let reader = tasks.clone().with_busy_timeout(Duration::from_secs(5));
     for s in historical {
-        assert_eq!(tasks.read_task(&s.task.task_id).unwrap().unwrap(), s);
+        assert_eq!(read_task_retried(&reader, &s.task.task_id), s);
         assert_eq!(
             session.call("get_task", json!({"task_id":s.task.task_id}), false)["status"],
             "needs_verification"

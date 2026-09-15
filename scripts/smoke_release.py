@@ -46,7 +46,7 @@ def runtime_smoke(binaries):
             assert rpc("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
             tools = rpc("tools/list", {})["tools"]
             cap = call("get_data_capabilities", {})
-            assert len(tools) == 18 and not cap["production_ready"]
+            assert len(tools) == 19 and not cap["production_ready"]
             # Keep the same actual proxy stdin open beyond the default 30s
             # read budget. This caught the preview.5 deployment regression.
             time.sleep(32)
@@ -119,9 +119,9 @@ def main():
         try:
             assert request("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
             tools = request("tools/list", {})["tools"]
-            assert len(tools) == 18
+            assert len(tools) == 19
             assert call("get_data_capabilities", {})["production_ready"] is False
-            checks.append("initialize_discovery_18_tools")
+            checks.append("initialize_discovery_19_tools")
             catalog = call("query_data", dict(dataset="securities.catalog", contract_version="v1", selection=dict(kind="catalog", scope="current_sh_sz_a"), filter=dict(kind="catalog"), version=dict(kind="latest_per_entity")))
             entity = catalog["records"][0]["entity"]
             assert catalog["records"][0]["industry"]["status"] == "missing"

@@ -29,6 +29,21 @@ use serde::Serialize;
 use serde_json::json;
 /// `basis_kind` recorded on decisions produced through this contract.
 pub const GAP_BASIS_KIND: &str = "source_gap_verifier";
+/// Public command identity (`verify_data_gap` / `market.gap_verification`
+/// / `gap-verification-task-v1`); day-only first phase.
+pub const OPERATION: &str = "verify_data_gap";
+pub const DATASET: &str = "market.gap_verification";
+pub const CONTRACT_VERSION: &str = "gap-verification-task-v1";
+pub fn command_key() -> crate::task_control::CommandKey {
+    crate::task_control::CommandKey {
+        operation: OPERATION.into(),
+        dataset: DATASET.into(),
+        contract_version: CONTRACT_VERSION.into(),
+    }
+}
+pub mod contract;
+pub mod runner;
+pub mod wire;
 /// The only caller input a gap verification ever names. Day-only in the
 /// first phase; yearly stays derived from fixed local QFQ daily data.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +172,9 @@ pub trait GapDecisionStore {
     fn freeze_gap_subject(&self, target: &GapTarget) -> Result<SubjectBinding, Error>;
     fn check_gap_subject(&self, subject: &SubjectBinding) -> Result<(), Error>;
     fn commit_gap_decision(&self, decision: &GapVerificationDecision) -> Result<bool, Error>;
+    /// Read a committed decision; used to reconcile a lost commit
+    /// response without re-running verification.
+    fn gap_decision(&self, decision_id: &str) -> Result<Option<GapVerificationDecision>, Error>;
 }
 impl GapDecisionStore for SqliteMarket {
     fn freeze_gap_subject(&self, target: &GapTarget) -> Result<SubjectBinding, Error> {
@@ -167,6 +185,9 @@ impl GapDecisionStore for SqliteMarket {
     }
     fn commit_gap_decision(&self, decision: &GapVerificationDecision) -> Result<bool, Error> {
         self.record_gap_decision_guarded(decision)
+    }
+    fn gap_decision(&self, decision_id: &str) -> Result<Option<GapVerificationDecision>, Error> {
+        self.gap_verification_decision(decision_id)
     }
 }
 /// Freeze the subject inside one caller-provided read snapshot: the
