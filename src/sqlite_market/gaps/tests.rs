@@ -303,13 +303,23 @@ fn concurrent_duplicate_recording_commits_exactly_one_fact() {
         let b = SqliteMarket::new(SqliteTasks::new(db.tasks.path()));
         let r2 = b.record_proven_gap(&gap("g1", "sh.600006"));
         let r1 = t.join().unwrap();
-        // serialized loser sees an idempotent no-op; a busy loser fails
-        // without writing; either way exactly one fact is committed
-        assert!(r1.is_ok() || r2.is_ok(), "{r1:?} {r2:?}");
-        assert_eq!(
-            r1.map(|v| v as u8).unwrap_or(0) + r2.map(|v| v as u8).unwrap_or(0),
-            1
-        );
+        // winner commits exactly one fact; the loser may only be an
+        // idempotent no-op or a transient lock/commit error — any other
+        // error fails the test
+        fn transient(e: &Error) -> bool {
+            matches!(
+                e,
+                Error::Storage(_)
+                    | Error::OutcomeUnknown(_)
+                    | Error::Task(crate::task_control::Error::StorageUnavailable(_))
+            )
+        }
+        for r in [&r1, &r2] {
+            if let Err(e) = r {
+                assert!(transient(e), "non-transient error {e:?}");
+            }
+        }
+        assert_eq!(r1.unwrap_or(false) as u8 + r2.unwrap_or(false) as u8, 1);
         assert_eq!(counts(&db), (1, 0));
     }
 }
