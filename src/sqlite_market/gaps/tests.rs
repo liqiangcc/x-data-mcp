@@ -190,6 +190,91 @@ fn invalid_facts_are_rejected_without_half_writes() {
     );
 }
 #[test]
+fn only_published_versions_cover_a_gap() {
+    let (_dir, db, plan) = super::super::tests::setup();
+    // 'legacy-daily' is 'validated' after prepare: not a covering
+    db.record_proven_gap(&gap("g1", "sh.600006")).unwrap();
+    let covering = GapCovering {
+        gap_id: "g1".into(),
+        version_id: "legacy-daily".into(),
+        covered_at: "2026-09-14T01:00:00Z".parse().unwrap(),
+    };
+    assert!(matches!(db.cover_gap(&covering), Err(Error::Invalid(_))));
+    // publish the daily version, then stage a yearly candidate on it
+    db.commit(&plan).unwrap();
+    let samples: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/issue79/legacy-records.json"
+    ))
+    .unwrap();
+    db.stage(&samples[2]["record"]).unwrap(); // legacy-yearly stays 'staging'
+    let mut yearly = gap("gy", "sh.600006");
+    yearly.period = Period::Year;
+    db.record_proven_gap(&yearly).unwrap();
+    let yearly_covering = |v: &str| GapCovering {
+        gap_id: "gy".into(),
+        version_id: v.into(),
+        covered_at: "2026-09-14T01:00:00Z".parse().unwrap(),
+    };
+    // staging version cannot cover; a published version from the wrong
+    // period scope cannot either
+    assert!(matches!(
+        db.cover_gap(&yearly_covering("legacy-yearly")),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        db.cover_gap(&yearly_covering("legacy-daily")),
+        Err(Error::Invalid(_))
+    ));
+    // validated-but-unpublished still cannot cover
+    db.mark_validated(&db.candidate("legacy-yearly").unwrap())
+        .unwrap();
+    assert!(matches!(
+        db.cover_gap(&yearly_covering("legacy-yearly")),
+        Err(Error::Invalid(_))
+    ));
+    assert_eq!(
+        db.open_proven_gaps("sh.600006", Period::Year)
+            .unwrap()
+            .len(),
+        1
+    );
+    // published daily covers the daily gap
+    assert!(db.cover_gap(&covering).unwrap());
+    assert!(
+        db.open_proven_gaps("sh.600006", Period::Day)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(counts(&db), (2, 1));
+}
+#[test]
+fn malformed_and_corrupt_digests_fail_closed() {
+    let (_dir, db) = setup();
+    // adapter rejects a digest that is not in sha256 format
+    let mut bad = gap("bad-digest", "sh.600006");
+    bad.evidence_digest = "x".into();
+    assert!(matches!(db.record_proven_gap(&bad), Err(Error::Invalid(_))));
+    let mut bad = gap("bad-digest2", "sh.600006");
+    bad.evidence_digest = "F".repeat(64); // uppercase is not this repo's format
+    assert!(matches!(db.record_proven_gap(&bad), Err(Error::Invalid(_))));
+    assert_eq!(counts(&db), (0, 0));
+    // a stored row whose digest was later damaged fails closed on every read
+    db.record_proven_gap(&gap("g1", "sh.600006")).unwrap();
+    let c = Connection::open(db.tasks.path()).unwrap();
+    c.execute("DROP TRIGGER proven_gaps_no_update", []).unwrap();
+    c.execute(
+        "UPDATE proven_gaps SET evidence_digest='x' WHERE gap_id='g1'",
+        [],
+    )
+    .unwrap();
+    drop(c);
+    assert!(matches!(db.proven_gap("g1"), Err(Error::Integrity(_))));
+    assert!(matches!(
+        db.open_proven_gaps("sh.600006", Period::Day),
+        Err(Error::Integrity(_))
+    ));
+}
+#[test]
 fn covering_scope_mismatch_is_rejected() {
     let (_dir, db, plan) = super::super::tests::setup();
     db.commit(&plan).unwrap();
@@ -218,8 +303,13 @@ fn concurrent_duplicate_recording_commits_exactly_one_fact() {
         let b = SqliteMarket::new(SqliteTasks::new(db.tasks.path()));
         let r2 = b.record_proven_gap(&gap("g1", "sh.600006"));
         let r1 = t.join().unwrap();
-        assert!(r1.is_ok() && r2.is_ok());
-        assert!(r1.unwrap() || r2.unwrap());
+        // serialized loser sees an idempotent no-op; a busy loser fails
+        // without writing; either way exactly one fact is committed
+        assert!(r1.is_ok() || r2.is_ok(), "{r1:?} {r2:?}");
+        assert_eq!(
+            r1.map(|v| v as u8).unwrap_or(0) + r2.map(|v| v as u8).unwrap_or(0),
+            1
+        );
         assert_eq!(counts(&db), (1, 0));
     }
 }

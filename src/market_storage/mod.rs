@@ -152,7 +152,7 @@ impl ProvenGap {
             || self.symbol.trim().is_empty()
             || self.evidence_kind.trim().is_empty()
             || self.evidence_id.trim().is_empty()
-            || self.evidence_digest.trim().is_empty()
+            || !crate::hash::is_sha256(&self.evidence_digest)
             || self.start_date > self.end_date
         {
             return Err(Error::Invalid("invalid proven gap fact".into()));

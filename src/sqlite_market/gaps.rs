@@ -24,16 +24,20 @@ impl SqliteMarket {
         self.write(|c| {
             let gap = read_gap(c, &covering.gap_id)?
                 .ok_or_else(|| Error::Invalid("covering references unknown gap".into()))?;
+            // A covering binds a published version only; staged/validated
+            // candidates never take a gap out of the open set.
             let scope: Option<(String, String)> = c
                 .query_row(
-                    "SELECT symbol,period FROM data_versions WHERE version_id=?1",
+                    "SELECT v.symbol,v.period FROM data_versions v WHERE v.version_id=?1 AND (v.state='published' OR EXISTS(SELECT 1 FROM publication_batches b WHERE b.version_id=v.version_id))",
                     [&covering.version_id],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()
                 .map_err(storage)?;
             let Some((symbol, period)) = scope else {
-                return Err(Error::Invalid("covering references unknown version".into()));
+                return Err(Error::Invalid(
+                    "covering references unknown or unpublished version".into(),
+                ));
             };
             if symbol != gap.symbol || period != super::period(gap.period) {
                 return Err(Error::Invalid("covering version scope mismatch".into()));
@@ -115,7 +119,7 @@ fn gap_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<ProvenGap, Error>> 
     let end: String = r.get(4)?;
     let observed_at: String = r.get(8)?;
     Ok(|| -> Result<ProvenGap, Error> {
-        Ok(ProvenGap {
+        let gap = ProvenGap {
             gap_id: r.get(0).map_err(storage)?,
             symbol: r.get(1).map_err(storage)?,
             period: match period.as_str() {
@@ -137,19 +141,26 @@ fn gap_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<ProvenGap, Error>> 
             observed_at: observed_at
                 .parse()
                 .map_err(|_| integrity("unreadable gap observed_at"))?,
-        })
+        };
+        gap.validate()
+            .map_err(|_| integrity("stored proven gap violates invariants"))?;
+        Ok(gap)
     }())
 }
 fn covering_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<GapCovering, Error>> {
     let covered_at: String = r.get(2)?;
     Ok(|| -> Result<GapCovering, Error> {
-        Ok(GapCovering {
+        let covering = GapCovering {
             gap_id: r.get(0).map_err(storage)?,
             version_id: r.get(1).map_err(storage)?,
             covered_at: covered_at
                 .parse()
                 .map_err(|_| integrity("unreadable covering covered_at"))?,
-        })
+        };
+        covering
+            .validate()
+            .map_err(|_| integrity("stored gap covering violates invariants"))?;
+        Ok(covering)
     }())
 }
 fn read_gap(c: &Connection, gap_id: &str) -> Result<Option<ProvenGap>, Error> {
