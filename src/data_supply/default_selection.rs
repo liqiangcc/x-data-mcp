@@ -131,12 +131,25 @@ fn started_symbol(fact: &ExecutionStartFact) -> Result<Option<String>, Selection
 pub fn resolve_default_daily(
     catalog: &SqliteCatalog,
 ) -> Result<DefaultDailySelection, SelectionError> {
-    let facts = catalog.selection_facts().map_err(invalid)?;
+    resolve_facts(&catalog.selection_facts().map_err(invalid)?)
+}
+/// Same-snapshot variant for callers that already hold a read transaction:
+/// selection facts are read inside that snapshot instead of a new one.
+pub(crate) fn resolve_default_daily_on(
+    c: &rusqlite::Connection,
+) -> Result<DefaultDailySelection, SelectionError> {
+    resolve_facts(&crate::sqlite_catalog::selection_facts_on(c).map_err(invalid)?)
+}
+fn resolve_facts(
+    facts: &crate::sqlite_catalog::SelectionFacts,
+) -> Result<DefaultDailySelection, SelectionError> {
     let version_id = facts
         .catalog_head
+        .clone()
         .ok_or_else(|| invalid("catalog head missing"))?;
     let version = facts
         .catalog
+        .clone()
         .ok_or_else(|| invalid("catalog head version unreadable"))?;
     let catalog_digest = crate::sqlite_catalog::digest(&version).map_err(invalid)?;
     let members: BTreeSet<String> = version.records.iter().filter_map(member_symbol).collect();
