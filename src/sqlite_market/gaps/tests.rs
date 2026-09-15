@@ -354,8 +354,9 @@ fn upgraded_v10_database_has_no_fabricated_gaps() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 11);
+    assert_eq!(v, 12);
     assert_eq!(counts(&db), (0, 0));
+    assert_eq!(decision_count(&db), 0);
     assert!(
         db.open_proven_gaps("sh.600006", Period::Day)
             .unwrap()
@@ -364,6 +365,8 @@ fn upgraded_v10_database_has_no_fabricated_gaps() {
     // the fact layer works after upgrade, without backfilling history
     assert!(db.record_proven_gap(&gap("g1", "sh.600006")).unwrap());
     assert_eq!(counts(&db), (1, 0));
+    assert!(db.record_gap_decision(&decision("d1")).unwrap());
+    assert_eq!(decision_count(&db), 1);
 }
 #[test]
 fn read_open_gaps_inside_caller_snapshot_matches_public_read() {
@@ -396,6 +399,217 @@ fn corrupt_stored_rows_fail_closed() {
     assert!(matches!(db.proven_gap("g1"), Err(Error::Integrity(_))));
     assert!(matches!(
         db.open_proven_gaps("sh.600006", Period::Day),
+        Err(Error::Integrity(_))
+    ));
+}
+fn decision(id: &str) -> GapVerificationDecision {
+    GapVerificationDecision {
+        decision_id: id.into(),
+        symbol: "sh.600006".into(),
+        period: Period::Day,
+        start_date: "2025-03-01".parse().unwrap(),
+        end_date: "2025-03-10".parse().unwrap(),
+        subject_version_id: "daily-600006".into(),
+        subject_version_digest: "b".repeat(64),
+        conclusion: "confirmed_missing_range".into(),
+        basis_kind: "fixture_basis".into(),
+        basis_ref: "fixture:basis-object".into(),
+        basis_sha256: "c".repeat(64),
+        verifier_id: "fixture:verifier".into(),
+        decided_at: "2026-09-15T00:00:00Z".parse().unwrap(),
+        decision_sha256: "d".repeat(64),
+    }
+}
+fn decision_count(db: &SqliteMarket) -> i64 {
+    Connection::open(db.tasks.path())
+        .unwrap()
+        .query_row("SELECT count(*) FROM gap_verification_decisions", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+}
+#[test]
+fn decision_commits_gap_atomically_and_reads_back() {
+    let (_dir, db) = setup();
+    let d = decision("d1");
+    assert!(db.record_gap_decision(&d).unwrap());
+    assert_eq!(db.gap_verification_decision("d1").unwrap(), Some(d.clone()));
+    assert_eq!(decision_count(&db), 1);
+    assert_eq!(counts(&db), (1, 0));
+    let open = db.open_proven_gaps("sh.600006", Period::Day).unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].gap_id, derive_gap_id(&d));
+    assert_eq!(open[0].evidence_kind, GAP_DECISION_EVIDENCE_KIND);
+    assert_eq!(open[0].evidence_id, "d1");
+    assert_eq!(open[0].evidence_digest, d.decision_sha256);
+    assert_eq!(open[0].observed_at, d.decided_at);
+    assert_eq!(open[0].start_date, d.start_date);
+    assert_eq!(open[0].end_date, d.end_date);
+}
+#[test]
+fn decision_replay_is_idempotent_and_conflicting_content_fails() {
+    let (_dir, db) = setup();
+    let d = decision("d1");
+    assert!(db.record_gap_decision(&d).unwrap());
+    // Identical replay: no new rows.
+    assert!(!db.record_gap_decision(&d).unwrap());
+    assert_eq!(decision_count(&db), 1);
+    assert_eq!(counts(&db), (1, 0));
+    // Same decision_id, different content: integrity conflict.
+    let mut other = decision("d1");
+    other.basis_ref = "fixture:other-basis".into();
+    assert!(matches!(
+        db.record_gap_decision(&other),
+        Err(Error::Integrity(_))
+    ));
+    // A different decision_id about the same subject+range derives the
+    // same gap_id but a different evidence binding: identity conflict, and
+    // the same-transaction rollback leaves no orphan decision row either.
+    let mut second = decision("d2");
+    second.decision_sha256 = "e".repeat(64);
+    assert!(matches!(
+        db.record_gap_decision(&second),
+        Err(Error::Integrity(_))
+    ));
+    assert_eq!(decision_count(&db), 1);
+    assert_eq!(counts(&db), (1, 0));
+}
+#[test]
+fn non_gap_conclusion_stores_decision_without_gap() {
+    let (_dir, db) = setup();
+    let mut d = decision("d1");
+    d.conclusion = "source_not_available".into();
+    assert!(db.record_gap_decision(&d).unwrap());
+    // Replaying a non-gap decision inserts nothing: not newly written.
+    assert!(!db.record_gap_decision(&d).unwrap());
+    assert_eq!(db.gap_verification_decision("d1").unwrap(), Some(d));
+    assert_eq!(decision_count(&db), 1);
+    assert_eq!(counts(&db), (0, 0));
+    assert!(
+        db.open_proven_gaps("sh.600006", Period::Day)
+            .unwrap()
+            .is_empty()
+    );
+}
+#[test]
+fn decision_insert_with_preexisting_identical_gap_reports_written() {
+    let (_dir, db) = setup();
+    let d = decision("d1");
+    // The derived gap row already exists verbatim (e.g. a pre-decision fact
+    // recorded through the same binding): the decision insert still counts.
+    let preexisting = ProvenGap {
+        gap_id: derive_gap_id(&d),
+        symbol: d.symbol.clone(),
+        period: d.period,
+        start_date: d.start_date,
+        end_date: d.end_date,
+        evidence_kind: GAP_DECISION_EVIDENCE_KIND.into(),
+        evidence_id: d.decision_id.clone(),
+        evidence_digest: d.decision_sha256.clone(),
+        observed_at: d.decided_at,
+    };
+    assert!(db.record_proven_gap(&preexisting).unwrap());
+    assert!(db.record_gap_decision(&d).unwrap());
+    assert_eq!(decision_count(&db), 1);
+    assert_eq!(counts(&db), (1, 0));
+    // Full replay afterwards is a no-op again.
+    assert!(!db.record_gap_decision(&d).unwrap());
+}
+#[test]
+fn invalid_decision_or_gap_writes_neither_row() {
+    let (_dir, db) = setup();
+    // Mechanically invalid decision (non-sha256 digest): no decision, no gap.
+    let mut bad = decision("d1");
+    bad.decision_sha256 = "not-a-digest".into();
+    assert!(db.record_gap_decision(&bad).is_err());
+    assert_eq!(decision_count(&db), 0);
+    assert_eq!(counts(&db), (0, 0));
+    // Inverted range: validated before any insert.
+    let mut bad = decision("d2");
+    bad.start_date = "2025-04-01".parse().unwrap();
+    assert!(db.record_gap_decision(&bad).is_err());
+    assert_eq!(decision_count(&db), 0);
+    assert_eq!(counts(&db), (0, 0));
+    // Yearly decisions are out of first-phase scope entirely.
+    let mut bad = decision("d3");
+    bad.period = Period::Year;
+    assert!(db.record_gap_decision(&bad).is_err());
+    assert_eq!(decision_count(&db), 0);
+}
+#[test]
+fn decision_rows_reject_update_and_delete() {
+    let (_dir, db) = setup();
+    db.record_gap_decision(&decision("d1")).unwrap();
+    let c = Connection::open(db.tasks.path()).unwrap();
+    assert!(
+        c.execute(
+            "UPDATE gap_verification_decisions SET conclusion='x' WHERE decision_id='d1'",
+            []
+        )
+        .is_err()
+    );
+    assert!(
+        c.execute(
+            "DELETE FROM gap_verification_decisions WHERE decision_id='d1'",
+            []
+        )
+        .is_err()
+    );
+    drop(c);
+    assert_eq!(
+        db.gap_verification_decision("d1").unwrap(),
+        Some(decision("d1"))
+    );
+}
+#[test]
+fn derive_gap_id_is_deterministic_and_content_bound() {
+    let d = decision("d1");
+    assert_eq!(derive_gap_id(&d), derive_gap_id(&d));
+    assert!(crate::hash::is_sha256(&derive_gap_id(&d)));
+    // decision_id/decided_at are not part of gap identity.
+    let mut same = d.clone();
+    same.decision_id = "d9".into();
+    same.decided_at = "2026-09-16T00:00:00Z".parse().unwrap();
+    assert_eq!(derive_gap_id(&d), derive_gap_id(&same));
+    // Different range or subject binds a different gap.
+    let mut other = d.clone();
+    other.end_date = "2025-03-11".parse().unwrap();
+    assert_ne!(derive_gap_id(&d), derive_gap_id(&other));
+    let mut other = d.clone();
+    other.subject_version_id = "daily-other".into();
+    assert_ne!(derive_gap_id(&d), derive_gap_id(&other));
+}
+#[test]
+fn decision_validate_is_mechanical_only() {
+    let mut d = decision("d1");
+    assert!(d.validate().is_ok());
+    d.symbol = " ".into();
+    assert!(d.validate().is_err());
+    let mut d = decision("d1");
+    d.subject_version_digest = "xyz".into();
+    assert!(d.validate().is_err());
+    let mut d = decision("d1");
+    d.verifier_id = String::new();
+    assert!(d.validate().is_err());
+    let mut d = decision("d1");
+    d.period = Period::Year;
+    assert!(d.validate().is_err());
+}
+#[test]
+fn corrupt_stored_decision_fails_closed() {
+    let (_dir, db) = setup();
+    db.record_gap_decision(&decision("d1")).unwrap();
+    let c = Connection::open(db.tasks.path()).unwrap();
+    c.execute("DROP TRIGGER gap_verification_decisions_no_update", [])
+        .unwrap();
+    c.execute(
+        "UPDATE gap_verification_decisions SET decided_at='unreadable' WHERE decision_id='d1'",
+        [],
+    )
+    .unwrap();
+    drop(c);
+    assert!(matches!(
+        db.gap_verification_decision("d1"),
         Err(Error::Integrity(_))
     ));
 }
