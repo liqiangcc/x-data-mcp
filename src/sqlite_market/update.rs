@@ -101,6 +101,15 @@ impl RangeRepository for SqliteMarket {
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
         self.read(|c| read_result(c, id).map(|r| r.map(|(_, receipt)| receipt)))
     }
+    fn cover_gap(&self, covering: &crate::market_storage::GapCovering) -> Result<bool, Error> {
+        SqliteMarket::cover_gap(self, covering)
+    }
+    fn gap_coverings(
+        &self,
+        gap_id: &str,
+    ) -> Result<Vec<crate::market_storage::GapCovering>, Error> {
+        SqliteMarket::gap_coverings(self, gap_id)
+    }
 }
 pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Receipt)>, Error> {
     let mut stmt = c.prepare(

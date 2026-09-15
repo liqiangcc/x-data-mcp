@@ -74,4 +74,10 @@ impl RangeRepository for ResponseFault {
     ) -> Result<TaskSnapshot, Error> {
         self.db.transition_task(t, r, run, c)
     }
+    fn cover_gap(&self, covering: &GapCovering) -> Result<bool, Error> {
+        self.db.cover_gap(covering)
+    }
+    fn gap_coverings(&self, gap_id: &str) -> Result<Vec<GapCovering>, Error> {
+        self.db.gap_coverings(gap_id)
+    }
 }

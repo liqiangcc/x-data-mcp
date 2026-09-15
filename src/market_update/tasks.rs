@@ -145,6 +145,101 @@ impl<R: MarketRepository> Contract for RangeContract<R> {
 pub(crate) fn frozen(id: &str, digest: &str, range: &DateRange) -> Value {
     json!({"base_version_id":id,"base_integrity_sha256":digest,"range":range})
 }
+/// Runner-side reader of the `default-range-task-v1` frozen item shape
+/// written by the default-range contract. Strict decode is the execution
+/// integrity gate: unknown or missing fields fail closed.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DefaultFrozen {
+    /// Presence/shape is the integrity gate; the runner never reads the
+    /// provenance content itself.
+    #[allow(dead_code)]
+    pub selection_evidence: DefaultFrozenEvidence,
+    pub base_version_id: String,
+    pub base_integrity_sha256: String,
+    /// `update` only; the key is absent on `backfill` items.
+    #[serde(default)]
+    pub refresh_range: Option<FrozenDayRange>,
+    pub proven_gap_ranges: Vec<FrozenGapRange>,
+}
+/// Selection/catalog/execution-start provenance, opaque to the runner but
+/// required to be present and well-formed.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+pub(crate) struct DefaultFrozenEvidence {
+    pub catalog_version_id: String,
+    pub catalog_digest: String,
+    pub securities: Vec<String>,
+    pub starts: std::collections::BTreeMap<String, Value>,
+    pub evidence_digest: String,
+}
+/// One closed `[start_date, end_date]` in the frozen shape.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FrozenDayRange {
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+}
+impl FrozenDayRange {
+    pub(crate) fn range(&self) -> Result<DateRange, crate::market_storage::Error> {
+        if self.start_date > self.end_date {
+            return Err(crate::market_storage::Error::Integrity(
+                "frozen range inverted".into(),
+            ));
+        }
+        Ok(DateRange {
+            start: self.start_date,
+            end: self.end_date,
+        })
+    }
+}
+/// One frozen open gap with its evidence identity preserved verbatim.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FrozenGapRange {
+    pub gap_id: String,
+    pub range: FrozenDayRange,
+    /// Preserved verbatim; covering bindings reference the gap row itself.
+    #[allow(dead_code)]
+    pub evidence_digest: String,
+}
+impl DefaultFrozen {
+    /// Required ranges: `update` is refresh plus every gap range;
+    /// `backfill` is gap ranges only.
+    pub(crate) fn required_ranges(&self) -> Result<Vec<DateRange>, crate::market_storage::Error> {
+        let mut ranges = vec![];
+        if let Some(refresh) = &self.refresh_range {
+            ranges.push(refresh.range()?);
+        }
+        for gap in &self.proven_gap_ranges {
+            ranges.push(gap.range.range()?);
+        }
+        Ok(ranges)
+    }
+    /// Single fetch range satisfying every required range (the fetch-union
+    /// allowed by #147). Never loses per-gap provenance: the frozen gap
+    /// list stays authoritative for covering write-back.
+    pub(crate) fn union(&self) -> Result<DateRange, crate::market_storage::Error> {
+        self.required_ranges()?
+            .into_iter()
+            .reduce(|a, b| DateRange {
+                start: a.start.min(b.start),
+                end: a.end.max(b.end),
+            })
+            .ok_or_else(|| {
+                crate::market_storage::Error::Integrity("default item has no required range".into())
+            })
+    }
+}
+/// Strictly decode the default frozen shape; malformed input is a storage
+/// integrity failure, never a silent skip.
+pub(crate) fn parse_default_frozen(
+    frozen: &Value,
+) -> Result<DefaultFrozen, crate::market_storage::Error> {
+    serde_json::from_value(frozen.clone())
+        .map_err(|e| crate::market_storage::Error::Integrity(format!("default frozen inputs: {e}")))
+}
 
 pub(crate) fn repository_error(error: crate::market_storage::Error) -> Error {
     use crate::market_storage::Error as MarketError;
