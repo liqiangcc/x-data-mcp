@@ -847,6 +847,8 @@ struct SyntheticRangeProvider {
     changed: bool,
     calls: std::cell::Cell<usize>,
     during_acquisition: Option<Box<dyn Fn()>>,
+    seen_ranges: std::cell::RefCell<Vec<DateRange>>,
+    fail_symbol: Option<String>,
 }
 impl SyntheticRangeProvider {
     fn new(changed: bool) -> Self {
@@ -854,6 +856,8 @@ impl SyntheticRangeProvider {
             changed,
             calls: std::cell::Cell::new(0),
             during_acquisition: None,
+            seen_ranges: std::cell::RefCell::new(vec![]),
+            fail_symbol: None,
         }
     }
 }
@@ -867,6 +871,12 @@ impl x_data_mcp::market_update::runner::RangeProvider for SyntheticRangeProvider
     {
         use x_data_mcp::market_update::runner::{Acquisition, CombinedCandidate};
         self.calls.set(self.calls.get() + 1);
+        self.seen_ranges.borrow_mut().push(range.clone());
+        if self.fail_symbol.as_deref() == Some(base.version().symbol.as_str()) {
+            return Err(x_data_mcp::market_data::SourceError::NotVerified(
+                "fixture: acquisition failed for this symbol".into(),
+            ));
+        }
         if let Some(hook) = &self.during_acquisition {
             hook();
         }
@@ -889,8 +899,16 @@ impl x_data_mcp::market_update::runner::RangeProvider for SyntheticRangeProvider
         let combined = if self.changed {
             let mut raw = base.raw().clone();
             raw["version_id"] = json!(candidate_id);
-            raw["records"][1]["close"] = json!("10.06");
-            raw["batch"]["bars"][1]["close"] = json!("10.06");
+            // Mutate the same bar in the full record as in the segment.
+            let mutated_date = batch.bars[0].date.to_string();
+            let index = raw["batch"]["bars"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|b| b["date"] == mutated_date)
+                .unwrap();
+            raw["records"][index]["close"] = json!("10.06");
+            raw["batch"]["bars"][index]["close"] = json!("10.06");
             raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
             let proof = CombinedEvidence {
                 base_integrity_sha256: evidence.base_integrity_sha256.clone(),
@@ -1974,4 +1992,444 @@ fn known_publication_two_connections_share_one_binding_and_failed_insert_leaves_
         RequestOutcome::Terminal(_)
     ));
     assert_eq!(f.db.task(&f.command.task_id).unwrap(), original);
+}
+
+// ---- #147 Slice 4: default-range task execution + gap covering ----
+mod default_runner {
+    use super::*;
+    use x_data_mcp::{
+        catalog::{
+            CatalogSnapshot, CompletenessEvidence, Exchange, IndustryInfo, SecurityRecord,
+            SecurityType,
+        },
+        data_supply::default_range::DefaultRangeContract,
+        market_storage::ProvenGap,
+        market_update::{
+            runner::{ItemExecution, RangeRunner},
+            tasks::Operation,
+        },
+        sqlite_catalog::SqliteCatalog,
+    };
+    const DAY: &str = "2026-01-15";
+    fn today() -> chrono::NaiveDate {
+        DAY.parse().unwrap()
+    }
+    fn publish_catalog(db: &SqliteMarket, codes: &[&str]) {
+        let records = codes
+            .iter()
+            .map(|code| SecurityRecord {
+                symbol: (*code).into(),
+                name: (*code).into(),
+                exchange: Exchange::Shanghai,
+                security_type: SecurityType::AShare,
+                source_security_id: (*code).into(),
+                industry: IndustryInfo::Missing {
+                    reason: "fixture".into(),
+                },
+                source: "fixture:catalog".into(),
+                acquired_at: chrono::Utc::now(),
+            })
+            .collect::<Vec<_>>();
+        SqliteCatalog::new(db.tasks.clone())
+            .publish_fixture(
+                "catalog-1",
+                CatalogSnapshot {
+                    source: "fixture:catalog".into(),
+                    acquired_at: chrono::Utc::now(),
+                    completeness: CompletenessEvidence::Complete {
+                        expected_count: records.len(),
+                    },
+                    records,
+                },
+                None,
+            )
+            .unwrap();
+    }
+    /// Real legacy collection + publish: writes the execution-start marker
+    /// and promotes `daily-{code}` to the effective qfq daily head.
+    fn publish_daily(db: &SqliteMarket, ctl: &TaskControl<SqliteTasks>, code: &str, seq: usize) {
+        let symbol = format!("sh.{code}");
+        let version_id = format!("daily-{code}");
+        let samples: Value =
+            serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+        let mut raw = samples[0]["record"].clone();
+        raw["version_id"] = json!(version_id);
+        raw["symbol"] = json!(symbol);
+        raw["batch"]["symbol"] = json!(symbol);
+        raw["batch"]["provenance"]["symbol"] = json!(symbol);
+        raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+        db.stage(&raw).unwrap();
+        let accepted = ctl
+            .accept(
+                &format!("req-{version_id}"),
+                LegacyCollection.key(),
+                json!({"symbols":[symbol],"periods":["day"]}),
+            )
+            .unwrap();
+        let RequestOutcome::Task(s) = accepted.record.outcome else {
+            panic!()
+        };
+        let s = db
+            .tasks
+            .transition(&s.task.task_id, 0, "range-run", Change::Claim)
+            .unwrap();
+        let s = db
+            .tasks
+            .transition(
+                &s.task.task_id,
+                s.task.state_revision,
+                "range-run",
+                Change::StartItem(s.items[0].spec.item_id.clone()),
+            )
+            .unwrap();
+        let plan = Publisher {
+            repository: db.clone(),
+        }
+        .prepare(Publication {
+            publication_id: format!("pub-{version_id}-{seq}"),
+            version_id,
+            task_id: s.task.task_id,
+            item_id: s.items[0].spec.item_id.clone(),
+            run_id: "range-run".into(),
+            expected_revision: s.task.state_revision,
+            intent: PublishIntent::Daily {
+                expected_head: None,
+            },
+        })
+        .unwrap();
+        db.commit(&plan).unwrap();
+    }
+    fn gap(id: &str, symbol: &str, start: &str, end: &str) -> ProvenGap {
+        ProvenGap {
+            gap_id: id.into(),
+            symbol: symbol.into(),
+            period: Period::Day,
+            start_date: start.parse().unwrap(),
+            end_date: end.parse().unwrap(),
+            evidence_kind: "gap_verification_decision".into(),
+            evidence_id: format!("evidence-{id}"),
+            evidence_digest: "e".repeat(64),
+            observed_at: "2026-09-15T00:00:00Z".parse().unwrap(),
+        }
+    }
+    struct DefaultFixture {
+        _dir: tempfile::TempDir,
+        db: SqliteMarket,
+        ctl: TaskControl<SqliteTasks>,
+        task_id: String,
+        items: Vec<String>,
+    }
+    /// Catalog + published daily for `codes`, recorded `gaps`, then a real
+    /// `selection {"kind":"default"}` acceptance for `op`.
+    fn default_fixture(
+        op: Operation,
+        codes: &[&str],
+        gaps: &[(&str, &str, &str, &str)],
+    ) -> DefaultFixture {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = SqliteTasks::new(dir.path().join("range.sqlite"));
+        tasks.initialize().unwrap();
+        let db = SqliteMarket::new(tasks.clone());
+        publish_catalog(&db, codes);
+        let ctl = TaskControl::new(
+            tasks,
+            "range-run".into(),
+            vec![
+                Box::new(LegacyCollection),
+                Box::new(DefaultRangeContract {
+                    operation: Operation::Update,
+                    resolver: db.clone(),
+                    today,
+                }),
+                Box::new(DefaultRangeContract {
+                    operation: Operation::Backfill,
+                    resolver: db.clone(),
+                    today,
+                }),
+            ],
+        )
+        .unwrap();
+        for (i, code) in codes.iter().enumerate() {
+            publish_daily(&db, &ctl, code, i);
+        }
+        for (id, symbol, start, end) in gaps {
+            db.record_proven_gap(&gap(id, symbol, start, end)).unwrap();
+        }
+        let key = DefaultRangeContract {
+            operation: op,
+            resolver: db.clone(),
+            today,
+        }
+        .key();
+        let accepted = ctl
+            .accept("req-default", key, json!({"selection":{"kind":"default"}}))
+            .unwrap();
+        let RequestOutcome::Task(snap) = accepted.record.outcome else {
+            panic!()
+        };
+        DefaultFixture {
+            _dir: dir,
+            db,
+            ctl,
+            task_id: snap.task.task_id,
+            items: snap.items.iter().map(|i| i.spec.item_id.clone()).collect(),
+        }
+    }
+    fn runner(db: &SqliteMarket) -> RangeRunner<SqliteMarket> {
+        RangeRunner {
+            repository: db.clone(),
+            run_id: "range-run".into(),
+        }
+    }
+    #[test]
+    fn default_update_executes_union_covers_frozen_gaps_and_replays() {
+        use x_data_mcp::data_supply::{Access, mcp::DataApi};
+        use x_data_mcp::mcp::ToolHandler;
+        for changed in [true, false] {
+            let f = default_fixture(
+                Operation::Update,
+                &["600006"],
+                &[
+                    ("g1", "sh.600006", "2025-02-01", "2025-02-28"),
+                    ("g2", "sh.600006", "2024-01-01", "2024-06-01"),
+                ],
+            );
+            let provider = SyntheticRangeProvider::new(changed);
+            let result = runner(&f.db)
+                .run_item(&f.task_id, &f.items[0], &provider)
+                .unwrap();
+            let ItemExecution::Published(receipt) = result else {
+                let ItemExecution::NotPublished(t) = result else {
+                    unreachable!()
+                };
+                panic!("item outcome: {:?}", t.items[0].outcome)
+            };
+            // One union acquisition/commit for refresh + both gap ranges.
+            assert_eq!(provider.calls.get(), 1);
+            let seen = provider.seen_ranges.borrow();
+            assert_eq!(
+                *seen,
+                vec![DateRange {
+                    start: "2024-01-01".parse().unwrap(),
+                    end: DAY.parse().unwrap()
+                }]
+            );
+            drop(seen);
+            assert_eq!(
+                receipt.version_id != "daily-600006",
+                changed,
+                "changed run must publish a new version"
+            );
+            // Both frozen gaps are covered in full by the committed union.
+            for gap_id in ["g1", "g2"] {
+                let bindings = f.db.gap_coverings(gap_id).unwrap();
+                assert_eq!(bindings.len(), 1);
+                assert_eq!(bindings[0].version_id, receipt.version_id);
+            }
+            assert!(
+                f.db.open_proven_gaps("sh.600006", Period::Day)
+                    .unwrap()
+                    .is_empty()
+            );
+            // Availability no longer reports either gap.
+            let api =
+                DataApi::new(f.db.tasks.clone(), "range-run".into(), Access::local()).unwrap();
+            let availability = api
+                .call(
+                    "get_data_availability",
+                    json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2024-01-01","end_date":"2026-01-15"},"version":{"kind":"latest_per_entity"},"page_size":1}),
+                )
+                .unwrap();
+            assert!(
+                availability["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|i| i["confirmed_gaps"].as_array().unwrap().is_empty())
+            );
+            // Progress projection still exposes frozen ranges + one result.
+            let progress = api
+                .call(
+                    "get_task_progress",
+                    json!({"task_id":f.task_id,"page_size":10}),
+                )
+                .unwrap();
+            assert_eq!(progress["frozen_daily_ranges"].as_array().unwrap().len(), 3);
+            assert_eq!(progress["range_results"].as_array().unwrap().len(), 1);
+            assert_eq!(progress["succeeded"], 1);
+            // Replay: same receipt, no re-acquisition, no duplicate bindings.
+            let ItemExecution::Published(replayed) = runner(&f.db)
+                .run_item(&f.task_id, &f.items[0], &provider)
+                .unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(receipt, replayed);
+            assert_eq!(provider.calls.get(), 1);
+            for gap_id in ["g1", "g2"] {
+                assert_eq!(f.db.gap_coverings(gap_id).unwrap().len(), 1);
+            }
+        }
+    }
+    #[test]
+    fn default_backfill_executes_gap_ranges_only() {
+        let f = default_fixture(
+            Operation::Backfill,
+            &["600006"],
+            &[
+                ("g1", "sh.600006", "2025-01-02", "2025-02-28"),
+                ("g2", "sh.600006", "2024-01-01", "2024-12-31"),
+            ],
+        );
+        let provider = SyntheticRangeProvider::new(true);
+        let ItemExecution::Published(receipt) = runner(&f.db)
+            .run_item(&f.task_id, &f.items[0], &provider)
+            .unwrap()
+        else {
+            panic!()
+        };
+        // Union of the two gap ranges only; no refresh range is fetched.
+        let seen = provider.seen_ranges.borrow();
+        assert_eq!(
+            *seen,
+            vec![DateRange {
+                start: "2024-01-01".parse().unwrap(),
+                end: "2025-02-28".parse().unwrap()
+            }]
+        );
+        assert_ne!(receipt.version_id, "daily-600006");
+        for gap_id in ["g1", "g2"] {
+            assert_eq!(
+                f.db.gap_coverings(gap_id).unwrap()[0].version_id,
+                receipt.version_id
+            );
+        }
+        assert!(
+            f.db.open_proven_gaps("sh.600006", Period::Day)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn gap_not_in_frozen_required_ranges_is_never_covered() {
+        let f = default_fixture(
+            Operation::Update,
+            &["600006"],
+            &[("g1", "sh.600006", "2025-02-01", "2025-02-28")],
+        );
+        // g3 is recorded after acceptance: inside the committed union but
+        // not part of this item's frozen required ranges.
+        f.db.record_proven_gap(&gap("g3", "sh.600006", "2025-03-01", "2025-03-10"))
+            .unwrap();
+        let provider = SyntheticRangeProvider::new(true);
+        let ItemExecution::Published(_) = runner(&f.db)
+            .run_item(&f.task_id, &f.items[0], &provider)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(f.db.gap_coverings("g1").unwrap().len(), 1);
+        assert!(f.db.gap_coverings("g3").unwrap().is_empty());
+        let open = f.db.open_proven_gaps("sh.600006", Period::Day).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].gap_id, "g3");
+    }
+    #[test]
+    fn failed_required_range_leaves_item_incomplete_and_other_items_continue() {
+        let f = default_fixture(
+            Operation::Backfill,
+            &["600006", "600007"],
+            &[
+                ("g1", "sh.600006", "2025-01-02", "2025-02-28"),
+                ("g2", "sh.600007", "2025-03-01", "2025-03-10"),
+            ],
+        );
+        assert_eq!(f.items.len(), 2);
+        let mut provider = SyntheticRangeProvider::new(true);
+        provider.fail_symbol = Some("sh.600007".into());
+        // First item publishes and covers its frozen gap.
+        let ItemExecution::Published(receipt) = runner(&f.db)
+            .run_item(&f.task_id, &f.items[0], &provider)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            f.db.gap_coverings("g1").unwrap()[0].version_id,
+            receipt.version_id
+        );
+        // Second item's acquisition fails: item finishes failed, gap open.
+        let ItemExecution::NotPublished(task) = runner(&f.db)
+            .run_item(&f.task_id, &f.items[1], &provider)
+            .unwrap()
+        else {
+            panic!()
+        };
+        let failed = task
+            .items
+            .iter()
+            .find(|i| i.spec.item_id == f.items[1])
+            .unwrap();
+        assert!(!failed.outcome.as_ref().unwrap().success);
+        assert!(
+            failed
+                .outcome
+                .as_ref()
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("SOURCE_NOT_VERIFIED")
+        );
+        assert!(f.db.gap_coverings("g2").unwrap().is_empty());
+        assert_eq!(
+            f.db.open_proven_gaps("sh.600007", Period::Day).unwrap()[0].gap_id,
+            "g2"
+        );
+        assert!(
+            f.db.item_receipt(&f.task_id, &f.items[1])
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn malformed_default_frozen_shape_fails_closed_without_commit() {
+        let f = default_fixture(
+            Operation::Backfill,
+            &["600006"],
+            &[("g1", "sh.600006", "2025-02-01", "2025-02-28")],
+        );
+        // Corrupt the frozen shape: the stored item spec diverges from the
+        // task's frozen work, so the snapshot consistency gate fails closed
+        // before any acquisition.
+        let c = Connection::open(f.db.tasks.path()).unwrap();
+        c.execute(
+            "UPDATE task_items SET frozen_inputs_json=json_set(frozen_inputs_json,'$.bogus',1) WHERE item_id=?1",
+            [&f.items[0]],
+        )
+        .unwrap();
+        drop(c);
+        let provider = SyntheticRangeProvider::new(true);
+        let err = runner(&f.db)
+            .run_item(&f.task_id, &f.items[0], &provider)
+            .unwrap_err();
+        assert!(err.to_string().contains("inconsistent"), "{err}");
+        assert_eq!(provider.calls.get(), 0);
+        assert!(f.db.gap_coverings("g1").unwrap().is_empty());
+    }
+    #[test]
+    fn frozen_inputs_projection_and_shape_stay_stable() {
+        let f = default_fixture(
+            Operation::Update,
+            &["600006"],
+            &[("g1", "sh.600006", "2025-02-01", "2025-02-28")],
+        );
+        let snap = f.ctl.repository.read_task(&f.task_id).unwrap().unwrap();
+        let frozen = &snap.items[0].spec.frozen_inputs;
+        assert_eq!(frozen["base_version_id"], "daily-600006");
+        assert!(frozen["selection_evidence"]["evidence_digest"].is_string());
+        assert_eq!(frozen["refresh_range"]["end_date"], serde_json::json!(DAY));
+        assert_eq!(frozen["proven_gap_ranges"][0]["gap_id"], "g1");
+        assert!(frozen["proven_gap_ranges"][0]["evidence_digest"].is_string());
+    }
 }

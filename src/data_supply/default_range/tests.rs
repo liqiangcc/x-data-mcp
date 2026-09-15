@@ -11,6 +11,7 @@ use crate::{
     market_storage::{
         GapCovering, MarketRepository, ProvenGap, Publication, PublishIntent, Publisher,
     },
+    market_update::publication::RangeRepository,
     sqlite_catalog::SqliteCatalog,
     sqlite_market::SqliteMarket,
     sqlite_tasks::SqliteTasks,
@@ -723,8 +724,11 @@ fn future_resolution_rejects_before_persistence() {
     );
 }
 #[test]
-fn runner_fails_closed_on_default_contract_before_execution() {
-    use crate::market_update::tasks::Operation;
+fn official_provider_keeps_default_execution_fail_closed() {
+    use crate::market_update::{
+        runner::{ItemExecution, RangeRunner},
+        tasks::Operation,
+    };
     let dir = tempfile::tempdir().unwrap();
     let (tasks, catalog, db) = open(&dir);
     publish_catalog(&catalog, "c1", &["600006"]);
@@ -743,29 +747,42 @@ fn runner_fails_closed_on_default_contract_before_execution() {
         panic!()
     };
     let task_id = snap.task.task_id.clone();
-    // The installed runner rejects the new contract/frozen shape loudly at
-    // its contract gate instead of executing partial work; the inner
-    // `frozen["range"]` Integrity guard is never even reached.
-    let runner = crate::market_update::runner::RangeRunner {
+    // The runner accepts the default contract, but the official provider is
+    // still fail-closed: acquisition returns SOURCE_NOT_VERIFIED, so the
+    // item finishes failed with no version, no receipt and no covering.
+    let runner = RangeRunner {
         repository: db.clone(),
         run_id: "run".into(),
     };
-    assert!(matches!(
-        runner.run_item(
+    let ItemExecution::NotPublished(after) = runner
+        .run_item(
             &task_id,
             &snap.items[0].spec.item_id,
             &crate::market_update::runner::OfficialRangeProvider,
-        ),
-        Err(crate::market_storage::Error::Invalid(ref m))
-            if m.contains("unsupported range execution contract")
-    ));
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    let outcome = after.items[0].outcome.as_ref().unwrap();
+    assert!(!outcome.success);
+    assert!(
+        outcome
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("SOURCE_NOT_VERIFIED")
+    );
+    assert!(
+        db.item_receipt(&task_id, &snap.items[0].spec.item_id)
+            .unwrap()
+            .is_none()
+    );
+    // The finished-failed task is no longer dispatchable.
     assert!(matches!(
         crate::data_supply::worker::run_once(&ctl, &db),
-        Err(crate::market_storage::Error::Invalid(ref m))
-            if m.contains("unsupported range execution contract")
+        Ok(None)
     ));
-    let after = ctl.repository.read_task(&task_id).unwrap().unwrap();
-    assert!(after.items.iter().all(|i| i.outcome.is_none()));
 }
 #[test]
 fn explicit_daily_acceptance_still_uses_the_explicit_contract() {

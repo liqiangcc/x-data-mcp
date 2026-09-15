@@ -63,11 +63,14 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         provider: &dyn RangeProvider,
     ) -> Result<ItemExecution, Error> {
         let mut task = self.repository.task(task_id)?;
+        let default_contract =
+            task.task.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
         if !matches!(
             task.task.key.operation.as_str(),
             "update_data" | "backfill_data"
         ) || task.task.key.dataset != "market.daily"
-            || task.task.key.contract_version != super::tasks::CONTRACT_VERSION
+            || (!default_contract
+                && task.task.key.contract_version != super::tasks::CONTRACT_VERSION)
         {
             return Err(Error::Invalid(
                 "unsupported range execution contract".into(),
@@ -80,6 +83,11 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             .cloned()
             .ok_or_else(|| Error::Invalid("range item absent from accepted task".into()))?;
         if let Some(receipt) = self.repository.item_receipt(task_id, item_id)? {
+            // Covering write-back is idempotent and may lag the commit after
+            // a crash; replay re-establishes it from the frozen gap list.
+            if default_contract {
+                self.ensure_default_coverings(&item.spec.frozen_inputs, &receipt.version_id)?;
+            }
             return Ok(ItemExecution::Published(receipt));
         }
         if task.visible_status(&self.run_id) == Status::NeedsVerification {
@@ -123,12 +131,22 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             &self.run_id,
             Change::StartItem(item_id.into()),
         )?;
-        let outcome = self.acquire_and_commit(&task, item_id, &item.spec.frozen_inputs, provider);
+        let outcome = if default_contract {
+            self.acquire_and_commit_default(&task, item_id, &item.spec.frozen_inputs, provider)
+        } else {
+            self.acquire_and_commit(&task, item_id, &item.spec.frozen_inputs, provider)
+        };
         match outcome {
             Ok(receipt) => Ok(ItemExecution::Published(receipt)),
             Err(error) => {
                 // A response can be lost after commit. Never overwrite success.
                 if let Some(receipt) = self.repository.item_receipt(task_id, item_id)? {
+                    if default_contract {
+                        self.ensure_default_coverings(
+                            &item.spec.frozen_inputs,
+                            &receipt.version_id,
+                        )?;
+                    }
                     return Ok(ItemExecution::Published(receipt));
                 }
                 if matches!(
@@ -206,18 +224,111 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         let base_id = frozen["base_version_id"]
             .as_str()
             .ok_or_else(|| Error::Integrity("frozen base missing".into()))?;
-        let base = self.repository.fixed(base_id)?;
-        if base.raw()["integrity_sha256"] != frozen["base_integrity_sha256"] {
-            return Err(Error::Integrity(
-                "fixed base differs from accepted digest".into(),
-            ));
-        }
+        let base_digest = frozen["base_integrity_sha256"]
+            .as_str()
+            .ok_or_else(|| Error::Integrity("frozen base digest missing".into()))?;
         let range = DateRange {
             start: serde_json::from_value(frozen["range"]["start"].clone())
                 .map_err(|e| Error::Integrity(e.to_string()))?,
             end: serde_json::from_value(frozen["range"]["end"].clone())
                 .map_err(|e| Error::Integrity(e.to_string()))?,
         };
+        self.commit_acquired_range(task, item_id, base_id, base_digest, &range, provider)
+    }
+    /// Default-range execution (#147): every required range — refresh plus
+    /// each frozen gap range for `update`, frozen gap ranges only for
+    /// `backfill` — is satisfied by one fetch/commit over their union,
+    /// through the same verified pipeline as the explicit contract. One
+    /// commit means `finish_task` completes the item only after the union
+    /// (and therefore every required range) is verified.
+    fn acquire_and_commit_default(
+        &self,
+        task: &TaskSnapshot,
+        item_id: &str,
+        frozen: &Value,
+        provider: &dyn RangeProvider,
+    ) -> Result<Receipt, Error> {
+        let parsed = super::tasks::parse_default_frozen(frozen)?;
+        // Shape/operation consistency: `update` freezes a refresh range,
+        // `backfill` never does; anything else is a frozen-shape violation.
+        match task.task.key.operation.as_str() {
+            "update_data" if parsed.refresh_range.is_none() => {
+                return Err(Error::Integrity(
+                    "default update item missing frozen refresh range".into(),
+                ));
+            }
+            "backfill_data" if parsed.refresh_range.is_some() => {
+                return Err(Error::Integrity(
+                    "default backfill item carries a refresh range".into(),
+                ));
+            }
+            _ => {}
+        }
+        let union = parsed.union()?;
+        let receipt = self.commit_acquired_range(
+            task,
+            item_id,
+            &parsed.base_version_id,
+            &parsed.base_integrity_sha256,
+            &union,
+            provider,
+        )?;
+        self.ensure_default_coverings(frozen, &receipt.version_id)?;
+        Ok(receipt)
+    }
+    /// Append covering bindings for frozen gaps the committed version
+    /// satisfied in full. The exact covering condition: the gap is listed in
+    /// the item's frozen `proven_gap_ranges` AND its entire
+    /// `[start_date, end_date]` is contained in the committed range whose
+    /// evidence the verified pipeline checked end-to-end. Gaps not in the
+    /// frozen list never gain a binding, whatever their overlap.
+    fn ensure_default_coverings(&self, frozen: &Value, version_id: &str) -> Result<(), Error> {
+        let parsed = super::tasks::parse_default_frozen(frozen)?;
+        let union = parsed.union()?;
+        for gap in &parsed.proven_gap_ranges {
+            let range = gap.range.range()?;
+            if range.start < union.start || range.end > union.end {
+                return Err(Error::Integrity(
+                    "frozen gap outside committed verified range".into(),
+                ));
+            }
+            // Replay: the identical binding already exists — cover_gap is
+            // append-only, so skip rather than conflict on covered_at.
+            if self
+                .repository
+                .gap_coverings(&gap.gap_id)?
+                .iter()
+                .any(|c| c.version_id == version_id)
+            {
+                continue;
+            }
+            self.repository
+                .cover_gap(&crate::market_storage::GapCovering {
+                    gap_id: gap.gap_id.clone(),
+                    version_id: version_id.into(),
+                    covered_at: chrono::Utc::now(),
+                })?;
+        }
+        Ok(())
+    }
+    /// Verified pipeline shared by both contracts: provider acquisition,
+    /// base/derivation checks, combined-coverage staging, publication
+    /// verification and the atomic commit/receipt + finish_item.
+    fn commit_acquired_range(
+        &self,
+        task: &TaskSnapshot,
+        item_id: &str,
+        base_id: &str,
+        base_digest: &str,
+        range: &DateRange,
+        provider: &dyn RangeProvider,
+    ) -> Result<Receipt, Error> {
+        let base = self.repository.fixed(base_id)?;
+        if base.raw()["integrity_sha256"] != base_digest {
+            return Err(Error::Integrity(
+                "fixed base differs from accepted digest".into(),
+            ));
+        }
         let id = crate::hash::sha256(
             serde_json::json!([task.task.task_id, item_id])
                 .to_string()
@@ -225,7 +336,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         );
         let candidate_id = format!("range-version-{id}");
         let acquired = provider
-            .acquire(&base, &range, &candidate_id)
+            .acquire(&base, range, &candidate_id)
             .map_err(|e| Error::Invalid(e.to_string()))?;
         let current = self.repository.task(&task.task.task_id)?;
         if current.task.status != Status::Running
@@ -235,14 +346,14 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 "task changed or cancelled during acquisition".into(),
             ));
         }
-        let changed =
-            match super::prepare(&base, &acquired.batch, &range, Some(&acquired.evidence))? {
-                Decision::Candidate(_) => true,
-                Decision::NoChange { .. } => false,
-                Decision::NeedsVerification(reason) => {
-                    return Err(Error::Invalid(format!("NEEDS_VERIFICATION: {reason:?}")));
-                }
-            };
+        let changed = match super::prepare(&base, &acquired.batch, range, Some(&acquired.evidence))?
+        {
+            Decision::Candidate(_) => true,
+            Decision::NoChange { .. } => false,
+            Decision::NeedsVerification(reason) => {
+                return Err(Error::Invalid(format!("NEEDS_VERIFICATION: {reason:?}")));
+            }
+        };
         if changed {
             let whole = acquired.combined.as_ref().ok_or_else(|| {
                 Error::Invalid("NEEDS_VERIFICATION: combined coverage absent".into())
@@ -274,7 +385,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 },
             },
             &acquired.batch,
-            &range,
+            range,
             &acquired.evidence,
             acquired.combined.as_ref().map(|c| &c.evidence),
         )?;

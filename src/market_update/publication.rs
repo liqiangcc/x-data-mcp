@@ -52,6 +52,13 @@ pub trait RangeRepository: MarketRepository {
         run: &str,
         change: crate::task_control::Change,
     ) -> Result<crate::task_control::TaskSnapshot, Error>;
+    /// Append a covering binding for a proven gap the committed version
+    /// satisfied in full. Append-only; re-binding the identical pair is an
+    /// idempotent no-op.
+    fn cover_gap(&self, covering: &crate::market_storage::GapCovering) -> Result<bool, Error>;
+    /// Audit read of covering bindings for one gap.
+    fn gap_coverings(&self, gap_id: &str)
+    -> Result<Vec<crate::market_storage::GapCovering>, Error>;
 }
 impl<R: MarketRepository> Publisher<R> {
     pub fn prepare_range(
@@ -78,9 +85,10 @@ impl<R: MarketRepository> Publisher<R> {
             task.task.key.operation.as_str(),
             "update_data" | "backfill_data"
         );
-        let frozen_matches = task.task.key.contract_version == super::tasks::CONTRACT_VERSION
+        let frozen_matches = if task.task.key.contract_version == super::tasks::CONTRACT_VERSION
             && task.task.key.dataset == "market.daily"
-            && task.items.iter().any(|item| {
+        {
+            task.items.iter().any(|item| {
                 item.spec.item_id == command.item_id
                     && item.spec.frozen_inputs
                         == super::tasks::frozen(
@@ -88,7 +96,26 @@ impl<R: MarketRepository> Publisher<R> {
                             &evidence.base_integrity_sha256,
                             range,
                         )
-            });
+            })
+        } else if task.task.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION
+            && task.task.key.dataset == "market.daily"
+        {
+            // The executed range must equal the union of the item's frozen
+            // required ranges (refresh + frozen gaps for update, frozen
+            // gaps only for backfill) on the frozen base identity.
+            task.items.iter().any(|item| {
+                item.spec.item_id == command.item_id
+                    && super::tasks::parse_default_frozen(&item.spec.frozen_inputs)
+                        .ok()
+                        .is_some_and(|frozen| {
+                            frozen.base_version_id == evidence.base_version_id
+                                && frozen.base_integrity_sha256 == evidence.base_integrity_sha256
+                                && frozen.union().ok().as_ref() == Some(range)
+                        })
+            })
+        } else {
+            false
+        };
         if range_task && !frozen_matches {
             return Err(Error::Conflict(
                 "range publication differs from accepted frozen inputs".into(),
