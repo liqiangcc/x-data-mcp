@@ -1,0 +1,74 @@
+{
+  "plan_id": "issue-54-46-client-package-probe",
+  "issues": ["#46", "#54"],
+  "frozen_at_utc": "2026-09-15",
+  "upstream_evidence": "evidence/issue-46-anchor-binding (PR #164) + evidence/issue-54-46-authority-discovery (merged bf1fda7)",
+  "purpose": "Final bounded slice: probe ONE official client install package for documentation or plain-data members that could close the remaining authority gaps (#46: tdxhy.cfg field<->anchored code-space declaration + A-share scope/market/field roles; #54: business-field->GBBQ binary C1..C4 binding). Mechanical inventory only; no contract claims. Honest NOT_FOUND/NOT_RUN outcomes are valid terminal evidence.",
+  "download_page_enumeration": {
+    "entry": "https://www.tdx.com.cn/soft.html -> https://www.tdx.com.cn/products/singledown.html",
+    "candidates": [
+      {"url": "https://data.tdx.com.cn/level2/new_tdx64.exe", "role": "main 64-bit Windows client (primary)", "http_status": 200, "content_length": 185469360, "last_modified": "Tue, 04 Aug 2026 08:28:37 GMT", "etag": "\"6a71a2b5-b0e09b0\"", "selected": false, "reason": "NOT_RUN: no innoextract/7z/cabextract/unshield on this box; format not unpackable under allowed tooling. Not downloaded."},
+      {"url": "https://data.tdx.com.cn/level2/new_tdx.exe", "role": "main 32-bit Windows client", "http_status": 200, "content_length": 155285936, "last_modified": "Mon, 06 Jul 2026 10:39:07 GMT", "etag": "\"6a4b85cb-94179b0\"", "selected": false, "reason": "same as above; superseded by 64-bit primary"},
+      {"url": "https://data.tdx.com.cn/kylin/com.tdx.tdxcfv_7.64_amd64.deb", "role": "Kylin Linux amd64 client V7.64 (official)", "http_status": 200, "content_length": 122990144, "last_modified": "Fri, 05 Jul 2024 01:19:57 GMT", "etag": "\"66874a3d-754ae40\"", "selected": true, "reason": "extractable with installed ar/dpkg-deb; official client package from the same download page"},
+      {"url": "https://data.tdx.com.cn/kylin/com.tdx.tdxcfv_7.64_arm64.deb", "role": "Kylin arm64 client", "http_status": 200, "selected": false, "reason": "one-package limit; amd64 preferred"},
+      {"url": "https://data.tdx.com.cn/uos/com.tdx.tdxcfv_7.64_amd64.deb", "role": "UOS amd64 client", "selected": false, "reason": "one-package limit; Kylin amd64 chosen first"}
+    ],
+    "selection_note": "Task rule was 'one main client package, latest main-site edition'. The latest main-site primary is new_tdx64.exe, but it is a Windows installer that no installed tool can unpack (innoextract/7z/cabextract/unshield all absent). Rather than mark the whole slice NOT_RUN, the single allowed download was spent on the official Kylin amd64 .deb — an official TDX client package (com.tdx.tdxcfv 7.64, maintainer tdx <nie@tdx.com.cn>) unpackable with format-appropriate tooling. The .exe enumeration + metadata is recorded above; its extraction remains NOT_RUN."
+  },
+  "inputs": {
+    "retained_dir": "/home/box/retained-inputs/",
+    "files": {
+      "official-client-com.tdx.tdxcfv_7.64_amd64.deb": {
+        "sha256": "22aff03c4b26fb67c2c049056f785d6fb56cd855fc3171dbb65a99ab9cfd4454",
+        "url": "https://data.tdx.com.cn/kylin/com.tdx.tdxcfv_7.64_amd64.deb",
+        "http": {"status": 200, "content_length": 122990144, "last_modified": "Fri, 05 Jul 2024 01:19:57 GMT", "etag": "\"66874a3d-754ae40\""},
+        "fetched_utc": "2026-09-15",
+        "authorization": "liqiangcc/x-data-mcp#71 comment-5676627357 (public official download)"
+      },
+      "official-base.zip": {"sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6"},
+      "official-gbbq.zip": {"sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"},
+      "official-tq-docs/tdxw-left.html": {"sha256": "c6ad42a2ee276382fb94a5a05f7a73d42909fb2f6088bd5e4140e447ddea12bf", "doc": "client online manual full-text corpus"},
+      "official-tq-docs/tdxw-index.html": {"sha256": "6b9ef91fc80bd9693d734f45c3ec923148050e4f9d843546ce58ba95b49951d9"},
+      "official-tq-docs/tdxw-left.js": {"sha256": "64971fd519fea73d8092efa65d05ea6f9f7b37c5865ed355b272c5a9a38256e2"},
+      "official-tq-docs/tdxw-welcome.html": {"sha256": "e355fc1be4c3827e495d53cc0af8d788f5f5e28d6839c4afa9e00a406633f5b7"}
+    }
+  },
+  "frozen_rules": {
+    "extraction": "dpkg-deb -x into a fresh /tmp dir; member enumeration via find; no execution of package binaries, scripts, or maintainer scripts",
+    "allowed_extensions": [".help", ".chm", ".hlp", ".txt", ".pdf", ".cfg", ".dat", ".ini"],
+    "extension_rule": "case-insensitive suffix match; files under deb control archive excluded (data.tar.xz payload only)",
+    "keyword_scan": {
+      "applies_to": "members whose first 2000 bytes are >=85% printable (decodable as utf-8 or gbk)",
+      "keywords": ["gbbq", "GBBQ", "除权", "除息", "复权", "权息", "分红", "配股", "送转", "股本", "行业", "incon", "tdxhy", "tdxzs", "base.zip", "字段", "偏移", "二进制", "记录结构", "float", "单精度", "参考价", "C1", "C2", "C3", "C4"],
+      "context_bytes": 120
+    },
+    "comparison_targets": {
+      "incon.dat": "vs official-gbbq.zip!zhb.zip!incon.dat — byte equality + per-section row counts + coverage of tdxhy.cfg field-2 (T) and field-5 (X) code sets",
+      "same_name_search": ["tdxhy.cfg", "tdxhy2.cfg", "tdxzs.cfg", "tdxzs3.cfg", "gbbq", "gbbq.map", "base.dbf", "base.map", "infoharbor.lst", "infoharbor_ex.code", "infoharbor_ex.name"],
+      "rule": "absent -> recorded ABSENT_IN_PACKAGE; present -> sha256 + byte-equality vs gen-2 archive member"
+    },
+    "manual_scan": "keyword_scan over tdxw-left.html corpus; matching lines classified business-level prose unless they name a binary member+field",
+    "binding_test": "a finding counts as a semantic anchor ONLY if official text names a binary member/record field AND its business meaning/unit/encoding; keyword presence or business-level capability prose = BUSINESS_LEVEL_ONLY; same-name file presence = MEMBER_CORROBORATION (client uses the file, proves nothing about semantics)"
+  },
+  "status_taxonomy": {
+    "FOUND_SEMANTIC_ANCHOR": "official text binds a binary member/field to business meaning",
+    "FOUND_BUSINESS_LEVEL_ONLY": "official prose confirms a business capability/concept, no binary binding",
+    "FOUND_MEMBER_CORROBORATION": "client package ships a same-name data file (byte-identical or same-namespace)",
+    "ABSENT_IN_PACKAGE": "comparison target not shipped in the package",
+    "NOT_FOUND": "searched, no such evidence exists in the package",
+    "NOT_RUN": "infeasible on this box (recorded with reason)",
+    "UNANCHORED": "gap remains with no source"
+  },
+  "prohibited": [
+    "no disassembly/decompilation/strings-extraction on executables or shared objects",
+    "no semantic inference from binary contents",
+    "no wine or client execution",
+    "no additional package downloads",
+    "no src/ changes",
+    "no claims that file presence proves field semantics"
+  ],
+  "outputs": {
+    "result": "result.json",
+    "determinism": "two clean-checkout runs, byte-identical; determinism.json"
+  }
+}
