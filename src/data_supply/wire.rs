@@ -388,6 +388,10 @@ pub enum WriteSelection {
         version_id: String,
         industry_code: Option<String>,
     },
+    /// Snapshot-resolved selection, implemented only for market.daily
+    /// update/backfill acceptance. Carries no caller-provided base, range
+    /// or gap overrides.
+    Default,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "dataset", deny_unknown_fields)]
@@ -490,6 +494,23 @@ pub struct RangeWriteItem {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
 }
+/// Closed `selection` object for range writes. A struct (not an
+/// internally-tagged enum) because serde `deny_unknown_fields` does not
+/// reject extra keys on unit enum variants — caller overrides like
+/// `base_version_id`/`start_date`/`gap_ids` must fail decode, not be
+/// silently dropped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RangeWriteSelection {
+    pub kind: RangeSelectionKind,
+}
+/// Only the snapshot-resolved default selection is implemented; explicit
+/// and catalog selections stay unavailable for update/backfill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RangeSelectionKind {
+    Default,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "dataset", deny_unknown_fields)]
 pub enum RangeWrite {
@@ -497,8 +518,12 @@ pub enum RangeWrite {
     Daily {
         request_id: String,
         contract_version: ContractVersion,
+        /// Explicit item list; mutually exclusive with `selection`
         #[schemars(length(min = 1))]
-        items: Vec<RangeWriteItem>,
+        items: Option<Vec<RangeWriteItem>>,
+        /// Snapshot-resolved selection; only `{"kind":"default"}` is
+        /// implemented for update/backfill
+        selection: Option<RangeWriteSelection>,
     },
     #[serde(rename = "market.yearly")]
     Yearly {

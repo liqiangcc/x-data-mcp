@@ -11,6 +11,10 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 pub const CONTRACT_VERSION: &str = "explicit-range-task-v1";
+/// Snapshot-resolved default daily contract. Parameter semantics differ
+/// from explicit ranges, so it persists a distinct contract version and
+/// never shares command identity with `CONTRACT_VERSION`.
+pub const DEFAULT_CONTRACT_VERSION: &str = "default-range-task-v1";
 #[derive(Debug, Clone, Copy)]
 pub enum Operation {
     Update,
@@ -142,7 +146,7 @@ pub(crate) fn frozen(id: &str, digest: &str, range: &DateRange) -> Value {
     json!({"base_version_id":id,"base_integrity_sha256":digest,"range":range})
 }
 
-fn repository_error(error: crate::market_storage::Error) -> Error {
+pub(crate) fn repository_error(error: crate::market_storage::Error) -> Error {
     use crate::market_storage::Error as MarketError;
     match error {
         MarketError::Task(error) => error,

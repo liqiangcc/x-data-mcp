@@ -3,6 +3,7 @@ use super::wire::{RangeWrite, YearlyPublication};
 use crate::{
     market_storage::PublishIntent,
     market_update::tasks::{EntityRange, ExplicitRanges, Operation},
+    task_control::Error,
     yearly_publication::tasks::{ExplicitYears, YearlyItem},
 };
 impl YearlyPublication {
@@ -26,27 +27,45 @@ impl RangeWrite {
     }
     pub fn key(&self, operation: Operation) -> crate::task_control::CommandKey {
         let mut key = operation.key();
-        if matches!(self, Self::Yearly { .. }) {
-            key.dataset = "market.yearly".into();
-            key.contract_version = crate::yearly_publication::tasks::CONTRACT_VERSION.into();
+        match self {
+            Self::Yearly { .. } => {
+                key.dataset = "market.yearly".into();
+                key.contract_version = crate::yearly_publication::tasks::CONTRACT_VERSION.into();
+            }
+            Self::Daily {
+                selection: Some(_), ..
+            } => {
+                key.contract_version = crate::market_update::tasks::DEFAULT_CONTRACT_VERSION.into();
+            }
+            _ => {}
         }
         key
     }
-    pub fn payload(&self) -> serde_json::Value {
+    pub fn payload(&self) -> Result<serde_json::Value, Error> {
+        fn invalid(message: &str) -> Error {
+            Error::InvalidCommand(message.into())
+        }
         match self {
-            Self::Daily { items, .. } => serde_json::to_value(ExplicitRanges {
-                items: items
-                    .iter()
-                    .map(|i| EntityRange {
-                        symbol: i.entity.symbol(),
-                        base_version_id: i.base_version_id.clone(),
-                        start_date: i.start_date,
-                        end_date: i.end_date,
-                    })
-                    .collect(),
-            })
-            .unwrap(),
-            Self::Yearly { items, .. } => serde_json::to_value(ExplicitYears {
+            Self::Daily {
+                items, selection, ..
+            } => match (items, selection) {
+                (Some(items), None) => Ok(serde_json::to_value(ExplicitRanges {
+                    items: items
+                        .iter()
+                        .map(|i| EntityRange {
+                            symbol: i.entity.symbol(),
+                            base_version_id: i.base_version_id.clone(),
+                            start_date: i.start_date,
+                            end_date: i.end_date,
+                        })
+                        .collect(),
+                })
+                .unwrap()),
+                (None, Some(_)) => Ok(serde_json::json!({"selection":{"kind":"default"}})),
+                (Some(_), Some(_)) => Err(invalid("items and selection are mutually exclusive")),
+                (None, None) => Err(invalid("items or selection required")),
+            },
+            Self::Yearly { items, .. } => Ok(serde_json::to_value(ExplicitYears {
                 items: items
                     .iter()
                     .map(|i| YearlyItem {
@@ -63,7 +82,7 @@ impl RangeWrite {
                     })
                     .collect(),
             })
-            .unwrap(),
+            .unwrap()),
         }
     }
 }

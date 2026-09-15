@@ -60,6 +60,16 @@ impl DataApi {
                             repository: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
                         }),
+                        Box::new(super::default_range::DefaultRangeContract {
+                            operation: crate::market_update::tasks::Operation::Update,
+                            resolver: repository.market.clone(),
+                            today: crate::calendar::shanghai_today,
+                        }),
+                        Box::new(super::default_range::DefaultRangeContract {
+                            operation: crate::market_update::tasks::Operation::Backfill,
+                            resolver: repository.market.clone(),
+                            today: crate::calendar::shanghai_today,
+                        }),
                         Box::new(crate::yearly_publication::tasks::YearlyContract {
                             operation: crate::market_update::tasks::Operation::Update,
                             repository: repository.market.clone(),
@@ -567,7 +577,7 @@ impl DataApi {
                     .accept(
                         command.request_id(),
                         command.key(operation),
-                        command.payload(),
+                        command.payload().map_err(task_error)?,
                     )
                     .map_err(task_error)?;
                 self.acceptance(command.request_id(), accepted)
