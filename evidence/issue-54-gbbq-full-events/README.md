@@ -94,11 +94,24 @@ diagnostics, not official semantics.
 
 ## Status
 
-Gen-1 retained inputs were never staged on the worker machine. Under the
-generation-2 ruling, the scan runs against the `plan-v2.json` pins; the
-scanner fails closed on any input hash mismatch and on any unregistered or
-drifted plan file. `result.json` and `determinism.json` are produced from
-two byte-identical runs.
+**GEN2_RESULT_COMMITTED.** `result.json` (SHA-256
+`934d64d9c832e34ea7a882c156c55191d829f03bf9e2789cbd0d7a6c0f72dad7`,
+3,027,103 bytes) was produced under `plan-v2.json` pins and replayed
+byte-identically from two independent checkouts (see `determinism.json`).
+
+Gen-2 consistency outcome: all 94 committed #53 category=1 events are
+present byte-identically in the gen-2 member (44 at unchanged
+`record_index`, 50 shifted +26 by upstream mid-file insertion); the 9
+bounded events are 9/9 present; decoded category set is unchanged; the
+six-digit category=1 total is a recorded observation of 68,669 (+27 vs the
+committed gen-1 total of 68,642); three `.day` members carry one appended
+bar each (+32 bytes), `sz000004.day` is byte-identical. All divergences are
+recorded as findings in `result.json` `consistency`.
+
+Headline diagnostic: 94/94 events resolved a previous close; 3 events
+(sh.600004 1, sh.600006 1, sz.000002 1) discriminate between candidates at
+the cent level. No candidate establishes an official contract; all gates
+unchanged.
 
 Self-test coverage runs without the inputs:
 

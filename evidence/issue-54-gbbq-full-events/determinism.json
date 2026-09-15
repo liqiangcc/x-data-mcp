@@ -1,0 +1,31 @@
+{
+  "schema": "issue54.full-events-determinism.v1",
+  "tested_commit": "97d626921bdf69dbd93b8be24bee91a9754cd378",
+  "checkouts": [
+    "/home/box/x-data-mcp-gbbq54",
+    "/tmp/issue54-repro-b"
+  ],
+  "runs": 2,
+  "byte_identical": true,
+  "plan": "plan-v2.json",
+  "plan_sha256": "23ce0e91352d85e6832d16b6b1060caa1e435a62d2d6c3caaaace12698f2721a",
+  "result_sha256": "934d64d9c832e34ea7a882c156c55191d829f03bf9e2789cbd0d7a6c0f72dad7",
+  "result_bytes": 3027103,
+  "runner_sha256": "ec271c0dbd886fa247e56003bedb0101d171890692de154a4416a1a338d99479",
+  "python": "3.13.5",
+  "network_requests_during_replay": 0,
+  "regression_tests_per_checkout": 6,
+  "input_pins": {
+    "gbbq_member_sha256": "4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+    "gbbq_member_bytes": 5967508,
+    "gbbq_count_u32_le": 205776,
+    "hsjday_zip_sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+    "decoder_source_sha256": "e28fae76760b1247a960cab285aa357c2d263b3212e7cabfb3f1ebfcc127d6ba",
+    "decoder_git_blob_sha1": "0eda4935027ffc79b5c425eff0a70a6d492b21d1"
+  },
+  "generation": "gen-2 official snapshot re-downloaded 2026-09-15 under issue #71 comment-5676627357 authorization; gen-1 pins in plan.json preserved unchanged",
+  "full_four_stock_revalidation": "NOT_RUN_NO_OFFICIAL_NORMALIZATION_CONTRACT",
+  "live_source": "NOT_RUN",
+  "official_normalization": "NOT_VERIFIED",
+  "scope": "Full-domain offline replay of gen-2 GBBQ member; diagnostic candidate evaluation only; no official semantic verification"
+}
