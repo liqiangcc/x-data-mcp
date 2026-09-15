@@ -304,22 +304,24 @@ fn concurrent_duplicate_recording_commits_exactly_one_fact() {
         let r2 = b.record_proven_gap(&gap("g1", "sh.600006"));
         let r1 = t.join().unwrap();
         // winner commits exactly one fact; the loser may only be an
-        // idempotent no-op or a transient lock/commit error — any other
-        // error fails the test
-        fn transient(e: &Error) -> bool {
-            matches!(
-                e,
-                Error::Storage(_)
-                    | Error::OutcomeUnknown(_)
-                    | Error::Task(crate::task_control::Error::StorageUnavailable(_))
-            )
+        // idempotent no-op or a transient whose message explicitly says
+        // SQLite lock contention — any other variant or message fails
+        fn busy(e: &Error) -> bool {
+            let msg = match e {
+                Error::Storage(m) | Error::OutcomeUnknown(m) => m,
+                Error::Task(crate::task_control::Error::StorageUnavailable(m)) => m,
+                _ => return false,
+            };
+            let m = msg.to_ascii_lowercase();
+            m.contains("busy") || m.contains("locked")
         }
-        for r in [&r1, &r2] {
-            if let Err(e) = r {
-                assert!(transient(e), "non-transient error {e:?}");
+        match (&r1, &r2) {
+            (Ok(a), Ok(b)) => assert_eq!(*a as u8 + *b as u8, 1, "{r1:?} {r2:?}"),
+            (Ok(true), Err(e)) | (Err(e), Ok(true)) => {
+                assert!(busy(e), "non-transient error {e:?}")
             }
+            _ => panic!("unexpected concurrent outcome {r1:?} {r2:?}"),
         }
-        assert_eq!(r1.unwrap_or(false) as u8 + r2.unwrap_or(false) as u8, 1);
         assert_eq!(counts(&db), (1, 0));
     }
 }
