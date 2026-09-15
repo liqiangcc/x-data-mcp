@@ -1,0 +1,77 @@
+{
+  "schema": "issue54.full-events-plan.v1",
+  "fixed_before_evaluation": true,
+  "status": "DIAGNOSTIC_CANDIDATES_NOT_OFFICIAL_CONTRACTS",
+  "baseline_commit": "61c746e4a02447c6d94ec1f6b4bbcffe0ee44d1f",
+  "extends": "evidence/issue-54-gbbq-decimal bounded 9-event matrix; same frozen candidate rules, now applied to every retained category=1 record and to all #53 four-security category=1 events without a first-N cap",
+  "input_scope": "Retained official artifacts only: local gbbq member, local hsjday.zip, pinned community decoder source. No new download, no BaoStock query, no security reselection.",
+  "inputs": {
+    "official_gbbq_member": {
+      "bytes": 5966087,
+      "sha256": "24f46cecc9b085ee6c0ef126fab33b405b8057747793eb5d25d44e624769ff60",
+      "count_u32_le": 205727,
+      "record_width": 29,
+      "origin_archive_sha256": "6cfdbfc5a67e80ba6773cd5e8cc6779a97a01e07d892e5e6a17c9b35dbef60aa"
+    },
+    "official_hsjday_zip_sha256": "611ea3ccc1e64717aebc9a14ce9c8b1ed06526b5fd69bd14275fc376f4f44272",
+    "day_members": {
+      "sh\\lday\\sh600004.day": "9fa246c023ca11c427d45aa527f01a64611cc40903ec5b636290d0986fe470a9",
+      "sh\\lday\\sh600006.day": "91cb06b2ba0cca331f41f759e3aa0647e6eb5bd62c450cd0fca2e6b397362f7d",
+      "sz\\lday\\sz000002.day": "69f117e439555018c64d77b75a359fe725c39a38423971cc03330d6d9b44bc19",
+      "sz\\lday\\sz000004.day": "77a40ad72bf1a338a4a49a8586744127aa9f800496b095d231d30251f62b966b"
+    },
+    "community_decoder_source": {
+      "repo": "wxyzZ/pytdx",
+      "commit": "0d6f80618e1bae0f8e48552e597af492f3640f5d",
+      "path": "pytdx/reader/gbbq_reader.py",
+      "git_blob_sha1": "0eda4935027ffc79b5c425eff0a70a6d492b21d1",
+      "raw_sha256": "e28fae76760b1247a960cab285aa357c2d263b3212e7cabfb3f1ebfcc127d6ba",
+      "boundary": "community reverse-engineering evidence, not official TDX contract"
+    },
+    "committed_evidence": {
+      "selected_events_sha256": "c53a962ad4e39ceb3f8c4533451516620b6547cfd071241e826857cd132bfef7",
+      "selection_sha256": "e6a3a4c59f02120c02328fdfc519592d9acf16666f8b1876dcbde670124b5446",
+      "category1_six_digit_decoded_total": 68642,
+      "decode_reproduction_sha256": "0cec6d369f0f642f91f5278e0e54ca690cd7837ba41a913c057c487ba49983f7"
+    }
+  },
+  "selection": [
+    "Decode every retained record (count_u32_le = 205727); no sampling",
+    "Histogram scope: every decoded record with category == 1, regardless of code shape",
+    "Four-security matrix scope: every category=1 record of the #53 fixed securities sh.600004, sh.600006, sz.000002, sz.000004; no first-N cap; retain unresolved previous close rather than skip"
+  ],
+  "candidates": [
+    {"id": "frozen_repr", "rule": "Decimal(repr(decoded float32 promoted to Python float)); existing frozen diagnostic input"},
+    {"id": "exact_binary", "rule": "Decimal.from_float(decoded float32 promoted exactly to float64)"},
+    {"id": "shortest_roundtrip", "rule": "For n=1..9 use Python format(value, .ng); select first decimal that struct.pack(<f, float(decimal)) maps back to original bits; no field or security exception"},
+    {"id": "fixed_2dp", "rule": "exact_binary.quantize(0.01, ROUND_HALF_UP), same scale on C1/C2/C3/C4"},
+    {"id": "fixed_3dp", "rule": "exact_binary.quantize(0.001, ROUND_HALF_UP), same scale on C1/C2/C3/C4"},
+    {"id": "fixed_4dp", "rule": "exact_binary.quantize(0.0001, ROUND_HALF_UP), same scale on C1/C2/C3/C4"},
+    {"id": "fixed_6dp", "rule": "exact_binary.quantize(0.000001, ROUND_HALF_UP), same scale on C1/C2/C3/C4"}
+  ],
+  "histograms": {
+    "category_counts": "decoded category byte -> count over all 205727 records",
+    "per_field": "for each C1..C4 over all category=1 records: zero/nonzero/negative/non_finite counts, distinct raw-bits count, tail count (exact binary decimal != shortest float32 roundtrip decimal), full distinct-value list sorted by raw bits hex with count, repr diagnostic and shortest decimal",
+    "field_combination_patterns": "4-bit nonzero mask (C1,C2,C3,C4) -> count over all category=1 records",
+    "symbol_coverage": "(market,code) -> category=1 record count, first and last date_iso"
+  },
+  "calculation": {
+    "precision": 60,
+    "reference": "(previous_close*10-C1+C4*C2)/(10+C4+C3)",
+    "reference_rounding": "ROUND_HALF_UP to 0.01 (frozen research rule, not official semantics)",
+    "ratio": "reference_cent/previous_close",
+    "single_event_ratio_diagnostic": "ROUND_HALF_UP to 0.000001; not a replacement for a full cumulative factor chain",
+    "day_observed": "previous trading bar and event-date bar from the retained official .day member are recorded raw; previous_close is the close integer/100",
+    "unknown_policy": "Unresolved previous close remains explicit; cannot support a production conclusion"
+  },
+  "cross_checks": [
+    "gbbq member sha256/byte count/count header must match the pinned retained member",
+    "decoder source sha256 and git blob sha1 must match the pinned community source",
+    "hsjday.zip sha256 and the four .day member sha256 must match #53 selection.json",
+    "freshly decoded category=1 events of the four securities must equal committed selected-events.json entries (record_index and clear_hex)",
+    "category=1 records with six-digit numeric code must total the committed 68642",
+    "decoded category set must equal the committed structure-summary category list"
+  ],
+  "acceptance": "Only independently auditable official business field/normalization/rounding evidence can establish a production contract. Full-domain histograms, matrix compatibility, shortest roundtrip or any fitted decimal alone is insufficient.",
+  "full_four_stock_revalidation": "Only if a normalization contract is established; otherwise NOT_RUN and #53 aggregate remains CROSS_MARKET_VALIDATION_HAS_MISMATCH"
+}
