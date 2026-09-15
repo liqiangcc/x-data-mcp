@@ -1,0 +1,262 @@
+{
+ "checks": [
+  {
+   "check": "committed file hashes",
+   "ok": true,
+   "detail": {
+    "mismatch": []
+   }
+  },
+  {
+   "check": "day-record sh.600006 20250716",
+   "ok": true,
+   "detail": {
+    "file": {
+     "O": 7.25,
+     "H": 7.27,
+     "L": 7.22,
+     "C": 7.25
+    },
+    "observed_display": {
+     "O": 7.25,
+     "H": 7.27,
+     "L": 7.22,
+     "C": 7.25
+    }
+   }
+  },
+  {
+   "check": "day-record sh.600006 20250717",
+   "ok": true,
+   "detail": {
+    "file": {
+     "O": 7.24,
+     "H": 7.32,
+     "L": 7.23,
+     "C": 7.32
+    },
+    "observed_display": {
+     "O": 7.24,
+     "H": 7.32,
+     "L": 7.23,
+     "C": 7.32
+    }
+   }
+  },
+  {
+   "check": "day-record sh.600004 20260723",
+   "ok": true,
+   "detail": {
+    "file": {
+     "O": 7.92,
+     "H": 7.99,
+     "L": 7.87,
+     "C": 7.96
+    },
+    "observed_display": {
+     "O": 7.92,
+     "H": 7.99,
+     "L": 7.87,
+     "C": 7.96
+    }
+   }
+  },
+  {
+   "check": "day-record sh.600004 20260724",
+   "ok": true,
+   "detail": {
+    "file": {
+     "O": 7.67,
+     "H": 7.74,
+     "L": 7.65,
+     "C": 7.67
+    },
+    "observed_display": {
+     "O": 7.67,
+     "H": 7.74,
+     "L": 7.65,
+     "C": 7.67
+    }
+   }
+  },
+  {
+   "check": "day-record sz.000002 20000110",
+   "ok": true,
+   "detail": {
+    "file": {
+     "O": 10.68,
+     "H": 11.44,
+     "L": 10.55,
+     "C": 11.44
+    },
+    "observed_display": {
+     "O": 10.68,
+     "H": 11.44,
+     "L": 10.55,
+     "C": 11.44
+    }
+   }
+  },
+  {
+   "check": "day-record sz.000002 19991229",
+   "ok": true,
+   "detail": {
+    "file": {
+     "O": 9.53,
+     "H": 9.69,
+     "L": 9.45,
+     "C": 9.65
+    },
+    "observed_display": {
+     "O": 9.53,
+     "H": 9.69,
+     "L": 9.45,
+     "C": 9.65
+    }
+   }
+  },
+  {
+   "check": "600006 reference discriminates normalization",
+   "ok": true,
+   "detail": {
+    "normalized_ref": 7.25,
+    "f32_ref": 7.244999999925494,
+    "f32_ref_2dp": 7.24,
+    "observed_昨结": 7.25,
+    "observed_pct": "+0.97%"
+   }
+  },
+  {
+   "check": "600004 event-day 昨结 uses cent-rounded reference",
+   "ok": true,
+   "detail": {
+    "ref": 7.675,
+    "ref_2dp": 7.68,
+    "pct_if_unrounded_ref": -0.06514657980455887,
+    "observed_昨结": 7.68,
+    "observed_pct": "-0.13%"
+   }
+  },
+  {
+   "check": "tdxhy binding 600000",
+   "ok": true,
+   "detail": {
+    "row": "1|600000|T1001|||X500102",
+    "T": "T1001=银行",
+    "X": "X500102=股份制银行",
+    "displayed": "全国性银行-股份制银行"
+   }
+  },
+  {
+   "check": "tdxhy binding 000001",
+   "ok": true,
+   "detail": {
+    "row": "0|000001|T1001|||X500102",
+    "T": "T1001=银行",
+    "X": "X500102=股份制银行",
+    "displayed": "全国性银行-股份制银行"
+   }
+  },
+  {
+   "check": "tdxhy binding 688318",
+   "ok": true,
+   "detail": {
+    "row": "1|688318|T1205|||X420202",
+    "T": "T1205=软件服务",
+    "X": "X420202=行业应用软件",
+    "displayed": "软件服务-行业应用软件"
+   }
+  },
+  {
+   "check": "tdxhy binding 600004",
+   "ok": true,
+   "detail": {
+    "row": "1|600004|T090302|||X610202",
+    "T": "T090302=机场",
+    "X": "X610202=机场",
+    "displayed": "航空机场-机场"
+   }
+  },
+  {
+   "check": "tdxhy binding 600006",
+   "ok": true,
+   "detail": {
+    "row": "1|600006|T040201|||X260201",
+    "T": "T040201=汽车整车",
+    "X": "X260201=商用载货车",
+    "displayed": "商用车-商用载货车"
+   }
+  },
+  {
+   "check": "tdxhy binding 000002",
+   "ok": true,
+   "detail": {
+    "row": "0|000002|T110201|||X530101",
+    "T": "T110201=全国地产",
+    "X": "X530101=住宅开发",
+    "displayed": "房地产—房地产开发"
+   }
+  },
+  {
+   "check": "000004 absent (delisted)",
+   "ok": true,
+   "detail": {
+    "note": "delisted security has no tdxhy.cfg row; identity demoted to T000004 extended market"
+   }
+  },
+  {
+   "check": "f3/f4 always empty",
+   "ok": true,
+   "detail": {
+    "rows": 5659
+   }
+  },
+  {
+   "check": "qfq chain input normalization discriminated",
+   "ok": true,
+   "detail": {
+    "scores": {
+     "exact_binary": 7,
+     "fixed_2dp": 8,
+     "fixed_3dp": 7,
+     "fixed_4dp": 7
+    },
+    "detail": "2dp-normalized business values reproduce all 8 displayed fields; exact-binary f32 misses the O boundary (-8.13 vs -8.14)",
+    "observed_evt": {
+     "O": -8.14,
+     "H": -8.06,
+     "L": -8.15,
+     "C": -8.06
+    },
+    "observed_prev": {
+     "O": -8.28,
+     "H": -8.27,
+     "L": -8.29,
+     "C": -8.27
+    },
+    "events_after": 24
+   }
+  },
+  {
+   "check": "qfq chain cent-rounded-ref ruled out",
+   "ok": true,
+   "detail": {
+    "evt_pred": {
+     "O": -8.14,
+     "H": -8.07,
+     "L": -8.15,
+     "C": -8.07
+    },
+    "prev_pred": {
+     "O": -8.28,
+     "H": -8.27,
+     "L": -8.29,
+     "C": -8.28
+    },
+    "mismatched_fields": 3
+   }
+  }
+ ],
+ "ok": true,
+ "chain_note": "unrounded affine chain must MATCH (8/8 fields); cent-rounded-ref variant must FAIL — it predicts -8.08/-8.29 vs observed -8.06/-8.27, ruling out per-event cent rounding"
+}

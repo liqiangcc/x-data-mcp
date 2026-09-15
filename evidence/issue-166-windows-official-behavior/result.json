@@ -1,0 +1,80 @@
+{
+ "result_id": "issue-166-windows-official-behavior",
+ "executed": "2026-09-15 (local, +08:00)",
+ "plan": "plan.json (frozen before behavior observation)",
+ "environment": "environment.json",
+ "inputs": "inputs.json + raw/files_manifest.json",
+ "observations": "raw/observations.json (transcribed official displays; every value binds a screenshot sha256)",
+ "replay": "scripts/verify_issue166.py -> determinism.json (19/19 checks ok)",
+ "phase_a_findings": {
+  "field_binding": [
+   "C1 = 每10股派现金额(元,含税): 600006 F10 shows '10派0.05元(含税)' at ex-date 2025-07-17 vs gen-2 record C1=0.05; 600004 shows '10派2.85元(含税)' at 2026-07-24 — uniquely binds C1",
+   "C2 = 配股价格(元): 000002 F10 配股 row shows 配股价格=7.50元 vs gen-2 C2=7.5 — uniquely binds C2",
+   "C4 = 每10股配股数: 000002 F10 shows 每10股配股=2.73 vs gen-2 C4=2.727 (stored precision > display) — binds C4; display rounds to 2dp",
+   "C3 = 每10股送转数: not directly bound by a nonzero-C3 display row in the fixed set; role exercised indirectly — the 000002 chain fit (8/8) requires C3 in the share-factor denominator for events like 2003-05-23 C3=10"
+  ],
+  "normalization_and_rounding": [
+   "Event-day 昨结/涨幅 display uses the CENT-ROUNDED 除权参考价: 600006 shows 昨结7.25 +0.97% (unrounded 7.245 would give +1.04%); 600004 shows 昨结7.68 -0.13% (unrounded 7.675 would give -0.07%)",
+   "600006 discriminates INPUT normalization: f32(0.05)=0.0500000007 gives ref 7.2449999 -> 昨结 would show 7.24 (+1.04%); observed 7.25/+0.97% consistent only with decimal-normalized input (7.245->7.25)",
+   "K线 前复权 chain = affine transform T_i(x)=(x-C1/10+C4*C2/10)/((10+C3+C4)/10) composed over all later events, anchored at latest bar",
+   "000002 25-event chain: fixed_2dp-normalized inputs reproduce ALL 8 displayed fields at the 2000-01-10 event bar and 1999-12-29 bar; exact-binary f32 inputs miss the O boundary (predict -8.13, display -8.14) — input normalization discriminated in favor of 2dp-normalized business values",
+   "Per-event cent-rounded-reference chain variant predicts -8.08/-8.29 — RULED OUT by observed -8.06/-8.27: intermediate references are NOT cent-rounded inside the K线 chain",
+   "前复权 produces negative adjusted prices (observed -8.14..-8.06) — proves subtractive (affine) not purely multiplicative adjustment",
+   "display rounding of adjusted prices: 2dp, half-up away from zero observed at boundaries"
+  ],
+  "identity_scope": [
+   "bare '000004' resolves to 工业指数(上海指数) FIRST; the delisted stock appears as T000004 国华网安 已摘牌 — delisted securities are demoted to 扩展市场/代码镜像, F10 dividend table empty",
+   "bare '000001' resolves to 平安银行 stock first (index second) — resolution order depends on live listing status",
+   "600006 / 600004 / 000002 resolve directly to the A-share stock"
+  ],
+  "data_layer": [
+   "client-downloaded vipdoc .day is byte-format 32B records {date, O,H,L,C u32×100, amount f32, vol u32, reserved}; verified identical values to gen-2 retained records for sampled bars",
+   "training mode (function 47) triggers full-history .day download into vipdoc/<mkt>/lday — the reproducible acquisition path used",
+   "T0002/cache/*.~~~day are ~420-record rolling windows — NOT full history",
+   "local V7.73 gbbq (5,581,982 B) uses a new per-security-block obfuscated encoding — not decodable by gen-2 layout; hash-bound only; F10 display binding does not depend on decoding it"
+  ]
+ },
+ "phase_b_findings": {
+  "field_binding": [
+   "tdxhy.cfg row = f0|code|T-code|f3|f4|X-code",
+   "f0 = exchange enum {0:SZ, 1:SH, 2:BJ} — 5659 rows, zero exceptions (000/001/002/003/200/201/300/301/302→0; 600/601/603/605/688/689/900→1; 920/874→2)",
+   "f2 = T-code into 通达信行业 space; names+hierarchy via incon.dat (T04可选消费>T0402汽车类>T040201汽车整车 etc.)",
+   "f5 = X-code into 通达信研究行业 space (X50银行>X5001全国性银行>X500102股份制银行 etc.)",
+   "f3/f4 empty in all 5659 rows — role unbound (unused in this generation)",
+   "display: F10 公司资料 '通达信研究行业: L1—L2' = X-code's first two levels; Ctrl+R 所属板块 '行业' leaf row = X-code L2-L3; '行业(最相似)' variant also observed (600006)",
+   "corroboration: F10 分红排名'同行业' lists same-X-group constituents"
+  ],
+  "scope": [
+   "table covers SH+SZ A-shares, BJ shares (920xxx/874774 with codes), and B-shares (200xxx/900xxx present with EMPTY T/X — listed but unclassified)",
+   "delisted securities are ABSENT (sz.000004 has no row; its F10 industry comes from the extended-market feed, not tdxhy.cfg)",
+   "tdxhy2.cfg does not exist in this generation"
+  ],
+  "per_sample": "raw/observations.json phase_b.samples — all 6 rows uniquely bound"
+ },
+ "m_methods": {
+  "M1_local_files": "DONE — hashes + copies in inputs.json/raw/files",
+  "M2_kline_export": "NOT_AVAILABLE — no text export function reachable in this client build; replaced by M3 readouts + downloaded .day raw bytes",
+  "M3_display_capture": "DONE — 29 curated screenshots, sha256-manifested",
+  "M4_tq": "NOT_RUN — TQ programmatic interface not usable with the logged-in account tier; only client GUI behavior used"
+ },
+ "status": {
+  "#54": {
+   "terminal": "#54_BEHAVIOR_BINDING_VERIFIED",
+   "caveats": [
+    "binding is between official DISPLAYED business fields and the committed gen-2 binary records; the local V7.73 gbbq generation is a different, obfuscated encoding (hash-bound, undecoded)",
+    "C3 bound only through the chain-fit requirement (denominator share-factor), not a dedicated display row",
+    "K线 intermediate references unrounded; event-day 昨结 uses cent-rounded reference — both distinguished"
+   ]
+  },
+  "#46": {
+   "terminal": "#46_FILE_FIELD_BINDING_VERIFIED",
+   "caveats": [
+    "f3/f4 unbound (always empty this generation)",
+    "B-share rows present but carry empty T/X",
+    "scope delimited to listed SH/SZ/BJ securities; delisted absent"
+   ]
+  },
+  "note": "Evidence for coordinator/Final Gate decision; no production semantics changed by this task"
+ },
+ "input_drift": "hq_cache files stable across capture window (hashes identical between snapshots where re-checked); vipdoc .day files created on demand during capture (labeled post-download artifacts)"
+}

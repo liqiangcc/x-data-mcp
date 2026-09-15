@@ -1,0 +1,402 @@
+{
+ "chart-000002-fq-event-20000110.png": {
+  "source_capture_sha256": "500a545ea6ab7606b163eef3f7de94718b8241230ed256fa665cf7a624a999b5",
+  "committed_sha256": "91ac049af2d653b7b5f682c2fffa05d77ed9c613b2308d6fb1ab05e37f8281f6",
+  "cropped_to": [
+   78,
+   78,
+   1102,
+   604
+  ],
+  "size": [
+   1024,
+   526
+  ]
+ },
+ "chart-600004-fq-20260723.png": {
+  "source_capture_sha256": "bfd8e3a8f5923b447a1ea3b37bf73b903871c6bb05605e2cee7290cbfdc8e629",
+  "committed_sha256": "0203ae7d2147e6061c8bda2c1520ace7a894b990019ad034331a3cca6cad1173",
+  "cropped_to": [
+   78,
+   78,
+   1102,
+   604
+  ],
+  "size": [
+   1024,
+   526
+  ]
+ },
+ "chart-600004-fq-20260724.png": {
+  "source_capture_sha256": "63765e6005d014dbd69747b280b73fe583fbbf58efcc240ae42928a5a372db1d",
+  "committed_sha256": "d3e951445c3dfaa55d8b03c9f20575db518f215c4fc947340c09bcd6338b938e",
+  "cropped_to": [
+   78,
+   78,
+   1102,
+   604
+  ],
+  "size": [
+   1024,
+   526
+  ]
+ },
+ "chart-600004-raw-20260724.png": {
+  "source_capture_sha256": "0855ba7a45528a7887fc561e78ead4fc5d47112ae3bb267f1a9b21e5c7d1ce5d",
+  "committed_sha256": "d10bd45c10243f56337aad8ebc2f18aa88b7bc8a45c924226e30c2a4a0f59f65",
+  "cropped_to": [
+   78,
+   78,
+   1102,
+   604
+  ],
+  "size": [
+   1024,
+   526
+  ]
+ },
+ "chart-600006-fq-20250716.png": {
+  "source_capture_sha256": "06ee8d9f6d38928dcf7ba377f0586819c019aac6a99f62fd5ba0cd9a76e0f1e2",
+  "committed_sha256": "f1e8ec4a26874f261c750f229197d9941e5ad7711bc6af68c4a40936880eb0e8",
+  "cropped_to": [
+   78,
+   78,
+   1102,
+   604
+  ],
+  "size": [
+   1024,
+   526
+  ]
+ },
+ "chart-600006-fq-20250717.png": {
+  "source_capture_sha256": "b5515f6a25459556b6814b3121954d1a1562b2b6613226e50a7b1fb4531efa28",
+  "committed_sha256": "1a992632023b14fab92352282e133f782d6c117304fbfaf2aa48233fd0f74046",
+  "cropped_to": [
+   78,
+   78,
+   1102,
+   604
+  ],
+  "size": [
+   1024,
+   526
+  ]
+ },
+ "chart-600006-open.png": {
+  "source_capture_sha256": "9d49f5d2dc43f5d97f2a7bf7e9aeda68b4bfb76876ba6b414e73c93b3a3c6c4f",
+  "committed_sha256": "b5883a56b959e0575ab77893f92b2f9bcd9b0c634a56e793533b29c2a9d21aec",
+  "cropped_to": [
+   78,
+   78,
+   1102,
+   604
+  ],
+  "size": [
+   1024,
+   526
+  ]
+ },
+ "chart-600006-raw-20250717.png": {
+  "source_capture_sha256": "5fe5bb120c6f6d1090b4900e0d477c464166024bd56aa56175abc304a14ff8bc",
+  "committed_sha256": "3ea85e0d8d864686a7e75a5f6e0e18cc99df8c627df04ef9dbc89caafbaa9259",
+  "cropped_to": [
+   78,
+   78,
+   1102,
+   604
+  ],
+  "size": [
+   1024,
+   526
+  ]
+ },
+ "client-main-initial.png": {
+  "source_capture_sha256": "6c1c2b16686baf2548f27ffbe9b6dd5f5ba600739007b86a903ac27cadde7ff0",
+  "committed_sha256": "318b65cd956864976ff5f2dbd5c4fb34c11c680406906829560a8df2331f2989",
+  "cropped_to": "full-frame",
+  "size": [
+   1651,
+   987
+  ]
+ },
+ "f10-000001-profile.jpg": {
+  "source_capture_sha256": "86cd9cac9ead6930191c7f5f44d92f09063cdaf1fc54dba9076c737f9e07ed9d",
+  "committed_sha256": "65b0c4b37fc592c6a46533e80efc2fc9d2e4f0444852d91a4b9b4957621a602a",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "f10-000002-allotment.jpg": {
+  "source_capture_sha256": "a47fbe9ed7aab837963ff8d5936be80c7d0177afde1d5845bcb72e937c85be0d",
+  "committed_sha256": "b2567ccd52b6ca535cba75f3da3af612394d30d466c4b43c1cb6c67963bc43e7",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "f10-000002-profile.jpg": {
+  "source_capture_sha256": "e75b14232b6595d0a0ff94880704fdf69991df1e93786a02697f482977bb5713",
+  "committed_sha256": "dc7fe1c607e50369d559e51749b31bfa62ee2eee3a800e08981c19bf15bb043c",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "f10-000004-profile.jpg": {
+  "source_capture_sha256": "272a6a370705e8d9e7160a359f33a17d91deb6860f20aa73bdb183e1cbc18542",
+  "committed_sha256": "360fac0520df6374f0ea89c98ee7ea0f29ceded8396f3fcde16e5f9867751e01",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "f10-600000-profile.jpg": {
+  "source_capture_sha256": "6d8c4a0d3d67b6c9258c28cea31b87e045aa9b16b171fd97fac9ca3cd2484a8b",
+  "committed_sha256": "fac75a9d59425c97ac81b03d393edad4ab344eebf7371df23a7b2bb3f8f62c32",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "f10-600004-dividend.jpg": {
+  "source_capture_sha256": "fc9986c4f5ae07766559d094bb925c7ffc8e71ad4e186e207faa5f59652ceb46",
+  "committed_sha256": "f9d0e2a1508f6d11daedbda9d10b86c4144fa29502e43d2839222916fc601ff2",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "f10-600004-peers.jpg": {
+  "source_capture_sha256": "a12f0b505b201955a93221d8fd5003eed3793ccf5008293f56fd024b8a6b40d6",
+  "committed_sha256": "2d30e7f8f197778687573fb6402e0f07c4eaf9817080378de63cb0039b44e34b",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "f10-600006-dividend.jpg": {
+  "source_capture_sha256": "ca46ef0c2d49d46bbdf822f3813777f67210168e4e479a0308f10b628db1a140",
+  "committed_sha256": "d528929228a35f391168ab69775126e97361d95d4e32072b614cd5070bb00e09",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "f10-600006-peers.png": {
+  "source_capture_sha256": "944360384a590d42990665fd738c375ca42183fd95757b87b272385005ec2b50",
+  "committed_sha256": "209ec606d68a928c6716e814e95e6869824c1caf9d498067c43f58d83a7db191",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ]
+ },
+ "f10-688318-profile.jpg": {
+  "source_capture_sha256": "9837f34ebfcadd1cf1914a1310db7985c32e46ba0e1e020e503cfdd834bd7b0f",
+  "committed_sha256": "2fca78f900c629f0d9f54599b93544a0a4a6ca0f0efb99a74fff9a949e522d2c",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "menu-adjust-modes.png": {
+  "source_capture_sha256": "b0f030bc2d0ecc994d8a7c8165a600c5fcc7dd0a5adb9003b1644ca7d6d70422",
+  "committed_sha256": "f83dab57adb9c520371b4bc1b071418d10bfb487bd438f901ba19fc7bcc1554e",
+  "cropped_to": [
+   78,
+   78,
+   1102,
+   604
+  ],
+  "size": [
+   1024,
+   526
+  ]
+ },
+ "sector-000001.jpg": {
+  "source_capture_sha256": "bd2e96e25d32bfb1918c0804f9d12ece0d0c7fbfb6f5f8d3123d543024311158",
+  "committed_sha256": "74453edad0218f95c6c8977379fbf93d13f3a9906977ab6d2c299fa80a2b9fe8",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "sector-600000.jpg": {
+  "source_capture_sha256": "c7b235cc2d637d20fa5b20f33177743dceff6c6321c50da370e11bdd86a6d87a",
+  "committed_sha256": "d16e1dbdfc6e574b823afebff349ae709893f55b3410aade16d231990adcee28",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "sector-600004.jpg": {
+  "source_capture_sha256": "e5f91b2c4e7ebfbcfb5130b62db5cecf065d86a40a79e481de6ab7e185e5ceb1",
+  "committed_sha256": "dae66ef3030d079d25f7541a5e1e23b27d80b499f58f3d9334118a7150359367",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "sector-600006.jpg": {
+  "source_capture_sha256": "d0212a08ace91a7c609c7c9f65f80566e13e4a6e9cae26fac2a455734517dc62",
+  "committed_sha256": "a876cda37ad5edc31452ad91ba6f6ecea2fbade7087dda752b86947ff93bc7d8",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "sector-688318.jpg": {
+  "source_capture_sha256": "a3b82389f3320f86435519bed136bcb819845835495487c01380366f70f3d534",
+  "committed_sha256": "d0d0eb476ca71faabee8e173caad29d3892abc1e25e5486391dea94c610824e8",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "t000004-extended-market.jpg": {
+  "source_capture_sha256": "d922baeaf69b04ed74916bb0f7f4e7535dbe745ca5e38f380da2fe5dc4da845c",
+  "committed_sha256": "ce8e550481c264285b7df3db3050e577f41e768ebc6b3d2ddb2fd7c9da6f242f",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "training-cutoff-20000110.jpg": {
+  "source_capture_sha256": "d41cea8cd6da363286c814766559ca9cd9c474c20ea9cc186418e56810d6c1cd",
+  "committed_sha256": "f8079194eb95b9415c093ff227926e2075e635a1f4c687567b7ac11ab7ce3577",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "training-mode-panel.jpg": {
+  "source_capture_sha256": "a193428cd3de0d698ac41532c778744c81591bcfd55df5b8a57191b4e1573edc",
+  "committed_sha256": "caabfbf7c3e847cb0f618ae0630fd8d6d371e51e389c41a2f37fb1acc586d9c9",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ },
+ "wizard-000004-identity.jpg": {
+  "source_capture_sha256": "7044a28043b7db4dc811cb1a814b018fd4ba81f052320624a56cfd970ed3eab3",
+  "committed_sha256": "2c0bc535611dddbca7293e01d8c284bdfd281f76fb04da972b37a9e1cce5a9d7",
+  "cropped_to": "full-frame",
+  "size": [
+   1600,
+   1000
+  ],
+  "downscaled_from": [
+   2880,
+   1800
+  ],
+  "format": "jpeg-q88 (from PNG)"
+ }
+}

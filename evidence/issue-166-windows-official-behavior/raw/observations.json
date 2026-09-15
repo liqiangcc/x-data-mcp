@@ -1,0 +1,254 @@
+{
+ "observations_id": "issue-166-official-client-observations",
+ "capture_window_local": "2026-09-15 ~22:00-23:59 +08:00",
+ "client": "通达信金融终端 V7.73 (TdxW.exe), account masked by client as 190****7027",
+ "method_notes": [
+  "F10 图文F10 pages are rendered by tdxcef.exe (official embedded browser) from the official data feed; values transcribed from screenshots.",
+  "K-line readouts are the client's own crosshair data window (arrow-key navigation on the chart).",
+  "复权 dropdown modes observed: 前复权 Ctrl+V / 不复权 / 后复权 / 定点复权 Ctrl+N; 训练模式(function 47) locks adjustment to 前复权 and accepts a 截止日 date — used only to trigger full-history .day download and to view the 2000-era bars; its 前复权 anchor remains the real latest bar.",
+  "所属板块 window via Ctrl+R lists per-security sectors with 类别 column: 行业 / 行业(最相似) / 地区 / 概念 / 风格 / 指数."
+ ],
+ "phase_a": {
+  "sh.600006": {
+   "event": {
+    "date": "2025-07-17",
+    "kind": "cash dividend"
+   },
+   "f10_dividend_row": {
+    "transcribed_from": "screenshots/f10-600006-dividend.jpg",
+    "分红年度": "2024年报",
+    "董事会日期": "2025-04-26",
+    "分红方案": "10派0.05元(含税)",
+    "股权登记日": "2025-07-16",
+    "除权派息日": "2025-07-17",
+    "方案进度": "实施方案",
+    "binds": "gen-2 record C1=0.05 (f32 0x3d4ccccd) = 每10股派现金(元,含税); C2=C3=C4=0 consistent with 无配股/送转"
+   },
+   "kline_readouts": [
+    {
+     "mode": "前复权",
+     "date": "2025-07-16",
+     "O": 7.25,
+     "H": 7.27,
+     "L": 7.22,
+     "C": 7.25,
+     "pct": "-0.02 (-0.28%)",
+     "transcribed_from": "screenshots/chart-600006-fq-20250716.png"
+    },
+    {
+     "mode": "前复权",
+     "date": "2025-07-17",
+     "O": 7.24,
+     "H": 7.32,
+     "L": 7.23,
+     "C": 7.32,
+     "pct": "+0.07 (+0.97%)",
+     "transcribed_from": "screenshots/chart-600006-fq-20250717.png"
+    },
+    {
+     "mode": "不复权",
+     "date": "2025-07-17",
+     "O": 7.24,
+     "H": 7.32,
+     "L": 7.23,
+     "C": 7.32,
+     "pct": "+0.07 (+0.97%)",
+     "transcribed_from": "screenshots/chart-600006-raw-20250717.png"
+    }
+   ],
+   "derived": "event-day displayed 昨结/涨跌 base = 7.25 (= raw prev close AND cent-rounded normalized reference (7.25*10-0.05)/10=7.245→7.25). Exact-binary f32 chain gives 7.2449999999 → would display 7.24 and pct +1.04%; observed +0.97% rules it out."
+  },
+  "sz.000002": {
+   "event": {
+    "date": "2000-01-10",
+    "kind": "allotment"
+   },
+   "f10_allotment_row": {
+    "transcribed_from": "screenshots/f10-000002-allotment.jpg",
+    "公告日期": "1999-12-22",
+    "股权登记日": "2000-01-07",
+    "除权基准日": "2000-01-10",
+    "每10股配股": "2.73",
+    "配股价格(元)": "7.50",
+    "实际配股数量": "8543.45万股",
+    "实际募资总额": "6.41亿",
+    "binds": "gen-2 record C2=7.5 (f32 0x40f00000) = 配股价格(元); C4=2.727 (f32 0x402e872b) = 每10股配股数量 — displayed as 2.73 (2dp display rounding; stored value more precise than display); C1=C3=0 = 无派息/送转"
+   },
+   "kline_readouts": [
+    {
+     "mode": "前复权 (anchor=latest, viewed in 训练模式 截止日=2000-01-10)",
+     "date": "2000-01-10",
+     "O": -8.14,
+     "H": -8.06,
+     "L": -8.15,
+     "C": -8.06,
+     "pct": "+0.12 (+1.47%)",
+     "transcribed_from": "screenshots/chart-000002-fq-20000110.png"
+    },
+    {
+     "mode": "前复权",
+     "date": "1999-12-29",
+     "O": -8.28,
+     "H": -8.27,
+     "L": -8.29,
+     "C": -8.27,
+     "transcribed_from": "screenshots/training-cutoff-20000110.jpg"
+    }
+   ],
+   "day_records": {
+    "20000107": "6b2d3101220400004c040000160400004b040000f6ab0c4d540dd00000000000 (O10.58 H11.00 L10.46 C10.99)",
+    "20000110": "6e2d31012c040000780400001f0400007804000098e1174d6052d90000000000 (O10.68 H11.44 L10.55 C11.44)",
+    "note": "client-downloaded sz000002.day is BYTE-IDENTICAL to gen-2 retained records for these bars"
+   },
+   "chain_fit": "25-event affine chain T_i(x)=(x-C1/10+C4*C2/10)/((10+C3+C4)/10) predicts displayed -8.14/-8.06/-8.15/-8.06 (evt) and -8.28/-8.27/-8.29/-8.27 (prev) within 2dp; cent-rounded-per-event variant predicts -8.08/-8.29 — ruled out"
+  },
+  "sh.600004": {
+   "event": {
+    "date": "2026-07-24",
+    "kind": "cash dividend"
+   },
+   "f10_dividend_row": {
+    "transcribed_from": "screenshots/f10-600004-dividend.jpg",
+    "分红年度": "2025年报",
+    "董事会日期": "2026-04-30",
+    "分红方案": "10派2.85元(含税)",
+    "股权登记日": "2026-07-23",
+    "除权派息日": "2026-07-24",
+    "方案进度": "实施方案"
+   },
+   "kline_readouts": [
+    {
+     "mode": "前复权",
+     "date": "2026-07-23",
+     "O": 7.64,
+     "H": 7.71,
+     "L": 7.59,
+     "C": 7.68,
+     "pct": "+0.04 (+0.52%)",
+     "transcribed_from": "screenshots/chart-600004-fq-20260723.png",
+     "note": "pre-event bar shifted down vs raw 7.92/7.99/7.87/7.96 by ~0.285 (single dividend, subtractive)"
+    },
+    {
+     "mode": "前复权",
+     "date": "2026-07-24",
+     "O": 7.67,
+     "H": 7.74,
+     "L": 7.65,
+     "C": 7.67,
+     "pct": "-0.01 (-0.13%)",
+     "transcribed_from": "screenshots/chart-600004-fq-20260724.png"
+    },
+    {
+     "mode": "不复权",
+     "date": "2026-07-24",
+     "O": 7.67,
+     "H": 7.74,
+     "L": 7.65,
+     "C": 7.67,
+     "pct": "-0.29 (-3.64%)",
+     "transcribed_from": "screenshots/chart-600004-raw-20260724.png"
+    }
+   ],
+   "derived": "raw prev close 7.96 (vipdoc .day verified). normalized ref = 7.96-0.285=7.675→7.68; exact-binary f32 0.285=0.28500001168 → 7.67499998→7.67. Observed 前复权 pct -0.13% ↔ 昨结 7.68 (normalized); 不复权 pct -3.64% ↔ raw 7.96. exact-binary ruled out again."
+  },
+  "sz.000004": {
+   "identity": "键盘精灵 '000004' → 工业指数(上海指数) first, 中海可转债C fund second, T000004 国华网安 已摘牌 third; delisted stock served via 扩展市场/代码镜像 (last update 2026-07-14)",
+   "f10": {
+    "中上协行业": "信息传输、软件和信息技术服务业—软件和信息技术服务业",
+    "通达信研究行业": "计算机—软件服务",
+    "transcribed_from": "screenshots/f10-000004-profile.jpg"
+   },
+   "tdxhy": "ABSENT from tdxhy.cfg (delisted securities drop out of the table)",
+   "f10_dividend": "empty table (no served events for delisted security)"
+  }
+ },
+ "phase_b": {
+  "tdxhy_cfg_format": "rows 'f0|code|T-code|f3|f4|X-code'; f3/f4 EMPTY in all 5659 rows of this generation",
+  "f0_exchange_enum": {
+   "0": "SZ (000/001/002/003/200/201/300/301/302 prefixes, n=2946)",
+   "1": "SH (600/601/603/605/688/689/900 prefixes, n=2365)",
+   "2": "BJ (920/874 prefixes, n=348)"
+  },
+  "scope": "A-shares + B-shares (200xxx/900xxx present but T/X empty) + BJ shares; delisted securities absent",
+  "hierarchy_names_source": "C:\new_tdx64\\incon.dat 'code|name' pairs (both T and X spaces)",
+  "samples": [
+   {
+    "code": "600000",
+    "row": "1|600000|T1001|||X500102",
+    "T": "T1001=银行",
+    "X": "X500102=股份制银行 (X50银行>X5001全国性银行>X500102股份制银行)",
+    "f10_研究行业": "银行—全国性银行",
+    "ctrl_r_leaf": "全国性银行-股份制银行 (类别=行业)",
+    "shots": [
+     "f10-600000-profile.jpg",
+     "sector-600000.jpg"
+    ]
+   },
+   {
+    "code": "000001",
+    "row": "0|000001|T1001|||X500102",
+    "T": "T1001=银行",
+    "X": "X500102=股份制银行",
+    "f10_研究行业": "银行—全国性银行",
+    "ctrl_r_leaf": "全国性银行-股份制银行",
+    "shots": [
+     "f10-000001-profile.jpg",
+     "sector-000001.jpg"
+    ]
+   },
+   {
+    "code": "688318",
+    "row": "1|688318|T1205|||X420202",
+    "T": "T1205=软件服务 (T12信息产业>T1205软件服务)",
+    "X": "X420202=行业应用软件 (X42计算机>X4202软件服务>X420202行业应用软件)",
+    "f10_研究行业": "计算机—软件服务",
+    "ctrl_r_leaf": "软件服务-行业应用软件",
+    "shots": [
+     "f10-688318-profile.jpg",
+     "sector-688318.jpg"
+    ]
+   },
+   {
+    "code": "600004",
+    "row": "1|600004|T090302|||X610202",
+    "T": "T090302=机场 (T09交通运输>T0903交通设施>T090302机场)",
+    "X": "X610202=机场 (X61交通运输>X6102航空机场>X610202机场)",
+    "f10_研究行业": "交通运输—航空机场",
+    "ctrl_r_leaf": "航空机场-机场 (类别=行业)",
+    "shots": [
+     "f10-600004-peers.jpg",
+     "sector-600004.jpg"
+    ]
+   },
+   {
+    "code": "600006",
+    "row": "1|600006|T040201|||X260201",
+    "T": "T040201=汽车整车 (T04可选消费>T0402汽车类>T040201汽车整车)",
+    "X": "X260201=商用载货车 (X26汽车>X2602商用车>X260201商用载货车)",
+    "ctrl_r_leaf": "商用车-商用载货车 (类别=行业最相似)",
+    "shots": [
+     "sector-600006.jpg",
+     "f10-600006-peers.jpg"
+    ]
+   },
+   {
+    "code": "000002",
+    "row": "0|000002|T110201|||X530101",
+    "T": "T110201=全国地产 (T11建筑地产>T1102房地产>T110201全国地产)",
+    "X": "X530101=住宅开发 (X53房地产>X5301房地产开发>X530101住宅开发)",
+    "f10_研究行业": "房地产—房地产开发",
+    "shots": [
+     "f10-000002-profile.jpg"
+    ]
+   },
+   {
+    "code": "000004",
+    "row": "ABSENT",
+    "note": "delisted; F10 still shows 研究行业=计算机—软件服务 from extended-market data feed"
+   }
+  ],
+  "display_semantics": "F10 公司资料 '通达信研究行业' shows X-code L1—L2; Ctrl+R 所属板块 '行业' row shows X-code L2—L3 leaf path; T-code (通达信行业) is the older 细分行业 space (quote-list column); both hierarchies resolve via incon.dat",
+  "corroboration": "F10 分红排名 '同行业' lists group constituents: 600006→汽车/商用车 stocks; 600004→航空机场 stocks — official grouping consistent with X-code membership",
+  "tdxhy2_cfg": "ABSENT in this generation (client created only tdxhy.cfg)"
+ }
+}
