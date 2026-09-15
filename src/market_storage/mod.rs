@@ -6,7 +6,7 @@ use crate::{
     publish::EffectiveVersion,
     task_control::{self, Change, ItemOutcome, Stage, Status, TaskSnapshot},
 };
-use chrono::{Datelike, FixedOffset, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Utc};
 use compat::CheckedRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -128,6 +128,53 @@ pub trait MarketRepository {
     fn range(&self, scope: &Scope, version: Option<&str>, range: &Range)
     -> Result<ReadPage, Error>;
     fn versions(&self, scope: &Scope) -> Result<Vec<EffectiveVersion>, Error>;
+}
+/// Durable proven-gap fact. Only durable evidence paths may produce one;
+/// this record carries opaque evidence identity and is never invented from
+/// date discontinuity, missing rows, version absence, or the current date.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvenGap {
+    pub gap_id: String,
+    pub symbol: String,
+    pub period: Period,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub evidence_kind: String,
+    pub evidence_id: String,
+    pub evidence_digest: String,
+    pub observed_at: DateTime<Utc>,
+}
+impl ProvenGap {
+    /// Mechanical storage invariants only; evidence-object existence and
+    /// digest verification belong to the consuming application layer.
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.gap_id.trim().is_empty()
+            || self.symbol.trim().is_empty()
+            || self.evidence_kind.trim().is_empty()
+            || self.evidence_id.trim().is_empty()
+            || self.evidence_digest.trim().is_empty()
+            || self.start_date > self.end_date
+        {
+            return Err(Error::Invalid("invalid proven gap fact".into()));
+        }
+        Ok(())
+    }
+}
+/// Append-only binding: a later published version covers a proven gap.
+/// The historical gap row is retained; covering bindings never erase it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GapCovering {
+    pub gap_id: String,
+    pub version_id: String,
+    pub covered_at: DateTime<Utc>,
+}
+impl GapCovering {
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.gap_id.trim().is_empty() || self.version_id.trim().is_empty() {
+            return Err(Error::Invalid("invalid gap covering".into()));
+        }
+        Ok(())
+    }
 }
 pub struct Publisher<R> {
     pub repository: R,
