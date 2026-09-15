@@ -1,0 +1,92 @@
+{
+  "schema": "issue54.full-events-plan.v2",
+  "fixed_before_evaluation": true,
+  "status": "DIAGNOSTIC_CANDIDATES_NOT_OFFICIAL_CONTRACTS",
+  "generation": "gen-2: official snapshot re-downloaded 2026-09-15 under issue #71 comment-5676627357 authorization; gen-1 retained pins in plan.json are preserved unchanged and are NOT superseded as historical evidence",
+  "baseline_commit": "61c746e4a02447c6d94ec1f6b4bbcffe0ee44d1f",
+  "extends": "evidence/issue-54-gbbq-decimal bounded 9-event matrix and plan.json gen-1 freeze; same frozen candidate rules, now applied to every category=1 record of the gen-2 gbbq member and to all #53 four-security category=1 events without a first-N cap",
+  "input_scope": "Generation-2 official downloads pinned below. No BaoStock query, no security reselection.",
+  "inputs": {
+    "official_gbbq_archive": {
+      "url": "https://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+      "retrieved_utc": "2026-09-15",
+      "bytes": 6358077,
+      "sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+      "last_modified": "Mon, 14 Sep 2026 10:10:10 GMT",
+      "etag": "\"6aa7c802-61043d\""
+    },
+    "official_gbbq_member": {
+      "bytes": 5967508,
+      "sha256": "4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+      "count_u32_le": 205776,
+      "record_width": 29
+    },
+    "official_hsjday_zip": {
+      "url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "retrieved_utc": "2026-09-15",
+      "bytes": 549387306,
+      "sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+      "last_modified": "Mon, 14 Sep 2026 07:58:56 GMT",
+      "etag": "\"6aa7a940-20befc2a\""
+    },
+    "day_members": {
+      "sh\\lday\\sh600004.day": "49656073176fea18fca2e8131e7159a0c91952cdbe9994856d2b60f42471b7eb",
+      "sh\\lday\\sh600006.day": "77ecaea34c1cc5b08572c4816962b2f8d97d082b545c6034e86e99ecf126655a",
+      "sz\\lday\\sz000002.day": "6f168cf053ca561fedde1aa97c3b38d71876854ade3dae5f1a2c9ba9f6b63826",
+      "sz\\lday\\sz000004.day": "77a40ad72bf1a338a4a49a8586744127aa9f800496b095d231d30251f62b966b"
+    },
+    "community_decoder_source": {
+      "repo": "wxyzZ/pytdx",
+      "commit": "0d6f80618e1bae0f8e48552e597af492f3640f5d",
+      "path": "pytdx/reader/gbbq_reader.py",
+      "git_blob_sha1": "0eda4935027ffc79b5c425eff0a70a6d492b21d1",
+      "raw_sha256": "e28fae76760b1247a960cab285aa357c2d263b3212e7cabfb3f1ebfcc127d6ba",
+      "boundary": "community reverse-engineering evidence, not official TDX contract"
+    },
+    "committed_evidence": {
+      "selected_events_sha256": "c53a962ad4e39ceb3f8c4533451516620b6547cfd071241e826857cd132bfef7",
+      "selection_sha256": "e6a3a4c59f02120c02328fdfc519592d9acf16666f8b1876dcbde670124b5446",
+      "bounded_inputs_sha256": "34af2d78b9071f8505e99ff5dfdf563bd9a833b76c5de7112d02cb997ec4d99c",
+      "category1_six_digit_decoded_total": 68642,
+      "decode_reproduction_sha256": "0cec6d369f0f642f91f5278e0e54ca690cd7837ba41a913c057c487ba49983f7"
+    }
+  },
+  "selection": [
+    "Decode every retained gen-2 record (count_u32_le = 205776); no sampling",
+    "Histogram scope: every decoded record with category == 1, regardless of code shape",
+    "Four-security matrix scope: every category=1 record of the #53 fixed securities sh.600004, sh.600006, sz.000002, sz.000004 in the gen-2 member; no first-N cap; retain unresolved previous close rather than skip"
+  ],
+  "cross_check": {
+    "event_reproduction": "presence",
+    "rule": "Every committed #53 category=1 event (94) and every bounded issue-54 event (9, a subset) must be found in the gen-2 member by identical clear_hex; record_index equality with gen-1 is recorded per event, not assumed. Any committed clear_hex absent from gen-2 is recorded as a finding, not silently dropped.",
+    "category1_six_digit_total": "recorded as a gen-2 observation and compared against the committed gen-1 total 68642; any delta is a finding",
+    "day_member_hashes": "gen-2 member sha256 recorded and compared against gen-1 pins from selection.json; any difference is a finding",
+    "category_set": "decoded category set recorded and compared against committed structure-summary list"
+  },
+  "candidates": [
+    {"id": "frozen_repr", "rule": "Decimal(repr(decoded float32 promoted to Python float)); existing frozen diagnostic input"},
+    {"id": "exact_binary", "rule": "Decimal.from_float(decoded float32 promoted exactly to float64)"},
+    {"id": "shortest_roundtrip", "rule": "For n=1..9 use Python format(value, .ng); select first decimal that struct.pack(<f, float(decimal)) maps back to original bits; no field or security exception"},
+    {"id": "fixed_2dp", "rule": "exact_binary.quantize(0.01, ROUND_HALF_UP), same scale on C1/C2/C3/C4"},
+    {"id": "fixed_3dp", "rule": "exact_binary.quantize(0.001, ROUND_HALF_UP), same scale on C1/C2/C3/C4"},
+    {"id": "fixed_4dp", "rule": "exact_binary.quantize(0.0001, ROUND_HALF_UP), same scale on C1/C2/C3/C4"},
+    {"id": "fixed_6dp", "rule": "exact_binary.quantize(0.000001, ROUND_HALF_UP), same scale on C1/C2/C3/C4"}
+  ],
+  "histograms": {
+    "category_counts": "decoded category byte -> count over all gen-2 records",
+    "per_field": "for each C1..C4 over all category=1 records: zero/nonzero/negative/non_finite counts, distinct raw-bits count, tail count (exact binary decimal != shortest float32 roundtrip decimal), full distinct-value list sorted by raw bits hex with count, repr diagnostic and shortest decimal",
+    "field_combination_patterns": "4-bit nonzero mask (C1,C2,C3,C4) -> count over all category=1 records",
+    "symbol_coverage": "(market,code) -> category=1 record count, first and last date_iso"
+  },
+  "calculation": {
+    "precision": 60,
+    "reference": "(previous_close*10-C1+C4*C2)/(10+C4+C3)",
+    "reference_rounding": "ROUND_HALF_UP to 0.01 (frozen research rule, not official semantics)",
+    "ratio": "reference_cent/previous_close",
+    "single_event_ratio_diagnostic": "ROUND_HALF_UP to 0.000001; not a replacement for a full cumulative factor chain",
+    "day_observed": "previous trading bar and event-date bar from the gen-2 official .day member are recorded raw; previous_close is the close integer/100",
+    "unknown_policy": "Unresolved previous close remains explicit; cannot support a production conclusion"
+  },
+  "acceptance": "Only independently auditable official business field/normalization/rounding evidence can establish a production contract. Full-domain histograms, matrix compatibility, shortest roundtrip or any fitted decimal alone is insufficient.",
+  "full_four_stock_revalidation": "Only if a normalization contract is established; otherwise NOT_RUN and #53 aggregate remains CROSS_MARKET_VALIDATION_HAS_MISMATCH"
+}

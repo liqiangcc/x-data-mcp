@@ -38,7 +38,8 @@ def make_day_row(date_raw, close_int):
 
 class ScanTests(unittest.TestCase):
     def test_plan_hash_pinned(self):
-        self.assertEqual(scan.sha((scan.HERE / 'plan.json').read_bytes()), scan.PLAN_SHA256)
+        for name, pinned in scan.KNOWN_PLANS.items():
+            self.assertEqual(scan.sha((scan.HERE / name).read_bytes()), pinned, name)
 
     def test_half_cent_candidates_match_bounded_matrix(self):
         event = make_record(1, '600006', 20250717, 1, [0.05, 0.0, 0.0, 0.0], index=127405)
@@ -91,6 +92,11 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(coverage['0.000002']['first_date'], '1993-04-05')
         self.assertEqual(coverage['1.600006']['count'], 1)
         self.assertNotIn('1.600004', coverage)
+
+    def test_symbol_key_maps_market_to_exchange_prefix(self):
+        self.assertEqual(scan.symbol_key(make_record(1, '600004', 20040713, 1, [0.0] * 4)), 'sh.600004')
+        self.assertEqual(scan.symbol_key(make_record(0, '000004', 19910601, 1, [0.0] * 4)), 'sz.000004')
+        self.assertIsNone(scan.symbol_key(make_record(7, '000004', 19910601, 1, [0.0] * 4)))
 
     def test_run_fails_closed_on_unpinned_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
