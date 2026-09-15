@@ -2,8 +2,65 @@
 //! and never decides which gaps exist or verifies evidence objects; producer
 //! authorization and evidence verification are application decisions.
 use super::*;
-use crate::market_storage::{GapCovering, ProvenGap};
+use crate::market_storage::{
+    CONFIRMED_MISSING_RANGE, GAP_DECISION_EVIDENCE_KIND, GapCovering, GapVerificationDecision,
+    ProvenGap, derive_gap_id,
+};
 impl SqliteMarket {
+    /// Atomic gap-decision fact write (#155): the decision row and — for a
+    /// `confirmed_missing_range` conclusion only — its `proven_gaps` row
+    /// commit in ONE write transaction; either side failing rolls back
+    /// both. Re-recording the identical decision is an idempotent no-op;
+    /// the same decision_id (or derived gap_id) with different content
+    /// fails closed. This is a pure fact layer: it stores the sealed
+    /// decision verbatim and never decides which gaps exist.
+    pub fn record_gap_decision(&self, decision: &GapVerificationDecision) -> Result<bool, Error> {
+        decision.validate()?;
+        let gap = ProvenGap {
+            gap_id: derive_gap_id(decision),
+            symbol: decision.symbol.clone(),
+            period: decision.period,
+            start_date: decision.start_date,
+            end_date: decision.end_date,
+            evidence_kind: GAP_DECISION_EVIDENCE_KIND.into(),
+            evidence_id: decision.decision_id.clone(),
+            evidence_digest: decision.decision_sha256.clone(),
+            observed_at: decision.decided_at,
+        };
+        gap.validate()?;
+        self.write(|c| {
+            match insert_decision(c, decision) {
+                Ok(()) => {}
+                Err(insert) => match read_decision(c, &decision.decision_id)? {
+                    Some(existing) if existing == *decision => {}
+                    Some(_) => {
+                        return Err(integrity("gap decision identity conflict"));
+                    }
+                    None => return Err(insert),
+                },
+            }
+            if decision.conclusion == CONFIRMED_MISSING_RANGE {
+                match insert_gap(c, &gap) {
+                    Ok(()) => Ok(true),
+                    Err(insert) => match read_gap(c, &gap.gap_id)? {
+                        Some(existing) if existing == gap => Ok(false),
+                        Some(_) => Err(integrity("proven gap identity conflict")),
+                        None => Err(insert),
+                    },
+                }
+            } else {
+                Ok(true)
+            }
+        })
+    }
+    /// Audit read of one stored decision; the stored row is mechanically
+    /// re-validated and integrity fail-closed when unreadable.
+    pub fn gap_verification_decision(
+        &self,
+        decision_id: &str,
+    ) -> Result<Option<GapVerificationDecision>, Error> {
+        self.read(|c| read_decision(c, decision_id))
+    }
     /// INSERT-only fact write. Re-recording the identical gap is an
     /// idempotent no-op; the same gap_id with different content fails closed.
     pub fn record_proven_gap(&self, gap: &ProvenGap) -> Result<bool, Error> {
@@ -82,6 +139,81 @@ impl SqliteMarket {
                 .collect()
         })
     }
+}
+fn insert_decision(c: &Connection, d: &GapVerificationDecision) -> Result<(), Error> {
+    c.execute(
+        "INSERT INTO gap_verification_decisions VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+        params![
+            d.decision_id,
+            d.symbol,
+            super::period(d.period),
+            d.start_date.to_string(),
+            d.end_date.to_string(),
+            d.subject_version_id,
+            d.subject_version_digest,
+            d.conclusion,
+            d.basis_kind,
+            d.basis_ref,
+            d.basis_sha256,
+            d.verifier_id,
+            d.decided_at.to_rfc3339(),
+            d.decision_sha256,
+        ],
+    )
+    .map_err(storage)?;
+    Ok(())
+}
+fn decision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<GapVerificationDecision, Error>> {
+    let period: String = r.get(2)?;
+    let start: String = r.get(3)?;
+    let end: String = r.get(4)?;
+    let decided_at: String = r.get(12)?;
+    Ok(|| -> Result<GapVerificationDecision, Error> {
+        let decision = GapVerificationDecision {
+            decision_id: r.get(0).map_err(storage)?,
+            symbol: r.get(1).map_err(storage)?,
+            period: match period.as_str() {
+                "day" => Period::Day,
+                other => {
+                    return Err(integrity(format!("unreadable decision period {other:?}")));
+                }
+            },
+            start_date: start
+                .parse()
+                .map_err(|_| integrity("unreadable decision start_date"))?,
+            end_date: end
+                .parse()
+                .map_err(|_| integrity("unreadable decision end_date"))?,
+            subject_version_id: r.get(5).map_err(storage)?,
+            subject_version_digest: r.get(6).map_err(storage)?,
+            conclusion: r.get(7).map_err(storage)?,
+            basis_kind: r.get(8).map_err(storage)?,
+            basis_ref: r.get(9).map_err(storage)?,
+            basis_sha256: r.get(10).map_err(storage)?,
+            verifier_id: r.get(11).map_err(storage)?,
+            decided_at: decided_at
+                .parse()
+                .map_err(|_| integrity("unreadable decision decided_at"))?,
+            decision_sha256: r.get(13).map_err(storage)?,
+        };
+        decision
+            .validate()
+            .map_err(|_| integrity("stored gap decision violates invariants"))?;
+        Ok(decision)
+    }())
+}
+fn read_decision(
+    c: &Connection,
+    decision_id: &str,
+) -> Result<Option<GapVerificationDecision>, Error> {
+    c.query_row(
+        "SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions WHERE decision_id=?1",
+        [decision_id],
+        decision_row,
+    )
+    .optional()
+    .map_err(storage)?
+    .transpose()
 }
 fn insert_gap(c: &Connection, gap: &ProvenGap) -> Result<(), Error> {
     c.execute(

@@ -160,6 +160,81 @@ impl ProvenGap {
         Ok(())
     }
 }
+/// Durable gap-verification decision (#155): the only evidence object that
+/// may produce a `proven_gaps` row. Produced exclusively by an installed
+/// trusted source-gap verifier port — never by task outcomes, empty
+/// source responses, date discontinuity, or MCP caller fields. `period` is
+/// day-only in the first phase; `subject_*` binds the verified published
+/// QFQ daily version the gap is relative to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GapVerificationDecision {
+    pub decision_id: String,
+    pub symbol: String,
+    pub period: Period,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub subject_version_id: String,
+    pub subject_version_digest: String,
+    /// Only `confirmed_missing_range` produces a gap row; other conclusions
+    /// (e.g. source limitation) are stored as decisions alone.
+    pub conclusion: String,
+    pub basis_kind: String,
+    pub basis_ref: String,
+    pub basis_sha256: String,
+    /// Server-derived installed-verifier identity; never caller-supplied.
+    pub verifier_id: String,
+    pub decided_at: DateTime<Utc>,
+    pub decision_sha256: String,
+}
+impl GapVerificationDecision {
+    /// Mechanical storage invariants only; subject-version binding, basis
+    /// re-verification, verifier authorization, and digest recomputation
+    /// belong to the producer application layer.
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.decision_id.trim().is_empty()
+            || self.symbol.trim().is_empty()
+            || self.period != Period::Day
+            || self.subject_version_id.trim().is_empty()
+            || !crate::hash::is_sha256(&self.subject_version_digest)
+            || self.conclusion.trim().is_empty()
+            || self.basis_kind.trim().is_empty()
+            || self.basis_ref.trim().is_empty()
+            || !crate::hash::is_sha256(&self.basis_sha256)
+            || self.verifier_id.trim().is_empty()
+            || !crate::hash::is_sha256(&self.decision_sha256)
+            || self.start_date > self.end_date
+        {
+            return Err(Error::Invalid("invalid gap verification decision".into()));
+        }
+        Ok(())
+    }
+}
+/// The only `proven_gaps.evidence_kind` a decision may produce.
+pub const GAP_DECISION_EVIDENCE_KIND: &str = "gap_verification_decision";
+/// The only conclusion that produces a `proven_gaps` row.
+pub const CONFIRMED_MISSING_RANGE: &str = "confirmed_missing_range";
+/// Deterministic gap identity: domain-separated canonical digest of the
+/// decision's subject + range content (`gap-v1`). Re-deciding the same
+/// range on the same subject version maps to the same gap row; never
+/// random.
+pub fn derive_gap_id(decision: &GapVerificationDecision) -> String {
+    crate::hash::sha256(
+        serde_json::json!([
+            "gap-v1",
+            decision.symbol,
+            match decision.period {
+                Period::Day => "day",
+                Period::Year => "year",
+            },
+            decision.start_date.to_string(),
+            decision.end_date.to_string(),
+            decision.subject_version_id,
+            decision.subject_version_digest,
+        ])
+        .to_string()
+        .as_bytes(),
+    )
+}
 /// Append-only binding: a later published version covers a proven gap.
 /// The historical gap row is retained; covering bindings never erase it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
