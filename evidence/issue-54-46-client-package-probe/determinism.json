@@ -1,0 +1,17 @@
+{
+ "runs": [
+  {
+   "worktree": "/home/box/x-data-mcp-client-probe",
+   "freeze_commit": "f6e9dc6",
+   "result_sha256": "0eb8f6921052b2ba63e61007f7e49b58ec591d98a8ca7a8b86116d2fd12f6c21"
+  },
+  {
+   "worktree": "/tmp/probe-repro",
+   "freeze_commit": "f6e9dc6",
+   "result_sha256": "0eb8f6921052b2ba63e61007f7e49b58ec591d98a8ca7a8b86116d2fd12f6c21"
+  }
+ ],
+ "byte_identical": true,
+ "python": "3.13.5",
+ "network_requests_during_replay": 0
+}

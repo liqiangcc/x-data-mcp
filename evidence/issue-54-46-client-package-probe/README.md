@@ -33,3 +33,32 @@ Authorization: liqiangcc/x-data-mcp#71 comment-5676627357 (public downloads only
 No disassembly/decompilation/strings-extraction on binaries; no wine/execution;
 no semantic inference from binary contents; only `.help/.chm/.hlp/.txt/.pdf/.cfg/.dat/.ini`
 members inventoried.
+
+## Results (terminal)
+
+Package: `com.tdx.tdxcfv` 7.64 amd64, 1,049 files, 29 doc/data members.
+
+- **incon.dat**: `FOUND_MEMBER_CORROBORATION` — the client ships the same
+  multi-namespace code→name dictionary (65,853 B), different bytes vs the gen-2
+  gbbq.zip copy (67,543 B): one-generation-older, gen-2 adds `#SGXHY`/`#JPHY`
+  sections; deb copy covers tdxhy codes T 110/111 (missing degenerate `T00`) and
+  X 348/349 (missing `X4006`). Proves the client consumes this dictionary;
+  proves nothing about tdxhy.cfg field positions.
+- **All other same-name targets**: `ABSENT_IN_PACKAGE` — no tdxhy.cfg,
+  tdxhy2.cfg, tdxzs*.cfg, gbbq, gbbq.map, base.dbf/base.map, infoharbor.*,
+  infoharbor_ex.* ship in the client package (they are server-downloaded data).
+- **Client manual corpus** (`tdxw-left.html`, 651KB): `FOUND_BUSINESS_LEVEL_ONLY`
+  — prose states precise auto-adjustment incl. 送股/配股/分红, front/back
+  adjustment, and rights-database maintenance/display. No binary binding.
+- **Keyword scan** across all 29 members: every hit is column-help prose,
+  industry-code text (e.g. `C13|农副食品加工业`), or coincidental bytes inside
+  binary resources (tdxres.dat). No member documents GBBQ record layout,
+  C1–C4 order/units/float32/rounding, or tdxhy.cfg field roles.
+- **#46 remaining gaps**: `NOT_FOUND` — field↔code-space declaration,
+  f0/f1/f3/f4 roles, A-share scope, tdxhy2 f1/f5 roles.
+- **#54 remaining gap**: `NOT_FOUND` — business-field→GBBQ binary C1–C4 binding.
+- **Windows installer**: `NOT_RUN` (no unpacker); **client behavior**: `NOT_RUN`
+  (prohibited).
+
+Result sha256 `0eb8f6921052b2ba63e61007f7e49b58ec591d98a8ca7a8b86116d2fd12f6c21`;
+two clean-checkout runs byte-identical.
