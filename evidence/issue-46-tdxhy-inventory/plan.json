@@ -1,0 +1,62 @@
+{
+  "schema": "issue46.tdxhy-inventory-plan.v1",
+  "fixed_before_evaluation": true,
+  "status": "FIELD_SEMANTICS_NOT_VERIFIED",
+  "generation": "gen-2: official base.zip re-downloaded 2026-09-15 under issue #71 comment-5676627357 authorization; gen-1 retained archive pins (16,099,192 bytes, 39de51e2...b71d9) preserved in evidence/issue-6-tdx-dbf-source/official/archive-20260913.json and NOT superseded",
+  "baseline_commit": "4b20162",
+  "extends": "evidence/issue-133-base-industry-candidates (locator scan) and evidence/issue-135-tdxhy-structure (STRUCTURAL_RELATION_AMBIGUOUS byte-structure scan); this slice adds field-level inventory, field-index-restricted token analysis, sample record comparison, and security-identity member coverage",
+  "inputs": {
+    "official_base_archive": {
+      "url": "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+      "retrieved_utc": "2026-09-15",
+      "bytes": 16411232,
+      "sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+      "last_modified": "Mon, 14 Sep 2026 10:10:10 GMT",
+      "etag": "\"6aa7c802-fa6a60\""
+    },
+    "member_pins": {
+      "tdxhy.cfg": {"bytes": 150332, "sha256": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6"},
+      "tdxhy2.cfg": {"bytes": 249158, "sha256": "f496dcd9af9c6681682cc25d621b2ada195f555e9a9834ef75878dfeb0a0be4a"},
+      "infoharbor_ex.code": {"bytes": 182145, "sha256": "79eed0f6857ffde3d1d3cc8966ceff6e400f45e6e2387224446e453850fb5281"},
+      "infoharbor_ex.name": {"bytes": 81609, "sha256": "f120745d760cea1f730639a8701f043ebffc31d7dccd70c8376a09ab9e7a3fb4"},
+      "base.dbf": {"bytes": 4270189, "sha256": "6e6480bbefcfa4145f1214e586457862f144dc5a563f14a285021e5e3ebcc770"},
+      "base.map": {"bytes": 123740, "sha256": "8441db92ec60046f5951e067eeaa50f5cf2e797a4551353250681bc4126f93cf"}
+    },
+    "retained_index": {
+      "path": "evidence/issue-6-tdx-dbf-source/official/archive-20260913.json",
+      "sha256": "15210910cf8d648a85e58409558be2284b1aa2bdf8464ae2e0d2d0228048325c",
+      "use": "gen-1 member identity baseline; gen-2 member table must contain the same 542 names; per-member sha256 differences are recorded as findings, not asserted away"
+    }
+  },
+  "fixed_samples": ["688318", "600000", "000001", "600004", "600006", "000002", "000004"],
+  "frozen_rules": {
+    "identity_gate": "archive bytes+sha256 and every read member's bytes+sha256 must equal the pins above; mismatch is a deterministic input failure, not a scan result",
+    "record_parse": "split raw member bytes on CRLF / CRCRLF / CR / LF terminators; report EOL form counts, blank-line count, NO_TERMINATOR count; field = literal '|' split, field index zero-based; never normalize whitespace or delimiters before measuring",
+    "field_inventory": "per member per field index: byte-width histogram, record count, empty count, distinct count, ascii-only count, high-byte-containing count, GB18030 strict-decode success count (labeled ENCODING_TRIAL_NOT_CONFIRMED), frozen-pattern conformance counts, top-50 values by count (raw hex), and the complete sorted distinct value set for fields with <=4096 distinct values",
+    "frozen_patterns": {
+      "single_digit": "^[0-9]$",
+      "six_digit": "^[0-9]{6}$",
+      "T_code": "^T[0-9]{4,6}$",
+      "X_code": "^X[0-9]{4,6}$",
+      "ZX_code": "^ZX[0-9]{6}$",
+      "CJ_code": "^CJ[0-9]{6}$",
+      "ZZ_code": "^ZZ[0-9]{8}$",
+      "gbk_name_trial": "field GB18030 strict-decodable and containing at least one byte >= 0x80"
+    },
+    "token_rule": "identical to issue-135: a six-digit token is a contiguous run of exactly six ASCII digits bounded by non-digits or field/line boundaries; each occurrence records line number and field index",
+    "ambiguity_attribution": "per member, build token -> set of field indices; classify each six-digit token as CODE_POSITION (occurs only at the member's code field index) or OTHER_FIELD; compute restricted overlap on code-position token sets only; report per-shared-code line counts; list every multi-line token with its field indices; mechanical verdict is one of CODE_POSITION_TOKENS_UNIVALENT / CODE_POSITION_TOKENS_NONUNIVALENT plus the field-index attribution of every ambiguity-causing token",
+    "code_fields": {
+      "tdxhy.cfg": "field index 1",
+      "tdxhy2.cfg": "field index 1",
+      "infoharbor_ex.code": "field index 0",
+      "infoharbor_ex.name": "field index 1",
+      "base.map": "bytes 0-5 of each record (fixed-width split frozen before inspection of coverage; trailing bytes reported separately)",
+      "base.dbf": "DBF field descriptor named GPDM (char, len 6) if present; per-record bytes at its declared offset"
+    },
+    "coverage_joins": "compute each member's code-position token set cardinality and all pairwise intersections/differences; for shared tdxhy.cfg/tdxhy2.cfg codes report field-0 byte agreement rate; for base.map report line count vs base.dbf record count equality and ordered pairing match rate (map line i first-6 == dbf record i GPDM); all outputs are byte facts",
+    "sample_records": "for each fixed sample, every member record whose code-position field equals the sample token: full raw record hex, field hex list, GB18030 decode trial per non-ASCII field; plus base.dbf record raw hex when GPDM matches",
+    "proven_unproven": "PROVEN labels only byte-observable facts (presence, uniqueness, field index, charset class, decode-trial success, byte equality across members); a fixed UNPROVEN label set is emitted for every semantic question: MARKET_FIELD_SEMANTICS, INDUSTRY_CODE_SEMANTICS, INDUSTRY_HIERARCHY, NAME_CORRECTNESS, ENCODING_CONFIRMED, CODE_TO_NAME_CONTRACT, SECURITY_RANGE_COMPLETENESS, MEMBER_RELATION_SEMANTICS"
+  },
+  "known_member_table_delta": "gen-2 archive has the same 542 member names as the retained index; 12 members differ in bytes/sha256 (base.dbf, base.map, block.dat, block_fg.dat, block_gn.dat, infoharbor_ex.code, infoharbor_ex.name, infoharbor_short.cfg, tdxhy2.cfg, tdxzsbase.cfg, tdxzsbase2.cfg, xgcode.cfg); tdxhy.cfg is byte-identical across generations",
+  "acceptance": "Only independently auditable official field-documentation or contract evidence can establish semantics. Field-shape conformance, GB18030 decode success, code-token overlap, and ordered-pairing agreement are mechanical observations and never a semantic contract. #46 ACs, #6 catalog gates, and #71 file-use boundary remain unchanged."
+}
