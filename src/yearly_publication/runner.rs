@@ -1,7 +1,7 @@
 //! Receipt-aware execution of accepted yearly tasks; no online source selection.
 use super::{Derivation, DerivationEvidence, results::YearlyRepository};
 use crate::{
-    market_data::{MarketDataPipeline, SourceError},
+    market_data::{CoverageEvidence, CoverageStatus, SourceError},
     market_storage::{
         Error, Publication, PublishIntent, Publisher, Receipt, compat::CheckedRecord,
     },
@@ -19,18 +19,45 @@ pub trait YearlyVerifier {
         derived_at: DateTime<Utc>,
     ) -> Result<DerivationEvidence, SourceError>;
 }
+/// Real verifier for the derived-yearly path: gated on an env-installed
+/// inspected official-file source, coverage-proven by re-aggregating the
+/// fixed daily base for the requested years. Missing years, invalid input
+/// and bars beyond as_of all fail closed.
 pub struct OfficialYearlyVerifier;
 impl YearlyVerifier for OfficialYearlyVerifier {
     fn verify(
         &self,
         base: &CheckedRecord,
-        _years: &BTreeSet<i32>,
-        _derived_at: DateTime<Utc>,
+        years: &BTreeSet<i32>,
+        derived_at: DateTime<Utc>,
     ) -> Result<DerivationEvidence, SourceError> {
-        crate::official_files::OfficialFilePipeline.derive_yearly(base.version())?;
-        Err(SourceError::NotVerified(
-            "fixed daily yearly coverage verifier is not implemented".into(),
-        ))
+        if crate::official_market::TdxMarketSource::from_env().is_none() {
+            return Err(SourceError::NotVerified(
+                "official-file source not installed".into(),
+            ));
+        }
+        let as_of = derived_at
+            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+            .date_naive();
+        crate::yearly::aggregate(base.version(), Some(years), as_of)
+            .map_err(|e| SourceError::NotVerified(e.to_string()))?;
+        Ok(DerivationEvidence {
+            base_integrity_sha256: base.raw()["integrity_sha256"]
+                .as_str()
+                .ok_or_else(|| {
+                    SourceError::NotVerified("fixed base carries no integrity digest".into())
+                })?
+                .into(),
+            years: years.clone(),
+            as_of,
+            coverage: CoverageEvidence {
+                status: CoverageStatus::Complete,
+                reason: format!(
+                    "selected years verified by re-aggregating fixed daily {} from the env-installed official-file source as of {as_of}; not a listing-history claim",
+                    base.version().version_id
+                ),
+            },
+        })
     }
 }
 #[derive(Debug)]
