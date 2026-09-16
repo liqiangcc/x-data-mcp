@@ -195,46 +195,97 @@ impl SqliteCatalog {
         let tx = c
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
-        crate::sqlite_tasks::check_schema(&tx, true)?;
-        let current = head(&tx)?;
-        if current.as_deref() != expected {
-            return Err(Error::Conflict("catalog head changed".into()));
-        }
-        let previous = current.as_deref().map(|id| read(&tx, id)).transpose()?;
-        validate_snapshot(&snapshot, previous.as_ref())
-            .map_err(|e| Error::Invalid(format!("{e:?}")))?;
-        let v = CatalogVersion {
-            version_id: id.into(),
-            published_at: snapshot.acquired_at,
-            source: snapshot.source,
-            acquired_at: snapshot.acquired_at,
-            records: snapshot.records,
-        };
-        let body = raw(&v)?;
-        tx.execute(
-            "INSERT INTO catalog_versions VALUES(?1,?2,?3,?4,?5,?6)",
-            params![
-                id,
-                v.published_at.to_rfc3339(),
-                v.source,
-                v.acquired_at.to_rfc3339(),
-                body,
-                digest(&v)?
-            ],
-        )
-        .map_err(storage)?;
-        for r in projection(&v) {
-            tx.execute(
-                "INSERT INTO catalog_members VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                params![id, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]],
-            )
-            .map_err(storage)?;
-        }
-        tx.execute("INSERT INTO catalog_head VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET version_id=excluded.version_id",[id]).map_err(storage)?;
-        read(&tx, id)?;
+        let published_at = snapshot.acquired_at;
+        publish_in_tx(&tx, id, snapshot, published_at, expected)?;
         tx.commit().map_err(storage)?;
         Ok(())
     }
+    /// Publish a candidate assembled from an inspected official-file
+    /// snapshot (design: docs/tasks/issue-6-catalog-impl.md §4.3). Same
+    /// transaction, validation and head-guard as `publish_fixture`; the
+    /// fixture gate is replaced by the `official-file:<sha16>` source
+    /// binding produced by the compose layer. Returns the version id.
+    pub fn publish_official(
+        &self,
+        snapshot: CatalogSnapshot,
+        expected: Option<&str>,
+        published_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<String, Error> {
+        let bound = snapshot
+            .source
+            .strip_prefix("official-file:")
+            .unwrap_or_default();
+        if bound.len() != 16
+            || !bound
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || snapshot.records.len() > 100_000
+        {
+            return Err(Error::Invalid(
+                "official-file:<manifest sha16> source binding required".into(),
+            ));
+        }
+        let id = format!(
+            "catalog-{}",
+            published_at.timestamp_nanos_opt().unwrap_or_default()
+        );
+        let mut c = self.tasks.connect(false)?;
+        let tx = c
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        publish_in_tx(&tx, &id, snapshot, published_at, expected)?;
+        tx.commit().map_err(storage)?;
+        Ok(id)
+    }
+}
+/// Shared atomic publish body: schema check, expected-head optimistic lock,
+/// snapshot validation against the previous version, version + member
+/// projection + head swap, and in-transaction read-back verification.
+fn publish_in_tx(
+    tx: &rusqlite::Transaction,
+    id: &str,
+    snapshot: CatalogSnapshot,
+    published_at: chrono::DateTime<chrono::Utc>,
+    expected: Option<&str>,
+) -> Result<(), Error> {
+    crate::sqlite_tasks::check_schema(tx, true)?;
+    let current = head(tx)?;
+    if current.as_deref() != expected {
+        return Err(Error::Conflict("catalog head changed".into()));
+    }
+    let previous = current.as_deref().map(|id| read(tx, id)).transpose()?;
+    validate_snapshot(&snapshot, previous.as_ref())
+        .map_err(|e| Error::Invalid(format!("{e:?}")))?;
+    let v = CatalogVersion {
+        version_id: id.into(),
+        published_at,
+        source: snapshot.source,
+        acquired_at: snapshot.acquired_at,
+        records: snapshot.records,
+    };
+    let body = raw(&v)?;
+    tx.execute(
+        "INSERT INTO catalog_versions VALUES(?1,?2,?3,?4,?5,?6)",
+        params![
+            id,
+            v.published_at.to_rfc3339(),
+            v.source,
+            v.acquired_at.to_rfc3339(),
+            body,
+            digest(&v)?
+        ],
+    )
+    .map_err(storage)?;
+    for r in projection(&v) {
+        tx.execute(
+            "INSERT INTO catalog_members VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![id, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]],
+        )
+        .map_err(storage)?;
+    }
+    tx.execute("INSERT INTO catalog_head VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET version_id=excluded.version_id",[id]).map_err(storage)?;
+    read(tx, id)?;
+    Ok(())
 }
 /// Stable fixture digest is deliberately separate from the market legacy digest format.
 pub fn fixture_value(v: &CatalogVersion) -> Result<Value, Error> {

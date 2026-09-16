@@ -2,7 +2,7 @@ use x_data_mcp::catalog::{
     CatalogRepository, CatalogService, CatalogVersion, IndustryInfo, IndustryScheme, RefreshStatus,
     SecurityCatalogSource,
 };
-use x_data_mcp::catalog_tdx::{compose, ex_code, incon, scope, tdxhy};
+use x_data_mcp::catalog_tdx::{compose, ex_code, incon, scope, source::TdxCatalogExecutor, tdxhy};
 
 fn gb18030(text: &str) -> Vec<u8> {
     encoding_rs::GB18030.encode(text).0.into_owned()
@@ -311,6 +311,268 @@ fn composed_snapshot_passes_existing_refresh_validation() {
     assert_eq!(result.status, RefreshStatus::Published);
 }
 
+// ---------- TdxCatalogExecutor + publish_official end-to-end ----------
+
+fn write_zip(path: &std::path::Path, members: &[(&str, &[u8])]) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut writer = zip::ZipWriter::new(file);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in members {
+        writer.start_file(*name, options).unwrap();
+        std::io::Write::write_all(&mut writer, bytes).unwrap();
+    }
+    writer.finish().unwrap();
+}
+
+/// Write base.zip / gbbq.zip / hsjday.zip plus a snapshot manifest binding
+/// their bytes, returning the manifest path.
+fn write_official_snapshot(
+    dir: &std::path::Path,
+    tdxhy: &[u8],
+    ex_code_bytes: &[u8],
+    incon_bytes: &[u8],
+) -> std::path::PathBuf {
+    write_zip(
+        &dir.join("base.zip"),
+        &[("tdxhy.cfg", tdxhy), ("infoharbor_ex.code", ex_code_bytes)],
+    );
+    let mut zhb = Vec::new();
+    {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zhb));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("incon.dat", options).unwrap();
+        std::io::Write::write_all(&mut writer, incon_bytes).unwrap();
+        writer.finish().unwrap();
+    }
+    write_zip(&dir.join("gbbq.zip"), &[("zhb.zip", &zhb)]);
+    write_zip(&dir.join("hsjday.zip"), &[("placeholder", b"x")]);
+
+    let files: Vec<serde_json::Value> = [
+        (
+            "base_industry",
+            "base.zip",
+            "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+        ),
+        (
+            "gbbq",
+            "gbbq.zip",
+            "https://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+        ),
+        (
+            "day",
+            "hsjday.zip",
+            "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+        ),
+    ]
+    .iter()
+    .map(|(role, name, url)| {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        serde_json::json!({
+            "role": role,
+            "relative_path": name,
+            "source_url": url,
+            "acquisition_started_at": "2026-09-01T00:00:00Z",
+            "acquisition_completed_at": "2026-09-01T00:00:01Z",
+            "last_modified": null,
+            "etag": null,
+            "bytes": bytes.len(),
+            "sha256": x_data_mcp::hash::sha256(&bytes),
+        })
+    })
+    .collect();
+    let manifest = dir.join("manifest.json");
+    std::fs::write(
+        &manifest,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "x-data-mcp.official-file-input.v1",
+            "files": files,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    manifest
+}
+
+fn catalog_item() -> x_data_mcp::task_control::ItemSpec {
+    x_data_mcp::task_control::ItemSpec {
+        item_id: "catalog:current_sh_sz_a".into(),
+        target: serde_json::json!({"scope":"current_sh_sz_a"}),
+        progress_unit: "catalog_snapshot".into(),
+        frozen_inputs: serde_json::json!({}),
+        scope_keys: ["catalog:current_sh_sz_a".to_string()]
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn make_executor(
+    store_dir: &std::path::Path,
+    manifest: &std::path::Path,
+    input_root: &std::path::Path,
+) -> (
+    TdxCatalogExecutor,
+    x_data_mcp::sqlite_catalog::SqliteCatalog,
+) {
+    std::fs::create_dir_all(store_dir).unwrap();
+    let tasks = x_data_mcp::sqlite_tasks::SqliteTasks::new(store_dir.join("db"));
+    tasks.initialize().unwrap();
+    let catalog = x_data_mcp::sqlite_catalog::SqliteCatalog::new(tasks);
+    (
+        TdxCatalogExecutor::new(catalog.clone(), manifest, input_root),
+        catalog,
+    )
+}
+
+fn execute(executor: &TdxCatalogExecutor) -> x_data_mcp::task_control::ItemOutcome {
+    use x_data_mcp::task_control::Executor;
+    executor.execute(
+        &x_data_mcp::task_control::CommandKey {
+            operation: "start_collection".into(),
+            dataset: "securities.catalog".into(),
+            contract_version: "v1".into(),
+        },
+        &catalog_item(),
+    )
+}
+
+#[test]
+fn official_executor_publishes_and_readback_verifies() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = write_official_snapshot(
+        dir.path(),
+        b"0|000001|T1001|||X500102\r\n1|600004|T1001|||X5001\r\n",
+        &gb18030("000001|平安银行|kw\r\n600004|白云机场|kw\r\n"),
+        &gb18030("#TDXNHY\r\nT1001|金融\r\n#TDXRSHY\r\nX5001|软件服务\r\n"),
+    );
+    let (executor, catalog) = make_executor(&dir.path().join("store"), &manifest, dir.path());
+    let outcome = execute(&executor);
+    assert!(outcome.success, "{:?}", outcome.error);
+    let head = catalog
+        .selection_facts()
+        .unwrap()
+        .catalog_head
+        .expect("head after publish");
+    let version = catalog.fixed(&head).unwrap();
+    assert_eq!(version.records.len(), 2);
+    assert!(version.source.starts_with("official-file:"));
+    assert_eq!(version.records[0].name, "平安银行");
+    assert_eq!(
+        version.records[0].industry,
+        IndustryInfo::Assigned {
+            code: "X5001".into(),
+            name: "软件服务".into(),
+            scheme: Some(IndustryScheme::TdxResearchIndustry),
+        }
+    );
+
+    // Second generation: one additional member → head advances to a new
+    // version; the prior version stays readable by id.
+    let dir2 = tempfile::tempdir().unwrap();
+    let manifest2 = write_official_snapshot(
+        dir2.path(),
+        b"0|000001|T1001|||X500102\r\n1|600004|T1001|||X5001\r\n0|000002|T1001|||X500102\r\n",
+        &gb18030("000001|平安银行|kw\r\n600004|白云机场|kw\r\n000002|万科A|kw\r\n"),
+        &gb18030("#TDXNHY\r\nT1001|金融\r\n#TDXRSHY\r\nX5001|软件服务\r\n"),
+    );
+    let executor2 = TdxCatalogExecutor::new(catalog.clone(), &manifest2, dir2.path());
+    let outcome = execute(&executor2);
+    assert!(outcome.success, "{:?}", outcome.error);
+    let head2 = catalog.selection_facts().unwrap().catalog_head.unwrap();
+    assert_ne!(head2, head);
+    assert_eq!(catalog.fixed(&head2).unwrap().records.len(), 3);
+    assert_eq!(catalog.fixed(&head).unwrap().records.len(), 2);
+}
+
+#[test]
+fn official_executor_rejections_keep_old_head() {
+    let dir = tempfile::tempdir().unwrap();
+    // Baseline publish: two members.
+    let manifest = write_official_snapshot(
+        dir.path(),
+        b"0|000001|T1001|||X500102\r\n1|600004|T1001|||X5001\r\n",
+        &gb18030("000001|平安银行|kw\r\n600004|白云机场|kw\r\n"),
+        &gb18030("#TDXNHY\r\nT1001|金融\r\n#TDXRSHY\r\nX5001|软件服务\r\n"),
+    );
+    let (executor, catalog) = make_executor(&dir.path().join("store"), &manifest, dir.path());
+    assert!(execute(&executor).success);
+    let head = catalog.selection_facts().unwrap().catalog_head.unwrap();
+
+    // Member disappeared: same identity space minus one member → reject,
+    // old head retained.
+    let dir2 = tempfile::tempdir().unwrap();
+    let manifest2 = write_official_snapshot(
+        dir2.path(),
+        b"0|000001|T1001|||X500102\r\n",
+        &gb18030("000001|平安银行|kw\r\n"),
+        &gb18030("#TDXNHY\r\nT1001|金融\r\n#TDXRSHY\r\nX5001|软件服务\r\n"),
+    );
+    let executor2 = TdxCatalogExecutor::new(catalog.clone(), &manifest2, dir2.path());
+    let outcome = execute(&executor2);
+    assert!(!outcome.success);
+    assert!(
+        outcome.error.unwrap().contains("MemberDisappeared"),
+        "member disappearance must reject"
+    );
+    assert_eq!(catalog.selection_facts().unwrap().catalog_head, Some(head));
+
+    // Nameless member: P1 default reject_candidate → rejection, head kept.
+    let dir3 = tempfile::tempdir().unwrap();
+    let manifest3 = write_official_snapshot(
+        dir3.path(),
+        b"0|000001|T1001|||X500102\r\n0|000099|T1001|||X500102\r\n",
+        &gb18030("000001|平安银行|kw\r\n"),
+        &gb18030("#TDXNHY\r\nT1001|金融\r\n#TDXRSHY\r\nX5001|软件服务\r\n"),
+    );
+    let store3 = tempfile::tempdir().unwrap();
+    let (executor3, _) = make_executor(&store3.path().join("store"), &manifest3, dir3.path());
+    let outcome = execute(&executor3);
+    assert!(!outcome.success);
+    assert!(
+        outcome
+            .error
+            .unwrap()
+            .contains("nameless scope members: 0:000099"),
+    );
+
+    // Duplicate identity rows → DuplicateSecurity rejection.
+    let dir4 = tempfile::tempdir().unwrap();
+    let manifest4 = write_official_snapshot(
+        dir4.path(),
+        b"0|000001|T1001|||X500102\r\n0|000001|T1001|||X500102\r\n",
+        &gb18030("000001|平安银行|kw\r\n"),
+        &gb18030("#TDXNHY\r\nT1001|金融\r\n#TDXRSHY\r\nX5001|软件服务\r\n"),
+    );
+    let store4 = tempfile::tempdir().unwrap();
+    let (executor4, _) = make_executor(&store4.path().join("store"), &manifest4, dir4.path());
+    let outcome = execute(&executor4);
+    assert!(!outcome.success);
+    assert!(outcome.error.unwrap().contains("DuplicateSecurity"));
+
+    // Manifest/sha mismatch → source failure, nothing published.
+    let dir5 = tempfile::tempdir().unwrap();
+    let manifest5 = write_official_snapshot(
+        dir5.path(),
+        b"0|000001|T1001|||X500102\r\n",
+        &gb18030("000001|平安银行|kw\r\n"),
+        &gb18030("#TDXNHY\r\nT1001|金融\r\n#TDXRSHY\r\nX5001|软件服务\r\n"),
+    );
+    std::fs::write(dir5.path().join("base.zip"), b"corrupted").unwrap();
+    let store5 = tempfile::tempdir().unwrap();
+    let (executor5, catalog5) =
+        make_executor(&store5.path().join("store"), &manifest5, dir5.path());
+    let outcome = execute(&executor5);
+    assert!(!outcome.success);
+    assert!(
+        outcome
+            .error
+            .unwrap()
+            .contains("snapshot inspection failed")
+    );
+    assert!(catalog5.selection_facts().unwrap().catalog_head.is_none());
+}
+
 // ---------- retained gen-2 integration (skipped when inputs are absent) ----------
 
 const RETAINED: &str = "/home/box/retained-inputs";
@@ -415,4 +677,75 @@ fn gen2_retained_members_match_the_frozen_counts() {
             t_code: "T00".into(),
         }]
     );
+}
+
+/// Executor end-to-end on retained gen-2 bytes: real member extraction
+/// (incl. nested gbbq.zip!zhb.zip!incon.dat), inspect hash binding, then the
+/// P1 default reject_candidate path — the six nameless members reject the
+/// candidate and nothing is published.
+#[test]
+fn gen2_retained_executor_rejects_on_anchored_nameless_members() {
+    let retained = std::path::Path::new(RETAINED);
+    let inputs = [
+        ("base_industry", "official-base.zip", "base.zip"),
+        ("gbbq", "official-gbbq.zip", "gbbq.zip"),
+        ("day", "official-hsjday.zip", "hsjday.zip"),
+    ];
+    if inputs
+        .iter()
+        .any(|(_, name, _)| !retained.join(name).exists())
+    {
+        eprintln!("skipping: {RETAINED} not present on this host");
+        return;
+    }
+    // /dev/shm is too small for hsjday.zip; work on the same filesystem as
+    // the retained inputs so hardlinks succeed.
+    let dir = tempfile::tempdir_in(retained.parent().unwrap()).unwrap();
+    let files: Vec<serde_json::Value> = inputs
+        .iter()
+        .map(|(role, retained_name, role_name)| {
+            let target = dir.path().join(role_name);
+            if std::fs::hard_link(retained.join(retained_name), &target).is_err() {
+                std::fs::copy(retained.join(retained_name), &target).unwrap();
+            }
+            let bytes = std::fs::read(&target).unwrap();
+            let url = match *role {
+                "base_industry" => "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+                "gbbq" => "https://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+                _ => "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+            };
+            serde_json::json!({
+                "role": role,
+                "relative_path": role_name,
+                "source_url": url,
+                "acquisition_started_at": "2026-09-01T00:00:00Z",
+                "acquisition_completed_at": "2026-09-01T00:00:01Z",
+                "last_modified": null,
+                "etag": null,
+                "bytes": bytes.len(),
+                "sha256": x_data_mcp::hash::sha256(&bytes),
+            })
+        })
+        .collect();
+    let manifest = dir.path().join("manifest.json");
+    std::fs::write(
+        &manifest,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "x-data-mcp.official-file-input.v1",
+            "files": files,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let store = tempfile::tempdir().unwrap();
+    let (executor, catalog) = make_executor(&store.path().join("store"), &manifest, dir.path());
+    let outcome = execute(&executor);
+    assert!(!outcome.success);
+    let error = outcome.error.unwrap();
+    assert!(error.contains("nameless scope members"), "{error}");
+    for code in ["001235", "300728", "601206", "603302", "603361", "688688"] {
+        assert!(error.contains(code), "{error} should enumerate {code}");
+    }
+    assert!(catalog.selection_facts().unwrap().catalog_head.is_none());
 }
