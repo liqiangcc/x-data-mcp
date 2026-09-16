@@ -15,6 +15,8 @@ OHLC 保持原十进制精度。volume/amount 只有该年全部值已知且单�
 测试覆盖选定历史年度、多年、十进制尾数、缺失/未知单位、溢出/精度丢失和错误输入。
 这些测试只证明本地聚合规则，不证明真实文件parser、QFQ语义或来源完整性。
 
-本核心尚未接入OfficialFilePipeline。生产入口仍fail closed；#54、#46/#6、授权、文件一致性
-及真实文件发布/MCP闭环未完成。后续接线必须保留每年元数据，并验证来自同一实际已发布版本，
-不能把内存fixture或已有聚合核心当成生产来源通过。
+本核心已接入 bounded 治理链路：`OfficialYearlyVerifier` 以 env 装配的官方快照源为门、对固定
+已发布 daily base 重聚合验证 coverage，FG 裁定该 bounded 路径 PASS；env 未装配时生产入口仍
+fail closed。#6 默认目录裁定、获取/使用授权、文件一致性、update/backfill 真实源与默认全目录
+MCP 闭环未完成。后续扩展必须保留每年元数据，并验证来自同一实际已发布版本，不能把内存
+fixture 或已有聚合核心当成生产来源通过。
