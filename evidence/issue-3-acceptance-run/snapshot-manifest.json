@@ -1,0 +1,38 @@
+{
+  "schema": "x-data-mcp.official-file-input.v1",
+  "files": [
+    {
+      "role": "base_industry",
+      "relative_path": "base.zip",
+      "source_url": "http://www.tdx.com.cn/products/data/data/dbf/base.zip",
+      "acquisition_started_at": "2026-09-15T08:28:00Z",
+      "acquisition_completed_at": "2026-09-15T08:28:33Z",
+      "last_modified": null,
+      "etag": null,
+      "bytes": 16411232,
+      "sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6"
+    },
+    {
+      "role": "gbbq",
+      "relative_path": "gbbq.zip",
+      "source_url": "http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+      "acquisition_started_at": "2026-09-15T08:28:00Z",
+      "acquisition_completed_at": "2026-09-15T08:28:32Z",
+      "last_modified": null,
+      "etag": null,
+      "bytes": 6358077,
+      "sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"
+    },
+    {
+      "role": "day",
+      "relative_path": "hsjday.zip",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-09-15T08:28:00Z",
+      "acquisition_completed_at": "2026-09-15T08:28:33Z",
+      "last_modified": null,
+      "etag": null,
+      "bytes": 549387306,
+      "sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+    }
+  ]
+}
