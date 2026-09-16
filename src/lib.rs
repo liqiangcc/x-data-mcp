@@ -8,6 +8,7 @@ pub mod market_data;
 pub mod mcp;
 pub mod official_files;
 pub mod publish;
+pub mod qfq;
 pub mod storage;
 pub mod task;
 pub mod worker;
