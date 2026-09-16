@@ -29,7 +29,7 @@ fn projection(v: &CatalogVersion) -> Vec<Vec<Option<String>>> {
                 Exchange::Other(_) => "invalid",
             };
             let (status, code, name, reason) = match &r.industry {
-                IndustryInfo::Assigned { code, name } => {
+                IndustryInfo::Assigned { code, name, .. } => {
                     ("assigned", Some(code.clone()), Some(name.clone()), None)
                 }
                 IndustryInfo::Missing { reason } => ("missing", None, None, Some(reason.clone())),
