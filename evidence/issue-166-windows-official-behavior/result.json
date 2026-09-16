@@ -5,7 +5,7 @@
  "environment": "environment.json",
  "inputs": "inputs.json + raw/files_manifest.json",
  "observations": "raw/observations.json (transcribed official displays; every value binds a screenshot sha256)",
- "replay": "scripts/verify_issue166.py -> determinism.json (19/19 checks ok)",
+ "replay": "scripts/verify_issue166.py -> determinism.json (20/20 checks ok)",
  "phase_a_findings": {
   "field_binding": [
    "C1 = 每10股派现金额(元,含税): 600006 F10 shows '10派0.05元(含税)' at ex-date 2025-07-17 vs gen-2 record C1=0.05; 600004 shows '10派2.85元(含税)' at 2026-07-24 — uniquely binds C1",

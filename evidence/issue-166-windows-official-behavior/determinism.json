@@ -255,6 +255,13 @@
     },
     "mismatched_fields": 3
    }
+  },
+  {
+   "check": "observation screenshot references committed",
+   "ok": true,
+   "detail": {
+    "missing": []
+   }
   }
  ],
  "ok": true,

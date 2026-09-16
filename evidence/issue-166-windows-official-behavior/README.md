@@ -14,7 +14,7 @@ Windows 实机官方客户端行为验证，为 #46/#54 的 `BLOCKED_EXTERNAL_EV
   - `raw/observations.json` — 官方显示逐字段转录（每条绑定截图 sha256）
   - `raw/screenshots/` — 29 张带 sha256 manifest 的截图（大帧经 1600px/JPEG 处理；原帧 sha256 保留在 manifest）
 - `scripts/verify_issue166.py` — 确定性重放：文件 hash → .day 记录 ↔ 显示值 → 边界参考价区分 → tdxhy/incon 绑定 → 000002 复权链对比
-- `determinism.json` — 重放结果（19/19 通过）
+- `determinism.json` — 重放结果（20/20 通过）
 - `result.json` — 机器可复核对比结果与终端状态
 
 ## 采集方法

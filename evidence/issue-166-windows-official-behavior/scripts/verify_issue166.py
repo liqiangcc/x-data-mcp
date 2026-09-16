@@ -10,7 +10,7 @@ Re-checks, from committed inputs only:
      variant which must be ruled out.
 Outputs determinism.json. No network, no client required.
 """
-import hashlib, json, os, struct, sys
+import hashlib, json, os, re, struct, sys
 from decimal import Decimal, ROUND_HALF_UP
 
 EV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,7 +76,8 @@ def main():
     for f in fm['files']:
         if not f['copied']:
             continue
-        p = os.path.join(EV, 'raw', 'files', os.path.basename(f['path']))
+        base = re.split(r'[\\/]', f['path'])[-1]  # manifest paths are Windows-style
+        p = os.path.join(EV, 'raw', 'files', base)
         if sha256(p) != f['sha256']:
             bad.append(f['path'])
     check("committed file hashes", not bad, {"mismatch": bad})
@@ -86,13 +87,36 @@ def main():
     d4 = day_records(os.path.join(EV, 'raw', 'files', 'sh600004.day'))
     d2 = day_records(os.path.join(EV, 'raw', 'files', 'sz000002.day'))
 
-    # 2. .day vs transcribed displays
+    pa = obs['phase_a']
+
+    def readout(sec, date, mode='前复权'):
+        for r in pa[sec]['kline_readouts']:
+            if r['date'] == date and mode in r['mode']:
+                return r
+        raise KeyError(f"{sec} {date} {mode}")
+
+    def ohlc(r):
+        return {k: r[k] for k in 'OHLC'}
+
+    def pct_disp(r):  # "+0.07 (+0.97%)" -> "+0.97%"
+        return re.search(r'\(([^)]*%)\)', r['pct']).group(1)
+
+    def day_hex_ohlc(sec, ymd):  # decode the transcribed hex in day_records
+        r = bytes.fromhex(pa[sec]['day_records'][ymd].split()[0])
+        o, h, l, c = (v / 100 for v in struct.unpack('<IIII', r[4:20]))
+        return {'O': o, 'H': h, 'L': l, 'C': c}
+
+    # 2. .day vs transcribed displays (expectations from observations.json)
+    m = re.search(r'raw (\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+)',
+                  readout('sh.600004', '2026-07-23')['note'])
+    raw_600004_0723 = dict(zip('OHLC', (float(v) for v in m.groups())))
     pairs = [
-        ("sh.600006 20250716", d6[20250716], {'O': 7.25, 'H': 7.27, 'L': 7.22, 'C': 7.25}),
-        ("sh.600006 20250717", d6[20250717], {'O': 7.24, 'H': 7.32, 'L': 7.23, 'C': 7.32}),
-        ("sh.600004 20260723", d4[20260723], {'O': 7.92, 'H': 7.99, 'L': 7.87, 'C': 7.96}),
-        ("sh.600004 20260724", d4[20260724], {'O': 7.67, 'H': 7.74, 'L': 7.65, 'C': 7.67}),
-        ("sz.000002 20000110", d2[20000110], {'O': 10.68, 'H': 11.44, 'L': 10.55, 'C': 11.44}),
+        ("sh.600006 20250716", d6[20250716], ohlc(readout('sh.600006', '2025-07-16'))),
+        ("sh.600006 20250717", d6[20250717], ohlc(readout('sh.600006', '2025-07-17', '不复权'))),
+        ("sh.600004 20260723", d4[20260723], raw_600004_0723),
+        ("sh.600004 20260724", d4[20260724], ohlc(readout('sh.600004', '2026-07-24', '不复权'))),
+        ("sz.000002 20000110", d2[20000110], day_hex_ohlc('sz.000002', '20000110')),
+        # no display transcription exists for this bar; raw pin only
         ("sz.000002 19991229", d2[19991229], {'O': 9.53, 'H': 9.69, 'L': 9.45, 'C': 9.65}),
     ]
     for name, rec, exp in pairs:
@@ -102,26 +126,30 @@ def main():
 
     # 3. boundary-reference discrimination (displayed event-day 昨结/涨幅)
     # 600006: raw prev C 7.25, C1=0.05 -> norm 7.245->7.25 (obs +0.97%); exact-f32 -> 7.24
+    obs6_zjc = readout('sh.600006', '2025-07-16')['C']  # displayed 昨结 on event day
+    obs6_pct = pct_disp(readout('sh.600006', '2025-07-17'))
     ref_norm = r2((d6[20250716]['C'] * 10 - 0.05) / 10)
     ref_f32 = (d6[20250716]['C'] * 10 - struct.unpack('<f', bytes.fromhex('cdcc4c3d'))[0]) / 10
     check("600006 reference discriminates normalization",
-          abs(ref_norm - 7.25) < 1e-9 and r2(ref_f32) != 7.25,
+          abs(ref_norm - obs6_zjc) < 1e-9 and r2(ref_f32) != obs6_zjc,
           {"normalized_ref": ref_norm, "f32_ref": ref_f32, "f32_ref_2dp": r2(ref_f32),
-           "observed_昨结": 7.25, "observed_pct": "+0.97%"})
+           "observed_昨结": obs6_zjc, "observed_pct": obs6_pct})
     # 600004: raw prev C 7.96, served C1-equivalent 2.85 -> ref 7.675.
     # Both decimal and f32 inputs round to 7.68 (f32(0.285)=0.28499999642),
     # so it does NOT discriminate input normalization; it DOES show the
     # displayed 昨结 is the CENT-ROUNDED reference: unrounded pct would be
     # (7.67-7.675)/7.675 = -0.065% -> -0.07%, observed -0.13% <-> 昨结 7.68.
+    obs4_zjc = readout('sh.600004', '2026-07-23')['C']  # displayed 昨结 on event day
+    obs4_pct = pct_disp(readout('sh.600004', '2026-07-24'))  # "-0.13%"
     dps = 2.85 / 10
     ref4 = d4[20260723]['C'] - dps
     pct_unrounded = (d4[20260724]['C'] - ref4) / ref4 * 100
     check("600004 event-day 昨结 uses cent-rounded reference",
-          abs(r2(ref4) - 7.68) < 1e-9 and
-          abs(r2(pct_unrounded) - (-0.13)) > 0.01,
+          abs(r2(ref4) - obs4_zjc) < 1e-9 and
+          abs(r2(pct_unrounded) - float(obs4_pct.rstrip('%'))) > 0.01,
           {"ref": ref4, "ref_2dp": r2(ref4),
            "pct_if_unrounded_ref": pct_unrounded,
-           "observed_昨结": 7.68, "observed_pct": "-0.13%"})
+           "observed_昨结": obs4_zjc, "observed_pct": obs4_pct})
 
     # 4. tdxhy.cfg bindings for fixed samples
     names = dict(l.split('|', 1) for l in
@@ -131,14 +159,20 @@ def main():
             (l.split('|') for l in
              open(os.path.join(EV, 'raw', 'files', 'tdxhy.cfg'), 'rb')
              .read().decode('gbk', 'replace').splitlines() if '|' in l) if len(r) >= 6}
-    expect = {  # code: (f0, T, T_name, X, X_name, displayed L1—L2 or leaf)
-        '600000': ('1', 'T1001', '银行', 'X500102', '股份制银行', '全国性银行-股份制银行'),
-        '000001': ('0', 'T1001', '银行', 'X500102', '股份制银行', '全国性银行-股份制银行'),
-        '688318': ('1', 'T1205', '软件服务', 'X420202', '行业应用软件', '软件服务-行业应用软件'),
-        '600004': ('1', 'T090302', '机场', 'X610202', '机场', '航空机场-机场'),
-        '600006': ('1', 'T040201', '汽车整车', 'X260201', '商用载货车', '商用车-商用载货车'),
-        '000002': ('0', 'T110201', '全国地产', 'X530101', '住宅开发', '房地产—房地产开发'),
-    }
+    def leaf_name(field):  # "T1001=银行 (T11...)" -> "银行"
+        return field.split('=', 1)[1].split(' (')[0]
+
+    # code: (f0, T, T_name, X, X_name, displayed L1—L2 or leaf) — all from
+    # phase_b.samples transcriptions in observations.json
+    expect = {}
+    for s in obs['phase_b']['samples']:
+        parts = s['row'].split('|')
+        if len(parts) < 6:  # 'ABSENT' rows
+            continue
+        disp = re.sub(r'\s*\(类别=[^)]*\)$', '',
+                      s.get('ctrl_r_leaf', s.get('f10_研究行业', '')))
+        expect[s['code']] = (parts[0], parts[2], leaf_name(s['T']),
+                             parts[5], leaf_name(s['X']), disp)
     for code, (f0, t, tn, x, xn, disp) in expect.items():
         r = rows[code]
         ok = (r[0] == f0 and r[2] == t and r[5] == x
@@ -161,8 +195,8 @@ def main():
         return d2[days[i - 1]]['C'] if i else None
     ev_after = [e for e in evs if e['date'] > '2000-01-10']
     ev_incl = [e for e in evs if e['date'] >= '2000-01-10']
-    obs_evt = {'O': -8.14, 'H': -8.06, 'L': -8.15, 'C': -8.06}
-    obs_prev = {'O': -8.28, 'H': -8.27, 'L': -8.29, 'C': -8.27}
+    obs_evt = ohlc(readout('sz.000002', '2000-01-10'))
+    obs_prev = ohlc(readout('sz.000002', '1999-12-29'))
     raw_evt = {k: d2[20000110][k] for k in 'OHLC'}
     raw_prev = {k: d2[19991229][k] for k in 'OHLC'}
     def preds(norm_dp, rr=None):
@@ -207,6 +241,32 @@ def main():
     res["chain_note"] = ("unrounded affine chain must MATCH (8/8 fields); "
                          "cent-rounded-ref variant must FAIL — it predicts -8.08/-8.29 "
                          "vs observed -8.06/-8.27, ruling out per-event cent rounding")
+
+    # 6. every screenshot reference in observations.json must resolve to a
+    #    committed, manifest-pinned capture
+    shots_man = json.load(open(os.path.join(EV, 'raw', 'screenshots', 'manifest.json')))
+    def shot_refs(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k == 'transcribed_from':
+                    yield v
+                elif k == 'shots':
+                    for s in v:
+                        yield 'screenshots/' + s
+                else:
+                    yield from shot_refs(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from shot_refs(v)
+    missing = []
+    for t in sorted(set(shot_refs(obs))):
+        base = re.split(r'[\\/]', t)[-1]
+        if base not in shots_man or not os.path.exists(
+                os.path.join(EV, 'raw', 'screenshots', base)):
+            missing.append(t)
+    check("observation screenshot references committed", not missing,
+          {"missing": missing})
+
     out = os.path.join(EV, 'determinism.json')
     json.dump(res, open(out, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     print(json.dumps({"ok": res['ok'],

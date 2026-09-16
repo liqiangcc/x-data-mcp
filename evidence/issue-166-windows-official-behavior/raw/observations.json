@@ -83,7 +83,7 @@
      "L": -8.15,
      "C": -8.06,
      "pct": "+0.12 (+1.47%)",
-     "transcribed_from": "screenshots/chart-000002-fq-20000110.png"
+     "transcribed_from": "screenshots/chart-000002-fq-event-20000110.png"
     },
     {
      "mode": "前复权",
@@ -228,7 +228,7 @@
     "ctrl_r_leaf": "商用车-商用载货车 (类别=行业最相似)",
     "shots": [
      "sector-600006.jpg",
-     "f10-600006-peers.jpg"
+     "f10-600006-peers.png"
     ]
    },
    {
