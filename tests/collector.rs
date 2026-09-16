@@ -55,6 +55,7 @@ impl FakeSource {
                 acquired_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
                 adapter_version: "test".into(),
                 yearly_derivation: None,
+                snapshot_inputs: None,
             },
             coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
             unit_currency: x_data_mcp::market_data::UnitCurrencyEvidence::confirmed(

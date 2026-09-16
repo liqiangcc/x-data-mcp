@@ -684,6 +684,7 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
     Ok(receipt)
 }
 
+pub(crate) mod collection;
 pub(crate) mod gaps;
 pub(crate) mod update;
 pub(crate) mod yearly_results;

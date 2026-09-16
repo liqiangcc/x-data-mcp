@@ -56,6 +56,7 @@ impl EffectiveVersion {
             acquired_at: self.published_at,
             adapter_version: "effective-publish".into(),
             yearly_derivation: self.yearly_derivation.clone(),
+            snapshot_inputs: None,
         }
     }
 }

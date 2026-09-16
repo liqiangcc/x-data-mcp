@@ -231,6 +231,39 @@ fn decrypt_record_with_keys(keys: &[u8], record: &[u8; RECORD_BYTES]) -> [u8; RE
     clear
 }
 
+/// Inverse of `decrypt_record` over the same pinned key table — Feistel
+/// rounds replayed in reverse order. Exists for fixture construction in
+/// integration tests; never used by the read path.
+#[doc(hidden)]
+pub fn encrypt_record(clear: &[u8; RECORD_BYTES]) -> [u8; RECORD_BYTES] {
+    let keys = key_table();
+    let p = |i: usize| u32::from_le_bytes(keys[i * 4..i * 4 + 4].try_into().unwrap());
+    let f = |num: u32| -> u32 {
+        let index =
+            |offset: usize| u32::from_le_bytes(keys[offset..offset + 4].try_into().unwrap());
+        let mut eax = index(((num & 0xff0000) >> 16) as usize * 4 + 0x448);
+        eax = eax.wrapping_add(index((num >> 24) as usize * 4 + 0x48));
+        eax ^= index(((num & 0xff00) >> 8) as usize * 4 + 0x848);
+        eax = eax.wrapping_add(index((num & 0xff) as usize * 4 + 0xC48));
+        eax
+    };
+    let mut out = [0u8; RECORD_BYTES];
+    for block in 0..3 {
+        let start = block * 8;
+        let mut numold = u32::from_le_bytes(clear[start..start + 4].try_into().unwrap()) ^ p(0);
+        let mut num = u32::from_le_bytes(clear[start + 4..start + 8].try_into().unwrap());
+        for j in 1..17usize {
+            let next = num ^ f(numold) ^ p(j);
+            num = numold;
+            numold = next;
+        }
+        out[start..start + 4].copy_from_slice(&(num ^ p(17)).to_le_bytes());
+        out[start + 4..start + 8].copy_from_slice(&numold.to_le_bytes());
+    }
+    out[24..].copy_from_slice(&clear[24..]);
+    out
+}
+
 /// Decode one encrypted record into an `Event`.
 pub fn decode_record(index: usize, record: &[u8; RECORD_BYTES]) -> Result<Event, Error> {
     event_from_clear(index, &decrypt_record(record))
