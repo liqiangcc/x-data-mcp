@@ -1,0 +1,18 @@
+{
+ "runs": [
+  {
+   "worktree": "/home/box/x-data-mcp-gbbq54",
+   "freeze_commit": "d5e74af",
+   "result_sha256": "491af31b4639cb8b017d52b1d9d234917a3ffd97026910c0f4d44f93fa9266c1"
+  },
+  {
+   "worktree": "/tmp/qfq-repro",
+   "freeze_commit": "d5e74af",
+   "result_sha256": "491af31b4639cb8b017d52b1d9d234917a3ffd97026910c0f4d44f93fa9266c1"
+  }
+ ],
+ "byte_identical": true,
+ "python": "3.13.5",
+ "network_requests_during_replay": 0,
+ "unit_tests": "8/8 PASS"
+}

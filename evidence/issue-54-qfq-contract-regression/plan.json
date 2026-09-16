@@ -1,0 +1,102 @@
+{
+ "plan_id": "issue-54-qfq-contract-regression",
+ "issues": [
+  "#54"
+ ],
+ "frozen_at_utc": "2026-09-16",
+ "upstream_evidence": [
+  "evidence/issue-54-gbbq-full-events (merged 4b20162; result.json sha256 934d64d9c832e34ea7a882c156c55191d829f03bf9e2789cbd0d7a6c0f72dad7)",
+  "evidence/issue-166-windows-official-behavior (merged 7d80be6) — accepted official client behavior contract",
+  "evidence/issue-3-cross-stock-qfq (#53; frozen BaoStock probe + validation)"
+ ],
+ "ruling": "FG ruling comment-5690661520: external blocker lifted by #167 behavior evidence; contract below is ACCEPTED, no changes, no tuning. This slice regressions it against the full frozen event domain + gen-2 .day.",
+ "contract_under_test": {
+  "field_roles": {
+   "C1": "每10股派现(元,含税) — bound by #167 F10 displays",
+   "C2": "配股价(元) — bound by #167 F10 display",
+   "C3": "每10股送转数 — INDIRECT: role constrained only via 000002 multi-event chain behavior; caveat must remain",
+   "C4": "每10股配股数 — bound by #167 F10 display (stored 2.727 vs displayed 2.73)"
+  },
+  "input_normalization": "each C field: float32 -> Decimal(str(float(Decimal(exact_binary_string)))) -> quantize(0.01, ROUND_HALF_UP); exact-binary f32 tails excluded",
+  "event_reference": "ref = (prev_close - C1/10 + C4*C2/10) / ((10+C3+C4)/10); displayed 昨结口径 = ref_cent = quantize(ref, 0.01, ROUND_HALF_UP); prev_close = raw .day close of the bar immediately before the event",
+  "qfq_chain": "front-adjustment for a bar at date d = affine composition over events with event_date > d, accumulated oldest->newest: A=A/s, B=(B-d_+a_)/s with d_=C1/10, a_=C4*C2/10, s=(10+C3+C4)/10; NO intermediate cent rounding; anchored at latest bar",
+  "arithmetic": "Decimal, context precision 50; all displayed comparisons quantize(0.01, ROUND_HALF_UP); source-precision comparisons quantize(1E-10)"
+ },
+ "inputs": {
+  "committed_files": {
+   "evidence/issue-54-gbbq-full-events/result.json": {
+    "sha256": "934d64d9c832e34ea7a882c156c55191d829f03bf9e2789cbd0d7a6c0f72dad7",
+    "role": "94 frozen events, four-security matrix, raw bits + prev_close + event_day_bar"
+   },
+   "evidence/issue-166-windows-official-behavior/raw/observations.json": {
+    "sha256": "51d6f8315367eda9f40798bc90518a7e11ee308f55f638504625de4458bb2187",
+    "role": "official client transcriptions: 6 qfq bars + event-day reference oracles"
+   },
+   "evidence/issue-166-windows-official-behavior/raw/files/sh600006.day": {
+    "sha256": "c1f9850ce26daca380904fe254626402e2cbcaf2968f73a1181a89f882a0117a",
+    "role": "#166 client-downloaded .day; cross-check vs gen-2 hsjday member"
+   },
+   "evidence/issue-166-windows-official-behavior/raw/files/sh600004.day": {
+    "sha256": "7dde98bd5249e67da1f6fe166fdf57237b6deb50f8d70f379115a5e5677cdcda",
+    "role": "#166 client-downloaded .day; cross-check vs gen-2 hsjday member"
+   },
+   "evidence/issue-166-windows-official-behavior/raw/files/sz000002.day": {
+    "sha256": "b9a9d2f980cab6efe6cfcb57766f64379af62c496d90f4f457f29d86b6894613",
+    "role": "#166 client-downloaded .day; cross-check vs gen-2 hsjday member"
+   },
+   "evidence/issue-3-cross-stock-qfq/baostock-valid-probe.json": {
+    "sha256": "280ed0df2464c8a59a5f1c68ad389607ac28a7acdd9f7b400fdb91bbb0835e42",
+    "role": "frozen BaoStock qfq rows incl. preclose (adjustflag=2, window 2025-01-01..2026-09-10)"
+   }
+  },
+  "retained_files": {
+   "/home/box/retained-inputs/official-hsjday.zip": {
+    "sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+    "members": [
+     "sh\\lday\\sh600004.day",
+     "sh\\lday\\sh600006.day",
+     "sz\\lday\\sz000002.day",
+     "sz\\lday\\sz000004.day"
+    ]
+   }
+  }
+ },
+ "frozen_rules": {
+  "day_decode": "32-byte records; date=uint32le@0; O/H/L/C=uint32le@4..20 /100; amount=float32@20; vol=uint32@24 (community layout, machine-verified against committed transcriptions)",
+  "per_event_reference": {
+   "for each of the 94 frozen events": "compute normalized C, prev_close (re-decoded from .day member, cross-checked vs matrix previous_close), ref, ref_cent",
+   "oracle": "event-day 昨结口径 = (a) BaoStock qfq preclose de-chained: observed_ref = preclose_BS(event_day) * product over later in-window events j of (prev_close_raw(j)/preclose_BS(day_j)); quantized to 0.01 before compare; (b) #167 client-transcribed 昨结 (600006: 7.25 on 2025-07-17; 600004: 7.68 on 2026-07-24)",
+   "statuses": "MATCH | MISMATCH_UNEXPLAINED | NO_ORACLE (event outside frozen BaoStock window and no client transcription) | NO_EVENT_DAY_BAR (event_date_in_day=false)"
+  },
+  "chain_reproduction": {
+   "client_oracle_bars": "6 bars from #167 observations.json (mode 前复权): sh.600006 2025-07-16/2025-07-17, sh.600004 2026-07-23/2026-07-24, sz.000002 2000-01-10/1999-12-29; compare r2(pred) to transcribed OHLC — a mismatch here is a contract failure, not explainable",
+   "baostock_window": "for every .day bar date in the frozen window with a BaoStock row: pred = A(d)*raw + B(d); compare vs source_qfq_value per field — EXACT_10DP | DISPLAY_MATCH_2DP | MODEL_DIVERGENCE_BAOSTOCK | UNEXPLAINED",
+   "divergence_rule": "a divergence is MODEL_DIVERGENCE_BAOSTOCK (explained) iff the BaoStock multiplicative-cent model reconstructed from observed preclose/prev_close factor chain reproduces source_qfq/raw within 1e-6 per date (BS per-event factors are ~6dp quantized); otherwise UNEXPLAINED",
+   "suspension_placeholder_rule": "BaoStock rows with open==high==low==close==preclose and volume=='' and amount=='' and no .day bar -> SUSPENSION_PLACEHOLDER (#53 semantics); never counted as mismatch"
+  },
+  "c3_report": "count events with normalized C3 != 0; for each, record whether any oracle bar predates it (chain exercised) — indirect exercise only, caveat preserved",
+  "consistency": "gen-2 .day member vs #166 committed .day copies (byte equality for the 3 overlapping securities); matrix previous_close/event_day_bar vs re-decoded .day"
+ },
+ "status_taxonomy": [
+  "MATCH",
+  "MISMATCH_UNEXPLAINED",
+  "MODEL_DIVERGENCE_BAOSTOCK",
+  "NO_ORACLE",
+  "NO_EVENT_DAY_BAR",
+  "SUSPENSION_PLACEHOLDER",
+  "EXACT_10DP",
+  "DISPLAY_MATCH_2DP"
+ ],
+ "acceptance": "zero MISMATCH_UNEXPLAINED / zero UNEXPLAINED across all checks; all #167 client-oracle bars must MATCH; every non-match item listed per-item (code/date/field/predicted/observed/class)",
+ "prohibited": [
+  "no tuning or candidate search",
+  "no new samples or downloads",
+  "no changes to #159 frozen event set",
+  "no src/ changes",
+  "no deletion/rewrite of old failure evidence"
+ ],
+ "outputs": {
+  "result": "result.json",
+  "determinism": "two clean-checkout runs, byte-identical; determinism.json"
+ }
+}
