@@ -20,10 +20,12 @@ schemars = { version = "1", features = ["chrono04"] }
 # Exact rational final rounding for the bounded Stage D algorithm.
 num-bigint = "0.4"
 num-traits = "0.2"
+encoding_rs = "0.8.41"
 
 [dev-dependencies]
 # Validate generated wire schemas against real stdio results; no HTTP schema resolution.
 jsonschema = { version = "0.33", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Reuse the already locked libc for fd-based local-filesystem verification.
