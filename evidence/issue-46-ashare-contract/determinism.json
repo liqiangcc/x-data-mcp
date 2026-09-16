@@ -1,0 +1,20 @@
+{
+ "runs": [
+  {
+   "checkout": "/home/box/x-data-mcp-tdxhy46",
+   "commit": "cfa62f6",
+   "sha256": "e9329bb714e2bc06f6378e08218b89da230e43276f133b61e3fb82d82c810cc8"
+  },
+  {
+   "checkout": "/tmp/t46-repro",
+   "commit": "cfa62f6",
+   "sha256": "e9329bb714e2bc06f6378e08218b89da230e43276f133b61e3fb82d82c810cc8"
+  }
+ ],
+ "byte_identical": true,
+ "result_sha256": "e9329bb714e2bc06f6378e08218b89da230e43276f133b61e3fb82d82c810cc8",
+ "result_bytes": 5168,
+ "python": "3.13.5",
+ "network_during_replay": 0,
+ "command": "python3 scan_ashare_contract.py; python3 scan_ashare_contract.py --check result.json"
+}

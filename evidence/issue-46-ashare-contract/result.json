@@ -1,0 +1,286 @@
+{
+ "ac_verdicts": {
+  "AC-01": "VERIFIED_MECHANICAL",
+  "AC-02": "PARTIAL — identity/name join works; 6 members lack a name row anywhere in base.zip",
+  "AC-03": "VERIFIED_MECHANICAL — every S member resolves X L2/L1 at declared level; 688688 f2=T00 unbound",
+  "AC-04": "VERIFIED_MECHANICAL — anomalies enumerated, none suppressed",
+  "AC-05": "VERIFIED_MECHANICAL — fixed samples replayed",
+  "AC-06": "REPORTED — see sections; gen-1/gen-2 drift per #161 findings",
+  "AC-07": "REPORTED — implementable vs blocked table in contract doc"
+ },
+ "checks": [
+  {
+   "check": "input pins (archives + members)",
+   "detail": {
+    "mismatch": []
+   },
+   "ok": true
+  },
+  {
+   "check": "binding.json pin",
+   "detail": {
+    "sha256": "67508fca508362eae967a40777fd117e580c47ab7dc101f494e1e3f6960d42e0"
+   },
+   "ok": true
+  },
+  {
+   "check": "member shape",
+   "detail": {
+    "base.dbf": 8875,
+    "base.map": 8875,
+    "ex.code": 5571,
+    "ex.name": 3245,
+    "tdxhy": 5659,
+    "tdxhy2": 6754
+   },
+   "ok": true
+  },
+  {
+   "check": "tdxhy f0 enum {0,1,2}",
+   "detail": {
+    "dist": {
+     "0": 2946,
+     "1": 2365,
+     "2": 348
+    }
+   },
+   "ok": true
+  },
+  {
+   "check": "f3/f4 always empty",
+   "detail": {
+    "rows": 5659
+   },
+   "ok": true
+  },
+  {
+   "check": "scope S defined and members unique",
+   "detail": {
+    "S": 5230,
+    "b_share_200_900": 78,
+    "bj_rows": 348,
+    "excluded_empty_T_or_X": 81,
+    "other_excluded_codes": [
+     "002710",
+     "002720",
+     "201872"
+    ]
+   },
+   "ok": true
+  },
+  {
+   "check": "no B-share code inside S",
+   "detail": {},
+   "ok": true
+  },
+  {
+   "check": "delisted 000004 absent from tdxhy, present in tdxhy2/base.dbf",
+   "detail": {},
+   "ok": true
+  },
+  {
+   "check": "name coverage: S members without ex.code name row",
+   "detail": {
+    "S": 5230,
+    "covered": 5224,
+    "missing": [
+     "001235",
+     "300728",
+     "601206",
+     "603302",
+     "603361",
+     "688688"
+    ]
+   },
+   "ok": true
+  },
+  {
+   "check": "missing-name codes also absent from ex.name (no name anywhere)",
+   "detail": {},
+   "ok": true
+  },
+  {
+   "check": "ex.code name field non-empty for covered members",
+   "detail": {
+    "dup_names": [],
+    "empty": []
+   },
+   "ok": true
+  },
+  {
+   "check": "base.dbf/base.map duplicate codes enumerated",
+   "detail": {
+    "base.dbf": [
+     "000020",
+     "200020"
+    ],
+    "base.map": [
+     "000020",
+     "200020"
+    ]
+   },
+   "ok": true
+  },
+  {
+   "check": "S subset of base.dbf and base.map code fields",
+   "detail": {
+    "only_in_S_vs_dbf": [],
+    "only_in_S_vs_map": []
+   },
+   "ok": true
+  },
+  {
+   "check": "ex.code non-S surplus is exactly the 920 BJ block",
+   "detail": {
+    "ex.code_not_S": 347
+   },
+   "ok": true
+  },
+  {
+   "check": "ex.name is not an A-share name source",
+   "detail": {
+    "ex.name_rows": 3245,
+    "ex.name_rows_in_S": 304
+   },
+   "ok": true
+  },
+  {
+   "check": "every S f5 leaf resolves in TDXRSHY at declared level",
+   "detail": {
+    "leaf_not_in_dict": [],
+    "level_mismatch": []
+   },
+   "ok": true
+  },
+  {
+   "check": "every S f5 L2/L1 prefix resolves at declared level",
+   "detail": {
+    "l1_fail": [],
+    "l2_fail": []
+   },
+   "ok": true
+  },
+  {
+   "check": "every S f2 resolves in TDXNHY (residual enumerated)",
+   "detail": {
+    "f2_not_in_dict": [
+     "688688"
+    ],
+    "note": "688688 f2=T00 degenerate value; X side resolves"
+   },
+   "ok": true
+  },
+  {
+   "check": "fixed samples row strings match #167 transcriptions",
+   "detail": {
+    "mismatch": []
+   },
+   "ok": true
+  },
+  {
+   "check": "gen-2 members byte-identical to Windows V7.73 live copies",
+   "detail": {
+    "member_sha_vs_windows": {
+     "incon.dat": true,
+     "tdxhy.cfg": true,
+     "tdxzs3.cfg": true
+    }
+   },
+   "ok": true
+  }
+ ],
+ "ok": true,
+ "scope": {
+  "S": 5230,
+  "excluded": {
+   "b_share": [
+    "200011",
+    "200012",
+    "200016",
+    "200017",
+    "200019",
+    "200020",
+    "200025",
+    "200026",
+    "200028",
+    "200029",
+    "200030",
+    "200037",
+    "200045",
+    "200055",
+    "200056",
+    "200058",
+    "200429",
+    "200468",
+    "200488",
+    "200505",
+    "200512",
+    "200521",
+    "200530",
+    "200539",
+    "200541",
+    "200550",
+    "200553",
+    "200570",
+    "200581",
+    "200596",
+    "200625",
+    "200706",
+    "200725",
+    "200726",
+    "200761",
+    "200869",
+    "200992",
+    "900901",
+    "900902",
+    "900903",
+    "900904",
+    "900905",
+    "900906",
+    "900908",
+    "900909",
+    "900910",
+    "900911",
+    "900912",
+    "900913",
+    "900914",
+    "900915",
+    "900916",
+    "900917",
+    "900918",
+    "900920",
+    "900921",
+    "900922",
+    "900923",
+    "900924",
+    "900925",
+    "900926",
+    "900927",
+    "900928",
+    "900929",
+    "900932",
+    "900934",
+    "900936",
+    "900937",
+    "900938",
+    "900939",
+    "900940",
+    "900941",
+    "900942",
+    "900943",
+    "900945",
+    "900946",
+    "900947",
+    "900948"
+   ],
+   "bj": 348,
+   "other_empty_TX": [
+    "002710",
+    "002720",
+    "201872"
+   ]
+  },
+  "rule": "f0 in {'0','1'} AND f2 non-empty AND f5 non-empty"
+ },
+ "status": "MECHANICAL_ACCEPTANCE_DONE"
+}
