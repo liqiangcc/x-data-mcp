@@ -100,14 +100,15 @@ impl DataApi {
                 )?,
             },
             access,
-            market_source: None,
+            market_source: crate::official_market::TdxMarketSource::from_env(),
             #[cfg(target_os = "linux")]
             worker_gate: None,
         })
     }
-    /// Install an inspect()-verified official-file snapshot source. Only the
-    /// market.daily collection item uses it; production installs none, so the
-    /// BlockedSource refusal and PRODUCTION_BLOCKERS gates are unchanged.
+    /// Override the env-installed official-file snapshot source (tests).
+    /// Only the market.daily collection item uses it; absent env installs
+    /// none, so the BlockedSource refusal and PRODUCTION_BLOCKERS gates are
+    /// unchanged.
     pub fn with_market_source(mut self, source: crate::official_market::TdxMarketSource) -> Self {
         self.market_source = Some(source);
         self
