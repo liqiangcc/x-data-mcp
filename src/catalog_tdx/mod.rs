@@ -13,4 +13,5 @@ pub mod compose;
 pub mod ex_code;
 pub mod incon;
 pub mod scope;
+pub mod source;
 pub mod tdxhy;

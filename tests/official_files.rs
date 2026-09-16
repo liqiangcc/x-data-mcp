@@ -84,8 +84,8 @@ fn official_pipeline_reports_every_unresolved_gate_for_both_operations() {
         assert!(message.contains("NOT_PRODUCTION_READY"));
         // Independent requirements from Issue #55; do not infer them from the adapter list.
         for gate in [
-            "CATALOG_INDUSTRY_NOT_VERIFIED",
-            "#6/#46",
+            "CATALOG_PUBLISH_NOT_VERIFIED",
+            "#6",
             "GBBQ_QFQ_NOT_VERIFIED",
             "#54",
             "FILE_ACCESS_USE_NOT_VERIFIED",

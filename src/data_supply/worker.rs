@@ -34,6 +34,15 @@ pub fn run_once(
         )?;
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
     }
+    if candidate.task.key.dataset == "securities.catalog" {
+        // The catalog item executes against an inspected official-file
+        // snapshot only when the input location is configured; absent
+        // configuration retains the source refusal.
+        return match crate::catalog_tdx::source::TdxCatalogExecutor::from_env(market) {
+            Some(executor) => Ok(control.run_selected(candidate, &executor)?),
+            None => Ok(control.run_selected(candidate, &crate::official_files::BlockedSource)?),
+        };
+    }
     if !matches!(
         candidate.task.key.operation.as_str(),
         "update_data" | "backfill_data"

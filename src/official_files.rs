@@ -8,7 +8,7 @@ use crate::{
 /// BR-SOURCE-001: unverified official-file inputs must not enter production.
 /// Each item remains unresolved; these are not runtime configuration switches.
 pub const PRODUCTION_BLOCKERS: &[&str] = &[
-    "CATALOG_INDUSTRY_NOT_VERIFIED (#6/#46: official-file Shanghai/Shenzhen A-share identity and TDX research industry level 2)",
+    "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run)",
     "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
     "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
     "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)",

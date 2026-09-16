@@ -69,3 +69,53 @@ fn catalog_read_does_not_initialize() {
     assert!(SqliteCatalog::new(SqliteTasks::new(&p)).fixed("x").is_err());
     assert!(!p.exists());
 }
+
+fn official_snapshot() -> CatalogSnapshot {
+    let mut snapshot = fixture();
+    let source = "official-file:dcdf6b4989892667".to_string();
+    snapshot.source = source.clone();
+    for record in &mut snapshot.records {
+        record.source = source.clone();
+    }
+    snapshot
+}
+#[test]
+fn publish_official_binds_manifest_sha_and_keeps_expected_head() {
+    let d = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(d.path().join("db"));
+    tasks.initialize().unwrap();
+    let store = SqliteCatalog::new(tasks);
+    for bad_source in ["fixture:catalog", "official-file:", "official-file:XYZ"] {
+        let mut snapshot = official_snapshot();
+        snapshot.source = bad_source.into();
+        for record in &mut snapshot.records {
+            record.source = bad_source.into();
+        }
+        assert!(
+            matches!(
+                store.publish_official(snapshot, None, chrono::Utc::now()),
+                Err(Error::Invalid(_))
+            ),
+            "{bad_source} must not pass the binding gate"
+        );
+    }
+    assert!(store.selection_facts().unwrap().catalog_head.is_none());
+    let id = store
+        .publish_official(official_snapshot(), None, chrono::Utc::now())
+        .unwrap();
+    assert!(id.starts_with("catalog-"));
+    assert_eq!(
+        store.fixed(&id).unwrap().source,
+        "official-file:dcdf6b4989892667"
+    );
+    // expected-head optimistic lock: a stale expected id conflicts, the
+    // published head is retained.
+    assert!(matches!(
+        store.publish_official(official_snapshot(), Some("stale"), chrono::Utc::now()),
+        Err(Error::Conflict(_))
+    ));
+    assert_eq!(
+        store.selection_facts().unwrap().catalog_head.as_deref(),
+        Some(id.as_str())
+    );
+}
