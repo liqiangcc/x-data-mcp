@@ -1130,3 +1130,193 @@ fn service_yearly_fail_closed_paths() {
         "expected source-install refusal, got {error:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// update_data market.daily against the installed snapshot source (#183):
+// TdxRangeProvider delivers the accepted range as a verified segment.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn range_provider_delivers_segment_with_snapshot_basis() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let r = accept_daily(&market, "run-a", "sh", "600006");
+    let snap = valid_snapshot();
+    let src = make_source(&snap);
+    let runner = TdxDailyRunner {
+        source: &src,
+        repository: market.clone(),
+        run_id: "run-a".into(),
+        published_at: now(),
+    };
+    let ItemExecution::Published(receipt) = runner.run_item(&r.task_id, &r.item_id).unwrap() else {
+        panic!("expected publication")
+    };
+    let base = market.fixed(&receipt.version_id).unwrap();
+    let provider = x_data_mcp::official_market::TdxRangeProvider { source: &src };
+
+    let range = x_data_mcp::market_update::DateRange {
+        start: chrono::NaiveDate::from_ymd_opt(2025, 7, 16).unwrap(),
+        end: chrono::NaiveDate::from_ymd_opt(2025, 7, 16).unwrap(),
+    };
+    let acquired =
+        x_data_mcp::market_update::runner::RangeProvider::acquire(&provider, &base, &range, "cand")
+            .unwrap();
+    assert_eq!(acquired.batch.bars.len(), 1);
+    assert_eq!(acquired.batch.bars[0].date, range.start);
+    assert!(acquired.combined.is_none());
+    // The segment keeps the inspected-snapshot coverage claim unchanged so an
+    // identical range reports no metadata change.
+    assert_eq!(
+        serde_json::to_value(&acquired.batch.coverage).unwrap(),
+        base.raw()["batch"]["coverage"]
+    );
+    let evidence = &acquired.evidence;
+    assert_eq!(evidence.base_version_id, receipt.version_id);
+    assert_eq!(
+        evidence.base_integrity_sha256,
+        base.raw()["integrity_sha256"].as_str().unwrap()
+    );
+    assert_eq!(
+        evidence.candidate_sha256,
+        x_data_mcp::market_update::candidate_digest(&acquired.batch).unwrap()
+    );
+    assert_eq!(evidence.range, range);
+    assert!(evidence.same_qfq_basis_ref.contains(src.manifest_sha256()));
+    assert!(evidence.revision_ref.is_none());
+
+    // A range the snapshot does not cover fails closed, never empty-approves.
+    let outside = x_data_mcp::market_update::DateRange {
+        start: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+        end: chrono::NaiveDate::from_ymd_opt(2000, 1, 2).unwrap(),
+    };
+    assert!(matches!(
+        x_data_mcp::market_update::runner::RangeProvider::acquire(
+            &provider, &base, &outside, "cand"
+        ),
+        Err(SourceError::InvalidResponse(_))
+    ));
+}
+
+#[test]
+fn service_env_install_update_data_no_change_and_fail_closed() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(snap) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; update e2e skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let manifest_path = dir.path().join("snapshot-manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let scope = Scope {
+        symbol: "sz.000002".into(),
+        period: Period::Day,
+    };
+
+    // Publish the daily base directly (explicit source, no env) so the no-env
+    // leg can observe a real fixed base being refused.
+    let r = accept_daily(&market, "run-a", "sz", "000002");
+    let src = make_source(&snap);
+    let runner = TdxDailyRunner {
+        source: &src,
+        repository: market.clone(),
+        run_id: "run-a".into(),
+        published_at: now(),
+    };
+    let ItemExecution::Published(receipt) = runner.run_item(&r.task_id, &r.item_id).unwrap() else {
+        panic!("expected publication")
+    };
+    let head = market.effective_head(&scope).unwrap().unwrap();
+    assert_eq!(head, receipt.version_id);
+
+    let update_request = |request_id: &str| json!({"dataset":"market.daily","request_id":request_id,"contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_version_id":head,"start_date":"2000-01-10","end_date":"2000-01-10"}]});
+    let item_error = |task_id: &str| {
+        market.task(task_id).unwrap().items[0]
+            .outcome
+            .as_ref()
+            .unwrap()
+            .error
+            .clone()
+            .unwrap()
+    };
+
+    // No env: the installed source is absent, so update keeps the refusal.
+    let _absent = EnvReset::absent();
+    let api = DataApi::new(tasks.clone(), "run".into(), Access::local()).unwrap();
+    let upd = api.call("update_data", update_request("u-noenv")).unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    blocked_outcome(Some(item_error(upd["task_id"].as_str().unwrap())));
+
+    // env installed: the real provider answers an identical segment → the
+    // update is a verified no-change bound to the fixed base.
+    drop(_absent);
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+    let api = DataApi::new(tasks.clone(), "run-env".into(), Access::local()).unwrap();
+    let upd = api.call("update_data", update_request("u-1")).unwrap();
+    let task_id = upd["task_id"].as_str().unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let task = market.task(task_id).unwrap();
+    assert!(
+        task.items[0].outcome.as_ref().unwrap().success,
+        "update item failed: {:?}",
+        task.items[0].outcome
+    );
+    let progress = api
+        .call("get_task_progress", json!({"task_id":task_id}))
+        .unwrap();
+    let result = &progress["range_results"][0];
+    assert_eq!(result["no_change"], json!(true));
+    assert_eq!(result["base_version"]["version_id"], json!(head));
+    assert_eq!(result["result_version"]["version_id"], json!(head));
+    assert_eq!(market.versions(&scope).unwrap().len(), 1);
+    assert_eq!(
+        market.effective_head(&scope).unwrap().as_deref(),
+        Some(head.as_str())
+    );
+
+    // Same frozen inputs under a new request id reuse the receipt and never
+    // create a second version.
+    let again = api.call("update_data", update_request("u-2")).unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let task = market.task(again["task_id"].as_str().unwrap()).unwrap();
+    assert!(task.items[0].outcome.as_ref().unwrap().success);
+    assert_eq!(market.versions(&scope).unwrap().len(), 1);
+    assert_eq!(
+        market.effective_head(&scope).unwrap().as_deref(),
+        Some(head.as_str())
+    );
+
+    // backfill never borrows the refresh provider: gap-only semantics differ,
+    // so it keeps the blocked source refusal even with env installed.
+    let bf = api.call("backfill_data", update_request("b-1")).unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    blocked_outcome(Some(item_error(bf["task_id"].as_str().unwrap())));
+
+    // An accepted base whose durable record no longer matches its pinned
+    // digest fails closed before acquisition.
+    let upd = api
+        .call("update_data", update_request("u-tampered"))
+        .unwrap();
+    rusqlite::Connection::open(market.tasks.path())
+        .unwrap()
+        .execute(
+            "UPDATE data_versions SET content_digest='tampered' WHERE version_id=?1",
+            [&head],
+        )
+        .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let error = item_error(upd["task_id"].as_str().unwrap());
+    assert!(
+        error.contains("INTEGRITY"),
+        "expected integrity refusal, got {error:?}"
+    );
+}
