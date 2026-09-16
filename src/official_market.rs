@@ -20,8 +20,12 @@ use crate::{
     },
     market_storage::{
         Error, MarketRepository, Publication, PublishIntent, Publisher, Receipt, Scope,
+        compat::CheckedRecord,
     },
-    market_update::runner::ItemExecution,
+    market_update::{
+        DateRange, Evidence,
+        runner::{Acquisition, ItemExecution, RangeProvider},
+    },
     publish::{self, EffectiveVersion},
     qfq,
     snapshot::{self, FileInput, FileRole},
@@ -285,6 +289,77 @@ impl MarketDataPipeline for TdxMarketSource {
         Err(SourceError::Unsupported(
             "yearly is derived from published daily by the yearly path, not a source fetch".into(),
         ))
+    }
+}
+
+/// Range-update provider for `update_data`/`market.daily` (#183): re-reads
+/// the fixed security's complete QFQ history from the installed inspected
+/// snapshot and delivers the accepted range as the verified segment.
+///
+/// `combined` stays `None`: with a single snapshot generation there is no
+/// independent whole-range coverage evidence, so any changed result fails
+/// closed at `NEEDS_VERIFICATION` — an honest limit, not a gap. The
+/// materialized coverage evidence is kept verbatim; the accepted range and
+/// the snapshot binding are carried by the `Evidence` instead (a differing
+/// reason would mark every update `metadata_changed` and force
+/// `NEEDS_VERIFICATION` even for an identical segment).
+///
+/// `backfill_data` never reaches this provider: its frozen gap-only
+/// semantics differ from refresh, so the worker keeps it on the blocked
+/// provider rather than letting it borrow the refresh path.
+pub struct TdxRangeProvider<'a> {
+    pub source: &'a TdxMarketSource,
+}
+
+impl RangeProvider for TdxRangeProvider<'_> {
+    fn acquire(
+        &self,
+        base: &CheckedRecord,
+        range: &DateRange,
+        _candidate_id: &str,
+    ) -> Result<Acquisition, SourceError> {
+        let mut batch = self.source.materialize_daily(&base.version().symbol)?;
+        batch
+            .bars
+            .retain(|b| range.start <= b.date && b.date <= range.end);
+        if batch.bars.is_empty() {
+            return Err(SourceError::InvalidResponse(
+                "snapshot carries no bars inside the accepted range".into(),
+            ));
+        }
+        let gbbq = batch
+            .provenance
+            .snapshot_inputs
+            .as_ref()
+            .and_then(|inputs| inputs.iter().find(|i| i.role == "gbbq"))
+            .ok_or_else(|| {
+                SourceError::InvalidResponse("snapshot binding lacks the gbbq member".into())
+            })?;
+        Ok(Acquisition {
+            evidence: Evidence {
+                base_version_id: base.version().version_id.clone(),
+                base_integrity_sha256: base.raw()["integrity_sha256"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        SourceError::NotVerified("fixed base carries no integrity digest".into())
+                    })?
+                    .into(),
+                candidate_sha256: crate::market_update::candidate_digest(&batch)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
+                range: range.clone(),
+                // Same-QFQ-basis proof: both the base version and this
+                // segment derive from the same manifest-pinned snapshot and
+                // the same gbbq member bytes.
+                same_qfq_basis_ref: format!(
+                    "inspected snapshot manifest {} + gbbq member {}",
+                    self.source.manifest_sha256(),
+                    gbbq.member_sha256
+                ),
+                revision_ref: None,
+            },
+            batch,
+            combined: None,
+        })
     }
 }
 

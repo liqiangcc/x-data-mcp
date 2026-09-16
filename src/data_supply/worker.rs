@@ -1,7 +1,7 @@
 //! Application dispatch, never an MCP eligibility decision or source fallback.
 use crate::{
     market_storage::Error,
-    market_update::runner::{OfficialRangeProvider, RangeRunner},
+    market_update::runner::{OfficialRangeProvider, RangeProvider, RangeRunner},
     sqlite_market::SqliteMarket,
     sqlite_tasks::SqliteTasks,
     task_control::{TaskRepository, TaskSnapshot, service::TaskControl},
@@ -88,12 +88,17 @@ pub fn run_once(
         repository: market.clone(),
         run_id: control.run_id.clone(),
     };
+    let tdx = market_source.map(|source| crate::official_market::TdxRangeProvider { source });
     for item in &candidate.items {
-        runner.run_item(
-            &candidate.task.task_id,
-            &item.spec.item_id,
-            &OfficialRangeProvider,
-        )?;
+        // Only refresh (`update_data`) may run against an installed snapshot
+        // source; backfill's frozen gap-only semantics differ from refresh,
+        // so it keeps the blocked provider rather than borrow this path.
+        let provider: &dyn RangeProvider =
+            match (candidate.task.key.operation.as_str(), tdx.as_ref()) {
+                ("update_data", Some(provider)) => provider,
+                _ => &OfficialRangeProvider,
+            };
+        runner.run_item(&candidate.task.task_id, &item.spec.item_id, provider)?;
     }
     Ok(Some(control.read_task(&candidate.task.task_id)?))
 }
