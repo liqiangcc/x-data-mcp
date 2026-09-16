@@ -1,0 +1,73 @@
+{
+  "plan_id": "issue-166-windows-official-behavior",
+  "issue": "#166",
+  "refs": ["#46", "#54", "#6", "#3", "#1"],
+  "frozen_at_local": "2026-09-15T22:00+08:00",
+  "frozen_at_utc": "2026-09-15T14:00Z",
+  "baseline_commit": "0675bc2d918e551a5b3aedf14edd96c3bb7be8c3",
+  "upstream_evidence": [
+    "evidence/issue-54-gbbq-full-events (#159 frozen candidate/validation set)",
+    "evidence/issue-46-anchor-binding (#164, S1/S2 established, S3 insufficient)",
+    "evidence/issue-54-46-authority-discovery (#163)",
+    "evidence/issue-54-46-client-package-probe (#165)"
+  ],
+  "purpose": "Run the official TDX Windows client (and TQ components if actually usable) on this Windows machine and record version-bound official behavior outputs. Bind (a) displayed/exported business fields of frozen GBBQ events to the same-snapshot gbbq binary records C1..C4, and (b) displayed industry classification of fixed securities to tdxhy.cfg/tdxhy2.cfg file fields, using only official client behavior as new authoritative evidence.",
+  "source_first": "Only behavior outputs produced by the installed official client (GUI display, client export files, TQ returns if usable) count as new authoritative evidence. Community decoders, open-source implementations, prior notes and candidate hit rates are diagnostic only.",
+  "environment_summary": {
+    "os": "Microsoft Windows 10.0.26200.8875 (CurrentBuild 26200, UBR 8875)",
+    "timezone": "UTC+08:00 (China Standard Time); capture date 2026-09-15 (Tuesday)",
+    "client": "TdxW.exe 通达信金融终端 64-bit; installer wizard title 'V7.73'; install dir C:\\new_tdx64",
+    "installer": {
+      "url": "https://data.tdx.com.cn/level2/new_tdx64.exe",
+      "content_length": 185469360,
+      "last_modified_gmt": "Tue, 04 Aug 2026 08:28:37 GMT",
+      "etag": "\"6a71a2b5-b0e09b0\"",
+      "sha256": "10c523db57546e91a3b84bda7243ee47c949aa379e13c3ceae6c42c964ae0ce0",
+      "fetched_local": "2026-09-15T21:42+08:00",
+      "local_copy": "C:\\Users\\liqia\\tdx-official\\new_tdx64.exe (not committed; hash bound only)"
+    },
+    "install_note": "Client files under C:\\new_tdx64 written 2026-09-15 21:49-21:51 +08:00 during this session from the installer launched by the agent; installed instance presumed to originate from the sha256-bound installer above (same V7.73 wizard title observed). Stale registry entry pointing to empty C:\\new_tdx recorded as residue, not used.",
+    "tq_components": "TQ策略 menu present in client; NewTc/, PYPlugins/ (TPyth.dll, tdxrpcx64.dll), TcApi_Cache/ ship in install. TQ programmatic access requires TQ-enabled account; usability NOT assumed — recorded as attempted with actual outcome.",
+    "data_snapshot": "C:\\new_tdx64\\T0002\\hq_cache\\ (gbbq, gbbq.map, tdxhy.cfg, tdxzs*.cfg, base.dbf, base.map, infoharbor*, incon.dat at C:\\new_tdx64\\incon.dat) hashed at declared snapshot times in inputs.json; .day members under C:\\new_tdx64\\vipdoc\\<market>\\lday\\ hashed after the client downloads them. All result entries bind to the recorded snapshot hashes."
+  },
+  "fixed_samples": {
+    "phase_a_securities": ["sh.600004", "sh.600006", "sz.000002", "sz.000004"],
+    "phase_a_key_events": [
+      {"security": "sh.600006", "date": "2025-07-17", "category": 1, "note": "half-cent boundary; gen-2 record C1=0.05(0x3d4ccccd) C2=C3=C4=0, previous_close 7.25 (2025-07-16), event bar open 7.24 close 7.32", "record_index_gen2": 127431},
+      {"security": "sz.000002", "date": "2000-01-10", "category": 1, "note": "allotment combination; gen-2 record C1=0 C2=7.5(0x40f00000) C3=0 C4=2.727(0x402e872b), previous_close 10.99 (2000-01-07), event bar open 10.68 close 11.44", "record_index_gen2": 103}
+    ],
+    "phase_b_securities": ["600000.SH", "000001.SZ", "688318.SH", "000004.SZ"],
+    "sample_rule": "Samples are fixed by this plan and by #159/#53; no reselection, addition or substitution after observing outputs. New samples would require a separate freeze plan before use."
+  },
+  "capture_methods": {
+    "M1_local_files": "Hash + copy raw bytes of client-downloaded official data files at snapshot times: hq_cache gbbq/gbbq.map/tdxhy.cfg/tdxhy2.cfg(if present)/tdxzs*.cfg/base.dbf/base.map/infoharbor*/addedcode*, root incon.dat/base.dbf, and vipdoc .day members for the four securities once downloaded. gbbq records for the two key events extracted and stored as raw hex in raw/.",
+    "M2_kline_export": "For each Phase-A security: open K-line, set adjustment mode to 不复权 then 前复权 via the client's own UI, and use the client data-export function to produce its native text/CSV output; store raw export bytes in raw/ with sha256. If the export function is unavailable, record the displayed values window (M3) instead and mark export NOT_AVAILABLE.",
+    "M3_display_capture": "Screenshots of the client's own display: 权息资料/分红扩股 (per-event business fields), K-line displayed OHLC values, F10 company profile industry fields, quote-list 细分行业 column, 板块归属. Each screenshot hashed; any text transcribed from a screenshot is marked transcribed_from with the image sha256.",
+    "M4_tq": "If a usable official TQ/TdxQuant/TdxAiData interface is actually present and callable in this environment, record component version/config and capture get_divid_factors / market-data returns for the same samples. If not usable: TQ captures = NOT_RUN with reason.",
+    "order_rule": "All captures for a sample occur against the recorded snapshot; if client data files change mid-run the change is recorded (before/after sha256) and the affected comparisons are marked INPUT_DRIFT."
+  },
+  "binding_rules": {
+    "gbbq_event_binding": "A business-field->C-slot binding counts only if the official display/export names a business field (e.g. 派息/送股/转增/配股/配股价) with a value AND unit that uniquely identifies which C1..C4 slot carries it at the same snapshot, including scale (per-share vs per-10-share) and decimals. Two displays that fit multiple slot mappings = ambiguous, listed as such.",
+    "rounding_distinction": "Displayed 2-decimal prices are display values; intermediate computation rounding is only claimable if observed outputs discriminate it (e.g. QFQ export values that distinguish half-up-at-2dp from exact-binary-then-display). Non-discriminating precision = UNIDENTIFIED, not a pass.",
+    "qfq_chain": "Client 前复权 export compared against chains computed from the same-snapshot .day + gbbq record under each #159 frozen candidate rule; a candidate is consistent only if zero unexplained mismatch on the frozen events and the sampled window. The comparison script is committed; results in result.json.",
+    "industry_binding": "A tdxhy.cfg field<->code-space binding counts only if the client-displayed classification for a fixed sample uniquely matches (via the #164 anchored name/code tables) the value stored in that field position of that security's tdxhy.cfg record at the same snapshot. A-share scope stays UNANCHORED unless official behavior actually delimits it.",
+    "statuses": ["#54_BEHAVIOR_BINDING_VERIFIED", "#54_BEHAVIOR_BINDING_NOT_VERIFIED", "#46_FILE_FIELD_BINDING_VERIFIED", "#46_FILE_FIELD_BINDING_PARTIAL", "#46_FILE_FIELD_BINDING_NOT_VERIFIED", "INPUT_MISMATCH_OR_UNKNOWN", "NOT_RUN"]
+  },
+  "prohibited": [
+    "no reverse tuning, sample swapping, or candidate additions after observing outputs",
+    "no modification of the #159 frozen validation set",
+    "no overwriting or silently mixing data generations; every artifact binds to its recorded snapshot sha256",
+    "no disassembly/patch/hook/license bypass of client binaries",
+    "no credentials, keys, cookies or tokens in the repository; only non-sensitive auditable digests/text",
+    "no production gate changes; no QFQ/catalog production code changes",
+    "no claims that client merely running/downloading proves semantics"
+  ],
+  "outputs": {
+    "environment": "environment.json",
+    "inputs": "inputs.json",
+    "raw": "raw/ (non-sensitive original exports, record hex, screenshot png files + sha256 list)",
+    "result": "result.json",
+    "readme": "README.md",
+    "determinism": "comparison/replay script re-run on committed raw inputs; determinism.json"
+  }
+}

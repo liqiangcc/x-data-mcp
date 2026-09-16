@@ -1,0 +1,113 @@
+{
+ "captured_local": "2026-09-15T23:55+08:00",
+ "files": [
+  {
+   "path": "C:\\new_tdx64\\vipdoc\\sh\\lday\\sh600006.day",
+   "sha256": "c1f9850ce26daca380904fe254626402e2cbcaf2968f73a1181a89f882a0117a",
+   "size": 206976,
+   "copied": true
+  },
+  {
+   "path": "C:\\new_tdx64\\vipdoc\\sh\\lday\\sh600004.day",
+   "sha256": "7dde98bd5249e67da1f6fe166fdf57237b6deb50f8d70f379115a5e5677cdcda",
+   "size": 180192,
+   "copied": true
+  },
+  {
+   "path": "C:\\new_tdx64\\vipdoc\\sz\\lday\\sz000002.day",
+   "sha256": "b9a9d2f980cab6efe6cfcb57766f64379af62c496d90f4f457f29d86b6894613",
+   "size": 271360,
+   "copied": true
+  },
+  {
+   "path": "C:\\new_tdx64\\vipdoc\\sh\\lday\\sh688318.day",
+   "sha256": "7d308da9bd582622a454d89cd10e57902d29f4c19a5f2f96c8df79ff8dc61766",
+   "size": 49632,
+   "copied": true
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\hq_cache\\tdxhy.cfg",
+   "sha256": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6",
+   "size": 150332,
+   "copied": true
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\hq_cache\\gbbq.map",
+   "sha256": "63923740097170f6623818c3e26bb80674d75d41643221982ddbaabc7080eb91",
+   "size": 96465,
+   "copied": true
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\hq_cache\\tdxzs3.cfg",
+   "sha256": "5b9b0b0bad821d79f48ec52800fbb4b143d72173189168cf24761bd386c88c8e",
+   "size": 32730,
+   "copied": true
+  },
+  {
+   "path": "C:\\new_tdx64\\incon.dat",
+   "sha256": "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51",
+   "size": 67543,
+   "copied": true
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\hq_cache\\gbbq",
+   "sha256": "5e8b60897386f48249a4a1a92f156cee83aae26ead846d3976055d2790d72175",
+   "size": 5581982,
+   "copied": false
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\hq_cache\\base.dbf",
+   "sha256": "c897af497a4dd99cdb7be5963ecb768a67c200a38ec8d80e4ecbfebc70062a78",
+   "size": 3819973,
+   "copied": false
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\hq_cache\\base.map",
+   "sha256": "211dd82c752915ad75bb2dd95405ae6ebfd1582184a3d022eeb02a6d4948b533",
+   "size": 119085,
+   "copied": false
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\hq_cache\\zhb.zip",
+   "sha256": "e1ded566dc5269642de760211ec1b67e5ebebd67ab1e6338f70cab7c05048350",
+   "size": 1411229,
+   "copied": false
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\hq_cache\\tdxzs.cfg",
+   "sha256": "a33983fc8bb15c97db93fe9b60394b326b71a91e99e33b8b54700415442074da",
+   "size": 18272,
+   "copied": false
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\hq_cache\\tdxzsbase.cfg",
+   "sha256": "fce827a5932e5f2400f3868b26ad9327181372374ba4a07c3ebc0eb549ca69c4",
+   "size": 237890,
+   "copied": false
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\cache\\sh600006.~~~day",
+   "sha256": "3199f26e092354636398b7390bdf084cfdb7ddf8469c275f9a24d0da961c47fd",
+   "size": 13454,
+   "copied": false
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\cache\\sz000002.~~~day",
+   "sha256": "8a9414335b191f14d49a1b77f37fd5c5cd0bdd75ffcdab2368b9701c2c0a906e",
+   "size": 13454,
+   "copied": false
+  },
+  {
+   "path": "C:\\new_tdx64\\T0002\\cache\\sz399996.~~~day",
+   "sha256": "1fc94fa6c0b1fefafe752c337e0246d94780af68f830de43ecc9c27ed2241f56",
+   "size": 13454,
+   "copied": false
+  },
+  {
+   "path": "C:\\new_tdx64\\TdxW.exe",
+   "sha256": "58bd2117ec86e8c063639f7adae4218011bb93998e3d93dcd286672d1978736b",
+   "size": 17549232,
+   "copied": false
+  }
+ ]
+}

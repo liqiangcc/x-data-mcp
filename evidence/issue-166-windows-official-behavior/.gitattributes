@@ -1,0 +1,4 @@
+# Raw captures are byte-exact evidence: never normalize line endings.
+raw/** -text
+# Captured client files are opaque binary blobs; suppress text diff.
+raw/files/** binary
