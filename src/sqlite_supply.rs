@@ -155,7 +155,7 @@ pub(crate) fn query(
                 continue;
             }
             let industry = match r.industry {
-                crate::catalog::IndustryInfo::Assigned { code, name } => {
+                crate::catalog::IndustryInfo::Assigned { code, name, .. } => {
                     Industry::Assigned { code, name }
                 }
                 crate::catalog::IndustryInfo::Missing { reason } => Industry::Missing { reason },

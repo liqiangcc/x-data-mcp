@@ -9,6 +9,7 @@
 //! nothing here assigns meaning to UNANCHORED members (base.dbf, tdxhy2.cfg,
 //! infoharbor_ex.name) or to `tdxhy.cfg` fields f3/f4.
 
+pub mod compose;
 pub mod ex_code;
 pub mod incon;
 pub mod scope;

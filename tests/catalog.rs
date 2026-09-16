@@ -68,6 +68,7 @@ fn assigned() -> IndustryInfo {
     IndustryInfo::Assigned {
         code: "BK0001".into(),
         name: "银行Ⅱ".into(),
+        scheme: None,
     }
 }
 

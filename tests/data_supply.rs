@@ -355,6 +355,7 @@ fn catalog_filter_and_selector_freeze_version_without_inventing_industry() {
                         IndustryInfo::Assigned {
                             code: "I".into(),
                             name: "行业".into(),
+                            scheme: None,
                         },
                     ),
                     record(

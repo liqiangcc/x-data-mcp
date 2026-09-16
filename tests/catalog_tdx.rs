@@ -1,4 +1,8 @@
-use x_data_mcp::catalog_tdx::{ex_code, incon, scope, tdxhy};
+use x_data_mcp::catalog::{
+    CatalogRepository, CatalogService, CatalogVersion, IndustryInfo, IndustryScheme, RefreshStatus,
+    SecurityCatalogSource,
+};
+use x_data_mcp::catalog_tdx::{compose, ex_code, incon, scope, tdxhy};
 
 fn gb18030(text: &str) -> Vec<u8> {
     encoding_rs::GB18030.encode(text).0.into_owned()
@@ -157,6 +161,156 @@ fn scope_partition_is_disjoint_exhaustive_and_reconciles() {
     assert_eq!(outcome.excluded[3].code, "002710");
 }
 
+// ---------- composition layer (S4–S6) ----------
+
+fn sections() -> Vec<incon::InconSection> {
+    incon::parse(&gb18030(
+        "#TDXNHY\r\nT1001|金融\r\n#TDXRSHY\r\nX50|信息技术\r\nX5001|软件服务\r\nX500102|细分领域\r\n",
+    ))
+    .unwrap()
+}
+
+fn compose_members<'a>(
+    tdxhy_bytes: &'a [u8],
+    ex_bytes: &'a [u8],
+    sections: &'a [incon::InconSection],
+) -> compose::ComposeOutcome {
+    let rows = tdxhy::parse(tdxhy_bytes).unwrap();
+    let outcome = scope::apply(&rows);
+    let names = ex_code::parse(ex_bytes).unwrap();
+    compose::compose(
+        &outcome.members,
+        &ex_code::name_map(&names),
+        sections,
+        "official-file:deadbeefcafe0001",
+        chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn compose_assembles_assigned_records_with_scheme_label() {
+    let outcome = compose_members(
+        b"0|000001|T1001|||X500102\r\n1|600004|T1001|||X5001\r\n",
+        &gb18030("000001|平安银行|kw\r\n600004|白云机场|kw\r\n"),
+        &sections(),
+    );
+    assert!(outcome.nameless.is_empty());
+    assert!(outcome.missing_industry.is_empty());
+    assert!(outcome.t_code_residuals.is_empty());
+    assert!(outcome.t_dictionary_checked);
+    let snapshot = outcome.snapshot.unwrap();
+    assert_eq!(snapshot.records.len(), 2);
+    let first = &snapshot.records[0];
+    assert_eq!(first.symbol, "000001");
+    assert_eq!(first.name, "平安银行");
+    assert_eq!(first.source_security_id, "tdxhy:0:000001");
+    assert_eq!(first.source, "official-file:deadbeefcafe0001");
+    assert_eq!(
+        first.industry,
+        IndustryInfo::Assigned {
+            code: "X5001".into(), // leaf X500102 resolved to its L2 ancestor
+            name: "软件服务".into(),
+            scheme: Some(IndustryScheme::TdxResearchIndustry),
+        }
+    );
+    let second = &snapshot.records[1];
+    assert_eq!(second.exchange, x_data_mcp::catalog::Exchange::Shanghai);
+    assert_eq!(
+        second.industry,
+        IndustryInfo::Assigned {
+            code: "X5001".into(), // L2 code resolves to itself
+            name: "软件服务".into(),
+            scheme: Some(IndustryScheme::TdxResearchIndustry),
+        }
+    );
+}
+
+#[test]
+fn compose_rejects_candidate_when_any_member_is_nameless() {
+    let outcome = compose_members(
+        b"0|000001|T1001|||X500102\r\n0|000099|T1001|||X500102\r\n0|000100|T1001|||X500102\r\n",
+        &gb18030("000001|平安银行|kw\r\n"),
+        &sections(),
+    );
+    // P1 default reject_candidate: the whole candidate is withheld and every
+    // nameless member is enumerated — no guessing, no partial publication.
+    assert!(outcome.snapshot.is_none());
+    assert_eq!(
+        outcome.nameless,
+        vec![(0u8, "000099".to_string()), (0u8, "000100".to_string())]
+    );
+}
+
+#[test]
+fn compose_keeps_members_with_unresolvable_industry_as_missing() {
+    let outcome = compose_members(
+        // 000002: L1 x_code has no L2 ancestor; 000003: L2 absent from TDXRSHY.
+        b"0|000002|T1001|||X42\r\n0|000003|T1001|||X9901\r\n",
+        &gb18030("000002|万科|kw\r\n000003|测试|kw\r\n"),
+        &sections(),
+    );
+    let snapshot = outcome.snapshot.unwrap();
+    assert_eq!(outcome.missing_industry.len(), 2);
+    for record in &snapshot.records {
+        match &record.industry {
+            IndustryInfo::Missing { reason } => {
+                assert!(reason.starts_with("tdx_research:"), "{reason}")
+            }
+            other => panic!("expected Missing, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn compose_reports_t_code_residuals_without_binding_names() {
+    let outcome = compose_members(
+        b"1|688688|T00|||X500102\r\n", // T00 absent from the fixture TDXNHY
+        &gb18030("688688|测试科创|kw\r\n"),
+        &sections(),
+    );
+    let snapshot = outcome.snapshot.unwrap();
+    assert_eq!(snapshot.records.len(), 1);
+    assert_eq!(
+        outcome.t_code_residuals,
+        vec![compose::TCodeResidual {
+            member: (1, "688688".into()),
+            t_code: "T00".into(),
+        }]
+    );
+}
+
+#[test]
+fn composed_snapshot_passes_existing_refresh_validation() {
+    struct Repo(std::sync::Mutex<Option<CatalogVersion>>);
+    impl CatalogRepository for Repo {
+        fn latest(&self) -> Result<Option<CatalogVersion>, std::io::Error> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+        fn publish_atomic(&self, version: &CatalogVersion) -> Result<(), std::io::Error> {
+            *self.0.lock().unwrap() = Some(version.clone());
+            Ok(())
+        }
+    }
+    struct Src(Option<x_data_mcp::catalog::CatalogSnapshot>);
+    impl SecurityCatalogSource for Src {
+        fn fetch(
+            &self,
+        ) -> Result<x_data_mcp::catalog::CatalogSnapshot, x_data_mcp::catalog::CatalogSourceError>
+        {
+            Ok(self.0.clone().unwrap())
+        }
+    }
+    let outcome = compose_members(
+        b"0|000001|T1001|||X500102\r\n1|600004|T1001|||X5001\r\n",
+        &gb18030("000001|平安银行|kw\r\n600004|白云机场|kw\r\n"),
+        &sections(),
+    );
+    let service = CatalogService::new(Src(outcome.snapshot), Repo(std::sync::Mutex::new(None)));
+    let result = service.refresh().unwrap();
+    assert_eq!(result.status, RefreshStatus::Published);
+}
+
 // ---------- retained gen-2 integration (skipped when inputs are absent) ----------
 
 const RETAINED: &str = "/home/box/retained-inputs";
@@ -229,5 +383,36 @@ fn gen2_retained_members_match_the_frozen_counts() {
     assert_eq!(
         nameless,
         ["001235", "300728", "601206", "603302", "603361", "688688"]
+    );
+
+    // Composition layer on the real snapshot: P1 default reject_candidate
+    // must fire with exactly the anchored nameless set, the T00 residual is
+    // reported verbatim, and no member lands in Missing.
+    let composed = compose::compose(
+        &outcome.members,
+        &name_map,
+        &sections,
+        "official-file:dcdf6b4989892667",
+        chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+    )
+    .unwrap();
+    assert!(composed.snapshot.is_none());
+    assert_eq!(composed.nameless.len(), 6);
+    assert_eq!(
+        composed
+            .nameless
+            .iter()
+            .map(|(_, code)| code.as_str())
+            .collect::<Vec<_>>(),
+        ["001235", "300728", "601206", "603302", "603361", "688688"]
+    );
+    assert!(composed.missing_industry.is_empty());
+    assert!(composed.t_dictionary_checked);
+    assert_eq!(
+        composed.t_code_residuals,
+        vec![compose::TCodeResidual {
+            member: (1, "688688".into()),
+            t_code: "T00".into(),
+        }]
     );
 }

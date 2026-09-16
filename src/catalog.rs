@@ -20,11 +20,31 @@ pub enum SecurityType {
     Other(String),
 }
 
+/// Classification-scheme label for an assigned industry (#6 product decision
+/// P2). Stored inside the version's compat payload; a `NULL`/absent scheme on
+/// old fixture rows means "unlabeled", never silently reinterpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndustryScheme {
+    TdxResearchIndustry,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IndustryInfo {
-    Assigned { code: String, name: String },
-    Missing { reason: String },
-    Conflicted { reason: String },
+    Assigned {
+        code: String,
+        name: String,
+        /// Classification scheme of `code`/`name`. `None` on payloads written
+        /// before the scheme label existed (fixture rows only).
+        #[serde(default)]
+        scheme: Option<IndustryScheme>,
+    },
+    Missing {
+        reason: String,
+    },
+    Conflicted {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
@@ -308,7 +328,7 @@ fn validate_record(
         });
     }
     match &record.industry {
-        IndustryInfo::Assigned { code, name }
+        IndustryInfo::Assigned { code, name, .. }
             if !code.trim().is_empty() && !name.trim().is_empty() => {}
         IndustryInfo::Assigned { .. } => {
             return Err(RejectReason::InvalidRecord {
