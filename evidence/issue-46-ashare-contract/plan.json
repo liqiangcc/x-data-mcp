@@ -1,0 +1,68 @@
+{
+ "schema": "issue46.ashare-contract-plan.v1",
+ "issue": 46,
+ "title": "沪深A 身份+名称+研究行业二级 组合契约机械验收（gen-2 retained）",
+ "frozen_before": "scanner 编写完成前冻结规则与 pin；scanner 只得按本计划断言，不得为凑通过改规则",
+ "inputs": {
+  "retained_root": "/home/box/retained-inputs",
+  "archives": {
+   "official-base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+   "official-gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"
+  },
+  "members": {
+   "base.zip!tdxhy.cfg": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6",
+   "base.zip!tdxhy2.cfg": "f496dcd9af9c6681682cc25d621b2ada195f555e9a9834ef75878dfeb0a0be4a",
+   "base.zip!base.dbf": "6e6480bbefcfa4145f1214e586457862f144dc5a563f14a285021e5e3ebcc770",
+   "base.zip!base.map": "8441db92ec60046f5951e067eeaa50f5cf2e797a4551353250681bc4126f93cf",
+   "base.zip!infoharbor_ex.code": "79eed0f6857ffde3d1d3cc8966ceff6e400f45e6e2387224446e453850fb5281",
+   "base.zip!infoharbor_ex.name": "f120745d760cea1f730639a8701f043ebffc31d7dccd70c8376a09ab9e7a3fb4",
+   "gbbq.zip!zhb.zip!incon.dat": "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51",
+   "gbbq.zip!zhb.zip!tdxzs3.cfg": "5b9b0b0bad821d79f48ec52800fbb4b143d72173189168cf24761bd386c88c8e"
+  },
+  "committed_evidence": {
+   "evidence/issue-46-anchor-binding/binding.json": "67508fca508362eae967a40777fd117e580c47ab7dc101f494e1e3f6960d42e0",
+   "evidence/issue-166-windows-official-behavior/raw/observations.json": "computed_at_scan_time"
+  }
+ },
+ "anchored_semantics": {
+  "tdxhy.cfg.f0": "exchange enum {0:SZ,1:SH,2:BJ} (#167 Windows behavior + #164 anchors, FG ruling comment 5690659606)",
+  "tdxhy.cfg.f2": "TDX 行业 T-code, dictionary = incon.dat#TDXNHY (#164 S1/S2)",
+  "tdxhy.cfg.f5": "TDX 研究行业 X-code leaf, dictionary = incon.dat#TDXRSHY (#164 S1/S2)",
+  "tdxhy.cfg.f3_f4": "empty in all rows this generation; no semantics assigned",
+  "level_of_X_code": "(len(code)-1)//2, declared by official PDF table + corroborated by #164 binding rows",
+  "X_L2_of_member": "leaf[:5]; must exist in TDXRSHY with level==2 (asserted per member, not assumed)",
+  "delisted_absent_from_tdxhy": "anchored by #167 observed 000004 absent + demoted to extended market"
+ },
+ "unanchored_fields": [
+  "base.dbf SC/DY/HY/GXRQ/SSDATE/... field semantics (mechanical facts only)",
+  "base.map tail field semantics (ordered pairing with base.dbf GPDM is mechanical)",
+  "infoharbor_ex.code field2/field3 role (comma-separated keyword-like values observed)",
+  "infoharbor_ex.name field0 enum and member role (mostly non-A-share codes this generation)",
+  "tdxhy2.cfg f0/f1/f5 roles and its superset-vs-tdxhy semantics",
+  "tdxhy.cfg row == 'currently listed' beyond the anchored delisted-absent observation"
+ ],
+ "scope_rule": {
+  "universe": "tdxhy.cfg rows",
+  "ashare_S": "f0 in {'0','1'} AND f2 non-empty AND f5 non-empty",
+  "excluded_must_be_reported": [
+   "f0=='2' (BJ)",
+   "f0 in {'0','1'} with empty f2 or f5 (B-share 200xxx/900xxx and any other code — enumerated, not silently dropped)"
+  ],
+  "note": "S is a mechanical candidate definition, not a claim of exchange-official completeness"
+ },
+ "fixed_samples": {
+  "source": "evidence/issue-166-windows-official-behavior phase_b.samples rows (pre-registered, not re-derived)",
+  "codes": ["600000", "000001", "688318", "600004", "600006", "000002", "000004"],
+  "expectation": "each sample's row string, T/X names and display leaf must equal the transcribed values"
+ },
+ "ac_verdicts": {
+  "AC-01": "member identity/sha/encoding/field position reproducible -> expected VERIFIED_MECHANICAL",
+  "AC-02": "identity+name coverage measured; missing names enumerated -> expected PARTIAL (6-code name gap is a finding, not a failure of the check)",
+  "AC-03": "X L2 id/name/membership for every S member -> expected VERIFIED_MECHANICAL; T-side T00 residual reported",
+  "AC-04": "missing/dup/conflict/vanish enumeration + #6 protection rules restated -> expected VERIFIED_MECHANICAL for enumeration",
+  "AC-05": "pre-fixed samples reproduce -> expected VERIFIED_MECHANICAL",
+  "AC-06": "separate reporting of mapping/coverage/consistency/#71 boundary -> report structure",
+  "AC-07": "deliverable table for #6: implementable vs still-blocked -> contract doc section"
+ },
+ "output": "result.json + determinism.json (double run byte-identical)"
+}
