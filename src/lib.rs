@@ -1,5 +1,6 @@
 pub mod calendar;
 pub mod catalog;
+pub mod catalog_tdx;
 pub mod collector;
 pub mod dbf;
 pub mod execution;
