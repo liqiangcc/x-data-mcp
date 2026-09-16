@@ -1,0 +1,218 @@
+{
+  "assertions": [
+    {
+      "name": "sz.000002_daily_base",
+      "ok": true,
+      "detail": {
+        "record_count": 8479,
+        "last": "2026-09-14",
+        "version_id": "collection-version-2c7bb388616c489bb1fd86c2ed79a1865e2d36c0ca67f148831b99ba3fd1395b"
+      }
+    },
+    {
+      "name": "sh.600006_daily_base",
+      "ok": true,
+      "detail": {
+        "record_count": 6467,
+        "last": "2026-09-14",
+        "version_id": "collection-version-7ab7dc388dfa2e3539bdb650d5acbd00659d28115a04f9f9564072bcac3122dd"
+      }
+    },
+    {
+      "name": "sh.600004_daily_base",
+      "ok": true,
+      "detail": {
+        "record_count": 5630,
+        "last": "2026-09-14",
+        "version_id": "collection-version-e7c0d003775626362f36da86551d16ca2659347055bce4980a42967e9d457b66"
+      }
+    },
+    {
+      "name": "sz.000002_yearly_version",
+      "ok": true,
+      "detail": {
+        "record_count": 36,
+        "first_date": "1991-12-31",
+        "last_date": "2026-09-14"
+      }
+    },
+    {
+      "name": "sz.000002_yearly_head",
+      "ok": true,
+      "detail": "yearly-version-1c88b8a456b35d8c2e42d1452cc7c94d0dbc76805ea16fa30a0a1136a0639702"
+    },
+    {
+      "name": "sz.000002_lineage",
+      "ok": true,
+      "detail": {
+        "base_daily_version_id": "collection-version-2c7bb388616c489bb1fd86c2ed79a1865e2d36c0ca67f148831b99ba3fd1395b",
+        "algorithm_version": "local-natural-year-v1",
+        "first_trade_date": "1991-01-29",
+        "last_trade_date": "2026-09-14",
+        "as_of": "2026-09-16"
+      }
+    },
+    {
+      "name": "sz.000002_yearly_values_match_independent_aggregation",
+      "ok": true,
+      "detail": {
+        "years_checked": 36,
+        "diffs": []
+      }
+    },
+    {
+      "name": "sz.000002_unfinished_2026",
+      "ok": true,
+      "detail": {
+        "is_finished": 0,
+        "last_trade_date": "2026-09-14"
+      }
+    },
+    {
+      "name": "sh.600006_yearly_version",
+      "ok": true,
+      "detail": {
+        "record_count": 28,
+        "first_date": "1999-12-30",
+        "last_date": "2026-09-14"
+      }
+    },
+    {
+      "name": "sh.600006_yearly_head",
+      "ok": true,
+      "detail": "yearly-version-071b6298895147685d52addfbc95c48086b06007bf4f39a1374f230c15b88fd7"
+    },
+    {
+      "name": "sh.600006_lineage",
+      "ok": true,
+      "detail": {
+        "base_daily_version_id": "collection-version-7ab7dc388dfa2e3539bdb650d5acbd00659d28115a04f9f9564072bcac3122dd",
+        "algorithm_version": "local-natural-year-v1",
+        "first_trade_date": "1999-07-27",
+        "last_trade_date": "2026-09-14",
+        "as_of": "2026-09-16"
+      }
+    },
+    {
+      "name": "sh.600006_yearly_values_match_independent_aggregation",
+      "ok": true,
+      "detail": {
+        "years_checked": 28,
+        "diffs": []
+      }
+    },
+    {
+      "name": "sh.600006_unfinished_2026",
+      "ok": true,
+      "detail": {
+        "is_finished": 0,
+        "last_trade_date": "2026-09-14"
+      }
+    },
+    {
+      "name": "sh.600004_yearly_version",
+      "ok": true,
+      "detail": {
+        "record_count": 24,
+        "first_date": "2003-12-31",
+        "last_date": "2026-09-14"
+      }
+    },
+    {
+      "name": "sh.600004_yearly_head",
+      "ok": true,
+      "detail": "yearly-version-91de60af35263fe88c7dcac3959ed6e0dbf57787609e04532ba3704879bab1b9"
+    },
+    {
+      "name": "sh.600004_lineage",
+      "ok": true,
+      "detail": {
+        "base_daily_version_id": "collection-version-e7c0d003775626362f36da86551d16ca2659347055bce4980a42967e9d457b66",
+        "algorithm_version": "local-natural-year-v1",
+        "first_trade_date": "2003-04-28",
+        "last_trade_date": "2026-09-14",
+        "as_of": "2026-09-16"
+      }
+    },
+    {
+      "name": "sh.600004_yearly_values_match_independent_aggregation",
+      "ok": true,
+      "detail": {
+        "years_checked": 24,
+        "diffs": []
+      }
+    },
+    {
+      "name": "sh.600004_unfinished_2026",
+      "ok": true,
+      "detail": {
+        "is_finished": 0,
+        "last_trade_date": "2026-09-14"
+      }
+    },
+    {
+      "name": "reused_request",
+      "ok": true,
+      "detail": {
+        "blocking_reasons": [
+          "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run)",
+          "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+          "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+          "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)",
+          "LOCAL_PIPELINE_NOT_IMPLEMENTED (validated parsers, QFQ and fixed-published-daily yearly)"
+        ],
+        "contract_version": "explicit-yearly-task-v1",
+        "dataset": "market.yearly",
+        "item_ids": [
+          "[\"market\",\"sz.000002\",\"year\"]"
+        ],
+        "readiness": "blocked",
+        "request_id": "yearly-accept-sz.000002",
+        "reused": true,
+        "status": "succeeded",
+        "task_id": "task-1dec4082a7f49ee5ea6d5629d6f72b15"
+      }
+    },
+    {
+      "name": "nochange_idempotent",
+      "ok": true,
+      "detail": {
+        "no_change": [
+          1
+        ],
+        "yearly_versions": 1
+      }
+    },
+    {
+      "name": "base_unavailable_refusal",
+      "ok": true,
+      "detail": "ACCEPTANCE_NEEDS_VERIFICATION: MARKET_NOT_FOUND"
+    },
+    {
+      "name": "coverage_insufficient_refusal",
+      "ok": true,
+      "detail": "ACCEPTANCE_NEEDS_VERIFICATION: selected year absent from fixed daily"
+    },
+    {
+      "name": "env_absent_refusal",
+      "ok": true,
+      "detail": "[[\"{\\\"success\\\":false,\\\"error\\\":\\\"BASE_UNAVAILABLE: SOURCE_NOT_VERIFIED: official-file source not installed\\\"}\"]]"
+    },
+    {
+      "name": "refusals_published_nothing",
+      "ok": true,
+      "detail": "exactly 3 yearly versions"
+    }
+  ],
+  "versions": {},
+  "expected_vs_actual": {
+    "sz.000002": [],
+    "sh.600006": [],
+    "sh.600004": []
+  },
+  "blocked_paths": {
+    "env_absent": "[[\"{\\\"success\\\":false,\\\"error\\\":\\\"BASE_UNAVAILABLE: SOURCE_NOT_VERIFIED: official-file source not installed\\\"}\"]]",
+    "base_unavailable": "ACCEPTANCE_NEEDS_VERIFICATION: MARKET_NOT_FOUND",
+    "coverage_insufficient": "ACCEPTANCE_NEEDS_VERIFICATION: selected year absent from fixed daily"
+  }
+}

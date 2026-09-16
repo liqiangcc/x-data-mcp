@@ -63,7 +63,9 @@ bar 数 8479/6467/5630，末日 2026-09-14，provenance sha 复核。
   `no_change=true` 或不产生新有效版本），逐字留痕 `yearly_execution_results
   .no_change` 与 `effective_heads` 未变。
 - **S8** 三条拒绝路径（各自独立 scratch DB/任务，verbatim 留痕）：
-  - **env-absent**：不注入两 env 起服务 → 同 S4 请求 → item 拒绝原文；
+  - **env-absent**：同一验收库上重启服务不注入两 env → 对 sz.000002
+    发 `update_data`（years 同 S4，`expected_yearly_head` = 当前 yearly
+    head）→ 受理后 worker 内 verifier 检查 env → item 拒绝原文；
   - **base-unavailable**：`base_daily_version_id` 指向不存在/非 published
     版本（固定用 `"collection-version-" + 64×"0"`）→ 拒绝原文；
   - **coverage-不足**：以 sh.600004 请求 `years:[1990]`（daily 始于 2003，
@@ -76,7 +78,10 @@ bar 数 8479/6467/5630，末日 2026-09-14，provenance sha 复核。
    `first/last` 覆盖请求年域；`effective_heads` period='year' 指向该版本。
 3. `yearly_lineage`：`base_daily_version_id` == 本运行 daily head；
    `algorithm_version`/`first_trade_date`/`last_trade_date`/`as_of` 在列；
-   `as_of` 等于最后参与交易日（非采集时刻）。
+   `first/last_trade_date` = 参与聚合的首/末日线交易日；
+   `as_of` = 派生时刻的 Asia/Shanghai 日期（verifier 证据字段，源自
+   derived_at/发布时间，非最后参与日）——计划初稿误写为"最后参与交易
+   日"，按 `yearly::aggregate`/`lineage_values` 实现语义修正。
 4. `query_data` 读回 bar 与库内 `yearly_bars` 逐字段一致（O/H/L/C/
    trade_date/first_trade_date/last_trade_date/is_finished）。
 5. **期望值独立机械聚合**：运行内 python（stdlib `Decimal`）从已发布
@@ -85,8 +90,9 @@ bar 数 8479/6467/5630，末日 2026-09-14，provenance sha 复核。
    `results.json.expected_vs_actual`。**该聚合不使用 #54 冻结 oracle
    值，独立产出期望**；volume/amount 因 daily 未提升必须为 unknown/NULL，
    不得为 0 或推算值。
-6. 未结束年（2026）：`is_finished=0`，`last_trade_date=2026-09-14`
-   （最后参与日），不以运行时刻冒充。
+6. 未结束年（2026）：`is_finished=0`，该行 `last_trade_date=2026-09-14`
+   （最后参与日）；`yearly_lineage.as_of` 为派生日（运行日），不冒充
+   参与交易日。
 7. S7 幂等：同 request_id `reused:true`；不同 request_id 同输入 →
    `no_change=true`，无新 version 行，`effective_heads` 不变。
 8. S8 三拒绝：item `success:false`，error 逐字入
