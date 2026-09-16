@@ -36,6 +36,9 @@ pub const ADAPTER_VERSION: &str = "tdx-market-source-v1";
 pub const NOT_PRODUCTION_READY: &str =
     "NOT_PRODUCTION_READY: official_files::PRODUCTION_BLOCKERS gates unchanged";
 const GBBQ_MEMBER: &str = "gbbq";
+/// Largest manifest byte count the installer will read; the pinned snapshot
+/// schema carries exactly three file entries and stays far below this.
+const MANIFEST_LIMIT: u64 = 1 << 20;
 
 #[derive(Debug, Clone)]
 pub struct TdxMarketSource {
@@ -75,6 +78,26 @@ impl TdxMarketSource {
             day: take(FileRole::Day)?,
             gbbq: take(FileRole::Gbbq)?,
         })
+    }
+
+    /// Service install hook: only when `X_DATA_MCP_OFFICIAL_MANIFEST`
+    /// (manifest file) and `X_DATA_MCP_OFFICIAL_DIR` (snapshot root) are both
+    /// configured AND the manifest passes `inspect()` does a source exist.
+    /// Absent or uninspectable configuration yields `None`, leaving the
+    /// market.daily item on the `BlockedSource` refusal path.
+    pub fn from_env() -> Option<Self> {
+        let manifest = std::env::var_os("X_DATA_MCP_OFFICIAL_MANIFEST")?;
+        let root = std::env::var_os("X_DATA_MCP_OFFICIAL_DIR")?;
+        let mut bytes = Vec::new();
+        std::fs::File::open(manifest)
+            .ok()?
+            .take(MANIFEST_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.len() as u64 > MANIFEST_LIMIT {
+            return None;
+        }
+        Self::inspect(root, &bytes, Utc::now()).ok()
     }
 
     /// Byte-verified snapshot binding carried into version provenance.
