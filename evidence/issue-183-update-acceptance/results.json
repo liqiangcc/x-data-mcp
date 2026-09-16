@@ -1,0 +1,293 @@
+{
+  "assertions": [
+    {
+      "name": "A1_input_integrity",
+      "ok": true,
+      "detail": {
+        "zip_sha256": {
+          "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+          "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+          "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+        },
+        "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3"
+      }
+    },
+    {
+      "name": "A2_base_sz.000002",
+      "ok": true,
+      "detail": {
+        "version_id": "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639",
+        "record_count": 8479,
+        "first_date": "1991-01-29",
+        "last_date": "2026-09-14"
+      }
+    },
+    {
+      "name": "A2_base_sh.600006",
+      "ok": true,
+      "detail": {
+        "version_id": "collection-version-d4f35003d33b844278512427141b49d22d1f501fa386e3f54f555578d879f623",
+        "record_count": 6467,
+        "first_date": "1999-07-27",
+        "last_date": "2026-09-14"
+      }
+    },
+    {
+      "name": "A10_provenance_traceable",
+      "ok": true,
+      "detail": {
+        "snapshot_inputs": [
+          {
+            "archive_sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+            "member": "sz\\lday\\sz000002.day",
+            "member_sha256": "6f168cf053ca561fedde1aa97c3b38d71876854ade3dae5f1a2c9ba9f6b63826",
+            "role": "day"
+          },
+          {
+            "archive_sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+            "member": "gbbq",
+            "member_sha256": "4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+            "role": "gbbq"
+          }
+        ],
+        "measured": {
+          "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+          "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+          "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+        }
+      }
+    },
+    {
+      "name": "A3_update_acceptance",
+      "ok": true,
+      "detail": {
+        "frozen_inputs": {
+          "base_integrity_sha256": "f66b161aff9ac9a7cd928ba4362afea6be4200fda35f7531548589ffa1e0794b",
+          "base_version_id": "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639",
+          "range": {
+            "end": "2026-09-17",
+            "start": "1991-01-29"
+          }
+        },
+        "task_id": "task-c55411c56e26a215751d30bbd3c149ad"
+      }
+    },
+    {
+      "name": "A4_update_execution_success",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": true,
+          "error": null
+        },
+        "note": "impl landed"
+      }
+    },
+    {
+      "name": "A5_nochange_reuses_base",
+      "ok": true,
+      "detail": {
+        "result_version_id": "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639",
+        "base": "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639",
+        "day_versions": 1
+      }
+    },
+    {
+      "name": "A6_execution_trail",
+      "ok": true,
+      "detail": {
+        "row": [
+          [
+            "range-result-68bb533ed693531ec085383c2a81af5a68a7f1883735d121054330a871b678a9",
+            "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639",
+            "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639",
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "A7_same_request_id_reused",
+      "ok": true,
+      "detail": {
+        "blocking_reasons": [
+          "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run)",
+          "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+          "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+          "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)",
+          "LOCAL_PIPELINE_NOT_IMPLEMENTED (update/backfill official-source execution)"
+        ],
+        "contract_version": "explicit-range-task-v1",
+        "dataset": "market.daily",
+        "item_ids": [
+          "[\"market\",\"sz.000002\",\"day\"]"
+        ],
+        "readiness": "blocked",
+        "request_id": "u1",
+        "reused": true,
+        "status": "succeeded",
+        "task_id": "task-c55411c56e26a215751d30bbd3c149ad"
+      }
+    },
+    {
+      "name": "A8_fresh_request_nochange",
+      "ok": true,
+      "detail": {
+        "results": [
+          [
+            "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639",
+            1
+          ]
+        ],
+        "day_versions": 1
+      }
+    },
+    {
+      "name": "A9_readback_unchanged",
+      "ok": true,
+      "detail": {
+        "oracle_20000110": {
+          "amount": null,
+          "close": "-8.06",
+          "date": "2000-01-10",
+          "entity": {
+            "code": "000002",
+            "exchange": "sz"
+          },
+          "first_trading_date": null,
+          "high": "-8.06",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "-8.15",
+          "open": "-8.14",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "000002",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "f66b161aff9ac9a7cd928ba4362afea6be4200fda35f7531548589ffa1e0794b",
+            "version_id": "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639"
+          },
+          "volume": null,
+          "year_unfinished": null
+        },
+        "last_bar": {
+          "amount": null,
+          "close": "3.05",
+          "date": "2026-09-14",
+          "entity": {
+            "code": "000002",
+            "exchange": "sz"
+          },
+          "first_trading_date": null,
+          "high": "3.07",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "3.03",
+          "open": "3.05",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "000002",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "f66b161aff9ac9a7cd928ba4362afea6be4200fda35f7531548589ffa1e0794b",
+            "version_id": "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639"
+          },
+          "volume": null,
+          "year_unfinished": null
+        },
+        "head": "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639",
+        "bar_hash_equal": true
+      }
+    },
+    {
+      "name": "A11_env_absent_refusal",
+      "ok": true,
+      "detail": {
+        "outcome": "{\"success\":false,\"error\":\"INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_",
+        "day_versions": 1
+      }
+    },
+    {
+      "name": "A12_uninspectable_refusal",
+      "ok": true,
+      "detail": {
+        "outcome": "{\"success\":false,\"error\":\"INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_",
+        "day_versions": 1
+      }
+    },
+    {
+      "name": "A13_base_missing_refusal",
+      "ok": true,
+      "detail": {
+        "verbatim": "INVALID_COMMAND: explicit published daily base unavailable",
+        "update_tasks": 0
+      }
+    },
+    {
+      "name": "A14_base_identity_refusal",
+      "ok": true,
+      "detail": {
+        "verbatim": "INVALID_COMMAND: fixed daily base identity mismatch",
+        "update_tasks": 0
+      }
+    },
+    {
+      "name": "A15_gates_preserved",
+      "ok": true,
+      "detail": {
+        "blocking_reasons": [
+          "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run)",
+          "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+          "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+          "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)",
+          "LOCAL_PIPELINE_NOT_IMPLEMENTED (update/backfill official-source execution)"
+        ],
+        "adjustment_evidence_reason": "qfq::forward_adjust over category==1 GBBQ affine chain (36 events, 76 non-category-1 records excluded uninterpreted); NOT_PRODUCTION_READY: official_files::PRODUCTION_BLOCKERS gates unchanged"
+      }
+    }
+  ],
+  "versions": {
+    "daily_base": {
+      "sz.000002": {
+        "version_id": "collection-version-6ce8d0bd492852b8894637dd7c4185da152f16507ec9a2bdcf90e3101493f639",
+        "record_count": 8479,
+        "first_date": "1991-01-29",
+        "last_date": "2026-09-14"
+      },
+      "sh.600006": {
+        "version_id": "collection-version-d4f35003d33b844278512427141b49d22d1f501fa386e3f54f555578d879f623",
+        "record_count": 6467,
+        "first_date": "1999-07-27",
+        "last_date": "2026-09-14"
+      }
+    }
+  },
+  "blocked_paths": {
+    "R1_env_absent": "{\"success\":false,\"error\":\"INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence); LOCAL_PIPELINE_NOT_IMPLEMENTED (update/backfill official-source execution)\"}",
+    "R2_uninspectable_manifest": "{\"success\":false,\"error\":\"INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence); LOCAL_PIPELINE_NOT_IMPLEMENTED (update/backfill official-source execution)\"}",
+    "R3a_base_missing": "INVALID_COMMAND: explicit published daily base unavailable",
+    "R3b_base_identity": "INVALID_COMMAND: fixed daily base identity mismatch"
+  },
+  "run_identity": {
+    "head": "c48797abe6ec5a7a6ad6623a3802784b260ba599",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
+    "zip_sha256": {
+      "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+      "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+      "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+    }
+  },
+  "production_blockers": [
+    "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run)",
+    "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+    "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+    "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)",
+    "LOCAL_PIPELINE_NOT_IMPLEMENTED (update/backfill official-source execution)"
+  ]
+}

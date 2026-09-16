@@ -100,12 +100,12 @@
   sh.600006 6467 bars（1999-07-27→2026-09-14）。
 - **S3** `query_data`/SQLite 直读记 base 快照：effective_heads day
   version_id、全量 bar 读回哈希（sha256 over canonical rows）、
-  `data_versions`/`publication_receipts` 全行。
+  `data_versions`/`publication_batches` 全行。
 - **S4** `update_data`（§2 wire，`request_id=u1`）→ 记录受理响应
   （task_id、item frozen_inputs=`{base_version_id,base_integrity_sha256,
   range}` 逐字）。
 - **S5** `run_worker_once` → item 终态；记录 `task_items` outcome、
-  `publication_receipts`、`data_versions` 增量。
+  `market_update_results`/`publication_batches`、`data_versions` 增量。
 - **S6** 同 `request_id=u1` 同参数重发 → `reused:true` + 同 task_id。
 - **S7** 新 `request_id=u2`、同 frozen inputs（同 items 数组）→
   `run_worker_once` → 仍 no-change。
@@ -123,7 +123,7 @@
 | A3 | update 受理 | S4 返回 task_id；item `frozen_inputs` 恰含 `base_version_id`（=S3 head）、`base_integrity_sha256`（=base raw digest）、`range={start:1991-01-29,end:<run date>}` |
 | A4 | update 执行成功 | S5 item outcome `success:true`；若 Phase B 未落地 → `BLOCKED_ON_IMPL`，verbatim 记录拒绝串，A5–A9 同标 |
 | A5 | no-change 复用版本 | update receipt `version_id` == base version id；该证券 `data_versions` day 行数仍 == 1（无第二版本） |
-| A6 | execution/result 留痕 | `publication_receipts` 新增一行绑定 task_id/item_id/run_id/version_id=base |
+| A6 | execution/result 留痕 | `market_update_results` 新增一行绑定 task_id/item_id/`base_version_id`/`result_version_id`=base/`no_change`=1（含 audit/receipt sha256 留痕列） |
 | A7 | 同 request_id replay | S6 `reused:true`，task_id == S4 task_id，无新 item 执行 |
 | A8 | 新 request_id 幂等 | S7 仍 `success:true` + receipt `version_id`==base；版本行数仍 == 1 |
 | A9 | 读回不变 | S8：两 oracle bar 逐字段 == §3；`effective_heads` version_id 不变；bar 读回哈希 == S3 |
