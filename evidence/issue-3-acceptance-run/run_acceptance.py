@@ -57,12 +57,16 @@ def record(kind, payload):
 
 
 class Service:
-    def __init__(self):
+    def __init__(self, db=DB, manifest=MANIFEST, snap_dir=SNAP_DIR):
         env = dict(os.environ)
-        env["X_DATA_MCP_OFFICIAL_MANIFEST"] = MANIFEST
-        env["X_DATA_MCP_OFFICIAL_DIR"] = SNAP_DIR
+        env.pop("X_DATA_MCP_OFFICIAL_MANIFEST", None)
+        env.pop("X_DATA_MCP_OFFICIAL_DIR", None)
+        if manifest is not None:
+            env["X_DATA_MCP_OFFICIAL_MANIFEST"] = manifest
+        if snap_dir is not None:
+            env["X_DATA_MCP_OFFICIAL_DIR"] = snap_dir
         self.proc = subprocess.Popen(
-            [MCP_DATA, DB], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            [MCP_DATA, db], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env=env, text=True)
         self.next_id = 0
 
@@ -166,6 +170,45 @@ def main():
     svc.proc.wait()
     record("service_exit", {"returncode": svc.proc.returncode, "stderr": stderr})
 
+    # ---- blocked paths (spec minimum evidence set) ----
+    # Same service binary on scratch DBs: (a) no env -> no source installed;
+    # (b) manifest present but uninspectable -> from_env declines. Both keep
+    # the market.daily item on the BlockedSource refusal; verbatim errors are
+    # recorded from the scratch task_items rows.
+    def blocked_path(name, manifest_env):
+        db = os.path.join(RUN_DIR, f"blocked-{name}.sqlite")
+        for stale in (db, db + "-wal", db + "-shm"):
+            if os.path.exists(stale):
+                os.remove(stale)
+        init = subprocess.run([TASK_SQLITE, "init", db],
+                              capture_output=True, text=True)
+        record(f"{name}_init", {"returncode": init.returncode})
+        bsvc = Service(db=db, manifest=manifest_env,
+                       snap_dir=SNAP_DIR if manifest_env else None)
+        bsvc.rpc("initialize")
+        bsvc.tool("start_collection", {
+            "request_id": f"blocked-{name}",
+            "dataset": "market.daily", "contract_version": "v1",
+            "selection": {"kind": "explicit",
+                          "securities": [{"exchange": "sz", "code": "000002"}]},
+        })
+        bsvc.tool("run_worker_once", {})
+        bsvc.proc.stdin.close()
+        bsvc.proc.wait()
+        con = sqlite3.connect(db)
+        outcome = con.execute(
+            "SELECT outcome_json FROM task_items").fetchone()[0]
+        error = json.loads(outcome)["error"]
+        record(f"{name}_item_outcome", {"outcome": json.loads(outcome)})
+        con.close()
+        return error
+
+    env_absent_error = blocked_path("env-absent", None)
+    bad_manifest = os.path.join(RUN_DIR, "uninspectable-manifest.json")
+    with open(bad_manifest, "w") as f:
+        f.write('{"schema":"x-data-mcp.official-file-input.v1","files":[]}')
+    uninspectable_error = blocked_path("uninspectable-manifest", bad_manifest)
+
     # ---- mechanical re-verification of the published store ----
     results = {"assertions": [], "versions": {}, "provenance": {}}
 
@@ -246,6 +289,15 @@ def main():
               {"years": len(yearly),
                "first_year": min(yearly), "last_year": max(yearly)})
     results["yearly_service_gate"] = yearly_status
+
+    check("env_absent_blocked_source_not_verified",
+          "SOURCE_NOT_VERIFIED" in env_absent_error, env_absent_error)
+    check("uninspectable_manifest_blocked_source_not_verified",
+          "SOURCE_NOT_VERIFIED" in uninspectable_error, uninspectable_error)
+    results["blocked_paths"] = {
+        "env_absent": env_absent_error,
+        "uninspectable_manifest": uninspectable_error,
+    }
 
     # Publication receipts bound to the collection task.
     receipts = con.execute(

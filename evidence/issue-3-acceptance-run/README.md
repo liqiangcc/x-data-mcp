@@ -10,7 +10,7 @@
 |---|---|
 | 代码 | `6c395d68012628fcc0a6ecee8a91588048dc001d`（`mcp_data --version` 报告 `x-data-mcp 0.2.0-preview.11 6c395d6… NOT_PRODUCTION_READY`） |
 | 构建 | `cargo build --locked --bins`（rustup stable 1.98.1，debug profile） |
-| 时间 | 2026-09-16T06:20:40Z – 06:25:22Z（UTC，见 `run-log.jsonl` 首末行） |
+| 时间 | 2026-09-16T06:43:49Z – 06:48:31Z（UTC，见 `run-log.jsonl` 首末行） |
 | 服务入口 | `mcp_data <initialized-database-path>`（JSON-RPC stdio，`DataApi::new` env 安装钩子） |
 | 环境变量 | `X_DATA_MCP_OFFICIAL_MANIFEST=evidence/issue-3-acceptance-run/snapshot-manifest.json`、`X_DATA_MCP_OFFICIAL_DIR=/home/box/acceptance-run-issue3/snapshot` |
 | 库 | `task_sqlite init /home/box/acceptance-run-issue3/acceptance.sqlite` 新建（schema 12） |
@@ -31,27 +31,37 @@ business_semantics/access_use` 全部 `NOT_VERIFIED`，`production_ready=false`�
 
 1. `initialize` → 服务就绪（协议 `2025-06-18`）
 2. `start_collection` market.daily v1，explicit selection =
-   sz.000002 + sh.600006 + sh.600004 → `task-5784bbb178631af9084eb6cb1d8aab08`，
+   sz.000002 + sh.600006 + sh.600004 → `task-1521f7956120b239e18040af8d399c8f`，
    三 item 受理（`readiness=blocked` 如实伴随受理）
 3. `run_worker_once` → `status=succeeded`，三 item 全部 `success:true`
 4. `query_data` 六条冻结 oracle bar 服务侧读回
 5. `update_data` market.yearly（base=000002 已发布 head）→ 受理后 worker
    执行 → item `success:false`，门禁拒绝原文留痕
-6. 服务退出后直接读 SQLite 做机械复核（不经过服务层）
+6. **blocked-path 留痕**（独立 scratch DB，同一服务二进制）：
+   - env-absent：不注入 `X_DATA_MCP_OFFICIAL_*` → `start_collection` +
+     `run_worker_once` → item 拒绝原文 `SOURCE_NOT_VERIFIED: …` 留痕
+     （`env-absent_item_outcome`）
+   - uninspectable-manifest：`X_DATA_MCP_OFFICIAL_MANIFEST` 指向
+     `files:[]` 畸形 manifest → `from_env` 拒绝安装 → 同路径拒绝
+     （`uninspectable-manifest_item_outcome`）
+   两条与已合并测试 `service_without_env_keeps_daily_blocked` /
+   `service_env_with_uninspectable_manifest_stays_blocked`
+   （`tests/official_market.rs`）一致，本记录为服务级实跑留痕。
+7. 服务退出后直接读 SQLite 做机械复核（不经过服务层）
 
 ## 发布结果
 
 | 证券 | version_id | bars | 首日 | 末日 |
 |---|---|---|---|---|
-| sz.000002 | `collection-version-2990ce6a…be6` | 8479 | 1991-01-29 | 2026-09-14 |
-| sh.600006 | `collection-version-eb79c6b9…317b` | 6467 | 1999-07-27 | 2026-09-14 |
-| sh.600004 | `collection-version-c0a0a182…f2c9` | 5630 | 2003-04-28 | 2026-09-14 |
+| sz.000002 | `collection-version-e868973b…91a1` | 8479 | 1991-01-29 | 2026-09-14 |
+| sh.600006 | `collection-version-67aebe54…92df` | 6467 | 1999-07-27 | 2026-09-14 |
+| sh.600004 | `collection-version-485ebda4…fe1c` | 5630 | 2003-04-28 | 2026-09-14 |
 
-publication receipt（`publication_batches`）：`collection-result-2990ce…` /
-`collection-result-eb79c6…` / `collection-result-c0a0a1…` 各绑定 item
+publication receipt（`publication_batches`）：`collection-result-e86897…` /
+`collection-result-67aebe…` / `collection-result-485ebd…` 各绑定 item
 `["market","<sym>","day"]`。`effective_heads` 三行指向上述版本。
 
-## 验收断言（`results.json`：23/23 PASS）
+## 验收断言（`results.json`：25/25 PASS）
 
 - 发布 bar 数 = `data_versions.record_count` = `daily_bars` 行数；首末日期一致。
 - Oracle bar（`#54` 契约回归 `client_oracle_bars` 冻结值，服务读回+库内复核双路）：
@@ -80,6 +90,11 @@ publication receipt（`publication_batches`）：`collection-result-2990ce…` /
   未实现 + 全部门禁拒绝，无 derived yearly 版本入库。
 - `PRODUCTION_BLOCKERS` 五条原样未解除；受理与版本 provenance note 均携带
   `NOT_PRODUCTION_READY`。
+- blocked-path 服务级留痕（`results.json.blocked_paths`）：无 env 与
+  manifest 不可 inspect 两种配置下，`market.daily` item 均以
+  `SOURCE_NOT_VERIFIED: <全部五条 blocker>` 拒绝，无版本入库；对应已合并
+  测试 `service_without_env_keeps_daily_blocked` /
+  `service_env_with_uninspectable_manifest_stays_blocked`。
 - **C3 caveat**：C3=每10股送转数为链约束间接角色（#169 冻结契约标注
   indirect），C3≠0 事件 24/94；本次发布沿用该角色不另作主张。
 - 非 cat-1 GBBQ 排除计数（provenance note 逐版本记录）：sz.000002=76、
