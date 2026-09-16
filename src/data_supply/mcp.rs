@@ -21,6 +21,7 @@ pub struct DataApi {
     pub observer: Observer<SqliteSupply>,
     pub legacy: SqliteTaskApi,
     pub access: Access,
+    market_source: Option<crate::official_market::TdxMarketSource>,
     #[cfg(target_os = "linux")]
     worker_gate: Option<std::sync::Arc<crate::local_runtime::WorkerGate>>,
 }
@@ -99,9 +100,17 @@ impl DataApi {
                 )?,
             },
             access,
+            market_source: None,
             #[cfg(target_os = "linux")]
             worker_gate: None,
         })
+    }
+    /// Install an inspect()-verified official-file snapshot source. Only the
+    /// market.daily collection item uses it; production installs none, so the
+    /// BlockedSource refusal and PRODUCTION_BLOCKERS gates are unchanged.
+    pub fn with_market_source(mut self, source: crate::official_market::TdxMarketSource) -> Self {
+        self.market_source = Some(source);
+        self
     }
     #[cfg(target_os = "linux")]
     pub fn with_worker_gate(
@@ -645,9 +654,12 @@ impl DataApi {
                             "service execution is busy or stopping; no additional worker started",
                         )
                     })?;
-                let snapshot =
-                    super::worker::run_once(&self.legacy.control, &self.queries.repository.market)
-                        .map_err(mapped)?;
+                let snapshot = super::worker::run_once(
+                    &self.legacy.control,
+                    &self.queries.repository.market,
+                    self.market_source.as_ref(),
+                )
+                .map_err(mapped)?;
                 encode(WorkerOutput {
                     idle: snapshot.is_none(),
                     task_id: snapshot.as_ref().map(|s| s.task.task_id.clone()),

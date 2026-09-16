@@ -198,6 +198,15 @@ pub struct YearlyDerivation {
     pub last_trading_date: NaiveDate,
 }
 
+/// One byte-exact snapshot input consumed while materializing a batch: the
+/// manifest-pinned archive digest plus the member actually read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotInputBinding {
+    pub role: String,
+    pub member: String,
+    pub archive_sha256: String,
+    pub member_sha256: String,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provenance {
     pub source: String,
@@ -209,6 +218,10 @@ pub struct Provenance {
     /// None for daily and legacy records; never infer lineage for old yearly data.
     #[serde(default)]
     pub yearly_derivation: Option<YearlyDerivation>,
+    /// Snapshot archive/member digests this batch was materialized from;
+    /// None for records that predate snapshot-bound provenance.
+    #[serde(default)]
+    pub snapshot_inputs: Option<Vec<SnapshotInputBinding>>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataBatch {

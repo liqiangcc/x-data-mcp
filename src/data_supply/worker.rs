@@ -9,6 +9,7 @@ use crate::{
 pub fn run_once(
     control: &TaskControl<SqliteTasks>,
     market: &SqliteMarket,
+    market_source: Option<&crate::official_market::TdxMarketSource>,
 ) -> Result<Option<TaskSnapshot>, Error> {
     let Some(candidate) = control
         .repository
@@ -47,7 +48,25 @@ pub fn run_once(
         candidate.task.key.operation.as_str(),
         "update_data" | "backfill_data"
     ) {
-        // Compatibility collection tasks retain their existing source refusal.
+        // Only the market.daily collection item may run against an installed
+        // inspected-snapshot source; catalog/yearly/legacy items and any
+        // service without a configured snapshot keep the source refusal.
+        if candidate.task.key.operation == "start_collection"
+            && candidate.task.key.dataset == "market.daily"
+            && candidate.task.key.contract_version == "v1"
+            && let Some(source) = market_source
+        {
+            let runner = crate::official_market::TdxDailyRunner {
+                source,
+                repository: market.clone(),
+                run_id: control.run_id.clone(),
+                published_at: chrono::Utc::now(),
+            };
+            for item in &candidate.items {
+                runner.run_item(&candidate.task.task_id, &item.spec.item_id)?;
+            }
+            return Ok(Some(control.read_task(&candidate.task.task_id)?));
+        }
         return Ok(control.run_selected(candidate, &crate::official_files::BlockedSource)?);
     }
     if candidate.task.key.dataset == "market.yearly" {

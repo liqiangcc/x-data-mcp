@@ -34,6 +34,7 @@ fn daily_fixture() -> MarketDataBatch {
             acquired_at: Utc::now(),
             adapter_version: "fixture".into(),
             yearly_derivation: None,
+            snapshot_inputs: None,
         },
         coverage: CoverageEvidence::complete("fixture only"),
         unit_currency: UnitCurrencyEvidence::confirmed(

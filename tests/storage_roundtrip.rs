@@ -30,6 +30,7 @@ fn sample_batch(symbol: &str, period: Period) -> MarketDataBatch {
             acquired_at: Utc::now(),
             adapter_version: "test".into(),
             yearly_derivation: None,
+            snapshot_inputs: None,
         },
         coverage: x_data_mcp::market_data::CoverageEvidence::complete("test fixture"),
         unit_currency: x_data_mcp::market_data::UnitCurrencyEvidence::confirmed(
