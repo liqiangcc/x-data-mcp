@@ -33,7 +33,7 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 
 **NOT_PRODUCTION_READY — production source convergence stage 1（可执行工程闭环）。**
 
-2026-09-16 Final Gate 裁定（[#46](https://github.com/liqiangcc/x-data-mcp/issues/46#issuecomment-5690659606) / [#54](https://github.com/liqiangcc/x-data-mcp/issues/54#issuecomment-5690661520)）：Windows 实机官方客户端行为证据（#167）已解除两 issue 的外部证据阻塞。#46 的 f0=交易所枚举{0:SZ,1:SH,2:BJ}、f2=通达信行业、f5=研究行业语义已验证，剩余沪深A精确范围/名称/跨文件组合契约 AC 验收；#54 的 2dp 业务归一化 + 仿射链/分位取整行为契约已接受，剩余 #159/#53 冻结矩阵 zero-unexplained-mismatch 全域回归。两 issue 保持 OPEN；#6/#3/#4/#5 门禁不变。
+2026-09-16 Final Gate 裁定（[#3](https://github.com/liqiangcc/x-data-mcp/issues/3#issuecomment-5695684698)）：bounded explicit `market.daily/v1` 官方快照路径与 fixed-base derived `market.yearly/v1` 治理路径均 PASS（三证券真实发布、receipt/lineage/no-change 复用与 fail-closed 留痕完整）；#46/#54 已完成关闭。yearly 的 `LOCAL_PIPELINE_NOT_IMPLEMENTED` 具体描述退休，剩余未实现项仅为 update/backfill 官方源执行。#3 保持 OPEN——默认全目录首次采集依赖 #6 的 P1/P2 产品裁定；update/backfill 真实源验收与部署/消费侧最终验收 NOT_RUN；overall `NOT_PRODUCTION_READY` 不变。
 
 已有 Rust 核心、任务受理/取消/重试、发布校验、目录核心和 stdio MCP 原型。
 生产来源决策见 [Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)，
@@ -48,8 +48,10 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 - 源端直接年线不再是生产契约；MCP `year` 表示本地派生输出。
 - 既有 `evidence/` 和历史文档原样保留；历史结论不等于当前生产状态。
 
-#6/#46 目录与研究行业二级文件能力、#54 GBBQ/QFQ 数值语义、官方文件长期服务器获取/使用边界、
-.day/gbbq 独立快照的一致性仍未通过。[.day原始解析器](docs/day-file.md)已实现；GBBQ、QFQ 和真实文件发布闭环尚未实现。本地[年线聚合核心](docs/yearly.md)已实现，尚未接入生产入口。
+#6 默认目录范围与 P1/P2 产品裁定、官方文件长期服务器获取/使用边界、.day/gbbq 独立快照一致性、
+update/backfill 官方源真实验收仍未通过。[.day原始解析器](docs/day-file.md)、GBBQ 解码/业务归一化、
+QFQ 仿射链与本地[年线聚合](docs/yearly.md)均已实现并有界验收——bounded 官方快照 daily→yearly
+治理链路经 FG 裁定 PASS（见上文），这不解除默认全目录与 update/backfill 门禁。
 已加入保守 DBF 容器解析基础（仅保留字段原始字节，不解释代码页或目录业务语义），见 [#46 实施记录](docs/tasks/issue-46.md)；这不解除目录契约门禁。
 已提供[本地输入清单核验](docs/snapshot-input.md)，字节匹配不代表跨文件一致或来源授权。
 默认装配的 `OfficialFilePipeline` 始终返回 `SOURCE_NOT_VERIFIED`，没有开关可绕过门禁。
@@ -85,7 +87,7 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 Stage B 引入 schema v3；当前显式 task_sqlite init/upgrade 使用 schema v9；不自动迁移真实行情。默认两个 stdio 入口均未切换到行情写入。
 历史固定 daily 可派生 immutable yearly，但不推进 yearly head；current-head 同时核对 daily/yearly head、任务修订与占用。
 实现、完整性扫描成本、测试入口及未验证项见 [Stage B 记录](docs/tasks/issue-79.md)。
-当前仍 NOT_PRODUCTION_READY；该切片不解除 #54/#6/#46/#71 来源门禁。
+当前仍 NOT_PRODUCTION_READY；该切片不解除来源门禁（#54/#46 后经 FG 验收关闭，#6/#71 等仍 OPEN）。
 
 ## 验证
 
@@ -146,13 +148,13 @@ Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README
 ## 更新/补采开发中（#92，PR #93）
 
 应用层已有 daily 显式区间合并判定及 SQLite 条件提交：有变化使用新版本，无变化记录独立复用结果；两者均与任务完成/占用释放同事务。schema v5 只增加更新结果表，显式 init/upgrade 才生效，不升级已部署预览库。
-segment 完整不能代替合并全范围覆盖证据，旧 head/revision/固定版本变更均拒绝，不自动 rebase。当前仅 fixture 验证过发布链。MCP 已接入显式 daily 的 update_data/backfill_data 受理（共 15 工具），readiness=blocked；默认选择、自动缺口、catalog 更新及真实文件执行仍未完成；yearly 显式分支见下文，不能通过提供证据字符串解除生产门禁。见 [#92 实施记录](docs/tasks/issue-92.md)。
+segment 完整不能代替合并全范围覆盖证据，旧 head/revision/固定版本变更均拒绝，不自动 rebase。当前仅 fixture 验证过发布链。MCP 已接入显式 daily 的 update_data/backfill_data 受理（共 15 工具），readiness=blocked；默认选择、自动缺口、catalog 更新及 update/backfill 真实文件执行仍未完成；yearly 显式分支见下文，不能通过提供证据字符串解除生产门禁。见 [#92 实施记录](docs/tasks/issue-92.md)。
 
 更新/补采调用的 v1 输入为 request_id、dataset=market.daily、contract_version=v1、items；每项显式提供 entity、base_version_id、start_date、end_date。能力发现按 operation 返回准确 schema。受理响应的 contract_version 标识持久执行契约 explicit-range-task-v1；当前 worker 只记录 SOURCE_NOT_VERIFIED，不发布行情。已部署 preview.2 的 13 工具与本开发分支不同，本段不是重新部署完成声明。
 
 显式 daily 更新的 RangeRunner 已接入应用 worker：先查收据，running 无可靠结果不重采，已知来源拒绝记录失败。fixture 测试可显式注入可信 provider 完成原子发布及查询；生产 MCP 不能选择它，仍只使用 OfficialFilePipeline。get_task_progress 同时返回 frozen_daily_ranges 与核验后的 range_results，包含原/结果版本、无变化标记和实际采集时间。
 
-固定 daily 到 yearly 的应用候选构造在 [#94 切片](docs/tasks/issue-94.md)中实现：核验 base/证据后本地聚合，保留逐年 lineage，并复用现有双 head 条件发布。已接入显式 yearly 更新/补采工具和受控 worker，成功执行只用 fixture verifier 验证；生产 verifier 仍拒绝，不代表来源通过。
+固定 daily 到 yearly 的应用候选构造在 [#94 切片](docs/tasks/issue-94.md)中实现：核验 base/证据后本地聚合，保留逐年 lineage，并复用现有双 head 条件发布。已接入显式 yearly 更新/补采工具和受控 worker；bounded 官方快照链路的生产 `OfficialYearlyVerifier` 已实现并经 FG 有界验收（见上文裁定），env 未装配时仍拒绝，不代表默认全目录来源通过。
 
 yearly 内部任务契约现已冻结年度、base digest 与发布意图；schema v6 新增 yearly 执行结果，无变化复用已有版本、变化原子发布。两者均保留本次执行审计，不重写旧版本。显式 task_sqlite upgrade 才升级；线上预览库未迁移。公开 yearly 分支逐项传入 entity、base_daily_version_id、years、publication；mode 为 historical_fixed_base（可指定 comparison_version_id）或 current_head（expected_yearly_head 可空）。get_task_progress 返回 frozen_yearly_inputs/yearly_results，缺证据或篡改拒绝；生产 readiness 仍 blocked。
 
