@@ -1,7 +1,7 @@
 //! `TdxMarketSource` / `TdxDailyRunner` — official-file snapshot source for
 //! market.daily collection. Synthetic fixtures cover fail-closed behavior;
 //! the retained gen-2 snapshot (when present) covers the end-to-end oracle.
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use std::{io::Write, path::Path, str::FromStr};
@@ -878,105 +878,85 @@ fn service_env_install_publishes_daily_and_derives_yearly() {
     let record = &page["records"][0];
     assert_eq!(record["date"], "2000-01-10");
     assert_eq!(record["close"], "-8.06");
-
-    // Service-level yearly stays gated: the worker's OfficialYearlyVerifier
-    // is unimplemented, so an update_data/market.yearly task fails closed.
-    let gated = api
+    // Derived yearly through the real worker path: update_data/market.yearly
+    // → YearlyRunner + OfficialYearlyVerifier (env-installed source). One
+    // complete natural year plus the still-running one.
+    let yearly = api
         .call(
             "update_data",
-            json!({"dataset":"market.yearly","request_id":"yr-gated","contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_daily_version_id":head,"years":[2000],"publication":{"mode":"current_head","expected_yearly_head":null}}]}),
+            json!({"dataset":"market.yearly","request_id":"yr-1","contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_daily_version_id":head,"years":[2000,2026],"publication":{"mode":"current_head","expected_yearly_head":null}}]}),
         )
         .unwrap();
     api.call("run_worker_once", json!({})).unwrap();
-    let gated_task = market.task(gated["task_id"].as_str().unwrap()).unwrap();
-    let gated_error = gated_task.items[0]
-        .outcome
-        .as_ref()
-        .unwrap()
-        .error
-        .as_deref()
-        .unwrap();
+    let task = market.task(yearly["task_id"].as_str().unwrap()).unwrap();
     assert!(
-        gated_error.contains("SOURCE_NOT_VERIFIED")
-            && gated_error.contains("LOCAL_PIPELINE_NOT_IMPLEMENTED"),
-        "expected the yearly verifier gate, got {gated_error:?}"
+        task.items[0].outcome.as_ref().unwrap().success,
+        "yearly item failed: {:?}",
+        task.items[0].outcome
     );
-
-    // The derivation chain itself is exercised through the same runner the
-    // worker uses, with the test-injected verifier that existing
-    // yearly_publication tests rely on (the trait exists for injection; the
-    // official verifier above is untouched).
-    use std::collections::BTreeSet;
-    use x_data_mcp::{
-        market_data::CoverageEvidence,
-        market_storage::compat::CheckedRecord,
-        yearly_publication::{
-            DerivationEvidence,
-            runner::{YearlyExecution, YearlyRunner, YearlyVerifier},
-        },
+    let yearly_scope = Scope {
+        symbol: "sz.000002".into(),
+        period: Period::Year,
     };
-    struct FixtureVerifier;
-    impl YearlyVerifier for FixtureVerifier {
-        fn verify(
-            &self,
-            base: &CheckedRecord,
-            years: &BTreeSet<i32>,
-            at: DateTime<Utc>,
-        ) -> Result<DerivationEvidence, SourceError> {
-            Ok(DerivationEvidence {
-                base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
-                years: years.clone(),
-                as_of: at
-                    .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
-                    .date_naive(),
-                coverage: CoverageEvidence {
-                    status: CoverageStatus::Complete,
-                    reason: "FIXTURE: derived from snapshot-published daily; not listing history"
-                        .into(),
-                },
-            })
-        }
+    let yearly_head = market
+        .effective_head(&yearly_scope)
+        .unwrap()
+        .expect("yearly head");
+    let record = market.fixed(&yearly_head).unwrap();
+    let annual = &record.raw()["local_yearly_derivation_v1"]["annual"];
+    assert_eq!(annual["base_daily_version_id"], json!(head));
+    let records = annual["records"].as_array().unwrap();
+    assert_eq!(records.len(), 2);
+    let (finished, running) = (&records[0], &records[1]);
+    assert_eq!(finished["lineage"]["base_daily_version_id"], json!(head));
+    assert_eq!(
+        finished["lineage"]["algorithm_version"],
+        "local-natural-year-v1"
+    );
+    assert_eq!(finished["year_unfinished"], false);
+    assert_eq!(running["year_unfinished"], true);
+
+    // Read-back through the public query equals an independent recompute of
+    // the same fixed daily base.
+    let expected = x_data_mcp::yearly::aggregate(
+        market.fixed(&head).unwrap().version(),
+        Some(&[2000, 2026].into()),
+        chrono::Utc::now()
+            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+            .date_naive(),
+    )
+    .unwrap();
+    let page = api
+        .call(
+            "query_data",
+            json!({"dataset":"market.yearly","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sz","code":"000002"}},"filter":{"kind":"yearly","start_year":2000,"end_year":2026},"version":{"kind":"latest_per_entity"},"page_size":10,"cursor":null}),
+        )
+        .unwrap();
+    let rows = page["records"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for (row, annual) in rows.iter().zip(expected.records.iter()) {
+        assert_eq!(row["date"], json!(annual.bar.date.to_string()));
+        assert_eq!(row["open"], json!(annual.bar.open.to_string()));
+        assert_eq!(row["high"], json!(annual.bar.high.to_string()));
+        assert_eq!(row["low"], json!(annual.bar.low.to_string()));
+        assert_eq!(row["close"], json!(annual.bar.close.to_string()));
     }
-    let derived = api
+
+    // Same frozen inputs again: the result reuses the version; the scope
+    // keeps exactly one published yearly version.
+    let again = api
         .call(
             "update_data",
-            json!({"dataset":"market.yearly","request_id":"yr-1","contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_daily_version_id":head,"years":[2000],"publication":{"mode":"current_head","expected_yearly_head":null}}]}),
+            json!({"dataset":"market.yearly","request_id":"yr-2","contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_daily_version_id":head,"years":[2000,2026],"publication":{"mode":"current_head","expected_yearly_head":yearly_head}}]}),
         )
         .unwrap();
-    let task_id = derived["task_id"].as_str().unwrap();
-    let item_id = market.task(task_id).unwrap().items[0].spec.item_id.clone();
-    // derived_at determines the verification as-of; the retained .day member
-    // ends 2026-09-14, so pick a later instant or the aggregation's
-    // bar-date<=as_of rule fails closed as designed.
-    let runner = YearlyRunner {
-        repository: market.clone(),
-        run_id: "run-env".into(),
-        derived_at: "2026-09-15T00:00:00Z".parse().unwrap(),
-    };
-    let YearlyExecution::Published(receipt) = runner
-        .run_item(task_id, &item_id, &FixtureVerifier)
-        .unwrap()
-    else {
-        let task = market.task(task_id).unwrap();
-        panic!(
-            "expected yearly publication; outcome: {:?}",
-            task.items[0].outcome
-        )
-    };
-    let record = market.fixed(&receipt.version_id).unwrap();
-    let records = record.raw()["local_yearly_derivation_v1"]["annual"]["records"]
-        .as_array()
-        .unwrap();
-    assert_eq!(records.len(), 1);
+    api.call("run_worker_once", json!({})).unwrap();
+    let task = market.task(again["task_id"].as_str().unwrap()).unwrap();
+    assert!(task.items[0].outcome.as_ref().unwrap().success);
+    assert_eq!(market.versions(&yearly_scope).unwrap().len(), 1);
     assert_eq!(
-        chrono::NaiveDate::parse_from_str(records[0]["bar"]["date"].as_str().unwrap(), "%Y-%m-%d")
-            .unwrap()
-            .year(),
-        2000
-    );
-    assert_eq!(
-        record.raw()["local_yearly_derivation_v1"]["annual"]["records"][0]["lineage"]["base_daily_version_id"],
-        json!(head)
+        market.effective_head(&yearly_scope).unwrap().as_deref(),
+        Some(yearly_head.as_str())
     );
 }
 
@@ -1029,4 +1009,124 @@ fn service_env_with_uninspectable_manifest_stays_blocked() {
     api.call("run_worker_once", json!({})).unwrap();
     let task = market.task(accepted["task_id"].as_str().unwrap()).unwrap();
     blocked_outcome(task.items[0].outcome.as_ref().unwrap().error.clone());
+}
+
+#[test]
+fn service_yearly_fail_closed_paths() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(snap) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; yearly fail-closed test skipped");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let manifest_path = dir.path().join("snapshot-manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let env = EnvReset::install(&manifest_path, &snap.root);
+
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let api = DataApi::new(tasks, "run-env".into(), Access::local()).unwrap();
+    let accepted = api
+        .call(
+            "start_collection",
+            json!({"request_id":"daily-1","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sz","code":"000002"}]}}),
+        )
+        .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let task = market.task(accepted["task_id"].as_str().unwrap()).unwrap();
+    assert!(task.items[0].outcome.as_ref().unwrap().success);
+    let head = market
+        .effective_head(&Scope {
+            symbol: "sz.000002".into(),
+            period: Period::Day,
+        })
+        .unwrap()
+        .expect("published daily head");
+
+    let yearly_request = |request_id: &str, base: &Value, years: &[i32]| json!({"dataset":"market.yearly","request_id":request_id,"contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_daily_version_id":base,"years":years,"publication":{"mode":"current_head","expected_yearly_head":null}}]});
+    let item_error = |task_id: &str| {
+        market.task(task_id).unwrap().items[0]
+            .outcome
+            .as_ref()
+            .unwrap()
+            .error
+            .clone()
+            .unwrap()
+    };
+
+    // A base version that does not exist is refused at acceptance.
+    assert!(
+        api.call(
+            "update_data",
+            yearly_request("yr-absent", &json!("no-such-version"), &[2000])
+        )
+        .is_err(),
+        "unknown base must not be accepted"
+    );
+
+    // A requested year outside the fixed base range fails closed (the
+    // acceptance coverage pre-check reports the missing year; the verifier's
+    // own re-aggregation would reject it at run time the same way).
+    let missing = api
+        .call(
+            "update_data",
+            yearly_request("yr-missing", &json!(head), &[1989]),
+        )
+        .map(|_| ())
+        .unwrap_err();
+    assert!(
+        missing.message.contains("absent"),
+        "expected MissingYear refusal, got {missing:?}"
+    );
+
+    // An accepted base whose durable record no longer matches its pinned
+    // digest fails closed before any derivation.
+    let tampered = api
+        .call(
+            "update_data",
+            yearly_request("yr-tampered", &json!(head), &[2000]),
+        )
+        .unwrap();
+    rusqlite::Connection::open(market.tasks.path())
+        .unwrap()
+        .execute(
+            "UPDATE data_versions SET content_digest='tampered' WHERE version_id=?1",
+            [&head],
+        )
+        .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let error = item_error(tampered["task_id"].as_str().unwrap());
+    assert!(
+        error.contains("INTEGRITY"),
+        "expected integrity refusal, got {error:?}"
+    );
+    rusqlite::Connection::open(market.tasks.path())
+        .unwrap()
+        .execute(
+            "UPDATE data_versions SET content_digest=json_extract(compat_json,'$.integrity_sha256') WHERE version_id=?1",
+            [&head],
+        )
+        .unwrap();
+
+    // Without the official-file source the verifier gate refuses.
+    drop(env);
+    let noenv = api
+        .call(
+            "update_data",
+            yearly_request("yr-noenv", &json!(head), &[2000]),
+        )
+        .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let error = item_error(noenv["task_id"].as_str().unwrap());
+    assert!(
+        error.contains("SOURCE_NOT_VERIFIED")
+            && error.contains("official-file source not installed"),
+        "expected source-install refusal, got {error:?}"
+    );
 }
