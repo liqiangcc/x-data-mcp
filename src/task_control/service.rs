@@ -268,6 +268,7 @@ mod selected_tests {
                 ItemOutcome {
                     success: false,
                     error: Some("unexpected execution".into()),
+                    evidence: None,
                 }
             }
         }

@@ -407,6 +407,7 @@ impl PublishPlan {
                 ItemOutcome {
                     success: true,
                     error: None,
+                    evidence: None,
                 },
             ),
             Utc::now(),

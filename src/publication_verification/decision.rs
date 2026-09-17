@@ -147,6 +147,7 @@ pub fn prepare(
     after.items[0].outcome = Some(ItemOutcome {
         success: true,
         error: None,
+        evidence: None,
     });
     after.claims.clear();
     let receipt = Receipt {

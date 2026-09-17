@@ -29,7 +29,7 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
    验收必须分别保存包/member hash、取得区间、语义契约版本和组合依据；同天下载/相同 ETag 不足。
 5. LOCAL_PIPELINE（已退休）：#187 FG 裁定 bounded daily/yearly/update/verify+backfill
    四条链路真实源验收 PASS，`LOCAL_PIPELINE_NOT_IMPLEMENTED` blocker 整条移除。
-   尚无通过以上门禁的真实目录（#6：缺名成员按现行契约 reject_candidate，全目录真实快照验收 #194 在途）与生产部署。接口/fixture 测试不能填补来源证据。
+   尚无通过以上门禁的真实目录（#6：缺名成员按产品裁定 5710586446 受治理排除，全目录真实快照验收 #194 裁定后重跑在途）与生产部署。接口/fixture 测试不能填补来源证据。
 
 ## 跨文件一致性 validator（#131）
 

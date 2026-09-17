@@ -9,7 +9,9 @@
 //! `SqliteCatalog::publish_official`. Every failure — missing members,
 //! malformed lines, rejected candidates — maps to an item error while the
 //! previous catalog stays published; nothing is skipped, repaired or
-//! guessed.
+//! guessed. Nameless scope members are governed `reject_candidate`
+//! exclusions (P1 ruling, #6 comment 5710586446): they are enumerated
+//! verbatim in the item outcome evidence and never enter the candidate.
 //!
 //! The executor is only installed when `X_DATA_MCP_OFFICIAL_MANIFEST` and
 //! `X_DATA_MCP_OFFICIAL_DIR` are both configured; otherwise the catalog
@@ -81,7 +83,7 @@ impl TdxCatalogExecutor {
         Ok(bytes)
     }
 
-    fn run(&self, item: &ItemSpec) -> Result<String, String> {
+    fn run(&self, item: &ItemSpec) -> Result<(String, serde_json::Value), String> {
         if item.target.get("scope").and_then(|v| v.as_str()) != Some("current_sh_sz_a") {
             return Err(format!(
                 "CATALOG_REJECTED: unsupported catalog scope {}",
@@ -168,30 +170,70 @@ impl TdxCatalogExecutor {
                 .map(|(market, code)| format!("{market}:{code}"))
                 .collect::<Vec<_>>()
                 .join(",");
-            return Err(format!("CATALOG_REJECTED: nameless scope members: {names}"));
+            return Err(format!(
+                "CATALOG_REJECTED: no publishable members; nameless scope members: {names}"
+            ));
         };
+        let published_count = snapshot.records.len();
 
         let expected = self
             .catalog
             .selection_facts()
             .map_err(|e| format!("CATALOG_SOURCE_FAILURE: catalog head unreadable: {e}"))?
             .catalog_head;
-        self.catalog
+        let version_id = self
+            .catalog
             .publish_official(snapshot, expected.as_deref(), Utc::now())
-            .map_err(|e| format!("CATALOG_REJECTED: {e}"))
+            .map_err(|e| format!("CATALOG_REJECTED: {e}"))?;
+        let evidence = serde_json::json!({
+            "catalog_version_id": version_id,
+            "published_members": published_count,
+            "reject_candidate_exclusions": outcome
+                .nameless
+                .iter()
+                .map(|(market, code)| serde_json::json!({
+                    "member": format!("{market}:{code}"),
+                    "reason": "reject_candidate: no name row in infoharbor_ex.code",
+                }))
+                .collect::<Vec<_>>(),
+            "missing_industry": outcome
+                .missing_industry
+                .iter()
+                .map(|(market, code)| format!("{market}:{code}"))
+                .collect::<Vec<_>>(),
+            "t_code_residuals": outcome
+                .t_code_residuals
+                .iter()
+                .map(|r| serde_json::json!({
+                    "member": format!("{}:{}", r.member.0, r.member.1),
+                    "t_code": r.t_code,
+                }))
+                .collect::<Vec<_>>(),
+            "t_dictionary_checked": outcome.t_dictionary_checked,
+            "scope_partition": {
+                "total": counts.total,
+                "scope": counts.scope,
+                "bj_market": counts.bj_market,
+                "b_share": counts.b_share,
+                "anomalous": counts.anomalous,
+            },
+        });
+        Ok((version_id, evidence))
     }
 }
 
 impl Executor for TdxCatalogExecutor {
     fn execute(&self, _key: &crate::task_control::CommandKey, item: &ItemSpec) -> ItemOutcome {
         match self.run(item) {
-            Ok(_version_id) => ItemOutcome {
+            Ok((_version_id, evidence)) => ItemOutcome {
                 success: true,
                 error: None,
+                evidence: Some(evidence),
             },
             Err(error) => ItemOutcome {
                 success: false,
                 error: Some(error),
+                evidence: None,
             },
         }
     }

@@ -347,6 +347,7 @@ fn stopped_check_is_atomic_preserves_successes_and_retry_uses_new_task() {
                 ItemOutcome {
                     success: true,
                     error: None,
+                    evidence: None,
                 },
             ),
         )

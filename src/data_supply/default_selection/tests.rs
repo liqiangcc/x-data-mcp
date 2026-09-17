@@ -437,6 +437,7 @@ fn failed_cancelled_and_interrupted_tasks_keep_their_marker() {
                 task::ItemOutcome {
                     success: false,
                     error: Some("fixture".into()),
+                    evidence: None,
                 },
             ),
         )
@@ -462,6 +463,7 @@ fn failed_cancelled_and_interrupted_tasks_keep_their_marker() {
                 task::ItemOutcome {
                     success: false,
                     error: Some("stopped".into()),
+                    evidence: None,
                 },
             ),
         )
@@ -753,6 +755,7 @@ fn evidence_is_deterministic_and_covers_every_proof() {
                 task::ItemOutcome {
                     success: false,
                     error: Some("again".into()),
+                    evidence: None,
                 },
             ),
         )

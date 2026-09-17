@@ -591,6 +591,7 @@ fn fail_range_without_publication(f: &Fixture) {
                     ItemOutcome {
                         success: false,
                         error: Some("fixture: no publication attempted".into()),
+                        evidence: None,
                     },
                 ),
             )

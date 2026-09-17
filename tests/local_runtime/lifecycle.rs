@@ -26,6 +26,7 @@ impl Executor for Blocking {
         ItemOutcome {
             success: false,
             error: Some("test-only controlled execution".into()),
+            evidence: None,
         }
     }
 }

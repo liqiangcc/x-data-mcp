@@ -108,7 +108,8 @@ SnapshotManifest inspect (snapshot.rs, 既有)
   不同交易所的歧义由 S 成员本身消化——ex.code 与 tdxhy.cfg 的 code
   集合关系已在 #46 证据中验证（ex.code ⊆ tdxhy.cfg 码集且每码至多一
   行）；若某 code 在 ex.code 出现多行 → `IdentityConflict`（AC-10）。
-- 缺名成员 → 按 §5-P1 未决策略处理，**默认 fail-closed**。
+- 缺名成员 → 按 §5-P1 已裁定策略：**受治理排除**（`reject_candidate`
+  排除项，verbatim 留痕入任务结果证据），不阻断目录发布。
 
 ### S5 行业解析（新增）
 
@@ -131,12 +132,12 @@ SnapshotManifest inspect (snapshot.rs, 既有)
 | `symbol` | f1 | 6 位，前导零保留 |
 | `exchange` | f0 | `0→Shenzhen, 1→Shanghai`（注意 Dict.html 枚举方向，逐行断言不复用代码前缀猜测） |
 | `security_type` | — | 恒 `AShare`（S 范围已排除非 A） |
-| `name` | ex.code f1 | GB18030；缺名按 §5-P1 |
+| `name` | ex.code f1 | GB18030；缺名成员按 §5-P1 受治理排除 |
 | `source_security_id` | 派生 | `tdxhy:{f0}:{f1}` 确定性拼串——官方文件内身份即 (exchange,code)，不引入额外 ID 命名空间 |
 | `industry` | f5[:5] + TDXRSHY | `Assigned{scheme, code:"X····", name}` 或 `Missing` |
 | `source` | 派生 | `official-file:<manifest_sha256[:16]>`——绑定整个已 inspect 快照 |
 | `acquired_at` | manifest `acquisition_completed_at` | 获取时间，**不冒充行业生效时间**（#6 明示） |
-| `completeness` | 派生 | `Complete{expected_count = |S|}`，语义见 §4.2 |
+| `completeness` | 派生 | `Complete{expected_count = |S| − |缺名排除|}`，语义见 §4.2 |
 
 ### S7 发布
 
@@ -200,13 +201,17 @@ E_ANOM = { row | f0 ∈ {0,1} ∧ (f2 = ε ∨ f5 = ε) ∧ f1 ∉ B 股段 }   
 
 ---
 
-## 5. 产品参数（两项均经 FG 5700226878 裁定；设计期分析保留原文）
+## 5. 产品参数（P1 经产品裁定 5710586446、P2 经 FG 5700226878 裁定；设计期分析保留原文）
 
-### P1 缺名成员处置 `name_missing_policy` — **已裁定（FG 5700226878）**
+### P1 缺名成员处置 `name_missing_policy` — **已裁定（产品裁定 5710586446，取代 FG 5700226878 的"现行契约即确定行为"注记）**
 
-> 2026-09-17 FG 裁定：现行契约（名称必填、缺名 `reject_candidate`
-> fail-closed）即为确定行为，不是未决实现选择；`keep_with_name_missing`
-> 或 `alt_name_source` 需显式需求变更/新授权来源。以下为设计期分析原文。
+> 2026-09-17 需求侧裁定（#6 评论 5710586446，依据 #194 真实快照验收
+> 证据）：缺名 scope 成员以 `reject_candidate` **显式排除并
+> verbatim 留痕**（成员清单+原因入任务结果证据，可审计），其余具名
+> 成员正常发布。这是需求变更而非校验放宽：缺名成员仍是受治理排除项，
+> 不可静默进入目录。missing_industry/t_code_residuals 诊断对已发布
+> 成员核算并留痕。以下为设计期分析原文（`reject_candidate` 行的
+> "整候选拒绝"语义已被上述裁定取代）。
 
 背景：S 成员 `001235/300728/601206/603302/603361/688688` 在 base.zip
 全部成员中无名称行（#168 AC-02 PARTIAL）。策略枚举：
@@ -217,9 +222,10 @@ E_ANOM = { row | f0 ∈ {0,1} ∧ (f2 = ε ∨ f5 = ε) ∧ f1 ∉ B 股段 }   
 | `keep_with_name_missing` | 保留成员，`name` 字段空缺 + 显式 `name_status=name_missing` | `name` 现为非空必填 → 需 `Option<String>`/状态列（schema 变更）+ `validate_record` 放行 + 消费侧（default_selection/mcp 投影）对无名成员的行为契约 |
 | `alt_name_source` | 采用另一**已授权且有独立身份绑定**的名称来源 | 需该来源先完成 #46 级锚定证据；当前无候选 |
 
-**设计冻结默认值 = `reject_candidate`**：不猜名、不按代码规律补齐、不
-静默放行。`keep_with_name_missing` 的实现路径在此文档预留（§6 预留列
-位），但默认分支不得提前实现其语义。
+**裁定后语义 = `reject_candidate` 排除**：不猜名、不按代码规律补齐、不
+静默放行——缺名成员显式排除并 verbatim 留痕，具名成员照常发布。
+`keep_with_name_missing` 的实现路径在此文档预留（§6 预留列
+位），但不得提前实现其语义。
 
 ### P2 行业分类标准 `industry_scheme` — **已裁定（FG 5700226878）**
 
@@ -272,7 +278,7 @@ ALTER TABLE catalog_versions ADD COLUMN input_manifest_sha256 TEXT;
 | AC | 设计落点 | 验收方式 | 残余门禁 |
 |---|---|---|---|
 | AC-01 范围清单 | §3 范围+排除枚举 | 单测：合成 tdxhy.cfg 断言 S/E 对账恒等式与逐条枚举 | "当前上市完整性"仍 UNANCHORED |
-| AC-02 行业归属 | §2-S5 + §5-P2 | 单测：L2 派生+字典解析+scheme 标签；缺名 6 成员按 P1 默认拒绝 | 分类标准待 #6 裁定 |
+| AC-02 行业归属 | §2-S5 + §5-P2 | 单测：L2 派生+字典解析+scheme 标签；缺名 6 成员按 P1 裁定排除并 verbatim 留痕 | — |
 | AC-03 后续采集读取 | `WriteSelection::Catalog`/default_selection 复用 | 现有消费侧测试不回归 + industry_code=tdx L2 语义标注 | — |
 | AC-04 失败保旧 | `CatalogService::rejected` 复用 | 单测：S1–S6 各失败类注入 → Rejected+旧 head | — |
 | AC-05 行业缺失保留 | S5 `Missing` 路径 | 单测：L2 不在字典 → Missing{reason}+成员保留 | — |
@@ -282,7 +288,7 @@ ALTER TABLE catalog_versions ADD COLUMN input_manifest_sha256 TEXT;
 | AC-09 完整性异常 | 对账恒等式+dup/empty 拒绝 | 单测：缺行/重复 (f0,f1)/S=0 → 拒绝 | — |
 | AC-10 冲突拒绝 | `IdentityConflict` 复用+ex.code 多行 | 单测：一码多名/字段不合形 → 拒绝 | — |
 | AC-11 行业冲突降级 | `Conflicted` 保留 | 本实现不产生；枚举存在性测试 | 多来源合并待裁定 |
-| AC-12 真实运行闭环 | 不在本切片 | — | **仍 NOT RUN**：需 #71 边界、P1/P2 裁定、真实快照接入验收 |
+| AC-12 真实运行闭环 | 不在本切片 | — | **仍 NOT RUN**：需 #71 边界、真实快照接入验收（#194 v2） |
 
 ## 8. 测试矩阵（实现期复用）
 
@@ -290,7 +296,7 @@ ALTER TABLE catalog_versions ADD COLUMN input_manifest_sha256 TEXT;
 |---|---|
 | 解析器 | 6 字段不合形/f0 越界/f1 非 6 位/f5 形态错/f3f4 非空/CRLF 缺失/GB18030 非法字节 → 全 fail-closed；前导零保留 |
 | 范围 | S/E_BJ/E_BSH/E_ANOM 互斥穷尽；对账违例 → 拒绝；gen-2 基线计数差异如实报告不失败 |
-| 名称 join | 缺名 → P1 默认 `reject_candidate`；一码多名 → IdentityConflict |
+| 名称 join | 缺名 → P1 裁定 `reject_candidate` 受治理排除（verbatim 留痕）；一码多名 → IdentityConflict |
 | 行业 | len(f5)<5 → `INDUSTRY_LEVEL_NOT_RESOLVABLE` 拒绝；L2 不在 TDXRSHY → Missing 保留；scheme 标签恒 `tdx_research_industry` |
 | 发布 | manifest sha 绑定进版本；同快照幂等；expected-head 冲突 → Conflict；成员消失 → MemberDisappeared |
 | 读路径 | digest/投影/scheme 列复核；fixture 行 scheme=NULL 兼容 |
@@ -305,9 +311,9 @@ ALTER TABLE catalog_versions ADD COLUMN input_manifest_sha256 TEXT;
    方法、读路径投影扩展。
 4. **P3 — TdxCatalogSource + worker 接线**：`CatalogService::refresh`
    生产装配、`catalog:current_sh_sz_a` item 执行器替换、provenance
-   诊断输出。**两项产品裁定未落地前 P3 不得合入**——默认
-   `reject_candidate` 虽然 fail-closed，但缺名拒绝语义本身是待裁定
-   行为面。
+   诊断输出。（历史注记：两项产品裁定均已落地——P1 经
+   5710586446、P2 经 5700226878；P3 已在裁定前按当时默认
+   fail-closed 语义合入，P1 裁定后按排除语义修订。）
 
 ## 10. 本设计明确不做
 

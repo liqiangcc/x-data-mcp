@@ -181,6 +181,7 @@ pub fn prepare(
     finished.items[0].outcome = Some(ItemOutcome {
         success: true,
         error: None,
+        evidence: None,
     });
     changed(&mut finished, now)?;
     let receipt = Receipt {
