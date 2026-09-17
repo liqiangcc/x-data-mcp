@@ -242,7 +242,10 @@ fn require_confirmed(
     }
 }
 
-pub(crate) fn validate_and_deduplicate(
+/// Governed batch validation shared by the publication path and the
+/// #187 acceptance seed tool (`seed_gap_subject`); not a public API.
+#[doc(hidden)]
+pub fn validate_and_deduplicate(
     batch: &MarketDataBatch,
 ) -> Result<(Vec<Bar>, ValidationSummary), PublishError> {
     if batch.bars.is_empty() {

@@ -24,7 +24,8 @@ use crate::{
     },
     market_update::{
         DateRange, Evidence,
-        runner::{Acquisition, ItemExecution, RangeProvider},
+        publication::CombinedEvidence,
+        runner::{Acquisition, CombinedCandidate, ItemExecution, RangeProvider},
     },
     publish::{self, EffectiveVersion},
     qfq,
@@ -33,7 +34,7 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::{io::Read, path::PathBuf};
+use std::{collections::BTreeMap, io::Read, path::PathBuf};
 
 pub const SOURCE_NAME: &str = "tdx-official-file-snapshot";
 pub const ADAPTER_VERSION: &str = "tdx-market-source-v1";
@@ -363,6 +364,170 @@ impl RangeProvider for TdxRangeProvider<'_> {
     }
 }
 
+/// #187 Phase C provider for `backfill_data` under the default frozen-gap
+/// contract only — never for explicit ranges and never for `update_data`
+/// refresh. Unlike `TdxRangeProvider`, it builds the trusted combined
+/// candidate a changed publication requires: the fixed base merged with
+/// real source bars inside the accepted union range, outside-range base
+/// values preserved verbatim — the same merge `market_update::prepare`
+/// approves before `prepare_range` re-checks the frozen inputs.
+///
+/// The combined record claims `Complete` coverage only when the merged
+/// records equal the full materialized source history — honest for a base
+/// whose only local holes were the frozen proven gaps — and otherwise
+/// carries the base coverage forward. `revision_ref` binds what `acquire`
+/// can see (base identity + accepted range + candidate id); the frozen
+/// proven-gap ids that authorize in-range value changes live in the task's
+/// frozen inputs, are re-checked by `prepare_range`'s frozen-inputs match,
+/// and are not visible to this layer — the reference says so rather than
+/// naming ids it cannot read.
+pub struct TdxBackfillProvider<'a> {
+    pub source: &'a TdxMarketSource,
+    pub published_at: DateTime<Utc>,
+}
+
+impl RangeProvider for TdxBackfillProvider<'_> {
+    fn acquire(
+        &self,
+        base: &CheckedRecord,
+        range: &DateRange,
+        candidate_id: &str,
+    ) -> Result<Acquisition, SourceError> {
+        let batch = self.source.materialize_daily(&base.version().symbol)?;
+        // Same pinned snapshot = same QFQ basis: the base's declared
+        // snapshot inputs must equal the member/archive digests this
+        // installed source actually read.
+        if base.batch.provenance.source != SOURCE_NAME
+            || base.batch.provenance.source_adjustment != "qfq"
+            || base.batch.provenance.snapshot_inputs != batch.provenance.snapshot_inputs
+        {
+            return Err(SourceError::NotVerified(
+                "base does not provably derive from the installed snapshot".into(),
+            ));
+        }
+        let inputs = batch.provenance.snapshot_inputs.as_deref().unwrap_or(&[]);
+        let day = inputs.iter().find(|i| i.role == "day").ok_or_else(|| {
+            SourceError::InvalidResponse("snapshot binding lacks the day member".into())
+        })?;
+        let gbbq = inputs.iter().find(|i| i.role == "gbbq").ok_or_else(|| {
+            SourceError::InvalidResponse("snapshot binding lacks the gbbq member".into())
+        })?;
+        // The segment is the real source bars inside the accepted union of
+        // frozen proven-gap ranges; an empty segment cannot fill anything.
+        let mut segment = batch.clone();
+        segment
+            .bars
+            .retain(|b| range.start <= b.date && b.date <= range.end);
+        if segment.bars.is_empty() {
+            return Err(SourceError::InvalidResponse(
+                "snapshot carries no bars inside the frozen gap range".into(),
+            ));
+        }
+        let base_integrity: String = base.raw()["integrity_sha256"]
+            .as_str()
+            .ok_or_else(|| {
+                SourceError::NotVerified("fixed base carries no integrity digest".into())
+            })?
+            .into();
+        // Mirror the merge `market_update::prepare` approves: base records
+        // overlaid by in-range source bars; everything outside the range is
+        // preserved verbatim. A proven gap only authorizes filling dates the
+        // base lacks — an overlapping bar the source contradicts is a basis
+        // conflict, not a gap, so fail closed instead of overwriting it.
+        let mut merged: BTreeMap<_, _> = base
+            .version()
+            .records
+            .iter()
+            .map(|b| (b.date, b.clone()))
+            .collect();
+        for bar in &segment.bars {
+            if let Some(existing) = merged.get(&bar.date)
+                && *existing != *bar
+            {
+                return Err(SourceError::NotVerified(format!(
+                    "source bar {} conflicts with the fixed base",
+                    bar.date
+                )));
+            }
+            merged.insert(bar.date, bar.clone());
+        }
+        let mut combined_batch = batch.clone();
+        combined_batch.bars = merged.into_values().collect();
+        combined_batch.coverage = if combined_batch.bars == batch.bars {
+            CoverageEvidence::complete(format!(
+                "merged record equals the full .day member history of inspected snapshot manifest {}; {NOT_PRODUCTION_READY}",
+                self.source.manifest_sha256()
+            ))
+        } else {
+            base.batch.coverage.clone()
+        };
+        let (records, validation) = publish::validate_and_deduplicate(&combined_batch)
+            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+        let mut raw = serde_json::to_value(EffectiveVersion {
+            version_id: candidate_id.into(),
+            symbol: combined_batch.symbol.clone(),
+            period: combined_batch.period,
+            adjustment: combined_batch.adjustment,
+            source: combined_batch.provenance.source.clone(),
+            records,
+            published_at: self.published_at,
+            validation,
+            unit_currency: combined_batch.unit_currency.clone(),
+            adjustment_evidence: combined_batch.adjustment_evidence.clone(),
+            yearly_derivation: None,
+        })
+        .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+        raw["batch"] = serde_json::to_value(&combined_batch)
+            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+        raw["integrity_sha256"] = Value::String(
+            crate::market_storage::compat::legacy_digest(&raw)
+                .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
+        );
+        let segment_sha256 = crate::market_update::candidate_digest(&segment)
+            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+        Ok(Acquisition {
+            batch: segment,
+            evidence: Evidence {
+                base_version_id: base.version().version_id.clone(),
+                base_integrity_sha256: base_integrity.clone(),
+                candidate_sha256: segment_sha256.clone(),
+                range: range.clone(),
+                same_qfq_basis_ref: format!(
+                    "inspected snapshot manifest {} + gbbq member {}",
+                    self.source.manifest_sha256(),
+                    gbbq.member_sha256
+                ),
+                revision_ref: Some(format!(
+                    "frozen proven-gap authorization checked by the default-contract frozen inputs; base {} range {}..{} candidate {}",
+                    base.version().version_id,
+                    range.start,
+                    range.end,
+                    candidate_id
+                )),
+            },
+            combined: Some(CombinedCandidate {
+                evidence: CombinedEvidence {
+                    base_integrity_sha256: base_integrity,
+                    segment_sha256,
+                    combined_integrity_sha256: raw["integrity_sha256"]
+                        .as_str()
+                        .expect("just set")
+                        .into(),
+                    complete_coverage_ref: format!(
+                        "inspected snapshot manifest {} + day member {}:{} + gbbq member {}:{}",
+                        self.source.manifest_sha256(),
+                        day.member,
+                        day.member_sha256,
+                        gbbq.member,
+                        gbbq.member_sha256
+                    ),
+                },
+                record: raw,
+            }),
+        })
+    }
+}
+
 /// Repository surface for collection publication: generic commit plus the
 /// reads the runner needs for replay, head preconditions and task transitions.
 pub trait DailyCollectionRepository: MarketRepository {
@@ -600,5 +765,152 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             },
         })?;
         self.repository.commit(&plan)
+    }
+}
+
+/// Decision-only conclusion: the pinned `.day` member exists but carries no
+/// bar for the target day — the source cannot prove a local gap.
+const CONCLUSION_SOURCE_LIMITATION: &str = "source_limitation";
+/// Decision-only conclusion: the frozen subject already carries the target
+/// day, so there is no local gap to prove.
+const CONCLUSION_NO_LOCAL_GAP: &str = "no_local_gap";
+/// #187 Phase B trusted gap verifier bound to an installed official-file
+/// snapshot; implements the sealed #155 `SourceGapVerifier` port. The
+/// emitted `GapBasis` is Serialize-only durable evidence, never caller
+/// input, and binds the .day member digest plus (inside
+/// `artifact_identity`) the manifest digest and gbbq member identity so the
+/// conclusion replays only against the pinned snapshot generation.
+///
+/// `confirmed_missing_range` is emitted only when every binding holds:
+/// - the frozen subject is a fully readable published official-file QFQ
+///   daily version whose declared snapshot inputs (manifest-pinned archive
+///   digests + .day/gbbq member digests) equal the members this installed
+///   source actually read — a subject minted from another source or
+///   another snapshot generation fails closed;
+/// - the source `.day` member contains an exact bar for the target day;
+/// - the subject carries no record for the target day;
+/// - every date present in both subject and source agrees field-for-field
+///   — an overlapping value conflict is an integrity doubt, never a gap.
+///
+/// A present member lacking the target day produces a `source_limitation`
+/// decision (no proven gap); a subject already carrying the day produces
+/// `no_local_gap` (no proven gap). Any identity, digest or basis doubt
+/// returns `BasisNotVerified` and writes nothing.
+pub struct TdxGapVerifier<'a, R> {
+    pub source: &'a TdxMarketSource,
+    pub repository: R,
+    /// Observation instant supplied by the caller's run clock.
+    pub observed_at: DateTime<Utc>,
+}
+impl<R: MarketRepository> crate::gap_verification::SourceGapVerifier for TdxGapVerifier<'_, R> {
+    fn verifier_id(&self) -> &str {
+        "tdx-official-gap-verifier-v1"
+    }
+    fn verify(
+        &self,
+        target: &crate::gap_verification::GapTarget,
+        subject: &crate::gap_verification::SubjectBinding,
+    ) -> Result<crate::gap_verification::GapBasis, Error> {
+        // Bounded slice: one frozen day only — wider targets are refused,
+        // never silently reinterpreted as ranges.
+        if target.start_date != target.end_date {
+            return Err(Error::BasisNotVerified(
+                "bounded gap verifier supports single-day targets only".into(),
+            ));
+        }
+        let batch = self.source.materialize_daily(&target.symbol).map_err(|e| {
+            Error::BasisNotVerified(format!(
+                "official-file source cannot materialize the target symbol: {e}"
+            ))
+        })?;
+        // Re-read the frozen subject: a fully verified published record
+        // whose stored digest must equal the frozen binding.
+        let record = self.repository.fixed(&subject.version_id)?;
+        if record.raw()["integrity_sha256"].as_str() != Some(subject.integrity_sha256.as_str()) {
+            return Err(Error::BasisNotVerified(
+                "subject digest does not match frozen binding".into(),
+            ));
+        }
+        let version = record.version();
+        if version.symbol != target.symbol
+            || version.period != Period::Day
+            || version.source != SOURCE_NAME
+            || version.adjustment != Adjustment::Forward
+            || !version.adjustment_evidence.is_confirmed()
+            || version.adjustment_evidence.value.as_deref() != Some("qfq")
+        {
+            return Err(Error::BasisNotVerified(
+                "subject is not a pinned official-file QFQ daily version".into(),
+            ));
+        }
+        // Same pinned snapshot = same QFQ basis: the subject's declared
+        // snapshot inputs must equal the member/archive digests this
+        // installed source actually read.
+        if record.batch.provenance.source != SOURCE_NAME
+            || record.batch.provenance.source_adjustment != "qfq"
+            || record.batch.provenance.snapshot_inputs != batch.provenance.snapshot_inputs
+        {
+            return Err(Error::BasisNotVerified(
+                "subject does not provably derive from the installed snapshot".into(),
+            ));
+        }
+        // Comparable overlap must agree field-for-field; a conflict is an
+        // integrity doubt, never a gap.
+        let source_bars: BTreeMap<_, &Bar> = batch.bars.iter().map(|b| (b.date, b)).collect();
+        for local in &record.batch.bars {
+            if let Some(remote) = source_bars.get(&local.date)
+                && local != *remote
+            {
+                return Err(Error::BasisNotVerified(format!(
+                    "subject/source value conflict on {}",
+                    local.date
+                )));
+            }
+        }
+        let conclusion = if !source_bars.contains_key(&target.start_date) {
+            CONCLUSION_SOURCE_LIMITATION
+        } else if record
+            .batch
+            .bars
+            .iter()
+            .any(|b| b.date == target.start_date)
+        {
+            CONCLUSION_NO_LOCAL_GAP
+        } else {
+            crate::market_storage::CONFIRMED_MISSING_RANGE
+        };
+        let inputs = batch.provenance.snapshot_inputs.as_deref().unwrap_or(&[]);
+        let day = inputs
+            .iter()
+            .find(|i| i.role == "day")
+            .ok_or_else(|| Error::Integrity("materialized batch missing day binding".into()))?;
+        let gbbq = inputs
+            .iter()
+            .find(|i| i.role == "gbbq")
+            .ok_or_else(|| Error::Integrity("materialized batch missing gbbq binding".into()))?;
+        let mut basis = crate::gap_verification::GapBasis {
+            source_identity: format!("{SOURCE_NAME} manifest {}", self.source.manifest_sha256()),
+            source_contract: ADAPTER_VERSION.into(),
+            symbol: target.symbol.clone(),
+            start_date: target.start_date,
+            end_date: target.end_date,
+            subject_version_id: subject.version_id.clone(),
+            subject_version_digest: subject.integrity_sha256.clone(),
+            artifact_identity: format!(
+                "{}:{} manifest {} gbbq member {}:{}",
+                day.member,
+                day.member_sha256,
+                self.source.manifest_sha256(),
+                gbbq.member,
+                gbbq.member_sha256
+            ),
+            artifact_sha256: day.member_sha256.clone(),
+            conclusion: conclusion.into(),
+            observed_at: self.observed_at,
+            verifier_id: self.verifier_id().into(),
+            basis_sha256: String::new(),
+        };
+        basis.basis_sha256 = basis.content_digest();
+        Ok(basis)
     }
 }
