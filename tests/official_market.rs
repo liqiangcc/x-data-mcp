@@ -1931,6 +1931,34 @@ fn service_backfill_data_default_restores_proven_gap() {
             .unwrap(),
         1
     );
+
+    // Regression: update_data still routes to TdxRangeProvider, not the
+    // blocked provider — the merged head's coverage text differs from the
+    // materialized segment's, so prepare honestly lands on
+    // NEEDS_VERIFICATION (refresh carries no combined evidence) instead of
+    // SOURCE_NOT_VERIFIED or a publish. No third version appears.
+    let upd = api
+        .call(
+            "update_data",
+            json!({"dataset":"market.daily","request_id":"u1","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":new_head,"start_date":"2025-07-16","end_date":"2025-07-16"}]}),
+        )
+        .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let upd_task = tasks
+        .read_task(upd["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    let outcome = upd_task.items[0].outcome.as_ref().unwrap();
+    assert!(!outcome.success);
+    let err = outcome.error.as_deref().unwrap();
+    assert!(err.contains("NEEDS_VERIFICATION"), "unexpected: {err}");
+    assert!(!err.contains("SOURCE_NOT_VERIFIED"), "unexpected: {err}");
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM data_versions", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
 }
 
 #[test]
@@ -1984,4 +2012,169 @@ fn service_backfill_explicit_range_stays_blocked_with_installed_source() {
             .unwrap(),
         1
     );
+}
+
+#[test]
+fn service_verify_data_gap_stale_head_fails_closed() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let full = source.materialize_daily("sh.600006").unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    publish_catalog(&tasks, &["600006"]);
+    let mut gapped = full.clone();
+    gapped.bars.retain(|b| b.date != day(20250716));
+    gapped.coverage.reason = "acceptance local-gap subject: real .day member bars with 2025-07-16 withheld; not a complete source history".into();
+    market::published_fixture(&market, &subject_raw("subject-gap", &gapped));
+
+    let manifest_path = db.path().join("manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+    let api = DataApi::new(tasks.clone(), "run".into(), Access::local()).unwrap();
+    // Acceptance freezes subject-gap as the verification subject.
+    let accepted = api
+        .call(
+            "verify_data_gap",
+            json!({"contract_version":"v1","request_id":"g-stale","target":{"symbol":"sh.600006","period":"day","start_date":"2025-07-16","end_date":"2025-07-16"}}),
+        )
+        .unwrap();
+    let task_id = accepted["task_id"].as_str().unwrap().to_owned();
+
+    // The effective head moves through the governed publish path before
+    // the worker runs: the #155 in-transaction stale guard must refuse.
+    let mut v2 = full.clone();
+    v2.bars.retain(|b| b.date != day(20250715));
+    v2.coverage.reason = "acceptance local-gap subject: real .day member bars with 2025-07-15 withheld; not a complete source history".into();
+    market
+        .commit(&market::prepare(
+            &market,
+            &subject_raw("subject-gap-v2", &v2),
+            PublishIntent::Daily {
+                expected_head: Some("subject-gap".into()),
+            },
+        ))
+        .unwrap();
+
+    api.call("run_worker_once", json!({})).unwrap();
+    let done = tasks.read_task(&task_id).unwrap().unwrap();
+    let outcome = done.items[0].outcome.as_ref().unwrap();
+    assert!(!outcome.success);
+    assert!(
+        outcome
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("subject head moved"),
+        "unexpected error: {:?}",
+        outcome.error
+    );
+    let c = rusqlite::Connection::open(tasks.path()).unwrap();
+    for table in ["gap_verification_decisions", "proven_gaps"] {
+        assert_eq!(
+            c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "{table} must stay empty on stale-head refusal"
+        );
+    }
+}
+
+#[test]
+fn service_no_env_verify_backfill_update_all_fail_closed() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let full = source.materialize_daily("sh.600006").unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    publish_catalog(&tasks, &["600006"]);
+    let mut gapped = full.clone();
+    gapped.bars.retain(|b| b.date != day(20250716));
+    gapped.coverage.reason = "acceptance local-gap subject: real .day member bars with 2025-07-16 withheld; not a complete source history".into();
+    market::published_fixture(&market, &subject_raw("subject-gap", &gapped));
+
+    // With the source installed, one real verification proves the gap so
+    // the later no-env backfill has a frozen gap to refuse against.
+    let manifest_path = db.path().join("manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    {
+        let _env = EnvReset::install(&manifest_path, &snap.root);
+        let api = DataApi::new(tasks.clone(), "run-env".into(), Access::local()).unwrap();
+        api.call(
+            "verify_data_gap",
+            json!({"contract_version":"v1","request_id":"g1","target":{"symbol":"sh.600006","period":"day","start_date":"2025-07-16","end_date":"2025-07-16"}}),
+        )
+        .unwrap();
+        api.call("run_worker_once", json!({})).unwrap();
+    }
+
+    let _absent = EnvReset::absent();
+    let api = DataApi::new(tasks.clone(), "run-noenv".into(), Access::local()).unwrap();
+    let fail = |name: &str, args: Value| -> String {
+        let accepted = api.call(name, args).unwrap();
+        api.call("run_worker_once", json!({})).unwrap();
+        let done = tasks
+            .read_task(accepted["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let outcome = done.items[0].outcome.as_ref().unwrap();
+        assert!(!outcome.success, "{name} unexpectedly succeeded");
+        outcome.error.clone().unwrap()
+    };
+
+    // verify_data_gap without an installed source keeps the #155
+    // unverified-verifier refusal; no new decision or gap row.
+    let err = fail(
+        "verify_data_gap",
+        json!({"contract_version":"v1","request_id":"g2","target":{"symbol":"sh.600006","period":"day","start_date":"2025-07-16","end_date":"2025-07-16"}}),
+    );
+    assert!(err.contains("source-gap verifier"), "unexpected: {err}");
+
+    // backfill_data accepts the frozen open gap but execution stays on the
+    // blocked provider — no version and no covering.
+    let err = fail(
+        "backfill_data",
+        json!({"request_id":"b1","dataset":"market.daily","contract_version":"v1","selection":{"kind":"default"}}),
+    );
+    assert!(
+        err.contains("SOURCE_NOT_VERIFIED") || err.contains("NOT_PRODUCTION_READY"),
+        "unexpected: {err}"
+    );
+
+    // update_data keeps OfficialRangeProvider without an installed source.
+    let err = fail(
+        "update_data",
+        json!({"dataset":"market.daily","request_id":"u1","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"subject-gap","start_date":"2025-07-15","end_date":"2025-07-16"}]}),
+    );
+    assert!(err.contains("SOURCE_NOT_VERIFIED"), "unexpected: {err}");
+
+    let c = rusqlite::Connection::open(tasks.path()).unwrap();
+    for (table, want) in [
+        ("gap_verification_decisions", 1),
+        ("proven_gaps", 1),
+        ("data_versions", 1),
+        ("gap_coverings", 0),
+    ] {
+        assert_eq!(
+            c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            want,
+            "{table} count drifted"
+        );
+    }
 }
