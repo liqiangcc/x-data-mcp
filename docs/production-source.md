@@ -59,7 +59,7 @@ Publisher 拒绝无基础版本或与当前已发布日线不匹配的年线；�
    不采用容差、逐股规则、过滤失败事件或拟合 BaoStock 结果放行。
 3. 官方文件长期服务器获取/使用边界未验证。公开 URL 或 HTTP 200 不等于用途授权。
 4. .day/gbbq 独立发布时点的一致性未验证。同日下载、同一供应者或相同文件名均不足以放行。
-5. update/backfill 官方源执行、.day 单位/币种锚定与默认全目标范围覆盖尚未交付；parser、本地 QFQ 与 [yearly纯计算核心](yearly.md)已实现，bounded daily→yearly 治理链路经 FG 有界验收 PASS。
+5. .day 单位/币种锚定与默认全目标范围覆盖尚未交付；parser、本地 QFQ、[yearly纯计算核心](yearly.md)、bounded explicit update（#186 验收）与 verify+default-gap backfill（#192 验收）官方源执行已实现，四条 bounded 治理链路均经 FG 有界验收 PASS。
 
 前三项任一不成立就不能宣称纯文件方案可满足首期；应重新审视范围或选型，不能偷偷增加 fallback。
 

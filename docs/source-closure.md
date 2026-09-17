@@ -27,8 +27,9 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
 4. 文件一致性：#74 能核验字节和取得时间，不能证明 .day/gbbq 业务上可组合。
    缺来源修订关联或可审计兼容性证据（适用证券、事件、截止时点及后续修订）。
    验收必须分别保存包/member hash、取得区间、语义契约版本和组合依据；同天下载/相同 ETag 不足。
-5. LOCAL_PIPELINE：已有独立 .day parser、yearly core、snapshot inspector 和 SQLite 条件发布。
-   尚无通过以上门禁的真实目录、GBBQ/QFQ 和生产装配。接口/fixture 测试不能填补来源证据。
+5. LOCAL_PIPELINE（已退休）：#187 FG 裁定 bounded daily/yearly/update/verify+backfill
+   四条链路真实源验收 PASS，`LOCAL_PIPELINE_NOT_IMPLEMENTED` blocker 整条移除。
+   尚无通过以上门禁的真实目录（#6 P1/P2）与生产部署。接口/fixture 测试不能填补来源证据。
 
 ## 跨文件一致性 validator（#131）
 

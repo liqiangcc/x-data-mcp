@@ -91,7 +91,6 @@ fn official_pipeline_reports_every_unresolved_gate_for_both_operations() {
             "#54",
             "FILE_ACCESS_USE_NOT_VERIFIED",
             "FILE_SET_CONSISTENCY_NOT_VERIFIED",
-            "LOCAL_PIPELINE_NOT_IMPLEMENTED",
         ] {
             assert!(message.contains(gate), "missing gate {gate}: {message}");
         }
