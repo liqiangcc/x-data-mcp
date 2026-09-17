@@ -1,0 +1,382 @@
+{
+  "assertions": [
+    {
+      "name": "V1_input_integrity",
+      "ok": true,
+      "detail": {
+        "archive_sha256": {
+          "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+          "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"
+        },
+        "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3"
+      }
+    },
+    {
+      "name": "V2_member_sha256",
+      "ok": true,
+      "detail": {
+        "tdxhy.cfg": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6",
+        "infoharbor_ex.code": "79eed0f6857ffde3d1d3cc8966ceff6e400f45e6e2387224446e453850fb5281",
+        "zhb.zip": "e1ded566dc5269642de760211ec1b67e5ebebd67ab1e6338f70cab7c05048350",
+        "incon.dat": "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51"
+      }
+    },
+    {
+      "name": "V3_scope_partition",
+      "ok": true,
+      "detail": {
+        "total": 5659,
+        "scope": 5230,
+        "scope_sz": 2906,
+        "scope_sh": 2324,
+        "bj": 348,
+        "b_share": 78,
+        "anomalous": 3,
+        "ex_names": 5571,
+        "tdxrshy": 474,
+        "tdxnhy": 145,
+        "nameless": [
+          "0:001235",
+          "0:300728",
+          "1:601206",
+          "1:603302",
+          "1:603361",
+          "1:688688"
+        ],
+        "published": 5224,
+        "published_missing_industry": 0,
+        "published_t_residuals": []
+      }
+    },
+    {
+      "name": "V4_success_exclusion_trail",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": true,
+          "error": null,
+          "evidence": {
+            "catalog_version_id": "catalog-1789633175682388426",
+            "missing_industry": [],
+            "published_members": 5224,
+            "reject_candidate_exclusions": [
+              {
+                "member": "0:001235",
+                "reason": "reject_candidate: no name row in infoharbor_ex.code"
+              },
+              {
+                "member": "0:300728",
+                "reason": "reject_candidate: no name row in infoharbor_ex.code"
+              },
+              {
+                "member": "1:601206",
+                "reason": "reject_candidate: no name row in infoharbor_ex.code"
+              },
+              {
+                "member": "1:603302",
+                "reason": "reject_candidate: no name row in infoharbor_ex.code"
+              },
+              {
+                "member": "1:603361",
+                "reason": "reject_candidate: no name row in infoharbor_ex.code"
+              },
+              {
+                "member": "1:688688",
+                "reason": "reject_candidate: no name row in infoharbor_ex.code"
+              }
+            ],
+            "scope_partition": {
+              "anomalous": 3,
+              "b_share": 78,
+              "bj_market": 348,
+              "scope": 5230,
+              "total": 5659
+            },
+            "t_code_residuals": [],
+            "t_dictionary_checked": true
+          }
+        }
+      }
+    },
+    {
+      "name": "V5_publish_counts",
+      "ok": true,
+      "detail": {
+        "versions": [
+          [
+            "catalog-1789633175682388426",
+            "official-file:b8a0d7b9aec1a270",
+            "21781f976c2b28ac0e2ee8bb7a160718d069cdec55faf078c89f56ca48e72890"
+          ]
+        ],
+        "head": "catalog-1789633175682388426",
+        "member_count": 5224
+      }
+    },
+    {
+      "name": "V6_provenance_binding",
+      "ok": true,
+      "detail": {
+        "source": "official-file:b8a0d7b9aec1a270",
+        "expected": "official-file:b8a0d7b9aec1a270",
+        "member_sha256": {
+          "tdxhy.cfg": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6",
+          "infoharbor_ex.code": "79eed0f6857ffde3d1d3cc8966ceff6e400f45e6e2387224446e453850fb5281",
+          "zhb.zip": "e1ded566dc5269642de760211ec1b67e5ebebd67ab1e6338f70cab7c05048350",
+          "incon.dat": "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51"
+        }
+      }
+    },
+    {
+      "name": "V7_version_immutable",
+      "ok": true,
+      "detail": {
+        "v1_digest_before": "21781f976c2b28ac0e2ee8bb7a160718d069cdec55faf078c89f56ca48e72890",
+        "v1_digest_after": "21781f976c2b28ac0e2ee8bb7a160718d069cdec55faf078c89f56ca48e72890"
+      }
+    },
+    {
+      "name": "V8_idempotent",
+      "ok": true,
+      "detail": {
+        "reused": true,
+        "versions": [
+          [
+            "catalog-1789633175682388426",
+            "official-file:b8a0d7b9aec1a270",
+            "21781f976c2b28ac0e2ee8bb7a160718d069cdec55faf078c89f56ca48e72890"
+          ],
+          [
+            "catalog-1789633187158611988",
+            "official-file:b8a0d7b9aec1a270",
+            "e4c851a98011e98223890f312e523cab069e2291e3f91d33c730d0ae4995e0fc"
+          ]
+        ],
+        "head": "catalog-1789633187158611988",
+        "v2_members_equal_v1": true,
+        "idle": true,
+        "outcome_c2_success": true
+      }
+    },
+    {
+      "name": "V9_readback",
+      "ok": true,
+      "detail": {
+        "paged_records": 5224,
+        "pages": 6,
+        "row_keys_equal_members": true,
+        "availability": {
+          "items": [
+            {
+              "availability": "available",
+              "confirmed_gaps": [],
+              "coverage_evidence": "validated fixture catalog snapshot",
+              "entity": null,
+              "first_record": null,
+              "freshness": "unknown",
+              "integrity": "verified",
+              "last_record": null,
+              "limitations": [
+                "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair"
+              ],
+              "record_count": 5224,
+              "related_tasks": [
+                {
+                  "contract_version": "v1",
+                  "created_at": "2026-09-17T08:19:36.252294025Z",
+                  "dataset": "securities.catalog",
+                  "last_progress_at": "2026-09-17T08:19:47.732419891Z",
+                  "operation": "start_collection",
+                  "request_id": "c2",
+                  "state_revision": 4,
+                  "status": "succeeded",
+                  "task_id": "task-1365f9b23e0f25d8026c8ba21ac110bd"
+                },
+                {
+                  "contract_version": "v1",
+                  "created_at": "2026-09-17T08:19:24.851295359Z",
+                  "dataset": "securities.catalog",
+                  "last_progress_at": "2026-09-17T08:19:36.195267417Z",
+                  "operation": "start_collection",
+                  "request_id": "c1",
+                  "state_revision": 4,
+                  "status": "succeeded",
+                  "task_id": "task-6e83b49a22fb50ad51feb74fdc44bf87"
+                }
+              ],
+              "unresolved_ranges": [],
+              "version_ref": {
+                "contract_version": "v1",
+                "dataset": "securities.catalog",
+                "entity": null,
+                "integrity_sha256": "e4c851a98011e98223890f312e523cab069e2291e3f91d33c730d0ae4995e0fc",
+                "version_id": "catalog-1789633187158611988"
+              }
+            }
+          ],
+          "next_cursor": null,
+          "page_complete": true,
+          "snapshot_id": "obs-4173572-1789633153785032428-1",
+          "snapshot_time": "2026-09-17T08:19:48.001281392Z"
+        },
+        "versions": {
+          "items": [
+            {
+              "published_at": "2026-09-17T08:19:47.158611988Z",
+              "version_ref": {
+                "contract_version": "v1",
+                "dataset": "securities.catalog",
+                "entity": null,
+                "integrity_sha256": "e4c851a98011e98223890f312e523cab069e2291e3f91d33c730d0ae4995e0fc",
+                "version_id": "catalog-1789633187158611988"
+              }
+            },
+            {
+              "published_at": "2026-09-17T08:19:35.682388426Z",
+              "version_ref": {
+                "contract_version": "v1",
+                "dataset": "securities.catalog",
+                "entity": null,
+                "integrity_sha256": "21781f976c2b28ac0e2ee8bb7a160718d069cdec55faf078c89f56ca48e72890",
+                "version_id": "catalog-1789633175682388426"
+              }
+            }
+          ],
+          "next_cursor": null,
+          "page_complete": true,
+          "snapshot_id": "4173572-1789633153785020328-7",
+          "snapshot_time": "2026-09-17T08:19:50.594178810Z"
+        }
+      }
+    },
+    {
+      "name": "V10_env_absent",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": false,
+          "error": "SOURCE_NOT_VERIFIED: CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; contract determined — nameless members are governed reject_candidate exclusions (ruling 5710586446), tdx_research_industry scheme authoritative; real-snapshot full-catalog collection/acceptance under the ruled contract (#194 v2) and deployment not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+        }
+      }
+    },
+    {
+      "name": "V11_source_fail_closed",
+      "ok": true,
+      "detail": {
+        "legs": {
+          "R2": {
+            "outcome": {
+              "success": false,
+              "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: manifest JSON invalid: missing field `schema` at line 1 column 12"
+            },
+            "catalog_counts": [
+              0,
+              0,
+              false
+            ]
+          },
+          "R3": {
+            "outcome": {
+              "success": false,
+              "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: local input unavailable: No such file or directory (os error 2)"
+            },
+            "catalog_counts": [
+              0,
+              0,
+              false
+            ]
+          },
+          "R4": {
+            "outcome": {
+              "success": false,
+              "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: artifact bytes do not match manifest: BaseIndustry"
+            },
+            "catalog_counts": [
+              0,
+              0,
+              false
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "V12_gates_preserved",
+      "ok": true,
+      "detail": {
+        "blocking_reasons": [
+          "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; contract determined — nameless members are governed reject_candidate exclusions (ruling 5710586446), tdx_research_industry scheme authoritative; real-snapshot full-catalog collection/acceptance under the ruled contract (#194 v2) and deployment not run)",
+          "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+          "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+          "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+        ]
+      }
+    }
+  ],
+  "blocked_paths": {
+    "R1_env_absent": {
+      "success": false,
+      "error": "SOURCE_NOT_VERIFIED: CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; contract determined — nameless members are governed reject_candidate exclusions (ruling 5710586446), tdx_research_industry scheme authoritative; real-snapshot full-catalog collection/acceptance under the ruled contract (#194 v2) and deployment not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+    },
+    "R2_uninspectable_manifest": {
+      "success": false,
+      "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: manifest JSON invalid: missing field `schema` at line 1 column 12"
+    },
+    "R3_member_missing": {
+      "success": false,
+      "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: local input unavailable: No such file or directory (os error 2)"
+    },
+    "R4_member_corrupt": {
+      "success": false,
+      "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: artifact bytes do not match manifest: BaseIndustry"
+    }
+  },
+  "run_identity": {
+    "head": "df063f525738143ae27bfaed42eae9dc23dfc43d",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
+    "archive_sha256": {
+      "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+      "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"
+    },
+    "member_sha256": {
+      "tdxhy.cfg": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6",
+      "infoharbor_ex.code": "79eed0f6857ffde3d1d3cc8966ceff6e400f45e6e2387224446e453850fb5281",
+      "zhb.zip": "e1ded566dc5269642de760211ec1b67e5ebebd67ab1e6338f70cab7c05048350",
+      "incon.dat": "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51"
+    },
+    "mechanical_recompute": {
+      "total": 5659,
+      "scope": 5230,
+      "scope_sz": 2906,
+      "scope_sh": 2324,
+      "bj": 348,
+      "b_share": 78,
+      "anomalous": 3,
+      "ex_names": 5571,
+      "tdxrshy": 474,
+      "tdxnhy": 145,
+      "nameless": [
+        "0:001235",
+        "0:300728",
+        "1:601206",
+        "1:603302",
+        "1:603361",
+        "1:688688"
+      ],
+      "published": 5224,
+      "published_missing_industry": 0,
+      "published_t_residuals": []
+    }
+  },
+  "production_blockers": [
+    "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; contract determined — nameless members are governed reject_candidate exclusions (ruling 5710586446), tdx_research_industry scheme authoritative; real-snapshot full-catalog collection/acceptance under the ruled contract (#194 v2) and deployment not run)",
+    "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+    "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+    "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+  ],
+  "notes": {
+    "plan": "PLAN-v2 (P1 ruling 5710586446); v1 run record preserved in run-log.jsonl/results.json/README.md",
+    "not_run": "market.daily 5230 collection, deployment, gen-3 snapshot — out of scope per issue."
+  }
+}
