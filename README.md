@@ -33,7 +33,9 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 
 **NOT_PRODUCTION_READY — production source convergence stage 1（可执行工程闭环）。**
 
-2026-09-16 Final Gate 裁定（[#3](https://github.com/liqiangcc/x-data-mcp/issues/3#issuecomment-5695684698)）：bounded explicit `market.daily/v1` 官方快照路径与 fixed-base derived `market.yearly/v1` 治理路径均 PASS（三证券真实发布、receipt/lineage/no-change 复用与 fail-closed 留痕完整）；#46/#54 已完成关闭。yearly 的 `LOCAL_PIPELINE_NOT_IMPLEMENTED` 具体描述退休，剩余未实现项仅为 update/backfill 官方源执行。#3 保持 OPEN——默认全目录首次采集依赖 #6 的 P1/P2 产品裁定；update/backfill 真实源验收与部署/消费侧最终验收 NOT_RUN；overall `NOT_PRODUCTION_READY` 不变。
+2026-09-16 Final Gate 裁定（[#3](https://github.com/liqiangcc/x-data-mcp/issues/3#issuecomment-5695684698)）：bounded explicit `market.daily/v1` 官方快照路径与 fixed-base derived `market.yearly/v1` 治理路径均 PASS（三证券真实发布、receipt/lineage/no-change 复用与 fail-closed 留痕完整）；#46/#54 已完成关闭。yearly 的 `LOCAL_PIPELINE_NOT_IMPLEMENTED` 具体描述退休。
+
+2026-09-17 Final Gate 裁定（[#187](https://github.com/liqiangcc/x-data-mcp/issues/187#issuecomment-5710110532)）：bounded explicit `update_data`（#186 证据）与 `verify_data_gap`+default `backfill_data`（#192 证据）官方源执行验收均 PASS；`LOCAL_PIPELINE_NOT_IMPLEMENTED` 整条 blocker 退休，四条 bounded 链（daily/yearly/update/verify-backfill）均有真实源验收证据。#3 保持 OPEN、#187 已关闭——默认全目录首次采集依赖 #6 缺名成员的产品裁定（#194 真实快照目录验收在途）；部署/消费侧最终验收 NOT_RUN；overall `NOT_PRODUCTION_READY` 与其余 blocker 不变。
 
 已有 Rust 核心、任务受理/取消/重试、发布校验、目录核心和 stdio MCP 原型。
 生产来源决策见 [Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)，
@@ -48,10 +50,11 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 - 源端直接年线不再是生产契约；MCP `year` 表示本地派生输出。
 - 既有 `evidence/` 和历史文档原样保留；历史结论不等于当前生产状态。
 
-#6 默认目录范围与 P1/P2 产品裁定、官方文件长期服务器获取/使用边界、.day/gbbq 独立快照一致性、
-update/backfill 官方源真实验收仍未通过。[.day原始解析器](docs/day-file.md)、GBBQ 解码/业务归一化、
-QFQ 仿射链与本地[年线聚合](docs/yearly.md)均已实现并有界验收——bounded 官方快照 daily→yearly
-治理链路经 FG 裁定 PASS（见上文），这不解除默认全目录与 update/backfill 门禁。
+#6 默认目录的真实快照全量采集验收（#194 在途）与缺名成员需求裁定、官方文件长期服务器获取/使用边界、
+.day/gbbq 独立快照一致性仍未通过。[.day原始解析器](docs/day-file.md)、GBBQ 解码/业务归一化、
+QFQ 仿射链与本地[年线聚合](docs/yearly.md)均已实现并有界验收——bounded 官方快照
+daily/yearly/update/verify+backfill 四条治理链路均经 FG 裁定 PASS（见上文裁定），
+这不解除默认全目录与其余门禁。
 已加入保守 DBF 容器解析基础（仅保留字段原始字节，不解释代码页或目录业务语义），见 [#46 实施记录](docs/tasks/issue-46.md)；这不解除目录契约门禁。
 已提供[本地输入清单核验](docs/snapshot-input.md)，字节匹配不代表跨文件一致或来源授权。
 默认装配的 `OfficialFilePipeline` 始终返回 `SOURCE_NOT_VERIFIED`，没有开关可绕过门禁。
@@ -148,11 +151,11 @@ Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README
 ## 更新/补采开发中（#92，PR #93）
 
 应用层已有 daily 显式区间合并判定及 SQLite 条件提交：有变化使用新版本，无变化记录独立复用结果；两者均与任务完成/占用释放同事务。schema v5 只增加更新结果表，显式 init/upgrade 才生效，不升级已部署预览库。
-segment 完整不能代替合并全范围覆盖证据，旧 head/revision/固定版本变更均拒绝，不自动 rebase。当前仅 fixture 验证过发布链。MCP 已接入显式 daily 的 update_data/backfill_data 受理（共 15 工具），readiness=blocked；默认选择、自动缺口、catalog 更新及 update/backfill 真实文件执行仍未完成；yearly 显式分支见下文，不能通过提供证据字符串解除生产门禁。见 [#92 实施记录](docs/tasks/issue-92.md)。
+segment 完整不能代替合并全范围覆盖证据，旧 head/revision/固定版本变更均拒绝，不自动 rebase。当前仅 fixture 验证过发布链。MCP 已接入显式 daily 的 update_data/backfill_data 受理（共 15 工具），readiness=blocked；默认选择（生产 catalog）、自动缺口发现及 catalog 更新仍未完成；update/backfill 有界真实文件执行已落地并经 #186/#192 验收；yearly 显式分支见下文，不能通过提供证据字符串解除生产门禁。见 [#92 实施记录](docs/tasks/issue-92.md)。
 
-更新/补采调用的 v1 输入为 request_id、dataset=market.daily、contract_version=v1、items；每项显式提供 entity、base_version_id、start_date、end_date。能力发现按 operation 返回准确 schema。受理响应的 contract_version 标识持久执行契约 explicit-range-task-v1；当前 worker 只记录 SOURCE_NOT_VERIFIED，不发布行情。已部署 preview.2 的 13 工具与本开发分支不同，本段不是重新部署完成声明。
+更新/补采调用的 v1 输入为 request_id、dataset=market.daily、contract_version=v1、items；每项显式提供 entity、base_version_id、start_date、end_date。能力发现按 operation 返回准确 schema。受理响应的 contract_version 标识持久执行契约 explicit-range-task-v1；env 未装配官方快照时 worker 只记录 SOURCE_NOT_VERIFIED 不发布行情，装配后经 `TdxRangeProvider` 有界真实源执行。已部署 preview.2 的 13 工具与本开发分支不同，本段不是重新部署完成声明。
 
-显式 daily 更新的 RangeRunner 已接入应用 worker：先查收据，running 无可靠结果不重采，已知来源拒绝记录失败。fixture 测试可显式注入可信 provider 完成原子发布及查询；生产 MCP 不能选择它，仍只使用 OfficialFilePipeline。get_task_progress 同时返回 frozen_daily_ranges 与核验后的 range_results，包含原/结果版本、无变化标记和实际采集时间。
+显式 daily 更新的 RangeRunner 已接入应用 worker：先查收据，running 无可靠结果不重采，已知来源拒绝记录失败。fixture 测试可显式注入可信 provider 完成原子发布及查询；生产 MCP 不能选择它：env 装配官方快照时用 `TdxRangeProvider`（显式 update）/`TdxBackfillProvider`（default frozen-gap backfill），否则 `OfficialFilePipeline` 拒绝。get_task_progress 同时返回 frozen_daily_ranges 与核验后的 range_results，包含原/结果版本、无变化标记和实际采集时间。
 
 固定 daily 到 yearly 的应用候选构造在 [#94 切片](docs/tasks/issue-94.md)中实现：核验 base/证据后本地聚合，保留逐年 lineage，并复用现有双 head 条件发布。已接入显式 yearly 更新/补采工具和受控 worker；bounded 官方快照链路的生产 `OfficialYearlyVerifier` 已实现并经 FG 有界验收（见上文裁定），env 未装配时仍拒绝，不代表默认全目录来源通过。
 

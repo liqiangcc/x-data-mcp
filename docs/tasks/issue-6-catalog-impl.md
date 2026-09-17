@@ -200,9 +200,13 @@ E_ANOM = { row | f0 ∈ {0,1} ∧ (f2 = ε ∨ f5 = ε) ∧ f1 ∉ B 股段 }   
 
 ---
 
-## 5. 未决产品参数（两项，显式建模，默认 fail-closed）
+## 5. 产品参数（两项均经 FG 5700226878 裁定；设计期分析保留原文）
 
-### P1 缺名成员处置 `name_missing_policy` — **UNDECIDED**
+### P1 缺名成员处置 `name_missing_policy` — **已裁定（FG 5700226878）**
+
+> 2026-09-17 FG 裁定：现行契约（名称必填、缺名 `reject_candidate`
+> fail-closed）即为确定行为，不是未决实现选择；`keep_with_name_missing`
+> 或 `alt_name_source` 需显式需求变更/新授权来源。以下为设计期分析原文。
 
 背景：S 成员 `001235/300728/601206/603302/603361/688688` 在 base.zip
 全部成员中无名称行（#168 AC-02 PARTIAL）。策略枚举：
@@ -217,7 +221,11 @@ E_ANOM = { row | f0 ∈ {0,1} ∧ (f2 = ε ∨ f5 = ε) ∧ f1 ∉ B 股段 }   
 静默放行。`keep_with_name_missing` 的实现路径在此文档预留（§6 预留列
 位），但默认分支不得提前实现其语义。
 
-### P2 行业分类标准 `industry_scheme` — **UNDECIDED**
+### P2 行业分类标准 `industry_scheme` — **已裁定（FG 5700226878）**
+
+> 2026-09-17 FG 裁定：P2 已 RESOLVED —— TDX 研究行业二级
+> （`tdx_research_industry`）为当前权威 scheme；旧东财文字为 superseded
+> 历史。以下为设计期分析原文。
 
 背景：官方文件可机械提供 **TDX 研究行业二级**（5230/5230）；#6 历史需
 求曾确认"东财二级"。在 #6 裁定前：

@@ -17,6 +17,7 @@ OHLC 保持原十进制精度。volume/amount 只有该年全部值已知且单�
 
 本核心已接入 bounded 治理链路：`OfficialYearlyVerifier` 以 env 装配的官方快照源为门、对固定
 已发布 daily base 重聚合验证 coverage，FG 裁定该 bounded 路径 PASS；env 未装配时生产入口仍
-fail closed。#6 默认目录裁定、获取/使用授权、文件一致性、update/backfill 真实源与默认全目录
-MCP 闭环未完成。后续扩展必须保留每年元数据，并验证来自同一实际已发布版本，不能把内存
+fail closed。#6 默认目录裁定、获取/使用授权、文件一致性与默认全目录
+MCP 闭环未完成；update/backfill 有界真实源链路已经 FG 验收（#186/#192）。
+后续扩展必须保留每年元数据，并验证来自同一实际已发布版本，不能把内存
 fixture 或已有聚合核心当成生产来源通过。

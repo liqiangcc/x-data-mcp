@@ -88,7 +88,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
         worker["items"][0]["description"]
             .as_str()
             .unwrap()
-            .contains("never downloads or publishes")
+            .contains("never downloads market data")
     );
     let worker_tool = tools
         .iter()
