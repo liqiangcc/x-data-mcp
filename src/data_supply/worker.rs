@@ -28,11 +28,25 @@ pub fn run_once(
             repository: market.clone(),
             run_id: control.run_id.clone(),
         };
-        runner.run(
-            &candidate.task.task_id,
-            &crate::gap_verification::UnverifiedGapVerifier,
-            chrono::Utc::now(),
-        )?;
+        let now = chrono::Utc::now();
+        match market_source {
+            // An installed inspected snapshot verifies real-source gaps;
+            // without it the unverified port stays fail-closed.
+            Some(source) => runner.run(
+                &candidate.task.task_id,
+                &crate::official_market::TdxGapVerifier {
+                    source,
+                    repository: market.clone(),
+                    observed_at: now,
+                },
+                now,
+            )?,
+            None => runner.run(
+                &candidate.task.task_id,
+                &crate::gap_verification::UnverifiedGapVerifier,
+                now,
+            )?,
+        };
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
     }
     if candidate.task.key.dataset == "securities.catalog" {

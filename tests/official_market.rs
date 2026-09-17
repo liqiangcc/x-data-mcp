@@ -1,24 +1,29 @@
 //! `TdxMarketSource` / `TdxDailyRunner` — official-file snapshot source for
 //! market.daily collection. Synthetic fixtures cover fail-closed behavior;
 //! the retained gen-2 snapshot (when present) covers the end-to-end oracle.
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use std::{io::Write, path::Path, str::FromStr};
 use x_data_mcp::{
     data_supply::{collect::CollectionContract, wire::Dataset},
+    gap_verification::{GapTarget, SourceGapVerifier, SubjectBinding, decide_gap},
     gbbq,
-    market_data::{Adjustment, CoverageStatus, Period, SourceError},
-    market_storage::{MarketRepository, Range, Scope},
+    market_data::{Adjustment, CoverageStatus, MarketDataBatch, Period, SourceError},
+    market_storage::{MarketRepository, PublishIntent, Range, Scope, compat},
     market_update::runner::ItemExecution,
-    official_market::{DailyCollectionRepository, TdxDailyRunner, TdxMarketSource},
+    official_market::{DailyCollectionRepository, TdxDailyRunner, TdxGapVerifier, TdxMarketSource},
+    publish::{EffectiveVersion, ValidationSummary},
     sqlite_market::SqliteMarket,
     sqlite_supply::SqliteSupply,
     sqlite_tasks::SqliteTasks,
     task_control::{
-        Contract, RequestOutcome, Stage, Status, legacy::LegacyCollection, service::TaskControl,
+        Contract, RequestOutcome, Stage, Status, TaskRepository, legacy::LegacyCollection,
+        service::TaskControl,
     },
 };
+#[path = "support/market.rs"]
+mod market;
 
 fn now() -> DateTime<Utc> {
     "2026-09-12T00:00:00Z".parse().unwrap()
@@ -1318,5 +1323,281 @@ fn service_env_install_update_data_no_change_and_fail_closed() {
     assert!(
         error.contains("INTEGRITY"),
         "expected integrity refusal, got {error:?}"
+    );
+}
+
+// ---------- #187 Phase B: TdxGapVerifier ----------
+
+fn day(d: u32) -> NaiveDate {
+    NaiveDate::parse_from_str(&d.to_string(), "%Y%m%d").unwrap()
+}
+
+/// Publish-ready record JSON for a materialized batch, matching the shape
+/// `TdxDailyRunner` commits (version fields + `batch` + legacy digest).
+fn subject_raw(version_id: &str, batch: &MarketDataBatch) -> Value {
+    let mut raw = serde_json::to_value(EffectiveVersion {
+        version_id: version_id.into(),
+        symbol: batch.symbol.clone(),
+        period: batch.period,
+        adjustment: batch.adjustment,
+        source: batch.provenance.source.clone(),
+        records: batch.bars.clone(),
+        published_at: now(),
+        validation: ValidationSummary {
+            record_count: batch.bars.len(),
+            unique_record_count: batch.bars.len(),
+            duplicate_count: 0,
+        },
+        unit_currency: batch.unit_currency.clone(),
+        adjustment_evidence: batch.adjustment_evidence.clone(),
+        yearly_derivation: None,
+    })
+    .unwrap();
+    raw["batch"] = serde_json::to_value(batch).unwrap();
+    raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+    raw
+}
+
+fn subject_binding(raw: &Value) -> SubjectBinding {
+    SubjectBinding {
+        version_id: raw["version_id"].as_str().unwrap().into(),
+        integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
+    }
+}
+
+fn fresh_market() -> (tempfile::TempDir, SqliteTasks, SqliteMarket) {
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    (d, t.clone(), SqliteMarket::new(t))
+}
+
+fn verifier<'a>(
+    source: &'a TdxMarketSource,
+    market: &SqliteMarket,
+) -> TdxGapVerifier<'a, SqliteMarket> {
+    TdxGapVerifier {
+        source,
+        repository: market.clone(),
+        observed_at: now(),
+    }
+}
+
+fn target(d: u32) -> GapTarget {
+    GapTarget {
+        symbol: "sh.600006".into(),
+        start_date: day(d),
+        end_date: day(d),
+    }
+}
+
+#[test]
+fn gap_verifier_confirms_missing_day_against_pinned_snapshot() {
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let (_d, t, market) = fresh_market();
+    // Controlled local-gap subject: the real materialized bars minus the
+    // target day, declared provenance still binding the same pinned
+    // archive+member digests.
+    let mut batch = source.materialize_daily("sh.600006").unwrap();
+    batch.bars.retain(|b| b.date != day(20250716));
+    let raw = subject_raw("subject-gap", &batch);
+    market::published_fixture(&market, &raw);
+
+    let v = verifier(&source, &market);
+    let basis = v.verify(&target(20250716), &subject_binding(&raw)).unwrap();
+    assert_eq!(v.verifier_id(), "tdx-official-gap-verifier-v1");
+    assert_eq!(basis.conclusion, "confirmed_missing_range");
+    assert_eq!(basis.symbol, "sh.600006");
+    assert_eq!(basis.start_date, day(20250716));
+    assert_eq!(basis.subject_version_id, "subject-gap");
+    assert_eq!(
+        basis.subject_version_digest,
+        raw["integrity_sha256"].as_str().unwrap()
+    );
+    assert_eq!(basis.verifier_id, v.verifier_id());
+    assert_eq!(basis.basis_sha256, basis.content_digest());
+    // The artifact binds the .day member digest; the manifest and gbbq
+    // member are bound inside the artifact identity.
+    let inputs = batch.provenance.snapshot_inputs.as_ref().unwrap();
+    let day_input = inputs.iter().find(|i| i.role == "day").unwrap();
+    let gbbq_input = inputs.iter().find(|i| i.role == "gbbq").unwrap();
+    assert_eq!(basis.artifact_sha256, day_input.member_sha256);
+    assert!(basis.artifact_identity.contains(&day_input.member_sha256));
+    assert!(basis.artifact_identity.contains(&gbbq_input.member_sha256));
+    assert!(basis.artifact_identity.contains(source.manifest_sha256()));
+    // The decision commits through the guarded producer and writes the gap.
+    decide_gap(
+        &market,
+        &v,
+        &target(20250716),
+        &subject_binding(&raw),
+        "d-gap",
+        now(),
+    )
+    .unwrap();
+    let c = rusqlite::Connection::open(t.path()).unwrap();
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM proven_gaps", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn gap_verifier_source_limitation_and_no_local_gap_write_no_gap() {
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let (_d, t, market) = fresh_market();
+    let batch = source.materialize_daily("sh.600006").unwrap();
+    let raw = subject_raw("subject-full", &batch);
+    market::published_fixture(&market, &raw);
+    let subject = subject_binding(&raw);
+    let v = verifier(&source, &market);
+
+    // Source member exists but lacks the target day -> decision only.
+    let basis = v.verify(&target(20250718), &subject).unwrap();
+    assert_eq!(basis.conclusion, "source_limitation");
+    decide_gap(&market, &v, &target(20250718), &subject, "d-limit", now()).unwrap();
+    // Subject already carries the day -> decision only.
+    let basis = v.verify(&target(20250716), &subject).unwrap();
+    assert_eq!(basis.conclusion, "no_local_gap");
+    decide_gap(&market, &v, &target(20250716), &subject, "d-local", now()).unwrap();
+
+    let c = rusqlite::Connection::open(t.path()).unwrap();
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM gap_verification_decisions", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap(),
+        2
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM proven_gaps", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn gap_verifier_fails_closed_on_basis_digest_or_conflict() {
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let (_d, _t, market) = fresh_market();
+    let batch = source.materialize_daily("sh.600006").unwrap();
+    let v = verifier(&source, &market);
+    let err = |e: x_data_mcp::market_storage::Error| {
+        matches!(e, x_data_mcp::market_storage::Error::BasisNotVerified(_))
+    };
+
+    // Subject minted from another snapshot generation: declared member
+    // digests differ from the installed source's actual member bytes.
+    let mut other = batch.clone();
+    for i in other.provenance.snapshot_inputs.as_mut().unwrap() {
+        i.member_sha256 = "0".repeat(64);
+    }
+    let raw = subject_raw("subject-other-snapshot", &other);
+    market::published_fixture(&market, &raw);
+    assert!(err(v
+        .verify(&target(20250716), &subject_binding(&raw))
+        .unwrap_err()));
+
+    // Overlapping value conflict on a shared date -> integrity doubt, not a gap.
+    let mut conflict = batch.clone();
+    conflict.bars[0].close = dec("7.52"); // pinned source says 7.53
+    let raw = subject_raw("subject-conflict", &conflict);
+    market
+        .commit(&market::prepare(
+            &market,
+            &raw,
+            PublishIntent::Daily {
+                expected_head: Some("subject-other-snapshot".into()),
+            },
+        ))
+        .unwrap();
+    assert!(err(v
+        .verify(&target(20250717), &subject_binding(&raw))
+        .unwrap_err()));
+
+    // Non-official subject (legacy fixture, different source/provenance).
+    let raw = market::samples()[0]["record"].clone();
+    market
+        .commit(&market::prepare(
+            &market,
+            &raw,
+            PublishIntent::Daily {
+                expected_head: Some("subject-conflict".into()),
+            },
+        ))
+        .unwrap();
+    assert!(err(v
+        .verify(&target(20250717), &subject_binding(&raw))
+        .unwrap_err()));
+
+    // Frozen binding digest that does not match the stored record.
+    let mut bad = subject_binding(&raw);
+    bad.integrity_sha256 = "f".repeat(64);
+    assert!(err(v.verify(&target(20250717), &bad).unwrap_err()));
+
+    // Multi-day targets are outside this bounded slice.
+    let wide = GapTarget {
+        symbol: "sh.600006".into(),
+        start_date: day(20250715),
+        end_date: day(20250717),
+    };
+    assert!(err(v.verify(&wide, &subject_binding(&raw)).unwrap_err()));
+}
+
+#[test]
+fn service_verify_data_gap_uses_installed_snapshot_verifier() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let mut batch = source.materialize_daily("sh.600006").unwrap();
+    batch.bars.retain(|b| b.date != day(20250716));
+    market::published_fixture(&market, &subject_raw("subject-gap", &batch));
+
+    let manifest_path = db.path().join("manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+    let api = DataApi::new(tasks.clone(), "run".into(), Access::local()).unwrap();
+    let accepted = api
+        .call(
+            "verify_data_gap",
+            json!({"contract_version":"v1","request_id":"g1","target":{"symbol":"sh.600006","period":"day","start_date":"2025-07-16","end_date":"2025-07-16"}}),
+        )
+        .unwrap();
+    let worked = api.call("run_worker_once", json!({})).unwrap();
+    assert_eq!(worked["task_id"], accepted["task_id"]);
+    let done = tasks
+        .read_task(accepted["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(done.items[0].outcome.as_ref().unwrap().success);
+    let c = rusqlite::Connection::open(tasks.path()).unwrap();
+    let (conclusion, verifier_id): (String, String) = c
+        .query_row(
+            "SELECT conclusion,verifier_id FROM gap_verification_decisions",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(conclusion, "confirmed_missing_range");
+    assert_eq!(verifier_id, "tdx-official-gap-verifier-v1");
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM proven_gaps", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
     );
 }
