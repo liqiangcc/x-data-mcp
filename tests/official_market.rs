@@ -12,7 +12,10 @@ use x_data_mcp::{
     market_data::{Adjustment, CoverageStatus, MarketDataBatch, Period, SourceError},
     market_storage::{MarketRepository, PublishIntent, Range, Scope, compat},
     market_update::runner::ItemExecution,
-    official_market::{DailyCollectionRepository, TdxDailyRunner, TdxGapVerifier, TdxMarketSource},
+    official_market::{
+        DailyCollectionRepository, TdxBackfillProvider, TdxDailyRunner, TdxGapVerifier,
+        TdxMarketSource,
+    },
     publish::{EffectiveVersion, ValidationSummary},
     sqlite_market::SqliteMarket,
     sqlite_supply::SqliteSupply,
@@ -1401,6 +1404,9 @@ fn gap_verifier_confirms_missing_day_against_pinned_snapshot() {
     // archive+member digests.
     let mut batch = source.materialize_daily("sh.600006").unwrap();
     batch.bars.retain(|b| b.date != day(20250716));
+    // Honest label: the storage contract requires status Complete, so the
+    // reason discloses the withheld bar and denies complete history.
+    batch.coverage.reason = "acceptance local-gap subject: real .day member bars with 2025-07-16 withheld; not a complete source history".into();
     let raw = subject_raw("subject-gap", &batch);
     market::published_fixture(&market, &raw);
 
@@ -1565,6 +1571,7 @@ fn service_verify_data_gap_uses_installed_snapshot_verifier() {
     let market = SqliteMarket::new(tasks.clone());
     let mut batch = source.materialize_daily("sh.600006").unwrap();
     batch.bars.retain(|b| b.date != day(20250716));
+    batch.coverage.reason = "acceptance local-gap subject: real .day member bars with 2025-07-16 withheld; not a complete source history".into();
     market::published_fixture(&market, &subject_raw("subject-gap", &batch));
 
     let manifest_path = db.path().join("manifest.json");
@@ -1596,6 +1603,383 @@ fn service_verify_data_gap_uses_installed_snapshot_verifier() {
     assert_eq!(verifier_id, "tdx-official-gap-verifier-v1");
     assert_eq!(
         c.query_row("SELECT count(*) FROM proven_gaps", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+// ---------- #187 Phase C: TdxBackfillProvider ----------
+
+fn publish_catalog(tasks: &SqliteTasks, codes: &[&str]) {
+    use x_data_mcp::{
+        catalog::{
+            CatalogSnapshot, CompletenessEvidence, Exchange, IndustryInfo, SecurityRecord,
+            SecurityType,
+        },
+        sqlite_catalog::SqliteCatalog,
+    };
+    let records = codes
+        .iter()
+        .map(|code| SecurityRecord {
+            symbol: (*code).into(),
+            name: (*code).into(),
+            exchange: Exchange::Shanghai,
+            security_type: SecurityType::AShare,
+            source_security_id: (*code).into(),
+            industry: IndustryInfo::Missing {
+                reason: "fixture".into(),
+            },
+            source: "fixture:catalog".into(),
+            acquired_at: now(),
+        })
+        .collect();
+    SqliteCatalog::new(tasks.clone())
+        .publish_fixture(
+            "catalog-1",
+            CatalogSnapshot {
+                source: "fixture:catalog".into(),
+                acquired_at: now(),
+                completeness: CompletenessEvidence::Complete {
+                    expected_count: codes.len(),
+                },
+                records,
+            },
+            None,
+        )
+        .unwrap();
+}
+
+#[test]
+fn backfill_provider_builds_combined_candidate_for_frozen_gap() {
+    use x_data_mcp::market_update::runner::RangeProvider;
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let (_d, _t, market) = fresh_market();
+    let full = source.materialize_daily("sh.600006").unwrap();
+    // Controlled-gap base: full member history minus the target day,
+    // declared snapshot binding intact.
+    let mut gapped = full.clone();
+    gapped.bars.retain(|b| b.date != day(20250716));
+    gapped.coverage.reason = "acceptance local-gap subject: real .day member bars with 2025-07-16 withheld; not a complete source history".into();
+    let raw = subject_raw("base-gap", &gapped);
+    market::published_fixture(&market, &raw);
+    let base = market.fixed("base-gap").unwrap();
+    let provider = TdxBackfillProvider {
+        source: &source,
+        published_at: now(),
+    };
+    let range = x_data_mcp::market_update::DateRange {
+        start: day(20250716),
+        end: day(20250716),
+    };
+    let acq = provider.acquire(&base, &range, "cand-1").unwrap();
+    // The segment is exactly the real source bar inside the frozen range.
+    assert_eq!(acq.batch.bars, [full.bars[1].clone()]);
+    let whole = acq.combined.expect("changed backfill needs a candidate");
+    assert_eq!(whole.record["version_id"], json!("cand-1"));
+    // Merged record = full source history; honest Complete claim because
+    // the merge equals the materialized member bytes.
+    let combined_batch: MarketDataBatch =
+        serde_json::from_value(whole.record["batch"].clone()).unwrap();
+    assert_eq!(combined_batch.bars, full.bars);
+    assert_eq!(combined_batch.coverage.status, CoverageStatus::Complete);
+    let version: EffectiveVersion = serde_json::from_value(whole.record.clone()).unwrap();
+    assert_eq!(version.records, combined_batch.bars);
+    // Evidence bindings.
+    assert_eq!(
+        whole.evidence.base_integrity_sha256,
+        raw["integrity_sha256"].as_str().unwrap()
+    );
+    assert_eq!(
+        whole.evidence.segment_sha256,
+        x_data_mcp::market_update::candidate_digest(&acq.batch).unwrap()
+    );
+    assert_eq!(
+        whole.evidence.combined_integrity_sha256,
+        whole.record["integrity_sha256"].as_str().unwrap()
+    );
+    let inputs = combined_batch.provenance.snapshot_inputs.as_ref().unwrap();
+    for sha in [
+        source.manifest_sha256(),
+        inputs[0].member_sha256.as_str(),
+        inputs[1].member_sha256.as_str(),
+    ] {
+        assert!(whole.evidence.complete_coverage_ref.contains(sha));
+    }
+    assert_eq!(acq.evidence.range, range);
+    assert!(
+        acq.evidence
+            .revision_ref
+            .as_deref()
+            .unwrap()
+            .contains("base-gap")
+    );
+    // The built record passes the governed stage/check path.
+    market.stage(&whole.record).unwrap();
+    assert_eq!(
+        market.candidate("cand-1").unwrap().version().records.len(),
+        3
+    );
+
+    // A base whose only hole is partially inside the range keeps its own
+    // coverage claim (merge does not equal full history).
+    let mut partial = full.clone();
+    partial.bars.retain(|b| b.date != day(20250715));
+    let raw = subject_raw("base-partial", &partial);
+    market
+        .commit(&market::prepare(
+            &market,
+            &raw,
+            PublishIntent::Daily {
+                expected_head: Some("base-gap".into()),
+            },
+        ))
+        .unwrap();
+    let base = market.fixed("base-partial").unwrap();
+    let acq = provider.acquire(&base, &range, "cand-2").unwrap();
+    let combined_batch: MarketDataBatch =
+        serde_json::from_value(acq.combined.unwrap().record["batch"].clone()).unwrap();
+    assert_eq!(combined_batch.bars.len(), 2);
+    assert_eq!(combined_batch.coverage, partial.coverage);
+
+    // A base that does not bind this snapshot generation fails closed.
+    let mut other = full.clone();
+    for i in other.provenance.snapshot_inputs.as_mut().unwrap() {
+        i.member_sha256 = "0".repeat(64);
+    }
+    let raw = subject_raw("base-other-snapshot", &other);
+    market
+        .commit(&market::prepare(
+            &market,
+            &raw,
+            PublishIntent::Daily {
+                expected_head: Some("base-partial".into()),
+            },
+        ))
+        .unwrap();
+    let base = market.fixed("base-other-snapshot").unwrap();
+    assert!(matches!(
+        provider.acquire(&base, &range, "cand-3"),
+        Err(SourceError::NotVerified(_))
+    ));
+    // An empty in-range segment cannot fill anything.
+    let base = market.fixed("base-partial").unwrap();
+    let empty = x_data_mcp::market_update::DateRange {
+        start: day(20250720),
+        end: day(20250720),
+    };
+    assert!(matches!(
+        provider.acquire(&base, &empty, "cand-4"),
+        Err(SourceError::InvalidResponse(_))
+    ));
+
+    // An overlapping in-range bar the source contradicts is a basis
+    // conflict — the provider fails closed instead of overwriting it.
+    let mut conflict = full.clone();
+    for b in &mut conflict.bars {
+        if b.date == day(20250716) {
+            // A flat shifted bar stays inside low/high bounds while still
+            // contradicting the source values.
+            b.open = dec("999.99");
+            b.high = dec("999.99");
+            b.low = dec("999.99");
+            b.close = dec("999.99");
+        }
+    }
+    let raw = subject_raw("base-conflict", &conflict);
+    market
+        .commit(&market::prepare(
+            &market,
+            &raw,
+            PublishIntent::Daily {
+                expected_head: Some("base-other-snapshot".into()),
+            },
+        ))
+        .unwrap();
+    let base = market.fixed("base-conflict").unwrap();
+    assert!(matches!(
+        provider.acquire(&base, &range, "cand-5"),
+        Err(SourceError::NotVerified(_))
+    ));
+}
+
+#[test]
+fn service_backfill_data_default_restores_proven_gap() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let full = source.materialize_daily("sh.600006").unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    publish_catalog(&tasks, &["600006"]);
+    let mut gapped = full.clone();
+    gapped.bars.retain(|b| b.date != day(20250716));
+    gapped.coverage.reason = "acceptance local-gap subject: real .day member bars with 2025-07-16 withheld; not a complete source history".into();
+    let subject = subject_raw("subject-gap", &gapped);
+    market::published_fixture(&market, &subject);
+
+    let manifest_path = db.path().join("manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+    let api = DataApi::new(tasks.clone(), "run".into(), Access::local()).unwrap();
+    // 1. verify_data_gap proves the local gap.
+    api.call(
+        "verify_data_gap",
+        json!({"contract_version":"v1","request_id":"g1","target":{"symbol":"sh.600006","period":"day","start_date":"2025-07-16","end_date":"2025-07-16"}}),
+    )
+    .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    // 2. backfill_data under the default selector freezes exactly that gap.
+    let accepted = api
+        .call(
+            "backfill_data",
+            json!({"request_id":"b1","dataset":"market.daily","contract_version":"v1","selection":{"kind":"default"}}),
+        )
+        .unwrap();
+    assert_eq!(accepted["contract_version"], json!("default-range-task-v1"));
+    let task_id = accepted["task_id"].as_str().unwrap().to_owned();
+    let snap_task = tasks.read_task(&task_id).unwrap().unwrap();
+    let f = &snap_task.items[0].spec.frozen_inputs;
+    assert_eq!(f["proven_gap_ranges"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        f["proven_gap_ranges"][0]["range"]["start_date"],
+        json!("2025-07-16")
+    );
+    // 3. Worker run: the installed snapshot fills the frozen gap.
+    let worked = api.call("run_worker_once", json!({})).unwrap();
+    assert_eq!(worked["task_id"], json!(task_id));
+    let done = tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(done.items[0].outcome.as_ref().unwrap().success);
+    let c = rusqlite::Connection::open(tasks.path()).unwrap();
+    let new_head: String = c
+        .query_row(
+            "SELECT version_id FROM effective_heads WHERE symbol='sh.600006' AND period='day'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(new_head, "subject-gap");
+    // The merged version restored the real source bar; outside-range bars
+    // preserved verbatim; old version retained.
+    let merged = market.fixed(&new_head).unwrap();
+    assert_eq!(merged.version().records, full.bars);
+    assert_eq!(merged.version().records[1], full.bars[1]);
+    market.fixed("subject-gap").unwrap();
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM data_versions", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    // The covering binds the new version; the open gap is gone while the
+    // historical decision/proven-gap rows stay auditable.
+    let (gap_id, covered_version): (String, String) = c
+        .query_row("SELECT gap_id,version_id FROM gap_coverings", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(covered_version, new_head);
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM proven_gaps WHERE gap_id=?1",
+            [&gap_id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM gap_verification_decisions", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap(),
+        1
+    );
+    // Availability reports no open confirmed gap for the covered range.
+    let availability = api
+        .call(
+            "get_data_availability",
+            json!({"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-07-15","end_date":"2025-07-17"},"version":{"kind":"latest_per_entity"}}),
+        )
+        .unwrap();
+    assert_eq!(
+        availability["items"][0]["confirmed_gaps"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    // Replay: the same request reuses the task; no second version/covering.
+    let replay = api
+        .call(
+            "backfill_data",
+            json!({"request_id":"b1","dataset":"market.daily","contract_version":"v1","selection":{"kind":"default"}}),
+        )
+        .unwrap();
+    assert_eq!(replay["reused"], json!(true));
+    assert_eq!(replay["task_id"], json!(task_id));
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM gap_coverings", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn service_backfill_explicit_range_stays_blocked_with_installed_source() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let batch = source.materialize_daily("sh.600006").unwrap();
+    market::published_fixture(&market, &subject_raw("base-full", &batch));
+    let manifest_path = db.path().join("manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+    let api = DataApi::new(tasks.clone(), "run".into(), Access::local()).unwrap();
+    let accepted = api
+        .call(
+            "backfill_data",
+            json!({"request_id":"bx1","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"base-full","start_date":"2025-07-15","end_date":"2025-07-17"}]}),
+        )
+        .unwrap();
+    assert_eq!(
+        accepted["contract_version"],
+        json!("explicit-range-task-v1")
+    );
+    let worked = api.call("run_worker_once", json!({})).unwrap();
+    assert_eq!(worked["task_id"], accepted["task_id"]);
+    let done = tasks
+        .read_task(accepted["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    let outcome = done.items[0].outcome.as_ref().unwrap();
+    assert!(!outcome.success);
+    assert!(
+        outcome
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("SOURCE_NOT_VERIFIED")
+    );
+    let c = rusqlite::Connection::open(tasks.path()).unwrap();
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM data_versions", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
         1

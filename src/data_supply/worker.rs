@@ -102,16 +102,30 @@ pub fn run_once(
         repository: market.clone(),
         run_id: control.run_id.clone(),
     };
-    let tdx = market_source.map(|source| crate::official_market::TdxRangeProvider { source });
+    let update = market_source.map(|source| crate::official_market::TdxRangeProvider { source });
+    let backfill = market_source.map(|source| crate::official_market::TdxBackfillProvider {
+        source,
+        published_at: chrono::Utc::now(),
+    });
     for item in &candidate.items {
-        // Only refresh (`update_data`) may run against an installed snapshot
-        // source; backfill's frozen gap-only semantics differ from refresh,
-        // so it keeps the blocked provider rather than borrow this path.
-        let provider: &dyn RangeProvider =
-            match (candidate.task.key.operation.as_str(), tdx.as_ref()) {
-                ("update_data", Some(provider)) => provider,
-                _ => &OfficialRangeProvider,
-            };
+        // `update_data` refresh uses the range provider; `backfill_data`
+        // gains a source path only under the default frozen-gap contract —
+        // explicit-range backfill and everything else keep the blocked
+        // provider.
+        let provider: &dyn RangeProvider = match (
+            candidate.task.key.operation.as_str(),
+            candidate.task.key.contract_version.as_str(),
+            update.as_ref(),
+            backfill.as_ref(),
+        ) {
+            ("update_data", _, Some(provider), _) => provider,
+            ("backfill_data", contract, _, Some(provider))
+                if contract == crate::market_update::tasks::DEFAULT_CONTRACT_VERSION =>
+            {
+                provider
+            }
+            _ => &OfficialRangeProvider,
+        };
         runner.run_item(&candidate.task.task_id, &item.spec.item_id, provider)?;
     }
     Ok(Some(control.read_task(&candidate.task.task_id)?))
