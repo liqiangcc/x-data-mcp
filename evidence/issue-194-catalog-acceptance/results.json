@@ -1,0 +1,300 @@
+{
+  "assertions": [
+    {
+      "name": "C1_input_integrity",
+      "ok": true,
+      "detail": {
+        "archive_sha256": {
+          "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+          "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"
+        },
+        "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3"
+      }
+    },
+    {
+      "name": "C2_member_sha256",
+      "ok": true,
+      "detail": {
+        "tdxhy.cfg": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6",
+        "infoharbor_ex.code": "79eed0f6857ffde3d1d3cc8966ceff6e400f45e6e2387224446e453850fb5281",
+        "zhb.zip": "e1ded566dc5269642de760211ec1b67e5ebebd67ab1e6338f70cab7c05048350",
+        "incon.dat": "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51"
+      }
+    },
+    {
+      "name": "C3_scope_partition",
+      "ok": true,
+      "detail": {
+        "total": 5659,
+        "scope": 5230,
+        "scope_sz": 2906,
+        "scope_sh": 2324,
+        "bj": 348,
+        "b_share": 78,
+        "anomalous": 3,
+        "ex_names": 5571,
+        "tdxrshy": 474,
+        "tdxnhy": 145,
+        "nameless": [
+          "0:001235",
+          "0:300728",
+          "1:601206",
+          "1:603302",
+          "1:603361",
+          "1:688688"
+        ],
+        "missing_industry": 0,
+        "t_residuals": [
+          [
+            "1",
+            "688688",
+            "T00"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "C4_nameless_verbatim",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": false,
+          "error": "CATALOG_REJECTED: nameless scope members: 0:001235,0:300728,1:601206,1:603302,1:603361,1:688688"
+        },
+        "expected": "CATALOG_REJECTED: nameless scope members: 0:001235,0:300728,1:601206,1:603302,1:603361,1:688688"
+      }
+    },
+    {
+      "name": "C5_no_leak",
+      "ok": true,
+      "detail": {
+        "catalog_counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "C6_idempotent",
+      "ok": true,
+      "detail": {
+        "reused": true,
+        "outcome_c2": {
+          "success": false,
+          "error": "CATALOG_REJECTED: nameless scope members: 0:001235,0:300728,1:601206,1:603302,1:603361,1:688688"
+        },
+        "idle": true,
+        "catalog_counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "C7_readback_honest",
+      "ok": true,
+      "detail": {
+        "availability": {
+          "items": [
+            {
+              "availability": "absent",
+              "confirmed_gaps": [],
+              "coverage_evidence": "no published version",
+              "entity": null,
+              "first_record": null,
+              "freshness": "unknown",
+              "integrity": "not_applicable",
+              "last_record": null,
+              "limitations": [
+                "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair"
+              ],
+              "record_count": 0,
+              "related_tasks": [
+                {
+                  "contract_version": "v1",
+                  "created_at": "2026-09-17T07:05:53.498400595Z",
+                  "dataset": "securities.catalog",
+                  "last_progress_at": "2026-09-17T07:06:04.000181956Z",
+                  "operation": "start_collection",
+                  "request_id": "c2",
+                  "state_revision": 4,
+                  "status": "failed",
+                  "task_id": "task-2c1e92a57cefc8e3b2d816e6d137c622"
+                },
+                {
+                  "contract_version": "v1",
+                  "created_at": "2026-09-17T07:05:42.696658109Z",
+                  "dataset": "securities.catalog",
+                  "last_progress_at": "2026-09-17T07:05:53.476692564Z",
+                  "operation": "start_collection",
+                  "request_id": "c1",
+                  "state_revision": 4,
+                  "status": "failed",
+                  "task_id": "task-bf198a679c610f352588b0014a3a79ac"
+                }
+              ],
+              "unresolved_ranges": [],
+              "version_ref": null
+            }
+          ],
+          "next_cursor": null,
+          "page_complete": true,
+          "snapshot_id": "obs-4086223-1789628730728826016-1",
+          "snapshot_time": "2026-09-17T07:06:04.021433171Z"
+        },
+        "versions": {
+          "items": [],
+          "next_cursor": null,
+          "page_complete": true,
+          "snapshot_id": "4086223-1789628730728811995-1",
+          "snapshot_time": "2026-09-17T07:06:04.031748379Z"
+        }
+      }
+    },
+    {
+      "name": "C8_env_absent",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": false,
+          "error": "SOURCE_NOT_VERIFIED: CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; contract determined — names required so nameless members reject_candidate, tdx_research_industry scheme authoritative; real-snapshot full-catalog collection/acceptance (#194) and deployment not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+        },
+        "catalog_counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "C9_uninspectable",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": false,
+          "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: manifest JSON invalid: missing field `schema` at line 1 column 12"
+        },
+        "catalog_counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "C10_member_missing",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": false,
+          "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: local input unavailable: No such file or directory (os error 2)"
+        },
+        "catalog_counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "C11_member_corrupt",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": false,
+          "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: artifact bytes do not match manifest: BaseIndustry"
+        },
+        "catalog_counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "C12_gates_preserved",
+      "ok": true,
+      "detail": {
+        "blocking_reasons": [
+          "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; contract determined — names required so nameless members reject_candidate, tdx_research_industry scheme authoritative; real-snapshot full-catalog collection/acceptance (#194) and deployment not run)",
+          "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+          "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+          "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+        ]
+      }
+    }
+  ],
+  "blocked_paths": {
+    "R1_env_absent": {
+      "success": false,
+      "error": "SOURCE_NOT_VERIFIED: CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; contract determined — names required so nameless members reject_candidate, tdx_research_industry scheme authoritative; real-snapshot full-catalog collection/acceptance (#194) and deployment not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+    },
+    "R2_uninspectable_manifest": {
+      "success": false,
+      "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: manifest JSON invalid: missing field `schema` at line 1 column 12"
+    },
+    "R3_member_missing": {
+      "success": false,
+      "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: local input unavailable: No such file or directory (os error 2)"
+    },
+    "R4_member_corrupt": {
+      "success": false,
+      "error": "CATALOG_SOURCE_FAILURE: snapshot inspection failed: artifact bytes do not match manifest: BaseIndustry"
+    }
+  },
+  "run_identity": {
+    "head": "a988f9b73b2ffb2efbee5b0b49bc62396e939a96",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
+    "archive_sha256": {
+      "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+      "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"
+    },
+    "member_sha256": {
+      "tdxhy.cfg": "df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6",
+      "infoharbor_ex.code": "79eed0f6857ffde3d1d3cc8966ceff6e400f45e6e2387224446e453850fb5281",
+      "zhb.zip": "e1ded566dc5269642de760211ec1b67e5ebebd67ab1e6338f70cab7c05048350",
+      "incon.dat": "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51"
+    },
+    "mechanical_recompute": {
+      "total": 5659,
+      "scope": 5230,
+      "scope_sz": 2906,
+      "scope_sh": 2324,
+      "bj": 348,
+      "b_share": 78,
+      "anomalous": 3,
+      "ex_names": 5571,
+      "tdxrshy": 474,
+      "tdxnhy": 145,
+      "nameless": [
+        "0:001235",
+        "0:300728",
+        "1:601206",
+        "1:603302",
+        "1:603361",
+        "1:688688"
+      ],
+      "missing_industry": 0,
+      "t_residuals": [
+        [
+          "1",
+          "688688",
+          "T00"
+        ]
+      ]
+    }
+  },
+  "production_blockers": [
+    "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; contract determined — names required so nameless members reject_candidate, tdx_research_industry scheme authoritative; real-snapshot full-catalog collection/acceptance (#194) and deployment not run)",
+    "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+    "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+    "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+  ],
+  "notes": {
+    "immutable_receipt_provenance": "NOT_APPLICABLE_ON_REJECT_PATH: P1 reject_candidate produces no catalog version on gen-2; mechanical diagnostics frozen in PLAN §2.",
+    "not_run": "market.daily 5230 collection, deployment, gen-3 snapshot — out of scope per issue."
+  }
+}
