@@ -1,0 +1,418 @@
+{
+  "assertions": [
+    {
+      "name": "B1_input_integrity",
+      "ok": true,
+      "detail": {
+        "zip_sha256": {
+          "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+          "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+          "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+        },
+        "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3"
+      }
+    },
+    {
+      "name": "B2_subject_honest",
+      "ok": true,
+      "detail": {
+        "bars": 8478,
+        "record_count": 8478,
+        "target_row": 0,
+        "coverage_reason": "ACCEPTANCE-LOCAL-GAP-SUBJECT: official sz.000002 QFQ bars minus frozen target 2000-01-10; complete only for this declared scratch coverage, not complete source history",
+        "catalog_source": [
+          "fixture:acceptance-187"
+        ],
+        "version_id": "collection-version-cc167980ab4084142e293cf78aee2bdaa5b42879b96d2e94353ac05da0833dfd",
+        "integrity_sha256": "077e48174030c482f730baab226edb865f84f6f11fdbfbf20817f4c953bb0226"
+      }
+    },
+    {
+      "name": "B3_verify_freeze",
+      "ok": true,
+      "detail": {
+        "subject_version_digest": "077e48174030c482f730baab226edb865f84f6f11fdbfbf20817f4c953bb0226",
+        "subject_version_id": "collection-version-cc167980ab4084142e293cf78aee2bdaa5b42879b96d2e94353ac05da0833dfd",
+        "target": {
+          "end_date": "2000-01-10",
+          "period": "day",
+          "start_date": "2000-01-10",
+          "symbol": "sz.000002"
+        }
+      }
+    },
+    {
+      "name": "B4_decision_gap_atomic",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": true,
+          "error": null
+        },
+        "decisions": [
+          [
+            "task-612f40e7787f315fd1921baf9759c0c1:sz.000002",
+            "sz.000002",
+            "2000-01-10",
+            "2000-01-10",
+            "collection-version-cc167980ab4084142e293cf78aee2bdaa5b42879b96d2e94353ac05da0833dfd",
+            "077e48174030c482f730baab226edb865f84f6f11fdbfbf20817f4c953bb0226",
+            "confirmed_missing_range",
+            "source_gap_verifier",
+            "sz\\lday\\sz000002.day:6f168cf053ca561fedde1aa97c3b38d71876854ade3dae5f1a2c9ba9f6b63826 manifest b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3 gbbq member gbbq:4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+            "dc0c7c6ca00fc142b3556a4fe651ee8ccdacdc021a8df1af614824d75cfce9bd",
+            "tdx-official-gap-verifier-v1"
+          ]
+        ],
+        "proven_gaps": [
+          [
+            "4687ef2300a98e4659324a3563b2d3ee29969fdbe1520277d4b11056f351fd74",
+            "sz.000002",
+            "2000-01-10",
+            "2000-01-10",
+            "gap_verification_decision",
+            "task-612f40e7787f315fd1921baf9759c0c1:sz.000002",
+            "4b682a2886a13851ed648a62c2bb1cdc06c273735668560f00210d497dd97939"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "B5_availability_open_gap",
+      "ok": true,
+      "detail": [
+        {
+          "evidence": "{\"kind\":\"gap_verification_decision\",\"id\":\"task-612f40e7787f315fd1921baf9759c0c1:sz.000002\",\"sha256\":\"4b682a2886a13851ed648a62c2bb1cdc06c273735668560f00210d497dd97939\"}",
+          "range": {
+            "end_date": "2000-01-10",
+            "kind": "daily",
+            "start_date": "2000-01-10"
+          }
+        }
+      ]
+    },
+    {
+      "name": "B6_backfill_freeze",
+      "ok": true,
+      "detail": {
+        "base_integrity_sha256": "077e48174030c482f730baab226edb865f84f6f11fdbfbf20817f4c953bb0226",
+        "base_version_id": "collection-version-cc167980ab4084142e293cf78aee2bdaa5b42879b96d2e94353ac05da0833dfd",
+        "proven_gap_ranges": [
+          {
+            "evidence_digest": "4b682a2886a13851ed648a62c2bb1cdc06c273735668560f00210d497dd97939",
+            "gap_id": "4687ef2300a98e4659324a3563b2d3ee29969fdbe1520277d4b11056f351fd74",
+            "range": {
+              "end_date": "2000-01-10",
+              "start_date": "2000-01-10"
+            }
+          }
+        ],
+        "selection_evidence": {
+          "catalog_digest": "107d1a95fcf2be2fc1b0e7e812401e94ae6d68bbb978d8b60e19b119ee998b72",
+          "catalog_version_id": "acceptance-187-catalog",
+          "evidence_digest": "735fe32136dceae3bfcf6cb137ec2b62f1930cd0db99f352d0f704376c795c17",
+          "securities": [
+            "sz.000002"
+          ],
+          "starts": {
+            "sz.000002": [
+              {
+                "item_id": "[\"market\",\"sz.000002\",\"day\"]",
+                "retry_of": null,
+                "run_id": "seed-gap-subject-1789620224543",
+                "start_revision": 2,
+                "started_at": "2026-09-17T04:44:17.391402092+00:00",
+                "task_id": "task-788eb9ec605d469fbb80773da1343283"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "B7_backfill_executed",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "success": true,
+          "error": null
+        },
+        "new_head": "range-version-57d1d8592c53b9380ab809230387b43e963016035ffc5eeabb8d06b0c83fe366"
+      }
+    },
+    {
+      "name": "B8_restored_bar",
+      "ok": true,
+      "detail": {
+        "record_count": 8479,
+        "stored": {
+          "open": "-8.14",
+          "high": "-8.06",
+          "low": "-8.15",
+          "close": "-8.06",
+          "volume": null,
+          "amount": null
+        },
+        "query_record": {
+          "amount": null,
+          "close": "-8.06",
+          "date": "2000-01-10",
+          "entity": {
+            "code": "000002",
+            "exchange": "sz"
+          },
+          "first_trading_date": null,
+          "high": "-8.06",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "-8.15",
+          "open": "-8.14",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "000002",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "393f3d7af9506a2fb48df293be341f7c274cb7f4de3cf104a4e6b47e6c0d4d32",
+            "version_id": "range-version-57d1d8592c53b9380ab809230387b43e963016035ffc5eeabb8d06b0c83fe366"
+          },
+          "volume": null,
+          "year_unfinished": null
+        },
+        "outside_hash_equal": true
+      }
+    },
+    {
+      "name": "B9_head_governance",
+      "ok": true,
+      "detail": {
+        "new_head": "range-version-57d1d8592c53b9380ab809230387b43e963016035ffc5eeabb8d06b0c83fe366",
+        "mur": [
+          [
+            "range-result-57d1d8592c53b9380ab809230387b43e963016035ffc5eeabb8d06b0c83fe366",
+            "collection-version-cc167980ab4084142e293cf78aee2bdaa5b42879b96d2e94353ac05da0833dfd",
+            "range-version-57d1d8592c53b9380ab809230387b43e963016035ffc5eeabb8d06b0c83fe366",
+            0
+          ]
+        ],
+        "v1_state": "published"
+      }
+    },
+    {
+      "name": "B10_covering",
+      "ok": true,
+      "detail": {
+        "coverings": [
+          [
+            "4687ef2300a98e4659324a3563b2d3ee29969fdbe1520277d4b11056f351fd74",
+            "range-version-57d1d8592c53b9380ab809230387b43e963016035ffc5eeabb8d06b0c83fe366",
+            "2026-09-17T04:48:26.226996080+00:00"
+          ]
+        ],
+        "open_after": []
+      }
+    },
+    {
+      "name": "B11_idempotent",
+      "ok": true,
+      "detail": {
+        "replay_g": true,
+        "replay_b": true,
+        "counts": {
+          "data_versions": 2,
+          "decisions": 2,
+          "proven_gaps": 1,
+          "gap_coverings": 1
+        },
+        "decisions": [
+          [
+            "confirmed_missing_range",
+            "collection-version-cc167980ab4084142e293cf78aee2bdaa5b42879b96d2e94353ac05da0833dfd"
+          ],
+          [
+            "no_local_gap",
+            "range-version-57d1d8592c53b9380ab809230387b43e963016035ffc5eeabb8d06b0c83fe366"
+          ]
+        ],
+        "second_backfill": "INVALID_COMMAND: EMPTY_SELECTION"
+      }
+    },
+    {
+      "name": "B12_provenance_binds",
+      "ok": true,
+      "detail": {
+        "snapshot_inputs": [
+          {
+            "archive_sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+            "member": "sz\\lday\\sz000002.day",
+            "member_sha256": "6f168cf053ca561fedde1aa97c3b38d71876854ade3dae5f1a2c9ba9f6b63826",
+            "role": "day"
+          },
+          {
+            "archive_sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+            "member": "gbbq",
+            "member_sha256": "4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+            "role": "gbbq"
+          }
+        ],
+        "basis_ref": "sz\\lday\\sz000002.day:6f168cf053ca561fedde1aa97c3b38d71876854ade3dae5f1a2c9ba9f6b63826 manifest b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3 gbbq member gbbq:4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+        "basis_sha256": "dc0c7c6ca00fc142b3556a4fe651ee8ccdacdc021a8df1af614824d75cfce9bd"
+      }
+    },
+    {
+      "name": "B13_env_absent_verify",
+      "ok": true,
+      "detail": {
+        "outcome": "{\"success\":false,\"error\":\"GAP_BASIS_NOT_VERIFIED: no installed trusted source-gap verifier (#54/#46/#71)\"}",
+        "counts": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "B14_uninspectable_verify",
+      "ok": true,
+      "detail": {
+        "outcome": "{\"success\":false,\"error\":\"GAP_BASIS_NOT_VERIFIED: no installed trusted source-gap verifier (#54/#46/#71)\"}",
+        "counts": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "B15_source_limitation",
+      "ok": true,
+      "detail": {
+        "conclusion": "source_limitation",
+        "proven_gaps": 0
+      }
+    },
+    {
+      "name": "B16_no_local_gap",
+      "ok": true,
+      "detail": {
+        "conclusion": "no_local_gap",
+        "proven_gaps": 0
+      }
+    },
+    {
+      "name": "B17_subject_identity",
+      "ok": true,
+      "detail": {
+        "outcome": "{\"success\":false,\"error\":\"GAP_BASIS_NOT_VERIFIED: subject is not a pinned official-file QFQ daily version\"}",
+        "counts": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "B18_stale_head",
+      "ok": true,
+      "detail": {
+        "outcome": "{\"success\":false,\"error\":\"MARKET_INTEGRITY: gap decision subject head moved\"}",
+        "counts": [
+          0,
+          0
+        ],
+        "versions": 2
+      }
+    },
+    {
+      "name": "B19_backfill_no_gap",
+      "ok": true,
+      "detail": "INVALID_COMMAND: EMPTY_SELECTION"
+    },
+    {
+      "name": "B20_explicit_backfill_blocked",
+      "ok": true,
+      "detail": {
+        "outcome": "{\"success\":false,\"error\":\"INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE",
+        "versions": 1
+      }
+    },
+    {
+      "name": "B22_gates_preserved",
+      "ok": true,
+      "detail": {
+        "blocking_reasons": [
+          "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run)",
+          "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+          "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+          "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)",
+          "LOCAL_PIPELINE_NOT_IMPLEMENTED (update/backfill official-source execution)"
+        ],
+        "verify_blocking_reasons": [
+          "GAP_BASIS_NOT_VERIFIED (#54/#46/#71: no trusted source-gap verifier)"
+        ],
+        "adjustment_evidence_reason": "qfq::forward_adjust over category==1 GBBQ affine chain (36 events, 76 non-category-1 records excluded uninterpreted); NOT_PRODUCTION_READY: official_files::PRODUCTION_BLOCKERS gates unchanged"
+      }
+    }
+  ],
+  "blocked_paths": {
+    "second_backfill_default": "INVALID_COMMAND: EMPTY_SELECTION",
+    "R1_env_absent": "{\"success\":false,\"error\":\"GAP_BASIS_NOT_VERIFIED: no installed trusted source-gap verifier (#54/#46/#71)\"}",
+    "R2_uninspectable_manifest": "{\"success\":false,\"error\":\"GAP_BASIS_NOT_VERIFIED: no installed trusted source-gap verifier (#54/#46/#71)\"}",
+    "R3_source_limitation": {
+      "outcome": {
+        "success": true,
+        "error": null
+      },
+      "decisions": [
+        [
+          "task-919925b60bf3629075ada18565196392:sz.000002",
+          "source_limitation"
+        ]
+      ]
+    },
+    "R4_no_local_gap": {
+      "outcome": {
+        "success": true,
+        "error": null
+      },
+      "decisions": [
+        [
+          "task-919925b60bf3629075ada18565196392:sz.000002",
+          "source_limitation"
+        ],
+        [
+          "task-fedc7e47a041074df408615472258a97:sz.000002",
+          "no_local_gap"
+        ]
+      ]
+    },
+    "R5_subject_identity": "{\"success\":false,\"error\":\"GAP_BASIS_NOT_VERIFIED: subject is not a pinned official-file QFQ daily version\"}",
+    "R6_stale_head": "{\"success\":false,\"error\":\"MARKET_INTEGRITY: gap decision subject head moved\"}",
+    "R7_no_frozen_gap": "INVALID_COMMAND: EMPTY_SELECTION",
+    "R8_explicit_backfill": "{\"success\":false,\"error\":\"INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run); GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence); LOCAL_PIPELINE_NOT_IMPLEMENTED (update/backfill official-source execution)\"}"
+  },
+  "run_identity": {
+    "head": "e4f7430a6f56111486ed10230b64d2e13e269a05",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
+    "zip_sha256": {
+      "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+      "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+      "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+    }
+  },
+  "subject": {
+    "version_id": "collection-version-cc167980ab4084142e293cf78aee2bdaa5b42879b96d2e94353ac05da0833dfd",
+    "integrity_sha256": "077e48174030c482f730baab226edb865f84f6f11fdbfbf20817f4c953bb0226",
+    "coverage_reason": "ACCEPTANCE-LOCAL-GAP-SUBJECT: official sz.000002 QFQ bars minus frozen target 2000-01-10; complete only for this declared scratch coverage, not complete source history"
+  },
+  "production_blockers": [
+    "CATALOG_PUBLISH_NOT_VERIFIED (#6: field semantics anchored via #46/#168 evidence; P1 nameless-member policy and P2 industry-scheme decisions pending; real-snapshot deployment and AC-12 acceptance not run)",
+    "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+    "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+    "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)",
+    "LOCAL_PIPELINE_NOT_IMPLEMENTED (update/backfill official-source execution)"
+  ],
+  "notes": {
+    "partial_coverage_no_covering": "NOT_OBSERVABLE_VIA_REAL_SOURCE: committed range equals the frozen union by construction; the invariant is unit-test covered (ensure_default_coverings).",
+    "changed_generation_update": "NOT_RUN: only one pinned official snapshot generation exists (gen-1 permanently unavailable)."
+  }
+}
