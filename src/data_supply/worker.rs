@@ -70,8 +70,13 @@ pub fn run_once(
             && candidate.task.key.contract_version == "v1"
             && let Some(source) = market_source
         {
+            // One session per worker run: the gbbq member decode is shared
+            // across every item in this task; single-item callers keep the
+            // plain path through the runner's `session: None` default.
+            let session = source.materialize_session();
             let runner = crate::official_market::TdxDailyRunner {
                 source,
+                session: Some(&session),
                 repository: market.clone(),
                 run_id: control.run_id.clone(),
                 published_at: chrono::Utc::now(),

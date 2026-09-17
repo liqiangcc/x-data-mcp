@@ -153,9 +153,54 @@ impl TdxMarketSource {
         Ok((member.clone(), bytes))
     }
 
+    /// Open a shared-decode session over this source: the gbbq member is
+    /// read, CRC-verified and decoded at most once (lazily, on the first
+    /// materialization), so a multi-symbol worker run pays one decode
+    /// instead of one per symbol. The session borrows the source — there
+    /// is no global or cross-process cache, and a changed snapshot can
+    /// only enter through a newly inspected source instance, which yields
+    /// a new session.
+    pub fn materialize_session(&self) -> MaterializeSession<'_> {
+        MaterializeSession {
+            source: self,
+            gbbq: std::cell::OnceCell::new(),
+        }
+    }
+
     /// Materialize the snapshot's complete `.day` history for one security
-    /// as forward-adjusted (QFQ) bars.
+    /// as forward-adjusted (QFQ) bars. Identical to running the materialize
+    /// on a fresh `materialize_session()` — the single-symbol path simply
+    /// pays the one gbbq decode itself.
     pub fn materialize_daily(&self, symbol: &str) -> Result<MarketDataBatch, SourceError> {
+        self.materialize_session().materialize_daily(symbol)
+    }
+}
+
+/// The one-time gbbq member decode shared by a `MaterializeSession`:
+/// member name and digest are kept for per-batch provenance binding.
+struct DecodedGbbq {
+    member: String,
+    sha256: String,
+    events: Vec<gbbq::Event>,
+}
+
+/// Per-source materialization channel; see `TdxMarketSource::materialize_session`.
+pub struct MaterializeSession<'a> {
+    source: &'a TdxMarketSource,
+    gbbq: std::cell::OnceCell<DecodedGbbq>,
+}
+
+impl MaterializeSession<'_> {
+    /// The inspected source this session decodes against.
+    pub fn source(&self) -> &TdxMarketSource {
+        self.source
+    }
+
+    /// Same output as `TdxMarketSource::materialize_daily`: the `.day`
+    /// member is re-read per symbol while the verified gbbq member bytes
+    /// are decoded once and shared.
+    pub fn materialize_daily(&self, symbol: &str) -> Result<MarketDataBatch, SourceError> {
+        let source = self.source;
         let Some((market, code)) = symbol.split_once('.').filter(|(m, c)| {
             matches!(*m, "sh" | "sz") && c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())
         }) else {
@@ -167,7 +212,7 @@ impl TdxMarketSource {
             format!("{market}\\lday\\{market}{code}.day"),
             format!("{market}/lday/{market}{code}.day"),
         ];
-        let (day_member, day_bytes) = self.member_bytes(&self.day, &day_names)?;
+        let (day_member, day_bytes) = source.member_bytes(&source.day, &day_names)?;
         let raw_bars = day_file::parse(&day_bytes)
             .map_err(|e| SourceError::InvalidResponse(format!(".day member malformed: {e}")))?;
         if raw_bars.is_empty() {
@@ -175,22 +220,31 @@ impl TdxMarketSource {
                 ".day member carries no records".into(),
             ));
         }
-        let (gbbq_member, gbbq_bytes) = self.member_bytes(&self.gbbq, &[GBBQ_MEMBER.into()])?;
-        let raw = gbbq::parse(&gbbq_bytes)
-            .map_err(|e| SourceError::InvalidResponse(format!("gbbq member malformed: {e}")))?;
+        if self.gbbq.get().is_none() {
+            let (member, bytes) = source.member_bytes(&source.gbbq, &[GBBQ_MEMBER.into()])?;
+            let raw = gbbq::parse(&bytes)
+                .map_err(|e| SourceError::InvalidResponse(format!("gbbq member malformed: {e}")))?;
+            let events = gbbq::decode_events(&raw).map_err(|e| {
+                SourceError::InvalidResponse(format!("gbbq record decode failed: {e}"))
+            })?;
+            let _ = self.gbbq.set(DecodedGbbq {
+                member,
+                sha256: crate::hash::sha256(&bytes),
+                events,
+            });
+        }
+        let gbbq = self.gbbq.get().expect("initialized above");
         let market_byte: u8 = if market == "sh" { 1 } else { 0 };
         let mut events = Vec::new();
         let mut excluded = 0usize;
-        for event in gbbq::decode_events(&raw)
-            .map_err(|e| SourceError::InvalidResponse(format!("gbbq record decode failed: {e}")))?
-        {
+        for event in &gbbq.events {
             if event.market != market_byte || event.code != code {
                 continue;
             }
             // Only category 1 has verified QFQ semantics; other categories are
             // never interpreted or applied to prices.
             if event.category == 1 {
-                events.push(event);
+                events.push(event.clone());
             } else {
                 excluded += 1;
             }
@@ -209,19 +263,29 @@ impl TdxMarketSource {
                 amount: None,
             })
             .collect();
-        let acquired_at = self
+        let acquired_at = source
             .day
             .acquisition_completed_at
-            .max(self.gbbq.acquisition_completed_at);
-        let binding = |input: &FileInput, member: String, bytes: &[u8]| SnapshotInputBinding {
-            role: serde_json::to_value(input.role)
+            .max(source.gbbq.acquisition_completed_at);
+        let day_binding = SnapshotInputBinding {
+            role: serde_json::to_value(source.day.role)
                 .unwrap()
                 .as_str()
                 .unwrap()
                 .to_string(),
-            member,
-            archive_sha256: input.sha256.clone(),
-            member_sha256: crate::hash::sha256(bytes),
+            member: day_member,
+            archive_sha256: source.day.sha256.clone(),
+            member_sha256: crate::hash::sha256(&day_bytes),
+        };
+        let gbbq_binding = SnapshotInputBinding {
+            role: serde_json::to_value(source.gbbq.role)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+            member: gbbq.member.clone(),
+            archive_sha256: source.gbbq.sha256.clone(),
+            member_sha256: gbbq.sha256.clone(),
         };
         Ok(MarketDataBatch {
             symbol: symbol.into(),
@@ -236,14 +300,11 @@ impl TdxMarketSource {
                 acquired_at,
                 adapter_version: ADAPTER_VERSION.into(),
                 yearly_derivation: None,
-                snapshot_inputs: Some(vec![
-                    binding(&self.day, day_member, &day_bytes),
-                    binding(&self.gbbq, gbbq_member, &gbbq_bytes),
-                ]),
+                snapshot_inputs: Some(vec![day_binding, gbbq_binding]),
             },
             coverage: CoverageEvidence::complete(format!(
                 "complete .day member history from inspected snapshot manifest {}; {NOT_PRODUCTION_READY}",
-                self.manifest_sha256
+                source.manifest_sha256
             )),
             unit_currency: UnitCurrencyEvidence {
                 price_currency: EvidenceValue::confirmed(
@@ -551,6 +612,10 @@ pub trait DailyCollectionRepository: MarketRepository {
 /// finish execution. No validation step is bypassed.
 pub struct TdxDailyRunner<'a, R> {
     pub source: &'a TdxMarketSource,
+    /// Shared-decode channel for a multi-item run: one gbbq member decode
+    /// serves every item. `None` materializes each item through the plain
+    /// single-symbol path; the two produce identical batches.
+    pub session: Option<&'a MaterializeSession<'a>>,
     pub repository: R,
     pub run_id: String,
     pub published_at: DateTime<Utc>,
@@ -710,10 +775,11 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 "existing daily head requires the update_data range path".into(),
             ));
         }
-        let batch = self
-            .source
-            .materialize_daily(symbol)
-            .map_err(|e| Error::Invalid(e.to_string()))?;
+        let batch = match self.session {
+            Some(session) => session.materialize_daily(symbol),
+            None => self.source.materialize_daily(symbol),
+        }
+        .map_err(|e| Error::Invalid(e.to_string()))?;
         let current = self.repository.task(&task.task.task_id)?;
         if current.task.status != Status::Running
             || current.task.state_revision != task.task.state_revision
