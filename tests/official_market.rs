@@ -2178,3 +2178,329 @@ fn service_no_env_verify_backfill_update_all_fail_closed() {
         );
     }
 }
+
+#[test]
+fn seed_gap_subject_tool_is_honest_and_fails_closed() {
+    use std::process::Command;
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(snap) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; seed-tool test skipped");
+        return;
+    };
+    let source = make_source(&snap);
+    let full = source.materialize_daily("sz.000002").unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let db_path = db.path().join("m.sqlite");
+    let tasks = SqliteTasks::new(&db_path);
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let manifest_path = db.path().join("manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+    let bin = env!("CARGO_BIN_EXE_seed_gap_subject");
+
+    // Honest construction: real acceptance, real publish, verbatim disclosure.
+    let out = Command::new(bin)
+        .arg(&db_path)
+        .args(["--symbol", "sz.000002", "--drop-date", "2000-01-10"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "seed failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let seeded: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(seeded["reused"], json!(false));
+    assert_eq!(seeded["bars"], json!(full.bars.len() - 1));
+    let subject_id = seeded["version_id"].as_str().unwrap().to_string();
+    let task_id = seeded["task_id"].as_str().unwrap().to_string();
+    let item_id = seeded["item_id"].as_str().unwrap().to_string();
+
+    // Real task + receipt: the subject is bound to a genuinely accepted
+    // LegacyCollection task, not a raw insert.
+    let task = market.task(&task_id).unwrap();
+    assert!(task.items[0].outcome.as_ref().unwrap().success);
+    let receipt = market
+        .collection_receipt(&task_id, &item_id)
+        .unwrap()
+        .expect("collection receipt");
+    assert_eq!(receipt.version_id, subject_id);
+
+    // Exactly one real bar withheld; the stored subject carries the
+    // verbatim disclosure reason and the source snapshot binding.
+    let subject = market.fixed(&subject_id).unwrap();
+    assert_eq!(subject.version().records.len(), full.bars.len() - 1);
+    assert!(
+        !subject
+            .version()
+            .records
+            .iter()
+            .any(|r| r.date.to_string() == "2000-01-10")
+    );
+    let batch = &subject.raw()["batch"];
+    assert_eq!(batch["coverage"]["status"], json!("Complete"));
+    let reason = batch["coverage"]["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with("ACCEPTANCE-LOCAL-GAP-SUBJECT:")
+            && reason.contains("2000-01-10")
+            && reason.contains("not complete source history"),
+        "unexpected reason: {reason}"
+    );
+    assert_eq!(
+        batch["provenance"]["snapshot_inputs"],
+        serde_json::to_value(full.provenance.snapshot_inputs.as_ref().unwrap()).unwrap()
+    );
+
+    // Idempotent re-seed replays the task instead of fabricating a second.
+    let out = Command::new(bin)
+        .arg(&db_path)
+        .args(["--symbol", "sz.000002", "--drop-date", "2000-01-10"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let again: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(again["reused"], json!(true));
+    assert_eq!(again["version_id"], json!(subject_id));
+
+    // A withheld date absent from the member is refused, not fabricated.
+    let other_path = db.path().join("other.sqlite");
+    SqliteTasks::new(&other_path).initialize().unwrap();
+    let out = Command::new(bin)
+        .arg(&other_path)
+        .args(["--symbol", "sz.000002", "--drop-date", "1989-01-01"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no bar"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Without an installed source the tool refuses before touching the db.
+    let out = Command::new(bin)
+        .arg(db.path().join("noenv.sqlite"))
+        .args(["--symbol", "sz.000002"])
+        .env_remove("X_DATA_MCP_OFFICIAL_MANIFEST")
+        .env_remove("X_DATA_MCP_OFFICIAL_DIR")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("source not installed"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // --source fixture variant: real bars under a fixture label; the
+    // verifier's source-identity gate must fail closed on it.
+    let db2 = tempfile::tempdir().unwrap();
+    let db2_path = db2.path().join("m.sqlite");
+    let tasks2 = SqliteTasks::new(&db2_path);
+    tasks2.initialize().unwrap();
+    let out = Command::new(bin)
+        .arg(&db2_path)
+        .args([
+            "--symbol",
+            "sz.000002",
+            "--drop-date",
+            "2000-01-10",
+            "--source",
+            "fixture",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fixture seed failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let fixture_seeded: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        fixture_seeded["source_label"],
+        json!("fixture:acceptance-187")
+    );
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let api2 = DataApi::new(tasks2.clone(), "run-fixture".into(), Access::local()).unwrap();
+    let accepted = api2
+        .call(
+            "verify_data_gap",
+            json!({"contract_version":"v1","request_id":"fx1","target":{"symbol":"sz.000002","period":"day","start_date":"2000-01-10","end_date":"2000-01-10"}}),
+        )
+        .unwrap();
+    api2.call("run_worker_once", json!({})).unwrap();
+    let done = tasks2
+        .read_task(accepted["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    let outcome = done.items[0].outcome.as_ref().unwrap();
+    assert!(!outcome.success, "fixture subject must not verify");
+    let c2 = rusqlite::Connection::open(tasks2.path()).unwrap();
+    for table in ["gap_verification_decisions", "proven_gaps"] {
+        assert_eq!(
+            c2.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "{table} must stay empty on identity-mismatch refusal"
+        );
+    }
+}
+
+#[test]
+fn seeded_gap_subject_drives_retained_backfill_e2e() {
+    use std::process::Command;
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(snap) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; seeded backfill e2e skipped");
+        return;
+    };
+    let source = make_source(&snap);
+    let full = source.materialize_daily("sz.000002").unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let db_path = db.path().join("m.sqlite");
+    let tasks = SqliteTasks::new(&db_path);
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let manifest_path = db.path().join("manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+
+    // Seed the controlled local-gap subject through the acceptance bin
+    // (real task acceptance + governed publish), then run the real
+    // verify -> backfill chain against it.
+    let out = Command::new(env!("CARGO_BIN_EXE_seed_gap_subject"))
+        .arg(&db_path)
+        .args(["--symbol", "sz.000002", "--drop-date", "2000-01-10"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "seed failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let seeded: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let subject_id = seeded["version_id"].as_str().unwrap().to_string();
+
+    let api = DataApi::new(tasks.clone(), "run".into(), Access::local()).unwrap();
+    api.call(
+        "verify_data_gap",
+        json!({"contract_version":"v1","request_id":"g1","target":{"symbol":"sz.000002","period":"day","start_date":"2000-01-10","end_date":"2000-01-10"}}),
+    )
+    .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let accepted = api
+        .call(
+            "backfill_data",
+            json!({"request_id":"b1","dataset":"market.daily","contract_version":"v1","selection":{"kind":"default"}}),
+        )
+        .unwrap();
+    let task_id = accepted["task_id"].as_str().unwrap().to_owned();
+    api.call("run_worker_once", json!({})).unwrap();
+    let done = tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(
+        done.items[0].outcome.as_ref().unwrap().success,
+        "backfill item failed: {:?}",
+        done.items[0].outcome
+    );
+
+    // The governed path published a new immutable version and advanced the
+    // head past the seeded subject; the covering binds the new version.
+    let c = rusqlite::Connection::open(tasks.path()).unwrap();
+    let new_head: String = c
+        .query_row(
+            "SELECT version_id FROM effective_heads WHERE symbol='sz.000002' AND period='day'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(new_head, subject_id);
+    let merged = market.fixed(&new_head).unwrap();
+    assert_eq!(merged.version().records.len(), full.bars.len());
+    let restored = merged
+        .version()
+        .records
+        .iter()
+        .find(|r| r.date.to_string() == "2000-01-10")
+        .expect("restored bar");
+    let source_bar = full
+        .bars
+        .iter()
+        .find(|b| b.date.to_string() == "2000-01-10")
+        .unwrap();
+    assert_eq!(restored.close, source_bar.close);
+    assert_eq!(restored.open, source_bar.open);
+    market.fixed(&subject_id).unwrap(); // old version retained
+    let covered_version: String = c
+        .query_row("SELECT version_id FROM gap_coverings", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(covered_version, new_head);
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM data_versions", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+
+    // Replay stays idempotent; explicit-range backfill remains blocked;
+    // update_data still lands on the range provider (NEEDS_VERIFICATION).
+    let replay = api
+        .call(
+            "backfill_data",
+            json!({"request_id":"b1","dataset":"market.daily","contract_version":"v1","selection":{"kind":"default"}}),
+        )
+        .unwrap();
+    assert_eq!(replay["reused"], json!(true));
+    let explicit = api
+        .call(
+            "backfill_data",
+            json!({"request_id":"bx1","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_version_id":new_head,"start_date":"2000-01-10","end_date":"2000-01-10"}]}),
+        )
+        .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let done = tasks
+        .read_task(explicit["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    let err = done.items[0]
+        .outcome
+        .as_ref()
+        .unwrap()
+        .error
+        .clone()
+        .unwrap();
+    assert!(err.contains("SOURCE_NOT_VERIFIED"), "unexpected: {err}");
+    let upd = api
+        .call(
+            "update_data",
+            json!({"dataset":"market.daily","request_id":"u1","contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_version_id":new_head,"start_date":"2000-01-10","end_date":"2000-01-10"}]}),
+        )
+        .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let done = tasks
+        .read_task(upd["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    let err = done.items[0]
+        .outcome
+        .as_ref()
+        .unwrap()
+        .error
+        .clone()
+        .unwrap();
+    assert!(err.contains("NEEDS_VERIFICATION"), "unexpected: {err}");
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM data_versions", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
