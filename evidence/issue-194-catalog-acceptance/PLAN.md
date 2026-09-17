@@ -145,3 +145,77 @@ zip 内目录成员 sha256（本计划起草时已从 retained 字节独立实�
 `results.json`（C1–C12 + blocked_paths + 全部 id/hash）、`README.md`。
 scratch 目录 `/home/box/acceptance-run-issue194/`（db-main +
 db-r1..r4）。
+
+---
+
+# PLAN-v2（P1 产品裁定后修订，追加不覆盖上文历史）
+
+依据：#6 评论 `5710586446`（2026-09-17 需求侧裁定）——缺名
+scope 成员以 `reject_candidate` **显式排除并 verbatim 留痕**
+（成员清单 + 原因，入任务结果证据），其余具名成员正常发布；
+这改变需求而非放宽校验，缺名成员仍是受治理排除项。
+下方为修订后冻结期望；v1 运行记录（`README.md`/`results.json`/
+`run-log.jsonl`，PR #197，12/12 PASS）保持原样。
+
+## v2.0 前提
+
+- 实现变更（PR-B，独立分支）合入 main 后才可运行；未合入时
+  v2 运行项整体记 `BLOCKED_ON_IMPL`。
+- v1 的 §1 固定输入、§2 机械期望、C1–C3、R1–R4 verbatim 期望
+  **不变**；scratch 目录复用 `/home/box/acceptance-run-issue194/`
+  （v2 库名 `db2-main.sqlite` / `db2-r1..r4.sqlite`，与 v1 产物
+  隔离）。
+
+## v2.1 冻结期望（发布侧）
+
+- item `success:true`；item 结果证据 verbatim 记录排除清单：
+  恰六个 `market:code`（`0:001235,0:300728,1:601206,1:603302,
+  1:603361,1:688688`，tdxhy 行序）+ 排除原因 `reject_candidate`
+  （缺名）。证据字段命名
+  由实现决定；断言核对内容与顺序，不核对字段名。
+- 发布 `catalog_members` 恰 **5224** 行（5230 − 6）；全部
+  `source_security_id = tdxhy:<market>:<code>`。
+- `catalog_versions.source` == `official-file:b8a0d7b9aec1a270`
+  （manifest sha16 verbatim；manifest → archive sha256 → 成员字节
+  链式绑定，member sha256 pin 见 §1）。
+- `catalog_head` 指向该 version；`catalog_versions` 恰 1 行
+  （c1 执行后）。
+- 已发布成员诊断（PLAN-v2 起草时 retained 字节独立实测）：
+  `missing_industry = 0`、`t_code_residuals = 0`（唯一 residual
+  `1:688688→T00` 在被排除的缺名成员中）。诊断值 verbatim 入
+  任务结果证据。
+- 幂等：`c1` 同 request_id 重发 `reused:true`；`c2`（新
+  request_id 同 selection）按现行 publish 语义产生**第二个**
+  version（id 为 `catalog-<publish nanos>`），member 投影与 v1
+  逐行一致、head 前进至 v2——冻结"内容无变化、版本递增"的
+  如实口径；worker 再跑 `idle:true`。
+- 读回：`get_data_availability` catalog → `availability` 非
+  `absent`（如实 verbatim 入档）；`query_data` catalog 分页合计
+  恰 5224 行；`list_data_versions` 逐条 verbatim。
+
+## v2.2 断言清单（V 系列；C1–C3/R1–R4 沿用 v1 冻结口径）
+
+| # | 断言 | 冻结口径 |
+|---|---|---|
+| V1 | 输入完整性 | 沿用 C1（§1 全部 sha256 实测 == pin） |
+| V2 | member 独立重算 | 沿用 C2（四 member sha256 == §1 表） |
+| V3 | scope 分桶 | 沿用 C3（§2 表逐项） |
+| V4 | item 成功+排除 verbatim | `success:true`；证据排除清单恰六 verbatim（行序）+ `reject_candidate` 原因；`missing_industry=0`、`t_code_residuals=0` verbatim |
+| V5 | 发布行数 | `catalog_members`=5224；`catalog_versions`=1；`catalog_head`==该 version |
+| V6 | provenance 绑定 | `catalog_versions.source`==`official-file:b8a0d7b9aec1a270` verbatim；member sha256 pin 入 run 证据 |
+| V7 | version immutable | v1 发布后 v2 到来前 version 行/成员投影/digest 不变 |
+| V8 | 幂等 | c1 `reused:true`；c2 第二 version 成员投影与 v1 逐行一致、head 前进；worker `idle:true` |
+| V9 | 读回 | query_data catalog 分页合计恰 5224 行且与表读回一致；availability/versions verbatim |
+| V10 | R1 env-absent | 沿用 C8：`SOURCE_NOT_VERIFIED` verbatim，零泄漏 |
+| V11 | R2–R4 source fail-closed | 沿用 C9–C11：`CATALOG_SOURCE_FAILURE` verbatim，零泄漏 |
+| V12 | 门禁保留 | blocking_reasons verbatim 入档；`NOT_PRODUCTION_READY` 不变 |
+
+## v2.3 如实标注
+
+- 六缺名成员**不进入目录**——排除是受治理行为，非静默跳过；
+  `MemberDisappeared` 语义不受本次变更影响（版本间成员消失仍按
+  既有规则）。
+- v1 atomic-reject 行为是裁定前契约正确行为；v2 改变的是需求
+  契约，v1 证据不回溯修订。
+- 若实现观察到结构性偏离（如排除清单不完整、成员数≠5224）：
+  停跑、先修 PLAN、再干净重跑。
