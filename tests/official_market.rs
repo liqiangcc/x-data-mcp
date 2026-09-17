@@ -428,6 +428,7 @@ fn runner_publishes_daily_through_governed_path() {
     let src = make_source(&snap);
     let runner = TdxDailyRunner {
         source: &src,
+        session: None,
         repository: market.clone(),
         run_id: "run-a".into(),
         published_at: now(),
@@ -521,6 +522,7 @@ fn worker_dispatch_routes_daily_collection_to_installed_source() {
     let r2 = accept_daily(&market, "run-d", "sh", "600006");
     let runner = TdxDailyRunner {
         source: &src,
+        session: None,
         repository: market.clone(),
         run_id: "run-d".into(),
         published_at: now(),
@@ -549,6 +551,7 @@ fn source_failure_finishes_item_failed_and_preserves_prior_state() {
     let src = make_source(&snap);
     let runner = TdxDailyRunner {
         source: &src,
+        session: None,
         repository: market.clone(),
         run_id: "run-b".into(),
         published_at: now(),
@@ -748,6 +751,7 @@ fn retained_gen2_snapshot_reproduces_frozen_oracle_end_to_end() {
     let r = accept_daily(&market, "run-retained", "sz", "000002");
     let runner = TdxDailyRunner {
         source: &src,
+        session: None,
         repository: market.clone(),
         run_id: "run-retained".into(),
         published_at: now(),
@@ -1153,6 +1157,7 @@ fn range_provider_delivers_segment_with_snapshot_basis() {
     let src = make_source(&snap);
     let runner = TdxDailyRunner {
         source: &src,
+        session: None,
         repository: market.clone(),
         run_id: "run-a".into(),
         published_at: now(),
@@ -1236,6 +1241,7 @@ fn service_env_install_update_data_no_change_and_fail_closed() {
     let src = make_source(&snap);
     let runner = TdxDailyRunner {
         source: &src,
+        session: None,
         repository: market.clone(),
         run_id: "run-a".into(),
         published_at: now(),
@@ -2503,4 +2509,151 @@ fn seeded_gap_subject_drives_retained_backfill_e2e() {
             .unwrap(),
         2
     );
+}
+
+#[test]
+fn materialize_session_shares_decode_and_keeps_symbols_isolated() {
+    // Two symbols plus a third symbol's event and a non-category-1 record:
+    // the shared decode must produce batches identical to the per-call
+    // path, and one symbol's records must never enter another's chain.
+    let bars_600004: Vec<u8> = [
+        day_record(20250715, [500, 510, 490, 505], 0.0, 10),
+        day_record(20250716, [505, 515, 500, 512], 0.0, 20),
+        day_record(20250717, [512, 520, 508, 518], 0.0, 30),
+    ]
+    .concat();
+    let bars_600006: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+    ]
+    .concat();
+    let events = gbbq_member(&[
+        gbbq_record(1, "600006", 20250716, 1, [0.0, 0.0, 0.0, 5.0]),
+        gbbq_record(1, "600004", 20250715, 1, [1.0, 0.0, 0.0, 0.0]),
+        // A non-category-1 record for 600004 is excluded uninterpreted and
+        // counted only into 600004's evidence.
+        gbbq_record(1, "600004", 20250716, 2, [0.0, 0.0, 0.0, 0.0]),
+        // A different symbol's category-1 event must be invisible to both.
+        gbbq_record(0, "000002", 20250716, 1, [9.0, 9.0, 9.0, 9.0]),
+    ]);
+    let snap = snapshot(
+        &[
+            ("sh\\lday\\sh600006.day", bars_600006.as_slice()),
+            ("sh\\lday\\sh600004.day", bars_600004.as_slice()),
+        ],
+        &[("gbbq", events.as_slice())],
+        &base_members(),
+    );
+    let source = make_source(&snap);
+    let session = source.materialize_session();
+    for symbol in ["sh.600006", "sh.600004"] {
+        let single = source.materialize_daily(symbol).unwrap();
+        let shared = session.materialize_daily(symbol).unwrap();
+        assert_eq!(
+            serde_json::to_value(&single).unwrap(),
+            serde_json::to_value(&shared).unwrap(),
+            "{symbol} diverged between single and shared paths"
+        );
+    }
+    // Symbol isolation: 600006's chain sees exactly its own category-1
+    // event; 600004 sees its own event plus one excluded non-category-1
+    // record; neither sees the 000002 record.
+    let six = session.materialize_daily("sh.600006").unwrap();
+    let four = session.materialize_daily("sh.600004").unwrap();
+    let reason = |b: &MarketDataBatch| b.adjustment_evidence.reason.to_string();
+    assert!(
+        reason(&six).contains("(1 events, 0 non-category-1"),
+        "{}",
+        reason(&six)
+    );
+    assert!(
+        reason(&four).contains("(1 events, 1 non-category-1"),
+        "{}",
+        reason(&four)
+    );
+    // And the bars reflect only the symbol's own chain: 600004's
+    // post-event bar equals its raw value (5.12 yuan), not a chain
+    // polluted by 600006's or 000002's events.
+    let bar_716 = four.bars.iter().find(|b| b.date == day(20250716)).unwrap();
+    assert_eq!(bar_716.close, dec("5.12"));
+}
+
+#[test]
+fn materialize_session_matches_single_path_on_retained_snapshot() {
+    let Some(snap) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; session equivalence test skipped");
+        return;
+    };
+    let source = make_source(&snap);
+    let session = source.materialize_session();
+    for symbol in ["sz.000002", "sh.600006", "sh.600004"] {
+        let single = source
+            .materialize_daily(symbol)
+            .unwrap_or_else(|e| panic!("{symbol} single path: {e}"));
+        let shared = session
+            .materialize_daily(symbol)
+            .unwrap_or_else(|e| panic!("{symbol} shared path: {e}"));
+        assert_eq!(
+            serde_json::to_value(&single).unwrap(),
+            serde_json::to_value(&shared).unwrap(),
+            "{symbol} diverged between single and shared paths"
+        );
+    }
+}
+
+#[test]
+fn service_multi_item_collection_uses_shared_session() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(snap) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; multi-item e2e skipped");
+        return;
+    };
+    let source = make_source(&snap);
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let manifest_path = db.path().join("manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+    let api = DataApi::new(tasks, "run-batch".into(), Access::local()).unwrap();
+    // One accepted task with two securities runs through the worker's
+    // shared-decode session; both items publish identical batches to the
+    // single-symbol path.
+    let accepted = api
+        .call(
+            "start_collection",
+            json!({"request_id":"batch-1","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sz","code":"000002"},{"exchange":"sh","code":"600006"}]}}),
+        )
+        .unwrap();
+    assert_eq!(accepted["item_ids"].as_array().unwrap().len(), 2);
+    api.call("run_worker_once", json!({})).unwrap();
+    let task = market.task(accepted["task_id"].as_str().unwrap()).unwrap();
+    assert_eq!(task.items.len(), 2);
+    for (item, symbol) in task.items.iter().zip(["sz.000002", "sh.600006"]) {
+        assert!(
+            item.outcome.as_ref().unwrap().success,
+            "{symbol} item failed: {:?}",
+            item.outcome
+        );
+        let head = market
+            .effective_head(&Scope {
+                symbol: symbol.into(),
+                period: Period::Day,
+            })
+            .unwrap()
+            .expect("published head");
+        let published = market.fixed(&head).unwrap();
+        let expected = source.materialize_daily(symbol).unwrap();
+        assert_eq!(
+            published.raw()["batch"],
+            serde_json::to_value(&expected).unwrap(),
+            "{symbol} published batch diverged from the single-symbol path"
+        );
+    }
 }
