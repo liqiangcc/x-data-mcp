@@ -188,6 +188,7 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
                             } else {
                                 error.to_string()
                             }),
+                            evidence: None,
                         },
                     ),
                 )?;

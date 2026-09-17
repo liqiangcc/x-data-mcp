@@ -227,19 +227,36 @@ fn compose_assembles_assigned_records_with_scheme_label() {
 }
 
 #[test]
-fn compose_rejects_candidate_when_any_member_is_nameless() {
+fn compose_excludes_nameless_members_and_publishes_named_remainder() {
     let outcome = compose_members(
         b"0|000001|T1001|||X500102\r\n0|000099|T1001|||X500102\r\n0|000100|T1001|||X500102\r\n",
         &gb18030("000001|平安银行|kw\r\n"),
         &sections(),
     );
-    // P1 default reject_candidate: the whole candidate is withheld and every
-    // nameless member is enumerated — no guessing, no partial publication.
-    assert!(outcome.snapshot.is_none());
+    // P1 ruling (5710586446): nameless members are governed exclusions —
+    // enumerated verbatim, never entering the candidate, and not blocking
+    // publication of the named remainder. Diagnostics cover published
+    // members only.
+    let snapshot = outcome.snapshot.expect("named remainder publishes");
+    assert_eq!(snapshot.records.len(), 1);
+    assert_eq!(snapshot.records[0].symbol, "000001");
     assert_eq!(
         outcome.nameless,
         vec![(0u8, "000099".to_string()), (0u8, "000100".to_string())]
     );
+    assert!(outcome.missing_industry.is_empty());
+    assert!(outcome.t_code_residuals.is_empty());
+}
+
+#[test]
+fn compose_reports_none_when_every_member_is_nameless() {
+    let outcome = compose_members(
+        b"0|000099|T1001|||X500102\r\n",
+        &gb18030("000001|平安银行|kw\r\n"),
+        &sections(),
+    );
+    assert!(outcome.snapshot.is_none());
+    assert_eq!(outcome.nameless, vec![(0u8, "000099".to_string())]);
 }
 
 #[test]
@@ -517,7 +534,9 @@ fn official_executor_rejections_keep_old_head() {
     );
     assert_eq!(catalog.selection_facts().unwrap().catalog_head, Some(head));
 
-    // Nameless member: P1 default reject_candidate → rejection, head kept.
+    // Nameless member: P1 ruling 5710586446 → governed exclusion; the
+    // named remainder publishes on a fresh store and the exclusion is
+    // verbatim in the item outcome evidence.
     let dir3 = tempfile::tempdir().unwrap();
     let manifest3 = write_official_snapshot(
         dir3.path(),
@@ -526,15 +545,21 @@ fn official_executor_rejections_keep_old_head() {
         &gb18030("#TDXNHY\r\nT1001|金融\r\n#TDXRSHY\r\nX5001|软件服务\r\n"),
     );
     let store3 = tempfile::tempdir().unwrap();
-    let (executor3, _) = make_executor(&store3.path().join("store"), &manifest3, dir3.path());
+    let (executor3, catalog3) =
+        make_executor(&store3.path().join("store"), &manifest3, dir3.path());
     let outcome = execute(&executor3);
-    assert!(!outcome.success);
-    assert!(
-        outcome
-            .error
-            .unwrap()
-            .contains("nameless scope members: 0:000099"),
+    assert!(outcome.success, "{:?}", outcome.error);
+    let evidence = outcome.evidence.expect("exclusion evidence recorded");
+    assert_eq!(
+        evidence["reject_candidate_exclusions"],
+        serde_json::json!([{
+            "member": "0:000099",
+            "reason": "reject_candidate: no name row in infoharbor_ex.code"
+        }])
     );
+    assert_eq!(evidence["published_members"], 1);
+    let head3 = catalog3.selection_facts().unwrap().catalog_head.unwrap();
+    assert_eq!(catalog3.fixed(&head3).unwrap().records.len(), 1);
 
     // Duplicate identity rows → DuplicateSecurity rejection.
     let dir4 = tempfile::tempdir().unwrap();
@@ -647,9 +672,11 @@ fn gen2_retained_members_match_the_frozen_counts() {
         ["001235", "300728", "601206", "603302", "603361", "688688"]
     );
 
-    // Composition layer on the real snapshot: P1 default reject_candidate
-    // must fire with exactly the anchored nameless set, the T00 residual is
-    // reported verbatim, and no member lands in Missing.
+    // Composition layer on the real snapshot under the ruled P1 contract
+    // (5710586446): the six nameless members are governed exclusions
+    // enumerated verbatim; the 5224 named members compose; diagnostics
+    // cover published members only — the sole T00 residual belongs to the
+    // excluded 688688, so the published residual set is empty.
     let composed = compose::compose(
         &outcome.members,
         &name_map,
@@ -658,7 +685,8 @@ fn gen2_retained_members_match_the_frozen_counts() {
         chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
     )
     .unwrap();
-    assert!(composed.snapshot.is_none());
+    let snapshot = composed.snapshot.expect("named remainder publishes");
+    assert_eq!(snapshot.records.len(), 5224);
     assert_eq!(composed.nameless.len(), 6);
     assert_eq!(
         composed
@@ -670,21 +698,16 @@ fn gen2_retained_members_match_the_frozen_counts() {
     );
     assert!(composed.missing_industry.is_empty());
     assert!(composed.t_dictionary_checked);
-    assert_eq!(
-        composed.t_code_residuals,
-        vec![compose::TCodeResidual {
-            member: (1, "688688".into()),
-            t_code: "T00".into(),
-        }]
-    );
+    assert!(composed.t_code_residuals.is_empty());
 }
 
 /// Executor end-to-end on retained gen-2 bytes: real member extraction
-/// (incl. nested gbbq.zip!zhb.zip!incon.dat), inspect hash binding, then the
-/// P1 default reject_candidate path — the six nameless members reject the
-/// candidate and nothing is published.
+/// (incl. nested gbbq.zip!zhb.zip!incon.dat), inspect hash binding, then
+/// the ruled P1 path — the six nameless members are verbatim
+/// `reject_candidate` exclusions in the item evidence and the 5224
+/// named members publish.
 #[test]
-fn gen2_retained_executor_rejects_on_anchored_nameless_members() {
+fn gen2_retained_executor_publishes_named_remainder_with_exclusion_trail() {
     let retained = std::path::Path::new(RETAINED);
     let inputs = [
         ("base_industry", "official-base.zip", "base.zip"),
@@ -741,11 +764,29 @@ fn gen2_retained_executor_rejects_on_anchored_nameless_members() {
     let store = tempfile::tempdir().unwrap();
     let (executor, catalog) = make_executor(&store.path().join("store"), &manifest, dir.path());
     let outcome = execute(&executor);
-    assert!(!outcome.success);
-    let error = outcome.error.unwrap();
-    assert!(error.contains("nameless scope members"), "{error}");
-    for code in ["001235", "300728", "601206", "603302", "603361", "688688"] {
-        assert!(error.contains(code), "{error} should enumerate {code}");
-    }
-    assert!(catalog.selection_facts().unwrap().catalog_head.is_none());
+    assert!(outcome.success, "{:?}", outcome.error);
+    let evidence = outcome.evidence.expect("exclusion evidence recorded");
+    let exclusions: Vec<&str> = evidence["reject_candidate_exclusions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["member"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        exclusions,
+        [
+            "0:001235", "0:300728", "1:601206", "1:603302", "1:603361", "1:688688"
+        ]
+    );
+    assert_eq!(evidence["published_members"], 5224);
+    assert_eq!(evidence["missing_industry"], serde_json::json!([]));
+    assert_eq!(evidence["t_code_residuals"], serde_json::json!([]));
+    let head = catalog
+        .selection_facts()
+        .unwrap()
+        .catalog_head
+        .expect("head after publish");
+    let version = catalog.fixed(&head).unwrap();
+    assert_eq!(version.records.len(), 5224);
+    assert!(version.source.starts_with("official-file:"));
 }

@@ -98,6 +98,11 @@ pub enum Stage {
 pub struct ItemOutcome {
     pub success: bool,
     pub error: Option<String>,
+    /// Optional executor-produced evidence (e.g. governed exclusion
+    /// lists, diagnostics) persisted verbatim in `task_items.outcome_json`.
+    /// Carries no decision power — the durable record only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<Value>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskItem {

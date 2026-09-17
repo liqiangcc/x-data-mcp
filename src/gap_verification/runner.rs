@@ -218,6 +218,7 @@ impl<R: GapDecisionStore + GapTaskStore> GapVerifyRunner<R> {
                             e.to_string()
                         }
                     }),
+                    evidence: None,
                 },
             ),
         )?;

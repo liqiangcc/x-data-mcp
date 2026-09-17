@@ -6,16 +6,19 @@
 //! `CatalogService::refresh` (S6). Every `Assigned` record carries
 //! `IndustryScheme::TdxResearchIndustry`; no other scheme is produced.
 //!
-//! Product-decision defaults honored here (still pending #6 rulings):
-//! - P1 `reject_candidate`: a scope member without a name row rejects the
-//!   whole candidate — `snapshot` is `None` and every nameless member is
-//!   enumerated. No name is guessed or derived from code patterns.
+//! Product-decision rulings honored here (#6):
+//! - P1 `reject_candidate` (ruled by comment 5710586446): a scope member
+//!   without a name row is a governed exclusion — it never enters the
+//!   candidate, is enumerated verbatim in `nameless`, and does not block
+//!   publication of the named remainder. No name is guessed or derived
+//!   from code patterns.
 //! - P2 scheme label: records carry `tdx_research_industry`; this module
 //!   never emits an eastmoney label or an unlabeled production assignment.
 //!
-//! Diagnostics are always computed in full so a rejected candidate still
-//! reports its missing-name set, missing-industry set, and T-code residuals
-//! verbatim.
+//! Diagnostics are computed over published (named) members only — an
+//! excluded nameless member must not appear in `missing_industry` or
+//! `t_code_residuals` — so the audit trail reports exactly what the
+//! published candidate contains.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -45,17 +48,20 @@ pub struct TCodeResidual {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeOutcome {
-    /// The assembled candidate snapshot, present only when every scope
-    /// member resolved a name (P1 `reject_candidate` default). Consumers
-    /// must not publish a `None` snapshot or rebuild one from diagnostics.
+    /// The assembled candidate snapshot of named members (P1 ruling
+    /// 5710586446: nameless members are governed exclusions). `None` only
+    /// when nothing is publishable; consumers must not publish a `None`
+    /// snapshot or rebuild one from diagnostics.
     pub snapshot: Option<CatalogSnapshot>,
     /// Scope members with no `infoharbor_ex.code` name row.
     pub nameless: Vec<MemberId>,
-    /// Members kept with `IndustryInfo::Missing` per AC-05: their level-2
-    /// code could not be derived or is absent from `#TDXRSHY`.
+    /// Published members kept with `IndustryInfo::Missing` per AC-05:
+    /// their level-2 code could not be derived or is absent from
+    /// `#TDXRSHY`. Excluded nameless members never appear here.
     pub missing_industry: Vec<MemberId>,
-    /// T-codes not present in `#TDXNHY` (checked only when that section
-    /// exists; `t_dictionary_checked` records whether the check ran).
+    /// T-codes of published members not present in `#TDXNHY` (checked
+    /// only when that section exists; `t_dictionary_checked` records
+    /// whether the check ran).
     pub t_code_residuals: Vec<TCodeResidual>,
     pub t_dictionary_checked: bool,
 }
@@ -97,6 +103,13 @@ pub fn compose(
             1 => Exchange::Shanghai,
             _ => return Err(ComposeError::BadMarket(id)),
         };
+        // P1 ruling 5710586446: a nameless scope member is a governed
+        // exclusion, enumerated verbatim — industry diagnostics apply only
+        // to members that actually publish.
+        let Some(name) = names.get(member.code.as_str()) else {
+            nameless.push(id);
+            continue;
+        };
         let industry = match incon::research_level2(&member.x_code) {
             None => {
                 missing_industry.push(id.clone());
@@ -129,34 +142,34 @@ pub fn compose(
                 t_code: member.t_code.clone(),
             });
         }
-        match names.get(member.code.as_str()) {
-            Some(name) => records.push(SecurityRecord {
-                symbol: member.code.clone(),
-                name: (*name).to_string(),
-                exchange,
-                security_type: SecurityType::AShare,
-                source_security_id: format!("tdxhy:{}:{}", member.market, member.code),
-                industry,
-                source: source.to_string(),
-                acquired_at,
-            }),
-            None => nameless.push(id),
-        }
+        records.push(SecurityRecord {
+            symbol: member.code.clone(),
+            name: (*name).to_string(),
+            exchange,
+            security_type: SecurityType::AShare,
+            source_security_id: format!("tdxhy:{}:{}", member.market, member.code),
+            industry,
+            source: source.to_string(),
+            acquired_at,
+        });
     }
 
-    let snapshot = if nameless.is_empty() {
+    let snapshot = if records.is_empty() {
+        None
+    } else {
         Some(CatalogSnapshot {
             source: source.to_string(),
             acquired_at,
-            // Complete here means: the member parsed fully and the scope +
-            // exclusion partition reconciled — not market-wide completeness.
+            // Complete here means: the member parsed fully, the scope +
+            // exclusion partition reconciled, and every published member
+            // is present — not market-wide completeness. Governed
+            // exclusions are enumerated in `nameless`, never dropped
+            // silently.
             completeness: CompletenessEvidence::Complete {
                 expected_count: records.len(),
             },
             records,
         })
-    } else {
-        None
     };
     Ok(ComposeOutcome {
         snapshot,

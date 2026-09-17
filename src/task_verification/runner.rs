@@ -29,7 +29,7 @@ impl<R: TaskRepository + StopRepository> StopRunner<R> {
             return Err(Error::RevisionConflict);
         }
         if s.items.iter().any(|i| i.stage == Stage::Running) {
-            s=self.repository.transition(&s.task.task_id,s.task.state_revision,&self.run_id,Change::FinishItem("stopped-writes".into(),ItemOutcome{success:false,error:Some("verification cancelled after inspector returned; original task unchanged".into())}))?;
+            s=self.repository.transition(&s.task.task_id,s.task.state_revision,&self.run_id,Change::FinishItem("stopped-writes".into(),ItemOutcome{success:false,error:Some("verification cancelled after inspector returned; original task unchanged".into()),evidence:None}))?;
         }
         let done = self.repository.transition(
             &s.task.task_id,

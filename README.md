@@ -35,7 +35,7 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 
 2026-09-16 Final Gate 裁定（[#3](https://github.com/liqiangcc/x-data-mcp/issues/3#issuecomment-5695684698)）：bounded explicit `market.daily/v1` 官方快照路径与 fixed-base derived `market.yearly/v1` 治理路径均 PASS（三证券真实发布、receipt/lineage/no-change 复用与 fail-closed 留痕完整）；#46/#54 已完成关闭。yearly 的 `LOCAL_PIPELINE_NOT_IMPLEMENTED` 具体描述退休。
 
-2026-09-17 Final Gate 裁定（[#187](https://github.com/liqiangcc/x-data-mcp/issues/187#issuecomment-5710110532)）：bounded explicit `update_data`（#186 证据）与 `verify_data_gap`+default `backfill_data`（#192 证据）官方源执行验收均 PASS；`LOCAL_PIPELINE_NOT_IMPLEMENTED` 整条 blocker 退休，四条 bounded 链（daily/yearly/update/verify-backfill）均有真实源验收证据。#3 保持 OPEN、#187 已关闭——默认全目录首次采集依赖 #6 缺名成员的产品裁定（#194 真实快照目录验收在途）；部署/消费侧最终验收 NOT_RUN；overall `NOT_PRODUCTION_READY` 与其余 blocker 不变。
+2026-09-17 Final Gate 裁定（[#187](https://github.com/liqiangcc/x-data-mcp/issues/187#issuecomment-5710110532)）：bounded explicit `update_data`（#186 证据）与 `verify_data_gap`+default `backfill_data`（#192 证据）官方源执行验收均 PASS；`LOCAL_PIPELINE_NOT_IMPLEMENTED` 整条 blocker 退休，四条 bounded 链（daily/yearly/update/verify-backfill）均有真实源验收证据。#3 保持 OPEN、#187 已关闭——#6 缺名成员处置已按产品裁定 5710586446 落地（受治理 `reject_candidate` 排除 + verbatim 留痕，具名成员照常发布），全目录真实快照验收 #194 按裁定后契约重跑在途；部署/消费侧最终验收 NOT_RUN；overall `NOT_PRODUCTION_READY` 与其余 blocker 不变。
 
 已有 Rust 核心、任务受理/取消/重试、发布校验、目录核心和 stdio MCP 原型。
 生产来源决策见 [Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)，
@@ -50,7 +50,7 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 - 源端直接年线不再是生产契约；MCP `year` 表示本地派生输出。
 - 既有 `evidence/` 和历史文档原样保留；历史结论不等于当前生产状态。
 
-#6 默认目录的真实快照全量采集验收（#194 在途）与缺名成员需求裁定、官方文件长期服务器获取/使用边界、
+#6 默认目录的真实快照全量采集验收（#194 按裁定后契约重跑在途）、官方文件长期服务器获取/使用边界、
 .day/gbbq 独立快照一致性仍未通过。[.day原始解析器](docs/day-file.md)、GBBQ 解码/业务归一化、
 QFQ 仿射链与本地[年线聚合](docs/yearly.md)均已实现并有界验收——bounded 官方快照
 daily/yearly/update/verify+backfill 四条治理链路均经 FG 裁定 PASS（见上文裁定），

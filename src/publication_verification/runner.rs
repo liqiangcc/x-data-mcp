@@ -40,6 +40,7 @@ impl<T: TaskRepository, E: EvidenceRepository + AuditStore> Runner<T, E> {
                     ItemOutcome {
                         success: false,
                         error: Some("publication inspection cancelled; target unchanged".into()),
+                        evidence: None,
                     },
                 ),
             )?;

@@ -191,6 +191,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                             } else {
                                 error.to_string()
                             }),
+                            evidence: None,
                         },
                     ),
                 )?;

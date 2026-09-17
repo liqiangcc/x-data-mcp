@@ -729,6 +729,7 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                             } else {
                                 error.to_string()
                             }),
+                            evidence: None,
                         },
                     ),
                 )?;

@@ -320,6 +320,7 @@ fn completed_scope_retry_errors_match_real_stdio_with_persisted_test_outcomes() 
             ItemOutcome {
                 success,
                 error: (!success).then(|| "fixture failure".into()),
+                evidence: None,
             }
         }
     }

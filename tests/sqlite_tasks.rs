@@ -50,6 +50,7 @@ impl Executor for Complete {
         ItemOutcome {
             success: self.0,
             error: (!self.0).then(|| "test failure".into()),
+            evidence: None,
         }
     }
 }
@@ -224,6 +225,7 @@ fn current_running_terminal_and_read_only_state_are_distinct_from_missing_eviden
                 ItemOutcome {
                     success: true,
                     error: None,
+                    evidence: None,
                 },
             ),
         )
@@ -430,6 +432,7 @@ fn completion_during_cancellation_uses_actual_outcomes_and_keeps_unfinished_item
                 ItemOutcome {
                     success: true,
                     error: None,
+                    evidence: None,
                 }
             }
         }
@@ -770,7 +773,8 @@ fn execution_uncertainty_is_persisted_without_finishing_items_or_releasing_claim
                 item,
                 ItemOutcome {
                     success: true,
-                    error: None
+                    error: None,
+                    evidence: None,
                 }
             )
         ),

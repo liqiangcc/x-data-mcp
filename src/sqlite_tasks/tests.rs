@@ -254,6 +254,7 @@ fn finish_cancel_and_failed_states_retain_execution_start() {
                 ItemOutcome {
                     success: false,
                     error: Some("fixture failure".into()),
+                    evidence: None,
                 },
             ),
         )
@@ -289,6 +290,7 @@ fn finish_cancel_and_failed_states_retain_execution_start() {
                 ItemOutcome {
                     success: false,
                     error: Some("stopped".into()),
+                    evidence: None,
                 },
             ),
         )
