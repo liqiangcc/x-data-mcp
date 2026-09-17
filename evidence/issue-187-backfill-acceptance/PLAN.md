@@ -120,11 +120,15 @@ local-gap subject 构造规则、执行序列、断言与拒绝路径；不含�
   保留可审计。
 - **S8** 幂等：同 `request_id:"g1"` 重发 verify → `reused`；同
   `request_id:"b1"` 重发 backfill → `reused`；新 request_id 同参数
-  verify → decision replay no-op（同 decision_id 不再写）；新
-  request_id `backfill_data` default → 无 open gap →
-  `EMPTY_SELECTION` verbatim 拒绝，无新版本无新 covering；全部成功
-  后再 `run_worker_once` 一次 → 无候选任务、无新增 version/
-  decision/gap/covering（worker re-run 幂等）。
+  verify → subject 绑定受理时点 effective head（此时已前进到补回
+  版本 v2，v2 含 target 日）→ worker 如实写第二条 decision
+  （`conclusion=no_local_gap`，绑定 v2 digest；decision_id 按 task
+  派生不同），**不产生新 proven_gap/covering/version**——这是对已
+  覆盖状态的诚实结论而非静默 replay，关键不变量为 gap/covering/
+  version 计数不增；新 request_id `backfill_data` default → 无
+  open gap → `EMPTY_SELECTION` verbatim 拒绝，无新版本无新
+  covering；全部成功后再 `run_worker_once` 一次 → 无候选任务、无
+  新增 version/decision/gap/covering（worker re-run 幂等）。
 - **S9** provenance：新版本的 `snapshot_inputs`/base 绑定、
   `market_update_results`（no_change=0）逐字段留痕；全量 bar 读回
   哈希 == retained 全历史参考（与 #178 已发布同证券全量一致）。
@@ -143,7 +147,7 @@ local-gap subject 构造规则、执行序列、断言与拒绝路径；不含�
 | B8 | 补回值 | 新版本 8479 bars；`2000-01-10` 行 == `{-8.14,-8.06,-8.15,-8.06,null,null}` 逐字段；其余各行与 v1 逐字段一致（canonical hash 对比）；`query_data` 服务读回与表读回逐字段一致 |
 | B9 | head/治理 | effective head==新版本；v1 仍 published 保留（版本不可变）；`market_update_results` no_change=0 + result_version_id=新版本 + base_version_id=v1；发布经 `PublishIntent::Daily{expected_head:v1}` 预期头绑定（receipt/留痕可复核） |
 | B10 | covering | `gap_coverings` 一行绑定 gap_id+新 version_id；availability open gap 消失；decision/gap 历史行不变 |
-| B11 | 幂等 | §8 全部：reused×2、decision replay 不重复、second backfill `EMPTY_SELECTION`、worker 再跑无新产出；版本/decision/gap/covering 计数均不增 |
+| B11 | 幂等 | §8 全部：reused×2；新 verify 对前进后 head 如实写第二条 `no_local_gap` decision（绑定 v2）但不产生新 gap/covering/version；second backfill `EMPTY_SELECTION`；worker 再跑无新产出；版本/gap/covering 计数不增、decision 至多 +1 且绑定新 head |
 | B12 | provenance | 新版本 snapshot_inputs archive/member sha == retained 实测；basis `artifact_sha256` 绑定 day member sha256 |
 | B13 | env-absent verify | §6-R1 verbatim；无 decision/gap 行 |
 | B14 | uninspectable verify | §6-R2 verbatim；无 decision/gap 行 |
