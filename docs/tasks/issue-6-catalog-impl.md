@@ -51,7 +51,7 @@ gen-2 f5 长度分布：5230 成员中 len(f5) ∈ {5,7}（L2 直连 764、L3 le
 | `SnapshotManifest`/`FileRole::BaseIndustry`/`inspect()` | `snapshot.rs` | base.zip 角色→文件名→URL→sha256 绑定已冻结（preview.8/9 验收） | **复用**为官方输入入口；目录构建必须消费已 inspect 的快照 |
 | `securities.catalog` dataset + `CatalogScope::CurrentShSzA` | `data_supply/wire.rs` | wire 契约已存在 | **复用**；不加新枚举 |
 | catalog collection → `catalog:current_sh_sz_a` 单 item | `data_supply/collect.rs` | FrozenWork/ItemSpec 已就绪 | **复用** |
-| `BlockedSource` worker → `SOURCE_NOT_VERIFIED` | `official_files.rs` | 当前全部 catalog item 拒绝 | **新增** `TdxCatalogSource` 替换该 item 的执行器；`CATALOG_INDUSTRY_NOT_VERIFIED` blocker 条目需随真实接入评审更新 |
+| `BlockedSource` worker → `SOURCE_NOT_VERIFIED` | `official_files.rs` | 当前全部 catalog item 拒绝 | **新增** `TdxCatalogSource` 替换该 item 的执行器；`CATALOG_PUBLISH_NOT_VERIFIED` blocker 条目随真实接入验收评审更新（注：2026-09-17 FG 5711367159 已裁定该条退休——#194 v2 bounded 验收 PASS） |
 | `default_selection` / `WriteSelection::Catalog{version_id,industry_code}` | `data_supply/*` | 按 `industry.code==industry_code` 过滤目录成员 | **复用**；`industry_code` 语义=TDX 研究行业 L2 码（X 5 位），须在使用处显式标注 scheme（§5-P2） |
 | `dbf.rs` | `src/dbf.rs` | base.dbf 保守容器解析 | **不使用**：契约 §4 明示 base.dbf 全部字段 UNANCHORED；目录实现不依赖 |
 | tdxhy.cfg / ex.code / incon.dat 解析 | 无 | 不存在 | **新增**三个 bounded 解析器（§2），沿用 `dbf.rs` 风格：结构校验+原始字段保留，不猜编码不补语义 |
@@ -318,7 +318,7 @@ ALTER TABLE catalog_versions ADD COLUMN input_manifest_sha256 TEXT;
 ## 10. 本设计明确不做
 
 - 不写任何实现代码（docs-only PR）；
-- 不解除 `CATALOG_INDUSTRY_NOT_VERIFIED` / `NOT_PRODUCTION_READY` /
+- 不解除 `CATALOG_PUBLISH_NOT_VERIFIED`（后经 FG 5711367159 裁定退休）/ `NOT_PRODUCTION_READY` /
   #71 门禁；
 - 不实现两项产品裁定的任一分支语义（仅建模参数与默认 fail-closed）；
 - 不使用 base.dbf/tdxhy2.cfg/ex.name 任何字段（UNANCHORED）；
