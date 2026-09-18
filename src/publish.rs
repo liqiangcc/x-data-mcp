@@ -251,7 +251,8 @@ pub fn validate_and_deduplicate(
     if batch.bars.is_empty() {
         return Err(PublishError::InvalidRecord("batch has no records".into()));
     }
-    let mut records = Vec::new();
+    let mut records: Vec<Bar> = Vec::new();
+    let mut seen: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
     let mut duplicate_count = 0;
     for bar in &batch.bars {
         if bar.date.year() <= 0 {
@@ -278,16 +279,22 @@ pub fn validate_and_deduplicate(
         if bar.amount.is_some_and(|value| value < 0.into()) {
             return Err(PublishError::InvalidRecord("amount is negative".into()));
         }
-        let key = record_key(batch.period, bar);
-        if let Some(existing) = records
-            .iter()
-            .find(|existing: &&Bar| record_key(batch.period, existing) == key)
-        {
-            if *existing != *bar {
-                return Err(PublishError::DuplicateConflict(key));
+        // Integer membership key: unique per period within one batch; the
+        // record_key string is built only for the conflict error path.
+        let key = match batch.period {
+            Period::Day => i64::from(bar.date.num_days_from_ce()),
+            Period::Year => i64::from(bar.date.year()),
+        };
+        if let Some(&index) = seen.get(&key) {
+            if records[index] != *bar {
+                return Err(PublishError::DuplicateConflict(record_key(
+                    batch.period,
+                    bar,
+                )));
             }
             duplicate_count += 1;
         } else {
+            seen.insert(key, records.len());
             records.push(bar.clone());
         }
     }
