@@ -286,7 +286,7 @@ systemctl try-restart "$TUNNEL" || true
 
 # --- 7. smoke: live stdio + tunnel observation (asserted, not assumed) -------
 step=smoke
-EXPECTED_TOOLS='["start_collection","get_task","run_worker_once","cancel_task","retry_task","get_request","inspect_verification_task","verify_publication_result","verify_stopped_writes","update_data","backfill_data","compute_metrics","query_data","list_data_versions","get_data_availability","list_tasks","get_task_progress","get_data_capabilities"]'
+EXPECTED_TOOLS='["start_collection","get_task","run_worker_once","cancel_task","retry_task","get_request","inspect_verification_task","verify_publication_result","verify_stopped_writes","verify_data_gap","update_data","backfill_data","compute_metrics","query_data","list_data_versions","get_data_availability","list_tasks","get_task_progress","get_data_capabilities"]'
 python3 - "$SOCK" "$RELEASE_DIR" "$REPORTS/${TAG_SHORT}-stdio.json" "$EXPECTED_TOOLS" <<'PYEOF' || fail "stdio smoke"
 import json, subprocess, socket, time, select, hashlib, sqlite3, sys, pathlib
 sock, rel, out, expected_json = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
