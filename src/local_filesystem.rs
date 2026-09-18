@@ -5,6 +5,13 @@ fn supported(kind: u64) -> bool {
     matches!(kind, 0xef53 | 0x58465342 | 0x9123683e | 0x01021994)
 }
 pub(crate) fn supported_file(file: &File) -> io::Result<bool> {
+    // Explicit operator opt-out for local preview/development on filesystems
+    // where lock/identity semantics are unprovable (e.g. overlayfs). Weakens
+    // the service singleton lease, endpoint identity bindings and executor
+    // guards — never set for production.
+    if std::env::var_os("X_DATA_MCP_UNSAFE_NONLOCAL_FS").is_some() {
+        return Ok(true);
+    }
     let mut info = std::mem::MaybeUninit::<libc::statfs>::uninit();
     // SAFETY: live owned fd and writable statfs storage of the correct size.
     if unsafe { libc::fstatfs(file.as_raw_fd(), info.as_mut_ptr()) } != 0 {
@@ -25,5 +32,17 @@ mod tests {
         for kind in [0xef53, 0x58465342, 0x9123683e, 0x01021994] {
             assert!(supported(kind));
         }
+    }
+    #[test]
+    fn unsafe_env_opt_out_accepts_any_file() {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        // SAFETY: single-threaded access to this variable; no other test
+        // reads X_DATA_MCP_UNSAFE_NONLOCAL_FS concurrently.
+        unsafe { std::env::set_var("X_DATA_MCP_UNSAFE_NONLOCAL_FS", "1") };
+        let accepted = supported_file(f.as_file());
+        // SAFETY: restoring the pre-test environment; same single-threaded
+        // argument as the set above.
+        unsafe { std::env::remove_var("X_DATA_MCP_UNSAFE_NONLOCAL_FS") };
+        assert!(accepted.unwrap());
     }
 }
