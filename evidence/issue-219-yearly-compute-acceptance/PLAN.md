@@ -43,11 +43,11 @@
 | Y4 | 逐 bar 正确性 | 每条 yearly bar == 对 `daily_bars` 的**独立 SQL 重聚合**(首 bar open/末 bar close/max high/min low/首末交易日;volume/amount 为 null 因基座全 null),全量比对不采样 |
 | Y5 | lineage | 每记录绑 `base_daily_version_id` == item base、`algorithm_version=local-natural-year-v1`、首末交易日 == 重算值;`year_unfinished` == (year==2026) |
 | Y6 | 消费面 | `query_data` yearly filter 返回逐年记录(date=年最后交易日,含 lineage/version_ref);`list_data_versions`/`get_data_availability` yearly 正常返回且 honest |
-| Y7 | compute 正向 | sz.000002 `consecutive_direction` range 2019–2025 direction=down min_periods=3 → `Computed`;冻结期望:`observed_direction=down`、`run_length=6`、`run_length_kind=lower_bound`、`matches=true`、anchor=2019(28.26)、first_change=2020(25.79)、end=2025(4.65)、`observations_used=7`;同请求两次逐字节一致(除 envelope id) |
-| Y8 | compute 边界 | (a) sz.000002 range 2005–2008 → `NotComputable`(`non_positive_price`,年收 ≤0);(b) sz.000035 range 2010–2014 → `NotComputable`(`missing_year`,2011→2013 断档);(c) sz.000002 range 2019–2026 `completed_only=true` → `excluded_tail=[2026]` 后同 Y7 结果;(d) 同区间 `completed_only=false` → `provisional=true` 且 2026 参与计算 |
+| Y7 | compute 诚实拒绝 | **执行前发现的架构事实**:`computed` 在生产源数据上不可达——`Completion` 证据仅来自 `analysis_coverage_v1`,只由 fixture/demo 代码写入且被硬拒于非 fixture 源("fixture coverage cannot certify a production source")。真实 yearly 版本每观测 `completion=Unknown` → 恒 `not_computable{unknown_completion}`。断言该拒绝:(a) sz.000002 2019–2025 → `unknown_completion` + `fixture-only` limitation verbatim + 两次逐字节一致 |
+| Y8 | compute 边界序 | 拒绝前更具体 reason 仍按序命中:(a) sz.000002 2005–2008 → `non_positive_price`(价格检查先于完成度检查);(b) sz.000035 2010–2012 → `missing_year`(range 末端缺年先于观测检查);(c) sz.000002 2019–2026 → `unknown_completion` 且 `excluded_tail=[2026]` 保留 completed_only 语义;(d) 伪造 version_id+sha 显式拒绝无回退 |
 | Y9 | provenance | yearly 版本 compat/evidence 绑 base version sha + derive as_of + `NOT_PRODUCTION_READY` verbatim |
 | Y10 | env-absent | 同拷贝库、无官方 env:yearly `update_data` 受理后 worker verbatim 拒执 `official-file source not installed` |
-| Y11 | 只读不变量 | daily 侧计数不动(`daily_bars`/`effective_heads`/`market_update_results`);`data_versions` 增量 == 6;tasks +1;三 blocker + `NOT_PRODUCTION_READY` verbatim |
+| Y11 | 只读不变量 | daily 侧不动:`daily_bars`/`market_update_results` 不变,day-period effective_heads == 5219;year-period heads == 6(current_head 首发);`data_versions` 增量 == 6;三 blocker + `NOT_PRODUCTION_READY` verbatim |
 | Y12 | 断点续跑 | (若中断)同请求重跑幂等:不重复发布 |
 
 **机械核对**:Y4/Y5/Y7 由脚本 SQL + API 独立重算,不读实现逻辑的输出。

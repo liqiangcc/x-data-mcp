@@ -1,0 +1,214 @@
+{
+  "assertions": [
+    {
+      "name": "Y1_input_integrity",
+      "ok": true,
+      "detail": {
+        "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
+        "shanghai_today": "2026-09-18"
+      }
+    },
+    {
+      "name": "Y1b_baseline",
+      "ok": true,
+      "detail": {
+        "data_versions": 5219,
+        "daily_bars": 16629206,
+        "effective_heads": 5219,
+        "market_update_results": 5219,
+        "yearly_bars": 0,
+        "yearly_lineage": 0,
+        "tasks": 109
+      }
+    },
+    {
+      "name": "Y1c_frozen_years",
+      "ok": true,
+      "detail": {
+        "sz.000002": 36,
+        "sh.600006": 28,
+        "sh.600004": 24,
+        "sz.000001": 36,
+        "sz.000035": 32,
+        "sh.688318": 7
+      }
+    },
+    {
+      "name": "Y2_acceptance",
+      "ok": true,
+      "detail": {
+        "task_id": "task-2afe7aa62d878de9cead20ebc10fb277",
+        "item_ids": 6
+      }
+    },
+    {
+      "name": "Y3_execution",
+      "ok": true,
+      "detail": {
+        "succeeded": 6,
+        "versions": 6,
+        "yearly_bars": 163
+      }
+    },
+    {
+      "name": "Y4_per_bar_reaggregation",
+      "ok": true,
+      "detail": {
+        "checked": 163,
+        "mismatches": []
+      }
+    },
+    {
+      "name": "Y5_lineage",
+      "ok": true,
+      "detail": {
+        "lineage_rows": 6,
+        "bad": []
+      }
+    },
+    {
+      "name": "Y6_consumer_surface",
+      "ok": true,
+      "detail": {
+        "records": 36,
+        "first": "1991-12-31",
+        "last": "2026-09-14",
+        "version_items": 1,
+        "availability": "unknown",
+        "evidence": "selected years verified by re-aggregating fixed daily collection-version-e75dbaa86f6913776c0ad7847c9d6e3fd222f67e5f8865dd7a6082859123e5b0 fr"
+      }
+    },
+    {
+      "name": "Y7_compute_honest_refusal",
+      "ok": true,
+      "detail": {
+        "outcome": {
+          "excluded_tail": [],
+          "limitations": [
+            "no inferred coverage, warmup, gap filling or version substitution",
+            "completion evidence is fixture-only; no production source approval"
+          ],
+          "outcome": "not_computable",
+          "reason": "unknown_completion"
+        },
+        "repeat_identical": true
+      }
+    },
+    {
+      "name": "Y8_compute_edges",
+      "ok": true,
+      "detail": {
+        "nonpositive": {
+          "excluded_tail": [],
+          "limitations": [
+            "no inferred coverage, warmup, gap filling or version substitution",
+            "completion evidence is fixture-only; no production source approval"
+          ],
+          "outcome": "not_computable",
+          "reason": "non_positive_price"
+        },
+        "missing_year": {
+          "excluded_tail": [],
+          "limitations": [
+            "no inferred coverage, warmup, gap filling or version substitution",
+            "completion evidence is fixture-only; no production source approval"
+          ],
+          "outcome": "not_computable",
+          "reason": "missing_year"
+        },
+        "completed_only_tail": [
+          2026
+        ]
+      }
+    },
+    {
+      "name": "Y8b_compute_binding",
+      "ok": true,
+      "detail": {
+        "bogus_rejected": true
+      }
+    },
+    {
+      "name": "Y9_provenance",
+      "ok": true,
+      "detail": {
+        "bad": [],
+        "coverage": [
+          "Complete",
+          "Complete",
+          "Complete",
+          "Complete",
+          "Complete",
+          "Complete"
+        ]
+      }
+    },
+    {
+      "name": "Y10_env_absent_refusal",
+      "ok": true,
+      "detail": {
+        "verbatim_present": true,
+        "task_outcomes": "[[\"{\\\"success\\\":false,\\\"error\\\":\\\"BASE_UNAVAILABLE: SOURCE_NOT_VERIFIED: official-file source not installed\\\"}\"]]"
+      }
+    },
+    {
+      "name": "Y11_invariance_gates",
+      "ok": true,
+      "detail": {
+        "final": {
+          "data_versions": 5225,
+          "daily_bars": 16629206,
+          "effective_heads": 5225,
+          "market_update_results": 5219,
+          "yearly_bars": 163,
+          "yearly_lineage": 6,
+          "tasks": 111
+        },
+        "heads_by_period": {
+          "day": 5219,
+          "year": 6
+        },
+        "task_delta": 2,
+        "production_ready": false
+      }
+    }
+  ],
+  "blocked_paths": {},
+  "run_identity": {
+    "head": "c2ea563bd19250a85a1b3f0f7adb97a312260c6b",
+    "mcp_data_sha256": "ccd4a473cf69a431134303459f174b9fd62d28c4f5d0604e0ac1e0e4a5f3b2ca",
+    "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
+    "archive_sha256": {
+      "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+      "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+      "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+    },
+    "shanghai_today": "2026-09-18",
+    "src_db": "/home/box/acceptance-run-issue4-update/db.sqlite"
+  },
+  "baseline": {
+    "before": {
+      "data_versions": 5219,
+      "daily_bars": 16629206,
+      "effective_heads": 5219,
+      "market_update_results": 5219,
+      "yearly_bars": 0,
+      "yearly_lineage": 0,
+      "tasks": 109
+    },
+    "after": {
+      "data_versions": 5225,
+      "daily_bars": 16629206,
+      "effective_heads": 5225,
+      "market_update_results": 5219,
+      "yearly_bars": 163,
+      "yearly_lineage": 6,
+      "tasks": 111
+    }
+  },
+  "summary": {
+    "pass": 14,
+    "total": 14,
+    "all_pass": true
+  }
+}
