@@ -263,27 +263,41 @@ fn insert_record(
     let v = &r.version;
     let m = metadata(r);
     c.execute("INSERT INTO data_versions VALUES(?1,?2,?3,?4,'staging',?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",params![v.version_id,m[0],m[1],m[2],m[3],m[4],m[5],m[6],m[7],m[8],m[9],m[10],m[11],text(&r.raw)?,r.raw["integrity_sha256"].as_str(),compat::DIGEST_FORMAT]).map_err(storage)?;
-    for e in evidence(r)? {
-        c.execute(
-            "INSERT INTO version_evidence VALUES(?1,?2,?3,?4,?5)",
-            params![v.version_id, e[0], e[1], e[2], e[3]],
-        )
+    let mut evidence_stmt = c
+        .prepare("INSERT INTO version_evidence VALUES(?1,?2,?3,?4,?5)")
         .map_err(storage)?;
+    for e in evidence(r)? {
+        evidence_stmt
+            .execute(params![v.version_id, e[0], e[1], e[2], e[3]])
+            .map_err(storage)?;
     }
+    drop(evidence_stmt);
     if v.period == Period::Day {
+        let mut bar_stmt = c
+            .prepare("INSERT INTO daily_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8)")
+            .map_err(storage)?;
         for b in &v.records {
             let b = bar_values(b);
-            c.execute(
-                "INSERT INTO daily_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-                params![v.version_id, b[0], b[1], b[2], b[3], b[4], b[5], b[6]],
-            )
-            .map_err(storage)?;
+            bar_stmt
+                .execute(params![
+                    v.version_id,
+                    b[0],
+                    b[1],
+                    b[2],
+                    b[3],
+                    b[4],
+                    b[5],
+                    b[6]
+                ])
+                .map_err(storage)?;
         }
     } else {
+        let mut bar_stmt = c
+            .prepare("INSERT INTO yearly_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)")
+            .map_err(storage)?;
         for b in annual_values(r, base.ok_or_else(|| Error::Base("missing base".into()))?)? {
-            c.execute(
-                "INSERT INTO yearly_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
-                params![
+            bar_stmt
+                .execute(params![
                     v.version_id,
                     b[0],
                     b[1],
@@ -296,9 +310,8 @@ fn insert_record(
                     b[8],
                     b[9],
                     b[10]
-                ],
-            )
-            .map_err(storage)?;
+                ])
+                .map_err(storage)?;
         }
         let l = lineage_values(r).unwrap();
         c.execute(
