@@ -1,0 +1,295 @@
+{
+ "assertions": [
+  {
+   "name": "U1_input_integrity",
+   "ok": true,
+   "detail": {
+    "archive_sha256": {
+     "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+     "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+     "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+    },
+    "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3"
+   }
+  },
+  {
+   "name": "U1b_baseline_workset",
+   "ok": true,
+   "detail": {
+    "counts": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206,
+     "market_update_results": 0
+    },
+    "distinct_head_symbols": 5219
+   }
+  },
+  {
+   "name": "U2_default_budget",
+   "ok": true,
+   "detail": {
+    "response": {
+     "id": 2,
+     "jsonrpc": "2.0",
+     "result": {
+      "content": [
+       {
+        "text": "{\"code\":\"invalid_arguments\",\"message\":\"INVALID_COMMAND: default security budget exceeded: 5224 > 100\",\"next_actions\":[\"correct the request or inspect the reported storage evidence\"],\"outcome_certainty\":\"not_committed\"}",
+        "type": "text"
+       }
+      ],
+      "isError": true,
+      "structuredContent": {
+       "code": "invalid_arguments",
+       "message": "INVALID_COMMAND: default security budget exceeded: 5224 > 100",
+       "next_actions": [
+        "correct the request or inspect the reported storage evidence"
+       ],
+       "outcome_certainty": "not_committed"
+      }
+     }
+    },
+    "task_count_before": 55
+   }
+  },
+  {
+   "name": "U3_sharded_acceptance",
+   "ok": true,
+   "detail": {
+    "tasks": 53,
+    "total_items": 5219
+   }
+  },
+  {
+   "name": "U4_item_outcomes",
+   "ok": true,
+   "detail": {
+    "success": 5219,
+    "failed": []
+   }
+  },
+  {
+   "name": "U5_no_change_semantics",
+   "ok": true,
+   "detail": {
+    "update_results": 5219,
+    "no_change": 5219,
+    "version_mismatch": 0
+   }
+  },
+  {
+   "name": "U6_zero_new_versions",
+   "ok": true,
+   "detail": {
+    "counts_before": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206,
+     "market_update_results": 0
+    },
+    "counts_after": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206,
+     "market_update_results": 5219
+    }
+   }
+  },
+  {
+   "name": "U7_data_unchanged",
+   "ok": true,
+   "detail": {
+    "daily_bars_after": 16629206,
+    "spot_bar_counts": {
+     "sh.600006": 6467,
+     "sh.600004": 5630,
+     "sz.000002": 8479
+    }
+   }
+  },
+  {
+   "name": "U8_provenance",
+   "ok": true,
+   "detail": {
+    "audit_rows": 5219,
+    "no_change_not_1": 0,
+    "combined_not_null": 0,
+    "missing_base_version": 0,
+    "missing_qfq_basis": 0,
+    "audit_spot": [
+     [
+      "[\"market\",\"sh.600000\",\"day\"]",
+      "collection-version-b5b70354ca803092a90d39883ea7087ddd7ab1d7bbcd54a146fea53d32aaff11",
+      "inspected snapshot manifest b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3 + gbbq member 4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+      null,
+      "c387bd8152595e42581a286a6e2f1b6daedb10a0dcebd88b188284ad8674c9cb"
+     ],
+     [
+      "[\"market\",\"sh.600004\",\"day\"]",
+      "collection-version-69e9b01833330f412909066752f35c4eb93be816be4f7dbaa8d6bacff8adc171",
+      "inspected snapshot manifest b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3 + gbbq member 4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+      null,
+      "b40af279fe81bcabce7da7f7e0022450912f7e061c4cdc41df0c91f2b8d37d25"
+     ],
+     [
+      "[\"market\",\"sh.600006\",\"day\"]",
+      "collection-version-20312846826be3e15b3fbb413b9037d85a457bb9384f56c906fd7d9174f7dfbd",
+      "inspected snapshot manifest b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3 + gbbq member 4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+      null,
+      "fd165b786db8c181e2ddbc422660c2c33b6be1b6496ebe60140bcaa4f53170cd"
+     ]
+    ]
+   }
+  },
+  {
+   "name": "U9_task_bookkeeping",
+   "ok": true,
+   "detail": {
+    "task_states": [
+     [
+      "succeeded",
+      53
+     ]
+    ]
+   }
+  },
+  {
+   "name": "U10_env_absent",
+   "ok": true,
+   "detail": {
+    "items": [
+     {
+      "item_id": "[\"market\",\"sh.600000\",\"day\"]",
+      "target": {
+       "period": "day",
+       "symbol": "sh.600000"
+      },
+      "stage": "finished",
+      "outcome": {
+       "success": false,
+       "error": "INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+      }
+     }
+    ],
+    "counts": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206,
+     "market_update_results": 5219
+    }
+   }
+  },
+  {
+   "name": "U11_gates_verbatim",
+   "ok": true,
+   "detail": {
+    "blocking_reasons": [
+     "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+     "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+     "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+    ],
+    "production_ready": false
+   }
+  }
+ ],
+ "blocked_paths": {
+  "S3_default_selection": {
+   "code": "invalid_arguments",
+   "message": "INVALID_COMMAND: default security budget exceeded: 5224 > 100",
+   "next_actions": [
+    "correct the request or inspect the reported storage evidence"
+   ],
+   "outcome_certainty": "not_committed"
+  },
+  "R1_env_absent": [
+   {
+    "success": false,
+    "error": "INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+   }
+  ]
+ },
+ "run_identity": {
+  "head": "af7646914de4503cfe4d3affada515974b89e40b",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
+  "archive_sha256": {
+   "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+   "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+   "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+  },
+  "shanghai_today": "2026-09-18"
+ },
+ "summary": {
+  "passed": 12,
+  "total": 12,
+  "failed": [],
+  "update_tasks": [
+   "task-3a8ffd417e55297d671adfcdff7962aa",
+   "task-f3e68e5104fb1d9702af339b19810d1f",
+   "task-525937df7be41a43db3198b4e79bae66",
+   "task-13431f501974fcda408f782ca53bc449",
+   "task-be63634b577cdc40b5e57f32c15a6904",
+   "task-4c38dfcedcd2b4f7734cdeb4e7d7849d",
+   "task-a6a4dc126ec516fbce761d60518d9a76",
+   "task-dca7d966087271317b7fe288f3ead923",
+   "task-d98c5751da2eac97e0a3f9bf53242fe7",
+   "task-01aebb11aeb04a8593c934a054336aff",
+   "task-6598478b6a49bef83ee0df60c0b3b9fd",
+   "task-fa0303edbda7a72791a4790079fadb20",
+   "task-77f10cae69d3b2db0927cede7b37b33c",
+   "task-0f286238de4669445f2ac580c4230bf9",
+   "task-ddbf97f7ff683ffd528f44724297d6fc",
+   "task-3648d7d696667dbe769e413c3b124d1f",
+   "task-b168bccf742b71b7f22a1695c30c2fb4",
+   "task-3d2317aad411d92a43557fb3d3a43826",
+   "task-41bfca5a6b4f35c2b6b8f39721ea3fe6",
+   "task-6234d067d8b0963f74220d968b27ff1e",
+   "task-0c4543bc786b678d8888c6c33f26a2a6",
+   "task-2fe78fea4503c9c006ebbc867a4c6eb9",
+   "task-dec0a8dd9296e650219daee83e333d20",
+   "task-18584d34ea435017c4558eb4e82b6deb",
+   "task-f04a66b8f276825e38fa5f7161f6fd37",
+   "task-2998e61755652e37077faeb62beb4868",
+   "task-14ca6d4046103d7040f4931547e561dd",
+   "task-6d30810c47a3e801f398a0cd6d788601",
+   "task-7e85046dabb81b9900ccd0b71d9d55cc",
+   "task-5467c7147d10d095f77d329e3585f2bc",
+   "task-4746896cf605d36616a12cbaa8229831",
+   "task-e230bcbfb1d404f196e1c92c6a2cfb67",
+   "task-9349d2e18ae31e57262c378139da8df6",
+   "task-50a17be2741287a50aec88a00a5cf45d",
+   "task-53678944593ce5e20e1ebbfac0132c80",
+   "task-f5c4c6afb871223b5d9e2ffdb0ae2a27",
+   "task-d54498be3d89fc630c3153a50d1beb9c",
+   "task-d6bacfffae692f0cc9d58b92f6ebf82f",
+   "task-fa31ee9c4e81025d2fa383b9c6084f8f",
+   "task-8783742c2f7fa34722b3e03b2181ef5e",
+   "task-5597a2a204c5ccfa3723ed7744f74f63",
+   "task-aa11f480d469e3d848366953da789280",
+   "task-da39e03e36ca67903788f05e861fd3a1",
+   "task-2060d8e880f9a6b39c5c0f8d05ccc116",
+   "task-ac312b896081b00d1d12847331bcea7b",
+   "task-e9358516f12890c712b1ddbd1d3e1590",
+   "task-58098cfa209cdf7d389e13e5df943aa6",
+   "task-6e408c12a7050d566af275851a99e568",
+   "task-81694e26448b2eb4bb787d3a034a8392",
+   "task-452cb17e3e7f0b2a87abfa3d95bf4dc1",
+   "task-76400535e22d9f3e239cb35c78be99a8",
+   "task-95a8e11cd7968a2432fa06aa745d5550",
+   "task-fe036513920bb442a6c4c0b43b3337a9"
+  ],
+  "counts_after": {
+   "data_versions": 5219,
+   "published": 5219,
+   "effective_heads": 5219,
+   "daily_bars": 16629206,
+   "market_update_results": 5219
+  },
+  "non_idle_worker_runs": 53
+ }
+}
