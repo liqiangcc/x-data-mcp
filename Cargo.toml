@@ -1,6 +1,6 @@
 [package]
 name = "x-data-mcp"
-version = "0.2.0-preview.11"
+version = "0.2.0-preview.12"
 edition = "2024"
 
 [dependencies]
