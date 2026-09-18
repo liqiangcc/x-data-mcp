@@ -9,7 +9,7 @@
 | 数据集 | `market.daily` |
 | 工作集 | **gen-2 首采验收已发布 head 的全部证券**（预期 5219；以 `/home/box/acceptance-run-issue4/db.sqlite` 机械查询为准） |
 | 操作 | `update_data`（`operation=update`，显式 items 分片 1..100 预算内） |
-| 数据源 | `OFFICIAL_SOURCE_ROOT=/home/box/retained-inputs`（**同一 inspected gen-2 快照**） |
+| 数据源 | `X_DATA_MCP_OFFICIAL_MANIFEST` + `X_DATA_MCP_OFFICIAL_DIR=/home/box/acceptance-run-issue3/snapshot`（**同一 inspected gen-2 快照**，与首采验收同一 env 机制） |
 | 基座 | `db.sqlite` 拷贝（`acceptance-run-issue4/db.sqlite` → 新 scratch），**不改已封存验收工件** |
 | 二进制 | `target/release/mcp_data`（release build——见 §3.1，动机=验收窗口，不构成性能声明） |
 | 输入完整性 | gen-2 快照 hash 经 `official_source inspect` 实测重确认 |
@@ -30,7 +30,7 @@
 | # | 断言 | 判定方式 |
 |---|---|---|
 | U1 | 输入完整性 | 快照逐文件 sha256 + manifest_sha256 == gen-2 冻结值 |
-| U2 | default 预算拒收 | `update_data {"kind":"default"}` → verbatim `default security budget exceeded: 5219 > 100`；not_committed |
+| U2 | default 预算拒收 | `update_data {"selection":{"kind":"default"}}` → verbatim `default security budget exceeded: 5219 > 100`；not_committed |
 | U3 | 分片受理 | 53 片全部 accepted；frozen items 合计 == 5219；`base_version_id`/`range` 冻结进 task evidence |
 | U4 | 逐 item 无变更完成 | 5219 items 全部 item_state=success；产出 `market_update_results` 行 == 5219 |
 | U5 | no_change 语义 | 全部 `market_update_results.no_change=1` 且 `result_version_id == base_version_id`（机械查询，不允许 truthy 伪造） |
@@ -38,7 +38,7 @@
 | U7 | 数据不动 | `daily_bars` 行数不变（16629206）；抽样 3 证券（sh.600004/sh.600006/sz.000002）逐 bar 内容不变 |
 | U8 | provenance | 全部 update results `audit_json` 绑 base version_id + 快照 manifest + 成员 digest（抽查 verbatim） |
 | U9 | task 簿记 | update tasks 全部 succeeded；item evidence 可追溯（spot-check verbatim） |
-| U10 | env-absent | 新库 + 无 source root：`update_data` 显式 items → verbatim `SOURCE_NOT_VERIFIED: env var OFFICIAL_SOURCE_ROOT is not set` |
+| U10 | env-absent | 同一拷贝库 + 无 official env：`update_data` 显式 items 受理后 worker 拒执 → verbatim `SOURCE_NOT_VERIFIED: GBBQ_QFQ_NOT_VERIFIED (...); FILE_ACCESS_USE_NOT_VERIFIED (...); FILE_SET_CONSISTENCY_NOT_VERIFIED (...)`（与首采 D10 同一 verbatim 形态；env 缺席先撞源门禁） |
 | U11 | 治理状态 | `GET /gates` blocked_paths verbatim：`GBBQ_QFQ_NOT_VERIFIED` + `FILE_ACCESS_USE_NOT_VERIFIED` + `FILE_SET_CONSISTENCY_NOT_VERIFIED`；`status=NOT_PRODUCTION_READY` |
 | U12 | 断点续跑 | （若发生中断）重跑同请求 → 幂等续跑无重复写入（`data_versions`/`market_update_results` 计数不变） |
 
@@ -51,11 +51,11 @@
 | S0 | 环境指纹：HEAD sha + `cargo --version` + `sha256sum target/release/mcp_data` + 快照 manifest_sha256 → `evidence.json` | 记录 |
 | S1 | 拷贝 `acceptance-run-issue4/db.sqlite` → `acceptance-run-issue4-update/db.sqlite`；机械基线查询（版本数/heads 映射/bars 计数） → `baseline.json` | 记录 |
 | S2 | `official_source inspect`（env on）→ 基线 manifest/逐文件 hash | U1 |
-| S3 | `update_data {"kind":"default"}` → verbatim 拒绝 → `blocked_paths` | U2 |
+| S3 | `update_data {"selection":{"kind":"default"}}` → verbatim 拒绝 → `blocked_paths` | U2 |
 | S4 | 基线查询生成 53 片 items（`{symbol,base_version_id,start_date,end_date}`，按 symbol 排序稳定切分）→ `shards.json` | U3 输入固化 |
 | S5 | 逐片 `update_data` → 受理证据收集；`run_worker_once` 排空循环至 `report[0]=="IDLE"` | U3 |
 | S6 | 断言 U4–U9 全查 | U4–U9 |
-| S7 | 新 scratch DB、unset env、显式 items `update_data` → verbatim 拒绝 | U10 |
+| S7 | 同一拷贝库上重开无 official env 的服务、显式 items `update_data` → 受理后 worker verbatim 拒执 | U10 |
 | S8 | `GET /gates` | U11 |
 | S9 | `results.json` 落盘；中断情形走 PLAN v1 中断注记路径 | U12 |
 
