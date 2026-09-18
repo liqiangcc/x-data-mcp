@@ -24,10 +24,12 @@
 | sh.600006 | `collection-version-20312846826be3e15b3fbb413b9037d85a457bb9384f56c906fd7d9174f7dfbd` | 1999-07-27 | 28(1999–2026) |
 | sh.600004 | `collection-version-69e9b01833330f412909066752f35c4eb93be816be4f7dbaa8d6bacff8adc171` | 2003-04-28 | 24(2003–2026) |
 | sz.000001 | `collection-version-eac2c3f1543d0213af7ef4388773269f148b09610abaa4d17b015eb4418ed5a1` | 1991-04-03 | 36(1991–2026) |
-| sz.000035 | `collection-version-31370cfe4b048be5d054af8e6ae1592c1c0db954c97bc42dd2ef07d8c4624d65` | 1994-04-08 | 33(1994–2026) |
+| sz.000035 | `collection-version-31370cfe4b048be5d054af8e6ae1592c1c0db954c97bc42dd2ef07d8c4624d65` | 1994-04-08 | 32(1994–2026 **不含 2012**) |
 | sh.688318 | `collection-version-19111da225f71cfb898afdfa724bd47cd269df94c0a07d35dcfdc49527f1e54c` | 2020-04-27 | 7(2020–2026) |
 
-机械期望:`yearly_bars` 新增 == **164**;yearly 版本新增 == **6**;2026 为上海历当前年 → `year_unfinished=true`。
+**冻结事实**:sz.000035 已发布 daily 在 2012 全年无 bar(2011-11-08 → 2013-09-17,~22 个月停牌缺口)——如实数据缺失,不是已证明 gap。其 item 只请求 32 个实际存在年;请求 2012 会按契约 `MissingYear` 显式失败,故不请求。该缺失转而成为 compute `missing_year` 边界腿的天然输入。
+
+机械期望:`yearly_bars` 新增 == **163**;yearly 版本新增 == **6**;2026 为上海历当前年(执行日 2026-09-18,晚于末 bar 2026-09-14)→ `year_unfinished=true`。
 
 **基线计数**(run 前机械重查):`yearly_bars=0`,`yearly_lineage=0`,`data_versions=5219`,`daily_bars=16629206`,`effective_heads=5219`,`tasks=109`,`market_update_results=5219`。
 
@@ -37,12 +39,12 @@
 |---|---|---|
 | Y1 | 输入完整性 | gen-2 快照 manifest sha == `b8a0d7b9…444d3`;env 指纹入档 |
 | Y2 | 受理 | 6 items 全部 accepted;frozen items 绑 base version + years + current_head/null |
-| Y3 | 派生执行 | 6 items 全部 success;yearly 版本新增 == 6;`yearly_bars` 增量 == 164 |
+| Y3 | 派生执行 | 6 items 全部 success;yearly 版本新增 == 6;`yearly_bars` 增量 == 163 |
 | Y4 | 逐 bar 正确性 | 每条 yearly bar == 对 `daily_bars` 的**独立 SQL 重聚合**(首 bar open/末 bar close/max high/min low/首末交易日;volume/amount 为 null 因基座全 null),全量比对不采样 |
 | Y5 | lineage | 每记录绑 `base_daily_version_id` == item base、`algorithm_version=local-natural-year-v1`、首末交易日 == 重算值;`year_unfinished` == (year==2026) |
 | Y6 | 消费面 | `query_data` yearly filter 返回逐年记录(date=年最后交易日,含 lineage/version_ref);`list_data_versions`/`get_data_availability` yearly 正常返回且 honest |
-| Y7 | compute 正向 | `consecutive_direction` on 已发布 yearly 版本(指定区间、正收盘价)→ `Computed`;`observed_direction`/`run_length`/`end`/`observations_used` 与独立重算一致;同请求两次逐字节一致(除 envelope id) |
-| Y8 | compute 边界 | (a) 覆盖 sz.000002 非正年收的区间 → `NotComputable`(`non_positive_price`);(b) 请求未派生年 → 显式拒绝/`not_computable`;(c) `completed_only` 语义:2026 未完结年按契约排除或标记 provisional |
+| Y7 | compute 正向 | sz.000002 `consecutive_direction` range 2019–2025 direction=down min_periods=3 → `Computed`;冻结期望:`observed_direction=down`、`run_length=6`、`run_length_kind=lower_bound`、`matches=true`、anchor=2019(28.26)、first_change=2020(25.79)、end=2025(4.65)、`observations_used=7`;同请求两次逐字节一致(除 envelope id) |
+| Y8 | compute 边界 | (a) sz.000002 range 2005–2008 → `NotComputable`(`non_positive_price`,年收 ≤0);(b) sz.000035 range 2010–2014 → `NotComputable`(`missing_year`,2011→2013 断档);(c) sz.000002 range 2019–2026 `completed_only=true` → `excluded_tail=[2026]` 后同 Y7 结果;(d) 同区间 `completed_only=false` → `provisional=true` 且 2026 参与计算 |
 | Y9 | provenance | yearly 版本 compat/evidence 绑 base version sha + derive as_of + `NOT_PRODUCTION_READY` verbatim |
 | Y10 | env-absent | 同拷贝库、无官方 env:yearly `update_data` 受理后 worker verbatim 拒执 `official-file source not installed` |
 | Y11 | 只读不变量 | daily 侧计数不动(`daily_bars`/`effective_heads`/`market_update_results`);`data_versions` 增量 == 6;tasks +1;三 blocker + `NOT_PRODUCTION_READY` verbatim |
