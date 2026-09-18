@@ -1,0 +1,18 @@
+{
+  "status": "DEPLOYED",
+  "release": "v0.2.0-preview.12",
+  "code_sha": "18a4d42017cf30aa299ef980239eccbac8e3778e",
+  "checks": {
+    "release_binding": "PASS (targetCommitish==tag sha==18a4d42, assets complete)",
+    "package_integrity": "PASS (tarball sha256 + SHA256SUMS + embedded version)",
+    "service_start": "PASS (data_service on unix socket, tmpfs runtime)",
+    "stdio_smoke": "PASS",
+    "tool_surface": "19 tools \u2014 includes verify_data_gap (new since preview.11; server EXPECTED_TOOLS in deploy_preview.sh must be updated from 18)",
+    "idle_regression_33s": "PASS",
+    "tunnel_observation": "NOT_RUN (no tunnel locally)",
+    "rollback": "NOT_RUN"
+  },
+  "consumer": "NOT_RUN",
+  "live_source": "NOT_RUN",
+  "production": "NOT_PRODUCTION_READY"
+}

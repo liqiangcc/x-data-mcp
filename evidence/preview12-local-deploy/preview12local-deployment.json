@@ -1,0 +1,47 @@
+{
+  "status": "DEPLOYED",
+  "release": "v0.2.0-preview.12",
+  "code_sha": "18a4d42017cf30aa299ef980239eccbac8e3778e",
+  "deployment_mode": "local-adapted",
+  "adaptations": [
+    "no systemd: data_service run as direct background process",
+    "no tunnel: x-data-mcp-tunnel.service absent locally (server-specific)",
+    "deploy root: /home/box/preview-deploy (releases+reports on overlayfs)",
+    "runtime paths: DB+unix socket on /dev/shm tmpfs (runtime guard fail-closed on overlayfs)",
+    "package fetch: gh release download (object CDN healthy from this box)"
+  ],
+  "fetch_verify": {
+    "tarball_sha256": "f07bb05185e80c9a98a30a7a538ebb88ee48e58b60d447bb37cf8d042cd0d98c",
+    "sha256_asset_check": "OK",
+    "package_SHA256SUMS": "OK",
+    "binary_version_embeds_sha": true,
+    "release_smoke_report": {
+      "status": "PASS",
+      "version": "x-data-mcp 0.2.0-preview.12 18a4d42017cf30aa299ef980239eccbac8e3778e NOT_PRODUCTION_READY"
+    }
+  },
+  "before": {
+    "fresh_deploy": true
+  },
+  "after": {
+    "schema": 12,
+    "counts": {
+      "tasks": 0,
+      "requests": 0,
+      "data_versions": 0,
+      "catalog_versions": 0,
+      "scope_occupancy": 0
+    }
+  },
+  "schema": {
+    "task_sqlite_init": "task schema 12 ready (development only)",
+    "upgrade": "not_applicable_fresh_db"
+  },
+  "service": {
+    "mode": "direct_process",
+    "socket": "/dev/shm/xdm-preview/run/mcp.sock"
+  },
+  "consumer": "NOT_RUN",
+  "live_source": "NOT_RUN",
+  "production": "NOT_PRODUCTION_READY"
+}
