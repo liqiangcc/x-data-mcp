@@ -39,6 +39,9 @@ EXPECTED = {  # gen-2 pins, same as the first-collection acceptance
 }
 SPOT = {"sh.600004", "sh.600006", "sz.000002"}
 EXPECTED_WORKSET = 5219
+# Default-selection workset counts all 5224 published catalog securities:
+# the budget guard fires before per-item head binding (measured verbatim).
+EXPECTED_DEFAULT_WORKSET = 5224
 EXPECTED_BARS = 16629206
 NO_DAY = ["sh.601091", "sh.688837", "sz.001246", "sz.301686", "sz.301716"]
 
@@ -251,7 +254,7 @@ def main():
         default_resp.get("result", {}).get("structuredContent")
         or default_resp.get("error") or {}, ensure_ascii=False)
     expected_budget = ("default security budget exceeded: "
-                       f"{EXPECTED_WORKSET} > 100")
+                       f"{EXPECTED_DEFAULT_WORKSET} > 100")
     check("U2_default_budget",
           (default_resp.get("result", {}).get("isError")
            or default_resp.get("error"))

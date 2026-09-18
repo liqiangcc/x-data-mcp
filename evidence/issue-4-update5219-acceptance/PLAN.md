@@ -21,7 +21,7 @@
 
 - 机械查询输入 DB：`COUNT(data_versions WHERE dataset='market.daily')`（预期 5219）、`COUNT(DISTINCT symbol)`、`daily_bars` 行数（预期 16629206）、全部 `(symbol → head version_id)` 映射。
 - gen-2 快照 hash 机械重算：`{data_root}/snapshots/20260513-095450/sha256` 逐文件 + `manifest_sha256`。
-- **首个事实**：`{"kind":"default"}` 的 `update_data` 在本基线必然 verbatim 拒收（`default security budget exceeded: 5219 > 100`）——因为 default 解析器要求每个证券有已发布 head，而 5 只 `.day` 缺席成员没有 head，default 工作集 = 5219 > `MAX_DEFAULT_SECURITIES=100`。这是预设预算的正确拒绝，记入 `blocked_paths`，不是缺陷。
+- **首个事实**：`{"selection":{"kind":"default"}` 的 `update_data` 在本基线必然 verbatim 拒收（实测：`default security budget exceeded: 5224 > 100`）——default 工作集按**全部 5224 个已发布目录证券**计数，预算检查在逐 item head 绑定之前触发；这与"显式 items 工作集 = 5219 个有 head 证券"是两层不同口径，非缺陷。这是预设预算的正确拒绝，记入 `blocked_paths`。
 - 工作集精确性：update 显式 items 的 `base_version_id` 由各证券 head `version_id` 提供；`start_date = base.first_date`，`end_date = 运行日`（上海历，`shanghai_today` 同服务侧）；该 range 覆盖该证券全部已发布历史 → 同代快照下物化结果与 base 完全一致。
 - 5 只 `.day` 缺席成员（sh.601091、sh.688837、sz.001246、sz.301686、sz.301716）无已发布 head，**不属于 update 工作集**——这是 contract 性排除（无 base_version_id 可绑），不作为失败。
 
@@ -30,7 +30,7 @@
 | # | 断言 | 判定方式 |
 |---|---|---|
 | U1 | 输入完整性 | 快照逐文件 sha256 + manifest_sha256 == gen-2 冻结值 |
-| U2 | default 预算拒收 | `update_data {"selection":{"kind":"default"}}` → verbatim `default security budget exceeded: 5219 > 100`；not_committed |
+| U2 | default 预算拒收 | `update_data {"selection":{"kind":"default"}}` → verbatim `default security budget exceeded: 5224 > 100`；not_committed |
 | U3 | 分片受理 | 53 片全部 accepted；frozen items 合计 == 5219；`base_version_id`/`range` 冻结进 task evidence |
 | U4 | 逐 item 无变更完成 | 5219 items 全部 item_state=success；产出 `market_update_results` 行 == 5219 |
 | U5 | no_change 语义 | 全部 `market_update_results.no_change=1` 且 `result_version_id == base_version_id`（机械查询，不允许 truthy 伪造） |
