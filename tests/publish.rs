@@ -864,3 +864,68 @@ fn verified_read_does_not_create_empty_storage_or_claim_data_exists() {
     );
     assert!(!root.exists());
 }
+
+#[test]
+fn dedup_counts_identical_duplicates_and_sorts_unique_records() {
+    // Identical keys with identical content count as duplicates; output is
+    // sorted unique records. Semantics pinned by issue #204 (O(N) membership).
+    let batch = batch(
+        Period::Day,
+        vec![
+            bar((2026, 9, 12), 11, Some(Decimal::ONE), Some(Decimal::TWO)),
+            bar((2026, 9, 10), 11, Some(Decimal::ONE), Some(Decimal::TWO)),
+            bar((2026, 9, 12), 11, Some(Decimal::ONE), Some(Decimal::TWO)),
+            bar((2026, 9, 11), 11, Some(Decimal::ONE), Some(Decimal::TWO)),
+        ],
+    );
+    let (records, summary) = x_data_mcp::publish::validate_and_deduplicate(&batch).unwrap();
+    assert_eq!(summary.record_count, 4);
+    assert_eq!(summary.unique_record_count, 3);
+    assert_eq!(summary.duplicate_count, 1);
+    let dates: Vec<_> = records.iter().map(|b| b.date.to_string()).collect();
+    assert_eq!(dates, ["2026-09-10", "2026-09-11", "2026-09-12"]);
+}
+
+#[test]
+fn dedup_rejects_conflicting_duplicate_with_record_key() {
+    let batch = batch(
+        Period::Day,
+        vec![
+            bar((2026, 9, 10), 11, Some(Decimal::ONE), Some(Decimal::TWO)),
+            bar((2026, 9, 10), 12, Some(Decimal::ONE), Some(Decimal::TWO)),
+        ],
+    );
+    match x_data_mcp::publish::validate_and_deduplicate(&batch) {
+        Err(PublishError::DuplicateConflict(key)) => assert_eq!(key, "2026-09-10"),
+        other => panic!("expected DuplicateConflict, got {other:?}"),
+    }
+}
+
+#[test]
+fn dedup_keys_yearly_records_by_year() {
+    // Year period keys on the natural year only: two different dates in the
+    // same year conflict, different years keep both.
+    let conflict = batch(
+        Period::Year,
+        vec![
+            bar((2026, 6, 30), 11, Some(Decimal::ONE), Some(Decimal::TWO)),
+            bar((2026, 12, 31), 12, Some(Decimal::ONE), Some(Decimal::TWO)),
+        ],
+    );
+    match x_data_mcp::publish::validate_and_deduplicate(&conflict) {
+        Err(PublishError::DuplicateConflict(key)) => assert_eq!(key, "2026"),
+        other => panic!("expected DuplicateConflict, got {other:?}"),
+    }
+    let distinct = batch(
+        Period::Year,
+        vec![
+            bar((2026, 12, 31), 11, Some(Decimal::ONE), Some(Decimal::TWO)),
+            bar((2025, 12, 31), 10, Some(Decimal::ONE), Some(Decimal::TWO)),
+        ],
+    );
+    let (records, summary) = x_data_mcp::publish::validate_and_deduplicate(&distinct).unwrap();
+    assert_eq!(summary.unique_record_count, 2);
+    assert_eq!(summary.duplicate_count, 0);
+    let dates: Vec<_> = records.iter().map(|b| b.date.to_string()).collect();
+    assert_eq!(dates, ["2025-12-31", "2026-12-31"]);
+}

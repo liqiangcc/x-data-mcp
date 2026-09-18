@@ -154,3 +154,28 @@ sz.000002 冻结锚点 bar（既有 oracle）：2000-01-10
 `evidence/issue-4-daily5230-acceptance/` 下 Phase B 追加：
 `run_daily5230_acceptance.py`、`run-log.jsonl`（verbatim）、
 `results.json`（D1–D12 + blocked_paths + 全部 id/hash）、`README.md`。
+
+## 8. 修订 v2 — 首跑中止与 release 重跑（#204 之后）
+
+**首跑中止（留痕，不纳入断言）**:debug build 首跑于
+`2b7a0c4` 运行 ~16.2h 至 3289/5224(62.7%）后中止。运行即测出
+§6"未测"项：publish/校验段 ~17-18s/item，逐段插桩定位为
+`validate_and_deduplicate` O(N²) × 每 item 6 遍全量校验（~93%)。
+中止记录：`/home/box/acceptance-run-issue4/ABORTED.md`;
+首跑 `run-log.jsonl` 保留。3 个 partially_failed 分片恰为 5 只
+无 `.day` member 证券所在片，符合预期失败类别。
+
+**修订项**（其余断言、机械期望、fail-closed 序列不变）:
+
+- 构建改为 `TMPDIR=/dev/shm cargo build --locked --release --bins`。
+  动机如实记录：修复后 debug ~2.8s/item(≈4h）仍在长窗口边缘，
+  release ~0.66s/item（实测）使验收在常规窗口内完成；**这不是
+  性能声明**，部署性能结论仍以实测为准。
+- 重跑代码 = 合并 #204 修复后的 HEAD(S0 留痕记录实际值，
+  本计划不冻结字面值）。#204 为纯等价变更：dedup 冲突语义、
+  重复计数、排序输出、发布内容逐字节不变，等价性由既有断言
+  与新增单测强制。
+- scratch 库全新重建（`db.sqlite` 重新 init)；首跑库文件不迁移、
+  不复用，仅作中止证据保留于 scratch 目录。
+- 时间预期更新：物化 ~51ms/symbol(release)+ 实测发布段
+  ~0.5s/item → 端到端预期 ~0.5h（外推，本次运行实测之）。
