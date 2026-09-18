@@ -1,0 +1,492 @@
+{
+ "assertions": [
+  {
+   "name": "D1_input_integrity",
+   "ok": true,
+   "detail": {
+    "archive_sha256": {
+     "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+     "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+     "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+    },
+    "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3"
+   }
+  },
+  {
+   "name": "D2_catalog_prerequisite",
+   "ok": true,
+   "detail": {
+    "versions": [
+     [
+      "catalog-1789700535021684788",
+      "official-file:b8a0d7b9aec1a270",
+      "8d6eb010f2ac8da7c15146509e902c8a0e3733811cd97e92244830b8ff9f2a29"
+     ]
+    ],
+    "head": [
+     "catalog-1789700535021684788"
+    ],
+    "member_count": 5224
+   }
+  },
+  {
+   "name": "D3_catalog_selection_budget",
+   "ok": true,
+   "detail": {
+    "response": {
+     "id": 4,
+     "jsonrpc": "2.0",
+     "result": {
+      "content": [
+       {
+        "text": "{\"code\":\"invalid_arguments\",\"message\":\"INVALID_COMMAND: resolved selection budget 1..100\",\"next_actions\":[\"correct the request or inspect the reported storage evidence\"],\"outcome_certainty\":\"not_committed\"}",
+        "type": "text"
+       }
+      ],
+      "isError": true,
+      "structuredContent": {
+       "code": "invalid_arguments",
+       "message": "INVALID_COMMAND: resolved selection budget 1..100",
+       "next_actions": [
+        "correct the request or inspect the reported storage evidence"
+       ],
+       "outcome_certainty": "not_committed"
+      }
+     }
+    },
+    "task_count": 1
+   }
+  },
+  {
+   "name": "D4_sharded_acceptance",
+   "ok": true,
+   "detail": {
+    "tasks": 53,
+    "total_items": 5224,
+    "per_task_items": [
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     100,
+     24
+    ]
+   }
+  },
+  {
+   "name": "D5_item_outcomes",
+   "ok": true,
+   "detail": {
+    "success": 5219,
+    "failed": [
+     {
+      "task_id": "task-9742cc4891b9704fb686ab47c6014a1d",
+      "item_id": "[\"market\",\"sh.601091\",\"day\"]",
+      "symbol": "sh.601091",
+      "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sh\\\\lday\\\\sh601091.day\", \"sh/lday/sh601091.day\"], found 0"
+     },
+     {
+      "task_id": "task-cb06c109f7a8fd52b6ea1883f5855311",
+      "item_id": "[\"market\",\"sh.688837\",\"day\"]",
+      "symbol": "sh.688837",
+      "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sh\\\\lday\\\\sh688837.day\", \"sh/lday/sh688837.day\"], found 0"
+     },
+     {
+      "task_id": "task-8707cec13668d2330e1d5d8b77119bda",
+      "item_id": "[\"market\",\"sz.001246\",\"day\"]",
+      "symbol": "sz.001246",
+      "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\\\lday\\\\sz001246.day\", \"sz/lday/sz001246.day\"], found 0"
+     },
+     {
+      "task_id": "task-01f2792ce6b123d0b817cf5d5b7eac82",
+      "item_id": "[\"market\",\"sz.301686\",\"day\"]",
+      "symbol": "sz.301686",
+      "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\\\lday\\\\sz301686.day\", \"sz/lday/sz301686.day\"], found 0"
+     },
+     {
+      "task_id": "task-01f2792ce6b123d0b817cf5d5b7eac82",
+      "item_id": "[\"market\",\"sz.301716\",\"day\"]",
+      "symbol": "sz.301716",
+      "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\\\lday\\\\sz301716.day\", \"sz/lday/sz301716.day\"], found 0"
+     }
+    ]
+   }
+  },
+  {
+   "name": "D4b_worker_runs",
+   "ok": true,
+   "detail": {
+    "non_idle": 53
+   }
+  },
+  {
+   "name": "D9_idempotent_recollection",
+   "ok": true,
+   "detail": {
+    "reused": true,
+    "errors": [
+     "INVALID_MARKET_COMMAND: existing daily head requires the update_data range path"
+    ],
+    "counts_before": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206
+    },
+    "counts_after": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206
+    }
+   }
+  },
+  {
+   "name": "D6_versions_and_heads",
+   "ok": true,
+   "detail": {
+    "counts": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206
+    },
+    "distinct_head_symbols": 5219
+   }
+  },
+  {
+   "name": "D7_provenance_binding",
+   "ok": true,
+   "detail": {
+    "versions_checked": 5219,
+    "bad": [],
+    "spot_day_member_sha256": {
+     "sz.000002": "6f168cf053ca561fedde1aa97c3b38d71876854ade3dae5f1a2c9ba9f6b63826",
+     "sh.600006": "77ecaea34c1cc5b08572c4816962b2f8d97d082b545c6034e86e99ecf126655a",
+     "sh.600004": "49656073176fea18fca2e8131e7159a0c91952cdbe9994856d2b60f42471b7eb"
+    }
+   }
+  },
+  {
+   "name": "D8_spot_check_content",
+   "ok": false,
+   "detail": {
+    "anchor_bar": [
+     [
+      "2000-01-10",
+      "-8.14",
+      "-8.06",
+      "-8.15",
+      "-8.06",
+      null,
+      null
+     ]
+    ],
+    "sz.000002": {
+     "version_id": "collection-version-7c6d89b4837e1241a590129f0e40d871a54a853ef377db0d09b02e1b5ca49ab3",
+     "bar_count": 8479,
+     "first": {
+      "trade_date": "1991-01-29",
+      "open": "-8.83",
+      "high": "-8.83",
+      "low": "-8.83",
+      "close": "-8.83",
+      "volume": null,
+      "amount": null
+     },
+     "last": {
+      "trade_date": "2026-09-14",
+      "open": "3.05",
+      "high": "3.07",
+      "low": "3.03",
+      "close": "3.05",
+      "volume": null,
+      "amount": null
+     },
+     "ok": true
+    },
+    "sh.600006": {
+     "version_id": "collection-version-035e0285ae80987e74c9c6af3614528b8a6e40280569c9caa52a70680f7e6439",
+     "bar_count": 6467,
+     "first": {
+      "trade_date": "1999-07-27",
+      "open": "1.16",
+      "high": "1.17",
+      "low": "0.92",
+      "close": "0.94",
+      "volume": null,
+      "amount": null
+     },
+     "last": {
+      "trade_date": "2026-09-14",
+      "open": "5.19",
+      "high": "5.39",
+      "low": "5.19",
+      "close": "5.36",
+      "volume": null,
+      "amount": null
+     },
+     "ok": true
+    },
+    "sh.600004": {
+     "version_id": "collection-version-bc8c5ca65b01f995177180f0749d9407f8884c4601e7af9f1dc98c15df89ef53",
+     "bar_count": 5630,
+     "first": {
+      "trade_date": "2003-04-28",
+      "open": "0.96",
+      "high": "1.56",
+      "low": "0.94",
+      "close": "1.55",
+      "volume": null,
+      "amount": null
+     },
+     "last": {
+      "trade_date": "2026-09-14",
+      "open": "7.71",
+      "high": "7.79",
+      "low": "7.7",
+      "close": "7.76",
+      "volume": null,
+      "amount": null
+     },
+     "ok": false
+    }
+   }
+  },
+  {
+   "name": "D12_readback",
+   "ok": true,
+   "detail": {
+    "sz.000002": {
+     "rows": 8479,
+     "expected": 8479,
+     "availability": "unknown"
+    },
+    "sh.600006": {
+     "rows": 6467,
+     "expected": 6467,
+     "availability": "unknown"
+    },
+    "sh.600004": {
+     "rows": 5630,
+     "expected": 5630,
+     "availability": "unknown"
+    }
+   }
+  },
+  {
+   "name": "D10_env_absent",
+   "ok": true,
+   "detail": {
+    "items": [
+     {
+      "item_id": "[\"market\",\"sz.000002\",\"day\"]",
+      "target": {
+       "period": "day",
+       "symbol": "sz.000002"
+      },
+      "stage": "finished",
+      "outcome": {
+       "success": false,
+       "error": "SOURCE_NOT_VERIFIED: GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+      }
+     }
+    ],
+    "counts": {
+     "data_versions": 0,
+     "published": 0,
+     "effective_heads": 0,
+     "daily_bars": 0
+    }
+   }
+  },
+  {
+   "name": "D11_gates_verbatim",
+   "ok": true,
+   "detail": {
+    "blocking_reasons": [
+     "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+     "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+     "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+    ],
+    "production_ready": false
+   }
+  }
+ ],
+ "blocked_paths": {
+  "S2_catalog_selection": {
+   "code": "invalid_arguments",
+   "message": "INVALID_COMMAND: resolved selection budget 1..100",
+   "next_actions": [
+    "correct the request or inspect the reported storage evidence"
+   ],
+   "outcome_certainty": "not_committed"
+  },
+  "R1_env_absent": [
+   {
+    "success": false,
+    "error": "SOURCE_NOT_VERIFIED: GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+   }
+  ]
+ },
+ "run_identity": {
+  "head": "bed5305d0bf98b475230356b1058128b13a90979",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
+  "archive_sha256": {
+   "base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+   "gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+   "hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+  },
+  "mechanical_recompute": {
+   "scope": 5230,
+   "nameless": [
+    "0:001235",
+    "0:300728",
+    "1:601206",
+    "1:603302",
+    "1:603361",
+    "1:688688"
+   ],
+   "published": 5224,
+   "hsjday_members": 12411,
+   "standard_day": 11801,
+   "nonstandard": 610,
+   "with_day": 5219,
+   "no_day": [
+    "sh601091",
+    "sh688837",
+    "sz001246",
+    "sz301686",
+    "sz301716"
+   ],
+   "spot_member_sha256": {
+    "sz.000002": "6f168cf053ca561fedde1aa97c3b38d71876854ade3dae5f1a2c9ba9f6b63826",
+    "sh.600006": "77ecaea34c1cc5b08572c4816962b2f8d97d082b545c6034e86e99ecf126655a",
+    "sh.600004": "49656073176fea18fca2e8131e7159a0c91952cdbe9994856d2b60f42471b7eb"
+   },
+   "spot_member_bytes": {
+    "sz.000002": 271328,
+    "sh.600006": 206944,
+    "sh.600004": 180160
+   }
+  }
+ },
+ "summary": {
+  "passed": 12,
+  "total": 13,
+  "failed": [
+   "D8_spot_check_content"
+  ],
+  "catalog_version": "catalog-1789700535021684788",
+  "daily_tasks": [
+   "task-fd220302f5d615c90a4a77734472149a",
+   "task-ca45cec89561b408496730c0851b486b",
+   "task-84cdfb08e92380bc2175c45559f46234",
+   "task-ebba981cb151f10055982bd5c5c63946",
+   "task-425f0db7225f50f0d8c9466a16d136f4",
+   "task-b83ebc793df325cc0d8c3e105e093d6b",
+   "task-bb76393eb0d0dc3bb1727f11364c4a1e",
+   "task-9742cc4891b9704fb686ab47c6014a1d",
+   "task-7462c09966277d06104bb750933b2c8c",
+   "task-d58db3b863aa027a5c0ffa484aab4b37",
+   "task-e57cfb202e73dbd993682667b5cfa7a6",
+   "task-141c87aa7e1b1541c4ee44917ab74bb6",
+   "task-e609d90453e5a82884d6f541ca038e94",
+   "task-2f68ecdf321575b3950769f04dcc9dcd",
+   "task-1069c058b8fba4235f6b86aa0082407d",
+   "task-98fdb97a9c7031aa94bb8b4a60618338",
+   "task-739888548d6a4631a46e0c45a0ccf7d7",
+   "task-7b4a7262ba792f5639acb257a06a3a70",
+   "task-f92ffa538bb0e7632286d0d4e47a5da8",
+   "task-ccbec482b6c7dd1070bff62eca730b56",
+   "task-7f0735686c62d686b729ffbfeb7d877b",
+   "task-f80a37750876677f20e22a5186ef7993",
+   "task-0447ca915bbf172b7348ee49c06adcff",
+   "task-cb06c109f7a8fd52b6ea1883f5855311",
+   "task-031a2cd8a6cefceb343375855d616782",
+   "task-f55a6d058cf11c686089fc8cf8b75195",
+   "task-301c5f0f9c7d07cac5e5c3ed1e118b5a",
+   "task-8707cec13668d2330e1d5d8b77119bda",
+   "task-15b2f123aa7c7c25ed80ed4fd8f5894a",
+   "task-25196891c3d26fb8a06126f8bc8ac1a9",
+   "task-118bb8f8be362843530530baba66f1f2",
+   "task-7e7b7833611556957bb29a8f8a2845ac",
+   "task-a3ef20ae98473a52ae650cb3f0bf8783",
+   "task-989615cc5b9701a24a84fc55f2808264",
+   "task-68fe0e6ce2b275248d325f8039f1db68",
+   "task-20eb250ddcb7eff9309c7c1796e5737b",
+   "task-0d477a83fe1430e43bda02ed5ccb1008",
+   "task-6b3555aa1480b8e78734cdb6e5eb68cd",
+   "task-d6bceba58a67e8eeb94d488bc2f5a3d0",
+   "task-6127ec6a5e9fa3ce010c1309cfd27f22",
+   "task-83e2f9d6d56401074e58bf1958d846e6",
+   "task-ae6855a2a0f575589e1c6a90bda93e6f",
+   "task-45b5a64041bdf04a2d3496be81f209eb",
+   "task-17f866a8d45cc3673499db5f803000dc",
+   "task-ad0bdeb6385ca77baeb5ecb47ab77215",
+   "task-310aaa138f50a91e007f977c40a373f5",
+   "task-c41322d7e1e014d4e2127a110114cfb1",
+   "task-fc53a9fac8e1a0d9c482f82966190e75",
+   "task-df4c24098e375fd60ca67dfb9e0a3792",
+   "task-e684c8700e4016430cd411e4eb49e270",
+   "task-f31fac685ab944a98b4e463d1ba24915",
+   "task-b7986c5931a1ea38aad430ae764e2eb0",
+   "task-01f2792ce6b123d0b817cf5d5b7eac82"
+  ],
+  "counts": {
+   "data_versions": 5219,
+   "published": 5219,
+   "effective_heads": 5219,
+   "daily_bars": 16629206
+  },
+  "non_idle_worker_runs": 53
+ }
+}

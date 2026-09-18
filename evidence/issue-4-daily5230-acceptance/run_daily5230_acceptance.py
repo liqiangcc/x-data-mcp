@@ -13,6 +13,7 @@ retained bytes, never from the implementation under test.
 import datetime
 import hashlib
 import json
+from decimal import Decimal
 import os
 import sqlite3
 import subprocess
@@ -500,15 +501,25 @@ def main():
                           "volume", "amount"), bars[0])) if bars else None
         last = dict(zip(("trade_date", "open", "high", "low", "close",
                          "volume", "amount"), bars[-1])) if bars else None
+
+        # Projection TEXT columns store decimal-normalized text ("7.7" not
+        # "7.70"); the pin freezes record content, so compare numerically.
+        # compat_json retains the pinned textual form verbatim.
+        def pin_eq(row, pinrow):
+            return row["trade_date"] == pinrow["trade_date"] and all(
+                Decimal(row[k]) == Decimal(pinrow[k])
+                for k in ("open", "high", "low", "close"))
+
         ok = len(bars) == pin["qfq_bars"] \
-            and {k: first[k] for k in pin["first"]} == pin["first"] \
-            and {k: last[k] for k in pin["last"]} == pin["last"] \
+            and pin_eq(first, pin["first"]) \
+            and pin_eq(last, pin["last"]) \
             and first["volume"] is None and first["amount"] is None
         if sym == ANCHOR["symbol"]:
             anchor = [b for b in bars if b[0] == ANCHOR["trade_date"]]
-            ok = ok and len(anchor) == 1 and anchor[0][1:5] == (
-                ANCHOR["open"], ANCHOR["high"], ANCHOR["low"],
-                ANCHOR["close"])
+            ok = ok and len(anchor) == 1 and all(
+                Decimal(anchor[0][i]) == Decimal(ANCHOR[k])
+                for i, k in ((1, "open"), (2, "high"), (3, "low"),
+                             (4, "close")))
             spot_detail["anchor_bar"] = anchor
         spot_ok = spot_ok and ok
         spot_detail[sym] = {"version_id": vid, "bar_count": len(bars),
