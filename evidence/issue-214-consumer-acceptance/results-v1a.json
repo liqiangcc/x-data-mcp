@@ -1,0 +1,238 @@
+{
+  "assertions": [
+    {
+      "name": "C1_service_binding",
+      "ok": true,
+      "detail": {
+        "version": "0.2.0-preview.12",
+        "tool_count": 19,
+        "tool_drift": [],
+        "production_ready": false
+      }
+    },
+    {
+      "name": "C2_capabilities",
+      "ok": true,
+      "detail": {
+        "revision": "generic-data-v1",
+        "write_blocked": true,
+        "blocked_ops": []
+      }
+    },
+    {
+      "name": "C3_full_pagination",
+      "ok": true,
+      "detail": {
+        "sz.000002": {
+          "records": 8479,
+          "pages": 9,
+          "seconds": 1.5,
+          "ok": true
+        },
+        "sh.600006": {
+          "records": 6467,
+          "pages": 7,
+          "seconds": 0.99,
+          "ok": true
+        },
+        "sh.600004": {
+          "records": 5630,
+          "pages": 6,
+          "seconds": 0.64,
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "C3b_catalog_pagination",
+      "ok": true,
+      "detail": {
+        "records": 5224,
+        "unique_entities": 5224
+      }
+    },
+    {
+      "name": "C4_version_binding",
+      "ok": true,
+      "detail": {
+        "explicit_ok": true,
+        "bogus_rejected": true,
+        "no_day_records": 0,
+        "unknown_records": 0,
+        "no_day_manifest": [
+          "absent"
+        ]
+      }
+    },
+    {
+      "name": "C5_cursor_discipline",
+      "ok": true,
+      "detail": {
+        "cursor_issued": true,
+        "forged_rejected": true,
+        "cross_selection_rejected": true
+      }
+    },
+    {
+      "name": "C6_version_listing",
+      "ok": true,
+      "detail": {
+        "items": 1,
+        "version_id": "collection-version-e75dbaa86f6913776c0ad7847c9d6e3fd222f67e5f8865dd7a6082859123e5b0",
+        "sha256_canonical": true
+      }
+    },
+    {
+      "name": "C7_availability",
+      "ok": true,
+      "detail": {
+        "availability": "unknown",
+        "confirmed_gaps": [],
+        "freshness": "unknown",
+        "evidence": "complete .day member history from inspected snapshot manifest b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3; NOT_PRODUCTION_READY: official_f"
+      }
+    },
+    {
+      "name": "C8_compute_rejection",
+      "ok": false,
+      "detail": {
+        "explicit_failure": true,
+        "outcome": null,
+        "repeat_identical": false,
+        "bad_metric_rejected": true
+      }
+    },
+    {
+      "name": "C9_task_introspection",
+      "ok": true,
+      "detail": {
+        "listed": 109,
+        "status_dist": {
+          "failed": 2,
+          "succeeded": 103,
+          "partially_failed": 4
+        },
+        "get_task_status": "succeeded",
+        "progress_task": "task-fe036513920bb442a6c4c0b43b3337a9",
+        "request_keys": [
+          "bound",
+          "request_id",
+          "task"
+        ]
+      }
+    },
+    {
+      "name": "C11_boundary_rejections",
+      "ok": true,
+      "detail": {
+        "unknown_field": true,
+        "page_size_0": true,
+        "page_size_1001": true,
+        "bad_contract": true,
+        "bad_dataset": true,
+        "bad_tool_args": true,
+        "write_tool_schema": true
+      }
+    },
+    {
+      "name": "C12_honesty_fields",
+      "ok": true,
+      "detail": {
+        "snapshot_id": "1498994-1789721742391034181-1",
+        "limitations": [
+          "fixed version selection is not a shared source acquisition time",
+          "source production gates remain blocked; coverage is not inferred from dates"
+        ],
+        "manifest_status": [
+          "present"
+        ],
+        "coverage_status": "complete",
+        "coverage_reason": "complete .day member history from inspected snapshot manifest b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9"
+      }
+    },
+    {
+      "name": "C10_read_only_invariance",
+      "ok": true,
+      "detail": {
+        "baseline_ok": true,
+        "before": {
+          "data_versions": 5219,
+          "catalog_versions": 1,
+          "daily_bars": 16629206,
+          "effective_heads": 5219,
+          "market_update_results": 5219,
+          "tasks": 109,
+          "yearly_bars": 0,
+          "proven_gaps": 0,
+          "task_status": {
+            "failed": 2,
+            "partially_failed": 4,
+            "succeeded": 103
+          }
+        },
+        "after": {
+          "data_versions": 5219,
+          "catalog_versions": 1,
+          "daily_bars": 16629206,
+          "effective_heads": 5219,
+          "market_update_results": 5219,
+          "tasks": 109,
+          "yearly_bars": 0,
+          "proven_gaps": 0,
+          "task_status": {
+            "failed": 2,
+            "partially_failed": 4,
+            "succeeded": 103
+          }
+        }
+      }
+    }
+  ],
+  "blocked_paths": [],
+  "run_identity": {
+    "git_head": "db451502257a789f078a700b60ade4a01113c6bf",
+    "client_sha256": "638bd8ed4e8d68ad05f6b63a24afac89da6f2a04042790c6e87864249f8d3853",
+    "service_sha256": "c74202f974162765e52addf3519b68b5d8de480b5af250d6ac4720aa16be35d6",
+    "db": "/home/box/acceptance-run-issue4-update/db.sqlite",
+    "db_size": 9567936512,
+    "socket": "/home/box/preview-deploy/run-realdata/mcp.sock",
+    "fs_opt_out": "X_DATA_MCP_UNSAFE_NONLOCAL_FS (development only)"
+  },
+  "baseline": {
+    "before": {
+      "data_versions": 5219,
+      "catalog_versions": 1,
+      "daily_bars": 16629206,
+      "effective_heads": 5219,
+      "market_update_results": 5219,
+      "tasks": 109,
+      "yearly_bars": 0,
+      "proven_gaps": 0,
+      "task_status": {
+        "failed": 2,
+        "partially_failed": 4,
+        "succeeded": 103
+      }
+    },
+    "after": {
+      "data_versions": 5219,
+      "catalog_versions": 1,
+      "daily_bars": 16629206,
+      "effective_heads": 5219,
+      "market_update_results": 5219,
+      "tasks": 109,
+      "yearly_bars": 0,
+      "proven_gaps": 0,
+      "task_status": {
+        "failed": 2,
+        "partially_failed": 4,
+        "succeeded": 103
+      }
+    }
+  },
+  "summary": {
+    "pass": 12,
+    "total": 13,
+    "all_pass": false
+  }
+}
