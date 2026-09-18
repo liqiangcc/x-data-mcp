@@ -2,6 +2,8 @@
 
 一次有界采集,同时供给三条阻塞链:changed-generation update 验收、FILE_SET_CONSISTENCY 取证、#54 normalization oracle。**采集动作全部在 Windows 侧执行**;本机负责规格、接收、登记与后续验收。
 
+**执行入口**:`scripts/gen3_acquire.py`(stdlib only)——`python gen3_acquire.py --out gen3-run-<date>` 一次完成 §1 下载+清单、§2 TQ oracle(`issue54.tq-oracle.v1`)、§3 元数据、§4 #71 模板;`--skip-download`/`--skip-tq` 可分步,不可得的项如实记 `NOT_RUN`。
+
 ## 0. 原则
 
 - 沿用 gen-2 纪律:官方文件**只下载一次**,字节先入 `retained-inputs/` 登记新代,再用于证据;gen-2 不覆盖、不删除;
