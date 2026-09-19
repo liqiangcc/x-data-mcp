@@ -1,0 +1,73 @@
+{
+ "captured_at_local": "2026-09-20 ~07:35 +08:00",
+ "files": {
+  "divid_000001_SZ.json": {
+   "bytes": 1533,
+   "sha256": "0e1f7178046efe22f89bb56d153da68e83f7ffbb21fe73f949b97af62a666a19"
+  },
+  "divid_000002_SZ.json": {
+   "bytes": 1669,
+   "sha256": "c5f7a4edcb74f52da3dd9775bdf5d2c1e57bb6f92dc9156c1678867274c06607"
+  },
+  "divid_000004_SZ.json": {
+   "bytes": 28,
+   "sha256": "4357b1b07a68bce2781aea3c9359aeb1c06c6e70a6ca94f4ae67957de19bd31c"
+  },
+  "divid_600000_SH.json": {
+   "bytes": 1260,
+   "sha256": "ce686f9b552ebe2ebb0f3aa3a5d9c476a8613970d147e7166e5fed41ccd00237"
+  },
+  "divid_600004_SH.json": {
+   "bytes": 1035,
+   "sha256": "9b4bb85d4170a8e3732995a16630293a5d76c35f62043c4e9891e726d396ac68"
+  },
+  "divid_600006_SH.json": {
+   "bytes": 1306,
+   "sha256": "c6db695567b4d6cfa2fcaf0b3915cb9c2fdab9a1d7e2451e6da9653530cc4863"
+  },
+  "divid_688318_SH.json": {
+   "bytes": 407,
+   "sha256": "7487bca095d1a40850b268094c26a4e73c06031dc0ac3f456a8dd7aecdeabf31"
+  },
+  "kline_000002_SZ_front_19991220_20000201.json": {
+   "bytes": 2583,
+   "sha256": "3c261c8c4fb6862fc812ac194fec1c9e85f993a962a6694a9d09eb976e1d38f1"
+  },
+  "kline_000002_SZ_front_20230801_20230915.json": {
+   "bytes": 3322,
+   "sha256": "2cb39bfbc4f4fb0ee4a0708b0762ac16e2535a40b2783a5c83a6ee833fcb34a4"
+  },
+  "kline_000002_SZ_front_full.json": {
+   "bytes": 725130,
+   "sha256": "6abbd2788593602453f7db99cb464a2e7df3fd12ecb10e00b7442c61cb773a98"
+  },
+  "kline_000002_SZ_none_19991220_20000201.json": {
+   "bytes": 2599,
+   "sha256": "6fa708023fecde63ac60c35f4ed56df20cac5cf48f48fa4a3083531fea6a0e9d"
+  },
+  "kline_000002_SZ_none_20230801_20230915.json": {
+   "bytes": 3322,
+   "sha256": "918e256971e909e2557879e23003fb8b26635838610a2af6a6a11fa8dbf5b58c"
+  },
+  "kline_000002_SZ_none_full.json": {
+   "bytes": 717771,
+   "sha256": "7aa64b7285afe8527070fbfa6190824b928332b384ff687cbc112cae7e109fd5"
+  },
+  "kline_600004_SH_front_20260701_20260815.json": {
+   "bytes": 3035,
+   "sha256": "868faea0b81bf0cfcc48ca432104e50c92c0e931b1f02944b42ed9d1e2396505"
+  },
+  "kline_600004_SH_none_20260701_20260815.json": {
+   "bytes": 3035,
+   "sha256": "a0a109dad56af093f7fd588caebbaea7685ae9e7d67b2600d98a8ba94e754c68"
+  },
+  "kline_600006_SH_front_20250701_20250801.json": {
+   "bytes": 2327,
+   "sha256": "61c4c72e41b737100d08d207b9c3ab1701c911b4a7de389a9c1a1591dd0f5940"
+  },
+  "kline_600006_SH_none_20250701_20250801.json": {
+   "bytes": 2327,
+   "sha256": "956e4348af357899a26332803b105c4e02b6d52477a21de25430b7df421a4fac"
+  }
+ }
+}

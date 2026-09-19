@@ -1,0 +1,42 @@
+{
+ "result_id": "issue-217-tq-oracle-probe",
+ "kind": "capability probe (bounded), not the formal gen-3 acquisition",
+ "captured_at": "2026-09-20 ~07:35 +08:00",
+ "environment": {
+  "client": "通达信金融终端 V7.73, C:\new_tdx64\\TdxW.exe",
+  "tq_layer": "PYPlugins/sys/tqcenter.py v1.0.16 (2026-07-24) -> TPythClient.dll",
+  "python": "3.10.9 + numpy 1.26.4 + pandas 2.2.1",
+  "login": "client running & logged in at capture time (account-auth dialog earlier showed 校验用户失败; session entered via guest/retry path — login tier unverified)"
+ },
+ "request_shapes": {
+  "divid_factors": {
+   "type": 4,
+   "stock_code": "600006.SH",
+   "start_time": "",
+   "end_time": "YYYYMMDDHHMMSS"
+  },
+  "market_data": {
+   "type": 1,
+   "stock_list": [
+    "<code>.<MKT>"
+   ],
+   "period": "1d",
+   "dividend_type": "none|front",
+   "start_time": "YYYYMMDD",
+   "end_time": "YYYYMMDD",
+   "count": -1,
+   "stock_page_index": 0,
+   "stock_page_size": 100,
+   "note": "count>0 switches to trailing-N mode; count=9000 with empty start returned full history 1991-01-29..2026-09-18"
+  }
+ },
+ "findings": [
+  "get_divid_factors Value order = [Bonus, AllotPrice, ShareBonus, Allotment] == gbbq record C1..C4; served as decimal display-precision strings",
+  "000002@2000-01-10 served ['0.00','7.50','0.00','2.73'] vs gen-2 stored f32 C4=2.727; 2019-08-15 Bonus '10.45' vs stored 10.45102024078369140625",
+  "get_market_data none returns raw OHLC + ForwardFactor = cumulative product of per-event ref/pc ratios, anchored globally at latest event, served at 6dp",
+  "get_market_data front anchors at the LAST BAR OF THE RESPONSE — windowed and full-history requests return different adjusted values; full-history matches the chart 前复权 exactly (incl. negative prices)",
+  "000004.SZ -> 0 events (delisted absent, consistent with tdxhy.cfg absence)",
+  "FF implied per-event ratios fit stored-precision inputs slightly better than served-2dp on the allotment event (0.931968 implied vs 0.931956 stored-fit vs 0.931898 served-fit) — recorded as open nuance"
+ ],
+ "files": "manifest.json (17 raw JSON, sha256)"
+}
