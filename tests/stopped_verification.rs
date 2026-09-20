@@ -1643,3 +1643,198 @@ fn publication_check_accepts_persisted_uncertainty_and_two_connections_replay_on
     assert_eq!(task(first).task.task_id, task(second).task.task_id);
     assert_eq!(r.read_task(&s.task.task_id).unwrap().unwrap(), s);
 }
+
+use x_data_mcp::task_verification::determinate::{Audited, Determinate};
+fn determinate(r: &SqliteTasks) -> Determinate<SqliteTasks> {
+    Determinate {
+        repository: r.clone(),
+    }
+}
+fn audited(r: &SqliteTasks) -> Audited<SqliteTasks> {
+    Audited {
+        repository: r.clone(),
+    }
+}
+fn started_target(r: &SqliteTasks, id: &str, inflight: bool) -> TaskSnapshot {
+    let old = original_task(r, id);
+    let mut target = r
+        .transition(&old.task.task_id, 0, "old-run", Change::Claim)
+        .unwrap();
+    target = r
+        .transition(
+            &target.task.task_id,
+            target.task.state_revision,
+            "old-run",
+            Change::StartItem(target.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    target = r
+        .transition(
+            &target.task.task_id,
+            target.task.state_revision,
+            "old-run",
+            Change::FinishItem(
+                target.items[0].spec.item_id.clone(),
+                ItemOutcome {
+                    success: true,
+                    error: None,
+                    evidence: None,
+                },
+            ),
+        )
+        .unwrap();
+    if inflight {
+        target = r
+            .transition(
+                &target.task.task_id,
+                target.task.state_revision,
+                "old-run",
+                Change::StartItem(target.items[1].spec.item_id.clone()),
+            )
+            .unwrap();
+    }
+    target
+}
+#[test]
+fn determinate_check_interrupts_started_task_and_releases_claims() {
+    let (_d, r) = db();
+    let target = started_target(&r, "first", false);
+    let check = task(
+        control(&r, "new-run")
+            .accept(
+                "inspection",
+                key(&r),
+                json!({"target_task_id":target.task.task_id}),
+            )
+            .unwrap(),
+    );
+    let RunOutcome::Completed(receipt) = runner(&r)
+        .run(&check.task.task_id, &determinate(&r))
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(receipt.conclusion, Conclusion::Interrupted);
+    let after = r.read_task(&target.task.task_id).unwrap().unwrap();
+    assert_eq!(after.task.status, Status::Interrupted);
+    assert!(after.claims.is_empty());
+    assert_eq!(after.items[0], target.items[0]);
+    assert_eq!(after.items[1].stage, Stage::Pending);
+    let business = TaskControl::new(
+        r.clone(),
+        "new-run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    let retried = task(
+        business
+            .retry(
+                &target.task.task_id,
+                "explicit-retry",
+                [target.items[1].spec.item_id.clone()].into(),
+            )
+            .unwrap(),
+    );
+    assert_eq!(retried.items.len(), 1);
+    assert_eq!(
+        retried.task.retry_of.as_deref(),
+        Some(target.task.task_id.as_str())
+    );
+}
+#[test]
+fn determinate_check_refuses_inflight_or_previously_started_pending_items() {
+    for previously_started in [false, true] {
+        let (_d, r) = db();
+        let target = started_target(&r, "first", !previously_started);
+        if previously_started {
+            rusqlite::Connection::open(r.path())
+                .unwrap()
+                .execute(
+                    "INSERT INTO task_item_execution_starts VALUES(?1,?2,'old-run',1,'2026-09-13T00:00:00Z')",
+                    rusqlite::params![target.task.task_id, target.items[1].spec.item_id],
+                )
+                .unwrap();
+        }
+        let check = task(
+            control(&r, "new-run")
+                .accept(
+                    "inspection",
+                    key(&r),
+                    json!({"target_task_id":target.task.task_id}),
+                )
+                .unwrap(),
+        );
+        let RunOutcome::Completed(receipt) = runner(&r)
+            .run(&check.task.task_id, &determinate(&r))
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(receipt.conclusion, Conclusion::InsufficientEvidence);
+        assert_eq!(
+            r.read_task(&target.task.task_id)
+                .unwrap()
+                .unwrap()
+                .task
+                .status,
+            Status::Running
+        );
+        assert!(
+            !r.read_task(&target.task.task_id)
+                .unwrap()
+                .unwrap()
+                .claims
+                .is_empty()
+        );
+    }
+}
+#[test]
+fn determinate_check_covers_claimed_task_without_item_starts() {
+    let (_d, r) = db();
+    let old = original_task(&r, "first");
+    let target = r
+        .transition(&old.task.task_id, 0, "old-run", Change::Claim)
+        .unwrap();
+    let check = task(
+        control(&r, "new-run")
+            .accept(
+                "inspection",
+                key(&r),
+                json!({"target_task_id":target.task.task_id}),
+            )
+            .unwrap(),
+    );
+    let RunOutcome::Completed(receipt) = runner(&r)
+        .run(&check.task.task_id, &determinate(&r))
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(receipt.conclusion, Conclusion::Interrupted);
+}
+#[test]
+fn audited_inspector_covers_never_started_and_determinate_targets() {
+    for started in [false, true] {
+        let (_d, r) = db();
+        let target = if started {
+            started_target(&r, "first", false)
+        } else {
+            original_task(&r, "first")
+        };
+        let check = task(
+            control(&r, "new-run")
+                .accept(
+                    "inspection",
+                    key(&r),
+                    json!({"target_task_id":target.task.task_id}),
+                )
+                .unwrap(),
+        );
+        let RunOutcome::Completed(receipt) =
+            runner(&r).run(&check.task.task_id, &audited(&r)).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(receipt.conclusion, Conclusion::Interrupted);
+    }
+}

@@ -13,5 +13,6 @@ pub fn command_key() -> crate::task_control::CommandKey {
         contract_version: CONTRACT_VERSION.into(),
     }
 }
+pub mod determinate;
 pub mod existing;
 pub mod never_started;

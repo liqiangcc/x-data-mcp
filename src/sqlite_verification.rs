@@ -216,6 +216,10 @@ impl ExistingStopRepository for SqliteTasks {
     }
 }
 
+const DURABLE_EFFECTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM publication_batches WHERE task_id=?1
+                 UNION ALL SELECT 1 FROM task_publications WHERE task_id=?1
+                 UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1
+                 UNION ALL SELECT 1 FROM yearly_execution_results WHERE task_id=?1)";
 impl crate::task_verification::never_started::EvidenceRepository for SqliteTasks {
     fn never_started_facts(
         &self,
@@ -224,17 +228,36 @@ impl crate::task_verification::never_started::EvidenceRepository for SqliteTasks
         self.read(|c| {
             let snapshot = read_bound_task(c, task_id)?.ok_or(Error::TaskNotFound)?;
             let has_durable_effects = c
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM publication_batches WHERE task_id=?1
-                 UNION ALL SELECT 1 FROM task_publications WHERE task_id=?1
-                 UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1
-                 UNION ALL SELECT 1 FROM yearly_execution_results WHERE task_id=?1)",
-                    [task_id],
-                    |r| r.get(0),
-                )
+                .query_row(DURABLE_EFFECTS_SQL, [task_id], |r| r.get(0))
                 .map_err(storage)?;
             Ok(crate::task_verification::never_started::Facts {
                 snapshot,
+                has_durable_effects,
+            })
+        })
+    }
+}
+impl crate::task_verification::determinate::EvidenceRepository for SqliteTasks {
+    fn determinate_facts(
+        &self,
+        task_id: &str,
+    ) -> Result<crate::task_verification::determinate::Facts, Error> {
+        self.read(|c| {
+            let snapshot = read_bound_task(c, task_id)?.ok_or(Error::TaskNotFound)?;
+            let mut stmt = c
+                .prepare("SELECT item_id FROM task_item_execution_starts WHERE task_id=?1")
+                .map_err(storage)?;
+            let started_items = stmt
+                .query_map([task_id], |r| r.get::<_, String>(0))
+                .map_err(storage)?
+                .collect::<Result<std::collections::BTreeSet<_>, _>>()
+                .map_err(storage)?;
+            let has_durable_effects = c
+                .query_row(DURABLE_EFFECTS_SQL, [task_id], |r| r.get(0))
+                .map_err(storage)?;
+            Ok(crate::task_verification::determinate::Facts {
+                snapshot,
+                started_items,
                 has_durable_effects,
             })
         })
