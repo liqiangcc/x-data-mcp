@@ -13,6 +13,11 @@ pub struct Facts {
     pub snapshot: TaskSnapshot,
     /// Items with a committed StartItem marker (audited execution start).
     pub started_items: BTreeSet<String>,
+    /// Items whose execution receipt committed. Every supported executor
+    /// binds the per-item result row in the same transaction as the
+    /// publication itself, so a row proves the write landed and its
+    /// absence proves the publish commit never did.
+    pub committed_items: BTreeSet<String>,
     /// Publication/result rows already bound to this task.
     pub has_durable_effects: bool,
 }
@@ -49,16 +54,13 @@ impl<R: EvidenceRepository> StopInspector for Determinate<R> {
                     .into(),
             });
         }
-        if target.items.iter().any(|i| i.stage == Stage::Running) {
-            return Ok(Observation::Insufficient {
-                reason: "STOP_EVIDENCE_NOT_VERIFIED: an in-flight item's write outcome needs publication-result verification".into(),
-            });
-        }
         let facts = self.repository.determinate_facts(&target.task.task_id)?;
         if &facts.snapshot != target {
             return Err(Error::RevisionConflict);
         }
         let mut finished = 0usize;
+        let mut landed = 0usize;
+        let mut uncommitted = 0usize;
         for item in &target.items {
             let started = facts.started_items.contains(&item.spec.item_id);
             match item.stage {
@@ -77,21 +79,39 @@ impl<R: EvidenceRepository> StopInspector for Determinate<R> {
                         });
                     }
                 }
-                Stage::Running => unreachable!("running items filtered above"),
+                Stage::Running => {
+                    if !started {
+                        return Ok(Observation::Insufficient {
+                            reason: "STOP_EVIDENCE_NOT_VERIFIED: running item lacks its audited start marker".into(),
+                        });
+                    }
+                    // The execution receipt commits atomically with the
+                    // publication: a row means the write landed, no row
+                    // means the publish commit never did. Both are
+                    // determinate; the interrupted item re-runs or fails
+                    // its base precondition honestly on retry.
+                    if facts.committed_items.contains(&item.spec.item_id) {
+                        landed += 1;
+                    } else {
+                        uncommitted += 1;
+                    }
+                }
             }
         }
-        if finished == 0 && facts.has_durable_effects {
+        if finished + landed == 0 && facts.has_durable_effects {
             return Ok(Observation::Insufficient {
-                reason: "STOP_EVIDENCE_NOT_VERIFIED: durable effects without a finished item"
+                reason: "STOP_EVIDENCE_NOT_VERIFIED: durable effects without a determinate write"
                     .into(),
             });
         }
         Ok(Observation::Stopped {
             snapshot_sha256: snapshot_digest(target)?,
             evidence_ref: format!(
-                "sqlite-determinate-items-v1: zero running items; {} finished items have audited start+outcome; {} pending items have no execution-start marker; conditional commit binds the inspected snapshot",
+                "sqlite-determinate-items-v1: {} finished items have audited start+outcome; {} pending items have no execution-start marker; {} in-flight items landed (committed receipt), {} in-flight items have no committed receipt; conditional commit binds the inspected snapshot",
                 finished,
-                target.items.len() - finished
+                target.items.len() - finished - landed - uncommitted,
+                landed,
+                uncommitted
             ),
         })
     }

@@ -1742,18 +1742,22 @@ fn determinate_check_interrupts_started_task_and_releases_claims() {
     );
 }
 #[test]
-fn determinate_check_refuses_inflight_or_previously_started_pending_items() {
-    for previously_started in [false, true] {
+fn determinate_check_resolves_inflight_items_from_committed_receipts() {
+    for committed in [false, true] {
         let (_d, r) = db();
-        let target = started_target(&r, "first", !previously_started);
-        if previously_started {
-            rusqlite::Connection::open(r.path())
-                .unwrap()
-                .execute(
-                    "INSERT INTO task_item_execution_starts VALUES(?1,?2,'old-run',1,'2026-09-13T00:00:00Z')",
-                    rusqlite::params![target.task.task_id, target.items[1].spec.item_id],
-                )
-                .unwrap();
+        let target = started_target(&r, "first", true);
+        if committed {
+            let c = rusqlite::Connection::open(r.path()).unwrap();
+            c.pragma_update(None, "foreign_keys", false).unwrap();
+            c.execute(
+                "INSERT INTO market_update_results VALUES(?1,?2,?3,'base','ver',0,'{}','x','{}')",
+                rusqlite::params![
+                    format!("pub-{}", target.task.task_id),
+                    target.task.task_id,
+                    target.items[1].spec.item_id
+                ],
+            )
+            .unwrap();
         }
         let check = task(
             control(&r, "new-run")
@@ -1770,23 +1774,57 @@ fn determinate_check_refuses_inflight_or_previously_started_pending_items() {
         else {
             panic!()
         };
-        assert_eq!(receipt.conclusion, Conclusion::InsufficientEvidence);
-        assert_eq!(
-            r.read_task(&target.task.task_id)
-                .unwrap()
-                .unwrap()
-                .task
-                .status,
-            Status::Running
-        );
-        assert!(
-            !r.read_task(&target.task.task_id)
-                .unwrap()
-                .unwrap()
-                .claims
-                .is_empty()
-        );
+        assert_eq!(receipt.conclusion, Conclusion::Interrupted);
+        let after = r.read_task(&target.task.task_id).unwrap().unwrap();
+        assert_eq!(after.task.status, Status::Interrupted);
+        assert!(after.claims.is_empty());
+        // Reset to pending so a retry either re-runs it or fails its base
+        // precondition honestly; the receipt outcome is never rewritten.
+        assert_eq!(after.items[1].stage, Stage::Pending);
     }
+}
+#[test]
+fn determinate_check_refuses_pending_item_with_prior_start() {
+    let (_d, r) = db();
+    let target = started_target(&r, "first", false);
+    rusqlite::Connection::open(r.path())
+        .unwrap()
+        .execute(
+            "INSERT INTO task_item_execution_starts VALUES(?1,?2,'old-run',1,'2026-09-13T00:00:00Z')",
+            rusqlite::params![target.task.task_id, target.items[1].spec.item_id],
+        )
+        .unwrap();
+    let check = task(
+        control(&r, "new-run")
+            .accept(
+                "inspection",
+                key(&r),
+                json!({"target_task_id":target.task.task_id}),
+            )
+            .unwrap(),
+    );
+    let RunOutcome::Completed(receipt) = runner(&r)
+        .run(&check.task.task_id, &determinate(&r))
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(receipt.conclusion, Conclusion::InsufficientEvidence);
+    assert_eq!(
+        r.read_task(&target.task.task_id)
+            .unwrap()
+            .unwrap()
+            .task
+            .status,
+        Status::Running
+    );
+    assert!(
+        !r.read_task(&target.task.task_id)
+            .unwrap()
+            .unwrap()
+            .claims
+            .is_empty()
+    );
 }
 #[test]
 fn determinate_check_covers_claimed_task_without_item_starts() {

@@ -252,12 +252,25 @@ impl crate::task_verification::determinate::EvidenceRepository for SqliteTasks {
                 .map_err(storage)?
                 .collect::<Result<std::collections::BTreeSet<_>, _>>()
                 .map_err(storage)?;
+            let mut stmt = c
+                .prepare(
+                    "SELECT item_id FROM market_update_results WHERE task_id=?1
+                     UNION SELECT item_id FROM yearly_execution_results WHERE task_id=?1
+                     UNION SELECT item_id FROM publication_batches WHERE task_id=?1",
+                )
+                .map_err(storage)?;
+            let committed_items = stmt
+                .query_map([task_id], |r| r.get::<_, String>(0))
+                .map_err(storage)?
+                .collect::<Result<std::collections::BTreeSet<_>, _>>()
+                .map_err(storage)?;
             let has_durable_effects = c
                 .query_row(DURABLE_EFFECTS_SQL, [task_id], |r| r.get(0))
                 .map_err(storage)?;
             Ok(crate::task_verification::determinate::Facts {
                 snapshot,
                 started_items,
+                committed_items,
                 has_durable_effects,
             })
         })
