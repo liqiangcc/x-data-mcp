@@ -377,7 +377,13 @@ fn range_candidates_compete_on_the_same_real_task_and_head() {
     let handles = [first, second]
         .into_iter()
         .map(|plan| {
-            let db = f.db.clone();
+            // The loser's Immediate transaction must wait out the winner's
+            // commit to reach the app-level conflict check; the 250ms
+            // default can expire under CI load (observed flake, #193).
+            let db = SqliteMarket::new(
+                SqliteTasks::new(f.db.tasks.path())
+                    .with_busy_timeout(std::time::Duration::from_secs(5)),
+            );
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 barrier.wait();
