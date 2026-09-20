@@ -326,26 +326,24 @@ fn write_day_segments(c: &Connection, r: &CheckedRecord) -> Result<(), Error> {
     let scope = Scope::of(v);
     let head_id = head(c, &scope)?;
     let mut base: Vec<(Vec<Option<String>>, String)> = Vec::new();
-    if let Some(head_id) = head_id.as_deref() {
-        if head_id != v.version_id {
-            let mut stmt = c.prepare(
-                "SELECT s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount,s.r7_raw,vs.segment_id \
-                 FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
-                 WHERE vs.version_id=?1 AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end \
-                 ORDER BY vs.seq,s.trade_date",
-            ).map_err(storage)?;
-            base = stmt
-                .query_map([head_id], |r| {
-                    let mut row = Vec::with_capacity(8);
-                    for i in 0..8 {
-                        row.push(r.get::<_, Option<String>>(i)?);
-                    }
-                    Ok((row, r.get::<_, String>(8)?))
-                })
-                .map_err(storage)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(storage)?;
-        }
+    if let Some(head_id) = head_id.as_deref().filter(|id| *id != v.version_id) {
+        let mut stmt = c.prepare(
+            "SELECT s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount,s.r7_raw,vs.segment_id \
+             FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
+             WHERE vs.version_id=?1 AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end \
+             ORDER BY vs.seq,s.trade_date",
+        ).map_err(storage)?;
+        base = stmt
+            .query_map([head_id], |r| {
+                let mut row = Vec::with_capacity(8);
+                for i in 0..8 {
+                    row.push(r.get::<_, Option<String>>(i)?);
+                }
+                Ok((row, r.get::<_, String>(8)?))
+            })
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?;
     }
     let mut base_index = std::collections::HashMap::new();
     for (i, (row, _)) in base.iter().enumerate() {
@@ -354,15 +352,15 @@ fn write_day_segments(c: &Connection, r: &CheckedRecord) -> Result<(), Error> {
     let shareable = |b: &[Option<String>]| -> Option<(usize, &str)> {
         let &idx = base_index.get(b[0].as_deref()?)?;
         let (row, seg) = &base[idx];
-        (row == b).then(|| (idx, seg.as_str()))
+        (row == b).then_some((idx, seg.as_str()))
     };
     let mut pieces: Vec<SegmentPiece> = Vec::new();
     let push_new = |first: usize, last: usize, pieces: &mut Vec<SegmentPiece>| {
-        if let Some(SegmentPiece::New { last: l, .. }) = pieces.last_mut() {
-            if *l + 1 == first {
-                *l = last;
-                return;
-            }
+        if let Some(SegmentPiece::New { last: l, .. }) = pieces.last_mut()
+            && *l + 1 == first
+        {
+            *l = last;
+            return;
         }
         pieces.push(SegmentPiece::New { first, last });
     };
