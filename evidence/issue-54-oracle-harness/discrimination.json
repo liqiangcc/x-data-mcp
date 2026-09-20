@@ -1,0 +1,136 @@
+{
+ "axis_a_mapping_support": {
+  "allot_pricexC1": {
+   "match": 1,
+   "miss": 7
+  },
+  "allot_pricexC2": {
+   "match": 8,
+   "miss": 0
+  },
+  "allot_pricexC3": {
+   "match": 1,
+   "miss": 7
+  },
+  "allot_pricexC4": {
+   "match": 0,
+   "miss": 8
+  },
+  "allotmentxC1": {
+   "match": 0,
+   "miss": 8
+  },
+  "allotmentxC2": {
+   "match": 0,
+   "miss": 8
+  },
+  "allotmentxC3": {
+   "match": 0,
+   "miss": 8
+  },
+  "allotmentxC4": {
+   "match": 7,
+   "miss": 1
+  },
+  "bonusxC1": {
+   "match": 101,
+   "miss": 17
+  },
+  "bonusxC2": {
+   "match": 1,
+   "miss": 117
+  },
+  "bonusxC3": {
+   "match": 3,
+   "miss": 115
+  },
+  "bonusxC4": {
+   "match": 0,
+   "miss": 118
+  },
+  "share_bonusxC1": {
+   "match": 3,
+   "miss": 38
+  },
+  "share_bonusxC2": {
+   "match": 1,
+   "miss": 40
+  },
+  "share_bonusxC3": {
+   "match": 40,
+   "miss": 1
+  },
+  "share_bonusxC4": {
+   "match": 0,
+   "miss": 41
+  }
+ },
+ "axis_b_mapped_pair_scores": {
+  "exact_binary": {
+   "match": 99,
+   "miss": 76
+  },
+  "fixed_4dp": {
+   "match": 156,
+   "miss": 19
+  },
+  "fixed_6dp": {
+   "match": 156,
+   "miss": 19
+  },
+  "frozen_repr": {
+   "match": 99,
+   "miss": 76
+  },
+  "shortest_roundtrip": {
+   "match": 156,
+   "miss": 19
+  }
+ },
+ "axis_c_chain": {
+  "exact_binary": {
+   "compared": 37329,
+   "exact": 1216,
+   "no_day_bar_misses_in_sample": 8,
+   "within_0p005": 35814,
+   "within_rate": "0.9594149320903319135256770875"
+  },
+  "fixed_4dp": {
+   "compared": 37329,
+   "exact": 1661,
+   "no_day_bar_misses_in_sample": 8,
+   "within_0p005": 35611,
+   "within_rate": "0.9539768008786734174502397600"
+  },
+  "fixed_6dp": {
+   "compared": 37329,
+   "exact": 1661,
+   "no_day_bar_misses_in_sample": 8,
+   "within_0p005": 35613,
+   "within_rate": "0.9540303785260789198746283051"
+  },
+  "frozen_repr": {
+   "compared": 37329,
+   "exact": 1216,
+   "no_day_bar_misses_in_sample": 8,
+   "within_0p005": 35814,
+   "within_rate": "0.9594149320903319135256770875"
+  },
+  "shortest_roundtrip": {
+   "compared": 37329,
+   "exact": 1661,
+   "no_day_bar_misses_in_sample": 8,
+   "within_0p005": 35613,
+   "within_rate": "0.9540303785260789198746283051"
+  }
+ },
+ "mapped_pair_misses_resolved_at_2dp": {
+  "allotment": 1,
+  "bonus": 17,
+  "share_bonus": 1
+ },
+ "mapped_pair_residual_after_2dp": [],
+ "schema": "issue54.discrimination.v1",
+ "status": "GBBQ_FLOAT32_BUSINESS_DECIMAL_NORMALIZATION_NOT_VERIFIED",
+ "verdict": "DIAGNOSTIC_ONLY"
+}
