@@ -523,7 +523,9 @@ fn verified_finished_result_is_not_rewritten_and_inspection_preserves_market_byt
         let mut all = vec![];
         for table in [
             "data_versions",
-            "daily_bars",
+            "bar_segments",
+            "segment_bars",
+            "version_segments",
             "yearly_bars",
             "version_evidence",
             "yearly_lineage",
@@ -747,7 +749,7 @@ fn application_rechecks_a_changed_sqlite_snapshot_once_without_reusing_old_plan(
 fn inspection_v8_requires_explicit_upgrade_and_preserves_existing_task_binding() {
     let (_dir, db, original, check) = fixture();
     let c = Connection::open(db.path()).unwrap();
-    c.execute_batch("DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; ALTER TABLE daily_bars DROP COLUMN r7_raw; DELETE FROM schema_migrations WHERE version>=9; PRAGMA user_version=8;").unwrap();
+    c.execute_batch("CREATE TABLE daily_bars AS SELECT vs.version_id,s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE version_segments; DROP TABLE segment_bars; DROP TABLE bar_segments; DELETE FROM schema_migrations WHERE version>=9; PRAGMA user_version=8;").unwrap();
     assert!(matches!(
         inspect(&db, "inspect", &check.task.task_id, "manager", "owner"),
         Err(Error::StorageUnavailable(_))

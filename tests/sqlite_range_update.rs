@@ -275,8 +275,8 @@ fn range_head_and_task_revision_changes_never_rebase() {
 #[test]
 fn range_base_and_candidate_tampering_reject_before_publish() {
     for sql in [
-        "UPDATE daily_bars SET close='10.07' WHERE version_id='legacy-daily' AND trade_date='2025-01-02'",
-        "UPDATE daily_bars SET close='10.07' WHERE version_id='updated-daily' AND trade_date='2025-01-02'",
+        "UPDATE segment_bars SET close='10.07' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily') AND trade_date='2025-01-02'",
+        "UPDATE segment_bars SET close='10.07' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='updated-daily') AND trade_date='2025-01-02'",
     ] {
         let f = fixture(true);
         let plan = f.plan();
@@ -323,7 +323,7 @@ fn range_receipt_refuses_corrupt_result_or_fixed_version() {
         "UPDATE market_update_results SET receipt_json=json_set(receipt_json,'$.task_revision',999)",
         "UPDATE market_update_results SET audit_json=json_set(audit_json,'$.no_change',0)",
         "UPDATE market_update_results SET no_change=0",
-        "UPDATE daily_bars SET close='10.07' WHERE trade_date='2025-01-02'",
+        "UPDATE segment_bars SET close='10.07' WHERE trade_date='2025-01-02'",
     ] {
         let f = fixture(false);
         f.db.commit_range(&f.plan()).unwrap();
@@ -410,7 +410,7 @@ fn range_candidates_compete_on_the_same_real_task_and_head() {
 fn range_schema_v4_requires_explicit_upgrade_and_preserves_published_records() {
     let f = fixture(false);
     let original = f.db.fixed("legacy-daily").unwrap().raw().clone();
-    f.sql("DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; ALTER TABLE daily_bars DROP COLUMN r7_raw; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
+    f.sql("CREATE TABLE daily_bars AS SELECT vs.version_id,s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE version_segments; DROP TABLE segment_bars; DROP TABLE bar_segments; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
     assert!(f.db.fixed("legacy-daily").is_err());
     assert!(f.db.range_receipt("absent").is_err());
     let version: u32 = Connection::open(f.db.tasks.path())
@@ -512,7 +512,7 @@ fn explicit_range_admission_normalizes_sets_and_freezes_base_without_requery_on_
         task.items[0].spec.frozen_inputs["base_integrity_sha256"],
         f.evidence.base_integrity_sha256
     );
-    f.sql("UPDATE daily_bars SET close='10.07' WHERE trade_date='2025-01-02'");
+    f.sql("UPDATE segment_bars SET close='10.07' WHERE trade_date='2025-01-02'");
     assert!(
         ctl.accept("range", Operation::Backfill.key(), payload)
             .unwrap()
@@ -741,7 +741,7 @@ fn range_progress_refuses_damaged_audit_and_immutable_base_without_fallback() {
     };
     for sql in [
         "UPDATE market_update_results SET receipt_json='{}'",
-        "UPDATE daily_bars SET close='10.09' WHERE version_id='legacy-daily' AND trade_date='2025-01-02'",
+        "UPDATE segment_bars SET close='10.09' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily') AND trade_date='2025-01-02'",
     ] {
         let f = fixture(false);
         f.db.commit_range(&f.plan()).unwrap();
@@ -1268,7 +1268,7 @@ fn publication_facts_reject_missing_success_receipt_and_damaged_fixed_data() {
     for damage in [
         "DELETE FROM market_update_results",
         "UPDATE market_update_results SET result_sha256='broken'",
-        "UPDATE daily_bars SET close='999'",
+        "UPDATE segment_bars SET close='999'",
     ] {
         let f = fixture(false);
         f.db.commit_range(&f.plan()).unwrap();
@@ -1604,7 +1604,7 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
     // Remove the migrations added after the deployed schema7 from this isolated
     // fixture. The retained v1-v7 DDL and checksums are exactly those used by
     // the deployed schema7.
-    f.sql("DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; ALTER TABLE daily_bars DROP COLUMN r7_raw; DELETE FROM schema_migrations WHERE version>=8; PRAGMA user_version=7;");
+    f.sql("CREATE TABLE daily_bars AS SELECT vs.version_id,s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE version_segments; DROP TABLE segment_bars; DROP TABLE bar_segments; DELETE FROM schema_migrations WHERE version>=8; PRAGMA user_version=7;");
     assert!(f.db.publication_facts(&f.command.task_id).is_err());
     let c = Connection::open(f.db.tasks.path()).unwrap();
     assert_eq!(
@@ -1821,7 +1821,7 @@ fn publication_runner_read_integrity_failure_marks_check_unresolved_without_fals
     let original = f.db.task(&f.command.task_id).unwrap();
     Connection::open(f.db.tasks.path())
         .unwrap()
-        .execute("UPDATE daily_bars SET close='999'", [])
+        .execute("UPDATE segment_bars SET close='999'", [])
         .unwrap();
     let runner = Runner {
         tasks: f.db.tasks.clone(),

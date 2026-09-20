@@ -109,7 +109,7 @@ fn real_batch_manifest_pages_pin_versions_and_reject_any_later_damage() {
     rusqlite::Connection::open(t.path())
         .unwrap()
         .execute(
-            "UPDATE daily_bars SET close='0' WHERE version_id='legacy-daily'",
+            "UPDATE segment_bars SET close='0' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily')",
             [],
         )
         .unwrap();
@@ -271,7 +271,7 @@ fn availability_classifies_corrupt_version_but_not_bad_database_as_absent() {
     assert_eq!(first.items[0].availability, Availability::Unknown);
     rusqlite::Connection::open(t.path())
         .unwrap()
-        .execute("UPDATE daily_bars SET close='0'", [])
+        .execute("UPDATE segment_bars SET close='0'", [])
         .unwrap();
     let bad = o.availability(args(), &Access::local()).unwrap();
     assert_eq!(bad.items[0].availability, Availability::Unavailable);

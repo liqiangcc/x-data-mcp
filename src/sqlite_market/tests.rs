@@ -146,7 +146,7 @@ fn verified_projection_and_sql_return_use_one_snapshot_then_detect_later_damage(
             Connection::open(path)
                 .unwrap()
                 .execute(
-                    "UPDATE daily_bars SET close='99' WHERE trade_date='2025-01-02'",
+                    "UPDATE segment_bars SET close='99' WHERE trade_date='2025-01-02'",
                     [],
                 )
                 .unwrap();

@@ -198,7 +198,7 @@ mod tests {
                 crate::sqlite_tasks::read_bound_task(c, &receipt.task_id)?.unwrap();
                 let writer = Connection::open(db.tasks.path()).unwrap();
                 writer
-                    .execute("UPDATE daily_bars SET close='999'", [])
+                    .execute("UPDATE segment_bars SET close='999'", [])
                     .unwrap();
                 read_facts(c, &receipt.task_id)
             })

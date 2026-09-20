@@ -156,7 +156,7 @@ fn verified_sql_range_is_ordered_precise_and_fixed() {
 fn compat_bar_metadata_and_evidence_tampering_reject_without_fallback() {
     for sql in [
         "UPDATE data_versions SET compat_json=json_set(compat_json,'$.source','altered')",
-        "UPDATE daily_bars SET close='10.06' WHERE trade_date='2025-01-02'",
+        "UPDATE segment_bars SET close='10.06' WHERE trade_date='2025-01-02'",
         "UPDATE data_versions SET source='altered'",
         "UPDATE version_evidence SET value='USD' WHERE field='price_currency'",
         "UPDATE data_versions SET content_digest='wrong'",
@@ -461,7 +461,7 @@ fn base_missing_corrupt_identity_period_and_adjustment_are_not_head_conflicts() 
             "corrupt" => {
                 Connection::open(store.tasks.path())
                     .unwrap()
-                    .execute("UPDATE daily_bars SET close='99'", [])
+                    .execute("UPDATE segment_bars SET close='99'", [])
                     .unwrap();
             }
             "identity" => {
@@ -561,15 +561,18 @@ fn fixed_paging_ignores_new_head_preserves_conditions_and_rejects_later_damage()
     Connection::open(store.tasks.path())
         .unwrap()
         .execute(
-            "UPDATE daily_bars SET open='0' WHERE version_id='legacy-daily'",
+            "UPDATE segment_bars SET open='0' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily')",
             [],
         )
         .unwrap();
     assert!(matches!(pages.market(next, now), Err(Error::Integrity(_))));
-    assert_eq!(
-        current_head(&store, Period::Day).as_deref(),
-        Some("new-head")
-    );
+    // new-head shares legacy-daily's identical bars via a clipped segment ref:
+    // damage to the shared immutable segment is detected on every version
+    // that references it, including the effective head.
+    assert!(matches!(
+        store.range(&scope(), None, &range()),
+        Err(Error::Integrity(_))
+    ));
 }
 #[test]
 fn version_list_freezes_members_and_tie_sort_order() {
@@ -819,4 +822,55 @@ fn publication_item_projection_tampering_is_rejected() {
         store.receipt("pub-legacy-daily"),
         Err(Error::Integrity(_))
     ));
+}
+#[test]
+fn segmented_storage_shares_unchanged_bars_and_materializes_only_delta() {
+    let (_dir, store) = db();
+    let raw = samples()[0]["record"].clone();
+    published_fixture(&store, &raw);
+    let mut r2 = raw.clone();
+    r2["version_id"] = json!("daily-2");
+    r2["records"][1]["close"] = json!("10.06");
+    r2["batch"]["bars"][1]["close"] = json!("10.06");
+    r2["integrity_sha256"] = json!(frozen_legacy::digest(&r2));
+    let plan = prepare(
+        &store,
+        &r2,
+        PublishIntent::Daily {
+            expected_head: Some("legacy-daily".into()),
+        },
+    );
+    store.commit(&plan).unwrap();
+    let c = Connection::open(store.tasks.path()).unwrap();
+    // Only the changed bar was materialized: 3 legacy bars + 1 delta row.
+    let bar_rows: i64 = c
+        .query_row("SELECT count(*) FROM segment_bars", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(bar_rows, 4);
+    let segments: i64 = c
+        .query_row("SELECT count(*) FROM bar_segments", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(segments, 2);
+    // daily-2 = ref(bar0) + new(bar1) + ref(bar2).
+    let refs: Vec<(String, i64, String, String)> = c
+        .prepare(
+            "SELECT segment_id,seq,clip_start,clip_end FROM version_segments WHERE version_id='daily-2' ORDER BY seq",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(refs.len(), 3);
+    assert_eq!(refs[0].0, "seg-legacy-daily");
+    assert_eq!(refs[2].0, "seg-legacy-daily");
+    assert!(refs[1].0.starts_with("seg-daily-2"));
+    // Rebuilt version reads verify against the recorded projection.
+    store.fixed("daily-2").unwrap();
+    let mut r = range();
+    r.start = "2024-01-01".parse().unwrap();
+    r.limit = 10;
+    let page = store.range(&scope(), Some("daily-2"), &r).unwrap();
+    assert_eq!(page.rows.len(), 3);
+    assert_eq!(page.rows[1].close, "10.06".parse().unwrap());
 }

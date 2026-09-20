@@ -278,25 +278,7 @@ fn insert_record(
     }
     drop(evidence_stmt);
     if v.period == Period::Day {
-        let mut bar_stmt = c
-            .prepare("INSERT INTO daily_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")
-            .map_err(storage)?;
-        for b in &v.records {
-            let b = daily_bar_values(b);
-            bar_stmt
-                .execute(params![
-                    v.version_id,
-                    b[0],
-                    b[1],
-                    b[2],
-                    b[3],
-                    b[4],
-                    b[5],
-                    b[6],
-                    b[7]
-                ])
-                .map_err(storage)?;
-        }
+        write_day_segments(c, r)?;
     } else {
         let mut bar_stmt = c
             .prepare("INSERT INTO yearly_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)")
@@ -325,6 +307,159 @@ fn insert_record(
             params![v.version_id, l[0], l[1], l[2], l[3], l[4]],
         )
         .map_err(storage)?;
+    }
+    Ok(())
+}
+enum SegmentPiece {
+    Ref {
+        segment_id: String,
+        clip_start: String,
+        clip_end: String,
+    },
+    New {
+        first: usize,
+        last: usize,
+    },
+}
+fn write_day_segments(c: &Connection, r: &CheckedRecord) -> Result<(), Error> {
+    let v = &r.version;
+    let scope = Scope::of(v);
+    let head_id = head(c, &scope)?;
+    let mut base: Vec<(Vec<Option<String>>, String)> = Vec::new();
+    if let Some(head_id) = head_id.as_deref().filter(|id| *id != v.version_id) {
+        let mut stmt = c.prepare(
+            "SELECT s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount,s.r7_raw,vs.segment_id \
+             FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
+             WHERE vs.version_id=?1 AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end \
+             ORDER BY vs.seq,s.trade_date",
+        ).map_err(storage)?;
+        base = stmt
+            .query_map([head_id], |r| {
+                let mut row = Vec::with_capacity(8);
+                for i in 0..8 {
+                    row.push(r.get::<_, Option<String>>(i)?);
+                }
+                Ok((row, r.get::<_, String>(8)?))
+            })
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?;
+    }
+    let mut base_index = std::collections::HashMap::new();
+    for (i, (row, _)) in base.iter().enumerate() {
+        base_index.insert(row[0].clone().unwrap(), i);
+    }
+    let shareable = |b: &[Option<String>]| -> Option<(usize, &str)> {
+        let &idx = base_index.get(b[0].as_deref()?)?;
+        let (row, seg) = &base[idx];
+        (row == b).then_some((idx, seg.as_str()))
+    };
+    let mut pieces: Vec<SegmentPiece> = Vec::new();
+    let push_new = |first: usize, last: usize, pieces: &mut Vec<SegmentPiece>| {
+        if let Some(SegmentPiece::New { last: l, .. }) = pieces.last_mut()
+            && *l + 1 == first
+        {
+            *l = last;
+            return;
+        }
+        pieces.push(SegmentPiece::New { first, last });
+    };
+    let mut i = 0;
+    while i < v.records.len() {
+        let b = daily_bar_values(&v.records[i]);
+        match shareable(&b) {
+            Some((idx, seg)) => {
+                let seg = seg.to_owned();
+                let clip_start = b[0].clone().unwrap();
+                let mut clip_end = clip_start.clone();
+                let mut prev_idx = idx;
+                let mut j = i + 1;
+                while j < v.records.len() {
+                    let nb = daily_bar_values(&v.records[j]);
+                    match shareable(&nb) {
+                        Some((nidx, nseg)) if nseg == seg && nidx == prev_idx + 1 => {
+                            clip_end = nb[0].clone().unwrap();
+                            prev_idx = nidx;
+                            j += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                pieces.push(SegmentPiece::Ref {
+                    segment_id: seg,
+                    clip_start,
+                    clip_end,
+                });
+                i = j;
+            }
+            None => {
+                push_new(i, i, &mut pieces);
+                i += 1;
+            }
+        }
+    }
+    let single_new = pieces.len() == 1 && matches!(pieces[0], SegmentPiece::New { .. });
+    let mut seg_stmt = c
+        .prepare("INSERT INTO bar_segments VALUES(?1,?2,?3,?4,?5)")
+        .map_err(storage)?;
+    let mut bar_stmt = c
+        .prepare("INSERT INTO segment_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")
+        .map_err(storage)?;
+    let mut ref_stmt = c
+        .prepare("INSERT INTO version_segments VALUES(?1,?2,?3,?4,?5)")
+        .map_err(storage)?;
+    for (seq, piece) in pieces.iter().enumerate() {
+        match piece {
+            SegmentPiece::Ref {
+                segment_id,
+                clip_start,
+                clip_end,
+            } => {
+                ref_stmt
+                    .execute(params![
+                        v.version_id,
+                        seq as u32,
+                        segment_id,
+                        clip_start,
+                        clip_end
+                    ])
+                    .map_err(storage)?;
+            }
+            SegmentPiece::New { first, last } => {
+                let segment_id = if single_new {
+                    format!("seg-{}", v.version_id)
+                } else {
+                    format!("seg-{}-s{}", v.version_id, seq)
+                };
+                let rows = &v.records[*first..=*last];
+                seg_stmt
+                    .execute(params![
+                        segment_id,
+                        v.symbol,
+                        rows.first().unwrap().date.to_string(),
+                        rows.last().unwrap().date.to_string(),
+                        rows.len() as u32
+                    ])
+                    .map_err(storage)?;
+                for bar in rows {
+                    let b = daily_bar_values(bar);
+                    bar_stmt
+                        .execute(params![
+                            segment_id, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]
+                        ])
+                        .map_err(storage)?;
+                }
+                ref_stmt
+                    .execute(params![
+                        v.version_id,
+                        seq as u32,
+                        segment_id,
+                        rows.first().unwrap().date.to_string(),
+                        rows.last().unwrap().date.to_string()
+                    ])
+                    .map_err(storage)?;
+            }
+        }
     }
     Ok(())
 }
@@ -412,7 +547,10 @@ fn read_projection(
     }
     let daily = rows(
         c,
-        "SELECT trade_date,open,high,low,close,volume,amount,r7_raw FROM daily_bars WHERE version_id=?1 ORDER BY trade_date",
+        "SELECT s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount,s.r7_raw \
+         FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
+         WHERE vs.version_id=?1 AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end \
+         ORDER BY vs.seq,s.trade_date",
         id,
         8,
     )?;
@@ -457,7 +595,10 @@ pub(crate) fn range_rows(
 ) -> Result<Vec<Bar>, Error> {
     let (sql, start, end) = match p {
         Period::Day => (
-            "SELECT trade_date,open,high,low,close,volume,amount FROM daily_bars WHERE version_id=?1 AND trade_date>=?2 AND trade_date<=?3 AND (?4 IS NULL OR trade_date>?4) ORDER BY trade_date LIMIT ?5",
+            "SELECT s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount \
+             FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
+             WHERE vs.version_id=?1 AND s.trade_date>=MAX(vs.clip_start,?2) AND s.trade_date<=MIN(vs.clip_end,?3) \
+             AND (?4 IS NULL OR s.trade_date>?4) ORDER BY vs.seq,s.trade_date LIMIT ?5",
             range.start.to_string(),
             range.end.to_string(),
         ),
