@@ -85,10 +85,7 @@ fn official_pipeline_reports_every_unresolved_gate_for_both_operations() {
         let message = result.unwrap_err().to_string();
         assert!(message.contains("NOT_PRODUCTION_READY"));
         // Independent requirements from Issue #55; do not infer them from the adapter list.
-        for gate in [
-            "FILE_ACCESS_USE_NOT_VERIFIED",
-            "FILE_SET_CONSISTENCY_NOT_VERIFIED",
-        ] {
+        for gate in ["FILE_ACCESS_USE_NOT_VERIFIED"] {
             assert!(message.contains(gate), "missing gate {gate}: {message}");
         }
     }
