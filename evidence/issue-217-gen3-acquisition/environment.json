@@ -1,0 +1,28 @@
+{
+  "schema": "issue217.environment.v1",
+  "captured_utc": "2026-09-20T01:10:00+00:00",
+  "host": {
+    "os": "Windows 10.0.26200.8875",
+    "python": "3.10.9 (MSC v.1934 64 bit)",
+    "timezone": "UTC+08:00"
+  },
+  "tdx_client": {
+    "product": "通达信金融终端 / TongdaXin Financial Terminal",
+    "version": "V7.73",
+    "install_dir": "C:\\new_tdx64",
+    "installer_url": "https://data.tdx.com.cn/level2/new_tdx64.exe",
+    "installer_sha256": "10c523db57546e91a3b84bda7243ee47c949aa379e13c3ceae6c42c964ae0ce0",
+    "session": "logged in; market session dropped mid-run and was re-established by client restart + fresh login (TdxW.exe restart, saved-credential login at ~09:00 local)"
+  },
+  "tq_stack": {
+    "module": "C:\\new_tdx64\\PYPlugins\\sys\\tqcenter.py (v1.0.16)",
+    "bridge": "TPythClient.dll InitConnect / GetTdxDataStr (type=1 kline, type=4 divid)",
+    "init": "tq.initialize(<strategy path under PYPlugins\\user>)",
+    "note": "TQ serves kline history only from the client's local vipdoc cache; sz.000001/sz.000035 history was first populated by opening each security's daily chart and entering training mode (function 47), which triggers the client's own full-history download"
+  },
+  "network_observations": {
+    "hq_servers_tcp7709": "reachable via direct IP (connect.cfg list)",
+    "data.tdx.com.cn_443": "reachable; TencentEdgeOne anti-bot JS cookie challenge observed on first hsjday.zip request (2026-09-20T01:02:42Z), replayed verbatim with computed cookies; subsequent requests served application/zip directly (EO-Cache-Status: HIT)",
+    "www.tdx.com.cn_443": "reachable, direct application/zip responses"
+  }
+}

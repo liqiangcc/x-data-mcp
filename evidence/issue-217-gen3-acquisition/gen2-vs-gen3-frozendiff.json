@@ -1,0 +1,77 @@
+{
+ "gen3_member_sha256": "da33cb67a6a89070bf08b6543e92057e8ce2f819ae4337d2d3a34c7d23eabf38",
+ "gen3_member_count": 206034,
+ "category_counts": {
+  "1": 68835,
+  "5": 116401,
+  "2": 4865,
+  "3": 4921,
+  "9": 7979,
+  "10": 304,
+  "14": 16,
+  "4": 2,
+  "8": 683,
+  "6": 84,
+  "15": 101,
+  "13": 11,
+  "12": 8,
+  "7": 19,
+  "11": 1805
+ },
+ "frozen_set_diff": {
+  "sh.600004": {
+   "gen2_events": 40,
+   "gen3_events": 40,
+   "new": [],
+   "removed": [],
+   "field_changed": []
+  },
+  "sh.600006": {
+   "gen2_events": 33,
+   "gen3_events": 33,
+   "new": [],
+   "removed": [],
+   "field_changed": []
+  },
+  "sz.000001": {
+   "gen2_events": 80,
+   "gen3_events": 81,
+   "new": [
+    [
+     "2026-09-24",
+     1
+    ]
+   ],
+   "removed": [],
+   "field_changed": []
+  },
+  "sz.000002": {
+   "gen2_events": 112,
+   "gen3_events": 112,
+   "new": [],
+   "removed": [],
+   "field_changed": []
+  },
+  "sz.000004": {
+   "gen2_events": 41,
+   "gen3_events": 41,
+   "new": [],
+   "removed": [],
+   "field_changed": []
+  },
+  "sz.000035": {
+   "gen2_events": 40,
+   "gen3_events": 40,
+   "new": [],
+   "removed": [],
+   "field_changed": []
+  },
+  "sh.688318": {
+   "gen2_events": 19,
+   "gen3_events": 19,
+   "new": [],
+   "removed": [],
+   "field_changed": []
+  }
+ }
+}

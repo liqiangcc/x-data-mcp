@@ -24,6 +24,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sys
 import urllib.request
 
@@ -50,41 +51,102 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+def fetch(url, cookie=None):
+    """One HTTP GET; returns (status, headers, body-bytes generator)."""
+    hdrs = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    if cookie:
+        hdrs["Cookie"] = cookie
+        hdrs["Referer"] = url.rsplit("/", 1)[0] + "/"
+    req = urllib.request.Request(url, headers=hdrs)
+    resp = urllib.request.urlopen(req, timeout=600)
+    return resp
+
+
+def eo_challenge_cookies(body):
+    """TencentEdgeOne anti-bot interstitial: JS sets
+    __tst_status=<sum of three ints> and EO_Bot_Ssid=<int> then reloads.
+    Returns the Cookie header a browser would send, or None."""
+    if b"EO_Bot_Ssid" not in body or b"__tst_status" not in body:
+        return None
+    nums = re.findall(rb"[A-Za-z]{5}:(\d{6,})", body)
+    ssid = re.search(rb"\+.{0,30}?(\d{10})\)", body)
+    if len(nums) < 3 or not ssid:
+        return None
+    tst = sum(int(n) for n in nums[:3])
+    return f"__tst_status={tst}#; EO_Bot_Ssid={ssid.group(1).decode()}"
+
+
 def step_download(out):
     manifest = {}
     for role, url in FILES.items():
         dest = os.path.join(out, f"{role}.zip")
+        attempts = []
         try:
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                headers = {k.lower(): v for k, v in resp.headers.items()}
-                status = resp.status
+            resp = fetch(url)
+            headers = {k.lower(): v for k, v in resp.headers.items()}
+            first = resp.read()
+            attempt = {"http_status": resp.status,
+                       "response_headers": headers,
+                       "body_bytes": len(first)}
+            if (headers.get("content-type", "").startswith("text/html")
+                    and len(first) < 65536):
+                # save the verbatim interstitial for audit
+                with open(dest + ".challenge.html", "wb") as f:
+                    f.write(first)
+                cookie = eo_challenge_cookies(first)
+                attempt["edgeone_challenge"] = (
+                    "cookie_replayed" if cookie else "unparsed")
+                attempts.append(attempt)
+                if not cookie:
+                    raise RuntimeError(
+                        "EdgeOne challenge not parseable")
+                resp = fetch(url, cookie=cookie)
+                headers = {k.lower(): v
+                           for k, v in resp.headers.items()}
+                attempt = {"http_status": resp.status,
+                           "response_headers": headers,
+                           "request_cookie": cookie}
                 with open(dest, "wb") as f:
                     while True:
                         chunk = resp.read(1 << 20)
                         if not chunk:
                             break
                         f.write(chunk)
+                attempt["body_bytes"] = os.path.getsize(dest)
+                attempts.append(attempt)
+            else:
+                with open(dest, "wb") as f:
+                    f.write(first)
+                    while True:
+                        chunk = resp.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                attempts.append(attempt)
             manifest[role] = {
                 "role": role, "url": url, "retrieved_utc": utcnow(),
-                "http_status": status,
+                "http_status": resp.status,
                 "last_modified": headers.get("last-modified"),
                 "etag": headers.get("etag"),
                 "bytes": os.path.getsize(dest),
                 "sha256": sha256_file(dest),
                 "response_headers": headers,
+                "attempts": attempts,
             }
         except Exception as e:  # noqa: BLE001 — verbatim capture
             manifest[role] = {"role": role, "url": url,
                               "status": "NOT_RUN",
-                              "reason": f"{type(e).__name__}: {e}"}
+                              "reason": f"{type(e).__name__}: {e}",
+                              "attempts": attempts}
     return manifest
 
 
 def norm_code(symbol):
-    """sh.600004 -> SH600004; sz.000002 -> SZ000002 (TQ convention)."""
+    """sh.600004 -> 600004.SH; sz.000002 -> 000002.SZ (TQ convention:
+    six digits + dot + market suffix; verified live 2026-09-20 — the
+    SH600006 form returns empty)."""
     m, c = symbol.split(".")
-    return m.upper() + c
+    return c + "." + m.upper()
 
 
 def row_to_dict(row):
@@ -129,77 +191,143 @@ def pick(row, *names):
     return None
 
 
+def tq_raw_call(dll, run_id, request, timeout_ms=120000):
+    """GetTdxDataStr verbatim: returns the raw response string."""
+    ptr = dll.GetTdxDataStr(
+        run_id, json.dumps(request, ensure_ascii=False).encode("utf-8"),
+        timeout_ms)
+    return ptr.decode("utf-8") if ptr else ""
+
+
 def step_tq(out):
-    import importlib
-    tq = None
-    import_errs = []
-    for name in ("tq", "tqcenter.tq", "tqcenter"):
-        try:
-            mod = importlib.import_module(name)
-            tq = getattr(mod, "tq", mod)
-            if hasattr(tq, "get_divid_factors") or hasattr(
-                    tq, "get_market_data"):
-                break
-        except Exception as e:  # noqa: BLE001
-            import_errs.append(f"{name}: {type(e).__name__}: {e}")
-    if tq is None or not (hasattr(tq, "get_divid_factors")
-                          or hasattr(tq, "get_market_data")):
+    """TQ oracle via verbatim GetTdxDataStr JSON (spec: raw responses
+    land on disk unmodified; parsed fields keep served decimal strings,
+    no float round-trip through pandas)."""
+    import importlib.util
+    plugin_dir = os.environ.get("TDX_PYPLUGINS_DIR",
+                                r"C:\new_tdx64\PYPlugins")
+    mod_path = os.path.join(plugin_dir, "sys", "tqcenter.py")
+    if not os.path.isfile(mod_path):
         return {"status": "NOT_RUN",
-                "reason": "TQ module not importable or lacks expected "
-                          "entry points",
-                "import_errors": import_errs}
+                "reason": f"tqcenter.py not found at {mod_path}"}
+    try:
+        spec = importlib.util.spec_from_file_location("tqcenter",
+                                                      mod_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        tq = mod.tq
+    except Exception as e:  # noqa: BLE001
+        return {"status": "NOT_RUN",
+                "reason": f"tqcenter import: {type(e).__name__}: {e}"}
+    # InitConnect requires a strategy file path under the plugin tree
+    strategy = os.path.join(plugin_dir, "user", "gen3_acquire.py")
+    try:
+        if not os.path.isfile(strategy):
+            with open(strategy, "w", encoding="utf-8") as f:
+                f.write("# gen3 oracle acquisition probe\n")
+        tq.initialize(strategy)
+    except Exception as e:  # noqa: BLE001
+        return {"status": "NOT_RUN",
+                "reason": f"tq.initialize: {type(e).__name__}: {e}"}
+    dll = mod.dll
+    run_id = tq.run_id
+    raw_dir = os.path.join(out, "tq-raw")
+    os.makedirs(raw_dir, exist_ok=True)
 
     oracle = {"schema": "issue54.tq-oracle.v1",
               "generator": {"kind": "tq_api", "captured_utc": utcnow(),
                             "environment_note":
-                                "windows tqcenter, exact build unknown"},
+                                "windows tqcenter.py v1.0.16 + "
+                                "TPythClient.dll, verbatim GetTdxDataStr"},
               "securities": {}, "raw": {}}
     for symbol in SECURITIES:
         code = norm_code(symbol)
         entry = {"divid_factors": [], "front_adjusted": [],
                  "unadjusted": [], "errors": []}
         raw = {}
-        # --- get_divid_factors ---
+        # --- get_divid_factors (type=4), verbatim ---
         try:
-            df = tq.get_divid_factors(stock_code=code,
-                                      start_time="", end_time="")
-            raw["divid_factors_repr"] = repr(df)[:200000]
-            for r in iter_rows(df):
-                rd = row_to_dict(r)
+            req = {"id": run_id, "type": 4, "stock_code": code,
+                   "start_time": "", "end_time": ""}
+            s = tq_raw_call(dll, run_id, req)
+            fn = f"divid_{code.replace('.', '_')}.json"
+            with open(os.path.join(raw_dir, fn), "w",
+                      encoding="utf-8") as f:
+                f.write(s)
+            raw["divid_factors_json"] = {
+                "file": f"tq-raw/{fn}", "bytes": len(s.encode("utf-8")),
+                "sha256": hashlib.sha256(s.encode("utf-8")).hexdigest()}
+            d = json.loads(s) if s else {}
+            if d.get("ErrorId") != "0":
+                entry["errors"].append(
+                    f"divid_factors ErrorId={d.get('ErrorId')}")
+            dates = d.get("Date", [])
+            types = d.get("Type", [])
+            values = d.get("Value", [])
+            for dt, ty, v in zip(dates, types, values):
+                v = list(v) + ["0"] * 4
                 entry["divid_factors"].append({
-                    "date": pick(rd, "date", "ex_date", "exdate",
-                                 "dividend_date", "time"),
-                    "fields": {f: pick(rd, f, f.replace("_", ""),
-                                       f.upper()) for f in ORACLE_FIELDS},
-                    "verbatim": rd})
+                    "date": dt,
+                    "fields": {"type": str(ty), "bonus": v[0],
+                               "allot_price": v[1],
+                               "share_bonus": v[2],
+                               "allotment": v[3]},
+                    "verbatim": {"date": dt, "type": ty, "value": v[:4]}})
         except Exception as e:  # noqa: BLE001
             entry["errors"].append(
                 f"get_divid_factors: {type(e).__name__}: {e}")
-        # --- get_market_data none/front (daily close only) ---
+        # --- get_market_data none/front, full history (front anchors at
+        # the response's last bar -> count must cover full history) ---
         for dtype, key in (("none", "unadjusted"),
                            ("front", "front_adjusted")):
             try:
-                md = tq.get_market_data(
-                    field_list=["time", "open", "high", "low", "close"],
-                    stock_list=[code], period="1d",
-                    start_time="", end_time="", count=0,
-                    dividend_type=dtype, fill_data=False)
-                raw[f"market_data_{dtype}_repr"] = repr(md)[:200000]
-                for r in iter_rows(md):
-                    rd = row_to_dict(r)
-                    entry[key].append({
-                        "date": pick(rd, "date", "time", "datetime"),
-                        "open": pick(rd, "open"),
-                        "high": pick(rd, "high"),
-                        "low": pick(rd, "low"),
-                        "close": pick(rd, "close"),
-                        "verbatim": rd})
+                req = {"id": run_id, "type": 1, "stock_list": [code],
+                       "period": "1d", "start_time": "", "end_time": "",
+                       "dividend_type": dtype, "count": 9000,
+                       "stock_page_index": 0, "stock_page_size": 100}
+                s = tq_raw_call(dll, run_id, req)
+                fn = f"kline_{code.replace('.', '_')}_{dtype}.json"
+                with open(os.path.join(raw_dir, fn), "w",
+                          encoding="utf-8") as f:
+                    f.write(s)
+                raw[f"market_data_{dtype}_json"] = {
+                    "file": f"tq-raw/{fn}",
+                    "bytes": len(s.encode("utf-8")),
+                    "sha256": hashlib.sha256(
+                        s.encode("utf-8")).hexdigest()}
+                d = json.loads(s) if s else {}
+                vd = d.get("Value", {}).get(code, {})
+                if d.get("ErrorId") != "0":
+                    entry["errors"].append(
+                        f"market_data({dtype}) ErrorId="
+                        f"{d.get('ErrorId')}")
+                dates = vd.get("Date", [])
+                for i, dt in enumerate(dates):
+                    row = {"date": dt}
+                    for fld, key_ in (("open", "Open"),
+                                      ("high", "High"),
+                                      ("low", "Low"),
+                                      ("close", "Close")):
+                        arr = vd.get(key_, [])
+                        row[fld] = arr[i] if i < len(arr) else None
+                    if dtype == "none":
+                        ff = vd.get("ForwardFactor", [])
+                        row["forward_factor"] = (
+                            ff[i] if i < len(ff) else None)
+                    row["verbatim"] = {k: row.get(k) for k in
+                                       ("date", "open", "high", "low",
+                                        "close", "forward_factor")}
+                    entry[key].append(row)
             except Exception as e:  # noqa: BLE001
                 entry["errors"].append(
                     f"get_market_data({dtype}): "
                     f"{type(e).__name__}: {e}")
         oracle["securities"][symbol] = entry
         oracle["raw"][symbol] = raw
+    try:
+        tq.close()
+    except Exception:  # noqa: BLE001
+        pass
     return oracle
 
 
