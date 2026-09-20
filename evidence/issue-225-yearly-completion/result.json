@@ -1,0 +1,128 @@
+{
+  "artifact": "issue-225 real-data verification: derived completion through compute_metrics",
+  "binary_sha256": "3d07e2602bac77217df448fa392a6f7dc466233100991e94bb3a0d7587778c30",
+  "compute_metrics_result": {
+    "contract_version": "v1",
+    "input": {
+      "input_id": "prices",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.yearly",
+        "entity": {
+          "code": "600036",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "04ce06a4113aadcb8066f772c97630c2945edf4ed1b4f3a2402565e0a21cecad",
+        "version_id": "yearly-version-5e114fd1d626346307f6f87cfe9a2aacb64142e67520bd229a53598b1c987ca6"
+      }
+    },
+    "metric": {
+      "algorithm_version": "local-consecutive-direction-v1",
+      "input_ids": [
+        "prices"
+      ],
+      "metric_id": "up",
+      "name": "consecutive_direction",
+      "parameters": {
+        "completed_only": true,
+        "direction": "up",
+        "equal_policy": "break",
+        "gap_policy": "reject",
+        "min_periods": 1,
+        "price_field": "close"
+      }
+    },
+    "requested_range": {
+      "end_year": 2026,
+      "start_year": 2020
+    },
+    "result": {
+      "actual_input_range": {
+        "end_year": 2025,
+        "start_year": 2022
+      },
+      "anchor": {
+        "close": "21.83",
+        "first_trading_date": "2023-01-03",
+        "last_trading_date": "2023-12-29",
+        "year": 2023
+      },
+      "continuity_evidence": "adjacent natural years and explicit completion checked for all used observations",
+      "cumulative_change": "0.836005497022",
+      "end": {
+        "close": "40.08",
+        "first_trading_date": "2025-01-02",
+        "last_trading_date": "2025-12-31",
+        "year": 2025
+      },
+      "excluded_tail": [
+        2026
+      ],
+      "first_change": {
+        "close": "35.28",
+        "first_trading_date": "2024-01-02",
+        "last_trading_date": "2024-12-31",
+        "year": 2024
+      },
+      "limitations": [
+        "completion evidence is fixture-only; no production source approval"
+      ],
+      "matches": true,
+      "observations_used": 4,
+      "observed_direction": "up",
+      "outcome": "computed",
+      "precision": {
+        "rounding": "half_even_once",
+        "scale": 12,
+        "unit": "ratio"
+      },
+      "provisional": false,
+      "run_length": 2,
+      "run_length_kind": "exact"
+    }
+  },
+  "database": "/opt/x-data-mcp-preview/state/preview.sqlite",
+  "effective_year_head_versions": [],
+  "note": "historical_fixed_base publication intentionally does not advance the effective year head; explicit version_ref used",
+  "yearly_version": {
+    "integrity_sha256": "04ce06a4113aadcb8066f772c97630c2945edf4ed1b4f3a2402565e0a21cecad",
+    "local_yearly_derivation_v1_meta": {
+      "as_of": "2026-09-20",
+      "base_daily_version_id": "range-version-c46fd9d7ff95542a97956ec05da10dbcd312c8a3b34e045d7b23943df49e8d8c",
+      "evidence": {
+        "as_of": "2026-09-20",
+        "base_integrity_sha256": "06cc75c61f422f63e4a8f08970e361cfeb46759a4f341268b2623d177a7c8f2a",
+        "coverage": {
+          "reason": "selected years verified by re-aggregating fixed daily range-version-c46fd9d7ff95542a97956ec05da10dbcd312c8a3b34e045d7b23943df49e8d8c from the env-installed official-file source as of 2026-09-20; not a listing-history claim",
+          "status": "Complete"
+        },
+        "years": [
+          2020,
+          2021,
+          2022,
+          2023,
+          2024,
+          2025,
+          2026
+        ]
+      },
+      "years": [
+        "2020",
+        "2021",
+        "2022",
+        "2023",
+        "2024",
+        "2025",
+        "2026"
+      ]
+    },
+    "period": "year",
+    "range": [
+      "2020-12-31",
+      "2026-09-18"
+    ],
+    "state": "published",
+    "symbol": "sh.600036",
+    "version_id": "yearly-version-5e114fd1d626346307f6f87cfe9a2aacb64142e67520bd229a53598b1c987ca6"
+  }
+}
