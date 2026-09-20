@@ -4,7 +4,9 @@ pub mod query;
 use crate::{
     market_data::{Bar, Period},
     publish::EffectiveVersion,
-    task_control::{self, Change, ItemOutcome, Stage, Status, TaskSnapshot},
+    task_control::{
+        self, Change, ItemBinding, ItemOutcome, Stage, Status, TaskHead, TaskItem, TaskSnapshot,
+    },
 };
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Utc};
 use compat::CheckedRecord;
@@ -125,6 +127,22 @@ pub trait MarketRepository {
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error>;
     fn fixed_many(&self, ids: &[String]) -> Result<Vec<CheckedRecord>, Error>;
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error>;
+    /// O(1) task-row projection for hot-loop guards; full snapshots are for
+    /// explicit task/progress reads.
+    fn task_head(&self, id: &str) -> Result<TaskHead, Error>;
+    /// O(1) head + item + occupancy binding for per-item execution and
+    /// commit binding checks. `None` means task or item row absent.
+    fn task_item_binding(&self, task: &str, item: &str) -> Result<Option<ItemBinding>, Error>;
+    /// Single-item light transition: applies `change` on the caller-held
+    /// head+item, verified by task-row revision (refreshed in place when
+    /// stale). Writes only the touched rows.
+    fn transition_task_head(
+        &self,
+        head: &mut TaskHead,
+        item: Option<&mut TaskItem>,
+        run: &str,
+        change: crate::task_control::Change,
+    ) -> Result<(), Error>;
     fn commit(&self, plan: &PublishPlan) -> Result<Receipt, Error>;
     fn receipt(&self, id: &str) -> Result<Option<Receipt>, Error>;
     fn range(&self, scope: &Scope, version: Option<&str>, range: &Range)
@@ -359,7 +377,11 @@ impl<R: MarketRepository> Publisher<R> {
         plan.base_digest = base
             .as_ref()
             .map(|r| r.raw["integrity_sha256"].as_str().unwrap().to_owned());
-        plan.finish_task(self.repository.task(&plan.command.task_id)?)?;
+        let binding = self
+            .repository
+            .task_item_binding(&plan.command.task_id, &plan.command.item_id)?
+            .ok_or(Error::Conflict("missing task item".into()))?;
+        plan.check_task_binding(&binding)?;
         Ok(plan)
     }
 }
@@ -373,34 +395,35 @@ impl PublishPlan {
     pub fn head_promotion(&self) -> Option<&Scope> {
         self.promote.as_ref()
     }
-    /// Same pure decision is re-evaluated against facts acquired inside commit.
-    pub(crate) fn finish_task(&self, task: TaskSnapshot) -> Result<TaskSnapshot, Error> {
-        if task.task.state_revision != self.command.expected_revision
-            || task.visible_status(&self.command.run_id) != Status::Running
-            || task.task.owner_run_id.as_deref() != Some(&self.command.run_id)
+    /// Binding guards shared by prepare-time pre-checks and the atomic
+    /// commit re-evaluation. Revision/owner/state plus the item's
+    /// target/occupancy binding.
+    pub(crate) fn check_task_binding(&self, binding: &ItemBinding) -> Result<(), Error> {
+        if binding.head.state_revision != self.command.expected_revision
+            || binding.head.visible_status(&self.command.run_id) != Status::Running
+            || binding.head.owner_run_id.as_deref() != Some(&self.command.run_id)
         {
             return Err(Error::Conflict("task revision/owner/state".into()));
         }
         let scope = Scope::of(&self.record.version);
-        let item = task
-            .items
-            .iter()
-            .find(|i| i.spec.item_id == self.command.item_id)
-            .ok_or_else(|| Error::Conflict("missing task item".into()))?;
+        let item = &binding.item;
         if item.stage != Stage::Running
+            || item.spec.item_id != self.command.item_id
             || item.spec.target
                 != serde_json::json!({"symbol":scope.symbol,"period":match scope.period{Period::Day=>"day",Period::Year=>"year"}})
             || !item.spec.scope_keys.contains(&scope.occupancy_key())
-            || !task.claims.iter().any(|c| {
-                c.scope_key == scope.occupancy_key()
-                    && c.task_id == self.command.task_id
-                    && c.state_revision == self.command.expected_revision
-            })
+            || !binding.scopes_bound
         {
             return Err(Error::Conflict("task target/occupancy".into()));
         }
-        let mut next = task_control::decide(
-            task,
+        Ok(())
+    }
+    /// Same pure decision is re-evaluated against facts acquired inside commit.
+    pub(crate) fn finish_task(&self, binding: &mut ItemBinding) -> Result<(), Error> {
+        self.check_task_binding(binding)?;
+        crate::task_control::decide_head(
+            &mut binding.head,
+            Some(&mut binding.item),
             &self.command.run_id,
             Change::FinishItem(
                 self.command.item_id.clone(),
@@ -412,15 +435,16 @@ impl PublishPlan {
             ),
             Utc::now(),
         )?;
-        if next.items.iter().all(|i| i.stage == Stage::Finished) {
-            next = task_control::decide(
-                next,
+        if binding.head.counts.finished == binding.head.counts.total {
+            crate::task_control::decide_head(
+                &mut binding.head,
+                None,
                 &self.command.run_id,
                 Change::FinishExecution,
                 Utc::now(),
             )?;
         }
-        Ok(next)
+        Ok(())
     }
 }
 pub(crate) fn base_error(e: Error) -> Error {

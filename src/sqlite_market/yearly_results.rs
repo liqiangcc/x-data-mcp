@@ -31,10 +31,10 @@ impl YearlyRepository for SqliteMarket {
                 for (scope, expected) in &plan.publication.required_heads {
                     if head(c,scope)? != *expected {return Err(Error::Conflict("effective head changed".into()));}
                 }
-                let task=crate::sqlite_tasks::read_bound_task(c,&command.task_id)?.ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
-                let next=plan.publication.finish_task(task)?;
-                crate::sqlite_tasks::write_task(c,&next,command.expected_revision)?;
-                Receipt {publication_id:command.publication_id.clone(),version_id:command.version_id.clone(),task_id:command.task_id.clone(),task_revision:next.task.state_revision}
+                let mut binding=crate::sqlite_tasks::read_item_binding(c,&command.task_id,&command.item_id)?.ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
+                plan.publication.finish_task(&mut binding)?;
+                crate::sqlite_tasks::persist_decided(c,&binding.head,Some(&binding.item),command.expected_revision)?;
+                Receipt {publication_id:command.publication_id.clone(),version_id:command.version_id.clone(),task_id:command.task_id.clone(),task_revision:binding.head.state_revision}
             }else{commit_publication(c,&plan.publication)?};
             let audit=text(&plan.audit)?;let receipt_json=text(&receipt)?;
             c.execute("INSERT INTO yearly_execution_results VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![command.publication_id,command.task_id,command.item_id,base.version.version_id,command.version_id,plan.no_change,audit,digest(&audit,&receipt_json),receipt_json]).map_err(storage)?;
@@ -110,20 +110,17 @@ pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Rec
     } else if result.raw != candidate.raw {
         return Err(integrity("yearly published candidate mismatch"));
     }
-    let task = crate::sqlite_tasks::read_bound_task(c, &task_id)?
+    let binding = crate::sqlite_tasks::read_item_binding(c, &task_id, &item_id)?
         .ok_or_else(|| integrity("yearly result task missing"))?;
-    if task.task.state_revision < receipt.task_revision
+    if binding.head.state_revision < receipt.task_revision
         || receipt.task_revision <= command.expected_revision
-        || !task.items.iter().any(|i| {
-            i.spec.item_id == item_id
-                && i.stage == crate::task_control::Stage::Finished
-                && i.outcome.as_ref().is_some_and(|o| o.success)
-        })
+        || binding.item.stage != crate::task_control::Stage::Finished
+        || !binding.item.outcome.as_ref().is_some_and(|o| o.success)
     {
         return Err(integrity("yearly result lacks successful task item"));
     }
     if matches!(
-        task.task.key.operation.as_str(),
+        binding.head.key.operation.as_str(),
         "update_data" | "backfill_data"
     ) {
         let years = candidate
@@ -143,12 +140,9 @@ pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Rec
         } else {
             serde_json::json!({"version_id":audit["prior_version_id"],"integrity_sha256":audit["prior_integrity_sha256"]})
         };
-        if task.task.key.contract_version != crate::yearly_publication::tasks::CONTRACT_VERSION
-            || task.task.key.dataset != "market.yearly"
-            || !task
-                .items
-                .iter()
-                .any(|i| i.spec.item_id == item_id && i.spec.frozen_inputs == expected)
+        if binding.head.key.contract_version != crate::yearly_publication::tasks::CONTRACT_VERSION
+            || binding.head.key.dataset != "market.yearly"
+            || binding.item.spec.frozen_inputs != expected
         {
             return Err(integrity("yearly result differs from frozen task"));
         }

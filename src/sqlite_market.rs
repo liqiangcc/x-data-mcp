@@ -705,6 +705,31 @@ impl MarketRepository for SqliteMarket {
                 .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))
         })
     }
+    fn task_head(&self, id: &str) -> Result<crate::task_control::TaskHead, Error> {
+        self.read(|c| {
+            crate::sqlite_tasks::read_task_head(c, id)?
+                .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))
+        })
+    }
+    fn task_item_binding(
+        &self,
+        task: &str,
+        item: &str,
+    ) -> Result<Option<crate::task_control::ItemBinding>, Error> {
+        self.read(|c| crate::sqlite_tasks::read_item_binding(c, task, item).map_err(Error::Task))
+    }
+    fn transition_task_head(
+        &self,
+        head: &mut crate::task_control::TaskHead,
+        item: Option<&mut crate::task_control::TaskItem>,
+        run: &str,
+        change: crate::task_control::Change,
+    ) -> Result<(), Error> {
+        self.write(|c| {
+            crate::sqlite_tasks::transition_head_tx(c, head, item, run, change, chrono::Utc::now())
+                .map_err(Error::Task)
+        })
+    }
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error> {
         self.write(|c|{
             let current=read_projection(c,&record.version.version_id,false,true)?;
@@ -801,14 +826,15 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
             return Err(Error::Conflict("effective head changed".into()));
         }
     }
-    let task = crate::sqlite_tasks::read_bound_task(c, &command.task_id)?
-        .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
-    let next = plan.finish_task(task)?;
+    let mut binding =
+        crate::sqlite_tasks::read_item_binding(c, &command.task_id, &command.item_id)?
+            .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
+    plan.finish_task(&mut binding)?;
     let receipt = Receipt {
         publication_id: command.publication_id.clone(),
         version_id: command.version_id.clone(),
         task_id: command.task_id.clone(),
-        task_revision: next.task.state_revision,
+        task_revision: binding.head.state_revision,
     };
     c.execute(
         "INSERT INTO publication_batches VALUES(?1,?2,?3,?4,?5,?6)",
@@ -840,7 +866,12 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
             ));
         }
     }
-    crate::sqlite_tasks::write_task(c, &next, command.expected_revision)?;
+    crate::sqlite_tasks::persist_decided(
+        c,
+        &binding.head,
+        Some(&binding.item),
+        command.expected_revision,
+    )?;
     read_projection(c, &command.version_id, true, true)?;
     Ok(receipt)
 }

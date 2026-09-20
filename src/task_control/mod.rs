@@ -138,19 +138,64 @@ pub struct TaskSnapshot {
 }
 impl TaskSnapshot {
     pub fn visible_status(&self, run: &str) -> Status {
-        if !self.task.status.terminal()
-            && (self.task.accepted_run_id != run
-                || self
-                    .task
-                    .owner_run_id
-                    .as_deref()
-                    .is_some_and(|owner| owner != run))
-        {
-            Status::NeedsVerification
-        } else {
-            self.task.status
-        }
+        visible_status(
+            self.task.status,
+            &self.task.accepted_run_id,
+            self.task.owner_run_id.as_deref(),
+            run,
+        )
     }
+}
+fn visible_status(status: Status, accepted: &str, owner: Option<&str>, run: &str) -> Status {
+    if !status.terminal() && (accepted != run || owner.is_some_and(|owner| owner != run)) {
+        Status::NeedsVerification
+    } else {
+        status
+    }
+}
+/// Aggregate per-stage item counters maintained on the task row; they are
+/// the O(1) equivalent of scanning every item.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ItemCounts {
+    pub total: u64,
+    pub pending: u64,
+    pub running: u64,
+    pub finished: u64,
+    pub succeeded: u64,
+}
+/// O(1) projection of a task row for hot-loop guards and light transitions.
+/// Carries no frozen work or item list; the counters answer every
+/// aggregate question `decide` asks of the full item vector.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskHead {
+    pub task_id: String,
+    pub key: CommandKey,
+    pub status: Status,
+    pub state_revision: u64,
+    pub accepted_run_id: String,
+    pub owner_run_id: Option<String>,
+    pub last_progress_at: DateTime<Utc>,
+    pub result: Option<Value>,
+    pub counts: ItemCounts,
+}
+impl TaskHead {
+    pub fn visible_status(&self, run: &str) -> Status {
+        visible_status(
+            self.status,
+            &self.accepted_run_id,
+            self.owner_run_id.as_deref(),
+            run,
+        )
+    }
+}
+/// One task row plus the one item row a runner/commit path touches, with
+/// the occupancy fact the binding checks need. O(1) to read.
+#[derive(Debug, Clone)]
+pub struct ItemBinding {
+    pub head: TaskHead,
+    pub item: TaskItem,
+    /// Every scope key the item binds is occupied by this task.
+    pub scopes_bound: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestRecord {
@@ -286,6 +331,25 @@ pub trait TaskRepository {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error>;
+    /// Apply `change` to the caller-held snapshot in place. Semantically
+    /// equivalent to `transition` except a stale pre-image is refreshed once
+    /// instead of rejected: callers in the execution loop hold one snapshot
+    /// across transitions, so an implementation may verify the persisted
+    /// revision against `s` and reload only when it diverged. `decide`
+    /// guards still reject an illegal change on the actual state. On error
+    /// the snapshot contents are unspecified; callers re-read or propagate.
+    fn transition_light(
+        &self,
+        s: &mut TaskSnapshot,
+        run: &str,
+        change: Change,
+    ) -> Result<(), Error> {
+        let current = self
+            .read_task(&s.task.task_id)?
+            .ok_or(Error::TaskNotFound)?;
+        *s = self.transition(&s.task.task_id, current.task.state_revision, run, change)?;
+        Ok(())
+    }
     fn candidates(&self, run: &str) -> Result<Vec<TaskSnapshot>, Error>;
     fn reconcile(&self, run: &str) -> Result<usize, Error>;
 }
@@ -295,19 +359,21 @@ pub trait Executor {
     fn execute(&self, key: &CommandKey, item: &ItemSpec) -> ItemOutcome;
 }
 
-/// Pure state decision; adapter applies this under a revision-checked transaction.
+/// Pure state decision applied in place; the adapter persists the mutated
+/// snapshot under a revision-checked transaction. Callers compare
+/// `state_revision` before/after to detect no-op decisions.
 pub fn decide(
-    mut s: TaskSnapshot,
+    s: &mut TaskSnapshot,
     run: &str,
     change: Change,
     now: DateTime<Utc>,
-) -> Result<TaskSnapshot, Error> {
+) -> Result<(), Error> {
     if run.trim().is_empty() {
         return Err(Error::InvalidCommand("empty run identity".into()));
     }
     if s.task.status.terminal() {
         return if matches!(change, Change::RequestCancel | Change::Reconcile) {
-            Ok(s)
+            Ok(())
         } else {
             Err(Error::RevisionConflict)
         };
@@ -318,7 +384,7 @@ pub fn decide(
         if s.visible_status(run) != s.task.status {
             s.task.status = Status::NeedsVerification;
         } else {
-            return Ok(s);
+            return Ok(());
         }
     } else {
         if s.visible_status(run) == Status::NeedsVerification {
@@ -351,7 +417,7 @@ pub fn decide(
             }
             Change::RequestCancel => {
                 if s.task.status == Status::CancelRequested {
-                    return Ok(s);
+                    return Ok(());
                 }
                 s.task.status = Status::CancelRequested;
             }
@@ -443,5 +509,336 @@ pub fn decide(
             claim.state_revision = s.task.state_revision;
         }
     }
-    Ok(s)
+    Ok(())
+}
+
+/// The same pure decision as `decide`, evaluated on a `TaskHead` plus the
+/// single item the change touches instead of a fully materialized item
+/// vector. Counters on the head answer every aggregate guard (`any running`,
+/// `all pending`, finished/succeeded totals) and are updated in step so the
+/// caller's head stays the exact post-decision state. `item` must be the
+/// persisted row for item-scoped changes; `None` is only valid for
+/// head-level changes. Equivalence with `decide` is covered by tests.
+pub(crate) fn decide_head(
+    head: &mut TaskHead,
+    item: Option<&mut TaskItem>,
+    run: &str,
+    change: Change,
+    now: DateTime<Utc>,
+) -> Result<(), Error> {
+    if run.trim().is_empty() {
+        return Err(Error::InvalidCommand("empty run identity".into()));
+    }
+    if head.status.terminal() {
+        return if matches!(change, Change::RequestCancel | Change::Reconcile) {
+            Ok(())
+        } else {
+            Err(Error::RevisionConflict)
+        };
+    }
+    let cancellation_finished = matches!(change, Change::FinishCancellation);
+    let recovery = matches!(change, Change::Reconcile);
+    if recovery {
+        if head.visible_status(run) != head.status {
+            head.status = Status::NeedsVerification;
+        } else {
+            return Ok(());
+        }
+    } else {
+        if head.visible_status(run) == Status::NeedsVerification {
+            return Err(Error::NeedsVerification(
+                "old run or unresolved execution".into(),
+            ));
+        }
+        match change {
+            Change::Claim if head.status == Status::Pending && head.owner_run_id.is_none() => {
+                head.status = Status::Running;
+                head.owner_run_id = Some(run.into());
+            }
+            Change::RequireVerification { item_id, reason } => {
+                let bound = item
+                    .as_deref()
+                    .is_some_and(|i| i.spec.item_id == item_id && i.stage == Stage::Running);
+                if reason.trim().is_empty()
+                    || head.owner_run_id.as_deref() != Some(run)
+                    || !matches!(head.status, Status::Running | Status::CancelRequested)
+                    || !bound
+                {
+                    return Err(Error::RevisionConflict);
+                }
+                let previous = head.result.take();
+                let previous_status = head.status;
+                head.status = Status::NeedsVerification;
+                head.result = Some(serde_json::json!({"execution_uncertainty":{
+                    "item_id":item_id,"reason":reason,"previous_result":previous,"previous_status":previous_status
+                }}));
+            }
+            Change::RequestCancel => {
+                if head.status == Status::CancelRequested {
+                    return Ok(());
+                }
+                head.status = Status::CancelRequested;
+            }
+            Change::StartItem(id)
+                if head.status == Status::Running && head.owner_run_id.as_deref() == Some(run) =>
+            {
+                if head.counts.running != 0 {
+                    return Err(Error::RevisionConflict);
+                }
+                match item {
+                    Some(i) if i.spec.item_id == id && i.stage == Stage::Pending => {
+                        i.stage = Stage::Running;
+                        head.counts.pending -= 1;
+                        head.counts.running += 1;
+                    }
+                    _ => return Err(Error::RevisionConflict),
+                }
+            }
+            Change::FinishItem(id, outcome) if head.owner_run_id.as_deref() == Some(run) => {
+                if outcome.success && outcome.error.is_some() {
+                    return Err(Error::InvalidCommand("success with error".into()));
+                }
+                match item {
+                    Some(i) if i.spec.item_id == id && i.stage == Stage::Running => {
+                        i.stage = Stage::Finished;
+                        i.outcome = Some(outcome);
+                        head.counts.running -= 1;
+                        head.counts.finished += 1;
+                        head.counts.succeeded += u64::from(i.outcome.as_ref().unwrap().success);
+                    }
+                    _ => return Err(Error::RevisionConflict),
+                }
+            }
+            Change::FinishExecution | Change::FinishCancellation => {
+                if cancellation_finished && head.status != Status::CancelRequested {
+                    return Err(Error::RevisionConflict);
+                }
+                let owned = head.owner_run_id.as_deref() == Some(run);
+                let never_started =
+                    head.owner_run_id.is_none() && head.counts.pending == head.counts.total;
+                if !owned && !never_started || head.counts.running != 0 {
+                    return Err(Error::NeedsVerification(
+                        "execution has not safely ended".into(),
+                    ));
+                }
+                let (finished, success, total) = (
+                    head.counts.finished,
+                    head.counts.succeeded,
+                    head.counts.total,
+                );
+                head.status = if cancellation_finished && success < total {
+                    Status::Cancelled
+                } else if finished == total {
+                    if success == finished {
+                        Status::Succeeded
+                    } else if success == 0 {
+                        Status::Failed
+                    } else {
+                        Status::PartiallyFailed
+                    }
+                } else if head.status == Status::CancelRequested {
+                    Status::Cancelled
+                } else {
+                    return Err(Error::RevisionConflict);
+                };
+                head.result =
+                    Some(serde_json::json!({"finished_items":finished,"successful_items":success}));
+                if cancellation_finished && head.status == Status::Cancelled {
+                    head.result.as_mut().unwrap()["cancellation_acknowledged"] =
+                        serde_json::json!(true);
+                }
+            }
+            _ => return Err(Error::RevisionConflict),
+        }
+    }
+    head.state_revision = head
+        .state_revision
+        .checked_add(1)
+        .ok_or(Error::RevisionConflict)?;
+    if !recovery {
+        head.last_progress_at = now;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn snapshot(status: Status, owner: Option<&str>, stages: &[Stage]) -> TaskSnapshot {
+        let items = stages
+            .iter()
+            .enumerate()
+            .map(|(index, stage)| TaskItem {
+                spec: ItemSpec {
+                    item_id: format!("i{index}"),
+                    target: serde_json::json!({"symbol":format!("s{index}")}),
+                    progress_unit: "u".into(),
+                    frozen_inputs: serde_json::json!({}),
+                    scope_keys: BTreeSet::from([format!("k{index}")]),
+                },
+                stage: *stage,
+                outcome: if *stage == Stage::Finished {
+                    Some(ItemOutcome {
+                        success: true,
+                        error: None,
+                        evidence: None,
+                    })
+                } else {
+                    None
+                },
+            })
+            .collect();
+        let now = DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        TaskSnapshot {
+            task: TaskRecord {
+                task_id: "t".into(),
+                key: CommandKey {
+                    operation: "op".into(),
+                    dataset: "d".into(),
+                    contract_version: "v".into(),
+                },
+                status,
+                state_revision: 7,
+                accepted_run_id: "run".into(),
+                owner_run_id: owner.map(str::to_string),
+                created_at: now,
+                last_progress_at: now,
+                work: FrozenWork {
+                    items: vec![],
+                    scopes: BTreeSet::new(),
+                },
+                result: None,
+                retry_of: None,
+            },
+            items,
+            claims: vec![],
+        }
+    }
+    fn head_of(s: &TaskSnapshot) -> TaskHead {
+        TaskHead {
+            task_id: s.task.task_id.clone(),
+            key: s.task.key.clone(),
+            status: s.task.status,
+            state_revision: s.task.state_revision,
+            accepted_run_id: s.task.accepted_run_id.clone(),
+            owner_run_id: s.task.owner_run_id.clone(),
+            last_progress_at: s.task.last_progress_at,
+            result: s.task.result.clone(),
+            counts: ItemCounts {
+                total: s.items.len() as u64,
+                pending: s.items.iter().filter(|i| i.stage == Stage::Pending).count() as u64,
+                running: s.items.iter().filter(|i| i.stage == Stage::Running).count() as u64,
+                finished: s
+                    .items
+                    .iter()
+                    .filter(|i| i.stage == Stage::Finished)
+                    .count() as u64,
+                succeeded: s
+                    .items
+                    .iter()
+                    .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+                    .count() as u64,
+            },
+        }
+    }
+    /// Every guard/transition branch must produce identical outcomes whether
+    /// the decision reads a materialized item vector (`decide`) or a head plus
+    /// the one bound item (`decide_head`).
+    #[test]
+    fn decide_head_matches_decide_on_equivalent_states() {
+        let now = DateTime::parse_from_rfc3339("2025-01-01T00:00:01Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let ok = ItemOutcome {
+            success: true,
+            error: None,
+            evidence: None,
+        };
+        let fail = ItemOutcome {
+            success: false,
+            error: Some("x".into()),
+            evidence: None,
+        };
+        use Stage::{Finished as F, Pending as P, Running as R};
+        use Status::*;
+        let states = [
+            snapshot(Pending, None, &[P, P, P]),
+            snapshot(Running, Some("run"), &[F, R, P]),
+            snapshot(Running, Some("run"), &[F, F, F]),
+            snapshot(Running, Some("run"), &[F, P, P]),
+            snapshot(CancelRequested, Some("run"), &[F, P, P]),
+            snapshot(Running, Some("other"), &[P, P, P]),
+            snapshot(Succeeded, Some("run"), &[F, F]),
+            snapshot(Interrupted, Some("run"), &[R, P]),
+        ];
+        let changes = [
+            Change::Claim,
+            Change::StartItem("i2".into()),
+            Change::StartItem("i0".into()),
+            Change::FinishItem("i1".into(), ok.clone()),
+            Change::FinishItem("i2".into(), ok.clone()),
+            Change::FinishItem("i1".into(), fail.clone()),
+            Change::FinishItem("i9".into(), ok.clone()),
+            Change::FinishItem(
+                "i1".into(),
+                ItemOutcome {
+                    success: true,
+                    error: Some("x".into()),
+                    evidence: None,
+                },
+            ),
+            Change::RequireVerification {
+                item_id: "i1".into(),
+                reason: "uncertain".into(),
+            },
+            Change::RequireVerification {
+                item_id: "i1".into(),
+                reason: " ".into(),
+            },
+            Change::RequestCancel,
+            Change::FinishExecution,
+            Change::FinishCancellation,
+            Change::Reconcile,
+        ];
+        for base in &states {
+            for change in &changes {
+                let mut s = base.clone();
+                let full = decide(&mut s, "run", change.clone(), now).map_err(|e| e.to_string());
+                let mut head = head_of(base);
+                let mut item = change_item(base, change);
+                let light = decide_head(&mut head, item.as_mut(), "run", change.clone(), now)
+                    .map_err(|e| e.to_string());
+                assert_eq!(full, light, "{base:?} {change:?}");
+                if full.is_err() {
+                    continue;
+                }
+                let expected_head = head_of(&s);
+                assert_eq!(head, expected_head, "{base:?} {change:?}");
+                match &item {
+                    Some(item) => {
+                        let actual = s
+                            .items
+                            .iter()
+                            .find(|i| i.spec.item_id == item.spec.item_id)
+                            .unwrap();
+                        assert_eq!(item, actual, "{base:?} {change:?}");
+                    }
+                    None => assert_eq!(s.items, base.items, "{base:?} {change:?}"),
+                }
+            }
+        }
+    }
+    /// The bound item a head-level change would touch, mirroring the persisted
+    /// row the SQLite adapter would supply for that change.
+    fn change_item(s: &TaskSnapshot, change: &Change) -> Option<TaskItem> {
+        let id = match change {
+            Change::StartItem(id)
+            | Change::FinishItem(id, _)
+            | Change::RequireVerification { item_id: id, .. } => id,
+            _ => return None,
+        };
+        s.items.iter().find(|i| i.spec.item_id == *id).cloned()
+    }
 }

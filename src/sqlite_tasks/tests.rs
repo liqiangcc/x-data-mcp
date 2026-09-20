@@ -7,13 +7,29 @@ use crate::task_verification::{
 };
 use std::{cell::RefCell, process::Command as ProcessCommand};
 thread_local! {
-    static AFTER_ROW: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    static AFTER_ROW: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    static WRITES: RefCell<Option<std::collections::BTreeMap<&'static str, usize>>> =
+        const { RefCell::new(None) };
 }
 pub(super) fn after_task_row() {
     let hook = AFTER_ROW.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
         hook();
     }
+}
+/// Counts each UPDATE/DELETE statement by target, for O(items) transition proofs.
+pub(super) fn count_write(kind: &'static str) {
+    WRITES.with(|slot| {
+        if let Some(map) = slot.borrow_mut().as_mut() {
+            *map.entry(kind).or_default() += 1;
+        }
+    });
+}
+fn take_writes() -> std::collections::BTreeMap<&'static str, usize> {
+    WRITES.with(|slot| slot.borrow_mut().take().unwrap_or_default())
+}
+fn reset_writes() {
+    WRITES.with(|slot| *slot.borrow_mut() = Some(Default::default()));
 }
 pub(super) fn crash_point(point: &str) {
     if std::env::var("X_DATA_MCP_TEST_SQLITE_CRASH").as_deref() == Ok(point) {
@@ -618,4 +634,200 @@ fn read_uses_one_snapshot_when_another_connection_commits_between_queries() {
     let newer = db.read_task(&initial.task.task_id).unwrap().unwrap();
     assert_eq!(newer.task.state_revision, 1);
     assert!(newer.claims.iter().all(|c| c.state_revision == 1));
+}
+#[test]
+fn item_transitions_write_o1_rows_regardless_of_task_size() {
+    struct Ok;
+    impl Executor for Ok {
+        fn execute(&self, _: &CommandKey, _: &ItemSpec) -> ItemOutcome {
+            ItemOutcome {
+                success: true,
+                error: None,
+                evidence: None,
+            }
+        }
+    }
+    for symbols in [1usize, 40] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = SqliteTasks::new(dir.path().join("task.sqlite"));
+        db.initialize().unwrap();
+        let ctl =
+            TaskControl::new(db.clone(), "run".into(), vec![Box::new(LegacyCollection)]).unwrap();
+        let items: Vec<String> = (0..symbols).map(|i| format!("s{i}")).collect();
+        let accepted = ctl
+            .accept(
+                "o1",
+                LegacyCollection.key(),
+                serde_json::json!({"symbols":items,"periods":["day"]}),
+            )
+            .unwrap();
+        let RequestOutcome::Task(task) = accepted.record.outcome else {
+            panic!()
+        };
+        reset_writes();
+        let done = ctl.run_selected(*task, &Ok).unwrap().unwrap();
+        assert_eq!(done.task.status, Status::Succeeded);
+        let writes = take_writes();
+        // Each item is started and finished once: exactly 2 UPDATEs per
+        // item, one guarded task-row UPDATE per transition, and a single
+        // terminal occupancy release. No per-item whole-task rewrites.
+        assert_eq!(writes.get("task_items").copied().unwrap_or(0), 2 * symbols);
+        assert_eq!(writes.get("tasks").copied().unwrap_or(0), 2 * symbols + 2);
+        assert_eq!(writes.get("scope_occupancy").copied().unwrap_or(0), 1);
+    }
+}
+/// The head+item execution path must persist byte-identical task state to
+/// the held-snapshot path for the same change sequence — including the
+/// stale-head refresh a concurrent writer can force.
+#[test]
+fn head_item_transitions_persist_identically_to_snapshot_transitions() {
+    let dir = tempfile::tempdir().unwrap();
+    let full_db = SqliteTasks::new(dir.path().join("full.sqlite"));
+    let head_db = SqliteTasks::new(dir.path().join("head.sqlite"));
+    full_db.initialize().unwrap();
+    head_db.initialize().unwrap();
+    let accepted = |db: &SqliteTasks| {
+        let ctl =
+            TaskControl::new(db.clone(), "run".into(), vec![Box::new(LegacyCollection)]).unwrap();
+        let accepted = ctl
+            .accept(
+                "req",
+                LegacyCollection.key(),
+                serde_json::json!({"symbols":["a","b","c"],"periods":["day"]}),
+            )
+            .unwrap();
+        let RequestOutcome::Task(task) = accepted.record.outcome else {
+            panic!()
+        };
+        task
+    };
+    let mut s = *accepted(&full_db);
+    let head_task = accepted(&head_db);
+    let sid = s.task.task_id.clone();
+    let tid = head_task.task.task_id.clone();
+    let item_ids: Vec<String> = head_task
+        .items
+        .iter()
+        .map(|i| i.spec.item_id.clone())
+        .collect();
+    let mut head = head_db.read(|c| read_task_head(c, &tid)).unwrap().unwrap();
+    let outcome = ItemOutcome {
+        success: true,
+        error: None,
+        evidence: None,
+    };
+    // Wall-clock fields necessarily differ between the two executions;
+    // every persisted decision/state field must be identical.
+    let normalize = |mut s: TaskSnapshot| {
+        let epoch = chrono::DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        s.task.created_at = epoch;
+        s.task.last_progress_at = epoch;
+        s.task.task_id = "task".into();
+        for claim in &mut s.claims {
+            claim.task_id = "task".into();
+        }
+        s
+    };
+    let snapshot_of = |db: &SqliteTasks, id: &str| normalize(db.read_task(id).unwrap().unwrap());
+    // Claim through both paths; persisted snapshots must stay identical.
+    full_db
+        .transition_light(&mut s, "run", Change::Claim)
+        .unwrap();
+    head_db
+        .write(|c| transition_head_tx(c, &mut head, None, "run", Change::Claim, Utc::now()))
+        .unwrap();
+    assert_eq!(snapshot_of(&full_db, &sid), snapshot_of(&head_db, &tid));
+    for item_id in &item_ids {
+        let mut item = head_db
+            .read(|c| read_task_item(c, &tid, item_id))
+            .unwrap()
+            .unwrap();
+        for change in [
+            Change::StartItem(item_id.clone()),
+            Change::FinishItem(item_id.clone(), outcome.clone()),
+        ] {
+            full_db
+                .transition_light(&mut s, "run", change.clone())
+                .unwrap();
+            head_db
+                .write(|c| {
+                    transition_head_tx(c, &mut head, Some(&mut item), "run", change, Utc::now())
+                })
+                .unwrap();
+            assert_eq!(
+                snapshot_of(&full_db, &sid),
+                snapshot_of(&head_db, &tid),
+                "{item_id}"
+            );
+        }
+        // The execution-start marker must land on the head path too.
+        assert!(head_db.item_execution_started(&tid, item_id).unwrap());
+    }
+    full_db
+        .transition_light(&mut s, "run", Change::FinishExecution)
+        .unwrap();
+    head_db
+        .write(|c| {
+            transition_head_tx(
+                c,
+                &mut head,
+                None,
+                "run",
+                Change::FinishExecution,
+                Utc::now(),
+            )
+        })
+        .unwrap();
+    let done = head_db.read_task(&tid).unwrap().unwrap();
+    assert_eq!(snapshot_of(&full_db, &sid), normalize(done.clone()));
+    assert_eq!(done.task.status, Status::Succeeded);
+    assert!(done.claims.is_empty());
+}
+/// A caller-held head that another writer advanced is refreshed inside the
+/// transition instead of failing or deciding on stale facts.
+#[test]
+fn head_transition_refreshes_a_stale_held_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = SqliteTasks::new(dir.path().join("task.sqlite"));
+    db.initialize().unwrap();
+    let ctl = TaskControl::new(db.clone(), "run".into(), vec![Box::new(LegacyCollection)]).unwrap();
+    let accepted = ctl
+        .accept(
+            "req",
+            LegacyCollection.key(),
+            serde_json::json!({"symbols":["a"],"periods":["day"]}),
+        )
+        .unwrap();
+    let RequestOutcome::Task(task) = accepted.record.outcome else {
+        panic!()
+    };
+    let tid = task.task.task_id.clone();
+    let item_id = task.items[0].spec.item_id.clone();
+    // The runner holds a pending head while another writer claims.
+    let mut head = db.read(|c| read_task_head(c, &tid)).unwrap().unwrap();
+    let mut item = db
+        .read(|c| read_task_item(c, &tid, &item_id))
+        .unwrap()
+        .unwrap();
+    db.transition(&tid, 0, "run", Change::Claim).unwrap();
+    // StartItem on the stale pair refreshes to the claimed state, then
+    // applies the legal change.
+    db.write(|c| {
+        transition_head_tx(
+            c,
+            &mut head,
+            Some(&mut item),
+            "run",
+            Change::StartItem(item_id.clone()),
+            Utc::now(),
+        )
+    })
+    .unwrap();
+    let s = db.read_task(&tid).unwrap().unwrap();
+    assert_eq!(s.task.status, Status::Running);
+    assert_eq!(s.items[0].stage, Stage::Running);
+    assert_eq!(head.state_revision, s.task.state_revision);
+    assert!(db.item_execution_started(&tid, &item_id).unwrap());
 }

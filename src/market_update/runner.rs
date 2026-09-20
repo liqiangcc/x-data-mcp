@@ -62,82 +62,79 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         item_id: &str,
         provider: &dyn RangeProvider,
     ) -> Result<ItemExecution, Error> {
-        let mut task = self.repository.task(task_id)?;
+        let mut binding = self.binding(task_id, item_id, "range")?;
         let default_contract =
-            task.task.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
+            binding.head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
         let republish_contract =
-            task.task.key.contract_version == super::tasks::REPUBLISH_CONTRACT_VERSION;
+            binding.head.key.contract_version == super::tasks::REPUBLISH_CONTRACT_VERSION;
         if !matches!(
-            task.task.key.operation.as_str(),
+            binding.head.key.operation.as_str(),
             "update_data" | "backfill_data" | "republish_data"
-        ) || task.task.key.dataset != "market.daily"
+        ) || binding.head.key.dataset != "market.daily"
             || (!default_contract
                 && !republish_contract
-                && task.task.key.contract_version != super::tasks::CONTRACT_VERSION)
+                && binding.head.key.contract_version != super::tasks::CONTRACT_VERSION)
         {
             return Err(Error::Invalid(
                 "unsupported range execution contract".into(),
             ));
         }
-        let item = task
-            .items
-            .iter()
-            .find(|i| i.spec.item_id == item_id)
-            .cloned()
-            .ok_or_else(|| Error::Invalid("range item absent from accepted task".into()))?;
         if let Some(receipt) = self.repository.item_receipt(task_id, item_id)? {
             // Covering write-back is idempotent and may lag the commit after
             // a crash; replay re-establishes it from the frozen gap list.
             if default_contract {
-                self.ensure_default_coverings(&item.spec.frozen_inputs, &receipt.version_id)?;
+                self.ensure_default_coverings(
+                    &binding.item.spec.frozen_inputs,
+                    &receipt.version_id,
+                )?;
             }
             return Ok(ItemExecution::Published(receipt));
         }
-        if task.visible_status(&self.run_id) == Status::NeedsVerification {
+        if binding.head.visible_status(&self.run_id) == Status::NeedsVerification {
             return Err(Error::Task(crate::task_control::Error::NeedsVerification(
                 "old run or unresolved execution".into(),
             )));
         }
-        if item.stage == Stage::Running {
+        if binding.item.stage == Stage::Running {
             return Err(Error::OutcomeUnknown(
                 "running item has no verified result; inspect before any retry".into(),
             ));
         }
-        if task.task.status.terminal() || item.stage == Stage::Finished {
-            if item.outcome.as_ref().is_some_and(|o| o.success) {
+        if binding.head.status.terminal() || binding.item.stage == Stage::Finished {
+            if binding.item.outcome.as_ref().is_some_and(|o| o.success) {
                 return Err(Error::Integrity(
                     "successful range item has no receipt".into(),
                 ));
             }
-            return Ok(ItemExecution::NotPublished(Box::new(task)));
+            return self.not_published(task_id);
         }
-        if task.task.status == Status::CancelRequested {
-            let next = self.repository.transition_task(
-                task_id,
-                task.task.state_revision,
+        if binding.head.status == Status::CancelRequested {
+            self.repository.transition_task_head(
+                &mut binding.head,
+                None,
                 &self.run_id,
                 Change::FinishExecution,
             )?;
-            return Ok(ItemExecution::NotPublished(Box::new(next)));
+            return self.not_published(task_id);
         }
-        if task.task.status == Status::Pending {
-            task = self.repository.transition_task(
-                task_id,
-                task.task.state_revision,
+        if binding.head.status == Status::Pending {
+            self.repository.transition_task_head(
+                &mut binding.head,
+                None,
                 &self.run_id,
                 Change::Claim,
             )?;
         }
-        task = self.repository.transition_task(
-            task_id,
-            task.task.state_revision,
+        self.repository.transition_task_head(
+            &mut binding.head,
+            Some(&mut binding.item),
             &self.run_id,
             Change::StartItem(item_id.into()),
         )?;
         let outcome = if default_contract {
-            self.acquire_and_commit_default(&task, item_id, &item.spec.frozen_inputs, provider)
+            self.acquire_and_commit_default(&mut binding, item_id, provider)
         } else {
-            self.acquire_and_commit(&task, item_id, &item.spec.frozen_inputs, provider)
+            self.acquire_and_commit(&mut binding, item_id, provider)
         };
         match outcome {
             Ok(receipt) => Ok(ItemExecution::Published(receipt)),
@@ -146,7 +143,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 if let Some(receipt) = self.repository.item_receipt(task_id, item_id)? {
                     if default_contract {
                         self.ensure_default_coverings(
-                            &item.spec.frozen_inputs,
+                            &binding.item.spec.frozen_inputs,
                             &receipt.version_id,
                         )?;
                     }
@@ -161,9 +158,9 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                                 | crate::task_control::Error::OutcomeUnknown(_)
                         )
                 ) {
-                    let current = self.repository.task(task_id)?;
-                    if let Err(recording) = self.repository.transition_task(
-                        task_id, current.task.state_revision, &self.run_id,
+                    let mut binding = self.binding(task_id, item_id, "range")?;
+                    if let Err(recording) = self.repository.transition_task_head(
+                        &mut binding.head, Some(&mut binding.item), &self.run_id,
                         Change::RequireVerification {
                             item_id: item_id.into(),
                             reason: "item execution result not confirmed after acquisition/derivation/publication; committed receipt not yet established".into(),
@@ -178,12 +175,12 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                     }
                     return Err(error);
                 }
-                let current = self.repository.task(task_id)?;
+                let mut binding = self.binding(task_id, item_id, "range")?;
                 let cancelled_without_publication = matches!(error, Error::Conflict(_))
-                    && current.task.status == Status::CancelRequested;
-                let next = self.repository.transition_task(
-                    task_id,
-                    current.task.state_revision,
+                    && binding.head.status == Status::CancelRequested;
+                self.repository.transition_task_head(
+                    &mut binding.head,
+                    Some(&mut binding.item),
                     &self.run_id,
                     Change::FinishItem(
                         item_id.into(),
@@ -198,46 +195,69 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                         },
                     ),
                 )?;
-                let next = if next.items.iter().all(|i| i.stage == Stage::Finished)
-                    || next.task.status == Status::CancelRequested
+                if binding.head.counts.finished == binding.head.counts.total
+                    || binding.head.status == Status::CancelRequested
                 {
-                    self.repository.transition_task(
-                        task_id,
-                        next.task.state_revision,
+                    self.repository.transition_task_head(
+                        &mut binding.head,
+                        None,
                         &self.run_id,
                         if cancelled_without_publication {
                             Change::FinishCancellation
                         } else {
                             Change::FinishExecution
                         },
-                    )?
-                } else {
-                    next
-                };
-                Ok(ItemExecution::NotPublished(Box::new(next)))
+                    )?;
+                }
+                self.not_published(task_id)
             }
         }
     }
+    /// O(1) head+item binding for this execution step; a missing item
+    /// produces the same invalid-command error the snapshot path did.
+    fn binding(
+        &self,
+        task_id: &str,
+        item_id: &str,
+        kind: &str,
+    ) -> Result<crate::task_control::ItemBinding, Error> {
+        match self.repository.task_item_binding(task_id, item_id)? {
+            Some(binding) => Ok(binding),
+            None => {
+                self.repository.task_head(task_id)?;
+                Err(Error::Invalid(format!(
+                    "{kind} item absent from accepted task"
+                )))
+            }
+        }
+    }
+    fn not_published(&self, task_id: &str) -> Result<ItemExecution, Error> {
+        Ok(ItemExecution::NotPublished(Box::new(
+            self.repository.task(task_id)?,
+        )))
+    }
     fn acquire_and_commit(
         &self,
-        task: &TaskSnapshot,
+        binding: &mut crate::task_control::ItemBinding,
         item_id: &str,
-        frozen: &Value,
         provider: &dyn RangeProvider,
     ) -> Result<Receipt, Error> {
+        let frozen = &binding.item.spec.frozen_inputs;
         let base_id = frozen["base_version_id"]
             .as_str()
-            .ok_or_else(|| Error::Integrity("frozen base missing".into()))?;
+            .ok_or_else(|| Error::Integrity("frozen base missing".into()))?
+            .to_string();
         let base_digest = frozen["base_integrity_sha256"]
             .as_str()
-            .ok_or_else(|| Error::Integrity("frozen base digest missing".into()))?;
+            .ok_or_else(|| Error::Integrity("frozen base digest missing".into()))?
+            .to_string();
         let range = DateRange {
             start: serde_json::from_value(frozen["range"]["start"].clone())
                 .map_err(|e| Error::Integrity(e.to_string()))?,
             end: serde_json::from_value(frozen["range"]["end"].clone())
                 .map_err(|e| Error::Integrity(e.to_string()))?,
         };
-        self.commit_acquired_range(task, item_id, base_id, base_digest, &range, provider)
+        self.commit_acquired_range(binding, item_id, &base_id, &base_digest, &range, provider)
     }
     /// Default-range execution (#147): every required range — refresh plus
     /// each frozen gap range for `update`, frozen gap ranges only for
@@ -247,15 +267,14 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
     /// (and therefore every required range) is verified.
     fn acquire_and_commit_default(
         &self,
-        task: &TaskSnapshot,
+        binding: &mut crate::task_control::ItemBinding,
         item_id: &str,
-        frozen: &Value,
         provider: &dyn RangeProvider,
     ) -> Result<Receipt, Error> {
-        let parsed = super::tasks::parse_default_frozen(frozen)?;
+        let parsed = super::tasks::parse_default_frozen(&binding.item.spec.frozen_inputs)?;
         // Shape/operation consistency: `update` freezes a refresh range,
         // `backfill` never does; anything else is a frozen-shape violation.
-        match task.task.key.operation.as_str() {
+        match binding.head.key.operation.as_str() {
             "update_data" if parsed.refresh_range.is_none() => {
                 return Err(Error::Integrity(
                     "default update item missing frozen refresh range".into(),
@@ -270,14 +289,14 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         }
         let union = parsed.union()?;
         let receipt = self.commit_acquired_range(
-            task,
+            binding,
             item_id,
             &parsed.base_version_id,
             &parsed.base_integrity_sha256,
             &union,
             provider,
         )?;
-        self.ensure_default_coverings(frozen, &receipt.version_id)?;
+        self.ensure_default_coverings(&binding.item.spec.frozen_inputs, &receipt.version_id)?;
         Ok(receipt)
     }
     /// Append covering bindings for frozen gaps the committed version
@@ -320,7 +339,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
     /// verification and the atomic commit/receipt + finish_item.
     fn commit_acquired_range(
         &self,
-        task: &TaskSnapshot,
+        binding: &mut crate::task_control::ItemBinding,
         item_id: &str,
         base_id: &str,
         base_digest: &str,
@@ -334,7 +353,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             ));
         }
         let id = crate::hash::sha256(
-            serde_json::json!([task.task.task_id, item_id])
+            serde_json::json!([binding.head.task_id, item_id])
                 .to_string()
                 .as_bytes(),
         );
@@ -342,9 +361,9 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         let acquired = provider
             .acquire(&base, range, &candidate_id)
             .map_err(|e| Error::Invalid(e.to_string()))?;
-        let current = self.repository.task(&task.task.task_id)?;
-        if current.task.status != Status::Running
-            || current.task.state_revision != task.task.state_revision
+        let current = self.repository.task_head(&binding.head.task_id)?;
+        if current.status != Status::Running
+            || current.state_revision != binding.head.state_revision
         {
             return Err(Error::Conflict(
                 "task changed or cancelled during acquisition".into(),
@@ -380,10 +399,10 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 } else {
                     base_id.into()
                 },
-                task_id: task.task.task_id.clone(),
+                task_id: binding.head.task_id.clone(),
                 item_id: item_id.into(),
                 run_id: self.run_id.clone(),
-                expected_revision: task.task.state_revision,
+                expected_revision: binding.head.state_revision,
                 intent: PublishIntent::Daily {
                     expected_head: Some(base_id.into()),
                 },

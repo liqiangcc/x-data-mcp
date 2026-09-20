@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 14;
-pub(crate) const MIGRATIONS: [&str; 14] = [
+pub const SCHEMA_VERSION: u32 = 15;
+pub(crate) const MIGRATIONS: [&str; 15] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
     include_str!("../migrations/tasks/003_market.sql"),
@@ -24,6 +24,7 @@ pub(crate) const MIGRATIONS: [&str; 14] = [
     include_str!("../migrations/tasks/012_gap_verification_decisions.sql"),
     include_str!("../migrations/tasks/013_r7_raw.sql"),
     include_str!("../migrations/tasks/014_segmented_bars.sql"),
+    include_str!("../migrations/tasks/015_task_counters.sql"),
 ];
 #[derive(Clone)]
 pub struct SqliteTasks {
@@ -43,6 +44,16 @@ impl SqliteTasks {
     }
     pub fn path(&self) -> &Path {
         &self.path
+    }
+    /// Truncate-checkpoint the WAL after a bounded batch of writes.
+    /// Returns SQLite's (busy, log_frames, checkpointed_frames); a busy
+    /// result is a fact for the caller to report, never silently ignored.
+    pub fn checkpoint_truncate(&self) -> Result<(i64, i64, i64), Error> {
+        let c = self.connect(false)?;
+        c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .map_err(storage)
     }
     /// Mechanical durable fact only: whether this item's StartItem transition
     /// committed a start marker. No contract or business filtering here.
@@ -158,15 +169,25 @@ fn configure(c: &Connection, busy: Duration) -> Result<(), Error> {
         .map_err(storage)?;
     c.pragma_update(None, "synchronous", "FULL")
         .map_err(storage)?;
-    let (fk, sync, mode): (i64, i64, String) = (
+    // WAL space must stay bounded: autocheckpoint every ~4MiB of frames and
+    // never retain a larger high-water WAL after checkpoint.
+    c.pragma_update(None, "wal_autocheckpoint", 1000)
+        .map_err(storage)?;
+    c.pragma_update(None, "journal_size_limit", 16_777_216)
+        .map_err(storage)?;
+    let (fk, sync, mode, autocp, jsl): (i64, i64, String, i64, i64) = (
         c.query_row("PRAGMA foreign_keys", [], |r| r.get(0))
             .map_err(storage)?,
         c.query_row("PRAGMA synchronous", [], |r| r.get(0))
             .map_err(storage)?,
         c.query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .map_err(storage)?,
+        c.query_row("PRAGMA wal_autocheckpoint", [], |r| r.get(0))
+            .map_err(storage)?,
+        c.query_row("PRAGMA journal_size_limit", [], |r| r.get(0))
+            .map_err(storage)?,
     );
-    if fk != 1 || sync != 2 || mode != "wal" {
+    if fk != 1 || sync != 2 || mode != "wal" || autocp != 1000 || jsl != 16_777_216 {
         return Err(Error::StorageUnavailable(
             "connection pragmas differ from task contract".into(),
         ));
@@ -231,8 +252,16 @@ fn storage(e: impl std::fmt::Display) -> Error {
 fn inconsistent(s: &str) -> Error {
     Error::NeedsVerification(s.into())
 }
+#[derive(Default)]
+struct ItemCounts {
+    total: i64,
+    pending: i64,
+    running: i64,
+    finished: i64,
+    succeeded: i64,
+}
 fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
-    let mut stmt=c.prepare("SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of FROM tasks WHERE task_id=?1").map_err(storage)?;
+    let mut stmt=c.prepare("SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded FROM tasks WHERE task_id=?1").map_err(storage)?;
     let mut rows = stmt.query([id]).map_err(storage)?;
     let Some(r) = rows.next().map_err(storage)? else {
         return Ok(None);
@@ -263,6 +292,13 @@ fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
             .transpose()?,
         retry_of: r.get(9).map_err(storage)?,
     };
+    let counts = ItemCounts {
+        total: r.get(10).map_err(storage)?,
+        pending: r.get(11).map_err(storage)?,
+        running: r.get(12).map_err(storage)?,
+        finished: r.get(13).map_err(storage)?,
+        succeeded: r.get(14).map_err(storage)?,
+    };
     #[cfg(test)]
     tests::after_task_row();
     let mut stmt=c.prepare("SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=?1 ORDER BY item_id").map_err(storage)?;
@@ -286,13 +322,19 @@ fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
                 .transpose()?,
         });
     }
-    let mut stmt=c.prepare("SELECT scope_key,task_id,state_revision FROM scope_occupancy WHERE task_id=?1 ORDER BY scope_key").map_err(storage)?;
+    // Occupancy rows are a static scope→task binding; the claim's revision
+    // is the task's current revision, maintained on the task row.
+    let mut stmt = c
+        .prepare(
+            "SELECT scope_key,task_id FROM scope_occupancy WHERE task_id=?1 ORDER BY scope_key",
+        )
+        .map_err(storage)?;
     let claims = stmt
         .query_map([id], |r| {
             Ok(ScopeClaim {
                 scope_key: r.get(0)?,
                 task_id: r.get(1)?,
-                state_revision: read_revision(r, 2)?,
+                state_revision: task.state_revision,
             })
         })
         .map_err(storage)?
@@ -311,12 +353,16 @@ fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
         items,
         claims,
     };
-    validate_snapshot(&s, &scopes)?;
+    validate_snapshot(&s, &scopes, &counts)?;
     crate::sqlite_verification::validate_task_link(c, &s)?;
     crate::sqlite_market::publication_checks::validate_task_link(c, &s)?;
     Ok(Some(s))
 }
-fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), Error> {
+fn validate_snapshot(
+    s: &TaskSnapshot,
+    scopes: &BTreeSet<String>,
+    counts: &ItemCounts,
+) -> Result<(), Error> {
     let uncertainty = s.execution_uncertainty()?;
     s.task
         .work
@@ -374,7 +420,16 @@ fn validate_snapshot(s: &TaskSnapshot, scopes: &BTreeSet<String>) -> Result<(), 
         .iter()
         .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
         .count();
+    let running = s.items.iter().filter(|i| i.stage == Stage::Running).count();
     let total = s.items.len();
+    if counts.total != total as i64
+        || counts.pending != (total - finished - running) as i64
+        || counts.running != running as i64
+        || counts.finished != finished as i64
+        || counts.succeeded != success as i64
+    {
+        return Err(inconsistent("task item counters diverged from items"));
+    }
     let valid = match s.task.status {
         Status::Succeeded => finished == total && success == total,
         Status::Failed => finished == total && success == 0,
@@ -491,33 +546,359 @@ pub(crate) fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSna
         _ => Err(inconsistent("task binding/execution missing")),
     }
 }
-pub(crate) fn write_task(c: &Connection, s: &TaskSnapshot, expected: u64) -> Result<(), Error> {
-    let changed=c.execute("UPDATE tasks SET status=?1,state_revision=?2,owner_run_id=?3,last_progress_at=?4,result_json=?5 WHERE task_id=?6 AND state_revision=?7",params![tag(&s.task.status),db_revision(s.task.state_revision)?,s.task.owner_run_id,s.task.last_progress_at.to_rfc3339(),s.task.result.as_ref().map(encode).transpose()?,s.task.task_id,db_revision(expected)?]).map_err(storage)?;
-    if changed != 1 {
-        return Err(Error::RevisionConflict);
+/// O(1) task-row projection: every field the runner/commit guards need,
+/// with no frozen-work or item-list decode.
+pub(crate) fn read_task_head(c: &Connection, id: &str) -> Result<Option<TaskHead>, Error> {
+    let mut stmt = c.prepare("SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,last_progress_at,result_json,item_count,items_pending,items_running,items_finished,items_succeeded FROM tasks WHERE task_id=?1").map_err(storage)?;
+    let mut rows = stmt.query([id]).map_err(storage)?;
+    let Some(r) = rows.next().map_err(storage)? else {
+        return Ok(None);
+    };
+    let status: String = r.get(1).map_err(storage)?;
+    Ok(Some(TaskHead {
+        task_id: id.into(),
+        key: decode(r.get(0).map_err(storage)?)?,
+        status: decode(format!("\"{status}\""))?,
+        state_revision: read_revision(r, 2).map_err(storage)?,
+        accepted_run_id: r.get(3).map_err(storage)?,
+        owner_run_id: r.get(4).map_err(storage)?,
+        last_progress_at: r
+            .get::<_, String>(5)
+            .map_err(storage)?
+            .parse()
+            .map_err(storage)?,
+        result: r
+            .get::<_, Option<String>>(6)
+            .map_err(storage)?
+            .map(decode)
+            .transpose()?,
+        counts: crate::task_control::ItemCounts {
+            total: r.get::<_, i64>(7).map_err(storage)? as u64,
+            pending: r.get::<_, i64>(8).map_err(storage)? as u64,
+            running: r.get::<_, i64>(9).map_err(storage)? as u64,
+            finished: r.get::<_, i64>(10).map_err(storage)? as u64,
+            succeeded: r.get::<_, i64>(11).map_err(storage)? as u64,
+        },
+    }))
+}
+fn read_task_item(c: &Connection, task_id: &str, item_id: &str) -> Result<Option<TaskItem>, Error> {
+    let mut stmt = c.prepare("SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=?1 AND item_id=?2").map_err(storage)?;
+    let mut rows = stmt.query(params![task_id, item_id]).map_err(storage)?;
+    let Some(r) = rows.next().map_err(storage)? else {
+        return Ok(None);
+    };
+    let stage: String = r.get(5).map_err(storage)?;
+    Ok(Some(TaskItem {
+        spec: ItemSpec {
+            item_id: r.get(0).map_err(storage)?,
+            target: decode(r.get(1).map_err(storage)?)?,
+            progress_unit: r.get(2).map_err(storage)?,
+            frozen_inputs: decode(r.get(3).map_err(storage)?)?,
+            scope_keys: decode(r.get(4).map_err(storage)?)?,
+        },
+        stage: decode(format!("\"{stage}\""))?,
+        outcome: r
+            .get::<_, Option<String>>(6)
+            .map_err(storage)?
+            .map(decode)
+            .transpose()?,
+    }))
+}
+/// One task row plus one item row plus the occupancy coverage fact — the
+/// complete O(1) pre-image for per-item execution and commit binding.
+/// `None` means the task or the item row is absent.
+pub(crate) fn read_item_binding(
+    c: &Connection,
+    task_id: &str,
+    item_id: &str,
+) -> Result<Option<ItemBinding>, Error> {
+    let (Some(head), Some(item)) = (
+        read_task_head(c, task_id)?,
+        read_task_item(c, task_id, item_id)?,
+    ) else {
+        return Ok(None);
+    };
+    let bound: i64 = c
+        .query_row(
+            "SELECT count(*) FROM scope_occupancy WHERE task_id=?1 AND scope_key IN (SELECT value FROM json_each(?2))",
+            params![task_id, encode(&item.spec.scope_keys)?],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    Ok(Some(ItemBinding {
+        head,
+        scopes_bound: bound > 0 && bound as usize == item.spec.scope_keys.len(),
+        item,
+    }))
+}
+/// Persist a `decide_head`-decided binding: the touched item row (when the
+/// change carried one), the guarded task row with matching counter deltas,
+/// and the single terminal occupancy release. `expected` is the pre-decision
+/// revision.
+pub(crate) fn persist_decided(
+    c: &Connection,
+    head: &TaskHead,
+    item: Option<&TaskItem>,
+    expected: u64,
+) -> Result<(), Error> {
+    // Item rows are written before the guarded task-row update so a counter
+    // recount observes the post-transition state.
+    if let Some(item) = item {
+        write_item_row(c, &head.task_id, item)?;
     }
-    for i in &s.items {
+    let counter = counter_delta(item.is_some(), item.and_then(|i| i.outcome.as_ref()));
+    guarded_task_update(c, &TaskRow::from(head), counter, expected)?;
+    if head.status.terminal() {
+        #[cfg(test)]
+        tests::count_write("scope_occupancy");
         c.execute(
-            "UPDATE task_items SET stage=?1,outcome_json=?2 WHERE task_id=?3 AND item_id=?4",
+            "DELETE FROM scope_occupancy WHERE task_id=?1",
+            [&head.task_id],
+        )
+        .map_err(storage)?;
+    }
+    Ok(())
+}
+/// O(1) transition on a caller-held head+item pair: verifies the persisted
+/// revision (refreshing the pair in place when stale), applies `decide_head`,
+/// and persists only the touched rows. Equivalent to `transition_light` for
+/// callers that never materialize the full item vector.
+pub(crate) fn transition_head_tx(
+    c: &Connection,
+    head: &mut TaskHead,
+    mut item: Option<&mut TaskItem>,
+    run: &str,
+    change: Change,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), Error> {
+    let persisted: Option<i64> = c
+        .query_row(
+            "SELECT state_revision FROM tasks WHERE task_id=?1",
+            [&head.task_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    match persisted {
+        None => return Err(Error::TaskNotFound),
+        Some(revision) if revision == db_revision(head.state_revision)? => {}
+        Some(_) => {
+            *head = read_task_head(c, &head.task_id)?.ok_or(Error::TaskNotFound)?;
+            if let Some(item) = item.as_deref_mut() {
+                let item_id = item.spec.item_id.clone();
+                *item = read_task_item(c, &head.task_id, &item_id)?
+                    .ok_or_else(|| inconsistent("bound item missing"))?;
+            }
+        }
+    }
+    let old_revision = head.state_revision;
+    // StartItem/FinishItem rewrite the item row; RequireVerification binds
+    // the item but leaves its row at `running`.
+    let writes_item = matches!(change, Change::StartItem(_) | Change::FinishItem(..));
+    let started_item = match &change {
+        Change::StartItem(item_id) => Some(item_id.clone()),
+        _ => None,
+    };
+    decide_head(head, item.as_deref_mut(), run, change, now)?;
+    if head.state_revision == old_revision {
+        return Ok(());
+    }
+    persist_decided(
+        c,
+        head,
+        if writes_item { item.as_deref() } else { None },
+        old_revision,
+    )?;
+    if let Some(started_item) = started_item {
+        // Execution-start marker lands atomically with the guarded
+        // item transition.
+        c.execute(
+            "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
             params![
-                tag(&i.stage),
-                i.outcome.as_ref().map(encode).transpose()?,
-                s.task.task_id,
-                i.spec.item_id
+                head.task_id,
+                started_item,
+                run,
+                db_revision(head.state_revision)?,
+                now.to_rfc3339()
             ],
         )
         .map_err(storage)?;
     }
+    Ok(())
+}
+fn write_items_delta(c: &Connection, s: &TaskSnapshot, changed: Option<&str>) -> Result<(), Error> {
+    match changed {
+        Some(id) => {
+            let item = s
+                .items
+                .iter()
+                .find(|i| i.spec.item_id == id)
+                .ok_or_else(|| inconsistent("changed item absent from task"))?;
+            write_item_row(c, &s.task.task_id, item)?;
+        }
+        None => {
+            // Diff against persisted rows so a whole-snapshot write only
+            // updates items that actually changed.
+            let mut stmt = c
+                .prepare("SELECT item_id,stage,outcome_json FROM task_items WHERE task_id=?1")
+                .map_err(storage)?;
+            let persisted = stmt
+                .query_map([&s.task.task_id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        (r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?),
+                    ))
+                })
+                .map_err(storage)?
+                .collect::<Result<std::collections::HashMap<String, _>, _>>()
+                .map_err(storage)?;
+            for item in &s.items {
+                let outcome = item.outcome.as_ref().map(encode).transpose()?;
+                match persisted.get(&item.spec.item_id) {
+                    Some((stage, old)) if *stage == tag(&item.stage) && *old == outcome => {}
+                    _ => write_item_row(c, &s.task.task_id, item)?,
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn write_item_row(c: &Connection, task_id: &str, item: &TaskItem) -> Result<(), Error> {
+    #[cfg(test)]
+    tests::count_write("task_items");
+    c.execute(
+        "UPDATE task_items SET stage=?1,outcome_json=?2 WHERE task_id=?3 AND item_id=?4",
+        params![
+            tag(&item.stage),
+            item.outcome.as_ref().map(encode).transpose()?,
+            task_id,
+            item.spec.item_id
+        ],
+    )
+    .map_err(storage)?;
+    Ok(())
+}
+/// The task-row fields a decided transition writes; shared shape of the
+/// snapshot and head persistence paths.
+struct TaskRow<'a> {
+    task_id: &'a str,
+    status: Status,
+    revision: u64,
+    owner: &'a Option<String>,
+    progress: &'a chrono::DateTime<Utc>,
+    result: &'a Option<serde_json::Value>,
+}
+impl<'a> From<&'a TaskHead> for TaskRow<'a> {
+    fn from(head: &'a TaskHead) -> Self {
+        Self {
+            task_id: &head.task_id,
+            status: head.status,
+            revision: head.state_revision,
+            owner: &head.owner_run_id,
+            progress: &head.last_progress_at,
+            result: &head.result,
+        }
+    }
+}
+/// Guarded task-row update shared by the snapshot and head paths.
+/// `counter` is the item-counter SQL fragment: incremental deltas for
+/// single-item transitions, a recount for whole-snapshot writes, empty for
+/// changes that cannot alter any item stage.
+fn guarded_task_update(
+    c: &Connection,
+    row: &TaskRow<'_>,
+    counter: &str,
+    expected: u64,
+) -> Result<(), Error> {
+    let sql = format!(
+        "UPDATE tasks SET status=?1,state_revision=?2,owner_run_id=?3,last_progress_at=?4,result_json=?5{counter} WHERE task_id=?6 AND state_revision=?7"
+    );
+    #[cfg(test)]
+    tests::count_write("tasks");
+    let changed_rows = c
+        .execute(
+            &sql,
+            params![
+                tag(&row.status),
+                db_revision(row.revision)?,
+                row.owner,
+                row.progress.to_rfc3339(),
+                row.result.as_ref().map(encode).transpose()?,
+                row.task_id,
+                db_revision(expected)?
+            ],
+        )
+        .map_err(storage)?;
+    if changed_rows != 1 {
+        return Err(Error::RevisionConflict);
+    }
+    Ok(())
+}
+/// Counter SQL fragment matching the in-memory arithmetic of a decided
+/// change: `Some(item_id)` + no outcome is a start, an outcome is a finish;
+/// `None` means the change could not touch any item.
+fn counter_delta(changed: bool, outcome: Option<&ItemOutcome>) -> &'static str {
+    match (changed, outcome) {
+        (true, None) => ",items_pending=items_pending-1,items_running=items_running+1",
+        (true, Some(o)) if o.success => {
+            ",items_running=items_running-1,items_finished=items_finished+1,items_succeeded=items_succeeded+1"
+        }
+        (true, Some(_)) => ",items_running=items_running-1,items_finished=items_finished+1",
+        (false, _) => "",
+    }
+}
+const RECOUNT_COUNTERS: &str = ",item_count=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id),items_pending=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id AND i.stage='pending'),items_running=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id AND i.stage='running'),items_finished=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id AND i.stage='finished'),items_succeeded=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id AND i.stage='finished' AND json_extract(i.outcome_json,'$.success')=1)";
+fn update_task_row(
+    c: &Connection,
+    s: &TaskSnapshot,
+    expected: u64,
+    changed: Option<&str>,
+    outcome: Option<&ItemOutcome>,
+) -> Result<(), Error> {
+    // Item counters are maintained either incrementally (single-item
+    // transition) or by recount (whole-snapshot write).
+    let counter = if changed.is_none() {
+        RECOUNT_COUNTERS
+    } else {
+        counter_delta(true, outcome)
+    };
+    guarded_task_update(
+        c,
+        &TaskRow {
+            task_id: &s.task.task_id,
+            status: s.task.status,
+            revision: s.task.state_revision,
+            owner: &s.task.owner_run_id,
+            progress: &s.task.last_progress_at,
+            result: &s.task.result,
+        },
+        counter,
+        expected,
+    )
+}
+pub(crate) fn write_task(c: &Connection, s: &TaskSnapshot, expected: u64) -> Result<(), Error> {
+    write_task_delta(c, s, expected, None, None)
+}
+/// Persist `next` (the post-transition snapshot). `changed`/`outcome`
+/// identify the single item this transition touched, allowing O(1) writes;
+/// `None` diffs persisted rows and recounts counters instead.
+pub(crate) fn write_task_delta(
+    c: &Connection,
+    s: &TaskSnapshot,
+    expected: u64,
+    changed: Option<&str>,
+    outcome: Option<&ItemOutcome>,
+) -> Result<(), Error> {
+    // Item rows are written before the guarded task-row update so a
+    // counter recount observes the post-transition state.
+    write_items_delta(c, s, changed)?;
+    update_task_row(c, s, expected, changed, outcome)?;
     if s.task.status.terminal() {
+        #[cfg(test)]
+        tests::count_write("scope_occupancy");
         c.execute(
             "DELETE FROM scope_occupancy WHERE task_id=?1",
             [&s.task.task_id],
-        )
-        .map_err(storage)?;
-    } else {
-        c.execute(
-            "UPDATE scope_occupancy SET state_revision=?1 WHERE task_id=?2",
-            params![db_revision(s.task.state_revision)?, s.task.task_id],
         )
         .map_err(storage)?;
     }
@@ -565,7 +946,7 @@ impl TaskRepository for SqliteTasks {
             if !conflicts.is_empty(){return Err(Error::RangeConflict(conflicts));}
             let task_id:String=c.query_row("SELECT 'task-' || lower(hex(randomblob(16)))",[],|r|r.get(0)).map_err(storage)?;
             let now=Utc::now().to_rfc3339();
-            c.execute("INSERT INTO tasks VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,?5,NULL,?6)",params![task_id,encode(&execution_key)?,run,now,encode(work)?,retry.map(|g|&g.original_task_id)]).map_err(storage)?;
+            c.execute("INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending) VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,?5,NULL,?6,?7,?7)",params![task_id,encode(&execution_key)?,run,now,encode(work)?,retry.map(|g|&g.original_task_id),work.items.len() as u32]).map_err(storage)?;
             for i in &work.items {c.execute("INSERT INTO task_items VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)",params![task_id,i.item_id,encode(&i.target)?,i.progress_unit,encode(&i.frozen_inputs)?,encode(&i.scope_keys)?]).map_err(storage)?;}
             for scope in &work.scopes {c.execute("INSERT INTO task_scopes VALUES(?1,?2)",params![task_id,scope]).map_err(storage)?;c.execute("INSERT INTO scope_occupancy VALUES(?1,?2,0)",params![scope,task_id]).map_err(storage)?;}
             let raw=encode(command)?;
@@ -590,7 +971,8 @@ impl TaskRepository for SqliteTasks {
                 _ => None,
             };
             let now = Utc::now();
-            let next = decide(old, run, change, now)?;
+            let mut next = old;
+            decide(&mut next, run, change, now)?;
             if next.task.state_revision != revision {
                 write_task(c, &next, revision)?;
                 if let Some(item_id) = started_item {
@@ -621,8 +1003,67 @@ impl TaskRepository for SqliteTasks {
         self.write(|c|{
         let mut stmt=c.prepare("SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled','interrupted') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1))").map_err(storage)?;
         let ids=stmt.query_map([run],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
-        let mut count=0;for id in ids{let old=read_bound_task(c,&id)?.ok_or(Error::TaskNotFound)?;let rev=old.task.state_revision;let next=decide(old,run,Change::Reconcile,Utc::now())?;if next.task.state_revision!=rev{write_task(c,&next,rev)?;count+=1;}}Ok(count)
+        let mut count=0;for id in ids{let mut next=read_bound_task(c,&id)?.ok_or(Error::TaskNotFound)?;let rev=next.task.state_revision;decide(&mut next,run,Change::Reconcile,Utc::now())?;if next.task.state_revision!=rev{write_task(c,&next,rev)?;count+=1;}}Ok(count)
     })
+    }
+    /// O(1) per-item transition: verifies only the task-row revision (which
+    /// serializes every mutation), decides on the caller-held snapshot in
+    /// place, and writes just the task row plus the one touched item row.
+    /// A stale pre-image is refreshed once — equivalent to the caller
+    /// re-reading before `transition` — and `decide` guards still reject
+    /// illegal changes on the actual state.
+    fn transition_light(
+        &self,
+        s: &mut TaskSnapshot,
+        run: &str,
+        change: Change,
+    ) -> Result<(), Error> {
+        self.write(|c| {
+            let persisted: Option<i64> = c
+                .query_row(
+                    "SELECT state_revision FROM tasks WHERE task_id=?1",
+                    [&s.task.task_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage)?;
+            match persisted {
+                None => return Err(Error::TaskNotFound),
+                // Revision serializes all task/item/occupancy writes, so the
+                // caller's snapshot is the exact persisted pre-image.
+                Some(revision) if revision == db_revision(s.task.state_revision)? => {}
+                Some(_) => *s = read_bound_task(c, &s.task.task_id)?.ok_or(Error::TaskNotFound)?,
+            }
+            let old_revision = s.task.state_revision;
+            let now = Utc::now();
+            let (changed_id, outcome) = match &change {
+                Change::StartItem(id) => (Some(id.clone()), None),
+                Change::FinishItem(id, outcome) => (Some(id.clone()), Some(outcome.clone())),
+                _ => (None, None),
+            };
+            let changed = changed_id.as_deref();
+            let outcome = outcome.as_ref();
+            decide(s, run, change, now)?;
+            if s.task.state_revision != old_revision {
+                write_task_delta(c, s, old_revision, changed, outcome)?;
+                if let Some(item_id) = changed.filter(|_| outcome.is_none()) {
+                    // Execution-start marker lands atomically with the
+                    // guarded item transition.
+                    c.execute(
+                        "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
+                        params![
+                            s.task.task_id,
+                            item_id,
+                            run,
+                            db_revision(s.task.state_revision)?,
+                            now.to_rfc3339()
+                        ],
+                    )
+                    .map_err(storage)?;
+                }
+            }
+            Ok(())
+        })
     }
 }
 

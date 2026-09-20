@@ -35,15 +35,24 @@ impl RangeRepository for SqliteMarket {
                         return Err(Error::Conflict("effective head changed".into()));
                     }
                 }
-                let task = crate::sqlite_tasks::read_bound_task(c, &command.task_id)?
-                    .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
-                let next = plan.publication.finish_task(task)?;
-                crate::sqlite_tasks::write_task(c, &next, command.expected_revision)?;
+                let mut binding = crate::sqlite_tasks::read_item_binding(
+                    c,
+                    &command.task_id,
+                    &command.item_id,
+                )?
+                .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
+                plan.publication.finish_task(&mut binding)?;
+                crate::sqlite_tasks::persist_decided(
+                    c,
+                    &binding.head,
+                    Some(&binding.item),
+                    command.expected_revision,
+                )?;
                 Receipt {
                     publication_id: command.publication_id.clone(),
                     version_id: command.version_id.clone(),
                     task_id: command.task_id.clone(),
-                    task_revision: next.task.state_revision,
+                    task_revision: binding.head.state_revision,
                 }
             } else {
                 commit_publication(c, &plan.publication)?
@@ -159,15 +168,16 @@ pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Rec
     {
         return Err(integrity("range result version digest mismatch"));
     }
-    let task = crate::sqlite_tasks::read_bound_task(c, &task_id)?
+    let binding = crate::sqlite_tasks::read_item_binding(c, &task_id, &item_id)?
         .ok_or_else(|| integrity("range result task missing"))?;
-    if task.task.state_revision < receipt.task_revision
+    if binding.head.state_revision < receipt.task_revision
         || receipt.task_revision <= command.expected_revision
-        || !task.items.iter().any(|item| {
-            item.spec.item_id == item_id
-                && item.stage == crate::task_control::Stage::Finished
-                && item.outcome.as_ref().is_some_and(|outcome| outcome.success)
-        })
+        || binding.item.stage != crate::task_control::Stage::Finished
+        || !binding
+            .item
+            .outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.success)
     {
         return Err(integrity("range result lacks successful task item"));
     }

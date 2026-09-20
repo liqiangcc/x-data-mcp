@@ -34,6 +34,25 @@ impl MarketRepository for ResponseFault {
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error> {
         self.db.task(id)
     }
+    fn task_head(&self, id: &str) -> Result<x_data_mcp::task_control::TaskHead, Error> {
+        self.db.task_head(id)
+    }
+    fn task_item_binding(
+        &self,
+        task: &str,
+        item: &str,
+    ) -> Result<Option<x_data_mcp::task_control::ItemBinding>, Error> {
+        self.db.task_item_binding(task, item)
+    }
+    fn transition_task_head(
+        &self,
+        head: &mut x_data_mcp::task_control::TaskHead,
+        item: Option<&mut x_data_mcp::task_control::TaskItem>,
+        run: &str,
+        change: Change,
+    ) -> Result<(), Error> {
+        self.db.transition_task_head(head, item, run, change)
+    }
     fn commit(&self, p: &PublishPlan) -> Result<Receipt, Error> {
         self.db.commit(p)
     }

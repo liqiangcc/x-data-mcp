@@ -41,11 +41,20 @@ impl<R: MarketRepository> Publisher<R> {
         candidate: &YearlyCandidate,
         prior_id: Option<&str>,
     ) -> Result<YearlyResultPlan, Error> {
-        tasks::validate_binding(
-            &self.repository.task(&command.task_id)?,
-            &command,
-            candidate,
-        )?;
+        match self
+            .repository
+            .task_item_binding(&command.task_id, &command.item_id)?
+        {
+            Some(binding) => tasks::validate_binding(&binding, &command, candidate)?,
+            None => {
+                let head = self.repository.task_head(&command.task_id)?;
+                if matches!(head.key.operation.as_str(), "update_data" | "backfill_data") {
+                    return Err(Error::Conflict(
+                        "yearly publication differs from accepted frozen inputs".into(),
+                    ));
+                }
+            }
+        }
         if candidate.raw["version_id"].as_str() != Some(command.version_id.as_str()) {
             return Err(Error::Invalid("yearly candidate identity".into()));
         }
@@ -64,13 +73,15 @@ impl<R: MarketRepository> Publisher<R> {
             return Err(Error::Base("fixed base changed after derivation".into()));
         }
         let prior = prior_id.map(|id| self.repository.fixed(id)).transpose()?;
-        let task = self.repository.task(&command.task_id)?;
-        if task.task.key.contract_version == super::tasks::CONTRACT_VERSION {
+        let binding = self
+            .repository
+            .task_item_binding(&command.task_id, &command.item_id)?
+            .ok_or_else(|| Error::Conflict("comparison item absent from accepted task".into()))?;
+        if binding.head.key.contract_version == super::tasks::CONTRACT_VERSION {
             let comparison = prior.as_ref().map(|p|json!({"version_id":p.version().version_id,"integrity_sha256":p.raw()["integrity_sha256"]})).unwrap_or(Value::Null);
-            if !task.items.iter().any(|i| {
-                i.spec.item_id == command.item_id
-                    && i.spec.frozen_inputs["comparison"] == comparison
-            }) {
+            if binding.item.spec.item_id != command.item_id
+                || binding.item.spec.frozen_inputs["comparison"] != comparison
+            {
                 return Err(Error::Conflict(
                     "comparison differs from accepted fixed version".into(),
                 ));

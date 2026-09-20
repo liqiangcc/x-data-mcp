@@ -80,39 +80,35 @@ impl<R: MarketRepository> Publisher<R> {
             ));
         }
         let base = self.repository.fixed(&evidence.base_version_id)?;
-        let task = self.repository.task(&command.task_id)?;
-        let range_task = matches!(
-            task.task.key.operation.as_str(),
-            "update_data" | "backfill_data"
-        );
-        let frozen_matches = if task.task.key.contract_version == super::tasks::CONTRACT_VERSION
-            && task.task.key.dataset == "market.daily"
+        let head = self.repository.task_head(&command.task_id)?;
+        let range_task = matches!(head.key.operation.as_str(), "update_data" | "backfill_data");
+        let item_frozen = self
+            .repository
+            .task_item_binding(&command.task_id, &command.item_id)?
+            .map(|binding| binding.item.spec.frozen_inputs);
+        let frozen_matches = if head.key.contract_version == super::tasks::CONTRACT_VERSION
+            && head.key.dataset == "market.daily"
         {
-            task.items.iter().any(|item| {
-                item.spec.item_id == command.item_id
-                    && item.spec.frozen_inputs
-                        == super::tasks::frozen(
-                            &evidence.base_version_id,
-                            &evidence.base_integrity_sha256,
-                            range,
-                        )
-            })
-        } else if task.task.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION
-            && task.task.key.dataset == "market.daily"
+            item_frozen.as_ref()
+                == Some(&super::tasks::frozen(
+                    &evidence.base_version_id,
+                    &evidence.base_integrity_sha256,
+                    range,
+                ))
+        } else if head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION
+            && head.key.dataset == "market.daily"
         {
             // The executed range must equal the union of the item's frozen
             // required ranges (refresh + frozen gaps for update, frozen
             // gaps only for backfill) on the frozen base identity.
-            task.items.iter().any(|item| {
-                item.spec.item_id == command.item_id
-                    && super::tasks::parse_default_frozen(&item.spec.frozen_inputs)
-                        .ok()
-                        .is_some_and(|frozen| {
-                            frozen.base_version_id == evidence.base_version_id
-                                && frozen.base_integrity_sha256 == evidence.base_integrity_sha256
-                                && frozen.union().ok().as_ref() == Some(range)
-                        })
-            })
+            item_frozen
+                .as_ref()
+                .and_then(|frozen| super::tasks::parse_default_frozen(frozen).ok())
+                .is_some_and(|frozen| {
+                    frozen.base_version_id == evidence.base_version_id
+                        && frozen.base_integrity_sha256 == evidence.base_integrity_sha256
+                        && frozen.union().ok().as_ref() == Some(range)
+                })
         } else {
             false
         };
@@ -139,7 +135,11 @@ impl<R: MarketRepository> Publisher<R> {
                     promote: None,
                     base_digest: None,
                 };
-                plan.finish_task(self.repository.task(&plan.command.task_id)?)?;
+                let mut binding = self
+                    .repository
+                    .task_item_binding(&plan.command.task_id, &plan.command.item_id)?
+                    .ok_or(crate::task_control::Error::TaskNotFound)?;
+                plan.finish_task(&mut binding)?;
                 (plan, true)
             }
             Decision::Candidate(prepared) => {
