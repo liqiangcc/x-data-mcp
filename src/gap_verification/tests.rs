@@ -153,7 +153,7 @@ fn missing_or_damaged_subject_fails_closed() {
     db.commit(&plan).unwrap();
     let c = Connection::open(db.tasks.path()).unwrap();
     c.execute(
-        "UPDATE daily_bars SET close='9.99' WHERE version_id='legacy-daily'",
+        "UPDATE segment_bars SET close='9.99' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily')",
         [],
     )
     .unwrap();

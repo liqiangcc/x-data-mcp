@@ -325,7 +325,7 @@ fn missing_or_corrupt_head_fails_the_whole_batch() {
     publish_daily(&db2, &ctl2, "600006", 0);
     Connection::open(db2.tasks.path())
         .unwrap()
-        .execute("UPDATE daily_bars SET close='0'", [])
+        .execute("UPDATE segment_bars SET close='0'", [])
         .unwrap();
     assert!(matches!(
         resolve(&db2, DefaultOperation::Update, today()),

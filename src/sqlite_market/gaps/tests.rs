@@ -354,7 +354,7 @@ fn upgraded_v10_database_has_no_fabricated_gaps() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 13);
+    assert_eq!(v, 14);
     assert_eq!(counts(&db), (0, 0));
     assert_eq!(decision_count(&db), 0);
     assert!(
