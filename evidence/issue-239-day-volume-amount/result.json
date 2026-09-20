@@ -1,0 +1,20 @@
+{
+  "schema": "issue239.result.v1",
+  "executed_utc": "2026-09-20",
+  "verdict": "ANCHORED",
+  "findings": {
+    "day_volume_unit": "股 (u32 exact shares)",
+    "day_amount_unit": "元 (f32 yuan)",
+    "evidence": "TQ kline Volume == float32(.day volume) for 37,345/37,345 bars across 6 frozen securities + issue's 3 named 600000 rows; TQ Amount (万元,2dp) consistent with .day f32/1e4 within f32-ulp/2+0.005万 on 37,288 bars (57 residuals ≤30元, ~1e-6 relative, likely upstream correction)",
+    "tq_surface_units": {
+      "kline_Volume": "股 via f32 channel",
+      "kline_Amount": "万元",
+      "snapshot_Volume": "手 (truncated)",
+      "snapshot_Amount": "万元",
+      "client_UI_VOLUME": "手 (rounded display)"
+    }
+  },
+  "issue240_note": "TQ type=1 kline has NO preclose/昨收 field. Type=3 snapshot exposes LastClose but current-day only — provides a prospective r7 oracle path (e.g. sz.000001 ex-date 2026-09-24), not historical.",
+  "replay": "scripts/verify_issue239.py — all PASS (full-corpus mode needs gen-3 hsjday.zip path)",
+  "raw_artifacts": "raw/kline_600000_SH_none.json, raw/snapshot_600000.json (verbatim GetTdxDataStr)"
+}

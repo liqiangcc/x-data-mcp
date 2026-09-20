@@ -1,0 +1,39 @@
+{
+  "schema": "issue239.unit-anchoring.v1",
+  "generated_utc": "2026-09-20T07:00:00+00:00",
+  "day_source": "gen-3 hsjday.zip sha256 563797f0d1b852e91b85ee0aafe396c0df1bb12e55b569e8526db76a4e181c64 (downloaded 2026-09-20)",
+  "oracle": "TQ tqcenter.py v1.0.16 verbatim GetTdxDataStr (type=1 kline, type=3 snapshot)",
+  "frozen6_corpus": {
+    "bars_compared": 37345,
+    "volume_exact": 31343,
+    "volume_f32_quantized_match": 37345,
+    "volume_rule": "TQ kline Volume == float32(.day volume u32) — 股",
+    "amount_within_f32ulp2_plus_0p005wan": 37288,
+    "amount_residual_bars": 57,
+    "amount_residual_max_over_bound_yuan": 30.0,
+    "amount_rule": "TQ kline/snapshot Amount == .day amount f32 / 10000 (万元, 2dp) — .day 元"
+  },
+  "issue_table_600000": [
+    {"date": "2026-09-16", "day_volume": 72340449, "tq_kline_volume": "72340448.00",
+     "day_amount_f32": "656348160.0", "tq_kline_amount_wan": "65634.81",
+     "note": "f32(72340449)=72340448 exact"},
+    {"date": "2026-09-17", "day_volume": 45671103, "tq_kline_volume": "45671104.00",
+     "day_amount_f32": "414887072.0", "tq_kline_amount_wan": "41488.71",
+     "note": "f32(45671103)=45671104 exact"},
+    {"date": "2026-09-18", "day_volume": 51759299, "tq_kline_volume": "51759300.00",
+     "day_amount_f32": "469969408.0", "tq_kline_amount_wan": "46996.94",
+     "note": "f32(51759299)=51759300 exact"}
+  ],
+  "snapshot_600000_20260918": {
+    "tq_snapshot_volume_shou": "517592",
+    "day_volume_floor_div100": 517592,
+    "tq_snapshot_amount_wan": "46996.94",
+    "tq_snapshot_lastclose": "9.06",
+    "note": "snapshot Volume is 手 (volume//100 truncated); LastClose == raw prev close on non-ex date"
+  },
+  "tq_field_inventory": {
+    "type1_kline": ["ErrorId","Date","Time","Open","High","Low","Close","Volume","Amount","VolInStock","ForwardFactor"],
+    "type3_snapshot_fields": ["ErrorId","ItemNum","LastClose","Open","Max","Min","Now","Volume","NowVol","Amount","Inside","Outside","TickDiff","InOutFlag","Jjjz","Buyp","Buyv","Sellp","Sellv","UpHome","DownHome","Before5MinNow","Average","XsFlag","Zangsu","ZAFPre3"],
+    "preclose_field": "none in type=1; type=3 has LastClose (current-day only)"
+  }
+}
