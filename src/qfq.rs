@@ -19,8 +19,9 @@
 //! `amount`/`volume` are **not** adjusted: the verified contract does not
 //! cover them, so they are passed through as stored and documented as such.
 //!
-//! This is a pure computation layer.  It is not wired into `official_files`
-//! or any production source path, and `SOURCE_NOT_VERIFIED` is unchanged.
+//! This is a pure computation layer.  `official_market` providers apply it
+//! over each security's category==1 GBBQ events; the remaining
+//! `SOURCE_NOT_VERIFIED` production blockers are unchanged.
 
 use chrono::NaiveDate;
 use rust_decimal::{Decimal, RoundingStrategy};
