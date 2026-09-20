@@ -1,0 +1,2016 @@
+{
+ "schema": "x-data-mcp.issue-240-r7-analysis.v1",
+ "diagnostic_only": true,
+ "inputs": {
+  "hsjday_zip_sha256": "563797f0d1b852e91b85ee0aafe396c0df1bb12e55b569e8526db76a4e181c64",
+  "gbbq_zip_sha256": "502236d9d8394e89b1a4091f5d0d2b86e419c0c4da2c788ddcea16ef7d3763e3",
+  "gbbq_reader_py_sha256": "e28fae76760b1247a960cab285aa357c2d263b3212e7cabfb3f1ebfcc127d6ba",
+  "decoder_path": "evidence/issue-3-tdx-gbbq-community/decode_gbbq.py"
+ },
+ "gbbq_records": 206034,
+ "day_members_total": 12423,
+ "sample_size": 55,
+ "equity_sample": {
+  "count": 24,
+  "match_prev_close": 21666,
+  "const_65536": 65793,
+  "zero": 13870,
+  "mismatches": 285,
+  "mismatch_on_event_date": 68,
+  "formula_exact": 61,
+  "formula_round_1fen": 3,
+  "formula_fail": 3
+ },
+ "non_equity_sample": {
+  "count": 31,
+  "mismatches": 8468,
+  "mismatch_on_event_date": 8
+ },
+ "per_member": [
+  {
+   "member": "sh\\lday\\sh600000.day",
+   "equity_prefix": true,
+   "records": 6393,
+   "match_prev_close": 2510,
+   "const_65536": 3853,
+   "zero": 18,
+   "first_record_r7": 1000,
+   "last_non65536_date": 20100913,
+   "mismatches": 11,
+   "mismatch_on_event_date": 10,
+   "mismatch_no_event": [
+    20030828
+   ],
+   "formula_exact": 10,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": [
+    [
+     20000706,
+     23.22,
+     23.07,
+     [
+      1.5,
+      0.0,
+      0.0,
+      0.0
+     ],
+     23.07
+    ],
+    [
+     20020822,
+     18.4,
+     12.13,
+     [
+      2.0,
+      0.0,
+      5.0,
+      0.0
+     ],
+     12.13
+    ],
+    [
+     20030623,
+     12.06,
+     11.96,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     11.96
+    ],
+    [
+     20040520,
+     9.39,
+     9.28,
+     [
+      1.100000023841858,
+      0.0,
+      0.0,
+      0.0
+     ],
+     9.28
+    ],
+    [
+     20050512,
+     7.06,
+     6.94,
+     [
+      1.2000000476837158,
+      0.0,
+      0.0,
+      0.0
+     ],
+     6.94
+    ],
+    [
+     20060525,
+     10.0,
+     9.87,
+     [
+      1.2999999523162842,
+      0.0,
+      0.0,
+      0.0
+     ],
+     9.87
+    ],
+    [
+     20070718,
+     36.33,
+     36.18,
+     [
+      1.5,
+      0.0,
+      0.0,
+      0.0
+     ],
+     36.18
+    ],
+    [
+     20080424,
+     35.29,
+     27.02,
+     [
+      1.600000023841858,
+      0.0,
+      3.0,
+      0.0
+     ],
+     27.02
+    ],
+    [
+     20090609,
+     30.59,
+     21.69,
+     [
+      2.299999952316284,
+      0.0,
+      4.0,
+      0.0
+     ],
+     21.69
+    ],
+    [
+     20100610,
+     18.5,
+     14.12,
+     [
+      1.5,
+      0.0,
+      3.0,
+      0.0
+     ],
+     14.12
+    ]
+   ]
+  },
+  {
+   "member": "sz\\lday\\sz000001.day",
+   "equity_prefix": true,
+   "records": 8457,
+   "match_prev_close": 0,
+   "const_65536": 2013,
+   "zero": 6444,
+   "first_record_r7": 0,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh600006.day",
+   "equity_prefix": true,
+   "records": 6471,
+   "match_prev_close": 2608,
+   "const_65536": 3830,
+   "zero": 18,
+   "first_record_r7": 510,
+   "last_non65536_date": 20100913,
+   "mismatches": 14,
+   "mismatch_on_event_date": 12,
+   "mismatch_no_event": [
+    20031010,
+    20031014
+   ],
+   "formula_exact": 11,
+   "formula_round_1fen": 1,
+   "formula_fail": 0,
+   "formula_samples": [
+    [
+     20000626,
+     6.03,
+     5.93,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     5.93
+    ],
+    [
+     20010613,
+     10.22,
+     10.02,
+     [
+      2.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     10.02
+    ],
+    [
+     20011030,
+     9.7,
+     9.65,
+     [
+      0.5,
+      0.0,
+      0.0,
+      0.0
+     ],
+     9.65
+    ],
+    [
+     20020522,
+     12.84,
+     12.64,
+     [
+      2.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     12.64
+    ],
+    [
+     20030602,
+     13.34,
+     13.14,
+     [
+      2.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     13.14
+    ],
+    [
+     20040611,
+     10.02,
+     4.91,
+     [
+      2.0,
+      0.0,
+      10.0,
+      0.0
+     ],
+     4.91
+    ],
+    [
+     20060620,
+     3.9,
+     3.82,
+     [
+      0.800000011920929,
+      0.0,
+      0.0,
+      0.0
+     ],
+     3.82
+    ],
+    [
+     20070719,
+     6.94,
+     6.82,
+     [
+      1.2000000476837158,
+      0.0,
+      0.0,
+      0.0
+     ],
+     6.82
+    ],
+    [
+     20080623,
+     4.13,
+     3.98,
+     [
+      1.5,
+      0.0,
+      0.0,
+      0.0
+     ],
+     3.98
+    ],
+    [
+     20090622,
+     4.88,
+     4.79,
+     [
+      0.8999999761581421,
+      0.0,
+      0.0,
+      0.0
+     ],
+     4.79
+    ],
+    [
+     20100621,
+     4.86,
+     4.8,
+     [
+      0.6000000238418579,
+      0.0,
+      0.0,
+      0.0
+     ],
+     4.8
+    ],
+    [
+     20050628,
+     3.02,
+     2.95,
+     [
+      0.75,
+      0.0,
+      0.0,
+      0.0
+     ],
+     2.94
+    ]
+   ]
+  },
+  {
+   "member": "sz\\lday\\sz000002.day",
+   "equity_prefix": true,
+   "records": 8483,
+   "match_prev_close": 0,
+   "const_65536": 1723,
+   "zero": 6760,
+   "first_record_r7": 0,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh600519.day",
+   "equity_prefix": true,
+   "records": 6008,
+   "match_prev_close": 2092,
+   "const_65536": 3885,
+   "zero": 18,
+   "first_record_r7": 3139,
+   "last_non65536_date": 20100913,
+   "mismatches": 12,
+   "mismatch_on_event_date": 9,
+   "mismatch_no_event": [
+    20030716,
+    20030717,
+    20030822
+   ],
+   "formula_exact": 7,
+   "formula_round_1fen": 1,
+   "formula_fail": 0,
+   "formula_samples": [
+    [
+     20020725,
+     36.4,
+     32.55,
+     [
+      6.0,
+      0.0,
+      1.0,
+      0.0
+     ],
+     32.55
+    ],
+    [
+     20030714,
+     25.7,
+     23.18,
+     [
+      2.0,
+      0.0,
+      1.0,
+      0.0
+     ],
+     23.18
+    ],
+    [
+     20040701,
+     33.85,
+     25.81,
+     [
+      3.0,
+      0.0,
+      3.0,
+      0.0
+     ],
+     25.81
+    ],
+    [
+     20050805,
+     55.51,
+     45.84,
+     [
+      5.0,
+      0.0,
+      2.0,
+      0.0
+     ],
+     45.84
+    ],
+    [
+     20070713,
+     114.37,
+     113.67,
+     [
+      7.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     113.67
+    ],
+    [
+     20080616,
+     149.49,
+     148.65,
+     [
+      8.359999656677246,
+      0.0,
+      0.0,
+      0.0
+     ],
+     148.65
+    ],
+    [
+     20090701,
+     148.01,
+     146.85,
+     [
+      11.5600004196167,
+      0.0,
+      0.0,
+      0.0
+     ],
+     146.85
+    ],
+    [
+     20100705,
+     127.68,
+     126.5,
+     [
+      11.850000381469727,
+      0.0,
+      0.0,
+      0.0
+     ],
+     126.49
+    ]
+   ]
+  },
+  {
+   "member": "sz\\lday\\sz200770.day",
+   "equity_prefix": false,
+   "records": 3052,
+   "match_prev_close": 2802,
+   "const_65536": 214,
+   "zero": 18,
+   "first_record_r7": 149,
+   "last_non65536_date": 20100329,
+   "mismatches": 17,
+   "mismatch_on_event_date": 8,
+   "mismatch_no_event": [
+    19980519,
+    19980626,
+    19980723,
+    19980727,
+    19980916,
+    19990315,
+    19990504,
+    20010817,
+    20010903
+   ],
+   "formula_exact": 6,
+   "formula_round_1fen": 2,
+   "formula_fail": 0,
+   "formula_samples": [
+    [
+     19980825,
+     0.63,
+     0.6,
+     [
+      0.30000001192092896,
+      0.0,
+      0.0,
+      0.0
+     ],
+     0.6
+    ],
+    [
+     20010627,
+     8.06,
+     8.04,
+     [
+      0.20000000298023224,
+      0.0,
+      0.0,
+      0.0
+     ],
+     8.04
+    ],
+    [
+     20030707,
+     3.14,
+     3.11,
+     [
+      0.3499999940395355,
+      0.0,
+      0.0,
+      0.0
+     ],
+     3.11
+    ],
+    [
+     20040625,
+     3.91,
+     3.87,
+     [
+      0.4000000059604645,
+      0.0,
+      0.0,
+      0.0
+     ],
+     3.87
+    ],
+    [
+     20060714,
+     3.38,
+     3.35,
+     [
+      0.3499999940395355,
+      0.0,
+      0.0,
+      0.0
+     ],
+     3.35
+    ],
+    [
+     20070713,
+     12.76,
+     12.74,
+     [
+      0.20000000298023224,
+      0.0,
+      0.0,
+      0.0
+     ],
+     12.74
+    ],
+    [
+     20020705,
+     4.75,
+     4.73,
+     [
+      0.25,
+      0.0,
+      0.0,
+      0.0
+     ],
+     4.72
+    ],
+    [
+     20050624,
+     2.52,
+     2.48,
+     [
+      0.4699999988079071,
+      0.0,
+      0.0,
+      0.0
+     ],
+     2.47
+    ]
+   ]
+  },
+  {
+   "member": "sh\\lday\\sh511180.day",
+   "equity_prefix": false,
+   "records": 1472,
+   "match_prev_close": 0,
+   "const_65536": 1472,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "bj\\lday\\bj920227.day",
+   "equity_prefix": false,
+   "records": 904,
+   "match_prev_close": 0,
+   "const_65536": 904,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz399396.day",
+   "equity_prefix": false,
+   "records": 5275,
+   "match_prev_close": 0,
+   "const_65536": 0,
+   "zero": 5275,
+   "first_record_r7": 0,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh605577.day",
+   "equity_prefix": true,
+   "records": 1227,
+   "match_prev_close": 0,
+   "const_65536": 1227,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh603288.day",
+   "equity_prefix": true,
+   "records": 3070,
+   "match_prev_close": 0,
+   "const_65536": 3070,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh601500.day",
+   "equity_prefix": true,
+   "records": 2423,
+   "match_prev_close": 0,
+   "const_65536": 2423,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh520840.day",
+   "equity_prefix": false,
+   "records": 261,
+   "match_prev_close": 0,
+   "const_65536": 261,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz399310.day",
+   "equity_prefix": false,
+   "records": 5113,
+   "match_prev_close": 0,
+   "const_65536": 0,
+   "zero": 5113,
+   "first_record_r7": 0,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh508006.day",
+   "equity_prefix": false,
+   "records": 1274,
+   "match_prev_close": 0,
+   "const_65536": 1274,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz300601.day",
+   "equity_prefix": true,
+   "records": 2340,
+   "match_prev_close": 0,
+   "const_65536": 2340,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz399382.day",
+   "equity_prefix": false,
+   "records": 3595,
+   "match_prev_close": 0,
+   "const_65536": 0,
+   "zero": 3595,
+   "first_record_r7": 0,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz159139.day",
+   "equity_prefix": false,
+   "records": 183,
+   "match_prev_close": 0,
+   "const_65536": 183,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh118061.day",
+   "equity_prefix": false,
+   "records": 190,
+   "match_prev_close": 0,
+   "const_65536": 190,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz160413.day",
+   "equity_prefix": false,
+   "records": 193,
+   "match_prev_close": 38,
+   "const_65536": 0,
+   "zero": 0,
+   "first_record_r7": 100100,
+   "last_non65536_date": 20100226,
+   "mismatches": 154,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [
+    20090515,
+    20090518,
+    20090519,
+    20090601,
+    20090604,
+    20090611,
+    20090612,
+    20090615,
+    20090616,
+    20090617
+   ],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz000800.day",
+   "equity_prefix": true,
+   "records": 7015,
+   "match_prev_close": 3035,
+   "const_65536": 3856,
+   "zero": 18,
+   "first_record_r7": 680,
+   "last_non65536_date": 20100913,
+   "mismatches": 105,
+   "mismatch_on_event_date": 13,
+   "mismatch_no_event": [
+    19970619,
+    19970620,
+    19970623,
+    19970624,
+    19970625,
+    19970626,
+    19970627,
+    19970702,
+    19970703,
+    19970704
+   ],
+   "formula_exact": 12,
+   "formula_round_1fen": 0,
+   "formula_fail": 1,
+   "formula_samples": [
+    [
+     19980608,
+     10.04,
+     9.94,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     9.94
+    ],
+    [
+     19990615,
+     8.54,
+     6.1,
+     [
+      0.0,
+      0.0,
+      4.0,
+      0.0
+     ],
+     6.1
+    ],
+    [
+     20000721,
+     7.3,
+     7.2,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     7.2
+    ],
+    [
+     20010814,
+     5.75,
+     5.65,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     5.65
+    ],
+    [
+     20020816,
+     6.38,
+     6.33,
+     [
+      0.5,
+      0.0,
+      0.0,
+      0.0
+     ],
+     6.33
+    ],
+    [
+     20030716,
+     10.32,
+     10.12,
+     [
+      2.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     10.12
+    ],
+    [
+     20040820,
+     5.9,
+     5.8,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     5.8
+    ],
+    [
+     20060815,
+     3.32,
+     3.12,
+     [
+      2.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     3.12
+    ],
+    [
+     20070816,
+     14.9,
+     14.8,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     14.8
+    ],
+    [
+     20080617,
+     11.08,
+     10.88,
+     [
+      2.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     10.88
+    ],
+    [
+     20090702,
+     15.58,
+     15.23,
+     [
+      3.5,
+      0.0,
+      0.0,
+      0.0
+     ],
+     15.23
+    ],
+    [
+     20100727,
+     17.83,
+     17.4,
+     [
+      4.269999980926514,
+      0.0,
+      0.0,
+      0.0
+     ],
+     17.4
+    ]
+   ]
+  },
+  {
+   "member": "bj\\lday\\bj920651.day",
+   "equity_prefix": false,
+   "records": 787,
+   "match_prev_close": 0,
+   "const_65536": 787,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "bj\\lday\\bj920508.day",
+   "equity_prefix": false,
+   "records": 1494,
+   "match_prev_close": 0,
+   "const_65536": 1139,
+   "zero": 355,
+   "first_record_r7": 0,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh501043.day",
+   "equity_prefix": false,
+   "records": 2176,
+   "match_prev_close": 0,
+   "const_65536": 2176,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh601106.day",
+   "equity_prefix": true,
+   "records": 4021,
+   "match_prev_close": 143,
+   "const_65536": 3877,
+   "zero": 0,
+   "first_record_r7": 570,
+   "last_non65536_date": 20100913,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh603039.day",
+   "equity_prefix": true,
+   "records": 2283,
+   "match_prev_close": 0,
+   "const_65536": 2283,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz123080.day",
+   "equity_prefix": false,
+   "records": 1394,
+   "match_prev_close": 0,
+   "const_65536": 1394,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz161132.day",
+   "equity_prefix": false,
+   "records": 1744,
+   "match_prev_close": 0,
+   "const_65536": 1744,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "bj\\lday\\bj920284.day",
+   "equity_prefix": false,
+   "records": 668,
+   "match_prev_close": 0,
+   "const_65536": 668,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz159545.day",
+   "equity_prefix": false,
+   "records": 593,
+   "match_prev_close": 0,
+   "const_65536": 593,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh600679.day",
+   "equity_prefix": true,
+   "records": 7864,
+   "match_prev_close": 3523,
+   "const_65536": 3808,
+   "zero": 522,
+   "first_record_r7": 0,
+   "last_non65536_date": 20100913,
+   "mismatches": 11,
+   "mismatch_on_event_date": 3,
+   "mismatch_no_event": [
+    19951017,
+    19951018,
+    19951226,
+    19960405,
+    19960430,
+    19960509,
+    19960523,
+    19960624
+   ],
+   "formula_exact": 3,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": [
+    [
+     19960625,
+     6.31,
+     5.74,
+     [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+     ],
+     5.74
+    ],
+    [
+     19980612,
+     9.66,
+     8.05,
+     [
+      0.0,
+      0.0,
+      2.0,
+      0.0
+     ],
+     8.05
+    ],
+    [
+     20020521,
+     22.45,
+     17.27,
+     [
+      0.0,
+      0.0,
+      3.0,
+      0.0
+     ],
+     17.27
+    ]
+   ]
+  },
+  {
+   "member": "sz\\lday\\sz301305.day",
+   "equity_prefix": true,
+   "records": 810,
+   "match_prev_close": 0,
+   "const_65536": 810,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz300157.day",
+   "equity_prefix": true,
+   "records": 3565,
+   "match_prev_close": 0,
+   "const_65536": 3565,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz301021.day",
+   "equity_prefix": true,
+   "records": 1265,
+   "match_prev_close": 0,
+   "const_65536": 1265,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz159131.day",
+   "equity_prefix": false,
+   "records": 209,
+   "match_prev_close": 0,
+   "const_65536": 208,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": 20260721,
+   "mismatches": 1,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [
+    20260721
+   ],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz000750.day",
+   "equity_prefix": true,
+   "records": 5867,
+   "match_prev_close": 2145,
+   "const_65536": 3618,
+   "zero": 0,
+   "first_record_r7": 699,
+   "last_non65536_date": 20090123,
+   "mismatches": 103,
+   "mismatch_on_event_date": 3,
+   "mismatch_no_event": [
+    19970710,
+    19970711,
+    19970715,
+    19970716,
+    19970717,
+    19970718,
+    19970721,
+    19970723,
+    19970724,
+    19970725
+   ],
+   "formula_exact": 2,
+   "formula_round_1fen": 0,
+   "formula_fail": 1,
+   "formula_samples": [
+    [
+     19990513,
+     14.45,
+     13.95,
+     [
+      5.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     13.95
+    ],
+    [
+     20000905,
+     27.38,
+     13.69,
+     [
+      0.0,
+      0.0,
+      10.0,
+      0.0
+     ],
+     13.69
+    ],
+    [
+     19991214,
+     14.51,
+     13.98,
+     [
+      0.0,
+      12.0,
+      0.0,
+      3.0
+     ],
+     11.16
+    ]
+   ]
+  },
+  {
+   "member": "sh\\lday\\sh601186.day",
+   "equity_prefix": true,
+   "records": 4486,
+   "match_prev_close": 590,
+   "const_65536": 3875,
+   "zero": 18,
+   "first_record_r7": 908,
+   "last_non65536_date": 20100913,
+   "mismatches": 2,
+   "mismatch_on_event_date": 2,
+   "mismatch_no_event": [],
+   "formula_exact": 2,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": [
+    [
+     20090713,
+     10.25,
+     10.15,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     10.15
+    ],
+    [
+     20100719,
+     7.47,
+     7.31,
+     [
+      1.600000023841858,
+      0.0,
+      0.0,
+      0.0
+     ],
+     7.31
+    ]
+   ]
+  },
+  {
+   "member": "sz\\lday\\sz002179.day",
+   "equity_prefix": true,
+   "records": 4573,
+   "match_prev_close": 674,
+   "const_65536": 3877,
+   "zero": 18,
+   "first_record_r7": 1619,
+   "last_non65536_date": 20100913,
+   "mismatches": 3,
+   "mismatch_on_event_date": 3,
+   "mismatch_no_event": [],
+   "formula_exact": 3,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": [
+    [
+     20080509,
+     31.41,
+     20.87,
+     [
+      1.0,
+      0.0,
+      5.0,
+      0.0
+     ],
+     20.87
+    ],
+    [
+     20090508,
+     28.54,
+     18.99,
+     [
+      0.5,
+      0.0,
+      5.0,
+      0.0
+     ],
+     18.99
+    ],
+    [
+     20100610,
+     18.9,
+     12.57,
+     [
+      0.5,
+      0.0,
+      5.0,
+      0.0
+     ],
+     12.57
+    ]
+   ]
+  },
+  {
+   "member": "sz\\lday\\sz160319.day",
+   "equity_prefix": false,
+   "records": 262,
+   "match_prev_close": 0,
+   "const_65536": 0,
+   "zero": 0,
+   "first_record_r7": 159880,
+   "last_non65536_date": 20100226,
+   "mismatches": 261,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [
+    20090205,
+    20090206,
+    20090209,
+    20090210,
+    20090211,
+    20090212,
+    20090213,
+    20090216,
+    20090217,
+    20090218
+   ],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh688053.day",
+   "equity_prefix": true,
+   "records": 1020,
+   "match_prev_close": 0,
+   "const_65536": 1020,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "bj\\lday\\bj833580.day",
+   "equity_prefix": false,
+   "records": 826,
+   "match_prev_close": 0,
+   "const_65536": 826,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh588300.day",
+   "equity_prefix": false,
+   "records": 1266,
+   "match_prev_close": 0,
+   "const_65536": 1266,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz300967.day",
+   "equity_prefix": true,
+   "records": 1321,
+   "match_prev_close": 0,
+   "const_65536": 1321,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sz\\lday\\sz000815.day",
+   "equity_prefix": true,
+   "records": 6412,
+   "match_prev_close": 2853,
+   "const_65536": 3522,
+   "zero": 18,
+   "first_record_r7": 451,
+   "last_non65536_date": 20100913,
+   "mismatches": 18,
+   "mismatch_on_event_date": 7,
+   "mismatch_no_event": [
+    19980626,
+    19980918,
+    19981106,
+    19981118,
+    19990120,
+    19990128,
+    19990405,
+    19990628,
+    19990722,
+    19991027
+   ],
+   "formula_exact": 5,
+   "formula_round_1fen": 1,
+   "formula_fail": 1,
+   "formula_samples": [
+    [
+     20000616,
+     13.52,
+     13.4,
+     [
+      1.2000000476837158,
+      0.0,
+      0.0,
+      0.0
+     ],
+     13.4
+    ],
+    [
+     20010611,
+     17.58,
+     17.53,
+     [
+      0.5,
+      0.0,
+      0.0,
+      0.0
+     ],
+     17.53
+    ],
+    [
+     20020806,
+     10.28,
+     10.18,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     10.18
+    ],
+    [
+     20030619,
+     8.17,
+     8.13,
+     [
+      0.4000000059604645,
+      0.0,
+      0.0,
+      0.0
+     ],
+     8.13
+    ],
+    [
+     20050627,
+     5.53,
+     4.59,
+     [
+      0.25,
+      0.0,
+      2.0,
+      0.0
+     ],
+     4.59
+    ],
+    [
+     20100604,
+     12.68,
+     6.29,
+     [
+      1.100000023841858,
+      0.0,
+      10.0,
+      0.0
+     ],
+     6.28
+    ],
+    [
+     20001110,
+     13.39,
+     12.79,
+     [
+      0.0,
+      9.0,
+      0.0,
+      3.0
+     ],
+     10.3
+    ]
+   ]
+  },
+  {
+   "member": "sh\\lday\\sh880741.day",
+   "equity_prefix": false,
+   "records": 1494,
+   "match_prev_close": 0,
+   "const_65536": 0,
+   "zero": 0,
+   "first_record_r7": 131081,
+   "last_non65536_date": 20260918,
+   "mismatches": 1493,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [
+    20200728,
+    20200729,
+    20200730,
+    20200731,
+    20200803,
+    20200804,
+    20200805,
+    20200806,
+    20200807,
+    20200810
+   ],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh688048.day",
+   "equity_prefix": true,
+   "records": 1085,
+   "match_prev_close": 0,
+   "const_65536": 1085,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh563360.day",
+   "equity_prefix": false,
+   "records": 473,
+   "match_prev_close": 0,
+   "const_65536": 370,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": 20260730,
+   "mismatches": 103,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [
+    20250102,
+    20250818,
+    20250821,
+    20250822,
+    20250929,
+    20251010,
+    20251205,
+    20251208,
+    20251209,
+    20251210
+   ],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh600985.day",
+   "equity_prefix": true,
+   "records": 5165,
+   "match_prev_close": 1493,
+   "const_65536": 3647,
+   "zero": 18,
+   "first_record_r7": 500,
+   "last_non65536_date": 20100913,
+   "mismatches": 6,
+   "mismatch_on_event_date": 6,
+   "mismatch_no_event": [],
+   "formula_exact": 6,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": [
+    [
+     20050714,
+     4.33,
+     4.25,
+     [
+      0.800000011920929,
+      0.0,
+      0.0,
+      0.0
+     ],
+     4.25
+    ],
+    [
+     20060626,
+     5.27,
+     5.18,
+     [
+      0.8999999761581421,
+      0.0,
+      0.0,
+      0.0
+     ],
+     5.18
+    ],
+    [
+     20070620,
+     12.15,
+     12.05,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     12.05
+    ],
+    [
+     20080801,
+     11.36,
+     11.24,
+     [
+      1.2200000286102295,
+      0.0,
+      0.0,
+      0.0
+     ],
+     11.24
+    ],
+    [
+     20090716,
+     18.11,
+     18.01,
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     18.01
+    ],
+    [
+     20100624,
+     15.98,
+     13.22,
+     [
+      1.2000000476837158,
+      0.0,
+      2.0,
+      0.0
+     ],
+     13.22
+    ]
+   ]
+  },
+  {
+   "member": "sh\\lday\\sh880680.day",
+   "equity_prefix": false,
+   "records": 759,
+   "match_prev_close": 0,
+   "const_65536": 0,
+   "zero": 0,
+   "first_record_r7": 10813666,
+   "last_non65536_date": 20260918,
+   "mismatches": 758,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [
+    20230807,
+    20230808,
+    20230809,
+    20230810,
+    20230811,
+    20230814,
+    20230815,
+    20230816,
+    20230817,
+    20230818
+   ],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh508000.day",
+   "equity_prefix": false,
+   "records": 1275,
+   "match_prev_close": 0,
+   "const_65536": 1275,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh501022.day",
+   "equity_prefix": false,
+   "records": 2334,
+   "match_prev_close": 0,
+   "const_65536": 2334,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh881443.day",
+   "equity_prefix": false,
+   "records": 3818,
+   "match_prev_close": 0,
+   "const_65536": 0,
+   "zero": 2654,
+   "first_record_r7": 0,
+   "last_non65536_date": 20260918,
+   "mismatches": 1164,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [
+    20211203,
+    20211206,
+    20211207,
+    20211208,
+    20211209,
+    20211210,
+    20211213,
+    20211214,
+    20211215,
+    20211216
+   ],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh501099.day",
+   "equity_prefix": false,
+   "records": 1465,
+   "match_prev_close": 0,
+   "const_65536": 1465,
+   "zero": 0,
+   "first_record_r7": 65536,
+   "last_non65536_date": null,
+   "mismatches": 0,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh881090.day",
+   "equity_prefix": false,
+   "records": 3818,
+   "match_prev_close": 0,
+   "const_65536": 0,
+   "zero": 2654,
+   "first_record_r7": 0,
+   "last_non65536_date": 20260918,
+   "mismatches": 1164,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [
+    20211203,
+    20211206,
+    20211207,
+    20211208,
+    20211209,
+    20211210,
+    20211213,
+    20211214,
+    20211215,
+    20211216
+   ],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  },
+  {
+   "member": "sh\\lday\\sh880807.day",
+   "equity_prefix": false,
+   "records": 3354,
+   "match_prev_close": 0,
+   "const_65536": 0,
+   "zero": 0,
+   "first_record_r7": 1245191,
+   "last_non65536_date": 20260918,
+   "mismatches": 3353,
+   "mismatch_on_event_date": 0,
+   "mismatch_no_event": [
+    20121130,
+    20121203,
+    20121204,
+    20121205,
+    20121206,
+    20121207,
+    20121210,
+    20121211,
+    20121212,
+    20121213
+   ],
+   "formula_exact": 0,
+   "formula_round_1fen": 0,
+   "formula_fail": 0,
+   "formula_samples": []
+  }
+ ]
+}
