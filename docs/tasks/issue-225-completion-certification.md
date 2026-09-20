@@ -1,6 +1,9 @@
 # Issue #225——生产级 `analysis_coverage` 认证路径：设计分析与决策点
 
-状态：**设计提案，待 FG 裁定**。本文不改代码；裁定后才进入实现 Issue。
+状态：**FG 已裁定（comment-5750013426），已实现**。D1=A 基线相对完整，
+D2=C 读取时推导（`sqlite_metrics::observations` 从嵌入的
+`local_yearly_derivation_v1.evidence` + `yearly_bars.is_finished` 机械计算），
+D3=无新签发者。本文保留为设计依据记录。
 
 ## 0. 代码事实（决定选项空间的边界）
 
