@@ -19,9 +19,11 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
    提升为已验收契约；#169 全冻结域 94 事件回归 `unexplained_total=0`。
    实现：`src/gbbq.rs` + `src/qfq.rs`，official_market providers 已接线；
    `GBBQ_QFQ_NOT_VERIFIED` 已从 PRODUCTION_BLOCKERS 移除。
-2. #71 使用范围：公开下载说明不等于本项目服务器使用许可。
-   缺明确覆盖使用主体、base/hsjday/gbbq、获取频率、留存、解析计算及个人 AI 访问范围的依据。
-   当前 FILE_ACCESS_USE_NOT_VERIFIED；不推定禁止，也不推定授权。
+2. #71 使用范围（已解决，2026-09-20 FG 限定 ACCEPT，comment-5749934485）：
+   使用方声明范围=仓库所有者个人研究、本地使用、不对外暴露不再分发；
+   服务架构本为本地 socket+UID 私有运行时。`FILE_ACCESS_USE_NOT_VERIFIED`
+   已从 PRODUCTION_BLOCKERS 移除。边界：用途/主体/暴露面变化即失效需重裁；
+   官方文档未给出授权文本，本裁定是使用方承担声明而非厂商授权证明。
 3. #6/#46 目录：retained base 的 infoharbor_ex.code、tdxhy.cfg 只是原字段证据。
    缺当前沪深 A 身份/范围语义、名称覆盖/编码和 TDX 研究行业二级字典/层级关联证明。
    验收需固定文件/member/hash、字段语义和有界沪深/前导零/缺失/冲突矩阵；不能靠代码前缀或行数。

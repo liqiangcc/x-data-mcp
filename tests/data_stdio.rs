@@ -245,7 +245,7 @@ fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
         let cap = &capabilities["items"][0];
         assert_eq!(capabilities["items"].as_array().unwrap().len(), 2);
         assert_eq!(cap["dataset"], "market.daily");
-        assert_eq!(cap["readiness"], "blocked");
+        assert_eq!(cap["readiness"], "ready");
         assert!(
             cap["description"]
                 .as_str()
@@ -262,7 +262,7 @@ fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
             .unwrap()
             .validate(&accepted)
             .unwrap();
-        assert_eq!(accepted["readiness"], "blocked");
+        assert_eq!(accepted["readiness"], "ready");
         assert_eq!(accepted["contract_version"], "explicit-range-task-v1");
         let duplicate = input["items"][0].clone();
         input["items"].as_array_mut().unwrap().push(duplicate);
@@ -368,7 +368,7 @@ fn real_yearly_update_stdio_has_closed_schema_frozen_inputs_and_blocked_worker()
             false,
         );
         assert_eq!(caps["items"].as_array().unwrap().len(), 1);
-        assert_eq!(caps["items"][0]["readiness"], "blocked");
+        assert_eq!(caps["items"][0]["readiness"], "ready");
         let schema = jsonschema::validator_for(&caps["items"][0]["input_schema"]).unwrap();
         schema.validate(&caps["items"][0]["example"]).unwrap();
         assert_eq!(caps["items"][0]["example"]["dataset"], "market.yearly");
@@ -387,7 +387,7 @@ fn real_yearly_update_stdio_has_closed_schema_frozen_inputs_and_blocked_worker()
         }
         let accepted = s.call(operation, input.clone(), false);
         assert_eq!(accepted["contract_version"], "explicit-yearly-task-v1");
-        assert_eq!(accepted["readiness"], "blocked");
+        assert_eq!(accepted["readiness"], "ready");
         assert_eq!(
             s.call(operation, input.clone(), false)["task_id"],
             accepted["task_id"]

@@ -138,7 +138,7 @@ def main():
             assert computed == call("compute_metrics", computation)
             checks.append("fixed_compute_deterministic_fixture_vector")
             accepted = call("start_collection", dict(request_id="smoke-write", dataset="market.daily", contract_version="v1", selection=dict(kind="explicit", securities=[entity])))
-            assert accepted["readiness"] == "blocked"
+            assert accepted["readiness"] == "ready"
             assert call("get_request", dict(contract_version="v1", request_id="smoke-write"))["task"]["task_id"] == accepted["task_id"]
             call("run_worker_once", {})
             progress = call("get_task_progress", dict(task_id=accepted["task_id"]))
@@ -149,7 +149,7 @@ def main():
             checks.append("request_task_retry_cancel_and_source_gate")
             call("run_worker_once", {})
             yearly_caps = call("get_data_capabilities", dict(operation="update_data", dataset="market.yearly"))
-            assert len(yearly_caps["items"]) == 1 and yearly_caps["items"][0]["readiness"] == "blocked"
+            assert len(yearly_caps["items"]) == 1 and yearly_caps["items"][0]["readiness"] == "ready"
             assert yearly_caps["items"][0]["example"]["items"][0]["publication"]["mode"] == "historical_fixed_base"
             yearly_input = dict(request_id="smoke-yearly-update", dataset="market.yearly", contract_version="v1", items=[dict(entity=entity, base_daily_version_id="demo-daily", years=[2020], publication=dict(mode="historical_fixed_base", comparison_version_id=None))])
             yearly_task = call("update_data", yearly_input)
