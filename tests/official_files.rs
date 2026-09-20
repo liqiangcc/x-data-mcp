@@ -25,6 +25,7 @@ fn daily_fixture() -> MarketDataBatch {
             close: Decimal::ONE,
             volume: None,
             amount: None,
+            r7_raw: None,
         }],
         provenance: Provenance {
             source: "offline-fixture".into(),

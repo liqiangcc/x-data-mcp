@@ -9,8 +9,11 @@
 //! records through `qfq::forward_adjust`. Other GBBQ categories are never
 //! interpreted or applied (the frozen oracle reproduces official client
 //! output from category-1 alone); their exclusion is counted into the
-//! published evidence reason. `.day` amount/volume units are not
-//! evidence-anchored, so those fields are not promoted into published bars.
+//! published evidence reason. `.day` amount/volume units are anchored by
+//! #239 TdxQuant oracle evidence (shares / yuan) and promoted into published
+//! bars verbatim — prices only are QFQ-adjusted; amount/volume are never
+//! adjusted. The eighth `.day` field (`reserved`) stays unpromoted: its
+//! A-share ex-basis semantics are only evidenced for 1999–2010 (#240).
 use crate::{
     day_file, gbbq,
     market_data::{
@@ -33,8 +36,9 @@ use crate::{
     task_control::{Change, ItemOutcome, Stage, Status, TaskSnapshot},
 };
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde_json::Value;
-use std::{collections::BTreeMap, io::Read, path::PathBuf};
+use std::{collections::BTreeMap, io::Read, path::PathBuf, str::FromStr};
 
 pub const SOURCE_NAME: &str = "tdx-official-file-snapshot";
 pub const ADAPTER_VERSION: &str = "tdx-market-source-v1";
@@ -259,8 +263,12 @@ impl MaterializeSession<'_> {
                 high: b.high,
                 low: b.low,
                 close: b.close,
-                volume: None,
-                amount: None,
+                volume: Some(Decimal::from(b.volume_raw)),
+                amount: Decimal::from_str(
+                    &f64::from(f32::from_bits(b.amount_float32_bits)).to_string(),
+                )
+                .ok(),
+                r7_raw: Some(b.r7_raw),
             })
             .collect();
         let acquired_at = source
@@ -315,14 +323,17 @@ impl MaterializeSession<'_> {
                     "yuan",
                     ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
                 ),
-                volume_unit: EvidenceValue::unknown(
-                    ".day volume unit semantics not evidence-anchored; raw volume not promoted",
+                volume_unit: EvidenceValue::confirmed(
+                    "share",
+                    ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
                 ),
-                amount_currency: EvidenceValue::unknown(
-                    ".day amount semantics not evidence-anchored; raw amount not promoted",
+                amount_currency: EvidenceValue::confirmed(
+                    "CNY",
+                    ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
                 ),
-                amount_unit: EvidenceValue::unknown(
-                    ".day amount unit semantics not evidence-anchored; raw amount not promoted",
+                amount_unit: EvidenceValue::confirmed(
+                    "yuan",
+                    ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
                 ),
             },
             adjustment_evidence: AdjustmentEvidence::confirmed(
@@ -502,13 +513,26 @@ impl RangeProvider for TdxBackfillProvider<'_> {
             .map(|b| (b.date, b.clone()))
             .collect();
         for bar in &segment.bars {
-            if let Some(existing) = merged.get(&bar.date)
-                && *existing != *bar
-            {
-                return Err(SourceError::NotVerified(format!(
-                    "source bar {} conflicts with the fixed base",
-                    bar.date
-                )));
+            if let Some(existing) = merged.get(&bar.date) {
+                // Same rule as `market_update::prepare` (#4 AC-71): filling an
+                // unknown optional field is enrichment, not a correction — a
+                // conflict exists only when a known value differs.
+                let changed_known = existing.open != bar.open
+                    || existing.high != bar.high
+                    || existing.low != bar.low
+                    || existing.close != bar.close
+                    || existing.volume.zip(bar.volume).is_some_and(|(a, b)| a != b)
+                    || existing.amount.zip(bar.amount).is_some_and(|(a, b)| a != b)
+                    || existing.r7_raw.zip(bar.r7_raw).is_some_and(|(a, b)| a != b);
+                let lost_known = (existing.volume.is_some() && bar.volume.is_none())
+                    || (existing.amount.is_some() && bar.amount.is_none())
+                    || (existing.r7_raw.is_some() && bar.r7_raw.is_none());
+                if changed_known || lost_known {
+                    return Err(SourceError::NotVerified(format!(
+                        "source bar {} conflicts with the fixed base",
+                        bar.date
+                    )));
+                }
             }
             merged.insert(bar.date, bar.clone());
         }

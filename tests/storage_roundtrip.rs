@@ -21,6 +21,7 @@ fn sample_batch(symbol: &str, period: Period) -> MarketDataBatch {
             close: Decimal::new(1185, 2),
             volume: Some(Decimal::ONE),
             amount: Some(Decimal::TWO),
+            r7_raw: None,
         }],
         provenance: Provenance {
             source: "tdx".into(),

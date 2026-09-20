@@ -11,7 +11,11 @@ pub struct RawDayRecord {
     pub ohlc_raw: [u32; 4],
     pub amount_float32_bits: u32,
     pub volume_raw: u32,
-    pub reserved: u32,
+    /// Eighth .day word, preserved verbatim. A-share ex-rights basis price
+    /// (fen) evidence is anchored only for 1999–2010 (#240); fund/index
+    /// members carry different semantics, and post-2010 values degrade to
+    /// the 0x10000 sentinel — consumers must not interpret it as a price.
+    pub r7_raw: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -49,7 +53,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<RawDayRecord>, DayFileError> {
             ohlc_raw: [words[1], words[2], words[3], words[4]],
             amount_float32_bits: words[5],
             volume_raw: words[6],
-            reserved: words[7],
+            r7_raw: words[7],
         });
     }
     Ok(records)

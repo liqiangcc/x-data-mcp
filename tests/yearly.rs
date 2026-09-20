@@ -24,6 +24,7 @@ fn input() -> EffectiveVersion {
             close: Decimal::from(i + 1),
             volume: Some(d("1.25")),
             amount: Some(d("0.0000000000000000000000000001")),
+            r7_raw: None,
         })
         .collect::<Vec<_>>();
     let mut input = EffectiveVersion {

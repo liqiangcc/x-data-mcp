@@ -226,12 +226,21 @@ fn materializes_qfq_daily_with_snapshot_bound_provenance() {
     assert_eq!(batch.bars[0].close, dec("7.53")); // 11.29/1.5 = 7.5266..→7.53
     assert_eq!(batch.bars[1].close, dec("11.31"));
     assert_eq!(batch.bars[2].close, dec("11.34"));
-    assert!(
-        batch
-            .bars
-            .iter()
-            .all(|b| b.volume.is_none() && b.amount.is_none())
+    // #239-anchored units: raw volume (shares) / amount (yuan) promoted
+    // verbatim; only prices are QFQ-adjusted.
+    assert_eq!(batch.bars[0].volume, Some(dec("100")));
+    assert_eq!(batch.bars[1].volume, Some(dec("110")));
+    assert_eq!(batch.bars[2].volume, Some(dec("120")));
+    assert!(batch.bars.iter().all(|b| b.amount == Some(dec("0"))));
+    // #244: eighth .day word preserved verbatim as internal evidence.
+    assert!(batch.bars.iter().all(|b| b.r7_raw == Some(0)));
+    assert_eq!(
+        batch.unit_currency.volume_unit.value.as_deref(),
+        Some("share")
     );
+    assert!(batch.unit_currency.volume_unit.is_confirmed());
+    assert!(batch.unit_currency.amount_currency.is_confirmed());
+    assert!(batch.unit_currency.amount_unit.is_confirmed());
     assert_eq!(batch.coverage.status, CoverageStatus::Complete);
     assert!(batch.adjustment_evidence.is_confirmed());
     assert_eq!(batch.adjustment_evidence.value.as_deref(), Some("qfq"));

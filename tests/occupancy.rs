@@ -39,6 +39,7 @@ impl FakeSource {
                 close: Decimal::ONE,
                 volume: Some(Decimal::ONE),
                 amount: Some(Decimal::ONE),
+                r7_raw: None,
             }],
             provenance: Provenance {
                 source: "fake".into(),

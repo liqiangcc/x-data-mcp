@@ -42,7 +42,7 @@ pub struct QfqBar {
     /// amount/volume, so the stored values are preserved verbatim.
     pub amount_float32_bits: u32,
     pub volume_raw: u32,
-    pub reserved: u32,
+    pub r7_raw: u32,
 }
 
 /// Displayed 昨结 for one event day — a queryable output of the frozen
@@ -107,7 +107,7 @@ pub fn forward_adjust(bars: &[RawDayRecord], events: &[Event]) -> Result<Vec<Qfq
                 chain_event_count: count,
                 amount_float32_bits: bar.amount_float32_bits,
                 volume_raw: bar.volume_raw,
-                reserved: bar.reserved,
+                r7_raw: bar.r7_raw,
             }
         })
         .collect())

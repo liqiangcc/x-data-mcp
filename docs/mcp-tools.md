@@ -77,7 +77,10 @@ SOURCE_NOT_VERIFIED 可能位于任务单项 error 字符串，而非顶层 API 
   这是当前 Serde 大小写，不能擅自转成全小写。
 - UnitCurrencyEvidence：price_currency、price_unit、volume_unit、amount_currency、
   amount_unit 五个 EvidenceValue。
-- Bar：date、open、high、low、close、volume、amount。
+- Bar：date、open、high、low、close、volume、amount；存储记录另含 `r7_raw`
+  （.day 第 8 字段原始 u32，#240 内部证据字段，不在查询 wire 契约中，
+  语义仅 A 股 1999–2010 区间锚定）。volume（股）/amount（元）自 #239 锚定后
+  由官方快照源填充真实值，旧版本仍为 null。
 - YearlyDerivation：base_daily_version_id、algorithm_version、
   first_trading_date、last_trading_date。
 - AnnualRecord：`{bar:Bar,lineage:YearlyDerivation,year_unfinished:boolean}`。

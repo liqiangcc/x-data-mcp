@@ -189,6 +189,11 @@ pub struct Bar {
     pub close: Decimal,
     pub volume: Option<Decimal>,
     pub amount: Option<Decimal>,
+    /// Eighth `.day` word preserved verbatim (internal evidence field, not a
+    /// promoted contract value). A-share ex-basis semantics are anchored only
+    /// for 1999–2010 (#240); it is not part of the query wire contract.
+    #[serde(default)]
+    pub r7_raw: Option<u32>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct YearlyDerivation {

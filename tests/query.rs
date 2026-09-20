@@ -31,6 +31,7 @@ fn daily(id: &str) -> EffectiveVersion {
                 close: Decimal::ONE,
                 volume: None,
                 amount: None,
+                r7_raw: None,
             })
             .collect(),
         published_at: now(),

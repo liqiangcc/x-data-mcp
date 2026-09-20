@@ -213,6 +213,11 @@ fn bar_values(b: &Bar) -> Vec<Option<String>> {
         b.amount.map(decimal),
     ]
 }
+fn daily_bar_values(b: &Bar) -> Vec<Option<String>> {
+    let mut v = bar_values(b);
+    v.push(b.r7_raw.map(|x| x.to_string()));
+    v
+}
 fn annual_values(
     r: &CheckedRecord,
     base: &CheckedRecord,
@@ -274,10 +279,10 @@ fn insert_record(
     drop(evidence_stmt);
     if v.period == Period::Day {
         let mut bar_stmt = c
-            .prepare("INSERT INTO daily_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8)")
+            .prepare("INSERT INTO daily_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")
             .map_err(storage)?;
         for b in &v.records {
-            let b = bar_values(b);
+            let b = daily_bar_values(b);
             bar_stmt
                 .execute(params![
                     v.version_id,
@@ -287,7 +292,8 @@ fn insert_record(
                     b[3],
                     b[4],
                     b[5],
-                    b[6]
+                    b[6],
+                    b[7]
                 ])
                 .map_err(storage)?;
         }
@@ -406,9 +412,9 @@ fn read_projection(
     }
     let daily = rows(
         c,
-        "SELECT trade_date,open,high,low,close,volume,amount FROM daily_bars WHERE version_id=?1 ORDER BY trade_date",
+        "SELECT trade_date,open,high,low,close,volume,amount,r7_raw FROM daily_bars WHERE version_id=?1 ORDER BY trade_date",
         id,
-        7,
+        8,
     )?;
     let yearly = rows(
         c,
@@ -428,7 +434,7 @@ fn read_projection(
                 .version
                 .records
                 .iter()
-                .map(bar_values)
+                .map(daily_bar_values)
                 .collect::<Vec<_>>()
             || !yearly.is_empty()
             || !lineage.is_empty()
@@ -503,6 +509,7 @@ pub(crate) fn range_rows(
                     .map(|s| s.parse())
                     .transpose()
                     .map_err(integrity)?,
+                r7_raw: None,
             })
         })
         .collect()
