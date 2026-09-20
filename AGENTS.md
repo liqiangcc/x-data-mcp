@@ -23,7 +23,7 @@
 
 实际开发暴露的规范歧义、冲突或不必要成本，按 `docs/conventions.md` 的反馈流程记录；不静默绕过，也不为了满足形式增加无价值抽象。
 
-Box（cursor）环境事实：`/home` 与 `/tmp` 为 overlayfs，runtime-guard 契约对其 fail-closed，全量测试须以 `TMPDIR=/dev/shm`（tmpfs）运行；Box 自带 cargo 1.85.1 无法编译本仓库，使用 rustup stable 1.98.1（`~/.cargo/bin`）。
+Box（Tailscale 节点 `grok-bot-vm-411252337`，SSH `box@grok-bot-vm-411252337`；旧节点 `cursor` 已被回收下线，磁盘数据无损）环境事实：`/home` 与 `/tmp` 为 overlayfs，runtime-guard 契约对其 fail-closed，全量测试须以 `TMPDIR=/dev/shm`（tmpfs）运行；Box 自带 cargo 1.85.1 无法编译本仓库，使用 rustup stable 1.98.1（`~/.cargo/bin`）。
 
 固定证据输入目录 `/home/box/retained-inputs/`（见其中 MANIFEST.md），官方文件只下载一次入库复用，重复下载需说明理由；gen-1 retained 字节永久不可得，跨代一致性走已提交派生证据。
 
