@@ -94,7 +94,8 @@ def day_member_symbols(zip_path):
     with zipfile.ZipFile(zip_path) as z:
         for info in z.infolist():
             name = info.filename
-            base = os.path.basename(name).lower()
+            # Official zips use Windows-style backslash member paths.
+            base = os.path.basename(name.replace("\\", "/")).lower()
             if not base.endswith(".day"):
                 skipped.append(name)
                 continue
