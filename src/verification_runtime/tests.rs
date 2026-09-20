@@ -10,6 +10,22 @@ fn database() -> (tempfile::TempDir, PathBuf) {
     SqliteTasks::new(&path).initialize().unwrap();
     (dir, path)
 }
+/// The guard's flock is scoped to its open file description: a child process
+/// spawned by a *parallel* test transiently inherits the fd between fork and
+/// exec, so a just-dropped guard can still report Busy inside that window
+/// (observed flake, #193). Retry briefly — the contract under test is
+/// post-release acquisition, not instant visibility.
+fn acquire_after_release<T>(
+    op: impl Fn() -> Result<T, Error>,
+) -> T {
+    for _ in 0..200 {
+        match op() {
+            Err(Error::Busy) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            result => return result.unwrap(),
+        }
+    }
+    op().unwrap()
+}
 #[test]
 fn guard_busy_while_held_and_reusable_only_after_scope_ends() {
     let (_dir, path) = database();
@@ -18,12 +34,12 @@ fn guard_busy_while_held_and_reusable_only_after_scope_ends() {
     assert!(matches!(try_acquire(&path, &descriptor), Err(Error::Busy)));
     assert!(matches!(create(&path, "check", "run"), Err(Error::Busy)));
     drop(guard);
-    let acquired = try_acquire(&path, &descriptor).unwrap();
+    let acquired = acquire_after_release(|| try_acquire(&path, &descriptor));
     acquired.verify_binding(&path).unwrap();
     assert!(matches!(create(&path, "check", "run"), Err(Error::Busy)));
     drop(acquired);
     assert_eq!(
-        create(&path, "check", "run").unwrap().descriptor(),
+        acquire_after_release(|| create(&path, "check", "run")).descriptor(),
         &descriptor
     );
 }
@@ -43,7 +59,7 @@ fn guard_rejects_other_database_boot_run_content_and_replaced_file() {
     std::fs::write(&descriptor.lock_path, b"{}").unwrap();
     assert!(try_acquire(&path, &descriptor).is_err());
     std::fs::write(&descriptor.lock_path, &raw).unwrap();
-    let held = try_acquire(&path, &descriptor).unwrap();
+    let held = acquire_after_release(|| try_acquire(&path, &descriptor));
     // Keep the old inode allocated; identical copied bytes must not substitute it.
     std::fs::rename(
         &descriptor.lock_path,
@@ -113,7 +129,7 @@ fn actual_process_guard_blocks_live_peer_and_releases_after_return_or_exit() {
         .unwrap();
         let status = child.wait().unwrap();
         assert_eq!(status.code(), Some(if exit { 106 } else { 0 }));
-        let after = try_acquire(&path, &descriptor).unwrap();
+        let after = acquire_after_release(|| try_acquire(&path, &descriptor));
         after.verify_binding(&path).unwrap();
     }
 }
