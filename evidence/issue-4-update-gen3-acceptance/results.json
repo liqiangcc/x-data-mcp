@@ -1,0 +1,290 @@
+{
+ "assertions": [
+  {
+   "name": "C1_input_integrity",
+   "ok": true,
+   "detail": {
+    "archive_sha256": {
+     "base.zip": "56c3574505bbd3fa3a1899b46e09112070dea17cbea2f713b7ccff2628379bec",
+     "gbbq.zip": "502236d9d8394e89b1a4091f5d0d2b86e419c0c4da2c788ddcea16ef7d3763e3",
+     "hsjday.zip": "563797f0d1b852e91b85ee0aafe396c0df1bb12e55b569e8526db76a4e181c64"
+    },
+    "manifest_sha256": "1e8d1ca77e99efb218213795a1d518f5ce6e4057fa93cf99520429ebb0cd5311"
+   }
+  },
+  {
+   "name": "C1b_baseline_workset",
+   "ok": true,
+   "detail": {
+    "counts": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206,
+     "market_update_results": 5219
+    }
+   }
+  },
+  {
+   "name": "C2_default_budget",
+   "ok": true,
+   "detail": {
+    "response": {
+     "id": 2,
+     "jsonrpc": "2.0",
+     "result": {
+      "content": [
+       {
+        "text": "{\"code\":\"invalid_arguments\",\"message\":\"INVALID_COMMAND: default security budget exceeded: 5224 > 100\",\"next_actions\":[\"correct the request or inspect the reported storage evidence\"],\"outcome_certainty\":\"not_committed\"}",
+        "type": "text"
+       }
+      ],
+      "isError": true,
+      "structuredContent": {
+       "code": "invalid_arguments",
+       "message": "INVALID_COMMAND: default security budget exceeded: 5224 > 100",
+       "next_actions": [
+        "correct the request or inspect the reported storage evidence"
+       ],
+       "outcome_certainty": "not_committed"
+      }
+     }
+    },
+    "task_count_before": 109
+   }
+  },
+  {
+   "name": "C3_sharded_acceptance",
+   "ok": true,
+   "detail": {
+    "tasks": 53,
+    "total_items": 5219
+   }
+  },
+  {
+   "name": "C4_legal_outcomes_zero_new_versions",
+   "ok": true,
+   "detail": {
+    "outcomes": 5219,
+    "no_change": 0,
+    "nv": 5219,
+    "other_failures": [],
+    "our_update_rows": [
+     0,
+     null,
+     null
+    ],
+    "counts_after": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206,
+     "market_update_results": 5219
+    }
+   }
+  },
+  {
+   "name": "C5_outcome_expected_consistency",
+   "ok": true,
+   "detail": {
+    "no_change_count": 0,
+    "no_change_symbols": [],
+    "rev_not_in_S_evt": [],
+    "S_evt_not_revised_count": 70,
+    "illegal_reasons": [],
+    "reason_distribution": {
+     "combined": 5082,
+     "RevisionUnverified": 137
+    }
+   }
+  },
+  {
+   "name": "C6_pin_sz000001_revision_unverified",
+   "ok": true,
+   "detail": {
+    "pin_outcome": "nv:RevisionUnverified",
+    "pin_error_head": "INVALID_MARKET_COMMAND: NEEDS_VERIFICATION: RevisionUnverified([1991-04-03, 1991-04-04, 1991-04-05, 1991-04-06, 1991-04-08, 1991-04-09, 1991-04-10, 1991-04-12, "
+   }
+  },
+  {
+   "name": "C7_data_unchanged",
+   "ok": true,
+   "detail": {
+    "daily_bars_after": 16629206,
+    "spot_bar_counts": {
+     "sh.600004": 5630,
+     "sh.600006": 6467,
+     "sz.000002": 8479
+    }
+   }
+  },
+  {
+   "name": "C8_provenance",
+   "ok": true,
+   "detail": {
+    "audit_rows": 0,
+    "flags": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "audit_spot": []
+   }
+  },
+  {
+   "name": "C9_task_bookkeeping",
+   "ok": true,
+   "detail": {
+    "task_states": [
+     [
+      "failed",
+      53,
+      5219
+     ]
+    ]
+   }
+  },
+  {
+   "name": "C10_env_absent",
+   "ok": true,
+   "detail": {
+    "items": [
+     {
+      "item_id": "[\"market\",\"sh.600000\",\"day\"]",
+      "target": {
+       "period": "day",
+       "symbol": "sh.600000"
+      },
+      "stage": "finished",
+      "outcome": {
+       "success": false,
+       "error": "INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+      }
+     }
+    ],
+    "counts": {
+     "data_versions": 5219,
+     "published": 5219,
+     "effective_heads": 5219,
+     "daily_bars": 16629206,
+     "market_update_results": 5219
+    }
+   }
+  },
+  {
+   "name": "C11_gates_verbatim",
+   "ok": true,
+   "detail": {
+    "blocking_reasons": [
+     "GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics)",
+     "FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries)",
+     "FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+    ],
+    "production_ready": false
+   }
+  }
+ ],
+ "blocked_paths": {
+  "S4_default_selection": {
+   "code": "invalid_arguments",
+   "message": "INVALID_COMMAND: default security budget exceeded: 5224 > 100",
+   "next_actions": [
+    "correct the request or inspect the reported storage evidence"
+   ],
+   "outcome_certainty": "not_committed"
+  },
+  "R1_env_absent": [
+   {
+    "success": false,
+    "error": "INVALID_MARKET_COMMAND: SOURCE_NOT_VERIFIED: NOT_PRODUCTION_READY; publish blocked; GBBQ_QFQ_NOT_VERIFIED (#54: float32 business decimal, event and QFQ semantics); FILE_ACCESS_USE_NOT_VERIFIED (long-running server acquisition/use boundaries); FILE_SET_CONSISTENCY_NOT_VERIFIED (independent .day/gbbq hashes, update times and compatibility evidence)"
+   }
+  ]
+ },
+ "run_identity": {
+  "head": "6daa99bd4945a3d6b0568f3d908265555316108f",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "manifest_sha256": "1e8d1ca77e99efb218213795a1d518f5ce6e4057fa93cf99520429ebb0cd5311",
+  "archive_sha256": {
+   "base.zip": "56c3574505bbd3fa3a1899b46e09112070dea17cbea2f713b7ccff2628379bec",
+   "gbbq.zip": "502236d9d8394e89b1a4091f5d0d2b86e419c0c4da2c788ddcea16ef7d3763e3",
+   "hsjday.zip": "563797f0d1b852e91b85ee0aafe396c0df1bb12e55b569e8526db76a4e181c64"
+  },
+  "shanghai_today": "2026-09-20",
+  "baseline_source": "/home/box/acceptance-run-issue4-update/db.sqlite"
+ },
+ "summary": {
+  "passed": 12,
+  "total": 12,
+  "failed": [],
+  "update_tasks": [
+   "task-80c72a0f2225b6a73476d58ff74e99e5",
+   "task-351c76c613f521be8209613416ee9ab9",
+   "task-faed72e34aa8bc872ab9669b2026270e",
+   "task-78a16fa267bb6923035f2acaa513c5b8",
+   "task-8d19dbb8e397476e681eb8d324655583",
+   "task-23400d0bdd3adb5e37fb6e9a3934752a",
+   "task-a36ed9ac9a568d00d5b39db1cda17ea0",
+   "task-592bfe34a6b0e075816c124dd671e3e2",
+   "task-cc221d43b671d8a9b45d2941b77e052b",
+   "task-1cad8d15f568510654bb6240163d781d",
+   "task-78f6953c6efd1476a23f4920bd27a5df",
+   "task-e776bc3c6ec2d561a548313a594052d9",
+   "task-b1242819ceec9a9d3d3a9c4277ca34f9",
+   "task-06406ecce4f31a0bbb73ea38d0555e5a",
+   "task-b784abb1c5ef3c7909b276a55cbd5240",
+   "task-17a670190e65682b79e932a2add46a92",
+   "task-afdd74e26f0646ae78e22d9a09151a2a",
+   "task-d6e13c71d765264f2b32b0eea9fa06ef",
+   "task-a65b08dae1e2055a3b674ce26e49bcbf",
+   "task-aa0b9fa46f1ac11f5d4f12f29a170505",
+   "task-e5f0d1f9449909b95cf902e4f63d481c",
+   "task-ae2cb180f617b84be5a6bf66720eff54",
+   "task-a37fe32f5ed0a0bf47178927077cb2a0",
+   "task-9e0f99d8d6656f236fe45df2735489fb",
+   "task-c6c2c0110221136b5bc6911a12621a40",
+   "task-226715b09607de781c0d8fcc949cfef9",
+   "task-5f3d448e296e7e5891929ea8a925de59",
+   "task-a9b7268ec25d22935f74a8a7485cfd39",
+   "task-c26afae3545ed75c2cae4909fe1210f8",
+   "task-fed3e52ed068527718209baa4ac0f13a",
+   "task-54e5da9ea40277c7eedda994ee1cf55b",
+   "task-d8fb8583525132706af445704dcf96fa",
+   "task-f9c07e75707ef3b9b7edd9133f1cd0be",
+   "task-7fc773048c9a6911ebb053fba51ff893",
+   "task-2e37b314bf41fd3a45ed38a3df9b5201",
+   "task-7f7a9a2a4038ee0673b84356aaf5f08b",
+   "task-97d3812ead31f3a30856559a78b5e0bc",
+   "task-ccf589276ed8e7b7d9b0ed303d3b2b8d",
+   "task-112d6d1a08aeaf0848b06520ca580541",
+   "task-fe219d156cac72c16c319acfc9299af6",
+   "task-6245e8500450e58693dc19d6b7357718",
+   "task-6756ffffd3c6feead7c3009407b09c7e",
+   "task-68d2c023908ed749a0eed2e6e7b40f44",
+   "task-4827e0b23a2bce088dd8bbd94325db4d",
+   "task-b98d365efa8b354abbaf4215dcab4e60",
+   "task-3240cdb921cc5df770598b4a8f361b19",
+   "task-09bbb2fc932bce966544d7f726eb206a",
+   "task-baf22b6fd3c28efdd87c9fa115b43fda",
+   "task-455d6239379d1f28d67abd52877a15af",
+   "task-837a840b84aa1583d2f9c080882bc816",
+   "task-5c32520dc09ea42f133000d8b4297f24",
+   "task-b799209596762def5067a63d2de025ff",
+   "task-b0ff55d67500d447951b811914d6c9e9"
+  ],
+  "counts_after": {
+   "data_versions": 5219,
+   "published": 5219,
+   "effective_heads": 5219,
+   "daily_bars": 16629206,
+   "market_update_results": 5219
+  },
+  "no_change": 0,
+  "needs_verification": 5219,
+  "reason_distribution": {
+   "combined": 5082,
+   "RevisionUnverified": 137
+  },
+  "non_idle_worker_runs": 53
+ }
+}
