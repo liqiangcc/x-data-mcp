@@ -131,3 +131,126 @@ fn sqlite_unfinished_tail_honors_both_explicit_modes() {
         }
     ));
 }
+#[test]
+fn production_yearly_completion_derives_from_embedded_derivation_evidence() {
+    // Issue #225 D1=A/D2=C: certified base coverage + finished year reads
+    // Complete; certified-but-open reads Incomplete; uncertified years and
+    // absent evidence fail closed to Unknown.
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t);
+    let reference = fixture::publish_derived(
+        &store,
+        Some(fixture::derivation_evidence(
+            "Complete",
+            &[2020, 2021, 2022, 2023],
+        )),
+        false,
+    );
+    let compute = Metrics {
+        repository: SqliteMetrics { market: store },
+    };
+    let request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
+    assert!(matches!(
+        compute.compute(request, &Access::local()).unwrap().result,
+        Outcome::Computed {
+            run_length: 3,
+            matches: Some(true),
+            ..
+        }
+    ));
+}
+#[test]
+fn production_yearly_completion_fail_closed_on_uncertified_or_unfinished() {
+    for (evidence, expected) in [
+        // Year outside the verifier-certified set: unknown.
+        (
+            Some(fixture::derivation_evidence(
+                "Complete",
+                &[2020, 2021, 2022],
+            )),
+            Reason::UnknownCompletion,
+        ),
+        // Verifier explicitly reported partial coverage: incomplete.
+        (
+            Some(fixture::derivation_evidence(
+                "Incomplete",
+                &[2020, 2021, 2022, 2023],
+            )),
+            Reason::IncompletePeriod,
+        ),
+        // No embedded derivation evidence at all: fail closed.
+        (None, Reason::UnknownCompletion),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let t = SqliteTasks::new(d.path().join("db"));
+        t.initialize().unwrap();
+        let store = SqliteMarket::new(t);
+        let reference = fixture::publish_derived(&store, evidence, false);
+        let compute = Metrics {
+            repository: SqliteMetrics { market: store },
+        };
+        let request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
+        assert!(matches!(
+            compute.compute(request, &Access::local()).unwrap().result,
+            Outcome::NotComputable { reason, .. } if reason == expected
+        ));
+    }
+    // Certified but still-open tail year reads Incomplete: completed_only
+    // excludes it and computes over the finished certified years; the
+    // non-completed mode keeps it as the provisional end year.
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t);
+    let reference = fixture::publish_derived(
+        &store,
+        Some(fixture::derivation_evidence(
+            "Complete",
+            &[2020, 2021, 2022, 2023],
+        )),
+        true,
+    );
+    let compute = Metrics {
+        repository: SqliteMetrics { market: store },
+    };
+    let mut request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
+    assert!(matches!(
+        compute
+            .compute(request.clone(), &Access::local())
+            .unwrap()
+            .result,
+        Outcome::Computed {
+            run_length: 2,
+            provisional: false,
+            ..
+        }
+    ));
+    request.metrics[0].parameters.completed_only = false;
+    assert!(matches!(
+        compute.compute(request, &Access::local()).unwrap().result,
+        Outcome::Computed {
+            run_length: 3,
+            provisional: true,
+            ..
+        }
+    ));
+}
+#[test]
+fn malformed_embedded_derivation_evidence_is_integrity_error() {
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let store = SqliteMarket::new(t);
+    let reference = fixture::publish_derived(
+        &store,
+        Some(serde_json::json!({"years": "not-an-array"})),
+        false,
+    );
+    let compute = Metrics {
+        repository: SqliteMetrics { market: store },
+    };
+    let request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
+    assert!(compute.compute(request, &Access::local()).is_err());
+}
