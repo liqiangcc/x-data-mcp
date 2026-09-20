@@ -489,7 +489,9 @@ def main():
     svc.close()
     s1 = Service(db, "absent")
     s1.rpc("initialize")
-    r_items = update_request("u-r1", [items[0]])
+    # request_id must differ from update5219's env-absent leg, which lives
+    # in the carried-over baseline DB.
+    r_items = update_request("u-r1-gen3", [items[0]])
     a1 = s1.tool("update_data", r_items)
     record("R1_accept", a1)
     s1.tool("run_worker_once", {})
