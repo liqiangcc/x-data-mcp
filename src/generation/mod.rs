@@ -29,6 +29,7 @@ use std::{
 
 pub const MANIFEST_NAME: &str = "snapshot-manifest.json";
 pub const DECISION_NAME: &str = "consistency-decision.json";
+pub const EVIDENCE_NAME: &str = "compatibility-evidence.json";
 pub const ACTIVE_NAME: &str = "active-generation.json";
 const ARTIFACTS: [&str; 3] = ["base.zip", "gbbq.zip", "hsjday.zip"];
 
@@ -53,6 +54,30 @@ pub struct Installed {
     pub manifest_sha256: String,
     pub dir: PathBuf,
     pub manifest: snapshot::SnapshotManifest,
+    /// The exact manifest bytes whose digest names this generation.
+    pub manifest_bytes: Vec<u8>,
+}
+
+/// The once-written consistency verdict (`consistency-decision.json`). It
+/// binds the decision to the generation identity and manifest bytes it was
+/// evaluated on, so a copied or stale verdict fails closed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionArtifact {
+    pub schema: String,
+    pub generation_id: String,
+    pub manifest_sha256: String,
+    pub issuer: String,
+    pub validator_contract_version: String,
+    pub evaluated_at: DateTime<Utc>,
+    pub status: crate::file_consistency::ConsistencyStatus,
+    pub reasons: Vec<crate::file_consistency::ConsistencyReason>,
+    pub evidence_sha256: Option<String>,
+    /// Structural probe facts recorded verbatim for audit.
+    pub probes: serde_json::Value,
+}
+impl DecisionArtifact {
+    pub const SCHEMA: &'static str = "x-data-mcp.consistency-decision.v1";
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +105,10 @@ pub enum Error {
     NotVerified(String),
     #[error("staging area for request {0} is already sealed or missing")]
     Staging(String),
+    #[error("generation {0} carries no verified compatibility decision")]
+    NotConsistencyVerified(String),
+    #[error("artifact {0} for generation {1} already exists")]
+    ArtifactExists(String, String),
 }
 
 #[derive(Clone)]
@@ -172,6 +201,7 @@ impl Store {
             manifest_sha256: inspection.manifest_sha256,
             dir: target,
             manifest,
+            manifest_bytes,
         })
     }
 
@@ -199,7 +229,28 @@ impl Store {
             manifest_sha256: inspection.manifest_sha256,
             dir,
             manifest,
+            manifest_bytes,
         })
+    }
+
+    /// Installed generation identities present on disk, whether or not the
+    /// durable store knows them (crash recovery adopts orphans).
+    pub fn installed_ids(&self) -> Result<Vec<String>, Error> {
+        let mut ids = vec![];
+        let dir = self.generations_dir();
+        if !dir.is_dir() {
+            return Ok(ids);
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                ids.push(name.to_string());
+            }
+        }
+        ids.sort();
+        Ok(ids)
     }
 
     /// Append the verification decision exactly once. `create_new` makes a
@@ -236,6 +287,85 @@ impl Store {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(Error::Io(e)),
         }
+    }
+
+    /// Write a supplementary once-only artifact (e.g. the compatibility
+    /// evidence consumed by the decision). Same write-once rule as the
+    /// decision itself; returns the artifact sha256.
+    pub fn write_artifact(&self, generation_id: &str, name: &str, bytes: &[u8]) -> Result<String, Error> {
+        let dir = self.generation_dir(generation_id);
+        if !dir.is_dir() {
+            return Err(Error::NotInstalled(generation_id.into()));
+        }
+        if name.contains(['/', '\\', '\0']) || name.is_empty() {
+            return Err(Error::NotVerified("invalid artifact name".into()));
+        }
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(name))
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    Error::ArtifactExists(name.into(), generation_id.into())
+                } else {
+                    Error::Io(e)
+                }
+            })?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fsync_dir(&dir)?;
+        Ok(crate::hash::sha256(bytes))
+    }
+
+    /// Read a supplementary artifact written by `write_artifact`.
+    pub fn artifact(&self, generation_id: &str, name: &str) -> Result<Option<Vec<u8>>, Error> {
+        if name.contains(['/', '\\', '\0']) || name.is_empty() {
+            return Err(Error::NotVerified("invalid artifact name".into()));
+        }
+        match fs::read(self.generation_dir(generation_id).join(name)) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(Error::Io(e)),
+        }
+    }
+
+    /// Parse the once-written decision into its typed artifact; malformed
+    /// or identity-mismatched verdicts are corruption, never tolerated.
+    pub fn decision_artifact(
+        &self,
+        generation_id: &str,
+    ) -> Result<Option<DecisionArtifact>, Error> {
+        let Some(bytes) = self.decision(generation_id)? else {
+            return Ok(None);
+        };
+        let artifact: DecisionArtifact = serde_json::from_slice(&bytes)
+            .map_err(|e| Error::Corrupt(generation_id.into(), e.to_string()))?;
+        if artifact.schema != DecisionArtifact::SCHEMA
+            || artifact.generation_id != generation_id
+        {
+            return Err(Error::Corrupt(
+                generation_id.into(),
+                "decision does not bind this generation".into(),
+            ));
+        }
+        Ok(Some(artifact))
+    }
+
+    /// A generation usable as a task source: bytes verified against the
+    /// manifest-pinned identity AND a `VERIFIED_COMPATIBLE` decision that
+    /// binds this exact generation and manifest. Anything less — missing,
+    /// malformed, mismatched or negative verdict — fails closed.
+    pub fn usable(&self, generation_id: &str, now: DateTime<Utc>) -> Result<Installed, Error> {
+        let installed = self.verify_installed(generation_id, now)?;
+        let Some(decision) = self.decision_artifact(generation_id)? else {
+            return Err(Error::NotConsistencyVerified(generation_id.into()));
+        };
+        if decision.manifest_sha256 != installed.manifest_sha256
+            || decision.status != crate::file_consistency::ConsistencyStatus::VerifiedCompatible
+        {
+            return Err(Error::NotConsistencyVerified(generation_id.into()));
+        }
+        Ok(installed)
     }
 
     /// The current active generation pointer, if any was ever activated.

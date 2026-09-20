@@ -110,3 +110,53 @@ impl Fetcher for Helper {
         })
     }
 }
+
+/// Local mirror fetcher: maps a declared role URL to a file under one
+/// directory by its canonical artifact name. This is how pinned snapshots
+/// and isolated acceptance flow through the identical staged, manifest-
+/// pinned, byte-verified pipeline — the recorded `source_url` stays the
+/// declared TDX URL the manifest contract requires.
+pub struct Mirror {
+    dir: std::path::PathBuf,
+}
+impl Mirror {
+    pub fn new(dir: impl Into<std::path::PathBuf>) -> Self {
+        Self { dir: dir.into() }
+    }
+    fn file(&self, url: &str) -> Result<std::path::PathBuf, Error> {
+        let name = url.rsplit('/').next().unwrap_or_default();
+        if !["base.zip", "gbbq.zip", "hsjday.zip"].contains(&name) {
+            return Err(Error::Failed(format!("undeclared url {url}")));
+        }
+        Ok(self.dir.join(name))
+    }
+}
+impl Fetcher for Mirror {
+    fn head(&self, url: &str) -> Result<Head, Error> {
+        let path = self.file(url)?;
+        let meta = std::fs::metadata(&path).map_err(|e| Error::Failed(e.to_string()))?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Ok(Head {
+            status: 200,
+            etag: Some(format!("\"{:x}-{:x}\"", meta.len(), mtime)),
+            last_modified: None,
+            content_length: Some(meta.len()),
+        })
+    }
+    fn fetch(&self, url: &str, dest: &Path) -> Result<FetchResult, Error> {
+        let path = self.file(url)?;
+        let bytes = std::fs::read(&path).map_err(|e| Error::Failed(e.to_string()))?;
+        std::fs::write(dest, &bytes).map_err(|e| Error::Failed(e.to_string()))?;
+        let head = self.head(url)?;
+        Ok(FetchResult {
+            head,
+            bytes: bytes.len() as u64,
+            sha256: crate::hash::sha256(&bytes),
+        })
+    }
+}

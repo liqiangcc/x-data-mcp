@@ -124,9 +124,31 @@ impl Db {
     /// initialised idempotently (IF NOT EXISTS schema, no migration story
     /// yet — schema v1 is the first version).
     pub fn open(&self) -> Result<(), Error> {
-        let c = self.connect()?;
+        let c = Connection::open_with_flags(
+            &self.path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+        )
+        .map_err(storage)?;
+        c.busy_timeout(std::time::Duration::from_millis(250))
+            .map_err(storage)?;
         c.execute_batch(SCHEMA).map_err(storage)?;
         Ok(())
+    }
+    /// Read-only consumer check: the data service may observe recorded
+    /// generation state but never creates or writes the acquire store.
+    /// A missing database is an absent store, not an error.
+    pub fn exists_readable(&self) -> Result<bool, Error> {
+        if !self.path.exists() {
+            return Ok(false);
+        }
+        let c = self.connect()?;
+        c.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='generations'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(storage)
+        .map(|n| n == 1)
     }
     fn connect(&self) -> Result<Connection, Error> {
         let c = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_WRITE)
@@ -285,6 +307,20 @@ impl Db {
             )
             .optional()
             .map_err(storage)
+        })
+    }
+    /// Rows whose state is one of `states`; the durable lifecycle facts
+    /// the service reconciles against the filesystem.
+    pub fn generations_in(&self, states: &[&str]) -> Result<Vec<Generation>, Error> {
+        self.read(|c| {
+            let marks = states.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let mut stmt = c
+                .prepare(&format!("SELECT generation_id,state,manifest_sha256,consistency_status,consistency_reasons,decision_sha256,evidence_json,acquisition_request_id,installed_at,updated_at FROM generations WHERE state IN ({marks}) ORDER BY installed_at"))
+                .map_err(storage)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(states.iter()), map_generation)
+                .map_err(storage)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(storage)
         })
     }
     pub fn generations(&self) -> Result<Vec<Generation>, Error> {

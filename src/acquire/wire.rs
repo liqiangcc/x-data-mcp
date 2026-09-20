@@ -126,24 +126,36 @@ pub struct GenerationView {
     pub acquisition_request_id: Option<String>,
     pub installed_at: String,
 }
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+/// Terminal verify reply. `state` is the generation lifecycle state after
+/// this call: `consistency_verified`, `not_verified`, `conflict`, or
+/// `refused` (precondition failed before evaluation). Refusals are
+/// durable outcomes replayed by request identity, not transient errors.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct VerifyOutcome {
+pub struct VerifyReply {
     pub request_id: String,
     pub generation_id: String,
     pub state: String,
-    pub consistency_status: String,
+    pub consistency_status: Option<String>,
     pub consistency_reasons: Vec<String>,
     pub decision_sha256: Option<String>,
+    pub reason_code: Option<String>,
     pub reused: bool,
 }
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+/// Terminal activate reply. `state` is `active` on a committed pointer
+/// swap, otherwise `refused` with a stable `reason_code`
+/// (`generation_not_installed`, `generation_not_consistency_verified`,
+/// `generation_bytes_unverified`, `activation_conflict`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ActivateOutcome {
+pub struct ActivateReply {
     pub request_id: String,
     pub generation_id: String,
-    pub manifest_sha256: String,
-    pub activated_at: String,
+    pub state: String,
+    pub reason_code: Option<String>,
+    pub detail: Option<String>,
+    pub manifest_sha256: Option<String>,
+    pub activated_at: Option<String>,
     pub previous_generation_id: Option<String>,
     pub reused: bool,
 }
