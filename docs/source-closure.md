@@ -26,9 +26,14 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
    缺当前沪深 A 身份/范围语义、名称覆盖/编码和 TDX 研究行业二级字典/层级关联证明。
    验收需固定文件/member/hash、字段语义和有界沪深/前导零/缺失/冲突矩阵；不能靠代码前缀或行数。
    已确认身份的行业缺失/冲突按 #6 降级，不能把未知身份视为行业缺失放行。
-4. 文件一致性：#74 能核验字节和取得时间，不能证明 .day/gbbq 业务上可组合。
-   缺来源修订关联或可审计兼容性证据（适用证券、事件、截止时点及后续修订）。
-   验收必须分别保存包/member hash、取得区间、语义契约版本和组合依据；同天下载/相同 ETag 不足。
+4. 文件一致性（已解决，2026-09-20 FG 裁定 ACCEPT，#131 comment-5749856666）：
+   `evidence/issue-131-file-set-consistency/` 审计 pinned 2026-09-20 snapshot 集合：
+   三角色字节重哈希匹配 manifest（manifest 自身 sha256 钉住）；全部 10,443 个已发布
+   day 版本 `snapshot_inputs` 唯一绑定该 day+gbbq 归档对、零违例；5,221/5,221 heads
+   出自该集合；base 经 catalog 版本绑定（source id=manifest 前缀+acquired_at 精确）。
+   `consistency_check` → `VERIFIED_COMPATIBLE` 零 reason。
+   `FILE_SET_CONSISTENCY_NOT_VERIFIED` 已从 PRODUCTION_BLOCKERS 移除。
+   边界：仅认定该 pinned 集合对本代际可组合；新一代下载需新 manifest + 重审计。
 5. LOCAL_PIPELINE（已退休）：#187 FG 裁定 bounded daily/yearly/update/verify+backfill
    四条链路真实源验收 PASS，`LOCAL_PIPELINE_NOT_IMPLEMENTED` blocker 整条移除。
    真实目录已有 bounded 官方快照发布验收（#194 v2：5224 成员发布 + 六缺名成员 `reject_candidate` verbatim 排除，FG 5711367159 裁定 `CATALOG_PUBLISH_NOT_VERIFIED` 退休）；changed-generation 目录更新与生产部署仍未验证。接口/fixture 测试不能填补来源证据。
