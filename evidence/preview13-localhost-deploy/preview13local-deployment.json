@@ -1,0 +1,47 @@
+{
+  "status": "DEPLOYED",
+  "release": "v0.2.0-preview.13",
+  "code_sha": "13f81a71316ba6c178c191b855c2d764dd5b082d",
+  "deployment_mode": "local-adapted",
+  "adaptations": [
+    "no systemd: data_service run as direct background process",
+    "no tunnel: not applicable locally",
+    "deploy root: /opt/x-data-mcp-preview (ext4 local filesystem)",
+    "runtime paths: DB+unix socket under /opt/x-data-mcp-preview on ext4 \u2014 runtime guard passes NATIVELY, no opt-out needed",
+    "package fetch: gh release download"
+  ],
+  "fetch_verify": {
+    "tarball_sha256": "4e7e437563431576343aa90ff7cb07c826640e76eb33787898b68bf98b233ff5",
+    "sha256_asset_check": "OK",
+    "package_SHA256SUMS": "OK",
+    "binary_version_embeds_sha": true
+  },
+  "before": {
+    "fresh_deploy": true
+  },
+  "after": {
+    "schema": 12,
+    "counts": {
+      "tasks": 0,
+      "requests": 0,
+      "data_versions": 0,
+      "catalog_versions": 0,
+      "scope_occupancy": 0
+    }
+  },
+  "schema": {
+    "task_sqlite_init": "task schema 12 ready (development only)",
+    "upgrade": "not_applicable_fresh_db"
+  },
+  "service": {
+    "mode": "direct_process",
+    "pid": 130008,
+    "socket": "/opt/x-data-mcp-preview/run/mcp.sock",
+    "socket_owner_binding": "mcp.sock.owner.json present"
+  },
+  "runtime_guard": "PASS natively on ext4 \u2014 no X_DATA_MCP_UNSAFE_NONLOCAL_FS opt-out used",
+  "consumer": "NOT_RUN",
+  "live_source": "NOT_RUN",
+  "production": "NOT_PRODUCTION_READY",
+  "notes": "Guard required chmod 600 on the DB file (private_metadata: mode & 077 == 0) \u2014 enforced, not bypassed."
+}
