@@ -127,7 +127,7 @@ fn production_stdio_fails_closed_without_python_and_does_not_publish() {
             .error
             .as_ref()
             .unwrap()
-            .contains("FILE_ACCESS_USE_NOT_VERIFIED")
+            .contains("SOURCE_NOT_VERIFIED")
     );
     assert!(
         record.scope_results[1]

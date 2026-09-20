@@ -10,4 +10,4 @@ schema为`x-data-mcp.official-file-input.v1`，files必须恰有三个不同role
 
 路径必须为输入目录内相对路径，拒绝父级/绝对路径、缺失文件以及解析到目录外的软链接。要求输入目录私有、可信且核验期间不变；不是对恶意进程并发替换目录的安全沙箱。摘要与长度不匹配时失败，CLI退出非零且不输出成功JSON。
 
-这为未来文件获取阶段与SQLite元数据存储提供输入契约，不连接OfficialFilePipeline。#54/#6/#46/#71及跨文件一致性门禁均未解除。Live source NOT_RUN，现有test使用人工字节fixture，只证明完整性与拒绝行为。
+这为未来文件获取阶段与SQLite元数据存储提供输入契约，不连接OfficialFilePipeline。Inspection 输出的各 NOT_VERIFIED 维度表示"本次字节核验本身不证明该维度"；门禁级结论由 FG 裁定与提交证据承载——#54/#71/跨文件一致性已按 FG 裁定解决（见 source-closure.md），#6/#46 目录语义仍缺。Live source NOT_RUN，现有test使用人工字节fixture，只证明完整性与拒绝行为。

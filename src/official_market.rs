@@ -1,9 +1,10 @@
 //! Inspected official-file snapshot source for QFQ daily market data
-//! (issue #3 slice). Existence of this source does NOT lift the
-//! `official_files::PRODUCTION_BLOCKERS` gates: construction requires an
-//! `inspect()`-passed snapshot supplied by the host, and nothing in the
-//! production service configures one. Published records keep the
-//! NOT_PRODUCTION_READY marking in their evidence reasons.
+//! (issue #3 slice). Construction requires an `inspect()`-passed snapshot
+//! supplied by the host. All `official_files::PRODUCTION_BLOCKERS` gates are
+//! resolved by Final Gate rulings (#54, #131, #71); published records carry
+//! the DECLARED_SCOPE note in their evidence reasons — the #71 acceptance is
+//! scoped to owner personal research, local-only, no external exposure, and
+//! overall production certification (#225) is not implied.
 //!
 //! Verified domain only: `.day` member raw OHLC plus `category == 1` GBBQ
 //! records through `qfq::forward_adjust`. Other GBBQ categories are never
@@ -42,8 +43,9 @@ use std::{collections::BTreeMap, io::Read, path::PathBuf, str::FromStr};
 
 pub const SOURCE_NAME: &str = "tdx-official-file-snapshot";
 pub const ADAPTER_VERSION: &str = "tdx-market-source-v1";
-pub const NOT_PRODUCTION_READY: &str =
-    "NOT_PRODUCTION_READY: official_files::PRODUCTION_BLOCKERS gates unchanged";
+pub const DECLARED_SCOPE: &str = "DECLARED_SCOPE: owner personal research, \
+    local-only, no external exposure (#71 comment-5749934485); overall \
+    production certification pending #225";
 const GBBQ_MEMBER: &str = "gbbq";
 /// Largest manifest byte count the installer will read; the pinned snapshot
 /// schema carries exactly three file entries and stays far below this.
@@ -311,7 +313,7 @@ impl MaterializeSession<'_> {
                 snapshot_inputs: Some(vec![day_binding, gbbq_binding]),
             },
             coverage: CoverageEvidence::complete(format!(
-                "complete .day member history from inspected snapshot manifest {}; {NOT_PRODUCTION_READY}",
+                "complete .day member history from inspected snapshot manifest {}; {DECLARED_SCOPE}",
                 source.manifest_sha256
             )),
             unit_currency: UnitCurrencyEvidence {
@@ -339,7 +341,7 @@ impl MaterializeSession<'_> {
             adjustment_evidence: AdjustmentEvidence::confirmed(
                 "qfq",
                 format!(
-                    "qfq::forward_adjust over category==1 GBBQ affine chain ({} events, {excluded} non-category-1 records excluded uninterpreted); {NOT_PRODUCTION_READY}",
+                    "qfq::forward_adjust over category==1 GBBQ affine chain ({} events, {excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}",
                     events.len()
                 ),
             ),
@@ -536,7 +538,7 @@ fn acquire_merged_segment(
     combined_batch.bars = merged.into_values().collect();
     combined_batch.coverage = if combined_batch.bars == batch.bars {
         CoverageEvidence::complete(format!(
-            "merged record equals the full .day member history of inspected snapshot manifest {}; {NOT_PRODUCTION_READY}",
+            "merged record equals the full .day member history of inspected snapshot manifest {}; {DECLARED_SCOPE}",
             source.manifest_sha256()
         ))
     } else {

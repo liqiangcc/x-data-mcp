@@ -258,8 +258,8 @@ fn materializes_qfq_daily_with_snapshot_bound_provenance() {
         assert_eq!(input.member_sha256.len(), 64);
     }
     assert!(
-        batch.coverage.reason.contains("NOT_PRODUCTION_READY"),
-        "published evidence must keep the not-production-ready marking"
+        batch.coverage.reason.contains("DECLARED_SCOPE"),
+        "published evidence must keep the declared-scope marking"
     );
 }
 

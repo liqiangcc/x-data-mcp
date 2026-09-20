@@ -84,11 +84,9 @@ fn official_pipeline_reports_every_unresolved_gate_for_both_operations() {
         assert!(matches!(result, Err(SourceError::NotVerified(_))));
         let message = result.unwrap_err().to_string();
         assert!(message.contains("NOT_PRODUCTION_READY"));
-        // Independent requirement from Issue #55; do not infer it from the adapter list.
-        assert!(
-            message.contains("FILE_ACCESS_USE_NOT_VERIFIED"),
-            "missing gate: {message}"
-        );
+        // All production gates are FG-resolved; the stub still refuses because
+        // it is not the governed provider path.
+        assert!(message.contains("unresolved gates: none"));
     }
 }
 

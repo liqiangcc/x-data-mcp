@@ -112,8 +112,7 @@ impl DataApi {
     }
     /// Override the env-installed official-file snapshot source (tests).
     /// Only the market.daily collection item uses it; absent env installs
-    /// none, so the BlockedSource refusal and PRODUCTION_BLOCKERS gates are
-    /// unchanged.
+    /// none, so the BlockedSource refusal is unchanged.
     pub fn with_market_source(mut self, source: crate::official_market::TdxMarketSource) -> Self {
         self.market_source = Some(source);
         self
@@ -199,7 +198,10 @@ impl DataApi {
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
-                    readiness: if matches!(e.handler, Handler::Collection | Handler::Range(_) | Handler::VerifyStopped | Handler::VerifyGap) {
+                    readiness: if matches!(e.handler, Handler::VerifyStopped | Handler::VerifyGap)
+                        || (matches!(e.handler, Handler::Collection | Handler::Range(_))
+                            && !crate::official_files::PRODUCTION_BLOCKERS.is_empty())
+                    {
                         "blocked"
                     } else {
                         "ready"
@@ -255,8 +257,13 @@ impl DataApi {
             item_ids: f.items.iter().map(|i| i.spec.item_id.clone()).collect(),
             readiness: if f.task.key == crate::publication_verification::admission::command_key() {
                 "ready"
-            } else {
+            } else if f.task.key.dataset == crate::task_verification::DATASET
+                || f.task.key.dataset == crate::gap_verification::DATASET
+                || !crate::official_files::PRODUCTION_BLOCKERS.is_empty()
+            {
                 "blocked"
+            } else {
+                "ready"
             }
             .into(),
             blocking_reasons: if f.task.key
