@@ -422,6 +422,23 @@ pub enum Collection {
 pub struct CatalogSelection {
     pub scope: CatalogScope,
 }
+/// Machine-checkable readiness fact; no workflow hints or next actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Readiness {
+    Ready,
+    Blocked,
+}
+/// Structured blocker: stable code plus human-readable detail and an
+/// optional evidence reference. Never a free-form instruction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlockingReason {
+    pub code: String,
+    pub detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_ref: Option<String>,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WriteAcceptance {
@@ -432,8 +449,8 @@ pub struct WriteAcceptance {
     pub reused: bool,
     pub status: TaskStatus,
     pub item_ids: Vec<String>,
-    pub readiness: String,
-    pub blocking_reasons: Vec<String>,
+    pub runtime_readiness: Readiness,
+    pub blocking_reasons: Vec<BlockingReason>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -531,6 +548,20 @@ pub enum RangeWrite {
         contract_version: ContractVersion,
         #[schemars(length(min = 1))]
         items: Vec<YearlyWriteItem>,
+    },
+}
+/// Republish accepts only `market.daily`: the single-variant tagged enum
+/// rejects every other dataset at schema/decode time, before any side
+/// effect can reach task acceptance.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "dataset", deny_unknown_fields)]
+pub enum RepublishWrite {
+    #[serde(rename = "market.daily")]
+    Daily {
+        request_id: String,
+        contract_version: ContractVersion,
+        #[schemars(length(min = 1))]
+        items: Vec<RangeWriteItem>,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

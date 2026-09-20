@@ -1142,7 +1142,7 @@ fn public_range_request_to_fixture_execution_and_verified_query_is_connected() {
         fail_range_without_publication(&f);
         let api = DataApi::new(f.db.tasks.clone(), "range-run".into(), Access::local()).unwrap();
         let accepted=api.call("backfill_data",json!({"request_id":"fixture-e2e","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"legacy-daily","start_date":"2025-01-02","end_date":"2025-01-02"}]})).unwrap();
-        assert_eq!(accepted["readiness"], "ready");
+        assert_eq!(accepted["runtime_readiness"], "blocked");
         // Explicit test composition only: no JSON/MCP flag can select this provider.
         let provider = SyntheticRangeProvider::new(changed);
         let runner = RangeRunner {

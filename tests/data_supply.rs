@@ -128,7 +128,7 @@ fn real_task_list_and_progress_freeze_state_and_enforce_authorization() {
     let start = api
         .call(
             "start_collection",
-            json!({"request_id":"r","symbols":["sh.600006"],"periods":["day","year"]}),
+            json!({"request_id":"r","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600006"},{"exchange":"sz","code":"000001"}]}}),
         )
         .unwrap();
     let task = start["task_id"].as_str().unwrap();
@@ -179,7 +179,7 @@ fn new_write_sets_replay_globally_and_old_scope_conflicts_are_shared() {
     assert_eq!(
         api.call(
             "start_collection",
-            json!({"request_id":"legacy","symbols":["sh.600006"],"periods":["day"]})
+            json!({"request_id":"overlap","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[e]}})
         )
         .unwrap_err()
         .code,
@@ -1009,7 +1009,7 @@ fn verify_data_gap_wire_is_closed_and_freezes_subject() {
     );
     assert_eq!(accepted["dataset"], json!("market.gap_verification"));
     assert_eq!(accepted["reused"], json!(false));
-    assert_eq!(accepted["readiness"], json!("blocked"));
+    assert_eq!(accepted["runtime_readiness"], json!("blocked"));
     let snap = t
         .read_task(accepted["task_id"].as_str().unwrap())
         .unwrap()

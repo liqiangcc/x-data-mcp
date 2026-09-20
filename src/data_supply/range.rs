@@ -1,5 +1,5 @@
 //! Protocol mapping only; selection, intent and eligibility live in task/application contracts.
-use super::wire::{RangeWrite, YearlyPublication};
+use super::wire::{RangeWrite, RepublishWrite, YearlyPublication};
 use crate::{
     market_storage::PublishIntent,
     market_update::tasks::{EntityRange, ExplicitRanges, Operation},
@@ -79,6 +79,34 @@ impl RangeWrite {
                             } => comparison_version_id.clone(),
                             _ => None,
                         },
+                    })
+                    .collect(),
+            })
+            .unwrap()),
+        }
+    }
+}
+impl RepublishWrite {
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::Daily { request_id, .. } => request_id,
+        }
+    }
+    /// Republish identity is fixed: market.daily + the dedicated republish
+    /// contract version; no selection or yearly variant exists.
+    pub fn key(&self) -> crate::task_control::CommandKey {
+        Operation::Republish.key()
+    }
+    pub fn payload(&self) -> Result<serde_json::Value, Error> {
+        match self {
+            Self::Daily { items, .. } => Ok(serde_json::to_value(ExplicitRanges {
+                items: items
+                    .iter()
+                    .map(|i| EntityRange {
+                        symbol: i.entity.symbol(),
+                        base_version_id: i.base_version_id.clone(),
+                        start_date: i.start_date,
+                        end_date: i.end_date,
                     })
                     .collect(),
             })

@@ -41,7 +41,6 @@ fn error(code: &str) -> x_data_mcp::mcp::ApiError {
         message: code.into(),
         scopes: None,
         outcome_certainty: None,
-        next_actions: None,
         details: None,
     }
 }
@@ -122,7 +121,7 @@ fn executing_sqlite_task_survives_disconnect_allows_concurrent_cancel_and_stops_
     let mut a = Session::new(&socket);
     let accepted = a.call(
         "start_collection",
-        json!({"request_id":"inflight","symbols":["sh.600000","sz.000001"],"periods":["day"]}),
+        json!({"request_id":"inflight","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"},{"exchange":"sz","code":"000001"}]}}),
         false,
     );
     let id = accepted["task_id"].as_str().unwrap();
@@ -134,21 +133,27 @@ fn executing_sqlite_task_survives_disconnect_allows_concurrent_cancel_and_stops_
         Status::Running
     );
     let mut b = Session::new(&socket);
-    assert_eq!(
-        b.call("get_task", json!({"task_id":id}), false)["status"],
-        "running"
+    let view = b.call(
+        "get_task",
+        json!({"contract_version":"v1","task_id":id}),
+        false,
     );
+    assert_eq!(view["status"], "running");
     assert_eq!(
         b.call("run_worker_once", json!({}), true)["code"],
         "worker_busy"
     );
     assert_eq!(
-        b.call("cancel_task", json!({"task_id":id}), false)["status"],
+        b.call(
+            "cancel_task",
+            json!({"contract_version":"v1","task_id":id,"expected_revision":view["state_revision"]}),
+            false
+        )["status"],
         "cancel_requested"
     );
     let queued = b.call(
         "start_collection",
-        json!({"request_id":"still-pending","symbols":["sz.000002"],"periods":["day"]}),
+        json!({"request_id":"still-pending","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sz","code":"000002"}]}}),
         false,
     );
     // Stop new turns while the real SQLite item is still running. Release only
@@ -221,7 +226,7 @@ fn real_shutdown_budget_exit_retains_running_task_and_occupancy() {
     let mut session = Session::new(&socket);
     let accepted = session.call(
         "start_collection",
-        json!({"request_id":"timeout","symbols":["sh.600000"],"periods":["day"]}),
+        json!({"request_id":"timeout","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}),
         false,
     );
     let id = accepted["task_id"].as_str().unwrap();
@@ -249,7 +254,11 @@ fn real_shutdown_budget_exit_retains_running_task_and_occupancy() {
     let mut real = Service::start(&db, &socket, 10);
     let mut session = Session::new(&socket);
     assert_eq!(
-        session.call("get_task", json!({"task_id":id}), false)["status"],
+        session.call(
+            "get_task",
+            json!({"contract_version":"v1","task_id":id}),
+            false
+        )["status"],
         "needs_verification"
     );
     drop(session);

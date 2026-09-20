@@ -106,6 +106,47 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
         s.call("run_worker_once", json!({"extra":true}), true)["code"],
         "invalid_arguments"
     );
+    // Single-action contract: republish advertises market.daily only, and a
+    // wrong-dataset payload fails at decode with zero side effects.
+    let republish = s.call(
+        "get_data_capabilities",
+        json!({"operation":"republish_data"}),
+        false,
+    );
+    assert_eq!(republish["items"].as_array().unwrap().len(), 1);
+    assert_eq!(republish["items"][0]["dataset"], "market.daily");
+    let yearly_republish = json!({"request_id":"rp-yearly","dataset":"market.yearly","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"x","years":[2025],"publication":{"mode":"historical_fixed_base"}}]});
+    assert!(
+        !jsonschema::validator_for(&republish["items"][0]["input_schema"])
+            .unwrap()
+            .is_valid(&yearly_republish)
+    );
+    let err = s.call("republish_data", yearly_republish, true);
+    assert_eq!(err["code"], "invalid_arguments");
+    assert_eq!(
+        s.call(
+            "get_request",
+            json!({"contract_version":"v1","request_id":"rp-yearly"}),
+            false
+        )["bound"],
+        false
+    );
+    // Facts only: no error payload carries workflow next actions.
+    for e in [
+        err,
+        s.call("update_data", json!({"dataset":"market.yearly"}), true),
+    ] {
+        assert!(e.get("next_actions").is_none(), "{e}");
+    }
+    // production_ready=false must carry structured reasons.
+    let reasons = republish["production_blocking_reasons"].as_array().unwrap();
+    assert!(!reasons.is_empty());
+    assert!(
+        reasons
+            .iter()
+            .all(|r| r["code"].is_string() && r["detail"].is_string())
+    );
+    assert_eq!(republish["capability_revision"], "generic-data-v2");
     let schema =
         |name: &str, field: &str| tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();
     for entry in x_data_mcp::data_supply::registry::entries() {
@@ -123,6 +164,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
                 | x_data_mcp::data_supply::registry::Handler::VerifyGap
                 | x_data_mcp::data_supply::registry::Handler::Collection
                 | x_data_mcp::data_supply::registry::Handler::Range(_)
+                | x_data_mcp::data_supply::registry::Handler::Republish
                 | x_data_mcp::data_supply::registry::Handler::Retry
                 | x_data_mcp::data_supply::registry::Handler::Task
                 | x_data_mcp::data_supply::registry::Handler::Cancel
@@ -148,7 +190,11 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
         .validate(&progress)
         .unwrap();
     assert_eq!(progress["total"], 1);
-    let request = s.call("get_request", json!({"request_id":"r"}), false);
+    let request = s.call(
+        "get_request",
+        json!({"contract_version":"v1","request_id":"r"}),
+        false,
+    );
     assert_eq!(request["bound"], true);
     let mut extra = input.clone();
     extra["symbols"] = json!(["sh.600006"]);
@@ -177,7 +223,6 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
         .validate(&retry)
         .unwrap();
     let a = s.call("retry_task", retry, false);
-    s.call("cancel_task", json!({"task_id":a["task_id"]}), false);
     let view = s.call(
         "get_task",
         json!({"contract_version":"v1","task_id":a["task_id"]}),
@@ -189,6 +234,17 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
         false,
     );
     assert_eq!(request["task"]["task_id"], a["task_id"]);
+    let rev = view["state_revision"].as_u64().unwrap();
+    s.call(
+        "cancel_task",
+        json!({"contract_version":"v1","task_id":a["task_id"],"expected_revision":rev}),
+        false,
+    );
+    let view = s.call(
+        "get_task",
+        json!({"contract_version":"v1","task_id":a["task_id"]}),
+        false,
+    );
     let rev = view["state_revision"].as_u64().unwrap();
     assert!(rev > 0);
     assert_eq!(
@@ -245,12 +301,13 @@ fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
         let cap = &capabilities["items"][0];
         assert_eq!(capabilities["items"].as_array().unwrap().len(), 2);
         assert_eq!(cap["dataset"], "market.daily");
-        assert_eq!(cap["readiness"], "ready");
+        assert_eq!(cap["runtime_readiness"], "blocked");
+        assert_eq!(cap["blocking_reasons"][0]["code"], "verified_source_absent");
         assert!(
             cap["description"]
                 .as_str()
                 .unwrap()
-                .contains("Explicit market.daily")
+                .contains("market.daily")
         );
         let mut input = json!({"request_id":"range-write","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"legacy-daily","start_date":"2025-01-02","end_date":"2025-01-02"}]});
         jsonschema::validator_for(&cap["input_schema"])
@@ -262,7 +319,7 @@ fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
             .unwrap()
             .validate(&accepted)
             .unwrap();
-        assert_eq!(accepted["readiness"], "ready");
+        assert_eq!(accepted["runtime_readiness"], "blocked");
         assert_eq!(accepted["contract_version"], "explicit-range-task-v1");
         let duplicate = input["items"][0].clone();
         input["items"].as_array_mut().unwrap().push(duplicate);
@@ -368,7 +425,7 @@ fn real_yearly_update_stdio_has_closed_schema_frozen_inputs_and_blocked_worker()
             false,
         );
         assert_eq!(caps["items"].as_array().unwrap().len(), 1);
-        assert_eq!(caps["items"][0]["readiness"], "ready");
+        assert_eq!(caps["items"][0]["runtime_readiness"], "ready");
         let schema = jsonschema::validator_for(&caps["items"][0]["input_schema"]).unwrap();
         schema.validate(&caps["items"][0]["example"]).unwrap();
         assert_eq!(caps["items"][0]["example"]["dataset"], "market.yearly");
@@ -387,7 +444,7 @@ fn real_yearly_update_stdio_has_closed_schema_frozen_inputs_and_blocked_worker()
         }
         let accepted = s.call(operation, input.clone(), false);
         assert_eq!(accepted["contract_version"], "explicit-yearly-task-v1");
-        assert_eq!(accepted["readiness"], "ready");
+        assert_eq!(accepted["runtime_readiness"], "ready");
         assert_eq!(
             s.call(operation, input.clone(), false)["task_id"],
             accepted["task_id"]
@@ -566,11 +623,8 @@ fn real_stop_verification_stdio_is_strict_discoverable_and_keeps_original_claims
         false,
     );
     let descriptor = &cap["items"][0];
-    assert_eq!(descriptor["readiness"], "blocked");
-    assert_eq!(
-        descriptor["blocking_reasons"],
-        json!(["STOP_EVIDENCE_NOT_VERIFIED"])
-    );
+    assert_eq!(descriptor["runtime_readiness"], "ready");
+    assert_eq!(descriptor["blocking_reasons"], json!([]));
     let input = json!({"contract_version":"v1","request_id":"inspection","target_task_id":original.task.task_id});
     jsonschema::validator_for(&descriptor["input_schema"])
         .unwrap()
@@ -598,10 +652,8 @@ fn real_stop_verification_stdio_is_strict_discoverable_and_keeps_original_claims
         .unwrap()
         .validate(&accepted)
         .unwrap();
-    assert_eq!(
-        accepted["blocking_reasons"],
-        json!(["STOP_EVIDENCE_NOT_VERIFIED"])
-    );
+    assert_eq!(accepted["blocking_reasons"], json!([]));
+    assert_eq!(accepted["runtime_readiness"], "ready");
     assert_eq!(
         s.call("verify_stopped_writes", input, false)["task_id"],
         accepted["task_id"]
@@ -866,7 +918,7 @@ fn real_publication_stdio_inspects_fixed_evidence_without_changing_original_task
             false,
         );
         let descriptor = &cap["items"][0];
-        assert_eq!(descriptor["readiness"], "ready");
+        assert_eq!(descriptor["runtime_readiness"], "ready");
         assert_eq!(cap["production_ready"], false);
         let input = json!({"contract_version":"v1","request_id":"publication-check","target_task_id":original.task.task_id});
         for field in [
@@ -903,7 +955,7 @@ fn real_publication_stdio_inspects_fixed_evidence_without_changing_original_task
             .unwrap()
             .validate(&check)
             .unwrap();
-        assert_eq!(check["readiness"], "ready");
+        assert_eq!(check["runtime_readiness"], "ready");
         assert_eq!(check["blocking_reasons"], json!([]));
         assert_eq!(
             s.call("verify_publication_result", input, false)["task_id"],
@@ -1104,7 +1156,7 @@ fn real_bounded_inspection_stdio_replays_history_without_recursive_tasks() {
         false,
     );
     assert_eq!(caps["production_ready"], false);
-    assert_eq!(caps["items"][0]["readiness"], "ready");
+    assert_eq!(caps["items"][0]["runtime_readiness"], "ready");
     for key in [
         "force", "stopped", "approved", "provider", "clock", "actor", "evidence",
     ] {

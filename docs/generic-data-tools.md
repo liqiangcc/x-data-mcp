@@ -108,12 +108,19 @@ get_data_capabilities 输入为空对象或精确 dataset/operation 过滤，不
 
 每个能力项至少包含：
 
-- dataset、operation、contract_version、implemented、readiness（ready/blocked）；
-- blocking_reasons：结构化原因和证据引用，不包含密钥；
-- 完整 input_schema、output_schema，以及对应 tool_name；
+- tool_name、dataset、contract_version、implemented、operator_only；
+- runtime_readiness 与 governance_readiness（ready/blocked）分开表达：
+  前者反映当前运行事实（已安装 inspected source、catalog 输入位置），
+  后者反映授权/一致性/语义证据门槛；
+- blocking_reasons：结构化 {code, detail, evidence_ref?}，不包含密钥或工作流指令；
+- declared_scope 与 active_generation_ref（generation 契约落地前为 null）；
+- 完整 input_schema、output_schema，以及 schema_digest；
 - supported_sources、默认来源规则、数值/时间/覆盖语义；
-- selection_modes、page_size 上限、progress_unit、取消/重试是否支持；
-- schema_digest、capability_revision。
+- selection_modes、page_size 上限、progress_unit、取消/重试是否支持。
+
+顶层同时返回 capability_revision、declared_scope、production_ready 与
+production_blocking_reasons（同样结构化）。任何 capability 不返回 next_actions、
+其他工具名、Skill 引用或跨 server 编排指令。
 
 能力目录、tools/list schema 和路由由同一静态 Rust 注册描述生成，
 不能维护三份手写且不一致的能力表。本文 JSON 是设计样例，不是第二份生产配置。

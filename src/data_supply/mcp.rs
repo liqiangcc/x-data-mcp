@@ -125,6 +125,74 @@ impl DataApi {
         self.worker_gate = Some(gate);
         self
     }
+    /// Source-dependent runtime readiness: an installed inspected official
+    /// snapshot (daily writes, gap verification) or a configured catalog
+    /// input location (catalog collection). Facts only; absent source is a
+    /// structured block, never a hidden failure.
+    fn runtime_block(&self, e: &Entry, dataset: Option<Dataset>) -> Option<BlockingReason> {
+        let needs_inspected = matches!(
+            (e.handler, dataset),
+            (Handler::Collection, Some(Dataset::Daily))
+                | (Handler::Range(_), Some(Dataset::Daily))
+                | (Handler::Republish, Some(Dataset::Daily))
+                | (Handler::VerifyGap, _)
+        );
+        let needs_catalog_input = matches!(
+            (e.handler, dataset),
+            (Handler::Collection, Some(Dataset::Catalog))
+        );
+        if needs_inspected && self.market_source.is_none() {
+            return Some(BlockingReason {
+                code: "verified_source_absent".into(),
+                detail: "no installed inspected official snapshot; executions record per-item source refusals and never advance heads (X_DATA_MCP_OFFICIAL_MANIFEST + X_DATA_MCP_OFFICIAL_DIR with a passing manifest)".into(),
+                evidence_ref: None,
+            });
+        }
+        if needs_catalog_input
+            && crate::catalog_tdx::source::TdxCatalogExecutor::from_env(
+                &self.queries.repository.market,
+            )
+            .is_none()
+        {
+            return Some(BlockingReason {
+                code: "catalog_source_unconfigured".into(),
+                detail: "official input location is not configured; catalog execution keeps the source refusal".into(),
+                evidence_ref: None,
+            });
+        }
+        None
+    }
+    /// Acceptance-time readiness for a persisted command key: the same
+    /// source facts as the capability matrix, keyed on the frozen task.
+    fn task_runtime_block(&self, key: &crate::task_control::CommandKey) -> Option<BlockingReason> {
+        let daily_write = key.dataset == "market.daily"
+            && matches!(
+                key.operation.as_str(),
+                "start_collection" | "update_data" | "backfill_data" | "republish_data"
+            );
+        if (daily_write || key.dataset == crate::gap_verification::DATASET)
+            && self.market_source.is_none()
+        {
+            return Some(BlockingReason {
+                code: "verified_source_absent".into(),
+                detail: "no installed inspected official snapshot; execution records per-item source refusals and never advances heads".into(),
+                evidence_ref: None,
+            });
+        }
+        if key.dataset == "securities.catalog"
+            && crate::catalog_tdx::source::TdxCatalogExecutor::from_env(
+                &self.queries.repository.market,
+            )
+            .is_none()
+        {
+            return Some(BlockingReason {
+                code: "catalog_source_unconfigured".into(),
+                detail: "official input location is not configured; catalog execution keeps the source refusal".into(),
+                evidence_ref: None,
+            });
+        }
+        None
+    }
     fn capabilities(&self, args: CapabilitiesQuery) -> Result<Value, ApiError> {
         if let Some(d) = args.dataset {
             self.access.require(d, None).map_err(mapped)?;
@@ -147,74 +215,34 @@ impl DataApi {
             {
                 continue;
             }
-            if self.access != Access::local()
-                && matches!(
-                    e.handler,
-                    Handler::Collection
-                        | Handler::Range(_)
-                        | Handler::Retry
-                        | Handler::Task
-                        | Handler::Request
-                        | Handler::Cancel
-                        | Handler::Worker
-                        | Handler::VerifyStopped
-                        | Handler::VerifyPublication
-                        | Handler::InspectVerification
-                        | Handler::VerifyGap
-                )
-            {
+            if self.access != Access::local() && e.requires_local() {
                 continue;
             }
             if args.operation.as_ref().is_some_and(|op| op != e.name) {
                 continue;
             }
-            let datasets = if matches!(e.handler, Handler::Range(_)) {
-                [Dataset::Daily, Dataset::Yearly]
-                    .into_iter()
-                    .filter(|d| {
-                        self.access.allows(*d, None) && args.dataset.is_none_or(|a| a == *d)
-                    })
-                    .map(Some)
-                    .collect::<Vec<_>>()
-            } else if matches!(
-                e.handler,
-                Handler::Query | Handler::Versions | Handler::Availability | Handler::Collection
-            ) {
-                self.access
-                    .datasets
-                    .iter()
-                    .filter(|d| args.dataset.is_none_or(|a| a == **d))
-                    .copied()
-                    .map(Some)
-                    .collect::<Vec<_>>()
-            } else {
-                vec![None]
-            };
-            for dataset in datasets {
+            for dataset in e.datasets(&self.access) {
+                if dataset.is_some() && args.dataset.is_some_and(|a| Some(a) != dataset) {
+                    continue;
+                }
                 let detailed = args.operation.is_some();
+                let block = self.runtime_block(&e, dataset);
                 items.push(Capability {
                     tool_name: e.name.into(),
-                    description: if matches!(e.handler, Handler::InspectVerification) { INSPECTION_DESCRIPTION } else if matches!(e.handler, Handler::VerifyPublication) { crate::publication_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyGap) { crate::gap_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler, Handler::Range(crate::market_update::tasks::Operation::Republish)) { REPUBLISH_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
+                    description: e.description.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
-                    readiness: if matches!(e.handler, Handler::VerifyStopped | Handler::VerifyGap)
-                        || (matches!(e.handler, Handler::Collection | Handler::Range(_))
-                            && !crate::official_files::PRODUCTION_BLOCKERS.is_empty())
-                    {
-                        "blocked"
+                    operator_only: e.operator_only,
+                    runtime_readiness: if block.is_some() {
+                        Readiness::Blocked
                     } else {
-                        "ready"
-                    }
-                    .into(),
-                    blocking_reasons: if matches!(e.handler, Handler::VerifyStopped) { vec![crate::task_verification::wire::BLOCKER.into()] } else if matches!(e.handler, Handler::VerifyGap) { vec![crate::gap_verification::wire::BLOCKER.into()] } else if matches!(e.handler, Handler::Collection | Handler::Range(_)) {
-                        crate::official_files::PRODUCTION_BLOCKERS
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect()
-                    } else {
-                        vec![]
+                        Readiness::Ready
                     },
+                    governance_readiness: Readiness::Ready,
+                    blocking_reasons: block.into_iter().collect(),
+                    declared_scope: crate::official_market::DECLARED_SCOPE.into(),
+                    active_generation_ref: None,
                     input_schema: detailed.then(|| e.input.clone()),
                     output_schema: detailed.then(|| e.output.clone()),
                     example: detailed.then(|| capability_example(&e, dataset)),
@@ -227,14 +255,27 @@ impl DataApi {
             }
         }
         encode(Capabilities {
-            capability_revision: "generic-data-v1".into(),
+            capability_revision: "generic-data-v2".into(),
             items,
             max_batch_entities: 100,
             max_page_size: 1000,
             max_snapshot_rows: 100000,
             max_snapshot_bytes: super::query::MAX_BYTES,
             snapshots_per_category: 32,
+            declared_scope: crate::official_market::DECLARED_SCOPE.into(),
             production_ready: false,
+            production_blocking_reasons: vec![
+                BlockingReason {
+                    code: "declared_scope_non_production".into(),
+                    detail: crate::official_market::DECLARED_SCOPE.into(),
+                    evidence_ref: None,
+                },
+                BlockingReason {
+                    code: "source_generation_contract_pending".into(),
+                    detail: "write tools do not yet freeze source_generation_id; the immutable generation verification/activation contract (#260) is not implemented in this build".into(),
+                    evidence_ref: None,
+                },
+            ],
         })
     }
     fn acceptance(&self, id: &str, a: crate::task_control::Acceptance) -> Result<Value, ApiError> {
@@ -244,6 +285,7 @@ impl DataApi {
                 "task binding required",
             ));
         };
+        let block = self.task_runtime_block(&f.task.key);
         encode(WriteAcceptance {
             request_id: id.into(),
             task_id: f.task.task_id.clone(),
@@ -255,145 +297,127 @@ impl DataApi {
             )
             .unwrap(),
             item_ids: f.items.iter().map(|i| i.spec.item_id.clone()).collect(),
-            readiness: if f.task.key == crate::publication_verification::admission::command_key() {
-                "ready"
-            } else if f.task.key.dataset == crate::task_verification::DATASET
-                || f.task.key.dataset == crate::gap_verification::DATASET
-                || !crate::official_files::PRODUCTION_BLOCKERS.is_empty()
-            {
-                "blocked"
+            runtime_readiness: if block.is_some() {
+                Readiness::Blocked
             } else {
-                "ready"
-            }
-            .into(),
-            blocking_reasons: if f.task.key
-                == crate::publication_verification::admission::command_key()
-            {
-                vec![]
-            } else if f.task.key.dataset == crate::task_verification::DATASET {
-                vec![crate::task_verification::wire::BLOCKER.into()]
-            } else if f.task.key.dataset == crate::gap_verification::DATASET {
-                vec![crate::gap_verification::wire::BLOCKER.into()]
-            } else {
-                crate::official_files::PRODUCTION_BLOCKERS
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
+                Readiness::Ready
             },
+            blocking_reasons: block.into_iter().collect(),
         })
     }
-    fn legacy_call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
-        // Legacy full-control compatibility is intentionally local-owner only. Restricted
-        // application contexts retain the read discovery/query operations above.
+    /// Typed control calls only. The retired untyped task shapes are not
+    /// advertised and are not decoded; every control input carries its
+    /// contract_version/dataset in the registry schema.
+    fn control_call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
         if self.access != Access::local() {
             return Err(ApiError::new(
                 "forbidden",
-                "legacy control requires local-owner context",
+                "control requires local-owner context",
             ));
         }
-        if input.get("contract_version").is_some() {
-            match name {
-                "get_task" => {
-                    let a: TaskV1 = decode(input)?;
-                    let f = self
-                        .observer
-                        .repository
-                        .task(&a.task_id, &self.access)
-                        .map_err(mapped)?;
-                    return encode(super::observe::summary(&f, &self.observer.run_id));
-                }
-                "get_request" => {
-                    let a: RequestV1 = decode(input)?;
-                    let record = self
-                        .legacy
-                        .control
-                        .read_request(&a.request_id)
-                        .map_err(task_error)?;
-                    let mut terminal_result = None;
-                    let task = match record {
-                        None => None,
-                        Some(r) => match r.outcome {
-                            crate::task_control::RequestOutcome::Task(s) => {
-                                Some(super::observe::summary(
-                                    &super::observe::TaskFacts {
-                                        request_id: a.request_id.clone(),
-                                        snapshot: *s,
-                                        publications: vec![],
-                                        range_results: vec![],
-                                        yearly_results: vec![],
-                                    },
-                                    &self.observer.run_id,
-                                ))
-                            }
-                            crate::task_control::RequestOutcome::Terminal(value) => {
-                                terminal_result =
-                                    Some(serde_json::from_value(value).map_err(|e| {
-                                        ApiError::new(
-                                            "unsupported_request_outcome",
-                                            format!("terminal contract: {e}"),
-                                        )
-                                    })?);
-                                None
-                            }
-                        },
-                    };
-                    return encode(RequestView {
-                        request_id: a.request_id,
-                        bound: task.is_some() || terminal_result.is_some(),
-                        task,
-                        terminal_result,
-                    });
-                }
-                "cancel_task" => {
-                    let a: CancelV1 = decode(input)?;
-                    let s = self
-                        .legacy
-                        .control
-                        .cancel(&a.task_id, a.expected_revision)
-                        .map_err(task_error)?;
-                    return encode(Cancellation {
-                        task_id: s.task.task_id.clone(),
-                        status: serde_json::from_value(
-                            serde_json::to_value(s.visible_status(&self.observer.run_id)).unwrap(),
-                        )
-                        .unwrap(),
-                        state_revision: s.task.state_revision,
-                    });
-                }
-                _ => {}
+        match name {
+            "get_task" => {
+                let a: TaskV1 = decode(input)?;
+                let f = self
+                    .observer
+                    .repository
+                    .task(&a.task_id, &self.access)
+                    .map_err(mapped)?;
+                return encode(super::observe::summary(&f, &self.observer.run_id));
             }
-        }
-        if name == "start_collection" && input.get("dataset").is_some() {
-            use crate::task_control::Contract;
-            let command: Collection = decode(input)?;
-            if command.request_id().trim().is_empty() {
-                return Err(ApiError::new("empty_request_id", "request_id required"));
+            "get_request" => {
+                let a: RequestV1 = decode(input)?;
+                let record = self
+                    .legacy
+                    .control
+                    .read_request(&a.request_id)
+                    .map_err(task_error)?;
+                let mut terminal_result = None;
+                let task = match record {
+                    None => None,
+                    Some(r) => match r.outcome {
+                        crate::task_control::RequestOutcome::Task(s) => {
+                            Some(super::observe::summary(
+                                &super::observe::TaskFacts {
+                                    request_id: a.request_id.clone(),
+                                    snapshot: *s,
+                                    publications: vec![],
+                                    range_results: vec![],
+                                    yearly_results: vec![],
+                                },
+                                &self.observer.run_id,
+                            ))
+                        }
+                        crate::task_control::RequestOutcome::Terminal(value) => {
+                            terminal_result = Some(serde_json::from_value(value).map_err(|e| {
+                                ApiError::new(
+                                    "unsupported_request_outcome",
+                                    format!("terminal contract: {e}"),
+                                )
+                            })?);
+                            None
+                        }
+                    },
+                };
+                return encode(RequestView {
+                    request_id: a.request_id,
+                    bound: task.is_some() || terminal_result.is_some(),
+                    task,
+                    terminal_result,
+                });
             }
-            let contract = super::collect::CollectionContract {
-                dataset: command.dataset(),
-                repository: self.queries.repository.clone(),
-            };
-            let accepted = self
-                .legacy
-                .control
-                .accept(command.request_id(), contract.key(), command.payload())
-                .map_err(task_error)?;
-            return self.acceptance(command.request_id(), accepted);
+            "cancel_task" => {
+                let a: CancelV1 = decode(input)?;
+                let s = self
+                    .legacy
+                    .control
+                    .cancel(&a.task_id, a.expected_revision)
+                    .map_err(task_error)?;
+                return encode(Cancellation {
+                    task_id: s.task.task_id.clone(),
+                    status: serde_json::from_value(
+                        serde_json::to_value(s.visible_status(&self.observer.run_id)).unwrap(),
+                    )
+                    .unwrap(),
+                    state_revision: s.task.state_revision,
+                });
+            }
+            "start_collection" => {
+                use crate::task_control::Contract;
+                let command: Collection = decode(input)?;
+                if command.request_id().trim().is_empty() {
+                    return Err(ApiError::new("empty_request_id", "request_id required"));
+                }
+                let contract = super::collect::CollectionContract {
+                    dataset: command.dataset(),
+                    repository: self.queries.repository.clone(),
+                };
+                let accepted = self
+                    .legacy
+                    .control
+                    .accept(command.request_id(), contract.key(), command.payload())
+                    .map_err(task_error)?;
+                return self.acceptance(command.request_id(), accepted);
+            }
+            "retry_task" => {
+                let a: RetryItems = decode(input)?;
+                let accepted = self
+                    .legacy
+                    .control
+                    .retry(
+                        &a.original_task_id,
+                        &a.new_request_id,
+                        a.item_ids.into_iter().collect(),
+                    )
+                    .map_err(task_error)?;
+                return self.acceptance(&a.new_request_id, accepted);
+            }
+            _ => {}
         }
-        if name == "retry_task" && input.get("contract_version").is_some() {
-            let a: RetryItems = decode(input)?;
-            let accepted = self
-                .legacy
-                .control
-                .retry(
-                    &a.original_task_id,
-                    &a.new_request_id,
-                    a.item_ids.into_iter().collect(),
-                )
-                .map_err(task_error)?;
-            return self.acceptance(&a.new_request_id, accepted);
-        }
-        self.legacy.call(name, input)
+        Err(ApiError::new(
+            "unknown_tool",
+            format!("unsupported tool: {name}"),
+        ))
     }
 }
 fn decode<T: DeserializeOwned>(v: Value) -> Result<T, ApiError> {
@@ -418,51 +442,18 @@ fn mapped(e: Error) -> ApiError {
     ApiError::new(code, e.to_string())
 }
 impl DataApi {
+    /// tools/list is generated from the same registry entries that drive
+    /// dispatch and get_data_capabilities; no second schema source exists.
     fn public_tools(&self) -> Value {
-        let mut tools = if self.access == Access::local() {
-            self.legacy.tools().as_array().unwrap().clone()
-        } else {
-            vec![]
-        };
-        for t in &mut tools {
-            if t["name"] == "run_worker_once" {
-                let e = entries()
-                    .into_iter()
-                    .find(|e| e.name == "run_worker_once")
-                    .unwrap();
-                t["description"] = json!(WORKER_DESCRIPTION);
-                t["inputSchema"] = e.input;
-                t["outputSchema"] = e.output;
-            }
-            let ty = match t["name"].as_str() {
-                Some("start_collection") => {
-                    Some(serde_json::to_value(schemars::schema_for!(Collection)).unwrap())
-                }
-                Some("retry_task") => {
-                    Some(serde_json::to_value(schemars::schema_for!(RetryItems)).unwrap())
-                }
-                Some("get_task") => {
-                    Some(serde_json::to_value(schemars::schema_for!(TaskV1)).unwrap())
-                }
-                Some("get_request") => {
-                    Some(serde_json::to_value(schemars::schema_for!(RequestV1)).unwrap())
-                }
-                Some("cancel_task") => {
-                    Some(serde_json::to_value(schemars::schema_for!(CancelV1)).unwrap())
-                }
-                _ => None,
-            };
-            if let Some(mut ty) = ty {
-                let old = t["inputSchema"].clone();
-                let defs = ty.as_object_mut().unwrap().remove("$defs");
-                t["inputSchema"] = json!({"oneOf":[old,ty]});
-                if let Some(defs) = defs {
-                    t["inputSchema"]["$defs"] = defs;
-                }
-            }
-        }
-        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped|Handler::VerifyPublication|Handler::InspectVerification|Handler::VerifyGap)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::InspectVerification){INSPECTION_DESCRIPTION}else if matches!(e.handler,Handler::VerifyPublication){crate::publication_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyGap){crate::gap_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(crate::market_update::tasks::Operation::Republish)){REPUBLISH_DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
-        Value::Array(tools)
+        Value::Array(
+            entries()
+                .into_iter()
+                .filter(|e| self.access == Access::local() || !e.requires_local())
+                .map(|e| {
+                    json!({"name":e.name,"description":e.description,"inputSchema":e.input,"outputSchema":e.output})
+                })
+                .collect(),
+        )
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
         if input
@@ -481,7 +472,7 @@ impl DataApi {
             ));
         }
         let Some(entry) = entries().into_iter().find(|e| e.name == name) else {
-            return self.legacy_call(name, input);
+            return self.control_call(name, input);
         };
         match entry.handler {
             Handler::InspectVerification => {
@@ -629,6 +620,25 @@ impl DataApi {
                     .map_err(task_error)?;
                 self.acceptance(command.request_id(), accepted)
             }
+            Handler::Republish => {
+                if self.access != Access::local() {
+                    return Err(ApiError::new(
+                        "forbidden",
+                        "write controls require local owner access",
+                    ));
+                }
+                let command: RepublishWrite = decode(input)?;
+                let accepted = self
+                    .legacy
+                    .control
+                    .accept(
+                        command.request_id(),
+                        command.key(),
+                        command.payload().map_err(task_error)?,
+                    )
+                    .map_err(task_error)?;
+                self.acceptance(command.request_id(), accepted)
+            }
             Handler::Compute => {
                 let computed = crate::metrics::service::Metrics {
                     repository: crate::sqlite_metrics::SqliteMetrics {
@@ -688,7 +698,7 @@ impl DataApi {
             | Handler::Retry
             | Handler::Task
             | Handler::Request
-            | Handler::Cancel => self.legacy_call(name, input),
+            | Handler::Cancel => self.control_call(name, input),
             Handler::Query => encode(
                 self.queries
                     .query(decode::<Query>(input)?, &self.access)
@@ -795,26 +805,6 @@ impl ToolHandler for DataApi {
                         "not_applicable"
                     }
                     .into(),
-                );
-                e.next_actions = Some(
-                    if e.code == "outcome_unknown"
-                        || (matches!(
-                            name,
-                            "update_data"
-                                | "backfill_data"
-                                | "republish_data"
-                                | "verify_publication_result"
-                                | "inspect_verification_task"
-                                | "verify_data_gap"
-                        ) && matches!(e.code.as_str(), "storage_error" | "needs_verification"))
-                    {
-                        vec![
-                        "inspect the same request_id/task_id; do not invent a replacement identity"
-                            .into(),
-                    ]
-                    } else {
-                        vec!["correct the request or inspect the reported storage evidence".into()]
-                    },
                 );
             }
             e

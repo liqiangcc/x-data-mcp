@@ -175,7 +175,7 @@ fn real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal()
         .spawn()
         .unwrap();
     let mut output = BufReader::new(child.stdout.take().unwrap());
-    writeln!(child.stdin.as_mut().unwrap(),"{}",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"start_collection","arguments":{"request_id":"disconnected","symbols":["sh.600000"],"periods":["day"]}}})).unwrap();
+    writeln!(child.stdin.as_mut().unwrap(),"{}",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"start_collection","arguments":{"request_id":"disconnected","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}}})).unwrap();
     let mut line = String::new();
     assert!(output.read_line(&mut line).unwrap() > 0);
     let accepted: Value = serde_json::from_str(&line).unwrap();
@@ -225,7 +225,11 @@ fn real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal()
         .collect();
     assert_eq!(names, registry);
     assert_eq!(
-        session.call("get_task", json!({"task_id":task_id}), false)["status"],
+        session.call(
+            "get_task",
+            json!({"contract_version":"v1","task_id":task_id}),
+            false
+        )["status"],
         "failed"
     );
     assert_eq!(
@@ -234,7 +238,7 @@ fn real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal()
     );
     let replay = session.call(
         "start_collection",
-        json!({"request_id":"disconnected","symbols":["sh.600000"],"periods":["day"]}),
+        json!({"request_id":"disconnected","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600000"}]}}),
         false,
     );
     assert_eq!(replay["task_id"], task_id);
@@ -290,7 +294,7 @@ fn real_service_restart_does_not_resume_old_nonterminal_tasks() {
     let mut session = Session::new(&socket);
     let pending = session.call(
         "start_collection",
-        json!({"request_id":"old-pending","symbols":["sz.000001"],"periods":["day"]}),
+        json!({"request_id":"old-pending","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sz","code":"000001"}]}}),
         false,
     );
     historical.push(
@@ -307,7 +311,7 @@ fn real_service_restart_does_not_resume_old_nonterminal_tasks() {
     let mut session = Session::new(&socket);
     let new = session.call(
         "start_collection",
-        json!({"request_id":"new-run","symbols":["sz.000002"],"periods":["day"]}),
+        json!({"request_id":"new-run","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sz","code":"000002"}]}}),
         false,
     );
     wait_terminal(&db, new["task_id"].as_str().unwrap());
@@ -315,7 +319,11 @@ fn real_service_restart_does_not_resume_old_nonterminal_tasks() {
     for s in historical {
         assert_eq!(read_task_retried(&reader, &s.task.task_id), s);
         assert_eq!(
-            session.call("get_task", json!({"task_id":s.task.task_id}), false)["status"],
+            session.call(
+                "get_task",
+                json!({"contract_version":"v1","task_id":s.task.task_id}),
+                false
+            )["status"],
             "needs_verification"
         );
         assert!(!s.claims.is_empty());
