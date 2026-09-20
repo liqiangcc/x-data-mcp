@@ -1,0 +1,30 @@
+name: epic-262-stall-monitor
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+permissions:
+  issues: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect stall and report to #262
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Repo activity: last push to any branch
+          pushed_at=$(gh api repos/{owner}/{repo} --jq .pushed_at)
+          # Issue activity: latest comment on #262
+          issue_open=$(gh api repos/{owner}/{repo}/issues/262 --jq .state)
+          [ "$issue_open" = "open" ] || { echo "issue #262 closed; monitor idle"; exit 0; }
+          last_comment=$(gh api repos/{owner}/{repo}/issues/262/comments --jq "if length==0 then \"1970-01-01T00:00:00Z\" else .[-1].created_at end")
+          last_is_alert=$(gh api repos/{owner}/{repo}/issues/262/comments --jq "if length==0 then \"no\" elif .[-1].body | contains(\"STALL-MONITOR\") then \"yes\" else \"no\" end")
+          last_epoch=$(date -d "$( [ "$pushed_at" \> "$last_comment" ] && echo "$pushed_at" || echo "$last_comment" )" +%s)
+          quiet_h=$(( ( $(date +%s) - last_epoch ) / 3600 ))
+          echo "last_activity=$([ "$pushed_at" \> "$last_comment" ] && echo "$pushed_at" || echo "$last_comment") quiet=${quiet_h}h last_is_alert=$last_is_alert"
+          if [ "$quiet_h" -ge 4 ] && [ "$last_is_alert" = "no" ]; then
+            gh api repos/{owner}/{repo}/issues/262/comments -f body="⚠️ STALL-MONITOR: no repo/issue activity for ${quiet_h}h (last: $([ "$pushed_at" \> "$last_comment" ] && echo "$pushed_at" || echo "$last_comment")). Executor may be stalled — check devin-epic on box." >/dev/null
+            echo "alert posted"
+          fi
