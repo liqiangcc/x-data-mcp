@@ -1,5 +1,9 @@
 # 真实来源闭环：证据、门禁与实施顺序（#88）
 
+当前摘要：#54 QFQ、#131 固定文件集合一致性和 #71 限定个人研究范围已分别裁定；这些结论只适用于明确证据与声明范围。新 generation 仍需新 manifest 和独立一致性决定。
+当前 acquisition 尚未实现 immutable generation、验证后激活和 generation-bound routine update，见
+[每日同步说明](daily-sync.md)与 #260；因此 overall `production_ready=false`，且不能宣称每日纯 MCP 闭环。
+
 ## 已发生的验收
 
 实现基线 b21ba036479820bc36cdc75aa8aa312923ec64c6，v0.2.0-preview.1。
@@ -44,7 +48,7 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
 
 逐文件 `FILE_BYTES_VERIFIED` 与跨文件可组合性是两个独立门禁。`src/file_consistency.rs` 只接受显式、不可变的兼容性证明：证明必须绑定 base、hsjday、GBBQ 三个角色的精确 SHA-256、兼容集合自身的 identity/revision 和适用时间窗。`compatibility_set_identity` / `compatibility_set_revision` 只标识已审计组合事实，不表示三个独立发布文件天然共享同一来源版本；`member_bindings` 按角色保存各自摘要及可选 source identity/revision，`FileFact` 中的 source identity/revision 仍属于各自角色。相同 URL、下载日期、ETag、Last-Modified 或分别正确的摘要不会被推断为兼容。
 
-validator 的结果是 `VERIFIED_COMPATIBLE`、`NOT_VERIFIED` 或 `CONFLICT`；明确矛盾优先于证据不足。输入顺序与完全相同的重复事实不改变结果，并保留角色/摘要/来源元数据和证据引用。`CompatibilityEvidence` 只应承载已验证、可审计的 evidence fact，不把调用方填入的字符串当作批准依据。保留的 #74 快照没有跨文件证明，测试明确返回 `NOT_VERIFIED`；当前状态没有生产放行，也不改变 #54、#46/#6 或 #71 的结论。该模块不增加 MCP 工具、不联网、不提供 fallback/force 开关。
+validator 的结果是 `VERIFIED_COMPATIBLE`、`NOT_VERIFIED` 或 `CONFLICT`；明确矛盾优先于证据不足。输入顺序与完全相同的重复事实不改变结果，并保留角色/摘要/来源元数据和证据引用。`CompatibilityEvidence` 只应承载已验证、可审计的 evidence fact，不把调用方填入的字符串当作批准依据。初始 #74 retained 快照没有跨文件证明，测试稳定返回 `NOT_VERIFIED`；后续 #131 Final Gate 只接受上文“文件一致性”条目记录的 exact pinned 集合。该模块本身不增加 MCP 工具、不联网、不提供 fallback/force 开关；#260 的 `verify_generation` 只能调用该领域契约并绑定外部证据，不能让 acquisition 自签 PASS。
 
 ## 本轮官方公开文档复核（2026-09-12）
 
@@ -64,7 +68,9 @@ validator 的结果是 `VERIFIED_COMPATIBLE`、`NOT_VERIFIED` 或 `CONFLICT`；�
 
 三份快照来自独立获取时点；这些证据没有证明业务字段、GBBQ/QFQ 语义、目录行业映射、跨文件一致性、服务器使用边界或生产 pipeline。门禁状态保持 `NOT_VERIFIED`，不得据此接入生产。
 
-## 最小实施与验收计划（尚未执行）
+## 历史最小实施与验收计划（后续状态见本文开头）
+
+以下 A–F 保留 stage-1 原计划，不是当前待办清单；已完成项和新 generation 缺口分别以上文裁定与 #260 为准。
 
 A. 在 #54/#71/#46 补齐上述证据；跨文件一致性须有独立契约后才能组合。证据不足继续 blocked。
 B. 契约成立后实现独立 Rust 目录/GBBQ 解析及 normalization/QFQ；保留未解释字段、拒绝不支持事件，先测试再接线。不得引入 tolerance、逐股规则或多源 fallback。
@@ -73,11 +79,12 @@ D. 有界真实验收固定 #53 四证券作为研究回归样本，不重选；
 E. 用发布版本 ID 贯穿 query→availability→consecutive_direction；完整性证据不足返回 unknown/not_computable，不用 year_unfinished=false 代替年度完整。
 F. ChatGPT 侧实际调用并保存参数、版本、结果、来源时间/摘要及失败记录；到此才能验收真实闭环，未覆盖的年度/证券不得扩大宣称。
 
-当前不能进入 B–F 的生产路径；不以用户开发授权代替来源语义或第三方使用范围证据。
-更多指标在闭环之后。NOT_PRODUCTION_READY，live market source NOT_RUN。
+Stage-1 当时不能进入 B–F；该历史判断不覆盖后续有界验收。当前仍不得以用户开发授权代替来源语义或第三方使用范围证据，且新 generation 在 #260 前不能自动验证/激活。
+Overall `NOT_PRODUCTION_READY` 保留，具体当前原因以本文开头和 runtime capability 为准。
 
-## 能力发现修复
+## 历史能力发现修复切片
 
+以下只记录 #88 当时切片；当前 19-tool registry 和剩余语义冲突见 #260。
 公开 run_worker_once 纳入同一 registry，保留旧 {} 输入和 idle/task_id/status 输出。
 详情说明同步任务/占用副作用和只拒绝来源的 Stage A 开发边界；不成为新生产执行器。
 真实 stdio 测试比较工具名称集合、详情 schema，验证空队列、额外字段拒绝和执行后 failed。

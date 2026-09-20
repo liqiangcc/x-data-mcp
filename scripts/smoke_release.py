@@ -53,19 +53,20 @@ def runtime_smoke(binaries):
             assert client.poll() is None, "idle MCP proxy exited while stdin remained open"
             assert call("get_data_capabilities", {})["production_ready"] is False
             assert {t["name"] for t in tools} == {c["tool_name"] for c in cap["items"]}
-            args = dict(request_id="runtime-smoke", symbols=["sh.600000"], periods=["day"])
+            args = dict(request_id="runtime-smoke", dataset="market.daily", contract_version="v1", selection=dict(kind="explicit", securities=[dict(exchange="sh", code="600000")]))
             accepted = call("start_collection", args)
             client.stdin.close()
             assert client.wait(timeout=10) == 0
             client = subprocess.Popen([binaries / "mcp_connect", endpoint], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             deadline = time.monotonic() + 10
             while True:
-                task = call("get_task", dict(task_id=accepted["task_id"]))
+                task = call("get_task", dict(contract_version="v1", task_id=accepted["task_id"]))
                 if task["status"] == "failed":
                     break
                 assert time.monotonic() < deadline, task
                 time.sleep(0.02)
-            assert "SOURCE_NOT_VERIFIED" in json.dumps(task)
+            progress = call("get_task_progress", dict(task_id=accepted["task_id"]))
+            assert "SOURCE_NOT_VERIFIED" in json.dumps(progress)
             replay = call("start_collection", args)
             assert replay["reused"] and replay["task_id"] == accepted["task_id"]
         finally:
@@ -138,7 +139,7 @@ def main():
             assert computed == call("compute_metrics", computation)
             checks.append("fixed_compute_deterministic_fixture_vector")
             accepted = call("start_collection", dict(request_id="smoke-write", dataset="market.daily", contract_version="v1", selection=dict(kind="explicit", securities=[entity])))
-            assert accepted["readiness"] == "ready"
+            assert accepted["runtime_readiness"] == "blocked"
             assert call("get_request", dict(contract_version="v1", request_id="smoke-write"))["task"]["task_id"] == accepted["task_id"]
             call("run_worker_once", {})
             progress = call("get_task_progress", dict(task_id=accepted["task_id"]))
@@ -149,7 +150,7 @@ def main():
             checks.append("request_task_retry_cancel_and_source_gate")
             call("run_worker_once", {})
             yearly_caps = call("get_data_capabilities", dict(operation="update_data", dataset="market.yearly"))
-            assert len(yearly_caps["items"]) == 1 and yearly_caps["items"][0]["readiness"] == "ready"
+            assert len(yearly_caps["items"]) == 1 and yearly_caps["items"][0]["runtime_readiness"] == "ready"
             assert yearly_caps["items"][0]["example"]["items"][0]["publication"]["mode"] == "historical_fixed_base"
             yearly_input = dict(request_id="smoke-yearly-update", dataset="market.yearly", contract_version="v1", items=[dict(entity=entity, base_daily_version_id="demo-daily", years=[2020], publication=dict(mode="historical_fixed_base", comparison_version_id=None))])
             yearly_task = call("update_data", yearly_input)
@@ -168,7 +169,7 @@ def main():
             child = subprocess.Popen([binaries / "mcp_data", db], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             request("initialize", {})
             publication_caps = call("get_data_capabilities", dict(operation="verify_publication_result"))
-            assert len(publication_caps["items"]) == 1 and publication_caps["items"][0]["readiness"] == "ready"
+            assert len(publication_caps["items"]) == 1 and publication_caps["items"][0]["runtime_readiness"] == "ready"
             assert publication_caps["production_ready"] is False
             publication_input = dict(contract_version="v1", request_id="smoke-publication-check", target_task_id=original["task_id"])
             assert call("verify_publication_result", dict(publication_input, published=True), error=True)["code"] == "invalid_arguments"
@@ -177,7 +178,7 @@ def main():
             assert call("get_request", dict(contract_version="v1", request_id="smoke-publication-check"))["bound"] is False
             checks.append("publication_inspection_discovery_and_never_started_refusal_without_binding")
             check = call("verify_stopped_writes", dict(contract_version="v1", request_id="smoke-stopping-check", target_task_id=original["task_id"]))
-            assert check["blocking_reasons"] == ["STOP_EVIDENCE_NOT_VERIFIED"]
+            assert check["blocking_reasons"] == []
             assert call("run_worker_once", {})["task_id"] == check["task_id"]
             checked = call("get_task_progress", dict(task_id=check["task_id"]))
             assert checked["stopped_write_check"]["conclusion"] == "interrupted"

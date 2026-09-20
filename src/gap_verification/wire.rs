@@ -41,5 +41,4 @@ impl VerifyDataGap {
         serde_json::json!({"target": self.target})
     }
 }
-pub const DESCRIPTION: &str = "Explicit asynchronous verification of a proven local coverage gap in one published QFQ daily version. The caller names only symbol/day/[start,end]; the subject head is frozen at acceptance and re-checked at decision commit. Decisions come only from the installed trusted source-gap verifier; source limitation or unavailability never produces a proven gap, and a decision never triggers update/backfill by itself. The installed production verifier is blocked (GAP_BASIS_NOT_VERIFIED) until the source gates lift.";
-pub const BLOCKER: &str = "GAP_BASIS_NOT_VERIFIED (#54/#46/#71: no trusted source-gap verifier)";
+pub const DESCRIPTION: &str = "Explicit asynchronous verification of a proven local coverage gap in one published QFQ daily version. The caller names only symbol/day/[start,end]; the subject head is frozen at acceptance and re-checked at decision commit. Decisions come only from the installed trusted source-gap verifier; source limitation or unavailability never produces a proven gap, and a decision never triggers update/backfill by itself. Proving a gap requires an installed inspected official source; without one runtime readiness is blocked and no gap can be proven.";
