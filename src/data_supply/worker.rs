@@ -60,7 +60,7 @@ pub fn run_once(
     }
     if !matches!(
         candidate.task.key.operation.as_str(),
-        "update_data" | "backfill_data"
+        "update_data" | "backfill_data" | "republish_data"
     ) {
         // Only the market.daily collection item may run against an installed
         // inspected-snapshot source; catalog/yearly/legacy items and any
@@ -112,20 +112,30 @@ pub fn run_once(
         source,
         published_at: chrono::Utc::now(),
     });
+    let republish = market_source.map(|source| crate::official_market::TdxRepublishProvider {
+        source,
+        published_at: chrono::Utc::now(),
+    });
     for item in &candidate.items {
         // `update_data` refresh uses the range provider; `backfill_data`
-        // gains a source path only under the default frozen-gap contract —
-        // explicit-range backfill and everything else keep the blocked
-        // provider.
+        // gains a source path only under the default frozen-gap contract;
+        // `republish_data` gains one only under the explicit republish
+        // contract (#247) — everything else keeps the blocked provider.
         let provider: &dyn RangeProvider = match (
             candidate.task.key.operation.as_str(),
             candidate.task.key.contract_version.as_str(),
             update.as_ref(),
             backfill.as_ref(),
+            republish.as_ref(),
         ) {
-            ("update_data", _, Some(provider), _) => provider,
-            ("backfill_data", contract, _, Some(provider))
+            ("update_data", _, Some(provider), _, _) => provider,
+            ("backfill_data", contract, _, Some(provider), _)
                 if contract == crate::market_update::tasks::DEFAULT_CONTRACT_VERSION =>
+            {
+                provider
+            }
+            ("republish_data", contract, _, _, Some(provider))
+                if contract == crate::market_update::tasks::REPUBLISH_CONTRACT_VERSION =>
             {
                 provider
             }

@@ -436,22 +436,181 @@ impl RangeProvider for TdxRangeProvider<'_> {
     }
 }
 
+/// Shared acquisition for providers that build a trusted combined
+/// candidate: the fixed base merged with real source bars inside the
+/// accepted range, outside-range base values preserved verbatim — the
+/// same merge `market_update::prepare` approves before `prepare_range`
+/// re-checks the frozen inputs.
+///
+/// The base must provably derive from the installed snapshot generation
+/// (same pinned member/archive digests = same QFQ basis). An overlapping
+/// in-range bar the source contradicts on any known value is a basis
+/// conflict, not a fill — the merge fails closed instead of overwriting;
+/// filling an unknown optional field is enrichment, not a correction
+/// (#4 AC-71). The combined record claims `Complete` coverage only when
+/// the merged records equal the full materialized source history and
+/// otherwise carries the base coverage forward.
+///
+/// `revision_ref` is the caller's durable revision-authorization text:
+/// the backfill provider binds the frozen proven-gap contract; the
+/// republish provider passes `None` so `prepare` independently rejects
+/// any revised known value — republish expects pure enrichment only.
+fn acquire_merged_segment(
+    source: &TdxMarketSource,
+    base: &CheckedRecord,
+    range: &DateRange,
+    candidate_id: &str,
+    published_at: DateTime<Utc>,
+    revision_ref: Option<String>,
+) -> Result<Acquisition, SourceError> {
+    let batch = source.materialize_daily(&base.version().symbol)?;
+    // Same pinned snapshot = same QFQ basis: the base's declared
+    // snapshot inputs must equal the member/archive digests this
+    // installed source actually read.
+    if base.batch.provenance.source != SOURCE_NAME
+        || base.batch.provenance.source_adjustment != "qfq"
+        || base.batch.provenance.snapshot_inputs != batch.provenance.snapshot_inputs
+    {
+        return Err(SourceError::NotVerified(
+            "base does not provably derive from the installed snapshot".into(),
+        ));
+    }
+    let inputs = batch.provenance.snapshot_inputs.as_deref().unwrap_or(&[]);
+    let day = inputs.iter().find(|i| i.role == "day").ok_or_else(|| {
+        SourceError::InvalidResponse("snapshot binding lacks the day member".into())
+    })?;
+    let gbbq = inputs.iter().find(|i| i.role == "gbbq").ok_or_else(|| {
+        SourceError::InvalidResponse("snapshot binding lacks the gbbq member".into())
+    })?;
+    // The segment is the real source bars inside the accepted union of
+    // frozen proven-gap ranges; an empty segment cannot fill anything.
+    let mut segment = batch.clone();
+    segment
+        .bars
+        .retain(|b| range.start <= b.date && b.date <= range.end);
+    if segment.bars.is_empty() {
+        return Err(SourceError::InvalidResponse(
+            "snapshot carries no bars inside the frozen gap range".into(),
+        ));
+    }
+    let base_integrity: String = base.raw()["integrity_sha256"]
+        .as_str()
+        .ok_or_else(|| SourceError::NotVerified("fixed base carries no integrity digest".into()))?
+        .into();
+    // Mirror the merge `market_update::prepare` approves: base records
+    // overlaid by in-range source bars; everything outside the range is
+    // preserved verbatim. A proven gap only authorizes filling dates the
+    // base lacks — an overlapping bar the source contradicts is a basis
+    // conflict, not a gap, so fail closed instead of overwriting it.
+    let mut merged: BTreeMap<_, _> = base
+        .version()
+        .records
+        .iter()
+        .map(|b| (b.date, b.clone()))
+        .collect();
+    for bar in &segment.bars {
+        if let Some(existing) = merged.get(&bar.date) {
+            // Same rule as `market_update::prepare` (#4 AC-71): filling an
+            // unknown optional field is enrichment, not a correction — a
+            // conflict exists only when a known value differs.
+            let changed_known = existing.open != bar.open
+                || existing.high != bar.high
+                || existing.low != bar.low
+                || existing.close != bar.close
+                || existing.volume.zip(bar.volume).is_some_and(|(a, b)| a != b)
+                || existing.amount.zip(bar.amount).is_some_and(|(a, b)| a != b)
+                || existing.r7_raw.zip(bar.r7_raw).is_some_and(|(a, b)| a != b);
+            let lost_known = (existing.volume.is_some() && bar.volume.is_none())
+                || (existing.amount.is_some() && bar.amount.is_none())
+                || (existing.r7_raw.is_some() && bar.r7_raw.is_none());
+            if changed_known || lost_known {
+                return Err(SourceError::NotVerified(format!(
+                    "source bar {} conflicts with the fixed base",
+                    bar.date
+                )));
+            }
+        }
+        merged.insert(bar.date, bar.clone());
+    }
+    let mut combined_batch = batch.clone();
+    combined_batch.bars = merged.into_values().collect();
+    combined_batch.coverage = if combined_batch.bars == batch.bars {
+        CoverageEvidence::complete(format!(
+            "merged record equals the full .day member history of inspected snapshot manifest {}; {NOT_PRODUCTION_READY}",
+            source.manifest_sha256()
+        ))
+    } else {
+        base.batch.coverage.clone()
+    };
+    let (records, validation) = publish::validate_and_deduplicate(&combined_batch)
+        .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+    let mut raw = serde_json::to_value(EffectiveVersion {
+        version_id: candidate_id.into(),
+        symbol: combined_batch.symbol.clone(),
+        period: combined_batch.period,
+        adjustment: combined_batch.adjustment,
+        source: combined_batch.provenance.source.clone(),
+        records,
+        published_at,
+        validation,
+        unit_currency: combined_batch.unit_currency.clone(),
+        adjustment_evidence: combined_batch.adjustment_evidence.clone(),
+        yearly_derivation: None,
+    })
+    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+    raw["batch"] = serde_json::to_value(&combined_batch)
+        .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+    raw["integrity_sha256"] = Value::String(
+        crate::market_storage::compat::legacy_digest(&raw)
+            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
+    );
+    let segment_sha256 = crate::market_update::candidate_digest(&segment)
+        .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+    Ok(Acquisition {
+        batch: segment,
+        evidence: Evidence {
+            base_version_id: base.version().version_id.clone(),
+            base_integrity_sha256: base_integrity.clone(),
+            candidate_sha256: segment_sha256.clone(),
+            range: range.clone(),
+            same_qfq_basis_ref: format!(
+                "inspected snapshot manifest {} + gbbq member {}",
+                source.manifest_sha256(),
+                gbbq.member_sha256
+            ),
+            revision_ref,
+        },
+        combined: Some(CombinedCandidate {
+            evidence: CombinedEvidence {
+                base_integrity_sha256: base_integrity,
+                segment_sha256,
+                combined_integrity_sha256: raw["integrity_sha256"]
+                    .as_str()
+                    .expect("just set")
+                    .into(),
+                complete_coverage_ref: format!(
+                    "inspected snapshot manifest {} + day member {}:{} + gbbq member {}:{}",
+                    source.manifest_sha256(),
+                    day.member,
+                    day.member_sha256,
+                    gbbq.member,
+                    gbbq.member_sha256
+                ),
+            },
+            record: raw,
+        }),
+    })
+}
+
 /// #187 Phase C provider for `backfill_data` under the default frozen-gap
 /// contract only — never for explicit ranges and never for `update_data`
 /// refresh. Unlike `TdxRangeProvider`, it builds the trusted combined
-/// candidate a changed publication requires: the fixed base merged with
-/// real source bars inside the accepted union range, outside-range base
-/// values preserved verbatim — the same merge `market_update::prepare`
-/// approves before `prepare_range` re-checks the frozen inputs.
-///
-/// The combined record claims `Complete` coverage only when the merged
-/// records equal the full materialized source history — honest for a base
-/// whose only local holes were the frozen proven gaps — and otherwise
-/// carries the base coverage forward. `revision_ref` binds what `acquire`
-/// can see (base identity + accepted range + candidate id); the frozen
-/// proven-gap ids that authorize in-range value changes live in the task's
-/// frozen inputs, are re-checked by `prepare_range`'s frozen-inputs match,
-/// and are not visible to this layer — the reference says so rather than
+/// candidate a changed publication requires through
+/// `acquire_merged_segment`. `revision_ref` binds what `acquire` can see
+/// (base identity + accepted range + candidate id); the frozen proven-gap
+/// ids that authorize in-range value changes live in the task's frozen
+/// inputs, are re-checked by `prepare_range`'s frozen-inputs match, and
+/// are not visible to this layer — the reference says so rather than
 /// naming ids it cannot read.
 pub struct TdxBackfillProvider<'a> {
     pub source: &'a TdxMarketSource,
@@ -465,151 +624,52 @@ impl RangeProvider for TdxBackfillProvider<'_> {
         range: &DateRange,
         candidate_id: &str,
     ) -> Result<Acquisition, SourceError> {
-        let batch = self.source.materialize_daily(&base.version().symbol)?;
-        // Same pinned snapshot = same QFQ basis: the base's declared
-        // snapshot inputs must equal the member/archive digests this
-        // installed source actually read.
-        if base.batch.provenance.source != SOURCE_NAME
-            || base.batch.provenance.source_adjustment != "qfq"
-            || base.batch.provenance.snapshot_inputs != batch.provenance.snapshot_inputs
-        {
-            return Err(SourceError::NotVerified(
-                "base does not provably derive from the installed snapshot".into(),
-            ));
-        }
-        let inputs = batch.provenance.snapshot_inputs.as_deref().unwrap_or(&[]);
-        let day = inputs.iter().find(|i| i.role == "day").ok_or_else(|| {
-            SourceError::InvalidResponse("snapshot binding lacks the day member".into())
-        })?;
-        let gbbq = inputs.iter().find(|i| i.role == "gbbq").ok_or_else(|| {
-            SourceError::InvalidResponse("snapshot binding lacks the gbbq member".into())
-        })?;
-        // The segment is the real source bars inside the accepted union of
-        // frozen proven-gap ranges; an empty segment cannot fill anything.
-        let mut segment = batch.clone();
-        segment
-            .bars
-            .retain(|b| range.start <= b.date && b.date <= range.end);
-        if segment.bars.is_empty() {
-            return Err(SourceError::InvalidResponse(
-                "snapshot carries no bars inside the frozen gap range".into(),
-            ));
-        }
-        let base_integrity: String = base.raw()["integrity_sha256"]
-            .as_str()
-            .ok_or_else(|| {
-                SourceError::NotVerified("fixed base carries no integrity digest".into())
-            })?
-            .into();
-        // Mirror the merge `market_update::prepare` approves: base records
-        // overlaid by in-range source bars; everything outside the range is
-        // preserved verbatim. A proven gap only authorizes filling dates the
-        // base lacks — an overlapping bar the source contradicts is a basis
-        // conflict, not a gap, so fail closed instead of overwriting it.
-        let mut merged: BTreeMap<_, _> = base
-            .version()
-            .records
-            .iter()
-            .map(|b| (b.date, b.clone()))
-            .collect();
-        for bar in &segment.bars {
-            if let Some(existing) = merged.get(&bar.date) {
-                // Same rule as `market_update::prepare` (#4 AC-71): filling an
-                // unknown optional field is enrichment, not a correction — a
-                // conflict exists only when a known value differs.
-                let changed_known = existing.open != bar.open
-                    || existing.high != bar.high
-                    || existing.low != bar.low
-                    || existing.close != bar.close
-                    || existing.volume.zip(bar.volume).is_some_and(|(a, b)| a != b)
-                    || existing.amount.zip(bar.amount).is_some_and(|(a, b)| a != b)
-                    || existing.r7_raw.zip(bar.r7_raw).is_some_and(|(a, b)| a != b);
-                let lost_known = (existing.volume.is_some() && bar.volume.is_none())
-                    || (existing.amount.is_some() && bar.amount.is_none())
-                    || (existing.r7_raw.is_some() && bar.r7_raw.is_none());
-                if changed_known || lost_known {
-                    return Err(SourceError::NotVerified(format!(
-                        "source bar {} conflicts with the fixed base",
-                        bar.date
-                    )));
-                }
-            }
-            merged.insert(bar.date, bar.clone());
-        }
-        let mut combined_batch = batch.clone();
-        combined_batch.bars = merged.into_values().collect();
-        combined_batch.coverage = if combined_batch.bars == batch.bars {
-            CoverageEvidence::complete(format!(
-                "merged record equals the full .day member history of inspected snapshot manifest {}; {NOT_PRODUCTION_READY}",
-                self.source.manifest_sha256()
-            ))
-        } else {
-            base.batch.coverage.clone()
-        };
-        let (records, validation) = publish::validate_and_deduplicate(&combined_batch)
-            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
-        let mut raw = serde_json::to_value(EffectiveVersion {
-            version_id: candidate_id.into(),
-            symbol: combined_batch.symbol.clone(),
-            period: combined_batch.period,
-            adjustment: combined_batch.adjustment,
-            source: combined_batch.provenance.source.clone(),
-            records,
-            published_at: self.published_at,
-            validation,
-            unit_currency: combined_batch.unit_currency.clone(),
-            adjustment_evidence: combined_batch.adjustment_evidence.clone(),
-            yearly_derivation: None,
-        })
-        .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
-        raw["batch"] = serde_json::to_value(&combined_batch)
-            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
-        raw["integrity_sha256"] = Value::String(
-            crate::market_storage::compat::legacy_digest(&raw)
-                .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
-        );
-        let segment_sha256 = crate::market_update::candidate_digest(&segment)
-            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
-        Ok(Acquisition {
-            batch: segment,
-            evidence: Evidence {
-                base_version_id: base.version().version_id.clone(),
-                base_integrity_sha256: base_integrity.clone(),
-                candidate_sha256: segment_sha256.clone(),
-                range: range.clone(),
-                same_qfq_basis_ref: format!(
-                    "inspected snapshot manifest {} + gbbq member {}",
-                    self.source.manifest_sha256(),
-                    gbbq.member_sha256
-                ),
-                revision_ref: Some(format!(
-                    "frozen proven-gap authorization checked by the default-contract frozen inputs; base {} range {}..{} candidate {}",
-                    base.version().version_id,
-                    range.start,
-                    range.end,
-                    candidate_id
-                )),
-            },
-            combined: Some(CombinedCandidate {
-                evidence: CombinedEvidence {
-                    base_integrity_sha256: base_integrity,
-                    segment_sha256,
-                    combined_integrity_sha256: raw["integrity_sha256"]
-                        .as_str()
-                        .expect("just set")
-                        .into(),
-                    complete_coverage_ref: format!(
-                        "inspected snapshot manifest {} + day member {}:{} + gbbq member {}:{}",
-                        self.source.manifest_sha256(),
-                        day.member,
-                        day.member_sha256,
-                        gbbq.member,
-                        gbbq.member_sha256
-                    ),
-                },
-                record: raw,
-            }),
-        })
+        acquire_merged_segment(
+            self.source,
+            base,
+            range,
+            candidate_id,
+            self.published_at,
+            Some(format!(
+                "frozen proven-gap authorization checked by the default-contract frozen inputs; base {} range {}..{} candidate {}",
+                base.version().version_id,
+                range.start,
+                range.end,
+                candidate_id
+            )),
+        )
+    }
+}
+
+/// #247 provider for `republish_data` under the explicit republish
+/// contract only — never for `update_data` refresh and never under the
+/// default frozen-gap contract. Same trusted combined candidate as the
+/// backfill path (fixed base merged with real in-range source bars), but
+/// the authorization is the explicit `republish_data` command itself:
+/// `revision_ref` stays `None`, so `market_update::prepare`
+/// independently rejects any revised known value — a republish expects
+/// pure enrichment (filling previously unpromoted optional fields) or
+/// new dates only, never a correction.
+pub struct TdxRepublishProvider<'a> {
+    pub source: &'a TdxMarketSource,
+    pub published_at: DateTime<Utc>,
+}
+
+impl RangeProvider for TdxRepublishProvider<'_> {
+    fn acquire(
+        &self,
+        base: &CheckedRecord,
+        range: &DateRange,
+        candidate_id: &str,
+    ) -> Result<Acquisition, SourceError> {
+        acquire_merged_segment(
+            self.source,
+            base,
+            range,
+            candidate_id,
+            self.published_at,
+            None,
+        )
     }
 }
 

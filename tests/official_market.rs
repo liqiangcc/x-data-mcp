@@ -14,7 +14,7 @@ use x_data_mcp::{
     market_update::runner::ItemExecution,
     official_market::{
         DailyCollectionRepository, TdxBackfillProvider, TdxDailyRunner, TdxGapVerifier,
-        TdxMarketSource,
+        TdxMarketSource, TdxRepublishProvider,
     },
     publish::{EffectiveVersion, ValidationSummary},
     sqlite_market::SqliteMarket,
@@ -2665,4 +2665,201 @@ fn service_multi_item_collection_uses_shared_session() {
             "{symbol} published batch diverged from the single-symbol path"
         );
     }
+}
+
+// ---------- #247: TdxRepublishProvider + republish_data ----------
+
+#[test]
+fn republish_provider_enriches_unpromoted_fields() {
+    use x_data_mcp::market_update::runner::RangeProvider;
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let (_d, _t, market) = fresh_market();
+    let full = source.materialize_daily("sh.600006").unwrap();
+    // Pre-#245 base shape: identical bars with the promoted fields still
+    // unpromoted — the exact state republish exists to repair.
+    let mut legacy = full.clone();
+    for b in &mut legacy.bars {
+        b.volume = None;
+        b.amount = None;
+        b.r7_raw = None;
+    }
+    let raw = subject_raw("base-legacy", &legacy);
+    market::published_fixture(&market, &raw);
+    let base = market.fixed("base-legacy").unwrap();
+    let provider = TdxRepublishProvider {
+        source: &source,
+        published_at: now(),
+    };
+    let range = x_data_mcp::market_update::DateRange {
+        start: full.bars[0].date,
+        end: full.bars.last().unwrap().date,
+    };
+    let acq = provider.acquire(&base, &range, "cand-r1").unwrap();
+    assert_eq!(acq.batch.bars, full.bars);
+    // Republish carries no revision_ref: pure enrichment only — prepare
+    // independently rejects any revised known value.
+    assert!(acq.evidence.revision_ref.is_none());
+    let whole = acq.combined.expect("changed republish needs a candidate");
+    assert_eq!(whole.record["version_id"], json!("cand-r1"));
+    let combined_batch: MarketDataBatch =
+        serde_json::from_value(whole.record["batch"].clone()).unwrap();
+    assert_eq!(combined_batch.bars, full.bars);
+    assert_eq!(combined_batch.coverage.status, CoverageStatus::Complete);
+    assert!(
+        combined_batch
+            .bars
+            .iter()
+            .all(|b| b.volume.is_some() && b.amount.is_some() && b.r7_raw.is_some())
+    );
+    // The built record passes the governed stage path.
+    market.stage(&whole.record).unwrap();
+    assert_eq!(
+        market.candidate("cand-r1").unwrap().version().records,
+        full.bars
+    );
+
+    // A known value the source contradicts is a basis conflict — fail
+    // closed, never overwrite (enrichment is None→Some only). A flat
+    // shifted bar stays inside low/high bounds while still contradicting
+    // the source values.
+    let mut conflict = legacy.clone();
+    conflict.bars[1].open = dec("999.99");
+    conflict.bars[1].high = dec("999.99");
+    conflict.bars[1].low = dec("999.99");
+    conflict.bars[1].close = dec("999.99");
+    let raw = subject_raw("base-conflict", &conflict);
+    market
+        .commit(&market::prepare(
+            &market,
+            &raw,
+            PublishIntent::Daily {
+                expected_head: Some("base-legacy".into()),
+            },
+        ))
+        .unwrap();
+    let base = market.fixed("base-conflict").unwrap();
+    assert!(matches!(
+        provider.acquire(&base, &range, "cand-r2"),
+        Err(SourceError::NotVerified(_))
+    ));
+
+    // A base that does not bind this snapshot generation fails closed.
+    let mut other = legacy.clone();
+    for i in other.provenance.snapshot_inputs.as_mut().unwrap() {
+        i.member_sha256 = "0".repeat(64);
+    }
+    let raw = subject_raw("base-other-snapshot", &other);
+    market
+        .commit(&market::prepare(
+            &market,
+            &raw,
+            PublishIntent::Daily {
+                expected_head: Some("base-conflict".into()),
+            },
+        ))
+        .unwrap();
+    let base = market.fixed("base-other-snapshot").unwrap();
+    assert!(matches!(
+        provider.acquire(&base, &range, "cand-r3"),
+        Err(SourceError::NotVerified(_))
+    ));
+
+    // An empty in-range segment cannot republish anything.
+    let base = market.fixed("base-legacy").unwrap();
+    let empty = x_data_mcp::market_update::DateRange {
+        start: day(20300101),
+        end: day(20300101),
+    };
+    assert!(matches!(
+        provider.acquire(&base, &empty, "cand-r4"),
+        Err(SourceError::InvalidResponse(_))
+    ));
+}
+
+#[test]
+fn service_republish_data_enriches_published_head() {
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let full = source.materialize_daily("sh.600006").unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let mut legacy = full.clone();
+    for b in &mut legacy.bars {
+        b.volume = None;
+        b.amount = None;
+        b.r7_raw = None;
+    }
+    let subject = subject_raw("subject-legacy", &legacy);
+    market::published_fixture(&market, &subject);
+
+    let manifest_path = db.path().join("manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+    let api = DataApi::new(tasks.clone(), "run".into(), Access::local()).unwrap();
+    let accepted = api
+        .call(
+            "republish_data",
+            json!({"request_id":"rp-1","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"subject-legacy","start_date":"2025-07-15","end_date":"2025-07-17"}]}),
+        )
+        .unwrap();
+    assert_eq!(
+        accepted["contract_version"],
+        json!("explicit-republish-task-v1")
+    );
+    let task_id = accepted["task_id"].as_str().unwrap().to_owned();
+    api.call("run_worker_once", json!({})).unwrap();
+    let done = tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(
+        done.items[0].outcome.as_ref().unwrap().success,
+        "republish item failed: {:?}",
+        done.items[0].outcome
+    );
+    // Head advanced to the enriched version; the base stays fixed.
+    let new_head: String = rusqlite::Connection::open(tasks.path())
+        .unwrap()
+        .query_row(
+            "SELECT version_id FROM effective_heads WHERE symbol='sh.600006' AND period='day'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(new_head, "subject-legacy");
+    let merged = market.fixed(&new_head).unwrap();
+    assert_eq!(merged.version().records, full.bars);
+    market.fixed("subject-legacy").unwrap();
+    // range-result evidence rows bind the republished item.
+    let c = rusqlite::Connection::open(tasks.path()).unwrap();
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM market_update_results", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    // Frozen inputs keep the explicit republish shape.
+    let snap_task = tasks.read_task(&task_id).unwrap().unwrap();
+    let f = &snap_task.items[0].spec.frozen_inputs;
+    assert_eq!(f["base_version_id"], json!("subject-legacy"));
+    assert!(f["range"]["start"].is_string());
+
+    // Default selection is not a republish surface.
+    let sel = api.call(
+        "republish_data",
+        json!({"request_id":"rp-sel","dataset":"market.daily","contract_version":"v1","selection":{"kind":"default"}}),
+    );
+    assert!(sel.is_err(), "default selection must not resolve republish");
+
+    // Yearly items never resolve a republish contract.
+    let yearly = api.call(
+        "republish_data",
+        json!({"request_id":"rp-yearly","dataset":"market.yearly","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":new_head,"years":[2025],"publication":{"mode":"historical_fixed_base"}}]}),
+    );
+    assert!(yearly.is_err(), "market.yearly must not resolve republish");
 }

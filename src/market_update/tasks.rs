@@ -15,10 +15,16 @@ pub const CONTRACT_VERSION: &str = "explicit-range-task-v1";
 /// from explicit ranges, so it persists a distinct contract version and
 /// never shares command identity with `CONTRACT_VERSION`.
 pub const DEFAULT_CONTRACT_VERSION: &str = "default-range-task-v1";
+/// Explicit republish contract (#247): same item payload shape as
+/// `CONTRACT_VERSION` but a distinct command identity — the operation
+/// itself is the durable authorization record for a pure-enrichment
+/// republication.
+pub const REPUBLISH_CONTRACT_VERSION: &str = "explicit-republish-task-v1";
 #[derive(Debug, Clone, Copy)]
 pub enum Operation {
     Update,
     Backfill,
+    Republish,
 }
 impl Operation {
     pub fn key(self) -> CommandKey {
@@ -26,10 +32,15 @@ impl Operation {
             operation: match self {
                 Self::Update => "update_data",
                 Self::Backfill => "backfill_data",
+                Self::Republish => "republish_data",
             }
             .into(),
             dataset: "market.daily".into(),
-            contract_version: CONTRACT_VERSION.into(),
+            contract_version: match self {
+                Self::Republish => REPUBLISH_CONTRACT_VERSION,
+                _ => CONTRACT_VERSION,
+            }
+            .into(),
         }
     }
 }

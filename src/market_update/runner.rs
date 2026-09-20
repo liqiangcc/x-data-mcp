@@ -65,11 +65,14 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         let mut task = self.repository.task(task_id)?;
         let default_contract =
             task.task.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
+        let republish_contract =
+            task.task.key.contract_version == super::tasks::REPUBLISH_CONTRACT_VERSION;
         if !matches!(
             task.task.key.operation.as_str(),
-            "update_data" | "backfill_data"
+            "update_data" | "backfill_data" | "republish_data"
         ) || task.task.key.dataset != "market.daily"
             || (!default_contract
+                && !republish_contract
                 && task.task.key.contract_version != super::tasks::CONTRACT_VERSION)
         {
             return Err(Error::Invalid(

@@ -21,6 +21,7 @@
 | start_collection | 首次建立指定数据 | dataset、contract_version、request_id、selection | WriteAcceptance |
 | update_data | 刷新已有数据 | 同上 | WriteAcceptance |
 | backfill_data | 补指定历史范围 | 同上，加类型化 range | WriteAcceptance |
+| republish_data | 授权重发固定基线（#247 纯 enrichment：仅填未晋升字段或新增日期，已知值改/丢 fail-closed；仅显式 items，无 default selection） | 同 update_data | WriteAcceptance |
 | query_data | 读取已发布数据 | dataset、contract_version、selection、filter、version_id?、page_size?、cursor? | DataPage |
 | list_data_versions | 列出指定对象的版本 | dataset、contract_version、selection、page_size?、cursor? | VersionPage |
 | get_data_availability | 检查已存版本与覆盖证据 | dataset、selection、range、分页 | AvailabilitySnapshot |

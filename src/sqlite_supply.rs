@@ -399,7 +399,7 @@ fn task_facts(
         .collect::<Result<Vec<_>, _>>()?;
     if matches!(
         s.task.key.operation.as_str(),
-        "update_data" | "backfill_data"
+        "update_data" | "backfill_data" | "republish_data"
     ) {
         let successful = s
             .items
