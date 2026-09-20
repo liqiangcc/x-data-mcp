@@ -1,0 +1,34 @@
+{
+  "schema": "issue-131-file-set-consistency-plan/v1",
+  "purpose": "Audit the pinned official retained input set (base + .day + gbbq) and produce an explicit CompatibilityEvidence artifact for file_consistency::validate. The audit records only mechanical facts; the Final Gate decides whether they suffice to retire FILE_SET_CONSISTENCY_NOT_VERIFIED.",
+  "inputs": {
+    "snapshot_manifest": {
+      "path": "/opt/x-data-mcp-preview/official-inputs/snapshot-manifest.json",
+      "sha256": "1e8d1ca77e99efb218213795a1d518f5ce6e4057fa93cf99520429ebb0cd5311"
+    },
+    "preview_database": {
+      "path": "/opt/x-data-mcp-preview/state/preview.sqlite",
+      "note": "read-only observation; day-version snapshot_inputs bindings are immutable once committed, so observed facts are stable under append-only writes"
+    }
+  },
+  "checks": [
+    "manifest_sha256_matches_pin",
+    "each retained file byte-rehashed and equal to its manifest sha256 (byte integrity re-verified, not trusted)",
+    "every published day data_version binds snapshot_inputs for exactly the manifest day + gbbq archive sha256s (sole-input coverage, zero violations)",
+    "every effective day head is backed by a version published from this set (no combination failure observed in the exercised domain)",
+    "catalog version exists with acquired_at == base acquisition_completed_at and source == official-file:<manifest_sha256[:16]> (base exercised via catalog publication)",
+    "aggregate exercised event counts parsed from adjustment_evidence (statistics, not a gate)"
+  ],
+  "evidence_artifact": {
+    "rule_version": "official-file-consistency-v1",
+    "compatibility_set_identity": "tdx-official-retained-snapshot",
+    "compatibility_set_revision": "snapshot-manifest@1e8d1ca77e99efb218213795a1d518f5ce6e4057fa93cf99520429ebb0cd5311",
+    "member_bindings": "all three required roles bound to manifest sha256; source_revision and source_identity absent (no file carries those annotations, so none are asserted)",
+    "valid_window": "closed interval [min acquisition_started_at, max acquisition_completed_at] over the three manifest entries"
+  },
+  "scope_limits": [
+    "This evidence asserts that the exact pinned file set was exercised together across the full published domain with verified outcomes. It does not assert vendor authorization (that remains #71, FILE_ACCESS_USE_NOT_VERIFIED).",
+    "Compatibility here means composability of this pinned set for this snapshot generation. A future download generation requires a new manifest and a new audit.",
+    "The audit does not decode GBBQ records itself; applied/excluded event counts are read verbatim from the stored adjustment_evidence produced by official_market."
+  ]
+}

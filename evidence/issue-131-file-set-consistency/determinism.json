@@ -1,0 +1,9 @@
+{
+  "schema": "issue-131-file-set-consistency-determinism/v1",
+  "runs": 2,
+  "byte_identical": true,
+  "result_sha256": "c6916ef42b49a090cd519f4b93eaa943ae713a660e0a598ceb98bc9ca8a66051",
+  "input_sha256": "c6969fdf09b9c3e59b28aff8b6316e8d2d80d9afc83165dc7f735ab399462a9b",
+  "compatibility_evidence_sha256": "abb99d48db13fe3cafbbaeaad252be2dd8ae32babe5b1d8d3f71345bddac30e4",
+  "audit_digest": "8c4ca55273e3c4566a984059034485f67a23c46f0d44ec37688d059caf88cff2"
+}

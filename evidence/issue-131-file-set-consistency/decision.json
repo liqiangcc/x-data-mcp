@@ -1,0 +1,49 @@
+{
+  "contract_version": "official-file-consistency-v1",
+  "status": "VERIFIED_COMPATIBLE",
+  "reasons": [],
+  "evidence_refs": [
+    "evidence/issue-131-file-set-consistency/result.json@8c4ca55273e3c4566a984059034485f67a23c46f0d44ec37688d059caf88cff2"
+  ],
+  "files": [
+    {
+      "role": "base_industry",
+      "bytes": 15963181,
+      "sha256": "56c3574505bbd3fa3a1899b46e09112070dea17cbea2f713b7ccff2628379bec",
+      "source_url": "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+      "acquisition_started_at": "2026-09-20T01:07:54Z",
+      "acquisition_completed_at": "2026-09-20T01:08:56.685158Z",
+      "last_modified": "Fri, 18 Sep 2026 12:59:10 GMT",
+      "etag": "\"6aad359e-f3942d\"",
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    },
+    {
+      "role": "day",
+      "bytes": 550106783,
+      "sha256": "563797f0d1b852e91b85ee0aafe396c0df1bb12e55b569e8526db76a4e181c64",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-09-20T01:06:00Z",
+      "acquisition_completed_at": "2026-09-20T01:07:54.540202Z",
+      "last_modified": "Fri, 18 Sep 2026 07:58:50 GMT",
+      "etag": "\"6aacef3a-20c9f69f\"",
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    },
+    {
+      "role": "gbbq",
+      "bytes": 6337960,
+      "sha256": "502236d9d8394e89b1a4091f5d0d2b86e419c0c4da2c788ddcea16ef7d3763e3",
+      "source_url": "https://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+      "acquisition_started_at": "2026-09-20T01:05:36Z",
+      "acquisition_completed_at": "2026-09-20T01:06:00.295579Z",
+      "last_modified": "Fri, 18 Sep 2026 10:14:43 GMT",
+      "etag": "\"6aad0f13-60b5a8\"",
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    }
+  ]
+}
