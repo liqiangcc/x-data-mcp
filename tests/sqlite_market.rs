@@ -155,8 +155,8 @@ fn verified_sql_range_is_ordered_precise_and_fixed() {
 #[test]
 fn compat_bar_metadata_and_evidence_tampering_reject_without_fallback() {
     for sql in [
-        "UPDATE data_versions SET compat_json=json_set(compat_json,'$.source','altered')",
-        "UPDATE segment_bars SET close='10.06' WHERE trade_date='2025-01-02'",
+        "UPDATE data_versions SET envelope_json=json_set(envelope_json,'$.source','altered')",
+        "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','10.06') WHERE trade_date='2025-01-02'",
         "UPDATE data_versions SET source='altered'",
         "UPDATE version_evidence SET value='USD' WHERE field='price_currency'",
         "UPDATE data_versions SET content_digest='wrong'",
@@ -461,7 +461,10 @@ fn base_missing_corrupt_identity_period_and_adjustment_are_not_head_conflicts() 
             "corrupt" => {
                 Connection::open(store.tasks.path())
                     .unwrap()
-                    .execute("UPDATE segment_bars SET close='99'", [])
+                    .execute(
+                        "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','99')",
+                        [],
+                    )
                     .unwrap();
             }
             "identity" => {
@@ -561,7 +564,7 @@ fn fixed_paging_ignores_new_head_preserves_conditions_and_rejects_later_damage()
     Connection::open(store.tasks.path())
         .unwrap()
         .execute(
-            "UPDATE segment_bars SET open='0' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily')",
+            "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.open','0') WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily')",
             [],
         )
         .unwrap();
@@ -736,7 +739,7 @@ fn fixed_base_change_after_prepare_is_rejected_without_recomputing_or_rebinding(
     let mut changed = raw;
     changed["batch"]["coverage"]["reason"] = json!("changed after validation");
     changed["integrity_sha256"] = json!(frozen_legacy::digest(&changed));
-    Connection::open(store.tasks.path()).unwrap().execute("UPDATE data_versions SET compat_json=?1,content_digest=?2,coverage_reason='changed after validation' WHERE version_id='legacy-daily'",rusqlite::params![serde_json::to_string(&changed).unwrap(),changed["integrity_sha256"].as_str().unwrap()]).unwrap();
+    Connection::open(store.tasks.path()).unwrap().execute("UPDATE data_versions SET envelope_json=json_set(envelope_json,'$.batch.coverage.reason','changed after validation','$.integrity_sha256',?1),content_digest=?1,coverage_reason='changed after validation' WHERE version_id='legacy-daily'",rusqlite::params![changed["integrity_sha256"].as_str().unwrap()]).unwrap();
     assert!(store.fixed("legacy-daily").is_ok());
     assert!(matches!(store.commit(&plan), Err(Error::Base(_))));
     assert!(
@@ -852,7 +855,7 @@ fn segmented_storage_shares_unchanged_bars_and_materializes_only_delta() {
         .unwrap();
     assert_eq!(segments, 2);
     // daily-2 = ref(bar0) + new(bar1) + ref(bar2).
-    let refs: Vec<(String, i64, String, String)> = c
+    let refs: Vec<(i64, i64, String, String)> = c
         .prepare(
             "SELECT segment_id,seq,clip_start,clip_end FROM version_segments WHERE version_id='daily-2' ORDER BY seq",
         )
@@ -861,10 +864,17 @@ fn segmented_storage_shares_unchanged_bars_and_materializes_only_delta() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
+    let legacy_seg: i64 = c
+        .query_row(
+            "SELECT segment_id FROM version_segments WHERE version_id='legacy-daily'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(refs.len(), 3);
-    assert_eq!(refs[0].0, "seg-legacy-daily");
-    assert_eq!(refs[2].0, "seg-legacy-daily");
-    assert!(refs[1].0.starts_with("seg-daily-2"));
+    assert_eq!(refs[0].0, legacy_seg);
+    assert_eq!(refs[2].0, legacy_seg);
+    assert_ne!(refs[1].0, legacy_seg);
     // Rebuilt version reads verify against the recorded projection.
     store.fixed("daily-2").unwrap();
     let mut r = range();

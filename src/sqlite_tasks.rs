@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 15;
-pub(crate) const MIGRATIONS: [&str; 15] = [
+pub const SCHEMA_VERSION: u32 = 16;
+pub(crate) const MIGRATIONS: [&str; 16] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
     include_str!("../migrations/tasks/003_market.sql"),
@@ -25,7 +25,18 @@ pub(crate) const MIGRATIONS: [&str; 15] = [
     include_str!("../migrations/tasks/013_r7_raw.sql"),
     include_str!("../migrations/tasks/014_segmented_bars.sql"),
     include_str!("../migrations/tasks/015_task_counters.sql"),
+    include_str!("../migrations/tasks/016_compact_records.sql"),
 ];
+/// Data migrations that cannot be expressed in SQL run inside the same
+/// transaction immediately after their schema step.
+fn post_migration(c: &Connection, version: usize) -> Result<(), Error> {
+    match version {
+        16 => crate::sqlite_market::envelope::migrate_legacy(c).map_err(|e| {
+            Error::StorageUnavailable(format!("compact record migration failed: {e}"))
+        }),
+        _ => Ok(()),
+    }
+}
 #[derive(Clone)]
 pub struct SqliteTasks {
     path: PathBuf,
@@ -89,6 +100,7 @@ impl SqliteTasks {
             .map_err(storage)?;
         for (index, sql) in MIGRATIONS.iter().enumerate() {
             apply_migration(&tx, index + 1, sql)?;
+            post_migration(&tx, index + 1)?;
         }
         tx.commit()
             .map_err(|e| Error::OutcomeUnknown(e.to_string()))
@@ -105,6 +117,7 @@ impl SqliteTasks {
         let version = check_schema(&tx, false)?;
         for (index, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
             apply_migration(&tx, index + 1, sql)?;
+            post_migration(&tx, index + 1)?;
         }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")

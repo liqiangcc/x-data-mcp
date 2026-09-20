@@ -57,6 +57,7 @@ impl RangeRepository for SqliteMarket {
             } else {
                 commit_publication(c, &plan.publication)?
             };
+            crate::sqlite_market::envelope::write_payloads(c, &plan.audit_payloads)?;
             let audit = text(&plan.audit)?;
             let receipt_json = text(&receipt)?;
             c.execute(
@@ -140,6 +141,7 @@ pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Rec
         return Err(integrity("range audit digest mismatch"));
     }
     let audit: Value = serde_json::from_str(&raw).map_err(integrity)?;
+    crate::sqlite_market::envelope::require_refs(c, &audit["segment"])?;
     let command: Publication =
         serde_json::from_value(audit["command"].clone()).map_err(integrity)?;
     let receipt: Receipt = serde_json::from_str(&receipt).map_err(integrity)?;

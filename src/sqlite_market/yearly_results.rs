@@ -36,6 +36,7 @@ impl YearlyRepository for SqliteMarket {
                 crate::sqlite_tasks::persist_decided(c,&binding.head,Some(&binding.item),command.expected_revision)?;
                 Receipt {publication_id:command.publication_id.clone(),version_id:command.version_id.clone(),task_id:command.task_id.clone(),task_revision:binding.head.state_revision}
             }else{commit_publication(c,&plan.publication)?};
+            crate::sqlite_market::envelope::write_payloads(c,&plan.audit_payloads)?;
             let audit=text(&plan.audit)?;let receipt_json=text(&receipt)?;
             c.execute("INSERT INTO yearly_execution_results VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![command.publication_id,command.task_id,command.item_id,base.version.version_id,command.version_id,plan.no_change,audit,digest(&audit,&receipt_json),receipt_json]).map_err(storage)?;
             read_result(c,&command.publication_id)?.map(|(_,r)|r).ok_or_else(||integrity("yearly result missing after insert"))
@@ -87,7 +88,9 @@ pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Rec
     }
     let base = read_record(c, &base_id, true, true)?;
     let result = read_record(c, &version_id, true, true)?;
-    let candidate = compat::check(&audit["candidate"])?;
+    let candidate_raw =
+        crate::sqlite_market::envelope::expand_if_envelope(c, None, &audit["candidate"])?;
+    let candidate = compat::check(&candidate_raw)?;
     validate_base(&candidate, Some(&base))?;
     if candidate.version.period != Period::Year
         || audit["base_integrity_sha256"] != base.raw["integrity_sha256"]

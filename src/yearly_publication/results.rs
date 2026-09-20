@@ -13,6 +13,7 @@ pub struct YearlyResultPlan {
     pub(crate) prior: Option<CheckedRecord>,
     pub(crate) no_change: bool,
     pub(crate) audit: Value,
+    pub(crate) audit_payloads: Vec<crate::sqlite_market::envelope::Payload>,
 }
 impl YearlyResultPlan {
     pub fn is_no_change(&self) -> bool {
@@ -106,9 +107,10 @@ impl<R: MarketRepository> Publisher<R> {
         } else {
             self.prepare_derived_yearly(command, candidate)?
         };
+        let (candidate_env, audit_payloads) = crate::sqlite_market::envelope::pack(&candidate.raw)?;
         let audit = json!({
             "format":"local-yearly-result-v1", "command":publication.command,
-            "candidate":candidate.raw, "no_change":no_change,
+            "candidate":candidate_env, "no_change":no_change,
             "base_daily_version_id":candidate.base_daily_version_id,
             "base_integrity_sha256":candidate.base_integrity_sha256,
             "prior_version_id":prior_id,
@@ -121,6 +123,7 @@ impl<R: MarketRepository> Publisher<R> {
             prior,
             no_change,
             audit,
+            audit_payloads,
         })
     }
 }

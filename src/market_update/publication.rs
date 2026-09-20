@@ -32,6 +32,7 @@ pub struct RangePlan {
     pub(crate) base: CheckedRecord,
     pub(crate) no_change: bool,
     pub(crate) audit: Value,
+    pub(crate) audit_payloads: Vec<crate::sqlite_market::envelope::Payload>,
 }
 impl RangePlan {
     pub fn is_no_change(&self) -> bool {
@@ -205,12 +206,13 @@ impl<R: MarketRepository> Publisher<R> {
                 (plan, false)
             }
         };
+        let (segment, audit_payloads) = crate::sqlite_market::envelope::pack_batch(&json!(batch))?;
         let audit = json!({
             "algorithm_version":"local-range-update-v1",
             "command":publication.command,
             "base_integrity_sha256":base.raw()["integrity_sha256"],
             "result_integrity_sha256":publication.record.raw()["integrity_sha256"],
-            "segment":batch,"range":range,"evidence":evidence,
+            "segment":segment,"range":range,"evidence":evidence,
             "combined":combined,"no_change":no_change
         });
         Ok(Preparation::Ready(Box::new(RangePlan {
@@ -218,6 +220,7 @@ impl<R: MarketRepository> Publisher<R> {
             base,
             no_change,
             audit,
+            audit_payloads,
         })))
     }
 }

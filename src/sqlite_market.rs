@@ -213,11 +213,6 @@ fn bar_values(b: &Bar) -> Vec<Option<String>> {
         b.amount.map(decimal),
     ]
 }
-fn daily_bar_values(b: &Bar) -> Vec<Option<String>> {
-    let mut v = bar_values(b);
-    v.push(b.r7_raw.map(|x| x.to_string()));
-    v
-}
 fn annual_values(
     r: &CheckedRecord,
     base: &CheckedRecord,
@@ -267,7 +262,9 @@ fn insert_record(
 ) -> Result<(), Error> {
     let v = &r.version;
     let m = metadata(r);
-    c.execute("INSERT INTO data_versions VALUES(?1,?2,?3,?4,'staging',?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",params![v.version_id,m[0],m[1],m[2],m[3],m[4],m[5],m[6],m[7],m[8],m[9],m[10],m[11],text(&r.raw)?,r.raw["integrity_sha256"].as_str(),compat::DIGEST_FORMAT]).map_err(storage)?;
+    let (env, payloads) = envelope::pack(&r.raw)?;
+    envelope::write_payloads(c, &payloads)?;
+    c.execute("INSERT INTO data_versions VALUES(?1,?2,?3,?4,'staging',?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",params![v.version_id,m[0],m[1],m[2],m[3],m[4],m[5],m[6],m[7],m[8],m[9],m[10],m[11],text(&env)?,r.raw["integrity_sha256"].as_str(),compat::DIGEST_FORMAT]).map_err(storage)?;
     let mut evidence_stmt = c
         .prepare("INSERT INTO version_evidence VALUES(?1,?2,?3,?4,?5)")
         .map_err(storage)?;
@@ -312,7 +309,7 @@ fn insert_record(
 }
 enum SegmentPiece {
     Ref {
-        segment_id: String,
+        segment_id: i64,
         clip_start: String,
         clip_end: String,
     },
@@ -325,21 +322,22 @@ fn write_day_segments(c: &Connection, r: &CheckedRecord) -> Result<(), Error> {
     let v = &r.version;
     let scope = Scope::of(v);
     let head_id = head(c, &scope)?;
-    let mut base: Vec<(Vec<Option<String>>, String)> = Vec::new();
+    let mut base: Vec<((String, String), i64)> = Vec::new();
     if let Some(head_id) = head_id.as_deref().filter(|id| *id != v.version_id) {
-        let mut stmt = c.prepare(
-            "SELECT s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount,s.r7_raw,vs.segment_id \
+        let mut stmt = c
+            .prepare(
+                "SELECT s.trade_date,s.bar_json,vs.segment_id \
              FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
              WHERE vs.version_id=?1 AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end \
              ORDER BY vs.seq,s.trade_date",
-        ).map_err(storage)?;
+            )
+            .map_err(storage)?;
         base = stmt
             .query_map([head_id], |r| {
-                let mut row = Vec::with_capacity(8);
-                for i in 0..8 {
-                    row.push(r.get::<_, Option<String>>(i)?);
-                }
-                Ok((row, r.get::<_, String>(8)?))
+                Ok((
+                    (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
+                    r.get::<_, i64>(2)?,
+                ))
             })
             .map_err(storage)?
             .collect::<Result<Vec<_>, _>>()
@@ -347,12 +345,12 @@ fn write_day_segments(c: &Connection, r: &CheckedRecord) -> Result<(), Error> {
     }
     let mut base_index = std::collections::HashMap::new();
     for (i, (row, _)) in base.iter().enumerate() {
-        base_index.insert(row[0].clone().unwrap(), i);
+        base_index.insert(row.0.clone(), i);
     }
-    let shareable = |b: &[Option<String>]| -> Option<(usize, &str)> {
-        let &idx = base_index.get(b[0].as_deref()?)?;
+    let shareable = |b: &(String, String)| -> Option<(usize, i64)> {
+        let &idx = base_index.get(&b.0)?;
         let (row, seg) = &base[idx];
-        (row == b).then_some((idx, seg.as_str()))
+        (row == b).then_some((idx, *seg))
     };
     let mut pieces: Vec<SegmentPiece> = Vec::new();
     let push_new = |first: usize, last: usize, pieces: &mut Vec<SegmentPiece>| {
@@ -364,21 +362,31 @@ fn write_day_segments(c: &Connection, r: &CheckedRecord) -> Result<(), Error> {
         }
         pieces.push(SegmentPiece::New { first, last });
     };
+    // Exact bar content, byte-identical to raw["records"] elements; sharing a
+    // segment therefore also shares the exact reconstructed representation.
+    let bar_jsons = r.raw["records"]
+        .as_array()
+        .ok_or_else(|| integrity("record lacks records array"))?
+        .iter()
+        .map(|b| Ok((b["date"].as_str().unwrap_or("").to_owned(), text(b)?)))
+        .collect::<Result<Vec<(String, String)>, Error>>()?;
+    if bar_jsons.len() != v.records.len() {
+        return Err(integrity("record/records array mismatch"));
+    }
     let mut i = 0;
-    while i < v.records.len() {
-        let b = daily_bar_values(&v.records[i]);
-        match shareable(&b) {
+    while i < bar_jsons.len() {
+        let b = &bar_jsons[i];
+        match shareable(b) {
             Some((idx, seg)) => {
-                let seg = seg.to_owned();
-                let clip_start = b[0].clone().unwrap();
+                let clip_start = b.0.clone();
                 let mut clip_end = clip_start.clone();
                 let mut prev_idx = idx;
                 let mut j = i + 1;
-                while j < v.records.len() {
-                    let nb = daily_bar_values(&v.records[j]);
-                    match shareable(&nb) {
+                while j < bar_jsons.len() {
+                    let nb = &bar_jsons[j];
+                    match shareable(nb) {
                         Some((nidx, nseg)) if nseg == seg && nidx == prev_idx + 1 => {
-                            clip_end = nb[0].clone().unwrap();
+                            clip_end = nb.0.clone();
                             prev_idx = nidx;
                             j += 1;
                         }
@@ -398,12 +406,18 @@ fn write_day_segments(c: &Connection, r: &CheckedRecord) -> Result<(), Error> {
             }
         }
     }
-    let single_new = pieces.len() == 1 && matches!(pieces[0], SegmentPiece::New { .. });
+    let mut next_segment: i64 = c
+        .query_row(
+            "SELECT COALESCE(MAX(segment_id),0)+1 FROM bar_segments",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
     let mut seg_stmt = c
         .prepare("INSERT INTO bar_segments VALUES(?1,?2,?3,?4,?5)")
         .map_err(storage)?;
     let mut bar_stmt = c
-        .prepare("INSERT INTO segment_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")
+        .prepare("INSERT INTO segment_bars VALUES(?1,?2,?3)")
         .map_err(storage)?;
     let mut ref_stmt = c
         .prepare("INSERT INTO version_segments VALUES(?1,?2,?3,?4,?5)")
@@ -426,27 +440,21 @@ fn write_day_segments(c: &Connection, r: &CheckedRecord) -> Result<(), Error> {
                     .map_err(storage)?;
             }
             SegmentPiece::New { first, last } => {
-                let segment_id = if single_new {
-                    format!("seg-{}", v.version_id)
-                } else {
-                    format!("seg-{}-s{}", v.version_id, seq)
-                };
-                let rows = &v.records[*first..=*last];
+                let rows = &bar_jsons[*first..=*last];
+                let segment_id = next_segment;
+                next_segment += 1;
                 seg_stmt
                     .execute(params![
                         segment_id,
                         v.symbol,
-                        rows.first().unwrap().date.to_string(),
-                        rows.last().unwrap().date.to_string(),
+                        rows.first().unwrap().0,
+                        rows.last().unwrap().0,
                         rows.len() as u32
                     ])
                     .map_err(storage)?;
-                for bar in rows {
-                    let b = daily_bar_values(bar);
+                for (date, json) in rows {
                     bar_stmt
-                        .execute(params![
-                            segment_id, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]
-                        ])
+                        .execute(params![segment_id, date, json])
                         .map_err(storage)?;
                 }
                 ref_stmt
@@ -454,8 +462,8 @@ fn write_day_segments(c: &Connection, r: &CheckedRecord) -> Result<(), Error> {
                         v.version_id,
                         seq as u32,
                         segment_id,
-                        rows.first().unwrap().date.to_string(),
-                        rows.last().unwrap().date.to_string()
+                        rows.first().unwrap().0,
+                        rows.last().unwrap().0
                     ])
                     .map_err(storage)?;
             }
@@ -489,7 +497,7 @@ fn read_projection(
     published: bool,
     allow_yearly: bool,
 ) -> Result<CheckedRecord, Error> {
-    let row:Option<(String,String,String,String)>=c.query_row("SELECT compat_json,content_digest,digest_format,state FROM data_versions WHERE version_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(storage)?;
+    let row:Option<(String,String,String,String)>=c.query_row("SELECT envelope_json,content_digest,digest_format,state FROM data_versions WHERE version_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(storage)?;
     let publication_exists: bool = c
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM publication_batches WHERE version_id=?1)",
@@ -511,7 +519,9 @@ fn read_projection(
             Error::NotFound
         });
     }
-    let raw: Value = serde_json::from_str(&raw).map_err(integrity)?;
+    let env: Value = serde_json::from_str(&raw).map_err(integrity)?;
+    let segment_backed = env["records"]["$ref"].as_str() == Some("segments");
+    let raw = envelope::expand(c, Some(id), &env)?;
     let record = compat::check(&raw)?;
     if record.version.version_id != id
         || digest != raw["integrity_sha256"].as_str().unwrap_or("")
@@ -545,15 +555,22 @@ fn read_projection(
     {
         return Err(integrity("unit/adjustment projection"));
     }
-    let daily = rows(
-        c,
-        "SELECT s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount,s.r7_raw \
-         FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
-         WHERE vs.version_id=?1 AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end \
-         ORDER BY vs.seq,s.trade_date",
-        id,
-        8,
-    )?;
+    let daily: Vec<String> = if segment_backed {
+        let mut stmt = c
+            .prepare(
+                "SELECT s.bar_json \
+                 FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
+                 WHERE vs.version_id=?1 AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end \
+                 ORDER BY vs.seq,s.trade_date",
+            )
+            .map_err(storage)?;
+        stmt.query_map([id], |r| r.get::<_, String>(0))
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?
+    } else {
+        Vec::new()
+    };
     let yearly = rows(
         c,
         "SELECT CAST(year AS TEXT),trade_date,open,high,low,close,volume,amount,first_trade_date,last_trade_date,CAST(is_finished AS TEXT) FROM yearly_bars WHERE version_id=?1 ORDER BY year",
@@ -567,16 +584,17 @@ fn read_projection(
         5,
     )?;
     if record.version.period == Period::Day {
-        if daily
-            != record
-                .version
-                .records
-                .iter()
-                .map(daily_bar_values)
-                .collect::<Vec<_>>()
-            || !yearly.is_empty()
-            || !lineage.is_empty()
-        {
+        // Segment projection is verified only for segment-backed records; a
+        // payload-backed (migrated) record is integrity-proved by its digests.
+        let expected: Vec<String> = raw["records"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|b| serde_json::to_string(b).unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if (segment_backed && daily != expected) || !yearly.is_empty() || !lineage.is_empty() {
             return Err(integrity("daily projection"));
         }
     } else if !daily.is_empty()
@@ -593,15 +611,41 @@ pub(crate) fn range_rows(
     p: Period,
     range: &Range,
 ) -> Result<Vec<Bar>, Error> {
+    if p == Period::Day {
+        let mut stmt = c
+            .prepare(
+                "SELECT s.bar_json \
+                 FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
+                 WHERE vs.version_id=?1 AND s.trade_date>=MAX(vs.clip_start,?2) AND s.trade_date<=MIN(vs.clip_end,?3) \
+                 AND (?4 IS NULL OR s.trade_date>?4) ORDER BY vs.seq,s.trade_date LIMIT ?5",
+            )
+            .map_err(storage)?;
+        let jsons = stmt
+            .query_map(
+                params![
+                    id,
+                    range.start.to_string(),
+                    range.end.to_string(),
+                    range.after.map(|d| d.to_string()),
+                    range.limit as u32 + 1
+                ],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?;
+        return jsons
+            .iter()
+            .map(|j| {
+                let mut bar: Bar = serde_json::from_str(j).map_err(integrity)?;
+                // r7_raw is internal evidence, not part of the range wire value.
+                bar.r7_raw = None;
+                Ok(bar)
+            })
+            .collect();
+    }
     let (sql, start, end) = match p {
-        Period::Day => (
-            "SELECT s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount \
-             FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
-             WHERE vs.version_id=?1 AND s.trade_date>=MAX(vs.clip_start,?2) AND s.trade_date<=MIN(vs.clip_end,?3) \
-             AND (?4 IS NULL OR s.trade_date>?4) ORDER BY vs.seq,s.trade_date LIMIT ?5",
-            range.start.to_string(),
-            range.end.to_string(),
-        ),
+        Period::Day => unreachable!(),
         Period::Year => (
             "SELECT trade_date,open,high,low,close,volume,amount FROM yearly_bars WHERE version_id=?1 AND year>=CAST(?2 AS INTEGER) AND year<=CAST(?3 AS INTEGER) AND (?4 IS NULL OR trade_date>?4) ORDER BY year LIMIT ?5",
             range.start.year().to_string(),
@@ -877,6 +921,7 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
 }
 
 pub(crate) mod collection;
+pub(crate) mod envelope;
 pub(crate) mod gaps;
 pub(crate) mod update;
 pub(crate) mod yearly_results;
