@@ -15,5 +15,5 @@ pub const DESCRIPTION: &str = "Explicit asynchronous stopping-evidence inspectio
 #[serde(untagged)]
 pub enum VerificationReply {
     Accepted(crate::data_supply::wire::WriteAcceptance),
-    Existing(crate::data_supply::wire::RequestView),
+    Existing(Box<crate::data_supply::wire::RequestView>),
 }
