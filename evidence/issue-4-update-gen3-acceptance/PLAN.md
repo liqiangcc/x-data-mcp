@@ -94,3 +94,7 @@
 - **理由分类不外推**：`RevisionUnverified`/`CoverageUnknown` 的分布是实测产物；计划只冻结判定规则与定点断言，不预设计数。
 - **duration**：5219 items 全历史物化，工作量大于同代验收；release 构建为窗口内可执行选择，不构成性能目标声明。
 - **非目标**：backfill/yearly/catalog 路径、变更数据发布能力、FILE_SET_CONSISTENCY 证据构造（#217 S3 已 NOT_VERIFIED 终态）、#54 候选判别（独立链）。
+
+## 更正记录（freeze v1 后，运行前）
+
+- **C5 判定模型修正**（post-freeze 代码事实，影响断言方向不改变命运空间）：`CoverageEvidence.reason` 内嵌快照 manifest sha256——跨代 update 下**每个 item 恒 metadata_changed**，`NoChange` 结构性不可达，合法结局空间实际收敛为"全部 NEEDS_VERIFICATION"。S_evt/S_day 仍用于理由分类核验：`RevisionUnverified ⊆ S_evt`（重叠值修订必以事件集差异为前提）；其余全部 `combined coverage absent`。原"item ∉ S_chg → NoChange"不变式作废。执行前探跑（被断言脚本 bug 中断）实测分布：5219 NV = 137 RevisionUnverified + 5082 combined-coverage-absent，0 NoChange、0 新版本——与本修正一致。

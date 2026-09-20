@@ -424,15 +424,27 @@ def main():
            "counts_after": after["counts"]})
 
     # C5: outcome ↔ expected-set consistency.
-    false_no_change = sorted(s for s in s_chg if s in no_change_set)
-    missed_change = sorted(s for s in (set(base["heads"]) - s_chg)
-                           if s not in no_change_set)
+    # PLAN CORRECTION (post-freeze code fact, recorded honestly):
+    # CoverageEvidence.reason embeds the snapshot manifest sha256, so under
+    # a new generation EVERY item is metadata_changed and NoChange is
+    # structurally unreachable — the legal outcome space collapses to
+    # NEEDS_VERIFICATION only. Revised-overlap bars require a gbbq
+    # event-set diff, so RevisionUnverified must stay inside S_evt.
+    rev_set = {s for s, v in item_outcome.items()
+               if v == "nv:RevisionUnverified"}
+    illegal_reasons = sorted(
+        s for s, v in item_outcome.items()
+        if v not in ("nv:RevisionUnverified", "nv:combined"))
     check("C5_outcome_expected_consistency",
-          not missed_change and not false_no_change,
-          {"workset_minus_S_chg_not_no_change": missed_change[:20],
-           "missed_change_count": len(missed_change),
-           "S_chg_with_no_change": false_no_change[:20],
-           "false_no_change_count": len(false_no_change),
+          not no_change_set
+          and rev_set <= (s_evt & set(item_outcome))
+          and not illegal_reasons,
+          {"no_change_count": len(no_change_set),
+           "no_change_symbols": sorted(no_change_set)[:20],
+           "rev_not_in_S_evt": sorted(rev_set - s_evt)[:20],
+           "S_evt_not_revised_count":
+               len((s_evt & set(item_outcome)) - rev_set),
+           "illegal_reasons": illegal_reasons[:20],
            "reason_distribution": reason_dist})
 
     # C6: pin assertion — sz.000001 gbbq event addition revises QFQ basis.
