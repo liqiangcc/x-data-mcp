@@ -1,7 +1,13 @@
-# 官方文件生产来源架构（stage 1）
+# 官方文件生产来源架构（stage 1 历史记录）
 
-当前决策：[Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)。
-状态：**NOT_PRODUCTION_READY**。本阶段收敛生产入口和能力契约，不交付下载、parser、QFQ 或 yearly 算法。
+> **Historical / superseded status snapshot.** 本文保留 #55 初始收敛阶段的约束和未决项，
+> 其中“未实现/未验证/固定工具数”不代表 2026-09-20 当前状态。当前 gate 裁定见
+> [来源闭环](source-closure.md)，双 MCP server、immutable generation 与每日更新目标见
+> [每日同步说明](daily-sync.md)和 [#260](https://github.com/liqiangcc/x-data-mcp/issues/260)。
+> Overall `production_ready=false` 仍成立，但不能据此复活本文已被后续证据退休的具体 blocker。
+
+原始决策：[Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)。
+以下正文按 stage 1 当时事实保留，不作为当前运行手册。
 
 ## 唯一目标链路
 

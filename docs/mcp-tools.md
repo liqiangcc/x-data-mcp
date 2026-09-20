@@ -4,13 +4,17 @@
 
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
-当前实现核对基线：`b3fe2b3bae22d558c3f193e668773728a2e0df34`。
-[当前八工具输入 schema 快照](contracts/mcp-tools-current.json)对应此提交的
-`src/mcp.rs::public_tools`，仅供审查，不是运行时配置或未来工具注册表。
+2026-09-20 运行时审计基线：`9b886c9`。当前部署分为两个 MCP server：
+`x-data-acquire` 注册 3 个采集工具，`x-data-mcp` 注册 19 个数据、任务、核实与计算工具。
+运行时 `tools/list` 与 `get_data_capabilities` 是机器契约入口；本文不复制完整 schema。
 
-本文“当前”描述可调用原型；“目标/拟议”描述尚未实现的契约。
-输入 schema、Serde 校验和业务规则并非完全一致，差距在文末列出。
-未实现工具不能传给当前 tools/call，也不能因本文列名就宣称交付。
+下文“当前八工具”内容是提交 `b3fe2b3bae22d558c3f193e668773728a2e0df34` 的历史快照，
+对应 [旧输入 schema](contracts/mcp-tools-current.json)，不再代表当前部署。通用工具目标与现状差距见
+[通用工具设计](generic-data-tools.md)；跨两个 server 的每日同步边界、Skill 编排和当前禁止声明见
+[每日同步说明](daily-sync.md)与 [Issue #260](https://github.com/liqiangcc/x-data-mcp/issues/260)。
+
+#260 尚未实现：当前不能把 `check_official_updates → acquire_generation → update_data`
+声明为安全闭环。文档、Skill 或示例不能替代 generation consistency、激活和 runtime readiness。
 
 ## 协议、权限和通用约定
 
@@ -53,9 +57,11 @@ SOURCE_NOT_VERIFIED 可能位于任务单项 error 字符串，而非顶层 API 
 写请求的 request_id 使用持久命名空间并包含操作类型/规范化参数语义；
 不得拿 JSON-RPC id 代替业务 request_id。
 
-## 当前工具目录
+## 历史八工具目录（不代表当前部署）
 
-| 工具 | 类别 | 当前作用 |
+以下表格只描述上述旧 schema 快照。当前工具必须通过运行时 discovery 获取。
+
+| 工具 | 类别 | 历史作用 |
 |---|---|---|
 | start_collection | 写 / 受理 | 冻结证券 × 周期并创建或复用任务 |
 | get_task | 读 | 单任务状态与执行项结果 |
@@ -238,6 +244,9 @@ request_outcome，区分未绑定、任务绑定、请求级终态、结果待�
 
 ## 当前目标与历史草案
 
-新实现统一使用 [通用工具设计](generic-data-tools.md)、[计算设计](compute-capabilities.md)和[实施基线](implementation-baseline.md)。本页以上仅为旧八工具的固定代码事实。
+通用查询、任务和计算入口已有运行实现，但 capability 真实性、generation 生命周期和每日同步仍存在
+#260 记录的阻塞。后续实现统一使用 [通用工具设计](generic-data-tools.md)、
+[计算设计](compute-capabilities.md)、[每日同步说明](daily-sync.md)和[实施基线](implementation-baseline.md)。
+本页以上仅为旧八工具的固定历史事实。
 
 此前逐类别工具、共享结果和组合探索已移到 [历史草案](history/mcp-tools-proposals.md)，仅供追溯，不据此额外注册工具。当前兼容差距与首个任务验收统一见实施基线。

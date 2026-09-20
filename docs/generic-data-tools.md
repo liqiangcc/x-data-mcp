@@ -3,9 +3,14 @@
 ## 决策与适用范围
 
 2026-09-12 用户要求现在考虑扩展，并授权按“工具按业务动作稳定、数据类别通过类型化参数扩展”
-开始设计。本设计承接 #75 / PR #76，是通用工具的当前目标定义，尚未实现。
-它取代 mcp-tools.md 中“新数据类别通常新增采集/查询工具”的旧目标方案；
-该文档的八工具现状记录与当前 schema 快照保持有效，不意味着已有接口已经升级。
+开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。2026-09-20 运行时已注册 19 个
+`x-data-mcp` 工具，通用查询、任务、availability 和 compute 的主要入口已实现；但实现并未完整兑现
+本文契约：capability 支持矩阵、runtime/governance readiness、逐工具 schema、generation 生命周期和
+每日同步仍有 [#260](https://github.com/liqiangcc/x-data-mcp/issues/260) 记录的冲突。
+
+本文取代 `mcp-tools.md` 中“新数据类别通常新增采集/查询工具”的旧目标方案，但不作为运行时
+readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capabilities` 读取；跨 server 编排见
+[每日同步说明](daily-sync.md)。
 
 数据业务规则仍来自 #3/#4/#5/#6。本设计调整入口和内部扩展契约，不扩大首期数据范围，
 不批准新来源，不取消查询、更新、补采、核实、恢复等能力。
@@ -38,7 +43,13 @@ item_ids 是原任务中稳定执行项 ID，替代未来对所有类别强制�
 四类 verify_*、restore_market_data_version、inspect_verification_task 的业务边界不合并进
 start_collection。恢复的目标名称调整为 restore_data_version，接收 DatasetVersionRef；
 其余核实工具优先用原任务/请求定位类型，由对应处理器提供证据检查。
-run_worker_once 保留为原型/受控运维能力，不进入正常 AI 采集组合。
+run_worker_once 保留为 operator/debug 运维能力，不进入正常 AI 采集组合；长期服务由后台 worker 执行任务。
+
+跨工具编排不进入 Tool/Capability 输出。Domain 和单一用例只返回当前动作的
+`state/outcome/certainty/refs/evidence/reason_codes`；不返回 `next_actions`、其他工具名或 Skill 内容。
+工作流顺序、分支、request_id 策略、轮询和恢复由项目级
+`.devin/skills/x-data-daily-sync/SKILL.md` 负责。Skill 不得重定义业务 PASS，也不得通过 shell/SSH/SQLite
+绕过 MCP。Skill 分发和 capability revision 握手见[每日同步说明](daily-sync.md)及 #260。
 
 ## Dataset 的含义与首期矩阵
 
@@ -50,9 +61,10 @@ dataset 是稳定业务数据契约身份，不是供应者名称、文件扩展
 | market.daily | 标准 QFQ 日线 | 官方文件处理生成历史日线 | 更新/修订检查 | 显式交易日期区间 | 单证券日线版本 |
 | market.yearly | 固定已发布 daily 本地派生年线 | 派生指定范围年线 | 从明确基础版本重新派生 | 指定自然年集合 | 单证券年线版本 |
 
-这些是目标支持矩阵，现有程序并未注册这些通用入口。
-能力发现同时区分 implemented 与 readiness，不把有 handler 等同生产可用。
-未通过来源门禁时写能力可以描述为 blocked，提供明确原因，但执行仍必须拒绝。
+这些是目标支持矩阵。现有程序已注册同名通用入口，但部分工具仍共用过宽的 range schema，
+不能因名称存在就认定每个 dataset/operation 分支已正确交付。能力发现必须同时区分 implemented、
+runtime readiness 与 governance readiness，不把有 handler 等同当前可执行；未满足 generation/source
+前置条件时必须返回结构化 blocked 原因，执行仍须拒绝。
 不列出尚未开发的财务等类别为 supported。
 
 .day 与 gbbq 是日线处理的内部原始输入，不要求 AI 分别采集再手动发布。
@@ -131,10 +143,11 @@ records（分支类型）、coverage、source/units/lineage、next_cursor、page
 cursor 固定 dataset、契约、身份、过滤、页大小与版本/快照；
 跨 dataset 使用、契约变化、失效均拒绝，不切换数据。
 
-错误沿用结构化类别、outcome_certainty、target、next_actions；
+错误沿用结构化类别、outcome_certainty、target、state、稳定 refs 与 evidence/reason codes；
 新错误至少区分 unknown_dataset、unsupported_operation、unsupported_contract、
 invalid_selection、source_blocked、request_conflict 和 outcome_unknown。
-这些为目标语义，具体 wire code 在实现时冻结；错误不能消耗普通未受理请求标识。
+错误不返回其他工具名或跨动作建议；Skill 根据结构化事实编排。具体 wire code 在实现时冻结，
+错误不能消耗普通未受理请求标识。
 不支持操作明确拒绝，不自动变成 start_collection 或其他来源。
 
 ## 处理器与控制分离
@@ -244,7 +257,7 @@ yearly 为证券选择与自然年范围，catalog 为目录范围，不接受�
 | unresolved_ranges | 无法判断的范围，不能自动转成补采计划 |
 | published_at、freshness | 发布时间与业务新鲜度分别表达；未定义规则则 freshness=unknown |
 | related_tasks | 本快照中相关任务引用和已知占用，不能当作保证会补齐 |
-| limitations、next_actions | 来源限制及适用操作建议，不触发实际动作 |
+| limitations、reason_codes | 来源限制和结构化事实；不返回跨工具编排建议 |
 
 available/partial 必须有相应覆盖证据，不能仅凭有行数判定。absent 仅表示可靠读到
 没有已发布版本；有版本但请求区间无记录且原因未知应为 unknown。
@@ -254,7 +267,8 @@ available/partial 必须有相应覆盖证据，不能仅凭有行数判定。ab
 版本选择、任务引用与覆盖说明在一次服务读快照解析；不在查询中实时访问来源。
 分页冻结全部结果，不随采集推进替换部分字段；新查询才反映新数据。
 仅依据日期包含未来不能制造历史缺口，未来范围单独标记。
-next_actions 中的采集/补采建议仍需显式写调用，并在受理时重新核对冲突和证据。
+availability 只返回事实和限制，不建议或触发采集/补采；是否发起写调用由 Skill/用户策略决定，
+受理时仍重新核对冲突和证据。
 
 ### list_tasks：发现已有执行，避免盲目重复采集
 
@@ -343,9 +357,13 @@ get_data_capabilities 无过滤参数时返回简洁 dataset/operation 目录与
 一个版本损坏批量明确拒绝；无版本对象显式列出；帮助示例与 schema 一致。
 上述为目标验收，文档提交不作为实现测试通过。
 
-目标工具目录现为 19 个业务工具（原 17 个加 availability、list_tasks），
-query_data 的批量/目录筛选不新增工具；export_data 未计入，run_worker_once 仍为运维能力。
+该阶段设计曾按 19 个业务工具计数；2026-09-20 runtime 的 `x-data-mcp` 也注册 19 个工具，
+但两者集合/语义并非因此自动一致，精确差异由 #260 的 registry golden test 验证。
+`query_data` 的批量/目录筛选不新增工具；export_data 未计入，run_worker_once 仍为运维能力。
 
 ## 通用计算入口
 
-[计算能力与 AI 编排边界](compute-capabilities.md)新增 compute_metrics 目标设计，按 metric/algorithm_version 类型化扩展。它只处理明确的确定性计算，不隐式采集或发布派生数据。inline 与 task 显式区分，任务模式有持久副作用。目标业务工具总数调整为 20；候选指标尚未实现，export_data 仍是后续候选。此前“分析先由 AI/Python 完成”的说明收敛为：已注册确定性计算可由服务提供，研究解释和开放式编排由 AI 完成。
+[计算能力与 AI 编排边界](compute-capabilities.md)定义 `compute_metrics` 按
+metric/algorithm_version 类型化扩展。该工具已注册，真实 yearly explicit-version inline 正向路径已有 #225
+证据；未注册算法或任务模式不能因设计文字冒充可用。它只处理明确的确定性计算，不隐式采集或发布派生数据。
+工具数量不再作为交付证明，支持矩阵以 runtime registry/capability 和契约测试为准；export_data 仍是后续候选。

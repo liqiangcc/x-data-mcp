@@ -20,7 +20,9 @@
 ## 设计入口
 
 [整体设计](docs/design.md)串联业务流程、模块职责、版本/任务和运行验收；
-[MCP tools 契约](docs/mcp-tools.md)区分当前八工具与后续能力，附当前输入 schema 快照。
+[MCP tools 契约](docs/mcp-tools.md)记录历史契约与当前 runtime discovery 入口，
+[通用工具设计](docs/generic-data-tools.md)定义单动作能力边界，
+[每日同步说明](docs/daily-sync.md)记录双 MCP server、generation 状态机和 Devin Skill 编排边界。
 SQLite 专项入口由整体设计统一引用。设计目标不表示实现、来源或部署已经验收。
 
 ## 与旧项目的关系
@@ -50,25 +52,27 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 - 源端直接年线不再是生产契约；MCP `year` 表示本地派生输出。
 - 既有 `evidence/` 和历史文档原样保留；历史结论不等于当前生产状态。
 
-官方文件长期服务器获取/使用边界、
-.day/gbbq 独立快照一致性仍未通过。[.day原始解析器](docs/day-file.md)、GBBQ 解码/业务归一化、
-QFQ 仿射链与本地[年线聚合](docs/yearly.md)均已实现并有界验收——bounded 官方快照
-daily/yearly/update/verify+backfill 四条治理链路均经 FG 裁定 PASS（见上文裁定），
-这不解除默认全目录与其余门禁。
-已加入保守 DBF 容器解析基础（仅保留字段原始字节，不解释代码页或目录业务语义），见 [#46 实施记录](docs/tasks/issue-46.md)；这不解除目录契约门禁。
-已提供[本地输入清单核验](docs/snapshot-input.md)，字节匹配不代表跨文件一致或来源授权。
-默认装配的 `OfficialFilePipeline` 始终返回 `SOURCE_NOT_VERIFIED`，没有开关可绕过门禁。
+固定 snapshot 的 GBBQ/QFQ 语义（#54）、base/day/GBBQ 一致性（#131）和文件使用边界（#71）
+已分别经 Final Gate 裁定；#71 仅适用于 owner 个人研究、本地使用、不对外暴露，#131 仅适用于已钉死并审计的文件集合。
+`PRODUCTION_BLOCKERS` 当前为空，但 overall `production_ready` 仍为 false；未来每个新 generation 必须重新建立字节与跨文件一致性证据，不能继承旧代 PASS。
+
+[.day 原始解析器](docs/day-file.md)、GBBQ 解码/QFQ 仿射链和本地[年线聚合](docs/yearly.md)已实现并有界验收。
+保守 DBF 容器解析和目录语义见 [#46 实施记录](docs/tasks/issue-46.md)；[本地输入清单核验](docs/snapshot-input.md)
+只证明 manifest 字节绑定，不单独证明跨文件兼容或授权。通用 `OfficialFilePipeline` stub 继续 fail closed；部署服务只能通过已检查的 snapshot/generation provider 执行。
+
+当前 acquisition adapter 能检查和下载文件，但 immutable generation、#131 验证后激活、generation-bound routine update 和 truthful capability 尚待 #260；在其完成前不得宣称每日同步可由 AI 纯 MCP 安全闭环。
 
 ## 本地入口
 
-`cargo run --locked --bin mcp_server` 启动 stdio 原型。`X_DATA_MCP_STORE` 设置本地状态目录，
-默认 `.x-data-mcp`。旧 `X_DATA_MCP_TDX_PYTHON` 不再读取，不需要 Python/eltdx/Key。
+`cargo run --locked --bin mcp_server` 是旧 stdio 原型，使用 `X_DATA_MCP_STORE`（默认 `.x-data-mcp`）；
+其历史八工具契约不代表当前长期服务。旧 `X_DATA_MCP_TDX_PYTHON` 不再读取，不需要 Python/eltdx/Key。
 
-工具为 `start_collection`、`get_task`、`run_worker_once`、`cancel_task`、`retry_task`，
-以及只读的 `get_market_data`、`list_market_data_versions`、`get_request`，见[查询契约](docs/published-queries.md)。
-受理会写入任务并返回 pending；必须显式运行 worker，当前采集会失败并报告未验证，不能发布新行情。
-年线没有已发布 daily 时报告 `PUBLISHED_QFQ_DAILY_REQUIRED`。
-此入口不是部署完成或自动后台执行的证明。
+当前 Linux 长期服务入口为 `data_service <initialized-db> <private-socket>`，客户端通过 `mcp_connect`
+访问；它注册通用查询/任务/核实/计算工具并运行后台 worker。准确工具集合必须从该实例 `tools/list` 与
+`get_data_capabilities` 发现，不能依据 README 静态列表。网络采集位于独立 `x-data-acquire` stdio server，
+不会加入 `data_service`。部署、generation 和每日编排边界见[每日同步说明](docs/daily-sync.md)。
+
+年线没有已发布 daily 时继续 fail closed；任何入口存在都不等于来源、generation、覆盖或整体生产认证已经通过。
 
 ## SQLite 任务开发入口（#78）
 
