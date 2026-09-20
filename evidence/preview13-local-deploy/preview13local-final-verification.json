@@ -1,0 +1,17 @@
+{
+  "status": "PASS",
+  "release": "v0.2.0-preview.13",
+  "checks": {
+    "tarball_sha256_matches_asset": true,
+    "package_sha256sums": "OK",
+    "binary_version_embeds_commit_sha": "0.2.0-preview.13 13f81a71316ba6c178c191b855c2d764dd5b082d",
+    "task_sqlite_init": "schema 12",
+    "service_process_alive": "pid 28440, direct process",
+    "socket_owner_binding": "/dev/shm/xdm-preview13/run/mcp.sock + mcp.sock.owner.json",
+    "stdio_initialize": "serverInfo x-data-mcp 0.2.0-preview.13",
+    "stdio_tools_list": "19 tools",
+    "fresh_db_counts_zero": true
+  },
+  "runtime_guard": "fail-closed on overlayfs honored; runtime paths on /dev/shm tmpfs; X_DATA_MCP_UNSAFE_NONLOCAL_FS=1 opt-out used for local preview only",
+  "production": "NOT_PRODUCTION_READY"
+}
