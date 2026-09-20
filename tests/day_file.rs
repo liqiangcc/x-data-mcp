@@ -13,7 +13,7 @@ fn fields_and_float_bits_are_preserved_without_business_conversion() {
     assert_eq!(parsed[0].ohlc_raw, [725, 730, 720, 725]);
     assert_eq!(parsed[0].amount_float32_bits, 0x3d4ccccd);
     assert_eq!(parsed[0].volume_raw, 0);
-    assert_eq!(parsed[0].reserved, 0xdeadbeef);
+    assert_eq!(parsed[0].r7_raw, 0xdeadbeef);
     assert_eq!(parsed, day_file::parse(&bytes).unwrap());
     assert_eq!(
         day_file::parse(&record(20250716, 0x7fc00001)).unwrap()[0].amount_float32_bits,

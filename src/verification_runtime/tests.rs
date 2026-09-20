@@ -15,9 +15,7 @@ fn database() -> (tempfile::TempDir, PathBuf) {
 /// exec, so a just-dropped guard can still report Busy inside that window
 /// (observed flake, #193). Retry briefly — the contract under test is
 /// post-release acquisition, not instant visibility.
-fn acquire_after_release<T>(
-    op: impl Fn() -> Result<T, Error>,
-) -> T {
+fn acquire_after_release<T>(op: impl Fn() -> Result<T, Error>) -> T {
     for _ in 0..200 {
         match op() {
             Err(Error::Busy) => std::thread::sleep(std::time::Duration::from_millis(1)),

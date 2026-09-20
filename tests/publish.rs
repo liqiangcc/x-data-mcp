@@ -21,6 +21,7 @@ fn bar(date: (i32, u32, u32), close: i64, volume: Option<Decimal>, amount: Optio
         close: Decimal::new(close, 0),
         volume,
         amount,
+        r7_raw: None,
     }
 }
 

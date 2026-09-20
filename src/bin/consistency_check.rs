@@ -41,11 +41,9 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 1 {
-        return Err(
-            "usage: consistency_check <input.json> — evaluates \
+        return Err("usage: consistency_check <input.json> — evaluates \
              file_consistency::validate and prints the verbatim decision"
-                .into(),
-        );
+            .into());
     }
     let mut bytes = Vec::new();
     File::open(&args[0])?.read_to_end(&mut bytes)?;

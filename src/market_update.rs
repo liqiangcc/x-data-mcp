@@ -154,6 +154,7 @@ pub fn prepare(
         if let Some(previous) = combined.get(&bar.date) {
             if (previous.volume.is_some() && bar.volume.is_none())
                 || (previous.amount.is_some() && bar.amount.is_none())
+                || (previous.r7_raw.is_some() && bar.r7_raw.is_none())
             {
                 lost.push(bar.date);
             }
@@ -165,6 +166,7 @@ pub fn prepare(
                 || previous.close != bar.close
                 || previous.volume.zip(bar.volume).is_some_and(|(a, b)| a != b)
                 || previous.amount.zip(bar.amount).is_some_and(|(a, b)| a != b)
+                || previous.r7_raw.zip(bar.r7_raw).is_some_and(|(a, b)| a != b)
             {
                 revised.push(bar.date);
             }

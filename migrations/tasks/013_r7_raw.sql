@@ -1,0 +1,1 @@
+ALTER TABLE daily_bars ADD COLUMN r7_raw TEXT;

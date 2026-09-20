@@ -118,6 +118,7 @@ pub fn aggregate(
                 close: last.close,
                 volume,
                 amount,
+                r7_raw: None,
             },
             lineage: YearlyDerivation {
                 base_daily_version_id: daily.version_id.clone(),
