@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "release": "v0.2.0-preview.13",
+  "checks": {
+    "tarball_sha256_matches_asset": true,
+    "package_sha256sums": "OK",
+    "binary_version_embeds_commit_sha": "0.2.0-preview.13 13f81a71316ba6c178c191b855c2d764dd5b082d",
+    "task_sqlite_init": "schema 12",
+    "service_process_alive": "pid 130008, direct process",
+    "socket_owner_binding": "mcp.sock + mcp.sock.owner.json",
+    "stdio_initialize": "serverInfo x-data-mcp 0.2.0-preview.13",
+    "stdio_tools_list": "19 tools",
+    "production_ready": false,
+    "blocked_paths": [
+      "verify_stopped_writes:STOP_EVIDENCE_NOT_VERIFIED",
+      "verify_data_gap:GAP_BASIS_NOT_VERIFIED",
+      "update_data/backfill_data/start_collection: GBBQ_QFQ_NOT_VERIFIED + FILE_ACCESS_USE_NOT_VERIFIED + FILE_SET_CONSISTENCY_NOT_VERIFIED"
+    ],
+    "fresh_db_counts_zero": true
+  },
+  "runtime_guard": "native ext4 pass, no opt-out",
+  "production": "NOT_PRODUCTION_READY"
+}
