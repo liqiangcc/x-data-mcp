@@ -1,0 +1,15 @@
+{
+  "schema": "issue217.gen3-acquisition-result.v1",
+  "executed_utc": "2026-09-20T01:02:18+00:00",
+  "environment": "Windows 10.0.26200.8875, TDX V7.73 (C:\\new_tdx64), tqcenter.py v1.0.16",
+  "statuses": {
+    "S1_file_acquisition": "DONE — gbbq/base/hsjday all captured with full HTTP metadata; all differ from gen-2 pins (changed generation)",
+    "S2_tq_oracle": "DONE — all 7 frozen securities captured verbatim (type=4 divid + type=1 kline none/front); sz.000004 serves 0 events (delisted, consistent with tdxhy.cfg absence)",
+    "S3_file_set_consistency": "NOT_VERIFIED — no set identity/revision binding obtainable; not inferred",
+    "S4_boundary_71": "NOT_OBTAINED — access facts recorded; no authorization claim",
+    "changed_update_input": "gen-3 gbbq member 206,034 records vs gen-2 205,776 (+258); frozen set: sz.000001 +1 cat1 event @2026-09-24, cross-validated by TQ divid oracle (bonus=2.49); no removals/field changes",
+    "oracle_matrix": "DIAGNOSTIC_ONLY matrix emitted (axis_b 2160 field comparisons; axis_c 37329 bar comparisons per interpretation)"
+  },
+  "replay": "scripts/verify_issue217.py — 41 checks, all PASS",
+  "raw_artifacts_local": "C:\\Users\\liqia\\tdx-official\\gen3-run-20260920b (zips not committed; sha256-bound via acquisition.json). Retained-inputs registration is Box-side and pending."
+}
