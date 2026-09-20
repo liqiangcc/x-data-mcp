@@ -66,6 +66,8 @@ pub mod verification_inspection;
 
 pub mod gap_verification;
 
+pub mod acquire;
+
 #[cfg(target_os = "linux")]
 pub mod local_runtime;
 

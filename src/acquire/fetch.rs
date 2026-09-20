@@ -42,8 +42,7 @@ impl Helper {
         let script = std::env::var_os("X_DATA_MCP_TDX_FETCH")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("scripts/tdx_fetch.py")
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/tdx_fetch.py")
             });
         Self { script }
     }
@@ -58,8 +57,7 @@ impl Helper {
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
             ));
         }
-        serde_json::from_slice(&output.stdout)
-            .map_err(|e| Error::Output(e.to_string()))
+        serde_json::from_slice(&output.stdout).map_err(|e| Error::Output(e.to_string()))
     }
 }
 #[derive(Deserialize)]
@@ -80,6 +78,11 @@ struct FetchJson {
     bytes: u64,
     sha256: String,
 }
+impl Default for Helper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl Fetcher for Helper {
     fn head(&self, url: &str) -> Result<Head, Error> {
         let h: HeadJson = serde_json::from_value(self.run(&["head", url])?)
@@ -92,12 +95,9 @@ impl Fetcher for Helper {
         })
     }
     fn fetch(&self, url: &str, dest: &Path) -> Result<FetchResult, Error> {
-        let f: FetchJson = serde_json::from_value(self.run(&[
-            "fetch",
-            url,
-            &dest.to_string_lossy(),
-        ])?)
-        .map_err(|e| Error::Output(e.to_string()))?;
+        let f: FetchJson =
+            serde_json::from_value(self.run(&["fetch", url, &dest.to_string_lossy()])?)
+                .map_err(|e| Error::Output(e.to_string()))?;
         Ok(FetchResult {
             head: Head {
                 status: f.status,

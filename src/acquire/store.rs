@@ -8,21 +8,21 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const SCHEMA: &str = "
-CREATE TABLE requests (
+CREATE TABLE IF NOT EXISTS requests (
   request_id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
   payload TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
-CREATE TABLE request_outcomes (
+CREATE TABLE IF NOT EXISTS request_outcomes (
   request_id TEXT PRIMARY KEY REFERENCES requests(request_id),
   outcome TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
-CREATE TABLE acquisition_tasks (
+CREATE TABLE IF NOT EXISTS acquisition_tasks (
   task_id TEXT PRIMARY KEY,
   request_id TEXT NOT NULL UNIQUE REFERENCES requests(request_id),
   kind TEXT NOT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE acquisition_tasks (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE TABLE generations (
+CREATE TABLE IF NOT EXISTS generations (
   generation_id TEXT PRIMARY KEY,
   state TEXT NOT NULL,
   manifest_sha256 TEXT NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE generations (
   installed_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE TABLE seen (
+CREATE TABLE IF NOT EXISTS seen (
   role TEXT PRIMARY KEY,
   etag TEXT,
   last_modified TEXT,
@@ -267,21 +267,13 @@ impl Db {
             rows.collect::<Result<Vec<_>, _>>().map_err(storage)
         })
     }
-    pub fn update_task(
-        &self,
-        task_id: &str,
-        state: &str,
-        generation_id: Option<&str>,
-        stage: Option<&str>,
-        bytes_done: u64,
-        error: Option<&str>,
-        detail: Option<&str>,
-        now: DateTime<Utc>,
-    ) -> Result<(), Error> {
+    /// Persist one task row transition: the whole row is written so a crash
+    /// can never leave a state/stage/bytes mix the reconciler has to guess.
+    pub fn update_task(&self, task: &Task) -> Result<(), Error> {
         self.write(|c| {
             c.execute(
                 "UPDATE acquisition_tasks SET state=?2,generation_id=?3,stage=?4,bytes_done=?5,error=?6,detail=?7,updated_at=?8 WHERE task_id=?1",
-                params![task_id, state, generation_id, stage, bytes_done as i64, error, detail, now.to_rfc3339()],
+                params![task.task_id, task.state, task.generation_id, task.stage, task.bytes_done as i64, task.error, task.detail, task.updated_at.to_rfc3339()],
             )
             .map_err(storage)?;
             Ok(())
@@ -343,9 +335,7 @@ impl Db {
                         role: r.get(0)?,
                         etag: r.get(1)?,
                         last_modified: r.get(2)?,
-                        content_length: r
-                            .get::<_, Option<i64>>(3)?
-                            .map(|v| v.max(0) as u64),
+                        content_length: r.get::<_, Option<i64>>(3)?.map(|v| v.max(0) as u64),
                         seen_at: parse_time(r.get::<_, String>(4)?),
                     })
                 },

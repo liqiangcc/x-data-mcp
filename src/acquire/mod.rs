@@ -7,8 +7,10 @@
 //! Verification and activation are separate, explicit, auditable steps:
 //! downloading is never synonymous with verified or active.
 pub mod fetch;
+pub mod mcp;
 pub mod service;
 pub mod store;
 pub mod wire;
 
+pub use mcp::AcquireApi;
 pub use service::{AcquireService, Source};

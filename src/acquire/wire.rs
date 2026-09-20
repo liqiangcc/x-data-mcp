@@ -55,6 +55,16 @@ pub struct ActivateGeneration {
 pub struct SyncStatus {
     pub contract_version: ContractVersion,
 }
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetireGeneration {
+    pub contract_version: ContractVersion,
+    pub request_id: String,
+    pub generation_id: String,
+    /// Explicit confirmation token: the generation's own manifest digest.
+    /// Anything else refuses the destructive retire (D5).
+    pub confirm_token: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -157,6 +167,32 @@ pub struct ActivateReply {
     pub manifest_sha256: Option<String>,
     pub activated_at: Option<String>,
     pub previous_generation_id: Option<String>,
+    pub reused: bool,
+}
+/// Operator/worker turn: advances the oldest open acquisition task by one
+/// durable stage. Empty input — the runtime worker loop calls this by
+/// name with no arguments.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerOnce {}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerTurn {
+    pub idle: bool,
+    pub task: Option<AcquisitionTaskView>,
+}
+/// Terminal retire reply. `state` is `evidence_only` once artifact bytes
+/// are deleted (audit artifacts remain), otherwise `refused` with a stable
+/// `reason_code` (`generation_not_installed`, `generation_active`,
+/// `confirm_token_mismatch`, `generation_referenced`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetireReply {
+    pub request_id: String,
+    pub generation_id: String,
+    pub state: String,
+    pub reason_code: Option<String>,
+    pub detail: Option<String>,
     pub reused: bool,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]

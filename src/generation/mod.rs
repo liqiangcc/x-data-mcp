@@ -33,7 +33,7 @@ pub const EVIDENCE_NAME: &str = "compatibility-evidence.json";
 pub const ACTIVE_NAME: &str = "active-generation.json";
 const ARTIFACTS: [&str; 3] = ["base.zip", "gbbq.zip", "hsjday.zip"];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ActivePointer {
     pub schema: String,
@@ -141,6 +141,89 @@ impl Store {
     pub fn acquire_db_path(&self) -> PathBuf {
         self.root.join("acquire.sqlite")
     }
+    /// Session pins live outside the immutable generation directories so a
+    /// held session never modifies the generation it reads.
+    pub fn pins_dir(&self) -> PathBuf {
+        self.root.join("pins")
+    }
+    fn pin_dir(&self, generation_id: &str) -> PathBuf {
+        self.pins_dir().join(generation_id)
+    }
+
+    /// Pin a generation for a named holder (task or session identity).
+    /// Holders create exactly one marker file per name; while any marker
+    /// exists a destructive retire must refuse. Pins are fail-closed: a
+    /// crashed holder leaves its marker behind and the generation stays
+    /// protected until `unpin` or `sweep_pins` removes it.
+    pub fn pin(&self, generation_id: &str, holder: &str) -> Result<Pin, Error> {
+        if !self.generation_dir(generation_id).is_dir() {
+            return Err(Error::NotInstalled(generation_id.into()));
+        }
+        if holder.contains(['/', '\\', '\0']) || holder.is_empty() {
+            return Err(Error::NotVerified("invalid pin holder".into()));
+        }
+        let dir = self.pin_dir(generation_id);
+        fs::create_dir_all(&dir)?;
+        let path = dir.join(holder);
+        fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?
+            .sync_all()?;
+        fsync_dir(&dir)?;
+        Ok(Pin {
+            store: self.clone(),
+            generation_id: generation_id.into(),
+            holder: holder.into(),
+        })
+    }
+    /// Holder names currently pinning this generation.
+    pub fn pins(&self, generation_id: &str) -> Result<Vec<String>, Error> {
+        let dir = self.pin_dir(generation_id);
+        let mut holders = vec![];
+        if dir.is_dir() {
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file()
+                    && let Some(name) = entry.file_name().to_str()
+                {
+                    holders.push(name.to_string());
+                }
+            }
+        }
+        holders.sort();
+        Ok(holders)
+    }
+    /// Remove one holder's marker; a missing marker is already unpinned.
+    pub fn unpin(&self, generation_id: &str, holder: &str) -> Result<(), Error> {
+        let path = self.pin_dir(generation_id).join(holder);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Error::Io(e)),
+        }
+        fsync_dir(&self.pin_dir(generation_id))?;
+        Ok(())
+    }
+    /// Sweep stale markers: `keep(holder)` decides which pins still protect
+    /// the generation (e.g. a nonterminal task). Stale pins from crashed
+    /// holders are removed so they fail safe without blocking retire
+    /// forever. Returns the removed holder names.
+    pub fn sweep_pins(
+        &self,
+        generation_id: &str,
+        keep: impl Fn(&str) -> bool,
+    ) -> Result<Vec<String>, Error> {
+        let mut removed = vec![];
+        for holder in self.pins(generation_id)? {
+            if !keep(&holder) {
+                self.unpin(generation_id, &holder)?;
+                removed.push(holder);
+            }
+        }
+        Ok(removed)
+    }
 
     /// The staged request directory a downloader writes into. It is created
     /// empty; a second stage for the same request is refused so crash
@@ -165,7 +248,10 @@ impl Store {
     }
 
     /// Read the staged canonical manifest without installing it.
-    pub fn staged_manifest(&self, request_id: &str) -> Result<(Vec<u8>, snapshot::SnapshotManifest), Error> {
+    pub fn staged_manifest(
+        &self,
+        request_id: &str,
+    ) -> Result<(Vec<u8>, snapshot::SnapshotManifest), Error> {
         let path = self.stage_dir(request_id).join(MANIFEST_NAME);
         let bytes = fs::read(&path).map_err(|_| Error::UnverifiedStage(request_id.into()))?;
         Ok((bytes.clone(), serde_json::from_slice(&bytes)?))
@@ -208,7 +294,11 @@ impl Store {
     /// Re-verify an installed generation's bytes against its manifest and
     /// directory identity (AC-G02): any modified artifact, manifest or
     /// tampered name fails; no read-repair ever happens here.
-    pub fn verify_installed(&self, generation_id: &str, now: DateTime<Utc>) -> Result<Installed, Error> {
+    pub fn verify_installed(
+        &self,
+        generation_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Installed, Error> {
         let dir = self.generation_dir(generation_id);
         if !dir.is_dir() {
             return Err(Error::NotInstalled(generation_id.into()));
@@ -292,7 +382,12 @@ impl Store {
     /// Write a supplementary once-only artifact (e.g. the compatibility
     /// evidence consumed by the decision). Same write-once rule as the
     /// decision itself; returns the artifact sha256.
-    pub fn write_artifact(&self, generation_id: &str, name: &str, bytes: &[u8]) -> Result<String, Error> {
+    pub fn write_artifact(
+        &self,
+        generation_id: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<String, Error> {
         let dir = self.generation_dir(generation_id);
         if !dir.is_dir() {
             return Err(Error::NotInstalled(generation_id.into()));
@@ -340,9 +435,7 @@ impl Store {
         };
         let artifact: DecisionArtifact = serde_json::from_slice(&bytes)
             .map_err(|e| Error::Corrupt(generation_id.into(), e.to_string()))?;
-        if artifact.schema != DecisionArtifact::SCHEMA
-            || artifact.generation_id != generation_id
-        {
+        if artifact.schema != DecisionArtifact::SCHEMA || artifact.generation_id != generation_id {
             return Err(Error::Corrupt(
                 generation_id.into(),
                 "decision does not bind this generation".into(),
@@ -414,6 +507,59 @@ impl Store {
         fsync_dir(&self.root)?;
         Ok(pointer)
     }
+
+    /// Evidence-only retire (D2): delete the raw artifact bytes while
+    /// keeping the manifest, consistency decision and evidence artifacts.
+    /// The directory survives for audit; byte-level replay thereafter fails
+    /// closed at `verify_installed`/`usable`. The caller holds every
+    /// precondition (not active, unpinned, explicit authorization) — this
+    /// method only performs the deletion.
+    pub fn retire_bytes(&self, generation_id: &str) -> Result<(), Error> {
+        let dir = self.generation_dir(generation_id);
+        if !dir.is_dir() {
+            return Err(Error::NotInstalled(generation_id.into()));
+        }
+        for name in required_artifacts() {
+            let path = dir.join(name);
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(Error::Io(e)),
+            }
+        }
+        fsync_dir(&dir)?;
+        Ok(())
+    }
+}
+
+/// RAII holder for one pin marker; dropping removes the marker so a live
+/// session cannot leave stale references behind. Crash-leaked markers are
+/// reconciled by `Store::sweep_pins`.
+pub struct Pin {
+    store: Store,
+    generation_id: String,
+    holder: String,
+}
+impl Pin {
+    pub fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+    pub fn holder(&self) -> &str {
+        &self.holder
+    }
+}
+impl Drop for Pin {
+    fn drop(&mut self) {
+        let _ = self.store.unpin(&self.generation_id, &self.holder);
+    }
+}
+impl std::fmt::Debug for Pin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pin")
+            .field("generation_id", &self.generation_id)
+            .field("holder", &self.holder)
+            .finish()
+    }
 }
 
 fn fsync_dir(dir: &Path) -> io::Result<()> {
@@ -437,9 +583,7 @@ mod tests {
     }
     fn url(role: FileRole) -> &'static str {
         match role {
-            FileRole::BaseIndustry => {
-                "https://www.tdx.com.cn/products/data/data/dbf/base.zip"
-            }
+            FileRole::BaseIndustry => "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
             FileRole::Gbbq => "https://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
             FileRole::Day => "https://data.tdx.com.cn/vipdoc/hsjday.zip",
         }
@@ -514,9 +658,7 @@ mod tests {
             store.activate(&installed, Some("other"), "act-1", now()),
             Err(Error::ActivationConflict { .. })
         ));
-        let pointer = store
-            .activate(&installed, None, "act-1", now())
-            .unwrap();
+        let pointer = store.activate(&installed, None, "act-1", now()).unwrap();
         assert_eq!(pointer.generation_id, generation_id);
         assert_eq!(pointer.previous_generation_id, None);
         assert_eq!(store.active().unwrap().unwrap(), pointer);
@@ -531,7 +673,10 @@ mod tests {
             .activate(&newer, Some(&generation_id), "act-2", now())
             .unwrap();
         assert_eq!(next.previous_generation_id, Some(generation_id.clone()));
-        assert_eq!(store.active().unwrap().unwrap().generation_id, newer.generation_id);
+        assert_eq!(
+            store.active().unwrap().unwrap().generation_id,
+            newer.generation_id
+        );
     }
 
     #[test]

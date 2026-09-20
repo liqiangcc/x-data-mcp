@@ -780,7 +780,7 @@ fn official_provider_keeps_default_execution_fail_closed() {
     );
     // The finished-failed task is no longer dispatchable.
     assert!(matches!(
-        crate::data_supply::worker::run_once(&ctl, &db, None),
+        crate::data_supply::worker::run_once(&ctl, &db, None, None),
         Ok(None)
     ));
 }
