@@ -13,10 +13,12 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
 
 ## 门禁逐项判定
 
-1. #54 GBBQ：既有九事件矩阵的五个规范化候选均能解释 600006 半分边界，不能区分官方规则。
-   缺 C1/C2/C3/C4 业务 scale、单位、float32→十进制映射和半分舍入位置的官方语义。
-   验收需要独立可审计依据及事前冻结规则，再验证原矩阵与 #53 四股；不是新增 BaoStock 拟合。
-   当前 NOT_VERIFIED，无 normalization contract，#53 四股本轮 NOT_RUN。
+1. #54 GBBQ（已解决，2026-09-16 Final Gate PASS）：Windows V7.73 官方客户端行为证据
+   （#167）把 C1=每10股派现（元，含税）、C2=配股价（元）、C4=每10股配股数、
+   2dp HALF_UP 业务十进制输入、事件日分位取整参考价、非逐事件取整的仿射 QFQ 链
+   提升为已验收契约；#169 全冻结域 94 事件回归 `unexplained_total=0`。
+   实现：`src/gbbq.rs` + `src/qfq.rs`，official_market providers 已接线；
+   `GBBQ_QFQ_NOT_VERIFIED` 已从 PRODUCTION_BLOCKERS 移除。
 2. #71 使用范围：公开下载说明不等于本项目服务器使用许可。
    缺明确覆盖使用主体、base/hsjday/gbbq、获取频率、留存、解析计算及个人 AI 访问范围的依据。
    当前 FILE_ACCESS_USE_NOT_VERIFIED；不推定禁止，也不推定授权。
