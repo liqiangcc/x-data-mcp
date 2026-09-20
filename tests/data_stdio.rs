@@ -516,16 +516,48 @@ fn real_stop_verification_stdio_is_strict_discoverable_and_keeps_original_claims
     else {
         panic!()
     };
-    // A claimed old task is not covered by the never-started proof.
-    let original = Box::new(
-        db.transition(
+    // A pending item with a prior execution start is not covered by the
+    // stopped-writes proof: its earlier write outcome is genuinely unknown,
+    // so the check stays insufficient and the original claims are kept.
+    let mut original = db
+        .transition(
             &original.task.task_id,
             0,
             "old-process",
             x_data_mcp::task_control::Change::Claim,
         )
-        .unwrap(),
-    );
+        .unwrap();
+    original = db
+        .transition(
+            &original.task.task_id,
+            original.task.state_revision,
+            "old-process",
+            x_data_mcp::task_control::Change::StartItem(original.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    original = db
+        .transition(
+            &original.task.task_id,
+            original.task.state_revision,
+            "old-process",
+            x_data_mcp::task_control::Change::FinishItem(
+                original.items[0].spec.item_id.clone(),
+                x_data_mcp::task_control::ItemOutcome {
+                    success: false,
+                    error: Some("prior run failed".into()),
+                    evidence: None,
+                },
+            ),
+        )
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO task_item_execution_starts VALUES(?1,?2,'old-process',1,'2026-09-13T00:00:00Z')",
+            rusqlite::params![original.task.task_id, original.items[1].spec.item_id],
+        )
+        .unwrap();
+    let original = Box::new(original);
     let mut s = Session::new(&path);
     s.request("initialize", json!({}));
     let cap = s.call(

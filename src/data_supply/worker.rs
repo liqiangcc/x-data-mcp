@@ -178,7 +178,7 @@ fn run_verification(
         }
         .run(
             &candidate.task.task_id,
-            &crate::task_verification::never_started::NeverStarted {
+            &crate::task_verification::determinate::Audited {
                 repository: control.repository.clone(),
             },
         )?;
