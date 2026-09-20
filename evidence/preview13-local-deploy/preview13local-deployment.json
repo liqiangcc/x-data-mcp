@@ -1,0 +1,51 @@
+{
+  "status": "DEPLOYED",
+  "release": "v0.2.0-preview.13",
+  "code_sha": "13f81a71316ba6c178c191b855c2d764dd5b082d",
+  "deployment_mode": "local-adapted",
+  "adaptations": [
+    "no systemd: data_service run as direct background process",
+    "no tunnel: x-data-mcp-tunnel.service absent locally (server-specific)",
+    "deploy root: /home/box/preview-deploy/releases/preview13 (overlayfs)",
+    "runtime paths: DB+unix socket on /dev/shm tmpfs (runtime guard fail-closed on overlayfs)",
+    "X_DATA_MCP_UNSAFE_NONLOCAL_FS=1 required for data_service + mcp_connect on this host (opt-out, local preview only)",
+    "package fetch: gh release download (object CDN healthy from this box)"
+  ],
+  "fetch_verify": {
+    "tarball_sha256": "4e7e437563431576343aa90ff7cb07c826640e76eb33787898b68bf98b233ff5",
+    "sha256_asset_check": "OK",
+    "package_SHA256SUMS": "OK",
+    "binary_version_embeds_sha": true,
+    "release_smoke_report": {
+      "status": "PASS",
+      "version": "x-data-mcp 0.2.0-preview.13 13f81a71316ba6c178c191b855c2d764dd5b082d NOT_PRODUCTION_READY"
+    }
+  },
+  "before": {
+    "fresh_deploy": true
+  },
+  "after": {
+    "schema": 12,
+    "counts": {
+      "tasks": 0,
+      "requests": 0,
+      "data_versions": 0,
+      "catalog_versions": 0,
+      "scope_occupancy": 0
+    }
+  },
+  "schema": {
+    "task_sqlite_init": "task schema 12 ready (development only)",
+    "upgrade": "not_applicable_fresh_db"
+  },
+  "service": {
+    "mode": "direct_process",
+    "pid": 28440,
+    "socket": "/dev/shm/xdm-preview13/run/mcp.sock",
+    "socket_owner_binding": "mcp.sock.owner.json present"
+  },
+  "consumer": "NOT_RUN",
+  "live_source": "NOT_RUN",
+  "production": "NOT_PRODUCTION_READY",
+  "notes": "Box tailnet identity changed to grok-bot-vm-411252337 after host reprovision; filesystem (including /home/box, retained-inputs, baseline DBs) intact. Same-machine continuity verified by content."
+}

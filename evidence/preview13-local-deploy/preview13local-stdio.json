@@ -1,0 +1,47 @@
+{
+ "status": "PASS",
+ "version": "0.2.0-preview.13",
+ "service_binary_sha256": "daf417c1ef4b0fa1780ff194fac3483ec473680ec9adaa3f316f936af7c1134e",
+ "proxy_binary_sha256": "4620a11c0ee725ae7904a40b4b7102099a34dd7c35b337edbbe17646bb4365db",
+ "normal_db_counts": {
+  "tasks": 0,
+  "requests": 0,
+  "data_versions": 0,
+  "catalog_versions": 0,
+  "scope_occupancy": 0
+ },
+ "normal_db_schema": 12,
+ "stdio": {
+  "initialize": {
+   "capabilities": {
+    "tools": {}
+   },
+   "protocolVersion": "2025-06-18",
+   "serverInfo": {
+    "name": "x-data-mcp",
+    "version": "0.2.0-preview.13"
+   }
+  },
+  "tools": [
+   "start_collection",
+   "get_task",
+   "run_worker_once",
+   "cancel_task",
+   "retry_task",
+   "get_request",
+   "inspect_verification_task",
+   "verify_publication_result",
+   "verify_stopped_writes",
+   "verify_data_gap",
+   "update_data",
+   "backfill_data",
+   "compute_metrics",
+   "query_data",
+   "list_data_versions",
+   "get_data_availability",
+   "list_tasks",
+   "get_task_progress",
+   "get_data_capabilities"
+  ]
+ }
+}
