@@ -188,10 +188,14 @@ def update_request(request_id, items):
 
 
 def nv_reason(error):
-    """Extract the verbatim NEEDS_VERIFICATION reason head, or None."""
-    if not error or not error.startswith("NEEDS_VERIFICATION:"):
+    """Extract the verbatim NEEDS_VERIFICATION reason head, or None.
+
+    Item errors carry the transport wrapper verbatim, e.g.
+    "INVALID_MARKET_COMMAND: NEEDS_VERIFICATION: RevisionUnverified([...])".
+    """
+    if not error or "NEEDS_VERIFICATION:" not in error:
         return None
-    tail = error.split(":", 1)[1].strip()
+    tail = error.split("NEEDS_VERIFICATION:", 1)[1].strip()
     return tail.split("(", 1)[0].split()[0] if tail else ""
 
 
@@ -397,7 +401,7 @@ def main():
         tuple(our_tasks)).fetchall()
     after = baseline(db)
     task_states = con.execute(
-        "SELECT status, COUNT(*), SUM(json_extract(result,'$.finished_items')) "
+        "SELECT status, COUNT(*), SUM(json_extract(result_json,'$.finished_items')) "
         "FROM tasks WHERE task_id IN (%s) GROUP BY status"
         % ",".join("?" * len(our_tasks)),
         tuple(our_tasks)).fetchall()

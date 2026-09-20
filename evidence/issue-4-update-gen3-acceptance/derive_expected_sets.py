@@ -79,9 +79,12 @@ def decode_gbbq_records(member_bytes, tmp_path):
         sys.path.remove(RETAINED)
         sys.modules.pop("pandas", None)
     # row: (market, code, datetime, category, hongli, peigujia, songgu, peigu)
+    # market byte mapping per src/official_market.rs: 1 -> sh, 0 -> sz.
+    # Unknown bytes are kept verbatim as "<n>.<code>" — recorded, not guessed.
     per_security = {}
     for market, code, dt, cat, h, pj, sg, pg in rows:
-        sym = f"{market}.{code}".lower()
+        prefix = {1: "sh", 0: "sz"}.get(market, str(market))
+        sym = f"{prefix}.{code}".lower()
         per_security.setdefault(sym, []).append(
             [dt, cat, repr(h), repr(pj), repr(sg), repr(pg)])
     return per_security
