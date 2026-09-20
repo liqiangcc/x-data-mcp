@@ -65,6 +65,7 @@ pub struct Capabilities {
     pub production_ready: bool,
 }
 pub const RANGE_DESCRIPTION: &str = "Explicit market.daily ranges or market.yearly natural-year sets, each bound to a published daily version; market.daily also accepts selection {\"kind\":\"default\"}, resolved and frozen from the acceptance snapshot (catalog + started securities + published heads + open proven gaps). Yearly publication mode and comparison are explicit and frozen; historical mode never advances head. Automatic gap discovery and catalog updates are not implemented. With an installed inspected official snapshot the worker executes bounded real-source explicit-range updates and default frozen-gap backfills; without one it fails closed. Publish gating via PRODUCTION_BLOCKERS remains.";
+pub const REPUBLISH_DESCRIPTION: &str = "Local-owner explicit market.daily republish (#247): republishes a fixed base version as a new version through the same verified pipeline, authorized by this command itself — not by frozen proven gaps. Only pure enrichment (filling previously unpromoted optional fields such as volume/amount/r7_raw) or new dates may differ from the base; any revised or lost known value fails closed at both the provider merge and market_update::prepare. The republished version advances the daily head; the base stays queryable verbatim. Selection/default resolution is not supported; explicit items only.";
 pub const WORKER_DESCRIPTION: &str = "Stage A development-only control: synchronously executes at most one locally owned pending task, mutating task outcomes and occupancy. Installed market executors run bounded real-source paths when an inspected official snapshot env is installed and record SOURCE_NOT_VERIFIED otherwise; stopping inspections may interrupt proven never-started tasks; started or unsupported executions retain their claims with insufficient evidence. Publication inspections record fixed durable evidence without changing original tasks. It never downloads market data or forcibly unlocks original tasks. Not a background scheduler or production pipeline.";
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +129,11 @@ pub fn entries() -> Vec<Entry> {
             "backfill_data",
             Handler::Range(crate::market_update::tasks::Operation::Backfill),
             json!({"request_id":"example-backfill","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"published-daily-id","start_date":"2025-01-01","end_date":"2025-12-31"}]}),
+        ),
+        entry::<RangeWrite, WriteAcceptance>(
+            "republish_data",
+            Handler::Range(crate::market_update::tasks::Operation::Republish),
+            json!({"request_id":"example-republish","dataset":"market.daily","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":"published-daily-id","start_date":"1990-01-01","end_date":"2025-12-31"}]}),
         ),
         entry::<WorkerInput, WorkerOutput>("run_worker_once", Handler::Worker, json!({})),
         entry::<crate::metrics::wire::Compute, crate::metrics::wire::Computation>(

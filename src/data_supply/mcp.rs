@@ -61,6 +61,11 @@ impl DataApi {
                             repository: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
                         }),
+                        Box::new(crate::market_update::tasks::RangeContract {
+                            operation: crate::market_update::tasks::Operation::Republish,
+                            repository: repository.market.clone(),
+                            today: crate::calendar::shanghai_today,
+                        }),
                         Box::new(super::default_range::DefaultRangeContract {
                             operation: crate::market_update::tasks::Operation::Update,
                             resolver: repository.market.clone(),
@@ -190,7 +195,7 @@ impl DataApi {
                 let detailed = args.operation.is_some();
                 items.push(Capability {
                     tool_name: e.name.into(),
-                    description: if matches!(e.handler, Handler::InspectVerification) { INSPECTION_DESCRIPTION } else if matches!(e.handler, Handler::VerifyPublication) { crate::publication_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyGap) { crate::gap_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
+                    description: if matches!(e.handler, Handler::InspectVerification) { INSPECTION_DESCRIPTION } else if matches!(e.handler, Handler::VerifyPublication) { crate::publication_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyStopped) { crate::task_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::VerifyGap) { crate::gap_verification::wire::DESCRIPTION } else if matches!(e.handler, Handler::Worker) { WORKER_DESCRIPTION } else if matches!(e.handler, Handler::Range(crate::market_update::tasks::Operation::Republish)) { REPUBLISH_DESCRIPTION } else if matches!(e.handler,Handler::Range(_)) { RANGE_DESCRIPTION } else { "Implemented interface; readiness does not imply published data or production source readiness." }.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
                     implemented: true,
@@ -449,7 +454,7 @@ impl DataApi {
                 }
             }
         }
-        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped|Handler::VerifyPublication|Handler::InspectVerification|Handler::VerifyGap)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::InspectVerification){INSPECTION_DESCRIPTION}else if matches!(e.handler,Handler::VerifyPublication){crate::publication_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyGap){crate::gap_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
+        tools.extend(entries().into_iter().filter(|e| self.access == Access::local() || !matches!(e.handler,Handler::Range(_)|Handler::VerifyStopped|Handler::VerifyPublication|Handler::InspectVerification|Handler::VerifyGap)).filter(|e|!matches!(e.handler,Handler::Collection|Handler::Retry|Handler::Task|Handler::Request|Handler::Cancel|Handler::Worker)).map(|e|json!({"name":e.name,"description":if matches!(e.handler,Handler::InspectVerification){INSPECTION_DESCRIPTION}else if matches!(e.handler,Handler::VerifyPublication){crate::publication_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyStopped){crate::task_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::VerifyGap){crate::gap_verification::wire::DESCRIPTION}else if matches!(e.handler,Handler::Range(crate::market_update::tasks::Operation::Republish)){REPUBLISH_DESCRIPTION}else if matches!(e.handler,Handler::Range(_)){RANGE_DESCRIPTION}else{"Bounded SQLite v1 data capability. No implicit collection. Discover details via get_data_capabilities."},"inputSchema":e.input,"outputSchema":e.output})));
         Value::Array(tools)
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
@@ -749,6 +754,7 @@ impl ToolHandler for DataApi {
                     | "verify_data_gap"
                     | "update_data"
                     | "backfill_data"
+                    | "republish_data"
             );
         self.dispatch(name, input).map_err(|mut e| {
             if generic {
@@ -758,6 +764,7 @@ impl ToolHandler for DataApi {
                             name,
                             "update_data"
                                 | "backfill_data"
+                                | "republish_data"
                                 | "verify_publication_result"
                                 | "inspect_verification_task"
                                 | "verify_data_gap"
@@ -771,6 +778,7 @@ impl ToolHandler for DataApi {
                             | "cancel_task"
                             | "update_data"
                             | "backfill_data"
+                            | "republish_data"
                             | "verify_publication_result"
                             | "inspect_verification_task"
                             | "verify_data_gap"
@@ -787,6 +795,7 @@ impl ToolHandler for DataApi {
                             name,
                             "update_data"
                                 | "backfill_data"
+                                | "republish_data"
                                 | "verify_publication_result"
                                 | "inspect_verification_task"
                                 | "verify_data_gap"

@@ -281,6 +281,11 @@ impl<R: DefaultRangeSource> Contract for DefaultRangeContract<R> {
         let op = match self.operation {
             crate::market_update::tasks::Operation::Update => DefaultOperation::Update,
             crate::market_update::tasks::Operation::Backfill => DefaultOperation::Backfill,
+            crate::market_update::tasks::Operation::Republish => {
+                return Err(task::Error::InvalidCommand(
+                    "republish is explicit-items only; no default selection".into(),
+                ));
+            }
         };
         let work = self
             .resolver

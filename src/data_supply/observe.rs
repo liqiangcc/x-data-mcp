@@ -500,11 +500,15 @@ fn frozen_daily_ranges(task: &TaskSnapshot) -> Result<Vec<FrozenDailyRange>, Err
     }
     if !matches!(
         task.task.key.operation.as_str(),
-        "update_data" | "backfill_data"
+        "update_data" | "backfill_data" | "republish_data"
     ) {
         return Ok(vec![]);
     }
-    let explicit = task.task.key.contract_version == crate::market_update::tasks::CONTRACT_VERSION;
+    let explicit = matches!(
+        task.task.key.contract_version.as_str(),
+        crate::market_update::tasks::CONTRACT_VERSION
+            | crate::market_update::tasks::REPUBLISH_CONTRACT_VERSION
+    );
     let default =
         task.task.key.contract_version == crate::market_update::tasks::DEFAULT_CONTRACT_VERSION;
     if !explicit && !default {
