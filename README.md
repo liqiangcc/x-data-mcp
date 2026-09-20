@@ -110,7 +110,7 @@ git diff --check
 这不证明真实采集/发布闭环完成，见[闭环门禁与实施顺序](docs/source-closure.md)。
 行情发布已改为[batch与version单点提交](docs/publish-storage.md)；[任务受理](docs/task-storage.md)也以单一快照提交绑定、执行状态和范围占用；当前仍要求单写者运行。
 
-Issue #54 的 [GBBQ 十进制诊断矩阵](evidence/issue-54-gbbq-decimal/README.md)已保存：仅 evidence，官方 normalization 契约仍 NOT_VERIFIED，未解除生产门禁。
+Issue #54 已 Final Gate PASS（[判定](https://github.com/liqiangcc/x-data-mcp/issues/54#issuecomment-5738653950)）：C1=每10股派现/C2=配股价/C4=每10股配股数，2dp HALF_UP 归一化 + 分位取整参考价 + 仿射 QFQ 链，94 事件零未解释；`GBBQ_QFQ_NOT_VERIFIED` 已退休（PR #252）。
 
 ## 通用 SQLite 数据入口（#80）
 
@@ -201,7 +201,7 @@ yearly 内部任务契约现已冻结年度、base digest 与发布意图；sche
 
 发布准备基线为 main ec50623dc385b873339273e5d8c97ad9dda12ee5。当前线上仍 preview.4/schema7；本节不是部署完成声明。正式切换前须验证发布 SHA 对应包/manifest/binary、隔离 synthetic smoke，暂停目标服务后保留库/配置备份，显式升级 schema7→9，再切换同一 tunnel。普通库不导入 demo，旧包/备份保留。
 
-准确 tag、SHA、升级与 stdio/tunnel 验收记录见 [#108](https://github.com/liqiangcc/x-data-mcp/issues/108) 和[发布操作记录](docs/tasks/issue-108.md)。ChatGPT 消费侧在实际调用前为 NOT_RUN；来源/#53 四股仍 NOT_RUN，#54/#6/#46/#71/文件一致性 NOT_VERIFIED，NOT_PRODUCTION_READY。其他恢复、目录和真实数据闭环继续未完成。
+准确 tag、SHA、升级与 stdio/tunnel 验收记录见 [#108](https://github.com/liqiangcc/x-data-mcp/issues/108) 和[发布操作记录](docs/tasks/issue-108.md)。ChatGPT 消费侧在实际调用前为 NOT_RUN；来源/#53 四股仍 NOT_RUN，#6/#46 仍 NOT_VERIFIED，NOT_PRODUCTION_READY（#54/#71/文件一致性已按 FG 裁定退休阻塞串）。其他恢复、目录和真实数据闭环继续未完成。
 
 ## 长期服务与本机 IPC（#110）
 

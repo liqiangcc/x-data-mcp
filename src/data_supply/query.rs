@@ -213,8 +213,7 @@ impl<R: ReadRepository> Queries<R> {
             selection_complete: true,
             limitations: vec![
                 "fixed version selection is not a shared source acquisition time".into(),
-                "source production gates remain blocked; coverage is not inferred from dates"
-                    .into(),
+                "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates".into(),
             ],
         };
         if more {

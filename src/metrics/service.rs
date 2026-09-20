@@ -58,8 +58,12 @@ impl<R: InputRepository> Metrics<R> {
         let mut result = evaluate(&observations, range, &metric.parameters)?;
         let (Outcome::Computed { limitations, .. } | Outcome::NotComputable { limitations, .. }) =
             &mut result;
-        limitations
-            .push("completion evidence is fixture-only; no production source approval".into());
+        limitations.push(
+            "completion is per-observation evidence-derived (fixture coverage or \
+             verifier-signed derivation evidence); completeness is base-relative, \
+             not a natural-year or listing-history claim"
+                .into(),
+        );
         Ok(Computation {
             contract_version: request.contract_version,
             input: input.clone(),
