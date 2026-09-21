@@ -742,7 +742,18 @@ fn fixed_base_change_after_prepare_is_rejected_without_recomputing_or_rebinding(
     let mut changed = raw;
     changed["batch"]["coverage"]["reason"] = json!("changed after validation");
     changed["integrity_sha256"] = json!(frozen_legacy::digest(&changed));
-    Connection::open(store.tasks.path()).unwrap().execute("UPDATE data_versions SET envelope_json=json_set(envelope_json,'$.batch.coverage.reason','changed after validation','$.integrity_sha256',?1),content_digest=?1,coverage_reason='changed after validation' WHERE version_id='legacy-daily'",rusqlite::params![changed["integrity_sha256"].as_str().unwrap()]).unwrap();
+    let conn = Connection::open(store.tasks.path()).unwrap();
+    // `coverage` is a shared-evidence `$ref` since the compact-envelope
+    // schema: tamper the payload row it points at so the expanded record
+    // stays self-consistent, exactly like the pre-ref inline edit.
+    let coverage_json = serde_json::to_string(&changed["batch"]["coverage"]).unwrap();
+    let coverage_id = x_data_mcp::hash::sha256(coverage_json.as_bytes());
+    conn.execute(
+        "INSERT INTO payloads VALUES(?1,?2)",
+        rusqlite::params![coverage_id, coverage_json],
+    )
+    .unwrap();
+    conn.execute("UPDATE data_versions SET envelope_json=json_set(envelope_json,'$.batch.coverage.\"$ref\"',?2,'$.integrity_sha256',?1),content_digest=?1,coverage_reason='changed after validation' WHERE version_id='legacy-daily'",rusqlite::params![changed["integrity_sha256"].as_str().unwrap(),format!("payload:{coverage_id}")]).unwrap();
     assert!(store.fixed("legacy-daily").is_ok());
     assert!(matches!(store.commit(&plan), Err(Error::Base(_))));
     assert!(

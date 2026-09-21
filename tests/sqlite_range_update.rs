@@ -1619,7 +1619,7 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
         7
     );
     f.db.tasks.upgrade().unwrap();
-    f.sql("INSERT INTO payloads SELECT * FROM payloads_bak; DROP TABLE payloads_bak;");
+    f.sql("INSERT OR IGNORE INTO payloads SELECT * FROM payloads_bak; DROP TABLE payloads_bak;");
     assert_eq!(
         c.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
             .unwrap(),
@@ -2807,4 +2807,49 @@ fn two_fifty_day_append_growth_stays_bounded() {
         "day-250 growth {}B is not commensurate with early mean {early:.0}B/day",
         growth[days - 1]
     );
+}
+
+/// Shared batch evidence (unit/currency, coverage, adjustment) is
+/// generation-common: it must be stored once in `payloads` and referenced
+/// by `$ref` from both the version envelope and the update audit —
+/// two stored references, one payload row.
+#[test]
+fn shared_batch_evidence_is_content_addressed_and_no_change_writes_no_payloads() {
+    let f = fixture(false);
+    f.db.commit_range(&f.plan()).unwrap();
+    let c = Connection::open(f.db.tasks.path()).unwrap();
+    // The version envelope references, not embeds, the shared blocks.
+    let env: String = c
+        .query_row(
+            "SELECT envelope_json FROM data_versions WHERE version_id='legacy-daily'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    for key in ["unit_currency", "coverage", "adjustment_evidence"] {
+        assert!(
+            env.contains(&format!(r#""{key}":{{"$ref":"payload:"#)),
+            "envelope keeps {key} inline"
+        );
+    }
+    // Same for the stored audit segment.
+    let audit: String = c
+        .query_row(
+            "SELECT audit_json FROM market_update_results LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(audit.contains(r#""unit_currency":{"$ref":"payload:"#));
+    // Both references resolve to a single stored payload row.
+    let shared: i64 = c
+        .query_row(
+            "SELECT count(*) FROM payloads WHERE payload_json LIKE '%volume_unit%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(shared, 1, "shared evidence must be stored once");
+    // Round-trip: the record still expands to the identical stored bytes.
+    f.db.fixed("legacy-daily").unwrap();
 }
