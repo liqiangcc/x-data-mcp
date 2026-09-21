@@ -787,6 +787,17 @@ S5A-2 执行结果（2026-09-21）：`SqliteCompactMarket` 已实现并覆盖 `T
 
 退出条件：容量、增长、时间、RSS、WAL 全部提供机械报告；任一硬上限失败即停止，不部署 ECS。
 
+**S5B 执行结果（retained gen-2，release，Box）**：
+
+- initial：11,801 源成员中 11,783 提交、18 个真实数据违规 item 级失败；29,136,493 bars；checkpoint 后 DB 1,405,120,512 B（**48.2 B/bar**，≤61 通过、≤56 目标通过）；RSS 峰值 561,053,696 B（≤1.5GiB 通过）；WAL 峰值 4.2MB、checkpoint 后 0；wall **3,177s ≈ 53min > 20min 硬门（Box）**。
+- measure：`segment_bars` 对象字节 46.4 B/bar（dbstat，payload 利用率约 88%）；bars 族（segment_bars+bar_segments+clips）≈1.29GiB ≤1.90GiB；非 bars 对象 ≤~60MiB ≤256MiB。
+- no-change（11,783 items）：+20,275,200 B = **1,721 B/item**（≤2KiB 硬门通过，768B 目标未达）；0 新 bars/segments/versions；WAL 后 0；wall 497s。
+- append day-1（11,783 items）：+28,585,984 B = **2,426 B/item**（5,221 折算 ~12.4MiB ≤16MiB 通过、8MiB 目标未达）；WAL 峰值 4.26MB ≤32MiB、后 0；wall 2,178s ≈ 36min（~185ms/item → 5,221 折算 ~16min > 5min 硬门）。
+- soak：primitive 模式（物理产物逐字节相同，跳过不改变存储字节的 harness 侧 envelope CPU）每日 100–500 items 轮转窗口 × 250 天，全库 DB；**late/early per-item 增长比 1.0143 ≤1.20 通过**；每日排空残留非终态 task（重启语义），总 wall 3,286s。
+- verify：`integrity_check=ok`；50 个采样 fixed read 全部 verified；最终 checkpoint 后 WAL=0、DB 1,559,019,520 B。
+
+**硬门结论**：容量全部通过；**时间门失败**——initial 53min>20min、日更 ~185ms/item（去掉 harness 侧 `fixed()` 后 stage+commit 仍 ~100ms/item → ~9min/5,221）> 5min。根因：每次 item commit 的 continuity 校验对 base 做 O(history) 全量物化（`commit_market_update` 内 `fixed()`），`stage_delta` 再做 `reconstruct_leaf`。需要按 task/scope 批量化的 continuity 校验或更廉价的 prefix proof——Issue 级设计决策，未决前不得声称日更时间 AC。证据：`evidence/issue-259-s5b-capacity/result.json`。
+
 ### S6：release 与 ECS
 
 构建固定 release 包，SHA-256 对账后 ECS fresh deploy；只通过两个 MCP server + repository Skill 执行 generation/status/data workflow。

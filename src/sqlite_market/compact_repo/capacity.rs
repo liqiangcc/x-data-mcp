@@ -280,7 +280,7 @@ fn start_head_item(repo: &SqliteCompactMarket, head: &mut TaskHead, item_id: &st
     let binding = repo
         .task_item_binding(&head.task_id, item_id)
         .unwrap()
-        .unwrap();
+        .unwrap_or_else(|| panic!("item {item_id} not bound to task {}", head.task_id));
     let mut item = binding.item;
     match item.stage {
         task_control::Stage::Pending => {
@@ -731,6 +731,332 @@ fn phase_append(
     })
 }
 
+/// Primitive soak day: identical physical artifacts to the adapter path
+/// (same segment/delta/version/result/task rows, same binding and head
+/// semantics) but skips the harness-side `fixed()`/envelope CPU that does
+/// not change stored bytes. Used for the long growth-ratio run where
+/// wall-clock is reported but not the metric under test.
+fn soak_item_primitive(
+    repo: &SqliteCompactMarket,
+    symbol: &str,
+    task_id: &str,
+    item_id: &str,
+    day_index: u64,
+    expected_revision: u64,
+) -> Result<bool, Error> {
+    repo.write(|c| {
+        let result_id = format!("upd-soak-{day_index}-{symbol}");
+        let version_id = format!("v{day_index}-{symbol}-soak");
+        let committed: bool = c
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM result_registry WHERE result_id=?1) \
+                 OR EXISTS(SELECT 1 FROM market_update_results WHERE task_id=?2 AND item_id=?3) \
+                 OR EXISTS(SELECT 1 FROM publication_results WHERE task_id=?2 AND item_id=?3)",
+                params![result_id, task_id, item_id],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if committed {
+            return Ok(false);
+        }
+        let (parent_key, parent_id, record_count, last_day, sbd, evd, cov): (
+            i64,
+            String,
+            i64,
+            i64,
+            Vec<u8>,
+            Vec<u8>,
+            i64,
+        ) = c
+            .query_row(
+                "SELECT h.version_key, v.version_id, v.record_count, v.last_day, \
+                 v.source_binding_digest, v.evidence_digest, v.coverage_status \
+                 FROM effective_heads h JOIN data_versions v ON v.version_key=h.version_key \
+                 WHERE h.entity=?1 AND h.period=1 AND h.adjustment=1",
+                [symbol],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
+                },
+            )
+            .map_err(storage)?;
+        let source_binding_digest: Digest = sbd.try_into().map_err(|_| integrity("bad binding"))?;
+        let evidence_arr: Digest = evd.try_into().map_err(|_| integrity("bad evidence"))?;
+        let day = next_trading_day(compact_market::epoch_date(last_day).map_err(integrity)?);
+        let trade_day = compact_market::epoch_day(day);
+        let salt = (day_index as i64) * 61 + i64::from(symbol.as_bytes()[symbol.len() - 1]);
+        let open = 1_000 + (salt % 900).abs() * 10;
+        let bar = CompactBar {
+            trade_day,
+            open_cents: open,
+            high_cents: open + 25,
+            low_cents: open - 25,
+            close_cents: open + 10,
+            volume: Some(1_000_000 + (salt % 9_000_000).abs()),
+            amount: Some((100_000_000 + (salt % 50_000_000).abs()).to_string()),
+            r7_raw: Some(0),
+        };
+        let segment = compact_v19::insert_segment(c, symbol, Period::Day, &[bar])?;
+        let ops = vec![StoredDelta {
+            range_start_day: trade_day,
+            range_end_day: trade_day,
+            kind: StoredDeltaKind::Upsert(StoredClip {
+                segment_key: segment.key,
+                clip: crate::compact_market::SegmentClip {
+                    segment_digest: segment.digest,
+                    clip_start_day: trade_day,
+                    clip_end_day: trade_day,
+                    row_count: 1,
+                },
+            }),
+        }];
+        let coverage_status = match cov {
+            1 => crate::market_data::CoverageStatus::Complete,
+            2 => crate::market_data::CoverageStatus::Incomplete,
+            _ => crate::market_data::CoverageStatus::Unknown,
+        };
+        let draft = compact_versions::VersionDraft {
+            version_id: version_id.clone(),
+            entity: symbol.into(),
+            period: Period::Day,
+            source_binding_digest,
+            coverage_status,
+            evidence_digest: evidence_arr,
+            created_at: Utc::now().to_rfc3339(),
+            yearly_lineage: None,
+        };
+        // Resume-safe: a killed day may leave a staged/validated version
+        // behind; reuse it rather than restaging.
+        let key: i64 = c
+            .query_row(
+                "SELECT version_key FROM data_versions WHERE version_id=?1",
+                [&version_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage)?
+            .map(Ok)
+            .unwrap_or_else(|| compact_versions::stage_delta(c, &draft, parent_key, &ops))?;
+        let state: i64 = c
+            .query_row(
+                "SELECT state FROM data_versions WHERE version_key=?1",
+                [key],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if state == 1 {
+            compact_versions::mark_validated(c, key)?;
+        }
+        let prefix_bytes = record_count as u64 * 32;
+        let evidence = compact_versions::put_evidence(
+            c,
+            EvidenceKind::Continuity,
+            &json!({
+                "mode": "append",
+                "base_version_id": parent_id,
+                "source_binding_digest": hex_bytes(&source_binding_digest),
+                "prefix_bytes": prefix_bytes,
+            }),
+        )?;
+        compact_results::commit_market_update(
+            c,
+            &compact_results::MarketUpdateCommit {
+                result_id,
+                task_id: task_id.into(),
+                item_id: item_id.into(),
+                base_version_key: parent_key,
+                result_version_key: key,
+                range_start_day: trade_day,
+                range_end_day: trade_day,
+                algorithm_version: UPDATE_ALGORITHM.into(),
+                source_binding_digest,
+                evidence_digest: evidence,
+                expected_task_revision: expected_revision,
+                published_at: Some(Utc::now()),
+                head: compact_results::HeadExpectation::Version(parent_key),
+                required_heads: vec![compact_results::RequiredHead {
+                    entity: symbol.into(),
+                    period: Period::Day,
+                    expected: Some(parent_key),
+                }],
+                binding: compact_results::BindingCheck {
+                    run_id: RUN.into(),
+                    entity: symbol.into(),
+                    period: Period::Day,
+                    occupancy_key: task_control::legacy::scope_id(symbol, "day"),
+                },
+                change: compact_results::MarketUpdateChange::Append { prefix_bytes, ops },
+            },
+        )?;
+        Ok(true)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn phase_soak_primitive(
+    repo: &SqliteCompactMarket,
+    symbols: &[String],
+    db: &Path,
+    day_index: u64,
+    item_limit: u64,
+) -> Value {
+    let db_before = db_bytes(db);
+    let started = Instant::now();
+    let mut items_done = 0usize;
+    let mut wal_peak = wal_bytes(db);
+    let published = published_entities(repo);
+    let all_active: Vec<String> = symbols
+        .iter()
+        .filter(|s| published.contains(*s))
+        .cloned()
+        .collect();
+    // Rotate the per-day item window across the whole published set so
+    // chain depth and per-item cost stay representative instead of
+    // repeatedly hitting the deepest-history symbols.
+    let limit = if item_limit > 0 {
+        (item_limit as usize).min(all_active.len())
+    } else {
+        all_active.len()
+    };
+    let active: Vec<String> = if limit == all_active.len() {
+        all_active.clone()
+    } else {
+        let offset = ((day_index - 1) as usize * limit) % all_active.len();
+        all_active
+            .iter()
+            .cycle()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect()
+    };
+    // Finish leftover non-terminal tasks from killed runs first: their
+    // scope occupancy blocks new accepts (production-faithful drain).
+    let stale: Vec<String> = repo
+        .read(|c| {
+            let mut stmt = c
+                .prepare(
+                    "SELECT task_id FROM tasks WHERE status IN \
+                     ('pending','running','cancel_requested') ORDER BY created_at",
+                )
+                .map_err(storage)?;
+            let rows = stmt
+                .query_map([], |r| r.get(0))
+                .map_err(storage)?
+                .collect::<Result<Vec<String>, _>>()
+                .map_err(storage)?;
+            Ok(rows)
+        })
+        .unwrap();
+    for task_id in &stale {
+        let mut head = repo.task_head(task_id).unwrap();
+        if head.status == task_control::Status::Pending {
+            repo.transition_task_head(
+                &mut head,
+                Option::<&mut task_control::TaskItem>::None,
+                RUN,
+                Change::Claim,
+            )
+            .unwrap();
+        }
+        let task_items: Vec<String> = repo
+            .task(task_id)
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.spec.item_id.clone())
+            .collect();
+        for item_id in &task_items {
+            let symbol = item_id.strip_prefix("item-").unwrap();
+            start_head_item(repo, &mut head, item_id);
+            if soak_item_primitive(
+                repo,
+                symbol,
+                task_id,
+                item_id,
+                day_index,
+                head.state_revision,
+            )
+            .unwrap()
+            {
+                head.state_revision += 1;
+                head.counts.running -= 1;
+                head.counts.finished += 1;
+                head.counts.succeeded += 1;
+            }
+            wal_peak = wal_peak.max(wal_bytes(db));
+        }
+    }
+    for (chunk_index, batch) in active.chunks(TASK_ITEMS).enumerate() {
+        let items: Vec<(String, String)> = batch
+            .iter()
+            .map(|s| {
+                (
+                    format!("item-{s}"),
+                    task_control::legacy::scope_id(s, "day"),
+                )
+            })
+            .collect();
+        let task_id = accept_phase_task(
+            repo,
+            &format!("req-soakp-{day_index}-{chunk_index}"),
+            &items,
+        );
+        let mut head = repo.task_head(&task_id).unwrap();
+        // Iterate the task's own item set: on resume the stored task may
+        // carry a different window than the locally recomputed one.
+        let task_items: Vec<String> = repo
+            .task(&task_id)
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.spec.item_id.clone())
+            .collect();
+        for item_id in &task_items {
+            let item_id: &str = item_id;
+            let symbol = item_id.strip_prefix("item-").unwrap();
+            start_head_item(repo, &mut head, item_id);
+            if soak_item_primitive(
+                repo,
+                symbol,
+                &task_id,
+                item_id,
+                day_index,
+                head.state_revision,
+            )
+            .unwrap()
+            {
+                head.state_revision += 1;
+                head.counts.running -= 1;
+                head.counts.finished += 1;
+                head.counts.succeeded += 1;
+            }
+            items_done += 1;
+            wal_peak = wal_peak.max(wal_bytes(db));
+        }
+    }
+    let metrics = repo.checkpoint_idle().unwrap();
+    let growth = db_bytes(db).saturating_sub(db_before);
+    json!({
+        "day_index": day_index,
+        "mode": "primitive",
+        "items": items_done,
+        "symbols_active": active.len(),
+        "wall_s": started.elapsed().as_secs_f64(),
+        "db_growth_bytes": growth,
+        "wal_peak_bytes": wal_peak,
+        "wal_after_checkpoint": wal_bytes(db),
+        "checkpoint": format!("{metrics:?}"),
+    })
+}
+
 fn phase_verify(repo: &SqliteCompactMarket, symbols: &[String]) -> Value {
     let published = published_entities(repo);
     let active: Vec<String> = symbols
@@ -839,6 +1165,8 @@ fn s5b_retained_capacity() {
         report.complete("append", &dir);
     }
     if all("soak") {
+        let soak_mode = std::env::var("X_CAPACITY_SOAK_MODE").unwrap_or_else(|_| "adapter".into());
+        let soak_items = env_u64("X_CAPACITY_SOAK_ITEMS", 0);
         let done = report
             .facts
             .get("soak_days_done")
@@ -851,14 +1179,22 @@ fn s5b_retained_capacity() {
             .cloned()
             .unwrap_or_default();
         for day in (done + 1)..=soak_days {
-            let out = phase_append(
-                &repo,
-                &symbols,
-                &db,
-                day + 1,
-                generation_id,
-                &manifest_sha256,
-                "soak",
+            let out = if soak_mode == "primitive" {
+                phase_soak_primitive(&repo, &symbols, &db, day + 1, soak_items)
+            } else {
+                phase_append(
+                    &repo,
+                    &symbols,
+                    &db,
+                    day + 1,
+                    generation_id,
+                    &manifest_sha256,
+                    "soak",
+                )
+            };
+            eprintln!(
+                "[soak] day {day}/{soak_days} growth={} wall={}s",
+                out["db_growth_bytes"], out["wall_s"]
             );
             days.push(out);
             report.set("soak_days_done", json!(day));

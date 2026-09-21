@@ -1,0 +1,131 @@
+{
+  "phase": "S5B",
+  "status": "measured",
+  "conclusion": "CAPACITY_PASS_RUNTIME_FAIL",
+  "harness": {
+    "test": "sqlite_market::compact_repo::capacity::s5b_retained_capacity",
+    "profile": "release",
+    "scope": "retained gen-2 snapshot; all sh|sz .day members (11,801 unique, bj unsupported)",
+    "production_shape": "tasks of <=100 items, per-item StartItem + commit/commit_range via SqliteCompactMarket",
+    "environment": {
+      "host": "Box (grok-bot-vm-411252337), overlayfs + X_DATA_MCP_UNSAFE_NONLOCAL_FS=1 (local acceptance only)",
+      "sqlite": "3.53.2",
+      "page_size": 4096,
+      "note": "Box results do not substitute for ECS deployment acceptance"
+    }
+  },
+  "initial": {
+    "symbols_committed": 11783,
+    "symbols_failed": 18,
+    "failed_reasons": "real OHLC violations / malformed .day members (item-level refusals, not aborts)",
+    "bars_total": 29136493,
+    "wall_s": 3176.9,
+    "rss_peak_bytes": 561053696,
+    "db_bytes_after_checkpoint": 1405120512,
+    "wal_peak_bytes": 4231272,
+    "wal_after_checkpoint": 0,
+    "bytes_per_bar_db": 48.2,
+    "gate": {
+      "bytes_per_bar": {"limit": 61, "target": 56, "actual": 48.2, "pass": true},
+      "db_size": {"limit_gib": 2.5, "actual_gib": 1.31, "pass": true},
+      "rss": {"limit_bytes": 1610612736, "actual": 561053696, "pass": true},
+      "wall": {"limit_s": 1200, "actual_s": 3176.9, "pass": false, "note": "Box release; AC environment is ECS 2vCPU - measured value recorded for comparison"}
+    }
+  },
+  "measure": {
+    "counts": {
+      "segment_bars": 29136493,
+      "bar_segments": 63143,
+      "version_checkpoint_clips": 63143,
+      "version_delta_clips": 0,
+      "data_versions": 11783,
+      "effective_heads": 11783,
+      "evidence_bundles": 13388,
+      "source_bindings": 11783,
+      "publication_results": 11783,
+      "market_update_results": 0,
+      "task_items": 11783,
+      "task_publications": 11783,
+      "result_registry": 11783,
+      "tasks": 119,
+      "requests": 119
+    },
+    "dbstat_top": [
+      {"name": "segment_bars", "pgsize": 1352359936, "unused": 163470011, "object_bytes_per_bar": 46.4},
+      {"name": "evidence_bundles", "pgsize": 19652608},
+      {"name": "bar_segments", "pgsize": 3862528},
+      {"name": "data_versions", "pgsize": 3461120},
+      {"name": "task_items", "pgsize": 3391488},
+      {"name": "publication_results", "pgsize": 2555904},
+      {"name": "tasks", "pgsize": 2494464},
+      {"name": "source_bindings", "pgsize": 2408448},
+      {"name": "version_checkpoint_clips", "pgsize": 1527808}
+    ],
+    "bars_family_bytes": 1388743749,
+    "bars_family_budget_bytes": 2040109465.6,
+    "bars_family_pass": true
+  },
+  "nochange": {
+    "items": 11783,
+    "db_growth_bytes": 20275200,
+    "bytes_per_item": 1720.7,
+    "wall_s": 497.5,
+    "wal_peak_bytes": 4223032,
+    "wal_after_checkpoint": 0,
+    "gate": {
+      "per_item": {"target_bytes": 768, "hard_bytes": 2048, "actual": 1720.7, "pass_hard": true, "pass_target": false},
+      "zero_new_bars": true,
+      "zero_new_versions": true
+    }
+  },
+  "append_day1": {
+    "items": 11783,
+    "bars_written": 11783,
+    "db_growth_bytes": 28585984,
+    "bytes_per_item": 2426,
+    "wall_s": 2178.2,
+    "per_item_ms": 185,
+    "wal_peak_bytes": 4264232,
+    "wal_after_checkpoint": 0,
+    "scaled_to_5221_items": {
+      "db_growth_mib": 12.4,
+      "wall_min": 16.1
+    },
+    "gate": {
+      "daily_growth_5221": {"limit_mib": 16, "target_mib": 8, "estimated_mib": 12.4, "pass_hard": true, "pass_target": false},
+      "daily_wall_5221": {"limit_min": 5, "estimated_min": 16.1, "pass": false},
+      "wal": {"limit_bytes": 33554432, "actual": 4264232, "pass": true}
+    },
+    "finding": "per-item adapter path performs O(history) work three times (harness fixed(), stage_delta reconstruct_leaf+verify, commit_market_update base re-materialization for continuity). Even without the harness-side fixed(), stage+commit floor is ~100ms/item -> 5,221 items ~9min/day vs <=5min budget. Daily commit continuity verification likely needs task/scope-level batching - design-level finding for issue decision."
+  },
+  "soak": {
+    "mode": "primitive",
+    "items_per_day": "500 (days 1-47) -> 250 (48) -> 100 rotating window (49-250)",
+    "days_completed": 250,
+    "total_wall_s": 3286,
+    "per_item_growth_early_avg_bytes": 2424,
+    "per_item_growth_late_avg_bytes": 2458,
+    "growth_ratio_late_over_early": 1.0143,
+    "ratio_limit": 1.20,
+    "ratio_pass": true,
+    "note": "identical physical artifacts (segment/delta/version/result/task rows, same binding+head semantics); skips harness-side envelope CPU which does not affect stored bytes; item-subset rotating window measures growth-ratio physics on the full-scale DB; full-market 250-day soak remains for ECS acceptance. Per-day commits included drain of leftover non-terminal tasks (production-faithful restart semantics)."
+  },
+  "verify": {
+    "integrity_check": "ok",
+    "sampled_fixed_reads": 50,
+    "wal_after_final_checkpoint": 0,
+    "final_db_bytes": 1559019520
+  },
+  "conclusion_assessment": {
+    "storage_capacity": "PASS at full retained scale: 48.2 B/bar DB, 46.4 B/bar object, 1.31->1.45 GiB after 250d, WAL bounded and zero after checkpoints, integrity ok, growth ratio 1.0143",
+    "runtime_budgets": "FAIL on Box: initial 53min > 20min; adapter-path daily update ~185ms/item (~16min/5221 items, ~9min floor without harness-side fixed()) > 5min; root cause is O(history) continuity verification per item commit",
+    "byte_budgets": "no-change 1721B/item (hard 2048 pass, target 768 miss); append 2426B/item (~12.4MiB/5221, hard 16MiB pass, target 8MiB miss)",
+    "next": "per-item commit continuity verification needs task/scope-level batching or a cheaper prefix proof before daily time budget can pass; rerun full-market adapter soak on ECS after that lands"
+  },
+  "unverified": [
+    "full-market adapter-mode 250-day soak (subset primitive soak passed; ECS run pending)",
+    "restart recovery at scale (S4 primitives covered SIGKILL at small scale; soak drained stale tasks each day)",
+    "full-market wall-time acceptance on ECS",
+    "100-item vs full-market production assembly"
+  ]
+}
