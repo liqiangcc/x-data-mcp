@@ -358,7 +358,7 @@ fn fixed_base_damage_after_derivation_never_substitutes_another_version() {
     let cmd = command(&store, "derived", PublishIntent::HistoricalFixedBase);
     Connection::open(store.tasks.path())
         .unwrap()
-        .execute_batch("UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','0') WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily')")
+        .execute_batch("UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','0')")
         .unwrap();
     assert!(matches!(
         publisher.prepare_derived_yearly(cmd, &candidate),
@@ -547,7 +547,7 @@ fn yearly_acceptance_normalizes_freezes_and_retains_global_id_and_scope_boundari
     assert_eq!(retried.items[0].spec, task.items[0].spec);
     Connection::open(store.tasks.path())
         .unwrap()
-        .execute_batch("UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','0') WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily')")
+        .execute_batch("UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','0')")
         .unwrap();
     assert!(
         ctl.accept(
@@ -850,7 +850,7 @@ fn yearly_reuse_head_conflict_preserves_task_and_old_result() {
 fn yearly_result_schema_requires_explicit_upgrade_and_read_does_not_upgrade() {
     let (_dir, store) = db();
     let c = Connection::open(store.tasks.path()).unwrap();
-    c.execute_batch("CREATE TABLE daily_bars AS SELECT vs.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE version_segments; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; DELETE FROM schema_migrations WHERE version>=6; PRAGMA user_version=5;").unwrap();
+    c.execute_batch("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; DELETE FROM schema_migrations WHERE version>=6; PRAGMA user_version=5;").unwrap();
     assert!(store.yearly_receipt("absent").is_err());
     let version: i64 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))

@@ -1,6 +1,6 @@
 //! Compact version envelopes. `data_versions.envelope_json` stores the
 //! compatibility record with bulk bar arrays replaced by `$ref` markers that
-//! point at shared `version_segments` rows or content-addressed `payloads`
+//! point at shared `manifest_nodes` segment clips or content-addressed `payloads`
 //! rows. Expansion restores the exact record; `compat::check` then re-verifies
 //! the legacy digest, so a broken reference fails closed.
 use super::*;
@@ -18,13 +18,13 @@ fn ref_segments() -> Value {
 fn ref_records() -> Value {
     serde_json::json!({REF: "records"})
 }
-fn ref_payload(id: &str) -> Value {
+pub(crate) fn ref_payload(id: &str) -> Value {
     serde_json::json!({REF: format!("payload:{id}")})
 }
 fn ref_annual_bars(id: &str) -> Value {
     serde_json::json!({REF: format!("annual_bars:{id}")})
 }
-fn array_payload(v: &Value) -> Result<Payload, Error> {
+pub(crate) fn array_payload(v: &Value) -> Result<Payload, Error> {
     if !v.is_array() {
         return Err(integrity("envelope payload is not an array"));
     }
@@ -34,10 +34,10 @@ fn array_payload(v: &Value) -> Result<Payload, Error> {
         json,
     })
 }
-/// Daily pack: `records` is served from `version_segments` (`marker` selects
+/// Daily pack: `records` is served from the manifest (`marker` selects
 /// segment- vs payload-backed reconstruction for migrated rows whose bars
 /// cannot be reproduced exactly from shared segments).
-fn pack_daily(raw: &Value, marker: Value) -> Result<(Value, Vec<Payload>), Error> {
+pub(crate) fn pack_daily(raw: &Value, marker: Value) -> Result<(Value, Vec<Payload>), Error> {
     let mut env = raw.clone();
     let mut out = Vec::new();
     env["records"] = marker;
@@ -105,7 +105,7 @@ fn pack_yearly(raw: &Value) -> Result<(Value, Vec<Payload>), Error> {
     Ok((env, out))
 }
 /// Strip bulk arrays from a version/audit record into `payloads` rows.
-/// `records` for daily versions is served from `version_segments` instead.
+/// `records` for daily versions is served from the manifest instead.
 pub(crate) fn pack(raw: &Value) -> Result<(Value, Vec<Payload>), Error> {
     if raw["period"].as_str() == Some("Day") {
         pack_daily(raw, ref_segments())
@@ -145,7 +145,10 @@ fn fetch_payload(c: &Connection, id: &str) -> Result<Value, Error> {
     }
     serde_json::from_str(&json).map_err(integrity)
 }
-fn expand_segments(c: &Connection, version_id: &str) -> Result<Value, Error> {
+/// Clip-table expansion used only by `migrate_legacy`, which runs at schema
+/// step 16 while `version_segments` still exists (step 17 converts it into
+/// manifest trees). Production reads resolve `$segments` via the manifest.
+fn expand_clips(c: &Connection, version_id: &str) -> Result<Value, Error> {
     let mut stmt = c
         .prepare(
             "SELECT s.bar_json FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id \
@@ -180,7 +183,9 @@ fn resolve(
     if r == "segments" {
         let id =
             version_id.ok_or_else(|| integrity("envelope segments reference out of context"))?;
-        return expand_segments(c, id);
+        let root = crate::sqlite_market::manifest::root_of(c, id)?
+            .ok_or_else(|| integrity("segment-backed version lacks manifest"))?;
+        return Ok(Value::Array(crate::sqlite_market::manifest::bars(c, root)?));
     }
     if let Some(id) = r.strip_prefix("payload:") {
         return fetch_payload(c, id);
@@ -273,7 +278,7 @@ pub(crate) fn migrate_legacy(c: &Connection) -> Result<(), Error> {
         }
         let (env, payloads) = if raw["period"].as_str() == Some("Day") {
             fill_segment_bars(c, &id, &raw)?;
-            let marker = if expand_segments(c, &id)? == raw["records"] {
+            let marker = if expand_clips(c, &id)? == raw["records"] {
                 ref_segments()
             } else {
                 let p = array_payload(&raw["records"])?;
@@ -292,8 +297,17 @@ pub(crate) fn migrate_legacy(c: &Connection) -> Result<(), Error> {
         )
         .map_err(storage)?;
     }
-    let unfilled: bool = c
+    // `version_segments` exists only while this data step runs at schema 16;
+    // schema 17 drops it, so a rerun on a packed database skips this check.
+    let has_clips: bool = c
         .query_row(
+            "SELECT count(*)>0 FROM sqlite_master WHERE type='table' AND name='version_segments'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    let unfilled = has_clips
+        && c.query_row(
             "SELECT EXISTS(SELECT 1 FROM segment_bars s JOIN version_segments vs ON vs.segment_id=s.segment_id WHERE s.bar_json='')",
             [],
             |r| r.get(0),

@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 16;
-pub(crate) const MIGRATIONS: [&str; 16] = [
+pub const SCHEMA_VERSION: u32 = 17;
+pub(crate) const MIGRATIONS: [&str; 17] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
     include_str!("../migrations/tasks/003_market.sql"),
@@ -26,6 +26,7 @@ pub(crate) const MIGRATIONS: [&str; 16] = [
     include_str!("../migrations/tasks/014_segmented_bars.sql"),
     include_str!("../migrations/tasks/015_task_counters.sql"),
     include_str!("../migrations/tasks/016_compact_records.sql"),
+    include_str!("../migrations/tasks/017_manifest_delta.sql"),
 ];
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.
@@ -34,6 +35,8 @@ fn post_migration(c: &Connection, version: usize) -> Result<(), Error> {
         16 => crate::sqlite_market::envelope::migrate_legacy(c).map_err(|e| {
             Error::StorageUnavailable(format!("compact record migration failed: {e}"))
         }),
+        17 => crate::sqlite_market::manifest::migrate(c)
+            .map_err(|e| Error::StorageUnavailable(format!("manifest migration failed: {e}"))),
         _ => Ok(()),
     }
 }

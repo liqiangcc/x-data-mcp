@@ -280,25 +280,21 @@ fn migrated_sharer_with_different_bar_text_uses_payload_and_fails_closed() {
     b["batch"]["bars"][0]["open"] = serde_json::json!("10.0000000000000000010");
     b["integrity_sha256"] =
         serde_json::json!(crate::market_storage::compat::legacy_digest(&b).unwrap());
+    // Simulate a migrated sharer: its manifest still references the parent's
+    // segment, but its records carry numerically-equal bars whose text
+    // differs, so the envelope keeps the exact array in payloads.
+    let p = envelope::array_payload(&b["records"]).unwrap();
+    envelope::write_payloads(&c, std::slice::from_ref(&p)).unwrap();
+    let (env, more) = envelope::pack_daily(&b, envelope::ref_payload(&p.id)).unwrap();
+    envelope::write_payloads(&c, &more).unwrap();
     c.execute(
-        "INSERT INTO data_versions(version_id,symbol,period,adjustment,state,source,published_at,record_count,unique_count,duplicate_count,coverage_status,coverage_reason,first_date,last_date,envelope_json,content_digest,digest_format) SELECT 'legacy-daily-b',symbol,period,adjustment,'staging',source,published_at,record_count,unique_count,duplicate_count,coverage_status,coverage_reason,first_date,last_date,?1,?2,digest_format FROM data_versions WHERE version_id='legacy-daily'",
+        "INSERT INTO data_versions(version_id,symbol,period,adjustment,state,source,published_at,record_count,unique_count,duplicate_count,coverage_status,coverage_reason,first_date,last_date,envelope_json,content_digest,digest_format,evidence_digest,manifest_root) SELECT 'legacy-daily-b',symbol,period,adjustment,'staging',source,published_at,record_count,unique_count,duplicate_count,coverage_status,coverage_reason,first_date,last_date,?1,?2,digest_format,evidence_digest,manifest_root FROM data_versions WHERE version_id='legacy-daily'",
         params![
-            serde_json::to_string(&b).unwrap(),
+            serde_json::to_string(&env).unwrap(),
             b["integrity_sha256"].as_str().unwrap()
         ],
     )
     .unwrap();
-    c.execute(
-        "INSERT INTO version_segments(version_id,seq,segment_id,clip_start,clip_end) SELECT 'legacy-daily-b',seq,segment_id,clip_start,clip_end FROM version_segments WHERE version_id='legacy-daily'",
-        [],
-    )
-    .unwrap();
-    c.execute(
-        "INSERT INTO version_evidence(version_id,field,status,value,reason) SELECT 'legacy-daily-b',field,status,value,reason FROM version_evidence WHERE version_id='legacy-daily'",
-        [],
-    )
-    .unwrap();
-    envelope::migrate_legacy(&c).unwrap();
     let env: String = c
         .query_row(
             "SELECT envelope_json FROM data_versions WHERE version_id='legacy-daily-b'",
@@ -348,4 +344,313 @@ fn unknown_or_dangling_envelope_reference_fails_closed() {
     )
     .unwrap();
     assert!(matches!(db.fixed("legacy-daily"), Err(Error::Integrity(_))));
+}
+fn daily_raw(id: &str, first_day: i64, days: usize) -> Value {
+    let samples: Vec<Value> = serde_json::from_str(include_str!(
+        "../../tests/fixtures/issue79/legacy-records.json"
+    ))
+    .unwrap();
+    let mut r = samples[0]["record"].clone();
+    let start = chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+    let bars: Vec<Value> = (0..days)
+        .map(|i| {
+            let d = start + chrono::Duration::days(first_day + i as i64);
+            serde_json::json!({"date":d.to_string(),"open":"10.00","high":"11.00","low":"9.00","close":"10.50","volume":null,"amount":null})
+        })
+        .collect();
+    r["version_id"] = serde_json::json!(id);
+    r["records"] = serde_json::json!(bars);
+    r["batch"]["bars"] = serde_json::json!(bars);
+    r["validation"]["record_count"] = serde_json::json!(days);
+    r["validation"]["unique_record_count"] = serde_json::json!(days);
+    r["integrity_sha256"] =
+        serde_json::json!(crate::market_storage::compat::legacy_digest(&r).unwrap());
+    r
+}
+fn publish_daily(db: &SqliteMarket, raw: &Value, head: Option<&str>) {
+    db.stage(raw).unwrap();
+    let ctl = TaskControl::new(
+        db.tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    let a = ctl
+        .accept(
+            raw["version_id"].as_str().unwrap(),
+            LegacyCollection.key(),
+            serde_json::json!({"symbols":[raw["symbol"]],"periods":["day"]}),
+        )
+        .unwrap();
+    let RequestOutcome::Task(s) = a.record.outcome else {
+        panic!()
+    };
+    let s = db
+        .tasks
+        .transition(&s.task.task_id, s.task.state_revision, "run", Change::Claim)
+        .unwrap();
+    let s = db
+        .tasks
+        .transition(
+            &s.task.task_id,
+            s.task.state_revision,
+            "run",
+            Change::StartItem(s.items[0].spec.item_id.clone()),
+        )
+        .unwrap();
+    let plan = Publisher {
+        repository: db.clone(),
+    }
+    .prepare(Publication {
+        publication_id: format!("pub-{}", raw["version_id"].as_str().unwrap()),
+        version_id: raw["version_id"].as_str().unwrap().into(),
+        task_id: s.task.task_id,
+        item_id: s.items[0].spec.item_id.clone(),
+        run_id: "run".into(),
+        expected_revision: s.task.state_revision,
+        intent: PublishIntent::Daily {
+            expected_head: head.map(str::to_owned),
+        },
+    })
+    .unwrap();
+    db.commit(&plan).unwrap();
+}
+#[test]
+fn manifest_append_versions_share_parent_subtrees_with_bounded_growth() {
+    let (_dir, db, plan) = setup();
+    db.commit(&plan).unwrap();
+    let c = Connection::open(db.tasks.path()).unwrap();
+    let nodes = |c: &Connection| -> i64 {
+        c.query_row("SELECT count(*) FROM manifest_nodes", [], |r| r.get(0))
+            .unwrap()
+    };
+    // 250 daily updates, each appending one bar to the previous head.
+    let mut prev = "legacy-daily".to_owned();
+    let mut days = 3usize;
+    for i in 0..250 {
+        days += 1;
+        let id = format!("d{i}");
+        publish_daily(&db, &daily_raw(&id, 0, days), Some(&prev));
+        prev = id;
+    }
+    let total = nodes(&c);
+    // Persistent splicing path-copies O(log n) interior nodes plus one leaf per
+    // update; the retired flat manifest restated every clip (O(days^2)).
+    assert!(
+        total < 250 * 64,
+        "manifest growth must stay near-linear, got {total} nodes"
+    );
+    let head_height: i64 = c
+        .query_row(
+            "SELECT n.height FROM data_versions v JOIN manifest_nodes n ON n.node_id=v.manifest_root WHERE v.version_id=?1",
+            [&prev],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        head_height <= 16,
+        "tree height must stay logarithmic: {head_height}"
+    );
+    // Every version still reconstructs its exact records through the tree.
+    for i in [0usize, 100, 249] {
+        let fixed = db.fixed(&format!("d{i}")).unwrap();
+        assert_eq!(fixed.version.records.len(), 4 + i);
+    }
+}
+#[test]
+fn manifest_splice_matches_a_flat_reference_sequence() {
+    let dir = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(dir.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let c = Connection::open(tasks.path()).unwrap();
+    let put_seg = |id: i64, first: i64, days: usize| -> Vec<String> {
+        let start = chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let dates: Vec<String> = (0..days)
+            .map(|i| (start + chrono::Duration::days(first + i as i64)).to_string())
+            .collect();
+        c.execute(
+            "INSERT INTO bar_segments VALUES(?1,'sh.600006',?2,?3,?4)",
+            params![id, dates[0], dates[days - 1], days as i64],
+        )
+        .unwrap();
+        let mut s = c
+            .prepare("INSERT INTO segment_bars VALUES(?1,?2,?3)")
+            .unwrap();
+        for d in &dates {
+            s.execute(params![id, d, format!("{{\"date\":\"{d}\",\"open\":\"1\",\"high\":\"1\",\"low\":\"1\",\"close\":\"1\",\"volume\":null,\"amount\":null}}")])
+                .unwrap();
+        }
+        dates
+    };
+    let seg1 = put_seg(1, 0, 100);
+    let new_a = put_seg(2, 500, 10);
+    let new_b = put_seg(3, 600, 5);
+    let base = manifest::build(
+        &c,
+        None,
+        &[manifest::Piece::New {
+            segment: 1,
+            first_date: seg1[0].clone(),
+            last_date: seg1[99].clone(),
+            count: 100,
+        }],
+    )
+    .unwrap();
+    let dates = |root: i64| -> Vec<String> {
+        manifest::bars(&c, root)
+            .unwrap()
+            .iter()
+            .map(|b| b["date"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(dates(base), seg1);
+    // Mixed splice: new + base[0..50) + new + base[50..100).
+    let v2 = manifest::build(
+        &c,
+        Some(base),
+        &[
+            manifest::Piece::New {
+                segment: 2,
+                first_date: new_a[0].clone(),
+                last_date: new_a[9].clone(),
+                count: 10,
+            },
+            manifest::Piece::Base { first: 0, last: 49 },
+            manifest::Piece::New {
+                segment: 3,
+                first_date: new_b[0].clone(),
+                last_date: new_b[4].clone(),
+                count: 5,
+            },
+            manifest::Piece::Base {
+                first: 50,
+                last: 99,
+            },
+        ],
+    )
+    .unwrap();
+    let expected: Vec<String> = new_a
+        .iter()
+        .chain(&seg1[..50])
+        .chain(&new_b)
+        .chain(&seg1[50..])
+        .cloned()
+        .collect();
+    assert_eq!(dates(v2), expected);
+    // The parent tree is untouched and still resolves identically.
+    assert_eq!(dates(base), seg1);
+    // Base pieces are independent slices: an out-of-order pair produces
+    // exactly the requested sequence rather than corrupting it silently.
+    let reordered = manifest::build(
+        &c,
+        Some(base),
+        &[
+            manifest::Piece::Base {
+                first: 50,
+                last: 99,
+            },
+            manifest::Piece::Base { first: 0, last: 49 },
+        ],
+    )
+    .unwrap();
+    let expected_reorder: Vec<String> = seg1[50..].iter().chain(&seg1[..50]).cloned().collect();
+    assert_eq!(dates(reordered), expected_reorder);
+    // An out-of-bounds base range fails closed.
+    assert!(matches!(
+        manifest::build(
+            &c,
+            Some(base),
+            &[manifest::Piece::Base {
+                first: 0,
+                last: 100
+            }]
+        ),
+        Err(Error::Integrity(_))
+    ));
+    // Range clips follow the spliced order (production records are
+    // date-sorted; this synthetic sequence exercises pure sequence order).
+    let clips = manifest::clips_in_range(&c, v2, "2019-01-01", "2023-01-01").unwrap();
+    let seg_order: Vec<i64> = clips.iter().map(|(s, _, _)| *s).collect();
+    assert_eq!(seg_order, vec![2, 1, 3, 1]);
+}
+#[test]
+fn manifest_and_evidence_corruption_fail_closed() {
+    for sql in [
+        // A dropped interior/leaf node.
+        "DELETE FROM manifest_nodes WHERE node_id=(SELECT manifest_root FROM data_versions WHERE version_id='legacy-daily')",
+        // A dangling child pointer.
+        "UPDATE manifest_nodes SET left_id=99999 WHERE node_id=(SELECT manifest_root FROM data_versions WHERE version_id='legacy-daily')",
+        // A corrupt leaf clip bound.
+        "UPDATE manifest_nodes SET clip_end='1900-01-01' WHERE node_id=(SELECT manifest_root FROM data_versions WHERE version_id='legacy-daily')",
+        // A corrupt declared leaf length.
+        "UPDATE manifest_nodes SET row_count=99 WHERE node_id=(SELECT manifest_root FROM data_versions WHERE version_id='legacy-daily')",
+        // A missing segment bar under a referenced clip.
+        "DELETE FROM segment_bars WHERE trade_date=(SELECT min(trade_date) FROM segment_bars)",
+        // A segment-backed record with no manifest root.
+        "UPDATE data_versions SET manifest_root=NULL WHERE version_id='legacy-daily'",
+        // A sealed evidence projection that no longer matches the record.
+        "UPDATE data_versions SET evidence_digest='tampered' WHERE version_id='legacy-daily'",
+    ] {
+        let (_dir, db, plan) = setup();
+        db.commit(&plan).unwrap();
+        // Disable FK checks so the simulated damage lands; reads must still
+        // fail closed rather than reconstruct around it.
+        Connection::open(db.tasks.path())
+            .unwrap()
+            .execute_batch(&format!("PRAGMA foreign_keys=OFF; {sql}"))
+            .unwrap();
+        assert!(
+            matches!(db.fixed("legacy-daily"), Err(Error::Integrity(_))),
+            "{sql}"
+        );
+    }
+}
+#[test]
+fn manifest_rebuilds_from_v16_flat_clips_and_migrates_idempotently() {
+    let (_dir, db, plan) = setup();
+    db.commit(&plan).unwrap();
+    publish_daily(&db, &daily_raw("d1", 0, 4), Some("legacy-daily"));
+    let original = db.fixed("d1").unwrap().raw().clone();
+    let c = Connection::open(db.tasks.path()).unwrap();
+    // Rewind to schema 16: flat per-version clips, no manifest, no digests.
+    c.execute_batch(
+        "CREATE TABLE version_segments(version_id TEXT NOT NULL,seq INTEGER NOT NULL,segment_id INTEGER NOT NULL,clip_start TEXT NOT NULL,clip_end TEXT NOT NULL,PRIMARY KEY(version_id,seq)) WITHOUT ROWID;
+         INSERT INTO version_segments
+           WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL
+             UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL
+             UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL)
+           SELECT t.version_id,ROW_NUMBER() OVER (PARTITION BY t.version_id ORDER BY m.clip_start)-1,m.segment_id,m.clip_start,m.clip_end
+           FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL;
+         DROP TABLE manifest_nodes;
+         ALTER TABLE data_versions DROP COLUMN manifest_root;
+         ALTER TABLE data_versions DROP COLUMN evidence_digest;
+         DELETE FROM schema_migrations WHERE version>=17;
+         PRAGMA user_version=16;",
+    )
+    .unwrap();
+    drop(c);
+    db.tasks.upgrade().unwrap();
+    // Rebuilt trees serve the exact same records.
+    assert_eq!(db.fixed("d1").unwrap().raw(), &original);
+    let c = Connection::open(db.tasks.path()).unwrap();
+    let nodes: i64 = c
+        .query_row("SELECT count(*) FROM manifest_nodes", [], |r| r.get(0))
+        .unwrap();
+    assert!(nodes > 0);
+    let has_clips: bool = c
+        .query_row(
+            "SELECT count(*)>0 FROM sqlite_master WHERE name='version_segments'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!has_clips);
+    // The data migration is idempotent on an already-migrated database.
+    manifest::migrate(&c).unwrap();
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM manifest_nodes", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        nodes
+    );
 }

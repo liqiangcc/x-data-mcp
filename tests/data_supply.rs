@@ -109,7 +109,7 @@ fn real_batch_manifest_pages_pin_versions_and_reject_any_later_damage() {
     rusqlite::Connection::open(t.path())
         .unwrap()
         .execute(
-            "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','0') WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily')",
+            "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','0')",
             [],
         )
         .unwrap();
