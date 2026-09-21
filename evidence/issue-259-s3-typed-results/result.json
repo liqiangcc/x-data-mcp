@@ -1,0 +1,88 @@
+{
+  "schema": "x-data-mcp.issue-259-s3-typed-results.v1",
+  "base_commit": "e94cd3e9eee90c72695581b168cd7a6faeb1dbe5",
+  "working_tree_has_s3_changes": true,
+  "decision": "PASS_TO_S4",
+  "result_identity": {
+    "compact_market_tests_passed": 23,
+    "fixed_vectors": {
+      "market_update_no_change": "e1f4d956900bd17779ef65615c25ceb5f98613b4a0a58a07d5a15aa3018bd8d9",
+      "publication_published": "2261074fdedc5b6b470a2684dbffd4cc7b2ce6cfe2d15fe98b85fc611df0626f",
+      "full_revision": "c03ce395eaedb1f2c92f7c7197fca6193f46cb09a4c2f78806e23ca11b7a9f3d"
+    }
+  },
+  "typed_result_store": {
+    "unit_tests_passed": 12,
+    "retained_tests_passed": 1,
+    "retained_tests_ignored_by_default": 1,
+    "atomic_immediate_transaction": true,
+    "unified_result_id_namespace": true,
+    "canonical_outcome_limit_bytes": 192,
+    "append_result_clips_contain_bars": false,
+    "legacy_audit_json_used": false,
+    "payloads_table_present": false
+  },
+  "retained_no_change": {
+    "symbol": "sz.000002",
+    "bars": 8479,
+    "segment_count": 17,
+    "input_sha256": {
+      "official-base.zip": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+      "official-hsjday.zip": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+      "official-gbbq.zip": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"
+    },
+    "core_counts_before": {
+      "bar_segments": 17,
+      "segment_bars": 8479,
+      "version_checkpoint_clips": 17,
+      "version_delta_clips": 0,
+      "data_versions": 1,
+      "publication_results": 0,
+      "task_publications": 0,
+      "market_update_delta_clips": 0
+    },
+    "core_counts_after": {
+      "bar_segments": 17,
+      "segment_bars": 8479,
+      "version_checkpoint_clips": 17,
+      "version_delta_clips": 0,
+      "data_versions": 1,
+      "publication_results": 0,
+      "task_publications": 0,
+      "market_update_delta_clips": 0
+    },
+    "result_registry_added": 1,
+    "market_update_results_added": 1,
+    "outcome_json_bytes": 95,
+    "no_change": true,
+    "decision": "PASS"
+  },
+  "corruption_and_atomicity_gates": [
+    "stale task revision or non-running item rolls back",
+    "result namespace or task-item collision rolls back",
+    "head compare-and-set failure rolls back published version",
+    "u64 to SQLite i64 overflow is rejected before effects",
+    "version projection and source binding linkage mismatch fails closed",
+    "append result refs and version delta mismatch fails closed",
+    "missing typed task publication fails closed",
+    "result digest, evidence, registry kind or item outcome corruption fails closed"
+  ],
+  "supporting_tests": {
+    "compact_version_tests_passed": 13,
+    "compact_segment_tests_passed": 15
+  },
+  "verification": [
+    "TMPDIR=/dev/shm cargo fmt --check",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_results -- --nocapture",
+    "TMPDIR=/dev/shm cargo test --locked --lib retained_s3_no_change_adds_only_typed_receipt -- --ignored --nocapture",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_versions -- --nocapture",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_market -- --nocapture",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_v19 -- --nocapture",
+    "TMPDIR=/dev/shm cargo clippy --locked --lib --test official_market -- -D warnings",
+    "git diff --check"
+  ],
+  "limitations": [
+    "S3 remains isolated from migration 19, current SqliteMarket, MarketRepository, MCP and production task adapters.",
+    "PASS_TO_S4 does not pass WriteCoordinator, WAL, full-market capacity, ECS or production-readiness gates."
+  ]
+}

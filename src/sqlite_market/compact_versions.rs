@@ -1274,5 +1274,97 @@ fn decode_period(code: i64) -> Result<Period, Error> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompactVersionState {
+    Staged,
+    Validated,
+    Published,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VersionResultFacts {
+    pub key: i64,
+    pub version_id: String,
+    pub entity: String,
+    pub period: Period,
+    pub state: CompactVersionState,
+    pub source_binding_digest: Digest,
+    pub parent_version_key: Option<i64>,
+    pub manifest_mode: ManifestMode,
+    pub delta_depth: u32,
+    pub projection_digest: Digest,
+    pub first_day: i64,
+    pub last_day: i64,
+}
+
+pub(crate) fn result_facts(c: &Connection, key: i64) -> Result<VersionResultFacts, Error> {
+    let row = read_version_row(c, key)?.ok_or_else(|| integrity("version row missing"))?;
+    let state = match row.state {
+        1 => CompactVersionState::Staged,
+        2 => CompactVersionState::Validated,
+        3 => CompactVersionState::Published,
+        _ => return Err(integrity("malformed version state")),
+    };
+    let manifest_mode = match row.manifest_mode {
+        1 => ManifestMode::Checkpoint,
+        2 => ManifestMode::Delta,
+        _ => return Err(integrity("malformed manifest_mode")),
+    };
+    let delta_depth: u32 = row
+        .delta_depth
+        .try_into()
+        .map_err(|_| integrity("malformed delta_depth"))?;
+    match manifest_mode {
+        ManifestMode::Checkpoint if row.parent_version_key.is_some() || delta_depth != 0 => {
+            return Err(integrity("checkpoint version carries parent/depth"));
+        }
+        ManifestMode::Delta
+            if row.parent_version_key.is_none()
+                || !(1..=MAX_DELTA_DEPTH as u32).contains(&delta_depth) =>
+        {
+            return Err(integrity("delta version lacks parent/depth"));
+        }
+        _ => {}
+    }
+    Ok(VersionResultFacts {
+        key: row.key,
+        version_id: row.version_id,
+        entity: row.entity,
+        period: row.period,
+        state,
+        source_binding_digest: row.source_binding_digest,
+        parent_version_key: row.parent_version_key,
+        manifest_mode,
+        delta_depth,
+        projection_digest: row.projection_digest,
+        first_day: row.first_day,
+        last_day: row.last_day,
+    })
+}
+
+pub(crate) fn verified_evidence_kind(
+    c: &Connection,
+    digest: &Digest,
+) -> Result<EvidenceKind, Error> {
+    Ok(read_evidence(c, digest)?.0)
+}
+
+pub(crate) fn verified_source_binding(
+    c: &Connection,
+    digest: &Digest,
+) -> Result<SourceBinding, Error> {
+    read_source_binding(c, digest)
+}
+
+pub(crate) fn apply_stored_delta(
+    c: &Connection,
+    base: &[CompactBar],
+    ops: &[StoredDelta],
+    entity: &str,
+    period: Period,
+) -> Result<Vec<CompactBar>, Error> {
+    apply_delta(c, base, ops, entity, period)
+}
+
 #[cfg(test)]
 mod tests;

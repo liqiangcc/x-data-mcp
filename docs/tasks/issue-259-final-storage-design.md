@@ -2,7 +2,7 @@
 
 ## 状态与目的
 
-状态：**DESIGN FROZEN / S0-S2 PROTOTYPE PASS / S3-S6 NOT STARTED**
+状态：**DESIGN FROZEN / S0-S3 PROTOTYPE PASS / S4-S6 NOT STARTED**
 适用基线：`issue-262-phase-d`，schema 18，2026-09-21。
 关联：#259、#260、#262。
 
@@ -298,6 +298,20 @@ CREATE TABLE market_update_results(
      OR (outcome=2 AND continuity_mode IN (2,3) AND base_version_key<>result_version_key AND delta_digest IS NOT NULL))
 ) STRICT;
 
+CREATE TABLE market_update_delta_clips(
+  result_key INTEGER NOT NULL REFERENCES market_update_results(result_key),
+  seq INTEGER NOT NULL CHECK(seq >= 0),
+  range_start_day INTEGER NOT NULL,
+  range_end_day INTEGER NOT NULL,
+  segment_key INTEGER NOT NULL REFERENCES bar_segments(segment_key),
+  clip_start_day INTEGER NOT NULL,
+  clip_end_day INTEGER NOT NULL,
+  row_count INTEGER NOT NULL CHECK(row_count > 0),
+  PRIMARY KEY(result_key,seq),
+  CHECK(range_start_day <= range_end_day),
+  CHECK(clip_start_day <= clip_end_day)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE publication_results(
   result_key INTEGER PRIMARY KEY,
   publication_id TEXT NOT NULL UNIQUE REFERENCES result_registry(result_id),
@@ -336,7 +350,20 @@ CREATE TABLE effective_heads(
 
 `publication_batches` 和 `yearly_execution_results.audit_json` 不再复制 command/receipt JSON。daily update/backfill 的单一 durable receipt 是 `market_update_results`；collection/yearly/republish 的单一 durable receipt 是 `publication_results`。result 与匹配 kind 的 registry row、item outcome 在同一事务提交；outcome=published 同时提交 `task_publications`、published version 和可选 head，no_change 不写 `task_publications`。publication verification 从这些类型化事实重建结论。
 
+append 的 `market_update_delta_clips` 保存本次 ordered tail clip refs，使普通 delta version 和 depth-256 checkpoint rollover 都能重新计算同一个 `delta_digest`；它不保存 bars，no-change/full revision 均为零行。full revision 的新 checkpoint 已持久化完整 result clips，变化摘要按下文独立 domain 绑定 base/result projection，无需复制 checkpoint refs 到 result 表。
+
 `publication_results.base_version_key` 表示同 entity/period 的既有结果版本：首次 collection 可 NULL，no_change 必须等于 result；yearly 的 daily 派生输入只在 `yearly_lineage.base_daily_version_key` 表达，不复用该列。command、selection、generation 和公共 evidence 存在 task/frozen-work 层一次；result 行只保存稳定 refs/digests。现有 `task_items.outcome_json` 保留协议所需的 success/reason/result ref，但 canonical bytes 目标 ≤192 bytes，禁止嵌入 bars、batch、完整 evidence 或重复 receipt。MCP `get_task_progress` 按引用组合响应，不要求持久化其 wire JSON。
+
+S3 的成功 item outcome 固定为 RFC 8785 canonical object：
+
+```text
+market update: {"error":null,"evidence":{"result_id":text,"result_kind":"market_update"},"success":true}
+publication:   {"error":null,"evidence":{"result_id":text,"result_kind":"publication"},"success":true}
+```
+
+只允许这些字段，canonical UTF-8 必须 ≤192 bytes。`task_revision` 保存本次原子完成后的 revision，即调用方提供的 `expected_task_revision + 1`。提交必须在一个 SQLite transaction 中依次核对 task revision、running item、base/head/version/evidence/source binding，登记统一 result ID，写类型化 result，完成 item 与 task counters，并在 published outcome 时发布 validated version、写 `task_publications` 及按显式策略推进 head；任一步失败整体回滚。no-change 只引用已 published base/result，不写 `task_publications` 或 head。
+
+`market_update_results.evidence_digest` 必须引用 `continuity` evidence；no-change 的 source binding 可表示本次已验证 generation，因而不要求等于复用版本的 source binding。append/full published result 的 source binding 必须等于新版本绑定。`publication_results` 的 collection/republish evidence 必须为 `version`，yearly 必须为 `yearly`；published result 的 source binding 必须等于新版本绑定。
 
 ## Canonical encoding 与摘要
 
@@ -428,7 +455,17 @@ SHA256(
 )
 ```
 
-该值保存为 update result 的 `delta_digest`。delta projection：
+该值保存为 append update result 的 `delta_digest`。full revision 的 `delta_digest` 定义为：
+
+```text
+SHA256(
+  "x-data-full-revision-v1\0"
+  || base_projection_digest
+  || result_projection_digest
+)
+```
+
+delta projection：
 
 ```text
 SHA256(
@@ -534,7 +571,7 @@ SHA256(
 )
 ```
 
-它不包含任何 bars 数组；`delta_digest` 指向新 segment 集合的有序摘要。
+它不包含任何 bars 数组；append 的 `delta_digest` 由持久化 ordered tail clip refs 重算，full revision 的 `delta_digest` 由 base/result projection 重算。
 
 `publication_results.result_digest` 使用 domain `x-data-publication-result-v1\0`，按以下顺序编码：
 
@@ -668,6 +705,8 @@ CLI 和测试可继续使用短连接 repository；生产 `data_service` 必须�
 先完成 no-change，再 append，再 revision。schema 18 的 `audit_json.segment.bars` 和 `publication_batches` command/receipt 不迁入 schema 19。
 
 退出条件：production-shaped no-change 对 bars/segments/checkpoints/deltas/versions 的 before/after 计数全部相同，且 schema 19 不存在 `payloads`；append 只新增 tail segment、一个 delta version 和对应紧凑 result。
+
+执行结果（2026-09-21，S3 working tree）：23 个 identity/framing 测试、12 个 typed result/atomicity 单测及 1 个 ignored retained production-shaped no-change 测试通过。`sz.000002` 的 8,479 bars/17 segments 在 no-change 前后所有 canonical bar、clip、version、publication 和 delta-ref 计数相同，只新增一条 registry 和一条 95-byte outcome 的 typed update result；schema 不含 `payloads`。append、depth-256 rollover、full revision、collection/yearly/republish、统一 ID namespace、head CAS、事务回滚和损坏拒绝均已覆盖。证据见 `evidence/issue-259-s3-typed-results/result.json`；结论为 `PASS_TO_S4`，模块仍未接 migration、当前 `SqliteMarket` 或 MCP。
 
 ### S4：WriteCoordinator 与 WAL
 

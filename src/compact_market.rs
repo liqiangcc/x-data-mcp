@@ -442,6 +442,225 @@ pub fn version_integrity_digest(identity: &VersionIdentity) -> Result<Digest, Er
     Ok(Sha256::digest(&payload).into())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateOutcome {
+    NoChange,
+    Published,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuityMode {
+    Unchanged,
+    Append,
+    Full,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketUpdateResultIdentity {
+    pub result_id: String,
+    pub task_id: String,
+    pub item_id: String,
+    pub base_version_id: String,
+    pub result_version_id: String,
+    pub outcome: UpdateOutcome,
+    pub range_start_day: i64,
+    pub range_end_day: i64,
+    pub algorithm_version: String,
+    pub source_binding_digest: Digest,
+    pub continuity_mode: ContinuityMode,
+    pub prefix_bytes: Option<u64>,
+    pub base_projection_digest: Digest,
+    pub result_projection_digest: Digest,
+    pub delta_digest: Option<Digest>,
+    pub evidence_digest: Digest,
+    pub task_revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicationKind {
+    Collection,
+    Yearly,
+    Republish,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationResultIdentity {
+    pub publication_id: String,
+    pub task_id: String,
+    pub item_id: String,
+    pub publication_kind: PublicationKind,
+    pub base_version_id: Option<String>,
+    pub result_version_id: String,
+    pub outcome: UpdateOutcome,
+    pub algorithm_version: String,
+    pub source_binding_digest: Digest,
+    pub evidence_digest: Digest,
+    pub task_revision: u64,
+}
+
+pub fn market_update_result_digest(identity: &MarketUpdateResultIdentity) -> Result<Digest, Error> {
+    for id in [
+        &identity.result_id,
+        &identity.task_id,
+        &identity.item_id,
+        &identity.base_version_id,
+        &identity.result_version_id,
+        &identity.algorithm_version,
+    ] {
+        if id.is_empty() {
+            return Err(invalid("update result identity field is empty"));
+        }
+    }
+    if identity.task_revision == 0 {
+        return Err(invalid("task_revision must be positive"));
+    }
+    epoch_date(identity.range_start_day)?;
+    epoch_date(identity.range_end_day)?;
+    if identity.range_start_day > identity.range_end_day {
+        return Err(invalid("update result range inverted"));
+    }
+    match identity.outcome {
+        UpdateOutcome::NoChange => {
+            if identity.continuity_mode != ContinuityMode::Unchanged
+                || identity.base_version_id != identity.result_version_id
+                || identity.prefix_bytes.is_none()
+                || identity.base_projection_digest != identity.result_projection_digest
+                || identity.delta_digest.is_some()
+            {
+                return Err(invalid("no-change update result semantics violated"));
+            }
+        }
+        UpdateOutcome::Published => {
+            if identity.base_version_id == identity.result_version_id
+                || identity.delta_digest.is_none()
+                || identity.continuity_mode == ContinuityMode::Unchanged
+            {
+                return Err(invalid("published update result semantics violated"));
+            }
+            match identity.continuity_mode {
+                ContinuityMode::Append if identity.prefix_bytes.is_none() => {
+                    return Err(invalid("append update result lacks prefix_bytes"));
+                }
+                ContinuityMode::Full if identity.prefix_bytes.is_some() => {
+                    return Err(invalid("full update result carries prefix_bytes"));
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut payload = Vec::new();
+    payload.extend_from_slice(b"x-data-market-update-result-v1\0");
+    push_text(&mut payload, &identity.result_id);
+    push_text(&mut payload, &identity.task_id);
+    push_text(&mut payload, &identity.item_id);
+    push_text(&mut payload, &identity.base_version_id);
+    push_text(&mut payload, &identity.result_version_id);
+    payload.push(match identity.outcome {
+        UpdateOutcome::NoChange => 1,
+        UpdateOutcome::Published => 2,
+    });
+    payload.extend_from_slice(&identity.range_start_day.to_be_bytes());
+    payload.extend_from_slice(&identity.range_end_day.to_be_bytes());
+    push_text(&mut payload, &identity.algorithm_version);
+    payload.extend_from_slice(&identity.source_binding_digest);
+    payload.push(match identity.continuity_mode {
+        ContinuityMode::Unchanged => 1,
+        ContinuityMode::Append => 2,
+        ContinuityMode::Full => 3,
+    });
+    match identity.prefix_bytes {
+        Some(prefix) => {
+            payload.push(1);
+            payload.extend_from_slice(&prefix.to_be_bytes());
+        }
+        None => payload.push(0),
+    }
+    payload.extend_from_slice(&identity.base_projection_digest);
+    payload.extend_from_slice(&identity.result_projection_digest);
+    match identity.delta_digest {
+        Some(delta) => {
+            payload.push(1);
+            payload.extend_from_slice(&delta);
+        }
+        None => payload.push(0),
+    }
+    payload.extend_from_slice(&identity.evidence_digest);
+    payload.extend_from_slice(&identity.task_revision.to_be_bytes());
+    Ok(Sha256::digest(&payload).into())
+}
+
+pub fn publication_result_digest(identity: &PublicationResultIdentity) -> Result<Digest, Error> {
+    for id in [
+        &identity.publication_id,
+        &identity.task_id,
+        &identity.item_id,
+        &identity.result_version_id,
+        &identity.algorithm_version,
+    ] {
+        if id.is_empty() {
+            return Err(invalid("publication result identity field is empty"));
+        }
+    }
+    if identity.task_revision == 0 {
+        return Err(invalid("task_revision must be positive"));
+    }
+    if let Some(base) = &identity.base_version_id
+        && base.is_empty()
+    {
+        return Err(invalid("base_version_id is empty"));
+    }
+    match identity.outcome {
+        UpdateOutcome::NoChange => {
+            if identity.base_version_id.as_deref() != Some(identity.result_version_id.as_str()) {
+                return Err(invalid("no-change publication result requires base=result"));
+            }
+        }
+        UpdateOutcome::Published => {
+            if identity.base_version_id.as_deref() == Some(identity.result_version_id.as_str()) {
+                return Err(invalid("published publication result reuses base version"));
+            }
+        }
+    }
+    let mut payload = Vec::new();
+    payload.extend_from_slice(b"x-data-publication-result-v1\0");
+    push_text(&mut payload, &identity.publication_id);
+    push_text(&mut payload, &identity.task_id);
+    push_text(&mut payload, &identity.item_id);
+    payload.push(match identity.publication_kind {
+        PublicationKind::Collection => 1,
+        PublicationKind::Yearly => 2,
+        PublicationKind::Republish => 3,
+    });
+    match &identity.base_version_id {
+        Some(base) => {
+            payload.push(1);
+            push_text(&mut payload, base);
+        }
+        None => payload.push(0),
+    }
+    push_text(&mut payload, &identity.result_version_id);
+    payload.push(match identity.outcome {
+        UpdateOutcome::NoChange => 1,
+        UpdateOutcome::Published => 2,
+    });
+    push_text(&mut payload, &identity.algorithm_version);
+    payload.extend_from_slice(&identity.source_binding_digest);
+    payload.extend_from_slice(&identity.evidence_digest);
+    payload.extend_from_slice(&identity.task_revision.to_be_bytes());
+    Ok(Sha256::digest(&payload).into())
+}
+
+pub fn full_revision_digest(
+    base_projection_digest: Digest,
+    result_projection_digest: Digest,
+) -> Digest {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(b"x-data-full-revision-v1\0");
+    payload.extend_from_slice(&base_projection_digest);
+    payload.extend_from_slice(&result_projection_digest);
+    Sha256::digest(&payload).into()
+}
+
 fn evidence_digest(kind: EvidenceKind, canonical_json: &str) -> Digest {
     let mut payload = Vec::new();
     payload.extend_from_slice(b"x-data-evidence-v1\0");
@@ -1258,5 +1477,171 @@ mod tests {
             .unwrap()
             .algorithm_version = String::new();
         assert!(version_integrity_digest(&empty_algorithm).is_err());
+    }
+
+    fn market_identity() -> MarketUpdateResultIdentity {
+        MarketUpdateResultIdentity {
+            result_id: "result-1".into(),
+            task_id: "task-1".into(),
+            item_id: "item-1".into(),
+            base_version_id: "base-v1".into(),
+            result_version_id: "base-v1".into(),
+            outcome: UpdateOutcome::NoChange,
+            range_start_day: 0,
+            range_end_day: 1,
+            algorithm_version: "market-update-v1".into(),
+            source_binding_digest: [0x11; 32],
+            continuity_mode: ContinuityMode::Unchanged,
+            prefix_bytes: Some(64),
+            base_projection_digest: [0x22; 32],
+            result_projection_digest: [0x22; 32],
+            delta_digest: None,
+            evidence_digest: [0x33; 32],
+            task_revision: 7,
+        }
+    }
+
+    fn publication_identity() -> PublicationResultIdentity {
+        PublicationResultIdentity {
+            publication_id: "pub-1".into(),
+            task_id: "task-1".into(),
+            item_id: "item-1".into(),
+            publication_kind: PublicationKind::Collection,
+            base_version_id: None,
+            result_version_id: "result-v1".into(),
+            outcome: UpdateOutcome::Published,
+            algorithm_version: "collection-v1".into(),
+            source_binding_digest: [0x11; 32],
+            evidence_digest: [0x33; 32],
+            task_revision: 7,
+        }
+    }
+
+    #[test]
+    fn market_update_result_fixed_vector() {
+        assert_eq!(
+            digest_hex(&market_update_result_digest(&market_identity()).unwrap()),
+            "e1f4d956900bd17779ef65615c25ceb5f98613b4a0a58a07d5a15aa3018bd8d9"
+        );
+    }
+
+    #[test]
+    fn publication_result_fixed_vector() {
+        assert_eq!(
+            digest_hex(&publication_result_digest(&publication_identity()).unwrap()),
+            "2261074fdedc5b6b470a2684dbffd4cc7b2ce6cfe2d15fe98b85fc611df0626f"
+        );
+    }
+
+    #[test]
+    fn market_update_result_semantics() {
+        let mut append = market_identity();
+        append.outcome = UpdateOutcome::Published;
+        append.result_version_id = "result-v2".into();
+        append.result_projection_digest = [0x44; 32];
+        append.delta_digest = Some([0x55; 32]);
+        append.continuity_mode = ContinuityMode::Append;
+        assert!(market_update_result_digest(&append).is_ok());
+        let mut full = append.clone();
+        full.continuity_mode = ContinuityMode::Full;
+        full.prefix_bytes = None;
+        assert!(market_update_result_digest(&full).is_ok());
+
+        let good = market_identity();
+        let mut append_no_change = good.clone();
+        append_no_change.continuity_mode = ContinuityMode::Append;
+        assert!(market_update_result_digest(&append_no_change).is_err());
+        let mut full_no_change = good.clone();
+        full_no_change.continuity_mode = ContinuityMode::Full;
+        assert!(market_update_result_digest(&full_no_change).is_err());
+        let mut different_ids = good.clone();
+        different_ids.result_version_id = "other".into();
+        assert!(market_update_result_digest(&different_ids).is_err());
+        let mut no_prefix = good.clone();
+        no_prefix.prefix_bytes = None;
+        assert!(market_update_result_digest(&no_prefix).is_err());
+        let mut different_projection = good.clone();
+        different_projection.result_projection_digest = [0x44; 32];
+        assert!(market_update_result_digest(&different_projection).is_err());
+        let mut with_delta = good.clone();
+        with_delta.delta_digest = Some([0x55; 32]);
+        assert!(market_update_result_digest(&with_delta).is_err());
+
+        let mut unchanged_published = append.clone();
+        unchanged_published.continuity_mode = ContinuityMode::Unchanged;
+        assert!(market_update_result_digest(&unchanged_published).is_err());
+        let mut same_ids = append.clone();
+        same_ids.result_version_id = "base-v1".into();
+        assert!(market_update_result_digest(&same_ids).is_err());
+        let mut no_delta = append.clone();
+        no_delta.delta_digest = None;
+        assert!(market_update_result_digest(&no_delta).is_err());
+        let mut append_no_prefix = append.clone();
+        append_no_prefix.prefix_bytes = None;
+        assert!(market_update_result_digest(&append_no_prefix).is_err());
+        let mut full_with_prefix = append.clone();
+        full_with_prefix.continuity_mode = ContinuityMode::Full;
+        assert!(market_update_result_digest(&full_with_prefix).is_err());
+
+        let mut empty_id = good.clone();
+        empty_id.result_id = String::new();
+        assert!(market_update_result_digest(&empty_id).is_err());
+        let mut empty_algorithm = good.clone();
+        empty_algorithm.algorithm_version = String::new();
+        assert!(market_update_result_digest(&empty_algorithm).is_err());
+        let mut zero_revision = good.clone();
+        zero_revision.task_revision = 0;
+        assert!(market_update_result_digest(&zero_revision).is_err());
+        let mut inverted = good.clone();
+        inverted.range_start_day = 5;
+        inverted.range_end_day = 1;
+        assert!(market_update_result_digest(&inverted).is_err());
+        let mut huge_day = good.clone();
+        huge_day.range_end_day = i64::MAX;
+        assert!(market_update_result_digest(&huge_day).is_err());
+    }
+
+    #[test]
+    fn publication_result_semantics() {
+        let mut no_change = publication_identity();
+        no_change.outcome = UpdateOutcome::NoChange;
+        no_change.base_version_id = Some("result-v1".into());
+        assert!(publication_result_digest(&no_change).is_ok());
+        let mut published_with_base = publication_identity();
+        published_with_base.base_version_id = Some("base-v1".into());
+        assert!(publication_result_digest(&published_with_base).is_ok());
+
+        let mut no_base = no_change.clone();
+        no_base.base_version_id = None;
+        assert!(publication_result_digest(&no_base).is_err());
+        let mut different_base = no_change.clone();
+        different_base.base_version_id = Some("other".into());
+        assert!(publication_result_digest(&different_base).is_err());
+        let mut published_same = publication_identity();
+        published_same.base_version_id = Some("result-v1".into());
+        assert!(publication_result_digest(&published_same).is_err());
+
+        let good = publication_identity();
+        let mut empty_id = good.clone();
+        empty_id.publication_id = String::new();
+        assert!(publication_result_digest(&empty_id).is_err());
+        let mut empty_base = good.clone();
+        empty_base.base_version_id = Some(String::new());
+        assert!(publication_result_digest(&empty_base).is_err());
+        let mut zero_revision = good;
+        zero_revision.task_revision = 0;
+        assert!(publication_result_digest(&zero_revision).is_err());
+    }
+
+    #[test]
+    fn full_revision_fixed_vector() {
+        assert_eq!(
+            digest_hex(&full_revision_digest([0x11; 32], [0x22; 32])),
+            "c03ce395eaedb1f2c92f7c7197fca6193f46cb09a4c2f78806e23ca11b7a9f3d"
+        );
+        let digest = full_revision_digest([0x11; 32], [0x22; 32]);
+        assert_ne!(full_revision_digest([0x12; 32], [0x22; 32]), digest);
+        assert_ne!(full_revision_digest([0x11; 32], [0x23; 32]), digest);
+        assert_ne!(full_revision_digest([0x22; 32], [0x11; 32]), digest);
     }
 }
