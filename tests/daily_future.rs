@@ -120,7 +120,7 @@ fn daily_today_is_allowed_and_accepted_replay_does_not_reconsult_clock_or_base()
     );
     rusqlite::Connection::open(market.tasks.path())
         .unwrap()
-        .execute_batch("UPDATE segment_bars SET close='0' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily')")
+        .execute_batch("UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','0')")
         .unwrap();
     let earlier = TaskControl::new(
         market.tasks.clone(),

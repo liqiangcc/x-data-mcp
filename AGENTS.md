@@ -28,3 +28,5 @@ Box（Tailscale 节点 `grok-bot-vm-411252337`，SSH `box@grok-bot-vm-411252337`
 固定证据输入目录 `/home/box/retained-inputs/`（见其中 MANIFEST.md），官方文件只下载一次入库复用，重复下载需说明理由；gen-1 retained 字节永久不可得，跨代一致性走已提交派生证据。
 
 Box 补充事实：本机无白名单内本地盘（唯一块设备 vda 即 overlay 后端，`/dev/shm` 仅 64MB，`CapEff=0` 无法自行挂载数据盘）。`data_service` 与验证执行器共用 `local_filesystem::supported_file` 守卫；开发/preview 场景可用显式 opt-out `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（#213）放行 overlayfs——单例租约与身份绑定语义随之失效，仅限本地验收，生产禁用；客户端 `mcp_connect` 连接时同样需要该变量。
+
+ECS 部署目标 `ecs-node`（OpenSSH 别名，key auth，`ssh ecs-node` 直接可用）：x86_64，2 vCPU，约 2GiB RAM，40GB 根盘（实测可用约 7.2GiB）。即 #259 容量/时间 AC 的计量环境；Phase G 部署、真实 MCP-only 代际更新与 WAL/disk 证据采集在此执行。

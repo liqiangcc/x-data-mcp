@@ -599,8 +599,14 @@ fn stopped_schema_upgrade_uses_real_v6_ddl_preserves_bindings_and_rejects_broken
             "task_scopes",
             "scope_occupancy",
         ] {
-            c.execute_batch(&format!("INSERT INTO {table} SELECT * FROM source.{table}"))
-                .unwrap();
+            let sql = if table == "tasks" {
+                // The v6 tasks DDL predates the v15 aggregate counters;
+                // copy only the columns a real v6 row carried.
+                "INSERT INTO tasks SELECT task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of FROM source.tasks".to_string()
+            } else {
+                format!("INSERT INTO {table} SELECT * FROM source.{table}")
+            };
+            c.execute_batch(&sql).unwrap();
         }
         c.execute_batch("DETACH DATABASE source").unwrap();
         if broken {

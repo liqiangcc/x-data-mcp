@@ -525,7 +525,7 @@ fn verified_finished_result_is_not_rewritten_and_inspection_preserves_market_byt
             "data_versions",
             "bar_segments",
             "segment_bars",
-            "version_segments",
+            "manifest_nodes",
             "yearly_bars",
             "version_evidence",
             "yearly_lineage",
@@ -749,7 +749,7 @@ fn application_rechecks_a_changed_sqlite_snapshot_once_without_reusing_old_plan(
 fn inspection_v8_requires_explicit_upgrade_and_preserves_existing_task_binding() {
     let (_dir, db, original, check) = fixture();
     let c = Connection::open(db.path()).unwrap();
-    c.execute_batch("CREATE TABLE daily_bars AS SELECT vs.version_id,s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE version_segments; DROP TABLE segment_bars; DROP TABLE bar_segments; DELETE FROM schema_migrations WHERE version>=9; PRAGMA user_version=8;").unwrap();
+    c.execute_batch("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; DELETE FROM schema_migrations WHERE version>=9; PRAGMA user_version=8;").unwrap();
     assert!(matches!(
         inspect(&db, "inspect", &check.task.task_id, "manager", "owner"),
         Err(Error::StorageUnavailable(_))

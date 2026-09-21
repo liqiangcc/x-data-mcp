@@ -1130,7 +1130,7 @@ fn service_yearly_fail_closed_paths() {
     rusqlite::Connection::open(market.tasks.path())
         .unwrap()
         .execute(
-            "UPDATE data_versions SET content_digest=json_extract(compat_json,'$.integrity_sha256') WHERE version_id=?1",
+            "UPDATE data_versions SET content_digest=json_extract(envelope_json,'$.integrity_sha256') WHERE version_id=?1",
             [&head],
         )
         .unwrap();

@@ -177,28 +177,23 @@ impl<R: TaskRepository> TaskControl<R> {
     ) -> Result<Option<TaskSnapshot>, Error> {
         self.contract(&s.task.key)?;
         if s.task.status == Status::Pending {
-            s = self.repository.transition(
-                &s.task.task_id,
-                s.task.state_revision,
-                &self.run_id,
-                Change::Claim,
-            )?;
+            self.repository
+                .transition_light(&mut s, &self.run_id, Change::Claim)?;
         }
-        for item in s.items.clone() {
-            s = self.read_task(&s.task.task_id)?;
+        for index in 0..s.items.len() {
             if s.task.status == Status::CancelRequested {
                 break;
             }
-            if item.stage != Stage::Pending {
+            if s.items[index].stage != Stage::Pending {
                 continue;
             }
-            match self.repository.transition(
-                &s.task.task_id,
-                s.task.state_revision,
+            let item_id = s.items[index].spec.item_id.clone();
+            match self.repository.transition_light(
+                &mut s,
                 &self.run_id,
-                Change::StartItem(item.spec.item_id.clone()),
+                Change::StartItem(item_id.clone()),
             ) {
-                Ok(next) => s = next,
+                Ok(()) => {}
                 Err(Error::RevisionConflict) => {
                     s = self.read_task(&s.task.task_id)?;
                     if s.task.status == Status::CancelRequested {
@@ -208,26 +203,19 @@ impl<R: TaskRepository> TaskControl<R> {
                 }
                 Err(e) => return Err(e),
             }
-            let outcome = executor.execute(&s.task.key, &item.spec);
+            let outcome = executor.execute(&s.task.key, &s.items[index].spec);
             // A concurrent cancellation may have advanced the revision while the
-            // synchronous executor was finishing. Re-read actual state, never undo it.
-            s = self.read_task(&s.task.task_id)?;
-            s = self.repository.transition(
-                &s.task.task_id,
-                s.task.state_revision,
+            // synchronous executor was finishing; transition_light re-reads the
+            // actual state once instead of undoing it.
+            self.repository.transition_light(
+                &mut s,
                 &self.run_id,
-                Change::FinishItem(item.spec.item_id, outcome),
+                Change::FinishItem(item_id, outcome),
             )?;
         }
-        s = self.read_task(&s.task.task_id)?;
         self.repository
-            .transition(
-                &s.task.task_id,
-                s.task.state_revision,
-                &self.run_id,
-                Change::FinishExecution,
-            )
-            .map(Some)
+            .transition_light(&mut s, &self.run_id, Change::FinishExecution)?;
+        Ok(Some(s))
     }
 }
 

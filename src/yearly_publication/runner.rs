@@ -8,7 +8,6 @@ use crate::{
     task_control::{Change, ItemOutcome, Stage, Status, TaskSnapshot},
 };
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 use std::collections::BTreeSet;
 /// Synchronous read-only verifier. Test injection never becomes a protocol input.
 pub trait YearlyVerifier {
@@ -77,68 +76,70 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         item_id: &str,
         provider: &dyn YearlyVerifier,
     ) -> Result<YearlyExecution, Error> {
-        let mut task = self.repository.task(task_id)?;
+        let mut binding = match self.repository.task_item_binding(task_id, item_id)? {
+            Some(binding) => binding,
+            None => {
+                self.repository.task_head(task_id)?;
+                return Err(Error::Invalid(
+                    "yearly item absent from accepted task".into(),
+                ));
+            }
+        };
         if !matches!(
-            task.task.key.operation.as_str(),
+            binding.head.key.operation.as_str(),
             "update_data" | "backfill_data"
-        ) || task.task.key.dataset != "market.yearly"
-            || task.task.key.contract_version != super::tasks::CONTRACT_VERSION
+        ) || binding.head.key.dataset != "market.yearly"
+            || binding.head.key.contract_version != super::tasks::CONTRACT_VERSION
         {
             return Err(Error::Invalid(
                 "unsupported yearly execution contract".into(),
             ));
         }
-        let item = task
-            .items
-            .iter()
-            .find(|i| i.spec.item_id == item_id)
-            .cloned()
-            .ok_or_else(|| Error::Invalid("yearly item absent from accepted task".into()))?;
         if let Some(receipt) = self.repository.yearly_item_receipt(task_id, item_id)? {
             return Ok(YearlyExecution::Published(receipt));
         }
-        if task.visible_status(&self.run_id) == Status::NeedsVerification {
+        if binding.head.visible_status(&self.run_id) == Status::NeedsVerification {
             return Err(Error::Task(crate::task_control::Error::NeedsVerification(
                 "old run or unresolved execution".into(),
             )));
         }
-        if item.stage == Stage::Running {
+        if binding.item.stage == Stage::Running {
             return Err(Error::OutcomeUnknown(
                 "running item has no verified result; inspect before any retry".into(),
             ));
         }
-        if task.task.status.terminal() || item.stage == Stage::Finished {
-            if item.outcome.as_ref().is_some_and(|o| o.success) {
+        if binding.head.status.terminal() || binding.item.stage == Stage::Finished {
+            if binding.item.outcome.as_ref().is_some_and(|o| o.success) {
                 return Err(Error::Integrity(
                     "successful yearly item has no receipt".into(),
                 ));
             }
-            return Ok(YearlyExecution::NotPublished(Box::new(task)));
+            return self.not_published(task_id);
         }
-        if task.task.status == Status::CancelRequested {
-            let next = self.repository.transition_task(
-                task_id,
-                task.task.state_revision,
+        if binding.head.status == Status::CancelRequested {
+            self.repository.transition_task_head(
+                &mut binding.head,
+                None,
                 &self.run_id,
                 Change::FinishExecution,
             )?;
-            return Ok(YearlyExecution::NotPublished(Box::new(next)));
+            return self.not_published(task_id);
         }
-        if task.task.status == Status::Pending {
-            task = self.repository.transition_task(
-                task_id,
-                task.task.state_revision,
+        if binding.head.status == Status::Pending {
+            self.repository.transition_task_head(
+                &mut binding.head,
+                None,
                 &self.run_id,
                 Change::Claim,
             )?;
         }
-        task = self.repository.transition_task(
-            task_id,
-            task.task.state_revision,
+        self.repository.transition_task_head(
+            &mut binding.head,
+            Some(&mut binding.item),
             &self.run_id,
             Change::StartItem(item_id.into()),
         )?;
-        let outcome = self.derive_and_commit(&task, item_id, &item.spec.frozen_inputs, provider);
+        let outcome = self.derive_and_commit(&mut binding, item_id, provider);
         match outcome {
             Ok(receipt) => Ok(YearlyExecution::Published(receipt)),
             Err(error) => {
@@ -155,9 +156,12 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
                                 | crate::task_control::Error::OutcomeUnknown(_)
                         )
                 ) {
-                    let current = self.repository.task(task_id)?;
-                    if let Err(recording) = self.repository.transition_task(
-                        task_id, current.task.state_revision, &self.run_id,
+                    let mut binding = self
+                        .repository
+                        .task_item_binding(task_id, item_id)?
+                        .ok_or(Error::Integrity("bound task item missing".into()))?;
+                    if let Err(recording) = self.repository.transition_task_head(
+                        &mut binding.head, Some(&mut binding.item), &self.run_id,
                         Change::RequireVerification {
                             item_id: item_id.into(),
                             reason: "item execution result not confirmed after acquisition/derivation/publication; committed receipt not yet established".into(),
@@ -172,12 +176,15 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
                     }
                     return Err(error);
                 }
-                let current = self.repository.task(task_id)?;
+                let mut binding = self
+                    .repository
+                    .task_item_binding(task_id, item_id)?
+                    .ok_or(Error::Integrity("bound task item missing".into()))?;
                 let cancelled_without_publication = matches!(error, Error::Conflict(_))
-                    && current.task.status == Status::CancelRequested;
-                let next = self.repository.transition_task(
-                    task_id,
-                    current.task.state_revision,
+                    && binding.head.status == Status::CancelRequested;
+                self.repository.transition_task_head(
+                    &mut binding.head,
+                    Some(&mut binding.item),
                     &self.run_id,
                     Change::FinishItem(
                         item_id.into(),
@@ -192,33 +199,36 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
                         },
                     ),
                 )?;
-                let next = if next.items.iter().all(|i| i.stage == Stage::Finished)
-                    || next.task.status == Status::CancelRequested
+                if binding.head.counts.finished == binding.head.counts.total
+                    || binding.head.status == Status::CancelRequested
                 {
-                    self.repository.transition_task(
-                        task_id,
-                        next.task.state_revision,
+                    self.repository.transition_task_head(
+                        &mut binding.head,
+                        None,
                         &self.run_id,
                         if cancelled_without_publication {
                             Change::FinishCancellation
                         } else {
                             Change::FinishExecution
                         },
-                    )?
-                } else {
-                    next
-                };
-                Ok(YearlyExecution::NotPublished(Box::new(next)))
+                    )?;
+                }
+                self.not_published(task_id)
             }
         }
     }
+    fn not_published(&self, task_id: &str) -> Result<YearlyExecution, Error> {
+        Ok(YearlyExecution::NotPublished(Box::new(
+            self.repository.task(task_id)?,
+        )))
+    }
     fn derive_and_commit(
         &self,
-        task: &TaskSnapshot,
+        binding: &mut crate::task_control::ItemBinding,
         item_id: &str,
-        frozen: &Value,
         verifier: &dyn YearlyVerifier,
     ) -> Result<Receipt, Error> {
+        let frozen = &binding.item.spec.frozen_inputs;
         let base_id = frozen["base_daily_version_id"]
             .as_str()
             .ok_or_else(|| Error::Integrity("frozen base missing".into()))?;
@@ -244,16 +254,16 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         let evidence = verifier
             .verify(&base, &years, self.derived_at)
             .map_err(|e| Error::Base(e.to_string()))?;
-        let current = self.repository.task(&task.task.task_id)?;
-        if current.task.status != Status::Running
-            || current.task.state_revision != task.task.state_revision
+        let current = self.repository.task_head(&binding.head.task_id)?;
+        if current.status != Status::Running
+            || current.state_revision != binding.head.state_revision
         {
             return Err(Error::Conflict(
                 "task changed or cancelled during yearly verification".into(),
             ));
         }
         let id = crate::hash::sha256(
-            serde_json::json!([task.task.task_id, item_id])
+            serde_json::json!([binding.head.task_id, item_id])
                 .to_string()
                 .as_bytes(),
         );
@@ -272,10 +282,10 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             Publication {
                 publication_id: format!("yearly-result-{id}"),
                 version_id: request.version_id,
-                task_id: task.task.task_id.clone(),
+                task_id: binding.head.task_id.clone(),
                 item_id: item_id.into(),
                 run_id: self.run_id.clone(),
-                expected_revision: task.task.state_revision,
+                expected_revision: binding.head.state_revision,
                 intent,
             },
             &candidate,

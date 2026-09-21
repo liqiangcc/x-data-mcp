@@ -275,8 +275,8 @@ fn range_head_and_task_revision_changes_never_rebase() {
 #[test]
 fn range_base_and_candidate_tampering_reject_before_publish() {
     for sql in [
-        "UPDATE segment_bars SET close='10.07' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily') AND trade_date='2025-01-02'",
-        "UPDATE segment_bars SET close='10.07' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='updated-daily') AND trade_date='2025-01-02'",
+        "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','10.07') WHERE trade_date='2025-01-02' AND segment_id IN (SELECT segment_id FROM manifest_nodes WHERE segment_id IS NOT NULL AND node_id IN (WITH RECURSIVE t(i) AS (SELECT manifest_root FROM data_versions WHERE version_id='legacy-daily' UNION ALL SELECT n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT i FROM t))",
+        "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','10.07') WHERE trade_date='2025-01-02' AND segment_id IN (SELECT segment_id FROM manifest_nodes WHERE segment_id IS NOT NULL AND node_id IN (WITH RECURSIVE t(i) AS (SELECT manifest_root FROM data_versions WHERE version_id='updated-daily' UNION ALL SELECT n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT i FROM t))",
     ] {
         let f = fixture(true);
         let plan = f.plan();
@@ -323,7 +323,7 @@ fn range_receipt_refuses_corrupt_result_or_fixed_version() {
         "UPDATE market_update_results SET receipt_json=json_set(receipt_json,'$.task_revision',999)",
         "UPDATE market_update_results SET audit_json=json_set(audit_json,'$.no_change',0)",
         "UPDATE market_update_results SET no_change=0",
-        "UPDATE segment_bars SET close='10.07' WHERE trade_date='2025-01-02'",
+        "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','10.07') WHERE trade_date='2025-01-02'",
     ] {
         let f = fixture(false);
         f.db.commit_range(&f.plan()).unwrap();
@@ -410,7 +410,9 @@ fn range_candidates_compete_on_the_same_real_task_and_head() {
 fn range_schema_v4_requires_explicit_upgrade_and_preserves_published_records() {
     let f = fixture(false);
     let original = f.db.fixed("legacy-daily").unwrap().raw().clone();
-    f.sql("CREATE TABLE daily_bars AS SELECT vs.version_id,s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE version_segments; DROP TABLE segment_bars; DROP TABLE bar_segments; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
+    let compat = observation_fixture::stored_compat(&f.db);
+    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
+    observation_fixture::restore_compat(&f.db, &compat);
     assert!(f.db.fixed("legacy-daily").is_err());
     assert!(f.db.range_receipt("absent").is_err());
     let version: u32 = Connection::open(f.db.tasks.path())
@@ -512,7 +514,7 @@ fn explicit_range_admission_normalizes_sets_and_freezes_base_without_requery_on_
         task.items[0].spec.frozen_inputs["base_integrity_sha256"],
         f.evidence.base_integrity_sha256
     );
-    f.sql("UPDATE segment_bars SET close='10.07' WHERE trade_date='2025-01-02'");
+    f.sql("UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','10.07') WHERE trade_date='2025-01-02'");
     assert!(
         ctl.accept("range", Operation::Backfill.key(), payload)
             .unwrap()
@@ -741,7 +743,7 @@ fn range_progress_refuses_damaged_audit_and_immutable_base_without_fallback() {
     };
     for sql in [
         "UPDATE market_update_results SET receipt_json='{}'",
-        "UPDATE segment_bars SET close='10.09' WHERE segment_id IN (SELECT segment_id FROM version_segments WHERE version_id='legacy-daily') AND trade_date='2025-01-02'",
+        "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','10.09') WHERE trade_date='2025-01-02' AND segment_id IN (SELECT segment_id FROM manifest_nodes WHERE segment_id IS NOT NULL AND node_id IN (WITH RECURSIVE t(i) AS (SELECT manifest_root FROM data_versions WHERE version_id='legacy-daily' UNION ALL SELECT n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT i FROM t))",
     ] {
         let f = fixture(false);
         f.db.commit_range(&f.plan()).unwrap();
@@ -1268,7 +1270,7 @@ fn publication_facts_reject_missing_success_receipt_and_damaged_fixed_data() {
     for damage in [
         "DELETE FROM market_update_results",
         "UPDATE market_update_results SET result_sha256='broken'",
-        "UPDATE segment_bars SET close='999'",
+        "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','999')",
     ] {
         let f = fixture(false);
         f.db.commit_range(&f.plan()).unwrap();
@@ -1604,7 +1606,9 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
     // Remove the migrations added after the deployed schema7 from this isolated
     // fixture. The retained v1-v7 DDL and checksums are exactly those used by
     // the deployed schema7.
-    f.sql("CREATE TABLE daily_bars AS SELECT vs.version_id,s.trade_date,s.open,s.high,s.low,s.close,s.volume,s.amount FROM version_segments vs JOIN segment_bars s ON s.segment_id=vs.segment_id AND s.trade_date>=vs.clip_start AND s.trade_date<=vs.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE version_segments; DROP TABLE segment_bars; DROP TABLE bar_segments; DELETE FROM schema_migrations WHERE version>=8; PRAGMA user_version=7;");
+    let compat = observation_fixture::stored_compat(&f.db);
+    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; CREATE TABLE payloads_bak AS SELECT * FROM payloads; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; DELETE FROM schema_migrations WHERE version>=8; PRAGMA user_version=7;");
+    observation_fixture::restore_compat(&f.db, &compat);
     assert!(f.db.publication_facts(&f.command.task_id).is_err());
     let c = Connection::open(f.db.tasks.path()).unwrap();
     assert_eq!(
@@ -1613,6 +1617,7 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
         7
     );
     f.db.tasks.upgrade().unwrap();
+    f.sql("INSERT INTO payloads SELECT * FROM payloads_bak; DROP TABLE payloads_bak;");
     assert_eq!(
         c.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
             .unwrap(),
@@ -1620,6 +1625,21 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
     );
     assert_eq!(f.db.publication_facts(&f.command.task_id).unwrap(), before);
     assert_eq!(f.count("publication_checks"), 0);
+}
+
+#[test]
+fn range_audit_segment_payload_missing_fails_closed() {
+    use x_data_mcp::publication_verification::EvidenceRepository;
+    let f = fixture(true);
+    f.db.commit_range(&f.plan()).unwrap();
+    f.db.publication_facts(&f.command.task_id).unwrap();
+    let c = Connection::open(f.db.tasks.path()).unwrap();
+    let payloads: i64 = c
+        .query_row("SELECT count(*) FROM payloads", [], |r| r.get(0))
+        .unwrap();
+    assert!(payloads >= 1);
+    f.sql("DELETE FROM payloads");
+    assert!(f.db.publication_facts(&f.command.task_id).is_err());
 }
 
 fn pending_publication_check(f: &Fixture, id: &str) -> x_data_mcp::task_control::TaskSnapshot {
@@ -1821,7 +1841,10 @@ fn publication_runner_read_integrity_failure_marks_check_unresolved_without_fals
     let original = f.db.task(&f.command.task_id).unwrap();
     Connection::open(f.db.tasks.path())
         .unwrap()
-        .execute("UPDATE segment_bars SET close='999'", [])
+        .execute(
+            "UPDATE segment_bars SET bar_json=json_set(bar_json,'$.close','999')",
+            [],
+        )
         .unwrap();
     let runner = Runner {
         tasks: f.db.tasks.clone(),

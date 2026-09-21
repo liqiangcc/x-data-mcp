@@ -4,7 +4,7 @@ use crate::{
     market_data::Period,
     market_storage::{Error as MarketError, MarketRepository, Publication, PublishIntent},
     market_update::tasks::Operation,
-    task_control::{CommandKey, Contract, Error, FrozenWork, ItemSpec, TaskSnapshot},
+    task_control::{CommandKey, Contract, Error, FrozenWork, ItemSpec},
 };
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -189,12 +189,12 @@ pub(crate) fn frozen(
     json!({"base_daily_version_id":base,"base_integrity_sha256":digest,"years":years,"intent":intent})
 }
 pub(super) fn validate_binding(
-    task: &TaskSnapshot,
+    binding: &crate::task_control::ItemBinding,
     command: &Publication,
     candidate: &YearlyCandidate,
 ) -> Result<(), MarketError> {
     if !matches!(
-        task.task.key.operation.as_str(),
+        binding.head.key.operation.as_str(),
         "update_data" | "backfill_data"
     ) {
         return Ok(());
@@ -209,18 +209,11 @@ pub(super) fn validate_binding(
         &years,
         &command.intent,
     );
-    expected["comparison"] = task
-        .items
-        .iter()
-        .find(|i| i.spec.item_id == command.item_id)
-        .map(|i| i.spec.frozen_inputs["comparison"].clone())
-        .unwrap_or(Value::Null);
-    if task.task.key.contract_version != CONTRACT_VERSION
-        || task.task.key.dataset != "market.yearly"
-        || !task
-            .items
-            .iter()
-            .any(|i| i.spec.item_id == command.item_id && i.spec.frozen_inputs == expected)
+    expected["comparison"] = binding.item.spec.frozen_inputs["comparison"].clone();
+    if binding.head.key.contract_version != CONTRACT_VERSION
+        || binding.head.key.dataset != "market.yearly"
+        || binding.item.spec.item_id != command.item_id
+        || binding.item.spec.frozen_inputs != expected
     {
         return Err(MarketError::Conflict(
             "yearly publication differs from accepted frozen inputs".into(),

@@ -34,7 +34,8 @@ pub fn prepare_claim(
     {
         return Err(Error::RevisionConflict);
     }
-    let after = task_control::decide(task.clone(), &descriptor.run_id, Change::Claim, now)?;
+    let mut after = task.clone();
+    task_control::decide(&mut after, &descriptor.run_id, Change::Claim, now)?;
     Ok(ClaimPlan {
         before: task,
         after,

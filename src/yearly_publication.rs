@@ -146,11 +146,20 @@ impl<R: MarketRepository> Publisher<R> {
         if candidate.raw["version_id"].as_str() != Some(command.version_id.as_str()) {
             return Err(Error::Invalid("yearly candidate/version binding".into()));
         }
-        tasks::validate_binding(
-            &self.repository.task(&command.task_id)?,
-            &command,
-            candidate,
-        )?;
+        match self
+            .repository
+            .task_item_binding(&command.task_id, &command.item_id)?
+        {
+            Some(binding) => tasks::validate_binding(&binding, &command, candidate)?,
+            None => {
+                let head = self.repository.task_head(&command.task_id)?;
+                if matches!(head.key.operation.as_str(), "update_data" | "backfill_data") {
+                    return Err(Error::Conflict(
+                        "yearly publication differs from accepted frozen inputs".into(),
+                    ));
+                }
+            }
+        }
         let base = self
             .repository
             .fixed(&candidate.base_daily_version_id)

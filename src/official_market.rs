@@ -708,64 +708,66 @@ pub struct TdxDailyRunner<'a, R> {
 }
 impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
     pub fn run_item(&self, task_id: &str, item_id: &str) -> Result<ItemExecution, Error> {
-        let mut task = self.repository.task(task_id)?;
-        if task.task.key.operation != "start_collection"
-            || task.task.key.dataset != "market.daily"
-            || task.task.key.contract_version != "v1"
+        let mut binding = match self.repository.task_item_binding(task_id, item_id)? {
+            Some(binding) => binding,
+            None => {
+                self.repository.task_head(task_id)?;
+                return Err(Error::Invalid(
+                    "collection item absent from accepted task".into(),
+                ));
+            }
+        };
+        if binding.head.key.operation != "start_collection"
+            || binding.head.key.dataset != "market.daily"
+            || binding.head.key.contract_version != "v1"
         {
             return Err(Error::Invalid("unsupported collection contract".into()));
         }
-        let item = task
-            .items
-            .iter()
-            .find(|i| i.spec.item_id == item_id)
-            .cloned()
-            .ok_or_else(|| Error::Invalid("collection item absent from accepted task".into()))?;
         if let Some(receipt) = self.repository.collection_receipt(task_id, item_id)? {
             return Ok(ItemExecution::Published(receipt));
         }
-        if task.visible_status(&self.run_id) == Status::NeedsVerification {
+        if binding.head.visible_status(&self.run_id) == Status::NeedsVerification {
             return Err(Error::Task(crate::task_control::Error::NeedsVerification(
                 "old run or unresolved execution".into(),
             )));
         }
-        if item.stage == Stage::Running {
+        if binding.item.stage == Stage::Running {
             return Err(Error::OutcomeUnknown(
                 "running item has no verified result; inspect before any retry".into(),
             ));
         }
-        if task.task.status.terminal() || item.stage == Stage::Finished {
-            if item.outcome.as_ref().is_some_and(|o| o.success) {
+        if binding.head.status.terminal() || binding.item.stage == Stage::Finished {
+            if binding.item.outcome.as_ref().is_some_and(|o| o.success) {
                 return Err(Error::Integrity(
                     "successful collection item has no receipt".into(),
                 ));
             }
-            return Ok(ItemExecution::NotPublished(Box::new(task)));
+            return self.not_published(task_id);
         }
-        if task.task.status == Status::CancelRequested {
-            let next = self.repository.transition_task(
-                task_id,
-                task.task.state_revision,
+        if binding.head.status == Status::CancelRequested {
+            self.repository.transition_task_head(
+                &mut binding.head,
+                None,
                 &self.run_id,
                 Change::FinishExecution,
             )?;
-            return Ok(ItemExecution::NotPublished(Box::new(next)));
+            return self.not_published(task_id);
         }
-        if task.task.status == Status::Pending {
-            task = self.repository.transition_task(
-                task_id,
-                task.task.state_revision,
+        if binding.head.status == Status::Pending {
+            self.repository.transition_task_head(
+                &mut binding.head,
+                None,
                 &self.run_id,
                 Change::Claim,
             )?;
         }
-        task = self.repository.transition_task(
-            task_id,
-            task.task.state_revision,
+        self.repository.transition_task_head(
+            &mut binding.head,
+            Some(&mut binding.item),
             &self.run_id,
             Change::StartItem(item_id.into()),
         )?;
-        let outcome = self.materialize_and_commit(&task, item_id, &item.spec.target);
+        let outcome = self.materialize_and_commit(&mut binding, item_id);
         match outcome {
             Ok(receipt) => Ok(ItemExecution::Published(receipt)),
             Err(error) => {
@@ -782,9 +784,12 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                                 | crate::task_control::Error::OutcomeUnknown(_)
                         )
                 ) {
-                    let current = self.repository.task(task_id)?;
-                    if let Err(recording) = self.repository.transition_task(
-                        task_id, current.task.state_revision, &self.run_id,
+                    let mut binding = self
+                        .repository
+                        .task_item_binding(task_id, item_id)?
+                        .ok_or(Error::Integrity("bound task item missing".into()))?;
+                    if let Err(recording) = self.repository.transition_task_head(
+                        &mut binding.head, Some(&mut binding.item), &self.run_id,
                         Change::RequireVerification {
                             item_id: item_id.into(),
                             reason: "item execution result not confirmed after materialization/publication; committed receipt not yet established".into(),
@@ -799,12 +804,15 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                     }
                     return Err(error);
                 }
-                let current = self.repository.task(task_id)?;
+                let mut binding = self
+                    .repository
+                    .task_item_binding(task_id, item_id)?
+                    .ok_or(Error::Integrity("bound task item missing".into()))?;
                 let cancelled_without_publication = matches!(error, Error::Conflict(_))
-                    && current.task.status == Status::CancelRequested;
-                let next = self.repository.transition_task(
-                    task_id,
-                    current.task.state_revision,
+                    && binding.head.status == Status::CancelRequested;
+                self.repository.transition_task_head(
+                    &mut binding.head,
+                    Some(&mut binding.item),
                     &self.run_id,
                     Change::FinishItem(
                         item_id.into(),
@@ -819,34 +827,37 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                         },
                     ),
                 )?;
-                let next = if next.items.iter().all(|i| i.stage == Stage::Finished)
-                    || next.task.status == Status::CancelRequested
+                if binding.head.counts.finished == binding.head.counts.total
+                    || binding.head.status == Status::CancelRequested
                 {
-                    self.repository.transition_task(
-                        task_id,
-                        next.task.state_revision,
+                    self.repository.transition_task_head(
+                        &mut binding.head,
+                        None,
                         &self.run_id,
                         if cancelled_without_publication {
                             Change::FinishCancellation
                         } else {
                             Change::FinishExecution
                         },
-                    )?
-                } else {
-                    next
-                };
-                Ok(ItemExecution::NotPublished(Box::new(next)))
+                    )?;
+                }
+                self.not_published(task_id)
             }
         }
+    }
+    fn not_published(&self, task_id: &str) -> Result<ItemExecution, Error> {
+        Ok(ItemExecution::NotPublished(Box::new(
+            self.repository.task(task_id)?,
+        )))
     }
     /// Source failure preserves the old version: nothing is staged or
     /// committed on any materialization/validation error.
     fn materialize_and_commit(
         &self,
-        task: &TaskSnapshot,
+        binding: &mut crate::task_control::ItemBinding,
         item_id: &str,
-        target: &Value,
     ) -> Result<Receipt, Error> {
+        let target = &binding.item.spec.target;
         let symbol = target["symbol"]
             .as_str()
             .ok_or_else(|| Error::Integrity("collection item target missing symbol".into()))?;
@@ -867,16 +878,16 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             None => self.source.materialize_daily(symbol),
         }
         .map_err(|e| Error::Invalid(e.to_string()))?;
-        let current = self.repository.task(&task.task.task_id)?;
-        if current.task.status != Status::Running
-            || current.task.state_revision != task.task.state_revision
+        let current = self.repository.task_head(&binding.head.task_id)?;
+        if current.status != Status::Running
+            || current.state_revision != binding.head.state_revision
         {
             return Err(Error::Conflict(
                 "task changed or cancelled during materialization".into(),
             ));
         }
         let id = crate::hash::sha256(
-            serde_json::json!([task.task.task_id, item_id])
+            serde_json::json!([binding.head.task_id, item_id])
                 .to_string()
                 .as_bytes(),
         );
@@ -909,10 +920,10 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
         .prepare(Publication {
             publication_id: format!("collection-result-{id}"),
             version_id: candidate_id,
-            task_id: task.task.task_id.clone(),
+            task_id: binding.head.task_id.clone(),
             item_id: item_id.into(),
             run_id: self.run_id.clone(),
-            expected_revision: task.task.state_revision,
+            expected_revision: binding.head.state_revision,
             intent: PublishIntent::Daily {
                 expected_head: None,
             },

@@ -95,3 +95,37 @@ pub fn revised(raw: &Value, id: &str) -> Value {
     r["integrity_sha256"] = json!(frozen_legacy::digest(&r));
     r
 }
+/// Snapshot every stored version's full compatibility record before a
+/// simulated schema downgrade; `restore_compat` writes them back into the
+/// renamed `compat_json` column so an explicit upgrade replays the real
+/// migration chain.
+pub fn stored_compat(db: &SqliteMarket) -> Vec<(String, String)> {
+    let c = rusqlite::Connection::open(db.tasks.path()).unwrap();
+    let mut stmt = c
+        .prepare("SELECT version_id FROM data_versions ORDER BY rowid")
+        .unwrap();
+    let ids = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    drop(stmt);
+    ids.into_iter()
+        .map(|id| {
+            (
+                id.clone(),
+                serde_json::to_string(db.candidate(&id).unwrap().raw()).unwrap(),
+            )
+        })
+        .collect()
+}
+pub fn restore_compat(db: &SqliteMarket, raws: &[(String, String)]) {
+    let c = rusqlite::Connection::open(db.tasks.path()).unwrap();
+    for (id, raw) in raws {
+        c.execute(
+            "UPDATE data_versions SET compat_json=?1 WHERE version_id=?2",
+            rusqlite::params![raw, id],
+        )
+        .unwrap();
+    }
+}
