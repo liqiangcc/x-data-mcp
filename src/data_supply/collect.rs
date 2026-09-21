@@ -152,6 +152,7 @@ impl Contract for CollectionContract {
                     frozen_inputs: json!({}),
                     scope_keys: BTreeSet::from([scope]),
                 }],
+                shared_evidence: None,
             });
         }
         let (selection, period) = match &c {
@@ -212,6 +213,10 @@ impl Contract for CollectionContract {
                 scope_keys: BTreeSet::from([scope]),
             });
         }
-        Ok(FrozenWork { items, scopes })
+        Ok(FrozenWork {
+            items,
+            scopes,
+            shared_evidence: None,
+        })
     }
 }

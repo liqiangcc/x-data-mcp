@@ -60,7 +60,11 @@ impl Contract for LegacyCollection {
                 });
             }
         }
-        Ok(FrozenWork { items, scopes })
+        Ok(FrozenWork {
+            items,
+            scopes,
+            shared_evidence: None,
+        })
     }
 }
 pub fn scope_id(symbol: &str, period: &str) -> String {

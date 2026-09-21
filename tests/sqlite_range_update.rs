@@ -412,7 +412,7 @@ fn range_schema_v4_requires_explicit_upgrade_and_preserves_published_records() {
     let f = fixture(false);
     let original = f.db.fixed("legacy-daily").unwrap().raw().clone();
     let compat = observation_fixture::stored_compat(&f.db);
-    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
+    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; ALTER TABLE tasks DROP COLUMN evidence_digest; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
     observation_fixture::restore_compat(&f.db, &compat);
     assert!(f.db.fixed("legacy-daily").is_err());
     assert!(f.db.range_receipt("absent").is_err());
@@ -1609,7 +1609,7 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
     // fixture. The retained v1-v7 DDL and checksums are exactly those used by
     // the deployed schema7.
     let compat = observation_fixture::stored_compat(&f.db);
-    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; CREATE TABLE payloads_bak AS SELECT * FROM payloads; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; DELETE FROM schema_migrations WHERE version>=8; PRAGMA user_version=7;");
+    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; CREATE TABLE payloads_bak AS SELECT * FROM payloads; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; ALTER TABLE tasks DROP COLUMN evidence_digest; DELETE FROM schema_migrations WHERE version>=8; PRAGMA user_version=7;");
     observation_fixture::restore_compat(&f.db, &compat);
     assert!(f.db.publication_facts(&f.command.task_id).is_err());
     let c = Connection::open(f.db.tasks.path()).unwrap();
@@ -2463,6 +2463,69 @@ mod default_runner {
         assert_eq!(frozen["refresh_range"]["end_date"], serde_json::json!(DAY));
         assert_eq!(frozen["proven_gap_ranges"][0]["gap_id"], "g1");
         assert!(frozen["proven_gap_ranges"][0]["evidence_digest"].is_string());
+    }
+    /// #262 regression: the resolved default selection (securities plus
+    /// per-symbol start evidence) must be stored once per task, not copied
+    /// into every item's frozen inputs — and again inside the task row's
+    /// frozen work. At the 100-item budget that duplication is ~100x the
+    /// evidence per task; at market scale (~5,221 item-updates/day) it is
+    /// ~150MB/day against the ≤16MiB hard cap.
+    #[test]
+    fn default_selection_evidence_is_stored_once_and_item_markers_bind() {
+        let owned: Vec<String> = (0..100).map(|i| format!("60{i:04}")).collect();
+        let codes: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let f = default_fixture(Operation::Update, &codes, &[]);
+        let snap = f.ctl.repository.read_task(&f.task_id).unwrap().unwrap();
+        let shared = snap.task.work.shared_evidence.as_ref().unwrap();
+        let shared_len = serde_json::to_string(shared).unwrap().len();
+        assert!(shared_len > 10_000, "fixture selection must be non-trivial");
+        for item in &snap.items {
+            let frozen_len = serde_json::to_string(&item.spec.frozen_inputs)
+                .unwrap()
+                .len();
+            assert!(
+                frozen_len < 2_000,
+                "item frozen inputs must carry only the digest marker, got {frozen_len}B"
+            );
+            let marker = item.spec.frozen_inputs["selection_evidence"]["evidence_digest"]
+                .as_str()
+                .unwrap();
+            assert_eq!(marker, shared["evidence_digest"].as_str().unwrap());
+        }
+        // The task row embeds one shared copy, not the evidence per item.
+        let work_len = serde_json::to_string(&snap.task.work).unwrap().len();
+        assert!(
+            work_len < shared_len + snap.items.len() * 2_000 + 8_192,
+            "frozen work re-embeds evidence per item: {work_len}B"
+        );
+        // The task head carries the digest so the O(1) binding path can
+        // check item markers without decoding the shared blob.
+        let head = f.db.task_head(&f.task_id).unwrap();
+        assert_eq!(
+            head.evidence_digest.as_deref(),
+            shared["evidence_digest"].as_str()
+        );
+        assert!(
+            f.db.task_item_binding(&f.task_id, &f.items[0])
+                .unwrap()
+                .is_some()
+        );
+    }
+    /// A tampered or orphaned `selection_evidence` marker — mismatched
+    /// digest, or one on a task carrying no shared evidence — fails closed
+    /// on both the full-snapshot and the O(1) binding read paths.
+    #[test]
+    fn tampered_item_evidence_marker_fails_closed() {
+        let f = default_fixture(Operation::Update, &["600006"], &[]);
+        let c = Connection::open(f.db.tasks.path()).unwrap();
+        c.execute(
+            "UPDATE task_items SET frozen_inputs_json=json_replace(frozen_inputs_json,'$.selection_evidence.evidence_digest','tampered') WHERE task_id=?1",
+            [&f.task_id],
+        )
+        .unwrap();
+        drop(c);
+        assert!(f.db.task_item_binding(&f.task_id, &f.items[0]).is_err());
+        assert!(f.ctl.repository.read_task(&f.task_id).is_err());
     }
 }
 

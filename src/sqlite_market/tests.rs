@@ -624,6 +624,7 @@ fn manifest_rebuilds_from_v16_flat_clips_and_migrates_idempotently() {
          DROP TABLE manifest_nodes;
          ALTER TABLE data_versions DROP COLUMN manifest_root;
          ALTER TABLE data_versions DROP COLUMN evidence_digest;
+         ALTER TABLE tasks DROP COLUMN evidence_digest;
          DELETE FROM schema_migrations WHERE version>=17;
          PRAGMA user_version=16;",
     )

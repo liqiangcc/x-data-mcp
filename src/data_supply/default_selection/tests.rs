@@ -170,7 +170,7 @@ fn seed_marker(
     let spec = json!({"item_id":item_id,"target":{},"progress_unit":"u","frozen_inputs":{},"scope_keys":["s"]});
     let work = json!({"items":[spec],"scopes":["s"]}).to_string();
     c.execute(
-        "INSERT INTO tasks VALUES(?1,?2,'succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',?3,'{}',?4,1,0,0,1,1)",
+        "INSERT INTO tasks VALUES(?1,?2,'succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',?3,'{}',?4,1,0,0,1,1,NULL)",
         params![task_id, key_json, work, retry_of],
     )
     .unwrap();

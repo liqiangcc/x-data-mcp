@@ -177,7 +177,11 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
                 },
             });
         }
-        Ok(FrozenWork { items, scopes })
+        Ok(FrozenWork {
+            items,
+            scopes,
+            shared_evidence: None,
+        })
     }
 }
 pub(crate) fn frozen(

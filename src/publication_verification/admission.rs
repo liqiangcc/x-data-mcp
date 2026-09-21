@@ -74,6 +74,7 @@ impl<R: TaskRepository> Contract for PublicationVerification<R> {
         Ok(FrozenWork {
             scopes: item.scope_keys.clone(),
             items: vec![item],
+            shared_evidence: None,
         })
     }
 }

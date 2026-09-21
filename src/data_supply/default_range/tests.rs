@@ -508,13 +508,17 @@ fn update_acceptance_freezes_minimal_intent_and_both_provenance_classes() {
     // Item scope/occupancy identical to explicit daily: symbol x day.
     assert_eq!(snap.items[0].spec.item_id, scope_id("sh.600006", "day"));
     let f = &snap.items[0].spec.frozen_inputs;
-    // Class 1: selection/catalog/execution-start provenance.
+    // Class 1: selection/catalog/execution-start provenance is stored once
+    // in the task's shared evidence; the item carries only its digest marker.
     let ev = &f["selection_evidence"];
-    assert_eq!(ev["catalog_version_id"], json!("c1"));
-    assert_eq!(ev["catalog_digest"].as_str().unwrap().len(), 64);
-    assert_eq!(ev["securities"], json!(["sh.600006"]));
-    assert!(ev["starts"]["sh.600006"].is_array());
-    assert_eq!(ev["evidence_digest"].as_str().unwrap().len(), 64);
+    let digest = ev["evidence_digest"].as_str().unwrap();
+    assert_eq!(digest.len(), 64);
+    let shared = snap.task.work.shared_evidence.as_ref().unwrap();
+    assert_eq!(shared["catalog_version_id"], json!("c1"));
+    assert_eq!(shared["catalog_digest"].as_str().unwrap().len(), 64);
+    assert_eq!(shared["securities"], json!(["sh.600006"]));
+    assert!(shared["starts"]["sh.600006"].is_array());
+    assert_eq!(shared["evidence_digest"], json!(digest));
     // Verified base identity.
     assert_eq!(f["base_version_id"], json!("daily-600006"));
     assert_eq!(f["base_integrity_sha256"].as_str().unwrap().len(), 64);

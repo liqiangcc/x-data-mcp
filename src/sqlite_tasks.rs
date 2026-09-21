@@ -3,13 +3,14 @@ use crate::task_control::*;
 use chrono::Utc;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const SCHEMA_VERSION: u32 = 17;
-pub(crate) const MIGRATIONS: [&str; 17] = [
+pub const SCHEMA_VERSION: u32 = 18;
+pub(crate) const MIGRATIONS: [&str; 18] = [
     include_str!("../migrations/tasks/001.sql"),
     include_str!("../migrations/tasks/002.sql"),
     include_str!("../migrations/tasks/003_market.sql"),
@@ -27,6 +28,7 @@ pub(crate) const MIGRATIONS: [&str; 17] = [
     include_str!("../migrations/tasks/015_task_counters.sql"),
     include_str!("../migrations/tasks/016_compact_records.sql"),
     include_str!("../migrations/tasks/017_manifest_delta.sql"),
+    include_str!("../migrations/tasks/018_shared_evidence.sql"),
 ];
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.
@@ -277,7 +279,7 @@ struct ItemCounts {
     succeeded: i64,
 }
 fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
-    let mut stmt=c.prepare("SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded FROM tasks WHERE task_id=?1").map_err(storage)?;
+    let mut stmt=c.prepare("SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest FROM tasks WHERE task_id=?1").map_err(storage)?;
     let mut rows = stmt.query([id]).map_err(storage)?;
     let Some(r) = rows.next().map_err(storage)? else {
         return Ok(None);
@@ -308,6 +310,13 @@ fn read_task(c: &Connection, id: &str) -> Result<Option<TaskSnapshot>, Error> {
             .transpose()?,
         retry_of: r.get(9).map_err(storage)?,
     };
+    // The head projection reads the digest column; the snapshot derives it
+    // from the shared evidence blob. Divergence means one side was tampered
+    // with — fail closed instead of letting the two read paths disagree.
+    let column_digest: Option<String> = r.get(15).map_err(storage)?;
+    if column_digest.as_deref() != task.work.evidence_digest() {
+        return Err(inconsistent("task evidence digest column/blob mismatch"));
+    }
     let counts = ItemCounts {
         total: r.get(10).map_err(storage)?,
         pending: r.get(11).map_err(storage)?,
@@ -565,7 +574,7 @@ pub(crate) fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSna
 /// O(1) task-row projection: every field the runner/commit guards need,
 /// with no frozen-work or item-list decode.
 pub(crate) fn read_task_head(c: &Connection, id: &str) -> Result<Option<TaskHead>, Error> {
-    let mut stmt = c.prepare("SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,last_progress_at,result_json,item_count,items_pending,items_running,items_finished,items_succeeded FROM tasks WHERE task_id=?1").map_err(storage)?;
+    let mut stmt = c.prepare("SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,last_progress_at,result_json,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest FROM tasks WHERE task_id=?1").map_err(storage)?;
     let mut rows = stmt.query([id]).map_err(storage)?;
     let Some(r) = rows.next().map_err(storage)? else {
         return Ok(None);
@@ -595,6 +604,7 @@ pub(crate) fn read_task_head(c: &Connection, id: &str) -> Result<Option<TaskHead
             finished: r.get::<_, i64>(10).map_err(storage)? as u64,
             succeeded: r.get::<_, i64>(11).map_err(storage)? as u64,
         },
+        evidence_digest: r.get(12).map_err(storage)?,
     }))
 }
 fn read_task_item(c: &Connection, task_id: &str, item_id: &str) -> Result<Option<TaskItem>, Error> {
@@ -634,6 +644,21 @@ pub(crate) fn read_item_binding(
     ) else {
         return Ok(None);
     };
+    // A `selection_evidence` marker must equal the task's shared-evidence
+    // digest; a mismatched marker — or one on a task carrying no shared
+    // evidence — is a tampered/corrupt row and fails closed.
+    if let Some(marker) = item
+        .spec
+        .frozen_inputs
+        .get("selection_evidence")
+        .and_then(|v| v.get("evidence_digest"))
+        .and_then(Value::as_str)
+        && head.evidence_digest.as_deref() != Some(marker)
+    {
+        return Err(inconsistent(
+            "item evidence marker mismatches task shared evidence",
+        ));
+    }
     let bound: i64 = c
         .query_row(
             "SELECT count(*) FROM scope_occupancy WHERE task_id=?1 AND scope_key IN (SELECT value FROM json_each(?2))",
@@ -962,7 +987,7 @@ impl TaskRepository for SqliteTasks {
             if !conflicts.is_empty(){return Err(Error::RangeConflict(conflicts));}
             let task_id:String=c.query_row("SELECT 'task-' || lower(hex(randomblob(16)))",[],|r|r.get(0)).map_err(storage)?;
             let now=Utc::now().to_rfc3339();
-            c.execute("INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending) VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,?5,NULL,?6,?7,?7)",params![task_id,encode(&execution_key)?,run,now,encode(work)?,retry.map(|g|&g.original_task_id),work.items.len() as u32]).map_err(storage)?;
+            c.execute("INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,evidence_digest) VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,?5,NULL,?6,?7,?7,?8)",params![task_id,encode(&execution_key)?,run,now,encode(work)?,retry.map(|g|&g.original_task_id),work.items.len() as u32,work.evidence_digest()]).map_err(storage)?;
             for i in &work.items {c.execute("INSERT INTO task_items VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)",params![task_id,i.item_id,encode(&i.target)?,i.progress_unit,encode(&i.frozen_inputs)?,encode(&i.scope_keys)?]).map_err(storage)?;}
             for scope in &work.scopes {c.execute("INSERT INTO task_scopes VALUES(?1,?2)",params![task_id,scope]).map_err(storage)?;c.execute("INSERT INTO scope_occupancy VALUES(?1,?2,0)",params![scope,task_id]).map_err(storage)?;}
             let raw=encode(command)?;

@@ -841,11 +841,15 @@ mod default_selection_wire {
         // Frozen per-item inputs carry both provenance classes.
         let snap = t.read_task(&task_id).unwrap().unwrap();
         let f = &snap.items[0].spec.frozen_inputs;
+        // The item carries only the evidence digest marker; the resolved
+        // selection object is stored once in the task's shared evidence.
+        let shared = snap.task.work.shared_evidence.as_ref().unwrap();
         assert_eq!(
-            f["selection_evidence"]["catalog_version_id"],
-            json!("catalog-1")
+            f["selection_evidence"]["evidence_digest"],
+            shared["evidence_digest"]
         );
-        assert_eq!(f["selection_evidence"]["securities"], json!(["sh.600006"]));
+        assert_eq!(shared["catalog_version_id"], json!("catalog-1"));
+        assert_eq!(shared["securities"], json!(["sh.600006"]));
         assert_eq!(f["base_version_id"], json!("legacy-daily"));
         assert_eq!(f["base_integrity_sha256"].as_str().unwrap().len(), 64);
         assert_eq!(f["refresh_range"]["start_date"], json!("2024-12-31"));
