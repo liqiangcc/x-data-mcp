@@ -370,6 +370,16 @@ fn append_update_promotes_head_and_preserves_base() {
     assert_eq!(head.version.version_id, "v2");
     assert_eq!(head.rows.len(), 3);
 
+    // The append stored ONLY the changed bar: delta segments never copy the
+    // parent's tail chunk. 2 base bars + 1 new bar = 3 physical bar rows.
+    let bar_rows: i64 = repo
+        .read(|c| {
+            c.query_row("SELECT count(*) FROM segment_bars", [], |r| r.get(0))
+                .map_err(storage)
+        })
+        .unwrap();
+    assert_eq!(bar_rows, 3);
+
     // Base version remains immutable and independently readable.
     assert_eq!(repo.fixed("v1").unwrap().version.records.len(), 2);
     let receipt = repo.range_receipt("upd-1").unwrap().unwrap();

@@ -292,19 +292,24 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
         .map(|bar| CompactBar::from_bar(bar, period))
         .collect::<Result<Vec<_>, _>>()
         .map_err(super::integrity)?;
-    let mut clips = Vec::new();
-    for chunk in bars.chunks(SEGMENT_ROWS) {
-        let segment = compact_v19::insert_segment(c, &entity, period, chunk)?;
-        clips.push(StoredClip {
-            segment_key: segment.key,
-            clip: crate::compact_market::SegmentClip {
-                segment_digest: segment.digest,
-                clip_start_day: chunk.first().unwrap().trade_day,
-                clip_end_day: chunk.last().unwrap().trade_day,
-                row_count: chunk.len() as u32,
-            },
-        });
-    }
+    // Full-candidate clips are only materialized for checkpoint staging;
+    // content-addressed segments let unchanged chunks reuse existing rows.
+    let full_clips = |c: &mut Connection| -> Result<Vec<StoredClip>, Error> {
+        let mut clips = Vec::new();
+        for chunk in bars.chunks(SEGMENT_ROWS) {
+            let segment = compact_v19::insert_segment(c, &entity, period, chunk)?;
+            clips.push(StoredClip {
+                segment_key: segment.key,
+                clip: crate::compact_market::SegmentClip {
+                    segment_digest: segment.digest,
+                    clip_start_day: chunk.first().unwrap().trade_day,
+                    clip_end_day: chunk.last().unwrap().trade_day,
+                    row_count: chunk.len() as u32,
+                },
+            });
+        }
+        Ok(clips)
+    };
     let yearly_lineage = match period {
         Period::Year => {
             let derivation = record
@@ -363,16 +368,37 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
             .map(|bar| CompactBar::from_bar(bar, period))
             .collect::<Result<Vec<_>, _>>()
             .map_err(super::integrity)?;
-        match plan_delta(&parent_bars, &bars, &clips)? {
+        match plan_delta(&parent_bars, &bars)? {
             DeltaPlan::Equal => {
                 return Err(Error::Conflict(
                     "candidate identical to declared parent; no-change must not stage".into(),
                 ));
             }
-            DeltaPlan::Ops(ops) => {
+            DeltaPlan::Upsert(changed) => {
+                // Delta segments carry ONLY the changed bars; a daily append
+                // therefore stores ~1 bar row per security, never a copied
+                // tail chunk. This is what bounds per-day DB growth.
+                let mut ops = Vec::new();
+                for chunk in changed.chunks(SEGMENT_ROWS) {
+                    let segment = compact_v19::insert_segment(c, &entity, period, chunk)?;
+                    ops.push(StoredDelta {
+                        range_start_day: chunk.first().unwrap().trade_day,
+                        range_end_day: chunk.last().unwrap().trade_day,
+                        kind: StoredDeltaKind::Upsert(StoredClip {
+                            segment_key: segment.key,
+                            clip: crate::compact_market::SegmentClip {
+                                segment_digest: segment.digest,
+                                clip_start_day: chunk.first().unwrap().trade_day,
+                                clip_end_day: chunk.last().unwrap().trade_day,
+                                row_count: chunk.len() as u32,
+                            },
+                        }),
+                    });
+                }
                 if parent.delta_depth < 256 {
                     compact_versions::stage_delta(c, &draft, parent_key, &ops)?;
                 } else {
+                    let clips = full_clips(c)?;
                     compact_versions::stage_checkpoint(
                         c,
                         &draft,
@@ -385,10 +411,12 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                 }
             }
             DeltaPlan::Full => {
+                let clips = full_clips(c)?;
                 compact_versions::stage_checkpoint(c, &draft, &clips, None)?;
             }
         }
     } else {
+        let clips = full_clips(c)?;
         compact_versions::stage_checkpoint(c, &draft, &clips, None)?;
     }
     Ok(())
@@ -396,69 +424,35 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
 
 enum DeltaPlan {
     Equal,
-    Ops(Vec<StoredDelta>),
+    /// Only the changed bars (inserts + value changes), ordered by day.
+    Upsert(Vec<CompactBar>),
     Full,
 }
 
-/// Delta ops are pure upserts: every parent day must still exist in the
-/// candidate; the upsert range covers [min changed day, max changed day] and
-/// carries the candidate's own segment clips.
-fn plan_delta(
-    parent: &[CompactBar],
-    candidate: &[CompactBar],
-    clips: &[StoredClip],
-) -> Result<DeltaPlan, Error> {
-    use std::collections::BTreeMap;
-    let parent_by_day: BTreeMap<i64, &CompactBar> =
-        parent.iter().map(|b| (b.trade_day, b)).collect();
-    let candidate_by_day: BTreeMap<i64, &CompactBar> =
-        candidate.iter().map(|b| (b.trade_day, b)).collect();
+/// Delta planning is mechanical: the candidate must retain every parent day
+/// (deletions force a checkpoint/full revision); each candidate bar absent
+/// from or differing from the parent becomes an upsert row.
+fn plan_delta(parent: &[CompactBar], candidate: &[CompactBar]) -> Result<DeltaPlan, Error> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let candidate_days: BTreeSet<i64> = candidate.iter().map(|b| b.trade_day).collect();
     if parent
         .iter()
-        .any(|b| !candidate_by_day.contains_key(&b.trade_day))
+        .any(|b| !candidate_days.contains(&b.trade_day))
     {
         return Ok(DeltaPlan::Full);
     }
-    let mut changed = Vec::new();
-    for bar in candidate {
-        if parent_by_day.get(&bar.trade_day) != Some(&bar) {
-            changed.push(bar.trade_day);
-        }
-    }
-    if changed.is_empty() {
-        return Ok(DeltaPlan::Equal);
-    }
-    let range_start = *changed.iter().min().unwrap();
-    let range_end = *changed.iter().max().unwrap();
-    let mut ops = Vec::new();
-    for stored in clips {
-        let clip = &stored.clip;
-        if clip.clip_end_day < range_start || clip.clip_start_day > range_end {
-            continue;
-        }
-        let start = clip.clip_start_day.max(range_start);
-        let count = candidate
-            .iter()
-            .filter(|b| b.trade_day >= start && b.trade_day <= clip.clip_end_day)
-            .count() as u32;
-        if count == 0 {
-            continue;
-        }
-        ops.push(StoredDelta {
-            range_start_day: start,
-            range_end_day: clip.clip_end_day,
-            kind: StoredDeltaKind::Upsert(StoredClip {
-                segment_key: stored.segment_key,
-                clip: crate::compact_market::SegmentClip {
-                    segment_digest: clip.segment_digest,
-                    clip_start_day: start,
-                    clip_end_day: clip.clip_end_day,
-                    row_count: count,
-                },
-            }),
-        });
-    }
-    Ok(DeltaPlan::Ops(ops))
+    let parent_by_day: BTreeMap<i64, &CompactBar> =
+        parent.iter().map(|b| (b.trade_day, b)).collect();
+    let changed: Vec<CompactBar> = candidate
+        .iter()
+        .filter(|b| parent_by_day.get(&b.trade_day) != Some(b))
+        .cloned()
+        .collect();
+    Ok(if changed.is_empty() {
+        DeltaPlan::Equal
+    } else {
+        DeltaPlan::Upsert(changed)
+    })
 }
 
 fn binding_check(plan: &PublishPlan) -> BindingCheck {
@@ -1336,3 +1330,6 @@ impl TaskRepository for SqliteCompactMarket {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod capacity;

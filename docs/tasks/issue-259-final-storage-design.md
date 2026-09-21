@@ -776,6 +776,15 @@ S5A-2 执行结果（2026-09-21）：`SqliteCompactMarket` 已实现并覆盖 `T
 
 验证：`compact_repo` 4 个端到端测试（collection 发布、append delta 更新 + head 推进、no-change range 只增 1 行 typed result、legacy adapter 对 v19 fail-closed）、全库 246 测试、`cargo fmt --check`、`cargo clippy --all-targets --all-features --locked -- -D warnings` 全部通过。证据见 `evidence/issue-259-s5a-compact-adapter/result.json`。worker/runner 尚未切换到 `SqliteCompactMarket`（生产装配与 MCP 路径在后续切片接入），容量验收（S5B）未完成前不得声称生产可用。
 
+**S5B 切片（执行时冻结）**：
+
+1. **Delta segment 修正（S5B 预算分析发现）**：`plan_delta` 曾把 upsert clip 绑定在 512 整块的尾段上，单日 append 会在新 segment 里重复写 ≤511 行旧 bars（5,221 项约 5.9MiB/日，超过 ≤1MiB bars 目标）。修正：delta 只把**变化的 bars**（插入 + 值变更）切成独立 segment，每个 upsert clip 覆盖该段全范围；删除任何 parent day → checkpoint（full revision）。初始/rollover checkpoint 仍用全量 512 分块（content-addressed 复用未变块）。
+2. **harness**：`src/sqlite_market/compact_repo/capacity.rs` 的 `#[ignore]` 测试 `s5b_retained_capacity`，env 参数化（`X_CAPACITY_DIR`/`X_CAPACITY_SYMBOLS`/`X_CAPACITY_SOAK_DAYS`/`X_CAPACITY_PHASES`），分阶段 `initial → measure → nochange → append → soak → verify`，`result.json` 增量持久化，断点经 DB 自身 published 集合与 request replay 幂等续跑。
+3. **范围**：固定 retained gen-2 snapshot（manifest 重算 sha256、官方 URL），in-scope = `hsjday.zip` 中全部 `sh|sz\lday\*.day` 成员（11,802 个；`bj` 被 `materialize_daily` 契约拒绝）。真实源数据 OHLC 违规按 item 级失败记录，不中止 run。
+4. **生产形状**：每 task ≤100 items（`MAX_DEFAULT_SECURITIES` 边界），per-item `StartItem` head transition + adapter `commit`/`commit_range`；`compact_source`/`compact_parent_version_id` 由 harness 显式写入（同 runner 角色）。
+5. **测量**：wall/Instant、peak RSS（`/proc/self/status` VmHWM）、DB/WAL bytes（checkpoint 前后与峰值）、`dbstat` 表/索引 split、PRAGMA `integrity_check`、逐日 growth 序列。
+6. **环境**：Box overlayfs + `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（#213 opt-out，仅本地验收）；release profile 计时。Box 结果不替代 ECS 最终部署验收。
+
 退出条件：容量、增长、时间、RSS、WAL 全部提供机械报告；任一硬上限失败即停止，不部署 ECS。
 
 ### S6：release 与 ECS
