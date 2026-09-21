@@ -30,6 +30,11 @@ pub(crate) const MIGRATIONS: [&str; 18] = [
     include_str!("../migrations/tasks/017_manifest_delta.sql"),
     include_str!("../migrations/tasks/018_shared_evidence.sql"),
 ];
+/// Compact market storage (#259) is an explicit opt-in target: schema-19 files
+/// are refused by `check_schema` above so legacy adapters stay fail-closed.
+pub const COMPACT_SCHEMA_VERSION: u32 = 19;
+pub(crate) const COMPACT_MIGRATION: &str =
+    include_str!("../migrations/tasks/019_compact_market.sql");
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.
 fn post_migration(c: &Connection, version: usize) -> Result<(), Error> {
@@ -84,6 +89,12 @@ impl SqliteTasks {
         })
     }
     pub fn initialize(&self) -> Result<(), Error> {
+        self.initialize_target(false)
+    }
+    pub fn initialize19(&self) -> Result<(), Error> {
+        self.initialize_target(true)
+    }
+    fn initialize_target(&self, compact: bool) -> Result<(), Error> {
         // Explicit create-new only. No clobber, migration or import of an existing file.
         std::fs::OpenOptions::new()
             .write(true)
@@ -107,6 +118,9 @@ impl SqliteTasks {
             apply_migration(&tx, index + 1, sql)?;
             post_migration(&tx, index + 1)?;
         }
+        if compact {
+            apply_migration(&tx, COMPACT_SCHEMA_VERSION as usize, COMPACT_MIGRATION)?;
+        }
         tx.commit()
             .map_err(|e| Error::OutcomeUnknown(e.to_string()))
     }
@@ -124,6 +138,38 @@ impl SqliteTasks {
             apply_migration(&tx, index + 1, sql)?;
             post_migration(&tx, index + 1)?;
         }
+        let broken: bool = tx
+            .prepare("PRAGMA foreign_key_check")
+            .map_err(storage)?
+            .exists([])
+            .map_err(storage)?;
+        if broken {
+            return Err(inconsistent("schema upgrade found foreign key violations"));
+        }
+        tx.commit()
+            .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
+        c.pragma_update(None, "foreign_keys", true)
+            .map_err(storage)?;
+        Ok(())
+    }
+    /// Explicit 18→19 compact storage upgrade. Every business table must be
+    /// empty; a populated schema-18 database can only be replaced by a fresh
+    /// rebuild, never migrated in place.
+    pub fn upgrade_compact(&self) -> Result<(), Error> {
+        let mut c = self.connect(false)?;
+        c.pragma_update(None, "foreign_keys", false)
+            .map_err(storage)?;
+        let tx = c
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let version = check_schema(&tx, false)?;
+        if version != SCHEMA_VERSION {
+            return Err(Error::StorageUnavailable(format!(
+                "schema {version} cannot upgrade to compact {COMPACT_SCHEMA_VERSION}; requires exact schema {SCHEMA_VERSION}"
+            )));
+        }
+        require_business_tables_empty(&tx)?;
+        apply_migration(&tx, COMPACT_SCHEMA_VERSION as usize, COMPACT_MIGRATION)?;
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(storage)?
@@ -209,6 +255,39 @@ fn configure(c: &Connection, busy: Duration) -> Result<(), Error> {
         return Err(Error::StorageUnavailable(
             "connection pragmas differ from task contract".into(),
         ));
+    }
+    Ok(())
+}
+fn require_business_tables_empty(c: &Connection) -> Result<(), Error> {
+    let mut stmt = c
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' \
+             AND name<>'schema_migrations' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .map_err(storage)?;
+    let names = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    drop(stmt);
+    for name in names {
+        let populated: bool = c
+            .query_row(
+                &format!(
+                    "SELECT EXISTS(SELECT 1 FROM \"{}\" LIMIT 1)",
+                    name.replace('"', "\"\"")
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if populated {
+            return Err(Error::StorageUnavailable(
+                "FRESH_REBUILD_REQUIRED: schema 19 compact market storage requires a new database"
+                    .into(),
+            ));
+        }
     }
     Ok(())
 }

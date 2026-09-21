@@ -737,6 +737,17 @@ CLI 和测试可继续使用短连接 repository；生产 `data_service` 必须�
 
 使用固定 retained generation 和 fresh DB：catalog → 5,221-scope daily → yearly sample → one-day no-change/append → 250-day production-shaped soak。
 
+**S5A 切片（执行时冻结）**：
+
+1. `SCHEMA_VERSION` 保持 18。schema-19 DB 的 `user_version=19` 被 legacy `check_schema` 直接拒绝，旧 `SqliteMarket`/`SqliteTasks` 业务读写天然 fail-closed；不使用兼容分支。
+2. `initialize` 不变（仍产生 v18）。新增 `initialize19`（fresh 文件顺序应用 1..19）与 `upgrade_compact`（v18→19 显式升级）。`upgrade` 目标保持 18；`task_sqlite` 是否把 `upgrade` 指向 19 推迟到 adapter 落地后再定。
+3. migration 19 用 `_v19` 临时表创建全部 schema-19 market 目标表；`_v19` 表内互相引用 `_v19` 名，rename 时由 SQLite 自动改写为最终名；对保留表（`tasks`/`task_items` 等）直接引用最终名。随后删除 13 个空 legacy market 表：`payloads`、`manifest_nodes`、`segment_bars`、`bar_segments`、`version_evidence`、`yearly_bars`、`yearly_lineage`、`publication_batches`、`market_update_results`、`yearly_execution_results`、`task_publications`、`effective_heads`、`data_versions`（`version_segments` 已由 post-migration 17 删除）；最后 rename 全部 `_v19` 表并建 `data_versions_entity_period_published` 索引。fresh init 与 upgrade 共用同一 migration 文件；init 中删除的都是空表，无数据迁移。
+4. `upgrade_compact` 前置检查：`sqlite_master` 中除 `schema_migrations` 和 `sqlite_%` 外所有表必须为空，否则返回稳定错误 `FRESH_REBUILD_REQUIRED: schema 19 compact market storage requires a new database`，原库字节与 `user_version` 不变。
+5. `SqliteCompactMarket`（S5A-2）实现现有 `MarketRepository` trait，不改契约：compact facts 是唯一存储身份；`CheckedRecord`/`raw` envelope 只在读取边界按确定性顺序做**内存投影**并为旧契约重算 `legacy_digest`，不落盘、不参与存储完整性。全应用层 92 处 `.raw` 消费点不动。
+6. WriteCoordinator 在 `SqliteCompactMarket` 装配时接入；task 侧方法复用同一 DB 的既有 task 表语义。
+
+S5A-1 执行结果（2026-09-21）：migration 19、`initialize19`、`upgrade_compact` 与全业务表空门禁已实现。`initialize19` 产出 14 个 compact 表、删除 13 个 legacy market 表、`foreign_key_check` 干净、legacy 读写 fail-closed；非空库（payloads 行或完整 task）稳定返回 `FRESH_REBUILD_REQUIRED` 且原库不变；`upgrade` 仍停在 18。证据见 `evidence/issue-259-s5a-schema-migration/result.json`。schema-19 目前尚无业务 adapter，S5A-2 实现 `SqliteCompactMarket` 前不得声称可用。
+
 退出条件：容量、增长、时间、RSS、WAL 全部提供机械报告；任一硬上限失败即停止，不部署 ECS。
 
 ### S6：release 与 ECS

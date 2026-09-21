@@ -831,3 +831,194 @@ fn head_transition_refreshes_a_stale_held_head() {
     assert_eq!(head.state_revision, s.task.state_revision);
     assert!(db.item_execution_started(&tid, &item_id).unwrap());
 }
+
+const COMPACT_TABLES: [&str; 14] = [
+    "evidence_bundles",
+    "source_bindings",
+    "bar_segments",
+    "segment_bars",
+    "data_versions",
+    "version_checkpoint_clips",
+    "version_delta_clips",
+    "yearly_lineage",
+    "result_registry",
+    "market_update_results",
+    "market_update_delta_clips",
+    "publication_results",
+    "task_publications",
+    "effective_heads",
+];
+const LEGACY_MARKET_TABLES: [&str; 7] = [
+    "payloads",
+    "version_evidence",
+    "yearly_bars",
+    "publication_batches",
+    "yearly_execution_results",
+    "manifest_nodes",
+    "version_segments",
+];
+const PRESERVED_TABLES: [&str; 16] = [
+    "tasks",
+    "task_items",
+    "task_scopes",
+    "scope_occupancy",
+    "requests",
+    "catalog_versions",
+    "catalog_members",
+    "catalog_head",
+    "stopped_write_checks",
+    "publication_checks",
+    "verification_runtime_guards",
+    "verification_inspections",
+    "task_item_execution_starts",
+    "proven_gaps",
+    "gap_coverings",
+    "gap_verification_decisions",
+];
+
+fn raw_tables(path: &std::path::Path) -> Vec<String> {
+    let c = Connection::open(path).unwrap();
+    let mut stmt = c
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+fn raw_user_version(path: &std::path::Path) -> u32 {
+    Connection::open(path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap()
+}
+fn raw_columns(path: &std::path::Path, table: &str) -> Vec<String> {
+    let c = Connection::open(path).unwrap();
+    let mut stmt = c.prepare(&format!("PRAGMA table_info({table})")).unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+fn assert_compact_shape(path: &std::path::Path) {
+    let tables = raw_tables(path);
+    assert_eq!(raw_user_version(path), COMPACT_SCHEMA_VERSION);
+    for table in COMPACT_TABLES {
+        assert!(tables.contains(&table.to_string()), "missing {table}");
+    }
+    for table in LEGACY_MARKET_TABLES {
+        assert!(!tables.contains(&table.to_string()), "legacy {table} kept");
+    }
+    for table in PRESERVED_TABLES {
+        assert!(
+            tables.contains(&table.to_string()),
+            "preserved {table} lost"
+        );
+    }
+    let versions = raw_columns(path, "data_versions");
+    assert!(versions.contains(&"version_key".to_string()));
+    assert!(!versions.contains(&"compat_json".to_string()));
+    assert!(!versions.contains(&"envelope_json".to_string()));
+    assert!(raw_columns(path, "bar_segments").contains(&"segment_key".to_string()));
+}
+fn assert_legacy_shape(path: &std::path::Path) {
+    assert_eq!(raw_user_version(path), SCHEMA_VERSION);
+    assert!(raw_columns(path, "data_versions").contains(&"envelope_json".to_string()));
+    assert!(!raw_columns(path, "data_versions").contains(&"version_key".to_string()));
+    assert!(raw_tables(path).contains(&"payloads".to_string()));
+}
+
+#[test]
+fn initialize19_builds_compact_schema_and_refuses_legacy_ops() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("compact.db");
+    let db = SqliteTasks::new(&path);
+    db.initialize19().unwrap();
+    assert_compact_shape(&path);
+    let e = db.read(|_| Ok(())).unwrap_err().to_string();
+    assert!(e.contains("unsupported/uninitialized schema"), "{e}");
+    let e = db.write(|_| Ok(())).unwrap_err().to_string();
+    assert!(e.contains("unsupported/uninitialized schema"), "{e}");
+}
+
+#[test]
+fn upgrade_compact_replaces_empty_schema18_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.db");
+    let db = SqliteTasks::new(&path);
+    db.initialize().unwrap();
+    assert_legacy_shape(&path);
+    db.upgrade_compact().unwrap();
+    assert_compact_shape(&path);
+    let c = Connection::open(&path).unwrap();
+    let broken: bool = c
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .exists([])
+        .unwrap();
+    assert!(!broken);
+    let e = db.read(|_| Ok(())).unwrap_err().to_string();
+    assert!(e.contains("unsupported/uninitialized schema"), "{e}");
+    let e = db.upgrade_compact().unwrap_err().to_string();
+    assert!(e.contains("unsupported/uninitialized schema"), "{e}");
+}
+
+#[test]
+fn upgrade_compact_rejects_any_populated_business_table() {
+    for populate in ["market", "task"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("populated.db");
+        let db = SqliteTasks::new(&path);
+        db.initialize().unwrap();
+        match populate {
+            "market" => {
+                db.write(|c| {
+                    c.execute("INSERT INTO payloads VALUES('p','{}')", [])
+                        .map_err(storage)
+                })
+                .unwrap();
+            }
+            _ => {
+                accept(SqliteTasks::new(&path));
+            }
+        }
+        let e = db.upgrade_compact().unwrap_err().to_string();
+        assert!(e.contains("FRESH_REBUILD_REQUIRED"), "{populate}: {e}");
+        assert_legacy_shape(&path);
+        if populate == "market" {
+            let n: i64 = db
+                .read(|c| {
+                    c.query_row("SELECT count(*) FROM payloads", [], |r| r.get(0))
+                        .map_err(storage)
+                })
+                .unwrap();
+            assert_eq!(n, 1);
+        }
+    }
+}
+
+#[test]
+fn upgrade_stays_schema18_and_never_applies_compact_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.db");
+    {
+        std::fs::File::create(&path).unwrap();
+        let mut c = Connection::open(&path).unwrap();
+        c.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0))
+            .unwrap();
+        let tx = c
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        for (index, sql) in MIGRATIONS.iter().enumerate().take(17) {
+            apply_migration(&tx, index + 1, sql).unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    assert_eq!(raw_user_version(&path), 17);
+    let db = SqliteTasks::new(&path);
+    db.upgrade().unwrap();
+    assert_eq!(raw_user_version(&path), SCHEMA_VERSION);
+    assert!(raw_columns(&path, "data_versions").contains(&"envelope_json".to_string()));
+    db.upgrade().unwrap();
+    assert_legacy_shape(&path);
+}
