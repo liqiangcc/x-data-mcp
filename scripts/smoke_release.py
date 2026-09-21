@@ -88,6 +88,56 @@ def runtime_smoke(binaries):
             assert status == 0, service.stderr.read()
 
 
+def acquire_smoke(binaries):
+    """Packaged acquire service: generation store + owner-only socket."""
+    with tempfile.TemporaryDirectory(prefix="x-data-mcp-acquire-smoke-") as tmp:
+        root = pathlib.Path(tmp)
+        generations, endpoint = root / "generations", root / "acquire.sock"
+        service = subprocess.Popen([binaries / "acquire_service", generations, endpoint], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        client = None
+        def rpc(method, params):
+            client.stdin.write(json.dumps(dict(jsonrpc="2.0", id=1, method=method, params=params)) + "\n")
+            client.stdin.flush()
+            assert select.select([client.stdout], [], [], 10)[0], "IPC response deadline"
+            response = json.loads(client.stdout.readline())
+            assert response["id"] == 1 and "error" not in response, response
+            return response["result"]
+        try:
+            deadline = time.monotonic() + 10
+            while True:
+                assert service.poll() is None, service.stderr.read()
+                with socket.socket(socket.AF_UNIX) as probe:
+                    try:
+                        probe.connect(str(endpoint))
+                        break
+                    except (FileNotFoundError, ConnectionRefusedError):
+                        assert time.monotonic() < deadline, "acquire service startup deadline"
+                        time.sleep(0.02)
+            client = subprocess.Popen([binaries / "mcp_connect", endpoint], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            assert rpc("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
+            tools = rpc("tools/list", {})["tools"]
+            names = {t["name"] for t in tools}
+            assert names == {"check_official_updates", "acquire_generation", "get_acquisition_task",
+                             "get_acquisition_request", "verify_generation", "activate_generation",
+                             "retire_generation", "sync_status", "run_worker_once",
+                             "get_acquisition_capabilities"}, names
+            cap = rpc("tools/call", dict(name="get_acquisition_capabilities",
+                                       arguments={"contract_version": "v1"}))
+            assert not cap["isError"], cap
+            client.stdin.close()
+            assert client.wait(timeout=10) == 0
+        finally:
+            if client is not None and client.poll() is None:
+                client.kill()
+                client.wait()
+            service.terminate()
+            try:
+                service.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                service.kill()
+                service.wait()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--bin-dir", type=pathlib.Path, required=True)
@@ -202,6 +252,8 @@ def main():
     runtime_smoke(binaries)
     checks.append("persistent_service_proxy_discovery_and_reconnect")
     checks.append("same_proxy_idle_over_30_seconds_then_calls_again")
+    acquire_smoke(binaries)
+    checks.append("acquire_service_socket_discovery_and_capabilities")
     report = dict(status="PASS", version=version, binary_sha256=hashlib.sha256((binaries / "mcp_data").read_bytes()).hexdigest(), checks=checks, live_source="NOT_RUN", production="NOT_PRODUCTION_READY", data="SYNTHETIC_FIXTURE_ONLY")
     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(report, ensure_ascii=False))
