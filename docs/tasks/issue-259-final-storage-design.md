@@ -746,7 +746,35 @@ CLI 和测试可继续使用短连接 repository；生产 `data_service` 必须�
 5. `SqliteCompactMarket`（S5A-2）实现现有 `MarketRepository` trait，不改契约：compact facts 是唯一存储身份；`CheckedRecord`/`raw` envelope 只在读取边界按确定性顺序做**内存投影**并为旧契约重算 `legacy_digest`，不落盘、不参与存储完整性。全应用层 92 处 `.raw` 消费点不动。
 6. WriteCoordinator 在 `SqliteCompactMarket` 装配时接入；task 侧方法复用同一 DB 的既有 task 表语义。
 
+**S5A-2 adapter 契约（执行时冻结）**：
+
+- `SqliteCompactMarket` 持有 `Arc<WriteCoordinator>`（lease + frozen expected schema-19 identity）并实现 `TaskRepository`、`MarketRepository`、`RangeRepository`。worker/`TaskControl` 直接以它为 repository，不再依赖 `SqliteTasks` 的 `check_schema`。
+- `sqlite_tasks` 的连接级 helper（`read_request`/`read_bound_task`/`read_task_head`/`read_item_binding`/`transition_head_tx`/`persist_decided`/`decide` 路径与 `accept`/`transition` 的 INSERT 逻辑）提升为 `pub(crate)`，由 compact adapter 在 coordinator transaction 内复用；task 语义不变。
+- stage 的 envelope 增加两个可选、由调用方显式写入的顶层字段（被 `legacy_digest` 覆盖、`compat::check` 反序列化忽略）：
+  - `raw["compact_source"]`：**v19 stage 必需**。`{generation_id, generation_manifest_sha256, day_member_sha256, security_event_sha256, generation_evidence}`。`generation_evidence` 的 canonical JSON 入 `evidence_bundles(kind='generation')`；其余字段入 `source_bindings`。caller（runner）从自己已验证的 installed snapshot 写入，adapter 不猜。
+  - `raw["compact_parent_version_id"]`：可选。声明 delta parent；update/backfill 路径写 base version_id。
+- `raw["compact_update_range"]=[start,end]`（ISO date，可选）：market update result 的 range 列；缺省时 append 取第一个分叉日到 candidate 末日，full 取 candidate 全范围。
+- stage 存储决策是机械的：声明 parent 且 candidate 可表示为 parent 的纯 upsert 序列（无 bar 删除）→ `stage_delta`（depth 256 时 `stage_checkpoint` rollover）；否则 → `stage_checkpoint`（full revision，新 root）。candidate 与已发布 parent 完全相等 → 拒绝（no-change 不应 stage）。yearly candidate（`yearly_derivation` 非空）→ checkpoint + `add_yearly_lineage`。
+- `versions()` 先用 metadata-only `list()` 定序，再逐个 `fixed()` 物化 `EffectiveVersion.records` —— 与 legacy `read_record` 同成本，契约不变。
+- `commit(plan)` 的 intent 映射：`Daily{expected_head:Some}` → `commit_market_update`（Published；continuity 由 result version 的 manifest_mode 派生：delta→Append、checkpoint→Full）；`Daily{expected_head:None}` → `commit_publication(kind=Collection)`；`HistoricalFixedBase` → `commit_publication(kind=Yearly)`；`CurrentHead` → `commit_publication(kind=Yearly)` 携带双 head expectation + promote。
+- S3 commit API 修正：`MarketUpdateCommit`/`PublicationCommit` 增加 `required_heads: Vec<(entity,period,Option<version_key>)>`，在提交事务内对所有 outcome 核对 `effective_heads` 与期望相等（None=必须缺失）。这覆盖 no-change 的“head 未移动”门禁和 `CurrentHead` 的非 promoted scope expectation；`head: HeadExpectation` 仍只表达 promoted scope 的行为。
+- `commit_range(plan)`：`no_change` → `commit_market_update(NoChange{prefix_bytes})`（prefix_bytes=base record_count×32）；changed → `commit_market_update`（Published）。不再写 `audit_json`/`publication_batches`；continuity evidence 从 `plan.audit` 的类型化字段（`same_qfq_basis_ref`/`revision_ref`/`base_version_id`）重建为 `evidence_bundles(kind='continuity')` 对象 `{mode,prefix_bytes,source_binding_digest,base_version_id,basis_ref,revision_ref}`，不存原始 audit。
+- 读取投影：synthesized raw = `to_value(EffectiveVersion)` + `batch` + `compact_source` + `compact_parent_version_id`（若 delta）+ `integrity_sha256`，字段顺序固定 ⇒ `legacy_digest` 跨 prepare/commit 重算一致。`integrity_sha256` 仅用于旧契约内部一致性，存储身份是 `integrity_digest`。
+- `receipt(id)` 经 `result_registry` 判 kind → `read_publication`/`read_market_update` → 映射 `Receipt`；`range_receipt`/`item_receipt` 同理。
+- gaps（`cover_gap`/`gap_coverings`/决策读）作用域保留表与 `data_versions.version_id`（v19 仍存在）兼容，连接级 SQL 直接复用。
+- `transition_task` → adapter 自己的 `TaskRepository::transition`（coordinator write + `decide`/`persist` helpers）。
+
 S5A-1 执行结果（2026-09-21）：migration 19、`initialize19`、`upgrade_compact` 与全业务表空门禁已实现。`initialize19` 产出 14 个 compact 表、删除 13 个 legacy market 表、`foreign_key_check` 干净、legacy 读写 fail-closed；非空库（payloads 行或完整 task）稳定返回 `FRESH_REBUILD_REQUIRED` 且原库不变；`upgrade` 仍停在 18。证据见 `evidence/issue-259-s5a-schema-migration/result.json`。schema-19 目前尚无业务 adapter，S5A-2 实现 `SqliteCompactMarket` 前不得声称可用。
+
+S5A-2 执行结果（2026-09-21）：`SqliteCompactMarket` 已实现并覆盖 `TaskRepository`/`MarketRepository`/`RangeRepository`，经 `Arc<WriteCoordinator>`（lease + frozen schema-19 identity）统一出入。已实现的修正与边界：
+
+- `MarketUpdateCommit`/`PublicationCommit` 增加 `required_heads`（事务内 `effective_heads` 核对）与 `binding`（事务内 task/item/scope/owner 核对）；`finish_item_and_task` 补终态 `result_json` 与 `scope_occupancy` 释放（与 `decide`/`persist_decided` 语义对齐）。
+- `compact_versions::materialize` 对 staged/validated/published 统一做 verified 物化；`synthesize` 在内存中重建 legacy 兼容 envelope（`version`+`batch`+`compact_source`+`compact_parent_version_id`+`integrity_sha256`），不落盘。
+- `sqlite_tasks` 的 `accept`/`transition`/`transition_light`/`candidates`/`reconcile` 提为连接级 `*_tx` 函数，两个 adapter 共用同一实现。
+- `commit` intent 映射、`commit_range`（no-change → typed result、零 bars/segments/versions 增长）、`receipt`/`range_receipt`/`item_receipt` 经 `result_registry` 统一回放。
+- `cover_gap`/`gap_coverings` 已按 v19 列（`entity`/INTEGER period/`state=3`/`task_publications`）改写。
+
+验证：`compact_repo` 4 个端到端测试（collection 发布、append delta 更新 + head 推进、no-change range 只增 1 行 typed result、legacy adapter 对 v19 fail-closed）、全库 246 测试、`cargo fmt --check`、`cargo clippy --all-targets --all-features --locked -- -D warnings` 全部通过。证据见 `evidence/issue-259-s5a-compact-adapter/result.json`。worker/runner 尚未切换到 `SqliteCompactMarket`（生产装配与 MCP 路径在后续切片接入），容量验收（S5B）未完成前不得声称生产可用。
 
 退出条件：容量、增长、时间、RSS、WAL 全部提供机械报告；任一硬上限失败即停止，不部署 ECS。
 

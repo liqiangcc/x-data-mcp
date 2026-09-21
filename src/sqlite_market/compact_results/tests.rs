@@ -128,22 +128,37 @@ fn connection() -> Connection {
          ) STRICT, WITHOUT ROWID;
          CREATE TABLE tasks(
            task_id TEXT PRIMARY KEY,
+           command_key_json TEXT NOT NULL,
            status TEXT NOT NULL CHECK(status IN ('pending','running','cancel_requested','needs_verification','succeeded','partially_failed','failed','cancelled','interrupted')),
            state_revision INTEGER NOT NULL CHECK(state_revision>=0),
+           accepted_run_id TEXT NOT NULL CHECK(length(accepted_run_id)>0),
+           owner_run_id TEXT,
+           created_at TEXT NOT NULL,
+           last_progress_at TEXT NOT NULL,
+           frozen_work_json TEXT NOT NULL,
+           result_json TEXT,
+           retry_of TEXT REFERENCES tasks(task_id),
            item_count INTEGER NOT NULL DEFAULT 0 CHECK(item_count>=0),
            items_pending INTEGER NOT NULL DEFAULT 0 CHECK(items_pending>=0),
            items_running INTEGER NOT NULL DEFAULT 0 CHECK(items_running>=0),
            items_finished INTEGER NOT NULL DEFAULT 0 CHECK(items_finished>=0),
-           items_succeeded INTEGER NOT NULL DEFAULT 0 CHECK(items_succeeded>=0)
+           items_succeeded INTEGER NOT NULL DEFAULT 0 CHECK(items_succeeded>=0),
+           evidence_digest TEXT
          ) STRICT;
          CREATE TABLE task_items(
            task_id TEXT NOT NULL REFERENCES tasks(task_id),
            item_id TEXT NOT NULL,
+           target_json TEXT NOT NULL,
+           progress_unit TEXT NOT NULL,
+           frozen_inputs_json TEXT NOT NULL,
+           scope_keys_json TEXT NOT NULL,
            stage TEXT NOT NULL CHECK(stage IN ('pending','running','finished')),
            outcome_json TEXT,
            PRIMARY KEY(task_id,item_id),
            CHECK((stage='finished')=(outcome_json IS NOT NULL))
          ) STRICT;
+         CREATE TABLE task_scopes(task_id TEXT NOT NULL REFERENCES tasks(task_id),scope_key TEXT NOT NULL,PRIMARY KEY(task_id,scope_key)) STRICT;
+         CREATE TABLE scope_occupancy(scope_key TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(task_id),state_revision INTEGER NOT NULL CHECK(state_revision>=0)) STRICT;
          CREATE TABLE market_update_results(
            result_key INTEGER PRIMARY KEY,
            result_id TEXT NOT NULL UNIQUE REFERENCES result_registry(result_id),
@@ -384,18 +399,51 @@ fn staged_daily_delta(c: &Connection, version_id: &str, parent: i64, ops: &[Stor
     key
 }
 
+const TEST_SCOPE_KEY: &str = "[\"market\",\"sh.600006\",\"day\"]";
+
 fn create_task(c: &Connection, task_id: &str, revision: i64, running_items: &[&str]) {
     c.execute(
-        "INSERT INTO tasks(task_id,status,state_revision,item_count,items_pending,items_running,items_finished,items_succeeded) VALUES(?1,'running',?2,?3,0,?3,0,0)",
-        params![task_id, revision, running_items.len() as i64],
+        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,item_count,items_running) VALUES(?1,?2,'running',?3,'run','run','2026-09-21T00:00:00+00:00','2026-09-21T00:00:00+00:00','{}',?4,?4)",
+        params![
+            task_id,
+            serde_json::json!({"operation":"update_data","dataset":"market.daily","contract_version":"v1"}).to_string(),
+            revision,
+            running_items.len() as i64
+        ],
     )
     .unwrap();
-    for item in running_items {
+    if !running_items.is_empty() {
         c.execute(
-            "INSERT INTO task_items(task_id,item_id,stage) VALUES(?1,?2,'running')",
-            params![task_id, item],
+            "INSERT OR IGNORE INTO task_scopes VALUES(?1,?2)",
+            params![task_id, TEST_SCOPE_KEY],
         )
         .unwrap();
+        c.execute(
+            "INSERT OR IGNORE INTO scope_occupancy VALUES(?1,?2,0)",
+            params![TEST_SCOPE_KEY, task_id],
+        )
+        .unwrap();
+    }
+    for item in running_items {
+        c.execute(
+            "INSERT INTO task_items VALUES(?1,?2,?3,'day','{}',?4,'running',NULL)",
+            params![
+                task_id,
+                item,
+                serde_json::json!({"symbol":"sh.600006","period":"day"}).to_string(),
+                serde_json::json!([TEST_SCOPE_KEY]).to_string()
+            ],
+        )
+        .unwrap();
+    }
+}
+
+fn test_binding() -> BindingCheck {
+    BindingCheck {
+        run_id: "run".into(),
+        entity: "sh.600006".into(),
+        period: Period::Day,
+        occupancy_key: TEST_SCOPE_KEY.into(),
     }
 }
 
@@ -422,6 +470,8 @@ fn update_command(
         expected_task_revision: 1,
         published_at: None,
         head: HeadExpectation::Keep,
+        required_heads: Vec::new(),
+        binding: test_binding(),
         change,
     }
 }
@@ -782,6 +832,8 @@ fn publication_commits() {
             expected_task_revision: expected_revision,
             published_at: Some(ts()),
             head,
+            required_heads: Vec::new(),
+            binding: test_binding(),
         }
     };
 
@@ -1209,6 +1261,8 @@ fn read_publication_fails_closed() {
             expected_task_revision: 1,
             published_at: Some(ts()),
             head: HeadExpectation::Keep,
+            required_heads: Vec::new(),
+            binding: test_binding(),
         };
         let stored = commit_publication(&mut c, &command).unwrap();
         (c, stored)
@@ -1406,6 +1460,8 @@ fn illegal_update_combinations_rejected() {
         expected_task_revision: 1,
         published_at: None,
         head: HeadExpectation::Keep,
+        required_heads: Vec::new(),
+        binding: test_binding(),
     };
     integrity_failure(commit_publication(&mut c, &nochange_pub).map(|s| s.result_key));
 }

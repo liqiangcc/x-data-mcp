@@ -433,12 +433,13 @@ struct VersionRow {
     projection_digest: Digest,
     integrity_digest: Option<Digest>,
     published_at: Option<String>,
+    created_at: String,
 }
 
 fn read_version_row(c: &Connection, key: i64) -> Result<Option<VersionRow>, Error> {
     let row = c
         .query_row(
-            "SELECT version_key,version_id,entity,period,state,source_binding_digest,parent_version_key,manifest_mode,delta_depth,record_count,first_day,last_day,coverage_status,evidence_digest,projection_digest,published_at,integrity_digest,adjustment,digest_format FROM data_versions WHERE version_key=?1",
+            "SELECT version_key,version_id,entity,period,state,source_binding_digest,parent_version_key,manifest_mode,delta_depth,record_count,first_day,last_day,coverage_status,evidence_digest,projection_digest,published_at,integrity_digest,adjustment,digest_format,created_at FROM data_versions WHERE version_key=?1",
             params![key],
             |r| {
                 Ok((
@@ -461,6 +462,7 @@ fn read_version_row(c: &Connection, key: i64) -> Result<Option<VersionRow>, Erro
                     r.get::<_, Option<Vec<u8>>>(16)?,
                     r.get::<_, i64>(17)?,
                     r.get::<_, String>(18)?,
+                    r.get::<_, String>(19)?,
                 ))
             },
         )
@@ -486,6 +488,7 @@ fn read_version_row(c: &Connection, key: i64) -> Result<Option<VersionRow>, Erro
         integrity_blob,
         adjustment,
         digest_format,
+        created_at,
     )) = row
     else {
         return Ok(None);
@@ -511,6 +514,7 @@ fn read_version_row(c: &Connection, key: i64) -> Result<Option<VersionRow>, Erro
         projection_digest: fixed_digest(&projection)?,
         integrity_digest: integrity_blob.map(|blob| fixed_digest(&blob)).transpose()?,
         published_at,
+        created_at,
     }))
 }
 
@@ -948,6 +952,116 @@ fn to_effective_version(
     })
 }
 
+fn unpublished_version(
+    c: &Connection,
+    row: &VersionRow,
+    bars: &[CompactBar],
+    evidence: VersionEvidence,
+) -> Result<EffectiveVersion, Error> {
+    let records = bars
+        .iter()
+        .map(|bar| bar.to_bar(row.period))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(integrity)?;
+    let yearly_derivation = match verify_stored_lineage(c, row)? {
+        Some(l) => Some(YearlyDerivation {
+            base_daily_version_id: l.base_daily_version_id,
+            algorithm_version: l.algorithm_version,
+            first_trading_date: compact_market::epoch_date(l.first_trade_day).map_err(integrity)?,
+            last_trading_date: compact_market::epoch_date(l.last_trade_day).map_err(integrity)?,
+        }),
+        None => None,
+    };
+    let published_at = DateTime::parse_from_rfc3339(&row.created_at)
+        .map_err(integrity)?
+        .with_timezone(&Utc);
+    Ok(EffectiveVersion {
+        version_id: row.version_id.clone(),
+        symbol: row.entity.clone(),
+        period: row.period,
+        adjustment: Adjustment::Forward,
+        source: evidence.source,
+        records,
+        published_at,
+        validation: ValidationSummary {
+            record_count: bars.len(),
+            unique_record_count: bars.len(),
+            duplicate_count: 0,
+        },
+        unit_currency: evidence.unit_currency,
+        adjustment_evidence: evidence.adjustment_evidence,
+        yearly_derivation,
+    })
+}
+
+/// Verified materialization of any stored version: published versions run the
+/// full chain/integrity verification; staged and validated versions run the
+/// staged-projection verification. The projected `EffectiveVersion.published_at`
+/// of an unpublished version is its immutable `created_at` stamp.
+#[derive(Debug, Clone)]
+pub(crate) struct MaterializedVersion {
+    pub key: i64,
+    pub state: CompactVersionState,
+    pub version: EffectiveVersion,
+    pub coverage_status: CoverageStatus,
+    pub coverage_reason: String,
+    pub source_binding: SourceBinding,
+    pub generation_evidence: Value,
+    pub parent_version_id: Option<String>,
+    pub projection_digest: Digest,
+    pub integrity_digest: Option<Digest>,
+}
+
+pub(crate) fn materialize(c: &Connection, version_id: &str) -> Result<MaterializedVersion, Error> {
+    let row = read_version_row_by_id(c, version_id)?.ok_or(Error::NotFound)?;
+    let state = match row.state {
+        1 => CompactVersionState::Staged,
+        2 => CompactVersionState::Validated,
+        3 => CompactVersionState::Published,
+        _ => return Err(integrity("malformed version state")),
+    };
+    let evidence = verify_version_evidence(c, &row.evidence_digest)?;
+    let version = match state {
+        CompactVersionState::Published => fixed_by_key(c, row.key)?.version,
+        _ => {
+            verify_staged(c, &row)?;
+            let (leaf, bars) = reconstruct_leaf(c, row.key)?;
+            unpublished_version(c, &leaf, &bars, evidence.clone())?
+        }
+    };
+    let source_binding = read_source_binding(c, &row.source_binding_digest)?;
+    let (kind, canonical) = read_evidence(c, &source_binding.evidence_digest)?;
+    if kind != EvidenceKind::Generation {
+        return Err(integrity("source binding evidence is not generation"));
+    }
+    let generation_evidence: Value = serde_json::from_str(&canonical).map_err(integrity)?;
+    let parent_version_id = match row.parent_version_key {
+        Some(parent) => Some(
+            read_version_row(c, parent)?
+                .ok_or_else(|| integrity("parent version missing"))?
+                .version_id,
+        ),
+        None => None,
+    };
+    Ok(MaterializedVersion {
+        key: row.key,
+        state,
+        version,
+        coverage_status: match row.coverage_status {
+            1 => CoverageStatus::Complete,
+            2 => CoverageStatus::Incomplete,
+            3 => CoverageStatus::Unknown,
+            _ => return Err(integrity("unknown coverage_status")),
+        },
+        coverage_reason: evidence.coverage_reason,
+        source_binding,
+        generation_evidence,
+        parent_version_id,
+        projection_digest: row.projection_digest,
+        integrity_digest: row.integrity_digest,
+    })
+}
+
 fn check_draft_static(c: &Connection, draft: &VersionDraft) -> Result<(), Error> {
     if draft.version_id.is_empty() {
         return Err(integrity("version_id is empty"));
@@ -1085,7 +1199,10 @@ fn insert_lineage_row(
     Ok(())
 }
 
-fn read_evidence(c: &Connection, digest: &Digest) -> Result<(EvidenceKind, String), Error> {
+pub(crate) fn read_evidence(
+    c: &Connection,
+    digest: &Digest,
+) -> Result<(EvidenceKind, String), Error> {
     let row = c
         .query_row(
             "SELECT evidence_kind,canonical_json FROM evidence_bundles WHERE evidence_digest=?1",
@@ -1100,7 +1217,7 @@ fn read_evidence(c: &Connection, digest: &Digest) -> Result<(EvidenceKind, Strin
     Ok((kind, row.1))
 }
 
-fn read_source_binding(c: &Connection, digest: &Digest) -> Result<SourceBinding, Error> {
+pub(crate) fn read_source_binding(c: &Connection, digest: &Digest) -> Result<SourceBinding, Error> {
     let row = c
         .query_row(
             "SELECT generation_id,generation_manifest_sha256,day_member_sha256,security_event_sha256,evidence_digest FROM source_bindings WHERE source_binding_digest=?1",

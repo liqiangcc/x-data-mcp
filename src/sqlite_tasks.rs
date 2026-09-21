@@ -1044,35 +1044,7 @@ impl TaskRepository for SqliteTasks {
         if id.trim().is_empty() || run.trim().is_empty() {
             return Err(Error::InvalidCommand("empty identity".into()));
         }
-        self.write(|c|{
-            if let Some(record)=read_request(c,id)?{if record.command!=*command{return Err(Error::RequestConflict);}return Ok(Acceptance{record,reused:true});}
-            // Corrupt accepted state is not permission to steal a missing claim.
-            let orphan: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN requests r ON r.task_id=t.task_id WHERE r.request_id IS NULL)", [], |r| r.get(0)).map_err(storage)?;
-            if orphan { return Err(inconsistent("unbound execution record")); }
-            let mut stmt=c.prepare("SELECT request_id FROM requests").map_err(storage)?;
-            let ids=stmt.query_map([],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
-            for existing in ids{read_request(c,&existing)?;}
-            let execution_key=if let Some(guard)=retry {
-                let old=read_bound_task(c,&guard.original_task_id)?.ok_or(Error::TaskNotFound)?;
-                if old.task.state_revision!=guard.expected_revision{return Err(Error::RevisionConflict);}
-                if command.intent!=serde_json::json!({"original_task_id":guard.original_task_id,"selected_items":guard.selected_items}) || command.key!= (CommandKey{operation:"retry_task".into(),..old.task.key.clone()}) {return Err(Error::InvalidRetrySelection);}
-                if c.query_row("SELECT request_id FROM requests WHERE task_id=?1",[&guard.original_task_id],|r|r.get::<_,String>(0)).map_err(storage)?==id{return Err(Error::RequestConflict);}
-                for item in &work.items {if !guard.selected_items.contains(&item.item_id) || !old.items.iter().any(|i|i.spec==*item && !i.outcome.as_ref().is_some_and(|o|o.success)){return Err(Error::InvalidRetrySelection);}}
-                if work.items.len()!=guard.selected_items.len(){return Err(Error::InvalidRetrySelection);}
-                old.task.key
-            }else{command.key.clone()};
-            let mut conflicts=Vec::new();
-            for scope in &work.scopes {if c.query_row("SELECT EXISTS(SELECT 1 FROM scope_occupancy WHERE scope_key=?1)",[scope],|r|r.get::<_,bool>(0)).map_err(storage)?{conflicts.push(scope.clone());}}
-            if !conflicts.is_empty(){return Err(Error::RangeConflict(conflicts));}
-            let task_id:String=c.query_row("SELECT 'task-' || lower(hex(randomblob(16)))",[],|r|r.get(0)).map_err(storage)?;
-            let now=Utc::now().to_rfc3339();
-            c.execute("INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,evidence_digest) VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,?5,NULL,?6,?7,?7,?8)",params![task_id,encode(&execution_key)?,run,now,encode(work)?,retry.map(|g|&g.original_task_id),work.items.len() as u32,work.evidence_digest()]).map_err(storage)?;
-            for i in &work.items {c.execute("INSERT INTO task_items VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)",params![task_id,i.item_id,encode(&i.target)?,i.progress_unit,encode(&i.frozen_inputs)?,encode(&i.scope_keys)?]).map_err(storage)?;}
-            for scope in &work.scopes {c.execute("INSERT INTO task_scopes VALUES(?1,?2)",params![task_id,scope]).map_err(storage)?;c.execute("INSERT INTO scope_occupancy VALUES(?1,?2,0)",params![scope,task_id]).map_err(storage)?;}
-            let raw=encode(command)?;
-            c.execute("INSERT INTO requests VALUES(?1,?2,?3,'task',?4,NULL)",params![id,raw,crate::hash::sha256(raw.as_bytes()),task_id]).map_err(storage)?;
-            Ok(Acceptance{record:read_request(c,id)?.ok_or_else(||inconsistent("inserted binding missing"))?,reused:false})
-        })
+        self.write(|c| accept_tx(c, id, command, work, run, retry))
     }
     fn transition(
         &self,
@@ -1081,50 +1053,13 @@ impl TaskRepository for SqliteTasks {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
-        self.write(|c| {
-            let old = read_bound_task(c, id)?.ok_or(Error::TaskNotFound)?;
-            if old.task.state_revision != revision {
-                return Err(Error::RevisionConflict);
-            }
-            let started_item = match &change {
-                Change::StartItem(item_id) => Some(item_id.clone()),
-                _ => None,
-            };
-            let now = Utc::now();
-            let mut next = old;
-            decide(&mut next, run, change, now)?;
-            if next.task.state_revision != revision {
-                write_task(c, &next, revision)?;
-                if let Some(item_id) = started_item {
-                    c.execute(
-                        "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
-                        params![
-                            id,
-                            item_id,
-                            run,
-                            db_revision(next.task.state_revision)?,
-                            now.to_rfc3339()
-                        ],
-                    )
-                    .map_err(storage)?;
-                }
-            }
-            read_bound_task(c, id)?.ok_or(Error::TaskNotFound)
-        })
+        self.write(|c| transition_tx(c, id, revision, run, change))
     }
     fn candidates(&self, run: &str) -> Result<Vec<TaskSnapshot>, Error> {
-        self.read(|c|{
-        let mut stmt=c.prepare("SELECT task_id FROM tasks WHERE accepted_run_id=?1 AND owner_run_id IS NULL AND status IN ('pending','cancel_requested') ORDER BY created_at,task_id").map_err(storage)?;
-        let ids=stmt.query_map([run],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
-        ids.iter().map(|id|read_bound_task(c,id)?.ok_or(Error::TaskNotFound)).collect()
-    })
+        self.read(|c| candidates_tx(c, run))
     }
     fn reconcile(&self, run: &str) -> Result<usize, Error> {
-        self.write(|c|{
-        let mut stmt=c.prepare("SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled','interrupted') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1))").map_err(storage)?;
-        let ids=stmt.query_map([run],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
-        let mut count=0;for id in ids{let mut next=read_bound_task(c,&id)?.ok_or(Error::TaskNotFound)?;let rev=next.task.state_revision;decide(&mut next,run,Change::Reconcile,Utc::now())?;if next.task.state_revision!=rev{write_task(c,&next,rev)?;count+=1;}}Ok(count)
-    })
+        self.write(|c| reconcile_tx(c, run))
     }
     /// O(1) per-item transition: verifies only the task-row revision (which
     /// serializes every mutation), decides on the caller-held snapshot in
@@ -1138,53 +1073,294 @@ impl TaskRepository for SqliteTasks {
         run: &str,
         change: Change,
     ) -> Result<(), Error> {
-        self.write(|c| {
-            let persisted: Option<i64> = c
-                .query_row(
-                    "SELECT state_revision FROM tasks WHERE task_id=?1",
-                    [&s.task.task_id],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(storage)?;
-            match persisted {
-                None => return Err(Error::TaskNotFound),
-                // Revision serializes all task/item/occupancy writes, so the
-                // caller's snapshot is the exact persisted pre-image.
-                Some(revision) if revision == db_revision(s.task.state_revision)? => {}
-                Some(_) => *s = read_bound_task(c, &s.task.task_id)?.ok_or(Error::TaskNotFound)?,
-            }
-            let old_revision = s.task.state_revision;
-            let now = Utc::now();
-            let (changed_id, outcome) = match &change {
-                Change::StartItem(id) => (Some(id.clone()), None),
-                Change::FinishItem(id, outcome) => (Some(id.clone()), Some(outcome.clone())),
-                _ => (None, None),
-            };
-            let changed = changed_id.as_deref();
-            let outcome = outcome.as_ref();
-            decide(s, run, change, now)?;
-            if s.task.state_revision != old_revision {
-                write_task_delta(c, s, old_revision, changed, outcome)?;
-                if let Some(item_id) = changed.filter(|_| outcome.is_none()) {
-                    // Execution-start marker lands atomically with the
-                    // guarded item transition.
-                    c.execute(
-                        "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
-                        params![
-                            s.task.task_id,
-                            item_id,
-                            run,
-                            db_revision(s.task.state_revision)?,
-                            now.to_rfc3339()
-                        ],
-                    )
-                    .map_err(storage)?;
-                }
-            }
-            Ok(())
-        })
+        self.write(|c| transition_light_tx(c, s, run, change))
     }
+}
+
+/// Connection-level accept used by both `SqliteTasks` and the schema-19
+/// compact repository; semantics are identical.
+pub(crate) fn accept_tx(
+    c: &Connection,
+    id: &str,
+    command: &Command,
+    work: &FrozenWork,
+    run: &str,
+    retry: Option<&RetryGuard>,
+) -> Result<Acceptance, Error> {
+    if let Some(record) = read_request(c, id)? {
+        if record.command != *command {
+            return Err(Error::RequestConflict);
+        }
+        return Ok(Acceptance {
+            record,
+            reused: true,
+        });
+    }
+    // Corrupt accepted state is not permission to steal a missing claim.
+    let orphan: bool = c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN requests r ON r.task_id=t.task_id WHERE r.request_id IS NULL)",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if orphan {
+        return Err(inconsistent("unbound execution record"));
+    }
+    let mut stmt = c
+        .prepare("SELECT request_id FROM requests")
+        .map_err(storage)?;
+    let ids = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    drop(stmt);
+    for existing in ids {
+        read_request(c, &existing)?;
+    }
+    let execution_key = if let Some(guard) = retry {
+        let old = read_bound_task(c, &guard.original_task_id)?.ok_or(Error::TaskNotFound)?;
+        if old.task.state_revision != guard.expected_revision {
+            return Err(Error::RevisionConflict);
+        }
+        if command.intent
+            != serde_json::json!({"original_task_id":guard.original_task_id,"selected_items":guard.selected_items})
+            || command.key
+                != (CommandKey {
+                    operation: "retry_task".into(),
+                    ..old.task.key.clone()
+                })
+        {
+            return Err(Error::InvalidRetrySelection);
+        }
+        if c.query_row(
+            "SELECT request_id FROM requests WHERE task_id=?1",
+            [&guard.original_task_id],
+            |r| r.get::<_, String>(0),
+        )
+        .map_err(storage)?
+            == id
+        {
+            return Err(Error::RequestConflict);
+        }
+        for item in &work.items {
+            if !guard.selected_items.contains(&item.item_id)
+                || !old
+                    .items
+                    .iter()
+                    .any(|i| i.spec == *item && !i.outcome.as_ref().is_some_and(|o| o.success))
+            {
+                return Err(Error::InvalidRetrySelection);
+            }
+        }
+        if work.items.len() != guard.selected_items.len() {
+            return Err(Error::InvalidRetrySelection);
+        }
+        old.task.key
+    } else {
+        command.key.clone()
+    };
+    let mut conflicts = Vec::new();
+    for scope in &work.scopes {
+        if c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM scope_occupancy WHERE scope_key=?1)",
+            [scope],
+            |r| r.get::<_, bool>(0),
+        )
+        .map_err(storage)?
+        {
+            conflicts.push(scope.clone());
+        }
+    }
+    if !conflicts.is_empty() {
+        return Err(Error::RangeConflict(conflicts));
+    }
+    let task_id: String = c
+        .query_row("SELECT 'task-' || lower(hex(randomblob(16)))", [], |r| {
+            r.get(0)
+        })
+        .map_err(storage)?;
+    let now = Utc::now().to_rfc3339();
+    c.execute(
+        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,evidence_digest) VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,?5,NULL,?6,?7,?7,?8)",
+        params![
+            task_id,
+            encode(&execution_key)?,
+            run,
+            now,
+            encode(work)?,
+            retry.map(|g| &g.original_task_id),
+            work.items.len() as u32,
+            work.evidence_digest()
+        ],
+    )
+    .map_err(storage)?;
+    for i in &work.items {
+        c.execute(
+            "INSERT INTO task_items VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)",
+            params![
+                task_id,
+                i.item_id,
+                encode(&i.target)?,
+                i.progress_unit,
+                encode(&i.frozen_inputs)?,
+                encode(&i.scope_keys)?
+            ],
+        )
+        .map_err(storage)?;
+    }
+    for scope in &work.scopes {
+        c.execute(
+            "INSERT INTO task_scopes VALUES(?1,?2)",
+            params![task_id, scope],
+        )
+        .map_err(storage)?;
+        c.execute(
+            "INSERT INTO scope_occupancy VALUES(?1,?2,0)",
+            params![scope, task_id],
+        )
+        .map_err(storage)?;
+    }
+    let raw = encode(command)?;
+    c.execute(
+        "INSERT INTO requests VALUES(?1,?2,?3,'task',?4,NULL)",
+        params![id, raw, crate::hash::sha256(raw.as_bytes()), task_id],
+    )
+    .map_err(storage)?;
+    Ok(Acceptance {
+        record: read_request(c, id)?.ok_or_else(|| inconsistent("inserted binding missing"))?,
+        reused: false,
+    })
+}
+
+/// Connection-level transition shared by `SqliteTasks` and the compact
+/// repository; identical decide/persist semantics.
+pub(crate) fn transition_tx(
+    c: &Connection,
+    id: &str,
+    revision: u64,
+    run: &str,
+    change: Change,
+) -> Result<TaskSnapshot, Error> {
+    let old = read_bound_task(c, id)?.ok_or(Error::TaskNotFound)?;
+    if old.task.state_revision != revision {
+        return Err(Error::RevisionConflict);
+    }
+    let started_item = match &change {
+        Change::StartItem(item_id) => Some(item_id.clone()),
+        _ => None,
+    };
+    let now = Utc::now();
+    let mut next = old;
+    decide(&mut next, run, change, now)?;
+    if next.task.state_revision != revision {
+        write_task(c, &next, revision)?;
+        if let Some(item_id) = started_item {
+            c.execute(
+                "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
+                params![
+                    id,
+                    item_id,
+                    run,
+                    db_revision(next.task.state_revision)?,
+                    now.to_rfc3339()
+                ],
+            )
+            .map_err(storage)?;
+        }
+    }
+    read_bound_task(c, id)?.ok_or(Error::TaskNotFound)
+}
+
+pub(crate) fn candidates_tx(c: &Connection, run: &str) -> Result<Vec<TaskSnapshot>, Error> {
+    let mut stmt = c
+        .prepare("SELECT task_id FROM tasks WHERE accepted_run_id=?1 AND owner_run_id IS NULL AND status IN ('pending','cancel_requested') ORDER BY created_at,task_id")
+        .map_err(storage)?;
+    let ids = stmt
+        .query_map([run], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    drop(stmt);
+    ids.iter()
+        .map(|id| read_bound_task(c, id)?.ok_or(Error::TaskNotFound))
+        .collect()
+}
+
+pub(crate) fn reconcile_tx(c: &Connection, run: &str) -> Result<usize, Error> {
+    let mut stmt = c
+        .prepare("SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled','interrupted') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1))")
+        .map_err(storage)?;
+    let ids = stmt
+        .query_map([run], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    drop(stmt);
+    let mut count = 0;
+    for id in ids {
+        let mut next = read_bound_task(c, &id)?.ok_or(Error::TaskNotFound)?;
+        let rev = next.task.state_revision;
+        decide(&mut next, run, Change::Reconcile, Utc::now())?;
+        if next.task.state_revision != rev {
+            write_task(c, &next, rev)?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+pub(crate) fn transition_light_tx(
+    c: &Connection,
+    s: &mut TaskSnapshot,
+    run: &str,
+    change: Change,
+) -> Result<(), Error> {
+    let persisted: Option<i64> = c
+        .query_row(
+            "SELECT state_revision FROM tasks WHERE task_id=?1",
+            [&s.task.task_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    match persisted {
+        None => return Err(Error::TaskNotFound),
+        // Revision serializes all task/item/occupancy writes, so the
+        // caller's snapshot is the exact persisted pre-image.
+        Some(revision) if revision == db_revision(s.task.state_revision)? => {}
+        Some(_) => *s = read_bound_task(c, &s.task.task_id)?.ok_or(Error::TaskNotFound)?,
+    }
+    let old_revision = s.task.state_revision;
+    let now = Utc::now();
+    let (changed_id, outcome) = match &change {
+        Change::StartItem(id) => (Some(id.clone()), None),
+        Change::FinishItem(id, outcome) => (Some(id.clone()), Some(outcome.clone())),
+        _ => (None, None),
+    };
+    let changed = changed_id.as_deref();
+    let outcome = outcome.as_ref();
+    decide(s, run, change, now)?;
+    if s.task.state_revision != old_revision {
+        write_task_delta(c, s, old_revision, changed, outcome)?;
+        if let Some(item_id) = changed.filter(|_| outcome.is_none()) {
+            // Execution-start marker lands atomically with the
+            // guarded item transition.
+            c.execute(
+                "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
+                params![
+                    s.task.task_id,
+                    item_id,
+                    run,
+                    db_revision(s.task.state_revision)?,
+                    now.to_rfc3339()
+                ],
+            )
+            .map_err(storage)?;
+        }
+    }
+    Ok(())
 }
 
 fn read_revision(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {

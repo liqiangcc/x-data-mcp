@@ -22,6 +22,26 @@ pub(crate) enum HeadExpectation {
     Version(i64),
 }
 
+/// A non-promoting head assertion evaluated inside the commit transaction:
+/// `effective_heads(entity,period)` must equal `expected` (`None` = absent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RequiredHead {
+    pub entity: String,
+    pub period: Period,
+    pub expected: Option<i64>,
+}
+
+/// The item-side binding facts the commit must re-verify inside its own
+/// transaction; mirrors `PublishPlan::check_task_binding`'s item/scope checks
+/// so a stale or cross-task item cannot carry a compact result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BindingCheck {
+    pub run_id: String,
+    pub entity: String,
+    pub period: Period,
+    pub occupancy_key: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MarketUpdateChange {
     NoChange {
@@ -49,6 +69,8 @@ pub(crate) struct MarketUpdateCommit {
     pub expected_task_revision: u64,
     pub published_at: Option<DateTime<Utc>>,
     pub head: HeadExpectation,
+    pub required_heads: Vec<RequiredHead>,
+    pub binding: BindingCheck,
     pub change: MarketUpdateChange,
 }
 
@@ -67,6 +89,8 @@ pub(crate) struct PublicationCommit {
     pub expected_task_revision: u64,
     pub published_at: Option<DateTime<Utc>>,
     pub head: HeadExpectation,
+    pub required_heads: Vec<RequiredHead>,
+    pub binding: BindingCheck,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +155,8 @@ pub(crate) fn commit_market_update(
     let plan = plan_market_update(&tx, command, &base)?;
     register_result(&tx, &command.result_id, REGISTRY_MARKET_UPDATE)?;
     require_item_unused(&tx, &command.task_id, &command.item_id)?;
+    check_required_heads(&tx, &command.required_heads)?;
+    check_binding(&tx, &command.task_id, &command.item_id, &command.binding)?;
     if plan.outcome == UpdateOutcome::Published {
         let published_at = command
             .published_at
@@ -337,6 +363,8 @@ pub(crate) fn commit_publication(
     }
     register_result(&tx, &command.publication_id, REGISTRY_PUBLICATION)?;
     require_item_unused(&tx, &command.task_id, &command.item_id)?;
+    check_required_heads(&tx, &command.required_heads)?;
+    check_binding(&tx, &command.task_id, &command.item_id, &command.binding)?;
     if command.outcome == UpdateOutcome::Published {
         compact_versions::publish(
             &tx,
@@ -958,6 +986,59 @@ fn require_item_unused(c: &Connection, task_id: &str, item_id: &str) -> Result<(
     Ok(())
 }
 
+fn check_required_heads(c: &Connection, heads: &[RequiredHead]) -> Result<(), Error> {
+    for required in heads {
+        let period_code: i64 = match required.period {
+            Period::Day => 1,
+            Period::Year => 2,
+        };
+        let current: Option<i64> = c
+            .query_row(
+                "SELECT version_key FROM effective_heads WHERE entity=?1 AND period=?2 AND adjustment=1",
+                params![required.entity, period_code],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        if current != required.expected {
+            return Err(Error::Conflict("effective head changed".into()));
+        }
+    }
+    Ok(())
+}
+
+fn check_binding(
+    c: &Connection,
+    task_id: &str,
+    item_id: &str,
+    check: &BindingCheck,
+) -> Result<(), Error> {
+    let binding = crate::sqlite_tasks::read_item_binding(c, task_id, item_id)
+        .map_err(Error::Task)?
+        .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
+    if binding.head.visible_status(&check.run_id) != crate::task_control::Status::Running
+        || binding.head.owner_run_id.as_deref() != Some(check.run_id.as_str())
+    {
+        return Err(Error::Conflict("task owner/state".into()));
+    }
+    let expected_target = serde_json::json!({
+        "symbol": check.entity,
+        "period": match check.period {
+            Period::Day => "day",
+            Period::Year => "year",
+        },
+    });
+    if binding.item.stage != crate::task_control::Stage::Running
+        || binding.item.spec.item_id != item_id
+        || binding.item.spec.target != expected_target
+        || !binding.item.spec.scope_keys.contains(&check.occupancy_key)
+        || !binding.scopes_bound
+    {
+        return Err(Error::Conflict("task target/occupancy".into()));
+    }
+    Ok(())
+}
+
 fn apply_head(
     c: &Connection,
     head: &HeadExpectation,
@@ -1037,6 +1118,32 @@ fn finish_item_and_task(
         return Err(Error::Conflict(
             "task state does not match expectation".into(),
         ));
+    }
+    let (terminal, finished, succeeded): (bool, i64, i64) = c
+        .query_row(
+            "SELECT status IN ('succeeded','partially_failed','failed','cancelled','interrupted'),items_finished,items_succeeded FROM tasks WHERE task_id=?1",
+            [task_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(storage)?;
+    if terminal {
+        // Mirrors `decide`'s terminal result fact and the occupancy release
+        // a terminal task always performs.
+        let result = serde_json::json!({
+            "finished_items": finished,
+            "successful_items": succeeded,
+        });
+        let changed = c
+            .execute(
+                "UPDATE tasks SET result_json=?1 WHERE task_id=?2 AND result_json IS NULL",
+                params![result.to_string(), task_id],
+            )
+            .map_err(storage)?;
+        if changed != 1 {
+            return Err(integrity("terminal task already carries a result"));
+        }
+        c.execute("DELETE FROM scope_occupancy WHERE task_id=?1", [task_id])
+            .map_err(storage)?;
     }
     Ok(())
 }
