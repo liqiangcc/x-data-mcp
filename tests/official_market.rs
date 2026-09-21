@@ -1175,7 +1175,10 @@ fn range_provider_delivers_segment_with_snapshot_basis() {
         panic!("expected publication")
     };
     let base = market.fixed(&receipt.version_id).unwrap();
-    let provider = x_data_mcp::official_market::TdxRangeProvider { source: &src };
+    let provider_session = src.materialize_session();
+    let provider = x_data_mcp::official_market::TdxRangeProvider {
+        session: &provider_session,
+    };
 
     let range = x_data_mcp::market_update::DateRange {
         start: chrono::NaiveDate::from_ymd_opt(2025, 7, 16).unwrap(),
@@ -1680,8 +1683,9 @@ fn backfill_provider_builds_combined_candidate_for_frozen_gap() {
     let raw = subject_raw("base-gap", &gapped);
     market::published_fixture(&market, &raw);
     let base = market.fixed("base-gap").unwrap();
+    let provider_session = source.materialize_session();
     let provider = TdxBackfillProvider {
-        source: &source,
+        session: &provider_session,
         published_at: now(),
     };
     let range = x_data_mcp::market_update::DateRange {
@@ -2612,6 +2616,92 @@ fn materialize_session_matches_single_path_on_retained_snapshot() {
 }
 
 #[test]
+fn forward_adjust_suffix_chains_bitwise_match_reference_on_retained_corpus() {
+    // The O(bars+events) suffix-chain implementation regroups the affine
+    // composition; Decimal arithmetic can differ in the last digit, so
+    // equivalence is asserted bitwise over every retained security's real
+    // bars and events — the same evidentiary standard as the #239 oracle.
+    let Some(snap) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; corpus equivalence test skipped");
+        return;
+    };
+    use std::io::Read;
+    let mut gbbq_zip = zip::ZipArchive::new(std::io::BufReader::new(
+        std::fs::File::open(snap.root.join("gbbq.zip")).unwrap(),
+    ))
+    .unwrap();
+    let mut gbbq_bytes = Vec::new();
+    gbbq_zip
+        .by_name("gbbq")
+        .unwrap()
+        .read_to_end(&mut gbbq_bytes)
+        .unwrap();
+    let events = gbbq::decode_events(&gbbq::parse(&gbbq_bytes).unwrap()).unwrap();
+    let mut by_security: std::collections::HashMap<(u8, String), Vec<gbbq::Event>> =
+        Default::default();
+    for event in events {
+        if event.category == 1 {
+            by_security
+                .entry((event.market, event.code.clone()))
+                .or_default()
+                .push(event);
+        }
+    }
+    let mut day_zip = zip::ZipArchive::new(std::io::BufReader::new(
+        std::fs::File::open(snap.root.join("hsjday.zip")).unwrap(),
+    ))
+    .unwrap();
+    let (mut members, mut bars_total, mut events_total, mut skipped) =
+        (0usize, 0usize, 0usize, 0usize);
+    let started = std::time::Instant::now();
+    for index in 0..day_zip.len() {
+        let mut entry = day_zip.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let Some(file_name) = name.rsplit(['\\', '/']).next() else {
+            continue;
+        };
+        let Some(stem) = file_name.strip_suffix(".day") else {
+            continue;
+        };
+        if stem.len() != 8 || !stem[2..].bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let market = match &stem[..2] {
+            "sh" => 1u8,
+            "sz" => 0u8,
+            _ => continue,
+        };
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        // Members that fail the strict parser are source errors on the
+        // production path too; equivalence is only meaningful on parseable
+        // members.
+        let Ok(bars) = x_data_mcp::day_file::parse(&bytes) else {
+            skipped += 1;
+            continue;
+        };
+        let events = by_security
+            .get(&(market, stem[2..].to_string()))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let fast = x_data_mcp::qfq::forward_adjust(&bars, events).unwrap();
+        let reference = x_data_mcp::qfq::forward_adjust_reference(&bars, events).unwrap();
+        assert_eq!(
+            fast, reference,
+            "{name}: suffix-chain QFQ diverged from the reference fold"
+        );
+        members += 1;
+        bars_total += bars.len();
+        events_total += events.len();
+    }
+    eprintln!(
+        "qfq corpus equivalence: {members} members, {bars_total} bars, {events_total} events, {skipped} unparseable skipped, 0 divergences, {:?} wall",
+        started.elapsed()
+    );
+    assert!(members > 0, "retained day archive carried no members");
+}
+
+#[test]
 fn service_multi_item_collection_uses_shared_session() {
     use x_data_mcp::{
         data_supply::{Access, mcp::DataApi},
@@ -2687,8 +2777,9 @@ fn republish_provider_enriches_unpromoted_fields() {
     let raw = subject_raw("base-legacy", &legacy);
     market::published_fixture(&market, &raw);
     let base = market.fixed("base-legacy").unwrap();
+    let provider_session = source.materialize_session();
     let provider = TdxRepublishProvider {
-        source: &source,
+        session: &provider_session,
         published_at: now(),
     };
     let range = x_data_mcp::market_update::DateRange {

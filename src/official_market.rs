@@ -116,14 +116,10 @@ impl TdxMarketSource {
         &self.manifest_sha256
     }
 
-    /// Read exactly one archive member. Absent or ambiguous members and any
-    /// decompression/CRC failure are source failures; the manifest-pinned
-    /// archive digest is what `inspect()` already verified.
-    fn member_bytes(
-        &self,
-        input: &FileInput,
-        candidates: &[String],
-    ) -> Result<(String, Vec<u8>), SourceError> {
+    /// Resolve an inspected input to its canonical archive path under the
+    /// snapshot root. The containment check is unchanged from the original
+    /// per-call `member_bytes` path.
+    fn archive_path(&self, input: &FileInput) -> Result<PathBuf, SourceError> {
         let archive = self
             .root
             .join(&input.relative_path)
@@ -134,42 +130,22 @@ impl TdxMarketSource {
                 "archive resolves outside inspected root".into(),
             ));
         }
-        let file = std::fs::File::open(&archive)
-            .map_err(|e| SourceError::Invocation(format!("archive open failed: {e}")))?;
-        let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file))
-            .map_err(|e| SourceError::Invocation(format!("archive is not a valid zip: {e}")))?;
-        let found: Vec<String> = zip
-            .file_names()
-            .filter(|name| candidates.iter().any(|c| c == name))
-            .map(str::to_owned)
-            .collect();
-        let [member] = found.as_slice() else {
-            return Err(SourceError::Invocation(format!(
-                "member absent or ambiguous: expected exactly one of {candidates:?}, found {}",
-                found.len()
-            )));
-        };
-        let mut entry = zip
-            .by_name(member)
-            .map_err(|e| SourceError::Invocation(format!("member open failed: {e}")))?;
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|e| SourceError::Invocation(format!("member bytes failed CRC: {e}")))?;
-        Ok((member.clone(), bytes))
+        Ok(archive)
     }
 
-    /// Open a shared-decode session over this source: the gbbq member is
-    /// read, CRC-verified and decoded at most once (lazily, on the first
-    /// materialization), so a multi-symbol worker run pays one decode
-    /// instead of one per symbol. The session borrows the source — there
-    /// is no global or cross-process cache, and a changed snapshot can
-    /// only enter through a newly inspected source instance, which yields
-    /// a new session.
+    /// Open a shared-decode session over this source: each archive's
+    /// central directory is parsed at most once (lazily, on first member
+    /// read) and the gbbq member is read, CRC-verified and decoded at most
+    /// once, so a multi-symbol worker run pays one index build and one
+    /// decode instead of one per symbol. The session borrows the source —
+    /// there is no global or cross-process cache, and a changed snapshot
+    /// can only enter through a newly inspected source instance, which
+    /// yields a new session.
     pub fn materialize_session(&self) -> MaterializeSession<'_> {
         MaterializeSession {
             source: self,
             gbbq: std::cell::OnceCell::new(),
+            archives: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -182,18 +158,50 @@ impl TdxMarketSource {
     }
 }
 
+/// One archive's parsed central directory: member name → all entry
+/// indices, so duplicate names stay detectable (absent-or-ambiguous is a
+/// source failure, unchanged from the per-call path).
+struct ArchiveIndex {
+    archive: zip::ZipArchive<std::io::BufReader<std::fs::File>>,
+    members: std::collections::HashMap<String, Vec<usize>>,
+}
+
+impl ArchiveIndex {
+    fn open(path: &std::path::Path) -> Result<Self, SourceError> {
+        let file = std::fs::File::open(path)
+            .map_err(|e| SourceError::Invocation(format!("archive open failed: {e}")))?;
+        let archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+            .map_err(|e| SourceError::Invocation(format!("archive is not a valid zip: {e}")))?;
+        let mut members = std::collections::HashMap::new();
+        for (index, name) in archive.file_names().enumerate() {
+            members
+                .entry(name.to_owned())
+                .or_insert_with(Vec::new)
+                .push(index);
+        }
+        Ok(Self { archive, members })
+    }
+}
+
 /// The one-time gbbq member decode shared by a `MaterializeSession`:
-/// member name and digest are kept for per-batch provenance binding.
+/// member name and digest are kept for per-batch provenance binding, and
+/// events are indexed by `(market, code)` once so per-symbol lookup is
+/// O(1) instead of a full-table scan.
 struct DecodedGbbq {
     member: String,
     sha256: String,
-    events: Vec<gbbq::Event>,
+    /// `(market, code)` → (category-1 events, non-category-1 excluded
+    /// count); every record is partitioned exactly once at decode time.
+    by_security: std::collections::HashMap<(u8, String), (Vec<gbbq::Event>, usize)>,
 }
 
 /// Per-source materialization channel; see `TdxMarketSource::materialize_session`.
 pub struct MaterializeSession<'a> {
     source: &'a TdxMarketSource,
     gbbq: std::cell::OnceCell<DecodedGbbq>,
+    /// Lazily opened central-directory indexes keyed by canonical archive
+    /// path; each archive is opened and scanned at most once per session.
+    archives: std::cell::RefCell<std::collections::HashMap<PathBuf, ArchiveIndex>>,
 }
 
 impl MaterializeSession<'_> {
@@ -202,9 +210,49 @@ impl MaterializeSession<'_> {
         self.source
     }
 
+    /// Read exactly one archive member through the session's shared
+    /// central-directory index: the archive is opened and its names scanned
+    /// at most once per session, and member lookup is O(1). Absent or
+    /// ambiguous members and any decompression/CRC failure are source
+    /// failures; the manifest-pinned archive digest is what `inspect()`
+    /// already verified.
+    fn member_bytes(
+        &self,
+        input: &FileInput,
+        candidates: &[String],
+    ) -> Result<(String, Vec<u8>), SourceError> {
+        let path = self.source.archive_path(input)?;
+        let mut archives = self.archives.borrow_mut();
+        let index = match archives.entry(path.clone()) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(ArchiveIndex::open(&path)?),
+        };
+        let mut found: Vec<(&String, usize)> = Vec::new();
+        for name in candidates {
+            if let Some(indices) = index.members.get(name) {
+                found.extend(indices.iter().map(|i| (name, *i)));
+            }
+        }
+        let [(member, member_index)] = found.as_slice() else {
+            return Err(SourceError::Invocation(format!(
+                "member absent or ambiguous: expected exactly one of {candidates:?}, found {}",
+                found.len()
+            )));
+        };
+        let mut entry = index
+            .archive
+            .by_index(*member_index)
+            .map_err(|e| SourceError::Invocation(format!("member open failed: {e}")))?;
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|e| SourceError::Invocation(format!("member bytes failed CRC: {e}")))?;
+        Ok(((*member).clone(), bytes))
+    }
+
     /// Same output as `TdxMarketSource::materialize_daily`: the `.day`
-    /// member is re-read per symbol while the verified gbbq member bytes
-    /// are decoded once and shared.
+    /// member is re-read per symbol through the shared archive index while
+    /// the verified gbbq member bytes are decoded once and shared.
     pub fn materialize_daily(&self, symbol: &str) -> Result<MarketDataBatch, SourceError> {
         let source = self.source;
         let Some((market, code)) = symbol.split_once('.').filter(|(m, c)| {
@@ -218,7 +266,7 @@ impl MaterializeSession<'_> {
             format!("{market}\\lday\\{market}{code}.day"),
             format!("{market}/lday/{market}{code}.day"),
         ];
-        let (day_member, day_bytes) = source.member_bytes(&source.day, &day_names)?;
+        let (day_member, day_bytes) = self.member_bytes(&source.day, &day_names)?;
         let raw_bars = day_file::parse(&day_bytes)
             .map_err(|e| SourceError::InvalidResponse(format!(".day member malformed: {e}")))?;
         if raw_bars.is_empty() {
@@ -227,35 +275,42 @@ impl MaterializeSession<'_> {
             ));
         }
         if self.gbbq.get().is_none() {
-            let (member, bytes) = source.member_bytes(&source.gbbq, &[GBBQ_MEMBER.into()])?;
+            let (member, bytes) = self.member_bytes(&source.gbbq, &[GBBQ_MEMBER.into()])?;
             let raw = gbbq::parse(&bytes)
                 .map_err(|e| SourceError::InvalidResponse(format!("gbbq member malformed: {e}")))?;
             let events = gbbq::decode_events(&raw).map_err(|e| {
                 SourceError::InvalidResponse(format!("gbbq record decode failed: {e}"))
             })?;
+            let mut by_security: std::collections::HashMap<
+                (u8, String),
+                (Vec<gbbq::Event>, usize),
+            > = std::collections::HashMap::new();
+            for event in events {
+                // Only category 1 has verified QFQ semantics; other
+                // categories are never interpreted or applied to prices.
+                let entry = by_security
+                    .entry((event.market, event.code.clone()))
+                    .or_default();
+                if event.category == 1 {
+                    entry.0.push(event);
+                } else {
+                    entry.1 += 1;
+                }
+            }
             let _ = self.gbbq.set(DecodedGbbq {
                 member,
                 sha256: crate::hash::sha256(&bytes),
-                events,
+                by_security,
             });
         }
         let gbbq = self.gbbq.get().expect("initialized above");
         let market_byte: u8 = if market == "sh" { 1 } else { 0 };
-        let mut events = Vec::new();
-        let mut excluded = 0usize;
-        for event in &gbbq.events {
-            if event.market != market_byte || event.code != code {
-                continue;
-            }
-            // Only category 1 has verified QFQ semantics; other categories are
-            // never interpreted or applied to prices.
-            if event.category == 1 {
-                events.push(event.clone());
-            } else {
-                excluded += 1;
-            }
-        }
-        let adjusted = qfq::forward_adjust(&raw_bars, &events)
+        let (events, excluded) = gbbq
+            .by_security
+            .get(&(market_byte, code.to_string()))
+            .map(|(events, excluded)| (events.as_slice(), *excluded))
+            .unwrap_or((&[], 0));
+        let adjusted = qfq::forward_adjust(&raw_bars, events)
             .map_err(|e| SourceError::InvalidResponse(format!("qfq chain failed: {e}")))?;
         let bars: Vec<Bar> = adjusted
             .iter()
@@ -383,7 +438,9 @@ impl MarketDataPipeline for TdxMarketSource {
 /// semantics differ from refresh, so the worker keeps it on the blocked
 /// provider rather than letting it borrow the refresh path.
 pub struct TdxRangeProvider<'a> {
-    pub source: &'a TdxMarketSource,
+    /// Shared decode/index channel; a single-item caller builds one fresh
+    /// session and pays the one-time decode itself.
+    pub session: &'a MaterializeSession<'a>,
 }
 
 impl RangeProvider for TdxRangeProvider<'_> {
@@ -393,7 +450,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
         range: &DateRange,
         _candidate_id: &str,
     ) -> Result<Acquisition, SourceError> {
-        let mut batch = self.source.materialize_daily(&base.version().symbol)?;
+        let mut batch = self.session.materialize_daily(&base.version().symbol)?;
         batch
             .bars
             .retain(|b| range.start <= b.date && b.date <= range.end);
@@ -427,7 +484,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                 // the same gbbq member bytes.
                 same_qfq_basis_ref: format!(
                     "inspected snapshot manifest {} + gbbq member {}",
-                    self.source.manifest_sha256(),
+                    self.session.source().manifest_sha256(),
                     gbbq.member_sha256
                 ),
                 revision_ref: None,
@@ -458,14 +515,15 @@ impl RangeProvider for TdxRangeProvider<'_> {
 /// republish provider passes `None` so `prepare` independently rejects
 /// any revised known value — republish expects pure enrichment only.
 fn acquire_merged_segment(
-    source: &TdxMarketSource,
+    session: &MaterializeSession<'_>,
     base: &CheckedRecord,
     range: &DateRange,
     candidate_id: &str,
     published_at: DateTime<Utc>,
     revision_ref: Option<String>,
 ) -> Result<Acquisition, SourceError> {
-    let batch = source.materialize_daily(&base.version().symbol)?;
+    let source = session.source();
+    let batch = session.materialize_daily(&base.version().symbol)?;
     // Same pinned snapshot = same QFQ basis: the base's declared
     // snapshot inputs must equal the member/archive digests this
     // installed source actually read.
@@ -615,7 +673,9 @@ fn acquire_merged_segment(
 /// are not visible to this layer — the reference says so rather than
 /// naming ids it cannot read.
 pub struct TdxBackfillProvider<'a> {
-    pub source: &'a TdxMarketSource,
+    /// Shared decode/index channel; a single-item caller builds one fresh
+    /// session and pays the one-time decode itself.
+    pub session: &'a MaterializeSession<'a>,
     pub published_at: DateTime<Utc>,
 }
 
@@ -627,7 +687,7 @@ impl RangeProvider for TdxBackfillProvider<'_> {
         candidate_id: &str,
     ) -> Result<Acquisition, SourceError> {
         acquire_merged_segment(
-            self.source,
+            self.session,
             base,
             range,
             candidate_id,
@@ -653,7 +713,9 @@ impl RangeProvider for TdxBackfillProvider<'_> {
 /// pure enrichment (filling previously unpromoted optional fields) or
 /// new dates only, never a correction.
 pub struct TdxRepublishProvider<'a> {
-    pub source: &'a TdxMarketSource,
+    /// Shared decode/index channel; a single-item caller builds one fresh
+    /// session and pays the one-time decode itself.
+    pub session: &'a MaterializeSession<'a>,
     pub published_at: DateTime<Utc>,
 }
 
@@ -665,7 +727,7 @@ impl RangeProvider for TdxRepublishProvider<'_> {
         candidate_id: &str,
     ) -> Result<Acquisition, SourceError> {
         acquire_merged_segment(
-            self.source,
+            self.session,
             base,
             range,
             candidate_id,

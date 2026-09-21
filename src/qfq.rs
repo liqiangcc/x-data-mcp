@@ -88,6 +88,73 @@ pub fn forward_adjust(bars: &[RawDayRecord], events: &[Event]) -> Result<Vec<Qfq
     }
     dated.sort_by_key(|(date, _)| *date);
 
+    // Chains are memoized per distinct event suffix: every bar with the
+    // same set of later events (`dated[k..]`) shares one fold, computed by
+    // `compose_chain` itself so the arithmetic — and therefore every last
+    // digit — is identical to folding per bar. Cost is O(bars) lookups plus
+    // one fold per distinct boundary: at most events+1 folds total, and
+    // typically far fewer than one per bar.
+    let mut chains: Vec<Option<gbbq::Affine>> = vec![None; dated.len() + 1];
+    let chain_at = |dated: &[(u32, [Decimal; 4])],
+                    chains: &mut Vec<Option<gbbq::Affine>>,
+                    k: usize|
+     -> gbbq::Affine {
+        if let Some(chain) = chains[k] {
+            return chain;
+        }
+        let chain = gbbq::compose_chain(dated[k..].iter().map(|(_, factors)| *factors));
+        chains[k] = Some(chain);
+        chain
+    };
+
+    // First index whose event date is strictly after `bar_date`. `.day`
+    // input is already ascending, so a forward-only pointer is amortized
+    // O(1); an out-of-order input falls back to binary search, keeping the
+    // result correct for arbitrary bar order.
+    let mut k = 0usize;
+    let mut last_bar_date = 0u32;
+    Ok(bars
+        .iter()
+        .map(|bar| {
+            let bar_date = ymd(bar.date);
+            k = if bar_date >= last_bar_date {
+                k + dated[k..].partition_point(|(date, _)| *date <= bar_date)
+            } else {
+                dated.partition_point(|(date, _)| *date <= bar_date)
+            };
+            last_bar_date = bar_date;
+            let chain = chain_at(dated.as_slice(), &mut chains, k);
+            QfqBar {
+                date: bar.date,
+                open: cent(chain.apply(raw_price(bar.ohlc_raw[0]))),
+                high: cent(chain.apply(raw_price(bar.ohlc_raw[1]))),
+                low: cent(chain.apply(raw_price(bar.ohlc_raw[2]))),
+                close: cent(chain.apply(raw_price(bar.ohlc_raw[3]))),
+                chain_event_count: dated.len() - k,
+                amount_float32_bits: bar.amount_float32_bits,
+                volume_raw: bar.volume_raw,
+                r7_raw: bar.r7_raw,
+            }
+        })
+        .collect())
+}
+
+/// Reference implementation retained as the equivalence oracle: the direct
+/// per-bar filter+fold used before chain memoization. `forward_adjust`
+/// calls `compose_chain` over the identical event suffix, so output is
+/// bitwise identical by construction — this oracle guards the suffix-index
+/// bookkeeping, and tests assert equality over the full retained corpus.
+#[doc(hidden)]
+pub fn forward_adjust_reference(
+    bars: &[RawDayRecord],
+    events: &[Event],
+) -> Result<Vec<QfqBar>, gbbq::Error> {
+    let mut dated: Vec<(u32, [Decimal; 4])> = Vec::with_capacity(events.len());
+    for event in events {
+        dated.push((event.date_raw, event.factors()?));
+    }
+    dated.sort_by_key(|(date, _)| *date);
+
     Ok(bars
         .iter()
         .map(|bar| {

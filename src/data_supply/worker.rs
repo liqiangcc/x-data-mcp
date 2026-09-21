@@ -139,15 +139,25 @@ pub fn run_once(
         repository: market.clone(),
         run_id: control.run_id.clone(),
     };
-    let update = market_source.map(|source| crate::official_market::TdxRangeProvider { source });
-    let backfill = market_source.map(|source| crate::official_market::TdxBackfillProvider {
-        source,
-        published_at: chrono::Utc::now(),
-    });
-    let republish = market_source.map(|source| crate::official_market::TdxRepublishProvider {
-        source,
-        published_at: chrono::Utc::now(),
-    });
+    // One materialization session per worker turn: the archive central
+    // directory is indexed once and the gbbq member decoded once, shared by
+    // every item's provider instead of re-decoded per symbol.
+    let session = market_source.map(|source| source.materialize_session());
+    let update = session
+        .as_ref()
+        .map(|session| crate::official_market::TdxRangeProvider { session });
+    let backfill = session
+        .as_ref()
+        .map(|session| crate::official_market::TdxBackfillProvider {
+            session,
+            published_at: chrono::Utc::now(),
+        });
+    let republish = session
+        .as_ref()
+        .map(|session| crate::official_market::TdxRepublishProvider {
+            session,
+            published_at: chrono::Utc::now(),
+        });
     for item in &candidate.items {
         // `update_data` refresh uses the range provider; `backfill_data`
         // gains a source path only under the default frozen-gap contract;
