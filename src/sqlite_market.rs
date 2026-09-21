@@ -911,6 +911,8 @@ pub(crate) mod collection;
 #[allow(dead_code)]
 pub(crate) mod compact_results;
 #[allow(dead_code)]
+pub(crate) mod compact_runtime;
+#[allow(dead_code)]
 pub(crate) mod compact_v19;
 #[allow(dead_code)]
 pub(crate) mod compact_versions;

@@ -2,7 +2,7 @@
 
 ## 状态与目的
 
-状态：**DESIGN FROZEN / S0-S3 PROTOTYPE PASS / S4-S6 NOT STARTED**
+状态：**DESIGN FROZEN / S0-S4 PROTOTYPE PASS / S5-S6 NOT STARTED**
 适用基线：`issue-262-phase-d`，schema 18，2026-09-21。
 关联：#259、#260、#262。
 
@@ -648,7 +648,24 @@ text(publication_id)
 - task 终态和 idle 时记录 `(busy,log,checkpointed)` 并尝试 PASSIVE；graceful shutdown 在所有 transaction 结束后执行 TRUNCATE，成功时 WAL=0。
 - crash/SIGKILL 后只走 SQLite recovery，禁止删除 WAL；重启后 committed receipts 不丢失，未知提交按现有 verification 流程处理。
 
-CLI 和测试可继续使用短连接 repository；生产 `data_service` 必须使用 coordinator。若实现者主张短连接已足够，须先以同一 full-market workload 证明 checkpoint 数量、WAL、wall time 全部通过本设计 AC，经 review 后才能修改该决策。
+S4 coordinator 接口固定为：持有调用方已经取得的 `Arc<DatabaseLease>` 和唯一长期 RW `Connection`；`write` 串行传入该 connection，调用结束必须处于 autocommit；`transaction` 提供 `BEGIN IMMEDIATE` 便利边界；`read` 以独立 read-only/query-only connection 包裹短 DEFERRED transaction，并用槽位计数把并发 reader 限制为 16。lifecycle `RwLock` 保证 shutdown 等待所有 bounded read/write/checkpoint 调用退出，writer `Mutex` 保证单业务写者；shutdown 不依赖 Drop 猜测。
+
+owner writer 的 prepared-statement cache 固定 128，reader 固定 32。每个 read/write/transaction/checkpoint boundary 都重新 `DatabaseLease::validate()` 并核对以下轻量 schema identity：
+
+```text
+SHA256(
+  "x-data-schema-identity-v1\0"
+  || u32be(user_version)
+  || u32be(migration_count)
+  || (u32be(version) || text(checksum))...
+)
+```
+
+`schema_migrations` 必须从 1 到 `user_version` 连续且数量相等；`applied_at` 不属于身份。coordinator 构造必须接收编译期/调用方期望的 `{user_version,digest}`，不能把启动时刚读到的未知 schema 自动当作可信 expected identity。
+
+checkpoint 使用独立管理 connection，并返回 mode、`(busy,log_frames,checkpointed_frames)`、调用前后 WAL bytes。PASSIVE 可在 bounded readers 存在时报告 busy；graceful shutdown 先取得 lifecycle 独占、再执行 TRUNCATE，仅在 `busy=0` 且 WAL bytes=0 后关闭 writer。失败时 writer/lease 保持可用供明确重试。SIGKILL 测试必须杀死测试创建的 child writer，重启只通过正常 SQLite open/recovery，既不删除也不改名 WAL。
+
+CLI 和测试可继续使用短连接 repository；生产 `data_service` 必须使用 coordinator。S4 在 migration 19 前只提供并验证隔离 runtime 原语，不接 schema-18 `data_service`；S5 完成 fresh schema 后才装配生产服务。若实现者主张短连接已足够，须先以同一 full-market workload 证明 checkpoint 数量、WAL、wall time 全部通过本设计 AC，经 review 后才能修改该决策。
 
 ## schema 升级与部署边界
 
@@ -713,6 +730,8 @@ CLI 和测试可继续使用短连接 repository；生产 `data_service` 必须�
 接入长期 writer、statement reuse、checkpoint metrics、graceful/SIGKILL tests。
 
 退出条件：16 readers 下无 WAL 单调增长；idle/shutdown WAL=0；committed receipt 不丢失。
+
+执行结果（2026-09-21，S4 working tree）：7 个 `/dev/shm` runtime 测试及 repository-wide all-target clippy 通过。长期 owner writer、128/32 statement cache、最多 16 readers、lease/schema boundary identity、PASSIVE/idle TRUNCATE/shutdown metrics 均已实现；16 readers + 121 transactions 的 WAL 峰值 510,912 bytes，8 个样本有 6 个 non-increase point，idle 与 shutdown 均归零。真实 child SIGKILL 后 committed receipt 保留、未提交 receipt 回滚、`integrity_check=ok`；路径/inode 中途替换 fail closed。证据见 `evidence/issue-259-s4-write-coordinator/result.json`；结论为 `PASS_TO_S5`。该 runtime 原语仍未接 schema-18 `data_service`，S5 migration/fresh adapter 前不得声称生产装配完成。
 
 ### S5：本机 full-market 验收
 

@@ -1,0 +1,91 @@
+{
+  "schema": "x-data-mcp.issue-259-s4-write-coordinator.v1",
+  "base_commit": "94f7c89a3e90944be575e75d52824e7a0508fb5f",
+  "working_tree_has_s4_changes": true,
+  "decision": "PASS_TO_S5",
+  "runtime": {
+    "service_lifetime_writer": true,
+    "single_business_writer": true,
+    "reader_limit": 16,
+    "writer_statement_cache_capacity": 128,
+    "reader_statement_cache_capacity": 32,
+    "synchronous": "FULL",
+    "foreign_keys": true,
+    "wal_autocheckpoint_frames": 1000,
+    "journal_size_limit_bytes": 16777216,
+    "schema_identity_fixed_vector": "57dbc4cb075c311c233eeee24fdd44c71b1ad5e1fdc51ef73d51188bc82fdf55",
+    "lease_and_schema_rechecked_at_boundaries": true
+  },
+  "mixed_load": {
+    "writer_transactions": 121,
+    "reader_threads": 16,
+    "maximum_observed_reader_slots": 16,
+    "wal_samples_bytes": [
+      255472,
+      510912,
+      510912,
+      510912,
+      510912,
+      510912,
+      510912,
+      510912
+    ],
+    "wal_max_bytes": 510912,
+    "wal_hard_limit_bytes": 33554432,
+    "non_increase_points": 6,
+    "final_passive": {
+      "busy": 0,
+      "log_frames": 61,
+      "checkpointed_frames": 61,
+      "wal_bytes_after": 510912
+    },
+    "idle_truncate": {
+      "busy": 0,
+      "log_frames": 0,
+      "checkpointed_frames": 0,
+      "wal_bytes_after": 0
+    },
+    "writer_remained_usable_after_idle_checkpoint": true,
+    "shutdown_truncate_wal_bytes_after": 0
+  },
+  "recovery": {
+    "actual_sigkill_child_process": true,
+    "committed_receipt_survived": true,
+    "uncommitted_receipt_absent": true,
+    "wal_deleted_or_renamed_before_recovery": false,
+    "integrity_check": "ok",
+    "graceful_shutdown_waited_for_active_reader": true,
+    "path_swap_during_read_detected": true,
+    "inode_swap_at_write_checkpoint_boundary_detected": true
+  },
+  "dependencies": {
+    "rusqlite_cache_feature": true,
+    "hashlink": {
+      "version": "0.12.2",
+      "published_at": "2026-09-07T11:07:51Z",
+      "minimum_age_gate_passed": true
+    },
+    "foldhash": {
+      "version": "0.2.0",
+      "published_at": "2025-08-23T19:14:01Z",
+      "minimum_age_gate_passed": true
+    }
+  },
+  "verification": [
+    "TMPDIR=/dev/shm cargo fmt --check",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_runtime -- --nocapture",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_results",
+    "TMPDIR=/dev/shm cargo clippy --all-targets --all-features --locked -- -D warnings",
+    "git diff --check"
+  ],
+  "test_results": {
+    "compact_runtime_passed": 7,
+    "compact_results_passed": 12,
+    "compact_results_ignored": 1
+  },
+  "limitations": [
+    "S4 is an isolated schema-19 runtime primitive and is not wired into the schema-18 data_service.",
+    "The mixed-load test is a bounded /dev/shm runtime test, not the full-market or ECS capacity gate.",
+    "Migration 19, fresh-rebuild enforcement, production adapter wiring, MCP acceptance and full-market capacity remain unverified."
+  ]
+}
