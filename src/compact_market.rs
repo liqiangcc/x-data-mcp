@@ -1105,8 +1105,14 @@ mod tests {
     fn rejects_bad_clips_and_deltas() {
         let segment = segment_digest("sh.600006", Period::Day, &[bar1(), bar2()]).unwrap();
         let good = clip(segment);
-        assert!(checkpoint_projection_digest("SH.600006", Period::Day, &[good.clone()]).is_err());
-        assert!(checkpoint_projection_digest("sh.60006", Period::Day, &[good.clone()]).is_err());
+        assert!(
+            checkpoint_projection_digest("SH.600006", Period::Day, std::slice::from_ref(&good))
+                .is_err()
+        );
+        assert!(
+            checkpoint_projection_digest("sh.60006", Period::Day, std::slice::from_ref(&good))
+                .is_err()
+        );
         assert!(checkpoint_projection_digest("sh.600006", Period::Day, &[]).is_err());
         let mut zero = good.clone();
         zero.row_count = 0;
