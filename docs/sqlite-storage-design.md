@@ -5,7 +5,8 @@
 > transition；但仍保留 `legacy-published-record-v1`、读时完整 compatibility
 > record expansion、`segment_bars.bar_json` 和 schema 16/17 legacy migration replay。
 > `compact-segmented-record-v2`、紧凑列式 canonical bars 及 no-change audit
-> 不复制完整 history 尚未完成。当前权威状态见
+> 不复制完整 history 尚未完成。#259 的最终候选物理契约、摘要、审计与容量
+> Gate 见 [#259 最终紧凑存储设计冻结候选](tasks/issue-259-final-storage-design.md)；当前实测状态见
 > [#259 physical audit](https://github.com/liqiangcc/x-data-mcp/issues/259#issuecomment-5756919342)。
 
 ## 状态与决策来源

@@ -2,6 +2,7 @@ pub mod calendar;
 pub mod catalog;
 pub mod catalog_tdx;
 pub mod collector;
+pub mod compact_market;
 pub mod dbf;
 pub mod execution;
 pub mod gbbq;

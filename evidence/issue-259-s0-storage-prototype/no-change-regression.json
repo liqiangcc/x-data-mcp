@@ -1,0 +1,27 @@
+{
+  "schema": "x-data-mcp.issue-259-s0-no-change-regression.v1",
+  "status": "EXPECTED_FAIL_SCHEMA18",
+  "base_commit": "fc0091948fe4c34489217ce25ca7527a5c9153b5",
+  "working_tree_has_s0_changes": true,
+  "host": {
+    "name": "Box",
+    "architecture": "x86_64",
+    "rustc": "1.98.1",
+    "profile": "test",
+    "tmpdir": "/dev/shm"
+  },
+  "test": "retained_production_shaped_no_change_does_not_add_bar_payload",
+  "command": "TMPDIR=/dev/shm cargo test --locked --test official_market retained_production_shaped_no_change_does_not_add_bar_payload -- --ignored --exact --nocapture",
+  "symbol": "sz.000002",
+  "bars": 8479,
+  "payload_json_bytes_before": 1472,
+  "payload_json_bytes_after": 1131357,
+  "payload_json_bytes_added": 1129885,
+  "wall_seconds": 43.23,
+  "assertion": "no-change must not add full-history bar payload",
+  "retained_inputs": {
+    "base_zip_sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+    "gbbq_zip_sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+    "hsjday_zip_sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+  }
+}

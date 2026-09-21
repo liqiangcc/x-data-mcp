@@ -1770,6 +1770,74 @@ fn service_env_install_update_data_no_change_and_fail_closed() {
     );
 }
 
+#[test]
+#[ignore = "#259 S0: schema 18 no-change audit persists retained full history"]
+fn retained_production_shaped_no_change_does_not_add_bar_payload() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(snapshot) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; #259 S0 no-change regression skipped");
+        return;
+    };
+    let manifest_dir = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_dir.path().join("snapshot-manifest.json");
+    std::fs::write(&manifest_path, &snapshot.manifest).unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let accepted = accept_daily(&market, "s0-run", "sz", "000002");
+    let source = make_source(&snapshot);
+    let full = source.materialize_daily("sz.000002").unwrap();
+    let range_start = full.bars.first().unwrap().date.to_string();
+    let range_end = full.bars.last().unwrap().date.to_string();
+    let runner = TdxDailyRunner {
+        source: &source,
+        session: None,
+        repository: market.clone(),
+        run_id: "s0-run".into(),
+        published_at: now(),
+    };
+    let ItemExecution::Published(receipt) = runner
+        .run_item(&accepted.task_id, &accepted.item_id)
+        .unwrap()
+    else {
+        panic!("expected retained base publication")
+    };
+    let payload_bytes = || {
+        rusqlite::Connection::open(tasks.path())
+            .unwrap()
+            .query_row(
+                "SELECT coalesce(sum(length(payload_json)),0) FROM payloads",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    let before = payload_bytes();
+    let _env = EnvReset::install(&manifest_path, &snapshot.root);
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let api = DataApi::new(tasks.clone(), "s0-update".into(), Access::local()).unwrap();
+    let update = api
+        .call(
+            "update_data",
+            json!({"dataset":"market.daily","request_id":"s0-no-change","contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_version_id":receipt.version_id,"start_date":range_start,"end_date":range_end}]}),
+        )
+        .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let task = market.task(update["task_id"].as_str().unwrap()).unwrap();
+    assert!(task.items[0].outcome.as_ref().unwrap().success);
+    let after = payload_bytes();
+    assert_eq!(
+        after,
+        before,
+        "retained no-change added {} bytes of full-history payload",
+        after - before
+    );
+}
+
 // ---------- #187 Phase B: TdxGapVerifier ----------
 
 fn day(d: u32) -> NaiveDate {
@@ -3375,4 +3443,391 @@ fn service_republish_data_enriches_published_head() {
         json!({"request_id":"rp-yearly","dataset":"market.yearly","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":new_head,"years":[2025],"publication":{"mode":"historical_fixed_base"}}]}),
     );
     assert!(yearly.is_err(), "market.yearly must not resolve republish");
+}
+
+#[cfg(target_os = "linux")]
+fn s0_resource_usage() -> Value {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    assert_eq!(
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+        0
+    );
+    let usage = unsafe { usage.assume_init() };
+    json!({
+        "user_cpu_seconds": usage.ru_utime.tv_sec as f64 + usage.ru_utime.tv_usec as f64 / 1_000_000.0,
+        "system_cpu_seconds": usage.ru_stime.tv_sec as f64 + usage.ru_stime.tv_usec as f64 / 1_000_000.0,
+        "peak_rss_kib": usage.ru_maxrss
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn s0_resource_usage() -> Value {
+    Value::Null
+}
+
+fn s0_cents(value: Decimal) -> i64 {
+    use rust_decimal::prelude::ToPrimitive;
+    let scaled = value * Decimal::from(100);
+    let cents = scaled.to_i64().unwrap();
+    assert_eq!(Decimal::from(cents) / Decimal::from(100), value);
+    cents
+}
+
+fn s0_volume(value: Option<Decimal>) -> Option<i64> {
+    use rust_decimal::prelude::ToPrimitive;
+    value.map(|value| {
+        let volume = value.to_i64().unwrap();
+        assert_eq!(Decimal::from(volume), value);
+        assert!(volume >= 0);
+        volume
+    })
+}
+
+fn s0_amount(value: Option<Decimal>) -> Option<String> {
+    value.map(|value| {
+        assert!(value >= Decimal::ZERO);
+        value.normalize().to_string()
+    })
+}
+
+fn s0_day(date: NaiveDate) -> i64 {
+    date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+        .num_days()
+}
+
+fn s0_segment_digest(entity: &str, bars: &[x_data_mcp::market_data::Bar]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"x-data-segment-v1\0");
+    digest.update((entity.len() as u32).to_be_bytes());
+    digest.update(entity.as_bytes());
+    digest.update([1]);
+    digest.update((bars.len() as u32).to_be_bytes());
+    for bar in bars {
+        digest.update(b"x-data-bar-v1\0");
+        digest.update(s0_day(bar.date).to_be_bytes());
+        for value in [bar.open, bar.high, bar.low, bar.close] {
+            digest.update(s0_cents(value).to_be_bytes());
+        }
+        match s0_volume(bar.volume) {
+            Some(value) => {
+                digest.update([1]);
+                digest.update(value.to_be_bytes());
+            }
+            None => digest.update([0]),
+        }
+        match s0_amount(bar.amount) {
+            Some(value) => {
+                digest.update([1]);
+                digest.update((value.len() as u32).to_be_bytes());
+                digest.update(value.as_bytes());
+            }
+            None => digest.update([0]),
+        }
+        match bar.r7_raw {
+            Some(value) => {
+                digest.update([1]);
+                digest.update(value.to_be_bytes());
+            }
+            None => digest.update([0]),
+        }
+    }
+    digest.finalize().into()
+}
+
+fn s0_measure_layout(
+    batches: &[MarketDataBatch],
+    segment_size: usize,
+) -> (tempfile::TempDir, Value) {
+    let dir = tempfile::tempdir_in("/dev/shm").unwrap();
+    let path = dir.path().join(format!("candidate-{segment_size}.sqlite"));
+    let mut connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA page_size=4096;
+             PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=FULL;
+             CREATE TABLE bar_segments(
+               segment_key INTEGER PRIMARY KEY,
+               segment_digest BLOB NOT NULL UNIQUE CHECK(length(segment_digest)=32),
+               entity TEXT NOT NULL,
+               period INTEGER NOT NULL CHECK(period IN (1,2)),
+               first_day INTEGER NOT NULL,
+               last_day INTEGER NOT NULL,
+               row_count INTEGER NOT NULL CHECK(row_count BETWEEN 1 AND 512),
+               CHECK(first_day <= last_day)
+             ) STRICT;
+             CREATE TABLE segment_bars(
+               segment_key INTEGER NOT NULL REFERENCES bar_segments(segment_key),
+               trade_day INTEGER NOT NULL,
+               open_cents INTEGER NOT NULL,
+               high_cents INTEGER NOT NULL,
+               low_cents INTEGER NOT NULL,
+               close_cents INTEGER NOT NULL,
+               volume INTEGER,
+               amount TEXT,
+               r7_raw INTEGER,
+               PRIMARY KEY(segment_key,trade_day),
+               CHECK(high_cents >= open_cents AND high_cents >= close_cents AND high_cents >= low_cents),
+               CHECK(low_cents <= open_cents AND low_cents <= close_cents),
+               CHECK(volume IS NULL OR volume >= 0),
+               CHECK(r7_raw IS NULL OR r7_raw BETWEEN 0 AND 4294967295)
+             ) STRICT, WITHOUT ROWID;",
+        )
+        .unwrap();
+    let transaction = connection.transaction().unwrap();
+    let mut segments = 0usize;
+    let mut bars = 0usize;
+    for batch in batches {
+        for chunk in batch.bars.chunks(segment_size) {
+            let digest = s0_segment_digest(&batch.symbol, chunk);
+            transaction
+                .execute(
+                    "INSERT INTO bar_segments(segment_digest,entity,period,first_day,last_day,row_count) VALUES(?1,?2,1,?3,?4,?5)",
+                    rusqlite::params![
+                        digest.as_slice(),
+                        batch.symbol,
+                        s0_day(chunk.first().unwrap().date),
+                        s0_day(chunk.last().unwrap().date),
+                        chunk.len() as i64
+                    ],
+                )
+                .unwrap();
+            let segment_key = transaction.last_insert_rowid();
+            for bar in chunk {
+                transaction
+                    .execute(
+                        "INSERT INTO segment_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                        rusqlite::params![
+                            segment_key,
+                            s0_day(bar.date),
+                            s0_cents(bar.open),
+                            s0_cents(bar.high),
+                            s0_cents(bar.low),
+                            s0_cents(bar.close),
+                            s0_volume(bar.volume),
+                            s0_amount(bar.amount),
+                            bar.r7_raw.map(i64::from)
+                        ],
+                    )
+                    .unwrap();
+            }
+            segments += 1;
+            bars += chunk.len();
+        }
+    }
+    transaction.commit().unwrap();
+    let wal_path = std::path::PathBuf::from(format!("{}-wal", path.display()));
+    let database_bytes_before_checkpoint = std::fs::metadata(&path).unwrap().len();
+    let wal_bytes_before_checkpoint = std::fs::metadata(&wal_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        .unwrap();
+    let wal_bytes_after_checkpoint = std::fs::metadata(&wal_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let mut statement = connection
+        .prepare(
+            "SELECT name,sum(pgsize),sum(payload),sum(unused) FROM dbstat WHERE name IN ('bar_segments','sqlite_autoindex_bar_segments_1','segment_bars') GROUP BY name ORDER BY name",
+        )
+        .unwrap();
+    let dbstat = statement
+        .query_map([], |row| {
+            Ok(json!({
+                "name": row.get::<_, String>(0)?,
+                "bytes": row.get::<_, i64>(1)?,
+                "payload_bytes": row.get::<_, i64>(2)?,
+                "unused_bytes": row.get::<_, i64>(3)?
+            }))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    drop(statement);
+    let (object_bytes, payload_bytes, unused_bytes): (i64, i64, i64) = connection
+        .query_row(
+            "SELECT coalesce(sum(pgsize),0),coalesce(sum(payload),0),coalesce(sum(unused),0) FROM dbstat WHERE name IN ('bar_segments','sqlite_autoindex_bar_segments_1','segment_bars')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    let sqlite_version: String = connection
+        .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+        .unwrap();
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    let page_count: i64 = connection
+        .query_row("PRAGMA page_count", [], |row| row.get(0))
+        .unwrap();
+    let database_bytes = std::fs::metadata(&path).unwrap().len();
+    (
+        dir,
+        json!({
+            "segment_size": segment_size,
+            "segments": segments,
+            "bars": bars,
+            "sqlite_version": sqlite_version,
+            "page_size": page_size,
+            "page_count": page_count,
+            "dbstat": dbstat,
+            "object_bytes": object_bytes,
+            "database_bytes_before_checkpoint": database_bytes_before_checkpoint,
+            "wal_bytes_before_checkpoint": wal_bytes_before_checkpoint,
+            "database_bytes": database_bytes,
+            "wal_bytes_after_checkpoint": wal_bytes_after_checkpoint,
+            "object_bytes_per_bar": object_bytes as f64 / bars as f64,
+            "database_bytes_per_bar": database_bytes as f64 / bars as f64,
+            "payload_bytes": payload_bytes,
+            "unused_bytes": unused_bytes,
+            "page_fill_ratio": payload_bytes as f64 / object_bytes as f64
+        }),
+    )
+}
+
+#[test]
+#[ignore = "#259 S0 retained-corpus physical prototype"]
+fn retained_s0_compact_bar_physical_prototype() {
+    let started = std::time::Instant::now();
+    let Some(snapshot) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; #259 S0 prototype skipped");
+        return;
+    };
+    for (name, expected) in [
+        (
+            "official-base.zip",
+            "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+        ),
+        (
+            "official-hsjday.zip",
+            "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+        ),
+        (
+            "official-gbbq.zip",
+            "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+        ),
+    ] {
+        assert_eq!(
+            sha(&std::fs::read(Path::new("/home/box/retained-inputs").join(name)).unwrap()),
+            expected
+        );
+    }
+    let source = make_source(&snapshot);
+    let symbols = ["sz.000002", "sh.600006", "sh.600004"];
+    let batches = symbols
+        .iter()
+        .map(|symbol| source.materialize_daily(symbol).unwrap())
+        .collect::<Vec<_>>();
+    let symbol_bars = batches
+        .iter()
+        .map(|batch| (batch.symbol.clone(), batch.bars.len()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let amount_lengths = batches
+        .iter()
+        .flat_map(|batch| batch.bars.iter())
+        .filter_map(|bar| s0_amount(bar.amount).map(|amount| amount.len()))
+        .collect::<Vec<_>>();
+    let mut amount_length_histogram = std::collections::BTreeMap::new();
+    for length in &amount_lengths {
+        *amount_length_histogram
+            .entry(length.to_string())
+            .or_insert(0usize) += 1;
+    }
+    let mut layouts = Vec::new();
+    let mut dirs = Vec::new();
+    for segment_size in [64, 256, 512] {
+        let (dir, result) = s0_measure_layout(&batches, segment_size);
+        dirs.push(dir);
+        layouts.push(result);
+    }
+    let runtime = json!({
+        "wall_seconds": started.elapsed().as_secs_f64(),
+        "process": s0_resource_usage()
+    });
+    let result = json!({
+        "schema": "x-data-mcp.issue-259-s0-physical-prototype.v1",
+        "database_location": "/dev/shm",
+        "runtime": runtime,
+        "symbols": symbols,
+        "symbol_bars": symbol_bars,
+        "bars": batches.iter().map(|batch| batch.bars.len()).sum::<usize>(),
+        "retained_inputs": {
+            "base_zip_sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+            "hsjday_zip_sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+            "gbbq_zip_sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"
+        },
+        "amount": {
+            "known": amount_lengths.len(),
+            "unknown": batches.iter().map(|batch| batch.bars.iter().filter(|bar| bar.amount.is_none()).count()).sum::<usize>(),
+            "average_text_bytes": amount_lengths.iter().sum::<usize>() as f64 / amount_lengths.len() as f64,
+            "max_text_bytes": amount_lengths.iter().copied().max().unwrap(),
+            "text_bytes_histogram": amount_length_histogram
+        },
+        "layouts": layouts,
+        "target_bytes_per_bar": 56,
+        "hard_bytes_per_bar": 61
+    });
+    if let Some(path) = std::env::var_os("X_DATA_MCP_S0_OUTPUT") {
+        std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+    }
+    println!("{}", serde_json::to_string_pretty(&result).unwrap());
+    let bytes_per_bar = result["layouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|layout| layout["segment_size"] == 512)
+        .unwrap()["object_bytes_per_bar"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        bytes_per_bar <= 56.0,
+        "512-bar candidate costs {bytes_per_bar:.2} bytes/bar"
+    );
+    drop(dirs);
+}
+
+#[test]
+#[ignore = "#259 S1 retained compact codec round-trip"]
+fn retained_s1_compact_codec_round_trips_all_bars() {
+    use x_data_mcp::compact_market::{CompactBar, MAX_SEGMENT_BARS, segment_digest};
+    let Some(snapshot) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; #259 S1 round-trip skipped");
+        return;
+    };
+    for (name, expected) in [
+        (
+            "official-base.zip",
+            "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+        ),
+        (
+            "official-hsjday.zip",
+            "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+        ),
+        (
+            "official-gbbq.zip",
+            "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+        ),
+    ] {
+        assert_eq!(
+            sha(&std::fs::read(Path::new("/home/box/retained-inputs").join(name)).unwrap()),
+            expected
+        );
+    }
+    let source = make_source(&snapshot);
+    for symbol in ["sz.000002", "sh.600006", "sh.600004"] {
+        let batch = source.materialize_daily(symbol).unwrap();
+        let compact = batch
+            .bars
+            .iter()
+            .map(|bar| CompactBar::from_bar(bar, Period::Day).unwrap())
+            .collect::<Vec<_>>();
+        for (bar, compact_bar) in batch.bars.iter().zip(&compact) {
+            assert_eq!(&compact_bar.to_bar(Period::Day).unwrap(), bar);
+        }
+        for chunk in compact.chunks(MAX_SEGMENT_BARS) {
+            segment_digest(&batch.symbol, Period::Day, chunk).unwrap();
+        }
+    }
 }

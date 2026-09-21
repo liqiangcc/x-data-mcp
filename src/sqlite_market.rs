@@ -908,6 +908,10 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
 }
 
 pub(crate) mod collection;
+#[allow(dead_code)]
+pub(crate) mod compact_v19;
+#[allow(dead_code)]
+pub(crate) mod compact_versions;
 pub(crate) mod envelope;
 pub(crate) mod gaps;
 pub(crate) mod manifest;
