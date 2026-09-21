@@ -22,6 +22,7 @@ pub mod day_file;
 pub mod query;
 
 pub mod file_consistency;
+pub mod generation;
 pub mod snapshot;
 
 pub mod sqlite_tasks;
@@ -64,6 +65,8 @@ pub mod verification_execution;
 pub mod verification_inspection;
 
 pub mod gap_verification;
+
+pub mod acquire;
 
 #[cfg(target_os = "linux")]
 pub mod local_runtime;

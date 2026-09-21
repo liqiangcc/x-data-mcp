@@ -45,4 +45,6 @@ pub mod default_selection;
 
 pub mod range;
 
+pub mod generation;
+
 pub mod worker;

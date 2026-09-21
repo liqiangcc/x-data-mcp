@@ -22,6 +22,7 @@ pub struct DataApi {
     pub legacy: SqliteTaskApi,
     pub access: Access,
     market_source: Option<crate::official_market::TdxMarketSource>,
+    generation: Option<super::generation::GenerationSource>,
     #[cfg(target_os = "linux")]
     worker_gate: Option<std::sync::Arc<crate::local_runtime::WorkerGate>>,
 }
@@ -31,8 +32,42 @@ impl DataApi {
         run_id: String,
         access: Access,
     ) -> Result<Self, crate::task_control::Error> {
+        Self::new_in(
+            tasks,
+            run_id,
+            access,
+            super::generation::GenerationSource::from_env(),
+        )
+    }
+    /// Same wiring as `new` with an explicit generation source (tests and
+    /// deployment assembly): source-reading contracts freeze
+    /// `source_generation_id` at acceptance and worker sessions open
+    /// pinned generation directories.
+    pub fn new_with_generation(
+        tasks: SqliteTasks,
+        run_id: String,
+        access: Access,
+        generation: super::generation::GenerationSource,
+    ) -> Result<Self, crate::task_control::Error> {
+        Self::new_in(tasks, run_id, access, Some(generation))
+    }
+    fn new_in(
+        tasks: SqliteTasks,
+        run_id: String,
+        access: Access,
+        generation: Option<super::generation::GenerationSource>,
+    ) -> Result<Self, crate::task_control::Error> {
         let repository = SqliteSupply {
             market: SqliteMarket::new(tasks.clone()),
+        };
+        // Wraps the contracts whose executors read official files so every
+        // accepted item freezes source_generation_id at acceptance.
+        let bind = |contract: Box<dyn crate::task_control::Contract>| match &generation {
+            Some(source) => Box::new(super::generation::Bound {
+                inner: contract,
+                source: source.clone(),
+            }) as Box<dyn crate::task_control::Contract>,
+            None => contract,
         };
         Ok(Self {
             queries: Queries::new(repository.clone()),
@@ -51,31 +86,31 @@ impl DataApi {
                             tasks, run_id,
                         )?),
                         Box::new(crate::task_control::legacy::LegacyCollection),
-                        Box::new(crate::market_update::tasks::RangeContract {
+                        bind(Box::new(crate::market_update::tasks::RangeContract {
                             operation: crate::market_update::tasks::Operation::Update,
                             repository: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
-                        }),
-                        Box::new(crate::market_update::tasks::RangeContract {
+                        })),
+                        bind(Box::new(crate::market_update::tasks::RangeContract {
                             operation: crate::market_update::tasks::Operation::Backfill,
                             repository: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
-                        }),
-                        Box::new(crate::market_update::tasks::RangeContract {
+                        })),
+                        bind(Box::new(crate::market_update::tasks::RangeContract {
                             operation: crate::market_update::tasks::Operation::Republish,
                             repository: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
-                        }),
-                        Box::new(super::default_range::DefaultRangeContract {
+                        })),
+                        bind(Box::new(super::default_range::DefaultRangeContract {
                             operation: crate::market_update::tasks::Operation::Update,
                             resolver: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
-                        }),
-                        Box::new(super::default_range::DefaultRangeContract {
+                        })),
+                        bind(Box::new(super::default_range::DefaultRangeContract {
                             operation: crate::market_update::tasks::Operation::Backfill,
                             resolver: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
-                        }),
+                        })),
                         Box::new(crate::yearly_publication::tasks::YearlyContract {
                             operation: crate::market_update::tasks::Operation::Update,
                             repository: repository.market.clone(),
@@ -86,26 +121,27 @@ impl DataApi {
                             repository: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
                         }),
-                        Box::new(crate::gap_verification::contract::GapVerificationContract {
+                        bind(Box::new(crate::gap_verification::contract::GapVerificationContract {
                             store: repository.market.clone(),
-                        }),
-                        Box::new(super::collect::CollectionContract {
+                        })),
+                        bind(Box::new(super::collect::CollectionContract {
                             dataset: Dataset::Daily,
                             repository: repository.clone(),
-                        }),
+                        })),
                         Box::new(super::collect::CollectionContract {
                             dataset: Dataset::Yearly,
                             repository: repository.clone(),
                         }),
-                        Box::new(super::collect::CollectionContract {
+                        bind(Box::new(super::collect::CollectionContract {
                             dataset: Dataset::Catalog,
                             repository: repository.clone(),
-                        }),
+                        })),
                     ],
                 )?,
             },
             access,
             market_source: crate::official_market::TdxMarketSource::from_env(),
+            generation,
             #[cfg(target_os = "linux")]
             worker_gate: None,
         })
@@ -117,6 +153,7 @@ impl DataApi {
         self.market_source = Some(source);
         self
     }
+
     #[cfg(target_os = "linux")]
     pub fn with_worker_gate(
         mut self,
@@ -124,6 +161,29 @@ impl DataApi {
     ) -> Self {
         self.worker_gate = Some(gate);
         self
+    }
+    /// Source readiness fact shared by capability and acceptance checks:
+    /// generation mode requires a verified active generation; legacy mode
+    /// requires the inspected-env snapshot.
+    fn source_ready(&self) -> bool {
+        match &self.generation {
+            Some(g) => g.active_verified_id().is_some(),
+            None => self.market_source.is_some(),
+        }
+    }
+    fn source_block(&self) -> BlockingReason {
+        match &self.generation {
+            Some(_) => BlockingReason {
+                code: "verified_source_absent".into(),
+                detail: "no verified active generation; executions record per-item source refusals and never advance heads (acquire+verify+activate through x-data-acquire)".into(),
+                evidence_ref: None,
+            },
+            None => BlockingReason {
+                code: "verified_source_absent".into(),
+                detail: "no installed inspected official snapshot; executions record per-item source refusals and never advance heads (X_DATA_MCP_OFFICIAL_MANIFEST + X_DATA_MCP_OFFICIAL_DIR with a passing manifest)".into(),
+                evidence_ref: None,
+            },
+        }
     }
     /// Source-dependent runtime readiness: an installed inspected official
     /// snapshot (daily writes, gap verification) or a configured catalog
@@ -141,23 +201,17 @@ impl DataApi {
             (e.handler, dataset),
             (Handler::Collection, Some(Dataset::Catalog))
         );
-        if needs_inspected && self.market_source.is_none() {
-            return Some(BlockingReason {
-                code: "verified_source_absent".into(),
-                detail: "no installed inspected official snapshot; executions record per-item source refusals and never advance heads (X_DATA_MCP_OFFICIAL_MANIFEST + X_DATA_MCP_OFFICIAL_DIR with a passing manifest)".into(),
-                evidence_ref: None,
-            });
+        if needs_inspected && !self.source_ready() {
+            return Some(self.source_block());
         }
-        if needs_catalog_input
-            && crate::catalog_tdx::source::TdxCatalogExecutor::from_env(
-                &self.queries.repository.market,
-            )
-            .is_none()
-        {
-            return Some(BlockingReason {
-                code: "catalog_source_unconfigured".into(),
-                detail: "official input location is not configured; catalog execution keeps the source refusal".into(),
-                evidence_ref: None,
+        if needs_catalog_input && !self.source_ready() {
+            return Some(match &self.generation {
+                Some(_) => self.source_block(),
+                None => BlockingReason {
+                    code: "catalog_source_unconfigured".into(),
+                    detail: "official input location is not configured; catalog execution keeps the source refusal".into(),
+                    evidence_ref: None,
+                },
             });
         }
         None
@@ -170,25 +224,18 @@ impl DataApi {
                 key.operation.as_str(),
                 "start_collection" | "update_data" | "backfill_data" | "republish_data"
             );
-        if (daily_write || key.dataset == crate::gap_verification::DATASET)
-            && self.market_source.is_none()
+        if (daily_write || key.dataset == crate::gap_verification::DATASET) && !self.source_ready()
         {
-            return Some(BlockingReason {
-                code: "verified_source_absent".into(),
-                detail: "no installed inspected official snapshot; execution records per-item source refusals and never advances heads".into(),
-                evidence_ref: None,
-            });
+            return Some(self.source_block());
         }
-        if key.dataset == "securities.catalog"
-            && crate::catalog_tdx::source::TdxCatalogExecutor::from_env(
-                &self.queries.repository.market,
-            )
-            .is_none()
-        {
-            return Some(BlockingReason {
-                code: "catalog_source_unconfigured".into(),
-                detail: "official input location is not configured; catalog execution keeps the source refusal".into(),
-                evidence_ref: None,
+        if key.dataset == "securities.catalog" && !self.source_ready() {
+            return Some(match &self.generation {
+                Some(_) => self.source_block(),
+                None => BlockingReason {
+                    code: "catalog_source_unconfigured".into(),
+                    detail: "official input location is not configured; catalog execution keeps the source refusal".into(),
+                    evidence_ref: None,
+                },
             });
         }
         None
@@ -242,7 +289,10 @@ impl DataApi {
                     governance_readiness: Readiness::Ready,
                     blocking_reasons: block.into_iter().collect(),
                     declared_scope: crate::official_market::DECLARED_SCOPE.into(),
-                    active_generation_ref: None,
+                    active_generation_ref: self
+                        .generation
+                        .as_ref()
+                        .and_then(|g| g.active_verified_id()),
                     input_schema: detailed.then(|| e.input.clone()),
                     output_schema: detailed.then(|| e.output.clone()),
                     example: detailed.then(|| capability_example(&e, dataset)),
@@ -254,6 +304,20 @@ impl DataApi {
                 });
             }
         }
+        let mut production_blocking_reasons = vec![BlockingReason {
+            code: "declared_scope_non_production".into(),
+            detail: crate::official_market::DECLARED_SCOPE.into(),
+            evidence_ref: None,
+        }];
+        if self.generation.is_none() {
+            production_blocking_reasons.push(BlockingReason {
+                code: "generation_root_unconfigured".into(),
+                detail: "X_DATA_MCP_GENERATION_ROOT is not configured; source bindings use the legacy inspected-env path rather than immutable generation sessions".into(),
+                evidence_ref: None,
+            });
+        } else if !self.source_ready() {
+            production_blocking_reasons.push(self.source_block());
+        }
         encode(Capabilities {
             capability_revision: "generic-data-v2".into(),
             items,
@@ -264,18 +328,7 @@ impl DataApi {
             snapshots_per_category: 32,
             declared_scope: crate::official_market::DECLARED_SCOPE.into(),
             production_ready: false,
-            production_blocking_reasons: vec![
-                BlockingReason {
-                    code: "declared_scope_non_production".into(),
-                    detail: crate::official_market::DECLARED_SCOPE.into(),
-                    evidence_ref: None,
-                },
-                BlockingReason {
-                    code: "source_generation_contract_pending".into(),
-                    detail: "write tools do not yet freeze source_generation_id; the immutable generation verification/activation contract (#260) is not implemented in this build".into(),
-                    evidence_ref: None,
-                },
-            ],
+            production_blocking_reasons,
         })
     }
     fn acceptance(&self, id: &str, a: crate::task_control::Acceptance) -> Result<Value, ApiError> {
@@ -388,6 +441,8 @@ impl DataApi {
                 if command.request_id().trim().is_empty() {
                     return Err(ApiError::new("empty_request_id", "request_id required"));
                 }
+                // Resolution goes through the registered contract, which is
+                // already generation-bound for source-reading datasets.
                 let contract = super::collect::CollectionContract {
                     dataset: command.dataset(),
                     repository: self.queries.repository.clone(),
@@ -681,6 +736,7 @@ impl DataApi {
                     &self.legacy.control,
                     &self.queries.repository.market,
                     self.market_source.as_ref(),
+                    self.generation.as_ref(),
                 )
                 .map_err(mapped)?;
                 encode(WorkerOutput {

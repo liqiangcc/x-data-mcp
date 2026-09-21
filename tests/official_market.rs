@@ -514,7 +514,7 @@ fn worker_dispatch_routes_daily_collection_to_installed_source() {
         .unwrap();
     let snap = valid_snapshot();
     let src = make_source(&snap);
-    let done = x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src))
+    let done = x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src), None)
         .unwrap()
         .unwrap();
     assert_eq!(done.task.status, Status::Succeeded);
@@ -622,7 +622,7 @@ fn non_daily_collection_items_remain_blocked() {
     };
     let snap = valid_snapshot();
     let src = make_source(&snap);
-    x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src)).unwrap();
+    x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src), None).unwrap();
     let task = market.task(&cat_task.task.task_id).unwrap();
     assert!(
         task.items[0]
@@ -645,7 +645,7 @@ fn non_daily_collection_items_remain_blocked() {
     let RequestOutcome::Task(l_task) = legacy.record.outcome else {
         panic!()
     };
-    x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src)).unwrap();
+    x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src), None).unwrap();
     let task = market.task(&l_task.task.task_id).unwrap();
     assert!(
         task.items[0]
