@@ -143,6 +143,11 @@ pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Rec
         } else {
             serde_json::json!({"version_id":audit["prior_version_id"],"integrity_sha256":audit["prior_integrity_sha256"]})
         };
+        // Generation mode stamps `source_generation_id` at accept; legacy
+        // tasks leave the key absent, so carry it through only when present.
+        if let Some(stamped) = binding.item.spec.frozen_inputs.get("source_generation_id") {
+            expected["source_generation_id"] = stamped.clone();
+        }
         if binding.head.key.contract_version != crate::yearly_publication::tasks::CONTRACT_VERSION
             || binding.head.key.dataset != "market.yearly"
             || binding.item.spec.frozen_inputs != expected

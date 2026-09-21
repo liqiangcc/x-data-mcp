@@ -214,6 +214,11 @@ pub(super) fn validate_binding(
         &command.intent,
     );
     expected["comparison"] = binding.item.spec.frozen_inputs["comparison"].clone();
+    // Generation mode stamps `source_generation_id` at accept; legacy tasks
+    // leave the key absent, so carry it through only when present.
+    if let Some(stamped) = binding.item.spec.frozen_inputs.get("source_generation_id") {
+        expected["source_generation_id"] = stamped.clone();
+    }
     if binding.head.key.contract_version != CONTRACT_VERSION
         || binding.head.key.dataset != "market.yearly"
         || binding.item.spec.item_id != command.item_id

@@ -126,12 +126,19 @@ pub fn run_once(
             run_id: control.run_id.clone(),
             derived_at: chrono::Utc::now(),
         };
+        let env = crate::yearly_publication::runner::OfficialYearlyVerifier;
+        let generation = crate::yearly_publication::runner::BoundYearlyVerifier {
+            bound: bound.as_ref(),
+        };
+        // Generation mode verifies derivation against the task's bound
+        // generation session; a missing binding keeps the source refusal.
+        let verifier: &dyn crate::yearly_publication::runner::YearlyVerifier =
+            match generation_source {
+                Some(_) => &generation,
+                None => &env,
+            };
         for item in &candidate.items {
-            runner.run_item(
-                &candidate.task.task_id,
-                &item.spec.item_id,
-                &crate::yearly_publication::runner::OfficialYearlyVerifier,
-            )?;
+            runner.run_item(&candidate.task.task_id, &item.spec.item_id, verifier)?;
         }
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
     }

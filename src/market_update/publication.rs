@@ -90,12 +90,21 @@ impl<R: MarketRepository> Publisher<R> {
         let frozen_matches = if head.key.contract_version == super::tasks::CONTRACT_VERSION
             && head.key.dataset == "market.daily"
         {
-            item_frozen.as_ref()
-                == Some(&super::tasks::frozen(
-                    &evidence.base_version_id,
-                    &evidence.base_integrity_sha256,
-                    range,
-                ))
+            // Generation mode stamps `source_generation_id` at accept;
+            // carry it through — its value is enforced by the worker's
+            // bound-session resolution, not by this input check.
+            let mut expected = super::tasks::frozen(
+                &evidence.base_version_id,
+                &evidence.base_integrity_sha256,
+                range,
+            );
+            if let Some(stamped) = item_frozen
+                .as_ref()
+                .and_then(|f| f.get("source_generation_id"))
+            {
+                expected["source_generation_id"] = stamped.clone();
+            }
+            item_frozen.as_ref() == Some(&expected)
         } else if head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION
             && head.key.dataset == "market.daily"
         {
