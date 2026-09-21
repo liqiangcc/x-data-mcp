@@ -32,6 +32,12 @@ allowed-tools:
 
 参数一律按 `tools/list` 中该工具的 `inputSchema` 传：schema 声明 `contract_version` 时必须为 `"v1"`；schema 未声明的字段一律不传（输入对象 `deny_unknown_fields`，多余字段即拒绝）。`update_data`/`start_collection`/`acquire_generation`/`verify_generation`/`activate_generation` 各自使用独立且唯一的 `request_id`。
 
+当前能力边界：data capability 的 `max_batch_entities=100`，default daily 和
+catalog-resolved collection 超过 100 个证券会整体拒绝，不会自动分页成多个写任务。
+#259 容量 AC 也尚未通过。因此本 Skill 当前只可执行不超过 100 个证券的有界功能
+流程；发现目标 scope 超过 100 或无法证明不超过 100 时，必须停止并报告
+`FULL_MARKET_NOT_SUPPORTED`，不得自行分片、绕过预算或在 ECS 上启动全市场 collection。
+
 ## 0. Revision 握手（每次执行第一步，不可跳过）
 
 调用并核对：
@@ -44,7 +50,11 @@ allowed-tools:
 
 任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。记录 `schema_digest`、`active_generation_ref`、`runtime_readiness`、`blocking_reasons` 作为事实。
 
-任一 server 报告 `runtime_readiness != "ready"` → 停止，原样转述 `blocking_reasons`。
+acquisition server 在全新环境可因 `no_active_generation` 报告 blocked；该原因不阻止
+`check_official_updates` / `acquire_generation` / `verify_generation` / 首次
+`activate_generation`。其他 acquisition blocker 仍停止。data server 的写工具必须在
+激活 generation 后重新读取 capability；目标工具若仍非 ready，则停止并原样转述
+`blocking_reasons`。
 
 ## 1. 远端探测（无变化不建任务）
 
@@ -65,10 +75,13 @@ allowed-tools:
 
 ## 3. 数据更新
 
-- 已有 published daily heads（`get_data_availability` 有实体覆盖）→ `mcp__x-data-mcp__update_data`，`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"selection":{"kind":"default"}}`。
+- 写入前先通过 catalog `query_data` 分页计数目标 scope；一旦发现第 101 个证券即
+  停止并报告 `FULL_MARKET_NOT_SUPPORTED`。不要调用 default write 试错。
+- 已有 published daily heads且目标不超过 100（`get_data_availability` 有实体覆盖）→ `mcp__x-data-mcp__update_data`，`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"selection":{"kind":"default"}}`。
 - 全新数据库（无任何 daily head）→ 两步 `start_collection`：
   1. `{"dataset":"securities.catalog","contract_version":"v1","request_id":<唯一>,"selection":{"scope":"current_sh_sz_a"}}` → 轮询终态 → 由 `list_data_versions`（`dataset:"securities.catalog"`）取 catalog `version_id`。
-  2. `{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"selection":{"kind":"catalog","version_id":<上一步 catalog 版本>}}` → 轮询至终态。
+  2. 对 catalog 分页计数；超过 100 时停止并保留 catalog 事实，不创建 daily collection。
+  3. 仅当 catalog 不超过 100 时，`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"selection":{"kind":"catalog","version_id":<上一步 catalog 版本>}}` → 轮询至终态。
   - `start_collection` 不接受 `{"kind":"default"}`；default selection 只属于 `update_data`/`backfill_data`。
 
 轮询 `get_task_progress(task_id)`：每次一轮，最多 60 轮；耗尽 → 停止并返回 refs。

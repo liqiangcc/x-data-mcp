@@ -4,8 +4,9 @@
 
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
-2026-09-20 运行时审计基线：`9b886c9`。当前部署分为两个 MCP server：
-`x-data-acquire` 注册 3 个采集工具，`x-data-mcp` 注册 19 个数据、任务、核实与计算工具。
+2026-09-21 当前部署分为两个 MCP server：release smoke 对 acquisition socket
+验证 10 个工具，对 data socket 验证 20 个工具。工具数不是稳定业务契约；客户端必须以
+运行实例的 `tools/list` 与 capability descriptor 为准。
 运行时 `tools/list` 与 `get_data_capabilities` 是机器契约入口；本文不复制完整 schema。
 
 下文“当前八工具”内容是提交 `b3fe2b3bae22d558c3f193e668773728a2e0df34` 的历史快照，
@@ -13,13 +14,17 @@
 [通用工具设计](generic-data-tools.md)；跨两个 server 的每日同步边界、Skill 编排和当前禁止声明见
 [每日同步说明](daily-sync.md)与 [Issue #260](https://github.com/liqiangcc/x-data-mcp/issues/260)。
 
-#260 尚未实现：当前不能把 `check_official_updates → acquire_generation → update_data`
-声明为安全闭环。文档、Skill 或示例不能替代 generation consistency、激活和 runtime readiness。
+#260 的 immutable generation、验证后激活、generation-bound update 和 capability
+主体已实现，并在 ECS 完成 100-item 功能 smoke；全市场、容量和独立 Skill 会话 DoD
+仍未完成。文档、Skill 或示例不能替代 generation consistency、runtime readiness，
+也不能把 100-item 结果外推为 5,221-symbol PASS。
 
 ## 协议、权限和通用约定
 
-当前 stdio 入口支持 initialize、tools/list、tools/call；
-initialize 返回 protocolVersion=2025-06-18、serverInfo=x-data-mcp/0.1.0。
+当前 stdio/socket 入口支持 initialize、tools/list、tools/call；
+initialize 返回 protocolVersion=2025-06-18，`serverInfo.version` 由当前包版本生成。
+wire 上 acquisition socket 的 `serverInfo.name` 仍为 `x-data-mcp`，而二进制/服务角色
+称为 `x-data-acquire`；客户端应按已配置的 server alias 和工具集合区分，不按静态版本字符串猜测。
 这是代码事实，不是最新协议符合性或完整协商的认证结论。
 本次不升级协议；完整协商、生命周期及目标客户端矩阵由实现任务验证。
 

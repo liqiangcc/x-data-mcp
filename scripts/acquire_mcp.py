@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Acquisition adapter MCP server — the network half of daily sync.
+"""DEPRECATED acquisition prototype; not part of the current release/runtime.
 
-Deliberately separate from x-data-mcp's data_service, which performs no
+The supported implementation is the Rust ``acquire_service`` with immutable
+generation directories, explicit consistency verification and conditional
+activation. This retained prototype mutates an inspected input directory and
+must not be used by the repository Skill, deployment, or acceptance evidence.
+
+It was deliberately separate from x-data-mcp's data_service, which performs no
 network I/O by design (trust boundary: the data service only consumes
 locally inspected, sha256-pinned inputs). This adapter owns the network
 side: HEAD probes of the three official TDX URLs and conditional download
@@ -158,9 +163,7 @@ def acquire(_args):
                          for r in URLS}
         state["generations"].append(gen)
         save_state(state)
-        return {"action": "installed", "generation": gen,
-                "next": "call update_data on x-data-mcp to apply; "
-                        "service picks up the new source on next connection"}
+        return {"action": "installed", "generation": gen}
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise

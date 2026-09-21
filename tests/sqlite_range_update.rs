@@ -26,6 +26,15 @@ struct Fixture {
     whole: Option<CombinedEvidence>,
 }
 fn command(db: &SqliteMarket, request: &str, version: &str, expected: Option<&str>) -> Publication {
+    command_for_range(db, request, version, expected, ("2025-01-02", "2025-01-02"))
+}
+fn command_for_range(
+    db: &SqliteMarket,
+    request: &str,
+    version: &str,
+    expected: Option<&str>,
+    range: (&str, &str),
+) -> Publication {
     use x_data_mcp::market_update::tasks::{Operation, RangeContract};
     let ctl = TaskControl::new(
         db.tasks.clone(),
@@ -45,7 +54,15 @@ fn command(db: &SqliteMarket, request: &str, version: &str, expected: Option<&st
             LegacyCollection.key(),
             json!({"symbols":["sh.600006"],"periods":["day"]}),
         ),
-        Some(base) => (Operation::Backfill.key(), range_payload(base)),
+        Some(base) => (
+            Operation::Backfill.key(),
+            json!({"items":[{
+                "symbol":"sh.600006",
+                "base_version_id":base,
+                "start_date":range.0,
+                "end_date":range.1
+            }]}),
+        ),
     };
     let request = ctl.accept(request, key, payload).unwrap();
     let RequestOutcome::Task(task) = request.record.outcome else {
@@ -2529,15 +2546,16 @@ mod default_runner {
     }
 }
 
-/// #259 AC evidence: 250 consecutive daily append updates keep per-day net
-/// database growth bounded — the day-231..250 mean must stay within 120% of
-/// the day-1..20 mean. Persistent manifest trees + content-addressed bars
-/// make each version O(new bars), never O(history); an O(days) per-version
-/// copy would fail this bound ~12x over.
+/// #259 micro-soak evidence: 250 consecutive fixture append updates keep
+/// per-day net database growth bounded — the final window mean must stay
+/// within 120% of the first window mean. This proves the manifest growth
+/// shape only; it is not the 5,221-symbol, production-provider, WAL, timing,
+/// or absolute 8/16MiB acceptance test.
 #[test]
 fn two_fifty_day_append_growth_stays_bounded() {
     use x_data_mcp::market_update::tasks::{Operation, RangeContract};
-    // Defaults are the #259 AC shape; SOAK_* overrides are for local probing.
+    // Defaults keep normal test runs bounded. Full-scale acceptance must set
+    // its own production-shaped inputs and report DB/WAL/time separately.
     let symbols: usize = std::env::var("SOAK_SYMBOLS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -2814,7 +2832,7 @@ fn two_fifty_day_append_growth_stays_bounded() {
 /// by `$ref` from both the version envelope and the update audit —
 /// two stored references, one payload row.
 #[test]
-fn shared_batch_evidence_is_content_addressed_and_no_change_writes_no_payloads() {
+fn shared_batch_evidence_is_content_addressed_in_envelope_and_audit() {
     let f = fixture(false);
     f.db.commit_range(&f.plan()).unwrap();
     let c = Connection::open(f.db.tasks.path()).unwrap();
@@ -2852,4 +2870,78 @@ fn shared_batch_evidence_is_content_addressed_and_no_change_writes_no_payloads()
     assert_eq!(shared, 1, "shared evidence must be stored once");
     // Round-trip: the record still expands to the identical stored bytes.
     f.db.fixed("legacy-daily").unwrap();
+}
+
+/// #259 P0-B acceptance test for the production-shaped no-change path.
+///
+/// Unlike the append micro-soak, the provider can hand `prepare_range` the
+/// complete requested history. A no-change result must bind the existing
+/// version/manifest digests; it must not copy that history into `payloads`.
+///
+/// Ignored until the compact audit format replaces `segment.bars` payloads.
+#[test]
+#[ignore = "#259 P0-B: no-change audit still persists the full batch bars payload"]
+fn production_shaped_no_change_audit_does_not_persist_history_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = SqliteMarket::new(SqliteTasks::new(dir.path().join("range.sqlite")));
+    db.tasks.initialize().unwrap();
+    let samples: Value =
+        serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+    let base = samples[0]["record"].clone();
+    db.stage(&base).unwrap();
+    let publisher = Publisher {
+        repository: db.clone(),
+    };
+    let first = publisher
+        .prepare(command(&db, "full-first", "legacy-daily", None))
+        .unwrap();
+    db.commit(&first).unwrap();
+
+    let batch: MarketDataBatch = serde_json::from_value(base["batch"].clone()).unwrap();
+    let range = DateRange {
+        start: batch.bars.first().unwrap().date,
+        end: batch.bars.last().unwrap().date,
+    };
+    let evidence = Evidence {
+        base_version_id: "legacy-daily".into(),
+        base_integrity_sha256: base["integrity_sha256"].as_str().unwrap().into(),
+        candidate_sha256: market_update::candidate_digest(&batch).unwrap(),
+        range: range.clone(),
+        same_qfq_basis_ref: "fixture:basis".into(),
+        revision_ref: None,
+        continuity: None,
+    };
+    let command = command_for_range(
+        &db,
+        "full-no-change",
+        "legacy-daily",
+        Some("legacy-daily"),
+        ("2024-12-31", "2025-12-31"),
+    );
+    let Preparation::Ready(plan) = publisher
+        .prepare_range(command, &batch, &range, &evidence, None)
+        .unwrap()
+    else {
+        panic!("full-history no-change candidate was not ready")
+    };
+    assert!(plan.is_no_change());
+
+    let c = Connection::open(db.tasks.path()).unwrap();
+    let payload_bytes = |c: &Connection| {
+        c.query_row(
+            "SELECT coalesce(sum(length(payload_json)),0) FROM payloads",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    let before = payload_bytes(&c);
+    drop(c);
+    db.commit_range(&plan).unwrap();
+    let c = Connection::open(db.tasks.path()).unwrap();
+    assert_eq!(
+        payload_bytes(&c),
+        before,
+        "no-change audit copied candidate history into payloads"
+    );
 }

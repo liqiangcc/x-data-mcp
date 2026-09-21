@@ -3,6 +3,12 @@
 //! point at shared `manifest_nodes` segment clips or content-addressed `payloads`
 //! rows. Expansion restores the exact record; `compat::check` then re-verifies
 //! the legacy digest, so a broken reference fails closed.
+//!
+//! This is an intermediate schema-18 representation, not #259 P0-A/P0-B
+//! completion: `digest_format` remains `legacy-published-record-v1`, reads
+//! reconstruct the full compatibility record, and audit `pack_batch` still
+//! persists its `bars` array as a payload. The target compact digest and
+//! manifest/segment-only audit must not be inferred from the word "Compact".
 use super::*;
 use serde_json::Value;
 const REF: &str = "$ref";
