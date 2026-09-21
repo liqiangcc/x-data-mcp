@@ -26,11 +26,12 @@ CHUNK = 1 << 20
 def _head(url):
     req = urllib.request.Request(url, method="HEAD")
     with urllib.request.urlopen(req, timeout=HEAD_TIMEOUT) as r:
+        length = r.headers.get("Content-Length")
         return {
             "status": r.status,
             "etag": r.headers.get("ETag"),
             "last_modified": r.headers.get("Last-Modified"),
-            "content_length": r.headers.get("Content-Length"),
+            "content_length": int(length) if length is not None else None,
         }
 
 

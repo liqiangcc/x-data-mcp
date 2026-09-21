@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0-preview.13",
+  "git_sha": "916330cadca842c685f0420740aa991352af4912",
+  "target": "x86_64-unknown-linux-gnu",
+  "build_platform": "ubuntu-24.04",
+  "minimum_glibc": "2.39",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "production": "NOT_PRODUCTION_READY",
+  "services": [
+    "data_service: market data MCP over owner-only unix socket",
+    "acquire_service: official-source generation lifecycle MCP over owner-only unix socket"
+  ],
+  "source_gates": [
+    "#54",
+    "#6/#46",
+    "#71",
+    "official file snapshot consistency"
+  ],
+  "default_backend": "explicit SQLite stdio; no implicit initialization",
+  "fixture_tool": "create_demo: explicit new synthetic database only"
+}
