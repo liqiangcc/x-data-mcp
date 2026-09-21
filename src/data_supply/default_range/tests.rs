@@ -829,3 +829,36 @@ fn explicit_daily_acceptance_still_uses_the_explicit_contract() {
     assert_eq!(snap.task.key.contract_version, CONTRACT_VERSION);
     assert!(snap.items[0].spec.frozen_inputs["range"].is_object());
 }
+/// #262 ECS catch: the `Bound` decorator stamps `source_generation_id`
+/// into every resolved item's frozen inputs at acceptance; the runner's
+/// strict frozen decode must admit that field (the binding itself is
+/// enforced at session open) while still rejecting unknown fields.
+#[test]
+fn generation_binding_stamp_survives_default_frozen_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006"]);
+    let ctl0 = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    publish_daily(&db, &ctl0, "600006", 0);
+    let ctl = acceptance_ctl(&tasks, &db, today);
+    let accepted = ctl
+        .accept(
+            "r-bound",
+            default_key(crate::market_update::tasks::Operation::Update, &db),
+            intent(),
+        )
+        .unwrap();
+    let RequestOutcome::Task(snap) = &accepted.record.outcome else {
+        panic!()
+    };
+    let mut frozen = snap.items[0].spec.frozen_inputs.clone();
+    frozen["source_generation_id"] = json!("gen-1");
+    crate::market_update::tasks::parse_default_frozen(&frozen).unwrap();
+    frozen["surprise"] = json!(1);
+    assert!(crate::market_update::tasks::parse_default_frozen(&frozen).is_err());
+}

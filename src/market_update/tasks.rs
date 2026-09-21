@@ -176,6 +176,13 @@ pub(crate) struct DefaultFrozen {
     #[serde(default)]
     pub refresh_range: Option<FrozenDayRange>,
     pub proven_gap_ranges: Vec<FrozenGapRange>,
+    /// Generation binding stamped by the `Bound` decorator at acceptance
+    /// (#260 D4). Shape is admitted here; the value itself is enforced at
+    /// worker session open, which refuses absent/null bindings in
+    /// generation mode. Absent on legacy (unbound) tasks.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub source_generation_id: Option<Value>,
 }
 /// Digest marker of the task's shared selection evidence (schema 18+):
 /// the resolved catalog/execution-start object lives once in the task's
