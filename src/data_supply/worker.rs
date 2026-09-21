@@ -145,7 +145,10 @@ pub fn run_once(
     let session = market_source.map(|source| source.materialize_session());
     let update = session
         .as_ref()
-        .map(|session| crate::official_market::TdxRangeProvider { session });
+        .map(|session| crate::official_market::TdxRangeProvider {
+            session,
+            published_at: chrono::Utc::now(),
+        });
     let backfill = session
         .as_ref()
         .map(|session| crate::official_market::TdxBackfillProvider {

@@ -31,6 +31,29 @@ pub struct Evidence {
     pub range: DateRange,
     pub same_qfq_basis_ref: String,
     pub revision_ref: Option<String>,
+    /// Recorded continuity proof for generation-bound updates (#262):
+    /// how the bytes read for this acquisition relate to the fixed base's
+    /// pinned snapshot inputs. Audit metadata — the fail-closed value
+    /// checks in `prepare` do not depend on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuity: Option<ContinuityEvidence>,
+}
+/// How the security's snapshot inputs at update time relate to the fixed
+/// base's pinned bindings. `mode`: `unchanged` (member digest and event
+/// digest both identical), `append` (the base's member bytes are an exact
+/// prefix and the event set is unchanged, so only strictly-newer records
+/// were materialized), `full` (no usable digest proof — complete
+/// materialization and value-level verification).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContinuityEvidence {
+    pub mode: String,
+    /// sha256 of the `.day` member bytes actually read for this update.
+    pub day_member_sha256: String,
+    /// Byte length of the prefix proven identical to the base's member;
+    /// equals the whole member for `unchanged`, 0 for `full`.
+    pub day_prefix_bytes: u64,
+    /// Digest of the security's category-1 event set plus excluded count.
+    pub gbbq_events_sha256: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {

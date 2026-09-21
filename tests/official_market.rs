@@ -245,14 +245,21 @@ fn materializes_qfq_daily_with_snapshot_bound_provenance() {
     assert!(batch.adjustment_evidence.is_confirmed());
     assert_eq!(batch.adjustment_evidence.value.as_deref(), Some("qfq"));
     let inputs = batch.provenance.snapshot_inputs.as_ref().unwrap();
-    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs.len(), 3);
     let manifest: Value = serde_json::from_slice(&snap.manifest).unwrap();
     for input in inputs {
+        // The per-security event binding digests decoded records, not a
+        // manifest file — its archive binding is the gbbq file's.
+        let role_name = if input.role == "gbbq-security-events" {
+            "gbbq"
+        } else {
+            input.role.as_str()
+        };
         let role = manifest["files"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|f| f["role"].as_str() == Some(&input.role))
+            .find(|f| f["role"].as_str() == Some(role_name))
             .unwrap();
         assert_eq!(input.archive_sha256, role["sha256"].as_str().unwrap());
         assert_eq!(input.member_sha256.len(), 64);
@@ -476,7 +483,7 @@ fn runner_publishes_daily_through_governed_path() {
     let inputs = stored.raw()["batch"]["provenance"]["snapshot_inputs"]
         .as_array()
         .unwrap();
-    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs.len(), 3);
     // Replay is idempotent: the committed receipt is returned, never re-run.
     let again = runner.run_item(&r.task_id, &r.item_id).unwrap();
     assert!(matches!(
@@ -800,7 +807,7 @@ fn retained_gen2_snapshot_reproduces_frozen_oracle_end_to_end() {
     let inputs = record.raw()["batch"]["provenance"]["snapshot_inputs"]
         .as_array()
         .unwrap();
-    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs.len(), 3);
     assert!(inputs.iter().all(|i| {
         i["archive_sha256"].as_str().unwrap().len() == 64
             && i["member_sha256"].as_str().unwrap().len() == 64
@@ -1178,6 +1185,7 @@ fn range_provider_delivers_segment_with_snapshot_basis() {
     let provider_session = src.materialize_session();
     let provider = x_data_mcp::official_market::TdxRangeProvider {
         session: &provider_session,
+        published_at: now(),
     };
 
     let range = x_data_mcp::market_update::DateRange {
@@ -1221,6 +1229,421 @@ fn range_provider_delivers_segment_with_snapshot_basis() {
         ),
         Err(SourceError::InvalidResponse(_))
     ));
+}
+
+// ---------------------------------------------------------------------------
+// #262 D2: generation-bound incremental update — digest-proven continuity
+// classifies unchanged/append without re-materializing the prefix, and any
+// unverifiable change fails closed without moving the head.
+// ---------------------------------------------------------------------------
+
+/// Publish the `valid_snapshot` fixture as the fixed base and return it.
+fn publish_base(market: &SqliteMarket, snap: &Snapshot) -> compat::CheckedRecord {
+    let src = make_source(snap);
+    let r = accept_daily(market, "run-a", "sh", "600006");
+    let runner = TdxDailyRunner {
+        source: &src,
+        session: None,
+        repository: market.clone(),
+        run_id: "run-a".into(),
+        published_at: now(),
+    };
+    let ItemExecution::Published(receipt) = runner.run_item(&r.task_id, &r.item_id).unwrap() else {
+        panic!("expected publication")
+    };
+    market.fixed(&receipt.version_id).unwrap()
+}
+
+fn update_provider<'a>(
+    session: &'a x_data_mcp::official_market::MaterializeSession<'a>,
+) -> x_data_mcp::official_market::TdxRangeProvider<'a> {
+    x_data_mcp::official_market::TdxRangeProvider {
+        session,
+        published_at: now(),
+    }
+}
+
+fn whole_range() -> x_data_mcp::market_update::DateRange {
+    x_data_mcp::market_update::DateRange {
+        start: NaiveDate::from_ymd_opt(2025, 7, 15).unwrap(),
+        end: NaiveDate::from_ymd_opt(2025, 7, 20).unwrap(),
+    }
+}
+
+fn acquire(
+    provider: &x_data_mcp::official_market::TdxRangeProvider<'_>,
+    base: &compat::CheckedRecord,
+) -> x_data_mcp::market_update::runner::Acquisition {
+    x_data_mcp::market_update::runner::RangeProvider::acquire(
+        provider,
+        base,
+        &whole_range(),
+        "cand-2",
+    )
+    .unwrap()
+}
+
+#[test]
+fn update_continuity_unchanged_reuses_base_bars() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    let cont = acquired.evidence.continuity.as_ref().unwrap();
+    assert_eq!(cont.mode, "unchanged");
+    // The whole 96-byte member is the proven prefix.
+    assert_eq!(cont.day_prefix_bytes, 96);
+    assert!(acquired.combined.is_none());
+    // The segment is byte-identical to what full materialization yields.
+    let full = src.materialize_daily("sh.600006").unwrap();
+    assert_eq!(acquired.batch.bars, full.bars);
+    assert_eq!(
+        acquired.batch.provenance.snapshot_inputs,
+        full.provenance.snapshot_inputs
+    );
+    // prepare reaches NoChange: no merged records, no metadata delta.
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NoChange { .. }
+    ));
+}
+
+#[test]
+fn update_continuity_append_materializes_only_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // Generation 2: identical member bytes plus one appended record.
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    let cont = acquired.evidence.continuity.as_ref().unwrap();
+    assert_eq!(cont.mode, "append");
+    assert_eq!(cont.day_prefix_bytes, 96);
+    // The segment carries the full range: proven prefix + adjusted tail.
+    assert_eq!(acquired.batch.bars.len(), 4);
+    assert_eq!(acquired.batch.bars[3].close, dec("11.39"));
+    assert_eq!(acquired.batch.bars[0].close, dec("7.53"));
+    // The combined candidate is the merged record ready to publish.
+    let combined = acquired.combined.as_ref().unwrap();
+    let records = combined.record["records"].as_array().unwrap();
+    assert_eq!(records.len(), 4);
+    assert_eq!(combined.record["version_id"], json!("cand-2"));
+    // prepare approves the segment as a Candidate over the same basis.
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::Candidate(_)
+    ));
+}
+
+#[test]
+fn update_continuity_ignores_other_securities_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // gbbq grows with an event for a different security — this symbol's
+    // event set is untouched, so continuity still proves unchanged.
+    let events = gbbq_member(&[
+        gbbq_record(1, "600006", 20250716, 1, [0.0, 0.0, 0.0, 5.0]),
+        gbbq_record(1, "600007", 20250718, 1, [0.0, 0.0, 0.0, 2.0]),
+    ]);
+    regbbq(&mut snap, &[("gbbq", events.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    assert_eq!(
+        acquired.evidence.continuity.as_ref().unwrap().mode,
+        "unchanged"
+    );
+    assert!(acquired.combined.is_none());
+    // The pinned member digest is content-stable across generations, so
+    // the proven-unchanged batch still lands on NoChange even though the
+    // new snapshot's manifest digest differs.
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NoChange { .. }
+    ));
+}
+
+#[test]
+fn update_continuity_append_narrow_range_stays_no_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // The member appended a record, but the accepted range only covers
+    // base dates — the merge is a provable no-change, so the acquisition
+    // must not carry a combined candidate (NoChange forbids one).
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let narrow = x_data_mcp::market_update::DateRange {
+        start: NaiveDate::from_ymd_opt(2025, 7, 16).unwrap(),
+        end: NaiveDate::from_ymd_opt(2025, 7, 16).unwrap(),
+    };
+    let acquired = x_data_mcp::market_update::runner::RangeProvider::acquire(
+        &update_provider(&session),
+        &base,
+        &narrow,
+        "cand-narrow",
+    )
+    .unwrap();
+    assert_eq!(
+        acquired.evidence.continuity.as_ref().unwrap().mode,
+        "append"
+    );
+    assert_eq!(acquired.batch.bars.len(), 1);
+    assert!(acquired.combined.is_none());
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &narrow,
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NoChange { .. }
+    ));
+}
+
+#[test]
+fn update_continuity_historical_revision_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // Rewrite a historical record in place: same length, changed volume —
+    // a structurally valid bar whose known value differs from the base.
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 999),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    // No prefix proof — the full path still materializes, and `prepare`
+    // sees the revised known value without a revision authorization.
+    assert_eq!(acquired.evidence.continuity.as_ref().unwrap().mode, "full");
+    assert!(acquired.combined.is_none());
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NeedsVerification(
+            x_data_mcp::market_update::Reason::RevisionUnverified(_)
+        )
+    ));
+}
+
+#[test]
+fn update_continuity_shrunk_member_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // Truncate the member: the last published record disappears.
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    assert_eq!(acquired.evidence.continuity.as_ref().unwrap().mode, "full");
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NeedsVerification(
+            x_data_mcp::market_update::Reason::MissingOldDates(_)
+        )
+    ));
+}
+
+#[test]
+fn update_continuity_event_change_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // A new event for THIS security reprices stored history — the event
+    // digest changes, continuity is unproven, and the value delta fails
+    // closed without a revision authorization.
+    let events = gbbq_member(&[
+        gbbq_record(1, "600006", 20250716, 1, [0.0, 0.0, 0.0, 5.0]),
+        gbbq_record(1, "600006", 20250719, 1, [0.0, 0.0, 0.0, 3.0]),
+    ]);
+    regbbq(&mut snap, &[("gbbq", events.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    assert_eq!(acquired.evidence.continuity.as_ref().unwrap().mode, "full");
+    assert!(acquired.combined.is_none());
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NeedsVerification(
+            x_data_mcp::market_update::Reason::RevisionUnverified(_)
+        )
+    ));
+}
+
+#[test]
+fn service_env_install_update_data_append_commits_tail() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    let head = base.version().version_id.clone();
+    // Generation 2: one appended record.
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let manifest_path = dir.path().join("snapshot-manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let api = DataApi::new(tasks.clone(), "run-env".into(), Access::local()).unwrap();
+    let upd = api
+        .call(
+            "update_data",
+            json!({"dataset":"market.daily","request_id":"u-app","contract_version":"v1",
+                   "items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":head,
+                             "start_date":"2025-07-15","end_date":"2025-07-20"}]}),
+        )
+        .unwrap();
+    let task_id = upd["task_id"].as_str().unwrap().to_string();
+    api.call("run_worker_once", json!({})).unwrap();
+    let task = market.task(&task_id).unwrap();
+    assert!(
+        task.items[0].outcome.as_ref().unwrap().success,
+        "append update failed: {:?}",
+        task.items[0].outcome
+    );
+    let scope = Scope {
+        symbol: "sh.600006".into(),
+        period: Period::Day,
+    };
+    let new_head = market.effective_head(&scope).unwrap().unwrap();
+    assert_ne!(new_head, head, "append update must advance the head");
+    let versions = market.versions(&scope).unwrap();
+    assert_eq!(versions.len(), 2);
+    let fixed = market.fixed(&new_head).unwrap();
+    assert_eq!(fixed.version().records.len(), 4);
+    assert_eq!(fixed.version().records[3].close, dec("11.39"));
+    // The continuity proof is recorded in the committed range audit.
+    let audit: String = rusqlite::Connection::open(market.tasks.path())
+        .unwrap()
+        .query_row(
+            "SELECT audit_json FROM market_update_results WHERE task_id=?1",
+            [&task_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        audit.contains("\"mode\":\"append\""),
+        "audit lacks continuity proof: {audit}"
+    );
+    // Replay of the same committed decision is a durable no-change:
+    // the new head's member digest matches the source, so re-running
+    // update reaches the unchanged path and never creates a version.
+    let upd2 = api
+        .call(
+            "update_data",
+            json!({"dataset":"market.daily","request_id":"u-app-2","contract_version":"v1",
+                   "items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":new_head,
+                             "start_date":"2025-07-15","end_date":"2025-07-20"}]}),
+        )
+        .unwrap();
+    let task_id2 = upd2["task_id"].as_str().unwrap().to_string();
+    api.call("run_worker_once", json!({})).unwrap();
+    let task2 = market.task(&task_id2).unwrap();
+    assert!(
+        task2.items[0].outcome.as_ref().unwrap().success,
+        "replay update failed: {:?}",
+        task2.items[0].outcome
+    );
+    assert_eq!(market.versions(&scope).unwrap().len(), 2);
+    assert_eq!(
+        market.effective_head(&scope).unwrap().as_deref(),
+        Some(new_head.as_str())
+    );
 }
 
 #[test]
@@ -1952,10 +2375,9 @@ fn service_backfill_data_default_restores_proven_gap() {
     );
 
     // Regression: update_data still routes to TdxRangeProvider, not the
-    // blocked provider — the merged head's coverage text differs from the
-    // materialized segment's, so prepare honestly lands on
-    // NEEDS_VERIFICATION (refresh carries no combined evidence) instead of
-    // SOURCE_NOT_VERIFIED or a publish. No third version appears.
+    // blocked provider. The merged head's member bytes and event set are
+    // digest-identical to the snapshot, so the refresh lands on a verified
+    // no-change — success, head kept, and no third version.
     let upd = api
         .call(
             "update_data",
@@ -1968,10 +2390,11 @@ fn service_backfill_data_default_restores_proven_gap() {
         .unwrap()
         .unwrap();
     let outcome = upd_task.items[0].outcome.as_ref().unwrap();
-    assert!(!outcome.success);
-    let err = outcome.error.as_deref().unwrap();
-    assert!(err.contains("NEEDS_VERIFICATION"), "unexpected: {err}");
-    assert!(!err.contains("SOURCE_NOT_VERIFIED"), "unexpected: {err}");
+    assert!(
+        outcome.success,
+        "unchanged update must succeed: {:?}",
+        outcome.error
+    );
     assert_eq!(
         c.query_row("SELECT count(*) FROM data_versions", [], |r| r
             .get::<_, i64>(0))
@@ -2470,7 +2893,8 @@ fn seeded_gap_subject_drives_retained_backfill_e2e() {
     );
 
     // Replay stays idempotent; explicit-range backfill remains blocked;
-    // update_data still lands on the range provider (NEEDS_VERIFICATION).
+    // update_data lands on the range provider and, with member bytes and
+    // the event set digest-identical to the snapshot, verifies no-change.
     let replay = api
         .call(
             "backfill_data",
@@ -2508,14 +2932,12 @@ fn seeded_gap_subject_drives_retained_backfill_e2e() {
         .read_task(upd["task_id"].as_str().unwrap())
         .unwrap()
         .unwrap();
-    let err = done.items[0]
-        .outcome
-        .as_ref()
-        .unwrap()
-        .error
-        .clone()
-        .unwrap();
-    assert!(err.contains("NEEDS_VERIFICATION"), "unexpected: {err}");
+    let outcome = done.items[0].outcome.as_ref().unwrap();
+    assert!(
+        outcome.success,
+        "unchanged update must succeed: {:?}",
+        outcome.error
+    );
     assert_eq!(
         c.query_row("SELECT count(*) FROM data_versions", [], |r| r
             .get::<_, i64>(0))

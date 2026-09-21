@@ -37,6 +37,7 @@ fn proof(base: &CheckedRecord, candidate: &MarketDataBatch, range: &DateRange) -
         range: range.clone(),
         same_qfq_basis_ref: "fixture:verified-compatible-basis".into(),
         revision_ref: Some("fixture:verified-change".into()),
+        continuity: None,
     }
 }
 #[test]

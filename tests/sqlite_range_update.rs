@@ -107,6 +107,7 @@ fn fixture(changed: bool) -> Fixture {
         range: range.clone(),
         same_qfq_basis_ref: "fixture:basis".into(),
         revision_ref: Some("fixture:revision".into()),
+        continuity: None,
     };
     let whole = if changed {
         let mut raw = base.clone();
@@ -904,6 +905,7 @@ impl x_data_mcp::market_update::runner::RangeProvider for SyntheticRangeProvider
             range: range.clone(),
             same_qfq_basis_ref: "fixture:runner-basis".into(),
             revision_ref: Some("fixture:runner-revision".into()),
+            continuity: None,
         };
         let combined = if self.changed {
             let mut raw = base.raw().clone();

@@ -239,6 +239,7 @@ mod tests {
             range: range.clone(),
             same_qfq_basis_ref: "fixture:crash-basis".into(),
             revision_ref: Some("fixture:crash-revision".into()),
+            continuity: None,
         };
         let whole = changed.then(|| CombinedEvidence {
             base_integrity_sha256: evidence.base_integrity_sha256.clone(),
