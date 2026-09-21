@@ -1,0 +1,151 @@
+{
+  "phase": "G-data",
+  "git_sha": "3be3f1dc58d6935df9b1915f361ae20569505ee8",
+  "generation": "868f4fa1f1aba40ffa9a19ac9d0b2deed08c31ee801f59b2b5206a4096fd895d",
+  "started": "20260921T061909Z",
+  "steps": {
+    "capabilities": {
+      "revision": "generic-data-v2",
+      "production_ready": false
+    },
+    "collection_catalog": {
+      "status": "succeeded",
+      "seconds": 10.011913171038032
+    },
+    "catalog_version": "catalog-1789971581105859146",
+    "collection_scope": {
+      "entities": 100,
+      "note": "explicit 100-item subset; task budget caps resolved selection at 100 (MAX_DEFAULT_SECURITIES), full-market breadth tracked separately"
+    },
+    "first_collection": {
+      "status": "failed",
+      "seconds": 10.020263590849936,
+      "items": {
+        "succeeded": 0,
+        "failed": 100,
+        "pending": 0,
+        "running": 0
+      }
+    },
+    "daily_update": {
+      "status": "succeeded",
+      "seconds": 165.32647109706886,
+      "items": {
+        "succeeded": 100,
+        "failed": 0,
+        "pending": 0,
+        "running": 0
+      }
+    },
+    "availability_sh600000": {
+      "items": [
+        {
+          "availability": "unknown",
+          "confirmed_gaps": [],
+          "coverage_evidence": "complete .day member history from inspected snapshot manifest 868f4fa1f1aba40ffa9a19ac9d0b2deed08c31ee801f59b2b5206a4096fd895d; DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); overall production certification pending #225",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_record": "2020-01-02",
+          "freshness": "unknown",
+          "integrity": "verified",
+          "last_record": "2026-09-18",
+          "limitations": [
+            "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair"
+          ],
+          "record_count": 1629,
+          "related_tasks": [
+            {
+              "contract_version": "default-range-task-v1",
+              "created_at": "2026-09-21T06:20:13.215553868Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-21T06:21:28.678666098Z",
+              "operation": "update_data",
+              "request_id": "daily-20260921T061909Z",
+              "state_revision": 202,
+              "status": "succeeded",
+              "task_id": "task-fa5b8b62c5fbaf7c5f7e86fa2674d072"
+            },
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-21T06:19:50.749166259Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-21T06:19:54.138194358Z",
+              "operation": "start_collection",
+              "request_id": "collection-20260921T061909Z",
+              "state_revision": 202,
+              "status": "failed",
+              "task_id": "task-047555ed2df1352c0e5c30f7dad33b12"
+            },
+            {
+              "contract_version": "default-range-task-v1",
+              "created_at": "2026-09-21T06:11:13.493070865Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-21T06:11:24.746264180Z",
+              "operation": "update_data",
+              "request_id": "daily-20260921T060831Z",
+              "state_revision": 202,
+              "status": "failed",
+              "task_id": "task-422806291ca1c8fed32d5105cecf0ae2"
+            },
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-21T06:09:07.102510507Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-21T06:10:19.888335490Z",
+              "operation": "start_collection",
+              "request_id": "collection-20260921T060831Z",
+              "state_revision": 202,
+              "status": "succeeded",
+              "task_id": "task-c87946161af4261440709301ad44157a"
+            }
+          ],
+          "unresolved_ranges": [
+            {
+              "end_date": "2100-01-01",
+              "kind": "daily",
+              "start_date": "2020-01-01"
+            }
+          ],
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "04faaa605cdb55c20dd10b0ada76a5f9de77bf6361680a360c5e35b7fffaa0fc",
+            "version_id": "collection-version-09d438fa623babe0346779abcba0761c5ce7df53d9bd810af092292db5afa490"
+          }
+        }
+      ],
+      "next_cursor": null,
+      "page_complete": true,
+      "snapshot_id": "obs-4051129-1789971549098870925-9",
+      "snapshot_time": "2026-09-21T06:22:59.337502880Z"
+    },
+    "versions_sh600000": {
+      "items": [
+        {
+          "published_at": "2026-09-21T06:09:08.547670420Z",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "04faaa605cdb55c20dd10b0ada76a5f9de77bf6361680a360c5e35b7fffaa0fc",
+            "version_id": "collection-version-09d438fa623babe0346779abcba0761c5ce7df53d9bd810af092292db5afa490"
+          }
+        }
+      ],
+      "next_cursor": null,
+      "page_complete": true,
+      "snapshot_id": "4051129-1789971549098864163-5",
+      "snapshot_time": "2026-09-21T06:22:59.574722375Z"
+    }
+  },
+  "finished": "20260921T062259Z"
+}

@@ -1,0 +1,39 @@
+{
+  "phase": "G-yearly+restart",
+  "started": "20260921T065407Z",
+  "steps": {
+    "daily_heads": {
+      "600000": "collection-version-09d438fa623babe0346779abcba0761c5ce7df53d9bd810af092292db5afa490",
+      "600004": "collection-version-c431bf62a654988b812f9cd133fdf63964100f25f42904fe71f49c886584ecdf",
+      "600006": "collection-version-0b04765c86ffa9fd5ed515f5f6d4507677cdfbd5172816055e4d30a6009a21a1"
+    },
+    "yearly_derive": {
+      "status": "succeeded",
+      "seconds": 16.7461116919294,
+      "items": {
+        "succeeded": 3,
+        "failed": 0
+      }
+    },
+    "yearly_query": {
+      "records": 1,
+      "years": [
+        null
+      ]
+    },
+    "post_restart_sync": {
+      "active": {
+        "activated_at": "2026-09-21T05:50:04.165066071Z",
+        "activation_request_id": "activate-20260921T054021Z",
+        "generation_id": "868f4fa1f1aba40ffa9a19ac9d0b2deed08c31ee801f59b2b5206a4096fd895d",
+        "manifest_sha256": "868f4fa1f1aba40ffa9a19ac9d0b2deed08c31ee801f59b2b5206a4096fd895d",
+        "previous_generation_id": null,
+        "schema": "x-data-mcp.active-generation.v1"
+      },
+      "generations": 1
+    },
+    "post_restart_task": "succeeded",
+    "post_restart_caps": "generic-data-v2"
+  },
+  "finished": "20260921T065501Z"
+}
