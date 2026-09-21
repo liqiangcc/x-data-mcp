@@ -2465,3 +2465,283 @@ mod default_runner {
         assert!(frozen["proven_gap_ranges"][0]["evidence_digest"].is_string());
     }
 }
+
+/// #259 AC evidence: 250 consecutive daily append updates keep per-day net
+/// database growth bounded — the day-231..250 mean must stay within 120% of
+/// the day-1..20 mean. Persistent manifest trees + content-addressed bars
+/// make each version O(new bars), never O(history); an O(days) per-version
+/// copy would fail this bound ~12x over.
+#[test]
+fn two_fifty_day_append_growth_stays_bounded() {
+    use x_data_mcp::market_update::tasks::{Operation, RangeContract};
+    // Defaults are the #259 AC shape; SOAK_* overrides are for local probing.
+    let symbols: usize = std::env::var("SOAK_SYMBOLS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8);
+    let days: usize = std::env::var("SOAK_DAYS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(250);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("soak.sqlite");
+    let db = SqliteMarket::new(SqliteTasks::new(path.clone()));
+    db.tasks.initialize().unwrap();
+    let samples: Value =
+        serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+    let base = samples[0]["record"].clone();
+    // One published base version per symbol through the real collection path.
+    let mut heads: Vec<(String, Value)> = Vec::new();
+    for i in 0..symbols {
+        let symbol = format!("sh.6000{i:02}");
+        let mut raw = base.clone();
+        raw["version_id"] = json!(format!("soak-base-{symbol}"));
+        raw["symbol"] = json!(symbol);
+        raw["batch"]["symbol"] = json!(symbol);
+        raw["batch"]["provenance"]["symbol"] = json!(symbol);
+        raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+        db.stage(&raw).unwrap();
+        let ctl = TaskControl::new(
+            db.tasks.clone(),
+            "range-run".into(),
+            vec![Box::new(LegacyCollection)],
+        )
+        .unwrap();
+        let request = ctl
+            .accept(
+                &format!("soak-base-{symbol}"),
+                LegacyCollection.key(),
+                json!({"symbols":[symbol],"periods":["day"]}),
+            )
+            .unwrap();
+        let RequestOutcome::Task(task) = request.record.outcome else {
+            panic!()
+        };
+        let t = db
+            .tasks
+            .transition(&task.task.task_id, 0, "range-run", Change::Claim)
+            .unwrap();
+        let t = db
+            .tasks
+            .transition(
+                &t.task.task_id,
+                t.task.state_revision,
+                "range-run",
+                Change::StartItem(t.items[0].spec.item_id.clone()),
+            )
+            .unwrap();
+        let plan = Publisher {
+            repository: db.clone(),
+        }
+        .prepare(Publication {
+            publication_id: format!("pub-{}", t.task.task_id),
+            version_id: raw["version_id"].as_str().unwrap().into(),
+            task_id: t.task.task_id,
+            item_id: t.items[0].spec.item_id.clone(),
+            run_id: "range-run".into(),
+            expected_revision: t.task.state_revision,
+            intent: PublishIntent::Daily {
+                expected_head: None,
+            },
+        })
+        .unwrap();
+        db.commit(&plan).unwrap();
+        heads.push((symbol, raw));
+    }
+    let file_size = |path: &std::path::Path| -> u64 {
+        Connection::open(path)
+            .unwrap()
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+            .unwrap();
+        std::fs::metadata(path).unwrap().len()
+    };
+    let mut sizes = vec![file_size(&path)];
+    for day in 1..=days {
+        let date = "2026-01-05".parse::<chrono::NaiveDate>().unwrap()
+            + chrono::Duration::days(day as i64 - 1);
+        // One update task per day carrying every symbol, as production does.
+        let ctl = TaskControl::new(
+            db.tasks.clone(),
+            "range-run".into(),
+            vec![Box::new(RangeContract {
+                operation: Operation::Update,
+                repository: db.clone(),
+                today: || "2026-09-12".parse().unwrap(),
+            })],
+        )
+        .unwrap();
+        let items: Vec<Value> = heads
+            .iter()
+            .map(|(symbol, raw)| {
+                json!({
+                    "symbol": symbol,
+                    "base_version_id": raw["version_id"],
+                    "start_date": date,
+                    "end_date": date,
+                })
+            })
+            .collect();
+        let request = ctl
+            .accept(
+                &format!("soak-day-{day}"),
+                Operation::Update.key(),
+                json!({"items": items}),
+            )
+            .unwrap();
+        let RequestOutcome::Task(task) = request.record.outcome else {
+            panic!()
+        };
+        let mut t = db
+            .tasks
+            .transition(&task.task.task_id, 0, "range-run", Change::Claim)
+            .unwrap();
+        for item in &t.items.clone() {
+            let item_id = item.spec.item_id.clone();
+            t = db
+                .tasks
+                .transition(
+                    &t.task.task_id,
+                    t.task.state_revision,
+                    "range-run",
+                    Change::StartItem(item_id),
+                )
+                .unwrap();
+            let symbol = item.spec.target["symbol"].as_str().unwrap().to_owned();
+            let head = heads.iter().position(|(s, _)| *s == symbol).unwrap();
+            let head_raw = heads[head].1.clone();
+            let bar = json!({
+                "date": date, "open": "10.0", "high": "11.0",
+                "low": "9.5", "close": "10.5", "volume": null, "amount": null,
+            });
+            let mut raw = head_raw.clone();
+            raw["version_id"] = json!(format!("soak-{symbol}-d{day}"));
+            raw["records"].as_array_mut().unwrap().push(bar.clone());
+            raw["batch"]["bars"]
+                .as_array_mut()
+                .unwrap()
+                .push(bar.clone());
+            let count = raw["records"].as_array().unwrap().len();
+            raw["validation"] =
+                json!({"record_count": count, "unique_record_count": count, "duplicate_count": 0});
+            raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+            db.stage(&raw).unwrap();
+            let mut batch: MarketDataBatch =
+                serde_json::from_value(head_raw["batch"].clone()).unwrap();
+            batch.bars = vec![serde_json::from_value(bar).unwrap()];
+            let range = DateRange {
+                start: date,
+                end: date,
+            };
+            let evidence = Evidence {
+                base_version_id: head_raw["version_id"].as_str().unwrap().into(),
+                base_integrity_sha256: head_raw["integrity_sha256"].as_str().unwrap().into(),
+                candidate_sha256: market_update::candidate_digest(&batch).unwrap(),
+                range: range.clone(),
+                same_qfq_basis_ref: "soak".into(),
+                revision_ref: None,
+                continuity: None,
+            };
+            let whole = CombinedEvidence {
+                base_integrity_sha256: evidence.base_integrity_sha256.clone(),
+                segment_sha256: evidence.candidate_sha256.clone(),
+                combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
+                complete_coverage_ref: "soak".into(),
+            };
+            let prepared = Publisher {
+                repository: db.clone(),
+            }
+            .prepare_range(
+                Publication {
+                    publication_id: format!("pub-{symbol}-d{day}"),
+                    version_id: raw["version_id"].as_str().unwrap().into(),
+                    task_id: t.task.task_id.clone(),
+                    item_id: item.spec.item_id.clone(),
+                    run_id: "range-run".into(),
+                    expected_revision: t.task.state_revision,
+                    intent: PublishIntent::Daily {
+                        expected_head: Some(head_raw["version_id"].as_str().unwrap().into()),
+                    },
+                },
+                &batch,
+                &range,
+                &evidence,
+                Some(&whole),
+            )
+            .unwrap();
+            let Preparation::Ready(plan) = prepared else {
+                panic!("day {day} {symbol}: update not approved")
+            };
+            db.commit_range(&plan).unwrap();
+            heads[head].1 = raw;
+            // commit_range decided item i and bumped the task revision;
+            // refresh before starting the next item.
+            t = db.tasks.read_task(&t.task.task_id).unwrap().unwrap();
+        }
+        sizes.push(file_size(&path));
+    }
+    if std::env::var("SOAK_DUMP").is_ok() {
+        let c = Connection::open(&path).unwrap();
+        let mut q = c
+            .prepare(
+                "SELECT name, sum(pgsize) FROM dbstat WHERE name NOT LIKE 'sqlite_%' GROUP BY name ORDER BY 2 DESC",
+            )
+            .unwrap();
+        let rows = q
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for (name, bytes) in rows {
+            println!("  {name}: {bytes}B");
+        }
+        for (label, sql) in [
+            (
+                "audit_json",
+                "SELECT avg(length(audit_json)), max(length(audit_json)) FROM market_update_results",
+            ),
+            (
+                "receipt_json",
+                "SELECT avg(length(receipt_json)), max(length(receipt_json)) FROM market_update_results",
+            ),
+            (
+                "envelope_json",
+                "SELECT avg(length(envelope_json)), max(length(envelope_json)) FROM data_versions",
+            ),
+        ] {
+            let (avg, max): (f64, i64) = c
+                .query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap();
+            println!("  avg/max {label}: {avg:.0}B/{max}B");
+        }
+        let sample: String = c
+            .query_row(
+                "SELECT audit_json FROM market_update_results ORDER BY rowid DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        println!("  sample audit_json: {}", &sample[..sample.len().min(3000)]);
+    }
+    let growth: Vec<u64> = sizes.windows(2).map(|w| w[1] - w[0]).collect();
+    let mean = |s: &[u64]| s.iter().sum::<u64>() as f64 / s.len() as f64;
+    let window = (days / 10).clamp(1, 20);
+    let early = mean(&growth[..window]);
+    let late = mean(&growth[growth.len() - window..]);
+    println!(
+        "{days}-day soak: base={}B final={}B early_mean={early:.0}B/day late_mean={late:.0}B/day last_day={}B",
+        sizes[0],
+        sizes[days],
+        growth[days - 1]
+    );
+    assert!(
+        late <= early * 1.2,
+        "final-{window}-day mean {late:.0}B/day exceeds 120% of first-{window}-day mean {early:.0}B/day"
+    );
+    // Single-day slack for 4KiB page quantization; a quadratic leak would be
+    // ~250x the early mean, not ~3x.
+    assert!(
+        growth[days - 1] as f64 <= early * 3.0 + 4096.0,
+        "day-250 growth {}B is not commensurate with early mean {early:.0}B/day",
+        growth[days - 1]
+    );
+}
