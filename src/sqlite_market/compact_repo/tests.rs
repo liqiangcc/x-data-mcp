@@ -546,13 +546,16 @@ fn backend_dispatch_and_compact_supply_surface() {
     .unwrap();
 
     // Schema-19 dispatch selects the compact backend. The service lease is
-    // single-owner, so the first adapter is dropped before reopening.
+    // single-owner; `repo.tasks()` is coordinator-bound and keeps the lease
+    // alive, so the dispatch probe uses a fresh handle after both drops.
     let tasks = repo.tasks();
+    let path = tasks.path().to_path_buf();
     drop(repo);
-    let backend = MarketBackend::open(&tasks).unwrap();
+    drop(tasks);
+    let backend = MarketBackend::open(&SqliteTasks::new(&path)).unwrap();
     assert!(matches!(backend, MarketBackend::Compact(_)));
     assert!(backend.task(&task_id).is_ok());
-    assert_eq!(backend.tasks().path(), tasks.path());
+    assert_eq!(backend.tasks().path(), path.as_path());
 
     // The compact read surface serves versions + query + verify.
     let supply = SqliteSupply {
@@ -601,6 +604,52 @@ fn backend_dispatch_and_compact_supply_surface() {
 
     // verify_versions round-trips the same snapshot digests.
     supply.verify(&[infos[0].version_ref.clone()]).unwrap();
+
+    // The compact backend's task handle is coordinator-bound: legacy
+    // SqliteTasks callers (task control, verification adapters) work on a
+    // schema-19 database without touching check_schema's v18 gate.
+    use crate::task_control::TaskRepository;
+    let bound_tasks = backend.tasks();
+    let accepted = bound_tasks
+        .accept(
+            "req-coordinator-bound",
+            &crate::task_control::Command {
+                key: crate::task_control::CommandKey {
+                    operation: "collect".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: "v1".into(),
+                },
+                intent: serde_json::json!({}),
+            },
+            &crate::task_control::FrozenWork {
+                items: vec![crate::task_control::ItemSpec {
+                    item_id: "i1".into(),
+                    target: serde_json::json!({"symbol": "sh.600006"}),
+                    progress_unit: "security_period".into(),
+                    frozen_inputs: serde_json::json!({}),
+                    scope_keys: std::collections::BTreeSet::from(["scope-1".to_string()]),
+                }],
+                scopes: std::collections::BTreeSet::from(["scope-1".to_string()]),
+                shared_evidence: None,
+            },
+            "run-x",
+            None,
+        )
+        .unwrap();
+    let crate::task_control::RequestOutcome::Task(snapshot) = accepted.record.outcome else {
+        panic!("expected task outcome");
+    };
+    assert_eq!(
+        bound_tasks
+            .read_task(&snapshot.task.task_id)
+            .unwrap()
+            .unwrap()
+            .task
+            .task_id,
+        snapshot.task.task_id
+    );
+    assert!(bound_tasks.candidates("run-x").unwrap().len() == 1);
+    assert!(bound_tasks.candidates("other-run").unwrap().is_empty());
 
     // A second fresh v18 database still selects the legacy backend.
     let legacy_dir = tempdir();
