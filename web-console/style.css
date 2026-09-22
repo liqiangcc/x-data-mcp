@@ -14,6 +14,16 @@
   --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
   --drawer-w: 240px;
 }
+html[data-theme="light"] {
+  --bg: #f6f8fa; --bg-raise: #ffffff; --bg-inset: #eaeef2;
+  --border: #d1d9e0; --text: #1f2328; --text-dim: #59636e;
+  --accent: #0969da; --ok: #1a7f37; --warn: #9a6700; --fail: #cf222e;
+}
+html[data-theme="dark"] {
+  --bg: #0d1117; --bg-raise: #161b22; --bg-inset: #010409;
+  --border: #30363d; --text: #e6edf3; --text-dim: #8b949e;
+  --accent: #58a6ff; --ok: #3fb950; --warn: #d29922; --fail: #f85149;
+}
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f6f8fa; --bg-raise: #ffffff; --bg-inset: #eaeef2;
@@ -182,3 +192,94 @@ body {
 .hero { background: linear-gradient(135deg, var(--bg-raise), color-mix(in srgb, var(--bg-raise) 80%, var(--bg-inset))); }
 .hero.warn { border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); }
 .hero.ok { border-color: color-mix(in srgb, var(--ok) 30%, var(--border)); }
+
+/* 搜索框 */
+.search {
+  width: 100%; padding: 10px 14px; margin-bottom: 4px;
+  background: var(--bg-raise); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--text); font: inherit; font-size: 15px;
+  -webkit-appearance: none; appearance: none;
+}
+.search:focus { outline: none; border-color: var(--accent); }
+.search::placeholder { color: var(--text-dim); }
+
+/* 筛选 chips */
+.chips { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.chipbtn {
+  padding: 6px 14px; border-radius: 18px; font: 500 13px var(--sans);
+  background: var(--bg-raise); border: 1px solid var(--border); color: var(--text-dim);
+}
+.chipbtn.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* 更高的 sparkline（K 线预览） */
+.spark.tall { height: 56px; }
+
+/* 前进右滑入 / 后退左滑入 */
+@keyframes riseL { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+@keyframes riseR { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+#content > * { animation-name: riseL; }
+#content.rev > * { animation-name: riseR; }
+
+/* checkpoint 节点绿点 */
+.timeline .row.cp::before { background: var(--ok); }
+
+/* sticky 搜索框 */
+.search { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 57px); z-index: 4; }
+
+/* 页脚 */
+.foot { text-align: center; font-size: 11px; padding: 24px 0 8px; }
+
+/* 失败分组标题里的 pill 计数 */
+.section-title .pill { font-size: 11px; }
+
+/* 蜡烛图：wick 竖线 + body 块，涨绿跌红（A股惯例） */
+.kchart { display: flex; align-items: stretch; gap: 2px; height: 72px; position: relative; }
+.kchart .k { flex: 1; min-width: 2px; position: relative; }
+.kchart .k::before { /* wick */
+  content: ""; position: absolute; left: 50%; transform: translateX(-50%);
+  top: var(--wt); height: var(--wb); width: 1px; background: currentColor; opacity: .7;
+}
+.kchart .k::after { /* body */
+  content: ""; position: absolute; left: 0; right: 0;
+  top: var(--bt); height: var(--bh); border-radius: 1px; background: currentColor;
+}
+.kchart .k.up { color: var(--ok); }
+.kchart .k.dn { color: var(--fail); }
+
+/* chip 复制反馈 */
+.chip { cursor: pointer; transition: border-color .15s, color .15s; }
+.chip:active { transform: scale(.96); }
+.chip.copied { border-color: var(--ok); color: var(--ok); }
+.chip.copied::after { content: " ✓"; }
+
+/* 骨架屏 */
+.skel { height: 88px; border-radius: 12px; overflow: hidden; position: relative; background: var(--bg-raise); border: 1px solid var(--border); }
+.skel::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.05), transparent);
+  animation: shimmer 1.2s infinite;
+}
+@keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .skel::after { animation: none; } }
+
+/* JSON 证据块 */
+.jsonblk {
+  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  color: var(--text-dim); white-space: pre-wrap; word-break: break-all;
+  background: var(--bg-inset); border-radius: 8px; padding: 10px 12px; margin: 0;
+}
+
+/* 下拉刷新指示器 */
+#pullhint {
+  text-align: center; font-size: 12px; color: var(--text-dim);
+  height: 0; overflow: hidden; transition: height .2s ease, padding .2s ease;
+}
+#pullhint.on { height: 34px; padding-top: 10px; }
+
+/* 离线横幅 */
+#offline {
+  display: none; text-align: center; font-size: 12px; padding: 6px;
+  background: color-mix(in srgb, var(--fail) 15%, var(--bg));
+  color: var(--fail); border-bottom: 1px solid color-mix(in srgb, var(--fail) 30%, transparent);
+}
+#offline.on { display: block; }

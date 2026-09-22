@@ -9,6 +9,7 @@ const FIX = {
       status: "running", created_at: "2026-10-01T09:00:12Z",
       items: { total: 5221, finished: 4310, succeeded: 4308, failed: 2, running: 1 },
       elapsed_s: 248, per_item_ms: 57,
+      phases: { parse_ms: 4, member_hash_ms: 9, base_read_ms: 8, diff_ms: 3, stage_ms: 12, commit_ms: 18, fsync_ms: 3 },
     },
     {
       task_id: "task-4b1e88d0", operation: "collect_data", dataset: "market.daily",
@@ -42,6 +43,7 @@ const FIX = {
       rows.push({
         entity: ent,
         last_day: i % 17 === 0 ? "2026-09-28" : "2026-09-30",
+      days_behind: i % 17 === 0 ? 2 : 0,
         records: 7000 + (i * 37) % 1600,
         coverage: i % 17 === 0 ? "incomplete" : "complete",
         delta_depth: (i * 13) % 250,
@@ -51,8 +53,10 @@ const FIX = {
     return rows;
   })(),
   gaps: [
-    { entity: "sz.300750", start: "2026-09-25", end: "2026-09-29", reason: "member read timeout", state: "open" },
-    { entity: "sh.600050", start: "2026-09-24", end: "2026-09-24", reason: "trading halt", state: "covered" },
+    { entity: "sz.300750", start: "2026-09-25", end: "2026-09-29", reason: "member read timeout", state: "open",
+      detail: { first_seen: "2026-09-25T09:02:11Z", attempts: 3, last_error: "member read timeout", covering_task: "task-7f3a2c91", hint: "缺口会在下一日更任务按 range 重试；若连续失败检查上游 .day member" } },
+    { entity: "sh.600050", start: "2026-09-24", end: "2026-09-24", reason: "trading halt", state: "covered",
+      detail: { first_seen: "2026-09-24T09:01:44Z", attempts: 1, covering_task: "task-4b1e88d0", hint: "停牌日，已按交易日历覆盖" } },
   ],
   storage: {
     db_bytes: 1405128704, wal_bytes: 0, rss_bytes: 561135616,
@@ -94,6 +98,31 @@ const FIX = {
     }),
     "task-9c02aa17": [],
   },
+  // 单版本详情：完整 digest + evidence JSON 预览
+  version_detail_of: (version_id) => ({
+    version_id,
+    parent_version_id: version_id.includes("-d")
+      ? version_id.replace(/-d(\d+)$/, (m, n) => +n > 1 ? `-d${n - 1}` : "")
+      : null,
+    state: "published", manifest_mode: version_id.includes("-d") ? "delta" : "checkpoint",
+    projection_digest: "C12A20F1…8D3E", integrity_digest: "EEDE00B4…7A21",
+    delta_digest: version_id.includes("-d") ? "9F33AC10…55B2" : null,
+    segment: { pages: 182, util: 0.91, span_days: 250 },
+    record_count: 7358 + (version_id.length * 7) % 300,
+    first_day: "1994-12-06", last_day: "2026-09-30",
+    published_at: "2026-09-30T09:03:02Z", task: "task-7f3a2c91",
+    evidence_json: '{\n  "kind": "continuity",\n  "mode": "append",\n  "day_member_sha256": "eb66bb8b…",\n  "prefix_bytes": 245312\n}',
+  }),
+  // item 详情：task item 的 outcome + 证据
+  item_detail_of: (task_id, item_id) => {
+    const items = FIX.task_items[task_id] || [];
+    const it = items.find((x) => x.item_id === item_id) || { symbol: item_id, ms: 61, success: true };
+    return {
+      item_id, symbol: it.symbol, task_id, ms: it.ms ?? 0,
+      outcome: it.success === false ? "failed" : it.success === true ? "succeeded" : it.stage ?? "pending",
+      evidence: { continuity: "append", range: "2026-09-30", bytes_in: 245408, bars_written: 1 },
+    };
+  },
   // 失败明细：错误原文 + evidence + result 绑定
   failure_detail: (item_id) => ({
     item_id,
@@ -109,6 +138,7 @@ const FIX = {
       continuity: "append",
     },
     hint: "source_violation 类失败为上游数据违规，重试不改结果；integrity 类需先查存储一致性。",
+    task_id: "task-7f3a2c91",
   }),
   // 实体详情：按 entity 派生（真实环境由 /api/entities/:id 提供）
   entity_detail: (entity) => {
@@ -123,12 +153,39 @@ const FIX = {
     const chain = [mk("", "checkpoint", 0, 1)];
     for (let d = Math.max(1, depth - 2); d <= depth; d++) chain.push(mk(`-d${d}`, "delta", d, d));
     chain.reverse();
+    const closes = Array.from({ length: 60 }, (_, i) => 8 + Math.sin(i / 7 + seed % 9) * 1.6 + (i / 60) * 2 + ((seed * (i + 3)) % 11) / 14);
+    const candles = closes.map((c, i) => {
+      const o = i ? closes[i - 1] : c * 0.99;
+      const hi = Math.max(o, c) * (1 + ((seed + i) % 7) / 300);
+      const lw = Math.min(o, c) * (1 - ((seed + i * 2) % 5) / 300);
+      return { o, h: hi, l: lw, c };
+    });
+    const updates = Array.from({ length: 7 }, (_, i) => {
+      const day = 30 - i;
+      const mode = i === 3 ? "full" : (i % 4 === 0 ? "append" : "unchanged");
+      return {
+        day: `2026-09-${String(day).padStart(2, "0")}`,
+        mode, result_id: `upd-${entity}-d${day}`,
+        prefix_bytes: 245312 + i * 96,
+        delta_digest: mode === "unchanged" ? null : `9F${((seed + i) % 0xffff).toString(16).toUpperCase().padStart(4, "0")}…`,
+        task_revision: 3 + (i % 3),
+      };
+    });
     return {
-      entity, period: "day",
+      yearly: {
+        bars: [ { year: 2023, close: 9.1 }, { year: 2024, close: 9.8 }, { year: 2025, close: 10.25 } ],
+        base_daily: `v1-${entity}-d${depth}`, algo: "yearly-v1", as_of: "2026-09-30",
+      },
+      entity, period: "day", closes, candles,
       head: `v1-${entity}-d${depth}`,
       coverage: depth % 17 === 0 ? "incomplete" : "complete",
       first_day: "1994-12-06", last_day: "2026-09-30",
-      chain,
+      chain, updates,
+      verifications: [
+        { at: "2026-09-30T09:05:11Z", outcome: "verified", digest_checked: "C12A20F1…8D3E", scope: "head+chain" },
+        { at: "2026-09-28T03:12:40Z", outcome: "verified", digest_checked: "C12A20F1…8D3E", scope: "full-history" },
+        { at: "2026-09-20T11:48:02Z", outcome: "failed_closed", digest_checked: "7B21E09C…44F0", scope: "head", reason: "projection digest mismatch" },
+      ],
       binding: {
         generation_id: "gen-2",
         manifest_sha256: "939971D0…AE8716",
