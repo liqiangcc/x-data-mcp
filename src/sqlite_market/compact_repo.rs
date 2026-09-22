@@ -37,6 +37,7 @@ use crate::market_storage::{
     Scope,
 };
 use crate::market_update::publication::{RangePlan, RangeRepository};
+use crate::official_market::CollectionCandidate;
 use crate::publish::EffectiveVersion;
 use crate::sqlite_tasks::SqliteTasks;
 use crate::task_control::{
@@ -1660,6 +1661,13 @@ impl crate::official_market::DailyCollectionRepository for SqliteCompactMarket {
         use crate::task_control::TaskRepository;
         Ok(self.transition(task, revision, run, change)?)
     }
+    fn commit_collection_batch(
+        &self,
+        task_id: &str,
+        items: &[CollectionCandidate],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        SqliteCompactMarket::commit_collection_batch(self, task_id, items).map(Some)
+    }
 }
 
 impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarket {
@@ -1872,3 +1880,279 @@ mod tests;
 
 #[cfg(test)]
 mod capacity;
+
+/// One batch entry validated by `collection_candidate_check`: the encoded
+/// bars plus the evidence/binding digests are produced in the same order
+/// `stage_tx` derives them, so every stored row is byte-identical.
+struct TypedCollection {
+    bars: Vec<CompactBar>,
+    source_binding: SourceBinding,
+    version_evidence: VersionEvidence,
+}
+
+impl SqliteCompactMarket {
+    /// Bulk first-collection commit (#259 S5F): one WriteCoordinator
+    /// transaction covers every item of a single collection task — typed
+    /// stage (no legacy envelope), validate, publish, typed result,
+    /// `task_publications`, head CAS and item finish — sharing the batch's
+    /// fsync. Content-level candidate failures finish the item as failed
+    /// without aborting the batch; structural/transaction errors roll the
+    /// whole batch back and the caller retries per item to isolate the bad
+    /// item.
+    pub fn commit_collection_batch(
+        &self,
+        task_id: &str,
+        items: &[CollectionCandidate],
+    ) -> Result<Vec<Result<Receipt, Error>>, Error> {
+        self.write(|c| {
+            let tx = c
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(storage)?;
+            let mut snapshot = crate::sqlite_tasks::read_bound_task(&tx, task_id)?
+                .ok_or(Error::Task(task_control::Error::TaskNotFound))?;
+            // Claim inside the batch transaction mirrors run_item's
+            // Pending -> Running transition: the task's first worker turn
+            // can commit the whole batch atomically.
+            if snapshot.task.status == crate::task_control::Status::Pending {
+                let run_id = items
+                    .first()
+                    .map(|item| item.run_id.clone())
+                    .ok_or_else(|| invalid("collection batch carries no items"))?;
+                crate::sqlite_tasks::transition_light_tx(
+                    &tx,
+                    &mut snapshot,
+                    &run_id,
+                    Change::Claim,
+                )
+                .map_err(Error::Task)?;
+            }
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(collection_batch_item(&tx, &mut snapshot, item)?);
+            }
+            tx.commit().map_err(storage)?;
+            Ok(out)
+        })
+    }
+}
+
+/// Per-item batch step: replay → start the item → typed validate+stage →
+/// finish failed items inside the batch → commit. Structural errors abort
+/// the whole batch transaction.
+fn collection_batch_item(
+    c: &Connection,
+    snapshot: &mut TaskSnapshot,
+    item: &CollectionCandidate,
+) -> Result<Result<Receipt, Error>, Error> {
+    if let Some(kind) = registry_kind(c, &item.publication_id)? {
+        let stored = compact_results::read_publication(c, &item.publication_id)?;
+        if kind != compact_results::REGISTRY_PUBLICATION {
+            return Err(Error::Conflict("collection result id kind mismatch".into()));
+        }
+        let receipt = publication_receipt(&stored);
+        if receipt.task_id != item.task_id || receipt.version_id != item.version_id {
+            return Err(Error::Conflict(
+                "collection result id replays a different commit".into(),
+            ));
+        }
+        return Ok(Ok(receipt));
+    }
+    crate::sqlite_tasks::transition_light_tx(
+        c,
+        snapshot,
+        &item.run_id,
+        Change::StartItem(item.item_id.clone()),
+    )
+    .map_err(Error::Task)?;
+    let typed = match collection_candidate_check(c, item) {
+        Ok(typed) => typed,
+        Err(error) => {
+            // Content-level candidate failure: record the item outcome
+            // inside the batch instead of aborting it.
+            crate::sqlite_tasks::transition_light_tx(
+                c,
+                snapshot,
+                &item.run_id,
+                Change::FinishItem(
+                    item.item_id.clone(),
+                    crate::task_control::ItemOutcome {
+                        success: false,
+                        error: Some(error.to_string()),
+                        evidence: None,
+                    },
+                ),
+            )
+            .map_err(Error::Task)?;
+            return Ok(Err(error));
+        }
+    };
+    let receipt = collection_item_commit_tx(c, item, &typed)?;
+    Ok(Ok(receipt))
+}
+
+/// Pure-ish candidate validation + typed staging inputs: bar encoding,
+/// ordering, unit evidence and source binding digests — the same checks
+/// `compat::check` + `check_bars_units` enforce on the envelope path, in
+/// one pass over the bars.
+fn collection_candidate_check(
+    c: &Connection,
+    item: &CollectionCandidate,
+) -> Result<TypedCollection, Error> {
+    compact_market::canonical_entity(&item.symbol).map_err(super::integrity)?;
+    let source_binding = SourceBinding {
+        generation_id: item.generation_id.clone(),
+        generation_manifest_sha256: hex_digest(&item.generation_manifest_sha256)?,
+        day_member_sha256: hex_digest(&item.day_member_sha256)?,
+        security_event_sha256: hex_digest(&item.security_event_sha256)?,
+        evidence_digest: compact_versions::put_evidence(
+            c,
+            EvidenceKind::Generation,
+            &item.generation_evidence,
+        )?,
+    };
+    let version_evidence = VersionEvidence {
+        source: item.source.clone(),
+        coverage_reason: item.coverage.reason.clone(),
+        unit_currency: item.unit_currency.clone(),
+        adjustment_evidence: item.adjustment_evidence.clone(),
+    };
+    let mut bars = Vec::with_capacity(item.bars.len());
+    for bar in &item.bars {
+        bars.push(CompactBar::from_bar(bar, Period::Day).map_err(super::integrity)?);
+    }
+    if bars.is_empty() {
+        return Err(integrity("collection candidate carries no bars"));
+    }
+    if bars
+        .windows(2)
+        .any(|pair| pair[0].trade_day >= pair[1].trade_day)
+    {
+        return Err(integrity("candidate bars are not strictly increasing"));
+    }
+    // `check_bars_units` semantics on the single encode pass.
+    let unit = &version_evidence.unit_currency;
+    if !unit.price_currency.is_confirmed() || !unit.price_unit.is_confirmed() {
+        return Err(integrity("price unit/currency evidence is not confirmed"));
+    }
+    if bars.iter().any(|bar| bar.volume.is_some()) && !unit.volume_unit.is_confirmed() {
+        return Err(integrity("volume unit evidence missing for volume bars"));
+    }
+    if bars.iter().any(|bar| bar.amount.is_some())
+        && !(unit.amount_currency.is_confirmed() && unit.amount_unit.is_confirmed())
+    {
+        return Err(integrity("amount unit evidence missing for amount bars"));
+    }
+    Ok(TypedCollection {
+        bars,
+        source_binding,
+        version_evidence,
+    })
+}
+
+/// Stage+publish+commit one validated collection candidate inside the
+/// batch transaction. Equivalent to `stage_tx` + `mark_validated` +
+/// `commit_publication` minus the redundant stored-chain re-verification —
+/// the rows were just written and digest-verified in this transaction, so
+/// the facts cannot change between stage and commit.
+fn collection_item_commit_tx(
+    c: &Connection,
+    item: &CollectionCandidate,
+    typed: &TypedCollection,
+) -> Result<Receipt, Error> {
+    let binding_digest = compact_versions::put_source_binding(c, &typed.source_binding)?;
+    let evidence_digest =
+        compact_versions::put_evidence(c, EvidenceKind::Version, &json!(typed.version_evidence))?;
+    let mut clips = Vec::new();
+    for chunk in typed.bars.chunks(SEGMENT_ROWS) {
+        let segment = compact_v19::insert_segment(c, &item.symbol, Period::Day, chunk)?;
+        clips.push(StoredClip {
+            segment_key: segment.key,
+            clip: crate::compact_market::SegmentClip {
+                segment_digest: segment.digest,
+                clip_start_day: chunk.first().unwrap().trade_day,
+                clip_end_day: chunk.last().unwrap().trade_day,
+                row_count: chunk.len() as u32,
+            },
+        });
+    }
+    let plain: Vec<crate::compact_market::SegmentClip> =
+        clips.iter().map(|clip| clip.clip.clone()).collect();
+    let projection =
+        compact_market::checkpoint_projection_digest(&item.symbol, Period::Day, &plain)
+            .map_err(integrity)?;
+    let draft = VersionDraft {
+        version_id: item.version_id.clone(),
+        entity: item.symbol.clone(),
+        period: Period::Day,
+        source_binding_digest: binding_digest,
+        coverage_status: item.coverage.status,
+        evidence_digest,
+        created_at: item.published_at.to_rfc3339(),
+        yearly_lineage: None,
+    };
+    compact_versions::check_draft_static(c, &draft)?;
+    let key = compact_versions::insert_version_row(c, &draft, None, 1, 0, &typed.bars, projection)?;
+    let written = compact_v19::write_checkpoint(c, key, &item.symbol, Period::Day, &clips)?;
+    if written != projection {
+        return Err(integrity("persisted checkpoint digest mismatch"));
+    }
+    // Staged -> validated: the stage above already verified every digest;
+    // the stored rows cannot change inside this transaction.
+    let changed = c
+        .execute(
+            "UPDATE data_versions SET state=2 WHERE version_key=?1 AND state=1",
+            [key],
+        )
+        .map_err(storage)?;
+    if changed != 1 {
+        return Err(integrity("batch validation transition did not apply"));
+    }
+    let revision: i64 = c
+        .query_row(
+            "SELECT state_revision FROM tasks WHERE task_id=?1",
+            [&item.task_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    let scope = Scope {
+        symbol: item.symbol.clone(),
+        period: Period::Day,
+    };
+    let stored = compact_results::commit_publication_tx(
+        c,
+        &PublicationCommit {
+            publication_id: item.publication_id.clone(),
+            task_id: item.task_id.clone(),
+            item_id: item.item_id.clone(),
+            publication_kind: PublicationKind::Collection,
+            base_version_key: None,
+            result_version_key: key,
+            outcome: UpdateOutcome::Published,
+            algorithm_version: COLLECTION_ALGORITHM.into(),
+            source_binding_digest: binding_digest,
+            evidence_digest,
+            expected_task_revision: u64::try_from(revision)
+                .map_err(|_| integrity("task revision out of range"))?,
+            published_at: Some(item.published_at),
+            head: HeadExpectation::Missing,
+            required_heads: vec![RequiredHead {
+                entity: item.symbol.clone(),
+                period: Period::Day,
+                expected: None,
+            }],
+            binding: BindingCheck {
+                run_id: item.run_id.clone(),
+                entity: item.symbol.clone(),
+                period: Period::Day,
+                occupancy_key: scope.occupancy_key(),
+            },
+        },
+        false,
+    )?;
+    Ok(Receipt {
+        publication_id: item.publication_id.clone(),
+        version_id: stored.identity.result_version_id.clone(),
+        task_id: item.task_id.clone(),
+        task_revision: stored.identity.task_revision,
+    })
+}

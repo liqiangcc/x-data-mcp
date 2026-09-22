@@ -281,6 +281,24 @@ impl crate::official_market::DailyCollectionRepository for MarketBackend {
             ),
         }
     }
+    fn commit_collection_batch(
+        &self,
+        task_id: &str,
+        items: &[crate::official_market::CollectionCandidate],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::official_market::DailyCollectionRepository::commit_collection_batch(
+                    m, task_id, items,
+                )
+            }
+            Self::Compact(m) => {
+                crate::official_market::DailyCollectionRepository::commit_collection_batch(
+                    m, task_id, items,
+                )
+            }
+        }
+    }
 }
 
 impl crate::publication_verification::decision::AuditStore for MarketBackend {

@@ -1127,6 +1127,30 @@ impl RangeProvider for TdxRepublishProvider<'_> {
     }
 }
 
+/// Typed first-collection candidate for the compact bulk staging path
+/// (#259 S5F): carries the canonical facts an envelope embeds — bars,
+/// coverage, unit/adjustment evidence and the generation source binding —
+/// without materializing legacy JSON.
+pub struct CollectionCandidate {
+    pub task_id: String,
+    pub item_id: String,
+    pub publication_id: String,
+    pub version_id: String,
+    pub run_id: String,
+    pub symbol: String,
+    pub source: String,
+    pub bars: Vec<crate::market_data::Bar>,
+    pub coverage: crate::market_data::CoverageEvidence,
+    pub unit_currency: crate::market_data::UnitCurrencyEvidence,
+    pub adjustment_evidence: crate::market_data::AdjustmentEvidence,
+    pub published_at: DateTime<Utc>,
+    pub generation_id: String,
+    pub generation_manifest_sha256: String,
+    pub day_member_sha256: String,
+    pub security_event_sha256: String,
+    pub generation_evidence: Value,
+}
+
 /// Repository surface for collection publication: generic commit plus the
 /// reads the runner needs for replay, head preconditions and task transitions.
 pub trait DailyCollectionRepository: MarketRepository {
@@ -1141,6 +1165,18 @@ pub trait DailyCollectionRepository: MarketRepository {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error>;
+    /// Optional typed bulk first-collection commit (#259 S5F): one write
+    /// transaction covers the whole task's items on backends that stage
+    /// compact checkpoints directly. `None` keeps the per-item envelope
+    /// path on legacy or any backend without a typed entry.
+    fn commit_collection_batch(
+        &self,
+        task_id: &str,
+        items: &[CollectionCandidate],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        let _ = (task_id, items);
+        Ok(None)
+    }
 }
 
 /// Item runner for `start_collection`/`market.daily`/`v1` — the only item
@@ -1302,6 +1338,152 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             self.repository.task(task_id)?,
         )))
     }
+    /// Bulk collection path (#259 S5F): produce the typed candidate for
+    /// every item (member parse stays outside the writer), then stage and
+    /// commit them in one repository transaction. Items that cannot
+    /// produce a candidate — replays, leftover running items, materialize
+    /// failures — fall back to `run_item` so outcome recording and crash
+    /// reconciliation stay identical. `None` means the repository only
+    /// supports the envelope path; callers keep the per-item loop.
+    /// `generation_id` binds the snapshot generation the caller already
+    /// resolved for this task's frozen `source_generation_id` input.
+    pub fn run_items(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+        generation_id: &str,
+    ) -> Result<Option<()>, Error> {
+        let mut candidates = Vec::new();
+        let mut fallback = Vec::new();
+        for item_id in item_ids {
+            match self.collection_candidate(task_id, item_id, generation_id) {
+                Ok(Some(candidate)) => candidates.push(candidate),
+                Ok(None) | Err(_) => fallback.push(item_id.clone()),
+            }
+        }
+        let results = match self
+            .repository
+            .commit_collection_batch(task_id, &candidates)
+        {
+            Ok(Some(results)) => results,
+            Ok(None) => return Ok(None),
+            Err(_) => {
+                // Structural/transaction errors rolled the whole batch back:
+                // isolate per item so one bad item cannot wedge the task in a
+                // Running-retry loop (the documented batch contract).
+                fallback.extend(candidates.iter().map(|item| item.item_id.clone()));
+                for item_id in fallback {
+                    self.run_item(task_id, &item_id)?;
+                }
+                return Ok(Some(()));
+            }
+        };
+        if results.len() != candidates.len() {
+            return Err(Error::Integrity(
+                "collection batch result count does not match candidates".into(),
+            ));
+        }
+        for (candidate, result) in candidates.iter().zip(results) {
+            if result.is_err() {
+                fallback.push(candidate.item_id.clone());
+            }
+        }
+        for item_id in fallback {
+            self.run_item(task_id, &item_id)?;
+        }
+        Ok(Some(()))
+    }
+
+    /// Typed candidate production for `run_items`: every check `run_item`
+    /// performs before staging, minus the envelope materialization. `None`
+    /// defers the item to the per-item path (receipt replay, leftover
+    /// running state or terminal task bookkeeping).
+    fn collection_candidate(
+        &self,
+        task_id: &str,
+        item_id: &str,
+        generation_id: &str,
+    ) -> Result<Option<CollectionCandidate>, Error> {
+        let binding = self
+            .repository
+            .task_item_binding(task_id, item_id)?
+            .ok_or_else(|| Error::Invalid("collection item absent from accepted task".into()))?;
+        if binding.head.key.operation != "start_collection"
+            || binding.head.key.dataset != "market.daily"
+            || binding.head.key.contract_version != "v1"
+        {
+            return Err(Error::Invalid("unsupported collection contract".into()));
+        }
+        if binding.head.status.terminal()
+            || binding.head.visible_status(&self.run_id) == Status::NeedsVerification
+            || binding.item.stage != Stage::Pending
+        {
+            // Terminal tasks, unverified runs and items already started or
+            // finished keep the per-item path: its replay and
+            // reconciliation semantics are authoritative there.
+            return Ok(None);
+        }
+        if binding.head.status == Status::CancelRequested {
+            return Ok(None);
+        }
+        let target = &binding.item.spec.target;
+        let symbol = target["symbol"]
+            .as_str()
+            .ok_or_else(|| Error::Integrity("collection item target missing symbol".into()))?;
+        if target["period"] != Value::String("day".into()) {
+            return Err(Error::Invalid("collection target is not daily".into()));
+        }
+        let scope = Scope {
+            symbol: symbol.into(),
+            period: Period::Day,
+        };
+        if self.repository.effective_head(&scope)?.is_some() {
+            return Err(Error::Invalid(
+                "existing daily head requires the update_data range path".into(),
+            ));
+        }
+        let batch = match self.session {
+            Some(session) => session.materialize_daily(symbol),
+            None => self.source.materialize_daily(symbol),
+        }
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+        let id = crate::hash::sha256(serde_json::json!([task_id, item_id]).to_string().as_bytes());
+        let (records, _) =
+            publish::validate_and_deduplicate(&batch).map_err(|e| Error::Invalid(e.to_string()))?;
+        let inputs = batch.provenance.snapshot_inputs.clone().unwrap_or_default();
+        let member_sha = |role: &str| {
+            inputs
+                .iter()
+                .find(|input| input.role == role)
+                .map(|input| input.member_sha256.clone())
+                .ok_or_else(|| {
+                    Error::Integrity(format!("snapshot inputs lack the {role} member binding"))
+                })
+        };
+        Ok(Some(CollectionCandidate {
+            task_id: task_id.into(),
+            item_id: item_id.into(),
+            publication_id: format!("collection-result-{id}"),
+            version_id: format!("collection-version-{id}"),
+            run_id: self.run_id.clone(),
+            symbol: batch.symbol.clone(),
+            source: batch.provenance.source.clone(),
+            bars: records,
+            coverage: batch.coverage.clone(),
+            unit_currency: batch.unit_currency.clone(),
+            adjustment_evidence: batch.adjustment_evidence.clone(),
+            published_at: self.published_at,
+            generation_id: generation_id.into(),
+            generation_manifest_sha256: self.source.manifest_sha256().to_string(),
+            day_member_sha256: member_sha("day")?,
+            security_event_sha256: member_sha(SECURITY_EVENTS_ROLE)?,
+            generation_evidence: serde_json::json!({
+                "manifest_sha256": self.source.manifest_sha256(),
+                "snapshot_inputs": inputs,
+            }),
+        }))
+    }
+
     /// Source failure preserves the old version: nothing is staged or
     /// committed on any materialization/validation error.
     fn materialize_and_commit(

@@ -14,7 +14,7 @@ use crate::compact_market::{
 const MAX_DEPTH: u32 = 256;
 const OUTCOME_LIMIT: usize = 192;
 const REGISTRY_MARKET_UPDATE: i64 = 1;
-const REGISTRY_PUBLICATION: i64 = 2;
+pub(crate) const REGISTRY_PUBLICATION: i64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HeadExpectation {
@@ -288,6 +288,25 @@ pub(crate) fn commit_publication(
     c: &mut Connection,
     command: &PublicationCommit,
 ) -> Result<StoredPublicationResult, Error> {
+    let tx = c
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage)?;
+    let result = commit_publication_tx(&tx, command, true)?;
+    tx.commit().map_err(storage)?;
+    Ok(result)
+}
+
+/// Transaction-level publication commit shared by the per-item path and the
+/// collection batch writer (#259 S5F). `verify_stored` controls the
+/// defense-in-depth re-verification (`verify_staged` inside `publish` and
+/// the post-publish `fixed` read-back): true on the standalone path; the
+/// batch path writes and verifies the candidate inside the same transaction
+/// so the identical re-read is redundant.
+pub(crate) fn commit_publication_tx(
+    c: &Connection,
+    command: &PublicationCommit,
+    verify_stored: bool,
+) -> Result<StoredPublicationResult, Error> {
     let expected_revision_i64 = i64::try_from(command.expected_task_revision)
         .map_err(|_| integrity("task revision out of range"))?;
     let task_revision = command
@@ -298,19 +317,15 @@ pub(crate) fn commit_publication(
         i64::try_from(task_revision).map_err(|_| integrity("task revision out of range"))?;
     let outcome_json = result_outcome_json(&command.publication_id, "publication")?;
 
-    let tx = c
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    let result = compact_versions::result_facts(&tx, command.result_version_key)?;
+    let result = compact_versions::result_facts(c, command.result_version_key)?;
     let expected_evidence = match command.publication_kind {
         PublicationKind::Collection | PublicationKind::Republish => EvidenceKind::Version,
         PublicationKind::Yearly => EvidenceKind::Yearly,
     };
-    if compact_versions::verified_evidence_kind(&tx, &command.evidence_digest)? != expected_evidence
-    {
+    if compact_versions::verified_evidence_kind(c, &command.evidence_digest)? != expected_evidence {
         return Err(integrity("publication evidence kind mismatch"));
     }
-    compact_versions::verified_source_binding(&tx, &command.source_binding_digest)?;
+    compact_versions::verified_source_binding(c, &command.source_binding_digest)?;
     match command.publication_kind {
         PublicationKind::Collection if result.period != Period::Day => {
             return Err(integrity("collection publication requires daily result"));
@@ -322,14 +337,14 @@ pub(crate) fn commit_publication(
     }
     let base = match command.base_version_key {
         Some(key) => {
-            let facts = compact_versions::result_facts(&tx, key)?;
+            let facts = compact_versions::result_facts(c, key)?;
             if facts.state != CompactVersionState::Published {
                 return Err(integrity("publication base version is not published"));
             }
             if facts.entity != result.entity || facts.period != result.period {
                 return Err(integrity("publication base scope mismatch"));
             }
-            compact_versions::fixed(&tx, &facts.version_id)?;
+            compact_versions::fixed(c, &facts.version_id)?;
             Some(facts)
         }
         None => None,
@@ -348,7 +363,7 @@ pub(crate) fn commit_publication(
             if command.published_at.is_some() || command.head != HeadExpectation::Keep {
                 return Err(integrity("no-change publication carries publish effects"));
             }
-            compact_versions::fixed(&tx, &result.version_id)?;
+            compact_versions::fixed(c, &result.version_id)?;
         }
         UpdateOutcome::Published => {
             if result.state != CompactVersionState::Validated {
@@ -367,19 +382,20 @@ pub(crate) fn commit_publication(
             }
         }
     }
-    register_result(&tx, &command.publication_id, REGISTRY_PUBLICATION)?;
-    require_item_unused(&tx, &command.task_id, &command.item_id)?;
-    check_required_heads(&tx, &command.required_heads)?;
-    check_binding(&tx, &command.task_id, &command.item_id, &command.binding)?;
+    register_result(c, &command.publication_id, REGISTRY_PUBLICATION)?;
+    require_item_unused(c, &command.task_id, &command.item_id)?;
+    check_required_heads(c, &command.required_heads)?;
+    check_binding(c, &command.task_id, &command.item_id, &command.binding)?;
     if command.outcome == UpdateOutcome::Published {
-        compact_versions::publish(
-            &tx,
-            result.key,
-            command
-                .published_at
-                .ok_or_else(|| integrity("published publication lacks published_at"))?,
-        )?;
-        compact_versions::fixed(&tx, &result.version_id)?;
+        let published_at = command
+            .published_at
+            .ok_or_else(|| integrity("published publication lacks published_at"))?;
+        if verify_stored {
+            compact_versions::publish(c, result.key, published_at)?;
+            compact_versions::fixed(c, &result.version_id)?;
+        } else {
+            compact_versions::publish_presumed(c, result.key, published_at)?;
+        }
     }
     let identity = PublicationResultIdentity {
         publication_id: command.publication_id.clone(),
@@ -395,7 +411,7 @@ pub(crate) fn commit_publication(
         task_revision,
     };
     let result_digest = compact_market::publication_result_digest(&identity).map_err(integrity)?;
-    tx.execute(
+    c.execute(
         "INSERT INTO publication_results(publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,source_binding_digest,evidence_digest,task_revision,result_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![
             command.publication_id,
@@ -413,15 +429,15 @@ pub(crate) fn commit_publication(
         ],
     )
     .map_err(conflict_or_storage)?;
-    let result_key = tx.last_insert_rowid();
+    let result_key = c.last_insert_rowid();
     if command.outcome == UpdateOutcome::Published {
-        tx.execute(
+        c.execute(
             "INSERT INTO task_publications(task_id,version_key,result_id) VALUES(?1,?2,?3)",
             params![command.task_id, result.key, command.publication_id],
         )
         .map_err(conflict_or_storage)?;
         apply_head(
-            &tx,
+            c,
             &command.head,
             &result.entity,
             result.period,
@@ -431,14 +447,13 @@ pub(crate) fn commit_publication(
         )?;
     }
     finish_item_and_task(
-        &tx,
+        c,
         &command.task_id,
         &command.item_id,
         expected_revision_i64,
         task_revision_i64,
         &outcome_json,
     )?;
-    tx.commit().map_err(storage)?;
     Ok(StoredPublicationResult {
         result_key,
         base_version_key: command.base_version_key,
@@ -682,6 +697,19 @@ pub(crate) fn read_market_update(
         identity,
         result_digest: fixed_digest(&stored_digest)?,
     })
+}
+
+/// Rebind a stored publication identity to another task id so the S5F
+/// equivalence test can compare result digests across databases whose
+/// accepted task ids legitimately differ.
+#[cfg(test)]
+pub(crate) fn publication_identity_with_task(
+    stored: &StoredPublicationResult,
+    task_id: &str,
+) -> compact_market::PublicationResultIdentity {
+    let mut identity = stored.identity.clone();
+    identity.task_id = task_id.into();
+    identity
 }
 
 pub(crate) fn read_publication(

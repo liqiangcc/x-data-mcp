@@ -277,6 +277,21 @@ pub(crate) fn publish(
         return Err(integrity("version is not validated"));
     }
     verify_staged(c, &row)?;
+    publish_presumed(c, version_key, published_at)
+}
+
+/// Publish transition without re-verifying the stored chain: only valid
+/// when the caller verified the same facts inside this transaction (#259
+/// S5F batch staging — the just-written rows cannot change within the tx).
+pub(crate) fn publish_presumed(
+    c: &Connection,
+    version_key: i64,
+    published_at: DateTime<Utc>,
+) -> Result<Digest, Error> {
+    let row = read_version_row(c, version_key)?.ok_or_else(|| integrity("version row missing"))?;
+    if row.state != 2 {
+        return Err(integrity("version is not validated"));
+    }
     let published = published_at.to_rfc3339();
     let identity = build_identity(c, &row, &published)?;
     let digest = compact_market::version_integrity_digest(&identity).map_err(integrity)?;
@@ -863,6 +878,20 @@ fn verify_stored_lineage(
     }
 }
 
+/// Recompute the integrity digest for `published_at` — used by the S5F
+/// equivalence test to compare rows across paths where the publish stamp
+/// legitimately differs (envelope commits stamp at commit time).
+#[cfg(test)]
+pub(crate) fn recompute_integrity(
+    c: &Connection,
+    key: i64,
+    published_at: &str,
+) -> Result<Digest, Error> {
+    let row = read_version_row(c, key)?.ok_or_else(|| integrity("version row missing"))?;
+    let identity = build_identity(c, &row, published_at)?;
+    compact_market::version_integrity_digest(&identity).map_err(integrity)
+}
+
 fn build_identity(
     c: &Connection,
     row: &VersionRow,
@@ -1076,7 +1105,7 @@ pub(crate) fn materialize(c: &Connection, version_id: &str) -> Result<Materializ
     })
 }
 
-fn check_draft_static(c: &Connection, draft: &VersionDraft) -> Result<(), Error> {
+pub(crate) fn check_draft_static(c: &Connection, draft: &VersionDraft) -> Result<(), Error> {
     if draft.version_id.is_empty() {
         return Err(integrity("version_id is empty"));
     }
@@ -1155,7 +1184,7 @@ fn check_draft_lineage(
     Ok(())
 }
 
-fn insert_version_row(
+pub(crate) fn insert_version_row(
     c: &Connection,
     draft: &VersionDraft,
     parent_version_key: Option<i64>,

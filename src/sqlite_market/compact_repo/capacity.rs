@@ -203,6 +203,53 @@ fn envelope(
     raw
 }
 
+/// Typed collection candidate mirroring `envelope`'s inputs exactly —
+/// same dedupe, unit override, generation binding — without the JSON
+/// round-trip (#259 S5F).
+fn collection_candidate(
+    batch: &MarketDataBatch,
+    version_id: &str,
+    publication_id: &str,
+    task_id: &str,
+    item_id: &str,
+    generation_id: &str,
+    manifest_sha256: &str,
+) -> crate::official_market::CollectionCandidate {
+    let mut batch = batch.clone();
+    batch.unit_currency = units();
+    let (records, _) = crate::publish::validate_and_deduplicate(&batch).unwrap();
+    let inputs = batch.provenance.snapshot_inputs.clone().unwrap_or_default();
+    let member = |role: &str| {
+        inputs
+            .iter()
+            .find(|i| i.role == role)
+            .map(|i| i.member_sha256.clone())
+            .unwrap_or_else(|| "00".repeat(32))
+    };
+    crate::official_market::CollectionCandidate {
+        task_id: task_id.into(),
+        item_id: item_id.into(),
+        publication_id: publication_id.into(),
+        version_id: version_id.into(),
+        run_id: RUN.into(),
+        symbol: batch.symbol.clone(),
+        source: batch.provenance.source.clone(),
+        bars: records,
+        coverage: batch.coverage.clone(),
+        unit_currency: batch.unit_currency.clone(),
+        adjustment_evidence: batch.adjustment_evidence.clone(),
+        published_at: Utc::now(),
+        generation_id: generation_id.into(),
+        generation_manifest_sha256: manifest_sha256.into(),
+        day_member_sha256: member("day"),
+        security_event_sha256: member("gbbq-security-events"),
+        generation_evidence: json!({
+            "manifest_sha256": manifest_sha256,
+            "snapshot_inputs": inputs,
+        }),
+    }
+}
+
 fn published_entities(repo: &SqliteCompactMarket) -> HashSet<String> {
     repo.read(|c| {
         let mut stmt = c
@@ -398,44 +445,32 @@ fn phase_initial(
             .collect();
         let task_id = accept_phase_task(repo, &format!("req-initial-{item_cursor}"), &items);
         item_cursor += 1;
-        let mut head = repo.task_head(&task_id).unwrap();
-        for ((symbol, batch_data), (item_id, _)) in materialized.iter().zip(&items) {
-            start_head_item(repo, &mut head, item_id);
-            bars_total += batch_data.bars.len() as u64;
-            let version_id = format!("v1-{symbol}");
-            let raw = envelope(
-                batch_data,
-                &version_id,
-                None,
-                generation_id,
-                manifest_sha256,
-            );
-            repo.stage(&raw).unwrap();
-            let candidate = repo.candidate(&version_id).unwrap();
-            repo.mark_validated(&candidate).unwrap();
-            let plan = PublishPlan {
-                command: Publication {
-                    publication_id: format!("pub-initial-{symbol}"),
-                    version_id: version_id.clone(),
-                    task_id: task_id.clone(),
-                    item_id: item_id.clone(),
-                    run_id: RUN.into(),
-                    expected_revision: head.state_revision,
-                    intent: PublishIntent::Daily {
-                        expected_head: None,
-                    },
-                },
-                record: candidate.clone(),
-                required_heads: vec![(Scope::of(&candidate.version), None)],
-                promote: None,
-                base_digest: None,
-            };
-            repo.commit(&plan).unwrap();
-            head.state_revision += 1;
-            head.counts.running -= 1;
-            head.counts.finished += 1;
-            head.counts.succeeded += 1;
-            committed += 1;
+        // S5F production shape: one write transaction commits the whole
+        // task — typed stage + publish + typed result + item finish.
+        let candidates: Vec<_> = materialized
+            .iter()
+            .zip(&items)
+            .map(|((symbol, batch_data), (item_id, _))| {
+                bars_total += batch_data.bars.len() as u64;
+                collection_candidate(
+                    batch_data,
+                    &format!("v1-{symbol}"),
+                    &format!("pub-initial-{symbol}"),
+                    &task_id,
+                    item_id,
+                    generation_id,
+                    manifest_sha256,
+                )
+            })
+            .collect();
+        for (candidate, result) in candidates
+            .iter()
+            .zip(repo.commit_collection_batch(&task_id, &candidates).unwrap())
+        {
+            match result {
+                Ok(_) => committed += 1,
+                Err(e) => failed.push(format!("{}: {e}", candidate.symbol)),
+            }
             rss_peak = rss_peak.max(rss_bytes());
             if committed.is_multiple_of(500) {
                 eprintln!(

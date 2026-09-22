@@ -725,3 +725,282 @@ fn ops_range_commit_stages_delta_binds_leaf_and_replays() {
     let replay = repo.item_receipt(&task_id2, ITEM).unwrap().unwrap();
     assert_eq!(replay, receipt);
 }
+
+fn collection_candidate_for(
+    version: &EffectiveVersion,
+    task_id: &str,
+    run: &str,
+) -> CollectionCandidate {
+    CollectionCandidate {
+        task_id: task_id.into(),
+        item_id: ITEM.into(),
+        publication_id: "pub-1".into(),
+        version_id: version.version_id.clone(),
+        run_id: run.into(),
+        symbol: version.symbol.clone(),
+        source: version.source.clone(),
+        bars: version.records.clone(),
+        coverage: CoverageEvidence::complete("full history verified"),
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        published_at: version.published_at,
+        generation_id: "gen-1".into(),
+        generation_manifest_sha256: "ab".repeat(32),
+        day_member_sha256: "cd".repeat(32),
+        security_event_sha256: "ef".repeat(32),
+        generation_evidence: json!({
+            "snapshot_inputs": [{
+                "role": "daily",
+                "member": "sh.600006.day",
+                "archive_sha256": "12".repeat(32),
+                "member_sha256": "cd".repeat(32)
+            }]
+        }),
+    }
+}
+
+#[test]
+fn typed_collection_batch_is_byte_equal_to_envelope_path() {
+    // Envelope path on repo1.
+    let dir1 = tempdir();
+    let (_, repo1) = repo(&dir1);
+    let task_id = accept_task(&repo1);
+    let revision = start_item(&repo1, &task_id);
+    let version = mk_version("v1", vec![bar(0, 100), bar(1, 110), bar(2, 120)]);
+    repo1
+        .stage(&envelope(&version, source("gen-1"), None))
+        .unwrap();
+    let checked = repo1.candidate("v1").unwrap();
+    repo1.mark_validated(&checked).unwrap();
+    repo1
+        .commit(&PublishPlan {
+            command: collect_command(&task_id, "pub-1", "v1", revision),
+            record: checked.clone(),
+            required_heads: vec![(Scope::of(&checked.version), None)],
+            promote: None,
+            base_digest: None,
+        })
+        .unwrap();
+
+    // Typed batch path on repo2 — same task inputs → same task_id.
+    let dir2 = tempdir();
+    let (_, repo2) = repo(&dir2);
+    let task_id2 = accept_task(&repo2);
+    let _ = (task_id, task_id2.clone());
+    let results = repo2
+        .commit_collection_batch(
+            &task_id2,
+            &[collection_candidate_for(&version, &task_id2, RUN)],
+        )
+        .unwrap();
+    let receipt = results.into_iter().next().unwrap().unwrap();
+    assert_eq!(receipt.version_id, "v1");
+
+    // Every stored digest-bearing row must be byte-identical except
+    // task-bound fields (task ids are per-database) and the version
+    // publish stamp (envelope commits stamp at commit time).
+    let dump = |repo: &SqliteCompactMarket, table: &str| {
+        repo.read(|c| {
+            let mut stmt = c.prepare(&format!("SELECT * FROM {table}")).unwrap();
+            let names: Vec<String> = stmt.column_names().iter().map(|n| n.to_string()).collect();
+            let mut rows = Vec::new();
+            let mut iter = stmt.query([]).unwrap();
+            while let Some(row) = iter.next().unwrap() {
+                let mut obj = serde_json::Map::new();
+                for (i, name) in names.iter().enumerate() {
+                    let value: rusqlite::types::Value = row.get(i).unwrap();
+                    obj.insert(
+                        name.clone(),
+                        match value {
+                            rusqlite::types::Value::Blob(b) => json!(hex_bytes(&b)),
+                            rusqlite::types::Value::Integer(n) => json!(n),
+                            rusqlite::types::Value::Text(t) => json!(t),
+                            rusqlite::types::Value::Real(f) => json!(f),
+                            rusqlite::types::Value::Null => Value::Null,
+                        },
+                    );
+                }
+                rows.push(Value::Object(obj));
+            }
+            Ok(json!(rows))
+        })
+        .unwrap()
+    };
+    for table in [
+        "bar_segments",
+        "segment_bars",
+        "version_checkpoint_clips",
+        "source_bindings",
+        "evidence_bundles",
+        "effective_heads",
+    ] {
+        let a = dump(&repo1, table);
+        let b = dump(&repo2, table);
+        assert_eq!(a, b, "table {table} differs between paths");
+    }
+    // publication_results / task_publications: identical except the
+    // task-bound fields and the digest that binds them.
+    let (pa, pb) = (
+        dump(&repo1, "publication_results"),
+        dump(&repo2, "publication_results"),
+    );
+    for (key, value) in pa[0].as_object().unwrap() {
+        if key == "task_id" || key == "result_digest" {
+            continue;
+        }
+        assert_eq!(value, &pb[0][key], "publication_results.{key} differs");
+    }
+    let (ta, tb) = (
+        dump(&repo1, "task_publications"),
+        dump(&repo2, "task_publications"),
+    );
+    for (key, value) in ta[0].as_object().unwrap() {
+        if key == "task_id" {
+            continue;
+        }
+        assert_eq!(value, &tb[0][key], "task_publications.{key} differs");
+    }
+    // The result digest is byte-equal under a shared task id.
+    let digest_for = |repo: &SqliteCompactMarket, task: &str| {
+        repo.read(|c| {
+            let stored = compact_results::read_publication(c, "pub-1")?;
+            let identity = compact_results::publication_identity_with_task(&stored, task);
+            compact_market::publication_result_digest(&identity)
+                .map(|d| hex_bytes(&d))
+                .map_err(integrity)
+        })
+        .unwrap()
+    };
+    assert_eq!(digest_for(&repo1, "t"), digest_for(&repo2, "t"));
+    // data_versions: all fields equal except published_at/integrity_digest.
+    let rows_a = dump(&repo1, "data_versions");
+    let rows_b = dump(&repo2, "data_versions");
+    assert_eq!(rows_a.as_array().unwrap().len(), 1);
+    let (va, vb) = (&rows_a[0], &rows_b[0]);
+    for (key, value) in va.as_object().unwrap() {
+        if key == "published_at" || key == "integrity_digest" {
+            continue;
+        }
+        assert_eq!(value, &vb[key], "data_versions.{key} differs");
+    }
+    // integrity digests are equal once rebuilt under a shared stamp.
+    let key_of = |repo: &SqliteCompactMarket| {
+        repo.read(|c| {
+            c.query_row(
+                "SELECT version_key FROM data_versions WHERE version_id='v1'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(storage)
+        })
+        .unwrap()
+    };
+    let stamp = "2025-01-02T00:00:00+00:00";
+    let ia = repo1
+        .read(|c| {
+            compact_versions::recompute_integrity(c, key_of(&repo1), stamp).map(|d| hex_bytes(&d))
+        })
+        .unwrap();
+    let ib = repo2
+        .read(|c| {
+            compact_versions::recompute_integrity(c, key_of(&repo2), stamp).map(|d| hex_bytes(&d))
+        })
+        .unwrap();
+    assert_eq!(ia, ib, "integrity digests differ under shared stamp");
+}
+
+#[test]
+fn collection_batch_records_item_failure_and_keeps_others() {
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    // Task with two items: one valid, one with unconfirmed units.
+    let scope = task_control::legacy::scope_id("sh.600006", "day");
+    let scope2 = task_control::legacy::scope_id("sz.000001", "day");
+    let work = FrozenWork {
+        items: vec![
+            ItemSpec {
+                item_id: "item-a".into(),
+                target: json!({"symbol": "sh.600006", "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            },
+            ItemSpec {
+                item_id: "item-b".into(),
+                target: json!({"symbol": "sz.000001", "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope2.clone()]),
+            },
+        ],
+        scopes: BTreeSet::from([scope, scope2]),
+        shared_evidence: None,
+    };
+    let command = Command {
+        key: CommandKey {
+            operation: "collect_data".into(),
+            dataset: "market.daily".into(),
+            contract_version: "v1".into(),
+        },
+        intent: json!({}),
+    };
+    let snapshot = match repo
+        .accept("req-batch", &command, &work, RUN, None)
+        .unwrap()
+        .record
+        .outcome
+    {
+        task_control::RequestOutcome::Task(s) => s,
+        _ => panic!("expected task"),
+    };
+    let task_id = snapshot.task.task_id.clone();
+    // Claim the task (run_items does this in production).
+    let head = repo.task_head(&task_id).unwrap();
+    use crate::task_control::TaskRepository;
+    repo.transition(&task_id, head.state_revision, RUN, Change::Claim)
+        .unwrap();
+
+    let mut good = collection_candidate_for(
+        &mk_version("v-a", vec![bar(0, 100), bar(1, 110)]),
+        &task_id,
+        RUN,
+    );
+    good.item_id = "item-a".into();
+    good.publication_id = "pub-a".into();
+    let mut bad = collection_candidate_for(&mk_version("v-b", vec![bar(0, 100)]), &task_id, RUN);
+    bad.item_id = "item-b".into();
+    bad.symbol = "sz.000001".into();
+    bad.publication_id = "pub-b".into();
+    bad.unit_currency.price_unit = EvidenceValue::unknown("unconfirmed");
+
+    let results = repo
+        .commit_collection_batch(&task_id, &[good, bad])
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].as_ref().unwrap().version_id, "v-a");
+    assert!(results[1].is_err());
+    let task = repo.task(&task_id).unwrap();
+    assert_eq!(task.task.status, crate::task_control::Status::Running);
+    assert_eq!(
+        task.items
+            .iter()
+            .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+            .count(),
+        1
+    );
+    assert!(
+        task.items
+            .iter()
+            .all(|i| i.stage == crate::task_control::Stage::Finished)
+    );
+    // The failed item produced no rows: only one published version exists.
+    let heads = repo
+        .read(|c| {
+            c.query_row("SELECT count(*) FROM effective_heads", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .map_err(storage)
+        })
+        .unwrap();
+    assert_eq!(heads, 1);
+}

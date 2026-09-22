@@ -114,8 +114,26 @@ pub fn run_once(
                 run_id: control.run_id.clone(),
                 published_at: chrono::Utc::now(),
             };
-            for item in &candidate.items {
-                runner.run_item(&candidate.task.task_id, &item.spec.item_id)?;
+            // S5F bulk path: on compact backends all items stage+commit in
+            // one write transaction; generation mode binds the resolved
+            // generation, env mode binds the manifest digest as the
+            // generation identity of the installed snapshot.
+            let generation_id = bound
+                .as_ref()
+                .map(|bound| bound.generation_id.as_str())
+                .unwrap_or_else(|| source.manifest_sha256());
+            let item_ids: Vec<String> = candidate
+                .items
+                .iter()
+                .map(|item| item.spec.item_id.clone())
+                .collect();
+            if runner
+                .run_items(&candidate.task.task_id, &item_ids, generation_id)?
+                .is_none()
+            {
+                for item in &candidate.items {
+                    runner.run_item(&candidate.task.task_id, &item.spec.item_id)?;
+                }
             }
             return Ok(Some(control.read_task(&candidate.task.task_id)?));
         }

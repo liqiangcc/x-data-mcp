@@ -1,0 +1,48 @@
+{
+  "issue": 259,
+  "phase": "S5F",
+  "recorded_at": "2026-10-01T00:00:00Z",
+  "scope": "typed bulk staging fast path for first collection (no legacy JSON envelope, one WriteCoordinator transaction per task)",
+  "environment": {
+    "host": "Box overlayfs (development evidence — AC re-run on local ext4 /opt/x-data-mcp-preview still required)",
+    "profile": "release",
+    "sqlite": "3.53.2",
+    "corpus": "retained gen-2 full market: 11,801 symbols / 29,136,493 bars"
+  },
+  "implementation": {
+    "typed_entry": "SqliteCompactMarket::commit_collection_batch(&[CollectionCandidate]) — single Immediate transaction per collection task: StartItem transitions, typed stage (single-pass CompactBar encode accumulating count/bounds/unit flags, content-addressed segments, checkpoint projection digest, draft static + unit checks), staged->validated->published state transitions without redundant stored-chain re-verification (same transaction, facts cannot change), typed publication_results + task_publications + head CAS + item finish",
+    "trait": "DailyCollectionRepository::commit_collection_batch default None -> legacy keeps the envelope path; MarketBackend dispatches to compact",
+    "runner": "TdxDailyRunner::run_items produces candidates via the same binding/head/materialize/validate checks as run_item minus envelope construction; items that cannot produce a candidate fall back to run_item so outcome recording and crash reconciliation are unchanged",
+    "worker": "start_collection branch tries run_items first with the bound generation_id (env mode binds manifest_sha256); None falls back to the per-item loop",
+    "failure_semantics": "content-level candidate failures finish the item as failed inside the batch transaction without aborting it; structural errors roll the whole batch back for per-item retry isolation"
+  },
+  "measurement": {
+    "initial_wall_s": 174.165,
+    "per_item_ms": 14.8,
+    "items_committed": 11783,
+    "items_failed": 18,
+    "failure_cause": "identical real-data violations as the envelope path (.day member malformed, OHLC out-of-bounds, empty members)",
+    "previous_wall_s_envelope": 3180,
+    "speedup": "18.3x",
+    "db_bytes_after_checkpoint": 1405128704,
+    "bytes_per_bar": 48.2,
+    "rss_peak_bytes": 561135616,
+    "wal_after_checkpoint": 0
+  },
+  "equivalence": {
+    "unit_test": "typed_collection_batch_is_byte_equal_to_envelope_path — bar_segments/segment_bars/version_checkpoint_clips/source_bindings/evidence_bundles/effective_heads rows byte-identical; data_versions identical except publish stamp; integrity and result digests equal under shared stamp/task id",
+    "full_market_cross_db": "all 11,783 manifest_mode=1 checkpoint versions: projection_digest, record_count, first/last day, coverage_status, source_binding_digest, evidence_digest byte-identical to the envelope-path S5B database; integrity_check ok on both"
+  },
+  "gates": {
+    "initial_wall_hard_20min": "PASS (2.9min)",
+    "initial_wall_target_10min": "PASS",
+    "capacity_regression": "NONE — byte-identical rows, 48.2 B/bar, RSS 535MiB, WAL bounded to 0",
+    "lib_tests": "250 passed, 0 failed",
+    "clippy": "clean -D warnings",
+    "fmt": "clean"
+  },
+  "limits": [
+    "member parse still serial inside the gather phase (~40ms/item of the 174s wall) — prefetch/pipelining is a further optimization, not required by the gate",
+    "production runner path uses run_items only for start_collection; update/yearly/republish paths unchanged"
+  ]
+}
