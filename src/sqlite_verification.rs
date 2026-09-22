@@ -220,6 +220,20 @@ const DURABLE_EFFECTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM publication_batch
                  UNION ALL SELECT 1 FROM task_publications WHERE task_id=?1
                  UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1
                  UNION ALL SELECT 1 FROM yearly_execution_results WHERE task_id=?1)";
+/// Schema-19 drops `publication_batches`/`yearly_execution_results`; their
+/// receipts live in `publication_results` instead.
+const DURABLE_EFFECTS_SQL_COMPACT: &str =
+    "SELECT EXISTS(SELECT 1 FROM task_publications WHERE task_id=?1
+                 UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1
+                 UNION ALL SELECT 1 FROM publication_results WHERE task_id=?1)";
+fn durable_effects(c: &Connection, task_id: &str) -> Result<bool, Error> {
+    let sql = if crate::sqlite_market::is_compact_schema(c).map_err(storage)? {
+        DURABLE_EFFECTS_SQL_COMPACT
+    } else {
+        DURABLE_EFFECTS_SQL
+    };
+    c.query_row(sql, [task_id], |r| r.get(0)).map_err(storage)
+}
 impl crate::task_verification::never_started::EvidenceRepository for SqliteTasks {
     fn never_started_facts(
         &self,
@@ -227,9 +241,7 @@ impl crate::task_verification::never_started::EvidenceRepository for SqliteTasks
     ) -> Result<crate::task_verification::never_started::Facts, Error> {
         self.read(|c| {
             let snapshot = read_bound_task(c, task_id)?.ok_or(Error::TaskNotFound)?;
-            let has_durable_effects = c
-                .query_row(DURABLE_EFFECTS_SQL, [task_id], |r| r.get(0))
-                .map_err(storage)?;
+            let has_durable_effects = durable_effects(c, task_id)?;
             Ok(crate::task_verification::never_started::Facts {
                 snapshot,
                 has_durable_effects,
@@ -254,9 +266,14 @@ impl crate::task_verification::determinate::EvidenceRepository for SqliteTasks {
                 .map_err(storage)?;
             let mut stmt = c
                 .prepare(
-                    "SELECT item_id FROM market_update_results WHERE task_id=?1
-                     UNION SELECT item_id FROM yearly_execution_results WHERE task_id=?1
-                     UNION SELECT item_id FROM publication_batches WHERE task_id=?1",
+                    if crate::sqlite_market::is_compact_schema(c).map_err(storage)? {
+                        "SELECT item_id FROM market_update_results WHERE task_id=?1
+                         UNION SELECT item_id FROM publication_results WHERE task_id=?1"
+                    } else {
+                        "SELECT item_id FROM market_update_results WHERE task_id=?1
+                         UNION SELECT item_id FROM yearly_execution_results WHERE task_id=?1
+                         UNION SELECT item_id FROM publication_batches WHERE task_id=?1"
+                    },
                 )
                 .map_err(storage)?;
             let committed_items = stmt
@@ -264,9 +281,7 @@ impl crate::task_verification::determinate::EvidenceRepository for SqliteTasks {
                 .map_err(storage)?
                 .collect::<Result<std::collections::BTreeSet<_>, _>>()
                 .map_err(storage)?;
-            let has_durable_effects = c
-                .query_row(DURABLE_EFFECTS_SQL, [task_id], |r| r.get(0))
-                .map_err(storage)?;
+            let has_durable_effects = durable_effects(c, task_id)?;
             Ok(crate::task_verification::determinate::Facts {
                 snapshot,
                 started_items,

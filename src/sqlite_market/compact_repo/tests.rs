@@ -605,6 +605,30 @@ fn backend_dispatch_and_compact_supply_surface() {
     // verify_versions round-trips the same snapshot digests.
     supply.verify(&[infos[0].version_ref.clone()]).unwrap();
 
+    // Schema-19 task facts: progress inspection reads typed
+    // `publication_results`/`market_update_results`, not the dropped
+    // `yearly_execution_results`/`publication_batches` tables.
+    use crate::data_supply::observe::ObservationRepository;
+    let facts = supply.task(&task_id, &access).unwrap();
+    assert_eq!(facts.request_id, "req-1");
+    assert_eq!(facts.publications.len(), 1);
+    assert!(facts.range_results.is_empty());
+    assert!(facts.yearly_results.is_empty());
+
+    // Stopped-write evidence adapters read the same compact result tables.
+    use crate::task_verification::determinate::EvidenceRepository as _;
+    use crate::task_verification::never_started::EvidenceRepository as _;
+    assert!(
+        backend
+            .tasks()
+            .never_started_facts(&task_id)
+            .unwrap()
+            .has_durable_effects
+    );
+    let determinate = backend.tasks().determinate_facts(&task_id).unwrap();
+    assert!(determinate.has_durable_effects);
+    assert!(determinate.committed_items.contains(ITEM));
+
     // The compact backend's task handle is coordinator-bound: legacy
     // SqliteTasks callers (task control, verification adapters) work on a
     // schema-19 database without touching check_schema's v18 gate.

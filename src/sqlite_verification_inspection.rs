@@ -145,7 +145,22 @@ fn read_facts(c: &Connection, id: &str) -> Result<Facts, Error> {
     if target.task.status == Status::Succeeded && completion_digest.is_none() {
         return Err(integrity("successful verification lacks its receipt"));
     }
-    let has_business_effects:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM publication_batches WHERE task_id=?1 UNION ALL SELECT 1 FROM task_publications WHERE task_id=?1 UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1 UNION ALL SELECT 1 FROM yearly_execution_results WHERE task_id=?1)",[id],|r|r.get(0)).map_err(storage)?;
+    let has_business_effects: bool = c
+        .query_row(
+            if crate::sqlite_market::is_compact_schema(c).map_err(storage)? {
+                "SELECT EXISTS(SELECT 1 FROM task_publications WHERE task_id=?1 \
+                 UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1 \
+                 UNION ALL SELECT 1 FROM publication_results WHERE task_id=?1)"
+            } else {
+                "SELECT EXISTS(SELECT 1 FROM publication_batches WHERE task_id=?1 \
+                 UNION ALL SELECT 1 FROM task_publications WHERE task_id=?1 \
+                 UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1 \
+                 UNION ALL SELECT 1 FROM yearly_execution_results WHERE task_id=?1)"
+            },
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
     let registration = crate::sqlite_verification_runtime::read_registration(c, &target)?;
     let finished = target.task.status.terminal();
     Ok(Facts {

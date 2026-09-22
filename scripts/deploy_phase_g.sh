@@ -266,6 +266,9 @@ if [[ -f "$DB" ]]; then
     mv "$DB" "$DB_ARCHIVED" || fail "archive existing market db"
     rm -f "$DB-shm" "$DB-wal" || true
 fi
+# The data socket's owner marker binds the previous database inode; the
+# fresh init19 file is a new identity, so rebind deliberately.
+rm -f "$SOCK_DATA.owner.json" || fail "clear stale endpoint owner"
 init_out=$("$RELEASE_DIR/bin/task_sqlite" init19 "$DB") || fail "task_sqlite init19"
 [[ "$init_out" == *"task schema 19 ready"* ]] || fail "init19 did not report schema 19"
 chmod 600 "$DB" || fail "chmod private market db"
