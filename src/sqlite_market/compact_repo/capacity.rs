@@ -731,6 +731,141 @@ fn phase_append(
     })
 }
 
+/// Ops-first adapter day: uses the incremental contract
+/// (`stage_ops_delta` + `validate_staged` + `commit_ops_update`) — the
+/// proposed production update shape. Task/item/binding semantics are
+/// identical to `phase_append`.
+fn phase_append_ops(
+    repo: &SqliteCompactMarket,
+    symbols: &[String],
+    db: &Path,
+    day_index: u64,
+    item_limit: u64,
+) -> Value {
+    let db_before = db_bytes(db);
+    let started = Instant::now();
+    let mut items_done = 0usize;
+    let mut wal_peak = wal_bytes(db);
+    let published = published_entities(repo);
+    let all_active: Vec<String> = symbols
+        .iter()
+        .filter(|s| published.contains(*s))
+        .cloned()
+        .collect();
+    let limit = if item_limit > 0 {
+        (item_limit as usize).min(all_active.len())
+    } else {
+        all_active.len()
+    };
+    let active: Vec<String> = if limit == all_active.len() {
+        all_active.clone()
+    } else {
+        let offset = ((day_index - 1) as usize * limit) % all_active.len();
+        all_active
+            .iter()
+            .cycle()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect()
+    };
+    for (chunk_index, batch) in active.chunks(TASK_ITEMS).enumerate() {
+        let items: Vec<(String, String)> = batch
+            .iter()
+            .map(|s| {
+                (
+                    format!("item-{s}"),
+                    task_control::legacy::scope_id(s, "day"),
+                )
+            })
+            .collect();
+        let task_id =
+            accept_phase_task(repo, &format!("req-ops-{day_index}-{chunk_index}"), &items);
+        let mut head = repo.task_head(&task_id).unwrap();
+        let task_items: Vec<String> = repo
+            .task(&task_id)
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.spec.item_id.clone())
+            .collect();
+        for item_id in &task_items {
+            let symbol = item_id.strip_prefix("item-").unwrap();
+            start_head_item(repo, &mut head, item_id);
+            let done: bool = repo
+                .read(|c| {
+                    c.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM market_update_results \
+                         WHERE task_id=?1 AND item_id=?2)",
+                        params![task_id, item_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(storage)
+                })
+                .unwrap();
+            if !done {
+                let head_id = head_version_id(repo, symbol).unwrap();
+                let version_id = format!("v{day_index}-{symbol}-ops");
+                let last_day: i64 = repo
+                    .read(|c| {
+                        c.query_row(
+                            "SELECT v.last_day FROM effective_heads h \
+                             JOIN data_versions v ON v.version_key=h.version_key \
+                             WHERE h.entity=?1 AND h.period=1 AND h.adjustment=1",
+                            [symbol],
+                            |r| r.get(0),
+                        )
+                        .map_err(storage)
+                    })
+                    .unwrap();
+                let day = next_trading_day(compact_market::epoch_date(last_day).unwrap());
+                let bar = Bar {
+                    date: day,
+                    open: rust_decimal::Decimal::new(10000, 2),
+                    high: rust_decimal::Decimal::new(10025, 2),
+                    low: rust_decimal::Decimal::new(9975, 2),
+                    close: rust_decimal::Decimal::new(10010, 2),
+                    volume: Some(rust_decimal::Decimal::new(1_500_000, 0)),
+                    amount: Some(rust_decimal::Decimal::new(150_225_000, 0)),
+                    r7_raw: None,
+                };
+                repo.stage_ops_delta(symbol, &head_id, &version_id, &[bar], &[])
+                    .unwrap();
+                repo.validate_staged(&version_id).unwrap();
+                repo.commit_ops_update(
+                    &format!("upd-ops-{day_index}-{symbol}"),
+                    &task_id,
+                    item_id,
+                    &head_id,
+                    &version_id,
+                    head.state_revision,
+                    RUN,
+                    &task_control::legacy::scope_id(symbol, "day"),
+                )
+                .unwrap();
+                head.state_revision += 1;
+                head.counts.running -= 1;
+                head.counts.finished += 1;
+                head.counts.succeeded += 1;
+            }
+            items_done += 1;
+            wal_peak = wal_peak.max(wal_bytes(db));
+        }
+    }
+    let metrics = repo.checkpoint_idle().unwrap();
+    json!({
+        "day_index": day_index,
+        "mode": "ops",
+        "items": items_done,
+        "symbols_active": active.len(),
+        "wall_s": started.elapsed().as_secs_f64(),
+        "db_growth_bytes": db_bytes(db).saturating_sub(db_before),
+        "wal_peak_bytes": wal_peak,
+        "wal_after_checkpoint": wal_bytes(db),
+        "checkpoint": format!("{metrics:?}"),
+    })
+}
+
 /// Primitive soak day: identical physical artifacts to the adapter path
 /// (same segment/delta/version/result/task rows, same binding and head
 /// semantics) but skips the harness-side `fixed()`/envelope CPU that does
@@ -1179,7 +1314,9 @@ fn s5b_retained_capacity() {
             .cloned()
             .unwrap_or_default();
         for day in (done + 1)..=soak_days {
-            let out = if soak_mode == "primitive" {
+            let out = if soak_mode == "ops" {
+                phase_append_ops(&repo, &symbols, &db, day + 1, soak_items)
+            } else if soak_mode == "primitive" {
                 phase_soak_primitive(&repo, &symbols, &db, day + 1, soak_items)
             } else {
                 phase_append(

@@ -28,7 +28,8 @@ use crate::compact_market::{
 };
 use crate::local_runtime::DatabaseLease;
 use crate::market_data::{
-    Adjustment, Bar, CoverageEvidence, MarketDataBatch, Period, Provenance, SnapshotInputBinding,
+    Adjustment, Bar, CoverageEvidence, CoverageStatus, MarketDataBatch, Period, Provenance,
+    SnapshotInputBinding,
 };
 use crate::market_storage::compat::{self, CheckedRecord};
 use crate::market_storage::{
@@ -105,6 +106,191 @@ impl SqliteCompactMarket {
     }
     fn tx<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {
         self.coordinator.transaction(f)
+    }
+
+    /// Ops-first delta stage: the update runner supplies the changed bars
+    /// and removed days for an existing published head instead of a
+    /// full-history envelope. The draft reuses the base version's
+    /// source binding / coverage / version evidence (same generation).
+    /// Returns the staged version key.
+    pub(crate) fn stage_ops_delta(
+        &self,
+        entity: &str,
+        base_version_id: &str,
+        version_id: &str,
+        upserts: &[Bar],
+        removes: &[NaiveDate],
+    ) -> Result<i64, Error> {
+        self.tx(|c| {
+            let base_key = version_key(c, base_version_id)?;
+            let base_facts = compact_versions::result_facts(c, base_key)?;
+            if base_facts.state != CompactVersionState::Published {
+                return Err(integrity("ops-delta base version is not published"));
+            }
+            if base_facts.entity != entity || base_facts.period != Period::Day {
+                return Err(integrity("ops-delta base entity/period mismatch"));
+            }
+            let (cov, evd): (i64, Vec<u8>) = c
+                .query_row(
+                    "SELECT coverage_status, evidence_digest FROM data_versions \
+                     WHERE version_key=?1",
+                    [base_key],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(storage)?;
+            let coverage_status = match cov {
+                1 => CoverageStatus::Complete,
+                2 => CoverageStatus::Incomplete,
+                _ => CoverageStatus::Unknown,
+            };
+            let mut bars: Vec<CompactBar> = upserts
+                .iter()
+                .map(|b| CompactBar::from_bar(b, Period::Day).map_err(integrity))
+                .collect::<Result<_, _>>()?;
+            bars.sort_by_key(|b| b.trade_day);
+            if bars.windows(2).any(|w| w[0].trade_day >= w[1].trade_day) {
+                return Err(integrity("ops-delta upserts are not strictly increasing"));
+            }
+            let mut ops = Vec::new();
+            for chunk in bars.chunks(512) {
+                let segment = compact_v19::insert_segment(c, entity, Period::Day, chunk)?;
+                ops.push(StoredDelta {
+                    range_start_day: chunk[0].trade_day,
+                    range_end_day: chunk[chunk.len() - 1].trade_day,
+                    kind: StoredDeltaKind::Upsert(StoredClip {
+                        segment_key: segment.key,
+                        clip: compact_market::SegmentClip {
+                            segment_digest: segment.digest,
+                            clip_start_day: chunk[0].trade_day,
+                            clip_end_day: chunk[chunk.len() - 1].trade_day,
+                            row_count: chunk.len() as u32,
+                        },
+                    }),
+                });
+            }
+            for day in removes {
+                let trade_day = compact_market::epoch_day(*day);
+                ops.push(StoredDelta {
+                    range_start_day: trade_day,
+                    range_end_day: trade_day,
+                    kind: StoredDeltaKind::Remove,
+                });
+            }
+            ops.sort_by_key(|o| o.range_start_day);
+            let draft = VersionDraft {
+                version_id: version_id.into(),
+                entity: entity.into(),
+                period: Period::Day,
+                source_binding_digest: base_facts.source_binding_digest,
+                coverage_status,
+                evidence_digest: evd
+                    .try_into()
+                    .map_err(|_| integrity("stored evidence digest is malformed"))?,
+                created_at: Utc::now().to_rfc3339(),
+                yearly_lineage: None,
+            };
+            compact_versions::stage_delta(c, &draft, base_key, &ops)
+        })
+    }
+
+    /// Marks a staged ops-delta version validated (mirrors `mark_validated`
+    /// on the envelope path without materializing a candidate).
+    pub(crate) fn validate_staged(&self, version_id: &str) -> Result<(), Error> {
+        self.tx(|c| compact_versions::mark_validated(c, version_key(c, version_id)?))
+    }
+
+    /// Commits a staged ops-delta update with the same binding / required
+    /// heads / head CAS semantics as the envelope commit path.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn commit_ops_update(
+        &self,
+        result_id: &str,
+        task_id: &str,
+        item_id: &str,
+        base_version_id: &str,
+        result_version_id: &str,
+        expected_revision: u64,
+        run_id: &str,
+        occupancy_key: &str,
+    ) -> Result<Receipt, Error> {
+        self.write(|c| {
+            let base_key = version_key(c, base_version_id)?;
+            let result_key = version_key(c, result_version_id)?;
+            let facts = compact_versions::result_facts(c, result_key)?;
+            if facts.state != CompactVersionState::Validated {
+                return Err(Error::Conflict("candidate is not validated".into()));
+            }
+            let (change, range_start, range_end) = match facts.manifest_mode {
+                ManifestMode::Delta => {
+                    if facts.parent_version_key != Some(base_key) {
+                        return Err(Error::Conflict(
+                            "update result delta is not based on the expected head".into(),
+                        ));
+                    }
+                    let parent = compact_versions::result_facts(c, base_key)?;
+                    let (ops, _, _) =
+                        compact_v19::read_delta(c, result_key, parent.projection_digest)?;
+                    (
+                        MarketUpdateChange::Append {
+                            prefix_bytes: base_count(c, base_key)? * 32,
+                            ops: ops.clone(),
+                        },
+                        ops.first().map(|o| o.range_start_day).unwrap_or(0),
+                        ops.last().map(|o| o.range_end_day).unwrap_or(0),
+                    )
+                }
+                ManifestMode::Checkpoint => {
+                    (MarketUpdateChange::Full, facts.first_day, facts.last_day)
+                }
+            };
+            let mut continuity = json!({
+                "mode": if matches!(change, MarketUpdateChange::Append{..}) {"append"} else {"full"},
+                "base_version_id": base_version_id,
+                "source_binding_digest": hex_bytes(&facts.source_binding_digest),
+            });
+            if let MarketUpdateChange::Append { prefix_bytes, .. } = &change {
+                continuity["prefix_bytes"] = json!(prefix_bytes);
+            }
+            let evidence =
+                compact_versions::put_evidence(c, EvidenceKind::Continuity, &continuity)?;
+            let entity = facts.entity.clone();
+            let stored = compact_results::commit_market_update(
+                c,
+                &MarketUpdateCommit {
+                    result_id: result_id.into(),
+                    task_id: task_id.into(),
+                    item_id: item_id.into(),
+                    base_version_key: base_key,
+                    result_version_key: result_key,
+                    range_start_day: range_start,
+                    range_end_day: range_end,
+                    algorithm_version: UPDATE_ALGORITHM.into(),
+                    source_binding_digest: facts.source_binding_digest,
+                    evidence_digest: evidence,
+                    expected_task_revision: expected_revision,
+                    published_at: Some(Utc::now()),
+                    head: HeadExpectation::Version(base_key),
+                    required_heads: vec![RequiredHead {
+                        entity: entity.clone(),
+                        period: Period::Day,
+                        expected: Some(base_key),
+                    }],
+                    binding: BindingCheck {
+                        run_id: run_id.into(),
+                        entity,
+                        period: Period::Day,
+                        occupancy_key: occupancy_key.into(),
+                    },
+                    change,
+                },
+            )?;
+            Ok(Receipt {
+                publication_id: result_id.into(),
+                version_id: stored.identity.result_version_id.clone(),
+                task_id: task_id.into(),
+                task_revision: stored.identity.task_revision,
+            })
+        })
     }
 }
 

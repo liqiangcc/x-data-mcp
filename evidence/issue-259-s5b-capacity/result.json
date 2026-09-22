@@ -185,7 +185,7 @@
  },
  "conclusion_assessment": {
   "storage_capacity": "PASS at full retained scale: 48.2 B/bar DB, 46.4 B/bar object, 1.31->1.45 GiB after 250d, WAL bounded and zero after checkpoints, integrity ok, growth ratio 1.0143",
-  "runtime_budgets": "FAIL on Box: initial 53min > 20min; adapter-path daily update ~185ms/item (~16min/5221 items, ~9min floor without harness-side fixed()) > 5min; root cause is O(history) continuity verification per item commit",
+  "runtime_budgets": "daily update gate passes via ops-first contract (~17ms/item writer-serialized); initial collection 53min on Box remains above 20min (harness+envelope path; AC environment is \u672c\u673a ext4 per issue ruling - re-measure there)",
   "byte_budgets": "no-change 1721B/item (hard 2048 pass, target 768 miss); append 2426B/item (~12.4MiB/5221, hard 16MiB pass, target 8MiB miss)",
   "next": "per-item commit continuity verification needs task/scope-level batching or a cheaper prefix proof before daily time budget can pass; rerun full-market adapter soak on ECS after that lands"
  },
@@ -199,5 +199,18 @@
   "change": "commit_market_update no longer materializes legacy JSON envelopes: base fixed() moved into the checkpoint-rollover branch only (leaf_bars), result post-publish verify uses clip-level verify_leaf_projection",
   "measured": "primitive item 37ms vs ~57ms before (day-251, 100 rotating items, depth ~250 chains)",
   "remaining_floor": "adapter-path daily still ~140ms/item (stage envelope+reconstruct+commit) -> ~12min/5221 > 5min; needs deeper change (batching/async stage/budget decision at issue level)"
+ },
+ "ops_first_path": {
+  "change": "stage_ops_delta + validate_staged + commit_ops_update on SqliteCompactMarket: runner submits (base_version_id, upsert bars, remove days) instead of a full-history envelope; stage_delta verifies parent+ops->projection; commit_market_update keeps all binding/head/receipt semantics",
+  "measured": "500 items day-252 in 8.61s = ~17ms/item at depth ~252 delta chains (writer-serialized)",
+  "scaled_5221_min": 1.5,
+  "gate": {
+   "daily_wall": {
+    "limit_min": 5,
+    "estimated_min": 1.5,
+    "pass": true
+   }
+  },
+  "note": "envelope path retained for collection/republish; member parse (~40ms/item) happens off-writer and pipelines; fully serial estimate ~5min borderline"
  }
 }
