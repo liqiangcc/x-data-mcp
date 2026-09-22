@@ -1576,7 +1576,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "x-data-mcp"
-version = "0.2.0-preview.17"
+version = "0.2.0-preview.18"
 dependencies = [
  "chrono",
  "encoding_rs",
