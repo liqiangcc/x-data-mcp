@@ -58,10 +58,10 @@ impl CompactBar {
             .map_err(|_| invalid("stored amount is not a decimal"))?;
         Ok(Bar {
             date: epoch_date(self.trade_day)?,
-            open: Decimal::from(self.open_cents) / Decimal::from(100),
-            high: Decimal::from(self.high_cents) / Decimal::from(100),
-            low: Decimal::from(self.low_cents) / Decimal::from(100),
-            close: Decimal::from(self.close_cents) / Decimal::from(100),
+            open: Decimal::new(self.open_cents, 2),
+            high: Decimal::new(self.high_cents, 2),
+            low: Decimal::new(self.low_cents, 2),
+            close: Decimal::new(self.close_cents, 2),
             volume: self.volume.map(Decimal::from),
             amount,
             r7_raw: self.r7_raw,
