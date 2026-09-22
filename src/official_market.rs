@@ -884,6 +884,74 @@ impl TdxRangeProvider<'_> {
     }
 }
 
+/// Measurement-harness provider (#259 S5G-7): delegates the typed
+/// acquisition to the real `TdxRangeProvider` — member read, sha256,
+/// continuity probe, event digest, validations all run for real — then
+/// substitutes a fabricated one-bar tail so the Append commit path is
+/// exercised against an unchanged snapshot. The fabricated tail is
+/// marked in the evidence; no production path uses this provider.
+#[cfg(test)]
+pub struct FabricatedAppendProvider<'a> {
+    pub inner: TdxRangeProvider<'a>,
+    /// Wall time spent inside the real `acquire_typed` call.
+    pub acquire_ns: std::cell::Cell<u64>,
+}
+#[cfg(test)]
+impl RangeProvider for FabricatedAppendProvider<'_> {
+    fn acquire(
+        &self,
+        base: &CheckedRecord,
+        range: &DateRange,
+        candidate_id: &str,
+    ) -> Result<Acquisition, SourceError> {
+        self.inner.acquire(base, range, candidate_id)
+    }
+    fn acquire_typed(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &crate::market_update::DateRange,
+    ) -> Result<Option<crate::market_update::runner::TypedAcquisition>, SourceError> {
+        let started = std::time::Instant::now();
+        let acquired = self.inner.acquire_typed(facts, base_window, range);
+        self.acquire_ns
+            .set(self.acquire_ns.get() + started.elapsed().as_nanos() as u64);
+        let Some(mut acquired) = acquired? else {
+            return Ok(None);
+        };
+        let next_day = facts.last_day + chrono::Duration::days(1);
+        if next_day > range.end {
+            return Ok(None);
+        }
+        let upsert = Bar {
+            date: next_day,
+            open: rust_decimal::Decimal::new(10000, 2),
+            high: rust_decimal::Decimal::new(10025, 2),
+            low: rust_decimal::Decimal::new(9975, 2),
+            close: rust_decimal::Decimal::new(10010, 2),
+            volume: Some(rust_decimal::Decimal::new(1_500_000, 0)),
+            amount: Some(rust_decimal::Decimal::new(150_225_000, 0)),
+            r7_raw: None,
+        };
+        acquired.decision = crate::market_update::runner::TypedDecision::Append {
+            upserts: vec![upsert.clone()],
+        };
+        if let Some(continuity) = acquired.evidence.continuity.as_mut() {
+            continuity.mode = "append".into();
+        }
+        acquired.evidence.candidate_sha256 = crate::hash::sha256(
+            serde_json::json!({"harness_fabricated_tail": [upsert.date.to_string()]})
+                .to_string()
+                .as_bytes(),
+        );
+        acquired
+            .evidence
+            .same_qfq_basis_ref
+            .push_str(" + harness fabricated tail");
+        Ok(Some(acquired))
+    }
+}
+
 /// Digest/identity context a continuity-proof update carries into its
 /// combined candidate evidence.
 struct ContinuityCtx<'a> {

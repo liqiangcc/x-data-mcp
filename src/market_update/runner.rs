@@ -315,7 +315,8 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
     /// path; `Err` does the same through the caller's fallback list.
     /// The pair's second element carries the frozen inputs of
     /// default-contract items for post-commit gap coverings.
-    fn update_candidate(
+    /// `pub(crate)` for the capacity harness's phase timing (#259 S5G-7).
+    pub(crate) fn update_candidate(
         &self,
         task_id: &str,
         item_id: &str,

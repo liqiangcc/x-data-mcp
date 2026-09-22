@@ -646,6 +646,181 @@ fn phase_nochange(repo: &SqliteCompactMarket, symbols: &[String], db: &Path) -> 
     })
 }
 
+/// Accept an `update_data`/explicit-contract task without pre-claiming:
+/// the batch commit claims inside its transaction (#259 S5G-6).
+fn accept_update_phase_task(
+    repo: &SqliteCompactMarket,
+    request: &str,
+    items: &[(String, String, String, crate::market_update::DateRange)],
+) -> String {
+    let scopes: BTreeSet<String> = items.iter().map(|(_, scope, _, _)| scope.clone()).collect();
+    let work = FrozenWork {
+        items: items
+            .iter()
+            .map(|(item_id, scope, base_id, range)| ItemSpec {
+                item_id: item_id.clone(),
+                target: json!({
+                    "symbol": item_id.strip_prefix("item-").unwrap_or_default(),
+                    "period": "day",
+                }),
+                progress_unit: "security_period".into(),
+                frozen_inputs: json!({
+                    "base_version_id": base_id,
+                    "range": {"start": range.start, "end": range.end},
+                }),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            })
+            .collect(),
+        scopes,
+        shared_evidence: None,
+    };
+    let command = Command {
+        key: CommandKey {
+            operation: "update_data".into(),
+            dataset: "market.daily".into(),
+            contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+        },
+        intent: json!({}),
+    };
+    let acceptance = repo.accept(request, &command, &work, RUN, None).unwrap();
+    match acceptance.record.outcome {
+        task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+        _ => panic!("expected task outcome"),
+    }
+}
+
+/// S5G-7 typed daily update through the production runner pieces:
+/// `update_candidate` (binding checks + typed acquire — member read,
+/// sha256, continuity probe, windowed base read) timed separately from
+/// `commit_update_batch` (one write transaction per task). `unchanged`
+/// runs the real `TdxRangeProvider`; `append` wraps it in
+/// `FabricatedAppendProvider` so the stage+commit delta path is
+/// exercised at scale against the unchanged snapshot.
+fn phase_typed(
+    repo: &SqliteCompactMarket,
+    session: &crate::official_market::MaterializeSession<'_>,
+    symbols: &[String],
+    db: &Path,
+    mode: &str,
+) -> Value {
+    let db_before = db_bytes(db);
+    let started = Instant::now();
+    let mut prepare_ns = 0u128;
+    let mut commit_ns = 0u128;
+    let mut accept_ns = 0u128;
+    let mut committed = 0usize;
+    let mut fallback_ran = 0usize;
+    let mut failed_items = 0usize;
+    let mut tasks = 0usize;
+    let mut wal_peak = wal_bytes(db);
+    let published = published_entities(repo);
+    let active: Vec<String> = symbols
+        .iter()
+        .filter(|s| published.contains(*s))
+        .cloned()
+        .collect();
+    let runner = crate::market_update::runner::RangeRunner {
+        repository: repo.clone(),
+        run_id: RUN.into(),
+    };
+    let real = crate::official_market::TdxRangeProvider {
+        session,
+        published_at: Utc::now(),
+    };
+    let fabricated = crate::official_market::FabricatedAppendProvider {
+        inner: crate::official_market::TdxRangeProvider {
+            session,
+            published_at: Utc::now(),
+        },
+        acquire_ns: std::cell::Cell::new(0),
+    };
+    let provider: &dyn crate::market_update::runner::RangeProvider =
+        if mode == "append" { &fabricated } else { &real };
+    for (chunk_index, batch) in active.chunks(TASK_ITEMS).enumerate() {
+        let mut specs = Vec::with_capacity(batch.len());
+        for symbol in batch {
+            let head_id = head_version_id(repo, symbol).unwrap();
+            let last_day: i64 = repo
+                .read(|c| {
+                    c.query_row(
+                        "SELECT v.last_day FROM effective_heads h \
+                         JOIN data_versions v ON v.version_key=h.version_key \
+                         WHERE h.entity=?1 AND h.period=1 AND h.adjustment=1",
+                        params![symbol],
+                        |r| r.get(0),
+                    )
+                    .map_err(storage)
+                })
+                .unwrap();
+            let last = compact_market::epoch_date(last_day).unwrap();
+            specs.push((
+                format!("item-{symbol}"),
+                task_control::legacy::scope_id(symbol, "day"),
+                head_id,
+                crate::market_update::DateRange {
+                    start: last - chrono::Duration::days(30),
+                    end: last + chrono::Duration::days(30),
+                },
+            ));
+        }
+        let t = Instant::now();
+        let task_id =
+            accept_update_phase_task(repo, &format!("req-typed-{mode}-{chunk_index}"), &specs);
+        accept_ns += t.elapsed().as_nanos();
+        let item_ids: Vec<String> = specs.iter().map(|s| s.0.clone()).collect();
+        let t = Instant::now();
+        let mut prepared = Vec::with_capacity(item_ids.len());
+        let mut fallbacks = Vec::new();
+        for item_id in &item_ids {
+            match runner.update_candidate(&task_id, item_id, provider) {
+                Ok(Some((item, _))) => prepared.push(item),
+                Ok(None) | Err(_) => fallbacks.push(item_id.clone()),
+            }
+        }
+        prepare_ns += t.elapsed().as_nanos();
+        if !prepared.is_empty() {
+            let t = Instant::now();
+            let results = repo.commit_update_batch(&task_id, &prepared).unwrap();
+            commit_ns += t.elapsed().as_nanos();
+            for (item, result) in prepared.iter().zip(results) {
+                match result {
+                    Ok(_) => committed += 1,
+                    Err(_) => {
+                        failed_items += 1;
+                        fallbacks.push(item.item_id.clone());
+                    }
+                }
+            }
+        }
+        for item_id in fallbacks {
+            runner.run_item(&task_id, &item_id, provider).ok();
+            fallback_ran += 1;
+        }
+        tasks += 1;
+        wal_peak = wal_peak.max(wal_bytes(db));
+    }
+    let metrics = repo.checkpoint_idle().unwrap();
+    json!({
+        "mode": mode,
+        "items_committed": committed,
+        "items_failed_in_batch": failed_items,
+        "fallback_items": fallback_ran,
+        "symbols_active": active.len(),
+        "tasks": tasks,
+        "wall_s": started.elapsed().as_secs_f64(),
+        "accept_ms": accept_ns as f64 / 1e6,
+        "prepare_ms": prepare_ns as f64 / 1e6,
+        "provider_acquire_ms": fabricated.acquire_ns.get() as f64 / 1e6,
+        "commit_ms": commit_ns as f64 / 1e6,
+        "per_item_ms": started.elapsed().as_secs_f64() * 1000.0 / active.len().max(1) as f64,
+        "db_growth_bytes": db_bytes(db).saturating_sub(db_before),
+        "wal_peak_bytes": wal_peak,
+        "wal_after_checkpoint": wal_bytes(db),
+        "checkpoint": format!("{metrics:?}"),
+        "peak_rss_bytes": rss_bytes(),
+    })
+}
+
 fn next_trading_day(day: NaiveDate) -> NaiveDate {
     use chrono::Datelike;
     let mut d = day + chrono::Duration::days(1);
@@ -1377,6 +1552,21 @@ fn s5b_retained_capacity() {
         if done + days.len() as u64 >= soak_days {
             report.complete("soak", &dir);
         }
+    }
+    if all("typed") {
+        // S5G-7: unchanged first (no-change commits), then append —
+        // the fabricated tails move the heads one fabricated day.
+        if !report.done("typed_unchanged") {
+            let out = phase_typed(&repo, &session, &symbols, &db, "unchanged");
+            report.set("typed_unchanged", out);
+            report.complete("typed_unchanged", &dir);
+        }
+        if !report.done("typed_append") {
+            let out = phase_typed(&repo, &session, &symbols, &db, "append");
+            report.set("typed_append", out);
+            report.complete("typed_append", &dir);
+        }
+        report.complete("typed", &dir);
     }
     if all("verify") && !report.done("verify") {
         drop(repo);
