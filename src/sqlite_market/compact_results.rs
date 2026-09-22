@@ -144,14 +144,12 @@ pub(crate) fn commit_market_update(
     if base.state != CompactVersionState::Published {
         return Err(integrity("update base version is not published"));
     }
-    let base_fixed = compact_versions::fixed(&tx, &base.version_id)?;
     compact_versions::verified_source_binding(&tx, &command.source_binding_digest)?;
     if compact_versions::verified_evidence_kind(&tx, &command.evidence_digest)?
         != EvidenceKind::Continuity
     {
         return Err(integrity("market update evidence is not continuity"));
     }
-    let base_compact = compact_bars(&base_fixed)?;
     let plan = plan_market_update(&tx, command, &base)?;
     register_result(&tx, &command.result_id, REGISTRY_MARKET_UPDATE)?;
     require_item_unused(&tx, &command.task_id, &command.item_id)?;
@@ -162,10 +160,17 @@ pub(crate) fn commit_market_update(
             .published_at
             .ok_or_else(|| integrity("published update lacks published_at"))?;
         compact_versions::publish(&tx, plan.result.key, published_at)?;
-        compact_versions::fixed(&tx, &plan.result.version_id)?;
+        // Clip-level verified read: the staged version was fully verified
+        // at stage time; publish only flips state, so re-verifying the
+        // stored projection digests is sufficient here (the legacy JSON
+        // envelope is not needed on the commit path).
+        compact_versions::verify_leaf_projection(&tx, plan.result.key)?;
         if plan.continuity == ContinuityMode::Append
             && plan.result.manifest_mode == ManifestMode::Checkpoint
         {
+            // Delta-chain rollover materialized a checkpoint from
+            // base+ops at stage time; verify that identity at clip level.
+            let base_compact = compact_versions::leaf_bars(&tx, base.key)?;
             let applied = compact_versions::apply_stored_delta(
                 &tx,
                 &base_compact,
@@ -173,7 +178,7 @@ pub(crate) fn commit_market_update(
                 &plan.result.entity,
                 plan.result.period,
             )?;
-            let actual = compact_bars(&compact_versions::fixed(&tx, &plan.result.version_id)?)?;
+            let actual = compact_versions::leaf_bars(&tx, plan.result.key)?;
             if applied != actual {
                 return Err(integrity("checkpoint append does not match base plus ops"));
             }

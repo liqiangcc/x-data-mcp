@@ -561,6 +561,20 @@ fn reconstruct_leaf(c: &Connection, key: i64) -> Result<(VersionRow, Vec<Compact
     Ok((row, bars))
 }
 
+/// Clip-level verified read of a leaf version: reconstructs the
+/// projection and verifies the stored published-node digests without
+/// materializing the legacy JSON envelope.
+pub(crate) fn verify_leaf_projection(c: &Connection, key: i64) -> Result<(), Error> {
+    let (row, bars) = reconstruct_leaf(c, key)?;
+    verify_published_node(c, &row, &bars)?;
+    Ok(())
+}
+
+/// Leaf projection bars at clip level (no legacy JSON envelope).
+pub(crate) fn leaf_bars(c: &Connection, key: i64) -> Result<Vec<CompactBar>, Error> {
+    Ok(reconstruct_leaf(c, key)?.1)
+}
+
 fn reconstruct_version(
     c: &Connection,
     leaf_key: i64,

@@ -798,6 +798,8 @@ S5A-2 执行结果（2026-09-21）：`SqliteCompactMarket` 已实现并覆盖 `T
 
 **硬门结论**：容量全部通过；**时间门失败**——initial 53min>20min、日更 ~185ms/item（去掉 harness 侧 `fixed()` 后 stage+commit 仍 ~100ms/item → ~9min/5,221）> 5min。根因：每次 item commit 的 continuity 校验对 base 做 O(history) 全量物化（`commit_market_update` 内 `fixed()`），`stage_delta` 再做 `reconstruct_leaf`。需要按 task/scope 批量化的 continuity 校验或更廉价的 prefix proof——Issue 级设计决策，未决前不得声称日更时间 AC。证据：`evidence/issue-259-s5b-capacity/result.json`。
 
+**S5C（commit 快路径，已执行）**：`commit_market_update` 不再物化 legacy envelope——base `fixed()` 仅保留在 depth-256 checkpoint-rollover 分支（改用 clip 级 `leaf_bars`），发布后 result 复验改用 clip 级 `verify_leaf_projection`（重算 stored projection/integrity digest，不产 envelope）。staged 版本在 stage 时已做 parent+ops→projection 全量验证且 facts 不可变，commit 侧 digest 级复验保持 fail-closed。primitive item 57ms→37ms（depth ~250 链）。adapter 日更预估 ~140ms/item（stage envelope 为主）→ ~12min/5,221，时间门仍不通过；剩余瓶颈是 stage 的 O(history) envelope+reconstruct，属于 Issue 级决策（批量 stage/异步校验/预算重议）。
+
 ### S6：release 与 ECS
 
 构建固定 release 包，SHA-256 对账后 ECS fresh deploy；只通过两个 MCP server + repository Skill 执行 generation/status/data workflow。
