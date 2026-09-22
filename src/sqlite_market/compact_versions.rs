@@ -249,6 +249,203 @@ pub(crate) fn stage_delta(
     Ok(key)
 }
 
+/// O(ops) append-only delta staging (#259 S5G-8): every op must be a
+/// pure upsert strictly after the parent's last day, so the result
+/// metadata is arithmetic over the parent row and the projection digest
+/// chains O(ops) off `parent.projection_digest` — no parent leaf
+/// materialization, no full merge. The parent's committed digests are
+/// the binding fact (`verify_published_fields` re-checks its row-level
+/// integrity); deep leaf re-verification stays with reads and the
+/// integrity verifier. Non-append shapes must use `stage_delta`.
+pub(crate) fn stage_delta_append(
+    c: &Connection,
+    draft: &VersionDraft,
+    parent_version_key: i64,
+    ops: &[StoredDelta],
+    new_bars: &[CompactBar],
+) -> Result<i64, Error> {
+    check_draft_static(c, draft)?;
+    if ops.is_empty() {
+        return Err(integrity("delta version requires at least one op"));
+    }
+    if draft.period != Period::Day {
+        // Yearly staging needs lineage verification over the full leaf.
+        return Err(integrity("append fast path is daily-only"));
+    }
+    let parent = read_version_row(c, parent_version_key)?
+        .ok_or_else(|| integrity("delta parent version row missing"))?;
+    verify_published_fields(c, &parent)?;
+    if parent.entity != draft.entity || parent.period != draft.period {
+        return Err(integrity("delta parent entity/period mismatch"));
+    }
+    if parent.delta_depth >= MAX_DELTA_DEPTH {
+        return Err(integrity("delta depth bound reached"));
+    }
+    let mut added: i64 = 0;
+    let mut prev_end = parent.last_day;
+    for op in ops {
+        let StoredDeltaKind::Upsert(stored) = &op.kind else {
+            return Err(integrity("append delta carries a non-upsert op"));
+        };
+        if op.range_start_day <= prev_end
+            || op.range_start_day > op.range_end_day
+            || op.range_start_day != stored.clip.clip_start_day
+            || op.range_end_day != stored.clip.clip_end_day
+        {
+            return Err(integrity("append ops overlap the base or each other"));
+        }
+        let segment = compact_v19::read_segment(c, stored.segment_key)?;
+        check_stored_clip(&segment, &stored.clip, &draft.entity, draft.period)?;
+        added = added
+            .checked_add(i64::from(stored.clip.row_count))
+            .ok_or_else(|| integrity("append record_count overflow"))?;
+        prev_end = op.range_end_day;
+    }
+    let plain = delta_ops(ops);
+    let (delta, projection) =
+        compact_market::delta_projection_digest(parent.projection_digest, &plain)
+            .map_err(integrity)?;
+    check_draft_evidence(c, draft, new_bars)?;
+    let key = insert_version_row_stats(
+        c,
+        draft,
+        Some(parent_version_key),
+        2,
+        parent.delta_depth + 1,
+        parent.record_count + added,
+        parent.first_day,
+        prev_end,
+        projection,
+    )?;
+    let (written_delta, written_projection) =
+        compact_v19::write_delta(c, key, parent.projection_digest, ops)?;
+    if written_delta != delta || written_projection != projection {
+        return Err(integrity("persisted delta digest mismatch"));
+    }
+    Ok(key)
+}
+
+/// O(ops) append-only delta verification (#259 S5G-8): decodes the
+/// delta's own ops, re-checks clip/segment digests, the chained
+/// projection and the arithmetic metadata against the parent row, plus
+/// the parent's row-level published integrity. Ancestors stay trusted
+/// as committed facts — reads and the integrity verifier re-verify the
+/// full leaf. `Ok(false)` means the node is not an append-only delta;
+/// the caller must run full chain verification.
+pub(crate) fn verify_delta_append(c: &Connection, version_key: i64) -> Result<bool, Error> {
+    let row = read_version_row(c, version_key)?.ok_or_else(|| integrity("version row missing"))?;
+    if row.manifest_mode != 2 {
+        return Ok(false);
+    }
+    let parent_key = row
+        .parent_version_key
+        .ok_or_else(|| integrity("delta version lacks parent"))?;
+    let parent =
+        read_version_row(c, parent_key)?.ok_or_else(|| integrity("delta parent missing"))?;
+    let (ops, _, projection) = compact_v19::read_delta(c, row.key, parent.projection_digest)?;
+    let mut added: i64 = 0;
+    let mut prev_end = parent.last_day;
+    for op in &ops {
+        let StoredDeltaKind::Upsert(stored) = &op.kind else {
+            return Ok(false);
+        };
+        if op.range_start_day <= prev_end
+            || op.range_start_day > op.range_end_day
+            || op.range_start_day != stored.clip.clip_start_day
+            || op.range_end_day != stored.clip.clip_end_day
+        {
+            return Ok(false);
+        }
+        added += i64::from(stored.clip.row_count);
+        prev_end = op.range_end_day;
+    }
+    verify_published_fields(c, &parent)?;
+    if row.delta_depth != parent.delta_depth + 1
+        || row.entity != parent.entity
+        || row.period != parent.period
+    {
+        return Err(integrity("version chain linkage mismatch"));
+    }
+    if projection != row.projection_digest {
+        return Err(integrity("delta projection digest mismatch"));
+    }
+    if row.record_count != parent.record_count + added
+        || row.first_day != parent.first_day
+        || row.last_day != prev_end
+    {
+        return Err(integrity(
+            "version metadata does not match append projection",
+        ));
+    }
+    let evidence = verify_version_evidence(c, &row.evidence_digest)?;
+    let _ = read_source_binding(c, &row.source_binding_digest)?;
+    let mut new_bars = Vec::new();
+    for op in &ops {
+        let StoredDeltaKind::Upsert(stored) = &op.kind else {
+            unreachable!("checked above")
+        };
+        let segment = compact_v19::read_segment(c, stored.segment_key)?;
+        check_stored_clip(&segment, &stored.clip, &row.entity, row.period)?;
+        new_bars.extend(
+            segment
+                .bars
+                .iter()
+                .filter(|bar| {
+                    bar.trade_day >= stored.clip.clip_start_day
+                        && bar.trade_day <= stored.clip.clip_end_day
+                })
+                .cloned(),
+        );
+    }
+    check_bars_units(&evidence, &new_bars)?;
+    if row.period == Period::Day && stored_lineage(c, row.key)?.is_some() {
+        return Err(integrity("daily version carries yearly lineage"));
+    }
+    Ok(true)
+}
+
+/// Validation for an append-only delta staged by `stage_delta_append`
+/// (#259 S5G-8): the O(ops) node check instead of the full chain
+/// replay. Falls back to `verify_staged` for any other delta shape.
+pub(crate) fn mark_validated_delta(c: &Connection, version_key: i64) -> Result<(), Error> {
+    let row = read_version_row(c, version_key)?.ok_or_else(|| integrity("version row missing"))?;
+    if row.state != 1 {
+        return Err(integrity("version is not staged"));
+    }
+    if !verify_delta_append(c, version_key)? {
+        verify_staged(c, &row)?;
+    }
+    let changed = c
+        .execute(
+            "UPDATE data_versions SET state=2 WHERE version_key=?1 AND state=1",
+            params![version_key],
+        )
+        .map_err(storage)?;
+    if changed != 1 {
+        return Err(integrity("version state transition did not apply"));
+    }
+    Ok(())
+}
+
+/// Publish for an append-only delta (#259 S5G-8): O(ops) node check then
+/// `publish_presumed`. `Ok(None)` means the staged node is not an
+/// append-only delta — the caller must run the full `publish` +
+/// leaf-projection verification path instead.
+pub(crate) fn publish_delta(
+    c: &Connection,
+    version_key: i64,
+    published_at: DateTime<Utc>,
+) -> Result<Option<Digest>, Error> {
+    let row = read_version_row(c, version_key)?.ok_or_else(|| integrity("version row missing"))?;
+    if row.state != 2 {
+        return Err(integrity("version is not validated"));
+    }
+    if !verify_delta_append(c, version_key)? {
+        return Ok(None);
+    }
+    Ok(Some(publish_presumed(c, version_key, published_at)?))
+}
+
 pub(crate) fn mark_validated(c: &Connection, version_key: i64) -> Result<(), Error> {
     let row = read_version_row(c, version_key)?.ok_or_else(|| integrity("version row missing"))?;
     if row.state != 1 {
@@ -1353,6 +1550,34 @@ pub(crate) fn insert_version_row(
     bars: &[CompactBar],
     projection: Digest,
 ) -> Result<i64, Error> {
+    insert_version_row_stats(
+        c,
+        draft,
+        parent_version_key,
+        manifest_mode,
+        delta_depth,
+        bars.len() as i64,
+        bars.first().map(|b| b.trade_day).unwrap_or(0),
+        bars.last().map(|b| b.trade_day).unwrap_or(0),
+        projection,
+    )
+}
+
+/// `insert_version_row` with explicit leaf statistics (#259 S5G-8): the
+/// append-only delta path derives them arithmetically from the parent
+/// row without materializing the projection.
+#[allow(clippy::too_many_arguments)]
+fn insert_version_row_stats(
+    c: &Connection,
+    draft: &VersionDraft,
+    parent_version_key: Option<i64>,
+    manifest_mode: i64,
+    delta_depth: i64,
+    record_count: i64,
+    first_day: i64,
+    last_day: i64,
+    projection: Digest,
+) -> Result<i64, Error> {
     let coverage = match draft.coverage_status {
         CoverageStatus::Complete => 1,
         CoverageStatus::Incomplete => 2,
@@ -1368,9 +1593,9 @@ pub(crate) fn insert_version_row(
             parent_version_key,
             manifest_mode,
             delta_depth,
-            bars.len() as i64,
-            bars.first().map(|b| b.trade_day).unwrap_or(0),
-            bars.last().map(|b| b.trade_day).unwrap_or(0),
+            record_count,
+            first_day,
+            last_day,
             coverage,
             draft.evidence_digest.as_slice(),
             projection.as_slice(),

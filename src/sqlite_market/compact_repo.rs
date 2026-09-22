@@ -224,14 +224,29 @@ impl SqliteCompactMarket {
                 created_at: Utc::now().to_rfc3339(),
                 yearly_lineage: None,
             };
-            compact_versions::stage_delta(c, &draft, base_key, &ops)
+            // O(ops) staging when the delta is a pure tail append
+            // (#259 S5G-8): no parent leaf reconstruction. Anything else
+            // (removes, revisions, overlapping upserts) keeps the full
+            // projection check.
+            let append_only = !bars.is_empty() && removes.is_empty() && {
+                let first = bars.first().unwrap().trade_day;
+                let parent_last = base_facts.last_day;
+                first > parent_last
+            };
+            if append_only {
+                compact_versions::stage_delta_append(c, &draft, base_key, &ops, &bars)
+            } else {
+                compact_versions::stage_delta(c, &draft, base_key, &ops)
+            }
         }
     }
 
     /// Marks a staged ops-delta version validated (mirrors `mark_validated`
-    /// on the envelope path without materializing a candidate).
+    /// on the envelope path without materializing a candidate). Runs the
+    /// O(ops) append-delta check when the staged shape qualifies
+    /// (#259 S5G-8), full chain verification otherwise.
     pub(crate) fn validate_staged(&self, version_id: &str) -> Result<(), Error> {
-        self.tx(|c| compact_versions::mark_validated(c, version_key(c, version_id)?))
+        self.tx(|c| compact_versions::mark_validated_delta(c, version_key(c, version_id)?))
     }
 
     /// Continuity-evidence JSON shared by the ops-first commit paths
@@ -2604,7 +2619,7 @@ fn update_batch_item(
                 &[],
             )
             .and_then(|_| {
-                compact_versions::mark_validated(c, version_key(c, result_version_id)?)?;
+                compact_versions::mark_validated_delta(c, version_key(c, result_version_id)?)?;
                 SqliteCompactMarket::commit_ops_update_tx(
                     c,
                     &item.publication_id,

@@ -172,28 +172,37 @@ pub(crate) fn commit_market_update_tx(
         let published_at = command
             .published_at
             .ok_or_else(|| integrity("published update lacks published_at"))?;
-        compact_versions::publish(c, plan.result.key, published_at)?;
-        // Clip-level verified read: the staged version was fully verified
-        // at stage time; publish only flips state, so re-verifying the
-        // stored projection digests is sufficient here (the legacy JSON
-        // envelope is not needed on the commit path).
-        compact_versions::verify_leaf_projection(c, plan.result.key)?;
-        if plan.continuity == ContinuityMode::Append
-            && plan.result.manifest_mode == ManifestMode::Checkpoint
-        {
-            // Delta-chain rollover materialized a checkpoint from
-            // base+ops at stage time; verify that identity at clip level.
-            let base_compact = compact_versions::leaf_bars(c, base.key)?;
-            let applied = compact_versions::apply_stored_delta(
-                c,
-                &base_compact,
-                &plan.append_ops,
-                &plan.result.entity,
-                plan.result.period,
-            )?;
-            let actual = compact_versions::leaf_bars(c, plan.result.key)?;
-            if applied != actual {
-                return Err(integrity("checkpoint append does not match base plus ops"));
+        // Append-only deltas (#259 S5G-8) publish off the O(ops) node
+        // check — the staged ops were verified against their segments
+        // and the parent's committed digests inside this transaction, so
+        // no leaf reconstruction runs on the update commit path. Any
+        // other shape keeps the full staged-chain + leaf verification.
+        if compact_versions::publish_delta(c, plan.result.key, published_at)?.is_none() {
+            compact_versions::publish(c, plan.result.key, published_at)?;
+            // Clip-level verified read: the staged version was fully
+            // verified at stage time; publish only flips state, so
+            // re-verifying the stored projection digests is sufficient
+            // here (the legacy JSON envelope is not needed on the commit
+            // path).
+            compact_versions::verify_leaf_projection(c, plan.result.key)?;
+            if plan.continuity == ContinuityMode::Append
+                && plan.result.manifest_mode == ManifestMode::Checkpoint
+            {
+                // Delta-chain rollover materialized a checkpoint from
+                // base+ops at stage time; verify that identity at clip
+                // level.
+                let base_compact = compact_versions::leaf_bars(c, base.key)?;
+                let applied = compact_versions::apply_stored_delta(
+                    c,
+                    &base_compact,
+                    &plan.append_ops,
+                    &plan.result.entity,
+                    plan.result.period,
+                )?;
+                let actual = compact_versions::leaf_bars(c, plan.result.key)?;
+                if applied != actual {
+                    return Err(integrity("checkpoint append does not match base plus ops"));
+                }
             }
         }
     }
