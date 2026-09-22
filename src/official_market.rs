@@ -802,10 +802,11 @@ impl TdxRangeProvider<'_> {
                 // base's coverage claim remains exactly true for this
                 // data (same pinning rule as the envelope path).
                 segment.coverage = facts.coverage.clone();
-                // Metadata the ops path cannot carry — a unit change or
-                // a non-complete coverage claim requires the envelope
-                // path's combined-candidate machinery.
-                if segment.unit_currency != facts.unit_currency
+                // Metadata the ops path cannot carry — a unit conflict
+                // or enrichment (`prepare`'s two gates; reason text is
+                // not drift) or a non-complete coverage claim requires
+                // the envelope path's combined-candidate machinery.
+                if crate::market_update::unit_drift(&facts.unit_currency, &segment.unit_currency)
                     || facts.coverage.status != crate::market_data::CoverageStatus::Complete
                 {
                     return Ok(None);
@@ -846,9 +847,14 @@ impl TdxRangeProvider<'_> {
                 // A coverage or unit drift means the merged result carries
                 // new metadata — the ops path has no channel for it; the
                 // envelope path handles it (and its NEEDS_VERIFICATION
-                // outcome for genuinely conflicting units).
+                // outcome for genuinely conflicting units). Units use
+                // `prepare`'s conflict/enrichment gates: reason text is
+                // not drift.
                 if segment.coverage != facts.coverage
-                    || segment.unit_currency != facts.unit_currency
+                    || crate::market_update::unit_drift(
+                        &facts.unit_currency,
+                        &segment.unit_currency,
+                    )
                 {
                     return Ok(None);
                 }

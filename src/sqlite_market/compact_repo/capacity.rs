@@ -711,6 +711,7 @@ fn phase_typed(
     let mut committed = 0usize;
     let mut fallback_ran = 0usize;
     let mut failed_items = 0usize;
+    let mut fallback_reasons: Vec<String> = Vec::new();
     let mut tasks = 0usize;
     let mut wal_peak = wal_bytes(db);
     let published = published_entities(repo);
@@ -736,6 +737,9 @@ fn phase_typed(
     };
     let provider: &dyn crate::market_update::runner::RangeProvider =
         if mode == "append" { &fabricated } else { &real };
+    // Request ids are idempotent: a rerun of this phase after a previous
+    // (possibly all-fallback) execution must not replay the old tasks.
+    let run_tag = std::env::var("X_CAPACITY_RUN_TAG").unwrap_or_else(|_| "1".into());
     for (chunk_index, batch) in active.chunks(TASK_ITEMS).enumerate() {
         let mut specs = Vec::with_capacity(batch.len());
         for symbol in batch {
@@ -764,8 +768,11 @@ fn phase_typed(
             ));
         }
         let t = Instant::now();
-        let task_id =
-            accept_update_phase_task(repo, &format!("req-typed-{mode}-{chunk_index}"), &specs);
+        let task_id = accept_update_phase_task(
+            repo,
+            &format!("req-typed-{mode}-r{run_tag}-{chunk_index}"),
+            &specs,
+        );
         accept_ns += t.elapsed().as_nanos();
         let item_ids: Vec<String> = specs.iter().map(|s| s.0.clone()).collect();
         let t = Instant::now();
@@ -774,7 +781,18 @@ fn phase_typed(
         for item_id in &item_ids {
             match runner.update_candidate(&task_id, item_id, provider) {
                 Ok(Some((item, _))) => prepared.push(item),
-                Ok(None) | Err(_) => fallbacks.push(item_id.clone()),
+                Ok(None) => {
+                    if fallback_reasons.len() < 8 {
+                        fallback_reasons.push(format!("{item_id}: typed-contract declined"));
+                    }
+                    fallbacks.push(item_id.clone());
+                }
+                Err(error) => {
+                    if fallback_reasons.len() < 8 {
+                        fallback_reasons.push(format!("{item_id}: {error}"));
+                    }
+                    fallbacks.push(item_id.clone());
+                }
             }
         }
         prepare_ns += t.elapsed().as_nanos();
@@ -805,6 +823,7 @@ fn phase_typed(
         "items_committed": committed,
         "items_failed_in_batch": failed_items,
         "fallback_items": fallback_ran,
+        "fallback_reasons": fallback_reasons,
         "symbols_active": active.len(),
         "tasks": tasks,
         "wall_s": started.elapsed().as_secs_f64(),

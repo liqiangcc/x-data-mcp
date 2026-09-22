@@ -1,7 +1,9 @@
 //! Daily range-update application decisions (#4). No source or MCP wiring.
 //! Evidence references are trusted application inputs, never user-controlled approval flags.
 use crate::{
-    market_data::{Bar, CoverageStatus, EvidenceValue, MarketDataBatch, Period},
+    market_data::{
+        Bar, CoverageStatus, EvidenceValue, MarketDataBatch, Period, UnitCurrencyEvidence,
+    },
     market_storage::{Error, compat::CheckedRecord},
 };
 pub mod publication;
@@ -148,6 +150,22 @@ pub fn candidate_digest(batch: &MarketDataBatch) -> Result<String, Error> {
 }
 fn conflicting_units(a: &EvidenceValue, b: &EvidenceValue) -> bool {
     a.is_confirmed() && b.is_confirmed() && a.value != b.value
+}
+/// Unit drift the typed update path cannot carry (#259 S5G): mirrors the
+/// two `prepare` gates — a confirmed-value conflict decides
+/// NeedsVerification and an unconfirmed→confirmed enrichment is a
+/// metadata change. Reason-text differences alone are not drift: the
+/// envelope path ignores them for the same reason.
+pub(crate) fn unit_drift(base: &UnitCurrencyEvidence, new: &UnitCurrencyEvidence) -> bool {
+    [
+        (&base.price_currency, &new.price_currency),
+        (&base.price_unit, &new.price_unit),
+        (&base.volume_unit, &new.volume_unit),
+        (&base.amount_currency, &new.amount_currency),
+        (&base.amount_unit, &new.amount_unit),
+    ]
+    .into_iter()
+    .any(|(a, b)| conflicting_units(a, b) || (!a.is_confirmed() && b.is_confirmed()))
 }
 pub fn prepare(
     existing: &CheckedRecord,
