@@ -1103,3 +1103,34 @@ fn bar_aware_unit_requirements() {
     };
     integrity_failure(stage_checkpoint(&c, &draft, &[full_clip(&seg)], None));
 }
+
+#[test]
+fn leaf_bars_in_range_matches_full_reconstruction() {
+    let c = connection();
+    let bars: Vec<CompactBar> = (0..10).map(|d| cb(d, 100 + d)).collect();
+    let (base_key, _) = publish_daily(&c, "v1", &bars);
+    // upsert revises day 5 and appends days 10-12
+    let rev = segment(&c, "sh.600006", Period::Day, &[cb(5, 555), cb(10, 200), cb(11, 210), cb(12, 220)]);
+    let draft = mk_draft("v2", "sh.600006", Period::Day, &c);
+    let key = stage_delta(&c, &draft, base_key, &[upsert(&rev, 5, 12)]).unwrap();
+    mark_validated(&c, key).unwrap();
+    publish(&c, key, ts()).unwrap();
+    // remove days 2-3
+    let draft = mk_draft("v3", "sh.600006", Period::Day, &c);
+    let key = stage_delta(&c, &draft, key, &[remove(2, 3)]).unwrap();
+    mark_validated(&c, key).unwrap();
+    publish(&c, key, ts()).unwrap();
+
+    let full = leaf_bars(&c, key).unwrap();
+    for (start, end) in [(0, 12), (0, 0), (4, 7), (10, 12), (13, 20), (2, 2), (8, 9)] {
+        let windowed = leaf_bars_in_range(&c, key, start, end).unwrap();
+        let expected: Vec<CompactBar> = full
+            .iter()
+            .filter(|b| b.trade_day >= start && b.trade_day <= end)
+            .cloned()
+            .collect();
+        assert_eq!(windowed, expected, "window [{start},{end}]");
+    }
+    // inverted range is empty, not an error
+    assert!(leaf_bars_in_range(&c, key, 9, 5).unwrap().is_empty());
+}

@@ -590,6 +590,166 @@ pub(crate) fn leaf_bars(c: &Connection, key: i64) -> Result<Vec<CompactBar>, Err
     Ok(reconstruct_leaf(c, key)?.1)
 }
 
+/// Windowed leaf read (#259 S5G): leaf bars restricted to
+/// `[start_day, end_day]`, decoding only segments that overlap the window.
+/// Cost is O(chain metadata + overlapping segments), not O(history) —
+/// used by the ops-diff path to compare a typed candidate against the
+/// base head without materializing it. Chain linkage, published-state
+/// and clip/segment digests are still enforced; malformed rows fail
+/// closed exactly like full reconstruction.
+pub(crate) fn leaf_bars_in_range(
+    c: &Connection,
+    leaf_key: i64,
+    start_day: i64,
+    end_day: i64,
+) -> Result<Vec<CompactBar>, Error> {
+    if start_day > end_day {
+        return Ok(Vec::new());
+    }
+    // Chain metadata walk, leaf -> root; no segment decode here.
+    let mut nodes = Vec::new();
+    let mut visited = HashSet::new();
+    let mut key = leaf_key;
+    loop {
+        if !visited.insert(key) {
+            return Err(integrity("version chain contains a cycle"));
+        }
+        let row = read_version_row(c, key)?
+            .ok_or_else(|| integrity("version chain node missing"))?;
+        match row.manifest_mode {
+            1 => {
+                if row.parent_version_key.is_some() || row.delta_depth != 0 {
+                    return Err(integrity("checkpoint version carries parent/depth"));
+                }
+                nodes.push(row);
+                break;
+            }
+            2 => {
+                if row.delta_depth < 1 || row.delta_depth > MAX_DELTA_DEPTH {
+                    return Err(integrity("delta depth out of bounds"));
+                }
+                let parent = row
+                    .parent_version_key
+                    .ok_or_else(|| integrity("delta version lacks parent"))?;
+                nodes.push(row);
+                key = parent;
+            }
+            _ => return Err(integrity("unknown manifest_mode")),
+        }
+        if nodes.len() > MAX_CHAIN_NODES {
+            return Err(integrity("version chain exceeds depth bound"));
+        }
+    }
+    nodes.reverse();
+    // Root checkpoint: decode only clips overlapping the window.
+    let mut map: BTreeMap<i64, CompactBar> = BTreeMap::new();
+    {
+        let root = &nodes[0];
+        let mut statement = c
+            .prepare(
+                "SELECT segment_key,clip_start_day,clip_end_day,row_count \
+                 FROM version_checkpoint_clips \
+                 WHERE version_key=?1 AND clip_start_day<=?2 AND clip_end_day>=?3 \
+                 ORDER BY seq",
+            )
+            .map_err(storage)?;
+        let rows = statement
+            .query_map(params![root.key, end_day, start_day], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?;
+        drop(statement);
+        for (segment_key, clip_start, clip_end, row_count) in rows {
+            if row_count <= 0 || row_count > u32::MAX as i64 {
+                return Err(integrity("checkpoint clip row_count out of bounds"));
+            }
+            let segment = compact_v19::read_segment(c, segment_key)?;
+            let clip = SegmentClip {
+                segment_digest: segment.digest,
+                clip_start_day: clip_start,
+                clip_end_day: clip_end,
+                row_count: row_count as u32,
+            };
+            check_stored_clip(&segment, &clip, &root.entity, root.period)?;
+            for bar in segment.bars.iter().filter(|bar| {
+                bar.trade_day >= clip_start.max(start_day)
+                    && bar.trade_day <= clip_end.min(end_day)
+            }) {
+                map.insert(bar.trade_day, bar.clone());
+            }
+        }
+    }
+    // Delta ops overlapping the window, applied root -> leaf. Ops outside
+    // the window are metadata-only and never decode their segment.
+    for row in nodes.iter().skip(1) {
+        let mut statement = c
+            .prepare(
+                "SELECT delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count \
+                 FROM version_delta_clips \
+                 WHERE version_key=?1 AND range_start_day<=?2 AND range_end_day>=?3 \
+                 ORDER BY seq",
+            )
+            .map_err(storage)?;
+        let rows = statement
+            .query_map(params![row.key, end_day, start_day], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                    r.get::<_, i64>(6)?,
+                ))
+            })
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?;
+        drop(statement);
+        for (kind, range_start, range_end, segment_key, clip_start, clip_end, row_count) in rows {
+            match kind {
+                1 => {
+                    let (segment_key, clip_start, clip_end) =
+                        match (segment_key, clip_start, clip_end) {
+                            (Some(key), Some(start), Some(end)) => (key, start, end),
+                            _ => return Err(integrity("upsert delta missing clip fields")),
+                        };
+                    if row_count <= 0 || row_count > u32::MAX as i64 {
+                        return Err(integrity("upsert delta row_count out of bounds"));
+                    }
+                    let segment = compact_v19::read_segment(c, segment_key)?;
+                    let clip = SegmentClip {
+                        segment_digest: segment.digest,
+                        clip_start_day: clip_start,
+                        clip_end_day: clip_end,
+                        row_count: row_count as u32,
+                    };
+                    check_stored_clip(&segment, &clip, &row.entity, row.period)?;
+                    for bar in segment.bars.iter().filter(|bar| {
+                        bar.trade_day >= clip_start.max(start_day)
+                            && bar.trade_day <= clip_end.min(end_day)
+                    }) {
+                        map.insert(bar.trade_day, bar.clone());
+                    }
+                }
+                2 => {
+                    let (drop_start, drop_end) = (range_start.max(start_day), range_end.min(end_day));
+                    map.retain(|day, _| !(*day >= drop_start && *day <= drop_end));
+                }
+                _ => return Err(integrity("unknown delta_kind")),
+            }
+        }
+    }
+    Ok(map.into_values().collect())
+}
+
 fn reconstruct_version(
     c: &Connection,
     leaf_key: i64,
