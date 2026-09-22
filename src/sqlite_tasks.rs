@@ -1154,11 +1154,81 @@ pub(crate) fn accept_tx(
     if orphan {
         return Err(inconsistent("unbound execution record"));
     }
-    // Registry-wide integrity gate: a corrupted stored command fails the
-    // accept closed. Digest-only (#259 S5G-8): hashing each stored
-    // command_json is O(rows × bytes) and does not decode every bound
-    // task snapshot — semantic revalidation stays with read_request on
-    // the consume/replay path, which every caller still hits.
+    // Registry-wide integrity gate (#259 S5G-8): O(rows) index scans with
+    // no snapshot decode, mirroring the structural invariants
+    // validate_snapshot enforces. Semantic revalidation stays with
+    // read_request on the consume/replay path, which every caller hits.
+    const TERMINAL: &str = "'succeeded','partially_failed','failed','cancelled','interrupted'";
+    for (sql, why) in [
+        // A request still bound to a deleted task row is corruption the
+        // digest gate below cannot see.
+        (
+            "SELECT EXISTS(SELECT 1 FROM requests r LEFT JOIN tasks t ON t.task_id=r.task_id \
+             WHERE r.task_id IS NOT NULL AND t.task_id IS NULL)"
+                .to_string(),
+            "request bound to missing task",
+        ),
+        // Item rows must exist and match the stored counters.
+        (
+            "SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN task_items i ON i.task_id=t.task_id \
+             GROUP BY t.task_id HAVING count(i.item_id)!=t.item_count \
+             OR sum(i.stage='pending')!=t.items_pending \
+             OR sum(i.stage='running')!=t.items_running \
+             OR sum(i.stage='finished')!=t.items_finished)"
+                .to_string(),
+            "task item rows diverge from counters",
+        ),
+        // Non-terminal task: occupancy claims equal the declared scope
+        // set, in both directions. The stored occupancy revision is the
+        // accept-time one (read_task stamps claims with the live task
+        // revision), so only the key set is compared here.
+        (
+            format!(
+                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.status NOT IN ({TERMINAL}) \
+                 AND (EXISTS(SELECT 1 FROM task_scopes s WHERE s.task_id=t.task_id \
+                   AND NOT EXISTS(SELECT 1 FROM scope_occupancy o WHERE o.task_id=t.task_id \
+                     AND o.scope_key=s.scope_key)) \
+                  OR EXISTS(SELECT 1 FROM scope_occupancy o WHERE o.task_id=t.task_id \
+                   AND NOT EXISTS(SELECT 1 FROM task_scopes s WHERE s.task_id=t.task_id \
+                     AND s.scope_key=o.scope_key))))"
+            ),
+            "active occupancy missing/inconsistent",
+        ),
+        // Terminal task: no claims, result present, no running items,
+        // counters consistent with the terminal status.
+        (
+            format!(
+                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.status IN ({TERMINAL}) \
+                 AND (t.result_json IS NULL \
+                  OR EXISTS(SELECT 1 FROM scope_occupancy o WHERE o.task_id=t.task_id) \
+                  OR EXISTS(SELECT 1 FROM task_items i WHERE i.task_id=t.task_id AND i.stage='running') \
+                  OR (t.status='succeeded' AND NOT(t.items_finished=t.item_count AND t.items_succeeded=t.item_count)) \
+                  OR (t.status='failed' AND NOT(t.items_finished=t.item_count AND t.items_succeeded=0)) \
+                  OR (t.status='partially_failed' AND NOT(t.items_finished=t.item_count AND t.items_succeeded>0 AND t.items_succeeded<t.item_count))))"
+            ),
+            "terminal execution/claims inconsistent",
+        ),
+        // Owner/stage consistency: running needs an owner, pending
+        // forbids one, and no item may progress without an owner.
+        (
+            "SELECT EXISTS(SELECT 1 FROM tasks t WHERE \
+             (t.status='running' AND t.owner_run_id IS NULL) \
+             OR (t.status='pending' AND (t.owner_run_id IS NOT NULL \
+               OR EXISTS(SELECT 1 FROM task_items i WHERE i.task_id=t.task_id AND i.stage!='pending'))) \
+             OR (t.owner_run_id IS NULL \
+               AND EXISTS(SELECT 1 FROM task_items i WHERE i.task_id=t.task_id AND i.stage!='pending')))"
+                .to_string(),
+            "execution owner/stage missing or inconsistent",
+        ),
+    ] {
+        let bad: bool = c.query_row(&sql, [], |r| r.get(0)).map_err(storage)?;
+        if bad {
+            return Err(inconsistent(why));
+        }
+    }
+    // Digest gate: a corrupted stored command fails the accept closed.
+    // Hashing each stored command_json is O(rows × bytes); bound task
+    // snapshots are not decoded here.
     let mut stmt = c
         .prepare("SELECT command_json,command_digest FROM requests")
         .map_err(storage)?;
