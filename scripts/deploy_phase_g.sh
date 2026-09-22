@@ -156,10 +156,24 @@ SOCK_ACQ=$(awk '{print $3}' <<<"$acq_exec")
 
 # --- 2. resolve release + verify package in $WORK before touching /opt -------
 step=resolve_release
-release_json=$(gh release view "$TAG" --json targetCommitish,assets) || fail "release $TAG missing"
-SHA=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["targetCommitish"])' <<<"$release_json")
 TARBALL="x-data-mcp-${TAG#v}-linux-x86_64.tar.gz"
-asset_digest=$(TARBALL="$TARBALL" python3 -c '
+if [[ "$FORCE_GIT" == "1" ]]; then
+    # Git-transport mode: no GitHub release object is required. refs/dist/<tag>
+    # carries dist-manifest.json binding tag + tag_sha + tarball sha256.
+    remote=$(git -C "$REPO" remote get-url origin) || fail "origin url"
+    git init --bare -q "$WORK/repo"
+    git -C "$WORK/repo" fetch --depth 1 "$remote" "refs/dist/$TAG" \
+        || fail "refs/dist/$TAG not available"
+    dist_manifest=$(git -C "$WORK/repo" show "FETCH_HEAD:dist-manifest.json") \
+        || fail "refs/dist/$TAG lacks dist-manifest.json"
+    SHA=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_sha"])' <<<"$dist_manifest")
+    asset_digest=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tarball_sha256"])' <<<"$dist_manifest")
+    [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$asset_digest" =~ ^[0-9a-f]{64}$ ]] \
+        || fail "dist-manifest binding malformed"
+else
+    release_json=$(gh release view "$TAG" --json targetCommitish,assets) || fail "release $TAG missing"
+    SHA=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["targetCommitish"])' <<<"$release_json")
+    asset_digest=$(TARBALL="$TARBALL" python3 -c '
 import json, os, sys
 a = {x["name"]: x["digest"].removeprefix("sha256:") for x in json.load(sys.stdin)["assets"]}
 need = [os.environ["TARBALL"], os.environ["TARBALL"] + ".sha256", "smoke-report.json"]
@@ -168,6 +182,7 @@ if missing:
     sys.exit("missing release assets: %s" % missing)
 print(a[os.environ["TARBALL"]])
 ' <<<"$release_json") || fail "release assets incomplete"
+fi
 RELEASE_DIR="$DEPLOY_ROOT/releases/$SHA"
 
 step=before_state
@@ -202,10 +217,12 @@ fi
 
 step=fetch_package
 fetch_git() {
-    remote=$(git -C "$REPO" remote get-url origin) || fail "origin url"
-    git init --bare -q "$WORK/repo"
-    git -C "$WORK/repo" fetch --depth 1 "$remote" "refs/dist/$TAG" \
-        || fail "refs/dist/$TAG not available"
+    if [[ ! -d "$WORK/repo" ]]; then
+        remote=$(git -C "$REPO" remote get-url origin) || fail "origin url"
+        git init --bare -q "$WORK/repo"
+        git -C "$WORK/repo" fetch --depth 1 "$remote" "refs/dist/$TAG" \
+            || fail "refs/dist/$TAG not available"
+    fi
     git -C "$WORK/repo" archive FETCH_HEAD | tar -x -C "$WORK" \
         || fail "refs/dist/$TAG unpack"
 }
@@ -251,6 +268,8 @@ if [[ -f "$DB" ]]; then
 fi
 init_out=$("$RELEASE_DIR/bin/task_sqlite" init19 "$DB") || fail "task_sqlite init19"
 [[ "$init_out" == *"task schema 19 ready"* ]] || fail "init19 did not report schema 19"
+chmod 600 "$DB" || fail "chmod private market db"
+chown "$(id -u):$(id -g)" "$DB" || fail "chown market db"
 fresh_schema=$(python3 -c "import sqlite3; print(sqlite3.connect('file:$DB?mode=ro', uri=True).execute('PRAGMA user_version').fetchone()[0])")
 [[ "$fresh_schema" == "19" ]] || fail "fresh db user_version=$fresh_schema != 19"
 

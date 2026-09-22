@@ -51,13 +51,28 @@ fn post_migration(c: &Connection, version: usize) -> Result<(), Error> {
 pub struct SqliteTasks {
     path: PathBuf,
     busy: Duration,
+    coordinator: Option<std::sync::Arc<crate::sqlite_market::compact_runtime::WriteCoordinator>>,
 }
 impl SqliteTasks {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
             busy: Duration::from_millis(250),
+            coordinator: None,
         }
+    }
+    /// Binds this handle to a schema-19 compact write coordinator sharing
+    /// the same database file. Once bound, `read`/`write` run through the
+    /// coordinator — lease validation, schema-identity check and the single
+    /// writer — instead of the legacy per-operation connection; `accept_tx`
+    /// and friends stay identical because they are connection-level. Used
+    /// when the compact backend and the task API share one process/lease.
+    pub(crate) fn with_coordinator(
+        mut self,
+        coordinator: std::sync::Arc<crate::sqlite_market::compact_runtime::WriteCoordinator>,
+    ) -> Self {
+        self.coordinator = Some(coordinator);
+        self
     }
     pub fn with_busy_timeout(mut self, busy: Duration) -> Self {
         self.busy = busy;
@@ -208,6 +223,11 @@ impl SqliteTasks {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        if let Some(coordinator) = &self.coordinator {
+            return coordinator
+                .read(|c| f(c).map_err(crate::market_storage::Error::Task))
+                .map_err(coordinator_error);
+        }
         let mut c = self.connect(true)?;
         let tx = c.transaction().map_err(storage)?;
         check_schema(&tx, true)?;
@@ -219,6 +239,20 @@ impl SqliteTasks {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        if let Some(coordinator) = &self.coordinator {
+            return coordinator
+                .write(|c| {
+                    let tx = c
+                        .transaction_with_behavior(TransactionBehavior::Immediate)
+                        .map_err(|e| crate::market_storage::Error::Task(storage(e)))?;
+                    let value = f(&tx).map_err(crate::market_storage::Error::Task)?;
+                    tx.commit().map_err(|e| {
+                        crate::market_storage::Error::Task(Error::OutcomeUnknown(e.to_string()))
+                    })?;
+                    Ok(value)
+                })
+                .map_err(coordinator_error);
+        }
         let mut c = self.connect(false)?;
         let tx = c
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -232,6 +266,12 @@ impl SqliteTasks {
         #[cfg(test)]
         tests::crash_point("after_commit");
         Ok(value)
+    }
+}
+fn coordinator_error(e: crate::market_storage::Error) -> Error {
+    match e {
+        crate::market_storage::Error::Task(inner) => inner,
+        other => Error::StorageUnavailable(other.to_string()),
     }
 }
 fn configure(c: &Connection, busy: Duration) -> Result<(), Error> {

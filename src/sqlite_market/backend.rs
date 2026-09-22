@@ -35,6 +35,24 @@ impl MarketBackend {
         }
     }
 
+    /// Same dispatch as `open` but shares the caller's database lease —
+    /// the long-lived service already holds the flock, so the compact
+    /// backend must not acquire a second one.
+    pub fn open_shared(
+        tasks: &SqliteTasks,
+        lease: std::sync::Arc<crate::local_runtime::DatabaseLease>,
+    ) -> Result<Self, Error> {
+        if !tasks.path().is_file() {
+            return Ok(Self::Legacy(SqliteMarket::new(tasks.clone())));
+        }
+        match tasks.schema_version()? {
+            crate::sqlite_tasks::COMPACT_SCHEMA_VERSION => Ok(Self::Compact(
+                SqliteCompactMarket::open_shared(tasks.path(), lease)?,
+            )),
+            _ => Ok(Self::Legacy(SqliteMarket::new(tasks.clone()))),
+        }
+    }
+
     /// Task-store handle sharing the same database file.
     pub fn tasks(&self) -> SqliteTasks {
         match self {

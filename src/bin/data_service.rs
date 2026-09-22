@@ -68,7 +68,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     // Uses the existing read-only schema check. Never creates/migrates a database,
     // and does not reconcile old tasks or substitute a new store on failure.
-    SqliteTasks::new(&path).candidates(&run_id)?;
+    // The backend is assembled once and shared across connections: on a
+    // schema-19 database the compact repository reuses this process's lease
+    // instead of acquiring a second flock.
+    let tasks = SqliteTasks::new(&path);
+    let backend =
+        x_data_mcp::sqlite_market::backend::MarketBackend::open_shared(&tasks, lease.clone())?;
+    backend.tasks().candidates(&run_id)?;
     let endpoint = Endpoint::bind(std::path::Path::new(&args[1]), &lease)?;
     let gate = Arc::new(WorkerGate::default());
     let stopping = Arc::new(AtomicBool::new(false));
@@ -98,9 +104,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let factory = {
         let gate = gate.clone();
         move || {
-            DataApi::new(SqliteTasks::new(&path), run_id.clone(), Access::local())
-                .map(|api| api.with_worker_gate(gate.clone()))
-                .map_err(std::io::Error::other)
+            DataApi::new_with_backend(
+                tasks.clone(),
+                backend.clone(),
+                run_id.clone(),
+                Access::local(),
+            )
+            .map(|api| api.with_worker_gate(gate.clone()))
+            .map_err(std::io::Error::other)
         }
     };
     let result = serve(endpoint, lease, factory, gate, stopping.clone(), config);

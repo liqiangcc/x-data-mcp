@@ -33,6 +33,25 @@ impl DataApi {
     ) -> Result<Self, crate::task_control::Error> {
         Self::new_in(
             tasks,
+            None,
+            run_id,
+            access,
+            super::generation::GenerationSource::from_env(),
+        )
+    }
+    /// Same wiring as `new` but takes a pre-opened market backend — the
+    /// long-lived service holds the database lease, so the compact backend
+    /// must be assembled once with `MarketBackend::open_shared` and shared
+    /// across connections instead of re-acquiring the flock per call.
+    pub fn new_with_backend(
+        tasks: SqliteTasks,
+        backend: crate::sqlite_market::backend::MarketBackend,
+        run_id: String,
+        access: Access,
+    ) -> Result<Self, crate::task_control::Error> {
+        Self::new_in(
+            tasks,
+            Some(backend),
             run_id,
             access,
             super::generation::GenerationSource::from_env(),
@@ -48,17 +67,21 @@ impl DataApi {
         access: Access,
         generation: super::generation::GenerationSource,
     ) -> Result<Self, crate::task_control::Error> {
-        Self::new_in(tasks, run_id, access, Some(generation))
+        Self::new_in(tasks, None, run_id, access, Some(generation))
     }
     fn new_in(
         tasks: SqliteTasks,
+        backend: Option<crate::sqlite_market::backend::MarketBackend>,
         run_id: String,
         access: Access,
         generation: Option<super::generation::GenerationSource>,
     ) -> Result<Self, crate::task_control::Error> {
         let repository = SqliteSupply {
-            market: crate::sqlite_market::backend::MarketBackend::open(&tasks)
-                .map_err(|e| crate::task_control::Error::StorageUnavailable(e.to_string()))?,
+            market: match backend {
+                Some(backend) => backend,
+                None => crate::sqlite_market::backend::MarketBackend::open(&tasks)
+                    .map_err(|e| crate::task_control::Error::StorageUnavailable(e.to_string()))?,
+            },
         };
         // Wraps the contracts whose executors read official files so every
         // accepted item freezes source_generation_id at acceptance.
@@ -74,16 +97,16 @@ impl DataApi {
             observer: Observer::new(repository.clone(), run_id.clone()),
             legacy: SqliteTaskApi {
                 control: crate::task_control::service::TaskControl::new(
-                    tasks.clone(),
+                    repository.market.tasks(),
                     run_id.clone(),
                     vec![
                         #[cfg(target_os = "linux")]
                         Box::new(crate::verification_inspection::InspectionContract),
                         Box::new(crate::task_verification::StopVerification::new(
-                            tasks.clone(), run_id.clone(),
+                            repository.market.tasks(), run_id.clone(),
                         )?),
                         Box::new(crate::publication_verification::admission::PublicationVerification::new(
-                            tasks, run_id,
+                            repository.market.tasks(), run_id,
                         )?),
                         Box::new(crate::task_control::legacy::LegacyCollection),
                         bind(Box::new(crate::market_update::tasks::RangeContract {

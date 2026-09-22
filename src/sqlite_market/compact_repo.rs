@@ -86,11 +86,22 @@ impl SqliteCompactMarket {
     pub fn open(path: &Path) -> Result<Self, Error> {
         let lease = DatabaseLease::acquire(path)
             .map_err(|e| Error::Base(format!("database lease: {e}")))?;
-        let coordinator =
-            WriteCoordinator::open_existing(path, Arc::new(lease), schema19_identity(), BUSY)?;
+        Self::open_shared(path, Arc::new(lease))
+    }
+
+    /// Opens the compact repository on an already-held database lease —
+    /// the service process owns the flock, so the backend must share it
+    /// rather than acquire a second one.
+    pub fn open_shared(path: &Path, lease: Arc<DatabaseLease>) -> Result<Self, Error> {
+        let coordinator = Arc::new(WriteCoordinator::open_existing(
+            path,
+            lease,
+            schema19_identity(),
+            BUSY,
+        )?);
         Ok(Self {
-            coordinator: Arc::new(coordinator),
-            tasks: SqliteTasks::new(path),
+            tasks: SqliteTasks::new(path).with_coordinator(coordinator.clone()),
+            coordinator,
         })
     }
 
