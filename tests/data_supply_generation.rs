@@ -178,10 +178,14 @@ fn acceptance_freezes_source_generation_id_and_worker_reads_it() {
     write_mirror(mirror.path(), 600007);
     let _gen_b = activate_generation(&service, "req-gen-b", Some(&gen_a));
 
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
     assert!(
         market
@@ -222,10 +226,14 @@ fn missing_and_null_bindings_refuse_the_source() {
     let _accepted = control
         .accept("req-unbound", control_key(&supply), daily_payload("600006"))
         .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
     assert_ne!(done.task.status, Status::Succeeded);
     assert!(
         market
@@ -412,10 +420,14 @@ fn yearly_derivation_runs_against_bound_generation() {
     control
         .accept("req-daily", control_key(&supply), daily_payload("600006"))
         .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
     let base_id = market
         .effective_head(&Scope {
@@ -442,10 +454,14 @@ fn yearly_derivation_runs_against_bound_generation() {
         snapshot.items[0].spec.frozen_inputs[SOURCE_GENERATION_KEY],
         json!(gen_a)
     );
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
     assert!(
         market
@@ -498,10 +514,14 @@ fn yearly_derivation_without_binding_refuses() {
     control
         .accept("req-daily", control_key(&supply), daily_payload("600006"))
         .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
     let base_id = market
         .effective_head(&Scope {
@@ -523,10 +543,14 @@ fn yearly_derivation_without_binding_refuses() {
         json!({"items":[{"symbol":"sh.600006","base_daily_version_id":base_id,"years":[year],"intent":{"CurrentHead":{"expected_daily_head":base_id,"expected_yearly_head":null}},"comparison_version_id":null}]}),
     )
     .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
     assert_ne!(done.task.status, Status::Succeeded);
     assert!(
         market

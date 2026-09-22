@@ -1276,6 +1276,84 @@ impl RangeRepository for SqliteCompactMarket {
     fn commit_range(&self, plan: &RangePlan) -> Result<Receipt, Error> {
         self.write(|c| commit_range_tx(c, plan))
     }
+    /// Ops-first daily commit: stage the candidate as a parent-delta
+    /// version, bind it to the approved merge by leaf equality (the content
+    /// binding replacing the envelope `combined_integrity_sha256` digest
+    /// check — the verifier still binds base + segment digests), then
+    /// commit with the same required-heads/binding/head-CAS semantics.
+    fn commit_range_ops(
+        &self,
+        command: &Publication,
+        scope: &Scope,
+        base_version_id: &str,
+        upserts: &[Bar],
+        removes: &[NaiveDate],
+        expected: &[Bar],
+    ) -> Result<Option<Receipt>, Error> {
+        if command.intent
+            != (PublishIntent::Daily {
+                expected_head: Some(base_version_id.into()),
+            })
+        {
+            return Err(Error::Invalid(
+                "ops commit must bind the expected daily head".into(),
+            ));
+        }
+        let version_id = command.version_id.clone();
+        // Replay-tolerant stage: an already-staged version is re-verified by
+        // the leaf equality check below instead of failing on re-stage.
+        let exists = self.tx(|c| {
+            c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM data_versions WHERE version_id=?1)",
+                [&version_id],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(storage)
+        })?;
+        if !exists {
+            self.stage_ops_delta(
+                &scope.symbol,
+                base_version_id,
+                &version_id,
+                upserts,
+                removes,
+            )?;
+        }
+        self.tx(|c| {
+            let key = version_key(c, &version_id)?;
+            let facts = compact_versions::result_facts(c, key)?;
+            if facts.parent_version_key != Some(version_key(c, base_version_id)?)
+                || facts.state == CompactVersionState::Published
+            {
+                return Err(Error::Conflict(
+                    "staged ops version is not a delta on the expected base".into(),
+                ));
+            }
+            let leaf = compact_versions::leaf_bars(c, key)?;
+            let approved = expected
+                .iter()
+                .map(|b| CompactBar::from_bar(b, Period::Day).map_err(integrity))
+                .collect::<Result<Vec<_>, _>>()?;
+            if leaf != approved {
+                return Err(Error::Integrity(
+                    "staged ops projection differs from approved candidate".into(),
+                ));
+            }
+            Ok(())
+        })?;
+        self.validate_staged(&version_id)?;
+        self.commit_ops_update(
+            &command.publication_id,
+            &command.task_id,
+            &command.item_id,
+            base_version_id,
+            &version_id,
+            command.expected_revision,
+            &command.run_id,
+            &scope.occupancy_key(),
+        )
+        .map(Some)
+    }
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
         self.read(|c| match registry_kind(c, id)? {
             Some(1) => {

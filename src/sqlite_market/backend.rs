@@ -20,9 +20,13 @@ pub enum MarketBackend {
 
 impl MarketBackend {
     /// Opens the backend matching the durable schema version of `tasks`'s
-    /// database file. An uninitialized (version 0) database keeps the
-    /// legacy backend; explicit `upgrade_compact` produces schema 19.
+    /// database file. An uninitialized or absent file keeps the legacy
+    /// backend so a missing database fails closed per-operation instead of
+    /// at service startup; explicit `upgrade_compact` produces schema 19.
     pub fn open(tasks: &SqliteTasks) -> Result<Self, Error> {
+        if !tasks.path().is_file() {
+            return Ok(Self::Legacy(SqliteMarket::new(tasks.clone())));
+        }
         match tasks.schema_version()? {
             crate::sqlite_tasks::COMPACT_SCHEMA_VERSION => {
                 Ok(Self::Compact(SqliteCompactMarket::open(tasks.path())?))
@@ -154,6 +158,40 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
         match self {
             Self::Legacy(m) => m.commit_range(plan),
             Self::Compact(m) => m.commit_range(plan),
+        }
+    }
+    fn commit_range_ops(
+        &self,
+        command: &crate::market_storage::Publication,
+        scope: &crate::market_storage::Scope,
+        base_version_id: &str,
+        upserts: &[crate::market_data::Bar],
+        removes: &[chrono::NaiveDate],
+        expected: &[crate::market_data::Bar],
+    ) -> Result<Option<Receipt>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::commit_range_ops(
+                    m,
+                    command,
+                    scope,
+                    base_version_id,
+                    upserts,
+                    removes,
+                    expected,
+                )
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::commit_range_ops(
+                    m,
+                    command,
+                    scope,
+                    base_version_id,
+                    upserts,
+                    removes,
+                    expected,
+                )
+            }
         }
     }
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {

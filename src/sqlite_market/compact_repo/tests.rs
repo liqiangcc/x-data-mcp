@@ -612,3 +612,116 @@ fn backend_dispatch_and_compact_supply_surface() {
         MarketBackend::Legacy(_)
     ));
 }
+
+#[test]
+fn ops_range_commit_stages_delta_binds_leaf_and_replays() {
+    use crate::market_update::publication::RangeRepository;
+
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+
+    let base = mk_version("v1", vec![bar(0, 100), bar(1, 110)]);
+    repo.stage(&envelope(&base, source("gen-1"), None)).unwrap();
+    let base_checked = repo.candidate("v1").unwrap();
+    repo.mark_validated(&base_checked).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: base_checked.clone(),
+        required_heads: vec![(Scope::of(&base_checked.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    let task_id2 = {
+        let scope = task_control::legacy::scope_id("sh.600006", "day");
+        let work = FrozenWork {
+            items: vec![ItemSpec {
+                item_id: ITEM.into(),
+                target: json!({"symbol": "sh.600006", "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            }],
+            scopes: BTreeSet::from([scope]),
+            shared_evidence: None,
+        };
+        let command = Command {
+            key: CommandKey {
+                operation: "update_data".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        match repo
+            .accept("req-2", &command, &work, RUN, None)
+            .unwrap()
+            .record
+            .outcome
+        {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        }
+    };
+    let revision2 = start_item(&repo, &task_id2);
+    let scope = Scope::of(&base_checked.version);
+    let approved = vec![bar(0, 100), bar(1, 110), bar(2, 120)];
+    let command = Publication {
+        publication_id: "upd-ops-1".into(),
+        version_id: "v2".into(),
+        task_id: task_id2.clone(),
+        item_id: ITEM.into(),
+        run_id: RUN.into(),
+        expected_revision: revision2,
+        intent: PublishIntent::Daily {
+            expected_head: Some("v1".into()),
+        },
+    };
+
+    // Leaf mismatch against the approved merge fails closed before commit.
+    let wrong = vec![bar(0, 100), bar(1, 110), bar(2, 999)];
+    assert!(
+        repo.commit_range_ops(&command, &scope, "v1", &[bar(2, 120)], &[], &wrong)
+            .is_err()
+    );
+
+    // Correct ops commit: staged delta binds leaf == approved merge.
+    let receipt = repo
+        .commit_range_ops(&command, &scope, "v1", &[bar(2, 120)], &[], &approved)
+        .unwrap()
+        .expect("compact backend supports ops commit");
+    assert_eq!(receipt.version_id, "v2");
+
+    let page = repo
+        .range(
+            &scope,
+            None,
+            &Range {
+                start: date(0),
+                end: date(10),
+                after: None,
+                limit: 10,
+            },
+        )
+        .unwrap();
+    assert_eq!(page.version.version_id, "v2");
+    assert_eq!(page.rows.len(), 3);
+
+    // The delta stored only the changed bar row.
+    let bar_rows: i64 = repo
+        .read(|c| {
+            c.query_row("SELECT count(*) FROM segment_bars", [], |r| r.get(0))
+                .map_err(storage)
+        })
+        .unwrap();
+    assert_eq!(bar_rows, 3);
+
+    // Replay: item receipt is already committed; a fresh commit_range_ops on
+    // a new item id would restage harmlessly, but the committed item's
+    // receipt is authoritative.
+    let replay = repo.item_receipt(&task_id2, ITEM).unwrap().unwrap();
+    assert_eq!(replay, receipt);
+}

@@ -803,7 +803,25 @@ S5A-2 执行结果（2026-09-21）：`SqliteCompactMarket` 已实现并覆盖 `T
 
 **S5E-1（生产装配切换，已执行）**：`src/sqlite_market/backend.rs` 新增 `MarketBackend`——按 `SqliteTasks::schema_version()` 探测的 durable `user_version` 分发：19→`SqliteCompactMarket`，其余→legacy `SqliteMarket`（legacy adapter 对 v19 fail-closed）。装配面：`data_supply/mcp.rs` 的 `SqliteSupply`/`SqliteMetrics`/`worker::run_once` 全部改持 `MarketBackend`；`SqliteCompactMarket` 补齐 `DailyCollectionRepository`/`YearlyRepository`（含 no-change typed receipt）/`AuditStore`/`EvidenceRepository`/`GapDecisionStore`/`GapTaskStore`/`DefaultRangeSource`。读面移植为 conn-level schema 感知：`head`/`read_record`/`range_rows`/`update::read_result`/`yearly_results::read_result`/`verification::read_facts` 按 `publication_batches` 存在性分发——v19 走 typed result + verified materialize；`SqliteSupply` 的 versions/task_facts/yearly 行元数据（base 重聚合复算）与 orphan 检查均已适配 v19 列。门禁：247 lib + 全部 integration、clippy、fmt 全绿。证据见 `evidence/issue-259-s5e-backend-assembly/result.json`。
 
+**S5E-2（runner ops-first 接线，已执行）**：`RangeRepository::commit_range_ops` 默认 `None`（legacy/不支持→envelope 回退）；compact 实现 = `stage_ops_delta` + staged leaf 与 approved merge 逐 bar 相等校验（替代 envelope `combined_integrity_sha256` digest 相等——更强：内容相等而非 digest 相等）+ `validate_staged` + `commit_ops_update`（同一 required-heads/binding/head-CAS/receipt 语义）。`RangeRunner::commit_acquired_range` 对 `metadata_changed==false` 的 records-only merge 走 ops 路径；frozen inputs 检查提取为 `Publisher::check_frozen_inputs` 两路共用；verifier base/segment digest 与 version 身份检查保留。新增 `ops_range_commit_stages_delta_binds_leaf_and_replays` 测试。`MarketBackend::open` 容忍缺失 DB 文件（legacy backend，逐操作 fail-closed 保持）。日更预估 ~95-120ms/item（acquire 仍内部构 envelope + fixed(base) 一次物化）→ ~8-10min/5,221；≤5min 仍需 acquire 流水线化或 canonical digest 契约演进——决策点已发 issue。证据见 `evidence/issue-259-s5e-ops-runner/result.json`。
+
 **S5D（ops-first 增量契约，已执行）**：`SqliteCompactMarket` 新增 `stage_ops_delta`/`validate_staged`/`commit_ops_update`——更新 runner 只提交 `(base_version_id, upsert bars, remove days)`，不再构造全量历史 envelope；stage 直接经 `stage_delta`（含 parent reconstruct+ops 应用+projection 复验），commit 复用 `commit_market_update` 全部绑定/head/receipt 语义。500 items 实测 **8.6s ≈ 17ms/item**（depth ~252 链、writer 串行），5,221 折算 **~1.5min ≤5min 硬门通过**；runner 侧 member 解析（~40ms/item）在 writer 外可流水线，全串行估 ~5min 压线。envelope 路径保留（collection/republish/走 `commit`），ops 路径供日更。harness `X_CAPACITY_SOAK_MODE=ops` 可复测。
+
+**S5F 切片（首采 bulk staging 快路径，执行时冻结）**：
+
+背景：S5B 实测 initial 53min/11,783 items（~270ms/item）> 20min 硬门。根因不是存储原语慢，是 collection 走 envelope 路径的兼容性重复税——每 item 构造 ~1.1MB legacy JSON envelope 再解析回 CompactBar，且 flatten/projection/lineage/evidence/insert 多趟 O(history) 独立遍历，每 item 一个写事务独立 fsync。
+
+契约：
+
+1. `SqliteCompactMarket` 新增类型化首采入口 `commit_collection_batch(&self, items: &[CollectionCandidate])`；`CollectionCandidate` 持有 `entity/period/bars: Vec<CompactBar>`（或 `Bar`，编码一次）+ `CompactSource` 类型化字段 + `coverage_reason/unit_currency/adjustment_evidence` + 可选 `yearly_lineage`。全程不构造、不解析 legacy JSON envelope。
+2. **事实等价**：typed 路径写入的 `data_versions`/`bar_segments`/`version_checkpoint_clips`/`source_bindings`/`evidence_bundles` 各行 digest 必须与同输入走 `stage_tx` envelope 路径逐字节相等（同一 canonical 输入、同一 digest 方案；只改输入编码，不改身份定义）。等价性由对照测试断言：fixture item 分别走两条路径，比较全部存储 digest。
+3. digest 合并为单趟：bars 编码切块时顺路累计 record_count/date bounds/projection 输入；`check_draft_lineage`/`check_draft_evidence` 消费已算结果，不再对 bars 重复遍历。fail-closed 不变——所有 digest 照算照核，只是不重复算。
+4. **批量写事务**：batch = 一个 collection task 的 items（天然 ≤`MAX_DEFAULT_SECURITIES`）。单个 WriteCoordinator 事务内依次完成每 item 的 `stage_checkpoint` + `commit_publication`（Collection kind）+ typed result + task/item 终态 + `task_publications`。预检失败的 item 记入 item outcome（fail-closed per item，不中止批）；事务内错误整批回滚，调用方逐 item 重试以隔离坏 item。
+5. runner/executor 侧：collection executor 从 member 解析直接产 `CollectionCandidate`；member 解析在 writer 关键路径外（预取/流水线），有界队列限 RSS。
+6. 范围：仅 collection 首采（含 republish 走原路径）。日更走 S5D ops 路径、yearly 走 lineage 路径，不改。
+7. 兼容 envelope `stage`/`commit` 路径保留不改，作为 republish 与等价性对照的参照实现。
+
+验收：重跑 `s5b_retained_capacity`（`X_CAPACITY_PHASES=initial`），目标 11,783 items **≤10min**（硬门 ≤20min、5,221 scope 目标 ≤15min），`result.json` initial 段更新并分项报告 parse/stage/commit/fsync 耗时；等价性测试 + 全量 suite + clippy + fmt 绿；容量断言（48.2B/bar、WAL、RSS）不回退。
 
 ### S6：release 与 ECS
 

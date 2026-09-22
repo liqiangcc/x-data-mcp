@@ -1,16 +1,18 @@
 //! Bounded publication-aware application execution. No MCP or source selection.
 use super::{
-    DateRange, Decision, Evidence,
+    DateRange, Decision, Evidence, PreparedRange, Reason,
     publication::{CombinedEvidence, Preparation, RangeRepository},
 };
 use crate::{
-    market_data::{MarketDataBatch, MarketDataPipeline, SourceError},
+    market_data::{Bar, MarketDataBatch, MarketDataPipeline, SourceError},
     market_storage::{
-        Error, Publication, PublishIntent, Publisher, Receipt, compat::CheckedRecord,
+        Error, Publication, PublishIntent, Publisher, Receipt, Scope, compat::CheckedRecord,
     },
     task_control::{Change, ItemOutcome, Stage, Status, TaskSnapshot},
 };
+use chrono::NaiveDate;
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct CombinedCandidate {
     pub record: Value,
@@ -369,14 +371,35 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 "task changed or cancelled during acquisition".into(),
             ));
         }
-        let changed = match super::prepare(&base, &acquired.batch, range, Some(&acquired.evidence))?
-        {
-            Decision::Candidate(_) => true,
-            Decision::NoChange { .. } => false,
-            Decision::NeedsVerification(reason) => {
-                return Err(Error::Invalid(format!("NEEDS_VERIFICATION: {reason:?}")));
+        let prepared =
+            match super::prepare(&base, &acquired.batch, range, Some(&acquired.evidence))? {
+                Decision::Candidate(prepared) => Some(prepared),
+                Decision::NoChange { .. } => None,
+                Decision::NeedsVerification(reason) => {
+                    return Err(Error::Invalid(format!("NEEDS_VERIFICATION: {reason:?}")));
+                }
+            };
+        if let Some(prepared) = &prepared {
+            // Ops-first commit: a records-only merge (no coverage or unit
+            // change) can be staged as a parent delta and bound by leaf
+            // equality. Backends without an ops path fall back to the
+            // envelope commit below.
+            if !prepared.metadata_changed
+                && let Some(receipt) = self.try_ops_commit(
+                    binding,
+                    item_id,
+                    base_id,
+                    &base,
+                    prepared,
+                    &acquired,
+                    range,
+                    &candidate_id,
+                )?
+            {
+                return Ok(receipt);
             }
-        };
+        }
+        let changed = prepared.is_some();
         if changed {
             let whole = acquired.combined.as_ref().ok_or_else(|| {
                 Error::Invalid("NEEDS_VERIFICATION: combined coverage absent".into())
@@ -418,5 +441,87 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 Err(Error::Invalid(format!("NEEDS_VERIFICATION: {reason:?}")))
             }
         }
+    }
+    /// Ops-first commit for a records-only range merge on backends with
+    /// parent-delta staging (#259). Runs the same accepted-inputs binding
+    /// (`check_frozen_inputs`) and verifier base/segment digest checks as the
+    /// envelope path; the candidate-content binding is the staged-leaf
+    /// equality inside `commit_range_ops`, which replaces the envelope
+    /// `combined_integrity_sha256` digest equality. `Ok(None)` falls back to
+    /// the envelope stage/commit below.
+    #[allow(clippy::too_many_arguments)]
+    fn try_ops_commit(
+        &self,
+        binding: &crate::task_control::ItemBinding,
+        item_id: &str,
+        base_id: &str,
+        base: &CheckedRecord,
+        prepared: &PreparedRange,
+        acquired: &Acquisition,
+        range: &DateRange,
+        candidate_id: &str,
+    ) -> Result<Option<Receipt>, Error> {
+        let command = Publication {
+            publication_id: format!(
+                "range-result-{}",
+                crate::hash::sha256(
+                    serde_json::json!([binding.head.task_id, item_id])
+                        .to_string()
+                        .as_bytes(),
+                )
+            ),
+            version_id: candidate_id.into(),
+            task_id: binding.head.task_id.clone(),
+            item_id: item_id.into(),
+            run_id: self.run_id.clone(),
+            expected_revision: binding.head.state_revision,
+            intent: PublishIntent::Daily {
+                expected_head: Some(base_id.into()),
+            },
+        };
+        (Publisher {
+            repository: self.repository.clone(),
+        })
+        .check_frozen_inputs(&command, &acquired.evidence, range)?;
+        let Some(whole) = &acquired.combined else {
+            return Err(Error::Invalid(
+                "NEEDS_VERIFICATION: combined coverage absent".into(),
+            ));
+        };
+        if whole.record["version_id"] != candidate_id
+            || whole.evidence.base_integrity_sha256 != prepared.base_integrity_sha256
+            || whole.evidence.segment_sha256 != prepared.candidate_sha256
+            || whole.evidence.complete_coverage_ref.trim().is_empty()
+        {
+            return Err(Error::Invalid(format!(
+                "NEEDS_VERIFICATION: {:?}",
+                Reason::CoverageUnknown
+            )));
+        }
+        // !prepared.metadata_changed ⇒ the merged candidate reuses the base
+        // coverage/units; the envelope path's unit-enrichment check is a
+        // no-op on this path by construction.
+        let base_dates: BTreeMap<NaiveDate, &Bar> =
+            base.version().records.iter().map(|b| (b.date, b)).collect();
+        let prepared_dates: BTreeSet<NaiveDate> = prepared.records.iter().map(|b| b.date).collect();
+        let upserts: Vec<Bar> = prepared
+            .records
+            .iter()
+            .filter(|b| base_dates.get(&b.date) != Some(b))
+            .cloned()
+            .collect();
+        let removes: Vec<NaiveDate> = base_dates
+            .keys()
+            .filter(|d| !prepared_dates.contains(d))
+            .copied()
+            .collect();
+        self.repository.commit_range_ops(
+            &command,
+            &Scope::of(base.version()),
+            base_id,
+            &upserts,
+            &removes,
+            &prepared.records,
+        )
     }
 }

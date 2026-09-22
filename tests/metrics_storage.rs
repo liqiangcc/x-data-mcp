@@ -16,7 +16,9 @@ fn verified_sqlite_completion_evidence_is_required_and_computation_is_read_only(
         let store = SqliteMarket::new(t.clone());
         let reference = fixture::publish(&store, coverage);
         let compute = Metrics {
-            repository: SqliteMetrics { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) },
+            repository: SqliteMetrics {
+                market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+            },
         };
         let request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
         let c = rusqlite::Connection::open(t.path()).unwrap();
@@ -58,7 +60,9 @@ fn fixed_digest_or_projection_damage_never_switches_versions() {
     let store = SqliteMarket::new(t.clone());
     let reference = fixture::publish(&store, true);
     let compute = Metrics {
-        repository: SqliteMetrics { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) },
+        repository: SqliteMetrics {
+            market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+        },
     };
     let request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
     let mut wrong = request.clone();
@@ -105,7 +109,9 @@ fn sqlite_unfinished_tail_honors_both_explicit_modes() {
     let store = SqliteMarket::new(t);
     let reference = fixture::publish_at(&store, true, true);
     let compute = Metrics {
-        repository: SqliteMetrics { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) },
+        repository: SqliteMetrics {
+            market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+        },
     };
     let mut request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
     assert!(matches!(
@@ -149,7 +155,9 @@ fn production_yearly_completion_derives_from_embedded_derivation_evidence() {
         false,
     );
     let compute = Metrics {
-        repository: SqliteMetrics { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) },
+        repository: SqliteMetrics {
+            market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+        },
     };
     let request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
     assert!(matches!(
@@ -189,7 +197,9 @@ fn production_yearly_completion_fail_closed_on_uncertified_or_unfinished() {
         let store = SqliteMarket::new(t);
         let reference = fixture::publish_derived(&store, evidence, false);
         let compute = Metrics {
-            repository: SqliteMetrics { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) },
+            repository: SqliteMetrics {
+                market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+            },
         };
         let request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
         assert!(matches!(
@@ -213,7 +223,9 @@ fn production_yearly_completion_fail_closed_on_uncertified_or_unfinished() {
         true,
     );
     let compute = Metrics {
-        repository: SqliteMetrics { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) },
+        repository: SqliteMetrics {
+            market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+        },
     };
     let mut request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
     assert!(matches!(
@@ -249,7 +261,9 @@ fn malformed_embedded_derivation_evidence_is_integrity_error() {
         false,
     );
     let compute = Metrics {
-        repository: SqliteMetrics { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) },
+        repository: SqliteMetrics {
+            market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+        },
     };
     let request: Compute = serde_json::from_value(fixture::request(reference)).unwrap();
     assert!(compute.compute(request, &Access::local()).is_err());

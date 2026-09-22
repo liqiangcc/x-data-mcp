@@ -44,6 +44,23 @@ impl RangePlan {
 }
 pub trait RangeRepository: MarketRepository {
     fn commit_range(&self, plan: &RangePlan) -> Result<Receipt, Error>;
+    /// Ops-first daily commit for backends with parent-delta staging: the
+    /// candidate is staged as a delta on `base_version_id` and the staged
+    /// leaf must equal `expected` bar-for-bar (the content binding that
+    /// replaces the envelope `combined_integrity_sha256` digest check).
+    /// `Ok(None)` means the backend lacks an ops path; the caller falls
+    /// back to `commit_range`.
+    fn commit_range_ops(
+        &self,
+        _command: &Publication,
+        _scope: &Scope,
+        _base_version_id: &str,
+        _upserts: &[crate::market_data::Bar],
+        _removes: &[chrono::NaiveDate],
+        _expected: &[crate::market_data::Bar],
+    ) -> Result<Option<Receipt>, Error> {
+        Ok(None)
+    }
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error>;
     fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error>;
     fn transition_task(
@@ -81,52 +98,7 @@ impl<R: MarketRepository> Publisher<R> {
             ));
         }
         let base = self.repository.fixed(&evidence.base_version_id)?;
-        let head = self.repository.task_head(&command.task_id)?;
-        let range_task = matches!(head.key.operation.as_str(), "update_data" | "backfill_data");
-        let item_frozen = self
-            .repository
-            .task_item_binding(&command.task_id, &command.item_id)?
-            .map(|binding| binding.item.spec.frozen_inputs);
-        let frozen_matches = if head.key.contract_version == super::tasks::CONTRACT_VERSION
-            && head.key.dataset == "market.daily"
-        {
-            // Generation mode stamps `source_generation_id` at accept;
-            // carry it through — its value is enforced by the worker's
-            // bound-session resolution, not by this input check.
-            let mut expected = super::tasks::frozen(
-                &evidence.base_version_id,
-                &evidence.base_integrity_sha256,
-                range,
-            );
-            if let Some(stamped) = item_frozen
-                .as_ref()
-                .and_then(|f| f.get("source_generation_id"))
-            {
-                expected["source_generation_id"] = stamped.clone();
-            }
-            item_frozen.as_ref() == Some(&expected)
-        } else if head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION
-            && head.key.dataset == "market.daily"
-        {
-            // The executed range must equal the union of the item's frozen
-            // required ranges (refresh + frozen gaps for update, frozen
-            // gaps only for backfill) on the frozen base identity.
-            item_frozen
-                .as_ref()
-                .and_then(|frozen| super::tasks::parse_default_frozen(frozen).ok())
-                .is_some_and(|frozen| {
-                    frozen.base_version_id == evidence.base_version_id
-                        && frozen.base_integrity_sha256 == evidence.base_integrity_sha256
-                        && frozen.union().ok().as_ref() == Some(range)
-                })
-        } else {
-            false
-        };
-        if range_task && !frozen_matches {
-            return Err(Error::Conflict(
-                "range publication differs from accepted frozen inputs".into(),
-            ));
-        }
+        self.check_frozen_inputs(&command, evidence, range)?;
         let decision = super::prepare(&base, batch, range, Some(evidence))?;
         let (publication, no_change) = match decision {
             Decision::NeedsVerification(reason) => {
@@ -231,5 +203,62 @@ impl<R: MarketRepository> Publisher<R> {
             audit,
             audit_payloads,
         })))
+    }
+    /// Accepted-inputs binding shared by the envelope and ops-first commits:
+    /// for accepted update/backfill tasks the executed base + range must equal
+    /// the item's frozen inputs.
+    pub(crate) fn check_frozen_inputs(
+        &self,
+        command: &Publication,
+        evidence: &Evidence,
+        range: &DateRange,
+    ) -> Result<(), Error> {
+        let head = self.repository.task_head(&command.task_id)?;
+        let range_task = matches!(head.key.operation.as_str(), "update_data" | "backfill_data");
+        let item_frozen = self
+            .repository
+            .task_item_binding(&command.task_id, &command.item_id)?
+            .map(|binding| binding.item.spec.frozen_inputs);
+        let frozen_matches = if head.key.contract_version == super::tasks::CONTRACT_VERSION
+            && head.key.dataset == "market.daily"
+        {
+            // Generation mode stamps `source_generation_id` at accept;
+            // carry it through — its value is enforced by the worker's
+            // bound-session resolution, not by this input check.
+            let mut expected = super::tasks::frozen(
+                &evidence.base_version_id,
+                &evidence.base_integrity_sha256,
+                range,
+            );
+            if let Some(stamped) = item_frozen
+                .as_ref()
+                .and_then(|f| f.get("source_generation_id"))
+            {
+                expected["source_generation_id"] = stamped.clone();
+            }
+            item_frozen.as_ref() == Some(&expected)
+        } else if head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION
+            && head.key.dataset == "market.daily"
+        {
+            // The executed range must equal the union of the item's frozen
+            // required ranges (refresh + frozen gaps for update, frozen
+            // gaps only for backfill) on the frozen base identity.
+            item_frozen
+                .as_ref()
+                .and_then(|frozen| super::tasks::parse_default_frozen(frozen).ok())
+                .is_some_and(|frozen| {
+                    frozen.base_version_id == evidence.base_version_id
+                        && frozen.base_integrity_sha256 == evidence.base_integrity_sha256
+                        && frozen.union().ok().as_ref() == Some(range)
+                })
+        } else {
+            false
+        };
+        if range_task && !frozen_matches {
+            return Err(Error::Conflict(
+                "range publication differs from accepted frozen inputs".into(),
+            ));
+        }
+        Ok(())
     }
 }
