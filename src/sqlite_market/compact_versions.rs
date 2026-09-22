@@ -614,8 +614,8 @@ pub(crate) fn leaf_bars_in_range(
         if !visited.insert(key) {
             return Err(integrity("version chain contains a cycle"));
         }
-        let row = read_version_row(c, key)?
-            .ok_or_else(|| integrity("version chain node missing"))?;
+        let row =
+            read_version_row(c, key)?.ok_or_else(|| integrity("version chain node missing"))?;
         match row.manifest_mode {
             1 => {
                 if row.parent_version_key.is_some() || row.delta_depth != 0 {
@@ -679,8 +679,7 @@ pub(crate) fn leaf_bars_in_range(
             };
             check_stored_clip(&segment, &clip, &root.entity, root.period)?;
             for bar in segment.bars.iter().filter(|bar| {
-                bar.trade_day >= clip_start.max(start_day)
-                    && bar.trade_day <= clip_end.min(end_day)
+                bar.trade_day >= clip_start.max(start_day) && bar.trade_day <= clip_end.min(end_day)
             }) {
                 map.insert(bar.trade_day, bar.clone());
             }
@@ -740,7 +739,8 @@ pub(crate) fn leaf_bars_in_range(
                     }
                 }
                 2 => {
-                    let (drop_start, drop_end) = (range_start.max(start_day), range_end.min(end_day));
+                    let (drop_start, drop_end) =
+                        (range_start.max(start_day), range_end.min(end_day));
                     map.retain(|day, _| !(*day >= drop_start && *day <= drop_end));
                 }
                 _ => return Err(integrity("unknown delta_kind")),
@@ -1615,6 +1615,10 @@ pub(crate) struct VersionResultFacts {
     pub projection_digest: Digest,
     pub first_day: i64,
     pub last_day: i64,
+    pub record_count: i64,
+    pub coverage_status: i64,
+    pub evidence_digest: Digest,
+    pub integrity_digest: Option<Digest>,
 }
 
 pub(crate) fn result_facts(c: &Connection, key: i64) -> Result<VersionResultFacts, Error> {
@@ -1659,6 +1663,10 @@ pub(crate) fn result_facts(c: &Connection, key: i64) -> Result<VersionResultFact
         projection_digest: row.projection_digest,
         first_day: row.first_day,
         last_day: row.last_day,
+        record_count: row.record_count,
+        coverage_status: row.coverage_status,
+        evidence_digest: row.evidence_digest,
+        integrity_digest: row.integrity_digest,
     })
 }
 

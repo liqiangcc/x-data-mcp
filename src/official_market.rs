@@ -574,6 +574,67 @@ impl TdxRangeProvider<'_> {
         market: &str,
         code: &str,
     ) -> Result<(String, String, String, Continuity), SourceError> {
+        let inputs = base
+            .batch
+            .provenance
+            .snapshot_inputs
+            .as_deref()
+            .unwrap_or(&[]);
+        let base_day_sha = inputs
+            .iter()
+            .find(|i| i.role == "day")
+            .map(|i| i.member_sha256.as_str());
+        let base_events_sha = inputs
+            .iter()
+            .find(|i| i.role == SECURITY_EVENTS_ROLE)
+            .map(|i| i.member_sha256.as_str());
+        // The base's member covered exactly its published records — .day
+        // records are fixed-width and parse-verified contiguous.
+        let prefix_bytes = base.version().records.len() * day_file::RECORD_BYTES;
+        let last_base_date = base.version().records.last().map(|b| b.date);
+        self.probe_bound(
+            base_day_sha,
+            base_events_sha,
+            prefix_bytes,
+            last_base_date,
+            market,
+            code,
+        )
+    }
+
+    /// Typed-facts probe for the ops-first update path (#259 S5G): the
+    /// same digest classification as `probe`, but bound to the compact
+    /// `source_bindings` row instead of the envelope `snapshot_inputs`.
+    /// The stored binding is the committed fact — verified at commit
+    /// time by `verified_source_binding` — so probing against it is
+    /// strictly stronger than trusting envelope metadata.
+    fn probe_facts(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        market: &str,
+        code: &str,
+    ) -> Result<(String, String, String, Continuity), SourceError> {
+        self.probe_bound(
+            Some(facts.day_member_sha256.as_str()),
+            Some(facts.security_event_sha256.as_str()),
+            facts.record_count as usize * day_file::RECORD_BYTES,
+            Some(facts.last_day),
+            market,
+            code,
+        )
+    }
+
+    /// Digest-proof continuity classification shared by `probe` (envelope
+    /// bindings) and `probe_facts` (compact source bindings).
+    fn probe_bound(
+        &self,
+        base_day_sha: Option<&str>,
+        base_events_sha: Option<&str>,
+        prefix_bytes: usize,
+        last_base_date: Option<NaiveDate>,
+        market: &str,
+        code: &str,
+    ) -> Result<(String, String, String, Continuity), SourceError> {
         let source = self.session.source();
         let (day_member, day_bytes) = self
             .session
@@ -581,31 +642,19 @@ impl TdxRangeProvider<'_> {
         let day_member_sha256 = crate::hash::sha256(&day_bytes);
         let (events, excluded) = self.session.security_events(market, code)?;
         let events_sha256 = security_events_digest(events, excluded);
-        let inputs = base
-            .batch
-            .provenance
-            .snapshot_inputs
-            .as_deref()
-            .unwrap_or(&[]);
-        let base_day = inputs.iter().find(|i| i.role == "day");
-        let base_events = inputs.iter().find(|i| i.role == SECURITY_EVENTS_ROLE);
-        // The base's member covered exactly its published records — .day
-        // records are fixed-width and parse-verified contiguous.
-        let prefix_bytes = base.version().records.len() * day_file::RECORD_BYTES;
-        let last_base_date = base.version().records.last().map(|b| b.date);
-        let continuity = match (base_day, base_events) {
-            (Some(day), Some(ev))
-                if ev.member_sha256 == events_sha256 && day.member_sha256 == day_member_sha256 =>
+        let continuity = match (base_day_sha, base_events_sha) {
+            (Some(day_sha), Some(ev_sha))
+                if ev_sha == events_sha256 && day_sha == day_member_sha256 =>
             {
                 Continuity::Unchanged {
                     prefix_bytes: day_bytes.len(),
                 }
             }
-            (Some(day), Some(ev))
-                if ev.member_sha256 == events_sha256
+            (Some(day_sha), Some(ev_sha))
+                if ev_sha == events_sha256
                     && day_bytes.len() > prefix_bytes
                     && day_bytes.len().is_multiple_of(day_file::RECORD_BYTES)
-                    && crate::hash::sha256(&day_bytes[..prefix_bytes]) == day.member_sha256 =>
+                    && crate::hash::sha256(&day_bytes[..prefix_bytes]) == day_sha =>
             {
                 // A parse failure here means the member itself is
                 // malformed — a source error, not a revision.
@@ -670,6 +719,168 @@ impl TdxRangeProvider<'_> {
             },
             record: raw,
         })
+    }
+
+    /// Typed ops-first acquisition (#259 S5G): probe continuity against
+    /// compact base facts, parse only the proven-new tail records, and
+    /// return exactly what the typed commit needs — no `fixed(base)`
+    /// materialization and no combined JSON envelope. `Ok(None)` means
+    /// the ops path cannot carry this update (absent continuity proof or
+    /// coverage/unit metadata drift) and the caller falls back to
+    /// `acquire`, which reproduces the envelope semantics for the rare
+    /// cases that still need it.
+    ///
+    /// `base_window` is the caller's `base_bars_in_range` read — the
+    /// base's leaf bars inside the accepted range only — used for the
+    /// segment batch and the empty-range check the envelope path makes.
+    fn acquire_typed(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &crate::market_update::DateRange,
+    ) -> Result<Option<crate::market_update::runner::TypedAcquisition>, SourceError> {
+        let symbol = facts.symbol.as_str();
+        let Some((market, code)) = symbol.split_once('.').filter(|(m, c)| {
+            matches!(*m, "sh" | "sz") && c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())
+        }) else {
+            return Err(SourceError::Unsupported(format!(
+                "unsupported symbol {symbol:?}; expected sh|sz + six digits"
+            )));
+        };
+        let (day_member, day_member_sha256, events_sha256, continuity) =
+            self.probe_facts(facts, market, code)?;
+        let (events, excluded) = self.session.security_events(market, code)?;
+        let gbbq_member_sha256 = self.session.decoded_gbbq()?.sha256.clone();
+        let source = self.session.source();
+        let (mode, prefix_bytes) = match &continuity {
+            Continuity::Unchanged { prefix_bytes } => ("unchanged", *prefix_bytes),
+            Continuity::Append { prefix_bytes, .. } => ("append", *prefix_bytes),
+            Continuity::Unverified => return Ok(None),
+        };
+        let make_evidence = |candidate_sha256: String| {
+            Ok::<_, SourceError>(crate::market_update::Evidence {
+                base_version_id: facts.version_id.clone(),
+                base_integrity_sha256: facts.integrity_sha256.clone(),
+                candidate_sha256,
+                range: range.clone(),
+                same_qfq_basis_ref: format!(
+                    "inspected snapshot manifest {} + gbbq member {}",
+                    source.manifest_sha256(),
+                    gbbq_member_sha256
+                ),
+                revision_ref: None,
+                continuity: Some(crate::market_update::ContinuityEvidence {
+                    mode: mode.into(),
+                    day_member_sha256: day_member_sha256.clone(),
+                    day_prefix_bytes: prefix_bytes as u64,
+                    gbbq_events_sha256: events_sha256.clone(),
+                }),
+            })
+        };
+        match continuity {
+            Continuity::Unverified => unreachable!("returned above"),
+            Continuity::Unchanged { .. } => {
+                // Envelope parity: no base bars inside the accepted range
+                // is a source failure there, not a no-change.
+                if base_window.is_empty() {
+                    return Err(SourceError::InvalidResponse(
+                        "snapshot carries no bars inside the accepted range".into(),
+                    ));
+                }
+                let mut segment = self.session.assemble_daily(
+                    symbol,
+                    DayMemberRead {
+                        member: day_member.clone(),
+                        sha256: day_member_sha256.clone(),
+                    },
+                    base_window.to_vec(),
+                    events,
+                    excluded,
+                )?;
+                // The member bytes and event set are byte-proven
+                // identical to what the base was published from, so the
+                // base's coverage claim remains exactly true for this
+                // data (same pinning rule as the envelope path).
+                segment.coverage = facts.coverage.clone();
+                // Metadata the ops path cannot carry — a unit change or
+                // a non-complete coverage claim requires the envelope
+                // path's combined-candidate machinery.
+                if segment.unit_currency != facts.unit_currency
+                    || facts.coverage.status != crate::market_data::CoverageStatus::Complete
+                {
+                    return Ok(None);
+                }
+                crate::publish::validate_and_deduplicate(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                crate::publish::validate_unit_currency_evidence(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                crate::publish::validate_adjustment_evidence(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                Ok(Some(crate::market_update::runner::TypedAcquisition {
+                    decision: crate::market_update::runner::TypedDecision::Unchanged,
+                    evidence: make_evidence(
+                        crate::market_update::candidate_digest(&segment)
+                            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
+                    )?,
+                }))
+            }
+            Continuity::Append { tail, .. } => {
+                let mut segment_bars = base_window.to_vec();
+                segment_bars.extend(MaterializeSession::qfq_bars(&tail, events)?);
+                segment_bars.retain(|b| range.start <= b.date && b.date <= range.end);
+                if segment_bars.is_empty() {
+                    return Err(SourceError::InvalidResponse(
+                        "snapshot carries no bars inside the accepted range".into(),
+                    ));
+                }
+                let segment = self.session.assemble_daily(
+                    symbol,
+                    DayMemberRead {
+                        member: day_member.clone(),
+                        sha256: day_member_sha256.clone(),
+                    },
+                    segment_bars,
+                    events,
+                    excluded,
+                )?;
+                // A coverage or unit drift means the merged result carries
+                // new metadata — the ops path has no channel for it; the
+                // envelope path handles it (and its NEEDS_VERIFICATION
+                // outcome for genuinely conflicting units).
+                if segment.coverage != facts.coverage
+                    || segment.unit_currency != facts.unit_currency
+                {
+                    return Ok(None);
+                }
+                crate::publish::validate_and_deduplicate(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                crate::publish::validate_unit_currency_evidence(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                crate::publish::validate_adjustment_evidence(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                // The probe proved every tail record is strictly newer
+                // than the base's last day, so the in-range tail bars
+                // are pure upserts: no base date can be revised and none
+                // is removed.
+                let upserts: Vec<Bar> = segment
+                    .bars
+                    .iter()
+                    .filter(|b| b.date > facts.last_day)
+                    .cloned()
+                    .collect();
+                Ok(Some(crate::market_update::runner::TypedAcquisition {
+                    decision: if upserts.is_empty() {
+                        crate::market_update::runner::TypedDecision::Unchanged
+                    } else {
+                        crate::market_update::runner::TypedDecision::Append { upserts }
+                    },
+                    evidence: make_evidence(
+                        crate::market_update::candidate_digest(&segment)
+                            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
+                    )?,
+                }))
+            }
+        }
     }
 }
 
@@ -858,6 +1069,14 @@ impl RangeProvider for TdxRangeProvider<'_> {
             batch,
             combined,
         })
+    }
+    fn acquire_typed(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &crate::market_update::DateRange,
+    ) -> Result<Option<crate::market_update::runner::TypedAcquisition>, SourceError> {
+        TdxRangeProvider::acquire_typed(self, facts, base_window, range)
     }
 }
 

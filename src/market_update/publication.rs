@@ -61,6 +61,55 @@ pub trait RangeRepository: MarketRepository {
     ) -> Result<Option<Receipt>, Error> {
         Ok(None)
     }
+    /// Typed base facts without bar materialization (#259 S5G). `None`
+    /// means the backend cannot serve metadata-only facts; the caller
+    /// falls back to `fixed()`.
+    fn update_base_facts(
+        &self,
+        _base_version_id: &str,
+    ) -> Result<Option<crate::market_update::UpdateBaseFacts>, Error> {
+        Ok(None)
+    }
+    /// Windowed base bars for the ops-diff path: leaf bars restricted to
+    /// `[start, end]` without full-history materialization. `None` means
+    /// unsupported.
+    fn base_bars_in_range(
+        &self,
+        _base_version_id: &str,
+        _start: chrono::NaiveDate,
+        _end: chrono::NaiveDate,
+    ) -> Result<Option<Vec<crate::market_data::Bar>>, Error> {
+        Ok(None)
+    }
+    /// Typed ops commit (#259 S5G): stages the delta and verifies the
+    /// staged ops by read-back comparison — O(ops), no expected leaf
+    /// bars required. `continuity_evidence` is the probe's proof record,
+    /// stored verbatim alongside the commit. `Ok(None)` means
+    /// unsupported.
+    fn commit_range_ops_typed(
+        &self,
+        _command: &Publication,
+        _scope: &Scope,
+        _base_version_id: &str,
+        _upserts: &[crate::market_data::Bar],
+        _removes: &[chrono::NaiveDate],
+        _continuity_evidence: Option<&serde_json::Value>,
+    ) -> Result<Option<Receipt>, Error> {
+        Ok(None)
+    }
+    /// No-change publication for the typed update path (#259 S5G): the
+    /// continuity probe proved the source bytes identical to the base's
+    /// pinned inputs, so the result reuses the base version and the head
+    /// stays put. `Ok(None)` means unsupported.
+    fn commit_range_no_change_typed(
+        &self,
+        _command: &Publication,
+        _base_version_id: &str,
+        _range: &crate::market_update::DateRange,
+        _continuity_evidence: Option<&serde_json::Value>,
+    ) -> Result<Option<Receipt>, Error> {
+        Ok(None)
+    }
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error>;
     fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error>;
     fn transition_task(

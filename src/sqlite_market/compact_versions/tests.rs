@@ -1110,7 +1110,12 @@ fn leaf_bars_in_range_matches_full_reconstruction() {
     let bars: Vec<CompactBar> = (0..10).map(|d| cb(d, 100 + d)).collect();
     let (base_key, _) = publish_daily(&c, "v1", &bars);
     // upsert revises day 5 and appends days 10-12
-    let rev = segment(&c, "sh.600006", Period::Day, &[cb(5, 555), cb(10, 200), cb(11, 210), cb(12, 220)]);
+    let rev = segment(
+        &c,
+        "sh.600006",
+        Period::Day,
+        &[cb(5, 555), cb(10, 200), cb(11, 210), cb(12, 220)],
+    );
     let draft = mk_draft("v2", "sh.600006", Period::Day, &c);
     let key = stage_delta(&c, &draft, base_key, &[upsert(&rev, 5, 12)]).unwrap();
     mark_validated(&c, key).unwrap();

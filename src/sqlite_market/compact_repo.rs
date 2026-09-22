@@ -218,6 +218,38 @@ impl SqliteCompactMarket {
         self.tx(|c| compact_versions::mark_validated(c, version_key(c, version_id)?))
     }
 
+    /// Continuity-evidence JSON shared by the ops-first commit paths
+    /// (#259 S5G): carries the probe's `ContinuityEvidence` so a typed
+    /// commit records the same proof fields as the plan-based path.
+    fn ops_continuity_json(
+        mode: &str,
+        base_version_id: &str,
+        source_binding_digest: &Digest,
+        prefix_bytes: Option<u64>,
+        evidence: Option<&Value>,
+    ) -> Value {
+        let mut continuity = json!({
+            "mode": mode,
+            "base_version_id": base_version_id,
+            "source_binding_digest": hex_bytes(source_binding_digest),
+        });
+        if let Some(evidence) = evidence {
+            if let Some(proof) = evidence.get("continuity") {
+                continuity["proof"] = proof.clone();
+            }
+            if let Some(basis) = evidence.get("same_qfq_basis_ref") {
+                continuity["basis_ref"] = basis.clone();
+            }
+            if let Some(revision) = evidence.get("revision_ref") {
+                continuity["revision_ref"] = revision.clone();
+            }
+        }
+        if let Some(prefix_bytes) = prefix_bytes {
+            continuity["prefix_bytes"] = json!(prefix_bytes);
+        }
+        continuity
+    }
+
     /// Commits a staged ops-delta update with the same binding / required
     /// heads / head CAS semantics as the envelope commit path.
     #[allow(clippy::too_many_arguments)]
@@ -231,8 +263,29 @@ impl SqliteCompactMarket {
         expected_revision: u64,
         run_id: &str,
         occupancy_key: &str,
+        continuity_evidence: Option<&Value>,
     ) -> Result<Receipt, Error> {
         self.write(|c| {
+            // Replay: a committed result may precede a lost response —
+            // return its receipt instead of conflicting on re-register.
+            if let Some(kind) = registry_kind(c, result_id)? {
+                if kind != 1 {
+                    return Err(Error::Conflict("result identity conflict".into()));
+                }
+                let stored = compact_results::read_market_update(c, result_id)?;
+                if stored.identity.task_id != task_id
+                    || stored.identity.item_id != item_id
+                    || stored.identity.result_version_id != result_version_id
+                {
+                    return Err(Error::Conflict("result identity conflict".into()));
+                }
+                return Ok(Receipt {
+                    publication_id: result_id.into(),
+                    version_id: stored.identity.result_version_id.clone(),
+                    task_id: task_id.into(),
+                    task_revision: stored.identity.task_revision,
+                });
+            }
             let base_key = version_key(c, base_version_id)?;
             let result_key = version_key(c, result_version_id)?;
             let facts = compact_versions::result_facts(c, result_key)?;
@@ -262,14 +315,20 @@ impl SqliteCompactMarket {
                     (MarketUpdateChange::Full, facts.first_day, facts.last_day)
                 }
             };
-            let mut continuity = json!({
-                "mode": if matches!(change, MarketUpdateChange::Append{..}) {"append"} else {"full"},
-                "base_version_id": base_version_id,
-                "source_binding_digest": hex_bytes(&facts.source_binding_digest),
-            });
-            if let MarketUpdateChange::Append { prefix_bytes, .. } = &change {
-                continuity["prefix_bytes"] = json!(prefix_bytes);
-            }
+            let continuity = Self::ops_continuity_json(
+                if matches!(change, MarketUpdateChange::Append { .. }) {
+                    "append"
+                } else {
+                    "full"
+                },
+                base_version_id,
+                &facts.source_binding_digest,
+                match &change {
+                    MarketUpdateChange::Append { prefix_bytes, .. } => Some(*prefix_bytes),
+                    _ => None,
+                },
+                continuity_evidence,
+            );
             let evidence =
                 compact_versions::put_evidence(c, EvidenceKind::Continuity, &continuity)?;
             let entity = facts.entity.clone();
@@ -309,6 +368,200 @@ impl SqliteCompactMarket {
                 task_id: task_id.into(),
                 task_revision: stored.identity.task_revision,
             })
+        })
+    }
+
+    /// Replay check for the typed commit entry points (#259 S5G): a
+    /// committed market-update result under this publication_id returns
+    /// its receipt; a foreign result kind or mismatched identity fails
+    /// closed, matching `commit_range_tx`'s registry behavior.
+    fn typed_replay_receipt(&self, command: &Publication) -> Result<Option<Receipt>, Error> {
+        self.read(|c| match registry_kind(c, &command.publication_id)? {
+            Some(1) => {
+                let stored = compact_results::read_market_update(c, &command.publication_id)?;
+                if stored.identity.task_id != command.task_id
+                    || stored.identity.item_id != command.item_id
+                    || stored.identity.result_version_id != command.version_id
+                {
+                    return Err(Error::Conflict("result identity conflict".into()));
+                }
+                Ok(Some(Receipt {
+                    publication_id: command.publication_id.clone(),
+                    version_id: stored.identity.result_version_id.clone(),
+                    task_id: command.task_id.clone(),
+                    task_revision: stored.identity.task_revision,
+                }))
+            }
+            Some(_) => Err(Error::Conflict("result identity conflict".into())),
+            None => Ok(None),
+        })
+    }
+
+    /// No-change publication for the ops-first update path (#259 S5G):
+    /// the continuity probe proved the member prefix is byte-identical
+    /// to the stored base, so the result reuses the base version — no
+    /// staging, no new version, the published head stays put.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn commit_ops_no_change(
+        &self,
+        result_id: &str,
+        task_id: &str,
+        item_id: &str,
+        base_version_id: &str,
+        expected_revision: u64,
+        run_id: &str,
+        occupancy_key: &str,
+        range_start_day: i64,
+        range_end_day: i64,
+        continuity_evidence: Option<&Value>,
+    ) -> Result<Receipt, Error> {
+        self.write(|c| {
+            if let Some(kind) = registry_kind(c, result_id)? {
+                if kind != 1 {
+                    return Err(Error::Conflict("result identity conflict".into()));
+                }
+                let stored = compact_results::read_market_update(c, result_id)?;
+                if stored.identity.task_id != task_id
+                    || stored.identity.item_id != item_id
+                    || stored.identity.result_version_id != base_version_id
+                {
+                    return Err(Error::Conflict("result identity conflict".into()));
+                }
+                return Ok(Receipt {
+                    publication_id: result_id.into(),
+                    version_id: stored.identity.result_version_id.clone(),
+                    task_id: task_id.into(),
+                    task_revision: stored.identity.task_revision,
+                });
+            }
+            let base_key = version_key(c, base_version_id)?;
+            let facts = compact_versions::result_facts(c, base_key)?;
+            if facts.state != CompactVersionState::Published {
+                return Err(integrity("no-change base is not published"));
+            }
+            let prefix_bytes = facts.record_count * 32;
+            let continuity = Self::ops_continuity_json(
+                "unchanged",
+                base_version_id,
+                &facts.source_binding_digest,
+                Some(prefix_bytes as u64),
+                continuity_evidence,
+            );
+            let evidence =
+                compact_versions::put_evidence(c, EvidenceKind::Continuity, &continuity)?;
+            let stored = compact_results::commit_market_update(
+                c,
+                &MarketUpdateCommit {
+                    result_id: result_id.into(),
+                    task_id: task_id.into(),
+                    item_id: item_id.into(),
+                    base_version_key: base_key,
+                    result_version_key: base_key,
+                    range_start_day,
+                    range_end_day,
+                    algorithm_version: UPDATE_ALGORITHM.into(),
+                    source_binding_digest: facts.source_binding_digest,
+                    evidence_digest: evidence,
+                    expected_task_revision: expected_revision,
+                    published_at: None,
+                    head: HeadExpectation::Keep,
+                    required_heads: vec![RequiredHead {
+                        entity: facts.entity.clone(),
+                        period: Period::Day,
+                        expected: Some(base_key),
+                    }],
+                    binding: BindingCheck {
+                        run_id: run_id.into(),
+                        entity: facts.entity.clone(),
+                        period: Period::Day,
+                        occupancy_key: occupancy_key.into(),
+                    },
+                    change: MarketUpdateChange::NoChange {
+                        prefix_bytes: prefix_bytes as u64,
+                    },
+                },
+            )?;
+            Ok(Receipt {
+                publication_id: result_id.into(),
+                version_id: stored.identity.result_version_id.clone(),
+                task_id: task_id.into(),
+                task_revision: stored.identity.task_revision,
+            })
+        })
+    }
+
+    /// Typed base facts for the ops-first update path (#259 S5G): version
+    /// row + source binding + version evidence — no bar materialization.
+    /// The caller gets exactly what `probe`/`prepare` read off the legacy
+    /// `CheckedRecord`: bindings, coverage, units, integrity, bounds.
+    pub(crate) fn update_base_facts(
+        &self,
+        base_version_id: &str,
+    ) -> Result<crate::market_update::UpdateBaseFacts, Error> {
+        self.read(|c| {
+            let key = version_key(c, base_version_id)?;
+            let facts = compact_versions::result_facts(c, key)?;
+            if facts.state != CompactVersionState::Published {
+                return Err(integrity("ops base version is not published"));
+            }
+            if facts.period != Period::Day {
+                return Err(integrity("ops base is not a daily version"));
+            }
+            let binding = compact_versions::read_source_binding(c, &facts.source_binding_digest)?;
+            let (kind, evidence_json) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
+            if kind != EvidenceKind::Version {
+                return Err(integrity("base version evidence kind mismatch"));
+            }
+            let evidence: compact_market::VersionEvidence = serde_json::from_str(&evidence_json)
+                .map_err(|e| integrity(format!("version evidence malformed: {e}")))?;
+            let integrity_digest = facts
+                .integrity_digest
+                .ok_or_else(|| integrity("published base lacks integrity digest"))?;
+            let coverage_status = match facts.coverage_status {
+                1 => CoverageStatus::Complete,
+                2 => CoverageStatus::Incomplete,
+                _ => CoverageStatus::Unknown,
+            };
+            Ok(crate::market_update::UpdateBaseFacts {
+                version_id: facts.version_id,
+                symbol: facts.entity,
+                record_count: u32::try_from(facts.record_count)
+                    .map_err(|_| integrity("base record_count out of range"))?,
+                first_day: compact_market::epoch_date(facts.first_day).map_err(integrity)?,
+                last_day: compact_market::epoch_date(facts.last_day).map_err(integrity)?,
+                integrity_sha256: hex_bytes(&integrity_digest),
+                coverage: crate::market_data::CoverageEvidence {
+                    status: coverage_status,
+                    reason: evidence.coverage_reason,
+                },
+                unit_currency: evidence.unit_currency,
+                source: evidence.source,
+                generation_id: binding.generation_id,
+                generation_manifest_sha256: hex_bytes(&binding.generation_manifest_sha256),
+                day_member_sha256: hex_bytes(&binding.day_member_sha256),
+                security_event_sha256: hex_bytes(&binding.security_event_sha256),
+            })
+        })
+    }
+
+    /// Windowed base bars for the ops-diff path (#259 S5G).
+    pub(crate) fn base_bars_in_range(
+        &self,
+        base_version_id: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Vec<Bar>, Error> {
+        self.read(|c| {
+            let key = version_key(c, base_version_id)?;
+            let bars = compact_versions::leaf_bars_in_range(
+                c,
+                key,
+                compact_market::epoch_day(start),
+                compact_market::epoch_day(end),
+            )?;
+            bars.iter()
+                .map(|bar| bar.to_bar(Period::Day).map_err(integrity))
+                .collect()
         })
     }
 }
@@ -1352,6 +1605,204 @@ impl RangeRepository for SqliteCompactMarket {
             command.expected_revision,
             &command.run_id,
             &scope.occupancy_key(),
+            None,
+        )
+        .map(Some)
+    }
+    fn update_base_facts(
+        &self,
+        base_version_id: &str,
+    ) -> Result<Option<crate::market_update::UpdateBaseFacts>, Error> {
+        // A base published before snapshot bindings existed cannot drive
+        // the continuity probe — the caller falls back to the envelope
+        // path, whose `Unverified` continuity still covers it.
+        let bound = self.read(|c| {
+            let key = version_key(c, base_version_id)?;
+            let facts = compact_versions::result_facts(c, key)?;
+            c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM source_bindings WHERE source_binding_digest=?1)",
+                params![facts.source_binding_digest.as_slice()],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(storage)
+        })?;
+        if !bound {
+            return Ok(None);
+        }
+        SqliteCompactMarket::update_base_facts(self, base_version_id).map(Some)
+    }
+    fn base_bars_in_range(
+        &self,
+        base_version_id: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Option<Vec<Bar>>, Error> {
+        SqliteCompactMarket::base_bars_in_range(self, base_version_id, start, end).map(Some)
+    }
+    /// Typed ops commit (#259 S5G): identical staging/CAS semantics to
+    /// `commit_range_ops`, but the content binding is O(ops) — the
+    /// staged delta clips are read back and compared to the requested
+    /// upserts/removes under the same normalization `stage_ops_delta`
+    /// applies — instead of reconstructing the whole projected leaf.
+    fn commit_range_ops_typed(
+        &self,
+        command: &Publication,
+        scope: &Scope,
+        base_version_id: &str,
+        upserts: &[Bar],
+        removes: &[NaiveDate],
+        continuity_evidence: Option<&Value>,
+    ) -> Result<Option<Receipt>, Error> {
+        if command.intent
+            != (PublishIntent::Daily {
+                expected_head: Some(base_version_id.into()),
+            })
+        {
+            return Err(Error::Invalid(
+                "ops commit must bind the expected daily head".into(),
+            ));
+        }
+        if let Some(receipt) = self.typed_replay_receipt(command)? {
+            return Ok(Some(receipt));
+        }
+        let version_id = command.version_id.clone();
+        let exists = self.tx(|c| {
+            c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM data_versions WHERE version_id=?1)",
+                [&version_id],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(storage)
+        })?;
+        if !exists {
+            self.stage_ops_delta(
+                &scope.symbol,
+                base_version_id,
+                &version_id,
+                upserts,
+                removes,
+            )?;
+        }
+        self.tx(|c| {
+            let key = version_key(c, &version_id)?;
+            let facts = compact_versions::result_facts(c, key)?;
+            if facts.parent_version_key != Some(version_key(c, base_version_id)?)
+                || facts.state == CompactVersionState::Published
+            {
+                return Err(Error::Conflict(
+                    "staged ops version is not a delta on the expected base".into(),
+                ));
+            }
+            let base = compact_versions::result_facts(
+                c,
+                facts
+                    .parent_version_key
+                    .expect("delta parent checked above"),
+            )?;
+            let (staged, _, _) = compact_v19::read_delta(c, key, base.projection_digest)?;
+            let mut bars: Vec<CompactBar> = upserts
+                .iter()
+                .map(|b| CompactBar::from_bar(b, Period::Day).map_err(integrity))
+                .collect::<Result<_, _>>()?;
+            bars.sort_by_key(|b| b.trade_day);
+            if bars.windows(2).any(|w| w[0].trade_day >= w[1].trade_day) {
+                return Err(integrity("typed ops upserts are not strictly increasing"));
+            }
+            let mut expected: Vec<(i64, i64, Option<compact_market::SegmentClip>)> = Vec::new();
+            for chunk in bars.chunks(SEGMENT_ROWS) {
+                expected.push((
+                    chunk[0].trade_day,
+                    chunk[chunk.len() - 1].trade_day,
+                    Some(compact_market::SegmentClip {
+                        segment_digest: compact_market::segment_digest(
+                            &scope.symbol,
+                            Period::Day,
+                            chunk,
+                        )
+                        .map_err(integrity)?,
+                        clip_start_day: chunk[0].trade_day,
+                        clip_end_day: chunk[chunk.len() - 1].trade_day,
+                        row_count: chunk.len() as u32,
+                    }),
+                ));
+            }
+            for day in removes {
+                let trade_day = compact_market::epoch_day(*day);
+                expected.push((trade_day, trade_day, None));
+            }
+            expected.sort_by_key(|e| e.0);
+            let actual: Vec<(i64, i64, Option<compact_market::SegmentClip>)> = staged
+                .iter()
+                .map(|op| match &op.kind {
+                    StoredDeltaKind::Upsert(clip) => (
+                        op.range_start_day,
+                        op.range_end_day,
+                        Some(clip.clip.clone()),
+                    ),
+                    StoredDeltaKind::Remove => (op.range_start_day, op.range_end_day, None),
+                })
+                .collect();
+            if actual != expected {
+                return Err(Error::Integrity(
+                    "staged ops differ from the requested delta".into(),
+                ));
+            }
+            Ok(())
+        })?;
+        self.validate_staged(&version_id)?;
+        self.commit_ops_update(
+            &command.publication_id,
+            &command.task_id,
+            &command.item_id,
+            base_version_id,
+            &version_id,
+            command.expected_revision,
+            &command.run_id,
+            &scope.occupancy_key(),
+            continuity_evidence,
+        )
+        .map(Some)
+    }
+    fn commit_range_no_change_typed(
+        &self,
+        command: &Publication,
+        base_version_id: &str,
+        range: &crate::market_update::DateRange,
+        continuity_evidence: Option<&Value>,
+    ) -> Result<Option<Receipt>, Error> {
+        if command.intent
+            != (PublishIntent::Daily {
+                expected_head: Some(base_version_id.into()),
+            })
+        {
+            return Err(Error::Invalid(
+                "no-change commit must bind the expected daily head".into(),
+            ));
+        }
+        if command.version_id != base_version_id {
+            return Err(Error::Invalid(
+                "no-change result must reuse the base version".into(),
+            ));
+        }
+        let scope_symbol = self.read(|c| {
+            let key = version_key(c, base_version_id)?;
+            Ok::<_, Error>(compact_versions::result_facts(c, key)?.entity)
+        })?;
+        self.commit_ops_no_change(
+            &command.publication_id,
+            &command.task_id,
+            &command.item_id,
+            base_version_id,
+            command.expected_revision,
+            &command.run_id,
+            &crate::market_storage::Scope {
+                symbol: scope_symbol,
+                period: Period::Day,
+            }
+            .occupancy_key(),
+            compact_market::epoch_day(range.start),
+            compact_market::epoch_day(range.end),
+            continuity_evidence,
         )
         .map(Some)
     }

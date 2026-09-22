@@ -726,6 +726,258 @@ fn ops_range_commit_stages_delta_binds_leaf_and_replays() {
     assert_eq!(replay, receipt);
 }
 
+/// S5G typed path: metadata-only base facts, windowed base reads,
+/// O(ops) staged-delta binding, and the no-change publication — all
+/// without materializing the base leaf.
+#[test]
+fn typed_update_facts_window_ops_and_no_change() {
+    use crate::market_update::publication::RangeRepository;
+
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+
+    let base = mk_version("v1", vec![bar(0, 100), bar(1, 110), bar(2, 120)]);
+    repo.stage(&envelope(&base, source("gen-1"), None)).unwrap();
+    let base_checked = repo.candidate("v1").unwrap();
+    repo.mark_validated(&base_checked).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: base_checked.clone(),
+        required_heads: vec![(Scope::of(&base_checked.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    // 1. Typed base facts: version row + bindings + evidence, no bars.
+    let facts = RangeRepository::update_base_facts(&repo, "v1")
+        .unwrap()
+        .expect("compact backend serves typed base facts");
+    assert_eq!(facts.version_id, "v1");
+    assert_eq!(facts.symbol, "sh.600006");
+    assert_eq!(facts.record_count, 3);
+    assert_eq!(facts.first_day, date(0));
+    assert_eq!(facts.last_day, date(2));
+    assert_eq!(facts.generation_id, "gen-1");
+    assert_eq!(facts.day_member_sha256, "cd".repeat(32));
+    assert_eq!(facts.security_event_sha256, "ef".repeat(32));
+    // The typed facts carry the compact integrity digest (the content
+    // binding covering projection + source inputs), not the synthesized
+    // envelope's legacy digest.
+    let stored_integrity: String = repo
+        .read(|c| {
+            c.query_row(
+                "SELECT lower(hex(integrity_digest)) FROM data_versions WHERE version_id='v1'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(storage)
+        })
+        .unwrap();
+    assert_eq!(facts.integrity_sha256, stored_integrity);
+    assert_eq!(facts.coverage.status, CoverageStatus::Complete);
+    assert_eq!(facts.unit_currency, units());
+
+    // 2. Windowed base read: only the in-range leaf bars decode.
+    let window = RangeRepository::base_bars_in_range(&repo, "v1", date(1), date(2))
+        .unwrap()
+        .expect("windowed read supported");
+    assert_eq!(window, vec![bar(1, 110), bar(2, 120)]);
+    let window = RangeRepository::base_bars_in_range(&repo, "v1", date(5), date(9))
+        .unwrap()
+        .expect("windowed read supported");
+    assert!(window.is_empty());
+
+    // 3. Typed ops commit: staged delta binds by ops read-back, not leaf.
+    let task_id2 = {
+        let scope = task_control::legacy::scope_id("sh.600006", "day");
+        let work = FrozenWork {
+            items: vec![ItemSpec {
+                item_id: ITEM.into(),
+                target: json!({"symbol": "sh.600006", "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            }],
+            scopes: BTreeSet::from([scope]),
+            shared_evidence: None,
+        };
+        let command = Command {
+            key: CommandKey {
+                operation: "update_data".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        match repo
+            .accept("req-2", &command, &work, RUN, None)
+            .unwrap()
+            .record
+            .outcome
+        {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        }
+    };
+    let revision2 = start_item(&repo, &task_id2);
+    let scope = Scope::of(&base_checked.version);
+    let command = Publication {
+        publication_id: "upd-typed-1".into(),
+        version_id: "v2".into(),
+        task_id: task_id2.clone(),
+        item_id: ITEM.into(),
+        run_id: RUN.into(),
+        expected_revision: revision2,
+        intent: PublishIntent::Daily {
+            expected_head: Some("v1".into()),
+        },
+    };
+    let evidence = json!({
+        "continuity": {"mode": "append", "day_member_sha256": "cd".repeat(32),
+            "day_prefix_bytes": 96, "gbbq_events_sha256": "ef".repeat(32)},
+        "same_qfq_basis_ref": "inspected snapshot manifest x + gbbq member y",
+    });
+
+    // A staged version whose ops differ from the request fails closed.
+    repo.stage_ops_delta("sh.600006", "v1", "v-bad", &[bar(3, 999)], &[])
+        .unwrap();
+    let bad_command = Publication {
+        version_id: "v-bad".into(),
+        ..command.clone()
+    };
+    assert!(
+        repo.commit_range_ops_typed(&bad_command, &scope, "v1", &[bar(3, 130)], &[], None)
+            .is_err()
+    );
+
+    let receipt = repo
+        .commit_range_ops_typed(&command, &scope, "v1", &[bar(3, 130)], &[], Some(&evidence))
+        .unwrap()
+        .expect("typed ops commit supported");
+    assert_eq!(receipt.version_id, "v2");
+    let page = repo
+        .range(
+            &scope,
+            None,
+            &Range {
+                start: date(0),
+                end: date(10),
+                after: None,
+                limit: 10,
+            },
+        )
+        .unwrap();
+    assert_eq!(page.version.version_id, "v2");
+    assert_eq!(page.rows.len(), 4);
+
+    // Replay of the committed typed result returns the same receipt.
+    let replay = repo
+        .commit_range_ops_typed(&command, &scope, "v1", &[bar(3, 130)], &[], None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(replay, receipt);
+
+    // 4. No-change publication on a fresh item reuses the base version.
+    let task_id3 = {
+        let scope = task_control::legacy::scope_id("sh.600006", "day");
+        let work = FrozenWork {
+            items: vec![ItemSpec {
+                item_id: ITEM.into(),
+                target: json!({"symbol": "sh.600006", "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            }],
+            scopes: BTreeSet::from([scope]),
+            shared_evidence: None,
+        };
+        let command = Command {
+            key: CommandKey {
+                operation: "update_data".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        match repo
+            .accept("req-3", &command, &work, RUN, None)
+            .unwrap()
+            .record
+            .outcome
+        {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        }
+    };
+    let revision3 = start_item(&repo, &task_id3);
+    let nc_command = Publication {
+        publication_id: "upd-typed-nc".into(),
+        version_id: "v2".into(),
+        task_id: task_id3.clone(),
+        item_id: ITEM.into(),
+        run_id: RUN.into(),
+        expected_revision: revision3,
+        intent: PublishIntent::Daily {
+            expected_head: Some("v2".into()),
+        },
+    };
+    let nc_receipt = repo
+        .commit_range_no_change_typed(
+            &nc_command,
+            "v2",
+            &crate::market_update::DateRange {
+                start: date(2),
+                end: date(3),
+            },
+            Some(&evidence),
+        )
+        .unwrap()
+        .expect("typed no-change commit supported");
+    assert_eq!(nc_receipt.version_id, "v2");
+    // Head is unchanged and no new version row was created.
+    let page = repo
+        .range(
+            &scope,
+            None,
+            &Range {
+                start: date(0),
+                end: date(10),
+                after: None,
+                limit: 10,
+            },
+        )
+        .unwrap();
+    assert_eq!(page.version.version_id, "v2");
+    let version_rows: i64 = repo
+        .read(|c| {
+            c.query_row("SELECT count(*) FROM data_versions", [], |r| r.get(0))
+                .map_err(storage)
+        })
+        .unwrap();
+    assert_eq!(version_rows, 3); // v1, v-bad (orphan draft), v2
+
+    // A no-change command that names a different result version is rejected.
+    let bad_nc = Publication {
+        version_id: "v-other".into(),
+        ..nc_command.clone()
+    };
+    assert!(
+        repo.commit_range_no_change_typed(
+            &bad_nc,
+            "v2",
+            &crate::market_update::DateRange {
+                start: date(2),
+                end: date(3),
+            },
+            None
+        )
+        .is_err()
+    );
+}
+
 fn collection_candidate_for(
     version: &EffectiveVersion,
     task_id: &str,

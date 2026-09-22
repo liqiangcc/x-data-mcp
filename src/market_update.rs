@@ -85,6 +85,29 @@ pub struct PreparedRange {
     pub same_qfq_basis_ref: String,
     pub revision_ref: Option<String>,
 }
+/// Typed base-version facts for the ops-first update path (#259 S5G):
+/// everything acquire/prepare needs about the base — bindings, coverage,
+/// units, integrity digest, record bounds — without materializing bars.
+/// `day_member_sha256`/`security_event_sha256` are the source bindings the
+/// base was published from; `integrity_sha256` is the published integrity
+/// digest in the same hex form the envelope `raw()["integrity_sha256"]`
+/// carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateBaseFacts {
+    pub version_id: String,
+    pub symbol: String,
+    pub record_count: u32,
+    pub first_day: NaiveDate,
+    pub last_day: NaiveDate,
+    pub integrity_sha256: String,
+    pub coverage: crate::market_data::CoverageEvidence,
+    pub unit_currency: crate::market_data::UnitCurrencyEvidence,
+    pub source: String,
+    pub generation_id: String,
+    pub generation_manifest_sha256: String,
+    pub day_member_sha256: String,
+    pub security_event_sha256: String,
+}
 pub fn candidate_digest(batch: &MarketDataBatch) -> Result<String, Error> {
     serde_json::to_vec(batch)
         .map(|b| crate::hash::sha256(&b))

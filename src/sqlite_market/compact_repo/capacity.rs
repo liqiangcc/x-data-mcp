@@ -876,6 +876,7 @@ fn phase_append_ops(
                     head.state_revision,
                     RUN,
                     &task_control::legacy::scope_id(symbol, "day"),
+                    None,
                 )
                 .unwrap();
                 head.state_revision += 1;

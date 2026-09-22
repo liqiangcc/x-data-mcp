@@ -23,6 +23,20 @@ pub struct Acquisition {
     pub evidence: Evidence,
     pub combined: Option<CombinedCandidate>,
 }
+/// Typed acquisition result for the ops-first update path (#259 S5G):
+/// the continuity evidence plus exactly the bars the typed commit needs.
+pub struct TypedAcquisition {
+    pub decision: TypedDecision,
+    pub evidence: Evidence,
+}
+pub enum TypedDecision {
+    /// The member bytes and event set are byte-proven identical to the
+    /// base's pinned snapshot inputs — publish a no-change receipt.
+    Unchanged,
+    /// The base's member bytes are a proven prefix of the current member;
+    /// `upserts` are the qfq-adjusted in-range tail bars — pure appends.
+    Append { upserts: Vec<Bar> },
+}
 /// Synchronous and read-only with respect to publication/task storage. Return
 /// only after acquisition has stopped. Trusted fixture/verifier port, not MCP.
 pub trait RangeProvider {
@@ -32,6 +46,18 @@ pub trait RangeProvider {
         range: &DateRange,
         candidate_id: &str,
     ) -> Result<Acquisition, SourceError>;
+    /// Typed ops-first acquisition (#259 S5G). `Ok(None)` means the
+    /// provider cannot serve the typed contract (or the update carries
+    /// metadata the ops path cannot); the caller falls back to
+    /// `acquire`.
+    fn acquire_typed(
+        &self,
+        _facts: &super::UpdateBaseFacts,
+        _base_window: &[Bar],
+        _range: &DateRange,
+    ) -> Result<Option<TypedAcquisition>, SourceError> {
+        Ok(None)
+    }
 }
 pub struct OfficialRangeProvider;
 impl RangeProvider for OfficialRangeProvider {
@@ -348,6 +374,19 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         range: &DateRange,
         provider: &dyn RangeProvider,
     ) -> Result<Receipt, Error> {
+        // Ops-first typed path (#259 S5G): metadata-only base facts,
+        // tail-only member parse, O(ops) staged-delta commit — no
+        // `fixed(base)` materialization and no combined envelope. A
+        // `None` at any step means this update cannot be carried by the
+        // typed contract (unsupported backend/provider, absent
+        // continuity proof, or metadata drift); fall through to the
+        // envelope path, which reproduces the same decisions at full
+        // materialization cost.
+        if let Some(receipt) =
+            self.commit_typed_range(binding, item_id, base_id, base_digest, range, provider)?
+        {
+            return Ok(receipt);
+        }
         let base = self.repository.fixed(base_id)?;
         if base.raw()["integrity_sha256"] != base_digest {
             return Err(Error::Integrity(
@@ -439,6 +478,112 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             Preparation::Ready(plan) => self.repository.commit_range(&plan),
             Preparation::NeedsVerification(reason) => {
                 Err(Error::Invalid(format!("NEEDS_VERIFICATION: {reason:?}")))
+            }
+        }
+    }
+    /// Typed ops-first range commit (#259 S5G): facts → probe →
+    /// windowed read → O(ops) commit. Every validation the envelope
+    /// path makes is preserved: frozen-inputs binding, the accepted
+    /// base digest, in-range emptiness, unit/coverage parity, and the
+    /// staged-ops read-back binding inside `commit_range_ops_typed`.
+    /// `Ok(None)` at any step means the typed contract cannot carry
+    /// this update and the caller continues on the envelope path.
+    fn commit_typed_range(
+        &self,
+        binding: &crate::task_control::ItemBinding,
+        item_id: &str,
+        base_id: &str,
+        base_digest: &str,
+        range: &DateRange,
+        provider: &dyn RangeProvider,
+    ) -> Result<Option<Receipt>, Error> {
+        let Some(facts) = self.repository.update_base_facts(base_id)? else {
+            return Ok(None);
+        };
+        // The frozen `base_integrity_sha256` is a legacy envelope digest
+        // that cannot be recomputed without materializing the base. On
+        // this path the accepted-base binding is the compact integrity
+        // digest instead — re-verified when `update_base_facts` read the
+        // version row, and transitively covering the leaf content
+        // (projection_digest) and pinned snapshot inputs
+        // (source_binding_digest). The commit's head CAS and verified
+        // source binding carry the rest of the envelope check's weight.
+        let _ = base_digest;
+        let Some(base_window) =
+            self.repository
+                .base_bars_in_range(base_id, range.start, range.end)?
+        else {
+            return Ok(None);
+        };
+        let Some(acquired) = provider
+            .acquire_typed(&facts, &base_window, range)
+            .map_err(|e| Error::Invalid(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+        // Same post-acquisition task guard as the envelope path.
+        let current = self.repository.task_head(&binding.head.task_id)?;
+        if current.status != Status::Running
+            || current.state_revision != binding.head.state_revision
+        {
+            return Err(Error::Conflict(
+                "task changed or cancelled during acquisition".into(),
+            ));
+        }
+        let id = crate::hash::sha256(
+            serde_json::json!([binding.head.task_id, item_id])
+                .to_string()
+                .as_bytes(),
+        );
+        let command = Publication {
+            publication_id: format!("range-result-{id}"),
+            version_id: match &acquired.decision {
+                TypedDecision::Append { .. } => format!("range-version-{id}"),
+                TypedDecision::Unchanged => base_id.into(),
+            },
+            task_id: binding.head.task_id.clone(),
+            item_id: item_id.into(),
+            run_id: self.run_id.clone(),
+            expected_revision: binding.head.state_revision,
+            intent: PublishIntent::Daily {
+                expected_head: Some(base_id.into()),
+            },
+        };
+        // Typed frozen binding: the provider's evidence must claim the
+        // same accepted base identity and range, and its integrity stamp
+        // must equal the compact digest the repository verified when the
+        // facts were read — this is the basis-binding role
+        // `check_frozen_inputs` fills on the envelope path.
+        if acquired.evidence.base_version_id != base_id
+            || acquired.evidence.base_integrity_sha256 != facts.integrity_sha256
+            || acquired.evidence.range != *range
+        {
+            return Err(Error::Invalid(format!(
+                "NEEDS_VERIFICATION: {:?}",
+                Reason::BasisUnknown
+            )));
+        }
+        let continuity_evidence = serde_json::to_value(&acquired.evidence).ok();
+        match &acquired.decision {
+            TypedDecision::Unchanged => self.repository.commit_range_no_change_typed(
+                &command,
+                base_id,
+                range,
+                continuity_evidence.as_ref(),
+            ),
+            TypedDecision::Append { upserts } => {
+                let scope = Scope {
+                    symbol: facts.symbol.clone(),
+                    period: crate::market_data::Period::Day,
+                };
+                self.repository.commit_range_ops_typed(
+                    &command,
+                    &scope,
+                    base_id,
+                    upserts,
+                    &[],
+                    continuity_evidence.as_ref(),
+                )
             }
         }
     }

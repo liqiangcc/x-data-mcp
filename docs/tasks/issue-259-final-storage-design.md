@@ -842,7 +842,16 @@ S5A-2 执行结果（2026-09-21）：`SqliteCompactMarket` 已实现并覆盖 `T
 
 验收：release profile 实测 5,221 scope 全量日更，分项耗时表 + wall time 落 `evidence/issue-259-s5g-daily-ops/result.json`；既有 250 天 soak/no-change/append/integrity 断言不回退。
 
-执行结果：（实现后回填）
+执行结果（部分实现已落地，实测待 S5G-7）：
+
+- `update_base_facts`（compact）：version row + source_binding + version evidence 直读，零 bar 物化；读取时 `result_facts` 重算 `version_integrity_digest` 验证。无 source binding 的 base 返回 `None` → envelope 回退（pre-binding 版本的 `Unverified` 路径仍然覆盖）。
+- `base_bars_in_range`（compact）：复用 `leaf_bars_in_range` 窗口读，只解码与 range 重叠的 segment。
+- `probe_facts`（official_market）：与 `probe` 共享 `probe_bound` digest 分类核心；绑定改为 compact `source_bindings` 行（commit 时 `verified_source_binding` 再验，比 envelope `snapshot_inputs` 元数据更强）。
+- `acquire_typed`（provider）：Unchanged → 零解析直接给证据；Append → 只 `qfq_bars` tail 记录，segment = base_window + in-range tail，coverage/unit 漂移 → `Ok(None)` 回退 envelope；Unverified → `Ok(None)`。
+- `commit_typed_range`（runner）：facts → acquire_typed → typed 提交；冻结的 `base_integrity_sha256` 是 legacy envelope digest，非物化不可重算——typed 路径的 base 内容绑定由 compact integrity digest 承担（覆盖 projection_digest → 传递绑定全部 leaf + source inputs），commit 侧 head CAS + verified source binding 补足 envelope 检查的其余语义。
+- `commit_range_ops_typed`（compact）：staged ops 回读逐 op 比对（O(ops)），替代 `commit_range_ops` 的全量 leaf 重建比对；replay 走 `registry_kind → receipt`（与 envelope `commit_range_tx` 同语义），ops commit 入口也补了事务内 replay。
+- `commit_range_no_change_typed` / `commit_ops_no_change`：`MarketUpdateChange::NoChange` 直提——result 复用 base 版本、head Keep、published_at 空，continuity 证据带 probe 的 proof/basis_ref 字段（与 plan 路径同形）。
+- 遗留：`commit_update_batch` 批量分发（S5G-6）、相位计时 + 全量实测（S5G-7）。
 
 ### S6：release 与 ECS
 
