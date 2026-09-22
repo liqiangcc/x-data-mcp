@@ -750,6 +750,7 @@ fn yearly_derive_commit_on_compact_schema() {
             &self,
             base: &CheckedRecord,
             years: &BTreeSet<i32>,
+            _annual: &crate::yearly::AnnualSeries,
             derived_at: DateTime<Utc>,
         ) -> Result<DerivationEvidence, crate::market_data::SourceError> {
             Ok(DerivationEvidence {

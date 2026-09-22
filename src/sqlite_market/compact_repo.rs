@@ -784,8 +784,26 @@ fn synthesize(m: &MaterializedVersion) -> Result<CheckedRecord, Error> {
         unit_currency: version.unit_currency.clone(),
         adjustment_evidence: version.adjustment_evidence.clone(),
     };
-    let mut raw = serde_json::to_value(version).map_err(super::integrity)?;
-    raw["batch"] = serde_json::to_value(&batch).map_err(super::integrity)?;
+    // Published records keep the typed columns authoritative: the stored
+    // integrity digest already binds the full content, and no reader of a
+    // published envelope consumes `records`/`batch.bars` (only digests,
+    // coverage, lineage and `compact_source`). Serializing thousands of
+    // bars into the envelope per read is pure waste — omit them. Staged
+    // and validated candidates keep the complete envelope because
+    // `compat::check` and replay equality need the self-contained form.
+    let mut raw = if m.state == CompactVersionState::Published {
+        let mut slim_version = version.clone();
+        slim_version.records = Vec::new();
+        let mut raw = serde_json::to_value(&slim_version).map_err(super::integrity)?;
+        let mut slim_batch = batch.clone();
+        slim_batch.bars = Vec::new();
+        raw["batch"] = serde_json::to_value(&slim_batch).map_err(super::integrity)?;
+        raw
+    } else {
+        let mut raw = serde_json::to_value(version).map_err(super::integrity)?;
+        raw["batch"] = serde_json::to_value(&batch).map_err(super::integrity)?;
+        raw
+    };
     raw["compact_source"] = json!({
         "generation_id": m.source_binding.generation_id,
         "generation_manifest_sha256": hex_bytes(m.source_binding.generation_manifest_sha256.as_slice()),

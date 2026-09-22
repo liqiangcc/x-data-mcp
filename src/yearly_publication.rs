@@ -12,7 +12,7 @@ use crate::{
     market_data::{CoverageEvidence, CoverageStatus, Period, YearlyDerivation},
     market_storage::{
         Error, MarketRepository, Publication, PublishIntent, PublishPlan, Publisher, base_error,
-        compat,
+        compat::{self, CheckedRecord},
     },
     publish::{EffectiveVersion, validate_and_deduplicate},
     yearly,
@@ -53,10 +53,15 @@ impl YearlyCandidate {
 
 impl<R: MarketRepository> Publisher<R> {
     /// Read only. Does not stage data, change heads, acquire scopes or accept a task.
+    /// `base` is the caller's windowed read of the fixed daily version and
+    /// `annual` the deterministic re-aggregation already performed for it —
+    /// both are rechecked against the request and evidence here.
     pub fn derive_yearly(
         &self,
         request: &Derivation,
         evidence: &DerivationEvidence,
+        base: &CheckedRecord,
+        annual: &crate::yearly::AnnualSeries,
     ) -> Result<YearlyCandidate, Error> {
         if request.symbol.trim().is_empty()
             || request.version_id.trim().is_empty()
@@ -66,20 +71,10 @@ impl<R: MarketRepository> Publisher<R> {
         {
             return Err(Error::Invalid("explicit yearly identity/selection".into()));
         }
-        // Windowed base read: only bars inside the selected years decode.
-        // Header facts and the stored integrity digest are unchanged.
-        let (first_day, last_day) = match (
-            NaiveDate::from_ymd_opt(*request.years.first().unwrap(), 1, 1),
-            NaiveDate::from_ymd_opt(*request.years.last().unwrap(), 12, 31),
-        ) {
-            (Some(first), Some(last)) => (first, last),
-            _ => return Err(Error::Invalid("selected years out of range".into())),
-        };
-        let base = self
-            .repository
-            .fixed_window(&request.base_daily_version_id, first_day, last_day)
-            .map_err(base_error)?;
         let daily = base.version();
+        if daily.version_id != request.base_daily_version_id {
+            return Err(Error::Base("fixed daily identity binding".into()));
+        }
         if daily.symbol != request.symbol || daily.period != Period::Day {
             return Err(Error::Base("fixed daily identity/period".into()));
         }
@@ -97,8 +92,21 @@ impl<R: MarketRepository> Publisher<R> {
                 "selected range coverage not verified for fixed daily/years/as_of".into(),
             ));
         }
-        let annual = yearly::aggregate(daily, Some(&request.years), as_of)
-            .map_err(|e| Error::Base(e.to_string()))?;
+        // `annual` was aggregated once by the caller over the same windowed
+        // base — verify it really is that series before trusting it.
+        if annual.base_daily_version_id != daily.version_id
+            || annual.as_of != as_of
+            || annual.records.len() != request.years.len()
+            || !annual
+                .records
+                .iter()
+                .map(|r| r.bar.date.year())
+                .eq(request.years.iter().copied())
+        {
+            return Err(Error::Base(
+                "aggregated annual series does not match the request".into(),
+            ));
+        }
         let lineage = YearlyDerivation {
             base_daily_version_id: daily.version_id.clone(),
             algorithm_version: yearly::ALGORITHM_VERSION.into(),
