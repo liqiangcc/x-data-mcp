@@ -23,6 +23,18 @@ Web = 只读的"治理仪表盘"；MCP = 唯一操作通道；SQLite = 唯一事
 5. **无实时性承诺**。轮询刷新；日更粒度为天。
 6. **读路径语义不变**。发现读口缺失先补 core 读口再接线；
    认证未配置或 token 错误时 fail-closed。
+6a. **UI 形态参考 `liqiangcc/acp-web-console`**（同使用场景：
+    iPhone Safari 上的单人巡检）。继承其已验证的移动端决策：
+    布局走 native scroll + `scroll-snap` 抽屉（手写跟手不可行，
+    合成器线程原生处理才不卡）；主题用语义化 CSS 变量 +
+    `{codex,chatgpt,light}` 结构；大列表必须窗口化渲染
+    （回放风暴教训：先收集再渲一次，不要逐行触发重排）；
+    大负载走 gzip HTTP；传输用 HTTP 轮询/长轮询而非 WS
+    （其 de48112 已收敛到该形态）。iOS 已知坑直接继承：
+    http 非 localhost 无 SW 缓存（network-first 策略）、
+    拖动期间关 backdrop-filter、tap/haptic 在 gesture context
+    内触发。**仅借用 UI/传输形态**——Rust 内嵌服务不变，
+    不引入 Node 运行时。
 7. **统计分析只覆盖治理元数据**与既有 `compute_metrics` 结果展示；
    不提供 ad-hoc 全市场行情扫描（存储为 per-entity scope 设计，
    无全局 trade_day 索引，横切为 O(29M bars) 全扫——非本平台职责，
@@ -87,6 +99,18 @@ Web = 只读的"治理仪表盘"；MCP = 唯一操作通道；SQLite = 唯一事
 | 来源对账 | 版本 ↔ generation ↔ manifest/member sha256 ↔ 证据 canonical JSON | `source_bindings` + `evidence_bundles` |
 | 更新审计时间线 | 逐日 continuity_mode、prefix_bytes、delta_digest | `market_update_results` |
 | 验证结果 | verify 结论、被检 digest、fail-closed 原因 | `verify_versions`/audit 投影 |
+
+### UI 规范（跨层，贯穿 A–D）
+
+- 布局：iPhone Safari 竖屏优先；抽屉式导航（左列表右详情或
+  snap 三栏），`overflow-x:auto` + `scroll-snap-type:x mandatory`，
+  JS 只驱动遮罩/class，不做跟手位移
+- 渲染：行列表窗口化（版本链/审计时间线可上千行）；批量数据
+  先收集再单次渲染；逐行 DOM 追加禁止出现在热路径
+- 传输：HTTP 轮询（默认 15s，页面可见时才轮询）；大负载 gzip
+- 主题：语义化 CSS 变量，默认深色（codex 风格起步）
+- PWA：图标/manifest 可留；http 场景 SW 不注册是预期行为，
+  不为 PWA 缓存引入复杂度
 
 ### D. 数据浏览（P2——最后做，先验证请求模式）
 
