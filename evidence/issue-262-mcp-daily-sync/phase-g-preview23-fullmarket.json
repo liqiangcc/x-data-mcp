@@ -1,0 +1,88 @@
+{
+  "issue": "liqiangcc/x-data-mcp#262",
+  "kind": "full-market MCP-only validation",
+  "code_version": {
+    "tag": "v0.2.0-preview.23",
+    "commit": "0cb3fe13bce8b68eb7adb40849eb8c2ce2a3137e",
+    "dist_ref": "refs/dist/v0.2.0-preview.23",
+    "binary_sha256": {
+      "data_service": "8187496d1217a7692ef06bf271b5ee7cde3725ddde29729249b27e398770addc",
+      "acquire_service": "658d7def773f535ec6296affcf5375e4da2434609da2382ff6b210642f1e7822",
+      "tarball": "10509a0609a5a8ae6b8e1b7536b76e2deef1932bebd908c17694e02b6399a379",
+      "local_ecs_identical": true
+    },
+    "smoke": "PASS (synthetic fixture only; NOT_PRODUCTION_READY)"
+  },
+  "environment": {
+    "host": "ecs-node (Alibaba Cloud ECS)",
+    "cpu": "2 vCPU x86_64",
+    "ram": "2 GiB",
+    "disk": "40 GB root",
+    "runtime_guard": "X_DATA_MCP_UNSAFE_NONLOCAL_FS=1 (overlayfs opt-out; preview acceptance only)",
+    "contention": "first ~30min of daily phase ran under unrelated headless-Chrome CPU load (load avg 12-22); stuck renderer (376996, 2h12m CPU in 3h11m) killed at ~05:00 local, after which load dropped to ~1 and chunk latency fell 150-190s -> 5-6s"
+  },
+  "scale": {
+    "catalog_records": 5226,
+    "daily_entities_published": 5221,
+    "daily_bars_total": 16655244,
+    "yearly_entities_published": 5221,
+    "official_source_gaps": [
+      "sz.001246", "sz.301569", "sz.301660", "sz.301686", "sz.301716"
+    ],
+    "gap_cause": "official package has no .day member for these symbols (data gap, not a system failure)"
+  },
+  "daily_collection": {
+    "method": "start_collection via MCP, explicit selections of 100 entities per task",
+    "task_exec_clean_run": {
+      "note": "45 tasks measured after Chrome contention removed (resumed run, warm page cache)",
+      "p50_s_per_100_items": 3.6,
+      "p90_s_per_100_items": 5.4,
+      "max_s": 12.4,
+      "total_s": 174.0,
+      "ms_per_item_median": 36.0
+    },
+    "task_exec_contended_run": {
+      "note": "first 7 chunks under Chrome contention",
+      "s_per_100_items": [64.8, 134.3, 153.6, 162.5, 189.4, 189.1, 223.5]
+    }
+  },
+  "yearly_derivation": {
+    "method": "update_data dataset=market.yearly via MCP, 100 items per task, per-item years intersected with daily availability (2025, 2026)",
+    "availability_precheck_s": 142,
+    "availability_skipped": 0,
+    "accept_s_per_100_items": {"p50": 3.42, "p90": 5.29, "max": 11.69},
+    "exec_s_per_100_items": {"p50": 17.40, "p90": 30.37, "max": 32.03},
+    "exec_task_total_s": 1036.5,
+    "end_to_end_s": 1356,
+    "ms_per_item_avg": 198.5,
+    "baseline_preview18": {"exec_ms_per_item": 800, "e2e_s": 10620},
+    "speedup": {"per_item": "4.0x", "e2e": "7.8x"}
+  },
+  "storage": {
+    "preview_sqlite_bytes": 831143936,
+    "wal_bytes": 16777216,
+    "data_plane_total_mb": 848,
+    "generations_dir_mb": 1100,
+    "yearly_delta_vs_daily_only_mb": 48,
+    "first_collection_budget_bytes": 2684354560,
+    "budget_pass": true
+  },
+  "crash_recovery_evidence": {
+    "event": "root filesystem filled to 100% during daily phase (unrelated /tmp scratch from prior sessions); data_service exited with STORAGE_UNAVAILABLE: disk I/O error; systemd restarted it 136+ times until space freed",
+    "task_state": "in-flight chunk-7 task observed as needs_verification ('old run or unresolved execution') - fail-closed",
+    "resolution": "verify_stopped_writes via MCP -> task marked interrupted, range locks released; resubmitted selection succeeded 100/100",
+    "duplicate_protection": "re-submission of already-published entities rejected with INVALID_MARKET_COMMAND 'existing daily head requires the update_data range path' (2 chunks, 200 items) - CAS semantics intact",
+    "request_identity": "re-using request_id with different payload rejected REQUEST_CONFLICT - durable request identity intact"
+  },
+  "integrity": {
+    "no_items_left_needs_verification": true,
+    "all_published_via_mcp": true,
+    "shell_sqlite_bypass": "none in data path (read-only diagnostics only)"
+  },
+  "targets_assessment": {
+    "accept_lt_5s_per_batch": "p50 3.42s PASS / p90 5.29s marginal",
+    "item_lt_150ms": "198.5ms avg NOT MET",
+    "yearly_lt_15min": "1036s task-sum NOT MET (1356s e2e incl. precheck+polling)",
+    "note": "stretch targets self-imposed; dominant residual costs: per-item multi-transaction writes, sha256 digests, sqlite VM"
+  }
+}
