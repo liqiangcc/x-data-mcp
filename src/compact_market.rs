@@ -90,7 +90,7 @@ impl CompactBar {
             if parsed < Decimal::ZERO {
                 return Err(invalid("negative amount"));
             }
-            if parsed.normalize().to_string() != *amount {
+            if !canonical_decimal(amount) {
                 return Err(invalid("stored amount is not canonical"));
             }
         }
@@ -763,7 +763,7 @@ fn invalid(message: impl Into<String>) -> Error {
     Error::Invalid(message.into())
 }
 
-fn period_code(period: Period) -> u8 {
+pub(crate) fn period_code(period: Period) -> u8 {
     match period {
         Period::Day => 1,
         Period::Year => 2,
@@ -841,7 +841,35 @@ fn push_text(out: &mut Vec<u8>, value: &str) {
     push_bytes(out, value.as_bytes());
 }
 
-fn bar_encoding(out: &mut Vec<u8>, bar: &CompactBar) {
+/// Lexical equivalent of `parsed.normalize().to_string() == text` for a
+/// value that already parsed as `Decimal`: optional '-', a non-empty digit
+/// integer part without leading zeros ("0" alone is fine), and an optional
+/// non-empty digit fraction that does not end in '0'. No '+', exponent, or
+/// bare '.' ever survives normalization, and "-0…" normalizes to "0".
+fn canonical_decimal(text: &str) -> bool {
+    let body = text.strip_prefix('-').unwrap_or(text);
+    let (int, frac) = match body.split_once('.') {
+        Some((i, f)) => (i, f),
+        None => (body, ""),
+    };
+    if int.is_empty()
+        || !int.bytes().all(|b| b.is_ascii_digit())
+        || (int.len() > 1 && int.starts_with('0'))
+    {
+        return false;
+    }
+    if body.contains('.')
+        && (frac.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) || frac.ends_with('0'))
+    {
+        return false;
+    }
+    if text.starts_with('-') && body.bytes().all(|b| b == b'0' || b == b'.') {
+        return false;
+    }
+    true
+}
+
+pub(crate) fn bar_encoding(out: &mut Vec<u8>, bar: &CompactBar) {
     out.extend_from_slice(b"x-data-bar-v1\0");
     out.extend_from_slice(&bar.trade_day.to_be_bytes());
     for value in [
@@ -1058,6 +1086,79 @@ mod tests {
         assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
         bar.volume = Some(Decimal::from_str("9223372036854775808").unwrap());
         assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+    }
+
+    #[test]
+    fn canonical_decimal_matches_normalize_stringify() {
+        // Equivalence oracle: `check()` parses first, then applies the
+        // lexical check — so the composed predicate must equal the old
+        // `parse ok && normalize().to_string() == original` on every input.
+        let cases = [
+            "0",
+            "-0",
+            "0.0",
+            "-0.0",
+            "0.00",
+            "1.",
+            "5.",
+            ".5",
+            "-.5",
+            "+5",
+            "1e3",
+            "1E3",
+            "1e-3",
+            "007",
+            "0.50",
+            "0.05",
+            "1.230",
+            "-1.230",
+            "10.0",
+            "0.001",
+            "-0.5",
+            "0.000",
+            "1",
+            "-1",
+            "12.34",
+            "-12.34",
+            "100.01",
+            "0.10",
+            "00.5",
+            "1.2.3",
+            "",
+            "-",
+            ".",
+            "1 0",
+            " 5",
+            "5 ",
+            "1_0",
+            "79228162514264337593543950335",
+            "99999999999999999999999999999",
+            "1234567890123456789012345678.9",
+            "0.0000000000000000000000000001",
+            "-0.0000000000000000000000000001",
+            "9007199254740993.99",
+        ];
+        for case in cases {
+            let parsed = case.parse::<Decimal>();
+            let composed = parsed.is_ok() && canonical_decimal(case);
+            let oracle = parsed
+                .map(|d| d.normalize().to_string() == case)
+                .unwrap_or(false);
+            assert_eq!(composed, oracle, "case {case:?}");
+        }
+        // Round-trip: every produced canonical amount stays canonical.
+        for v in [
+            "0",
+            "1",
+            "0.1",
+            "123456.78",
+            "92233720368547758.07",
+            "0.0000000000000000000000000001",
+        ] {
+            let d = Decimal::from_str(v).unwrap().normalize();
+            let s = d.to_string();
+            assert!(canonical_decimal(&s), "normalized {s:?} must be canonical");
+        }
     }
 
     #[test]

@@ -801,6 +801,21 @@ impl MarketRepository for SqliteMarket {
         // The contract permits returning a superset of the window.
         SqliteMarket::fixed(self, id)
     }
+    fn fixed_window_years(
+        &self,
+        id: &str,
+        first_day: chrono::NaiveDate,
+        last_day: chrono::NaiveDate,
+    ) -> Result<std::collections::BTreeSet<i32>, Error> {
+        let record = SqliteMarket::fixed(self, id)?;
+        Ok(record
+            .version()
+            .records
+            .iter()
+            .filter(|bar| bar.date >= first_day && bar.date <= last_day)
+            .map(|bar| bar.date.year())
+            .collect())
+    }
     fn task(&self, id: &str) -> Result<crate::task_control::TaskSnapshot, Error> {
         self.read(|c| {
             crate::sqlite_tasks::read_bound_task(c, id)?

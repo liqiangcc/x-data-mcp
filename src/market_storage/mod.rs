@@ -8,6 +8,8 @@ use crate::{
         self, Change, ItemBinding, ItemOutcome, Stage, Status, TaskHead, TaskItem, TaskSnapshot,
     },
 };
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Utc};
 use compat::CheckedRecord;
 use serde::{Deserialize, Serialize};
@@ -151,6 +153,17 @@ pub trait MarketRepository {
         first_day: NaiveDate,
         last_day: NaiveDate,
     ) -> Result<CheckedRecord, Error>;
+    /// Distinct calendar years that have at least one stored bar of the
+    /// fixed version inside `[first_day, last_day]`; the compact backend
+    /// decodes only overlapping segments without building `Bar`s, the
+    /// legacy backend may derive them from a full read. Same published-only
+    /// `NotFound` semantics as `fixed_window`.
+    fn fixed_window_years(
+        &self,
+        id: &str,
+        first_day: NaiveDate,
+        last_day: NaiveDate,
+    ) -> Result<BTreeSet<i32>, Error>;
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error>;
     /// O(1) task-row projection for hot-loop guards; full snapshots are for
     /// explicit task/progress reads.

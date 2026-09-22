@@ -2,6 +2,7 @@
 //! `WriteCoordinator`, compact facts authoritative, legacy-compatible
 //! `CheckedRecord` envelopes synthesized in memory at read boundaries. No
 //! legacy JSON envelope is ever persisted.
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1664,6 +1665,21 @@ impl MarketRepository for SqliteCompactMarket {
             // versions — the complete version's authoritative binding even
             // though `records` holds only the window.
             synthesize(&m)
+        })
+    }
+    fn fixed_window_years(
+        &self,
+        id: &str,
+        first_day: NaiveDate,
+        last_day: NaiveDate,
+    ) -> Result<BTreeSet<i32>, Error> {
+        self.read(|c| {
+            compact_versions::window_years(
+                c,
+                id,
+                compact_market::epoch_day(first_day),
+                compact_market::epoch_day(last_day),
+            )
         })
     }
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error> {

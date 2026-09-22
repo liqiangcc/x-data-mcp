@@ -1,10 +1,13 @@
 //! Issue #60 / Issue #3: exact local aggregation of one published daily version.
 //! No I/O, clock, normalization or source approval occurs in this module.
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
 
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::{
     market_data::{Bar, Period, UnitCurrencyEvidence, YearlyDerivation},
@@ -137,6 +140,53 @@ pub fn aggregate(
         unit_currency: daily.unit_currency.clone(),
         records,
     })
+}
+
+thread_local! {
+    /// Memoized aggregates. The key binds the published base version's
+    /// stored `integrity_digest` — which itself covers bar content
+    /// (projection), evidence, source binding, and identity — together
+    /// with the selected years and `as_of`, so identical keys always
+    /// yield identical series. Lets commit-time lineage verification
+    /// reuse the derivation's computation instead of re-decoding the
+    /// base window.
+    static AGGREGATE_MEMO: RefCell<HashMap<[u8; 32], Rc<AnnualSeries>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Memo key for `aggregate_memoized`. `base_digest_hex` is the stored
+/// `integrity_sha256`/`integrity_digest` of the authenticated base
+/// version the caller verified the `EffectiveVersion` against.
+pub fn aggregate_key(base_digest_hex: &str, years: &BTreeSet<i32>, as_of: NaiveDate) -> [u8; 32] {
+    let mut payload = Vec::with_capacity(128);
+    payload.extend_from_slice(b"x-data-aggregate-v1\0");
+    payload.extend_from_slice(base_digest_hex.as_bytes());
+    payload.push(0);
+    payload.extend_from_slice(&as_of.num_days_from_ce().to_be_bytes());
+    for year in years {
+        payload.extend_from_slice(&year.to_be_bytes());
+    }
+    Sha256::digest(&payload).into()
+}
+
+/// Runs `compute` (a `aggregate` call and any reads it needs) only when
+/// the memo lacks `key`; otherwise returns the prior result.
+pub fn aggregate_memoized<E>(
+    key: [u8; 32],
+    compute: impl FnOnce() -> Result<AnnualSeries, E>,
+) -> Result<Rc<AnnualSeries>, E> {
+    if let Some(hit) = AGGREGATE_MEMO.with(|memo| memo.borrow().get(&key).cloned()) {
+        return Ok(hit);
+    }
+    let series = Rc::new(compute()?);
+    AGGREGATE_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.len() >= 16_384 {
+            memo.clear();
+        }
+        memo.insert(key, series.clone());
+    });
+    Ok(series)
 }
 
 fn sum_known(

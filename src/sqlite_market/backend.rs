@@ -121,6 +121,21 @@ impl crate::market_storage::MarketRepository for MarketBackend {
             }
         }
     }
+    fn fixed_window_years(
+        &self,
+        id: &str,
+        first_day: chrono::NaiveDate,
+        last_day: chrono::NaiveDate,
+    ) -> Result<std::collections::BTreeSet<i32>, Error> {
+        match self {
+            Self::Legacy(m) => crate::market_storage::MarketRepository::fixed_window_years(
+                m, id, first_day, last_day,
+            ),
+            Self::Compact(m) => crate::market_storage::MarketRepository::fixed_window_years(
+                m, id, first_day, last_day,
+            ),
+        }
+    }
     fn task(&self, id: &str) -> Result<crate::task_control::TaskSnapshot, Error> {
         match self {
             Self::Legacy(m) => m.task(id),

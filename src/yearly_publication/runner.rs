@@ -328,13 +328,25 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         }
         // One re-aggregation per item: success is the fail-closed coverage
         // proof the verifier binds into evidence, and the same series feeds
-        // the derivation — the computation is deterministic.
+        // the derivation — the computation is deterministic. The memo key
+        // binds the base's stored integrity digest so commit-time lineage
+        // verification reuses this series instead of re-decoding the base
+        // window.
         let as_of = self
             .derived_at
             .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
             .date_naive();
-        let annual = crate::yearly::aggregate(base.version(), Some(&years), as_of)
-            .map_err(|e| Error::Base(e.to_string()))?;
+        let key = crate::yearly::aggregate_key(
+            base.raw()["integrity_sha256"]
+                .as_str()
+                .ok_or_else(|| Error::Integrity("fixed base lacks integrity digest".into()))?,
+            &years,
+            as_of,
+        );
+        let annual = crate::yearly::aggregate_memoized(key, || {
+            crate::yearly::aggregate(base.version(), Some(&years), as_of)
+        })
+        .map_err(|e| Error::Base(e.to_string()))?;
         let evidence = verifier
             .verify(&base, &years, &annual, self.derived_at)
             .map_err(|e| Error::Base(e.to_string()))?;

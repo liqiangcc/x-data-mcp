@@ -1135,26 +1135,42 @@ fn verify_lineage(
     compact_market::epoch_date(lineage.first_trade_day).map_err(integrity)?;
     compact_market::epoch_date(lineage.last_trade_day).map_err(integrity)?;
     let as_of = compact_market::epoch_date(lineage.as_of_day).map_err(integrity)?;
-    // Windowed base read: lineage bounds already enclose every base bar of
-    // the selected years, so only overlapping segments decode. A truncated
-    // or shifted window changes the re-aggregation output and fails the
-    // projection equality below — fail-closed.
-    let base_bars = leaf_bars_in_range(
-        c,
-        lineage.base_daily_version_key,
-        lineage.first_trade_day,
-        lineage.last_trade_day,
-    )?;
-    let base_evidence = verify_version_evidence(c, &base.evidence_digest)?;
-    let base_version = to_effective_version(c, &base, &base_bars, base_evidence)?;
+    if stored_lineage(c, base.key)?.is_some() {
+        return Err(integrity("yearly base carries a lineage row"));
+    }
     let records = bars
         .iter()
         .map(|bar| bar.to_bar(period))
         .collect::<Result<Vec<_>, _>>()
         .map_err(integrity)?;
     let years: BTreeSet<i32> = records.iter().map(|bar| bar.date.year()).collect();
-    let annual = crate::yearly::aggregate(&base_version, Some(&years), as_of)
-        .map_err(|e| integrity(format!("yearly aggregation failed: {e}")))?;
+    // The windowed base re-aggregation is a pure function of the published
+    // base content — bound by its stored integrity digest — plus years and
+    // as_of. The derivation already computed it, so staged/validated/
+    // published re-verification of the same inputs reuses the memoized
+    // series instead of re-decoding the window; the projection equality
+    // below still runs on every call. On a miss, lineage bounds enclose
+    // every base bar of the selected years so only overlapping segments
+    // decode — a truncated or shifted window changes the aggregation
+    // output and fails the equality check: fail-closed.
+    let base_digest_hex = compact_market::digest_hex(
+        &base
+            .integrity_digest
+            .ok_or_else(|| integrity("published base lacks integrity digest"))?,
+    );
+    let key = crate::yearly::aggregate_key(&base_digest_hex, &years, as_of);
+    let annual = crate::yearly::aggregate_memoized(key, || {
+        let base_bars = leaf_bars_in_range(
+            c,
+            lineage.base_daily_version_key,
+            lineage.first_trade_day,
+            lineage.last_trade_day,
+        )?;
+        let base_evidence = verify_version_evidence(c, &base.evidence_digest)?;
+        let base_version = to_effective_version(c, &base, &base_bars, base_evidence)?;
+        crate::yearly::aggregate(&base_version, Some(&years), as_of)
+            .map_err(|e| integrity(format!("yearly aggregation failed: {e}")))
+    })?;
     if annual
         .records
         .iter()
@@ -1544,6 +1560,31 @@ pub(crate) fn materialize_windowed(
         projection_digest: row.projection_digest,
         integrity_digest: row.integrity_digest,
     })
+}
+
+/// Distinct calendar years with stored bars in `[start_day, end_day]` for
+/// a published version — decodes only overlapping segments (clip digests
+/// enforced) without materializing `Bar`s. Same published-only `NotFound`
+/// semantics as `materialize_windowed`.
+pub(crate) fn window_years(
+    c: &Connection,
+    version_id: &str,
+    start_day: i64,
+    end_day: i64,
+) -> Result<BTreeSet<i32>, Error> {
+    let row = read_version_row_by_id(c, version_id)?.ok_or(Error::NotFound)?;
+    if row.state != 3 {
+        return Err(Error::NotFound);
+    }
+    verify_version_evidence(c, &row.evidence_digest)?;
+    leaf_bars_in_range(c, row.key, start_day, end_day)?
+        .iter()
+        .map(|bar| {
+            compact_market::epoch_date(bar.trade_day)
+                .map(|date| date.year())
+                .map_err(integrity)
+        })
+        .collect()
 }
 
 pub(crate) fn check_draft_static(c: &Connection, draft: &VersionDraft) -> Result<(), Error> {

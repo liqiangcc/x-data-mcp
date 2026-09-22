@@ -115,16 +115,21 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
                 } => expected_yearly_head.clone(),
                 _ => item.comparison_version_id.clone(),
             };
-            // Windowed base read: only bars in the selected years decode —
-            // year-presence and identity/digest facts are all the admission
-            // check needs, and both come from the same verified projection.
+            // Identity/digest come from the O(1) facts row; year presence
+            // needs only the distinct stored years in the selected window —
+            // the compact backend decodes overlapping segments without
+            // materializing bars.
             let first = NaiveDate::from_ymd_opt(*item.years.first().unwrap(), 1, 1)
                 .ok_or_else(|| invalid("selected year out of range"))?;
             let last = NaiveDate::from_ymd_opt(*item.years.last().unwrap(), 12, 31)
                 .ok_or_else(|| invalid("selected year out of range"))?;
             let base = self
                 .repository
-                .fixed_window(&item.base_daily_version_id, first, last)
+                .fixed_facts(&item.base_daily_version_id)
+                .map_err(repository_error)?;
+            let available = self
+                .repository
+                .fixed_window_years(&item.base_daily_version_id, first, last)
                 .map_err(repository_error)?;
             let comparison = comparison_id
                 .map(|id| self.repository.fixed_facts(&id))
@@ -136,18 +141,12 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
             {
                 return Err(invalid("comparison yearly identity/period mismatch"));
             }
-            if base.version().symbol != item.symbol
-                || base.version().period != Period::Day
-                || base.version().version_id != item.base_daily_version_id
+            if base.symbol != item.symbol
+                || base.period != Period::Day
+                || base.version_id != item.base_daily_version_id
             {
                 return Err(invalid("fixed daily identity/period mismatch"));
             }
-            let available: BTreeSet<_> = base
-                .version()
-                .records
-                .iter()
-                .map(|r| r.date.year())
-                .collect();
             if !item.years.is_subset(&available) {
                 return Err(Error::NeedsVerification(
                     "selected year absent from fixed daily".into(),
@@ -161,7 +160,7 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
                 target: json!({"symbol":item.symbol,"period":"year"}),
                 progress_unit: "security_period".into(),
                 frozen_inputs: {
-                    let mut value = frozen(&item.base_daily_version_id,base.raw()["integrity_sha256"].as_str().unwrap(),&item.years,&item.intent);
+                    let mut value = frozen(&item.base_daily_version_id,&base.integrity_sha256,&item.years,&item.intent);
                     value["comparison"] = comparison.map(|p|json!({"version_id":p.version_id,"integrity_sha256":p.integrity_sha256})).unwrap_or(Value::Null);
                     value
                 },
