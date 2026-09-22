@@ -104,6 +104,9 @@ const FIX = {
     parent_version_id: version_id.includes("-d")
       ? version_id.replace(/-d(\d+)$/, (m, n) => +n > 1 ? `-d${n - 1}` : "")
       : null,
+    child_version_id: version_id.includes("-d") && +version_id.match(/-d(\d+)$/)[1] < 206
+      ? version_id.replace(/-d(\d+)$/, (m, n) => `-d${+n + 1}`)
+      : null,
     state: "published", manifest_mode: version_id.includes("-d") ? "delta" : "checkpoint",
     projection_digest: "C12A20F1…8D3E", integrity_digest: "EEDE00B4…7A21",
     delta_digest: version_id.includes("-d") ? "9F33AC10…55B2" : null,
@@ -113,6 +116,18 @@ const FIX = {
     published_at: "2026-09-30T09:03:02Z", task: "task-7f3a2c91",
     evidence_json: '{\n  "kind": "continuity",\n  "mode": "append",\n  "day_member_sha256": "eb66bb8b…",\n  "prefix_bytes": 245312\n}',
   }),
+  // generation 详情：来源对账面
+  generation_detail: {
+    generation_id: "gen-2",
+    manifest_sha256: "939971D0…AE8716",
+    member_count: 3, bound_entities: 11783,
+    members: [
+      { path: "SHA/day/20260930.day", sha256: "1165802a…", kind: "day" },
+      { path: "SHA/gbbq/security_event.json", sha256: "2af27e6a…", kind: "gbbq" },
+      { path: "SZA/day/20260930.day", sha256: "44c19f02…", kind: "day" },
+    ],
+    audit: { outcome: "verified", at: "2026-09-30T08:59:44Z", by: "gen-audit task-9c02aa17" },
+  },
   // item 详情：task item 的 outcome + 证据
   item_detail_of: (task_id, item_id) => {
     const items = FIX.task_items[task_id] || [];
@@ -120,12 +135,13 @@ const FIX = {
     return {
       item_id, symbol: it.symbol, task_id, ms: it.ms ?? 0,
       outcome: it.success === false ? "failed" : it.success === true ? "succeeded" : it.stage ?? "pending",
+      error: it.success === false ? "day member malformed: non-increasing trade_date at record 1822" : null,
       evidence: { continuity: "append", range: "2026-09-30", bytes_in: 245408, bars_written: 1 },
     };
   },
   // 失败明细：错误原文 + evidence + result 绑定
   failure_detail: (item_id) => ({
-    item_id,
+    item_id, class: item_id.endsWith("19") ? "integrity" : "source_violation",
     symbol: item_id.replace("item-", ""),
     error: item_id.includes("600519")
       ? "integrity: delta projection digest mismatch — staged ops projection C87F… does not match committed result"
@@ -139,6 +155,7 @@ const FIX = {
     },
     hint: "source_violation 类失败为上游数据违规，重试不改结果；integrity 类需先查存储一致性。",
     task_id: "task-7f3a2c91",
+    evidence_json: '{\n  "result_id": "upd-sh.600519-0930",\n  "binding": "sb-9f2e",\n  "prefix_bytes": 245312,\n  "integrity_digest": "7B21E09C…44F0"\n}', 
   }),
   // 实体详情：按 entity 派生（真实环境由 /api/entities/:id 提供）
   entity_detail: (entity) => {
@@ -175,11 +192,17 @@ const FIX = {
       yearly: {
         bars: [ { year: 2023, close: 9.1 }, { year: 2024, close: 9.8 }, { year: 2025, close: 10.25 } ],
         base_daily: `v1-${entity}-d${depth}`, algo: "yearly-v1", as_of: "2026-09-30",
+        cross_check: { yearly_last: 10.25, daily_agg_last: 10.25, consistent: true },
       },
       entity, period: "day", closes, candles,
       head: `v1-${entity}-d${depth}`,
       coverage: depth % 17 === 0 ? "incomplete" : "complete",
       first_day: "1994-12-06", last_day: "2026-09-30",
+      periods: {
+        day: { bars: 7358, first: "1994-12-06", last: "2026-09-30" },
+        week: { bars: 1402, first: "1994-12-09", last: "2026-09-30" },
+        month: { bars: 378, first: "1994-12", last: "2026-09" },
+      },
       chain, updates,
       verifications: [
         { at: "2026-09-30T09:05:11Z", outcome: "verified", digest_checked: "C12A20F1…8D3E", scope: "head+chain" },

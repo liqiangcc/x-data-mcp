@@ -49,9 +49,10 @@ const clsPill = { integrity: ["fail", "integrity"], source_violation: ["warn", "
 function pageHome() {
   const t = FIX.tasks[0]; // 最新任务
   const issueN = FIX.failures.length + FIX.gaps.filter((g) => g.state === "open").length;
+  const today = FIX.tasks[0].created_at.slice(0, 10);
   const hero = issueN
-    ? `<div class="hero warn link" data-nav="failures:"><span class="dot"></span><div><div class="msg">${issueN} 项需关注</div><div class="sub">失败 ${FIX.failures.length} · 开放缺口 ${FIX.gaps.filter((g) => g.state === "open").length} · 点击查看 ›</div></div></div>`
-    : `<div class="hero ok"><span class="dot"></span><div><div class="msg">全部正常</div><div class="sub">最近检查 ${ago(FIX.generated_at)}</div></div></div>`;
+    ? `<div class="hero warn link" data-nav="failures:"><span class="dot"></span><div><div class="msg">${issueN} 项需关注</div><div class="sub">失败 ${FIX.failures.length} · 开放缺口 ${FIX.gaps.filter((g) => g.state === "open").length} · 点击查看 ›</div></div><span class="dim" style="font-size:11px">${today}</span></div>`
+    : `<div class="hero ok"><span class="dot"></span><div><div class="msg">全部正常</div><div class="sub">最近检查 ${ago(FIX.generated_at)}</div></div><span class="dim" style="font-size:11px">${today}</span></div>`;
   const pct = t.items.total ? (t.items.finished / t.items.total) * 100 : 0;
   const anomalies = FIX.coverage.filter((r) => r.coverage !== "complete" || r.delta_depth > 200);
   const s = FIX.storage;
@@ -64,8 +65,12 @@ function pageHome() {
         ${statusPill(t.status)}
       </div>
       <div class="bar ${t.items.failed ? "" : "ok"}"><i style="width:${pct}%"></i></div>
+      ${(() => { const it = FIX.task_items[t.task_id] || []; const dn = it.filter((x) => x.ms != null); if (!dn.length) return "";
+        const mx = Math.max(...dn.map((x) => x.ms)), step = Math.max(1, Math.floor(dn.length / 48));
+        return `<div class="spark" style="height:18px;margin:6px 0 2px">${dn.filter((_, i) => i % step === 0).map((x) => `<i style="height:${8 + (x.ms / mx) * 92}%"></i>`).join("")}</div>`; })()}
       <div class="kv"><span class="k">进度</span><span class="v nw">${t.items.finished}/${t.items.total} · 失败 ${t.items.failed} ›</span></div>
       <div class="kv"><span class="k">耗时</span><span class="v" id="live-elapsed">${t.elapsed_s}s · ${t.per_item_ms ?? "—"}ms/item</span></div>
+      ${t.status === "running" && t.per_item_ms ? `<div class="kv"><span class="k">预计剩余</span><span class="v">~${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}s</span></div>` : ""}
     </div>
 
     <div class="section-title">失败队列</div>
@@ -92,10 +97,10 @@ function pageHome() {
     </div>`).join("")}
 
     <div class="section-title">来源</div>
-    <div class="card">
+    <div class="card link" data-nav="generation:">
       <div class="kv"><span class="k">generation</span><span class="v">gen-2</span></div>
       <div class="kv"><span class="k">manifest</span><span class="v"><span class="chip">939971D0…AE8716</span></span></div>
-      <div class="kv"><span class="k">绑定实体</span><span class="v">${FIX.coverage.length}</span></div>
+      <div class="kv"><span class="k">绑定实体</span><span class="v">${FIX.coverage.length} ›</span></div>
     </div>
 
     <div class="section-title">存储</div>
@@ -112,10 +117,13 @@ function pageHome() {
 /* ---------- 列表页 ---------- */
 function pageFailures() {
   if (!FIX.failures.length) return `<div class="card dim">当前无失败 item</div>`;
+  const byCls = {};
+  FIX.failures.forEach((f) => { byCls[f.class] = (byCls[f.class] || 0) + 1; });
+  const sum = `<div class="card"><div class="kv"><span class="k">分类统计</span><span class="v nw">${Object.entries(byCls).map(([k, n]) => `${k} ${n}`).join(" · ")}</span></div></div>`;
   const groups = {};
   FIX.failures.forEach((f, i) => { (groups[f.class] = groups[f.class] || []).push([f, i]); });
   const order = ["integrity", "storage", "conflict", "source_violation"];
-  return Object.entries(groups)
+  const grouped = Object.entries(groups)
     .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
     .map(([cls, items]) => {
       const [c, t] = clsPill[cls] || ["dim", cls];
@@ -129,14 +137,18 @@ function pageFailures() {
           <span class="pill dim">›</span>
         </div>`).join("");
     }).join("");
+  return sum + grouped;
 }
 
 let covQuery = "";
 let covFilter = "all";
+let covMkt = "all";
 let itemFilter = "all";
+let itemSort = "seq";
 function pageCoverage() {
   let pool = covQuery ? FIX.coverage.filter((r) => r.entity.includes(covQuery)) : FIX.coverage;
   if (covFilter === "warn") pool = pool.filter((r) => r.coverage !== "complete" || r.delta_depth > 200);
+  if (covMkt !== "all") pool = pool.filter((r) => r.entity.startsWith(covMkt));
   const rows = pool.slice(0, shown).map((r) => `<div class="row link" data-nav="entity:${esc(r.entity)}">
       <div class="main">
         <div class="title mono">${esc(r.entity)}</div>
@@ -144,7 +156,8 @@ function pageCoverage() {
       </div>
       <span class="pill ${r.coverage === "complete" ? "ok" : "warn"}">${r.coverage} ›</span>
     </div>`).join("");
-  const gaps = FIX.gaps.map((g, gi) => `<div class="row link" data-nav="gap:${gi}">
+  const gapPool = covMkt === "all" ? FIX.gaps : FIX.gaps.filter((g) => g.entity.startsWith(covMkt));
+  const gaps = gapPool.map((g, gi) => `<div class="row link" data-nav="gap:${gi}">
       <div class="main"><div class="title mono">${esc(g.entity)}</div>
       <div class="sub">${g.start} ~ ${g.end} · ${esc(g.reason)}</div></div>
       <span class="pill ${g.state === "open" ? "warn" : "ok"}">${g.state === "open" ? "缺口" : "已覆盖"} ›</span>
@@ -155,8 +168,10 @@ function pageCoverage() {
   return `<input id="cov-search" class="search" type="search" placeholder="搜索实体（如 sh.600）" value="${esc(covQuery)}">
           <div class="chips" style="margin-top:6px">
             ${[["all", "全部 " + FIX.coverage.length], ["warn", "异常 " + anomN]].map(([k, l]) => `<button class="chipbtn${covFilter === k ? " on" : ""}" data-covfilter="${k}">${l}</button>`).join("")}
+            <span style="flex:1"></span>
+            ${[["all", "全市场"], ["sh.", "沪"], ["sz.", "深"]].map(([k, l]) => `<button class="chipbtn${covMkt === k ? " on" : ""}" data-mkt="${k}">${l}</button>`).join("")}
           </div>
-          <div class="section-title">缺口</div>${gaps}
+          <div class="section-title">缺口</div>${gaps || `<div class="card dim">无缺口</div>`}
           <div class="section-title">实体覆盖（${pool.length}）</div>${rows}${more || (pool.length ? "" : `<div class="card dim">无匹配</div>`)}`;
 }
 
@@ -178,10 +193,16 @@ function pageStorage() {
     <div class="card">
       <div class="kv"><span class="k">实体 / bars</span><span class="v">${s.entities} / ${(s.bars / 1e6).toFixed(1)}M</span></div>
       <div class="kv"><span class="k">segments / 利用率</span><span class="v">${s.segments} / ${(s.segment_utilization * 100) | 0}%</span></div>
+      <div class="bar${s.segment_utilization > 0.9 ? " warn" : " ok"}" style="margin:6px 0"><i style="width:${s.segment_utilization * 100}%"></i></div>
       <div class="kv"><span class="k">版本数</span><span class="v">${s.versions}</span></div>
       <div class="kv"><span class="k">24h WAL 峰值</span><span class="v">${fmtBytes(s.wal_peak_24h)}</span></div>
       <div class="kv"><span class="k">reader 占用</span><span class="v">${s.readers_active}/${s.readers_max} · 待帧 ${s.pending_frames}</span></div>
       <div class="kv"><span class="k">checkpoint</span><span class="v">${s.last_checkpoint_ms}ms · 无滞留</span></div>
+    </div>
+    <div class="section-title">写入成本（B/item · #259 门）</div>
+    <div class="card">
+      ${[["no-change", s.write_cost.no_change_bytes_per_item], ["append", s.write_cost.append_bytes_per_item]].map(([k, v]) => `<div class="hbar"><span class="lbl">${k}</span><span class="track"><i style="width:${(v / s.write_cost.append_bytes_per_item) * 100}%"></i></span><span class="num">${v}</span></div>`).join("")}
+      <div class="kv"><span class="k">采样</span><span class="v">${s.write_cost.sampled_items} items · 最新任务</span></div>
     </div>
     <div class="section-title">DB 趋势（采样）</div>
     <div class="card">${trend}</div>
@@ -194,13 +215,14 @@ function pageTaskDetail(id) {
   const t = FIX.tasks.find((x) => x.task_id === id);
   const items = FIX.task_items[id] || [];
   const failed = items.filter((i) => i.success === false);
-  const pool = itemFilter === "failed" ? failed
+  let pool = itemFilter === "failed" ? failed
     : itemFilter === "running" ? items.filter((i) => i.stage === "running")
     : itemFilter === "pending" ? items.filter((i) => i.stage === "pending")
     : items;
+  if (itemSort === "slow") pool = [...pool].sort((a, b) => (b.ms ?? 0) - (a.ms ?? 0));
   const list = pool.slice(0, shown).map((i) => {
     const st = i.success === false ? ["fail", "失败"] : i.success === true ? ["ok", "ok"] : i.stage === "running" ? ["warn", "运行"] : ["dim", "等待"];
-    return `<div class="row link" data-nav="item:${esc(t.task_id)}|${esc(i.item_id)}">
+    return `<div class="row link${i.stage === "running" ? " live" : ""}" data-nav="item:${esc(t.task_id)}|${esc(i.item_id)}">
       <div class="main"><div class="title mono">${esc(i.symbol)}</div>
       <div class="sub">${i.ms != null ? i.ms + "ms" : "—"}</div></div>
       <span class="pill ${st[0]}">${st[1]} ›</span></div>`;
@@ -220,7 +242,7 @@ function pageTaskDetail(id) {
       ${spark}
       <div class="kv"><span class="k">操作 / 数据集</span><span class="v">${t.operation} · ${t.dataset}</span></div>
       <div class="kv"><span class="k">进度</span><span class="v">${t.items.finished}/${t.items.total} · 失败 ${t.items.failed}</span></div>
-      <div class="kv"><span class="k">耗时</span><span class="v">${t.elapsed_s}s · ${t.per_item_ms ?? "—"}ms/item</span></div>
+      <div class="kv"><span class="k">耗时</span><span class="v"${t.status === "running" ? ` id="live-elapsed"` : ""}>${t.elapsed_s}s · ${t.per_item_ms ?? "—"}ms/item</span></div>
     </div>
     ${t.phases ? `<div class="section-title">相位耗时（ms/item）</div>
     <div class="card">${Object.entries(t.phases).map(([k, v]) => {
@@ -233,12 +255,20 @@ function pageTaskDetail(id) {
     <div class="chips">
       ${[["all", "全部 " + items.length], ["failed", "失败 " + failed.length], ["running", "运行中"], ["pending", "等待"]]
         .map(([k, l]) => `<button class="chipbtn${itemFilter === k ? " on" : ""}" data-filter="${k}">${l}</button>`).join("")}
+      <span style="flex:1"></span>
+      <button class="chipbtn${itemSort === "slow" ? " on" : ""}" data-sort="slow">最慢</button>
     </div>
     ${list}${more}`;
 }
 
 function pageFailureDetail(itemId) {
   const d = FIX.failure_detail(itemId);
+  const clsHint = {
+    integrity: "integrity 失败：先查存储一致性（verify_versions）——可能是 delta 链损坏，不要盲目重试。",
+    source_violation: "source_violation：上游数据违规，重试不改变结果。检查 .day member 或等待下一交易日。",
+    storage: "storage 失败：检查 WAL 滞留/disk 空间/reader 占用，然后重试 item。",
+    conflict: "conflict：写入协调器检测到并发冲突，通常 retry 即可自愈。",
+  };
   return `<div class="card">
       <h3>${esc(d.symbol)} · ${esc(d.item_id)}</h3>
       <div class="errblk">${esc(d.error)}</div>
@@ -251,7 +281,9 @@ function pageFailureDetail(itemId) {
       <div class="kv"><span class="k">range</span><span class="v">${esc(d.evidence.range)}</span></div>
       <div class="kv"><span class="k">continuity</span><span class="v">${esc(d.evidence.continuity)}</span></div>
     </div>
-    <div class="card dim">${esc(d.hint)}</div>
+    <div class="section-title">raw evidence</div>
+    <div class="card"><pre class="jsonblk">${esc(d.evidence_json)}</pre></div>
+    <div class="card dim">${esc(clsHint[d.class] || d.hint)}</div>
     <div class="card link" data-nav="entity:${esc(d.symbol)}"><div class="kv"><span class="k">查看实体</span><span class="v nw">${esc(d.symbol)} ›</span></div></div>
     <div class="card link" data-nav="task:0"><div class="kv"><span class="k">所属任务</span><span class="v nw">${esc(d.task_id)} ›</span></div></div>`;
 }
@@ -270,7 +302,9 @@ function pageEntityDetail(entity) {
       <div class="kv"><span class="k">head</span><span class="v">${esc(d.head)}</span></div>
       <div class="kv"><span class="k">覆盖</span><span class="v">${d.first_day} ~ ${d.last_day}</span></div>
       <div class="kv"><span class="k">coverage</span><span class="v">${d.coverage}</span></div>
+      <div class="chips" style="margin-top:8px">${Object.entries(d.periods).map(([p, x]) => `<button class="chipbtn" title="${x.first} ~ ${x.last}">${p} · ${x.bars}</button>`).join("")}</div>
     </div>
+    ${(FIX._lastCandles = d.candles, "")}
     <div class="section-title">近 60 日 K 线</div>
     <div class="card"><div class="kchart">${d.candles.map((c) => {
       const lo = Math.min(...d.candles.map((x) => x.l)), hi = Math.max(...d.candles.map((x) => x.h));
@@ -285,6 +319,9 @@ function pageEntityDetail(entity) {
       <div class="spark">${d.yearly.bars.map((b) => `<i style="height:${(b.close / Math.max(...d.yearly.bars.map((x) => x.close))) * 92 + 8}%"></i>`).join("")}</div>
       <div class="kv"><span class="k">基座 / 算法</span><span class="v">${esc(d.yearly.base_daily.slice(0, 22))}… · ${d.yearly.algo}</span></div>
       <div class="kv"><span class="k">as_of</span><span class="v">${d.yearly.as_of}</span></div>
+      <div class="kv"><span class="k">日线对照</span><span class="v">${d.yearly.cross_check.consistent
+        ? `<span class="pill ok">一致</span> 年末收盘 ${d.yearly.cross_check.yearly_last} vs 日线聚合 ${d.yearly.cross_check.daily_agg_last}`
+        : `<span class="pill fail">不一致</span>`}</span></div>
     </div>
     <div class="section-title">更新审计（近 7 日）</div>
     <div class="card">${d.updates.map((u) => {
@@ -309,12 +346,28 @@ function pageEntityDetail(entity) {
     </div>`;
 }
 
+function pageGeneration() {
+  const g = FIX.generation_detail;
+  return `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3>${esc(g.generation_id)}</h3>
+        <span class="pill ${g.audit.outcome === "verified" ? "ok" : "fail"}">${g.audit.outcome === "verified" ? "审计通过" : "审计失败"}</span>
+      </div>
+      <div class="kv"><span class="k">manifest</span><span class="v"><span class="chip">${esc(g.manifest_sha256)}</span></span></div>
+      <div class="kv"><span class="k">member / 绑定实体</span><span class="v">${g.member_count} / ${g.bound_entities}</span></div>
+      <div class="kv"><span class="k">审计</span><span class="v">${ago(g.audit.at)} · ${esc(g.audit.by)}</span></div>
+    </div>
+    <div class="section-title">manifest members（${g.member_count}）</div>
+    <div class="card">${g.members.map((m) => `<div class="kv"><span class="k mono" style="font-size:11px">${esc(m.path)}</span><span class="v"><span class="chip">${esc(m.sha256)}</span></span></div>`).join("")}</div>
+    <div class="card dim">字节完整性链：manifest_sha → member_sha → member 字节 → 解析记录 → segment。逐项可复核。</div>`;
+}
+
 function pageAbout() {
   return `<div class="card">
       <h3>x-data 治理台（mock）</h3>
       <div class="kv"><span class="k">形态</span><span class="v">只读观测 · MCP 为唯一操作通道</span></div>
       <div class="kv"><span class="k">数据源</span><span class="v">SQLite 唯一事实源（fixture）</span></div>
-      <div class="kv"><span class="k">Issue</span><span class="v">#268 · 阻塞于 #259 硬门 + S6</span></div>
+      <div class="kv"><span class="k">Issue</span><span class="v"><a href="https://github.com/liqiangcc/x-data-mcp/issues/268" style="color:var(--accent)">#268</a> · 阻塞于 #259 硬门 + S6</span></div>
       <div class="kv"><span class="k">渲染</span><span class="v">vanilla JS · 零依赖 · ${innerWidth}×${innerHeight}</span></div>
       <div class="kv"><span class="k">主题</span><span class="v">${matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"}（系统）</span></div>
     </div>
@@ -331,6 +384,7 @@ function pageItemDetail(tid, iid) {
       </div>
       <div class="kv"><span class="k">item / task</span><span class="v">${esc(d.item_id)}</span></div>
       <div class="kv"><span class="k">耗时</span><span class="v">${d.ms}ms</span></div>
+      ${d.error ? `<div class="errblk">${esc(d.error)}</div>` : ""}
     </div>
     <div class="section-title">写入证据</div>
     <div class="card">
@@ -352,8 +406,10 @@ function pageVersionDetail(vid) {
       <div class="kv"><span class="k">manifest</span><span class="v">${v.manifest_mode} · ${v.record_count} 条</span></div>
       <div class="kv"><span class="k">覆盖</span><span class="v">${v.first_day} ~ ${v.last_day}</span></div>
       <div class="kv"><span class="k">发布</span><span class="v">${ago(v.published_at)} · ${esc(v.task)}</span></div>
+      <div class="kv"><span class="k">最近验证</span><span class="v"><span class="pill ok">通过</span> head+chain</span></div>
     </div>
     ${v.parent_version_id ? `<div class="card link" data-nav="version:${esc(v.parent_version_id)}"><div class="kv"><span class="k">父版本</span><span class="v nw">${esc(v.parent_version_id)} ›</span></div></div>` : ""}
+    ${v.child_version_id ? `<div class="card link" data-nav="version:${esc(v.child_version_id)}"><div class="kv"><span class="k">子版本</span><span class="v nw">${esc(v.child_version_id)} ›</span></div></div>` : ""}
     <div class="section-title">Digests</div>
     <div class="card">
       ${dig("projection", v.projection_digest)}
@@ -404,6 +460,7 @@ function route(e) {
     case "gap": return ["缺口", pageGapDetail(+e.param)];
     case "version": return ["版本", pageVersionDetail(e.param)];
     case "item": { const [tid, iid] = e.param.split("|"); return ["item 详情", pageItemDetail(tid, iid)]; }
+    case "generation": return ["来源对账", pageGeneration()];
     case "about": return ["关于", pageAbout()];
     case "entity": return ["实体", pageEntityDetail(e.param)];
     default: return ["?", ""];
@@ -420,6 +477,12 @@ function render() {
   content.innerHTML = html;
   content.classList.toggle("rev", navDir < 0); navDir = 1;
   canvas.scrollTop = scrollMemo[keyOf(e)] ?? 0;
+  const toTop = $("#to-top") || (() => {
+    const b = document.createElement("button");
+    b.id = "to-top"; b.textContent = "↑"; b.setAttribute("aria-label", "回顶");
+    b.onclick = () => canvas.scrollTo({ top: 0, behavior: "smooth" });
+    document.body.appendChild(b); return b;
+  })();
   const lm = $("#load-more");
   if (lm) {
     const grow = () => { scrollMemo[keyOf(e)] = canvas.scrollTop; shown += PAGE_SIZE; render(); };
@@ -458,6 +521,10 @@ content.addEventListener("click", (ev) => {
   if (f) { itemFilter = f.dataset.filter; shown = PAGE_SIZE; render(); }
   const cf = ev.target.closest("[data-covfilter]");
   if (cf) { covFilter = cf.dataset.covfilter; shown = PAGE_SIZE; render(); }
+  const so = ev.target.closest("[data-sort]");
+  if (so) { itemSort = itemSort === "slow" ? "seq" : "slow"; shown = PAGE_SIZE; render(); }
+  const mk = ev.target.closest("[data-mkt]");
+  if (mk) { covMkt = mk.dataset.mkt; shown = PAGE_SIZE; render(); }
 });
 $("#menu-btn").addEventListener("click", () => { stack.length > 1 ? history.back() : nav("about"); });
 content.addEventListener("click", (ev) => {
@@ -472,6 +539,7 @@ $("#poll-state").addEventListener("click", () => { pollTick = 15; render(); });
 /* ---------- 模拟轮询（详情页不自动刷） ---------- */
 let pollTick = 15;
 setInterval(() => {
+  if (document.hidden) return;
   pollTick -= 1;
   const live = $("#live-elapsed");
   if (live) { const m = live.textContent.match(/^(\d+)s/); if (m) live.textContent = live.textContent.replace(/^\d+s/, `${+m[1] + 1}s`); }
@@ -482,6 +550,31 @@ setInterval(() => {
 // 离线横幅
 const offline = () => $("#offline").classList.toggle("on", !navigator.onLine);
 window.addEventListener("offline", offline); window.addEventListener("online", offline); offline();
+
+/* ---------- K 线触摸 tooltip ---------- */
+content.addEventListener("touchmove", (ev) => {
+  const kc = ev.target.closest(".kchart"); if (!kc) return;
+  const ks = kc.querySelectorAll(".k"); if (!ks.length) return;
+  const rect = kc.getBoundingClientRect();
+  const idx = Math.min(ks.length - 1, Math.max(0, Math.floor((ev.touches[0].clientX - rect.left) / rect.width * ks.length)));
+  ks.forEach((k, i) => k.classList.toggle("sel", i === idx));
+  const d = FIX._lastCandles && FIX._lastCandles[idx];
+  let tip = $("#ktip");
+  if (!tip) { tip = document.createElement("div"); tip.id = "ktip"; kc.appendChild(tip); }
+  if (d) {
+    const day = new Date(Date.now() - (ks.length - 1 - idx) * 864e5).toISOString().slice(5, 10);
+    tip.textContent = `${day}  O ${d.o.toFixed(2)}  H ${d.h.toFixed(2)}  L ${d.l.toFixed(2)}  C ${d.c.toFixed(2)}`;
+  }
+}, { passive: true });
+content.addEventListener("touchend", () => {
+  const tip = $("#ktip"); if (tip) tip.remove();
+  document.querySelectorAll(".k.sel").forEach((k) => k.classList.remove("sel"));
+}, { passive: true });
+
+/* ---------- 回顶悬浮钮 ---------- */
+canvas.addEventListener("scroll", () => {
+  const b = $("#to-top"); if (b) b.classList.toggle("on", canvas.scrollTop > 700);
+}, { passive: true });
 
 /* ---------- 下拉刷新（触顶下拉显示指示器） ---------- */
 let pullY = null;
