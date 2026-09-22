@@ -1,0 +1,33 @@
+{
+  "issue": 262,
+  "commit": "7d00c18",
+  "date": "2026-09-22",
+  "subject": "yearly read-path optimization — windowed base reads",
+  "environment": "Box dev node, release build, schema-19 capacity DB /home/box/capacity-s5b/market.db (11,783 published daily versions, 29.2M bars, 1.66 GiB)",
+  "method": "fixed_window_timing_probe (ignored test): 10 deepest + 40 sampled daily versions; fixed() vs fixed_window(2025-01-01..2026-12-31); digest equality asserted per item",
+  "results": {
+    "n_versions": 50,
+    "fixed_full_ms_total": 4005.3,
+    "fixed_window_ms_total": 144.5,
+    "speedup": "27.7x",
+    "fixed_ms": {
+      "p50": 28.4,
+      "p90": 45.7,
+      "max": 2518.1
+    },
+    "window_ms": {
+      "p50": 2.9,
+      "p90": 3.5,
+      "max": 4.6
+    },
+    "bars_decoded_full": 287455,
+    "bars_decoded_window": 19844
+  },
+  "accept_path_change": "ExplicitYears/ExplicitRanges/collect resolve + default-selection resolve no longer materialize base versions; yearly execute uses fixed_window + fixed_facts",
+  "expected_yearly_projection": "accept ~60-80s -> <5s per 100-item chunk; item execute ~0.8s -> <150ms; full-market yearly ~2h57m -> target <15min (driver remains serial)",
+  "caveats": [
+    "measured on dev box (faster CPU than ECS 2vCPU); ECS absolute numbers will be ~3x slower, ratio holds",
+    "published raw() integrity_sha256 now reports the stored typed integrity_digest on compact schema; staged/validated candidates keep legacy envelope digest",
+    "existing databases with legacy-flavor frozen digests would mismatch after upgrade — preview deploys are fresh DBs"
+  ]
+}
