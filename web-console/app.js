@@ -63,7 +63,12 @@ function pageHome() {
           ${FIX.gaps.filter((g) => g.state === "open").length ? `<span class="chipbtn link" data-nav="coverage:">缺口 ${FIX.gaps.filter((g) => g.state === "open").length} ›</span>` : ""}
           ${deepN0 ? `<span class="chipbtn link" data-nav="storage:">深链 ${deepN0} ›</span>` : ""}
         </div></div><span class="dim" style="font-size:11px">${today}</span></div>`
-    : `<div class="hero ok"><span class="dot"></span><div><div class="msg">全部正常</div><div class="sub">最近检查 ${ago(FIX.generated_at)}</div></div><span class="dim" style="font-size:11px">${today}</span></div>`;
+    : `<div class="hero ok"><span class="dot"></span><div><div class="msg">全部正常</div>
+        <div class="chips" style="margin-top:6px">
+          <span class="chipbtn" data-nav="failures:">失败 0</span>
+          <span class="chipbtn" data-nav="coverage:">缺口 0</span>
+          <span class="chipbtn" data-nav="storage:">存储 ›</span>
+        </div><div class="sub" style="margin-top:4px">最近检查 ${ago(FIX.generated_at)}</div></div><span class="dim" style="font-size:11px">${today}</span></div>`;
   const pct = t.items.total ? (t.items.finished / t.items.total) * 100 : 0;
   const anomalies = FIX.coverage.filter((r) => r.coverage !== "complete" || r.delta_depth > 200);
   const s = FIX.storage;
@@ -75,13 +80,13 @@ function pageHome() {
         <div><span class="mono">${esc(t.task_id)}</span> <span class="dim">${t.operation}</span></div>
         ${statusPill(t.status)}
       </div>
-      <div class="bar ${t.items.failed ? "" : "ok"}"><i style="width:${pct}%"></i></div>
+      <div class="bar${t.items.failed ? "" : " ok"}" style="position:relative"><i style="width:${pct}%"></i>${t.items.failed ? `<b class="failseg" style="left:${pct - t.items.failed / t.items.total * 100}%;width:${t.items.failed / t.items.total * 100}%"></b>` : ""}</div>
       ${(() => { const it = FIX.task_items[t.task_id] || []; const dn = it.filter((x) => x.ms != null); if (!dn.length) return "";
         const mx = Math.max(...dn.map((x) => x.ms)), step = Math.max(1, Math.floor(dn.length / 48));
         return `<div class="spark" style="height:18px;margin:6px 0 2px">${dn.filter((_, i) => i % step === 0).map((x) => `<i style="height:${8 + (x.ms / mx) * 92}%"></i>`).join("")}</div>`; })()}
       <div class="kv"><span class="k">进度</span><span class="v nw">${t.items.finished}/${t.items.total} · ${t.items.failed ? `<span style="color:var(--fail)">失败 ${t.items.failed}</span>` : "失败 0"} ›</span></div>
       <div class="kv"><span class="k">耗时</span><span class="v" id="live-elapsed">${t.elapsed_s}s · ${t.per_item_ms ?? "—"}ms/item</span></div>
-      ${t.status === "running" && t.per_item_ms ? `<div class="kv"><span class="k">预计剩余</span><span class="v" id="live-eta" data-eta="${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}">~${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}s</span></div>` : ""}
+      ${t.status === "running" && t.per_item_ms && t.items.finished < t.items.total ? `<div class="kv"><span class="k">预计剩余</span><span class="v" id="live-eta" data-eta="${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}">~${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}s</span></div>` : ""}
     </div>
 
     <div class="section-title">失败队列</div>
@@ -96,6 +101,9 @@ function pageHome() {
       <div class="kv"><span class="k">实体</span><span class="v">${FIX.coverage.length}</span></div>
       <div class="kv"><span class="k">异常</span><span class="v nw">${anomalies.length} 条（缺口 ${FIX.gaps.filter((g) => g.state === "open").length}）›</span></div>
       ${anomalies.slice(0, 3).map((r) => `<div class="kv"><span class="k mono">${esc(r.entity)}</span><span class="v">${r.coverage} · depth ${r.delta_depth}</span></div>`).join("")}
+      ${(() => { const okp = (FIX.coverage.length - anomalies.length) / FIX.coverage.length * 100;
+        return `<div class="bar${anomalies.length ? "" : " ok"}" style="margin-top:6px"><i style="width:${okp}%"></i></div>
+        <div class="sub dim" style="font-size:11px;margin-top:3px">完整率 ${okp.toFixed(1)}%</div>`; })()}
     </div>
 
     <div class="section-title">历史任务</div>
@@ -156,11 +164,13 @@ function pageFailures() {
 let covQuery = "";
 let covFilter = "all";
 let covMkt = "all";
-let covDepth = null; // "lo"|"mid"|"hi" 深度桶过滤
+let covDepth = null;
+let covSort = "default"; // "lo"|"mid"|"hi" 深度桶过滤
 let itemFilter = "all";
 let itemSort = "seq";
 let itemQuery = "";
 let chainOlder = [], chainEntity = null, chainDepth = 0;
+let entityPeriod = "day";
 let currentCovPool = () => [], currentItemPool = () => [], covRowFn = null, itemRowFn = null;
 function pageCoverage() {
   let pool = covQuery ? FIX.coverage.filter((r) => r.entity.includes(covQuery)) : FIX.coverage;
@@ -169,11 +179,13 @@ function pageCoverage() {
   if (covDepth === "lo") pool = pool.filter((r) => r.delta_depth === 0);
   else if (covDepth === "mid") pool = pool.filter((r) => r.delta_depth > 0 && r.delta_depth <= 127);
   else if (covDepth === "hi") pool = pool.filter((r) => r.delta_depth > 127);
+  if (covSort === "stale") pool = [...pool].sort((a, b) => (b.days_behind || 0) - (a.days_behind || 0));
+  else if (covSort === "deep") pool = [...pool].sort((a, b) => b.delta_depth - a.delta_depth);
   currentCovPool = () => pool;
   covRowFn = (r) => `<div class="row link${r.days_behind ? " stale" : ""}${r.delta_depth > 200 ? " deep" : ""}" data-nav="entity:${esc(r.entity)}">
       <div class="main">
         <div class="title mono">${esc(r.entity)}</div>
-        <div class="sub">至 ${r.last_day}${r.days_behind ? ` · 滞后 ${r.days_behind}d` : ""} · ${r.records} 条 · depth ${r.delta_depth}${r.delta_depth > 200 ? ' <b class="dmark warn"></b>' : r.delta_depth > 100 ? ' <b class="dmark"></b>' : ""}</div>
+        <div class="sub">至 ${r.last_day}${r.days_behind ? ` · 滞后 ${r.days_behind}d` : ""} · ${fmtNum(r.records)} 条 · depth ${r.delta_depth}${r.delta_depth > 200 ? ' <b class="dmark warn"></b>' : r.delta_depth > 100 ? ' <b class="dmark"></b>' : ""}</div>
       </div>
       <span class="pill ${r.coverage === "complete" ? "ok" : "warn"}">${r.coverage} ›</span>
     </div>`;
@@ -192,11 +204,13 @@ function pageCoverage() {
   const okPct = ((FIX.coverage.length - anomN) / FIX.coverage.length * 100).toFixed(1);
   const sumBar = `<div class="card"><div class="kv"><span class="k">完整率</span><span class="v">${okPct}% · 滞后 ${staleN} · 深链 ${deepN}</span></div></div>`;
   return `<input id="cov-search" class="search" type="search" placeholder="搜索实体（如 sh.600）" value="${esc(covQuery)}">
-          <div class="chips" style="margin-top:6px">
+          <div class="chips" style="margin-top:6px;position:relative">
+            <span id="cov-pos" class="dim" style="position:absolute;right:2px;bottom:-16px;font-size:10px">${shown < pool.length ? `${shown}/${pool.length}` : ""}</span>
             ${[["all", "全部 " + FIX.coverage.length], ["warn", "异常 " + anomN]].map(([k, l]) => `<button class="chipbtn${covFilter === k ? " on" : ""}" data-covfilter="${k}">${l}</button>`).join("")}
             <span style="flex:1"></span>
             ${[["all", "全市场"], ["sh.", "沪"], ["sz.", "深"]].map(([k, l]) => `<button class="chipbtn${covMkt === k ? " on" : ""}" data-mkt="${k}">${l}</button>`).join("")}
             ${covDepth ? `<button class="chipbtn on" data-mkt-clear-depth>深度:${covDepth} ✕</button>` : ""}
+            ${[["stale", "滞后"], ["deep", "深链"]].map(([k, l]) => `<button class="chipbtn${covSort === k ? " on" : ""}" data-covsort="${k}">${l}</button>`).join("")}
           </div>
           ${sumBar}
           <div class="section-title">缺口</div>${gaps || `<div class="card dim">无缺口</div>`}
@@ -232,7 +246,8 @@ function pageStorage() {
       const rate = (last - first) / days; // MB/日
       const diskMb = 40 * 1024, freeMb = diskMb - s.db_bytes / 1048576;
       const eta = rate > 0 ? Math.floor(freeMb / rate) : null;
-      return `<div class="kv"><span class="k">容量外推</span><span class="v">增速 ~${rate.toFixed(1)}MB/日 · 40GiB 盘${eta ? `剩 ~${eta} 日` : "不增长"}</span></div>`; })()}
+      return `<div class="kv"><span class="k">容量外推</span><span class="v">增速 ~${rate.toFixed(1)}MB/日 · 40GiB 盘${eta ? `剩 ~${eta} 日` : "不增长"}</span></div>
+      <div class="kv"><span class="k">B/bar 目标</span><span class="v">${s.bytes_per_bar} vs ≤55 <span class="pill ${s.bytes_per_bar <= 55 ? "ok" : "warn"}">${s.bytes_per_bar <= 55 ? "达标" : "超标"}</span></span></div>`; })()}
     <div class="section-title">写入成本（B/item · #259 门）</div>
     <div class="card">
       ${[["no-change", s.write_cost.no_change_bytes_per_item], ["append", s.write_cost.append_bytes_per_item]].map(([k, v]) => `<div class="hbar"><span class="lbl">${k}</span><span class="track"><i style="width:${(v / s.write_cost.append_bytes_per_item) * 100}%"></i></span><span class="num">${v}</span></div>`).join("")}
@@ -258,10 +273,11 @@ function pageTaskDetail(id) {
   currentItemPool = () => pool;
   itemRowFn = (i) => {
     const st = i.success === false ? ["fail", "失败"] : i.success === true ? ["ok", "ok"] : i.stage === "running" ? ["warn", "运行"] : ["dim", "等待"];
-    return `<div class="row link${i.stage === "running" ? " live" : ""}" data-nav="item:${esc(t.task_id)}|${esc(i.item_id)}">
-      <div class="main"><div class="title mono">${esc(i.symbol)}</div>
+    const clickable = i.stage !== "pending";
+    return `<div class="row${clickable ? ` link${i.stage === "running" ? " live" : ""}` : ""}"${clickable ? ` data-nav="item:${esc(t.task_id)}|${esc(i.item_id)}"` : ""}>
+      <div class="main"><div class="title mono" ${clickable ? "" : 'style="color:var(--dim)"'}>${esc(i.symbol)}</div>
       <div class="sub">${i.ms != null ? i.ms + "ms" : "—"}</div></div>
-      <span class="pill ${st[0]}">${st[1]} ›</span></div>`;
+      <span class="pill ${st[0]}">${st[1]}${clickable ? " ›" : ""}</span></div>`;
   };
   const list = pool.slice(0, shown).map(itemRowFn).join("");
   const more = shown < pool.length ? `<button class="load-more" id="load-more">显示更多（${shown}/${pool.length}）</button>` : "";
@@ -276,9 +292,10 @@ function pageTaskDetail(id) {
   return `<div class="card">
       <div style="display:flex;justify-content:space-between"><span class="mono">${esc(t.task_id)}</span>${statusPill(t.status)}</div>
       <div style="font-size:30px;font-weight:600;letter-spacing:-0.02em;font-feature-settings:'tnum'">${Math.round(tpct)}%<span class="dim" style="font-size:13px;font-weight:400"> 完成</span></div>
-      <div class="bar ${t.items.failed ? "" : "ok"}"><i style="width:${tpct}%"></i></div>
+      <div class="bar${t.items.failed ? "" : " ok"}" style="position:relative"><i style="width:${tpct}%"></i>${t.items.failed ? `<b class="failseg" style="left:${tpct - t.items.failed / t.items.total * 100}%;width:${t.items.failed / t.items.total * 100}%"></b>` : ""}</div>
       ${spark}
       <div class="kv"><span class="k">操作 / 数据集</span><span class="v">${t.operation} · ${t.dataset}</span></div>
+      <div class="kv"><span class="k">创建</span><span class="v">${ago(t.created_at)}（${esc(t.created_at.slice(5, 16))}）</span></div>
       <div class="kv"><span class="k">进度</span><span class="v">${fmtNum(t.items.finished)}/${fmtNum(t.items.total)} · 失败 ${t.items.failed}</span></div>
       <div class="kv"><span class="k">耗时</span><span class="v"${t.status === "running" ? ` id="live-elapsed"` : ""}>${t.elapsed_s}s · ${t.per_item_ms ?? "—"}ms/item</span></div>
     </div>
@@ -286,20 +303,22 @@ function pageTaskDetail(id) {
     <div class="card">${Object.entries(t.phases).map(([k, v]) => {
       const mx = Math.max(...Object.values(t.phases));
       const total = Object.values(t.phases).reduce((a, b) => a + b, 0);
-      return `<div class="hbar"><span class="lbl">${k.replace("_ms", "")}</span><span class="track"><i style="width:${(v / mx) * 100}%"></i></span><span class="num">${v}ms · ${Math.round(v / total * 100)}%</span></div>`;
+      const hint = { parse_ms: "解析 day member", member_hash_ms: "member hash 验证", base_read_ms: "基座版本读取", diff_ms: "增量 diff 计算", stage_ms: "暂存写入", commit_ms: "提交+head 切换", fsync_ms: "fsync 持久化" }[k] || "";
+      return `<div class="hbar" title="${hint}"><span class="lbl">${k.replace("_ms", "")}</span><span class="track"><i style="width:${(v / mx) * 100}%"></i></span><span class="num">${v}ms · ${Math.round(v / total * 100)}%</span></div>`;
     }).join("")}
       <div class="kv" style="border-top:1px solid var(--border);margin-top:4px;padding-top:8px"><span class="k">合计</span><span class="v">${Object.values(t.phases).reduce((a, b) => a + b, 0)}ms · 实测 ${t.per_item_ms ?? "—"}ms/item</span></div>
     </div>` : ""}
     ${failed.length ? `<div class="section-title">失败 item（${failed.length}）</div>` +
       failed.map((f) => `<div class="row link" data-nav="failure-item:${esc(f.item_id)}"><div class="main"><div class="title mono">${esc(f.symbol)}</div></div><span class="pill fail">失败 ›</span></div>`).join("") : ""}
-    <div class="section-title">items（${pool.length}${pool.length !== items.length ? ` / ${items.length}` : ""}）</div>
-    <input id="item-search" class="search" type="search" placeholder="搜索 item（如 sz.300750）" value="${esc(itemQuery)}" style="margin-bottom:6px">
+    ${!items.length ? `<div class="card dim">尚无 item——任务排队中</div>` : ""}
+    ${items.length ? `<div class="section-title">items（${pool.length}${pool.length !== items.length ? ` / ${items.length}` : ""}）</div>` : ""}
+    ${items.length ? `<input id="item-search" class="search" type="search" placeholder="搜索 item（如 sz.300750）" value="${esc(itemQuery)}" style="margin-bottom:6px">
     <div class="chips">
       ${[["all", "全部 " + items.length], ["failed", "失败 " + failed.length], ["running", "运行中"], ["pending", "等待"]]
         .map(([k, l]) => `<button class="chipbtn${itemFilter === k ? " on" : ""}" data-filter="${k}">${l}</button>`).join("")}
       <span style="flex:1"></span>
       <button class="chipbtn${itemSort === "slow" ? " on" : ""}" data-sort="slow">最慢</button>
-    </div>
+    </div>` : ""}
     <div id="rowbox" data-pool="item">${list}</div>${more}`;
 }
 
@@ -317,7 +336,7 @@ function pageFailureDetail(itemId) {
     </div>
     <div class="section-title">证据</div>
     <div class="card">
-      <div class="kv"><span class="k">result_id</span><span class="v">${esc(d.evidence.result_id)}</span></div>
+      <div class="kv link" data-nav="version:${esc(d.evidence.result_id)}"><span class="k">result_id</span><span class="v">${esc(d.evidence.result_id)} ›</span></div>
       <div class="kv"><span class="k">task_revision</span><span class="v">${d.evidence.task_revision}</span></div>
       <div class="kv"><span class="k">source_binding</span><span class="v"><span class="chip">${esc(d.evidence.source_binding)}</span></span></div>
       <div class="kv"><span class="k">range</span><span class="v">${esc(d.evidence.range)}</span></div>
@@ -329,7 +348,7 @@ function pageFailureDetail(itemId) {
     ${(() => { const same = FIX.failures.filter((f) => f.symbol === d.symbol).length;
       return same > 1 ? `<div class="card"><div class="kv"><span class="k">同实体失败</span><span class="v"><span class="pill warn">该实体共 ${same} 次</span></span></div></div>` : ""; })()}
     <div class="card link" data-nav="entity:${esc(d.symbol)}"><div class="kv"><span class="k">查看实体</span><span class="v nw">${esc(d.symbol)} ›</span></div></div>
-    <div class="card link" data-nav="task:0"><div class="kv"><span class="k">所属任务</span><span class="v nw">${esc(d.task_id)} ›</span></div></div>`;
+    <div class="card link" data-nav="task:${FIX.tasks.findIndex((t) => t.task_id === d.task_id)}"><div class="kv"><span class="k">所属任务</span><span class="v nw">${esc(d.task_id)} ›</span></div></div>`;
 }
 
 function pageEntityDetail(entity) {
@@ -345,7 +364,7 @@ function pageEntityDetail(entity) {
       </div>
       <span class="pill ok">${c.state} ›</span></div>`).join("");
   return `<div class="card">
-      <h3>${esc(d.entity)} · ${d.period} <span class="pill dim" style="font-size:11px;vertical-align:2px">${d.entity.startsWith("sh.") ? "沪" : "深"}</span></h3>
+      <h3>${esc(d.entity)} · ${d.period} <span class="pill dim" style="font-size:11px;vertical-align:2px">${d.entity.startsWith("sh.") ? "沪" : "深"}</span>${(() => { const gs = FIX.gaps.filter((g) => g.entity === d.entity); const halt = gs.length && gs.every((g) => g.reason === "trading halt"); return gs.length ? ` <span class="pill ${halt ? "dim" : "warn"}" style="font-size:11px;vertical-align:2px">${halt ? "停牌" : `缺口×${gs.length}`}</span>` : ""; })()}</h3>
       <div class="kv"><span class="k">head</span><span class="v">${esc(d.head)}</span></div>
       <div class="kv"><span class="k">覆盖</span><span class="v">${d.first_day} ~ ${d.last_day}</span></div>
       <div class="kv"><span class="k">coverage</span><span class="v">${d.coverage}</span></div>
@@ -356,18 +375,27 @@ function pageEntityDetail(entity) {
         }).join("");
         return `<div class="covbar"><i class="fill" style="width:100%"></i>${segs}</div>
           <div class="sub dim" style="font-size:11px;margin-top:4px">${d.first_day} —— ${d.last_day}${segs ? " · 红段=缺口" : ""}</div>`; })()}
-      <div class="chips" style="margin-top:8px">${Object.entries(d.periods).map(([p, x]) => `<button class="chipbtn" title="${x.first} ~ ${x.last}">${p} · ${x.bars}</button>`).join("")}</div>
+      <div class="chips" style="margin-top:8px">${Object.entries(d.periods).map(([p, x]) => `<button class="chipbtn${entityPeriod === p ? " on" : ""}" data-period="${p}" title="${x.first} ~ ${x.last}">${p} · ${x.bars}</button>`).join("")}</div>
     </div>
-    ${(FIX._lastCandles = d.candles, "")}
-    <div class="section-title">近 60 日 K 线</div>
-    <div class="card"><div class="kchart">${d.candles.map((c) => {
-      const lo = Math.min(...d.candles.map((x) => x.l)), hi = Math.max(...d.candles.map((x) => x.h));
+    ${(() => {
+      const grp = entityPeriod === "week" ? 5 : entityPeriod === "month" ? 20 : 1;
+      const cs = [];
+      for (let i = 0; i < d.candles.length; i += grp) {
+        const g = d.candles.slice(i, i + grp);
+        if (g.length) cs.push({ o: g[0].o, h: Math.max(...g.map(x=>x.h)), l: Math.min(...g.map(x=>x.l)), c: g[g.length-1].c, v: g.reduce((a,x)=>a+x.v,0) });
+      }
+      FIX._kcandles = cs; FIX._lastCandles = cs;
+      return "";
+    })()}
+    <div class="section-title">K 线（${entityPeriod} · ${(FIX._kcandles || []).length} 根）</div>
+    <div class="card"><div class="kchart">${(FIX._kcandles || d.candles).map((c) => {
+      const lo = Math.min(...(FIX._kcandles || d.candles).map((x) => x.l)), hi = Math.max(...(FIX._kcandles || d.candles).map((x) => x.h));
       const y = (v) => ((v - lo) / (hi - lo || 1)) * 100;
       const up = c.c >= c.o;
       const bTop = 100 - y(Math.max(c.o, c.c)), bH = Math.max(2, y(Math.max(c.o, c.c)) - y(Math.min(c.o, c.c)));
       return `<i class="k${up ? " up" : " dn"}" style="--wt:${100 - y(c.h)}%;--wb:${y(c.h) - y(c.l)}%;--bt:${bTop}%;--bh:${bH}%"></i>`;
     }).join("")}</div>
-    <div class="vchart">${(() => { const vm = Math.max(...d.candles.map((x) => x.v)); return d.candles.map((c) => `<i class="${c.c >= c.o ? "" : "dn"}" style="height:${Math.max(4, (c.v / vm) * 100)}%"></i>`).join(""); })()}</div>
+    <div class="vchart">${(() => { const cs = FIX._kcandles || d.candles; const vm = Math.max(...cs.map((x) => x.v)); return cs.map((c) => `<i class="${c.c >= c.o ? "" : "dn"}" style="height:${Math.max(4, (c.v / vm) * 100)}%"></i>`).join(""); })()}</div>
     <div class="sub dim" style="font-size:11px;margin-top:6px">${(() => {
       const chg = ((d.closes[d.closes.length - 1] - d.closes[0]) / d.closes[0] * 100);
       const hi = Math.max(...d.candles.map((x) => x.h)), lo = Math.min(...d.candles.map((x) => x.l));
@@ -376,6 +404,7 @@ function pageEntityDetail(entity) {
     <div class="section-title">年线（period=2）</div>
     <div class="card">
       <div class="spark">${d.yearly.bars.map((b) => `<i style="height:${(b.close / Math.max(...d.yearly.bars.map((x) => x.close))) * 92 + 8}%"></i>`).join("")}</div>
+      <div style="display:flex;justify-content:space-between;font:10px var(--mono);color:var(--dim)">${d.yearly.bars.map((b) => `<span>${b.year}</span>`).join("")}</div>
       <div class="kv"><span class="k">基座 / 算法</span><span class="v">${esc(d.yearly.base_daily.slice(0, 22))}… · ${d.yearly.algo}</span></div>
       <div class="kv"><span class="k">as_of</span><span class="v">${d.yearly.as_of}</span></div>
       <div class="kv"><span class="k">日线对照</span><span class="v">${d.yearly.cross_check.consistent
@@ -383,9 +412,9 @@ function pageEntityDetail(entity) {
         : `<span class="pill fail">不一致</span>`}</span></div>
     </div>
     <div class="section-title">更新审计（近 7 日）</div>
-    <div class="card">${d.updates.map((u) => {
+    <div class="card">${d.updates.map((u, ui) => {
       const mc = { unchanged: ["dim", "unchanged"], append: ["ok", "append"], full: ["warn", "full"] }[u.mode];
-      const vid = `${d.head.split("-d")[0]}-d${d.chain[0].depth - 0}`;
+      const vid = `${d.head.split("-d")[0]}-d${d.chain[0].depth - ui}`;
       return `<div class="kv${u.delta_digest ? " link" : ""}"${u.delta_digest ? ` data-nav="version:${esc(vid)}"` : ""}><span class="k mono">${u.day}</span>
         <span class="v"><span class="pill ${mc[0]}">${mc[1]}</span> <span class="dim" style="font-size:10px">rev${u.task_revision}</span> ${u.delta_digest ? `<span class="chip">Δ ${esc(u.delta_digest)}</span>` : `<span class="dim">复用基座</span>`}</span></div>`;
     }).join("")}</div>
@@ -402,7 +431,7 @@ function pageEntityDetail(entity) {
     }).join("")}</div>
     <div class="section-title">来源绑定</div>
     <div class="card">
-      <div class="kv"><span class="k">generation</span><span class="v">${esc(d.binding.generation_id)}</span></div>
+      <div class="kv link" data-nav="generation:"><span class="k">generation</span><span class="v">${esc(d.binding.generation_id)} ›</span></div>
       <div class="kv"><span class="k">manifest</span><span class="v"><span class="chip">${esc(d.binding.manifest_sha256)}</span></span></div>
       <div class="kv"><span class="k">day member</span><span class="v"><span class="chip">${esc(d.binding.day_member_sha256)}</span></span></div>
       <div class="kv"><span class="k">gbbq events</span><span class="v"><span class="chip">${esc(d.binding.security_event_sha256)}</span></span></div>
@@ -421,7 +450,7 @@ function pageGeneration() {
       <div class="kv"><span class="k">审计</span><span class="v">${ago(g.audit.at)} · ${esc(g.audit.by)}</span></div>
     </div>
     <div class="section-title">manifest members（${g.member_count}）</div>
-    <div class="card">${g.members.map((m) => `<div class="kv"><span class="k mono" style="font-size:11px">${esc(m.path)}</span><span class="v"><span class="chip">${esc(m.sha256)}</span></span></div>`).join("")}</div>
+    <div class="card">${g.members.map((m) => `<div class="kv"><span class="k mono" style="font-size:11px">${esc(m.path)} <span class="pill dim" style="font-size:9px">${m.kind}</span></span><span class="v"><span class="chip">${esc(m.sha256)}</span></span></div>`).join("")}</div>
     <div class="card dim">字节完整性链：manifest_sha → member_sha → member 字节 → 解析记录 → segment。逐项可复核。</div>`;
 }
 
@@ -431,6 +460,7 @@ function pageAbout() {
       <div class="kv"><span class="k">形态</span><span class="v">只读观测 · MCP 为唯一操作通道</span></div>
       <div class="kv"><span class="k">数据源</span><span class="v">SQLite 唯一事实源（fixture）</span></div>
       <div class="kv"><span class="k">Issue</span><span class="v"><a href="https://github.com/liqiangcc/x-data-mcp/issues/268" style="color:var(--accent)">#268</a> · 阻塞于 #259 硬门 + S6</span></div>
+      <div class="kv"><span class="k">仓库</span><span class="v"><a href="https://github.com/liqiangcc/x-data-mcp" style="color:var(--accent)">liqiangcc/x-data-mcp</a></span></div>
       <div class="kv"><span class="k">渲染</span><span class="v">vanilla JS · 零依赖 · ${innerWidth}×${innerHeight}</span></div>
       <div class="kv"><span class="k">主题</span><span class="v">${matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"}（系统）</span></div>
       <div class="kv"><span class="k">构建</span><span class="v">mock fcef3fa+ · schema-19 读口契约</span></div>
@@ -468,14 +498,18 @@ function pageItemDetail(tid, iid) {
         return `<div class="stageline">${stages.map((st, i) => `<span class="st ${i < cur ? "done" : i === cur ? (d.outcome === "failed" ? "err" : "cur") : ""}">${i < cur ? "●" : i === cur ? "●" : "○"} ${st}</span>`).join('<span class="stline"></span>')}</div>`; })()}
       ${d.error ? `<div class="errblk">${esc(d.error)}</div>` : ""}
     </div>
-    <div class="section-title">写入证据</div>
+    ${d.outcome === "pending" ? `<div class="card dim">排队中——尚未被调度执行</div>` : ""}
+    ${d.outcome === "pending" || d.outcome === "running" ? "" : `<div class="section-title">${d.outcome === "failed" ? "中断点" : "写入证据"}</div>
     <div class="card">
+      ${d.evidence.failed_phase ? `<div class="kv"><span class="k">失败相位</span><span class="v"><span class="pill fail">${esc(d.evidence.failed_phase)}</span></span></div>` : ""}
       <div class="kv"><span class="k">continuity</span><span class="v">${esc(d.evidence.continuity)}</span></div>
-      <div class="kv"><span class="k">range</span><span class="v">${esc(d.evidence.range)}</span></div>
+      <div class="kv"><span class="k">range</span><span class="v">${esc(d.evidence.range ?? "—（未写入）")}</span></div>
       <div class="kv"><span class="k">bytes_in / bars</span><span class="v">${d.evidence.bytes_in} / ${d.evidence.bars_written}</span></div>
-    </div>
+    </div>`}
     ${(() => { const same = FIX.failures.filter((f) => f.symbol === d.symbol).length;
       return same > 1 ? `<div class="card"><div class="kv"><span class="k">同实体失败</span><span class="v"><span class="pill warn">该实体共 ${same} 次</span></span></div></div>` : ""; })()}
+    ${d.outcome === "failed" ? `<div class="card link" data-nav="failure-item:${esc(d.item_id)}"><div class="kv"><span class="k">失败详情</span><span class="v nw">错误+证据 ›</span></div></div>` : ""}
+    <div class="card link" data-nav="task:${FIX.tasks.findIndex((t) => t.task_id === d.task_id)}"><div class="kv"><span class="k">所属任务</span><span class="v nw">${esc(d.task_id)} ›</span></div></div>
     <div class="card link" data-nav="entity:${esc(d.symbol)}"><div class="kv"><span class="k">查看实体</span><span class="v nw">${esc(d.symbol)} ›</span></div></div>`;
 }
 
@@ -489,7 +523,9 @@ function pageVersionDetail(vid) {
       </div>
       <div class="kv"><span class="k">manifest</span><span class="v">${v.manifest_mode} · ${fmtNum(v.record_count)} 条${v.manifest_mode === "delta" ? ` <span class="dim" style="font-size:11px">（+${1 + (v.record_count % 3)} vs 父）</span>` : ""}</span></div>
       <div class="kv"><span class="k">覆盖</span><span class="v">${v.first_day} ~ ${v.last_day}</span></div>
+      <div class="covbar" style="margin:4px 0"><i class="fill" style="width:100%"></i></div>
       <div class="kv"><span class="k">发布</span><span class="v">${ago(v.published_at)} · ${esc(v.task)}</span></div>
+      <div class="kv link" data-nav="entity:${esc(v.version_id.match(/^v1-([^.]+\.\d+)/)?.[1] || "")}"><span class="k">所属实体</span><span class="v">${esc(v.version_id.match(/^v1-([^.]+\.\d+)/)?.[1] || "—")} ›</span></div>
       <div class="kv"><span class="k">最近验证</span><span class="v"><span class="pill ok">通过</span> head+chain</span></div>
     </div>
     ${v.parent_version_id ? `<div class="card link" data-nav="version:${esc(v.parent_version_id)}"><div class="kv"><span class="k">父版本</span><span class="v nw">${esc(v.parent_version_id)} ›</span></div></div>` : ""}
@@ -511,6 +547,7 @@ function pageVersionDetail(vid) {
 }
 
 function pageGapDetail(gi) {
+  const idx = gi;
   const g = FIX.gaps[gi];
   const d = g.detail;
   return `<div class="card">
@@ -524,16 +561,23 @@ function pageGapDetail(gi) {
         return `<div class="covbar"><i class="fill" style="width:100%"></i><i class="gapseg" style="left:${a}%;width:${Math.max(1, b - a)}%"></i></div>
           <div class="sub dim" style="font-size:11px;margin-top:4px">红段为缺口在全历史（${d.first_day} ~ ${d.last_day}）中的位置</div>`; })()}
       <div class="kv"><span class="k">原因</span><span class="v">${esc(g.reason)}</span></div>
+      ${(() => { const days = []; for (let t = new Date(g.start); t <= new Date(g.end); t = new Date(+t + 864e5)) days.push(t.toISOString().slice(0, 10));
+        return days.length > 1 ? `<div class="chips" style="margin-top:6px">${days.map((dd) => `<span class="chip" style="font-size:10px">${dd.slice(5)}</span>`).join("")}</div>` : ""; })()}
     </div>
     <div class="section-title">详情</div>
     <div class="card">
       <div class="kv"><span class="k">首次发现</span><span class="v">${ago(d.first_seen)}</span></div>
       <div class="kv"><span class="k">重试次数</span><span class="v">${d.attempts}</span></div>
       ${d.last_error ? `<div class="kv"><span class="k">最近错误</span><span class="v">${esc(d.last_error)}</span></div>` : ""}
-      <div class="kv"><span class="k">覆盖任务</span><span class="v">${esc(d.covering_task)}</span></div>
+      ${(() => { const ti = FIX.tasks.findIndex((t) => t.task_id === d.covering_task);
+        return ti >= 0 ? `<div class="kv link" data-nav="task:${ti}"><span class="k">覆盖任务</span><span class="v">${esc(d.covering_task)} ›</span></div>` : `<div class="kv"><span class="k">覆盖任务</span><span class="v">${esc(d.covering_task)}</span></div>`; })()}
     </div>
     <div class="card dim">${esc(d.hint)}</div>
-    <div class="card link" data-nav="entity:${esc(g.entity)}"><div class="kv"><span class="k">查看实体</span><span class="v nw">${esc(g.entity)} ›</span></div></div>`;
+    <div class="card link" data-nav="entity:${esc(g.entity)}"><div class="kv"><span class="k">查看实体</span><span class="v nw">${esc(g.entity)} ›</span></div></div>
+    <div style="display:flex;gap:8px">
+      ${idx > 0 ? `<div class="card link" style="flex:1" data-nav="gap:${idx - 1}"><div class="kv"><span class="k">上一条</span><span class="v nw">${esc(FIX.gaps[idx - 1].entity)} ‹</span></div></div>` : ""}
+      ${idx < FIX.gaps.length - 1 ? `<div class="card link" style="flex:1" data-nav="gap:${idx + 1}"><div class="kv"><span class="k">下一条</span><span class="v nw">${esc(FIX.gaps[idx + 1].entity)} ›</span></div></div>` : ""}
+    </div>`;
 }
 
 /* ---------- 路由 ---------- */
@@ -591,13 +635,20 @@ function render() {
   lastRenderMs = performance.now() - rt0;
   if (lm && rb) {
     const pool = rb.dataset.pool === "cov" ? currentCovPool() : currentItemPool();
+    let growing = false;
     const grow = () => {
-      const batch = pool.slice(shown, shown + PAGE_SIZE);
-      const rowFn = rb.dataset.pool === "cov" ? covRowFn : itemRowFn;
-      rb.insertAdjacentHTML("beforeend", batch.map(rowFn).join(""));
-      shown += batch.length;
-      lm.textContent = shown < pool.length ? `显示更多（${shown}/${pool.length}）` : "已全部加载";
-      if (shown >= pool.length) lm.remove();
+      if (growing) return;
+      growing = true;
+      requestAnimationFrame(() => {
+        growing = false;
+        if (!lm.isConnected) return;
+        const batch = pool.slice(shown, shown + PAGE_SIZE);
+        const rowFn = rb.dataset.pool === "cov" ? covRowFn : itemRowFn;
+        rb.insertAdjacentHTML("beforeend", batch.map(rowFn).join(""));
+        shown += batch.length;
+        lm.textContent = shown < pool.length ? `显示更多（${shown}/${pool.length}）` : "已全部加载";
+        if (shown >= pool.length) lm.remove();
+      });
     };
     lm.onclick = grow;
     new IntersectionObserver((ev) => { if (ev[0].isIntersecting) grow(); }).observe(lm);
@@ -615,8 +666,14 @@ content.addEventListener("click", (ev) => {
   else if (kind === "gap") nav("gap", param);
   else if (kind === "version") nav("version", param);
   else if (kind === "item") nav("item", param);
-  else if (kind === "entity") nav("entity", param);
+  else if (kind === "entity") { entityPeriod = "day"; nav("entity", param); }
   else nav(kind);
+});
+content.addEventListener("keydown", (ev) => {
+  if (ev.target.id === "cov-search" && ev.key === "Enter") {
+    const pool = currentCovPool();
+    if (pool.length) nav("entity", pool[0].entity);
+  }
 });
 let searchTimer = null;
 content.addEventListener("input", (ev) => {
@@ -650,6 +707,10 @@ content.addEventListener("click", (ev) => {
   if (so) { itemSort = itemSort === "slow" ? "seq" : "slow"; shown = PAGE_SIZE; render(); }
   const mk = ev.target.closest("[data-mkt]");
   if (mk) { covMkt = mk.dataset.mkt; shown = PAGE_SIZE; render(); }
+  const pd = ev.target.closest("[data-period]");
+  if (pd) { entityPeriod = pd.dataset.period; render(); return; }
+  const cs = ev.target.closest("[data-covsort]");
+  if (cs) { covSort = covSort === cs.dataset.covsort ? "default" : cs.dataset.covsort; shown = PAGE_SIZE; render(); }
   if (ev.target.closest("[data-mkt-clear-depth]")) { covDepth = null; shown = PAGE_SIZE; render(); }
   const cg = ev.target.closest("[data-collapse]");
   if (cg) { const c = cg.dataset.collapse; collapsed.has(c) ? collapsed.delete(c) : collapsed.add(c); render(); }
@@ -702,7 +763,8 @@ content.addEventListener("touchmove", (ev) => {
   if (!tip) { tip = document.createElement("div"); tip.id = "ktip"; kc.appendChild(tip); }
   if (d) {
     const day = new Date(Date.now() - (ks.length - 1 - idx) * 864e5).toISOString().slice(5, 10);
-    tip.textContent = `${day}  O ${d.o.toFixed(2)}  H ${d.h.toFixed(2)}  L ${d.l.toFixed(2)}  C ${d.c.toFixed(2)}  V ${d.v ?? "—"}`;
+    const chg = ((d.c - d.o) / d.o * 100).toFixed(1);
+    tip.textContent = `${day}  O ${d.o.toFixed(2)}  H ${d.h.toFixed(2)}  L ${d.l.toFixed(2)}  C ${d.c.toFixed(2)}  ${d.c >= d.o ? "+" : ""}${chg}%`;
   }
 }, { passive: true });
 content.addEventListener("touchend", () => {

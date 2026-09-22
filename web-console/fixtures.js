@@ -138,7 +138,9 @@ const FIX = {
       item_id, symbol: it.symbol, task_id, ms: it.ms ?? 0,
       outcome: it.success === false ? "failed" : it.success === true ? "succeeded" : it.stage ?? "pending",
       error: it.success === false ? "day member malformed: non-increasing trade_date at record 1822" : null,
-      evidence: { continuity: "append", range: "2026-09-30", bytes_in: 245408, bars_written: 1 },
+      evidence: it.success === false
+        ? { continuity: "中断于 stage", failed_phase: "diff", bytes_in: 245408, bars_written: 0 }
+        : { continuity: "append", range: "2026-09-30", bytes_in: 245408, bars_written: 1 },
     };
   },
   // 失败明细：错误原文 + evidence + result 绑定

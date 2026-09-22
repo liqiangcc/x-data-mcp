@@ -85,6 +85,7 @@ body {
   padding: 12px 14px; background: var(--bg-raise);
   border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px;
   -webkit-tap-highlight-color: transparent;
+  content-visibility: auto; contain-intrinsic-size: auto 52px;
 }
 .row:active, .nav-item:active, .load-more:active { background: var(--bg-inset); }
 .row .main { min-width: 0; flex: 1; }
@@ -307,7 +308,7 @@ body {
 #to-top:active { transform: scale(.92); }
 
 /* 运行中 item 行左缘呼吸线 */
-.row.live { border-left: 2px solid var(--warn); }
+.row.live { box-shadow: inset 2px 0 0 var(--warn); }
 
 /* WAL 峰值标记（趋势 bar 右侧琥珀点） */
 .hbar .track { position: relative; }
@@ -315,8 +316,8 @@ body {
 .hbar .num { width: 84px; white-space: nowrap; text-align: right; }
 
 /* 覆盖行标记：滞后蓝灰 / 深链琥珀 */
-.row.stale { border-left: 2px solid var(--dim); }
-.row.deep { border-left: 2px solid var(--warn); }
+.row.stale { box-shadow: inset 2px 0 0 var(--dim); }
+.row.deep { box-shadow: inset 2px 0 0 var(--warn); }
 
 /* 量柱 */
 .vchart { display: flex; align-items: flex-end; gap: 1px; height: 28px; margin-top: 6px; }
@@ -358,3 +359,12 @@ body {
 /* 无障碍 + 选择色 */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+/* 进度条失败段（红） */
+.bar .failseg { position: absolute; top: 0; bottom: 0; background: var(--fail); border-radius: inherit; }
+
+/* 滚动容器：防 scroll chaining + 合成提示 */
+#content { overscroll-behavior-y: contain; touch-action: pan-y; will-change: scroll-position; }
+
+/* 卡片 paint 隔离：滚动时不向外交互重绘 */
+.card { contain: layout paint; content-visibility: auto; contain-intrinsic-size: auto 140px; }
