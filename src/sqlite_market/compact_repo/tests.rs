@@ -687,6 +687,54 @@ fn backend_dispatch_and_compact_supply_surface() {
 }
 
 #[test]
+fn catalog_roundtrip_on_compact_schema_uses_bound_tasks() {
+    use crate::catalog::{
+        CatalogSnapshot, CompletenessEvidence, Exchange, IndustryInfo, SecurityRecord, SecurityType,
+    };
+    use crate::sqlite_catalog::SqliteCatalog;
+
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    // The worker builds the catalog executor from `market.tasks()`; on a
+    // schema-19 database that handle is coordinator-bound, so catalog
+    // reads/writes must run through it rather than opening side
+    // connections that bypass the shared lease and writer.
+    let catalog = SqliteCatalog::new(repo.tasks());
+    let now = Utc::now();
+    let snapshot = CatalogSnapshot {
+        source: "fixture:catalog".into(),
+        acquired_at: now,
+        completeness: CompletenessEvidence::Complete { expected_count: 1 },
+        records: vec![SecurityRecord {
+            symbol: "600006".into(),
+            name: "样例".into(),
+            exchange: Exchange::Shanghai,
+            security_type: SecurityType::AShare,
+            source_security_id: "sh600006".into(),
+            industry: IndustryInfo::Missing {
+                reason: "fixture unknown".into(),
+            },
+            source: "fixture:catalog".into(),
+            acquired_at: now,
+        }],
+    };
+    catalog
+        .publish_fixture("cat-v1", snapshot.clone(), None)
+        .unwrap();
+    let facts = catalog.selection_facts().unwrap();
+    assert_eq!(facts.catalog_head.as_deref(), Some("cat-v1"));
+    assert_eq!(catalog.fixed("cat-v1").unwrap().records.len(), 1);
+    assert!(matches!(
+        catalog.publish_fixture("cat-v2", snapshot, Some("stale")),
+        Err(crate::market_storage::Error::Conflict(_))
+    ));
+    assert_eq!(
+        catalog.selection_facts().unwrap().catalog_head.as_deref(),
+        Some("cat-v1")
+    );
+}
+
+#[test]
 fn ops_range_commit_stages_delta_binds_leaf_and_replays() {
     use crate::market_update::publication::RangeRepository;
 

@@ -1,6 +1,6 @@
 //! Minimal catalog fixture adapter. No source acquisition and no stdio write handler.
 use crate::{catalog::*, hash::sha256, market_storage::Error, sqlite_tasks::SqliteTasks};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 #[derive(Clone)]
 pub struct SqliteCatalog {
@@ -159,24 +159,59 @@ impl SqliteCatalog {
     pub fn new(tasks: SqliteTasks) -> Self {
         Self { tasks }
     }
+    /// Route catalog access through the task store's transaction surface:
+    /// a legacy handle applies the schema gate itself, while a
+    /// coordinator-bound (schema-19) handle runs under the shared write
+    /// coordinator. An inner market error aborts the transaction via a
+    /// sentinel task error; the real catalog error is returned unchanged.
+    fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {
+        let mut slot = None;
+        let gate = self.tasks.read(|c| {
+            slot = Some(f(c));
+            if slot.as_ref().is_some_and(|r| r.is_ok()) {
+                Ok(())
+            } else {
+                Err(crate::task_control::Error::StorageUnavailable(
+                    "catalog read aborted".into(),
+                ))
+            }
+        });
+        match slot {
+            Some(result) => result,
+            None => gate
+                .map(|_| ())
+                .map_err(|e| Error::Storage(e.to_string()))
+                .and_then(|()| Err(Error::Storage("catalog read returned no result".into()))),
+        }
+    }
+    fn write<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {
+        let mut slot = None;
+        let gate = self.tasks.write(|c| {
+            slot = Some(f(c));
+            if slot.as_ref().is_some_and(|r| r.is_ok()) {
+                Ok(())
+            } else {
+                Err(crate::task_control::Error::StorageUnavailable(
+                    "catalog write aborted".into(),
+                ))
+            }
+        });
+        match slot {
+            Some(result) => result,
+            None => gate
+                .map(|_| ())
+                .map_err(|e| Error::Storage(e.to_string()))
+                .and_then(|()| Err(Error::Storage("catalog write returned no result".into()))),
+        }
+    }
     /// One bounded read-transaction snapshot of raw selection facts. The
     /// catalog read re-verifies digest and member projection inside the same
     /// snapshot; contract-family filtering belongs to the application layer.
     pub fn selection_facts(&self) -> Result<SelectionFacts, Error> {
-        let mut c = self.tasks.connect(true).map_err(storage)?;
-        let tx = c.transaction().map_err(storage)?;
-        crate::sqlite_tasks::check_schema(&tx, true)?;
-        let result = selection_facts_on(&tx)?;
-        tx.commit().map_err(storage)?;
-        Ok(result)
+        self.read(selection_facts_on)
     }
     pub fn fixed(&self, id: &str) -> Result<CatalogVersion, Error> {
-        let mut c = self.tasks.connect(true)?;
-        let tx = c.transaction().map_err(storage)?;
-        crate::sqlite_tasks::check_schema(&tx, true)?;
-        let result = read(&tx, id)?;
-        tx.commit().map_err(storage)?;
-        Ok(result)
+        self.read(|c| read(c, id))
     }
     /// Explicit fixture import, not a production publisher. Applies the existing catalog rules.
     pub fn publish_fixture(
@@ -191,14 +226,8 @@ impl SqliteCatalog {
         {
             return Err(Error::Invalid("bounded, labelled fixture required".into()));
         }
-        let mut c = self.tasks.connect(false)?;
-        let tx = c
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(storage)?;
         let published_at = snapshot.acquired_at;
-        publish_in_tx(&tx, id, snapshot, published_at, expected)?;
-        tx.commit().map_err(storage)?;
-        Ok(())
+        self.write(|c| publish_in_tx(c, id, snapshot, published_at, expected))
     }
     /// Publish a candidate assembled from an inspected official-file
     /// snapshot (design: docs/tasks/issue-6-catalog-impl.md §4.3). Same
@@ -229,26 +258,22 @@ impl SqliteCatalog {
             "catalog-{}",
             published_at.timestamp_nanos_opt().unwrap_or_default()
         );
-        let mut c = self.tasks.connect(false)?;
-        let tx = c
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(storage)?;
-        publish_in_tx(&tx, &id, snapshot, published_at, expected)?;
-        tx.commit().map_err(storage)?;
+        self.write(|c| publish_in_tx(c, &id, snapshot, published_at, expected))?;
         Ok(id)
     }
 }
-/// Shared atomic publish body: schema check, expected-head optimistic lock,
-/// snapshot validation against the previous version, version + member
-/// projection + head swap, and in-transaction read-back verification.
+/// Shared atomic publish body: expected-head optimistic lock, snapshot
+/// validation against the previous version, version + member projection +
+/// head swap, and in-transaction read-back verification. Schema identity is
+/// enforced by the caller (`SqliteTasks::write` checks the v18 gate, and a
+/// coordinator-bound handle validates the compact schema identity instead).
 fn publish_in_tx(
-    tx: &rusqlite::Transaction,
+    tx: &Connection,
     id: &str,
     snapshot: CatalogSnapshot,
     published_at: chrono::DateTime<chrono::Utc>,
     expected: Option<&str>,
 ) -> Result<(), Error> {
-    crate::sqlite_tasks::check_schema(tx, true)?;
     let current = head(tx)?;
     if current.as_deref() != expected {
         return Err(Error::Conflict("catalog head changed".into()));
