@@ -735,6 +735,141 @@ fn catalog_roundtrip_on_compact_schema_uses_bound_tasks() {
 }
 
 #[test]
+fn yearly_derive_commit_on_compact_schema() {
+    use crate::market_update::tasks::Operation;
+    use crate::task_control::{Contract, RequestOutcome};
+    use crate::yearly_publication::{
+        DerivationEvidence,
+        runner::{YearlyExecution, YearlyRunner, YearlyVerifier},
+        tasks::YearlyContract,
+    };
+
+    struct Stub;
+    impl YearlyVerifier for Stub {
+        fn verify(
+            &self,
+            base: &CheckedRecord,
+            years: &BTreeSet<i32>,
+            derived_at: DateTime<Utc>,
+        ) -> Result<DerivationEvidence, crate::market_data::SourceError> {
+            Ok(DerivationEvidence {
+                base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
+                years: years.clone(),
+                as_of: derived_at
+                    .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                    .date_naive(),
+                coverage: CoverageEvidence::complete("stub re-aggregation verified"),
+            })
+        }
+    }
+
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    // Publish a daily base covering 2025 and 2026 through the real path.
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+    let days = [
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 6, 30).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 18).unwrap(),
+    ]
+    .into_iter()
+    .map(compact_market::epoch_day);
+    let version = mk_version(
+        "v1",
+        days.enumerate()
+            .map(|(i, d)| bar(d, 100 + i as i64))
+            .collect(),
+    );
+    repo.stage(&envelope(&version, source("gen-1"), None))
+        .unwrap();
+    let candidate = repo.candidate("v1").unwrap();
+    repo.mark_validated(&candidate).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: candidate.clone(),
+        required_heads: vec![(Scope::of(&candidate.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    // Accept the yearly task through the real contract, then run the item.
+    let contract = YearlyContract {
+        operation: Operation::Update,
+        repository: repo.clone(),
+        today: || NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+    };
+    let work = contract
+        .resolve(&json!({"items":[{
+            "symbol":"sh.600006",
+            "base_daily_version_id":"v1",
+            "years":[2025,2026],
+            "intent":{"CurrentHead":{"expected_daily_head":"v1","expected_yearly_head":null}},
+            "comparison_version_id":null
+        }]}))
+        .unwrap();
+    let command = Command {
+        key: contract.key(),
+        intent: json!({}),
+    };
+    let acceptance = repo
+        .accept("req-yearly", &command, &work, RUN, None)
+        .unwrap();
+    let RequestOutcome::Task(snapshot) = acceptance.record.outcome else {
+        panic!("expected task outcome")
+    };
+    let yearly_task = snapshot.task.task_id.clone();
+    let item_id = snapshot.items[0].spec.item_id.clone();
+
+    let runner = YearlyRunner {
+        repository: repo.clone(),
+        run_id: RUN.into(),
+        derived_at: ts(),
+    };
+    let YearlyExecution::Published(receipt) =
+        runner.run_item(&yearly_task, &item_id, &Stub).unwrap()
+    else {
+        panic!("yearly item did not publish")
+    };
+
+    let fixed = repo.fixed(&receipt.version_id).unwrap();
+    assert_eq!(fixed.version.period, Period::Year);
+    assert_eq!(fixed.version.records.len(), 2);
+    assert_eq!(
+        fixed
+            .version
+            .yearly_derivation
+            .as_ref()
+            .unwrap()
+            .base_daily_version_id,
+        "v1"
+    );
+    // A derived version inherits the published base's source binding.
+    assert_eq!(
+        fixed.raw()["compact_source"]["generation_id"],
+        json!("gen-1")
+    );
+    let head = repo
+        .versions(&Scope {
+            symbol: "sh.600006".into(),
+            period: Period::Year,
+        })
+        .unwrap();
+    assert_eq!(head.len(), 1);
+    assert_eq!(head[0].version_id, receipt.version_id);
+
+    // Re-running the committed item replays the stored receipt.
+    let YearlyExecution::Published(replay) =
+        runner.run_item(&yearly_task, &item_id, &Stub).unwrap()
+    else {
+        panic!("yearly replay did not publish")
+    };
+    assert_eq!(replay, receipt);
+}
+
+#[test]
 fn ops_range_commit_stages_delta_binds_leaf_and_replays() {
     use crate::market_update::publication::RangeRepository;
 

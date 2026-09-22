@@ -198,6 +198,13 @@ impl<R: MarketRepository> Publisher<R> {
         }
         match self.repository.candidate(&command.version_id) {
             Ok(existing) if existing.raw() == candidate.raw() => {}
+            // Compact backends synthesize the staged raw from typed facts,
+            // adding `compact_source` and dropping the derived
+            // `local_yearly_derivation_v1` projection — compare the typed
+            // version content instead of the envelope bytes.
+            Ok(existing)
+                if existing.raw().get("compact_source").is_some()
+                    && existing.version() == &compat::check(&candidate.raw)?.version => {}
             Ok(_) => {
                 return Err(Error::Conflict(
                     "yearly candidate id has different content".into(),
@@ -207,7 +214,11 @@ impl<R: MarketRepository> Publisher<R> {
             Err(error) => return Err(error),
         }
         let plan = self.prepare(command)?;
-        if plan.record.raw() != candidate.raw()
+        let next = compat::check(&candidate.raw)?;
+        let same_record = plan.record.raw() == candidate.raw()
+            || (plan.record.raw().get("compact_source").is_some()
+                && plan.record.version == next.version);
+        if !same_record
             || plan.base_digest.as_deref() != Some(candidate.base_integrity_sha256.as_str())
         {
             return Err(Error::Base(

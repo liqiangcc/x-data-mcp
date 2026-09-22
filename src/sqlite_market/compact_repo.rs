@@ -823,22 +823,6 @@ pub(crate) fn materialize_checked(
 
 fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
     let record = compat::check(raw)?;
-    let source: CompactSource = serde_json::from_value(
-        raw.get("compact_source")
-            .cloned()
-            .ok_or_else(|| invalid("compact_source required for compact staging"))?,
-    )
-    .map_err(invalid)?;
-    let evidence =
-        compact_versions::put_evidence(c, EvidenceKind::Generation, &source.generation_evidence)?;
-    let binding = SourceBinding {
-        generation_id: source.generation_id.clone(),
-        generation_manifest_sha256: hex_digest(&source.generation_manifest_sha256)?,
-        day_member_sha256: hex_digest(&source.day_member_sha256)?,
-        security_event_sha256: hex_digest(&source.security_event_sha256)?,
-        evidence_digest: evidence,
-    };
-    let binding_digest = compact_versions::put_source_binding(c, &binding)?;
     let version_evidence = VersionEvidence {
         source: record.version.source.clone(),
         coverage_reason: record.batch.coverage.reason.clone(),
@@ -874,7 +858,10 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
         }
         Ok(clips)
     };
-    let yearly_lineage = match period {
+    // A yearly record carries no generation source of its own: it derives
+    // entirely from a published daily base, so it inherits that base's
+    // source binding. Daily records must carry `compact_source`.
+    let (yearly_lineage, binding_digest) = match period {
         Period::Year => {
             let derivation = record
                 .version
@@ -889,19 +876,40 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
             {
                 return Err(invalid("yearly base is not a published daily version"));
             }
-            Some(YearlyLineageDraft {
-                base_daily_version_key: base_key,
-                algorithm_version: derivation.algorithm_version.clone(),
-                first_trade_day: compact_market::epoch_day(derivation.first_trading_date),
-                last_trade_day: compact_market::epoch_day(derivation.last_trading_date),
-                as_of_day: base.last_day,
-            })
+            (
+                Some(YearlyLineageDraft {
+                    base_daily_version_key: base_key,
+                    algorithm_version: derivation.algorithm_version.clone(),
+                    first_trade_day: compact_market::epoch_day(derivation.first_trading_date),
+                    last_trade_day: compact_market::epoch_day(derivation.last_trading_date),
+                    as_of_day: base.last_day,
+                }),
+                base.source_binding_digest,
+            )
         }
         Period::Day => {
             if record.version.yearly_derivation.is_some() {
                 return Err(invalid("daily record carries yearly derivation"));
             }
-            None
+            let source: CompactSource = serde_json::from_value(
+                raw.get("compact_source")
+                    .cloned()
+                    .ok_or_else(|| invalid("compact_source required for compact staging"))?,
+            )
+            .map_err(invalid)?;
+            let evidence = compact_versions::put_evidence(
+                c,
+                EvidenceKind::Generation,
+                &source.generation_evidence,
+            )?;
+            let binding = SourceBinding {
+                generation_id: source.generation_id.clone(),
+                generation_manifest_sha256: hex_digest(&source.generation_manifest_sha256)?,
+                day_member_sha256: hex_digest(&source.day_member_sha256)?,
+                security_event_sha256: hex_digest(&source.security_event_sha256)?,
+                evidence_digest: evidence,
+            };
+            (None, compact_versions::put_source_binding(c, &binding)?)
         }
     };
     let draft = VersionDraft {
@@ -1107,7 +1115,22 @@ fn commit_tx(c: &mut Connection, plan: &PublishPlan) -> Result<Receipt, Error> {
     }
     // The sealed plan's record must still equal the stored verified facts.
     let stored = materialize_checked(c, &command.version_id, true)?;
-    if stored.raw != plan.record.raw {
+    // Compact storage keeps only typed yearly facts; the derived
+    // `local_yearly_derivation_v1` envelope projection is not reproducible,
+    // so yearly candidates compare the facts the commit actually publishes.
+    let same = match plan.record.version.period {
+        Period::Year => {
+            stored.version.version_id == plan.record.version.version_id
+                && stored.version.symbol == plan.record.version.symbol
+                && stored.version.records == plan.record.version.records
+                && stored.version.yearly_derivation == plan.record.version.yearly_derivation
+                && stored.version.source == plan.record.version.source
+                && stored.version.unit_currency == plan.record.version.unit_currency
+                && stored.batch.coverage == plan.record.batch.coverage
+        }
+        Period::Day => stored.raw == plan.record.raw,
+    };
+    if !same {
         return Err(integrity("validated candidate changed since plan"));
     }
     if let Some(digest) = &plan.base_digest {
