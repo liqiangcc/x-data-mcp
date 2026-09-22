@@ -1114,17 +1114,24 @@ pub(crate) fn accept_tx(
     if orphan {
         return Err(inconsistent("unbound execution record"));
     }
+    // Registry-wide integrity gate: a corrupted stored command fails the
+    // accept closed. Digest-only (#259 S5G-8): hashing each stored
+    // command_json is O(rows × bytes) and does not decode every bound
+    // task snapshot — semantic revalidation stays with read_request on
+    // the consume/replay path, which every caller still hits.
     let mut stmt = c
-        .prepare("SELECT request_id FROM requests")
+        .prepare("SELECT command_json,command_digest FROM requests")
         .map_err(storage)?;
-    let ids = stmt
-        .query_map([], |r| r.get::<_, String>(0))
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;
     drop(stmt);
-    for existing in ids {
-        read_request(c, &existing)?;
+    for (raw, digest) in rows {
+        if crate::hash::sha256(raw.as_bytes()) != digest {
+            return Err(inconsistent("command digest mismatch"));
+        }
     }
     let execution_key = if let Some(guard) = retry {
         let old = read_bound_task(c, &guard.original_task_id)?.ok_or(Error::TaskNotFound)?;
