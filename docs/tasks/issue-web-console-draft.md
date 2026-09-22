@@ -41,14 +41,33 @@ Web = 只读的"治理仪表盘"；MCP = 唯一操作通道；SQLite = 唯一事
 
 ### B. 治理统计（P0/P1——全部元数据级聚合，无 bar 扫描）
 
-| 能力 | 回答的问题 | 成本 |
+只展示系统已产生的测量值——console 做聚合展示，不新增采样器。
+
+| 能力 | 回答的问题 | 数据源/成本 |
 |---|---|---|
-| 日更成功率与失败原因分布 | 按日/按周成功率趋势、失败分类占比 | O(items/天) |
-| 覆盖统计 | 全市场实体按 last_day 分布、缺口总数、覆盖率 | O(N) 行级 |
-| 版本链健康 | delta 深度分布直方图、rollover 计数、逼近 256 上限的实体预警 | O(版本数) |
+| 日更成功率与失败原因分布 | 按日/按周成功率趋势、失败分类占比（source violation 率漂移 = 上游格式变化的先行指标） | `task_items.outcome` 聚合，O(items/天) |
+| 覆盖统计 | 全市场实体按 last_day 分布、缺口总数、覆盖率 | `data_versions` 元数据，O(N) 行级 |
+| 版本链健康 | delta 深度分布直方图、rollover 计数、逼近 256 上限的实体预警 | `data_versions.delta_depth` 聚合 |
 | 连续性审计统计 | unchanged/append/full 比例、异常 full-rewrite 频率 | `market_update_results.continuity_mode` 聚合 |
 | 来源一致性 | generation 绑定的实体数、审计 outcome 分布 | results/source_bindings 聚合 |
-| 存储趋势 | B/bar、DB/WAL 增长曲线、segment payload 利用率 | 定时采样落表 |
+
+#### B.1 空间占用（#259 容量门的日常监控版）
+
+| 指标 | 数据源 | 价值 |
+|---|---|---|
+| DB / WAL 总量与趋势 | `SqliteMetrics` + 定时采样 | ≤2.5GiB 容量预算的实时对照 |
+| B/bar 实测 | dbstat（capacity measure 同款） | 压缩率漂移预警（S5B 基线 48.2B/bar） |
+| segment 利用率 | `segment_bars` pgsize/unused | 碎片检测 |
+| 每类写入增量成本 | no-change B/item、append B/item | #259 验收指标（1,721/2,426 B/item）每日复核 |
+
+#### B.2 耗时（日更 SLA 仪表）
+
+| 指标 | 数据源 | 价值 |
+|---|---|---|
+| 任务 wall time + per-item ms | task 时间戳 | 日更 ≤5min 门的日常监控 |
+| 相位耗时分布 | S5G phase 计时（parse/stage/commit/fsync 分项） | 性能回归定位：变慢直接看哪段退化 |
+| 失败/重试率趋势 | item outcome 聚合 | 数据质量漂移 |
+| reader/writer 等待时间 | WriteCoordinator 指标 | 读写竞争监控 |
 
 ### C. 溯源与审计（P1——本产品差异化面）
 
