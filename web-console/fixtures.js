@@ -63,6 +63,8 @@ const FIX = {
     bytes_per_bar: 48.2, segment_utilization: 0.88,
     segments: 63143, bars: 29136493, versions: 11783, entities: 11783,
     wal_peak_24h: 4202432,
+    readers_active: 1, readers_max: 8, last_checkpoint_ms: 412, pending_frames: 0,
+    write_cost: { no_change_bytes_per_item: 1721, append_bytes_per_item: 2426, sampled_items: 5221 },
     trend: [
       { day: "09-25", db_mb: 1380, wal_mb: 0 },
       { day: "09-26", db_mb: 1391, wal_mb: 4.1 },
@@ -215,6 +217,16 @@ const FIX = {
         day_member_sha256: ((seed * 40503) >>> 0).toString(16).padStart(8, "0") + "…",
         security_event_sha256: ((seed * 99991) >>> 0).toString(16).padStart(8, "0") + "…",
       },
+      // 惰性更早版本窗口：版本链只带尾部，"加载更早"时 API 分页取
+      chain_older: (below_depth, n) => Array.from({ length: Math.min(n, below_depth) }, (_, i) => {
+        const d = below_depth - 1 - i;
+        return {
+          version_id: `v1-${entity}-d${d}`, mode: "delta", depth: d,
+          records: 7000 + (seed % 1500) + d, state: "published",
+          projection: ((seed * 2654435761 * (d + 1)) >>> 0).toString(16).toUpperCase().padStart(8, "0") + "…",
+          published_at: `2026-09-${String(1 + (d % 28)).padStart(2, "0")}T09:00:00Z`,
+        };
+      }),
     };
   },
   version_detail: {

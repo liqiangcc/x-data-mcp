@@ -170,10 +170,11 @@ body {
 
 /* 页面入场（transform+opacity，合成器层零掉帧） */
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-#content > * { animation: rise .18s ease-out backwards; }
-#content > *:nth-child(2) { animation-delay: .03s; }
-#content > *:nth-child(3) { animation-delay: .06s; }
-#content > *:nth-child(n+4) { animation-delay: .09s; }
+#content > :nth-child(-n+6) { animation: rise .18s ease-out backwards; }
+#content > :nth-child(2) { animation-delay: .03s; }
+#content > :nth-child(3) { animation-delay: .06s; }
+#content > :nth-child(n+4) { animation-delay: .09s; }
+#rowbox > * { animation: none; }
 @media (prefers-reduced-motion: reduce) { #content > * { animation: none; } }
 
 /* sparkline：任务 item 耗时分布（纯 CSS 竖条） */
@@ -217,8 +218,8 @@ body {
 /* 前进右滑入 / 后退左滑入 */
 @keyframes riseL { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
 @keyframes riseR { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
-#content > * { animation-name: riseL; }
-#content.rev > * { animation-name: riseR; }
+#content > :nth-child(-n+6) { animation-name: riseL; }
+#content.rev > :nth-child(-n+6) { animation-name: riseR; }
 
 /* checkpoint 节点绿点 */
 .timeline .row.cp::before { background: var(--ok); }
@@ -307,3 +308,8 @@ body {
 
 /* 运行中 item 行左缘呼吸线 */
 .row.live { border-left: 2px solid var(--warn); }
+
+/* WAL 峰值标记（趋势 bar 右侧琥珀点） */
+.hbar .track { position: relative; }
+.hbar .walmark { position: absolute; right: -2px; top: 50%; transform: translateY(-50%); width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.hbar .num { width: 84px; white-space: nowrap; text-align: right; }

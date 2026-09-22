@@ -23,7 +23,7 @@ const nav = (name, param) => {
   render();
 };
 let navDir = 1; // 1 前进 -1 后退
-const back = () => { if (stack.length > 1) { navDir = -1; stack.pop(); shown = PAGE_SIZE; render(); } };
+const back = () => { if (stack.length > 1) { navDir = -1; stack.pop(); shown = PAGE_SIZE; chainOlder = []; chainEntity = null; render(); } };
 window.addEventListener("popstate", back);
 
 /* ---------- 工具 ---------- */
@@ -70,13 +70,14 @@ function pageHome() {
         return `<div class="spark" style="height:18px;margin:6px 0 2px">${dn.filter((_, i) => i % step === 0).map((x) => `<i style="height:${8 + (x.ms / mx) * 92}%"></i>`).join("")}</div>`; })()}
       <div class="kv"><span class="k">进度</span><span class="v nw">${t.items.finished}/${t.items.total} · 失败 ${t.items.failed} ›</span></div>
       <div class="kv"><span class="k">耗时</span><span class="v" id="live-elapsed">${t.elapsed_s}s · ${t.per_item_ms ?? "—"}ms/item</span></div>
-      ${t.status === "running" && t.per_item_ms ? `<div class="kv"><span class="k">预计剩余</span><span class="v">~${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}s</span></div>` : ""}
+      ${t.status === "running" && t.per_item_ms ? `<div class="kv"><span class="k">预计剩余</span><span class="v" id="live-eta" data-eta="${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}">~${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}s</span></div>` : ""}
     </div>
 
     <div class="section-title">失败队列</div>
     <div class="card link" data-nav="failures:">
       <div class="kv"><span class="k">总数</span><span class="v nw">${FIX.failures.length} 条 ›</span></div>
-      ${FIX.failures.slice(0, 2).map((f) => `<div class="kv"><span class="k mono">${esc(f.symbol)}</span><span class="v">${esc(f.class)}</span></div>`).join("")}
+      ${FIX.failures.slice(0, 2).map((f) => `<div class="kv"><span class="k mono">${esc(f.symbol)}</span><span class="v">${esc(f.class)}</span></div>
+        <div class="sub dim" style="font-size:11px;margin:-4px 0 4px">${esc(f.error.slice(0, 60))}</div>`).join("")}
     </div>
 
     <div class="section-title">覆盖</div>
@@ -143,19 +144,27 @@ function pageFailures() {
 let covQuery = "";
 let covFilter = "all";
 let covMkt = "all";
+let covDepth = null; // "lo"|"mid"|"hi" 深度桶过滤
 let itemFilter = "all";
 let itemSort = "seq";
+let chainOlder = [], chainEntity = null, chainDepth = 0;
+let currentCovPool = () => [], currentItemPool = () => [], covRowFn = null, itemRowFn = null;
 function pageCoverage() {
   let pool = covQuery ? FIX.coverage.filter((r) => r.entity.includes(covQuery)) : FIX.coverage;
   if (covFilter === "warn") pool = pool.filter((r) => r.coverage !== "complete" || r.delta_depth > 200);
   if (covMkt !== "all") pool = pool.filter((r) => r.entity.startsWith(covMkt));
-  const rows = pool.slice(0, shown).map((r) => `<div class="row link" data-nav="entity:${esc(r.entity)}">
+  if (covDepth === "lo") pool = pool.filter((r) => r.delta_depth === 0);
+  else if (covDepth === "mid") pool = pool.filter((r) => r.delta_depth > 0 && r.delta_depth <= 127);
+  else if (covDepth === "hi") pool = pool.filter((r) => r.delta_depth > 127);
+  currentCovPool = () => pool;
+  covRowFn = (r) => `<div class="row link" data-nav="entity:${esc(r.entity)}">
       <div class="main">
         <div class="title mono">${esc(r.entity)}</div>
         <div class="sub">至 ${r.last_day}${r.days_behind ? ` · 滞后 ${r.days_behind}d` : ""} · ${r.records} 条 · depth ${r.delta_depth}</div>
       </div>
       <span class="pill ${r.coverage === "complete" ? "ok" : "warn"}">${r.coverage} ›</span>
-    </div>`).join("");
+    </div>`;
+  const rows = pool.slice(0, shown).map(covRowFn).join("");
   const gapPool = covMkt === "all" ? FIX.gaps : FIX.gaps.filter((g) => g.entity.startsWith(covMkt));
   const gaps = gapPool.map((g, gi) => `<div class="row link" data-nav="gap:${gi}">
       <div class="main"><div class="title mono">${esc(g.entity)}</div>
@@ -170,18 +179,19 @@ function pageCoverage() {
             ${[["all", "全部 " + FIX.coverage.length], ["warn", "异常 " + anomN]].map(([k, l]) => `<button class="chipbtn${covFilter === k ? " on" : ""}" data-covfilter="${k}">${l}</button>`).join("")}
             <span style="flex:1"></span>
             ${[["all", "全市场"], ["sh.", "沪"], ["sz.", "深"]].map(([k, l]) => `<button class="chipbtn${covMkt === k ? " on" : ""}" data-mkt="${k}">${l}</button>`).join("")}
+            ${covDepth ? `<button class="chipbtn on" data-mkt-clear-depth>深度:${covDepth} ✕</button>` : ""}
           </div>
           <div class="section-title">缺口</div>${gaps || `<div class="card dim">无缺口</div>`}
-          <div class="section-title">实体覆盖（${pool.length}）</div>${rows}${more || (pool.length ? "" : `<div class="card dim">无匹配</div>`)}`;
+          <div class="section-title">实体覆盖（${pool.length}）</div><div id="rowbox" data-pool="cov">${rows}</div>${more || (pool.length ? "" : `<div class="card dim">无匹配</div>`)}`;
 }
 
 function pageStorage() {
   const s = FIX.storage;
   const stat = (k, v) => `<div class="stat"><div class="v">${v}</div><div class="k">${k}</div></div>`;
   const maxDb = Math.max(...s.trend.map((t) => t.db_mb));
-  const trend = s.trend.map((t) => `<div class="hbar"><span class="lbl">${t.day}</span><span class="track"><i style="width:${(t.db_mb / maxDb) * 100}%"></i></span><span class="num">${t.db_mb}M</span></div>`).join("");
+  const trend = s.trend.map((t) => `<div class="hbar"><span class="lbl">${t.day}</span><span class="track"><i style="width:${(t.db_mb / maxDb) * 100}%"></i>${t.wal_mb ? `<b class="walmark" title="WAL 峰值 ${t.wal_mb}MB"></b>` : ""}</span><span class="num">${t.db_mb}M</span></div>`).join("");
   const maxD = Math.max(...s.delta_depth_hist.map((h) => h.count));
-  const hist = s.delta_depth_hist.map((h) => `<div class="hbar${h.depth.startsWith("≥") ? " warn" : ""}"><span class="lbl">${h.depth}</span><span class="track"><i style="width:${Math.max(1.5, (h.count / maxD) * 100)}%"></i></span><span class="num">${h.count}</span></div>`).join("");
+  const hist = s.delta_depth_hist.map((h) => `<div class="hbar link${h.depth.startsWith("≥") ? " warn" : ""}" data-depth="${h.depth}"><span class="lbl">${h.depth}</span><span class="track"><i style="width:${Math.max(1.5, (h.count / maxD) * 100)}%"></i></span><span class="num">${h.count} ›</span></div>`).join("");
   return `
     <div class="stat-grid">
       ${stat("数据库", fmtBytes(s.db_bytes))}
@@ -220,13 +230,15 @@ function pageTaskDetail(id) {
     : itemFilter === "pending" ? items.filter((i) => i.stage === "pending")
     : items;
   if (itemSort === "slow") pool = [...pool].sort((a, b) => (b.ms ?? 0) - (a.ms ?? 0));
-  const list = pool.slice(0, shown).map((i) => {
+  currentItemPool = () => pool;
+  itemRowFn = (i) => {
     const st = i.success === false ? ["fail", "失败"] : i.success === true ? ["ok", "ok"] : i.stage === "running" ? ["warn", "运行"] : ["dim", "等待"];
     return `<div class="row link${i.stage === "running" ? " live" : ""}" data-nav="item:${esc(t.task_id)}|${esc(i.item_id)}">
       <div class="main"><div class="title mono">${esc(i.symbol)}</div>
       <div class="sub">${i.ms != null ? i.ms + "ms" : "—"}</div></div>
       <span class="pill ${st[0]}">${st[1]} ›</span></div>`;
-  }).join("");
+  };
+  const list = pool.slice(0, shown).map(itemRowFn).join("");
   const more = shown < pool.length ? `<button class="load-more" id="load-more">显示更多（${shown}/${pool.length}）</button>` : "";
   const done = items.filter((i) => i.ms != null);
   const spark = done.length ? (() => {
@@ -247,7 +259,8 @@ function pageTaskDetail(id) {
     ${t.phases ? `<div class="section-title">相位耗时（ms/item）</div>
     <div class="card">${Object.entries(t.phases).map(([k, v]) => {
       const mx = Math.max(...Object.values(t.phases));
-      return `<div class="hbar"><span class="lbl">${k.replace("_ms", "")}</span><span class="track"><i style="width:${(v / mx) * 100}%"></i></span><span class="num">${v}</span></div>`;
+      const total = Object.values(t.phases).reduce((a, b) => a + b, 0);
+      return `<div class="hbar"><span class="lbl">${k.replace("_ms", "")}</span><span class="track"><i style="width:${(v / mx) * 100}%"></i></span><span class="num">${v}ms · ${Math.round(v / total * 100)}%</span></div>`;
     }).join("")}</div>` : ""}
     ${failed.length ? `<div class="section-title">失败 item（${failed.length}）</div>` +
       failed.map((f) => `<div class="row link" data-nav="failure-item:${esc(f.item_id)}"><div class="main"><div class="title mono">${esc(f.symbol)}</div></div><span class="pill fail">失败 ›</span></div>`).join("") : ""}
@@ -258,7 +271,7 @@ function pageTaskDetail(id) {
       <span style="flex:1"></span>
       <button class="chipbtn${itemSort === "slow" ? " on" : ""}" data-sort="slow">最慢</button>
     </div>
-    ${list}${more}`;
+    <div id="rowbox" data-pool="item">${list}</div>${more}`;
 }
 
 function pageFailureDetail(itemId) {
@@ -290,7 +303,10 @@ function pageFailureDetail(itemId) {
 
 function pageEntityDetail(entity) {
   const d = FIX.entity_detail(entity);
-  const chain = d.chain.map((c) => `<div class="row link${c.mode === "checkpoint" ? " cp" : ""}" data-nav="version:${esc(c.version_id)}">
+  const older = chainEntity === entity ? chainOlder : [];
+  const tail = d.chain[d.chain.length - 1];
+  const chainAll = tail.mode === "checkpoint" ? [...d.chain.slice(0, -1), ...older, tail] : [...d.chain, ...older];
+  const chain = chainAll.map((c) => `<div class="row link${c.mode === "checkpoint" ? " cp" : ""}" data-nav="version:${esc(c.version_id)}">
       <div class="main">
         <div class="title mono">${esc(c.version_id)}</div>
         <div class="sub">${c.mode} · depth ${c.depth} · ${c.records} 条 · ${ago(c.published_at)}</div>
@@ -326,10 +342,14 @@ function pageEntityDetail(entity) {
     <div class="section-title">更新审计（近 7 日）</div>
     <div class="card">${d.updates.map((u) => {
       const mc = { unchanged: ["dim", "unchanged"], append: ["ok", "append"], full: ["warn", "full"] }[u.mode];
-      return `<div class="kv"><span class="k mono">${u.day}</span>
+      const vid = `${d.head.split("-d")[0]}-d${d.chain[0].depth - 0}`;
+      return `<div class="kv${u.delta_digest ? " link" : ""}"${u.delta_digest ? ` data-nav="version:${esc(vid)}"` : ""}><span class="k mono">${u.day}</span>
         <span class="v"><span class="pill ${mc[0]}">${mc[1]}</span> ${u.delta_digest ? `<span class="chip">Δ ${esc(u.delta_digest)}</span>` : `<span class="dim">复用基座</span>`}</span></div>`;
     }).join("")}</div>
-    <div class="section-title">版本链（新→旧，尾部窗口）</div><div class="timeline">${chain}</div>
+    <div class="section-title">版本链（新→旧，depth ${d.chain[0].depth}）</div>
+    <div class="timeline">${chain}</div>
+    ${(() => { const tl = chainAll[chainAll.length - 1].mode === "checkpoint" ? chainAll[chainAll.length - 2] : chainAll[chainAll.length - 1];
+      return tl.depth > 1 ? `<button class="load-more" id="chain-more">加载更早版本（当前到 depth ${tl.depth}）</button>` : ""; })()}
     <div class="section-title">验证结果</div>
     <div class="card">${d.verifications.map((v) => {
       const [c, t] = v.outcome === "verified" ? ["ok", "通过"] : ["fail", "fail-closed"];
@@ -370,6 +390,7 @@ function pageAbout() {
       <div class="kv"><span class="k">Issue</span><span class="v"><a href="https://github.com/liqiangcc/x-data-mcp/issues/268" style="color:var(--accent)">#268</a> · 阻塞于 #259 硬门 + S6</span></div>
       <div class="kv"><span class="k">渲染</span><span class="v">vanilla JS · 零依赖 · ${innerWidth}×${innerHeight}</span></div>
       <div class="kv"><span class="k">主题</span><span class="v">${matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"}（系统）</span></div>
+      <div class="kv"><span class="k">构建</span><span class="v">mock fcef3fa+ · schema-19 读口契约</span></div>
     </div>
     <div class="card dim">异常浮上来，正常的折叠 —— 巡检第一性问题：今天有没有异常。</div>`;
 }
@@ -469,9 +490,14 @@ function route(e) {
 
 function render() {
   const e = peek();
-  const [title, html] = route(e);
+  let title, html;
+  try { [title, html] = route(e); }
+  catch (err) {
+    title = "渲染错误";
+    html = `<div class="card"><div class="errblk">${esc(err.message)}</div></div>`;
+  }
   $("#page-title").textContent = title;
-  const parent = stack.length > 1 ? route(stack[stack.length - 2])[0] : "";
+  const parent = stack.length > 1 ? (() => { try { return route(stack[stack.length - 2])[0]; } catch { return ""; } })() : "";
   $("#menu-btn").textContent = stack.length > 1 ? `‹ ${parent}` : "ⓘ";
   $("#menu-btn").style.width = stack.length > 1 ? "auto" : "44px";
   content.innerHTML = html;
@@ -483,11 +509,27 @@ function render() {
     b.onclick = () => canvas.scrollTo({ top: 0, behavior: "smooth" });
     document.body.appendChild(b); return b;
   })();
-  const lm = $("#load-more");
-  if (lm) {
-    const grow = () => { scrollMemo[keyOf(e)] = canvas.scrollTop; shown += PAGE_SIZE; render(); };
+  const cm = $("#chain-more");
+  if (cm) cm.onclick = () => {
+    const d = FIX.entity_detail(e.param);
+    chainEntity = e.param;
+    const lastShown = chainOlder.length ? chainOlder[chainOlder.length - 1].depth : d.chain[d.chain.length - 2].depth;
+    chainOlder = chainOlder.concat(d.chain_older(lastShown, 12));
+    render();
+  };
+  const lm = $("#load-more"), rb = $("#rowbox");
+  if (lm && rb) {
+    const pool = rb.dataset.pool === "cov" ? currentCovPool() : currentItemPool();
+    const grow = () => {
+      const batch = pool.slice(shown, shown + PAGE_SIZE);
+      const rowFn = rb.dataset.pool === "cov" ? covRowFn : itemRowFn;
+      rb.insertAdjacentHTML("beforeend", batch.map(rowFn).join(""));
+      shown += batch.length;
+      lm.textContent = shown < pool.length ? `显示更多（${shown}/${pool.length}）` : "已全部加载";
+      if (shown >= pool.length) lm.remove();
+    };
     lm.onclick = grow;
-    new IntersectionObserver((ev, o) => { if (ev[0].isIntersecting) { o.disconnect(); grow(); } }).observe(lm);
+    new IntersectionObserver((ev) => { if (ev[0].isIntersecting) grow(); }).observe(lm);
   }
 }
 
@@ -505,10 +547,14 @@ content.addEventListener("click", (ev) => {
   else if (kind === "entity") nav("entity", param);
   else nav(kind);
 });
+let searchTimer = null;
 content.addEventListener("input", (ev) => {
-  if (ev.target.id === "cov-search") { covQuery = ev.target.value; shown = PAGE_SIZE;
+  if (ev.target.id !== "cov-search") return;
+  covQuery = ev.target.value;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { shown = PAGE_SIZE;
     const pos = canvas.scrollTop; render(); canvas.scrollTop = pos;
-    const el = $("#cov-search"); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    const el = $("#cov-search"); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 250);
 });
 content.addEventListener("click", (ev) => {
   const chip = ev.target.closest(".chip");
@@ -525,6 +571,13 @@ content.addEventListener("click", (ev) => {
   if (so) { itemSort = itemSort === "slow" ? "seq" : "slow"; shown = PAGE_SIZE; render(); }
   const mk = ev.target.closest("[data-mkt]");
   if (mk) { covMkt = mk.dataset.mkt; shown = PAGE_SIZE; render(); }
+  if (ev.target.closest("[data-mkt-clear-depth]")) { covDepth = null; shown = PAGE_SIZE; render(); }
+  const dp = ev.target.closest("[data-depth]");
+  if (dp) {
+    const b = dp.dataset.depth;
+    covDepth = b === "0" ? "lo" : b === "≥128" || b === "≥256" ? "hi" : "mid";
+    nav("coverage");
+  }
 });
 $("#menu-btn").addEventListener("click", () => { stack.length > 1 ? history.back() : nav("about"); });
 content.addEventListener("click", (ev) => {
@@ -543,6 +596,8 @@ setInterval(() => {
   pollTick -= 1;
   const live = $("#live-elapsed");
   if (live) { const m = live.textContent.match(/^(\d+)s/); if (m) live.textContent = live.textContent.replace(/^\d+s/, `${+m[1] + 1}s`); }
+  const eta = $("#live-eta");
+  if (eta) { const n = +eta.dataset.eta - 1; eta.dataset.eta = n; eta.textContent = `~${Math.max(0, n)}s`; }
   if (pollTick <= 0) { pollTick = 15; if (stack.length === 1) render(); }
   $("#poll-state").textContent = `刷新 ${pollTick}s`;
 }, 1000);
@@ -572,8 +627,14 @@ content.addEventListener("touchend", () => {
 }, { passive: true });
 
 /* ---------- 回顶悬浮钮 ---------- */
+let scrollTick = false;
 canvas.addEventListener("scroll", () => {
-  const b = $("#to-top"); if (b) b.classList.toggle("on", canvas.scrollTop > 700);
+  if (scrollTick) return;
+  scrollTick = true;
+  requestAnimationFrame(() => {
+    const b = $("#to-top"); if (b) b.classList.toggle("on", canvas.scrollTop > 700);
+    scrollTick = false;
+  });
 }, { passive: true });
 
 /* ---------- 下拉刷新（触顶下拉显示指示器） ---------- */
