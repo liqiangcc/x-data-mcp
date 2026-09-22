@@ -828,10 +828,10 @@ fn yearly_derive_commit_on_compact_schema() {
         run_id: RUN.into(),
         derived_at: ts(),
     };
-    let YearlyExecution::Published(receipt) =
-        runner.run_item(&yearly_task, &item_id, &Stub).unwrap()
-    else {
-        panic!("yearly item did not publish")
+    let outcome = runner.run_item(&yearly_task, &item_id, &Stub).unwrap();
+    let YearlyExecution::Published(receipt) = outcome else {
+        let snap = repo.task(&yearly_task).unwrap();
+        panic!("yearly item did not publish: {:?}", snap.items[0].outcome)
     };
 
     let fixed = repo.fixed(&receipt.version_id).unwrap();
@@ -867,6 +867,15 @@ fn yearly_derive_commit_on_compact_schema() {
         panic!("yearly replay did not publish")
     };
     assert_eq!(replay, receipt);
+
+    // The audit projection requires the stored result to link its daily
+    // derivation base (schema-19 task-progress reads hit this path).
+    let (audit, _) = repo
+        .read(|c| {
+            compact_results::read_yearly_audit(c, &receipt.publication_id).map(|o| o.unwrap())
+        })
+        .unwrap();
+    assert_eq!(audit["base_daily_version_id"], json!("v1"));
 }
 
 #[test]

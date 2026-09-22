@@ -715,7 +715,7 @@ fn period_name(period: Period) -> &'static str {
     }
 }
 
-fn version_key(c: &Connection, version_id: &str) -> Result<i64, Error> {
+pub(crate) fn version_key(c: &Connection, version_id: &str) -> Result<i64, Error> {
     c.query_row(
         "SELECT version_key FROM data_versions WHERE version_id=?1",
         [version_id],

@@ -1195,6 +1195,20 @@ fn stored_lineage(c: &Connection, key: i64) -> Result<Option<YearlyLineageDraft>
     .map_err(storage)
 }
 
+/// The published daily base version_id of a yearly version's stored
+/// lineage, or None when the version has no lineage row.
+pub(crate) fn daily_base_version_id(
+    c: &Connection,
+    version_key: i64,
+) -> Result<Option<String>, Error> {
+    let Some(lineage) = stored_lineage(c, version_key)? else {
+        return Ok(None);
+    };
+    let base = read_version_row(c, lineage.base_daily_version_key)?
+        .ok_or_else(|| integrity("yearly lineage base version missing"))?;
+    Ok(Some(base.version_id))
+}
+
 fn verify_stored_lineage(
     c: &Connection,
     row: &VersionRow,
