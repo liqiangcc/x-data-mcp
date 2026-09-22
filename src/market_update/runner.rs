@@ -1,16 +1,18 @@
 //! Bounded publication-aware application execution. No MCP or source selection.
 use super::{
-    DateRange, Decision, Evidence,
+    DateRange, Decision, Evidence, PreparedRange, Reason,
     publication::{CombinedEvidence, Preparation, RangeRepository},
 };
 use crate::{
-    market_data::{MarketDataBatch, MarketDataPipeline, SourceError},
+    market_data::{Bar, MarketDataBatch, MarketDataPipeline, SourceError},
     market_storage::{
-        Error, Publication, PublishIntent, Publisher, Receipt, compat::CheckedRecord,
+        Error, Publication, PublishIntent, Publisher, Receipt, Scope, compat::CheckedRecord,
     },
     task_control::{Change, ItemOutcome, Stage, Status, TaskSnapshot},
 };
+use chrono::NaiveDate;
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct CombinedCandidate {
     pub record: Value,
@@ -21,6 +23,20 @@ pub struct Acquisition {
     pub evidence: Evidence,
     pub combined: Option<CombinedCandidate>,
 }
+/// Typed acquisition result for the ops-first update path (#259 S5G):
+/// the continuity evidence plus exactly the bars the typed commit needs.
+pub struct TypedAcquisition {
+    pub decision: TypedDecision,
+    pub evidence: Evidence,
+}
+pub enum TypedDecision {
+    /// The member bytes and event set are byte-proven identical to the
+    /// base's pinned snapshot inputs — publish a no-change receipt.
+    Unchanged,
+    /// The base's member bytes are a proven prefix of the current member;
+    /// `upserts` are the qfq-adjusted in-range tail bars — pure appends.
+    Append { upserts: Vec<Bar> },
+}
 /// Synchronous and read-only with respect to publication/task storage. Return
 /// only after acquisition has stopped. Trusted fixture/verifier port, not MCP.
 pub trait RangeProvider {
@@ -30,6 +46,18 @@ pub trait RangeProvider {
         range: &DateRange,
         candidate_id: &str,
     ) -> Result<Acquisition, SourceError>;
+    /// Typed ops-first acquisition (#259 S5G). `Ok(None)` means the
+    /// provider cannot serve the typed contract (or the update carries
+    /// metadata the ops path cannot); the caller falls back to
+    /// `acquire`.
+    fn acquire_typed(
+        &self,
+        _facts: &super::UpdateBaseFacts,
+        _base_window: &[Bar],
+        _range: &DateRange,
+    ) -> Result<Option<TypedAcquisition>, SourceError> {
+        Ok(None)
+    }
 }
 pub struct OfficialRangeProvider;
 impl RangeProvider for OfficialRangeProvider {
@@ -213,6 +241,212 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             }
         }
     }
+    /// Bulk update path (#259 S5G-6): prepare every item outside the
+    /// writer — binding checks plus typed acquisition (member hash,
+    /// continuity probe, tail-only parse) — then commit the prepared set
+    /// in ONE repository transaction via `commit_update_batch`. Items the
+    /// typed contract cannot carry (replays, non-pending states,
+    /// unverified members, unsupported backends) keep the per-item
+    /// `run_item` path, whose reconciliation semantics are authoritative.
+    /// `Ok(None)` means the repository lacks the batch surface; callers
+    /// keep the per-item loop.
+    pub fn run_items(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+        provider: &dyn RangeProvider,
+    ) -> Result<Option<()>, Error> {
+        let mut items = Vec::new();
+        let mut fallback = Vec::new();
+        // Frozen inputs of prepared default-contract items: their gap
+        // coverings append after the batch commit, per receipt.
+        let mut coverings: Vec<(String, Value)> = Vec::new();
+        for item_id in item_ids {
+            match self.update_candidate(task_id, item_id, provider) {
+                Ok(Some((item, frozen))) => {
+                    if let Some(frozen) = frozen {
+                        coverings.push((item.item_id.clone(), frozen));
+                    }
+                    items.push(item);
+                }
+                Ok(None) | Err(_) => fallback.push(item_id.clone()),
+            }
+        }
+        if !items.is_empty() {
+            let results = match self.repository.commit_update_batch(task_id, &items) {
+                Ok(Some(results)) => Some(results),
+                Ok(None) => return Ok(None),
+                Err(_) => {
+                    // Structural failure rolled the whole batch back:
+                    // isolate per item so one bad item cannot wedge the
+                    // task in a Running-retry loop (the batch contract).
+                    fallback.extend(items.iter().map(|item| item.item_id.clone()));
+                    None
+                }
+            };
+            if let Some(results) = results {
+                if results.len() != items.len() {
+                    return Err(Error::Integrity(
+                        "update batch result count does not match items".into(),
+                    ));
+                }
+                for (item, result) in items.iter().zip(results) {
+                    match result {
+                        Ok(receipt) => {
+                            if let Some((_, frozen)) =
+                                coverings.iter().find(|(id, _)| *id == item.item_id)
+                            {
+                                self.ensure_default_coverings(frozen, &receipt.version_id)?;
+                            }
+                        }
+                        Err(_) => fallback.push(item.item_id.clone()),
+                    }
+                }
+            }
+        }
+        for item_id in fallback {
+            self.run_item(task_id, &item_id, provider)?;
+        }
+        Ok(Some(()))
+    }
+    /// Batch preparation for one update item (#259 S5G-6): the same
+    /// pre-acquisition checks `run_item` performs, plus the typed
+    /// acquire — no writes. `Ok(None)` defers the item to the per-item
+    /// path; `Err` does the same through the caller's fallback list.
+    /// The pair's second element carries the frozen inputs of
+    /// default-contract items for post-commit gap coverings.
+    /// `pub(crate)` for the capacity harness's phase timing (#259 S5G-7).
+    pub(crate) fn update_candidate(
+        &self,
+        task_id: &str,
+        item_id: &str,
+        provider: &dyn RangeProvider,
+    ) -> Result<Option<(crate::market_update::UpdateBatchItem, Option<Value>)>, Error> {
+        let binding = match self.repository.task_item_binding(task_id, item_id)? {
+            Some(binding) => binding,
+            None => {
+                self.repository.task_head(task_id)?;
+                return Err(Error::Invalid(
+                    "range item absent from accepted task".into(),
+                ));
+            }
+        };
+        let default_contract =
+            binding.head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
+        let republish_contract =
+            binding.head.key.contract_version == super::tasks::REPUBLISH_CONTRACT_VERSION;
+        if !matches!(
+            binding.head.key.operation.as_str(),
+            "update_data" | "backfill_data" | "republish_data"
+        ) || binding.head.key.dataset != "market.daily"
+            || (!default_contract
+                && !republish_contract
+                && binding.head.key.contract_version != super::tasks::CONTRACT_VERSION)
+        {
+            return Err(Error::Invalid(
+                "unsupported range execution contract".into(),
+            ));
+        }
+        if self.repository.item_receipt(task_id, item_id)?.is_some()
+            || binding.head.visible_status(&self.run_id) == Status::NeedsVerification
+            || binding.item.stage != Stage::Pending
+            || binding.head.status.terminal()
+            || binding.head.status == Status::CancelRequested
+        {
+            return Ok(None);
+        }
+        let (base_id, range) = if default_contract {
+            let parsed = super::tasks::parse_default_frozen(&binding.item.spec.frozen_inputs)?;
+            match binding.head.key.operation.as_str() {
+                "update_data" if parsed.refresh_range.is_none() => {
+                    return Err(Error::Integrity(
+                        "default update item missing frozen refresh range".into(),
+                    ));
+                }
+                "backfill_data" if parsed.refresh_range.is_some() => {
+                    return Err(Error::Integrity(
+                        "default backfill item carries a refresh range".into(),
+                    ));
+                }
+                _ => {}
+            }
+            (parsed.base_version_id.clone(), parsed.union()?)
+        } else {
+            let frozen = &binding.item.spec.frozen_inputs;
+            let base_id = frozen["base_version_id"]
+                .as_str()
+                .ok_or_else(|| Error::Integrity("frozen base missing".into()))?
+                .to_string();
+            let range = DateRange {
+                start: serde_json::from_value(frozen["range"]["start"].clone())
+                    .map_err(|e| Error::Integrity(e.to_string()))?,
+                end: serde_json::from_value(frozen["range"]["end"].clone())
+                    .map_err(|e| Error::Integrity(e.to_string()))?,
+            };
+            (base_id, range)
+        };
+        let Some(facts) = self.repository.update_base_facts(&base_id)? else {
+            return Ok(None);
+        };
+        let Some(base_window) =
+            self.repository
+                .base_bars_in_range(&base_id, range.start, range.end)?
+        else {
+            return Ok(None);
+        };
+        let Some(acquired) = provider
+            .acquire_typed(&facts, &base_window, &range)
+            .map_err(|e| Error::Invalid(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+        // The batch transaction's revision CAS subsumes the per-item
+        // post-acquisition task guard: any interleaving task change fails
+        // the CAS and rolls the batch back to the per-item path.
+        if acquired.evidence.base_version_id != base_id
+            || acquired.evidence.base_integrity_sha256 != facts.integrity_sha256
+            || acquired.evidence.range != range
+        {
+            return Err(Error::Invalid(format!(
+                "NEEDS_VERIFICATION: {:?}",
+                Reason::BasisUnknown
+            )));
+        }
+        let id = crate::hash::sha256(serde_json::json!([task_id, item_id]).to_string().as_bytes());
+        let scope = Scope {
+            symbol: facts.symbol.clone(),
+            period: crate::market_data::Period::Day,
+        };
+        let continuity = serde_json::to_value(&acquired.evidence).unwrap_or(Value::Null);
+        let prepared = match acquired.decision {
+            TypedDecision::Unchanged => crate::market_update::UpdateBatchPrepared::NoChange {
+                base_version_id: base_id,
+                range_start_day: crate::compact_market::epoch_day(range.start),
+                range_end_day: crate::compact_market::epoch_day(range.end),
+                continuity,
+            },
+            TypedDecision::Append { upserts } => {
+                crate::market_update::UpdateBatchPrepared::Append {
+                    base_version_id: base_id,
+                    result_version_id: format!("range-version-{id}"),
+                    upserts,
+                    continuity,
+                }
+            }
+        };
+        Ok(Some((
+            crate::market_update::UpdateBatchItem {
+                task_id: task_id.into(),
+                item_id: item_id.into(),
+                publication_id: format!("range-result-{id}"),
+                run_id: self.run_id.clone(),
+                symbol: facts.symbol.clone(),
+                occupancy_key: scope.occupancy_key(),
+                prepared,
+            },
+            default_contract.then(|| binding.item.spec.frozen_inputs.clone()),
+        )))
+    }
     /// O(1) head+item binding for this execution step; a missing item
     /// produces the same invalid-command error the snapshot path did.
     fn binding(
@@ -346,6 +580,19 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         range: &DateRange,
         provider: &dyn RangeProvider,
     ) -> Result<Receipt, Error> {
+        // Ops-first typed path (#259 S5G): metadata-only base facts,
+        // tail-only member parse, O(ops) staged-delta commit — no
+        // `fixed(base)` materialization and no combined envelope. A
+        // `None` at any step means this update cannot be carried by the
+        // typed contract (unsupported backend/provider, absent
+        // continuity proof, or metadata drift); fall through to the
+        // envelope path, which reproduces the same decisions at full
+        // materialization cost.
+        if let Some(receipt) =
+            self.commit_typed_range(binding, item_id, base_id, base_digest, range, provider)?
+        {
+            return Ok(receipt);
+        }
         let base = self.repository.fixed(base_id)?;
         if base.raw()["integrity_sha256"] != base_digest {
             return Err(Error::Integrity(
@@ -369,14 +616,35 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 "task changed or cancelled during acquisition".into(),
             ));
         }
-        let changed = match super::prepare(&base, &acquired.batch, range, Some(&acquired.evidence))?
-        {
-            Decision::Candidate(_) => true,
-            Decision::NoChange { .. } => false,
-            Decision::NeedsVerification(reason) => {
-                return Err(Error::Invalid(format!("NEEDS_VERIFICATION: {reason:?}")));
+        let prepared =
+            match super::prepare(&base, &acquired.batch, range, Some(&acquired.evidence))? {
+                Decision::Candidate(prepared) => Some(prepared),
+                Decision::NoChange { .. } => None,
+                Decision::NeedsVerification(reason) => {
+                    return Err(Error::Invalid(format!("NEEDS_VERIFICATION: {reason:?}")));
+                }
+            };
+        if let Some(prepared) = &prepared {
+            // Ops-first commit: a records-only merge (no coverage or unit
+            // change) can be staged as a parent delta and bound by leaf
+            // equality. Backends without an ops path fall back to the
+            // envelope commit below.
+            if !prepared.metadata_changed
+                && let Some(receipt) = self.try_ops_commit(
+                    binding,
+                    item_id,
+                    base_id,
+                    &base,
+                    prepared,
+                    &acquired,
+                    range,
+                    &candidate_id,
+                )?
+            {
+                return Ok(receipt);
             }
-        };
+        }
+        let changed = prepared.is_some();
         if changed {
             let whole = acquired.combined.as_ref().ok_or_else(|| {
                 Error::Invalid("NEEDS_VERIFICATION: combined coverage absent".into())
@@ -418,5 +686,193 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 Err(Error::Invalid(format!("NEEDS_VERIFICATION: {reason:?}")))
             }
         }
+    }
+    /// Typed ops-first range commit (#259 S5G): facts → probe →
+    /// windowed read → O(ops) commit. Every validation the envelope
+    /// path makes is preserved: frozen-inputs binding, the accepted
+    /// base digest, in-range emptiness, unit/coverage parity, and the
+    /// staged-ops read-back binding inside `commit_range_ops_typed`.
+    /// `Ok(None)` at any step means the typed contract cannot carry
+    /// this update and the caller continues on the envelope path.
+    fn commit_typed_range(
+        &self,
+        binding: &crate::task_control::ItemBinding,
+        item_id: &str,
+        base_id: &str,
+        base_digest: &str,
+        range: &DateRange,
+        provider: &dyn RangeProvider,
+    ) -> Result<Option<Receipt>, Error> {
+        let Some(facts) = self.repository.update_base_facts(base_id)? else {
+            return Ok(None);
+        };
+        // The frozen `base_integrity_sha256` is a legacy envelope digest
+        // that cannot be recomputed without materializing the base. On
+        // this path the accepted-base binding is the compact integrity
+        // digest instead — re-verified when `update_base_facts` read the
+        // version row, and transitively covering the leaf content
+        // (projection_digest) and pinned snapshot inputs
+        // (source_binding_digest). The commit's head CAS and verified
+        // source binding carry the rest of the envelope check's weight.
+        let _ = base_digest;
+        let Some(base_window) =
+            self.repository
+                .base_bars_in_range(base_id, range.start, range.end)?
+        else {
+            return Ok(None);
+        };
+        let Some(acquired) = provider
+            .acquire_typed(&facts, &base_window, range)
+            .map_err(|e| Error::Invalid(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+        // Same post-acquisition task guard as the envelope path.
+        let current = self.repository.task_head(&binding.head.task_id)?;
+        if current.status != Status::Running
+            || current.state_revision != binding.head.state_revision
+        {
+            return Err(Error::Conflict(
+                "task changed or cancelled during acquisition".into(),
+            ));
+        }
+        let id = crate::hash::sha256(
+            serde_json::json!([binding.head.task_id, item_id])
+                .to_string()
+                .as_bytes(),
+        );
+        let command = Publication {
+            publication_id: format!("range-result-{id}"),
+            version_id: match &acquired.decision {
+                TypedDecision::Append { .. } => format!("range-version-{id}"),
+                TypedDecision::Unchanged => base_id.into(),
+            },
+            task_id: binding.head.task_id.clone(),
+            item_id: item_id.into(),
+            run_id: self.run_id.clone(),
+            expected_revision: binding.head.state_revision,
+            intent: PublishIntent::Daily {
+                expected_head: Some(base_id.into()),
+            },
+        };
+        // Typed frozen binding: the provider's evidence must claim the
+        // same accepted base identity and range, and its integrity stamp
+        // must equal the compact digest the repository verified when the
+        // facts were read — this is the basis-binding role
+        // `check_frozen_inputs` fills on the envelope path.
+        if acquired.evidence.base_version_id != base_id
+            || acquired.evidence.base_integrity_sha256 != facts.integrity_sha256
+            || acquired.evidence.range != *range
+        {
+            return Err(Error::Invalid(format!(
+                "NEEDS_VERIFICATION: {:?}",
+                Reason::BasisUnknown
+            )));
+        }
+        let continuity_evidence = serde_json::to_value(&acquired.evidence).ok();
+        match &acquired.decision {
+            TypedDecision::Unchanged => self.repository.commit_range_no_change_typed(
+                &command,
+                base_id,
+                range,
+                continuity_evidence.as_ref(),
+            ),
+            TypedDecision::Append { upserts } => {
+                let scope = Scope {
+                    symbol: facts.symbol.clone(),
+                    period: crate::market_data::Period::Day,
+                };
+                self.repository.commit_range_ops_typed(
+                    &command,
+                    &scope,
+                    base_id,
+                    upserts,
+                    &[],
+                    continuity_evidence.as_ref(),
+                )
+            }
+        }
+    }
+    /// Ops-first commit for a records-only range merge on backends with
+    /// parent-delta staging (#259). Runs the same accepted-inputs binding
+    /// (`check_frozen_inputs`) and verifier base/segment digest checks as the
+    /// envelope path; the candidate-content binding is the staged-leaf
+    /// equality inside `commit_range_ops`, which replaces the envelope
+    /// `combined_integrity_sha256` digest equality. `Ok(None)` falls back to
+    /// the envelope stage/commit below.
+    #[allow(clippy::too_many_arguments)]
+    fn try_ops_commit(
+        &self,
+        binding: &crate::task_control::ItemBinding,
+        item_id: &str,
+        base_id: &str,
+        base: &CheckedRecord,
+        prepared: &PreparedRange,
+        acquired: &Acquisition,
+        range: &DateRange,
+        candidate_id: &str,
+    ) -> Result<Option<Receipt>, Error> {
+        let command = Publication {
+            publication_id: format!(
+                "range-result-{}",
+                crate::hash::sha256(
+                    serde_json::json!([binding.head.task_id, item_id])
+                        .to_string()
+                        .as_bytes(),
+                )
+            ),
+            version_id: candidate_id.into(),
+            task_id: binding.head.task_id.clone(),
+            item_id: item_id.into(),
+            run_id: self.run_id.clone(),
+            expected_revision: binding.head.state_revision,
+            intent: PublishIntent::Daily {
+                expected_head: Some(base_id.into()),
+            },
+        };
+        (Publisher {
+            repository: self.repository.clone(),
+        })
+        .check_frozen_inputs(&command, &acquired.evidence, range)?;
+        let Some(whole) = &acquired.combined else {
+            return Err(Error::Invalid(
+                "NEEDS_VERIFICATION: combined coverage absent".into(),
+            ));
+        };
+        if whole.record["version_id"] != candidate_id
+            || whole.evidence.base_integrity_sha256 != prepared.base_integrity_sha256
+            || whole.evidence.segment_sha256 != prepared.candidate_sha256
+            || whole.evidence.complete_coverage_ref.trim().is_empty()
+        {
+            return Err(Error::Invalid(format!(
+                "NEEDS_VERIFICATION: {:?}",
+                Reason::CoverageUnknown
+            )));
+        }
+        // !prepared.metadata_changed ⇒ the merged candidate reuses the base
+        // coverage/units; the envelope path's unit-enrichment check is a
+        // no-op on this path by construction.
+        let base_dates: BTreeMap<NaiveDate, &Bar> =
+            base.version().records.iter().map(|b| (b.date, b)).collect();
+        let prepared_dates: BTreeSet<NaiveDate> = prepared.records.iter().map(|b| b.date).collect();
+        let upserts: Vec<Bar> = prepared
+            .records
+            .iter()
+            .filter(|b| base_dates.get(&b.date) != Some(b))
+            .cloned()
+            .collect();
+        let removes: Vec<NaiveDate> = base_dates
+            .keys()
+            .filter(|d| !prepared_dates.contains(d))
+            .copied()
+            .collect();
+        self.repository.commit_range_ops(
+            &command,
+            &Scope::of(base.version()),
+            base_id,
+            &upserts,
+            &removes,
+            &prepared.records,
+        )
     }
 }

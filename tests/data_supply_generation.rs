@@ -148,7 +148,7 @@ fn acceptance_freezes_source_generation_id_and_worker_reads_it() {
     let dir = tempfile::tempdir().unwrap();
     let market = opened(&dir);
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -178,10 +178,14 @@ fn acceptance_freezes_source_generation_id_and_worker_reads_it() {
     write_mirror(mirror.path(), 600007);
     let _gen_b = activate_generation(&service, "req-gen-b", Some(&gen_a));
 
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &market, None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
     assert!(
         market
@@ -208,7 +212,7 @@ fn missing_and_null_bindings_refuse_the_source() {
     let dir = tempfile::tempdir().unwrap();
     let market = opened(&dir);
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -222,10 +226,14 @@ fn missing_and_null_bindings_refuse_the_source() {
     let _accepted = control
         .accept("req-unbound", control_key(&supply), daily_payload("600006"))
         .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &market, None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
     assert_ne!(done.task.status, Status::Succeeded);
     assert!(
         market
@@ -245,7 +253,7 @@ fn missing_and_null_bindings_refuse_the_source() {
     let dir2 = tempfile::tempdir().unwrap();
     let market2 = opened(&dir2);
     let supply2 = SqliteSupply {
-        market: market2.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market2.clone()),
     };
     let control2 = TaskControl::new(
         market2.tasks.clone(),
@@ -269,7 +277,7 @@ fn missing_and_null_bindings_refuse_the_source() {
     );
     let done = x_data_mcp::data_supply::worker::run_once(
         &control2,
-        &market2,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market2.clone()),
         None,
         Some(&empty_generation),
     )
@@ -363,4 +371,194 @@ fn control_key(supply: &SqliteSupply) -> x_data_mcp::task_control::CommandKey {
         repository: supply.clone(),
     }
     .key()
+}
+
+#[test]
+fn yearly_derivation_runs_against_bound_generation() {
+    use chrono::Datelike;
+    use x_data_mcp::market_update::tasks::Operation;
+    use x_data_mcp::yearly_publication::tasks::YearlyContract;
+
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), 600006);
+    let root = tempfile::tempdir().unwrap();
+    let service = AcquireService::open(root.path(), Source::Mirror(mirror.path().into())).unwrap();
+    let gen_a = activate_generation(&service, "req-gen-a", None);
+    let generation = GenerationSource::new(root.path());
+
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let supply = SqliteSupply {
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+    };
+    let yearly = YearlyContract {
+        operation: Operation::Update,
+        repository: market.clone(),
+        today: x_data_mcp::calendar::shanghai_today,
+    };
+    let yearly_key = yearly.key();
+    let control = TaskControl::new(
+        market.tasks.clone(),
+        "run-y".into(),
+        vec![
+            Box::new(Bound {
+                inner: Box::new(CollectionContract {
+                    dataset: Dataset::Daily,
+                    repository: supply.clone(),
+                }),
+                source: generation.clone(),
+            }) as Box<dyn Contract>,
+            Box::new(Bound {
+                inner: Box::new(yearly),
+                source: generation.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    // Seed the daily base through the generation-bound daily path.
+    control
+        .accept("req-daily", control_key(&supply), daily_payload("600006"))
+        .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+    let base_id = market
+        .effective_head(&Scope {
+            symbol: "sh.600006".into(),
+            period: Period::Day,
+        })
+        .unwrap()
+        .unwrap();
+
+    // Yearly derive: Bound freezes generation A into the item and the
+    // worker verifies derivation against that pinned session — no
+    // env-installed source exists anywhere in this test. `CurrentHead`
+    // promotes the derived yearly to the effective head.
+    let year = x_data_mcp::calendar::shanghai_today().year();
+    let accepted = control
+        .accept(
+            "req-yearly",
+            yearly_key,
+            json!({"items":[{"symbol":"sh.600006","base_daily_version_id":base_id,"years":[year],"intent":{"CurrentHead":{"expected_daily_head":base_id,"expected_yearly_head":null}},"comparison_version_id":null}]}),
+        )
+        .unwrap();
+    let snapshot = control.read_task(&task_id(&accepted)).unwrap();
+    assert_eq!(
+        snapshot.items[0].spec.frozen_inputs[SOURCE_GENERATION_KEY],
+        json!(gen_a)
+    );
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+    assert!(
+        market
+            .effective_head(&Scope {
+                symbol: "sh.600006".into(),
+                period: Period::Year,
+            })
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn yearly_derivation_without_binding_refuses() {
+    use x_data_mcp::market_update::tasks::Operation;
+    use x_data_mcp::yearly_publication::tasks::YearlyContract;
+
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), 600006);
+    let root = tempfile::tempdir().unwrap();
+    let service = AcquireService::open(root.path(), Source::Mirror(mirror.path().into())).unwrap();
+    let _gen_a = activate_generation(&service, "req-gen-a", None);
+    let generation = GenerationSource::new(root.path());
+
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let supply = SqliteSupply {
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+    };
+    let control = TaskControl::new(
+        market.tasks.clone(),
+        "run-u".into(),
+        vec![
+            Box::new(Bound {
+                inner: Box::new(CollectionContract {
+                    dataset: Dataset::Daily,
+                    repository: supply.clone(),
+                }),
+                source: generation.clone(),
+            }) as Box<dyn Contract>,
+            // Unwrapped: the accepted item carries no binding key.
+            Box::new(YearlyContract {
+                operation: Operation::Update,
+                repository: market.clone(),
+                today: x_data_mcp::calendar::shanghai_today,
+            }),
+        ],
+    )
+    .unwrap();
+    control
+        .accept("req-daily", control_key(&supply), daily_payload("600006"))
+        .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+    let base_id = market
+        .effective_head(&Scope {
+            symbol: "sh.600006".into(),
+            period: Period::Day,
+        })
+        .unwrap()
+        .unwrap();
+    let year = chrono::Datelike::year(&x_data_mcp::calendar::shanghai_today());
+    control
+        .accept(
+            "req-yearly",
+        YearlyContract {
+            operation: Operation::Update,
+            repository: market.clone(),
+            today: x_data_mcp::calendar::shanghai_today,
+        }
+        .key(),
+        json!({"items":[{"symbol":"sh.600006","base_daily_version_id":base_id,"years":[year],"intent":{"CurrentHead":{"expected_daily_head":base_id,"expected_yearly_head":null}},"comparison_version_id":null}]}),
+    )
+    .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        None,
+        Some(&generation),
+    )
+    .unwrap()
+    .unwrap();
+    assert_ne!(done.task.status, Status::Succeeded);
+    assert!(
+        market
+            .effective_head(&Scope {
+                symbol: "sh.600006".into(),
+                period: Period::Year,
+            })
+            .unwrap()
+            .is_none()
+    );
 }

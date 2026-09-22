@@ -1,0 +1,61 @@
+{
+  "schema": "x-data-mcp.issue-259-s5a-schema-migration.v1",
+  "slice": "S5A-1",
+  "decision": "PASS",
+  "migration": {
+    "file": "migrations/tasks/019_compact_market.sql",
+    "strategy": "_v19 create, drop 13 empty legacy market tables, rename to final names, create index",
+    "dropped_legacy_tables": [
+      "segment_bars",
+      "bar_segments",
+      "version_evidence",
+      "yearly_bars",
+      "yearly_lineage",
+      "task_publications",
+      "publication_batches",
+      "effective_heads",
+      "market_update_results",
+      "yearly_execution_results",
+      "manifest_nodes",
+      "payloads",
+      "data_versions"
+    ],
+    "version_segments_already_dropped_by_post_migration_17": true,
+    "created_compact_tables": 14,
+    "foreign_key_check": "clean"
+  },
+  "gate": {
+    "schema_version_stays": 18,
+    "compact_schema_version": 19,
+    "legacy_ops_on_v19_fail_closed": true,
+    "upgrade_target_stays": 18,
+    "initialize_stays": 18,
+    "initialize19_applies_migrations_1_through_19": true,
+    "upgrade_compact_requires_exact_schema": 18,
+    "business_tables_must_be_empty": "all sqlite_master tables except schema_migrations and sqlite_%",
+    "populated_database_error": "FRESH_REBUILD_REQUIRED: schema 19 compact market storage requires a new database",
+    "populated_database_unchanged": true,
+    "data_migrated": 0
+  },
+  "tests": {
+    "initialize19_builds_compact_schema_and_refuses_legacy_ops": "pass",
+    "upgrade_compact_replaces_empty_schema18_database": "pass",
+    "upgrade_compact_rejects_any_populated_business_table": "pass (market payloads row and full accepted task)",
+    "upgrade_stays_schema18_and_never_applies_compact_migration": "pass (v17->18 stops at 18)",
+    "lib_total": 242,
+    "lib_passed": 242,
+    "lib_ignored": 1
+  },
+  "verification": [
+    "cargo fmt --check",
+    "TMPDIR=/dev/shm cargo test --locked --lib",
+    "TMPDIR=/dev/shm cargo clippy --all-targets --all-features --locked -- -D warnings",
+    "git diff --check"
+  ],
+  "limitations": [
+    "SqliteCompactMarket adapter is not implemented yet; schema-19 databases have no business adapter until S5A-2.",
+    "WriteCoordinator is not yet wired into a production repository; integration lands with the adapter.",
+    "task_sqlite CLI still initializes schema 18 and upgrades to 18; exposing the 19 target is deferred to adapter integration.",
+    "No capacity or full-market claims; this slice only proves the migration and the fresh-rebuild gate."
+  ]
+}

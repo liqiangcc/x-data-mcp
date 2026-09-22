@@ -9,7 +9,6 @@ use super::{
 use crate::{
     market_storage::Error,
     mcp::{ApiError, ToolHandler},
-    sqlite_market::SqliteMarket,
     sqlite_supply::SqliteSupply,
     sqlite_task_mcp::SqliteTaskApi,
     sqlite_tasks::SqliteTasks,
@@ -58,7 +57,8 @@ impl DataApi {
         generation: Option<super::generation::GenerationSource>,
     ) -> Result<Self, crate::task_control::Error> {
         let repository = SqliteSupply {
-            market: SqliteMarket::new(tasks.clone()),
+            market: crate::sqlite_market::backend::MarketBackend::open(&tasks)
+                .map_err(|e| crate::task_control::Error::StorageUnavailable(e.to_string()))?,
         };
         // Wraps the contracts whose executors read official files so every
         // accepted item freezes source_generation_id at acceptance.
@@ -111,16 +111,16 @@ impl DataApi {
                             resolver: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
                         })),
-                        Box::new(crate::yearly_publication::tasks::YearlyContract {
+                        bind(Box::new(crate::yearly_publication::tasks::YearlyContract {
                             operation: crate::market_update::tasks::Operation::Update,
                             repository: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
-                        }),
-                        Box::new(crate::yearly_publication::tasks::YearlyContract {
+                        })),
+                        bind(Box::new(crate::yearly_publication::tasks::YearlyContract {
                             operation: crate::market_update::tasks::Operation::Backfill,
                             repository: repository.market.clone(),
                             today: crate::calendar::shanghai_today,
-                        }),
+                        })),
                         bind(Box::new(crate::gap_verification::contract::GapVerificationContract {
                             store: repository.market.clone(),
                         })),

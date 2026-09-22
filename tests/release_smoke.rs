@@ -30,6 +30,7 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
         "same_proxy_idle_over_30_seconds_then_calls_again",
         "publication_inspection_discovery_and_never_started_refusal_without_binding",
         "bounded_inspection_historical_request_without_recursive_task_or_rewrite",
+        "acquire_service_socket_discovery_and_capabilities",
     ] {
         assert!(
             value["checks"]
@@ -39,7 +40,7 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
                 .any(|v| v == required)
         );
     }
-    assert_eq!(value["checks"].as_array().unwrap().len(), 11);
+    assert_eq!(value["checks"].as_array().unwrap().len(), 12);
     assert!(
         value["checks"]
             .as_array()

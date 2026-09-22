@@ -2,17 +2,29 @@
 
 ## 当前状态
 
-**NOT_IMPLEMENTED / NOT SAFE FOR UNATTENDED DAILY SYNC**
+**PARTIALLY IMPLEMENTED / CAPACITY-BLOCKED FOR FULL-MARKET PRODUCTION**
 
 当前运行时包含两个 MCP server：
 
 - `x-data-acquire`：远端文件探测、下载和本地安装。
 - `x-data-mcp`：任务、版本、发布、查询、核实和计算。
 
-这不等于每日同步已经闭环。[Issue #260](https://github.com/liqiangcc/x-data-mcp/issues/260) 的实现和部署验收完成前，不得把当前
-`check_official_updates → acquire_generation → update_data` 当作安全流程：当前 acquisition 会替换可变目录，未在激活前执行每代 #131 一致性验证；长期 worker 还可能持有旧 manifest 元数据后按同一路径读取新文件。跨代 `update_data` 的既有真实验收也会 fail closed，而 capability 仍有过时或冲突描述。
+截至 2026-09-21，immutable generation、每代 #131 验证后条件激活、任务受理时
+冻结 `source_generation_id`、generation-bound daily/yearly update、truthful capability
+和仓库 Skill 已实现。ECS 已通过 100-item MCP 功能 smoke，但这**不等于**全市场或
+生产闭环完成：
 
-本文记录 #260 已裁定的目标边界和验收入口，不声明目标工具已经可用。当前生产事实以运行时 `tools/list`、`get_data_capabilities` 和对应 Issue/证据为准；文档不能替代 runtime readiness。
+- `start_collection` 与 default daily selection 的单任务预算仍为 100 个证券；
+- #259 的首次全市场 DB ≤2.5GiB、每日增长 ≤8/16MiB 尚未通过；
+- `production_ready` 仍为 false；当前不得在 ECS 上启动 5,221-symbol collection。
+
+当前权威状态见 [#259 容量审计](https://github.com/liqiangcc/x-data-mcp/issues/259#issuecomment-5756919342)
+和 [#262 Epic 更正](https://github.com/liqiangcc/x-data-mcp/issues/262#issuecomment-5756920960)。
+运行时 `tools/list`、capability 与结构化 readiness 仍是机器事实入口；本文不替代
+runtime readiness，也不把 100-item smoke 扩大为全市场验收。
+
+Issue/Epic 中的“v15”是交付规划标签；当前 SQLite `SCHEMA_VERSION=18`，二者不是
+同一版本序列。
 
 ## 关注点分离
 
@@ -74,13 +86,16 @@ Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。#259
 
 | Tool | 单一职责 |
 |---|---|
+| `get_acquisition_capabilities` | 返回 revision、schema、readiness、blocker 和 active generation 事实 |
 | `check_official_updates` | 只读观测远端文件事实；结果区分 changed、unchanged、unknown |
 | `acquire_generation` | 以持久 request identity 异步下载并 byte-verify 一个 candidate generation；不激活 |
 | `get_acquisition_task` | 读取下载、校验、持久化阶段和稳定 refs |
 | `get_acquisition_request` | 在响应丢失或超时后按 request identity 恢复事实 |
 | `verify_generation` | 使用 #131 契约和显式 CompatibilityEvidence 产生 consistency decision；不激活 |
 | `activate_generation` | 对 `consistency_verified` generation 执行 expected-previous 条件激活；不更新行情 |
+| `retire_generation` | owner/operator 显式确认后按引用与留存规则退役 generation |
 | `sync_status` | 只读返回 active/pending generation、manifest 和 consistency 状态 |
+| `run_worker_once` | operator/debug-only；正常长期服务不由 Skill 调用 |
 
 ### `x-data-mcp`
 
@@ -108,7 +123,9 @@ Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。#259
 .devin/skills/x-data-daily-sync/SKILL.md
 ```
 
-Skill 尚未交付；必须与 #260 tools/capability 同一实现 PR 或同一受控 release 验收。它应：
+Skill 已交付于 `.devin/skills/x-data-daily-sync/SKILL.md`。它的当前能力边界是
+generation 与有界数据任务编排；受 100-item 预算与 #259 容量 blocker 约束，尚不能
+据此声明全市场 unattended daily sync 已验收。Skill 必须：
 
 - 使用 `triggers: [user]`，不在无用户请求时自主下载、激活或发布。
 - 仅允许所需的 `x-data-acquire` / `x-data-mcp` MCP tools；禁止 shell、SSH、curl、SQLite 和文件旁路。
@@ -187,18 +204,28 @@ Capability 必须表达：
 
 `production_ready=false` 必须附结构化原因。`republish_data` 不得广告 yearly；`verify_data_gap` 不得保留已退休 blocker；`start_collection` 不得继续声称已解决来源为 NOT_VERIFIED。
 
-## 开发前未决决定
+## 已冻结的治理决定
 
-#260 仍保持“阶段：待澄清”，开发前必须冻结：
+#262 comment-5751060523 已批准 D1–D6 默认值：validator 全部 PASS 后才自动签发
+CompatibilityEvidence；generation retention/retire、durable acquisition store、按任务
+冻结 source session、条件 activate/显式 retire 和 revision 兼容矩阵均以该裁定为准。
+后续实现不得重新把这些项目标成“开发前未决”，也不得把 HTTP/ETag/文件名或单文件
+SHA 当作 #131 PASS。
 
-1. 自动 daily generation 的 #131 CompatibilityEvidence issuer 和签发规则。
-2. Generation 热保留、冷归档、evidence-only 与 destructive retire 边界。
-3. Acquisition request/task/crash facts 的独立 durable store；不能继续依赖单 JSON state。
-4. Background worker 按 task 冻结 generation 创建 source session 的 factory 生命周期。
-5. Activate/retire 的 owner 授权、expected revision 和显式确认。
-6. Repository Skill、可选 Plugin、acquisition/data server 的 revision 兼容矩阵。
+## 当前验收矩阵
 
-这些是治理和契约决定，不应在实现 PR 中临时猜测。
+只有“实现 + 自动测试 + 对应规模真实证据”三列同时存在才可标 PASS：
+
+| 能力 | 实现/测试 | 真实证据 | 当前裁定 |
+|---|---|---|---|
+| immutable generation + verify/activate | 有 | ECS generation `868f4fa1…` | 100-item 功能前置 PASS |
+| generation-bound daily update | 有 | ECS 100/100 | 有界功能 PASS，非全市场 |
+| generation-bound yearly update | 有 | ECS 3/3 | 有界功能 PASS |
+| 5,221-symbol collection/update | 100-item budget 阻塞 | 无 | FAIL / 未验收 |
+| 首采 DB ≤2.5GiB、日增 ≤8/16MiB | 当前 `bar_json`/audit payload 不满足 | 100-item dbstat 已显示超标风险 | FAIL |
+| 新 Devin 会话仅 Skill+MCP | Skill 文件存在 | 无独立会话证据 | 未验收 |
+| 双 MCP 可复现部署 | release 包含双 binary | 仓库 `deploy_preview.sh` 仍是旧单服务拓扑 | 未收口 |
+| overall production readiness | capability 恒实报告 false | 结构化 blocker 可观测 | 非生产 |
 
 ## 验收
 
@@ -215,10 +242,10 @@ Capability 必须表达：
 
 ## 当前禁止声明
 
-在 #260 实现、CI、真实 generation E2E 和 ECS 部署验收完成前，禁止声明：
+在全市场、容量、Skill 独立会话和生产治理验收完成前，禁止声明：
 
-- “每日更新可完全由 AI 通过 MCP 安全完成”；
+- “全市场每日更新可完全由 AI 通过 MCP 安全完成”；
 - “acquire 下载成功即可 update”；
-- “原子换目录已保证 generation identity”；
 - “tools readiness=ready 即 generation 可用”；
-- “Skill 已可调用”。
+- “100-item smoke 已满足 5,221-symbol 容量/性能 AC”；
+- “Skill 已通过独立新会话的全市场验收”。

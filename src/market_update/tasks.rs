@@ -150,7 +150,11 @@ impl<R: MarketRepository> Contract for RangeContract<R> {
                 ),
             });
         }
-        Ok(FrozenWork { items, scopes })
+        Ok(FrozenWork {
+            items,
+            scopes,
+            shared_evidence: None,
+        })
     }
 }
 pub(crate) fn frozen(id: &str, digest: &str, range: &DateRange) -> Value {
@@ -172,17 +176,23 @@ pub(crate) struct DefaultFrozen {
     #[serde(default)]
     pub refresh_range: Option<FrozenDayRange>,
     pub proven_gap_ranges: Vec<FrozenGapRange>,
+    /// Generation binding stamped by the `Bound` decorator at acceptance
+    /// (#260 D4). Shape is admitted here; the value itself is enforced at
+    /// worker session open, which refuses absent/null bindings in
+    /// generation mode. Absent on legacy (unbound) tasks.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub source_generation_id: Option<Value>,
 }
-/// Selection/catalog/execution-start provenance, opaque to the runner but
-/// required to be present and well-formed.
+/// Digest marker of the task's shared selection evidence (schema 18+):
+/// the resolved catalog/execution-start object lives once in the task's
+/// `shared_evidence`; this marker must equal its `evidence_digest`.
+/// Presence/shape is the integrity gate; the runner never reads the
+/// provenance content itself.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
 pub(crate) struct DefaultFrozenEvidence {
-    pub catalog_version_id: String,
-    pub catalog_digest: String,
-    pub securities: Vec<String>,
-    pub starts: std::collections::BTreeMap<String, Value>,
     pub evidence_digest: String,
 }
 /// One closed `[start_date, end_date]` in the frozen shape.

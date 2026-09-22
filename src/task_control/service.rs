@@ -150,7 +150,11 @@ impl<R: TaskRepository> TaskControl<R> {
             .iter()
             .flat_map(|i| i.scope_keys.iter().cloned())
             .collect();
-        let work = FrozenWork { items, scopes };
+        let work = FrozenWork {
+            items,
+            scopes,
+            shared_evidence: None,
+        };
         work.validate()?;
         let command = Command {
             key: CommandKey {

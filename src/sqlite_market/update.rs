@@ -122,6 +122,9 @@ impl RangeRepository for SqliteMarket {
     }
 }
 pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Receipt)>, Error> {
+    if super::is_compact_schema(c)? {
+        return super::compact_results::read_update_audit(c, id);
+    }
     let mut stmt = c.prepare(
         "SELECT task_id,item_id,base_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM market_update_results WHERE result_id=?1",
     ).map_err(storage)?;
@@ -239,6 +242,7 @@ mod tests {
             range: range.clone(),
             same_qfq_basis_ref: "fixture:crash-basis".into(),
             revision_ref: Some("fixture:crash-revision".into()),
+            continuity: None,
         };
         let whole = changed.then(|| CombinedEvidence {
             base_integrity_sha256: evidence.base_integrity_sha256.clone(),

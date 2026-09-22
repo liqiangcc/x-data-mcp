@@ -60,7 +60,17 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 保守 DBF 容器解析和目录语义见 [#46 实施记录](docs/tasks/issue-46.md)；[本地输入清单核验](docs/snapshot-input.md)
 只证明 manifest 字节绑定，不单独证明跨文件兼容或授权。通用 `OfficialFilePipeline` stub 继续 fail closed；部署服务只能通过已检查的 snapshot/generation provider 执行。
 
-当前 acquisition adapter 能检查和下载文件，但 immutable generation、#131 验证后激活、generation-bound routine update 和 truthful capability 尚待 #260；在其完成前不得宣称每日同步可由 AI 纯 MCP 安全闭环。
+截至 2026-09-21，immutable generation、#131 验证后激活、generation-bound
+daily/yearly update、truthful capability 和仓库 Skill 已实现；ECS 上已完成 100-item
+MCP 功能 smoke。该结果不等于全市场或生产验收：单任务仍有 100 个证券上限，
+#259 的首次全市场容量与每日增长 AC 尚未通过，overall `production_ready=false`。
+当前 schema 禁止在 ECS 上直接启动 5,221-symbol collection；权威容量状态见
+[#259 的物理审计](https://github.com/liqiangcc/x-data-mcp/issues/259#issuecomment-5756919342)
+与 [#262 的 Epic 更正](https://github.com/liqiangcc/x-data-mcp/issues/262#issuecomment-5756920960)。
+
+Issue 标题中的“v15”是交付/规划标签，不是 SQLite schema 编号；当前
+`SCHEMA_VERSION=18`。文档提到 v16/v17/v18 时若指 migration/schema，必须明确写
+“schema”，不能据此推断产品版本或容量 AC 已完成。
 
 ## 本地入口
 
@@ -241,3 +251,7 @@ NOT_PRODUCTION_READY：本机部署检查通过不代表真实数据闭环或完
 随后主线 `22c2255210c68b49d08ffd24a6cfb3468274f07a` 已发布为 [v0.2.0-preview.10](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.10) 并切换预览服务；普通库按显式 `task_sqlite upgrade` 由 schema9 升级到 schema10（无回填），运行时和隧道验收通过，普通库仍为空。
 
 随后主线 `feca5e2448dc8bd7da7d8a8e530d239fc358712a` 已发布为 [v0.2.0-preview.11](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.11)。自本版本起发布走 #140 流水线：向 main 上的提交推送 `v0.2.0-preview.N` tag 即触发 `release.yml` 自动构建、校验并创建 prerelease（tag 版本与 `Cargo.toml` 不一致或 tag 不在 main 上时拒绝），同 workflow 把验证过的包推到 `refs/dist/<tag>`；部署使用 `scripts/deploy_preview.sh <tag>`（`--force-git-transport` 经 `refs/dist` git 取包），完成一致备份、显式 schema 检查、原子 `current` 切换、data/tunnel 重启与五份报告，失败自动回滚并写 `FAILED_AT_*` 报告。preview.11 部署与 `--from-report` 回滚均已实操通过。详见 [preview.11 部署结果](docs/tasks/preview11-results.md)。真实来源、ChatGPT 消费侧和所有 QFQ/目录/授权门禁仍未解除，系统继续 `NOT_PRODUCTION_READY`。
+
+以上 `deploy_preview.sh` 段落是 preview.11 的单 data-service + tunnel 历史部署证据。
+该脚本未安装/configure 当前 `acquire_service` 与 immutable generation root，不能用于
+#262 双 MCP 拓扑或作为 generation/full-market DoD 证据。

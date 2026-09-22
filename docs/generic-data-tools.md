@@ -3,10 +3,11 @@
 ## 决策与适用范围
 
 2026-09-12 用户要求现在考虑扩展，并授权按“工具按业务动作稳定、数据类别通过类型化参数扩展”
-开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。2026-09-20 运行时已注册 19 个
-`x-data-mcp` 工具，通用查询、任务、availability 和 compute 的主要入口已实现；但实现并未完整兑现
-本文契约：capability 支持矩阵、runtime/governance readiness、逐工具 schema、generation 生命周期和
-每日同步仍有 [#260](https://github.com/liqiangcc/x-data-mcp/issues/260) 记录的冲突。
+开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。2026-09-21 release smoke
+验证 data socket 当前注册 20 个工具，通用查询、任务、availability、compute、capability
+和 generation-bound 数据路径的主要入口已实现；全市场 100-item 预算、#259 容量以及
+独立 Skill 会话等 DoD 仍有 [#260](https://github.com/liqiangcc/x-data-mcp/issues/260) /
+[#262](https://github.com/liqiangcc/x-data-mcp/issues/262) 记录的缺口。
 
 本文取代 `mcp-tools.md` 中“新数据类别通常新增采集/查询工具”的旧目标方案，但不作为运行时
 readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capabilities` 读取；跨 server 编排见
@@ -364,8 +365,9 @@ get_data_capabilities 无过滤参数时返回简洁 dataset/operation 目录与
 一个版本损坏批量明确拒绝；无版本对象显式列出；帮助示例与 schema 一致。
 上述为目标验收，文档提交不作为实现测试通过。
 
-该阶段设计曾按 19 个业务工具计数；2026-09-20 runtime 的 `x-data-mcp` 也注册 19 个工具，
-但两者集合/语义并非因此自动一致，精确差异由 #260 的 registry golden test 验证。
+该阶段设计曾按 19 个业务工具计数；当前 release smoke 验证 data socket 为 20 个工具。
+历史计数不是当前契约，精确集合/语义由 registry golden test、运行时 `tools/list` 与
+capability 验证。
 `query_data` 的批量/目录筛选不新增工具；export_data 未计入，run_worker_once 仍为运维能力。
 
 ## 通用计算入口

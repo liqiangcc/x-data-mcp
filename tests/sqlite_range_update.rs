@@ -26,6 +26,15 @@ struct Fixture {
     whole: Option<CombinedEvidence>,
 }
 fn command(db: &SqliteMarket, request: &str, version: &str, expected: Option<&str>) -> Publication {
+    command_for_range(db, request, version, expected, ("2025-01-02", "2025-01-02"))
+}
+fn command_for_range(
+    db: &SqliteMarket,
+    request: &str,
+    version: &str,
+    expected: Option<&str>,
+    range: (&str, &str),
+) -> Publication {
     use x_data_mcp::market_update::tasks::{Operation, RangeContract};
     let ctl = TaskControl::new(
         db.tasks.clone(),
@@ -45,7 +54,15 @@ fn command(db: &SqliteMarket, request: &str, version: &str, expected: Option<&st
             LegacyCollection.key(),
             json!({"symbols":["sh.600006"],"periods":["day"]}),
         ),
-        Some(base) => (Operation::Backfill.key(), range_payload(base)),
+        Some(base) => (
+            Operation::Backfill.key(),
+            json!({"items":[{
+                "symbol":"sh.600006",
+                "base_version_id":base,
+                "start_date":range.0,
+                "end_date":range.1
+            }]}),
+        ),
     };
     let request = ctl.accept(request, key, payload).unwrap();
     let RequestOutcome::Task(task) = request.record.outcome else {
@@ -107,6 +124,7 @@ fn fixture(changed: bool) -> Fixture {
         range: range.clone(),
         same_qfq_basis_ref: "fixture:basis".into(),
         revision_ref: Some("fixture:revision".into()),
+        continuity: None,
     };
     let whole = if changed {
         let mut raw = base.clone();
@@ -411,7 +429,7 @@ fn range_schema_v4_requires_explicit_upgrade_and_preserves_published_records() {
     let f = fixture(false);
     let original = f.db.fixed("legacy-daily").unwrap().raw().clone();
     let compat = observation_fixture::stored_compat(&f.db);
-    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
+    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE stopped_write_checks; DROP TABLE yearly_execution_results; DROP TABLE market_update_results; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; ALTER TABLE tasks DROP COLUMN evidence_digest; DELETE FROM schema_migrations WHERE version>=5; PRAGMA user_version=4;");
     observation_fixture::restore_compat(&f.db, &compat);
     assert!(f.db.fixed("legacy-daily").is_err());
     assert!(f.db.range_receipt("absent").is_err());
@@ -904,6 +922,7 @@ impl x_data_mcp::market_update::runner::RangeProvider for SyntheticRangeProvider
             range: range.clone(),
             same_qfq_basis_ref: "fixture:runner-basis".into(),
             revision_ref: Some("fixture:runner-revision".into()),
+            continuity: None,
         };
         let combined = if self.changed {
             let mut raw = base.raw().clone();
@@ -1607,7 +1626,7 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
     // fixture. The retained v1-v7 DDL and checksums are exactly those used by
     // the deployed schema7.
     let compat = observation_fixture::stored_compat(&f.db);
-    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; CREATE TABLE payloads_bak AS SELECT * FROM payloads; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; DELETE FROM schema_migrations WHERE version>=8; PRAGMA user_version=7;");
+    f.sql("CREATE TABLE daily_bars AS WITH RECURSIVE t(version_id,i) AS (SELECT version_id,manifest_root FROM data_versions WHERE manifest_root IS NOT NULL UNION ALL SELECT t.version_id,n.left_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.left_id IS NOT NULL UNION ALL SELECT t.version_id,n.right_id FROM manifest_nodes n JOIN t ON n.node_id=t.i WHERE n.right_id IS NOT NULL) SELECT t.version_id,s.trade_date,json_extract(s.bar_json,'$.open') AS open,json_extract(s.bar_json,'$.high') AS high,json_extract(s.bar_json,'$.low') AS low,json_extract(s.bar_json,'$.close') AS close,json_extract(s.bar_json,'$.volume') AS volume,json_extract(s.bar_json,'$.amount') AS amount FROM t JOIN manifest_nodes m ON m.node_id=t.i AND m.segment_id IS NOT NULL JOIN segment_bars s ON s.segment_id=m.segment_id AND s.trade_date>=m.clip_start AND s.trade_date<=m.clip_end; CREATE TABLE payloads_bak AS SELECT * FROM payloads; DROP TABLE verification_inspections; DROP TABLE verification_runtime_guards; DROP TABLE publication_checks; DROP TABLE task_item_execution_starts; DROP TABLE gap_coverings; DROP TABLE proven_gaps; DROP TABLE gap_verification_decisions; DROP TABLE IF EXISTS version_segments; DROP TABLE IF EXISTS manifest_nodes; DROP TABLE segment_bars; DROP TABLE bar_segments; DROP TABLE payloads; ALTER TABLE data_versions RENAME COLUMN envelope_json TO compat_json; ALTER TABLE data_versions DROP COLUMN manifest_root; ALTER TABLE data_versions DROP COLUMN evidence_digest; ALTER TABLE tasks DROP COLUMN item_count; ALTER TABLE tasks DROP COLUMN items_pending; ALTER TABLE tasks DROP COLUMN items_running; ALTER TABLE tasks DROP COLUMN items_finished; ALTER TABLE tasks DROP COLUMN items_succeeded; ALTER TABLE tasks DROP COLUMN evidence_digest; DELETE FROM schema_migrations WHERE version>=8; PRAGMA user_version=7;");
     observation_fixture::restore_compat(&f.db, &compat);
     assert!(f.db.publication_facts(&f.command.task_id).is_err());
     let c = Connection::open(f.db.tasks.path()).unwrap();
@@ -1617,7 +1636,7 @@ fn publication_check_schema_upgrade_is_explicit_and_preserves_published_facts() 
         7
     );
     f.db.tasks.upgrade().unwrap();
-    f.sql("INSERT INTO payloads SELECT * FROM payloads_bak; DROP TABLE payloads_bak;");
+    f.sql("INSERT OR IGNORE INTO payloads SELECT * FROM payloads_bak; DROP TABLE payloads_bak;");
     assert_eq!(
         c.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
             .unwrap(),
@@ -2462,4 +2481,467 @@ mod default_runner {
         assert_eq!(frozen["proven_gap_ranges"][0]["gap_id"], "g1");
         assert!(frozen["proven_gap_ranges"][0]["evidence_digest"].is_string());
     }
+    /// #262 regression: the resolved default selection (securities plus
+    /// per-symbol start evidence) must be stored once per task, not copied
+    /// into every item's frozen inputs — and again inside the task row's
+    /// frozen work. At the 100-item budget that duplication is ~100x the
+    /// evidence per task; at market scale (~5,221 item-updates/day) it is
+    /// ~150MB/day against the ≤16MiB hard cap.
+    #[test]
+    fn default_selection_evidence_is_stored_once_and_item_markers_bind() {
+        let owned: Vec<String> = (0..100).map(|i| format!("60{i:04}")).collect();
+        let codes: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let f = default_fixture(Operation::Update, &codes, &[]);
+        let snap = f.ctl.repository.read_task(&f.task_id).unwrap().unwrap();
+        let shared = snap.task.work.shared_evidence.as_ref().unwrap();
+        let shared_len = serde_json::to_string(shared).unwrap().len();
+        assert!(shared_len > 10_000, "fixture selection must be non-trivial");
+        for item in &snap.items {
+            let frozen_len = serde_json::to_string(&item.spec.frozen_inputs)
+                .unwrap()
+                .len();
+            assert!(
+                frozen_len < 2_000,
+                "item frozen inputs must carry only the digest marker, got {frozen_len}B"
+            );
+            let marker = item.spec.frozen_inputs["selection_evidence"]["evidence_digest"]
+                .as_str()
+                .unwrap();
+            assert_eq!(marker, shared["evidence_digest"].as_str().unwrap());
+        }
+        // The task row embeds one shared copy, not the evidence per item.
+        let work_len = serde_json::to_string(&snap.task.work).unwrap().len();
+        assert!(
+            work_len < shared_len + snap.items.len() * 2_000 + 8_192,
+            "frozen work re-embeds evidence per item: {work_len}B"
+        );
+        // The task head carries the digest so the O(1) binding path can
+        // check item markers without decoding the shared blob.
+        let head = f.db.task_head(&f.task_id).unwrap();
+        assert_eq!(
+            head.evidence_digest.as_deref(),
+            shared["evidence_digest"].as_str()
+        );
+        assert!(
+            f.db.task_item_binding(&f.task_id, &f.items[0])
+                .unwrap()
+                .is_some()
+        );
+    }
+    /// A tampered or orphaned `selection_evidence` marker — mismatched
+    /// digest, or one on a task carrying no shared evidence — fails closed
+    /// on both the full-snapshot and the O(1) binding read paths.
+    #[test]
+    fn tampered_item_evidence_marker_fails_closed() {
+        let f = default_fixture(Operation::Update, &["600006"], &[]);
+        let c = Connection::open(f.db.tasks.path()).unwrap();
+        c.execute(
+            "UPDATE task_items SET frozen_inputs_json=json_replace(frozen_inputs_json,'$.selection_evidence.evidence_digest','tampered') WHERE task_id=?1",
+            [&f.task_id],
+        )
+        .unwrap();
+        drop(c);
+        assert!(f.db.task_item_binding(&f.task_id, &f.items[0]).is_err());
+        assert!(f.ctl.repository.read_task(&f.task_id).is_err());
+    }
+}
+
+/// #259 micro-soak evidence: 250 consecutive fixture append updates keep
+/// per-day net database growth bounded — the final window mean must stay
+/// within 120% of the first window mean. This proves the manifest growth
+/// shape only; it is not the 5,221-symbol, production-provider, WAL, timing,
+/// or absolute 8/16MiB acceptance test.
+#[test]
+fn two_fifty_day_append_growth_stays_bounded() {
+    use x_data_mcp::market_update::tasks::{Operation, RangeContract};
+    // Defaults keep normal test runs bounded. Full-scale acceptance must set
+    // its own production-shaped inputs and report DB/WAL/time separately.
+    let symbols: usize = std::env::var("SOAK_SYMBOLS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8);
+    let days: usize = std::env::var("SOAK_DAYS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(250);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("soak.sqlite");
+    let db = SqliteMarket::new(SqliteTasks::new(path.clone()));
+    db.tasks.initialize().unwrap();
+    let samples: Value =
+        serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+    let base = samples[0]["record"].clone();
+    // One published base version per symbol through the real collection path.
+    let mut heads: Vec<(String, Value)> = Vec::new();
+    for i in 0..symbols {
+        let symbol = format!("sh.6000{i:02}");
+        let mut raw = base.clone();
+        raw["version_id"] = json!(format!("soak-base-{symbol}"));
+        raw["symbol"] = json!(symbol);
+        raw["batch"]["symbol"] = json!(symbol);
+        raw["batch"]["provenance"]["symbol"] = json!(symbol);
+        raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+        db.stage(&raw).unwrap();
+        let ctl = TaskControl::new(
+            db.tasks.clone(),
+            "range-run".into(),
+            vec![Box::new(LegacyCollection)],
+        )
+        .unwrap();
+        let request = ctl
+            .accept(
+                &format!("soak-base-{symbol}"),
+                LegacyCollection.key(),
+                json!({"symbols":[symbol],"periods":["day"]}),
+            )
+            .unwrap();
+        let RequestOutcome::Task(task) = request.record.outcome else {
+            panic!()
+        };
+        let t = db
+            .tasks
+            .transition(&task.task.task_id, 0, "range-run", Change::Claim)
+            .unwrap();
+        let t = db
+            .tasks
+            .transition(
+                &t.task.task_id,
+                t.task.state_revision,
+                "range-run",
+                Change::StartItem(t.items[0].spec.item_id.clone()),
+            )
+            .unwrap();
+        let plan = Publisher {
+            repository: db.clone(),
+        }
+        .prepare(Publication {
+            publication_id: format!("pub-{}", t.task.task_id),
+            version_id: raw["version_id"].as_str().unwrap().into(),
+            task_id: t.task.task_id,
+            item_id: t.items[0].spec.item_id.clone(),
+            run_id: "range-run".into(),
+            expected_revision: t.task.state_revision,
+            intent: PublishIntent::Daily {
+                expected_head: None,
+            },
+        })
+        .unwrap();
+        db.commit(&plan).unwrap();
+        heads.push((symbol, raw));
+    }
+    let file_size = |path: &std::path::Path| -> u64 {
+        Connection::open(path)
+            .unwrap()
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+            .unwrap();
+        std::fs::metadata(path).unwrap().len()
+    };
+    let mut sizes = vec![file_size(&path)];
+    for day in 1..=days {
+        let date = "2026-01-05".parse::<chrono::NaiveDate>().unwrap()
+            + chrono::Duration::days(day as i64 - 1);
+        // One update task per day carrying every symbol, as production does.
+        let ctl = TaskControl::new(
+            db.tasks.clone(),
+            "range-run".into(),
+            vec![Box::new(RangeContract {
+                operation: Operation::Update,
+                repository: db.clone(),
+                today: || "2026-09-12".parse().unwrap(),
+            })],
+        )
+        .unwrap();
+        let items: Vec<Value> = heads
+            .iter()
+            .map(|(symbol, raw)| {
+                json!({
+                    "symbol": symbol,
+                    "base_version_id": raw["version_id"],
+                    "start_date": date,
+                    "end_date": date,
+                })
+            })
+            .collect();
+        let request = ctl
+            .accept(
+                &format!("soak-day-{day}"),
+                Operation::Update.key(),
+                json!({"items": items}),
+            )
+            .unwrap();
+        let RequestOutcome::Task(task) = request.record.outcome else {
+            panic!()
+        };
+        let mut t = db
+            .tasks
+            .transition(&task.task.task_id, 0, "range-run", Change::Claim)
+            .unwrap();
+        for item in &t.items.clone() {
+            let item_id = item.spec.item_id.clone();
+            t = db
+                .tasks
+                .transition(
+                    &t.task.task_id,
+                    t.task.state_revision,
+                    "range-run",
+                    Change::StartItem(item_id),
+                )
+                .unwrap();
+            let symbol = item.spec.target["symbol"].as_str().unwrap().to_owned();
+            let head = heads.iter().position(|(s, _)| *s == symbol).unwrap();
+            let head_raw = heads[head].1.clone();
+            let bar = json!({
+                "date": date, "open": "10.0", "high": "11.0",
+                "low": "9.5", "close": "10.5", "volume": null, "amount": null,
+            });
+            let mut raw = head_raw.clone();
+            raw["version_id"] = json!(format!("soak-{symbol}-d{day}"));
+            raw["records"].as_array_mut().unwrap().push(bar.clone());
+            raw["batch"]["bars"]
+                .as_array_mut()
+                .unwrap()
+                .push(bar.clone());
+            let count = raw["records"].as_array().unwrap().len();
+            raw["validation"] =
+                json!({"record_count": count, "unique_record_count": count, "duplicate_count": 0});
+            raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+            db.stage(&raw).unwrap();
+            let mut batch: MarketDataBatch =
+                serde_json::from_value(head_raw["batch"].clone()).unwrap();
+            batch.bars = vec![serde_json::from_value(bar).unwrap()];
+            let range = DateRange {
+                start: date,
+                end: date,
+            };
+            let evidence = Evidence {
+                base_version_id: head_raw["version_id"].as_str().unwrap().into(),
+                base_integrity_sha256: head_raw["integrity_sha256"].as_str().unwrap().into(),
+                candidate_sha256: market_update::candidate_digest(&batch).unwrap(),
+                range: range.clone(),
+                same_qfq_basis_ref: "soak".into(),
+                revision_ref: None,
+                continuity: None,
+            };
+            let whole = CombinedEvidence {
+                base_integrity_sha256: evidence.base_integrity_sha256.clone(),
+                segment_sha256: evidence.candidate_sha256.clone(),
+                combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
+                complete_coverage_ref: "soak".into(),
+            };
+            let prepared = Publisher {
+                repository: db.clone(),
+            }
+            .prepare_range(
+                Publication {
+                    publication_id: format!("pub-{symbol}-d{day}"),
+                    version_id: raw["version_id"].as_str().unwrap().into(),
+                    task_id: t.task.task_id.clone(),
+                    item_id: item.spec.item_id.clone(),
+                    run_id: "range-run".into(),
+                    expected_revision: t.task.state_revision,
+                    intent: PublishIntent::Daily {
+                        expected_head: Some(head_raw["version_id"].as_str().unwrap().into()),
+                    },
+                },
+                &batch,
+                &range,
+                &evidence,
+                Some(&whole),
+            )
+            .unwrap();
+            let Preparation::Ready(plan) = prepared else {
+                panic!("day {day} {symbol}: update not approved")
+            };
+            db.commit_range(&plan).unwrap();
+            heads[head].1 = raw;
+            // commit_range decided item i and bumped the task revision;
+            // refresh before starting the next item.
+            t = db.tasks.read_task(&t.task.task_id).unwrap().unwrap();
+        }
+        sizes.push(file_size(&path));
+    }
+    if std::env::var("SOAK_DUMP").is_ok() {
+        let c = Connection::open(&path).unwrap();
+        let mut q = c
+            .prepare(
+                "SELECT name, sum(pgsize) FROM dbstat WHERE name NOT LIKE 'sqlite_%' GROUP BY name ORDER BY 2 DESC",
+            )
+            .unwrap();
+        let rows = q
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for (name, bytes) in rows {
+            println!("  {name}: {bytes}B");
+        }
+        for (label, sql) in [
+            (
+                "audit_json",
+                "SELECT avg(length(audit_json)), max(length(audit_json)) FROM market_update_results",
+            ),
+            (
+                "receipt_json",
+                "SELECT avg(length(receipt_json)), max(length(receipt_json)) FROM market_update_results",
+            ),
+            (
+                "envelope_json",
+                "SELECT avg(length(envelope_json)), max(length(envelope_json)) FROM data_versions",
+            ),
+        ] {
+            let (avg, max): (f64, i64) = c
+                .query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap();
+            println!("  avg/max {label}: {avg:.0}B/{max}B");
+        }
+        let sample: String = c
+            .query_row(
+                "SELECT audit_json FROM market_update_results ORDER BY rowid DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        println!("  sample audit_json: {}", &sample[..sample.len().min(3000)]);
+    }
+    let growth: Vec<u64> = sizes.windows(2).map(|w| w[1] - w[0]).collect();
+    let mean = |s: &[u64]| s.iter().sum::<u64>() as f64 / s.len() as f64;
+    let window = (days / 10).clamp(1, 20);
+    let early = mean(&growth[..window]);
+    let late = mean(&growth[growth.len() - window..]);
+    println!(
+        "{days}-day soak: base={}B final={}B early_mean={early:.0}B/day late_mean={late:.0}B/day last_day={}B",
+        sizes[0],
+        sizes[days],
+        growth[days - 1]
+    );
+    assert!(
+        late <= early * 1.2,
+        "final-{window}-day mean {late:.0}B/day exceeds 120% of first-{window}-day mean {early:.0}B/day"
+    );
+    // Single-day slack for 4KiB page quantization; a quadratic leak would be
+    // ~250x the early mean, not ~3x.
+    assert!(
+        growth[days - 1] as f64 <= early * 3.0 + 4096.0,
+        "day-250 growth {}B is not commensurate with early mean {early:.0}B/day",
+        growth[days - 1]
+    );
+}
+
+/// Shared batch evidence (unit/currency, coverage, adjustment) is
+/// generation-common: it must be stored once in `payloads` and referenced
+/// by `$ref` from both the version envelope and the update audit —
+/// two stored references, one payload row.
+#[test]
+fn shared_batch_evidence_is_content_addressed_in_envelope_and_audit() {
+    let f = fixture(false);
+    f.db.commit_range(&f.plan()).unwrap();
+    let c = Connection::open(f.db.tasks.path()).unwrap();
+    // The version envelope references, not embeds, the shared blocks.
+    let env: String = c
+        .query_row(
+            "SELECT envelope_json FROM data_versions WHERE version_id='legacy-daily'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    for key in ["unit_currency", "coverage", "adjustment_evidence"] {
+        assert!(
+            env.contains(&format!(r#""{key}":{{"$ref":"payload:"#)),
+            "envelope keeps {key} inline"
+        );
+    }
+    // Same for the stored audit segment.
+    let audit: String = c
+        .query_row(
+            "SELECT audit_json FROM market_update_results LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(audit.contains(r#""unit_currency":{"$ref":"payload:"#));
+    // Both references resolve to a single stored payload row.
+    let shared: i64 = c
+        .query_row(
+            "SELECT count(*) FROM payloads WHERE payload_json LIKE '%volume_unit%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(shared, 1, "shared evidence must be stored once");
+    // Round-trip: the record still expands to the identical stored bytes.
+    f.db.fixed("legacy-daily").unwrap();
+}
+
+/// #259 P0-B acceptance test for the production-shaped no-change path.
+///
+/// Unlike the append micro-soak, the provider can hand `prepare_range` the
+/// complete requested history. A no-change result must bind the existing
+/// version/manifest digests; it must not copy that history into `payloads`.
+///
+/// Ignored until the compact audit format replaces `segment.bars` payloads.
+#[test]
+#[ignore = "#259 P0-B: no-change audit still persists the full batch bars payload"]
+fn production_shaped_no_change_audit_does_not_persist_history_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = SqliteMarket::new(SqliteTasks::new(dir.path().join("range.sqlite")));
+    db.tasks.initialize().unwrap();
+    let samples: Value =
+        serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+    let base = samples[0]["record"].clone();
+    db.stage(&base).unwrap();
+    let publisher = Publisher {
+        repository: db.clone(),
+    };
+    let first = publisher
+        .prepare(command(&db, "full-first", "legacy-daily", None))
+        .unwrap();
+    db.commit(&first).unwrap();
+
+    let batch: MarketDataBatch = serde_json::from_value(base["batch"].clone()).unwrap();
+    let range = DateRange {
+        start: batch.bars.first().unwrap().date,
+        end: batch.bars.last().unwrap().date,
+    };
+    let evidence = Evidence {
+        base_version_id: "legacy-daily".into(),
+        base_integrity_sha256: base["integrity_sha256"].as_str().unwrap().into(),
+        candidate_sha256: market_update::candidate_digest(&batch).unwrap(),
+        range: range.clone(),
+        same_qfq_basis_ref: "fixture:basis".into(),
+        revision_ref: None,
+        continuity: None,
+    };
+    let command = command_for_range(
+        &db,
+        "full-no-change",
+        "legacy-daily",
+        Some("legacy-daily"),
+        ("2024-12-31", "2025-12-31"),
+    );
+    let Preparation::Ready(plan) = publisher
+        .prepare_range(command, &batch, &range, &evidence, None)
+        .unwrap()
+    else {
+        panic!("full-history no-change candidate was not ready")
+    };
+    assert!(plan.is_no_change());
+
+    let c = Connection::open(db.tasks.path()).unwrap();
+    let payload_bytes = |c: &Connection| {
+        c.query_row(
+            "SELECT coalesce(sum(length(payload_json)),0) FROM payloads",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    let before = payload_bytes(&c);
+    drop(c);
+    db.commit_range(&plan).unwrap();
+    let c = Connection::open(db.tasks.path()).unwrap();
+    assert_eq!(
+        payload_bytes(&c),
+        before,
+        "no-change audit copied candidate history into payloads"
+    );
 }

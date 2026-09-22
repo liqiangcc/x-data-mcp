@@ -239,12 +239,15 @@ fn task_invalid(message: impl ToString) -> task::Error {
     task::Error::InvalidCommand(message.to_string())
 }
 /// Frozen per-item inputs (serde-stable evidence shape):
-/// `selection_evidence` (catalog + execution-start provenance), verified
-/// base identity, `refresh_range` for update only (absent for backfill),
-/// and `proven_gap_ranges` as a distinct gap-provenance class.
+/// `selection_evidence` is only the digest marker of the task's shared
+/// evidence (schema 18+); the resolved selection object — catalog and
+/// execution-start provenance for every selected security — is stored
+/// once in the task's `shared_evidence`. Plus verified base identity,
+/// `refresh_range` for update only (absent for backfill), and
+/// `proven_gap_ranges` as a distinct gap-provenance class.
 fn frozen_default(selection: &DefaultDailySelection, item: &FrozenSecurityWork) -> Value {
     let mut frozen = json!({
-        "selection_evidence": selection,
+        "selection_evidence": {"evidence_digest": selection.evidence_digest},
         "base_version_id": item.base_version_id,
         "base_integrity_sha256": item.base_integrity_sha256,
         "proven_gap_ranges": item.proven_gap_ranges,
@@ -304,7 +307,11 @@ impl<R: DefaultRangeSource> Contract for DefaultRangeContract<R> {
                 frozen_inputs: frozen_default(&work.selection, w),
             });
         }
-        Ok(FrozenWork { items, scopes })
+        Ok(FrozenWork {
+            items,
+            scopes,
+            shared_evidence: Some(serde_json::to_value(&work.selection).map_err(task_invalid)?),
+        })
     }
 }
 #[cfg(test)]

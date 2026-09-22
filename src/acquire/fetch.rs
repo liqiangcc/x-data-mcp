@@ -160,3 +160,31 @@ impl Fetcher for Mirror {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// The helper owns the head/fetch wire shape: numeric `status`,
+    /// `content_length` and `bytes` — HTTP header strings are normalized
+    /// inside `tdx_fetch.py`, not here. A stringly-typed regression fails
+    /// decode instead of silently passing (#262 G live-deploy catch).
+    #[test]
+    fn helper_wire_contract_decodes_numeric_lengths() {
+        let head: HeadJson = serde_json::from_str(
+            r#"{"status":200,"etag":"\"6aafb05c-f84ba5\"","last_modified":"Sun, 20 Sep 2026 10:07:24 GMT","content_length":16272293}"#,
+        )
+        .unwrap();
+        assert_eq!(head.content_length, Some(16272293));
+        let fetch: FetchJson = serde_json::from_str(
+            r#"{"status":200,"etag":null,"last_modified":null,"content_length":5,"bytes":5,"sha256":"ab"}"#,
+        )
+        .unwrap();
+        assert_eq!(fetch.bytes, 5);
+        assert!(
+            serde_json::from_str::<HeadJson>(
+                r#"{"status":200,"etag":null,"last_modified":null,"content_length":"16272293"}"#,
+            )
+            .is_err()
+        );
+    }
+}

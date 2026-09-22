@@ -1,0 +1,162 @@
+{
+  "amount": {
+    "average_text_bytes": 8.522793545878693,
+    "known": 20576,
+    "max_text_bytes": 11,
+    "text_bytes_histogram": {
+      "10": 2763,
+      "11": 10,
+      "4": 4,
+      "5": 39,
+      "6": 319,
+      "7": 1727,
+      "8": 8015,
+      "9": 7699
+    },
+    "unknown": 0
+  },
+  "bars": 20576,
+  "database_location": "/dev/shm",
+  "hard_bytes_per_bar": 61,
+  "layouts": [
+    {
+      "bars": 20576,
+      "database_bytes": 950272,
+      "database_bytes_before_checkpoint": 4096,
+      "database_bytes_per_bar": 46.183514774494554,
+      "dbstat": [
+        {
+          "bytes": 24576,
+          "name": "bar_segments",
+          "payload_bytes": 17442,
+          "unused_bytes": 5563
+        },
+        {
+          "bytes": 901120,
+          "name": "segment_bars",
+          "payload_bytes": 723278,
+          "unused_bytes": 113478
+        },
+        {
+          "bytes": 20480,
+          "name": "sqlite_autoindex_bar_segments_1",
+          "payload_bytes": 11823,
+          "unused_bytes": 7632
+        }
+      ],
+      "object_bytes": 946176,
+      "object_bytes_per_bar": 45.98444790046656,
+      "page_count": 232,
+      "page_fill_ratio": 0.7953520275297619,
+      "page_size": 4096,
+      "payload_bytes": 752543,
+      "segment_size": 64,
+      "segments": 323,
+      "sqlite_version": "3.53.2",
+      "unused_bytes": 126673,
+      "wal_bytes_after_checkpoint": 0,
+      "wal_bytes_before_checkpoint": 976472
+    },
+    {
+      "bars": 20576,
+      "database_bytes": 909312,
+      "database_bytes_before_checkpoint": 4096,
+      "database_bytes_per_bar": 44.19284603421462,
+      "dbstat": [
+        {
+          "bytes": 12288,
+          "name": "bar_segments",
+          "payload_bytes": 4508,
+          "unused_bytes": 7417
+        },
+        {
+          "bytes": 888832,
+          "name": "segment_bars",
+          "payload_bytes": 710638,
+          "unused_bytes": 113866
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_bar_segments_1",
+          "payload_bytes": 2951,
+          "unused_bytes": 891
+        }
+      ],
+      "object_bytes": 905216,
+      "object_bytes_per_bar": 43.99377916018663,
+      "page_count": 222,
+      "page_fill_ratio": 0.7932880108173077,
+      "page_size": 4096,
+      "payload_bytes": 718097,
+      "segment_size": 256,
+      "segments": 82,
+      "sqlite_version": "3.53.2",
+      "unused_bytes": 122174,
+      "wal_bytes_after_checkpoint": 0,
+      "wal_bytes_before_checkpoint": 935272
+    },
+    {
+      "bars": 20576,
+      "database_bytes": 901120,
+      "database_bytes_before_checkpoint": 4096,
+      "database_bytes_per_bar": 43.79471228615863,
+      "dbstat": [
+        {
+          "bytes": 4096,
+          "name": "bar_segments",
+          "payload_bytes": 2255,
+          "unused_bytes": 1669
+        },
+        {
+          "bytes": 888832,
+          "name": "segment_bars",
+          "payload_bytes": 710382,
+          "unused_bytes": 114122
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_bar_segments_1",
+          "payload_bytes": 1475,
+          "unused_bytes": 2490
+        }
+      ],
+      "object_bytes": 897024,
+      "object_bytes_per_bar": 43.59564541213064,
+      "page_count": 220,
+      "page_fill_ratio": 0.7960901826484018,
+      "page_size": 4096,
+      "payload_bytes": 714112,
+      "segment_size": 512,
+      "segments": 41,
+      "sqlite_version": "3.53.2",
+      "unused_bytes": 118281,
+      "wal_bytes_after_checkpoint": 0,
+      "wal_bytes_before_checkpoint": 927032
+    }
+  ],
+  "retained_inputs": {
+    "base_zip_sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+    "gbbq_zip_sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+    "hsjday_zip_sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892"
+  },
+  "runtime": {
+    "process": {
+      "peak_rss_kib": 568500,
+      "system_cpu_seconds": 1.583979,
+      "user_cpu_seconds": 37.253374
+    },
+    "wall_seconds": 38.882896228
+  },
+  "schema": "x-data-mcp.issue-259-s0-physical-prototype.v1",
+  "symbol_bars": {
+    "sh.600004": 5630,
+    "sh.600006": 6467,
+    "sz.000002": 8479
+  },
+  "symbols": [
+    "sz.000002",
+    "sh.600006",
+    "sh.600004"
+  ],
+  "target_bytes_per_bar": 56
+}

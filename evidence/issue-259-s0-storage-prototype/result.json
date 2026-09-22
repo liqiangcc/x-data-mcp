@@ -1,0 +1,44 @@
+{
+  "schema": "x-data-mcp.issue-259-s0-result.v1",
+  "base_commit": "fc0091948fe4c34489217ce25ca7527a5c9153b5",
+  "working_tree_has_s0_changes": true,
+  "environment": {
+    "host": "Box",
+    "architecture": "x86_64",
+    "logical_cpus": 8,
+    "cpu_model": "Intel(R) Xeon(R) Processor",
+    "memory_kib": 16397616,
+    "filesystem": "/dev/shm tmpfs",
+    "rustc": "1.98.1",
+    "sqlite": "3.53.2",
+    "profile": "test"
+  },
+  "source": {
+    "snapshot": "retained-gen-2",
+    "generation_id": null,
+    "generation_id_reason": "S0 opens pinned retained files directly and does not install them into a generation store."
+  },
+  "s0_decision": "PASS_TO_S1",
+  "no_change_regression": {
+    "status": "EXPECTED_FAIL_SCHEMA18",
+    "bars": 8479,
+    "payload_json_bytes_added": 1129885,
+    "evidence": "no-change-regression.json"
+  },
+  "physical_prototype": {
+    "status": "PASS",
+    "bars": 20576,
+    "best_segment_size": 512,
+    "best_object_bytes_per_bar": 43.59564541213064,
+    "target_bytes_per_bar": 56,
+    "hard_bytes_per_bar": 61,
+    "sqlite_varint_observation": "Integer varint effects are included in dbstat payload/unused bytes and the measured object bytes per bar.",
+    "evidence": "physical-prototype.json"
+  },
+  "limitations": [
+    "Representative retained corpus contains three securities, not the full market.",
+    "Measurement uses Rust test profile on Box tmpfs, not ECS release timing.",
+    "Source indexing, GBBQ decode, QFQ, SQLite write and checkpoint timings are not separated in S0; physical-prototype.json records aggregate wall/CPU/peak-RSS and per-layout DB/WAL bytes.",
+    "PASS_TO_S1 permits codec and storage implementation only; it does not pass full-market capacity or production readiness."
+  ]
+}

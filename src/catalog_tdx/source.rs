@@ -25,7 +25,6 @@ use super::{compose, ex_code, incon, scope, tdxhy};
 use crate::{
     snapshot::{self, FileRole},
     sqlite_catalog::SqliteCatalog,
-    sqlite_market::SqliteMarket,
     task_control::{Executor, ItemOutcome, ItemSpec},
 };
 
@@ -56,14 +55,10 @@ impl TdxCatalogExecutor {
 
     /// Install only when both configuration variables are present; absent
     /// configuration leaves the catalog item on the blocked-source path.
-    pub fn from_env(market: &SqliteMarket) -> Option<Self> {
+    pub fn from_env(tasks: &crate::sqlite_tasks::SqliteTasks) -> Option<Self> {
         let manifest = std::env::var_os("X_DATA_MCP_OFFICIAL_MANIFEST")?;
         let root = std::env::var_os("X_DATA_MCP_OFFICIAL_DIR")?;
-        Some(Self::new(
-            SqliteCatalog::new(market.tasks.clone()),
-            manifest,
-            root,
-        ))
+        Some(Self::new(SqliteCatalog::new(tasks.clone()), manifest, root))
     }
 
     fn member(zip: &mut zip::ZipArchive<File>, name: &str) -> Result<Vec<u8>, String> {

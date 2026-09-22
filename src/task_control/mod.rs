@@ -29,8 +29,22 @@ pub struct ItemSpec {
 pub struct FrozenWork {
     pub items: Vec<ItemSpec>,
     pub scopes: BTreeSet<String>,
+    /// Evidence shared verbatim by every item of this task, persisted once
+    /// inside `frozen_work_json` rather than copied into each item's frozen
+    /// inputs. Items carry only `{"evidence_digest": ...}` markers whose
+    /// digest must equal this object's own `evidence_digest` field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_evidence: Option<Value>,
 }
 impl FrozenWork {
+    /// The digest item evidence markers must equal: the shared evidence's
+    /// own `evidence_digest` field, when this task carries one.
+    pub fn evidence_digest(&self) -> Option<&str> {
+        self.shared_evidence
+            .as_ref()?
+            .get("evidence_digest")?
+            .as_str()
+    }
     pub fn validate(&self) -> Result<(), Error> {
         let mut ids = BTreeSet::new();
         if self.items.is_empty() || self.scopes.is_empty() {
@@ -58,6 +72,20 @@ impl FrozenWork {
         }
         if self.scopes.iter().any(|s| s.trim().is_empty()) {
             return Err(Error::InvalidCommand("empty scope".into()));
+        }
+        let digest = self.evidence_digest();
+        for item in &self.items {
+            if let Some(marker) = item
+                .frozen_inputs
+                .get("selection_evidence")
+                .and_then(|v| v.get("evidence_digest"))
+                .and_then(Value::as_str)
+                && digest != Some(marker)
+            {
+                return Err(Error::InvalidCommand(
+                    "item evidence marker mismatches shared evidence".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -177,6 +205,10 @@ pub struct TaskHead {
     pub last_progress_at: DateTime<Utc>,
     pub result: Option<Value>,
     pub counts: ItemCounts,
+    /// Digest of the task's shared evidence (schema 18+); per-item
+    /// `selection_evidence` markers must equal it. `None` for tasks that
+    /// carry no shared evidence.
+    pub evidence_digest: Option<String>,
 }
 impl TaskHead {
     pub fn visible_status(&self, run: &str) -> Status {
@@ -708,6 +740,7 @@ mod tests {
                 work: FrozenWork {
                     items: vec![],
                     scopes: BTreeSet::new(),
+                    shared_evidence: None,
                 },
                 result: None,
                 retry_of: None,
@@ -726,6 +759,7 @@ mod tests {
             owner_run_id: s.task.owner_run_id.clone(),
             last_progress_at: s.task.last_progress_at,
             result: s.task.result.clone(),
+            evidence_digest: s.task.work.evidence_digest().map(str::to_string),
             counts: ItemCounts {
                 total: s.items.len() as u64,
                 pending: s.items.iter().filter(|i| i.stage == Stage::Pending).count() as u64,

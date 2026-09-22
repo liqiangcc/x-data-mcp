@@ -3,7 +3,6 @@ use crate::{
     data_supply::generation::{BoundSource, GenerationSource, uniform_binding},
     market_storage::Error,
     market_update::runner::{OfficialRangeProvider, RangeProvider, RangeRunner},
-    sqlite_market::SqliteMarket,
     sqlite_tasks::SqliteTasks,
     task_control::{TaskRepository, TaskSnapshot, service::TaskControl},
 };
@@ -20,7 +19,7 @@ fn source_session(generation: &GenerationSource, candidate: &TaskSnapshot) -> Op
 }
 pub fn run_once(
     control: &TaskControl<SqliteTasks>,
-    market: &SqliteMarket,
+    market: &crate::sqlite_market::backend::MarketBackend,
     market_source: Option<&crate::official_market::TdxMarketSource>,
     generation_source: Option<&GenerationSource>,
 ) -> Result<Option<TaskSnapshot>, Error> {
@@ -43,7 +42,9 @@ pub fn run_once(
         Some(_) => bound.as_ref().map(|b| &b.source),
         None => market_source,
     };
-    let catalog_executor = bound.as_ref().map(|bound| bound.catalog_executor(market));
+    let catalog_executor = bound
+        .as_ref()
+        .map(|bound| bound.catalog_executor(&market.tasks()));
     if candidate.task.key.dataset == crate::task_verification::DATASET {
         run_verification(control, market, &candidate)?;
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
@@ -81,7 +82,7 @@ pub fn run_once(
         let executor = match catalog_executor {
             Some(executor) => Some(executor),
             None if generation_source.is_none() => {
-                crate::catalog_tdx::source::TdxCatalogExecutor::from_env(market)
+                crate::catalog_tdx::source::TdxCatalogExecutor::from_env(&market.tasks())
             }
             None => None,
         };
@@ -113,8 +114,26 @@ pub fn run_once(
                 run_id: control.run_id.clone(),
                 published_at: chrono::Utc::now(),
             };
-            for item in &candidate.items {
-                runner.run_item(&candidate.task.task_id, &item.spec.item_id)?;
+            // S5F bulk path: on compact backends all items stage+commit in
+            // one write transaction; generation mode binds the resolved
+            // generation, env mode binds the manifest digest as the
+            // generation identity of the installed snapshot.
+            let generation_id = bound
+                .as_ref()
+                .map(|bound| bound.generation_id.as_str())
+                .unwrap_or_else(|| source.manifest_sha256());
+            let item_ids: Vec<String> = candidate
+                .items
+                .iter()
+                .map(|item| item.spec.item_id.clone())
+                .collect();
+            if runner
+                .run_items(&candidate.task.task_id, &item_ids, generation_id)?
+                .is_none()
+            {
+                for item in &candidate.items {
+                    runner.run_item(&candidate.task.task_id, &item.spec.item_id)?;
+                }
             }
             return Ok(Some(control.read_task(&candidate.task.task_id)?));
         }
@@ -126,12 +145,19 @@ pub fn run_once(
             run_id: control.run_id.clone(),
             derived_at: chrono::Utc::now(),
         };
+        let env = crate::yearly_publication::runner::OfficialYearlyVerifier;
+        let generation = crate::yearly_publication::runner::BoundYearlyVerifier {
+            bound: bound.as_ref(),
+        };
+        // Generation mode verifies derivation against the task's bound
+        // generation session; a missing binding keeps the source refusal.
+        let verifier: &dyn crate::yearly_publication::runner::YearlyVerifier =
+            match generation_source {
+                Some(_) => &generation,
+                None => &env,
+            };
         for item in &candidate.items {
-            runner.run_item(
-                &candidate.task.task_id,
-                &item.spec.item_id,
-                &crate::yearly_publication::runner::OfficialYearlyVerifier,
-            )?;
+            runner.run_item(&candidate.task.task_id, &item.spec.item_id, verifier)?;
         }
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
     }
@@ -139,41 +165,67 @@ pub fn run_once(
         repository: market.clone(),
         run_id: control.run_id.clone(),
     };
-    let update = market_source.map(|source| crate::official_market::TdxRangeProvider { source });
-    let backfill = market_source.map(|source| crate::official_market::TdxBackfillProvider {
-        source,
-        published_at: chrono::Utc::now(),
-    });
-    let republish = market_source.map(|source| crate::official_market::TdxRepublishProvider {
-        source,
-        published_at: chrono::Utc::now(),
-    });
-    for item in &candidate.items {
-        // `update_data` refresh uses the range provider; `backfill_data`
-        // gains a source path only under the default frozen-gap contract;
-        // `republish_data` gains one only under the explicit republish
-        // contract (#247) — everything else keeps the blocked provider.
-        let provider: &dyn RangeProvider = match (
-            candidate.task.key.operation.as_str(),
-            candidate.task.key.contract_version.as_str(),
-            update.as_ref(),
-            backfill.as_ref(),
-            republish.as_ref(),
-        ) {
-            ("update_data", _, Some(provider), _, _) => provider,
-            ("backfill_data", contract, _, Some(provider), _)
-                if contract == crate::market_update::tasks::DEFAULT_CONTRACT_VERSION =>
-            {
-                provider
-            }
-            ("republish_data", contract, _, _, Some(provider))
-                if contract == crate::market_update::tasks::REPUBLISH_CONTRACT_VERSION =>
-            {
-                provider
-            }
-            _ => &OfficialRangeProvider,
-        };
-        runner.run_item(&candidate.task.task_id, &item.spec.item_id, provider)?;
+    // One materialization session per worker turn: the archive central
+    // directory is indexed once and the gbbq member decoded once, shared by
+    // every item's provider instead of re-decoded per symbol.
+    let session = market_source.map(|source| source.materialize_session());
+    let update = session
+        .as_ref()
+        .map(|session| crate::official_market::TdxRangeProvider {
+            session,
+            published_at: chrono::Utc::now(),
+        });
+    let backfill = session
+        .as_ref()
+        .map(|session| crate::official_market::TdxBackfillProvider {
+            session,
+            published_at: chrono::Utc::now(),
+        });
+    let republish = session
+        .as_ref()
+        .map(|session| crate::official_market::TdxRepublishProvider {
+            session,
+            published_at: chrono::Utc::now(),
+        });
+    // `update_data` refresh uses the range provider; `backfill_data`
+    // gains a source path only under the default frozen-gap contract;
+    // `republish_data` gains one only under the explicit republish
+    // contract (#247) — everything else keeps the blocked provider.
+    let provider: &dyn RangeProvider = match (
+        candidate.task.key.operation.as_str(),
+        candidate.task.key.contract_version.as_str(),
+        update.as_ref(),
+        backfill.as_ref(),
+        republish.as_ref(),
+    ) {
+        ("update_data", _, Some(provider), _, _) => provider,
+        ("backfill_data", contract, _, Some(provider), _)
+            if contract == crate::market_update::tasks::DEFAULT_CONTRACT_VERSION =>
+        {
+            provider
+        }
+        ("republish_data", contract, _, _, Some(provider))
+            if contract == crate::market_update::tasks::REPUBLISH_CONTRACT_VERSION =>
+        {
+            provider
+        }
+        _ => &OfficialRangeProvider,
+    };
+    // S5G-6 bulk path: on compact backends the task's prepared items
+    // commit in one write transaction; `None` or any unprepared item
+    // keeps the per-item loop.
+    let item_ids: Vec<String> = candidate
+        .items
+        .iter()
+        .map(|item| item.spec.item_id.clone())
+        .collect();
+    if runner
+        .run_items(&candidate.task.task_id, &item_ids, provider)?
+        .is_none()
+    {
+        for item in &candidate.items {
+            runner.run_item(&candidate.task.task_id, &item.spec.item_id, provider)?;
+        }
     }
     Ok(Some(control.read_task(&candidate.task.task_id)?))
 }
@@ -181,7 +233,7 @@ pub fn run_once(
 #[cfg(target_os = "linux")]
 fn run_verification(
     control: &TaskControl<SqliteTasks>,
-    market: &SqliteMarket,
+    market: &crate::sqlite_market::backend::MarketBackend,
     candidate: &TaskSnapshot,
 ) -> Result<(), Error> {
     if !crate::verification_execution::supported(&candidate.task.key) {

@@ -191,10 +191,19 @@ fn compact_envelope_preserves_exact_decimal_text_and_digest() {
     let env: Value = serde_json::from_str(&env).unwrap();
     assert_eq!(env["records"], serde_json::json!({"$ref":"segments"}));
     assert_eq!(env["batch"]["bars"], serde_json::json!({"$ref":"records"}));
+    // Shared evidence blocks are stored once in `payloads` and referenced.
+    for key in ["unit_currency", "coverage", "adjustment_evidence"] {
+        assert!(
+            env["batch"][key]["$ref"]
+                .as_str()
+                .is_some_and(|r| r.starts_with("payload:")),
+            "batch.{key} must be a shared-evidence ref"
+        );
+    }
     let payloads: i64 = c
         .query_row("SELECT count(*) FROM payloads", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(payloads, 0);
+    assert_eq!(payloads, 3);
 }
 #[test]
 fn numerically_equal_bar_with_different_text_cannot_share_a_segment() {
@@ -320,7 +329,15 @@ fn migrated_sharer_with_different_bar_text_uses_payload_and_fails_closed() {
         db.candidate("legacy-daily-b").unwrap().raw()["records"][0]["open"],
         serde_json::json!("10.0000000000000000010")
     );
-    c.execute("DELETE FROM payloads", []).unwrap();
+    // Removing only the migrated sharer's records payload fails it closed
+    // while segment-backed `legacy-daily` keeps reading (its own shared
+    // evidence payloads remain present).
+    let ref_id = env["records"]["$ref"].as_str().unwrap().to_string();
+    c.execute(
+        "DELETE FROM payloads WHERE payload_id=?1",
+        [ref_id.strip_prefix("payload:").unwrap()],
+    )
+    .unwrap();
     assert!(matches!(
         db.candidate("legacy-daily-b"),
         Err(Error::Integrity(_))
@@ -624,6 +641,7 @@ fn manifest_rebuilds_from_v16_flat_clips_and_migrates_idempotently() {
          DROP TABLE manifest_nodes;
          ALTER TABLE data_versions DROP COLUMN manifest_root;
          ALTER TABLE data_versions DROP COLUMN evidence_digest;
+         ALTER TABLE tasks DROP COLUMN evidence_digest;
          DELETE FROM schema_migrations WHERE version>=17;
          PRAGMA user_version=16;",
     )

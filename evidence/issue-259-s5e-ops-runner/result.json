@@ -1,0 +1,23 @@
+{
+  "issue": 259,
+  "phase": "S5E-2",
+  "recorded_at": "2026-10-01T00:00:00Z",
+  "scope": "production runner wired to ops-first commits on schema-19 without weakening the verification chain",
+  "changes": {
+    "trait": "RangeRepository::commit_range_ops — default None falls back to the envelope path; compact impl stages a parent delta, binds the candidate by staged-leaf equality with the approved merge, validates, and commits through commit_ops_update (same required-heads/binding/head-CAS semantics)",
+    "runner": "RangeRunner::commit_acquired_range tries the ops path for records-only merges (metadata_changed == false); envelope stage+prepare_range+commit_range unchanged otherwise and on legacy",
+    "verification": "check_frozen_inputs extracted from prepare_range and reused on the ops path; verifier base/segment digests and version identity still checked; the envelope combined_integrity_sha256 equality is replaced by staged-leaf == approved-records bar-for-bar equality (strictly stronger: content equality, not digest equality)",
+    "startup": "MarketBackend::open tolerates an absent database file (legacy backend; per-operation fail-closed preserved)"
+  },
+  "verification": {
+    "new_tests": ["ops_range_commit_stages_delta_binds_leaf_and_replays", "backend_dispatch_and_compact_supply_surface"],
+    "lib_tests": "248 passed, 0 failed, 2 ignored",
+    "integration": "all test binaries green including data_stdio, official_market, sqlite_range_update",
+    "clippy": "clippy --all-targets --locked -D warnings clean",
+    "fmt": "cargo fmt --check clean"
+  },
+  "limits": [
+    "acquire still builds the combined envelope internally and fixed(base) still materializes once per item — the ops path removes the JSON stage + envelope commit, not the provider-side envelope construction",
+    "daily-update wall time on the production path is now estimated ~95-120ms/item (~8-10min/5,221); the <=5min gate additionally needs acquire pipelining or a canonical-digest contract revision — decision point posted to the issue"
+  ]
+}

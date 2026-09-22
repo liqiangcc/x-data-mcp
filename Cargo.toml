@@ -1,6 +1,6 @@
 [package]
 name = "x-data-mcp"
-version = "0.2.0-preview.13"
+version = "0.2.0-preview.14"
 edition = "2024"
 
 [dependencies]
@@ -12,7 +12,7 @@ thiserror = "2"
 
 tempfile = "3"
 sha2 = "0.11"
-rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "cache"], default-features = false }
 
 # Stage C: derive discoverable schemas from the same typed wire contracts.
 schemars = { version = "1", features = ["chrono04"] }
@@ -22,6 +22,7 @@ num-bigint = "0.4"
 num-traits = "0.2"
 encoding_rs = "0.8.41"
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
+serde_json_canonicalizer = "=0.3.2"
 
 [dev-dependencies]
 # Validate generated wire schemas against real stdio results; no HTTP schema resolution.

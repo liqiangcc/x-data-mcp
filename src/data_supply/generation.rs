@@ -117,10 +117,10 @@ impl BoundSource {
     /// generation directory — the same immutable bytes the session pins.
     pub fn catalog_executor(
         &self,
-        market: &crate::sqlite_market::SqliteMarket,
+        tasks: &crate::sqlite_tasks::SqliteTasks,
     ) -> crate::catalog_tdx::source::TdxCatalogExecutor {
         crate::catalog_tdx::source::TdxCatalogExecutor::new(
-            crate::sqlite_catalog::SqliteCatalog::new(market.tasks.clone()),
+            crate::sqlite_catalog::SqliteCatalog::new(tasks.clone()),
             self.dir.join(generation::MANIFEST_NAME),
             self.dir.clone(),
         )

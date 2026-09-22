@@ -1,7 +1,9 @@
 //! Daily range-update application decisions (#4). No source or MCP wiring.
 //! Evidence references are trusted application inputs, never user-controlled approval flags.
 use crate::{
-    market_data::{Bar, CoverageStatus, EvidenceValue, MarketDataBatch, Period},
+    market_data::{
+        Bar, CoverageStatus, EvidenceValue, MarketDataBatch, Period, UnitCurrencyEvidence,
+    },
     market_storage::{Error, compat::CheckedRecord},
 };
 pub mod publication;
@@ -31,6 +33,29 @@ pub struct Evidence {
     pub range: DateRange,
     pub same_qfq_basis_ref: String,
     pub revision_ref: Option<String>,
+    /// Recorded continuity proof for generation-bound updates (#262):
+    /// how the bytes read for this acquisition relate to the fixed base's
+    /// pinned snapshot inputs. Audit metadata — the fail-closed value
+    /// checks in `prepare` do not depend on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuity: Option<ContinuityEvidence>,
+}
+/// How the security's snapshot inputs at update time relate to the fixed
+/// base's pinned bindings. `mode`: `unchanged` (member digest and event
+/// digest both identical), `append` (the base's member bytes are an exact
+/// prefix and the event set is unchanged, so only strictly-newer records
+/// were materialized), `full` (no usable digest proof — complete
+/// materialization and value-level verification).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContinuityEvidence {
+    pub mode: String,
+    /// sha256 of the `.day` member bytes actually read for this update.
+    pub day_member_sha256: String,
+    /// Byte length of the prefix proven identical to the base's member;
+    /// equals the whole member for `unchanged`, 0 for `full`.
+    pub day_prefix_bytes: u64,
+    /// Digest of the security's category-1 event set plus excluded count.
+    pub gbbq_events_sha256: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
@@ -62,6 +87,62 @@ pub struct PreparedRange {
     pub same_qfq_basis_ref: String,
     pub revision_ref: Option<String>,
 }
+/// Typed base-version facts for the ops-first update path (#259 S5G):
+/// everything acquire/prepare needs about the base — bindings, coverage,
+/// units, integrity digest, record bounds — without materializing bars.
+/// `day_member_sha256`/`security_event_sha256` are the source bindings the
+/// base was published from; `integrity_sha256` is the published integrity
+/// digest in the same hex form the envelope `raw()["integrity_sha256"]`
+/// carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateBaseFacts {
+    pub version_id: String,
+    pub symbol: String,
+    pub record_count: u32,
+    pub first_day: NaiveDate,
+    pub last_day: NaiveDate,
+    pub integrity_sha256: String,
+    pub coverage: crate::market_data::CoverageEvidence,
+    pub unit_currency: crate::market_data::UnitCurrencyEvidence,
+    pub source: String,
+    pub generation_id: String,
+    pub generation_manifest_sha256: String,
+    pub day_member_sha256: String,
+    pub security_event_sha256: String,
+}
+/// One prepared item for `RangeRepository::commit_update_batch`
+/// (#259 S5G-6): acquisition and continuity probing already ran outside
+/// the transaction, so the batch writer only replays, transitions, stages
+/// and commits.
+#[derive(Debug)]
+pub struct UpdateBatchItem {
+    pub task_id: String,
+    pub item_id: String,
+    pub publication_id: String,
+    pub run_id: String,
+    pub symbol: String,
+    pub occupancy_key: String,
+    pub prepared: UpdateBatchPrepared,
+}
+#[derive(Debug)]
+pub enum UpdateBatchPrepared {
+    /// Continuity-proven unchanged member: reuse the base version, the
+    /// published head stays put.
+    NoChange {
+        base_version_id: String,
+        range_start_day: i64,
+        range_end_day: i64,
+        continuity: serde_json::Value,
+    },
+    /// Continuity-proven append: stage `upserts` as a delta on the base
+    /// version, then commit.
+    Append {
+        base_version_id: String,
+        result_version_id: String,
+        upserts: Vec<crate::market_data::Bar>,
+        continuity: serde_json::Value,
+    },
+}
 pub fn candidate_digest(batch: &MarketDataBatch) -> Result<String, Error> {
     serde_json::to_vec(batch)
         .map(|b| crate::hash::sha256(&b))
@@ -69,6 +150,22 @@ pub fn candidate_digest(batch: &MarketDataBatch) -> Result<String, Error> {
 }
 fn conflicting_units(a: &EvidenceValue, b: &EvidenceValue) -> bool {
     a.is_confirmed() && b.is_confirmed() && a.value != b.value
+}
+/// Unit drift the typed update path cannot carry (#259 S5G): mirrors the
+/// two `prepare` gates — a confirmed-value conflict decides
+/// NeedsVerification and an unconfirmed→confirmed enrichment is a
+/// metadata change. Reason-text differences alone are not drift: the
+/// envelope path ignores them for the same reason.
+pub(crate) fn unit_drift(base: &UnitCurrencyEvidence, new: &UnitCurrencyEvidence) -> bool {
+    [
+        (&base.price_currency, &new.price_currency),
+        (&base.price_unit, &new.price_unit),
+        (&base.volume_unit, &new.volume_unit),
+        (&base.amount_currency, &new.amount_currency),
+        (&base.amount_unit, &new.amount_unit),
+    ]
+    .into_iter()
+    .any(|(a, b)| conflicting_units(a, b) || (!a.is_confirmed() && b.is_confirmed()))
 }
 pub fn prepare(
     existing: &CheckedRecord,

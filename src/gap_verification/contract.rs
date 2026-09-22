@@ -125,6 +125,7 @@ impl<S: GapDecisionStore> Contract for GapVerificationContract<S> {
         Ok(FrozenWork {
             scopes: BTreeSet::from([scope]),
             items: vec![item],
+            shared_evidence: None,
         })
     }
 }

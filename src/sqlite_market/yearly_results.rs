@@ -53,6 +53,9 @@ impl YearlyRepository for SqliteMarket {
     }
 }
 pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Receipt)>, Error> {
+    if super::is_compact_schema(c)? {
+        return super::compact_results::read_yearly_audit(c, id);
+    }
     let mut stmt=c.prepare("SELECT task_id,item_id,base_daily_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM yearly_execution_results WHERE result_id=?1").map_err(storage)?;
     let mut rows = stmt.query([id]).map_err(storage)?;
     let Some(row) = rows.next().map_err(storage)? else {
@@ -143,6 +146,11 @@ pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Rec
         } else {
             serde_json::json!({"version_id":audit["prior_version_id"],"integrity_sha256":audit["prior_integrity_sha256"]})
         };
+        // Generation mode stamps `source_generation_id` at accept; legacy
+        // tasks leave the key absent, so carry it through only when present.
+        if let Some(stamped) = binding.item.spec.frozen_inputs.get("source_generation_id") {
+            expected["source_generation_id"] = stamped.clone();
+        }
         if binding.head.key.contract_version != crate::yearly_publication::tasks::CONTRACT_VERSION
             || binding.head.key.dataset != "market.yearly"
             || binding.item.spec.frozen_inputs != expected

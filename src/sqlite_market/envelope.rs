@@ -3,6 +3,12 @@
 //! point at shared `manifest_nodes` segment clips or content-addressed `payloads`
 //! rows. Expansion restores the exact record; `compat::check` then re-verifies
 //! the legacy digest, so a broken reference fails closed.
+//!
+//! This is an intermediate schema-18 representation, not #259 P0-A/P0-B
+//! completion: `digest_format` remains `legacy-published-record-v1`, reads
+//! reconstruct the full compatibility record, and audit `pack_batch` still
+//! persists its `bars` array as a payload. The target compact digest and
+//! manifest/segment-only audit must not be inferred from the word "Compact".
 use super::*;
 use serde_json::Value;
 const REF: &str = "$ref";
@@ -34,6 +40,41 @@ pub(crate) fn array_payload(v: &Value) -> Result<Payload, Error> {
         json,
     })
 }
+/// A content-addressed payload for any JSON value (shared evidence blocks).
+fn value_payload(v: &Value) -> Result<Payload, Error> {
+    let json = text(v)?;
+    Ok(Payload {
+        id: crate::hash::sha256(json.as_bytes()),
+        json,
+    })
+}
+/// Generation-common evidence inside a serialized `MarketDataBatch`:
+/// unit/currency, coverage and adjustment evidence are identical for every
+/// item resolved from one snapshot, so each block is stored once in
+/// `payloads` and replaced by a content-addressed `$ref` (#259 P0-D).
+fn pack_shared(batch: &mut Value, out: &mut Vec<Payload>) -> Result<(), Error> {
+    for key in ["unit_currency", "coverage", "adjustment_evidence"] {
+        let v = &batch[key];
+        if v.is_null() || v.get(REF).is_some() {
+            continue;
+        }
+        let p = value_payload(v)?;
+        batch[key] = ref_payload(&p.id);
+        out.push(p);
+    }
+    Ok(())
+}
+/// Inflate a `$ref` marker back to its payload content; non-refs (legacy
+/// inline evidence) pass through unchanged.
+fn inflate_ref(c: &Connection, v: &Value) -> Result<Value, Error> {
+    if let Some(r) = v.get(REF).and_then(Value::as_str) {
+        let Some(id) = r.strip_prefix("payload:") else {
+            return Err(integrity("unexpected shared-evidence reference"));
+        };
+        return fetch_payload(c, id);
+    }
+    Ok(v.clone())
+}
 /// Daily pack: `records` is served from the manifest (`marker` selects
 /// segment- vs payload-backed reconstruction for migrated rows whose bars
 /// cannot be reproduced exactly from shared segments).
@@ -50,6 +91,7 @@ pub(crate) fn pack_daily(raw: &Value, marker: Value) -> Result<(Value, Vec<Paylo
         out.push(p);
         ref_payload(&id)
     };
+    pack_shared(&mut env["batch"], &mut out)?;
     Ok((env, out))
 }
 /// Yearly pack: the `annual.records` derivation array is canonical when the
@@ -102,6 +144,7 @@ fn pack_yearly(raw: &Value) -> Result<(Value, Vec<Payload>), Error> {
         out.push(p);
         ref_payload(&id)
     };
+    pack_shared(&mut env["batch"], &mut out)?;
     Ok((env, out))
 }
 /// Strip bulk arrays from a version/audit record into `payloads` rows.
@@ -119,7 +162,9 @@ pub(crate) fn pack_batch(batch: &Value) -> Result<(Value, Vec<Payload>), Error> 
     let mut out = batch.clone();
     let p = array_payload(&batch["bars"])?;
     out["bars"] = ref_payload(&p.id);
-    Ok((out, vec![p]))
+    let mut payloads = vec![p];
+    pack_shared(&mut out, &mut payloads)?;
+    Ok((out, payloads))
 }
 pub(crate) fn write_payloads(c: &Connection, payloads: &[Payload]) -> Result<(), Error> {
     let mut stmt = c
@@ -212,6 +257,11 @@ pub(crate) fn expand(
     raw["records"] = records.clone();
     if raw.pointer("/batch/bars").is_some() {
         raw["batch"]["bars"] = resolve(c, version_id, &raw["batch"]["bars"], Some(&records))?;
+    }
+    for key in ["unit_currency", "coverage", "adjustment_evidence"] {
+        if let Some(slot) = raw.pointer_mut(&format!("/batch/{key}")) {
+            *slot = inflate_ref(c, slot)?;
+        }
     }
     if let Some(v) = raw
         .pointer("/local_yearly_derivation_v1/annual/records")

@@ -245,14 +245,21 @@ fn materializes_qfq_daily_with_snapshot_bound_provenance() {
     assert!(batch.adjustment_evidence.is_confirmed());
     assert_eq!(batch.adjustment_evidence.value.as_deref(), Some("qfq"));
     let inputs = batch.provenance.snapshot_inputs.as_ref().unwrap();
-    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs.len(), 3);
     let manifest: Value = serde_json::from_slice(&snap.manifest).unwrap();
     for input in inputs {
+        // The per-security event binding digests decoded records, not a
+        // manifest file — its archive binding is the gbbq file's.
+        let role_name = if input.role == "gbbq-security-events" {
+            "gbbq"
+        } else {
+            input.role.as_str()
+        };
         let role = manifest["files"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|f| f["role"].as_str() == Some(&input.role))
+            .find(|f| f["role"].as_str() == Some(role_name))
             .unwrap();
         assert_eq!(input.archive_sha256, role["sha256"].as_str().unwrap());
         assert_eq!(input.member_sha256.len(), 64);
@@ -390,7 +397,7 @@ struct Rig {
 
 fn accept_daily(market: &SqliteMarket, run: &str, exchange: &str, code: &str) -> Rig {
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -476,7 +483,7 @@ fn runner_publishes_daily_through_governed_path() {
     let inputs = stored.raw()["batch"]["provenance"]["snapshot_inputs"]
         .as_array()
         .unwrap();
-    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs.len(), 3);
     // Replay is idempotent: the committed receipt is returned, never re-run.
     let again = runner.run_item(&r.task_id, &r.item_id).unwrap();
     assert!(matches!(
@@ -490,7 +497,7 @@ fn worker_dispatch_routes_daily_collection_to_installed_source() {
     let dir = tempfile::tempdir().unwrap();
     let market = opened(&dir);
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -514,9 +521,14 @@ fn worker_dispatch_routes_daily_collection_to_installed_source() {
         .unwrap();
     let snap = valid_snapshot();
     let src = make_source(&snap);
-    let done = x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src), None)
-        .unwrap()
-        .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        Some(&src),
+        None,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded);
     assert!(
         market
@@ -591,7 +603,7 @@ fn non_daily_collection_items_remain_blocked() {
     tasks.initialize().unwrap();
     let market = SqliteMarket::new(tasks.clone());
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         tasks,
@@ -622,7 +634,13 @@ fn non_daily_collection_items_remain_blocked() {
     };
     let snap = valid_snapshot();
     let src = make_source(&snap);
-    x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src), None).unwrap();
+    x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        Some(&src),
+        None,
+    )
+    .unwrap();
     let task = market.task(&cat_task.task.task_id).unwrap();
     assert!(
         task.items[0]
@@ -645,7 +663,13 @@ fn non_daily_collection_items_remain_blocked() {
     let RequestOutcome::Task(l_task) = legacy.record.outcome else {
         panic!()
     };
-    x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src), None).unwrap();
+    x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        Some(&src),
+        None,
+    )
+    .unwrap();
     let task = market.task(&l_task.task.task_id).unwrap();
     assert!(
         task.items[0]
@@ -800,7 +824,7 @@ fn retained_gen2_snapshot_reproduces_frozen_oracle_end_to_end() {
     let inputs = record.raw()["batch"]["provenance"]["snapshot_inputs"]
         .as_array()
         .unwrap();
-    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs.len(), 3);
     assert!(inputs.iter().all(|i| {
         i["archive_sha256"].as_str().unwrap().len() == 64
             && i["member_sha256"].as_str().unwrap().len() == 64
@@ -1175,7 +1199,11 @@ fn range_provider_delivers_segment_with_snapshot_basis() {
         panic!("expected publication")
     };
     let base = market.fixed(&receipt.version_id).unwrap();
-    let provider = x_data_mcp::official_market::TdxRangeProvider { source: &src };
+    let provider_session = src.materialize_session();
+    let provider = x_data_mcp::official_market::TdxRangeProvider {
+        session: &provider_session,
+        published_at: now(),
+    };
 
     let range = x_data_mcp::market_update::DateRange {
         start: chrono::NaiveDate::from_ymd_opt(2025, 7, 16).unwrap(),
@@ -1218,6 +1246,421 @@ fn range_provider_delivers_segment_with_snapshot_basis() {
         ),
         Err(SourceError::InvalidResponse(_))
     ));
+}
+
+// ---------------------------------------------------------------------------
+// #262 D2: generation-bound incremental update — digest-proven continuity
+// classifies unchanged/append without re-materializing the prefix, and any
+// unverifiable change fails closed without moving the head.
+// ---------------------------------------------------------------------------
+
+/// Publish the `valid_snapshot` fixture as the fixed base and return it.
+fn publish_base(market: &SqliteMarket, snap: &Snapshot) -> compat::CheckedRecord {
+    let src = make_source(snap);
+    let r = accept_daily(market, "run-a", "sh", "600006");
+    let runner = TdxDailyRunner {
+        source: &src,
+        session: None,
+        repository: market.clone(),
+        run_id: "run-a".into(),
+        published_at: now(),
+    };
+    let ItemExecution::Published(receipt) = runner.run_item(&r.task_id, &r.item_id).unwrap() else {
+        panic!("expected publication")
+    };
+    market.fixed(&receipt.version_id).unwrap()
+}
+
+fn update_provider<'a>(
+    session: &'a x_data_mcp::official_market::MaterializeSession<'a>,
+) -> x_data_mcp::official_market::TdxRangeProvider<'a> {
+    x_data_mcp::official_market::TdxRangeProvider {
+        session,
+        published_at: now(),
+    }
+}
+
+fn whole_range() -> x_data_mcp::market_update::DateRange {
+    x_data_mcp::market_update::DateRange {
+        start: NaiveDate::from_ymd_opt(2025, 7, 15).unwrap(),
+        end: NaiveDate::from_ymd_opt(2025, 7, 20).unwrap(),
+    }
+}
+
+fn acquire(
+    provider: &x_data_mcp::official_market::TdxRangeProvider<'_>,
+    base: &compat::CheckedRecord,
+) -> x_data_mcp::market_update::runner::Acquisition {
+    x_data_mcp::market_update::runner::RangeProvider::acquire(
+        provider,
+        base,
+        &whole_range(),
+        "cand-2",
+    )
+    .unwrap()
+}
+
+#[test]
+fn update_continuity_unchanged_reuses_base_bars() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    let cont = acquired.evidence.continuity.as_ref().unwrap();
+    assert_eq!(cont.mode, "unchanged");
+    // The whole 96-byte member is the proven prefix.
+    assert_eq!(cont.day_prefix_bytes, 96);
+    assert!(acquired.combined.is_none());
+    // The segment is byte-identical to what full materialization yields.
+    let full = src.materialize_daily("sh.600006").unwrap();
+    assert_eq!(acquired.batch.bars, full.bars);
+    assert_eq!(
+        acquired.batch.provenance.snapshot_inputs,
+        full.provenance.snapshot_inputs
+    );
+    // prepare reaches NoChange: no merged records, no metadata delta.
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NoChange { .. }
+    ));
+}
+
+#[test]
+fn update_continuity_append_materializes_only_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // Generation 2: identical member bytes plus one appended record.
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    let cont = acquired.evidence.continuity.as_ref().unwrap();
+    assert_eq!(cont.mode, "append");
+    assert_eq!(cont.day_prefix_bytes, 96);
+    // The segment carries the full range: proven prefix + adjusted tail.
+    assert_eq!(acquired.batch.bars.len(), 4);
+    assert_eq!(acquired.batch.bars[3].close, dec("11.39"));
+    assert_eq!(acquired.batch.bars[0].close, dec("7.53"));
+    // The combined candidate is the merged record ready to publish.
+    let combined = acquired.combined.as_ref().unwrap();
+    let records = combined.record["records"].as_array().unwrap();
+    assert_eq!(records.len(), 4);
+    assert_eq!(combined.record["version_id"], json!("cand-2"));
+    // prepare approves the segment as a Candidate over the same basis.
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::Candidate(_)
+    ));
+}
+
+#[test]
+fn update_continuity_ignores_other_securities_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // gbbq grows with an event for a different security — this symbol's
+    // event set is untouched, so continuity still proves unchanged.
+    let events = gbbq_member(&[
+        gbbq_record(1, "600006", 20250716, 1, [0.0, 0.0, 0.0, 5.0]),
+        gbbq_record(1, "600007", 20250718, 1, [0.0, 0.0, 0.0, 2.0]),
+    ]);
+    regbbq(&mut snap, &[("gbbq", events.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    assert_eq!(
+        acquired.evidence.continuity.as_ref().unwrap().mode,
+        "unchanged"
+    );
+    assert!(acquired.combined.is_none());
+    // The pinned member digest is content-stable across generations, so
+    // the proven-unchanged batch still lands on NoChange even though the
+    // new snapshot's manifest digest differs.
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NoChange { .. }
+    ));
+}
+
+#[test]
+fn update_continuity_append_narrow_range_stays_no_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // The member appended a record, but the accepted range only covers
+    // base dates — the merge is a provable no-change, so the acquisition
+    // must not carry a combined candidate (NoChange forbids one).
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let narrow = x_data_mcp::market_update::DateRange {
+        start: NaiveDate::from_ymd_opt(2025, 7, 16).unwrap(),
+        end: NaiveDate::from_ymd_opt(2025, 7, 16).unwrap(),
+    };
+    let acquired = x_data_mcp::market_update::runner::RangeProvider::acquire(
+        &update_provider(&session),
+        &base,
+        &narrow,
+        "cand-narrow",
+    )
+    .unwrap();
+    assert_eq!(
+        acquired.evidence.continuity.as_ref().unwrap().mode,
+        "append"
+    );
+    assert_eq!(acquired.batch.bars.len(), 1);
+    assert!(acquired.combined.is_none());
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &narrow,
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NoChange { .. }
+    ));
+}
+
+#[test]
+fn update_continuity_historical_revision_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // Rewrite a historical record in place: same length, changed volume —
+    // a structurally valid bar whose known value differs from the base.
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 999),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    // No prefix proof — the full path still materializes, and `prepare`
+    // sees the revised known value without a revision authorization.
+    assert_eq!(acquired.evidence.continuity.as_ref().unwrap().mode, "full");
+    assert!(acquired.combined.is_none());
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NeedsVerification(
+            x_data_mcp::market_update::Reason::RevisionUnverified(_)
+        )
+    ));
+}
+
+#[test]
+fn update_continuity_shrunk_member_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // Truncate the member: the last published record disappears.
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    assert_eq!(acquired.evidence.continuity.as_ref().unwrap().mode, "full");
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NeedsVerification(
+            x_data_mcp::market_update::Reason::MissingOldDates(_)
+        )
+    ));
+}
+
+#[test]
+fn update_continuity_event_change_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    // A new event for THIS security reprices stored history — the event
+    // digest changes, continuity is unproven, and the value delta fails
+    // closed without a revision authorization.
+    let events = gbbq_member(&[
+        gbbq_record(1, "600006", 20250716, 1, [0.0, 0.0, 0.0, 5.0]),
+        gbbq_record(1, "600006", 20250719, 1, [0.0, 0.0, 0.0, 3.0]),
+    ]);
+    regbbq(&mut snap, &[("gbbq", events.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let acquired = acquire(&update_provider(&session), &base);
+    assert_eq!(acquired.evidence.continuity.as_ref().unwrap().mode, "full");
+    assert!(acquired.combined.is_none());
+    let decision = x_data_mcp::market_update::prepare(
+        &base,
+        &acquired.batch,
+        &whole_range(),
+        Some(&acquired.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        decision,
+        x_data_mcp::market_update::Decision::NeedsVerification(
+            x_data_mcp::market_update::Reason::RevisionUnverified(_)
+        )
+    ));
+}
+
+#[test]
+fn service_env_install_update_data_append_commits_tail() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    let head = base.version().version_id.clone();
+    // Generation 2: one appended record.
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let manifest_path = dir.path().join("snapshot-manifest.json");
+    std::fs::write(&manifest_path, &snap.manifest).unwrap();
+    let _env = EnvReset::install(&manifest_path, &snap.root);
+
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let api = DataApi::new(tasks.clone(), "run-env".into(), Access::local()).unwrap();
+    let upd = api
+        .call(
+            "update_data",
+            json!({"dataset":"market.daily","request_id":"u-app","contract_version":"v1",
+                   "items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":head,
+                             "start_date":"2025-07-15","end_date":"2025-07-20"}]}),
+        )
+        .unwrap();
+    let task_id = upd["task_id"].as_str().unwrap().to_string();
+    api.call("run_worker_once", json!({})).unwrap();
+    let task = market.task(&task_id).unwrap();
+    assert!(
+        task.items[0].outcome.as_ref().unwrap().success,
+        "append update failed: {:?}",
+        task.items[0].outcome
+    );
+    let scope = Scope {
+        symbol: "sh.600006".into(),
+        period: Period::Day,
+    };
+    let new_head = market.effective_head(&scope).unwrap().unwrap();
+    assert_ne!(new_head, head, "append update must advance the head");
+    let versions = market.versions(&scope).unwrap();
+    assert_eq!(versions.len(), 2);
+    let fixed = market.fixed(&new_head).unwrap();
+    assert_eq!(fixed.version().records.len(), 4);
+    assert_eq!(fixed.version().records[3].close, dec("11.39"));
+    // The continuity proof is recorded in the committed range audit.
+    let audit: String = rusqlite::Connection::open(market.tasks.path())
+        .unwrap()
+        .query_row(
+            "SELECT audit_json FROM market_update_results WHERE task_id=?1",
+            [&task_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        audit.contains("\"mode\":\"append\""),
+        "audit lacks continuity proof: {audit}"
+    );
+    // Replay of the same committed decision is a durable no-change:
+    // the new head's member digest matches the source, so re-running
+    // update reaches the unchanged path and never creates a version.
+    let upd2 = api
+        .call(
+            "update_data",
+            json!({"dataset":"market.daily","request_id":"u-app-2","contract_version":"v1",
+                   "items":[{"entity":{"exchange":"sh","code":"600006"},"base_version_id":new_head,
+                             "start_date":"2025-07-15","end_date":"2025-07-20"}]}),
+        )
+        .unwrap();
+    let task_id2 = upd2["task_id"].as_str().unwrap().to_string();
+    api.call("run_worker_once", json!({})).unwrap();
+    let task2 = market.task(&task_id2).unwrap();
+    assert!(
+        task2.items[0].outcome.as_ref().unwrap().success,
+        "replay update failed: {:?}",
+        task2.items[0].outcome
+    );
+    assert_eq!(market.versions(&scope).unwrap().len(), 2);
+    assert_eq!(
+        market.effective_head(&scope).unwrap().as_deref(),
+        Some(new_head.as_str())
+    );
 }
 
 #[test]
@@ -1341,6 +1784,74 @@ fn service_env_install_update_data_no_change_and_fail_closed() {
     assert!(
         error.contains("INTEGRITY"),
         "expected integrity refusal, got {error:?}"
+    );
+}
+
+#[test]
+#[ignore = "#259 S0: schema 18 no-change audit persists retained full history"]
+fn retained_production_shaped_no_change_does_not_add_bar_payload() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(snapshot) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; #259 S0 no-change regression skipped");
+        return;
+    };
+    let manifest_dir = tempfile::tempdir().unwrap();
+    let manifest_path = manifest_dir.path().join("snapshot-manifest.json");
+    std::fs::write(&manifest_path, &snapshot.manifest).unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
+    tasks.initialize().unwrap();
+    let market = SqliteMarket::new(tasks.clone());
+    let accepted = accept_daily(&market, "s0-run", "sz", "000002");
+    let source = make_source(&snapshot);
+    let full = source.materialize_daily("sz.000002").unwrap();
+    let range_start = full.bars.first().unwrap().date.to_string();
+    let range_end = full.bars.last().unwrap().date.to_string();
+    let runner = TdxDailyRunner {
+        source: &source,
+        session: None,
+        repository: market.clone(),
+        run_id: "s0-run".into(),
+        published_at: now(),
+    };
+    let ItemExecution::Published(receipt) = runner
+        .run_item(&accepted.task_id, &accepted.item_id)
+        .unwrap()
+    else {
+        panic!("expected retained base publication")
+    };
+    let payload_bytes = || {
+        rusqlite::Connection::open(tasks.path())
+            .unwrap()
+            .query_row(
+                "SELECT coalesce(sum(length(payload_json)),0) FROM payloads",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    let before = payload_bytes();
+    let _env = EnvReset::install(&manifest_path, &snapshot.root);
+    use x_data_mcp::{
+        data_supply::{Access, mcp::DataApi},
+        mcp::ToolHandler,
+    };
+    let api = DataApi::new(tasks.clone(), "s0-update".into(), Access::local()).unwrap();
+    let update = api
+        .call(
+            "update_data",
+            json!({"dataset":"market.daily","request_id":"s0-no-change","contract_version":"v1","items":[{"entity":{"exchange":"sz","code":"000002"},"base_version_id":receipt.version_id,"start_date":range_start,"end_date":range_end}]}),
+        )
+        .unwrap();
+    api.call("run_worker_once", json!({})).unwrap();
+    let task = market.task(update["task_id"].as_str().unwrap()).unwrap();
+    assert!(task.items[0].outcome.as_ref().unwrap().success);
+    let after = payload_bytes();
+    assert_eq!(
+        after,
+        before,
+        "retained no-change added {} bytes of full-history payload",
+        after - before
     );
 }
 
@@ -1680,8 +2191,9 @@ fn backfill_provider_builds_combined_candidate_for_frozen_gap() {
     let raw = subject_raw("base-gap", &gapped);
     market::published_fixture(&market, &raw);
     let base = market.fixed("base-gap").unwrap();
+    let provider_session = source.materialize_session();
     let provider = TdxBackfillProvider {
-        source: &source,
+        session: &provider_session,
         published_at: now(),
     };
     let range = x_data_mcp::market_update::DateRange {
@@ -1948,10 +2460,9 @@ fn service_backfill_data_default_restores_proven_gap() {
     );
 
     // Regression: update_data still routes to TdxRangeProvider, not the
-    // blocked provider — the merged head's coverage text differs from the
-    // materialized segment's, so prepare honestly lands on
-    // NEEDS_VERIFICATION (refresh carries no combined evidence) instead of
-    // SOURCE_NOT_VERIFIED or a publish. No third version appears.
+    // blocked provider. The merged head's member bytes and event set are
+    // digest-identical to the snapshot, so the refresh lands on a verified
+    // no-change — success, head kept, and no third version.
     let upd = api
         .call(
             "update_data",
@@ -1964,10 +2475,11 @@ fn service_backfill_data_default_restores_proven_gap() {
         .unwrap()
         .unwrap();
     let outcome = upd_task.items[0].outcome.as_ref().unwrap();
-    assert!(!outcome.success);
-    let err = outcome.error.as_deref().unwrap();
-    assert!(err.contains("NEEDS_VERIFICATION"), "unexpected: {err}");
-    assert!(!err.contains("SOURCE_NOT_VERIFIED"), "unexpected: {err}");
+    assert!(
+        outcome.success,
+        "unchanged update must succeed: {:?}",
+        outcome.error
+    );
     assert_eq!(
         c.query_row("SELECT count(*) FROM data_versions", [], |r| r
             .get::<_, i64>(0))
@@ -2466,7 +2978,8 @@ fn seeded_gap_subject_drives_retained_backfill_e2e() {
     );
 
     // Replay stays idempotent; explicit-range backfill remains blocked;
-    // update_data still lands on the range provider (NEEDS_VERIFICATION).
+    // update_data lands on the range provider and, with member bytes and
+    // the event set digest-identical to the snapshot, verifies no-change.
     let replay = api
         .call(
             "backfill_data",
@@ -2504,14 +3017,12 @@ fn seeded_gap_subject_drives_retained_backfill_e2e() {
         .read_task(upd["task_id"].as_str().unwrap())
         .unwrap()
         .unwrap();
-    let err = done.items[0]
-        .outcome
-        .as_ref()
-        .unwrap()
-        .error
-        .clone()
-        .unwrap();
-    assert!(err.contains("NEEDS_VERIFICATION"), "unexpected: {err}");
+    let outcome = done.items[0].outcome.as_ref().unwrap();
+    assert!(
+        outcome.success,
+        "unchanged update must succeed: {:?}",
+        outcome.error
+    );
     assert_eq!(
         c.query_row("SELECT count(*) FROM data_versions", [], |r| r
             .get::<_, i64>(0))
@@ -2612,6 +3123,92 @@ fn materialize_session_matches_single_path_on_retained_snapshot() {
 }
 
 #[test]
+fn forward_adjust_suffix_chains_bitwise_match_reference_on_retained_corpus() {
+    // The O(bars+events) suffix-chain implementation regroups the affine
+    // composition; Decimal arithmetic can differ in the last digit, so
+    // equivalence is asserted bitwise over every retained security's real
+    // bars and events — the same evidentiary standard as the #239 oracle.
+    let Some(snap) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; corpus equivalence test skipped");
+        return;
+    };
+    use std::io::Read;
+    let mut gbbq_zip = zip::ZipArchive::new(std::io::BufReader::new(
+        std::fs::File::open(snap.root.join("gbbq.zip")).unwrap(),
+    ))
+    .unwrap();
+    let mut gbbq_bytes = Vec::new();
+    gbbq_zip
+        .by_name("gbbq")
+        .unwrap()
+        .read_to_end(&mut gbbq_bytes)
+        .unwrap();
+    let events = gbbq::decode_events(&gbbq::parse(&gbbq_bytes).unwrap()).unwrap();
+    let mut by_security: std::collections::HashMap<(u8, String), Vec<gbbq::Event>> =
+        Default::default();
+    for event in events {
+        if event.category == 1 {
+            by_security
+                .entry((event.market, event.code.clone()))
+                .or_default()
+                .push(event);
+        }
+    }
+    let mut day_zip = zip::ZipArchive::new(std::io::BufReader::new(
+        std::fs::File::open(snap.root.join("hsjday.zip")).unwrap(),
+    ))
+    .unwrap();
+    let (mut members, mut bars_total, mut events_total, mut skipped) =
+        (0usize, 0usize, 0usize, 0usize);
+    let started = std::time::Instant::now();
+    for index in 0..day_zip.len() {
+        let mut entry = day_zip.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let Some(file_name) = name.rsplit(['\\', '/']).next() else {
+            continue;
+        };
+        let Some(stem) = file_name.strip_suffix(".day") else {
+            continue;
+        };
+        if stem.len() != 8 || !stem[2..].bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let market = match &stem[..2] {
+            "sh" => 1u8,
+            "sz" => 0u8,
+            _ => continue,
+        };
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        // Members that fail the strict parser are source errors on the
+        // production path too; equivalence is only meaningful on parseable
+        // members.
+        let Ok(bars) = x_data_mcp::day_file::parse(&bytes) else {
+            skipped += 1;
+            continue;
+        };
+        let events = by_security
+            .get(&(market, stem[2..].to_string()))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let fast = x_data_mcp::qfq::forward_adjust(&bars, events).unwrap();
+        let reference = x_data_mcp::qfq::forward_adjust_reference(&bars, events).unwrap();
+        assert_eq!(
+            fast, reference,
+            "{name}: suffix-chain QFQ diverged from the reference fold"
+        );
+        members += 1;
+        bars_total += bars.len();
+        events_total += events.len();
+    }
+    eprintln!(
+        "qfq corpus equivalence: {members} members, {bars_total} bars, {events_total} events, {skipped} unparseable skipped, 0 divergences, {:?} wall",
+        started.elapsed()
+    );
+    assert!(members > 0, "retained day archive carried no members");
+}
+
+#[test]
 fn service_multi_item_collection_uses_shared_session() {
     use x_data_mcp::{
         data_supply::{Access, mcp::DataApi},
@@ -2687,8 +3284,9 @@ fn republish_provider_enriches_unpromoted_fields() {
     let raw = subject_raw("base-legacy", &legacy);
     market::published_fixture(&market, &raw);
     let base = market.fixed("base-legacy").unwrap();
+    let provider_session = source.materialize_session();
     let provider = TdxRepublishProvider {
-        source: &source,
+        session: &provider_session,
         published_at: now(),
     };
     let range = x_data_mcp::market_update::DateRange {
@@ -2862,4 +3460,391 @@ fn service_republish_data_enriches_published_head() {
         json!({"request_id":"rp-yearly","dataset":"market.yearly","contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":new_head,"years":[2025],"publication":{"mode":"historical_fixed_base"}}]}),
     );
     assert!(yearly.is_err(), "market.yearly must not resolve republish");
+}
+
+#[cfg(target_os = "linux")]
+fn s0_resource_usage() -> Value {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    assert_eq!(
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+        0
+    );
+    let usage = unsafe { usage.assume_init() };
+    json!({
+        "user_cpu_seconds": usage.ru_utime.tv_sec as f64 + usage.ru_utime.tv_usec as f64 / 1_000_000.0,
+        "system_cpu_seconds": usage.ru_stime.tv_sec as f64 + usage.ru_stime.tv_usec as f64 / 1_000_000.0,
+        "peak_rss_kib": usage.ru_maxrss
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn s0_resource_usage() -> Value {
+    Value::Null
+}
+
+fn s0_cents(value: Decimal) -> i64 {
+    use rust_decimal::prelude::ToPrimitive;
+    let scaled = value * Decimal::from(100);
+    let cents = scaled.to_i64().unwrap();
+    assert_eq!(Decimal::from(cents) / Decimal::from(100), value);
+    cents
+}
+
+fn s0_volume(value: Option<Decimal>) -> Option<i64> {
+    use rust_decimal::prelude::ToPrimitive;
+    value.map(|value| {
+        let volume = value.to_i64().unwrap();
+        assert_eq!(Decimal::from(volume), value);
+        assert!(volume >= 0);
+        volume
+    })
+}
+
+fn s0_amount(value: Option<Decimal>) -> Option<String> {
+    value.map(|value| {
+        assert!(value >= Decimal::ZERO);
+        value.normalize().to_string()
+    })
+}
+
+fn s0_day(date: NaiveDate) -> i64 {
+    date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+        .num_days()
+}
+
+fn s0_segment_digest(entity: &str, bars: &[x_data_mcp::market_data::Bar]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"x-data-segment-v1\0");
+    digest.update((entity.len() as u32).to_be_bytes());
+    digest.update(entity.as_bytes());
+    digest.update([1]);
+    digest.update((bars.len() as u32).to_be_bytes());
+    for bar in bars {
+        digest.update(b"x-data-bar-v1\0");
+        digest.update(s0_day(bar.date).to_be_bytes());
+        for value in [bar.open, bar.high, bar.low, bar.close] {
+            digest.update(s0_cents(value).to_be_bytes());
+        }
+        match s0_volume(bar.volume) {
+            Some(value) => {
+                digest.update([1]);
+                digest.update(value.to_be_bytes());
+            }
+            None => digest.update([0]),
+        }
+        match s0_amount(bar.amount) {
+            Some(value) => {
+                digest.update([1]);
+                digest.update((value.len() as u32).to_be_bytes());
+                digest.update(value.as_bytes());
+            }
+            None => digest.update([0]),
+        }
+        match bar.r7_raw {
+            Some(value) => {
+                digest.update([1]);
+                digest.update(value.to_be_bytes());
+            }
+            None => digest.update([0]),
+        }
+    }
+    digest.finalize().into()
+}
+
+fn s0_measure_layout(
+    batches: &[MarketDataBatch],
+    segment_size: usize,
+) -> (tempfile::TempDir, Value) {
+    let dir = tempfile::tempdir_in("/dev/shm").unwrap();
+    let path = dir.path().join(format!("candidate-{segment_size}.sqlite"));
+    let mut connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA page_size=4096;
+             PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=FULL;
+             CREATE TABLE bar_segments(
+               segment_key INTEGER PRIMARY KEY,
+               segment_digest BLOB NOT NULL UNIQUE CHECK(length(segment_digest)=32),
+               entity TEXT NOT NULL,
+               period INTEGER NOT NULL CHECK(period IN (1,2)),
+               first_day INTEGER NOT NULL,
+               last_day INTEGER NOT NULL,
+               row_count INTEGER NOT NULL CHECK(row_count BETWEEN 1 AND 512),
+               CHECK(first_day <= last_day)
+             ) STRICT;
+             CREATE TABLE segment_bars(
+               segment_key INTEGER NOT NULL REFERENCES bar_segments(segment_key),
+               trade_day INTEGER NOT NULL,
+               open_cents INTEGER NOT NULL,
+               high_cents INTEGER NOT NULL,
+               low_cents INTEGER NOT NULL,
+               close_cents INTEGER NOT NULL,
+               volume INTEGER,
+               amount TEXT,
+               r7_raw INTEGER,
+               PRIMARY KEY(segment_key,trade_day),
+               CHECK(high_cents >= open_cents AND high_cents >= close_cents AND high_cents >= low_cents),
+               CHECK(low_cents <= open_cents AND low_cents <= close_cents),
+               CHECK(volume IS NULL OR volume >= 0),
+               CHECK(r7_raw IS NULL OR r7_raw BETWEEN 0 AND 4294967295)
+             ) STRICT, WITHOUT ROWID;",
+        )
+        .unwrap();
+    let transaction = connection.transaction().unwrap();
+    let mut segments = 0usize;
+    let mut bars = 0usize;
+    for batch in batches {
+        for chunk in batch.bars.chunks(segment_size) {
+            let digest = s0_segment_digest(&batch.symbol, chunk);
+            transaction
+                .execute(
+                    "INSERT INTO bar_segments(segment_digest,entity,period,first_day,last_day,row_count) VALUES(?1,?2,1,?3,?4,?5)",
+                    rusqlite::params![
+                        digest.as_slice(),
+                        batch.symbol,
+                        s0_day(chunk.first().unwrap().date),
+                        s0_day(chunk.last().unwrap().date),
+                        chunk.len() as i64
+                    ],
+                )
+                .unwrap();
+            let segment_key = transaction.last_insert_rowid();
+            for bar in chunk {
+                transaction
+                    .execute(
+                        "INSERT INTO segment_bars VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                        rusqlite::params![
+                            segment_key,
+                            s0_day(bar.date),
+                            s0_cents(bar.open),
+                            s0_cents(bar.high),
+                            s0_cents(bar.low),
+                            s0_cents(bar.close),
+                            s0_volume(bar.volume),
+                            s0_amount(bar.amount),
+                            bar.r7_raw.map(i64::from)
+                        ],
+                    )
+                    .unwrap();
+            }
+            segments += 1;
+            bars += chunk.len();
+        }
+    }
+    transaction.commit().unwrap();
+    let wal_path = std::path::PathBuf::from(format!("{}-wal", path.display()));
+    let database_bytes_before_checkpoint = std::fs::metadata(&path).unwrap().len();
+    let wal_bytes_before_checkpoint = std::fs::metadata(&wal_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        .unwrap();
+    let wal_bytes_after_checkpoint = std::fs::metadata(&wal_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let mut statement = connection
+        .prepare(
+            "SELECT name,sum(pgsize),sum(payload),sum(unused) FROM dbstat WHERE name IN ('bar_segments','sqlite_autoindex_bar_segments_1','segment_bars') GROUP BY name ORDER BY name",
+        )
+        .unwrap();
+    let dbstat = statement
+        .query_map([], |row| {
+            Ok(json!({
+                "name": row.get::<_, String>(0)?,
+                "bytes": row.get::<_, i64>(1)?,
+                "payload_bytes": row.get::<_, i64>(2)?,
+                "unused_bytes": row.get::<_, i64>(3)?
+            }))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    drop(statement);
+    let (object_bytes, payload_bytes, unused_bytes): (i64, i64, i64) = connection
+        .query_row(
+            "SELECT coalesce(sum(pgsize),0),coalesce(sum(payload),0),coalesce(sum(unused),0) FROM dbstat WHERE name IN ('bar_segments','sqlite_autoindex_bar_segments_1','segment_bars')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    let sqlite_version: String = connection
+        .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+        .unwrap();
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    let page_count: i64 = connection
+        .query_row("PRAGMA page_count", [], |row| row.get(0))
+        .unwrap();
+    let database_bytes = std::fs::metadata(&path).unwrap().len();
+    (
+        dir,
+        json!({
+            "segment_size": segment_size,
+            "segments": segments,
+            "bars": bars,
+            "sqlite_version": sqlite_version,
+            "page_size": page_size,
+            "page_count": page_count,
+            "dbstat": dbstat,
+            "object_bytes": object_bytes,
+            "database_bytes_before_checkpoint": database_bytes_before_checkpoint,
+            "wal_bytes_before_checkpoint": wal_bytes_before_checkpoint,
+            "database_bytes": database_bytes,
+            "wal_bytes_after_checkpoint": wal_bytes_after_checkpoint,
+            "object_bytes_per_bar": object_bytes as f64 / bars as f64,
+            "database_bytes_per_bar": database_bytes as f64 / bars as f64,
+            "payload_bytes": payload_bytes,
+            "unused_bytes": unused_bytes,
+            "page_fill_ratio": payload_bytes as f64 / object_bytes as f64
+        }),
+    )
+}
+
+#[test]
+#[ignore = "#259 S0 retained-corpus physical prototype"]
+fn retained_s0_compact_bar_physical_prototype() {
+    let started = std::time::Instant::now();
+    let Some(snapshot) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; #259 S0 prototype skipped");
+        return;
+    };
+    for (name, expected) in [
+        (
+            "official-base.zip",
+            "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+        ),
+        (
+            "official-hsjday.zip",
+            "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+        ),
+        (
+            "official-gbbq.zip",
+            "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+        ),
+    ] {
+        assert_eq!(
+            sha(&std::fs::read(Path::new("/home/box/retained-inputs").join(name)).unwrap()),
+            expected
+        );
+    }
+    let source = make_source(&snapshot);
+    let symbols = ["sz.000002", "sh.600006", "sh.600004"];
+    let batches = symbols
+        .iter()
+        .map(|symbol| source.materialize_daily(symbol).unwrap())
+        .collect::<Vec<_>>();
+    let symbol_bars = batches
+        .iter()
+        .map(|batch| (batch.symbol.clone(), batch.bars.len()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let amount_lengths = batches
+        .iter()
+        .flat_map(|batch| batch.bars.iter())
+        .filter_map(|bar| s0_amount(bar.amount).map(|amount| amount.len()))
+        .collect::<Vec<_>>();
+    let mut amount_length_histogram = std::collections::BTreeMap::new();
+    for length in &amount_lengths {
+        *amount_length_histogram
+            .entry(length.to_string())
+            .or_insert(0usize) += 1;
+    }
+    let mut layouts = Vec::new();
+    let mut dirs = Vec::new();
+    for segment_size in [64, 256, 512] {
+        let (dir, result) = s0_measure_layout(&batches, segment_size);
+        dirs.push(dir);
+        layouts.push(result);
+    }
+    let runtime = json!({
+        "wall_seconds": started.elapsed().as_secs_f64(),
+        "process": s0_resource_usage()
+    });
+    let result = json!({
+        "schema": "x-data-mcp.issue-259-s0-physical-prototype.v1",
+        "database_location": "/dev/shm",
+        "runtime": runtime,
+        "symbols": symbols,
+        "symbol_bars": symbol_bars,
+        "bars": batches.iter().map(|batch| batch.bars.len()).sum::<usize>(),
+        "retained_inputs": {
+            "base_zip_sha256": "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+            "hsjday_zip_sha256": "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+            "gbbq_zip_sha256": "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9"
+        },
+        "amount": {
+            "known": amount_lengths.len(),
+            "unknown": batches.iter().map(|batch| batch.bars.iter().filter(|bar| bar.amount.is_none()).count()).sum::<usize>(),
+            "average_text_bytes": amount_lengths.iter().sum::<usize>() as f64 / amount_lengths.len() as f64,
+            "max_text_bytes": amount_lengths.iter().copied().max().unwrap(),
+            "text_bytes_histogram": amount_length_histogram
+        },
+        "layouts": layouts,
+        "target_bytes_per_bar": 56,
+        "hard_bytes_per_bar": 61
+    });
+    if let Some(path) = std::env::var_os("X_DATA_MCP_S0_OUTPUT") {
+        std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+    }
+    println!("{}", serde_json::to_string_pretty(&result).unwrap());
+    let bytes_per_bar = result["layouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|layout| layout["segment_size"] == 512)
+        .unwrap()["object_bytes_per_bar"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        bytes_per_bar <= 56.0,
+        "512-bar candidate costs {bytes_per_bar:.2} bytes/bar"
+    );
+    drop(dirs);
+}
+
+#[test]
+#[ignore = "#259 S1 retained compact codec round-trip"]
+fn retained_s1_compact_codec_round_trips_all_bars() {
+    use x_data_mcp::compact_market::{CompactBar, MAX_SEGMENT_BARS, segment_digest};
+    let Some(snapshot) = retained_snapshot() else {
+        eprintln!("retained-inputs absent; #259 S1 round-trip skipped");
+        return;
+    };
+    for (name, expected) in [
+        (
+            "official-base.zip",
+            "dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6",
+        ),
+        (
+            "official-hsjday.zip",
+            "c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892",
+        ),
+        (
+            "official-gbbq.zip",
+            "daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9",
+        ),
+    ] {
+        assert_eq!(
+            sha(&std::fs::read(Path::new("/home/box/retained-inputs").join(name)).unwrap()),
+            expected
+        );
+    }
+    let source = make_source(&snapshot);
+    for symbol in ["sz.000002", "sh.600006", "sh.600004"] {
+        let batch = source.materialize_daily(symbol).unwrap();
+        let compact = batch
+            .bars
+            .iter()
+            .map(|bar| CompactBar::from_bar(bar, Period::Day).unwrap())
+            .collect::<Vec<_>>();
+        for (bar, compact_bar) in batch.bars.iter().zip(&compact) {
+            assert_eq!(&compact_bar.to_bar(Period::Day).unwrap(), bar);
+        }
+        for chunk in compact.chunks(MAX_SEGMENT_BARS) {
+            segment_digest(&batch.symbol, Period::Day, chunk).unwrap();
+        }
+    }
 }

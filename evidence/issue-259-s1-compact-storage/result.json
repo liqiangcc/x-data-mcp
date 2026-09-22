@@ -1,0 +1,58 @@
+{
+  "schema": "x-data-mcp.issue-259-s1-compact-storage.v1",
+  "base_commit": "fc0091948fe4c34489217ce25ca7527a5c9153b5",
+  "working_tree_has_issue_259_design_and_s0_s1_changes": true,
+  "decision": "PASS_TO_S2",
+  "codec": {
+    "unit_tests_passed": 10,
+    "fixed_vectors": {
+      "segment": "198e18b303e0caeb56076b2356971cd929c100c736e9ccd58cb945103f9ab275",
+      "checkpoint": "10a347ad4f3ba1d413e91ae865ee481ca342d4b13ca77e19951b60e0e16947f7",
+      "delta": "e59db36dc0c0558640e04a9543de474424f282e9c970a2db52815b8770441716",
+      "projection": "d5d2bf47e163bc3f87eb2f4d07f726371d875cadc023240fa1557caa9a4549e3"
+    },
+    "negative_prices_representable": true,
+    "non_2dp_prices_rejected": true,
+    "invalid_volume_amount_r7_and_ohlc_rejected": true
+  },
+  "sqlite_primitives": {
+    "unit_tests_passed": 15,
+    "content_addressed_segment_reuse": true,
+    "checkpoint_and_delta_digest_roundtrip": true,
+    "fail_closed_cases": [
+      "tampered bar",
+      "deleted bar",
+      "altered segment digest",
+      "missing segment",
+      "clip out of bounds",
+      "clip row-count mismatch",
+      "noncontiguous sequence",
+      "overlapping clips or deltas",
+      "malformed delta kind or nullable fields"
+    ]
+  },
+  "retained_roundtrip": {
+    "status": "PASS",
+    "snapshot": "retained-gen-2",
+    "symbols": {
+      "sz.000002": 8479,
+      "sh.600006": 6467,
+      "sh.600004": 5630
+    },
+    "bars": 20576,
+    "segment_limit": 512
+  },
+  "verification": [
+    "TMPDIR=/dev/shm cargo fmt --check",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_market -- --nocapture",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_v19 -- --nocapture",
+    "TMPDIR=/dev/shm cargo test --locked --test official_market retained_s1_compact_codec_round_trips_all_bars -- --ignored --exact --nocapture",
+    "TMPDIR=/dev/shm cargo clippy --locked --lib --test official_market -- -D warnings",
+    "git diff --check"
+  ],
+  "limitations": [
+    "S1 modules are not wired into schema migration, publication, verified query, MCP or production heads.",
+    "Delta entity and period binding remains the responsibility of the S2 data_versions path because the frozen delta API receives only a parent projection digest.",
+    "PASS_TO_S2 does not pass full-market capacity, daily-growth, ECS or production-readiness gates."
+  ]
+}

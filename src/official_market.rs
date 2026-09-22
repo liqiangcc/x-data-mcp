@@ -36,7 +36,7 @@ use crate::{
     snapshot::{self, FileInput, FileRole},
     task_control::{Change, ItemOutcome, Stage, Status, TaskSnapshot},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use std::{collections::BTreeMap, io::Read, path::PathBuf, str::FromStr};
@@ -47,9 +47,31 @@ pub const DECLARED_SCOPE: &str = "DECLARED_SCOPE: owner personal research, \
     local-only, no external exposure (#71 comment-5749934485); overall \
     production certification pending #225";
 const GBBQ_MEMBER: &str = "gbbq";
+/// Snapshot-binding role for the per-security decoded event set: digests
+/// the category-1 events actually applied plus the excluded count, so an
+/// update can prove event continuity for one symbol even when other
+/// securities' records changed the gbbq member as a whole.
+const SECURITY_EVENTS_ROLE: &str = "gbbq-security-events";
 /// Largest manifest byte count the installer will read; the pinned snapshot
 /// schema carries exactly three file entries and stays far below this.
 const MANIFEST_LIMIT: u64 = 1 << 20;
+
+/// Canonical digest of one security's interpreted event set: every
+/// category-1 event's stored `(date_raw, c_raw)` fields in decode order,
+/// followed by the excluded non-category-1 record count. Byte-exact over
+/// the decoded records — identical inputs digest identically, and any
+/// added/dropped/reordered record fails the continuity check.
+fn security_events_digest(events: &[gbbq::Event], excluded: usize) -> String {
+    let mut bytes = Vec::with_capacity(events.len() * 20 + 8);
+    for event in events {
+        bytes.extend_from_slice(&event.date_raw.to_le_bytes());
+        for c in event.c_raw {
+            bytes.extend_from_slice(&c.to_bits().to_le_bytes());
+        }
+    }
+    bytes.extend_from_slice(&(excluded as u64).to_le_bytes());
+    crate::hash::sha256(&bytes)
+}
 
 #[derive(Debug, Clone)]
 pub struct TdxMarketSource {
@@ -116,14 +138,10 @@ impl TdxMarketSource {
         &self.manifest_sha256
     }
 
-    /// Read exactly one archive member. Absent or ambiguous members and any
-    /// decompression/CRC failure are source failures; the manifest-pinned
-    /// archive digest is what `inspect()` already verified.
-    fn member_bytes(
-        &self,
-        input: &FileInput,
-        candidates: &[String],
-    ) -> Result<(String, Vec<u8>), SourceError> {
+    /// Resolve an inspected input to its canonical archive path under the
+    /// snapshot root. The containment check is unchanged from the original
+    /// per-call `member_bytes` path.
+    fn archive_path(&self, input: &FileInput) -> Result<PathBuf, SourceError> {
         let archive = self
             .root
             .join(&input.relative_path)
@@ -134,42 +152,22 @@ impl TdxMarketSource {
                 "archive resolves outside inspected root".into(),
             ));
         }
-        let file = std::fs::File::open(&archive)
-            .map_err(|e| SourceError::Invocation(format!("archive open failed: {e}")))?;
-        let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file))
-            .map_err(|e| SourceError::Invocation(format!("archive is not a valid zip: {e}")))?;
-        let found: Vec<String> = zip
-            .file_names()
-            .filter(|name| candidates.iter().any(|c| c == name))
-            .map(str::to_owned)
-            .collect();
-        let [member] = found.as_slice() else {
-            return Err(SourceError::Invocation(format!(
-                "member absent or ambiguous: expected exactly one of {candidates:?}, found {}",
-                found.len()
-            )));
-        };
-        let mut entry = zip
-            .by_name(member)
-            .map_err(|e| SourceError::Invocation(format!("member open failed: {e}")))?;
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|e| SourceError::Invocation(format!("member bytes failed CRC: {e}")))?;
-        Ok((member.clone(), bytes))
+        Ok(archive)
     }
 
-    /// Open a shared-decode session over this source: the gbbq member is
-    /// read, CRC-verified and decoded at most once (lazily, on the first
-    /// materialization), so a multi-symbol worker run pays one decode
-    /// instead of one per symbol. The session borrows the source — there
-    /// is no global or cross-process cache, and a changed snapshot can
-    /// only enter through a newly inspected source instance, which yields
-    /// a new session.
+    /// Open a shared-decode session over this source: each archive's
+    /// central directory is parsed at most once (lazily, on first member
+    /// read) and the gbbq member is read, CRC-verified and decoded at most
+    /// once, so a multi-symbol worker run pays one index build and one
+    /// decode instead of one per symbol. The session borrows the source —
+    /// there is no global or cross-process cache, and a changed snapshot
+    /// can only enter through a newly inspected source instance, which
+    /// yields a new session.
     pub fn materialize_session(&self) -> MaterializeSession<'_> {
         MaterializeSession {
             source: self,
             gbbq: std::cell::OnceCell::new(),
+            archives: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -182,18 +180,57 @@ impl TdxMarketSource {
     }
 }
 
+/// A `.day` member read for binding: the resolved member name and the
+/// sha256 of its decompressed bytes.
+struct DayMemberRead {
+    member: String,
+    sha256: String,
+}
+
+/// One archive's parsed central directory: member name → all entry
+/// indices, so duplicate names stay detectable (absent-or-ambiguous is a
+/// source failure, unchanged from the per-call path).
+struct ArchiveIndex {
+    archive: zip::ZipArchive<std::io::BufReader<std::fs::File>>,
+    members: std::collections::HashMap<String, Vec<usize>>,
+}
+
+impl ArchiveIndex {
+    fn open(path: &std::path::Path) -> Result<Self, SourceError> {
+        let file = std::fs::File::open(path)
+            .map_err(|e| SourceError::Invocation(format!("archive open failed: {e}")))?;
+        let archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+            .map_err(|e| SourceError::Invocation(format!("archive is not a valid zip: {e}")))?;
+        let mut members = std::collections::HashMap::new();
+        for (index, name) in archive.file_names().enumerate() {
+            members
+                .entry(name.to_owned())
+                .or_insert_with(Vec::new)
+                .push(index);
+        }
+        Ok(Self { archive, members })
+    }
+}
+
 /// The one-time gbbq member decode shared by a `MaterializeSession`:
-/// member name and digest are kept for per-batch provenance binding.
+/// member name and digest are kept for per-batch provenance binding, and
+/// events are indexed by `(market, code)` once so per-symbol lookup is
+/// O(1) instead of a full-table scan.
 struct DecodedGbbq {
     member: String,
     sha256: String,
-    events: Vec<gbbq::Event>,
+    /// `(market, code)` → (category-1 events, non-category-1 excluded
+    /// count); every record is partitioned exactly once at decode time.
+    by_security: std::collections::HashMap<(u8, String), (Vec<gbbq::Event>, usize)>,
 }
 
 /// Per-source materialization channel; see `TdxMarketSource::materialize_session`.
 pub struct MaterializeSession<'a> {
     source: &'a TdxMarketSource,
     gbbq: std::cell::OnceCell<DecodedGbbq>,
+    /// Lazily opened central-directory indexes keyed by canonical archive
+    /// path; each archive is opened and scanned at most once per session.
+    archives: std::cell::RefCell<std::collections::HashMap<PathBuf, ArchiveIndex>>,
 }
 
 impl MaterializeSession<'_> {
@@ -202,9 +239,109 @@ impl MaterializeSession<'_> {
         self.source
     }
 
+    /// Read exactly one archive member through the session's shared
+    /// central-directory index: the archive is opened and its names scanned
+    /// at most once per session, and member lookup is O(1). Absent or
+    /// ambiguous members and any decompression/CRC failure are source
+    /// failures; the manifest-pinned archive digest is what `inspect()`
+    /// already verified.
+    fn member_bytes(
+        &self,
+        input: &FileInput,
+        candidates: &[String],
+    ) -> Result<(String, Vec<u8>), SourceError> {
+        let path = self.source.archive_path(input)?;
+        let mut archives = self.archives.borrow_mut();
+        let index = match archives.entry(path.clone()) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(ArchiveIndex::open(&path)?),
+        };
+        let mut found: Vec<(&String, usize)> = Vec::new();
+        for name in candidates {
+            if let Some(indices) = index.members.get(name) {
+                found.extend(indices.iter().map(|i| (name, *i)));
+            }
+        }
+        let [(member, member_index)] = found.as_slice() else {
+            return Err(SourceError::Invocation(format!(
+                "member absent or ambiguous: expected exactly one of {candidates:?}, found {}",
+                found.len()
+            )));
+        };
+        let mut entry = index
+            .archive
+            .by_index(*member_index)
+            .map_err(|e| SourceError::Invocation(format!("member open failed: {e}")))?;
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|e| SourceError::Invocation(format!("member bytes failed CRC: {e}")))?;
+        Ok(((*member).clone(), bytes))
+    }
+
+    /// Ensure the gbbq member is decoded and return the shared state.
+    /// The decode happens at most once per session; the member bytes were
+    /// already CRC-verified by `member_bytes`.
+    fn decoded_gbbq(&self) -> Result<&DecodedGbbq, SourceError> {
+        if self.gbbq.get().is_none() {
+            let (member, bytes) = self.member_bytes(&self.source.gbbq, &[GBBQ_MEMBER.into()])?;
+            let raw = gbbq::parse(&bytes)
+                .map_err(|e| SourceError::InvalidResponse(format!("gbbq member malformed: {e}")))?;
+            let events = gbbq::decode_events(&raw).map_err(|e| {
+                SourceError::InvalidResponse(format!("gbbq record decode failed: {e}"))
+            })?;
+            let mut by_security: std::collections::HashMap<
+                (u8, String),
+                (Vec<gbbq::Event>, usize),
+            > = std::collections::HashMap::new();
+            for event in events {
+                // Only category 1 has verified QFQ semantics; other
+                // categories are never interpreted or applied to prices.
+                let entry = by_security
+                    .entry((event.market, event.code.clone()))
+                    .or_default();
+                if event.category == 1 {
+                    entry.0.push(event);
+                } else {
+                    entry.1 += 1;
+                }
+            }
+            let _ = self.gbbq.set(DecodedGbbq {
+                member,
+                sha256: crate::hash::sha256(&bytes),
+                by_security,
+            });
+        }
+        Ok(self.gbbq.get().expect("initialized above"))
+    }
+
+    /// The security's interpreted event set: category-1 events in decode
+    /// order plus the count of excluded non-category-1 records.
+    fn security_events(
+        &self,
+        market: &str,
+        code: &str,
+    ) -> Result<(&[gbbq::Event], usize), SourceError> {
+        let gbbq = self.decoded_gbbq()?;
+        let market_byte: u8 = if market == "sh" { 1 } else { 0 };
+        Ok(gbbq
+            .by_security
+            .get(&(market_byte, code.to_string()))
+            .map(|(events, excluded)| (events.as_slice(), *excluded))
+            .unwrap_or((&[], 0)))
+    }
+
+    /// Candidate member names for a security's `.day` file.
+    fn day_names(market: &str, code: &str) -> [String; 2] {
+        [
+            format!("{market}\\lday\\{market}{code}.day"),
+            format!("{market}/lday/{market}{code}.day"),
+        ]
+    }
+
     /// Same output as `TdxMarketSource::materialize_daily`: the `.day`
-    /// member is re-read per symbol while the verified gbbq member bytes
-    /// are decoded once and shared.
+    /// member is re-read per symbol through the shared archive index while
+    /// the verified gbbq member bytes are decoded once and shared.
     pub fn materialize_daily(&self, symbol: &str) -> Result<MarketDataBatch, SourceError> {
         let source = self.source;
         let Some((market, code)) = symbol.split_once('.').filter(|(m, c)| {
@@ -214,11 +351,8 @@ impl MaterializeSession<'_> {
                 "unsupported symbol {symbol:?}; expected sh|sz + six digits"
             )));
         };
-        let day_names = [
-            format!("{market}\\lday\\{market}{code}.day"),
-            format!("{market}/lday/{market}{code}.day"),
-        ];
-        let (day_member, day_bytes) = source.member_bytes(&source.day, &day_names)?;
+        let (day_member, day_bytes) =
+            self.member_bytes(&source.day, &Self::day_names(market, code))?;
         let raw_bars = day_file::parse(&day_bytes)
             .map_err(|e| SourceError::InvalidResponse(format!(".day member malformed: {e}")))?;
         if raw_bars.is_empty() {
@@ -226,36 +360,29 @@ impl MaterializeSession<'_> {
                 ".day member carries no records".into(),
             ));
         }
-        if self.gbbq.get().is_none() {
-            let (member, bytes) = source.member_bytes(&source.gbbq, &[GBBQ_MEMBER.into()])?;
-            let raw = gbbq::parse(&bytes)
-                .map_err(|e| SourceError::InvalidResponse(format!("gbbq member malformed: {e}")))?;
-            let events = gbbq::decode_events(&raw).map_err(|e| {
-                SourceError::InvalidResponse(format!("gbbq record decode failed: {e}"))
-            })?;
-            let _ = self.gbbq.set(DecodedGbbq {
-                member,
-                sha256: crate::hash::sha256(&bytes),
-                events,
-            });
-        }
-        let gbbq = self.gbbq.get().expect("initialized above");
-        let market_byte: u8 = if market == "sh" { 1 } else { 0 };
-        let mut events = Vec::new();
-        let mut excluded = 0usize;
-        for event in &gbbq.events {
-            if event.market != market_byte || event.code != code {
-                continue;
-            }
-            // Only category 1 has verified QFQ semantics; other categories are
-            // never interpreted or applied to prices.
-            if event.category == 1 {
-                events.push(event.clone());
-            } else {
-                excluded += 1;
-            }
-        }
-        let adjusted = qfq::forward_adjust(&raw_bars, &events)
+        let (events, excluded) = self.security_events(market, code)?;
+        let bars = Self::qfq_bars(&raw_bars, events)?;
+        self.assemble_daily(
+            symbol,
+            DayMemberRead {
+                member: day_member,
+                sha256: crate::hash::sha256(&day_bytes),
+            },
+            bars,
+            events,
+            excluded,
+        )
+    }
+
+    /// Map verified-raw `.day` records through the QFQ event chain into
+    /// publishable bars. Output depends only on each record and the events
+    /// strictly after its date, so a proven-identical prefix never needs
+    /// re-adjustment.
+    fn qfq_bars(
+        raw_bars: &[crate::day_file::RawDayRecord],
+        events: &[gbbq::Event],
+    ) -> Result<Vec<Bar>, SourceError> {
+        let adjusted = qfq::forward_adjust(raw_bars, events)
             .map_err(|e| SourceError::InvalidResponse(format!("qfq chain failed: {e}")))?;
         let bars: Vec<Bar> = adjusted
             .iter()
@@ -273,6 +400,24 @@ impl MaterializeSession<'_> {
                 r7_raw: Some(b.r7_raw),
             })
             .collect();
+        Ok(bars)
+    }
+
+    /// Build the snapshot-bound batch shared by full materialization and
+    /// the incremental update path: the same bars plus bindings covering
+    /// the `.day` member, the gbbq member, and this security's decoded
+    /// event set. The per-security binding is what lets a later update
+    /// prove event continuity without trusting the whole gbbq table.
+    fn assemble_daily(
+        &self,
+        symbol: &str,
+        day: DayMemberRead,
+        bars: Vec<Bar>,
+        events: &[gbbq::Event],
+        excluded: usize,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let source = self.source;
+        let gbbq = self.decoded_gbbq()?;
         let acquired_at = source
             .day
             .acquisition_completed_at
@@ -283,9 +428,9 @@ impl MaterializeSession<'_> {
                 .as_str()
                 .unwrap()
                 .to_string(),
-            member: day_member,
+            member: day.member,
             archive_sha256: source.day.sha256.clone(),
-            member_sha256: crate::hash::sha256(&day_bytes),
+            member_sha256: day.sha256,
         };
         let gbbq_binding = SnapshotInputBinding {
             role: serde_json::to_value(source.gbbq.role)
@@ -296,6 +441,12 @@ impl MaterializeSession<'_> {
             member: gbbq.member.clone(),
             archive_sha256: source.gbbq.sha256.clone(),
             member_sha256: gbbq.sha256.clone(),
+        };
+        let events_binding = SnapshotInputBinding {
+            role: SECURITY_EVENTS_ROLE.into(),
+            member: format!("gbbq#{symbol}"),
+            archive_sha256: source.gbbq.sha256.clone(),
+            member_sha256: security_events_digest(events, excluded),
         };
         Ok(MarketDataBatch {
             symbol: symbol.into(),
@@ -310,7 +461,7 @@ impl MaterializeSession<'_> {
                 acquired_at,
                 adapter_version: ADAPTER_VERSION.into(),
                 yearly_derivation: None,
-                snapshot_inputs: Some(vec![day_binding, gbbq_binding]),
+                snapshot_inputs: Some(vec![day_binding, gbbq_binding, events_binding]),
             },
             coverage: CoverageEvidence::complete(format!(
                 "complete .day member history from inspected snapshot manifest {}; {DECLARED_SCOPE}",
@@ -383,7 +534,438 @@ impl MarketDataPipeline for TdxMarketSource {
 /// semantics differ from refresh, so the worker keeps it on the blocked
 /// provider rather than letting it borrow the refresh path.
 pub struct TdxRangeProvider<'a> {
-    pub source: &'a TdxMarketSource,
+    /// Shared decode/index channel; a single-item caller builds one fresh
+    /// session and pays the one-time decode itself.
+    pub session: &'a MaterializeSession<'a>,
+    /// Commit clock for a changed publication's combined record.
+    pub published_at: DateTime<Utc>,
+}
+
+/// How the member bytes and event set just read relate to the fixed
+/// base's pinned snapshot inputs (#262 incremental update).
+enum Continuity {
+    /// Member digest and event digest both identical — every published
+    /// value is byte-proven unchanged; the base's stored bars are exactly
+    /// what re-materialization would produce. The proven prefix is the
+    /// whole member.
+    Unchanged { prefix_bytes: usize },
+    /// The base's member bytes are an exact `prefix_bytes` prefix of the
+    /// current member and the event set is unchanged — only the
+    /// strictly-newer tail records were parsed and adjusted.
+    Append {
+        prefix_bytes: usize,
+        tail: Vec<day_file::RawDayRecord>,
+    },
+    /// Digest proof unavailable or contradicted (missing bindings,
+    /// changed event set, rewritten/shrunk/overlapping member bytes).
+    /// The caller falls back to full materialization; `prepare` then
+    /// decides on values alone, so a real revision still fails closed.
+    Unverified,
+}
+
+impl TdxRangeProvider<'_> {
+    /// Read the security's `.day` member and event set through the shared
+    /// session once and classify continuity against the fixed base's
+    /// snapshot bindings. The member digest and the prefix digest are the
+    /// proof: no parsed value is trusted for the classification.
+    fn probe(
+        &self,
+        base: &CheckedRecord,
+        market: &str,
+        code: &str,
+    ) -> Result<(String, String, String, Continuity), SourceError> {
+        let inputs = base
+            .batch
+            .provenance
+            .snapshot_inputs
+            .as_deref()
+            .unwrap_or(&[]);
+        let base_day_sha = inputs
+            .iter()
+            .find(|i| i.role == "day")
+            .map(|i| i.member_sha256.as_str());
+        let base_events_sha = inputs
+            .iter()
+            .find(|i| i.role == SECURITY_EVENTS_ROLE)
+            .map(|i| i.member_sha256.as_str());
+        // The base's member covered exactly its published records — .day
+        // records are fixed-width and parse-verified contiguous.
+        let prefix_bytes = base.version().records.len() * day_file::RECORD_BYTES;
+        let last_base_date = base.version().records.last().map(|b| b.date);
+        self.probe_bound(
+            base_day_sha,
+            base_events_sha,
+            prefix_bytes,
+            last_base_date,
+            market,
+            code,
+        )
+    }
+
+    /// Typed-facts probe for the ops-first update path (#259 S5G): the
+    /// same digest classification as `probe`, but bound to the compact
+    /// `source_bindings` row instead of the envelope `snapshot_inputs`.
+    /// The stored binding is the committed fact — verified at commit
+    /// time by `verified_source_binding` — so probing against it is
+    /// strictly stronger than trusting envelope metadata.
+    fn probe_facts(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        market: &str,
+        code: &str,
+    ) -> Result<(String, String, String, Continuity), SourceError> {
+        self.probe_bound(
+            Some(facts.day_member_sha256.as_str()),
+            Some(facts.security_event_sha256.as_str()),
+            facts.record_count as usize * day_file::RECORD_BYTES,
+            Some(facts.last_day),
+            market,
+            code,
+        )
+    }
+
+    /// Digest-proof continuity classification shared by `probe` (envelope
+    /// bindings) and `probe_facts` (compact source bindings).
+    fn probe_bound(
+        &self,
+        base_day_sha: Option<&str>,
+        base_events_sha: Option<&str>,
+        prefix_bytes: usize,
+        last_base_date: Option<NaiveDate>,
+        market: &str,
+        code: &str,
+    ) -> Result<(String, String, String, Continuity), SourceError> {
+        let source = self.session.source();
+        let (day_member, day_bytes) = self
+            .session
+            .member_bytes(&source.day, &MaterializeSession::day_names(market, code))?;
+        let day_member_sha256 = crate::hash::sha256(&day_bytes);
+        let (events, excluded) = self.session.security_events(market, code)?;
+        let events_sha256 = security_events_digest(events, excluded);
+        let continuity = match (base_day_sha, base_events_sha) {
+            (Some(day_sha), Some(ev_sha))
+                if ev_sha == events_sha256 && day_sha == day_member_sha256 =>
+            {
+                Continuity::Unchanged {
+                    prefix_bytes: day_bytes.len(),
+                }
+            }
+            (Some(day_sha), Some(ev_sha))
+                if ev_sha == events_sha256
+                    && day_bytes.len() > prefix_bytes
+                    && day_bytes.len().is_multiple_of(day_file::RECORD_BYTES)
+                    && crate::hash::sha256(&day_bytes[..prefix_bytes]) == day_sha =>
+            {
+                // A parse failure here means the member itself is
+                // malformed — a source error, not a revision.
+                let tail = day_file::parse(&day_bytes[prefix_bytes..]).map_err(|e| {
+                    SourceError::InvalidResponse(format!(".day member tail malformed: {e}"))
+                })?;
+                match (last_base_date, tail.first()) {
+                    (Some(last), Some(first)) if first.date > last => {
+                        Continuity::Append { prefix_bytes, tail }
+                    }
+                    // Overlapping or missing tail records mean rewritten
+                    // history — no continuity proof.
+                    _ => Continuity::Unverified,
+                }
+            }
+            _ => Continuity::Unverified,
+        };
+        Ok((day_member, day_member_sha256, events_sha256, continuity))
+    }
+
+    /// Serialize the merged update candidate into an immutable version
+    /// record and bind the evidence chain the publication gate checks:
+    /// base integrity → segment digest → combined record integrity, plus
+    /// the snapshot inputs that claim complete coverage.
+    fn combined_candidate(
+        &self,
+        ctx: &ContinuityCtx<'_>,
+        base: &CheckedRecord,
+        batch: &MarketDataBatch,
+        segment: &MarketDataBatch,
+        merged: Vec<Bar>,
+    ) -> Result<CombinedCandidate, SourceError> {
+        let mut combined_batch = batch.clone();
+        combined_batch.bars = merged;
+        combined_batch.coverage = if combined_batch.bars == batch.bars {
+            // Merged == full materialized history: carry the same
+            // coverage claim a fresh materialization makes so the stored
+            // metadata stays stable for the next update.
+            batch.coverage.clone()
+        } else {
+            base.batch.coverage.clone()
+        };
+        let raw = combined_version_record(&combined_batch, ctx.candidate_id, self.published_at)?;
+        let segment_sha256 = crate::market_update::candidate_digest(segment)
+            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+        Ok(CombinedCandidate {
+            evidence: CombinedEvidence {
+                base_integrity_sha256: ctx.base_integrity.into(),
+                segment_sha256,
+                combined_integrity_sha256: raw["integrity_sha256"]
+                    .as_str()
+                    .expect("just set")
+                    .into(),
+                complete_coverage_ref: format!(
+                    "inspected snapshot manifest {} + day member {}:{} + gbbq member {} + security events {}",
+                    self.session.source().manifest_sha256(),
+                    ctx.day_member,
+                    ctx.day_member_sha256,
+                    self.session.source().gbbq.sha256,
+                    ctx.events_sha256,
+                ),
+            },
+            record: raw,
+        })
+    }
+
+    /// Typed ops-first acquisition (#259 S5G): probe continuity against
+    /// compact base facts, parse only the proven-new tail records, and
+    /// return exactly what the typed commit needs — no `fixed(base)`
+    /// materialization and no combined JSON envelope. `Ok(None)` means
+    /// the ops path cannot carry this update (absent continuity proof or
+    /// coverage/unit metadata drift) and the caller falls back to
+    /// `acquire`, which reproduces the envelope semantics for the rare
+    /// cases that still need it.
+    ///
+    /// `base_window` is the caller's `base_bars_in_range` read — the
+    /// base's leaf bars inside the accepted range only — used for the
+    /// segment batch and the empty-range check the envelope path makes.
+    fn acquire_typed(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &crate::market_update::DateRange,
+    ) -> Result<Option<crate::market_update::runner::TypedAcquisition>, SourceError> {
+        let symbol = facts.symbol.as_str();
+        let Some((market, code)) = symbol.split_once('.').filter(|(m, c)| {
+            matches!(*m, "sh" | "sz") && c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())
+        }) else {
+            return Err(SourceError::Unsupported(format!(
+                "unsupported symbol {symbol:?}; expected sh|sz + six digits"
+            )));
+        };
+        let (day_member, day_member_sha256, events_sha256, continuity) =
+            self.probe_facts(facts, market, code)?;
+        let (events, excluded) = self.session.security_events(market, code)?;
+        let gbbq_member_sha256 = self.session.decoded_gbbq()?.sha256.clone();
+        let source = self.session.source();
+        let (mode, prefix_bytes) = match &continuity {
+            Continuity::Unchanged { prefix_bytes } => ("unchanged", *prefix_bytes),
+            Continuity::Append { prefix_bytes, .. } => ("append", *prefix_bytes),
+            Continuity::Unverified => return Ok(None),
+        };
+        let make_evidence = |candidate_sha256: String| {
+            Ok::<_, SourceError>(crate::market_update::Evidence {
+                base_version_id: facts.version_id.clone(),
+                base_integrity_sha256: facts.integrity_sha256.clone(),
+                candidate_sha256,
+                range: range.clone(),
+                same_qfq_basis_ref: format!(
+                    "inspected snapshot manifest {} + gbbq member {}",
+                    source.manifest_sha256(),
+                    gbbq_member_sha256
+                ),
+                revision_ref: None,
+                continuity: Some(crate::market_update::ContinuityEvidence {
+                    mode: mode.into(),
+                    day_member_sha256: day_member_sha256.clone(),
+                    day_prefix_bytes: prefix_bytes as u64,
+                    gbbq_events_sha256: events_sha256.clone(),
+                }),
+            })
+        };
+        match continuity {
+            Continuity::Unverified => unreachable!("returned above"),
+            Continuity::Unchanged { .. } => {
+                // Envelope parity: no base bars inside the accepted range
+                // is a source failure there, not a no-change.
+                if base_window.is_empty() {
+                    return Err(SourceError::InvalidResponse(
+                        "snapshot carries no bars inside the accepted range".into(),
+                    ));
+                }
+                let mut segment = self.session.assemble_daily(
+                    symbol,
+                    DayMemberRead {
+                        member: day_member.clone(),
+                        sha256: day_member_sha256.clone(),
+                    },
+                    base_window.to_vec(),
+                    events,
+                    excluded,
+                )?;
+                // The member bytes and event set are byte-proven
+                // identical to what the base was published from, so the
+                // base's coverage claim remains exactly true for this
+                // data (same pinning rule as the envelope path).
+                segment.coverage = facts.coverage.clone();
+                // Metadata the ops path cannot carry — a unit conflict
+                // or enrichment (`prepare`'s two gates; reason text is
+                // not drift) or a non-complete coverage claim requires
+                // the envelope path's combined-candidate machinery.
+                if crate::market_update::unit_drift(&facts.unit_currency, &segment.unit_currency)
+                    || facts.coverage.status != crate::market_data::CoverageStatus::Complete
+                {
+                    return Ok(None);
+                }
+                crate::publish::validate_and_deduplicate(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                crate::publish::validate_unit_currency_evidence(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                crate::publish::validate_adjustment_evidence(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                Ok(Some(crate::market_update::runner::TypedAcquisition {
+                    decision: crate::market_update::runner::TypedDecision::Unchanged,
+                    evidence: make_evidence(
+                        crate::market_update::candidate_digest(&segment)
+                            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
+                    )?,
+                }))
+            }
+            Continuity::Append { tail, .. } => {
+                let mut segment_bars = base_window.to_vec();
+                segment_bars.extend(MaterializeSession::qfq_bars(&tail, events)?);
+                segment_bars.retain(|b| range.start <= b.date && b.date <= range.end);
+                if segment_bars.is_empty() {
+                    return Err(SourceError::InvalidResponse(
+                        "snapshot carries no bars inside the accepted range".into(),
+                    ));
+                }
+                let segment = self.session.assemble_daily(
+                    symbol,
+                    DayMemberRead {
+                        member: day_member.clone(),
+                        sha256: day_member_sha256.clone(),
+                    },
+                    segment_bars,
+                    events,
+                    excluded,
+                )?;
+                // A coverage or unit drift means the merged result carries
+                // new metadata — the ops path has no channel for it; the
+                // envelope path handles it (and its NEEDS_VERIFICATION
+                // outcome for genuinely conflicting units). Units use
+                // `prepare`'s conflict/enrichment gates: reason text is
+                // not drift.
+                if segment.coverage != facts.coverage
+                    || crate::market_update::unit_drift(
+                        &facts.unit_currency,
+                        &segment.unit_currency,
+                    )
+                {
+                    return Ok(None);
+                }
+                crate::publish::validate_and_deduplicate(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                crate::publish::validate_unit_currency_evidence(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                crate::publish::validate_adjustment_evidence(&segment)
+                    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+                // The probe proved every tail record is strictly newer
+                // than the base's last day, so the in-range tail bars
+                // are pure upserts: no base date can be revised and none
+                // is removed.
+                let upserts: Vec<Bar> = segment
+                    .bars
+                    .iter()
+                    .filter(|b| b.date > facts.last_day)
+                    .cloned()
+                    .collect();
+                Ok(Some(crate::market_update::runner::TypedAcquisition {
+                    decision: if upserts.is_empty() {
+                        crate::market_update::runner::TypedDecision::Unchanged
+                    } else {
+                        crate::market_update::runner::TypedDecision::Append { upserts }
+                    },
+                    evidence: make_evidence(
+                        crate::market_update::candidate_digest(&segment)
+                            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
+                    )?,
+                }))
+            }
+        }
+    }
+}
+
+/// Measurement-harness provider (#259 S5G-7): delegates the typed
+/// acquisition to the real `TdxRangeProvider` — member read, sha256,
+/// continuity probe, event digest, validations all run for real — then
+/// substitutes a fabricated one-bar tail so the Append commit path is
+/// exercised against an unchanged snapshot. The fabricated tail is
+/// marked in the evidence; no production path uses this provider.
+#[cfg(test)]
+pub struct FabricatedAppendProvider<'a> {
+    pub inner: TdxRangeProvider<'a>,
+    /// Wall time spent inside the real `acquire_typed` call.
+    pub acquire_ns: std::cell::Cell<u64>,
+}
+#[cfg(test)]
+impl RangeProvider for FabricatedAppendProvider<'_> {
+    fn acquire(
+        &self,
+        base: &CheckedRecord,
+        range: &DateRange,
+        candidate_id: &str,
+    ) -> Result<Acquisition, SourceError> {
+        self.inner.acquire(base, range, candidate_id)
+    }
+    fn acquire_typed(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &crate::market_update::DateRange,
+    ) -> Result<Option<crate::market_update::runner::TypedAcquisition>, SourceError> {
+        let started = std::time::Instant::now();
+        let acquired = self.inner.acquire_typed(facts, base_window, range);
+        self.acquire_ns
+            .set(self.acquire_ns.get() + started.elapsed().as_nanos() as u64);
+        let Some(mut acquired) = acquired? else {
+            return Ok(None);
+        };
+        let next_day = facts.last_day + chrono::Duration::days(1);
+        if next_day > range.end {
+            return Ok(None);
+        }
+        let upsert = Bar {
+            date: next_day,
+            open: rust_decimal::Decimal::new(10000, 2),
+            high: rust_decimal::Decimal::new(10025, 2),
+            low: rust_decimal::Decimal::new(9975, 2),
+            close: rust_decimal::Decimal::new(10010, 2),
+            volume: Some(rust_decimal::Decimal::new(1_500_000, 0)),
+            amount: Some(rust_decimal::Decimal::new(150_225_000, 0)),
+            r7_raw: None,
+        };
+        acquired.decision = crate::market_update::runner::TypedDecision::Append {
+            upserts: vec![upsert.clone()],
+        };
+        if let Some(continuity) = acquired.evidence.continuity.as_mut() {
+            continuity.mode = "append".into();
+        }
+        acquired.evidence.candidate_sha256 = crate::hash::sha256(
+            serde_json::json!({"harness_fabricated_tail": [upsert.date.to_string()]})
+                .to_string()
+                .as_bytes(),
+        );
+        acquired
+            .evidence
+            .same_qfq_basis_ref
+            .push_str(" + harness fabricated tail");
+        Ok(Some(acquired))
+    }
+}
+
+/// Digest/identity context a continuity-proof update carries into its
+/// combined candidate evidence.
+struct ContinuityCtx<'a> {
+    base_integrity: &'a str,
+    day_member: &'a str,
+    day_member_sha256: &'a str,
+    events_sha256: &'a str,
+    candidate_id: &'a str,
 }
 
 impl RangeProvider for TdxRangeProvider<'_> {
@@ -391,51 +973,255 @@ impl RangeProvider for TdxRangeProvider<'_> {
         &self,
         base: &CheckedRecord,
         range: &DateRange,
-        _candidate_id: &str,
+        candidate_id: &str,
     ) -> Result<Acquisition, SourceError> {
-        let mut batch = self.source.materialize_daily(&base.version().symbol)?;
-        batch
-            .bars
-            .retain(|b| range.start <= b.date && b.date <= range.end);
-        if batch.bars.is_empty() {
-            return Err(SourceError::InvalidResponse(
-                "snapshot carries no bars inside the accepted range".into(),
-            ));
-        }
-        let gbbq = batch
-            .provenance
-            .snapshot_inputs
-            .as_ref()
-            .and_then(|inputs| inputs.iter().find(|i| i.role == "gbbq"))
+        let source = self.session.source();
+        let symbol = base.version().symbol.clone();
+        let Some((market, code)) = symbol.split_once('.').filter(|(m, c)| {
+            matches!(*m, "sh" | "sz") && c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())
+        }) else {
+            return Err(SourceError::Unsupported(format!(
+                "unsupported symbol {symbol:?}; expected sh|sz + six digits"
+            )));
+        };
+        let base_integrity: String = base.raw()["integrity_sha256"]
+            .as_str()
             .ok_or_else(|| {
-                SourceError::InvalidResponse("snapshot binding lacks the gbbq member".into())
-            })?;
+                SourceError::NotVerified("fixed base carries no integrity digest".into())
+            })?
+            .into();
+        let (day_member, day_member_sha256, events_sha256, continuity) =
+            self.probe(base, market, code)?;
+        let ctx = ContinuityCtx {
+            base_integrity: &base_integrity,
+            day_member: &day_member,
+            day_member_sha256: &day_member_sha256,
+            events_sha256: &events_sha256,
+            candidate_id,
+        };
+        let (mode, prefix_bytes) = match &continuity {
+            Continuity::Unchanged { prefix_bytes } => ("unchanged", *prefix_bytes),
+            Continuity::Append { prefix_bytes, .. } => ("append", *prefix_bytes),
+            Continuity::Unverified => ("full", 0),
+        };
+        let (events, excluded) = self.session.security_events(market, code)?;
+        // Under an `unchanged`/`append` proof the prefix bars are byte-
+        // identical to the base's materialization input, so the base's
+        // stored bars are reused verbatim; only the tail is adjusted.
+        // `unverified` pays the full materialize as before.
+        let (batch, combined) = match continuity {
+            Continuity::Unchanged { .. } => {
+                let mut batch = self.session.assemble_daily(
+                    &symbol,
+                    DayMemberRead {
+                        member: day_member.clone(),
+                        sha256: day_member_sha256.clone(),
+                    },
+                    base.batch.bars.clone(),
+                    events,
+                    excluded,
+                )?;
+                // The member bytes and event set are byte-proven identical
+                // to what the base was published from, so the base's
+                // coverage claim remains exactly true for this data.
+                // Carrying it forward (instead of the new manifest's
+                // identical-in-content claim) keeps a cross-generation
+                // no-change a real NoChange — otherwise the volatile
+                // manifest digest alone would bump every symbol's version
+                // on every generation.
+                batch.coverage = base.batch.coverage.clone();
+                let mut segment = batch.clone();
+                segment
+                    .bars
+                    .retain(|b| range.start <= b.date && b.date <= range.end);
+                if segment.bars.is_empty() {
+                    return Err(SourceError::InvalidResponse(
+                        "snapshot carries no bars inside the accepted range".into(),
+                    ));
+                }
+                // Records are byte-proven identical; only batch metadata
+                // (e.g. a different generation's manifest coverage claim)
+                // can still authorize a new version. A provable no-change
+                // must not carry a combined candidate — NoChange forbids
+                // one — while a metadata change requires it.
+                let combined = if batch.coverage == base.batch.coverage
+                    && batch.unit_currency == base.version().unit_currency
+                {
+                    None
+                } else {
+                    Some(self.combined_candidate(
+                        &ctx,
+                        base,
+                        &batch,
+                        &segment,
+                        base.version().records.clone(),
+                    )?)
+                };
+                (segment, combined)
+            }
+            Continuity::Append { tail, .. } => {
+                let mut bars = base.batch.bars.clone();
+                bars.extend(MaterializeSession::qfq_bars(&tail, events)?);
+                let batch = self.session.assemble_daily(
+                    &symbol,
+                    DayMemberRead {
+                        member: day_member.clone(),
+                        sha256: day_member_sha256.clone(),
+                    },
+                    bars,
+                    events,
+                    excluded,
+                )?;
+                let mut segment = batch.clone();
+                segment
+                    .bars
+                    .retain(|b| range.start <= b.date && b.date <= range.end);
+                if segment.bars.is_empty() {
+                    return Err(SourceError::InvalidResponse(
+                        "snapshot carries no bars inside the accepted range".into(),
+                    ));
+                }
+                let merged: Vec<Bar> = merge_segment_bars(base, &segment.bars)?
+                    .into_values()
+                    .collect();
+                // A narrow accepted range can exclude every appended
+                // record; when the merge reproduces the base exactly and
+                // units are unchanged the update is a no-change, which
+                // forbids a combined candidate. The base's coverage claim
+                // remains exactly true for identical data — pinning it
+                // keeps a cross-generation no-change from becoming a
+                // metadata-only version bump on the volatile manifest
+                // digest.
+                if merged == base.version().records
+                    && batch.unit_currency == base.version().unit_currency
+                {
+                    let mut segment = segment;
+                    segment.coverage = base.batch.coverage.clone();
+                    (segment, None)
+                } else {
+                    let combined = self.combined_candidate(&ctx, base, &batch, &segment, merged)?;
+                    (segment, Some(combined))
+                }
+            }
+            Continuity::Unverified => {
+                let mut batch = self.session.materialize_daily(&symbol)?;
+                batch
+                    .bars
+                    .retain(|b| range.start <= b.date && b.date <= range.end);
+                if batch.bars.is_empty() {
+                    return Err(SourceError::InvalidResponse(
+                        "snapshot carries no bars inside the accepted range".into(),
+                    ));
+                }
+                (batch, None)
+            }
+        };
+        let gbbq_member_sha256 = self.session.decoded_gbbq()?.sha256.clone();
         Ok(Acquisition {
             evidence: Evidence {
                 base_version_id: base.version().version_id.clone(),
-                base_integrity_sha256: base.raw()["integrity_sha256"]
-                    .as_str()
-                    .ok_or_else(|| {
-                        SourceError::NotVerified("fixed base carries no integrity digest".into())
-                    })?
-                    .into(),
+                base_integrity_sha256: base_integrity,
                 candidate_sha256: crate::market_update::candidate_digest(&batch)
                     .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
                 range: range.clone(),
-                // Same-QFQ-basis proof: both the base version and this
-                // segment derive from the same manifest-pinned snapshot and
-                // the same gbbq member bytes.
+                // Same-QFQ-basis proof: this segment derives from the
+                // manifest-pinned snapshot named here; continuity vs the
+                // fixed base is carried by `continuity` below.
                 same_qfq_basis_ref: format!(
                     "inspected snapshot manifest {} + gbbq member {}",
-                    self.source.manifest_sha256(),
-                    gbbq.member_sha256
+                    source.manifest_sha256(),
+                    gbbq_member_sha256
                 ),
                 revision_ref: None,
+                continuity: Some(crate::market_update::ContinuityEvidence {
+                    mode: mode.into(),
+                    day_member_sha256,
+                    day_prefix_bytes: prefix_bytes as u64,
+                    gbbq_events_sha256: events_sha256,
+                }),
             },
             batch,
-            combined: None,
+            combined,
         })
     }
+    fn acquire_typed(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &crate::market_update::DateRange,
+    ) -> Result<Option<crate::market_update::runner::TypedAcquisition>, SourceError> {
+        TdxRangeProvider::acquire_typed(self, facts, base_window, range)
+    }
+}
+
+/// Overlay in-range segment bars onto the fixed base's records. Same rule
+/// as `market_update::prepare` (#4 AC-71): filling an unknown optional
+/// field is enrichment, not a correction — a source bar contradicting a
+/// known base value is a basis conflict and fails closed.
+fn merge_segment_bars(
+    base: &CheckedRecord,
+    segment_bars: &[Bar],
+) -> Result<BTreeMap<NaiveDate, Bar>, SourceError> {
+    let mut merged: BTreeMap<_, _> = base
+        .version()
+        .records
+        .iter()
+        .map(|b| (b.date, b.clone()))
+        .collect();
+    for bar in segment_bars {
+        if let Some(existing) = merged.get(&bar.date) {
+            let changed_known = existing.open != bar.open
+                || existing.high != bar.high
+                || existing.low != bar.low
+                || existing.close != bar.close
+                || existing.volume.zip(bar.volume).is_some_and(|(a, b)| a != b)
+                || existing.amount.zip(bar.amount).is_some_and(|(a, b)| a != b)
+                || existing.r7_raw.zip(bar.r7_raw).is_some_and(|(a, b)| a != b);
+            let lost_known = (existing.volume.is_some() && bar.volume.is_none())
+                || (existing.amount.is_some() && bar.amount.is_none())
+                || (existing.r7_raw.is_some() && bar.r7_raw.is_none());
+            if changed_known || lost_known {
+                return Err(SourceError::NotVerified(format!(
+                    "source bar {} conflicts with the fixed base",
+                    bar.date
+                )));
+            }
+        }
+        merged.insert(bar.date, bar.clone());
+    }
+    Ok(merged)
+}
+
+/// Serialize a merged candidate batch into the immutable version record
+/// and bind its integrity digest.
+fn combined_version_record(
+    combined_batch: &MarketDataBatch,
+    candidate_id: &str,
+    published_at: DateTime<Utc>,
+) -> Result<Value, SourceError> {
+    let (records, validation) = publish::validate_and_deduplicate(combined_batch)
+        .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+    let mut raw = serde_json::to_value(EffectiveVersion {
+        version_id: candidate_id.into(),
+        symbol: combined_batch.symbol.clone(),
+        period: combined_batch.period,
+        adjustment: combined_batch.adjustment,
+        source: combined_batch.provenance.source.clone(),
+        records,
+        published_at,
+        validation,
+        unit_currency: combined_batch.unit_currency.clone(),
+        adjustment_evidence: combined_batch.adjustment_evidence.clone(),
+        yearly_derivation: None,
+    })
+    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+    raw["batch"] = serde_json::to_value(combined_batch)
+        .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+    raw["integrity_sha256"] = Value::String(
+        crate::market_storage::compat::legacy_digest(&raw)
+            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
+    );
+    Ok(raw)
 }
 
 /// Shared acquisition for providers that build a trusted combined
@@ -458,14 +1244,15 @@ impl RangeProvider for TdxRangeProvider<'_> {
 /// republish provider passes `None` so `prepare` independently rejects
 /// any revised known value — republish expects pure enrichment only.
 fn acquire_merged_segment(
-    source: &TdxMarketSource,
+    session: &MaterializeSession<'_>,
     base: &CheckedRecord,
     range: &DateRange,
     candidate_id: &str,
     published_at: DateTime<Utc>,
     revision_ref: Option<String>,
 ) -> Result<Acquisition, SourceError> {
-    let batch = source.materialize_daily(&base.version().symbol)?;
+    let source = session.source();
+    let batch = session.materialize_daily(&base.version().symbol)?;
     // Same pinned snapshot = same QFQ basis: the base's declared
     // snapshot inputs must equal the member/archive digests this
     // installed source actually read.
@@ -504,68 +1291,18 @@ fn acquire_merged_segment(
     // preserved verbatim. A proven gap only authorizes filling dates the
     // base lacks — an overlapping bar the source contradicts is a basis
     // conflict, not a gap, so fail closed instead of overwriting it.
-    let mut merged: BTreeMap<_, _> = base
-        .version()
-        .records
-        .iter()
-        .map(|b| (b.date, b.clone()))
-        .collect();
-    for bar in &segment.bars {
-        if let Some(existing) = merged.get(&bar.date) {
-            // Same rule as `market_update::prepare` (#4 AC-71): filling an
-            // unknown optional field is enrichment, not a correction — a
-            // conflict exists only when a known value differs.
-            let changed_known = existing.open != bar.open
-                || existing.high != bar.high
-                || existing.low != bar.low
-                || existing.close != bar.close
-                || existing.volume.zip(bar.volume).is_some_and(|(a, b)| a != b)
-                || existing.amount.zip(bar.amount).is_some_and(|(a, b)| a != b)
-                || existing.r7_raw.zip(bar.r7_raw).is_some_and(|(a, b)| a != b);
-            let lost_known = (existing.volume.is_some() && bar.volume.is_none())
-                || (existing.amount.is_some() && bar.amount.is_none())
-                || (existing.r7_raw.is_some() && bar.r7_raw.is_none());
-            if changed_known || lost_known {
-                return Err(SourceError::NotVerified(format!(
-                    "source bar {} conflicts with the fixed base",
-                    bar.date
-                )));
-            }
-        }
-        merged.insert(bar.date, bar.clone());
-    }
+    let merged = merge_segment_bars(base, &segment.bars)?;
     let mut combined_batch = batch.clone();
     combined_batch.bars = merged.into_values().collect();
     combined_batch.coverage = if combined_batch.bars == batch.bars {
-        CoverageEvidence::complete(format!(
-            "merged record equals the full .day member history of inspected snapshot manifest {}; {DECLARED_SCOPE}",
-            source.manifest_sha256()
-        ))
+        // Merged == full materialized history: carry the same coverage
+        // claim a fresh materialization makes so the stored metadata
+        // stays stable for the next update.
+        batch.coverage.clone()
     } else {
         base.batch.coverage.clone()
     };
-    let (records, validation) = publish::validate_and_deduplicate(&combined_batch)
-        .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
-    let mut raw = serde_json::to_value(EffectiveVersion {
-        version_id: candidate_id.into(),
-        symbol: combined_batch.symbol.clone(),
-        period: combined_batch.period,
-        adjustment: combined_batch.adjustment,
-        source: combined_batch.provenance.source.clone(),
-        records,
-        published_at,
-        validation,
-        unit_currency: combined_batch.unit_currency.clone(),
-        adjustment_evidence: combined_batch.adjustment_evidence.clone(),
-        yearly_derivation: None,
-    })
-    .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
-    raw["batch"] = serde_json::to_value(&combined_batch)
-        .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
-    raw["integrity_sha256"] = Value::String(
-        crate::market_storage::compat::legacy_digest(&raw)
-            .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
-    );
+    let raw = combined_version_record(&combined_batch, candidate_id, published_at)?;
     let segment_sha256 = crate::market_update::candidate_digest(&segment)
         .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
     Ok(Acquisition {
@@ -581,6 +1318,10 @@ fn acquire_merged_segment(
                 gbbq.member_sha256
             ),
             revision_ref,
+            // Same-generation equality above already pins every input;
+            // the digest-continuity modes exist for cross-generation
+            // updates only.
+            continuity: None,
         },
         combined: Some(CombinedCandidate {
             evidence: CombinedEvidence {
@@ -615,7 +1356,9 @@ fn acquire_merged_segment(
 /// are not visible to this layer — the reference says so rather than
 /// naming ids it cannot read.
 pub struct TdxBackfillProvider<'a> {
-    pub source: &'a TdxMarketSource,
+    /// Shared decode/index channel; a single-item caller builds one fresh
+    /// session and pays the one-time decode itself.
+    pub session: &'a MaterializeSession<'a>,
     pub published_at: DateTime<Utc>,
 }
 
@@ -627,7 +1370,7 @@ impl RangeProvider for TdxBackfillProvider<'_> {
         candidate_id: &str,
     ) -> Result<Acquisition, SourceError> {
         acquire_merged_segment(
-            self.source,
+            self.session,
             base,
             range,
             candidate_id,
@@ -653,7 +1396,9 @@ impl RangeProvider for TdxBackfillProvider<'_> {
 /// pure enrichment (filling previously unpromoted optional fields) or
 /// new dates only, never a correction.
 pub struct TdxRepublishProvider<'a> {
-    pub source: &'a TdxMarketSource,
+    /// Shared decode/index channel; a single-item caller builds one fresh
+    /// session and pays the one-time decode itself.
+    pub session: &'a MaterializeSession<'a>,
     pub published_at: DateTime<Utc>,
 }
 
@@ -665,7 +1410,7 @@ impl RangeProvider for TdxRepublishProvider<'_> {
         candidate_id: &str,
     ) -> Result<Acquisition, SourceError> {
         acquire_merged_segment(
-            self.source,
+            self.session,
             base,
             range,
             candidate_id,
@@ -673,6 +1418,30 @@ impl RangeProvider for TdxRepublishProvider<'_> {
             None,
         )
     }
+}
+
+/// Typed first-collection candidate for the compact bulk staging path
+/// (#259 S5F): carries the canonical facts an envelope embeds — bars,
+/// coverage, unit/adjustment evidence and the generation source binding —
+/// without materializing legacy JSON.
+pub struct CollectionCandidate {
+    pub task_id: String,
+    pub item_id: String,
+    pub publication_id: String,
+    pub version_id: String,
+    pub run_id: String,
+    pub symbol: String,
+    pub source: String,
+    pub bars: Vec<crate::market_data::Bar>,
+    pub coverage: crate::market_data::CoverageEvidence,
+    pub unit_currency: crate::market_data::UnitCurrencyEvidence,
+    pub adjustment_evidence: crate::market_data::AdjustmentEvidence,
+    pub published_at: DateTime<Utc>,
+    pub generation_id: String,
+    pub generation_manifest_sha256: String,
+    pub day_member_sha256: String,
+    pub security_event_sha256: String,
+    pub generation_evidence: Value,
 }
 
 /// Repository surface for collection publication: generic commit plus the
@@ -689,6 +1458,18 @@ pub trait DailyCollectionRepository: MarketRepository {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error>;
+    /// Optional typed bulk first-collection commit (#259 S5F): one write
+    /// transaction covers the whole task's items on backends that stage
+    /// compact checkpoints directly. `None` keeps the per-item envelope
+    /// path on legacy or any backend without a typed entry.
+    fn commit_collection_batch(
+        &self,
+        task_id: &str,
+        items: &[CollectionCandidate],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        let _ = (task_id, items);
+        Ok(None)
+    }
 }
 
 /// Item runner for `start_collection`/`market.daily`/`v1` — the only item
@@ -850,6 +1631,152 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             self.repository.task(task_id)?,
         )))
     }
+    /// Bulk collection path (#259 S5F): produce the typed candidate for
+    /// every item (member parse stays outside the writer), then stage and
+    /// commit them in one repository transaction. Items that cannot
+    /// produce a candidate — replays, leftover running items, materialize
+    /// failures — fall back to `run_item` so outcome recording and crash
+    /// reconciliation stay identical. `None` means the repository only
+    /// supports the envelope path; callers keep the per-item loop.
+    /// `generation_id` binds the snapshot generation the caller already
+    /// resolved for this task's frozen `source_generation_id` input.
+    pub fn run_items(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+        generation_id: &str,
+    ) -> Result<Option<()>, Error> {
+        let mut candidates = Vec::new();
+        let mut fallback = Vec::new();
+        for item_id in item_ids {
+            match self.collection_candidate(task_id, item_id, generation_id) {
+                Ok(Some(candidate)) => candidates.push(candidate),
+                Ok(None) | Err(_) => fallback.push(item_id.clone()),
+            }
+        }
+        let results = match self
+            .repository
+            .commit_collection_batch(task_id, &candidates)
+        {
+            Ok(Some(results)) => results,
+            Ok(None) => return Ok(None),
+            Err(_) => {
+                // Structural/transaction errors rolled the whole batch back:
+                // isolate per item so one bad item cannot wedge the task in a
+                // Running-retry loop (the documented batch contract).
+                fallback.extend(candidates.iter().map(|item| item.item_id.clone()));
+                for item_id in fallback {
+                    self.run_item(task_id, &item_id)?;
+                }
+                return Ok(Some(()));
+            }
+        };
+        if results.len() != candidates.len() {
+            return Err(Error::Integrity(
+                "collection batch result count does not match candidates".into(),
+            ));
+        }
+        for (candidate, result) in candidates.iter().zip(results) {
+            if result.is_err() {
+                fallback.push(candidate.item_id.clone());
+            }
+        }
+        for item_id in fallback {
+            self.run_item(task_id, &item_id)?;
+        }
+        Ok(Some(()))
+    }
+
+    /// Typed candidate production for `run_items`: every check `run_item`
+    /// performs before staging, minus the envelope materialization. `None`
+    /// defers the item to the per-item path (receipt replay, leftover
+    /// running state or terminal task bookkeeping).
+    fn collection_candidate(
+        &self,
+        task_id: &str,
+        item_id: &str,
+        generation_id: &str,
+    ) -> Result<Option<CollectionCandidate>, Error> {
+        let binding = self
+            .repository
+            .task_item_binding(task_id, item_id)?
+            .ok_or_else(|| Error::Invalid("collection item absent from accepted task".into()))?;
+        if binding.head.key.operation != "start_collection"
+            || binding.head.key.dataset != "market.daily"
+            || binding.head.key.contract_version != "v1"
+        {
+            return Err(Error::Invalid("unsupported collection contract".into()));
+        }
+        if binding.head.status.terminal()
+            || binding.head.visible_status(&self.run_id) == Status::NeedsVerification
+            || binding.item.stage != Stage::Pending
+        {
+            // Terminal tasks, unverified runs and items already started or
+            // finished keep the per-item path: its replay and
+            // reconciliation semantics are authoritative there.
+            return Ok(None);
+        }
+        if binding.head.status == Status::CancelRequested {
+            return Ok(None);
+        }
+        let target = &binding.item.spec.target;
+        let symbol = target["symbol"]
+            .as_str()
+            .ok_or_else(|| Error::Integrity("collection item target missing symbol".into()))?;
+        if target["period"] != Value::String("day".into()) {
+            return Err(Error::Invalid("collection target is not daily".into()));
+        }
+        let scope = Scope {
+            symbol: symbol.into(),
+            period: Period::Day,
+        };
+        if self.repository.effective_head(&scope)?.is_some() {
+            return Err(Error::Invalid(
+                "existing daily head requires the update_data range path".into(),
+            ));
+        }
+        let batch = match self.session {
+            Some(session) => session.materialize_daily(symbol),
+            None => self.source.materialize_daily(symbol),
+        }
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+        let id = crate::hash::sha256(serde_json::json!([task_id, item_id]).to_string().as_bytes());
+        let (records, _) =
+            publish::validate_and_deduplicate(&batch).map_err(|e| Error::Invalid(e.to_string()))?;
+        let inputs = batch.provenance.snapshot_inputs.clone().unwrap_or_default();
+        let member_sha = |role: &str| {
+            inputs
+                .iter()
+                .find(|input| input.role == role)
+                .map(|input| input.member_sha256.clone())
+                .ok_or_else(|| {
+                    Error::Integrity(format!("snapshot inputs lack the {role} member binding"))
+                })
+        };
+        Ok(Some(CollectionCandidate {
+            task_id: task_id.into(),
+            item_id: item_id.into(),
+            publication_id: format!("collection-result-{id}"),
+            version_id: format!("collection-version-{id}"),
+            run_id: self.run_id.clone(),
+            symbol: batch.symbol.clone(),
+            source: batch.provenance.source.clone(),
+            bars: records,
+            coverage: batch.coverage.clone(),
+            unit_currency: batch.unit_currency.clone(),
+            adjustment_evidence: batch.adjustment_evidence.clone(),
+            published_at: self.published_at,
+            generation_id: generation_id.into(),
+            generation_manifest_sha256: self.source.manifest_sha256().to_string(),
+            day_member_sha256: member_sha("day")?,
+            security_event_sha256: member_sha(SECURITY_EVENTS_ROLE)?,
+            generation_evidence: serde_json::json!({
+                "manifest_sha256": self.source.manifest_sha256(),
+                "snapshot_inputs": inputs,
+            }),
+        }))
+    }
+
     /// Source failure preserves the old version: nothing is staged or
     /// committed on any materialization/validation error.
     fn materialize_and_commit(

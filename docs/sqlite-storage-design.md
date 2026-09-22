@@ -1,5 +1,14 @@
 # SQLite 行情存储与分析查询设计
 
+> **历史设计文档。** 本文描述 2026-09-12 首期方案，不代表当前 schema 18。
+> 当前实现已使用 compact envelope、persistent manifest tree 和 O(items) task
+> transition；但仍保留 `legacy-published-record-v1`、读时完整 compatibility
+> record expansion、`segment_bars.bar_json` 和 schema 16/17 legacy migration replay。
+> `compact-segmented-record-v2`、紧凑列式 canonical bars 及 no-change audit
+> 不复制完整 history 尚未完成。#259 的最终候选物理契约、摘要、审计与容量
+> Gate 见 [#259 最终紧凑存储设计冻结候选](tasks/issue-259-final-storage-design.md)；当前实测状态见
+> [#259 physical audit](https://github.com/liqiangcc/x-data-mcp/issues/259#issuecomment-5756919342)。
+
 ## 状态与决策来源
 
 设计任务：[Issue #69](https://github.com/liqiangcc/x-data-mcp/issues/69)。编写日期：2026-09-12。
@@ -13,7 +22,7 @@
 用户已授权本次编写并提交设计。下文表划分、事务和实现顺序属于本次设计决定，
 不能反推所有具体字段、性能指标或迁移范围都已由用户逐项确认。
 
-当前代码仍采用 JSON 文件，已有[发布单点提交](publish-storage.md)、
+本段“当前代码”仅指 2026-09-12 基线；当时仍采用 JSON 文件，已有[发布单点提交](publish-storage.md)、
 [任务受理单点提交](task-storage.md)和 #67 历史版本完整性读取。
 [#68](https://github.com/liqiangcc/x-data-mcp/issues/68) 已关闭，其已合并查询契约作为兼容回归基线，不再派发。
 SQLite 实现替换持久化机制，须保留这些用例的可观察语义。

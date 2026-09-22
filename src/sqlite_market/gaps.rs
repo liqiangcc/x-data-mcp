@@ -34,6 +34,19 @@ impl SqliteMarket {
         decision: &GapVerificationDecision,
         guard_subject_head: bool,
     ) -> Result<bool, Error> {
+        self.write(|c| record_gap_decision_tx(c, decision, guard_subject_head))
+    }
+}
+
+/// Connection-level gap-decision write shared by both backends. The gap
+/// tables are schema-neutral; the subject-head guard resolves through the
+/// schema-aware `head`.
+pub(crate) fn record_gap_decision_tx(
+    c: &Connection,
+    decision: &GapVerificationDecision,
+    guard_subject_head: bool,
+) -> Result<bool, Error> {
+    {
         decision.validate()?;
         let gap = ProvenGap {
             gap_id: derive_gap_id(decision),
@@ -47,7 +60,7 @@ impl SqliteMarket {
             observed_at: decision.decided_at,
         };
         gap.validate()?;
-        self.write(|c| {
+        {
             let inserted = match insert_decision(c, decision) {
                 Ok(()) => true,
                 Err(insert) => match read_decision(c, &decision.decision_id)? {
@@ -82,8 +95,10 @@ impl SqliteMarket {
             } else {
                 Ok(inserted)
             }
-        })
+        }
     }
+}
+impl SqliteMarket {
     /// Audit read of one stored decision; the stored row is mechanically
     /// re-validated and integrity fail-closed when unreadable.
     pub fn gap_verification_decision(
@@ -233,7 +248,7 @@ fn decision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<GapVerificatio
         Ok(decision)
     }())
 }
-fn read_decision(
+pub(crate) fn read_decision(
     c: &Connection,
     decision_id: &str,
 ) -> Result<Option<GapVerificationDecision>, Error> {

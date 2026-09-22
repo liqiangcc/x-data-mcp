@@ -103,6 +103,9 @@ impl DatabaseLease {
         lease.validate()?;
         Ok(lease)
     }
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
     pub fn validate(&self) -> io::Result<()> {
         let m = private_metadata(&self.path, false)?;
         if !m.is_file()

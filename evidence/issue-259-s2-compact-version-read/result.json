@@ -1,0 +1,63 @@
+{
+  "schema": "x-data-mcp.issue-259-s2-compact-version-read.v1",
+  "base_commit": "fc0091948fe4c34489217ce25ca7527a5c9153b5",
+  "working_tree_has_issue_259_design_and_s0_s1_s2_changes": true,
+  "decision": "PASS_TO_S3",
+  "canonical_identity": {
+    "rfc8785_dependency": "serde_json_canonicalizer=0.3.2",
+    "codec_identity_tests_passed": 18,
+    "fixed_vectors": {
+      "continuity_evidence": "2b95996080eb7b5d5785e1178859a1c6f93b4257e192ef810b3ac1c753910916",
+      "source_binding": "2268d65f32921a455ef412312467dca8cd12945b5fa39295866aeb0627c688c0",
+      "daily_version": "d8cf6f98195bd579c690060a28b27a1c4c79c53772b9142373a4f4d58fab62cc",
+      "yearly_version": "14969aa54d66f79edb6e71ee68c2b355d4861b1618bec4a983e1582382b50807"
+    },
+    "legacy_json_digest_used": false
+  },
+  "compact_version_store": {
+    "tests_passed": 13,
+    "lifecycle": "staged_validated_published",
+    "maximum_delta_depth": 256,
+    "checkpoint_rollover_compared_bar_by_bar": true,
+    "fixed_read_reconstructs_and_verifies_full_chain": true,
+    "range_read_matches_existing_read_page_semantics": true,
+    "version_list_reads_metadata_only": true,
+    "yearly_projection_recomputed_from_published_daily_base": true,
+    "fresh_test_schema_forbidden_objects_absent": [
+      "compat_json",
+      "envelope_json",
+      "bar_json",
+      "payloads"
+    ]
+  },
+  "corruption_gates": [
+    "evidence JCS or digest mismatch",
+    "source binding mismatch",
+    "missing or corrupt parent",
+    "parent cycle or scope mismatch",
+    "delta depth or manifest mode mismatch",
+    "checkpoint or delta rows missing",
+    "projection or version integrity mismatch",
+    "record count or date bounds mismatch",
+    "segment or bar corruption",
+    "yearly lineage or deterministic aggregation mismatch"
+  ],
+  "supporting_s1_tests": {
+    "compact_segment_tests_passed": 15,
+    "retained_roundtrip_not_rerun": true,
+    "reason": "The S1 retained 20576-bar round-trip already passed; S2 did not change the bar codec or segment framing."
+  },
+  "verification": [
+    "TMPDIR=/dev/shm cargo fmt --check",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_versions -- --nocapture",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_market -- --nocapture",
+    "TMPDIR=/dev/shm cargo test --locked --lib compact_v19 -- --nocapture",
+    "TMPDIR=/dev/shm cargo clippy --locked --lib --test official_market -- -D warnings",
+    "git diff --check"
+  ],
+  "limitations": [
+    "S2 is an isolated schema-19 version store and is not wired into migration, SqliteMarket, MarketRepository, MCP, publication results or effective-head writes.",
+    "Version listing proves metadata and integrity identity without reading segment_bars; fixed and range reads perform full projection verification.",
+    "PASS_TO_S3 does not pass audit-result, full-market capacity, daily-growth, ECS or production-readiness gates."
+  ]
+}

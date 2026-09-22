@@ -1,0 +1,25 @@
+{
+  "issue": 259,
+  "phase": "S5E-1",
+  "recorded_at": "2026-10-01T00:00:00Z",
+  "environment": "devin-box overlayfs, rustup stable 1.98.1, debug+release-units",
+  "scope": "schema-detected backend dispatch: production assembly routes schema-19 databases to SqliteCompactMarket and schema-18 to legacy SqliteMarket",
+  "changes": {
+    "backend_dispatch": "src/sqlite_market/backend.rs MarketBackend::open probes durable user_version via SqliteTasks::schema_version(); 19->Compact, all else->Legacy (legacy adapter itself fail-closes on v19)",
+    "assembly": "data_supply/mcp.rs constructs MarketBackend::open(&tasks); SqliteSupply/SqliteMetrics/worker run_once carry MarketBackend",
+    "compact_traits": "SqliteCompactMarket now implements DailyCollectionRepository, YearlyRepository (commit_yearly incl. no-change typed receipt), AuditStore (shared publication_checks table), EvidenceRepository, GapDecisionStore, GapTaskStore, DefaultRangeSource",
+    "schema_aware_reads": "conn-level head/read_record/range_rows/update::read_result/yearly_results::read_result dispatch on publication_batches presence; verification::read_facts reads typed result tables on v19",
+    "query_port": "sqlite_supply versions/task_facts + yearly row metadata re-aggregated from verified base on v19; gaps/default-range/metrics surfaces ride the schema-aware helpers"
+  },
+  "verification": {
+    "new_test": "backend_dispatch_and_compact_supply_surface (dispatch on v19 + versions/query/verify reads + legacy stays legacy)",
+    "lib_tests": "247 passed, 0 failed, 2 ignored",
+    "integration": "all integration suites green",
+    "clippy": "clippy --all-targets --locked -D warnings clean",
+    "fmt": "cargo fmt --check clean"
+  },
+  "limits": [
+    "v19 read paths exercise typed results + verified materialization; full adapter-level collection/update/years E2E on production runner remains for local-ext4 AC",
+    "per-item byte targets (768B no-change / 8MiB append) still above target but within hard gates"
+  ]
+}

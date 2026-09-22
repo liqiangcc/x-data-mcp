@@ -508,13 +508,17 @@ fn update_acceptance_freezes_minimal_intent_and_both_provenance_classes() {
     // Item scope/occupancy identical to explicit daily: symbol x day.
     assert_eq!(snap.items[0].spec.item_id, scope_id("sh.600006", "day"));
     let f = &snap.items[0].spec.frozen_inputs;
-    // Class 1: selection/catalog/execution-start provenance.
+    // Class 1: selection/catalog/execution-start provenance is stored once
+    // in the task's shared evidence; the item carries only its digest marker.
     let ev = &f["selection_evidence"];
-    assert_eq!(ev["catalog_version_id"], json!("c1"));
-    assert_eq!(ev["catalog_digest"].as_str().unwrap().len(), 64);
-    assert_eq!(ev["securities"], json!(["sh.600006"]));
-    assert!(ev["starts"]["sh.600006"].is_array());
-    assert_eq!(ev["evidence_digest"].as_str().unwrap().len(), 64);
+    let digest = ev["evidence_digest"].as_str().unwrap();
+    assert_eq!(digest.len(), 64);
+    let shared = snap.task.work.shared_evidence.as_ref().unwrap();
+    assert_eq!(shared["catalog_version_id"], json!("c1"));
+    assert_eq!(shared["catalog_digest"].as_str().unwrap().len(), 64);
+    assert_eq!(shared["securities"], json!(["sh.600006"]));
+    assert!(shared["starts"]["sh.600006"].is_array());
+    assert_eq!(shared["evidence_digest"], json!(digest));
     // Verified base identity.
     assert_eq!(f["base_version_id"], json!("daily-600006"));
     assert_eq!(f["base_integrity_sha256"].as_str().unwrap().len(), 64);
@@ -783,7 +787,12 @@ fn official_provider_keeps_default_execution_fail_closed() {
     );
     // The finished-failed task is no longer dispatchable.
     assert!(matches!(
-        crate::data_supply::worker::run_once(&ctl, &db, None, None),
+        crate::data_supply::worker::run_once(
+            &ctl,
+            &crate::sqlite_market::backend::MarketBackend::Legacy(db.clone()),
+            None,
+            None
+        ),
         Ok(None)
     ));
 }
@@ -824,4 +833,37 @@ fn explicit_daily_acceptance_still_uses_the_explicit_contract() {
     };
     assert_eq!(snap.task.key.contract_version, CONTRACT_VERSION);
     assert!(snap.items[0].spec.frozen_inputs["range"].is_object());
+}
+/// #262 ECS catch: the `Bound` decorator stamps `source_generation_id`
+/// into every resolved item's frozen inputs at acceptance; the runner's
+/// strict frozen decode must admit that field (the binding itself is
+/// enforced at session open) while still rejecting unknown fields.
+#[test]
+fn generation_binding_stamp_survives_default_frozen_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog, db) = open(&dir);
+    publish_catalog(&catalog, "c1", &["600006"]);
+    let ctl0 = TaskControl::new(
+        tasks.clone(),
+        "run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap();
+    publish_daily(&db, &ctl0, "600006", 0);
+    let ctl = acceptance_ctl(&tasks, &db, today);
+    let accepted = ctl
+        .accept(
+            "r-bound",
+            default_key(crate::market_update::tasks::Operation::Update, &db),
+            intent(),
+        )
+        .unwrap();
+    let RequestOutcome::Task(snap) = &accepted.record.outcome else {
+        panic!()
+    };
+    let mut frozen = snap.items[0].spec.frozen_inputs.clone();
+    frozen["source_generation_id"] = json!("gen-1");
+    crate::market_update::tasks::parse_default_frozen(&frozen).unwrap();
+    frozen["surprise"] = json!(1);
+    assert!(crate::market_update::tasks::parse_default_frozen(&frozen).is_err());
 }

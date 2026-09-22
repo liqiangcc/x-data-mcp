@@ -523,6 +523,7 @@ impl Contract for Documents {
                 .flat_map(|i| i.scope_keys.iter().cloned())
                 .collect(),
             items,
+            shared_evidence: None,
         })
     }
 }
@@ -660,6 +661,7 @@ fn disjoint_dates_do_not_narrow_security_period_occupancy() {
                     scope_keys: scopes.clone(),
                 }],
                 scopes,
+                shared_evidence: None,
             })
         }
     }

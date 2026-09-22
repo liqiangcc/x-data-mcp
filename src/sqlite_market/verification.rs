@@ -14,9 +14,19 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
     let kind = contract_kind(&task.task.key).ok_or(Error::Task(TaskError::UnsupportedContract))?;
     let daily = matches!(kind, FactContract::Daily);
     let legacy = matches!(kind, FactContract::Legacy);
+    let compact_schema: bool = c
+        .query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='publication_batches')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if compact_schema {
+        return read_facts_compact(c, task, daily, legacy);
+    }
     let mut stmt = c.prepare("SELECT 0,result_id,item_id FROM market_update_results WHERE task_id=?1 UNION ALL SELECT 1,result_id,item_id FROM yearly_execution_results WHERE task_id=?1").map_err(storage)?;
     let rows = stmt
-        .query_map([task_id], |r| {
+        .query_map([&task_id], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
@@ -63,7 +73,7 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
     if legacy {
         let mut stmt = c.prepare("SELECT publication_id,version_id,item_id,command_json,receipt_json FROM publication_batches WHERE task_id=?1").map_err(storage)?;
         let rows = stmt
-            .query_map([task_id], |r| {
+            .query_map([&task_id], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
@@ -140,6 +150,116 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
                 "task publication associations do not match execution receipts",
             ));
         }
+    }
+    let mut items = Vec::new();
+    for item in &task.items {
+        let evidence = found
+            .remove(&item.spec.item_id)
+            .unwrap_or(Evidence::Missing);
+        if matches!(evidence, Evidence::Missing)
+            && (item.stage == Stage::Finished && item.outcome.as_ref().is_some_and(|o| o.success))
+        {
+            return Err(integrity(
+                "successful item lacks publication execution evidence",
+            ));
+        }
+        items.push(ItemFact {
+            item_id: item.spec.item_id.clone(),
+            evidence,
+        });
+    }
+    Ok(Facts { task, items })
+}
+
+/// Schema-19 facts read: typed `market_update_results` /
+/// `publication_results` rows replace the v18 audit JSON. The canonical
+/// `result_digest` already binds the full result identity, so it is the
+/// evidence digest directly.
+fn read_facts_compact(
+    c: &Connection,
+    task: crate::task_control::TaskSnapshot,
+    daily: bool,
+    legacy: bool,
+) -> Result<Facts, Error> {
+    let task_id = task.task.task_id.clone();
+    if legacy {
+        return Err(integrity(
+            "legacy contract facts cannot exist on compact storage",
+        ));
+    }
+    let mut stmt = c
+        .prepare(
+            "SELECT 0,r.result_id,r.item_id,r.outcome,v.version_id,r.task_revision,r.result_digest \
+             FROM market_update_results r \
+             JOIN data_versions v ON v.version_key=r.result_version_key WHERE r.task_id=?1 \
+             UNION ALL \
+             SELECT 1,r.publication_id,r.item_id,r.outcome,v.version_id,r.task_revision,r.result_digest \
+             FROM publication_results r \
+             JOIN data_versions v ON v.version_key=r.result_version_key \
+             WHERE r.task_id=?1 AND r.publication_kind=2",
+        )
+        .map_err(storage)?;
+    let rows = stmt
+        .query_map([&task_id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, Vec<u8>>(6)?,
+            ))
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let mut found = std::collections::BTreeMap::new();
+    let mut published = 0_i64;
+    for (kind, id, item, outcome, version_id, revision, digest) in rows {
+        if (kind == 0) != daily
+            || !task.items.iter().any(|i| i.spec.item_id == item)
+            || found.contains_key(&item)
+        {
+            return Err(integrity(
+                "publication result contract/item association differs",
+            ));
+        }
+        let reused_version = outcome == 1;
+        if !reused_version {
+            published += 1;
+        }
+        let digest: [u8; 32] = digest
+            .try_into()
+            .map_err(|_| integrity("stored result digest is malformed"))?;
+        let revision =
+            u64::try_from(revision).map_err(|_| integrity("stored task revision overflows"))?;
+        found.insert(
+            item,
+            Evidence::Committed {
+                evidence_sha256: super::compact_repo::hex_bytes(&digest),
+                receipt: crate::market_storage::Receipt {
+                    publication_id: id,
+                    version_id,
+                    task_id: task_id.clone(),
+                    task_revision: revision,
+                },
+                reused_version,
+            },
+        );
+    }
+    // `task_publications` is written only for published results.
+    let count: i64 = c
+        .query_row(
+            "SELECT count(*) FROM task_publications WHERE task_id=?1",
+            [&task_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if count != published {
+        return Err(integrity(
+            "task publication associations do not match execution receipts",
+        ));
     }
     let mut items = Vec::new();
     for item in &task.items {

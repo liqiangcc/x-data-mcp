@@ -76,6 +76,7 @@ impl<R: TaskRepository> Contract for StopVerification<R> {
         Ok(FrozenWork {
             scopes: item.scope_keys.clone(),
             items: vec![item],
+            shared_evidence: None,
         })
     }
 }

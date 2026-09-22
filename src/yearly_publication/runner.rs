@@ -59,6 +59,50 @@ impl YearlyVerifier for OfficialYearlyVerifier {
         })
     }
 }
+/// Generation-mode verifier: the bound session's presence already proves a
+/// verified, usable, pinned generation — the same fail-closed gate the
+/// env-installed source provides in legacy mode. A missing or unpinned
+/// session keeps the source refusal; there is no mutable-root fallback.
+pub struct BoundYearlyVerifier<'a> {
+    pub bound: Option<&'a crate::data_supply::generation::BoundSource>,
+}
+impl YearlyVerifier for BoundYearlyVerifier<'_> {
+    fn verify(
+        &self,
+        base: &CheckedRecord,
+        years: &BTreeSet<i32>,
+        derived_at: DateTime<Utc>,
+    ) -> Result<DerivationEvidence, SourceError> {
+        let Some(bound) = self.bound else {
+            return Err(SourceError::NotVerified(
+                "no bound generation session".into(),
+            ));
+        };
+        let as_of = derived_at
+            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+            .date_naive();
+        crate::yearly::aggregate(base.version(), Some(years), as_of)
+            .map_err(|e| SourceError::NotVerified(e.to_string()))?;
+        Ok(DerivationEvidence {
+            base_integrity_sha256: base.raw()["integrity_sha256"]
+                .as_str()
+                .ok_or_else(|| {
+                    SourceError::NotVerified("fixed base carries no integrity digest".into())
+                })?
+                .into(),
+            years: years.clone(),
+            as_of,
+            coverage: CoverageEvidence {
+                status: CoverageStatus::Complete,
+                reason: format!(
+                    "selected years verified by re-aggregating fixed daily {} against bound generation {} as of {as_of}; not a listing-history claim",
+                    base.version().version_id,
+                    bound.generation_id
+                ),
+            },
+        })
+    }
+}
 #[derive(Debug)]
 pub enum YearlyExecution {
     Published(Receipt),

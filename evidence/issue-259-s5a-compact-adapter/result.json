@@ -1,0 +1,33 @@
+{
+  "issue": 259,
+  "phase": "S5A-2 compact repository adapter",
+  "commit_base": "cf43b47d7cca9f350abf1234c361d4e46a03efa9",
+  "environment": "Box /dev/shm tmpfs, rustup stable 1.98.1, TMPDIR=/dev/shm",
+  "implemented": {
+    "SqliteCompactMarket": "TaskRepository + MarketRepository + RangeRepository over Arc<WriteCoordinator> (lease + frozen schema-19 identity)",
+    "commit_struct_corrections": "required_heads (in-tx effective_heads assertions incl. no-change stability and CurrentHead daily expectation) and binding (in-tx task/item/scope/owner check) added to MarketUpdateCommit/PublicationCommit",
+    "finish_item_and_task": "terminal task now writes result_json {finished_items,successful_items} and deletes scope_occupancy, matching decide/persist_decided semantics",
+    "materialize": "verified materialization for staged/validated/published versions; staged projection published_at = immutable created_at",
+    "synthesize": "deterministic in-memory legacy envelope (version + batch + compact_source + compact_parent_version_id + integrity_sha256); never persisted",
+    "task_helpers": "accept_tx/transition_tx/transition_light_tx/candidates_tx/reconcile_tx shared between SqliteTasks and SqliteCompactMarket",
+    "commit_mapping": "Daily{Some}->commit_market_update (delta->Append, checkpoint->Full), Daily{None}->Collection, HistoricalFixedBase/CurrentHead->Yearly with resolved required_heads and apply_head CAS",
+    "commit_range": "no_change -> MarketUpdateChange::NoChange (prefix_bytes = base record_count*32, zero bars/segments/versions); typed continuity evidence in evidence_bundles, no audit_json",
+    "gap_ops": "cover_gap/gap_coverings rewritten for v19 columns (entity, INTEGER period, state=3, task_publications)",
+    "receipts": "result_registry kind dispatch to read_market_update/read_publication for receipt/range_receipt/item_receipt idempotent replay"
+  },
+  "tests": {
+    "compact_repo": 4,
+    "lib_total": 246,
+    "lib_ignored": 1,
+    "gates": [
+      "cargo fmt --check",
+      "cargo test --locked --lib",
+      "cargo clippy --all-targets --all-features --locked -- -D warnings"
+    ]
+  },
+  "known_gaps": [
+    "worker/runner and MCP assembly still point at legacy SqliteMarket; production wiring is a later slice",
+    "S5B capacity acceptance not run; NOT production ready"
+  ],
+  "verdict": "PASS_S5A_2"
+}

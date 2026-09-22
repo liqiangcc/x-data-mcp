@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Deploy a tagged preview release to /opt/x-data-mcp-preview and produce the
 # five evidence reports. Fail-closed:
+#
+# LEGACY TOPOLOGY: this script deploys/restarts only the data service and the
+# historical tunnel. It does not install/configure acquire_service, immutable
+# generation storage, or the two-MCP Phase G topology. A successful run is
+# preview.11 continuity evidence, not #262 generation/full-market acceptance.
 #   * any unmet precondition exits non-zero before touching /opt;
 #   * once the mutating phase (stop service / upgrade / switch) starts, any
 #     later failure auto-restores the previous current symlink, the consistent
