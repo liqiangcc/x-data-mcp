@@ -177,7 +177,7 @@ const FIX = {
       const o = i ? closes[i - 1] : c * 0.99;
       const hi = Math.max(o, c) * (1 + ((seed + i) % 7) / 300);
       const lw = Math.min(o, c) * (1 - ((seed + i * 2) % 5) / 300);
-      return { o, h: hi, l: lw, c };
+      return { o, h: hi, l: lw, c, v: 800 + ((seed * (i + 7)) % 900) };
     });
     const updates = Array.from({ length: 7 }, (_, i) => {
       const day = 30 - i;

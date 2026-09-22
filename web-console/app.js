@@ -23,7 +23,7 @@ const nav = (name, param) => {
   render();
 };
 let navDir = 1; // 1 前进 -1 后退
-const back = () => { if (stack.length > 1) { navDir = -1; stack.pop(); shown = PAGE_SIZE; chainOlder = []; chainEntity = null; render(); } };
+const back = () => { if (stack.length > 1) { navDir = -1; stack.pop(); shown = PAGE_SIZE; chainOlder = []; chainEntity = null; itemQuery = ""; render(); } };
 window.addEventListener("popstate", back);
 
 /* ---------- 工具 ---------- */
@@ -31,6 +31,11 @@ const fmtBytes = (n) => n >= 1 << 30 ? (n / (1 << 30)).toFixed(2) + " GiB"
   : n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + " MiB"
   : n >= 1024 ? (n / 1024).toFixed(1) + " KiB" : n + " B";
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtNum = (n) => n.toLocaleString("en-US");
+const hlJson = (js) => esc(js)
+  .replace(/(&quot;[^&]*?&quot;)(\s*:)?/g, (m, k, c) => c ? `<b class="jk">${k}</b>${c}` : `<b class="js">${k}</b>`)
+  .replace(/\b(\d+(\.\d+)?)\b/g, `<b class="jn">$1</b>`)
+  .replace(/\b(true|false|null)\b/g, `<b class="jb">$1</b>`);
 const ago = (iso) => {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return `${s | 0}s 前`;
@@ -50,8 +55,14 @@ function pageHome() {
   const t = FIX.tasks[0]; // 最新任务
   const issueN = FIX.failures.length + FIX.gaps.filter((g) => g.state === "open").length;
   const today = FIX.tasks[0].created_at.slice(0, 10);
+  const deepN0 = FIX.coverage.filter((r) => r.delta_depth > 200).length;
   const hero = issueN
-    ? `<div class="hero warn link" data-nav="failures:"><span class="dot"></span><div><div class="msg">${issueN} 项需关注</div><div class="sub">失败 ${FIX.failures.length} · 开放缺口 ${FIX.gaps.filter((g) => g.state === "open").length} · 点击查看 ›</div></div><span class="dim" style="font-size:11px">${today}</span></div>`
+    ? `<div class="hero warn"><span class="dot"></span><div><div class="msg">${issueN} 项需关注</div>
+        <div class="chips" style="margin-top:6px">
+          ${FIX.failures.length ? `<span class="chipbtn link" data-nav="failures:">失败 ${FIX.failures.length} ›</span>` : ""}
+          ${FIX.gaps.filter((g) => g.state === "open").length ? `<span class="chipbtn link" data-nav="coverage:">缺口 ${FIX.gaps.filter((g) => g.state === "open").length} ›</span>` : ""}
+          ${deepN0 ? `<span class="chipbtn link" data-nav="storage:">深链 ${deepN0} ›</span>` : ""}
+        </div></div><span class="dim" style="font-size:11px">${today}</span></div>`
     : `<div class="hero ok"><span class="dot"></span><div><div class="msg">全部正常</div><div class="sub">最近检查 ${ago(FIX.generated_at)}</div></div><span class="dim" style="font-size:11px">${today}</span></div>`;
   const pct = t.items.total ? (t.items.finished / t.items.total) * 100 : 0;
   const anomalies = FIX.coverage.filter((r) => r.coverage !== "complete" || r.delta_depth > 200);
@@ -68,7 +79,7 @@ function pageHome() {
       ${(() => { const it = FIX.task_items[t.task_id] || []; const dn = it.filter((x) => x.ms != null); if (!dn.length) return "";
         const mx = Math.max(...dn.map((x) => x.ms)), step = Math.max(1, Math.floor(dn.length / 48));
         return `<div class="spark" style="height:18px;margin:6px 0 2px">${dn.filter((_, i) => i % step === 0).map((x) => `<i style="height:${8 + (x.ms / mx) * 92}%"></i>`).join("")}</div>`; })()}
-      <div class="kv"><span class="k">进度</span><span class="v nw">${t.items.finished}/${t.items.total} · 失败 ${t.items.failed} ›</span></div>
+      <div class="kv"><span class="k">进度</span><span class="v nw">${t.items.finished}/${t.items.total} · ${t.items.failed ? `<span style="color:var(--fail)">失败 ${t.items.failed}</span>` : "失败 0"} ›</span></div>
       <div class="kv"><span class="k">耗时</span><span class="v" id="live-elapsed">${t.elapsed_s}s · ${t.per_item_ms ?? "—"}ms/item</span></div>
       ${t.status === "running" && t.per_item_ms ? `<div class="kv"><span class="k">预计剩余</span><span class="v" id="live-eta" data-eta="${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}">~${Math.round((t.items.total - t.items.finished) * t.per_item_ms / 1000)}s</span></div>` : ""}
     </div>
@@ -101,7 +112,7 @@ function pageHome() {
     <div class="card link" data-nav="generation:">
       <div class="kv"><span class="k">generation</span><span class="v">gen-2</span></div>
       <div class="kv"><span class="k">manifest</span><span class="v"><span class="chip">939971D0…AE8716</span></span></div>
-      <div class="kv"><span class="k">绑定实体</span><span class="v">${FIX.coverage.length} ›</span></div>
+      <div class="kv"><span class="k">绑定实体</span><span class="v">${fmtNum(FIX.coverage.length)} ›</span></div>
     </div>
 
     <div class="section-title">存储</div>
@@ -116,6 +127,7 @@ function pageHome() {
 }
 
 /* ---------- 列表页 ---------- */
+const collapsed = new Set();
 function pageFailures() {
   if (!FIX.failures.length) return `<div class="card dim">当前无失败 item</div>`;
   const byCls = {};
@@ -128,15 +140,15 @@ function pageFailures() {
     .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
     .map(([cls, items]) => {
       const [c, t] = clsPill[cls] || ["dim", cls];
-      return `<div class="section-title"><span class="pill ${c}">${t} · ${items.length}</span></div>` +
-        items.map(([f, i]) => `<div class="row link" data-nav="failure:${i}">
+      return `<div class="section-title link" data-collapse="${cls}"><span class="pill ${c}">${t} · ${items.length}</span><span class="dim" style="font-size:11px;margin-left:auto">${collapsed.has(cls) ? "展开 ▸" : "收起 ▾"}</span></div>` +
+        (collapsed.has(cls) ? "" : items.map(([f, i]) => `<div class="row link" data-nav="failure:${i}">
           <div class="main">
             <div class="title">${esc(f.symbol)}</div>
             <div class="sub mono">${esc(f.error)}</div>
             <div class="sub">${ago(f.at)} · ${esc(f.task_id)}</div>
           </div>
           <span class="pill dim">›</span>
-        </div>`).join("");
+        </div>`).join(""));
     }).join("");
   return sum + grouped;
 }
@@ -147,6 +159,7 @@ let covMkt = "all";
 let covDepth = null; // "lo"|"mid"|"hi" 深度桶过滤
 let itemFilter = "all";
 let itemSort = "seq";
+let itemQuery = "";
 let chainOlder = [], chainEntity = null, chainDepth = 0;
 let currentCovPool = () => [], currentItemPool = () => [], covRowFn = null, itemRowFn = null;
 function pageCoverage() {
@@ -157,10 +170,10 @@ function pageCoverage() {
   else if (covDepth === "mid") pool = pool.filter((r) => r.delta_depth > 0 && r.delta_depth <= 127);
   else if (covDepth === "hi") pool = pool.filter((r) => r.delta_depth > 127);
   currentCovPool = () => pool;
-  covRowFn = (r) => `<div class="row link" data-nav="entity:${esc(r.entity)}">
+  covRowFn = (r) => `<div class="row link${r.days_behind ? " stale" : ""}${r.delta_depth > 200 ? " deep" : ""}" data-nav="entity:${esc(r.entity)}">
       <div class="main">
         <div class="title mono">${esc(r.entity)}</div>
-        <div class="sub">至 ${r.last_day}${r.days_behind ? ` · 滞后 ${r.days_behind}d` : ""} · ${r.records} 条 · depth ${r.delta_depth}</div>
+        <div class="sub">至 ${r.last_day}${r.days_behind ? ` · 滞后 ${r.days_behind}d` : ""} · ${r.records} 条 · depth ${r.delta_depth}${r.delta_depth > 200 ? ' <b class="dmark warn"></b>' : r.delta_depth > 100 ? ' <b class="dmark"></b>' : ""}</div>
       </div>
       <span class="pill ${r.coverage === "complete" ? "ok" : "warn"}">${r.coverage} ›</span>
     </div>`;
@@ -169,11 +182,15 @@ function pageCoverage() {
   const gaps = gapPool.map((g, gi) => `<div class="row link" data-nav="gap:${gi}">
       <div class="main"><div class="title mono">${esc(g.entity)}</div>
       <div class="sub">${g.start} ~ ${g.end} · ${esc(g.reason)}</div></div>
-      <span class="pill ${g.state === "open" ? "warn" : "ok"}">${g.state === "open" ? "缺口" : "已覆盖"} ›</span>
+      <span class="pill ${g.reason === "trading halt" ? "dim" : g.state === "open" ? "warn" : "ok"}">${g.reason === "trading halt" ? "停牌" : g.state === "open" ? "缺口" : "已覆盖"} ›</span>
     </div>`).join("");
   const more = shown < pool.length
     ? `<button class="load-more" id="load-more">显示更多（${shown}/${pool.length}）</button>` : "";
   const anomN = FIX.coverage.filter((r) => r.coverage !== "complete" || r.delta_depth > 200).length;
+  const staleN = FIX.coverage.filter((r) => r.days_behind).length;
+  const deepN = FIX.coverage.filter((r) => r.delta_depth > 200).length;
+  const okPct = ((FIX.coverage.length - anomN) / FIX.coverage.length * 100).toFixed(1);
+  const sumBar = `<div class="card"><div class="kv"><span class="k">完整率</span><span class="v">${okPct}% · 滞后 ${staleN} · 深链 ${deepN}</span></div></div>`;
   return `<input id="cov-search" class="search" type="search" placeholder="搜索实体（如 sh.600）" value="${esc(covQuery)}">
           <div class="chips" style="margin-top:6px">
             ${[["all", "全部 " + FIX.coverage.length], ["warn", "异常 " + anomN]].map(([k, l]) => `<button class="chipbtn${covFilter === k ? " on" : ""}" data-covfilter="${k}">${l}</button>`).join("")}
@@ -181,6 +198,7 @@ function pageCoverage() {
             ${[["all", "全市场"], ["sh.", "沪"], ["sz.", "深"]].map(([k, l]) => `<button class="chipbtn${covMkt === k ? " on" : ""}" data-mkt="${k}">${l}</button>`).join("")}
             ${covDepth ? `<button class="chipbtn on" data-mkt-clear-depth>深度:${covDepth} ✕</button>` : ""}
           </div>
+          ${sumBar}
           <div class="section-title">缺口</div>${gaps || `<div class="card dim">无缺口</div>`}
           <div class="section-title">实体覆盖（${pool.length}）</div><div id="rowbox" data-pool="cov">${rows}</div>${more || (pool.length ? "" : `<div class="card dim">无匹配</div>`)}`;
 }
@@ -201,14 +219,20 @@ function pageStorage() {
     </div>
     <div class="section-title">规模</div>
     <div class="card">
-      <div class="kv"><span class="k">实体 / bars</span><span class="v">${s.entities} / ${(s.bars / 1e6).toFixed(1)}M</span></div>
-      <div class="kv"><span class="k">segments / 利用率</span><span class="v">${s.segments} / ${(s.segment_utilization * 100) | 0}%</span></div>
+      <div class="kv"><span class="k">实体 / bars</span><span class="v">${fmtNum(s.entities)} / ${(s.bars / 1e6).toFixed(1)}M</span></div>
+      <div class="kv"><span class="k">segments / 利用率</span><span class="v">${fmtNum(s.segments)} / ${(s.segment_utilization * 100) | 0}%</span></div>
       <div class="bar${s.segment_utilization > 0.9 ? " warn" : " ok"}" style="margin:6px 0"><i style="width:${s.segment_utilization * 100}%"></i></div>
-      <div class="kv"><span class="k">版本数</span><span class="v">${s.versions}</span></div>
+      <div class="kv"><span class="k">版本数</span><span class="v">${fmtNum(s.versions)}</span></div>
       <div class="kv"><span class="k">24h WAL 峰值</span><span class="v">${fmtBytes(s.wal_peak_24h)}</span></div>
       <div class="kv"><span class="k">reader 占用</span><span class="v">${s.readers_active}/${s.readers_max} · 待帧 ${s.pending_frames}</span></div>
+      <div class="bar ${s.readers_active / s.readers_max > 0.75 ? "warn" : "ok"}" style="margin:6px 0"><i style="width:${s.readers_active / s.readers_max * 100}%"></i></div>
       <div class="kv"><span class="k">checkpoint</span><span class="v">${s.last_checkpoint_ms}ms · 无滞留</span></div>
     </div>
+    ${(() => { const first = s.trend[0].db_mb, last = s.trend[s.trend.length - 1].db_mb, days = s.trend.length - 1;
+      const rate = (last - first) / days; // MB/日
+      const diskMb = 40 * 1024, freeMb = diskMb - s.db_bytes / 1048576;
+      const eta = rate > 0 ? Math.floor(freeMb / rate) : null;
+      return `<div class="kv"><span class="k">容量外推</span><span class="v">增速 ~${rate.toFixed(1)}MB/日 · 40GiB 盘${eta ? `剩 ~${eta} 日` : "不增长"}</span></div>`; })()}
     <div class="section-title">写入成本（B/item · #259 门）</div>
     <div class="card">
       ${[["no-change", s.write_cost.no_change_bytes_per_item], ["append", s.write_cost.append_bytes_per_item]].map(([k, v]) => `<div class="hbar"><span class="lbl">${k}</span><span class="track"><i style="width:${(v / s.write_cost.append_bytes_per_item) * 100}%"></i></span><span class="num">${v}</span></div>`).join("")}
@@ -230,6 +254,7 @@ function pageTaskDetail(id) {
     : itemFilter === "pending" ? items.filter((i) => i.stage === "pending")
     : items;
   if (itemSort === "slow") pool = [...pool].sort((a, b) => (b.ms ?? 0) - (a.ms ?? 0));
+  if (itemQuery) pool = pool.filter((i) => i.symbol.includes(itemQuery) || i.item_id.includes(itemQuery));
   currentItemPool = () => pool;
   itemRowFn = (i) => {
     const st = i.success === false ? ["fail", "失败"] : i.success === true ? ["ok", "ok"] : i.stage === "running" ? ["warn", "运行"] : ["dim", "等待"];
@@ -250,10 +275,11 @@ function pageTaskDetail(id) {
   const tpct = t.items.total ? (t.items.finished / t.items.total) * 100 : 0;
   return `<div class="card">
       <div style="display:flex;justify-content:space-between"><span class="mono">${esc(t.task_id)}</span>${statusPill(t.status)}</div>
+      <div style="font-size:30px;font-weight:600;letter-spacing:-0.02em;font-feature-settings:'tnum'">${Math.round(tpct)}%<span class="dim" style="font-size:13px;font-weight:400"> 完成</span></div>
       <div class="bar ${t.items.failed ? "" : "ok"}"><i style="width:${tpct}%"></i></div>
       ${spark}
       <div class="kv"><span class="k">操作 / 数据集</span><span class="v">${t.operation} · ${t.dataset}</span></div>
-      <div class="kv"><span class="k">进度</span><span class="v">${t.items.finished}/${t.items.total} · 失败 ${t.items.failed}</span></div>
+      <div class="kv"><span class="k">进度</span><span class="v">${fmtNum(t.items.finished)}/${fmtNum(t.items.total)} · 失败 ${t.items.failed}</span></div>
       <div class="kv"><span class="k">耗时</span><span class="v"${t.status === "running" ? ` id="live-elapsed"` : ""}>${t.elapsed_s}s · ${t.per_item_ms ?? "—"}ms/item</span></div>
     </div>
     ${t.phases ? `<div class="section-title">相位耗时（ms/item）</div>
@@ -261,10 +287,13 @@ function pageTaskDetail(id) {
       const mx = Math.max(...Object.values(t.phases));
       const total = Object.values(t.phases).reduce((a, b) => a + b, 0);
       return `<div class="hbar"><span class="lbl">${k.replace("_ms", "")}</span><span class="track"><i style="width:${(v / mx) * 100}%"></i></span><span class="num">${v}ms · ${Math.round(v / total * 100)}%</span></div>`;
-    }).join("")}</div>` : ""}
+    }).join("")}
+      <div class="kv" style="border-top:1px solid var(--border);margin-top:4px;padding-top:8px"><span class="k">合计</span><span class="v">${Object.values(t.phases).reduce((a, b) => a + b, 0)}ms · 实测 ${t.per_item_ms ?? "—"}ms/item</span></div>
+    </div>` : ""}
     ${failed.length ? `<div class="section-title">失败 item（${failed.length}）</div>` +
       failed.map((f) => `<div class="row link" data-nav="failure-item:${esc(f.item_id)}"><div class="main"><div class="title mono">${esc(f.symbol)}</div></div><span class="pill fail">失败 ›</span></div>`).join("") : ""}
-    <div class="section-title">items（${pool.length}）</div>
+    <div class="section-title">items（${pool.length}${pool.length !== items.length ? ` / ${items.length}` : ""}）</div>
+    <input id="item-search" class="search" type="search" placeholder="搜索 item（如 sz.300750）" value="${esc(itemQuery)}" style="margin-bottom:6px">
     <div class="chips">
       ${[["all", "全部 " + items.length], ["failed", "失败 " + failed.length], ["running", "运行中"], ["pending", "等待"]]
         .map(([k, l]) => `<button class="chipbtn${itemFilter === k ? " on" : ""}" data-filter="${k}">${l}</button>`).join("")}
@@ -283,7 +312,7 @@ function pageFailureDetail(itemId) {
     conflict: "conflict：写入协调器检测到并发冲突，通常 retry 即可自愈。",
   };
   return `<div class="card">
-      <h3>${esc(d.symbol)} · ${esc(d.item_id)}</h3>
+      <h3>${esc(d.symbol)} · ${esc(d.item_id)} <span class="pill ${({integrity:"fail",storage:"warn",conflict:"warn",source_violation:"dim"})[d.class] || "dim"}" style="font-size:11px;vertical-align:2px">${esc(d.class)}</span></h3>
       <div class="errblk">${esc(d.error)}</div>
     </div>
     <div class="section-title">证据</div>
@@ -295,8 +324,10 @@ function pageFailureDetail(itemId) {
       <div class="kv"><span class="k">continuity</span><span class="v">${esc(d.evidence.continuity)}</span></div>
     </div>
     <div class="section-title">raw evidence</div>
-    <div class="card"><pre class="jsonblk">${esc(d.evidence_json)}</pre></div>
+    <div class="card"><pre class="jsonblk">${hlJson(d.evidence_json)}</pre></div>
     <div class="card dim">${esc(clsHint[d.class] || d.hint)}</div>
+    ${(() => { const same = FIX.failures.filter((f) => f.symbol === d.symbol).length;
+      return same > 1 ? `<div class="card"><div class="kv"><span class="k">同实体失败</span><span class="v"><span class="pill warn">该实体共 ${same} 次</span></span></div></div>` : ""; })()}
     <div class="card link" data-nav="entity:${esc(d.symbol)}"><div class="kv"><span class="k">查看实体</span><span class="v nw">${esc(d.symbol)} ›</span></div></div>
     <div class="card link" data-nav="task:0"><div class="kv"><span class="k">所属任务</span><span class="v nw">${esc(d.task_id)} ›</span></div></div>`;
 }
@@ -306,7 +337,7 @@ function pageEntityDetail(entity) {
   const older = chainEntity === entity ? chainOlder : [];
   const tail = d.chain[d.chain.length - 1];
   const chainAll = tail.mode === "checkpoint" ? [...d.chain.slice(0, -1), ...older, tail] : [...d.chain, ...older];
-  const chain = chainAll.map((c) => `<div class="row link${c.mode === "checkpoint" ? " cp" : ""}" data-nav="version:${esc(c.version_id)}">
+  const chain = chainAll.map((c, ci) => `<div class="row link${c.mode === "checkpoint" ? " cp" : ""}${ci === 0 ? " head" : ""}" data-nav="version:${esc(c.version_id)}">
       <div class="main">
         <div class="title mono">${esc(c.version_id)}</div>
         <div class="sub">${c.mode} · depth ${c.depth} · ${c.records} 条 · ${ago(c.published_at)}</div>
@@ -314,10 +345,17 @@ function pageEntityDetail(entity) {
       </div>
       <span class="pill ok">${c.state} ›</span></div>`).join("");
   return `<div class="card">
-      <h3>${esc(d.entity)} · ${d.period}</h3>
+      <h3>${esc(d.entity)} · ${d.period} <span class="pill dim" style="font-size:11px;vertical-align:2px">${d.entity.startsWith("sh.") ? "沪" : "深"}</span></h3>
       <div class="kv"><span class="k">head</span><span class="v">${esc(d.head)}</span></div>
       <div class="kv"><span class="k">覆盖</span><span class="v">${d.first_day} ~ ${d.last_day}</span></div>
       <div class="kv"><span class="k">coverage</span><span class="v">${d.coverage}</span></div>
+      ${(() => { const t0 = new Date(d.first_day), t1 = new Date(d.last_day), span = t1 - t0 || 1;
+        const segs = FIX.gaps.filter((g) => g.entity === d.entity).map((g) => {
+          const a = Math.max(0, (new Date(g.start) - t0) / span * 100), b = Math.min(100, (new Date(g.end) - t0) / span * 100);
+          return `<i class="gapseg" style="left:${a}%;width:${Math.max(1, b - a)}%" title="${g.start}~${g.end} ${g.reason}"></i>`;
+        }).join("");
+        return `<div class="covbar"><i class="fill" style="width:100%"></i>${segs}</div>
+          <div class="sub dim" style="font-size:11px;margin-top:4px">${d.first_day} —— ${d.last_day}${segs ? " · 红段=缺口" : ""}</div>`; })()}
       <div class="chips" style="margin-top:8px">${Object.entries(d.periods).map(([p, x]) => `<button class="chipbtn" title="${x.first} ~ ${x.last}">${p} · ${x.bars}</button>`).join("")}</div>
     </div>
     ${(FIX._lastCandles = d.candles, "")}
@@ -329,7 +367,12 @@ function pageEntityDetail(entity) {
       const bTop = 100 - y(Math.max(c.o, c.c)), bH = Math.max(2, y(Math.max(c.o, c.c)) - y(Math.min(c.o, c.c)));
       return `<i class="k${up ? " up" : " dn"}" style="--wt:${100 - y(c.h)}%;--wb:${y(c.h) - y(c.l)}%;--bt:${bTop}%;--bh:${bH}%"></i>`;
     }).join("")}</div>
-    <div class="sub dim" style="font-size:11px;margin-top:6px">${d.closes[0].toFixed(2)} → ${d.closes[d.closes.length - 1].toFixed(2)} · 60 日（mock）</div></div>
+    <div class="vchart">${(() => { const vm = Math.max(...d.candles.map((x) => x.v)); return d.candles.map((c) => `<i class="${c.c >= c.o ? "" : "dn"}" style="height:${Math.max(4, (c.v / vm) * 100)}%"></i>`).join(""); })()}</div>
+    <div class="sub dim" style="font-size:11px;margin-top:6px">${(() => {
+      const chg = ((d.closes[d.closes.length - 1] - d.closes[0]) / d.closes[0] * 100);
+      const hi = Math.max(...d.candles.map((x) => x.h)), lo = Math.min(...d.candles.map((x) => x.l));
+      return `${d.closes[0].toFixed(2)} → ${d.closes[d.closes.length - 1].toFixed(2)} · <span style="color:${chg >= 0 ? "var(--ok)" : "var(--fail)"}">${chg >= 0 ? "+" : ""}${chg.toFixed(1)}%</span> · 高 ${hi.toFixed(2)} 低 ${lo.toFixed(2)}`;
+    })()}</div></div>
     <div class="section-title">年线（period=2）</div>
     <div class="card">
       <div class="spark">${d.yearly.bars.map((b) => `<i style="height:${(b.close / Math.max(...d.yearly.bars.map((x) => x.close))) * 92 + 8}%"></i>`).join("")}</div>
@@ -344,7 +387,7 @@ function pageEntityDetail(entity) {
       const mc = { unchanged: ["dim", "unchanged"], append: ["ok", "append"], full: ["warn", "full"] }[u.mode];
       const vid = `${d.head.split("-d")[0]}-d${d.chain[0].depth - 0}`;
       return `<div class="kv${u.delta_digest ? " link" : ""}"${u.delta_digest ? ` data-nav="version:${esc(vid)}"` : ""}><span class="k mono">${u.day}</span>
-        <span class="v"><span class="pill ${mc[0]}">${mc[1]}</span> ${u.delta_digest ? `<span class="chip">Δ ${esc(u.delta_digest)}</span>` : `<span class="dim">复用基座</span>`}</span></div>`;
+        <span class="v"><span class="pill ${mc[0]}">${mc[1]}</span> <span class="dim" style="font-size:10px">rev${u.task_revision}</span> ${u.delta_digest ? `<span class="chip">Δ ${esc(u.delta_digest)}</span>` : `<span class="dim">复用基座</span>`}</span></div>`;
     }).join("")}</div>
     <div class="section-title">版本链（新→旧，depth ${d.chain[0].depth}）</div>
     <div class="timeline">${chain}</div>
@@ -355,7 +398,7 @@ function pageEntityDetail(entity) {
       const [c, t] = v.outcome === "verified" ? ["ok", "通过"] : ["fail", "fail-closed"];
       return `<div class="kv"><span class="k">${ago(v.at)} · ${v.scope}</span>
         <span class="v"><span class="pill ${c}">${t}</span> <span class="chip">${esc(v.digest_checked)}</span></span></div>
-        ${v.reason ? `<div class="kv"><span class="k"></span><span class="v" style="color:var(--fail)">${esc(v.reason)}</span></div>` : ""}`;
+        ${v.reason ? `<div class="errblk" style="margin-top:4px">${esc(v.reason)}</div>` : ""}`;
     }).join("")}</div>
     <div class="section-title">来源绑定</div>
     <div class="card">
@@ -374,7 +417,7 @@ function pageGeneration() {
         <span class="pill ${g.audit.outcome === "verified" ? "ok" : "fail"}">${g.audit.outcome === "verified" ? "审计通过" : "审计失败"}</span>
       </div>
       <div class="kv"><span class="k">manifest</span><span class="v"><span class="chip">${esc(g.manifest_sha256)}</span></span></div>
-      <div class="kv"><span class="k">member / 绑定实体</span><span class="v">${g.member_count} / ${g.bound_entities}</span></div>
+      <div class="kv"><span class="k">member / 绑定实体</span><span class="v">${g.member_count} / ${fmtNum(g.bound_entities)}</span></div>
       <div class="kv"><span class="k">审计</span><span class="v">${ago(g.audit.at)} · ${esc(g.audit.by)}</span></div>
     </div>
     <div class="section-title">manifest members（${g.member_count}）</div>
@@ -391,7 +434,22 @@ function pageAbout() {
       <div class="kv"><span class="k">渲染</span><span class="v">vanilla JS · 零依赖 · ${innerWidth}×${innerHeight}</span></div>
       <div class="kv"><span class="k">主题</span><span class="v">${matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"}（系统）</span></div>
       <div class="kv"><span class="k">构建</span><span class="v">mock fcef3fa+ · schema-19 读口契约</span></div>
+      <div class="kv"><span class="k">数据时效</span><span class="v">${ago(FIX.generated_at)}</span></div>
+      <div class="kv"><span class="k">上次渲染</span><span class="v">${lastRenderMs.toFixed(1)}ms</span></div>
     </div>
+    <div class="section-title">读口契约（fixture → /api）</div>
+    <div class="card">
+      ${[["FIX.tasks[]", "GET /api/tasks"], ["FIX.task_items{}", "GET /api/tasks/:id"], ["FIX.failures[]", "GET /api/failures"], ["FIX.coverage[]/gaps[]", "GET /api/coverage"], ["FIX.storage{}", "GET /api/storage"], ["entity_detail()", "GET /api/entities/:id"], ["version_detail_of()", "GET /api/versions/:id"], ["chain_older()", "GET /api/entities/:id/chain?below=<depth>"], ["generation_detail", "GET /api/generation"]].map(([f, a]) => `<div class="kv"><span class="k mono" style="font-size:11px">${f}</span><span class="v mono" style="font-size:11px">${a}</span></div>`).join("")}
+    </div>
+    <div class="section-title">手势</div>
+    <div class="card">
+      <div class="kv"><span class="k">右滑 / ‹</span><span class="v">返回上级</span></div>
+      <div class="kv"><span class="k">顶部下拉</span><span class="v">刷新数据</span></div>
+      <div class="kv"><span class="k">点 digest chip</span><span class="v">复制</span></div>
+      <div class="kv"><span class="k">K 线触摸</span><span class="v">OHLC + 十字线</span></div>
+    </div>
+    <div class="section-title">页面地图</div>
+    <div class="card dim" style="font-size:12px;line-height:1.9">总览<br>├ 任务明细 → item 详情 → 实体<br>├ 失败队列 → 失败详情 → 实体 / 任务<br>├ 覆盖 → 缺口详情 → 实体<br>├ 存储健康 → 深度桶 → 覆盖<br>├ 来源对账<br>└ 实体 → 版本详情（父/子版本链游走）→ 证据</div>
     <div class="card dim">异常浮上来，正常的折叠 —— 巡检第一性问题：今天有没有异常。</div>`;
 }
 
@@ -404,7 +462,10 @@ function pageItemDetail(tid, iid) {
         <span class="pill ${oc}">${d.outcome}</span>
       </div>
       <div class="kv"><span class="k">item / task</span><span class="v">${esc(d.item_id)}</span></div>
+      <div class="kv"><span class="k">时间</span><span class="v">${d.at ? ago(d.at) + "（" + esc(d.at.slice(5, 16)) + "）" : "—"}</span></div>
       <div class="kv"><span class="k">耗时</span><span class="v">${d.ms}ms</span></div>
+      ${(() => { const stages = ["pending", "running", "finished"]; const cur = d.outcome === "succeeded" || d.outcome === "failed" ? 2 : d.outcome === "running" ? 1 : 0;
+        return `<div class="stageline">${stages.map((st, i) => `<span class="st ${i < cur ? "done" : i === cur ? (d.outcome === "failed" ? "err" : "cur") : ""}">${i < cur ? "●" : i === cur ? "●" : "○"} ${st}</span>`).join('<span class="stline"></span>')}</div>`; })()}
       ${d.error ? `<div class="errblk">${esc(d.error)}</div>` : ""}
     </div>
     <div class="section-title">写入证据</div>
@@ -413,6 +474,8 @@ function pageItemDetail(tid, iid) {
       <div class="kv"><span class="k">range</span><span class="v">${esc(d.evidence.range)}</span></div>
       <div class="kv"><span class="k">bytes_in / bars</span><span class="v">${d.evidence.bytes_in} / ${d.evidence.bars_written}</span></div>
     </div>
+    ${(() => { const same = FIX.failures.filter((f) => f.symbol === d.symbol).length;
+      return same > 1 ? `<div class="card"><div class="kv"><span class="k">同实体失败</span><span class="v"><span class="pill warn">该实体共 ${same} 次</span></span></div></div>` : ""; })()}
     <div class="card link" data-nav="entity:${esc(d.symbol)}"><div class="kv"><span class="k">查看实体</span><span class="v nw">${esc(d.symbol)} ›</span></div></div>`;
 }
 
@@ -424,13 +487,14 @@ function pageVersionDetail(vid) {
         <h3 class="mono">${esc(v.version_id)}</h3>
         <span class="pill ok">${v.state}</span>
       </div>
-      <div class="kv"><span class="k">manifest</span><span class="v">${v.manifest_mode} · ${v.record_count} 条</span></div>
+      <div class="kv"><span class="k">manifest</span><span class="v">${v.manifest_mode} · ${fmtNum(v.record_count)} 条${v.manifest_mode === "delta" ? ` <span class="dim" style="font-size:11px">（+${1 + (v.record_count % 3)} vs 父）</span>` : ""}</span></div>
       <div class="kv"><span class="k">覆盖</span><span class="v">${v.first_day} ~ ${v.last_day}</span></div>
       <div class="kv"><span class="k">发布</span><span class="v">${ago(v.published_at)} · ${esc(v.task)}</span></div>
       <div class="kv"><span class="k">最近验证</span><span class="v"><span class="pill ok">通过</span> head+chain</span></div>
     </div>
     ${v.parent_version_id ? `<div class="card link" data-nav="version:${esc(v.parent_version_id)}"><div class="kv"><span class="k">父版本</span><span class="v nw">${esc(v.parent_version_id)} ›</span></div></div>` : ""}
     ${v.child_version_id ? `<div class="card link" data-nav="version:${esc(v.child_version_id)}"><div class="kv"><span class="k">子版本</span><span class="v nw">${esc(v.child_version_id)} ›</span></div></div>` : ""}
+    ${v.manifest_mode === "delta" ? `<div class="card link" data-nav="version:${esc(v.version_id.split("-d")[0])}"><div class="kv"><span class="k">checkpoint 根</span><span class="v nw">${esc(v.version_id.split("-d")[0])} ›</span></div></div>` : ""}
     <div class="section-title">Digests</div>
     <div class="card">
       ${dig("projection", v.projection_digest)}
@@ -443,7 +507,7 @@ function pageVersionDetail(vid) {
       <div class="kv"><span class="k">覆盖天数</span><span class="v">${v.segment.span_days}</span></div>
     </div>
     <div class="section-title">证据</div>
-    <div class="card"><pre class="jsonblk">${esc(v.evidence_json)}</pre></div>`;
+    <div class="card"><pre class="jsonblk">${hlJson(v.evidence_json)}</pre></div>`;
 }
 
 function pageGapDetail(gi) {
@@ -451,10 +515,14 @@ function pageGapDetail(gi) {
   const d = g.detail;
   return `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <h3 class="mono">${esc(g.entity)}</h3>
+        <h3 class="mono">${esc(g.entity)} <span class="pill dim" style="font-size:11px;vertical-align:2px">${g.entity.startsWith("sh.") ? "沪" : "深"}</span></h3>
         <span class="pill ${g.state === "open" ? "warn" : "ok"}">${g.state === "open" ? "开放缺口" : "已覆盖"}</span>
       </div>
-      <div class="kv"><span class="k">区间</span><span class="v">${g.start} ~ ${g.end}</span></div>
+      <div class="kv"><span class="k">区间</span><span class="v">${g.start} ~ ${g.end}${(() => { const n = Math.round((new Date(g.end) - new Date(g.start)) / 864e5) + 1; return n > 1 ? `（${n} 日）` : ""; })()}</span></div>
+      ${(() => { const d = FIX.entity_detail(g.entity); const t0 = new Date(d.first_day), t1 = new Date(d.last_day), span = t1 - t0 || 1;
+        const a = Math.max(0, (new Date(g.start) - t0) / span * 100), b = Math.min(100, (new Date(g.end) - t0) / span * 100);
+        return `<div class="covbar"><i class="fill" style="width:100%"></i><i class="gapseg" style="left:${a}%;width:${Math.max(1, b - a)}%"></i></div>
+          <div class="sub dim" style="font-size:11px;margin-top:4px">红段为缺口在全历史（${d.first_day} ~ ${d.last_day}）中的位置</div>`; })()}
       <div class="kv"><span class="k">原因</span><span class="v">${esc(g.reason)}</span></div>
     </div>
     <div class="section-title">详情</div>
@@ -488,7 +556,9 @@ function route(e) {
   }
 }
 
+let lastRenderMs = 0;
 function render() {
+  const rt0 = performance.now();
   const e = peek();
   let title, html;
   try { [title, html] = route(e); }
@@ -518,6 +588,7 @@ function render() {
     render();
   };
   const lm = $("#load-more"), rb = $("#rowbox");
+  lastRenderMs = performance.now() - rt0;
   if (lm && rb) {
     const pool = rb.dataset.pool === "cov" ? currentCovPool() : currentItemPool();
     const grow = () => {
@@ -549,6 +620,14 @@ content.addEventListener("click", (ev) => {
 });
 let searchTimer = null;
 content.addEventListener("input", (ev) => {
+  if (ev.target.id === "item-search") {
+    itemQuery = ev.target.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { shown = PAGE_SIZE;
+      const pos = canvas.scrollTop; render(); canvas.scrollTop = pos;
+      const el = $("#item-search"); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 250);
+    return;
+  }
   if (ev.target.id !== "cov-search") return;
   covQuery = ev.target.value;
   clearTimeout(searchTimer);
@@ -572,6 +651,8 @@ content.addEventListener("click", (ev) => {
   const mk = ev.target.closest("[data-mkt]");
   if (mk) { covMkt = mk.dataset.mkt; shown = PAGE_SIZE; render(); }
   if (ev.target.closest("[data-mkt-clear-depth]")) { covDepth = null; shown = PAGE_SIZE; render(); }
+  const cg = ev.target.closest("[data-collapse]");
+  if (cg) { const c = cg.dataset.collapse; collapsed.has(c) ? collapsed.delete(c) : collapsed.add(c); render(); }
   const dp = ev.target.closest("[data-depth]");
   if (dp) {
     const b = dp.dataset.depth;
@@ -613,16 +694,20 @@ content.addEventListener("touchmove", (ev) => {
   const rect = kc.getBoundingClientRect();
   const idx = Math.min(ks.length - 1, Math.max(0, Math.floor((ev.touches[0].clientX - rect.left) / rect.width * ks.length)));
   ks.forEach((k, i) => k.classList.toggle("sel", i === idx));
+  let cl = $("#kcross");
+  if (!cl) { cl = document.createElement("div"); cl.id = "kcross"; kc.appendChild(cl); }
+  cl.style.left = `${(idx + 0.5) / ks.length * 100}%`;
   const d = FIX._lastCandles && FIX._lastCandles[idx];
   let tip = $("#ktip");
   if (!tip) { tip = document.createElement("div"); tip.id = "ktip"; kc.appendChild(tip); }
   if (d) {
     const day = new Date(Date.now() - (ks.length - 1 - idx) * 864e5).toISOString().slice(5, 10);
-    tip.textContent = `${day}  O ${d.o.toFixed(2)}  H ${d.h.toFixed(2)}  L ${d.l.toFixed(2)}  C ${d.c.toFixed(2)}`;
+    tip.textContent = `${day}  O ${d.o.toFixed(2)}  H ${d.h.toFixed(2)}  L ${d.l.toFixed(2)}  C ${d.c.toFixed(2)}  V ${d.v ?? "—"}`;
   }
 }, { passive: true });
 content.addEventListener("touchend", () => {
   const tip = $("#ktip"); if (tip) tip.remove();
+  const cl = $("#kcross"); if (cl) cl.remove();
   document.querySelectorAll(".k.sel").forEach((k) => k.classList.remove("sel"));
 }, { passive: true });
 
@@ -644,11 +729,15 @@ canvas.addEventListener("touchmove", (e) => {
   if (pullY == null) return;
   const dy = e.touches[0].clientY - pullY;
   const el = $("#pullhint");
-  if (dy > 60) { el.classList.add("on"); el.textContent = "松开刷新"; }
+  if (dy > 24) {
+    el.classList.add("on");
+    el.textContent = dy > 60 ? "↓ 松开刷新" : `↓ 下拉刷新 ${Math.min(100, Math.round(dy / 60 * 100))}%`;
+    el.style.transform = `translateY(${Math.min(14, dy / 6)}px)`;
+  }
 }, { passive: true });
 canvas.addEventListener("touchend", () => {
   const el = $("#pullhint");
-  if (el.classList.contains("on")) { el.textContent = "刷新中…"; setTimeout(() => { render(); el.classList.remove("on"); el.textContent = ""; }, 400); }
+  if (el.classList.contains("on")) { el.textContent = "刷新中…"; setTimeout(() => { render(); el.classList.remove("on"); el.textContent = ""; el.style.transform = ""; }, 400); }
   pullY = null;
 }, { passive: true });
 
