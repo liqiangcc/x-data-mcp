@@ -78,7 +78,9 @@ fn ctl(db: &SqliteTasks, run: &str) -> TaskControl<SqliteTasks> {
             Box::new(CollectionContract {
                 dataset: Dataset::Daily,
                 repository: SqliteSupply {
-                    market: SqliteMarket::new(db.clone()),
+                    market: crate::sqlite_market::backend::MarketBackend::Legacy(
+                        SqliteMarket::new(db.clone()),
+                    ),
                 },
             }),
             Box::new(LegacyCollection),

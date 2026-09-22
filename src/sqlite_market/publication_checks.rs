@@ -65,45 +65,45 @@ pub(crate) fn read_receipt(
     let receipt = audit.receipt.clone();
     Ok(Some((audit, receipt)))
 }
+/// Connection-level publication-check commit shared by both storage
+/// backends (the `publication_checks` audit table is schema-neutral).
+pub(crate) fn commit_check_tx(c: &Connection, plan: &Plan) -> Result<CheckReceipt, Error> {
+    let audit = &plan.audit;
+    let id = &audit.receipt.verification_task_id;
+    if let Some((previous, receipt)) = read_receipt(c, id)? {
+        if previous != *audit {
+            return Err(Error::Conflict("publication check replay differs".into()));
+        }
+        return Ok(receipt);
+    }
+    let check = crate::sqlite_tasks::read_bound_task(c, id)?
+        .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
+    let facts = super::verification::read_facts(c, &audit.receipt.target_task_id)?;
+    if check != audit.verification_before || facts != audit.facts {
+        return Err(Error::Conflict(
+            "publication check revision or evidence changed".into(),
+        ));
+    }
+    crate::sqlite_tasks::write_task(c, &audit.verification_after, check.task.state_revision)?;
+    let raw = serde_json::to_string(audit).map_err(integrity)?;
+    c.execute(
+        "INSERT INTO publication_checks VALUES(?1,?2,?3,?4)",
+        params![
+            id,
+            audit.receipt.target_task_id,
+            raw,
+            crate::hash::sha256(raw.as_bytes())
+        ],
+    )
+    .map_err(storage)?;
+    read_receipt(c, id)?
+        .map(|(_, r)| r)
+        .ok_or_else(|| integrity("publication check receipt missing after insert"))
+}
+
 impl AuditStore for SqliteMarket {
     fn commit_check(&self, plan: &Plan) -> Result<CheckReceipt, Error> {
-        self.write_transaction(true, |c| {
-            let audit = &plan.audit;
-            let id = &audit.receipt.verification_task_id;
-            if let Some((previous, receipt)) = read_receipt(c, id)? {
-                if previous != *audit {
-                    return Err(Error::Conflict("publication check replay differs".into()));
-                }
-                return Ok(receipt);
-            }
-            let check = crate::sqlite_tasks::read_bound_task(c, id)?
-                .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
-            let facts = super::verification::read_facts(c, &audit.receipt.target_task_id)?;
-            if check != audit.verification_before || facts != audit.facts {
-                return Err(Error::Conflict(
-                    "publication check revision or evidence changed".into(),
-                ));
-            }
-            crate::sqlite_tasks::write_task(
-                c,
-                &audit.verification_after,
-                check.task.state_revision,
-            )?;
-            let raw = serde_json::to_string(audit).map_err(integrity)?;
-            c.execute(
-                "INSERT INTO publication_checks VALUES(?1,?2,?3,?4)",
-                params![
-                    id,
-                    audit.receipt.target_task_id,
-                    raw,
-                    crate::hash::sha256(raw.as_bytes())
-                ],
-            )
-            .map_err(storage)?;
-            read_receipt(c, id)?
-                .map(|(_, r)| r)
-                .ok_or_else(|| integrity("publication check receipt missing after insert"))
-        })
+        self.write_transaction(true, |c| commit_check_tx(c, plan))
     }
     fn check_receipt(&self, id: &str) -> Result<Option<CheckReceipt>, Error> {
         self.read(|c| read_receipt(c, id).map(|r| r.map(|(_, receipt)| receipt)))

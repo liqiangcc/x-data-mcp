@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{ErrorCode, TransactionBehavior};
 
+use super::compact_repo;
 use super::compact_v19::{self, StoredClip, StoredDelta, StoredDeltaKind};
 use super::compact_versions::{self, CompactVersionState, VersionResultFacts};
 use super::*;
@@ -1376,3 +1377,134 @@ fn conflict_or_storage(error: rusqlite::Error) -> Error {
 
 #[cfg(test)]
 mod tests;
+
+/// Read-side audit projection of a stored compact update result for
+/// `RangeExecutionResult` consumers. The typed row is digest-verified by
+/// `read_market_update`; the synthesized JSON carries only the fields the
+/// wire projections consume.
+pub(crate) fn read_update_audit(
+    c: &Connection,
+    result_id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
+    let exists: bool = c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM market_update_results WHERE result_id=?1)",
+            [result_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if !exists {
+        return Ok(None);
+    }
+    let stored = read_market_update(c, result_id)?;
+    let id = &stored.identity;
+    let base = compact_repo::materialize_checked(c, &id.base_version_id, false)?;
+    let result = compact_repo::materialize_checked(c, &id.result_version_id, false)?;
+    let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
+        .ok_or_else(|| integrity("range result task missing"))?;
+    if binding.head.state_revision < id.task_revision
+        || binding.item.stage != crate::task_control::Stage::Finished
+        || !binding.item.outcome.as_ref().is_some_and(|o| o.success)
+    {
+        return Err(integrity("range result lacks successful task item"));
+    }
+    let no_change = id.outcome == UpdateOutcome::NoChange;
+    if !no_change {
+        let linked: bool = c
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_publications WHERE result_id=?1)",
+                [result_id],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if !linked {
+            return Err(integrity("range publication missing"));
+        }
+    }
+    let audit = serde_json::json!({
+        "no_change": no_change,
+        "command": {
+            "publication_id": id.result_id,
+            "task_id": id.task_id,
+            "item_id": id.item_id,
+            "version_id": id.result_version_id,
+        },
+        "evidence": {"base_version_id": id.base_version_id},
+        "segment": {"provenance": {"acquired_at": result.raw["batch"]["provenance"]["acquired_at"]}},
+        "algorithm_version": id.algorithm_version,
+        "base_integrity_sha256": base.raw["integrity_sha256"],
+        "result_integrity_sha256": result.raw["integrity_sha256"],
+    });
+    Ok(Some((
+        audit,
+        Receipt {
+            publication_id: id.result_id.clone(),
+            version_id: id.result_version_id.clone(),
+            task_id: id.task_id.clone(),
+            task_revision: id.task_revision,
+        },
+    )))
+}
+
+/// Read-side audit projection of a stored compact yearly publication for
+/// `YearlyExecutionResult` consumers.
+pub(crate) fn read_yearly_audit(
+    c: &Connection,
+    result_id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
+    let exists: bool = c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM publication_results \
+             WHERE publication_id=?1 AND publication_kind=2)",
+            [result_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if !exists {
+        return Ok(None);
+    }
+    let stored = read_publication(c, result_id)?;
+    let id = &stored.identity;
+    let base_id = id
+        .base_version_id
+        .as_ref()
+        .ok_or_else(|| integrity("yearly result lacks daily base"))?;
+    let _base = compact_repo::materialize_checked(c, base_id, false)?;
+    let result = compact_repo::materialize_checked(c, &id.result_version_id, false)?;
+    let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
+        .ok_or_else(|| integrity("yearly result task missing"))?;
+    if binding.head.state_revision < id.task_revision
+        || binding.item.stage != crate::task_control::Stage::Finished
+        || !binding.item.outcome.as_ref().is_some_and(|o| o.success)
+    {
+        return Err(integrity("yearly result lacks successful task item"));
+    }
+    let no_change = id.outcome == UpdateOutcome::NoChange;
+    if !no_change {
+        let linked: bool = c
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_publications WHERE result_id=?1)",
+                [result_id],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if !linked {
+            return Err(integrity("yearly publication missing"));
+        }
+    }
+    let audit = serde_json::json!({
+        "no_change": no_change,
+        "base_daily_version_id": base_id,
+        "command": {"item_id": id.item_id},
+        "candidate": {"batch": {"provenance": {"acquired_at": result.raw["batch"]["provenance"]["acquired_at"]}}},
+    });
+    Ok(Some((
+        audit,
+        Receipt {
+            publication_id: id.publication_id.clone(),
+            version_id: id.result_version_id.clone(),
+            task_id: id.task_id.clone(),
+            task_revision: id.task_revision,
+        },
+    )))
+}

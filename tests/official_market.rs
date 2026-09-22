@@ -397,7 +397,7 @@ struct Rig {
 
 fn accept_daily(market: &SqliteMarket, run: &str, exchange: &str, code: &str) -> Rig {
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -497,7 +497,7 @@ fn worker_dispatch_routes_daily_collection_to_installed_source() {
     let dir = tempfile::tempdir().unwrap();
     let market = opened(&dir);
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -521,7 +521,7 @@ fn worker_dispatch_routes_daily_collection_to_installed_source() {
         .unwrap();
     let snap = valid_snapshot();
     let src = make_source(&snap);
-    let done = x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src), None)
+    let done = x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), Some(&src), None)
         .unwrap()
         .unwrap();
     assert_eq!(done.task.status, Status::Succeeded);
@@ -598,7 +598,7 @@ fn non_daily_collection_items_remain_blocked() {
     tasks.initialize().unwrap();
     let market = SqliteMarket::new(tasks.clone());
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         tasks,
@@ -629,7 +629,7 @@ fn non_daily_collection_items_remain_blocked() {
     };
     let snap = valid_snapshot();
     let src = make_source(&snap);
-    x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src), None).unwrap();
+    x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), Some(&src), None).unwrap();
     let task = market.task(&cat_task.task.task_id).unwrap();
     assert!(
         task.items[0]
@@ -652,7 +652,7 @@ fn non_daily_collection_items_remain_blocked() {
     let RequestOutcome::Task(l_task) = legacy.record.outcome else {
         panic!()
     };
-    x_data_mcp::data_supply::worker::run_once(&control, &market, Some(&src), None).unwrap();
+    x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), Some(&src), None).unwrap();
     let task = market.task(&l_task.task.task_id).unwrap();
     assert!(
         task.items[0]

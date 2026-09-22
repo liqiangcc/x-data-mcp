@@ -515,3 +515,100 @@ fn legacy_adapters_reject_schema19() {
             .is_err()
     );
 }
+
+#[test]
+fn backend_dispatch_and_compact_supply_surface() {
+    use crate::data_supply::query::QueryPlan;
+    use crate::data_supply::wire::{
+        ContractVersion, Dataset, Exchange, Filter, Query, Security, Selection, VersionChoice,
+        VersionsQuery,
+    };
+    use crate::data_supply::{Access, query::ReadRepository};
+    use crate::sqlite_market::backend::MarketBackend;
+    use crate::sqlite_supply::SqliteSupply;
+
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+    let version = mk_version("v1", vec![bar(0, 100), bar(1, 110)]);
+    repo.stage(&envelope(&version, source("gen-1"), None))
+        .unwrap();
+    let candidate = repo.candidate("v1").unwrap();
+    repo.mark_validated(&candidate).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: candidate.clone(),
+        required_heads: vec![(Scope::of(&candidate.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    // Schema-19 dispatch selects the compact backend. The service lease is
+    // single-owner, so the first adapter is dropped before reopening.
+    let tasks = repo.tasks();
+    drop(repo);
+    let backend = MarketBackend::open(&tasks).unwrap();
+    assert!(matches!(backend, MarketBackend::Compact(_)));
+    assert!(backend.task(&task_id).is_ok());
+    assert_eq!(backend.tasks().path(), tasks.path());
+
+    // The compact read surface serves versions + query + verify.
+    let supply = SqliteSupply {
+        market: backend.clone(),
+    };
+    let access = Access::local();
+    let entity = Security {
+        exchange: Exchange::Sh,
+        code: "600006".into(),
+    };
+    let infos = supply
+        .versions(
+            &VersionsQuery {
+                dataset: Dataset::Daily,
+                contract_version: ContractVersion::V1,
+                selection: Selection::Single {
+                    entity: entity.clone(),
+                },
+                page_size: 10,
+                cursor: None,
+            },
+            &access,
+        )
+        .unwrap();
+    assert_eq!(infos.len(), 1);
+    assert_eq!(infos[0].version_ref.version_id, "v1");
+
+    let plan = QueryPlan::new(
+        Query {
+            dataset: Dataset::Daily,
+            contract_version: ContractVersion::V1,
+            selection: Selection::Single { entity },
+            filter: Filter::Daily {
+                start_date: date(0),
+                end_date: date(10),
+            },
+            version: VersionChoice::LatestPerEntity,
+            page_size: 10,
+            cursor: None,
+        },
+        &access,
+    )
+    .unwrap();
+    let snapshot = supply.query(&plan, &access).unwrap();
+    assert_eq!(snapshot.rows.len(), 2);
+
+    // verify_versions round-trips the same snapshot digests.
+    supply.verify(&[infos[0].version_ref.clone()]).unwrap();
+
+    // A second fresh v18 database still selects the legacy backend.
+    let legacy_dir = tempdir();
+    let legacy_path = legacy_dir.path().join("legacy.db");
+    let legacy_tasks = SqliteTasks::new(legacy_path);
+    legacy_tasks.initialize().unwrap();
+    assert!(matches!(
+        MarketBackend::open(&legacy_tasks).unwrap(),
+        MarketBackend::Legacy(_)
+    ));
+}

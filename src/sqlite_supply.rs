@@ -3,12 +3,12 @@ use crate::{
     data_supply::{Access, query::*, wire::*},
     market_storage::{Error, Scope},
     sqlite_catalog,
-    sqlite_market::{SqliteMarket, read_record},
+    sqlite_market::{backend::MarketBackend, read_record},
 };
 use rusqlite::{Connection, params};
 #[derive(Clone)]
 pub struct SqliteSupply {
-    pub market: SqliteMarket,
+    pub market: MarketBackend,
 }
 fn storage(e: impl std::fmt::Display) -> Error {
     Error::Storage(e.to_string())
@@ -83,10 +83,12 @@ impl ReadRepository for SqliteSupply {
                 let ids=s.query_map([],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
                 for id in ids {let v=sqlite_catalog::read(c,&id)?;result.push(VersionInfo{version_ref:catalog_ref(&v)?,published_at:v.published_at});}
             }else{
-                let orphan:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM publication_batches b LEFT JOIN data_versions v ON b.version_id=v.version_id WHERE v.version_id IS NULL)",[],|r|r.get(0)).map_err(storage)?;if orphan{return Err(Error::Integrity("orphan market publication".into()));}
+                let compact=crate::sqlite_market::is_compact_schema(c)?;
+                let orphan:bool=if compact{c.query_row("SELECT EXISTS(SELECT 1 FROM task_publications tp LEFT JOIN data_versions v ON v.version_key=tp.version_key WHERE v.version_key IS NULL)",[],|r|r.get(0))}else{c.query_row("SELECT EXISTS(SELECT 1 FROM publication_batches b LEFT JOIN data_versions v ON b.version_id=v.version_id WHERE v.version_id IS NULL)",[],|r|r.get(0))}.map_err(storage)?;if orphan{return Err(Error::Integrity("orphan market publication".into()));}
+                let list_sql=if compact{"SELECT v.version_id FROM data_versions v WHERE v.entity=?1 AND v.period=?2 AND (v.state=3 OR EXISTS(SELECT 1 FROM task_publications tp WHERE tp.version_key=v.version_key)) ORDER BY v.published_at DESC,v.version_id ASC"}else{"SELECT version_id FROM data_versions v WHERE symbol=?1 AND period=?2 AND (state='published' OR EXISTS(SELECT 1 FROM publication_batches b WHERE b.version_id=v.version_id)) ORDER BY published_at DESC,version_id ASC"};
                 for entity in entities {
-                    let mut s=c.prepare("SELECT version_id FROM data_versions v WHERE symbol=?1 AND period=?2 AND (state='published' OR EXISTS(SELECT 1 FROM publication_batches b WHERE b.version_id=v.version_id)) ORDER BY published_at DESC,version_id ASC").map_err(storage)?;
-                    let ids=s.query_map(params![entity.symbol(),if args.dataset==Dataset::Daily{"day"}else{"year"}],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
+                    let mut s=c.prepare(list_sql).map_err(storage)?;
+                    let get_id=|r:&rusqlite::Row<'_>| r.get::<_,String>(0);let ids:Vec<String>=if compact{s.query_map(params![entity.symbol(),if args.dataset==Dataset::Daily{1}else{2}],get_id)}else{s.query_map(params![entity.symbol(),if args.dataset==Dataset::Daily{"day"}else{"year"}],get_id)}.map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
                     for id in ids {let r=read_market(c,args.dataset,&entity,&id)?;result.push(VersionInfo{version_ref:market_ref(args.dataset,&entity,&r),published_at:r.version().published_at});}
                 }
             }
@@ -236,18 +238,12 @@ pub(crate) fn query(
                 plan.args.dataset.period().unwrap(),
                 &range,
             )? {
-                let (first_trading_date, last_trading_date, year_unfinished) = if plan.args.dataset
-                    == Dataset::Yearly
-                {
-                    let (first,last,finished):(String,String,bool)=c.query_row("SELECT first_trade_date,last_trade_date,is_finished FROM yearly_bars WHERE version_id=?1 AND trade_date=?2",params![id,b.date.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(storage)?;
-                    (
-                        Some(first.parse().map_err(storage)?),
-                        Some(last.parse().map_err(storage)?),
-                        Some(!finished),
-                    )
-                } else {
-                    (None, None, None)
-                };
+                let (first_trading_date, last_trading_date, year_unfinished) =
+                    if plan.args.dataset == Dataset::Yearly {
+                        yearly_row_meta(c, &r, &b)?
+                    } else {
+                        (None, None, None)
+                    };
                 result.rows.push(Row::Market {
                     first_trading_date,
                     last_trading_date,
@@ -269,6 +265,66 @@ pub(crate) fn query(
         }
     }
     Ok(result)
+}
+
+/// Per-year row metadata. v18 reads the stored `yearly_bars` row; compact
+/// storage re-aggregates the verified base daily version (the same
+/// projection stage-time verification recomputes) and indexes per-year
+/// lineage by calendar year.
+pub(crate) type YearlyRowMeta = (
+    Option<chrono::NaiveDate>,
+    Option<chrono::NaiveDate>,
+    Option<bool>,
+);
+
+pub(crate) fn yearly_row_meta(
+    c: &Connection,
+    r: &crate::market_storage::compat::CheckedRecord,
+    bar: &crate::market_data::Bar,
+) -> Result<YearlyRowMeta, Error> {
+    if !crate::sqlite_market::is_compact_schema(c)? {
+        let (first, last, finished): (String, String, bool) = c
+            .query_row(
+                "SELECT first_trade_date,last_trade_date,is_finished FROM yearly_bars \
+                 WHERE version_id=?1 AND trade_date=?2",
+                params![r.version().version_id, bar.date.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(storage)?;
+        return Ok((
+            Some(first.parse().map_err(storage)?),
+            Some(last.parse().map_err(storage)?),
+            Some(!finished),
+        ));
+    }
+    let lineage = r
+        .version()
+        .yearly_derivation
+        .as_ref()
+        .ok_or_else(|| Error::Integrity("yearly version lacks derivation".into()))?;
+    let as_of_day: i64 = c
+        .query_row(
+            "SELECT l.as_of_day FROM yearly_lineage l \
+             JOIN data_versions v ON v.version_key=l.version_key WHERE v.version_id=?1",
+            [&r.version().version_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    let as_of = crate::compact_market::epoch_date(as_of_day)
+        .map_err(|e| Error::Integrity(format!("stored yearly as_of: {e}")))?;
+    let base = read_record(c, &lineage.base_daily_version_id, true, false)?;
+    let annual = crate::yearly::aggregate(&base.version, None, as_of)
+        .map_err(|e| Error::Integrity(format!("yearly re-aggregation: {e}")))?;
+    let record = annual
+        .records
+        .iter()
+        .find(|rec| rec.bar.date == bar.date)
+        .ok_or_else(|| Error::Integrity("yearly record missing from re-aggregation".into()))?;
+    Ok((
+        Some(record.lineage.first_trading_date),
+        Some(record.lineage.last_trading_date),
+        Some(record.year_unfinished),
+    ))
 }
 
 fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
@@ -352,7 +408,7 @@ fn task_facts(
         });
     }
     let mut q = c
-        .prepare("SELECT version_id FROM task_publications WHERE task_id=?1 ORDER BY version_id")
+        .prepare(if crate::sqlite_market::is_compact_schema(c)?{"SELECT v.version_id FROM task_publications tp JOIN data_versions v ON v.version_key=tp.version_key WHERE tp.task_id=?1 ORDER BY v.version_id"}else{"SELECT version_id FROM task_publications WHERE task_id=?1 ORDER BY version_id"})
         .map_err(storage)?;
     let ids = q
         .query_map([id], |r| r.get::<_, String>(0))

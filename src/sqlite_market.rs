@@ -149,7 +149,30 @@ fn base_record(c: &Connection, r: &CheckedRecord) -> Result<Option<CheckedRecord
         .map(|l| read_record(c, &l.base_daily_version_id, true, false).map_err(base_error))
         .transpose()
 }
+/// True when the database carries the schema-19 compact layout
+/// (`publication_batches` is dropped by migration 19). Connection-level
+/// read helpers below dispatch on it so every caller works on either
+/// schema without an extra flag.
+pub(crate) fn is_compact_schema(c: &Connection) -> Result<bool, Error> {
+    c.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='publication_batches')",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(storage)
+}
+
 pub(crate) fn head(c: &Connection, scope: &Scope) -> Result<Option<String>, Error> {
+    if is_compact_schema(c)? {
+        return c
+            .query_row(
+                "SELECT v.version_id FROM effective_heads h                  JOIN data_versions v ON v.version_key=h.version_key                  WHERE h.entity=?1 AND h.period=?2 AND h.adjustment=1",
+                params![scope.symbol, compact_repo::period_code(scope.period)],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage);
+    }
     c.query_row(
         "SELECT version_id FROM effective_heads WHERE symbol=?1 AND period=?2 AND adjustment='qfq'",
         params![scope.symbol, period(scope.period)],
@@ -455,6 +478,13 @@ pub(crate) fn read_record(
     published: bool,
     allow_yearly: bool,
 ) -> Result<CheckedRecord, Error> {
+    if is_compact_schema(c)? {
+        let record = compact_repo::materialize_checked(c, id, !published)?;
+        if !allow_yearly && record.version.period != Period::Day {
+            return Err(Error::Integrity("yearly record in daily context".into()));
+        }
+        return Ok(record);
+    }
     let record = read_projection(c, id, published, allow_yearly)?;
     let base = base_record(c, &record)?;
     validate_base(&record, base.as_ref())?;
@@ -551,6 +581,24 @@ pub(crate) fn range_rows(
     p: Period,
     range: &Range,
 ) -> Result<Vec<Bar>, Error> {
+    if is_compact_schema(c)? {
+        let record = compact_repo::materialize_checked(c, id, false)?;
+        if record.version.period != p {
+            return Err(Error::Integrity("range version period mismatch".into()));
+        }
+        return Ok(record
+            .version
+            .records
+            .iter()
+            .filter(|b| {
+                b.date >= range.start
+                    && b.date <= range.end
+                    && range.after.map(|a| b.date > a).unwrap_or(true)
+            })
+            .take(range.limit + 1)
+            .cloned()
+            .collect());
+    }
     if p == Period::Day {
         let segment_backed: bool = c
             .query_row(
@@ -907,6 +955,7 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
     Ok(receipt)
 }
 
+pub mod backend;
 pub(crate) mod collection;
 #[allow(dead_code)]
 pub(crate) mod compact_repo;

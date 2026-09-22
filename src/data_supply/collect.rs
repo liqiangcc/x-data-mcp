@@ -1,5 +1,6 @@
 //! Dataset command normalization and frozen item decisions. No MCP business rules.
 use super::wire::*;
+use crate::market_storage::MarketRepository;
 use crate::{
     sqlite_supply::SqliteSupply,
     task_control::{self as task, CommandKey, Contract, FrozenWork, ItemSpec},
@@ -52,10 +53,9 @@ impl CollectionContract {
                 version_id,
                 industry_code,
             } => {
-                let v =
-                    crate::sqlite_catalog::SqliteCatalog::new(self.repository.market.tasks.clone())
-                        .fixed(version_id)
-                        .map_err(invalid)?;
+                let v = crate::sqlite_catalog::SqliteCatalog::new(self.repository.market.tasks())
+                    .fixed(version_id)
+                    .map_err(invalid)?;
                 let digest = crate::sqlite_catalog::digest(&v).map_err(invalid)?;
                 let securities=v.records.iter().filter(|r|industry_code.as_ref().is_none_or(|code|matches!(&r.industry,crate::catalog::IndustryInfo::Assigned{code:c,..} if c==code))).map(|r|Security{exchange:match r.exchange{crate::catalog::Exchange::Shanghai=>Exchange::Sh,_=>Exchange::Sz},code:r.symbol.clone()}).collect();
                 Ok((

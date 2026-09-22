@@ -148,7 +148,7 @@ fn acceptance_freezes_source_generation_id_and_worker_reads_it() {
     let dir = tempfile::tempdir().unwrap();
     let market = opened(&dir);
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -179,7 +179,7 @@ fn acceptance_freezes_source_generation_id_and_worker_reads_it() {
     let _gen_b = activate_generation(&service, "req-gen-b", Some(&gen_a));
 
     let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &market, None, Some(&generation))
+        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
             .unwrap()
             .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
@@ -208,7 +208,7 @@ fn missing_and_null_bindings_refuse_the_source() {
     let dir = tempfile::tempdir().unwrap();
     let market = opened(&dir);
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -223,7 +223,7 @@ fn missing_and_null_bindings_refuse_the_source() {
         .accept("req-unbound", control_key(&supply), daily_payload("600006"))
         .unwrap();
     let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &market, None, Some(&generation))
+        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
             .unwrap()
             .unwrap();
     assert_ne!(done.task.status, Status::Succeeded);
@@ -245,7 +245,7 @@ fn missing_and_null_bindings_refuse_the_source() {
     let dir2 = tempfile::tempdir().unwrap();
     let market2 = opened(&dir2);
     let supply2 = SqliteSupply {
-        market: market2.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market2.clone()),
     };
     let control2 = TaskControl::new(
         market2.tasks.clone(),
@@ -269,7 +269,7 @@ fn missing_and_null_bindings_refuse_the_source() {
     );
     let done = x_data_mcp::data_supply::worker::run_once(
         &control2,
-        &market2,
+        &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market2.clone()),
         None,
         Some(&empty_generation),
     )
@@ -381,7 +381,7 @@ fn yearly_derivation_runs_against_bound_generation() {
     let dir = tempfile::tempdir().unwrap();
     let market = opened(&dir);
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let yearly = YearlyContract {
         operation: Operation::Update,
@@ -413,7 +413,7 @@ fn yearly_derivation_runs_against_bound_generation() {
         .accept("req-daily", control_key(&supply), daily_payload("600006"))
         .unwrap();
     let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &market, None, Some(&generation))
+        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
             .unwrap()
             .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
@@ -443,7 +443,7 @@ fn yearly_derivation_runs_against_bound_generation() {
         json!(gen_a)
     );
     let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &market, None, Some(&generation))
+        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
             .unwrap()
             .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
@@ -473,7 +473,7 @@ fn yearly_derivation_without_binding_refuses() {
     let dir = tempfile::tempdir().unwrap();
     let market = opened(&dir);
     let supply = SqliteSupply {
-        market: market.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -499,7 +499,7 @@ fn yearly_derivation_without_binding_refuses() {
         .accept("req-daily", control_key(&supply), daily_payload("600006"))
         .unwrap();
     let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &market, None, Some(&generation))
+        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
             .unwrap()
             .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
@@ -524,7 +524,7 @@ fn yearly_derivation_without_binding_refuses() {
     )
     .unwrap();
     let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &market, None, Some(&generation))
+        x_data_mcp::data_supply::worker::run_once(&control, &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()), None, Some(&generation))
             .unwrap()
             .unwrap();
     assert_ne!(done.task.status, Status::Succeeded);

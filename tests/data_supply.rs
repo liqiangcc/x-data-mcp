@@ -31,7 +31,7 @@ fn absent_is_explicit_and_read_never_creates_a_task() {
     let t = SqliteTasks::new(d.path().join("db"));
     t.initialize().unwrap();
     let q = Queries::new(SqliteSupply {
-        market: SqliteMarket::new(t.clone()),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(SqliteMarket::new(t.clone())),
     });
     let page = q.query(args(), &Access::local()).unwrap();
     assert_eq!(page.version_manifest[0].status, ManifestStatus::Absent);
@@ -47,7 +47,7 @@ fn forbidden_selection_is_rejected_before_storage_access() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("no-db");
     let q = Queries::new(SqliteSupply {
-        market: SqliteMarket::new(SqliteTasks::new(&p)),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(SqliteMarket::new(SqliteTasks::new(&p))),
     });
     let mut access = Access::local();
     access.securities = Some(Default::default());
@@ -72,7 +72,7 @@ fn real_batch_manifest_pages_pin_versions_and_reject_any_later_damage() {
     let raw = market::samples()[0]["record"].clone();
     market::published_fixture(&store, &raw);
     let q = Queries::new(SqliteSupply {
-        market: store.clone(),
+        market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store.clone()).clone(),
     });
     let mut a = args();
     a.selection = Selection::Batch {
@@ -134,7 +134,7 @@ fn real_task_list_and_progress_freeze_state_and_enforce_authorization() {
     let task = start["task_id"].as_str().unwrap();
     let observer = Observer::new(
         SqliteSupply {
-            market: SqliteMarket::new(t),
+            market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(SqliteMarket::new(t)),
         },
         "run".into(),
     );
@@ -266,7 +266,7 @@ fn availability_classifies_corrupt_version_but_not_bad_database_as_absent() {
     t.initialize().unwrap();
     let store = SqliteMarket::new(t.clone());
     market::published_fixture(&store, &market::samples()[0]["record"]);
-    let o = Observer::new(SqliteSupply { market: store }, "run".into());
+    let o = Observer::new(SqliteSupply { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) }, "run".into());
     let first = o.availability(args(), &Access::local()).unwrap();
     assert_eq!(first.items[0].availability, Availability::Unknown);
     rusqlite::Connection::open(t.path())
@@ -292,7 +292,7 @@ fn query_budgets_cursor_instance_eviction_and_permissions_are_enforced() {
     t.initialize().unwrap();
     let store = SqliteMarket::new(t);
     market::published_fixture(&store, &market::samples()[0]["record"]);
-    let repo = SqliteSupply { market: store };
+    let repo = SqliteSupply { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) };
     let q = Queries::new(repo.clone());
     for size in [0, 1001] {
         let mut a = args();
@@ -437,7 +437,7 @@ fn yearly_query_returns_actual_participation_and_unfinished_semantics() {
             version_id: yearly["version_id"].as_str().unwrap().into(),
         }],
     };
-    let q = Queries::new(SqliteSupply { market: store });
+    let q = Queries::new(SqliteSupply { market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store) });
     let p = q.query(a, &Access::local()).unwrap();
     match &p.records[0] {
         Row::Market {
@@ -531,7 +531,7 @@ fn availability_reports_open_proven_gaps_with_canonical_evidence() {
         .unwrap();
     let o = Observer::new(
         SqliteSupply {
-            market: store.clone(),
+            market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store.clone()).clone(),
         },
         "run".into(),
     );
@@ -606,7 +606,7 @@ fn availability_maps_yearly_gaps_and_fails_closed_on_unnatural_year_range() {
     store.record_proven_gap(&yearly).unwrap();
     let o = Observer::new(
         SqliteSupply {
-            market: store.clone(),
+            market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store.clone()).clone(),
         },
         "run".into(),
     );
@@ -667,7 +667,7 @@ fn catalog_availability_never_reports_proven_gaps() {
         .unwrap();
     let o = Observer::new(
         SqliteSupply {
-            market: SqliteMarket::new(t),
+            market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(SqliteMarket::new(t)),
         },
         "run".into(),
     );

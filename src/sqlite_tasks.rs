@@ -66,6 +66,13 @@ impl SqliteTasks {
     pub fn path(&self) -> &Path {
         &self.path
     }
+    /// Durable schema version of the database file (0 = uninitialized,
+    /// 18 = legacy market storage, 19 = compact market storage).
+    pub fn schema_version(&self) -> Result<u32, Error> {
+        let c = self.connect(false)?;
+        c.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(storage)
+    }
     /// Truncate-checkpoint the WAL after a bounded batch of writes.
     /// Returns SQLite's (busy, log_frames, checkpointed_frames); a busy
     /// result is a fact for the caller to report, never silently ignored.

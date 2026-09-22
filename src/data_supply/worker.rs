@@ -3,7 +3,6 @@ use crate::{
     data_supply::generation::{BoundSource, GenerationSource, uniform_binding},
     market_storage::Error,
     market_update::runner::{OfficialRangeProvider, RangeProvider, RangeRunner},
-    sqlite_market::SqliteMarket,
     sqlite_tasks::SqliteTasks,
     task_control::{TaskRepository, TaskSnapshot, service::TaskControl},
 };
@@ -20,7 +19,7 @@ fn source_session(generation: &GenerationSource, candidate: &TaskSnapshot) -> Op
 }
 pub fn run_once(
     control: &TaskControl<SqliteTasks>,
-    market: &SqliteMarket,
+    market: &crate::sqlite_market::backend::MarketBackend,
     market_source: Option<&crate::official_market::TdxMarketSource>,
     generation_source: Option<&GenerationSource>,
 ) -> Result<Option<TaskSnapshot>, Error> {
@@ -43,7 +42,9 @@ pub fn run_once(
         Some(_) => bound.as_ref().map(|b| &b.source),
         None => market_source,
     };
-    let catalog_executor = bound.as_ref().map(|bound| bound.catalog_executor(market));
+    let catalog_executor = bound
+        .as_ref()
+        .map(|bound| bound.catalog_executor(&market.tasks()));
     if candidate.task.key.dataset == crate::task_verification::DATASET {
         run_verification(control, market, &candidate)?;
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
@@ -81,7 +82,7 @@ pub fn run_once(
         let executor = match catalog_executor {
             Some(executor) => Some(executor),
             None if generation_source.is_none() => {
-                crate::catalog_tdx::source::TdxCatalogExecutor::from_env(market)
+                crate::catalog_tdx::source::TdxCatalogExecutor::from_env(&market.tasks())
             }
             None => None,
         };
@@ -201,7 +202,7 @@ pub fn run_once(
 #[cfg(target_os = "linux")]
 fn run_verification(
     control: &TaskControl<SqliteTasks>,
-    market: &SqliteMarket,
+    market: &crate::sqlite_market::backend::MarketBackend,
     candidate: &TaskSnapshot,
 ) -> Result<(), Error> {
     if !crate::verification_execution::supported(&candidate.task.key) {

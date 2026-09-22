@@ -38,6 +38,7 @@ use crate::market_storage::{
 };
 use crate::market_update::publication::{RangePlan, RangeRepository};
 use crate::publish::EffectiveVersion;
+use crate::sqlite_tasks::SqliteTasks;
 use crate::task_control::{
     self, Acceptance, Change, Command, FrozenWork, RequestRecord, RetryGuard, TaskHead, TaskItem,
     TaskRepository, TaskSnapshot,
@@ -52,8 +53,9 @@ const COLLECTION_ALGORITHM: &str = "local-collection-v1";
 /// `RangeRepository` over the compact tables, fronted by the
 /// `WriteCoordinator`'s lease/schema checks and WAL bounds.
 #[derive(Clone)]
-pub(crate) struct SqliteCompactMarket {
+pub struct SqliteCompactMarket {
     coordinator: Arc<WriteCoordinator>,
+    tasks: SqliteTasks,
 }
 
 /// Deterministic schema-19 identity (recomputes the schema_migrations digest
@@ -80,14 +82,21 @@ pub(crate) fn schema19_identity() -> SchemaIdentity {
 }
 
 impl SqliteCompactMarket {
-    pub(crate) fn open(path: &Path) -> Result<Self, Error> {
+    pub fn open(path: &Path) -> Result<Self, Error> {
         let lease = DatabaseLease::acquire(path)
             .map_err(|e| Error::Base(format!("database lease: {e}")))?;
         let coordinator =
             WriteCoordinator::open_existing(path, Arc::new(lease), schema19_identity(), BUSY)?;
         Ok(Self {
             coordinator: Arc::new(coordinator),
+            tasks: SqliteTasks::new(path),
         })
+    }
+
+    /// Task-store handle sharing the same database file (used by catalog
+    /// executors that bind `SqliteCatalog` to the tasks database).
+    pub(crate) fn tasks(&self) -> SqliteTasks {
+        self.tasks.clone()
     }
 
     pub(crate) fn coordinator(&self) -> &Arc<WriteCoordinator> {
@@ -98,13 +107,22 @@ impl SqliteCompactMarket {
         self.coordinator.checkpoint_idle()
     }
 
-    fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {
+    pub(crate) fn read<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         self.coordinator.read(f)
     }
-    fn write<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T, Error>) -> Result<T, Error> {
+    pub(crate) fn write<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         self.coordinator.write(f)
     }
-    fn tx<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {
+    pub(crate) fn tx<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         self.coordinator.transaction(f)
     }
 
@@ -319,11 +337,11 @@ fn hex_digest(text: &str) -> Result<Digest, Error> {
     Ok(digest)
 }
 
-fn hex_bytes(bytes: &[u8]) -> String {
+pub(crate) fn hex_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn period_code(period: Period) -> i64 {
+pub(crate) fn period_code(period: Period) -> i64 {
     match period {
         Period::Day => 1,
         Period::Year => 2,
@@ -426,7 +444,7 @@ fn synthesize(m: &MaterializedVersion) -> Result<CheckedRecord, Error> {
     })
 }
 
-fn materialize_checked(
+pub(crate) fn materialize_checked(
     c: &Connection,
     version_id: &str,
     staged: bool,
@@ -1511,6 +1529,263 @@ impl TaskRepository for SqliteCompactMarket {
                 Error::Task(inner) => inner,
                 other => task_control::Error::StorageUnavailable(other.to_string()),
             })
+    }
+}
+
+fn publication_receipt(stored: &compact_results::StoredPublicationResult) -> Receipt {
+    Receipt {
+        publication_id: stored.identity.publication_id.clone(),
+        version_id: stored.identity.result_version_id.clone(),
+        task_id: stored.identity.task_id.clone(),
+        task_revision: stored.identity.task_revision,
+    }
+}
+
+fn head_version_id(c: &Connection, entity: &str, period: Period) -> Result<Option<String>, Error> {
+    c.query_row(
+        "SELECT v.version_id FROM effective_heads h \
+         JOIN data_versions v ON v.version_key=h.version_key \
+         WHERE h.entity=?1 AND h.period=?2 AND h.adjustment=?3",
+        params![entity, period_code(period), 1],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(storage)
+}
+
+impl crate::official_market::DailyCollectionRepository for SqliteCompactMarket {
+    fn collection_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
+        self.read(|c| {
+            let id: Option<String> = c
+                .query_row(
+                    "SELECT publication_id FROM publication_results \
+                     WHERE task_id=?1 AND item_id=?2 AND publication_kind=1",
+                    params![task, item],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage)?;
+            id.map(|id| compact_results::read_publication(c, &id).map(|s| publication_receipt(&s)))
+                .transpose()
+        })
+    }
+    fn effective_head(&self, scope: &Scope) -> Result<Option<String>, Error> {
+        self.read(|c| head_version_id(c, &scope.symbol, scope.period))
+    }
+    fn transition_task(
+        &self,
+        task: &str,
+        revision: u64,
+        run: &str,
+        change: crate::task_control::Change,
+    ) -> Result<crate::task_control::TaskSnapshot, Error> {
+        use crate::task_control::TaskRepository;
+        Ok(self.transition(task, revision, run, change)?)
+    }
+}
+
+impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarket {
+    fn transition_task(
+        &self,
+        task: &str,
+        revision: u64,
+        run: &str,
+        change: crate::task_control::Change,
+    ) -> Result<crate::task_control::TaskSnapshot, Error> {
+        use crate::task_control::TaskRepository;
+        Ok(self.transition(task, revision, run, change)?)
+    }
+    fn commit_yearly(
+        &self,
+        plan: &crate::yearly_publication::results::YearlyResultPlan,
+    ) -> Result<Receipt, Error> {
+        self.write(|c| {
+            if plan.no_change {
+                yearly_no_change_tx(c, plan)
+            } else {
+                commit_tx(c, &plan.publication)
+            }
+        })
+    }
+    fn yearly_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
+        self.read(|c| {
+            let kind: Option<i64> = c
+                .query_row(
+                    "SELECT publication_kind FROM publication_results WHERE publication_id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage)?;
+            match kind {
+                Some(2) => {
+                    compact_results::read_publication(c, id).map(|s| Some(publication_receipt(&s)))
+                }
+                Some(_) => Ok(None),
+                None => Ok(None),
+            }
+        })
+    }
+    fn yearly_item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
+        self.read(|c| {
+            let id: Option<String> = c
+                .query_row(
+                    "SELECT publication_id FROM publication_results \
+                     WHERE task_id=?1 AND item_id=?2 AND publication_kind=2",
+                    params![task, item],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage)?;
+            id.map(|id| compact_results::read_publication(c, &id).map(|s| publication_receipt(&s)))
+                .transpose()
+        })
+    }
+}
+
+/// Compact-path yearly no-change commit: the reused yearly version is
+/// already published, so the commit writes only a typed
+/// `publication_results` (kind=yearly) receipt with head=Keep — no new
+/// version, segment, or head movement.
+fn yearly_no_change_tx(
+    c: &mut Connection,
+    plan: &crate::yearly_publication::results::YearlyResultPlan,
+) -> Result<Receipt, Error> {
+    let command = plan.command();
+    if let Some(kind) = registry_kind(c, &command.publication_id)? {
+        return replay_receipt(c, kind, command);
+    }
+    let result_key = version_key(c, &command.version_id)?;
+    let facts = compact_versions::result_facts(c, result_key)?;
+    if facts.period != Period::Year {
+        return Err(integrity("yearly no-change result is not a yearly version"));
+    }
+    let lineage = plan
+        .publication
+        .record
+        .version
+        .yearly_derivation
+        .as_ref()
+        .ok_or_else(|| integrity("yearly no-change result lacks lineage"))?;
+    let evidence = compact_versions::put_evidence(
+        c,
+        EvidenceKind::Yearly,
+        &json!({
+            "base_daily_version_id": lineage.base_daily_version_id,
+            "algorithm_version": lineage.algorithm_version,
+            "mode": "no_change",
+        }),
+    )?;
+    let stored = compact_results::commit_publication(
+        c,
+        &PublicationCommit {
+            publication_id: command.publication_id.clone(),
+            task_id: command.task_id.clone(),
+            item_id: command.item_id.clone(),
+            publication_kind: PublicationKind::Yearly,
+            base_version_key: Some(result_key),
+            result_version_key: result_key,
+            outcome: UpdateOutcome::NoChange,
+            algorithm_version: lineage.algorithm_version.clone(),
+            source_binding_digest: facts.source_binding_digest,
+            evidence_digest: evidence,
+            expected_task_revision: command.expected_revision,
+            published_at: None,
+            head: HeadExpectation::Keep,
+            required_heads: required_heads(c, &plan.publication.required_heads)?,
+            binding: binding_check(&plan.publication),
+        },
+    )?;
+    Ok(publication_receipt(&stored))
+}
+
+impl crate::publication_verification::decision::AuditStore for SqliteCompactMarket {
+    fn commit_check(
+        &self,
+        plan: &crate::publication_verification::decision::Plan,
+    ) -> Result<crate::publication_verification::decision::Receipt, Error> {
+        self.write(|c| super::publication_checks::commit_check_tx(c, plan))
+    }
+    fn check_receipt(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::publication_verification::decision::Receipt>, Error> {
+        self.read(|c| {
+            super::publication_checks::read_receipt(c, id).map(|r| r.map(|(_, receipt)| receipt))
+        })
+    }
+}
+
+impl crate::publication_verification::EvidenceRepository for SqliteCompactMarket {
+    fn publication_facts(
+        &self,
+        task_id: &str,
+    ) -> Result<crate::publication_verification::Facts, Error> {
+        self.read(|c| super::verification::read_facts(c, task_id))
+    }
+}
+
+impl crate::data_supply::default_range::DefaultRangeSource for SqliteCompactMarket {
+    fn resolve_default_work(
+        &self,
+        op: crate::data_supply::default_range::DefaultOperation,
+        today: NaiveDate,
+    ) -> Result<crate::data_supply::default_range::DefaultWork, Error> {
+        self.read(|c| {
+            crate::data_supply::default_range::resolve_default_work_on(c, op, today).map_err(|e| {
+                match e {
+                    crate::data_supply::default_selection::SelectionError::EmptySelection => {
+                        Error::Invalid("EMPTY_SELECTION".into())
+                    }
+                    crate::data_supply::default_selection::SelectionError::Invalid(m) => {
+                        Error::Invalid(m)
+                    }
+                }
+            })
+        })
+    }
+}
+
+impl crate::gap_verification::runner::GapTaskStore for SqliteCompactMarket {
+    fn task(&self, id: &str) -> Result<TaskSnapshot, Error> {
+        MarketRepository::task(self, id)
+    }
+    fn transition_task(
+        &self,
+        task: &str,
+        revision: u64,
+        run: &str,
+        change: Change,
+    ) -> Result<TaskSnapshot, Error> {
+        use crate::task_control::TaskRepository;
+        Ok(self.transition(task, revision, run, change)?)
+    }
+}
+
+impl crate::gap_verification::GapDecisionStore for SqliteCompactMarket {
+    fn freeze_gap_subject(
+        &self,
+        target: &crate::gap_verification::GapTarget,
+    ) -> Result<crate::gap_verification::SubjectBinding, Error> {
+        self.read(|c| crate::gap_verification::freeze_subject_on(c, target))
+    }
+    fn check_gap_subject(
+        &self,
+        subject: &crate::gap_verification::SubjectBinding,
+    ) -> Result<(), Error> {
+        self.read(|c| crate::gap_verification::check_subject_on(c, subject))
+    }
+    fn commit_gap_decision(
+        &self,
+        decision: &crate::market_storage::GapVerificationDecision,
+    ) -> Result<bool, Error> {
+        self.tx(|c| super::gaps::record_gap_decision_tx(c, decision, true))
+    }
+    fn gap_decision(
+        &self,
+        decision_id: &str,
+    ) -> Result<Option<crate::market_storage::GapVerificationDecision>, Error> {
+        self.read(|c| super::gaps::read_decision(c, decision_id))
     }
 }
 
