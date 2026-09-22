@@ -27,6 +27,11 @@ Web = 只读的"治理仪表盘"；MCP = 唯一操作通道；SQLite = 唯一事
    不提供 ad-hoc 全市场行情扫描（存储为 per-entity scope 设计，
    无全局 trade_day 索引，横切为 O(29M bars) 全扫——非本平台职责，
    由离线导出或下游系统承担）。
+8. **观测数据的记录口径**：不新增进程外采样器。耗时类指标经既有
+   durable 通道落库——runner 把相位耗时写入 `ItemOutcome.evidence`
+   （该字段本就是 executor 产出的无决策权 durable 证据，零 schema
+   变更）；空间趋势（DB/WAL、B/item 增量成本）允许一张 append-only
+   采样表，随日更任务事务落库——它本身是治理数据，属唯一例外。
 
 ## 能力清单
 
@@ -41,7 +46,9 @@ Web = 只读的"治理仪表盘"；MCP = 唯一操作通道；SQLite = 唯一事
 
 ### B. 治理统计（P0/P1——全部元数据级聚合，无 bar 扫描）
 
-只展示系统已产生的测量值——console 做聚合展示，不新增采样器。
+只展示系统已产生的测量值。标注口径：**直读** = 现有表/dstat 直接
+可查；**evidence 落库** = runner 写入 `ItemOutcome.evidence`（既有
+字段，零 schema 变更）；**采样表** = 契约第 8 条的 append-only 例外。
 
 | 能力 | 回答的问题 | 数据源/成本 |
 |---|---|---|
@@ -53,21 +60,23 @@ Web = 只读的"治理仪表盘"；MCP = 唯一操作通道；SQLite = 唯一事
 
 #### B.1 空间占用（#259 容量门的日常监控版）
 
-| 指标 | 数据源 | 价值 |
+| 指标 | 读取方式 | 价值 |
 |---|---|---|
-| DB / WAL 总量与趋势 | `SqliteMetrics` + 定时采样 | ≤2.5GiB 容量预算的实时对照 |
-| B/bar 实测 | dbstat（capacity measure 同款） | 压缩率漂移预警（S5B 基线 48.2B/bar） |
-| segment 利用率 | `segment_bars` pgsize/unused | 碎片检测 |
-| 每类写入增量成本 | no-change B/item、append B/item | #259 验收指标（1,721/2,426 B/item）每日复核 |
+| DB / WAL 当前大小 | **直读**：文件 stat / CheckpointMetrics | ≤2.5GiB 容量预算的实时对照 |
+| B/bar 实测 | **直读**：dbstat（capacity measure 同款） | 压缩率漂移预警（S5B 基线 48.2B/bar） |
+| segment 利用率 | **直读**：`segment_bars` pgsize/unused | 碎片检测 |
+| DB/WAL 趋势 | **采样表**：每日任务事务内落一行 | 增长曲线 |
+| 每类写入增量成本 | **采样表**：日更后 DB 增量 ÷ item 数 | #259 验收指标（1,721/2,426 B/item）每日复核 |
 
 #### B.2 耗时（日更 SLA 仪表）
 
-| 指标 | 数据源 | 价值 |
+| 指标 | 读取方式 | 价值 |
 |---|---|---|
-| 任务 wall time + per-item ms | task 时间戳 | 日更 ≤5min 门的日常监控 |
-| 相位耗时分布 | S5G phase 计时（parse/stage/commit/fsync 分项） | 性能回归定位：变慢直接看哪段退化 |
-| 失败/重试率趋势 | item outcome 聚合 | 数据质量漂移 |
-| reader/writer 等待时间 | WriteCoordinator 指标 | 读写竞争监控 |
+| 任务 wall time | **直读**：`tasks.created_at`/`last_progress_at` | 日更 ≤5min 门的日常监控 |
+| per-item 耗时 | **直读**：`task_item_execution_starts.started_at` 相邻差分（item finish 时刻经 evidence 补强） | 慢 item 定位 |
+| 相位耗时分布 | **evidence 落库**：runner 写 `ItemOutcome.evidence`（parse/stage/commit/fsync 分项） | 性能回归定位：变慢直接看哪段退化 |
+| 失败/重试率趋势 | **直读**：`task_items.outcome_json` 聚合 | 数据质量漂移 |
+| reader/writer 等待时间 | WriteCoordinator 内部计数（需补暴露口，低优先） | 读写竞争监控 |
 
 ### C. 溯源与审计（P1——本产品差异化面）
 
