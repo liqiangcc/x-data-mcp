@@ -108,6 +108,39 @@ pub struct UpdateBaseFacts {
     pub day_member_sha256: String,
     pub security_event_sha256: String,
 }
+/// One prepared item for `RangeRepository::commit_update_batch`
+/// (#259 S5G-6): acquisition and continuity probing already ran outside
+/// the transaction, so the batch writer only replays, transitions, stages
+/// and commits.
+#[derive(Debug)]
+pub struct UpdateBatchItem {
+    pub task_id: String,
+    pub item_id: String,
+    pub publication_id: String,
+    pub run_id: String,
+    pub symbol: String,
+    pub occupancy_key: String,
+    pub prepared: UpdateBatchPrepared,
+}
+#[derive(Debug)]
+pub enum UpdateBatchPrepared {
+    /// Continuity-proven unchanged member: reuse the base version, the
+    /// published head stays put.
+    NoChange {
+        base_version_id: String,
+        range_start_day: i64,
+        range_end_day: i64,
+        continuity: serde_json::Value,
+    },
+    /// Continuity-proven append: stage `upserts` as a delta on the base
+    /// version, then commit.
+    Append {
+        base_version_id: String,
+        result_version_id: String,
+        upserts: Vec<crate::market_data::Bar>,
+        continuity: serde_json::Value,
+    },
+}
 pub fn candidate_digest(batch: &MarketDataBatch) -> Result<String, Error> {
     serde_json::to_vec(batch)
         .map(|b| crate::hash::sha256(&b))

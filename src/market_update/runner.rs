@@ -241,6 +241,211 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             }
         }
     }
+    /// Bulk update path (#259 S5G-6): prepare every item outside the
+    /// writer — binding checks plus typed acquisition (member hash,
+    /// continuity probe, tail-only parse) — then commit the prepared set
+    /// in ONE repository transaction via `commit_update_batch`. Items the
+    /// typed contract cannot carry (replays, non-pending states,
+    /// unverified members, unsupported backends) keep the per-item
+    /// `run_item` path, whose reconciliation semantics are authoritative.
+    /// `Ok(None)` means the repository lacks the batch surface; callers
+    /// keep the per-item loop.
+    pub fn run_items(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+        provider: &dyn RangeProvider,
+    ) -> Result<Option<()>, Error> {
+        let mut items = Vec::new();
+        let mut fallback = Vec::new();
+        // Frozen inputs of prepared default-contract items: their gap
+        // coverings append after the batch commit, per receipt.
+        let mut coverings: Vec<(String, Value)> = Vec::new();
+        for item_id in item_ids {
+            match self.update_candidate(task_id, item_id, provider) {
+                Ok(Some((item, frozen))) => {
+                    if let Some(frozen) = frozen {
+                        coverings.push((item.item_id.clone(), frozen));
+                    }
+                    items.push(item);
+                }
+                Ok(None) | Err(_) => fallback.push(item_id.clone()),
+            }
+        }
+        if !items.is_empty() {
+            let results = match self.repository.commit_update_batch(task_id, &items) {
+                Ok(Some(results)) => Some(results),
+                Ok(None) => return Ok(None),
+                Err(_) => {
+                    // Structural failure rolled the whole batch back:
+                    // isolate per item so one bad item cannot wedge the
+                    // task in a Running-retry loop (the batch contract).
+                    fallback.extend(items.iter().map(|item| item.item_id.clone()));
+                    None
+                }
+            };
+            if let Some(results) = results {
+                if results.len() != items.len() {
+                    return Err(Error::Integrity(
+                        "update batch result count does not match items".into(),
+                    ));
+                }
+                for (item, result) in items.iter().zip(results) {
+                    match result {
+                        Ok(receipt) => {
+                            if let Some((_, frozen)) =
+                                coverings.iter().find(|(id, _)| *id == item.item_id)
+                            {
+                                self.ensure_default_coverings(frozen, &receipt.version_id)?;
+                            }
+                        }
+                        Err(_) => fallback.push(item.item_id.clone()),
+                    }
+                }
+            }
+        }
+        for item_id in fallback {
+            self.run_item(task_id, &item_id, provider)?;
+        }
+        Ok(Some(()))
+    }
+    /// Batch preparation for one update item (#259 S5G-6): the same
+    /// pre-acquisition checks `run_item` performs, plus the typed
+    /// acquire — no writes. `Ok(None)` defers the item to the per-item
+    /// path; `Err` does the same through the caller's fallback list.
+    /// The pair's second element carries the frozen inputs of
+    /// default-contract items for post-commit gap coverings.
+    fn update_candidate(
+        &self,
+        task_id: &str,
+        item_id: &str,
+        provider: &dyn RangeProvider,
+    ) -> Result<Option<(crate::market_update::UpdateBatchItem, Option<Value>)>, Error> {
+        let binding = match self.repository.task_item_binding(task_id, item_id)? {
+            Some(binding) => binding,
+            None => {
+                self.repository.task_head(task_id)?;
+                return Err(Error::Invalid(
+                    "range item absent from accepted task".into(),
+                ));
+            }
+        };
+        let default_contract =
+            binding.head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
+        let republish_contract =
+            binding.head.key.contract_version == super::tasks::REPUBLISH_CONTRACT_VERSION;
+        if !matches!(
+            binding.head.key.operation.as_str(),
+            "update_data" | "backfill_data" | "republish_data"
+        ) || binding.head.key.dataset != "market.daily"
+            || (!default_contract
+                && !republish_contract
+                && binding.head.key.contract_version != super::tasks::CONTRACT_VERSION)
+        {
+            return Err(Error::Invalid(
+                "unsupported range execution contract".into(),
+            ));
+        }
+        if self.repository.item_receipt(task_id, item_id)?.is_some()
+            || binding.head.visible_status(&self.run_id) == Status::NeedsVerification
+            || binding.item.stage != Stage::Pending
+            || binding.head.status.terminal()
+            || binding.head.status == Status::CancelRequested
+        {
+            return Ok(None);
+        }
+        let (base_id, range) = if default_contract {
+            let parsed = super::tasks::parse_default_frozen(&binding.item.spec.frozen_inputs)?;
+            match binding.head.key.operation.as_str() {
+                "update_data" if parsed.refresh_range.is_none() => {
+                    return Err(Error::Integrity(
+                        "default update item missing frozen refresh range".into(),
+                    ));
+                }
+                "backfill_data" if parsed.refresh_range.is_some() => {
+                    return Err(Error::Integrity(
+                        "default backfill item carries a refresh range".into(),
+                    ));
+                }
+                _ => {}
+            }
+            (parsed.base_version_id.clone(), parsed.union()?)
+        } else {
+            let frozen = &binding.item.spec.frozen_inputs;
+            let base_id = frozen["base_version_id"]
+                .as_str()
+                .ok_or_else(|| Error::Integrity("frozen base missing".into()))?
+                .to_string();
+            let range = DateRange {
+                start: serde_json::from_value(frozen["range"]["start"].clone())
+                    .map_err(|e| Error::Integrity(e.to_string()))?,
+                end: serde_json::from_value(frozen["range"]["end"].clone())
+                    .map_err(|e| Error::Integrity(e.to_string()))?,
+            };
+            (base_id, range)
+        };
+        let Some(facts) = self.repository.update_base_facts(&base_id)? else {
+            return Ok(None);
+        };
+        let Some(base_window) =
+            self.repository
+                .base_bars_in_range(&base_id, range.start, range.end)?
+        else {
+            return Ok(None);
+        };
+        let Some(acquired) = provider
+            .acquire_typed(&facts, &base_window, &range)
+            .map_err(|e| Error::Invalid(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+        // The batch transaction's revision CAS subsumes the per-item
+        // post-acquisition task guard: any interleaving task change fails
+        // the CAS and rolls the batch back to the per-item path.
+        if acquired.evidence.base_version_id != base_id
+            || acquired.evidence.base_integrity_sha256 != facts.integrity_sha256
+            || acquired.evidence.range != range
+        {
+            return Err(Error::Invalid(format!(
+                "NEEDS_VERIFICATION: {:?}",
+                Reason::BasisUnknown
+            )));
+        }
+        let id = crate::hash::sha256(serde_json::json!([task_id, item_id]).to_string().as_bytes());
+        let scope = Scope {
+            symbol: facts.symbol.clone(),
+            period: crate::market_data::Period::Day,
+        };
+        let continuity = serde_json::to_value(&acquired.evidence).unwrap_or(Value::Null);
+        let prepared = match acquired.decision {
+            TypedDecision::Unchanged => crate::market_update::UpdateBatchPrepared::NoChange {
+                base_version_id: base_id,
+                range_start_day: crate::compact_market::epoch_day(range.start),
+                range_end_day: crate::compact_market::epoch_day(range.end),
+                continuity,
+            },
+            TypedDecision::Append { upserts } => {
+                crate::market_update::UpdateBatchPrepared::Append {
+                    base_version_id: base_id,
+                    result_version_id: format!("range-version-{id}"),
+                    upserts,
+                    continuity,
+                }
+            }
+        };
+        Ok(Some((
+            crate::market_update::UpdateBatchItem {
+                task_id: task_id.into(),
+                item_id: item_id.into(),
+                publication_id: format!("range-result-{id}"),
+                run_id: self.run_id.clone(),
+                symbol: facts.symbol.clone(),
+                occupancy_key: scope.occupancy_key(),
+                prepared,
+            },
+            default_contract.then(|| binding.item.spec.frozen_inputs.clone()),
+        )))
+    }
     /// O(1) head+item binding for this execution step; a missing item
     /// produces the same invalid-command error the snapshot path did.
     fn binding(

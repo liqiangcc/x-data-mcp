@@ -187,32 +187,45 @@ pub fn run_once(
             session,
             published_at: chrono::Utc::now(),
         });
-    for item in &candidate.items {
-        // `update_data` refresh uses the range provider; `backfill_data`
-        // gains a source path only under the default frozen-gap contract;
-        // `republish_data` gains one only under the explicit republish
-        // contract (#247) — everything else keeps the blocked provider.
-        let provider: &dyn RangeProvider = match (
-            candidate.task.key.operation.as_str(),
-            candidate.task.key.contract_version.as_str(),
-            update.as_ref(),
-            backfill.as_ref(),
-            republish.as_ref(),
-        ) {
-            ("update_data", _, Some(provider), _, _) => provider,
-            ("backfill_data", contract, _, Some(provider), _)
-                if contract == crate::market_update::tasks::DEFAULT_CONTRACT_VERSION =>
-            {
-                provider
-            }
-            ("republish_data", contract, _, _, Some(provider))
-                if contract == crate::market_update::tasks::REPUBLISH_CONTRACT_VERSION =>
-            {
-                provider
-            }
-            _ => &OfficialRangeProvider,
-        };
-        runner.run_item(&candidate.task.task_id, &item.spec.item_id, provider)?;
+    // `update_data` refresh uses the range provider; `backfill_data`
+    // gains a source path only under the default frozen-gap contract;
+    // `republish_data` gains one only under the explicit republish
+    // contract (#247) — everything else keeps the blocked provider.
+    let provider: &dyn RangeProvider = match (
+        candidate.task.key.operation.as_str(),
+        candidate.task.key.contract_version.as_str(),
+        update.as_ref(),
+        backfill.as_ref(),
+        republish.as_ref(),
+    ) {
+        ("update_data", _, Some(provider), _, _) => provider,
+        ("backfill_data", contract, _, Some(provider), _)
+            if contract == crate::market_update::tasks::DEFAULT_CONTRACT_VERSION =>
+        {
+            provider
+        }
+        ("republish_data", contract, _, _, Some(provider))
+            if contract == crate::market_update::tasks::REPUBLISH_CONTRACT_VERSION =>
+        {
+            provider
+        }
+        _ => &OfficialRangeProvider,
+    };
+    // S5G-6 bulk path: on compact backends the task's prepared items
+    // commit in one write transaction; `None` or any unprepared item
+    // keeps the per-item loop.
+    let item_ids: Vec<String> = candidate
+        .items
+        .iter()
+        .map(|item| item.spec.item_id.clone())
+        .collect();
+    if runner
+        .run_items(&candidate.task.task_id, &item_ids, provider)?
+        .is_none()
+    {
+        for item in &candidate.items {
+            runner.run_item(&candidate.task.task_id, &item.spec.item_id, provider)?;
+        }
     }
     Ok(Some(control.read_task(&candidate.task.task_id)?))
 }

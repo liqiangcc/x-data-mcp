@@ -141,6 +141,22 @@ impl SqliteCompactMarket {
         removes: &[NaiveDate],
     ) -> Result<i64, Error> {
         self.tx(|c| {
+            Self::stage_ops_delta_tx(c, entity, base_version_id, version_id, upserts, removes)
+        })
+    }
+
+    /// Transaction-level `stage_ops_delta` (#259 S5G-6): the batch
+    /// update commit drives the same staging inside one transaction.
+    #[allow(clippy::too_many_arguments)]
+    fn stage_ops_delta_tx(
+        c: &Connection,
+        entity: &str,
+        base_version_id: &str,
+        version_id: &str,
+        upserts: &[Bar],
+        removes: &[NaiveDate],
+    ) -> Result<i64, Error> {
+        {
             let base_key = version_key(c, base_version_id)?;
             let base_facts = compact_versions::result_facts(c, base_key)?;
             if base_facts.state != CompactVersionState::Published {
@@ -209,7 +225,7 @@ impl SqliteCompactMarket {
                 yearly_lineage: None,
             };
             compact_versions::stage_delta(c, &draft, base_key, &ops)
-        })
+        }
     }
 
     /// Marks a staged ops-delta version validated (mirrors `mark_validated`
@@ -266,6 +282,37 @@ impl SqliteCompactMarket {
         continuity_evidence: Option<&Value>,
     ) -> Result<Receipt, Error> {
         self.write(|c| {
+            Self::commit_ops_update_tx(
+                c,
+                result_id,
+                task_id,
+                item_id,
+                base_version_id,
+                result_version_id,
+                expected_revision,
+                run_id,
+                occupancy_key,
+                continuity_evidence,
+            )
+        })
+    }
+
+    /// Transaction-level `commit_ops_update` (#259 S5G-6): the batch
+    /// update commit drives the same commit inside one transaction.
+    #[allow(clippy::too_many_arguments)]
+    fn commit_ops_update_tx(
+        c: &Connection,
+        result_id: &str,
+        task_id: &str,
+        item_id: &str,
+        base_version_id: &str,
+        result_version_id: &str,
+        expected_revision: u64,
+        run_id: &str,
+        occupancy_key: &str,
+        continuity_evidence: Option<&Value>,
+    ) -> Result<Receipt, Error> {
+        {
             // Replay: a committed result may precede a lost response —
             // return its receipt instead of conflicting on re-register.
             if let Some(kind) = registry_kind(c, result_id)? {
@@ -332,7 +379,7 @@ impl SqliteCompactMarket {
             let evidence =
                 compact_versions::put_evidence(c, EvidenceKind::Continuity, &continuity)?;
             let entity = facts.entity.clone();
-            let stored = compact_results::commit_market_update(
+            let stored = compact_results::commit_market_update_tx(
                 c,
                 &MarketUpdateCommit {
                     result_id: result_id.into(),
@@ -368,7 +415,7 @@ impl SqliteCompactMarket {
                 task_id: task_id.into(),
                 task_revision: stored.identity.task_revision,
             })
-        })
+        }
     }
 
     /// Replay check for the typed commit entry points (#259 S5G): a
@@ -416,6 +463,39 @@ impl SqliteCompactMarket {
         continuity_evidence: Option<&Value>,
     ) -> Result<Receipt, Error> {
         self.write(|c| {
+            Self::commit_ops_no_change_tx(
+                c,
+                result_id,
+                task_id,
+                item_id,
+                base_version_id,
+                expected_revision,
+                run_id,
+                occupancy_key,
+                range_start_day,
+                range_end_day,
+                continuity_evidence,
+            )
+        })
+    }
+
+    /// Transaction-level `commit_ops_no_change` (#259 S5G-6): the update
+    /// batch writer drives the same commit inside one transaction.
+    #[allow(clippy::too_many_arguments)]
+    fn commit_ops_no_change_tx(
+        c: &Connection,
+        result_id: &str,
+        task_id: &str,
+        item_id: &str,
+        base_version_id: &str,
+        expected_revision: u64,
+        run_id: &str,
+        occupancy_key: &str,
+        range_start_day: i64,
+        range_end_day: i64,
+        continuity_evidence: Option<&Value>,
+    ) -> Result<Receipt, Error> {
+        {
             if let Some(kind) = registry_kind(c, result_id)? {
                 if kind != 1 {
                     return Err(Error::Conflict("result identity conflict".into()));
@@ -449,7 +529,7 @@ impl SqliteCompactMarket {
             );
             let evidence =
                 compact_versions::put_evidence(c, EvidenceKind::Continuity, &continuity)?;
-            let stored = compact_results::commit_market_update(
+            let stored = compact_results::commit_market_update_tx(
                 c,
                 &MarketUpdateCommit {
                     result_id: result_id.into(),
@@ -487,7 +567,7 @@ impl SqliteCompactMarket {
                 task_id: task_id.into(),
                 task_revision: stored.identity.task_revision,
             })
-        })
+        }
     }
 
     /// Typed base facts for the ops-first update path (#259 S5G): version
@@ -1806,6 +1886,13 @@ impl RangeRepository for SqliteCompactMarket {
         )
         .map(Some)
     }
+    fn commit_update_batch(
+        &self,
+        task_id: &str,
+        items: &[crate::market_update::UpdateBatchItem],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        SqliteCompactMarket::commit_update_batch(self, task_id, items).map(Some)
+    }
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
         self.read(|c| match registry_kind(c, id)? {
             Some(1) => {
@@ -2384,6 +2471,197 @@ impl SqliteCompactMarket {
             tx.commit().map_err(storage)?;
             Ok(out)
         })
+    }
+
+    /// Batched update commit (#259 S5G-6): one write transaction covers
+    /// the whole prepared item set — claim, per-item start, delta
+    /// staging, publication commit and item finish — replacing the
+    /// per-item stage+validate+commit transaction chain. Structural
+    /// errors roll the batch back; the caller re-runs items individually.
+    pub fn commit_update_batch(
+        &self,
+        task_id: &str,
+        items: &[crate::market_update::UpdateBatchItem],
+    ) -> Result<Vec<Result<Receipt, Error>>, Error> {
+        self.write(|c| {
+            let tx = c
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(storage)?;
+            let mut snapshot = crate::sqlite_tasks::read_bound_task(&tx, task_id)?
+                .ok_or(Error::Task(task_control::Error::TaskNotFound))?;
+            if snapshot.task.status == crate::task_control::Status::Pending {
+                let run_id = items
+                    .first()
+                    .map(|item| item.run_id.clone())
+                    .ok_or_else(|| invalid("update batch carries no items"))?;
+                crate::sqlite_tasks::transition_light_tx(
+                    &tx,
+                    &mut snapshot,
+                    &run_id,
+                    Change::Claim,
+                )
+                .map_err(Error::Task)?;
+            }
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(update_batch_item(&tx, &mut snapshot, item)?);
+            }
+            tx.commit().map_err(storage)?;
+            Ok(out)
+        })
+    }
+}
+
+/// Per-item batch step for `commit_update_batch`: replay → start the
+/// item → stage+commit inside a savepoint → map a failed commit to the
+/// same per-item outcome `run_item` records (verification marker for
+/// outcome-unknown classes, a failed finish otherwise). Structural
+/// errors — the transitions themselves — abort the whole batch.
+fn update_batch_item(
+    c: &Connection,
+    snapshot: &mut TaskSnapshot,
+    item: &crate::market_update::UpdateBatchItem,
+) -> Result<Result<Receipt, Error>, Error> {
+    if let Some(kind) = registry_kind(c, &item.publication_id)? {
+        let stored = compact_results::read_market_update(c, &item.publication_id)?;
+        if kind != compact_results::REGISTRY_MARKET_UPDATE {
+            return Err(Error::Conflict("update result id kind mismatch".into()));
+        }
+        let expected_version = match &item.prepared {
+            crate::market_update::UpdateBatchPrepared::NoChange {
+                base_version_id, ..
+            } => base_version_id,
+            crate::market_update::UpdateBatchPrepared::Append {
+                result_version_id, ..
+            } => result_version_id,
+        };
+        if stored.identity.task_id != item.task_id
+            || stored.identity.item_id != item.item_id
+            || stored.identity.result_version_id != *expected_version
+        {
+            return Err(Error::Conflict(
+                "update result id replays a different commit".into(),
+            ));
+        }
+        return Ok(Ok(Receipt {
+            publication_id: item.publication_id.clone(),
+            version_id: stored.identity.result_version_id.clone(),
+            task_id: item.task_id.clone(),
+            task_revision: stored.identity.task_revision,
+        }));
+    }
+    crate::sqlite_tasks::transition_light_tx(
+        c,
+        snapshot,
+        &item.run_id,
+        Change::StartItem(item.item_id.clone()),
+    )
+    .map_err(Error::Task)?;
+    let revision: i64 = c
+        .query_row(
+            "SELECT state_revision FROM tasks WHERE task_id=?1",
+            [&item.task_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    let expected_revision =
+        u64::try_from(revision).map_err(|_| integrity("task revision out of range"))?;
+    let committed = {
+        // The savepoint confines one item's staged writes: a content or
+        // commit failure rolls back only this item, never its siblings.
+        c.execute_batch("SAVEPOINT update_batch_item")
+            .map_err(storage)?;
+        let outcome = match &item.prepared {
+            crate::market_update::UpdateBatchPrepared::NoChange {
+                base_version_id,
+                range_start_day,
+                range_end_day,
+                continuity,
+            } => SqliteCompactMarket::commit_ops_no_change_tx(
+                c,
+                &item.publication_id,
+                &item.task_id,
+                &item.item_id,
+                base_version_id,
+                expected_revision,
+                &item.run_id,
+                &item.occupancy_key,
+                *range_start_day,
+                *range_end_day,
+                Some(continuity),
+            ),
+            crate::market_update::UpdateBatchPrepared::Append {
+                base_version_id,
+                result_version_id,
+                upserts,
+                continuity,
+            } => SqliteCompactMarket::stage_ops_delta_tx(
+                c,
+                &item.symbol,
+                base_version_id,
+                result_version_id,
+                upserts,
+                &[],
+            )
+            .and_then(|_| {
+                compact_versions::mark_validated(c, version_key(c, result_version_id)?)?;
+                SqliteCompactMarket::commit_ops_update_tx(
+                    c,
+                    &item.publication_id,
+                    &item.task_id,
+                    &item.item_id,
+                    base_version_id,
+                    result_version_id,
+                    expected_revision,
+                    &item.run_id,
+                    &item.occupancy_key,
+                    Some(continuity),
+                )
+            }),
+        };
+        match outcome {
+            Ok(receipt) => {
+                c.execute_batch("RELEASE update_batch_item")
+                    .map_err(storage)?;
+                Ok(receipt)
+            }
+            Err(error) => {
+                c.execute_batch("ROLLBACK TO update_batch_item; RELEASE update_batch_item")
+                    .map_err(storage)?;
+                Err(error)
+            }
+        }
+    };
+    match committed {
+        Ok(receipt) => Ok(Ok(receipt)),
+        Err(error) => {
+            let change = if matches!(
+                error,
+                Error::OutcomeUnknown(_)
+                    | Error::Storage(_)
+                    | Error::Task(
+                        task_control::Error::StorageUnavailable(_)
+                            | task_control::Error::OutcomeUnknown(_)
+                    )
+            ) {
+                Change::RequireVerification {
+                    item_id: item.item_id.clone(),
+                    reason: "item execution result not confirmed inside update batch; committed receipt not yet established".into(),
+                }
+            } else {
+                Change::FinishItem(
+                    item.item_id.clone(),
+                    task_control::ItemOutcome {
+                        success: false,
+                        error: Some(error.to_string()),
+                        evidence: None,
+                    },
+                )
+            };
+            crate::sqlite_tasks::transition_light_tx(c, snapshot, &item.run_id, change)
+                .map_err(Error::Task)?;
+            Ok(Err(error))
+        }
     }
 }
 

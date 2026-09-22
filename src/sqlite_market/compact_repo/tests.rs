@@ -1256,3 +1256,325 @@ fn collection_batch_records_item_failure_and_keeps_others() {
         .unwrap();
     assert_eq!(heads, 1);
 }
+
+/// S5G-6 batch update commit: one transaction carries the claim, both
+/// item starts, an append stage+commit and a no-change commit. Content
+/// failures finish only their item; structural errors roll the whole
+/// batch back.
+#[test]
+fn update_batch_commit_mixed_isolation_and_rollback() {
+    use crate::market_update::{UpdateBatchItem, UpdateBatchPrepared};
+
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+
+    // Two published bases on distinct scopes.
+    for (req, symbol, version_id, bars) in [
+        (
+            "req-b1",
+            "sh.600006",
+            "v1",
+            vec![bar(0, 100), bar(1, 110), bar(2, 120)],
+        ),
+        ("req-b2", "sz.000001", "v1b", vec![bar(0, 200), bar(1, 210)]),
+    ] {
+        let scope = task_control::legacy::scope_id(symbol, "day");
+        let work = FrozenWork {
+            items: vec![ItemSpec {
+                item_id: ITEM.into(),
+                target: json!({"symbol": symbol, "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            }],
+            scopes: BTreeSet::from([scope]),
+            shared_evidence: None,
+        };
+        let command = Command {
+            key: CommandKey {
+                operation: "collect_data".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        let task_id = match repo
+            .accept(req, &command, &work, RUN, None)
+            .unwrap()
+            .record
+            .outcome
+        {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        };
+        let revision = start_item(&repo, &task_id);
+        let mut version = mk_version(version_id, bars);
+        version.symbol = symbol.into();
+        repo.stage(&envelope(&version, source("gen-1"), None))
+            .unwrap();
+        let checked = repo.candidate(version_id).unwrap();
+        repo.mark_validated(&checked).unwrap();
+        repo.commit(&PublishPlan {
+            command: collect_command(&task_id, &format!("pub-{version_id}"), version_id, revision),
+            record: checked.clone(),
+            required_heads: vec![(Scope::of(&checked.version), None)],
+            promote: None,
+            base_digest: None,
+        })
+        .unwrap();
+    }
+
+    // One update task carrying an item per scope.
+    let accept_update = |req: &str, items: &[(&str, &str)]| -> String {
+        let mut specs = Vec::new();
+        let mut scopes = BTreeSet::new();
+        for (item_id, symbol) in items {
+            let scope = task_control::legacy::scope_id(symbol, "day");
+            specs.push(ItemSpec {
+                item_id: (*item_id).into(),
+                target: json!({"symbol": symbol, "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            });
+            scopes.insert(scope);
+        }
+        let work = FrozenWork {
+            items: specs,
+            scopes,
+            shared_evidence: None,
+        };
+        let command = Command {
+            key: CommandKey {
+                operation: "update_data".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        match repo
+            .accept(req, &command, &work, RUN, None)
+            .unwrap()
+            .record
+            .outcome
+        {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        }
+    };
+    let occupancy = |symbol: &str| {
+        Scope {
+            symbol: symbol.into(),
+            period: Period::Day,
+        }
+        .occupancy_key()
+    };
+    let continuity =
+        || json!({"continuity": {"mode": "append", "day_member_sha256": "cd".repeat(32)}});
+
+    // Mixed batch: append on one scope, no-change on the other — one
+    // transaction performs claim + both item starts + both commits.
+    let task_id = accept_update(
+        "req-u1",
+        &[("item-a", "sh.600006"), ("item-b", "sz.000001")],
+    );
+    let items = vec![
+        UpdateBatchItem {
+            task_id: task_id.clone(),
+            item_id: "item-a".into(),
+            publication_id: "upd-a".into(),
+            run_id: RUN.into(),
+            symbol: "sh.600006".into(),
+            occupancy_key: occupancy("sh.600006"),
+            prepared: UpdateBatchPrepared::Append {
+                base_version_id: "v1".into(),
+                result_version_id: "v2".into(),
+                upserts: vec![bar(3, 130)],
+                continuity: continuity(),
+            },
+        },
+        UpdateBatchItem {
+            task_id: task_id.clone(),
+            item_id: "item-b".into(),
+            publication_id: "upd-b".into(),
+            run_id: RUN.into(),
+            symbol: "sz.000001".into(),
+            occupancy_key: occupancy("sz.000001"),
+            prepared: UpdateBatchPrepared::NoChange {
+                base_version_id: "v1b".into(),
+                range_start_day: 0,
+                range_end_day: 3,
+                continuity: continuity(),
+            },
+        },
+    ];
+    let results = repo.commit_update_batch(&task_id, &items).unwrap();
+    assert_eq!(results.len(), 2);
+    let receipt_a = results[0].as_ref().unwrap();
+    let receipt_b = results[1].as_ref().unwrap();
+    assert_eq!(receipt_a.version_id, "v2");
+    assert_eq!(receipt_b.version_id, "v1b");
+    let task = repo.task(&task_id).unwrap();
+    assert_eq!(task.task.status, crate::task_control::Status::Succeeded);
+    assert!(
+        task.items
+            .iter()
+            .all(|i| i.stage == crate::task_control::Stage::Finished)
+    );
+    let page = repo
+        .range(
+            &Scope {
+                symbol: "sh.600006".into(),
+                period: Period::Day,
+            },
+            None,
+            &Range {
+                start: date(0),
+                end: date(10),
+                after: None,
+                limit: 10,
+            },
+        )
+        .unwrap();
+    assert_eq!(page.version.version_id, "v2");
+    assert_eq!(page.rows.len(), 4);
+    let page = repo
+        .range(
+            &Scope {
+                symbol: "sz.000001".into(),
+                period: Period::Day,
+            },
+            None,
+            &Range {
+                start: date(0),
+                end: date(10),
+                after: None,
+                limit: 10,
+            },
+        )
+        .unwrap();
+    assert_eq!(page.version.version_id, "v1b");
+    assert_eq!(page.rows.len(), 2);
+
+    // Replay of the committed batch returns the same receipts without
+    // touching task state.
+    let replayed = repo.commit_update_batch(&task_id, &items).unwrap();
+    assert_eq!(replayed[0].as_ref().unwrap(), receipt_a);
+    assert_eq!(replayed[1].as_ref().unwrap(), receipt_b);
+
+    // Content failure isolation: a duplicate-day upsert fails its
+    // savepoint; the sibling no-change item still commits.
+    let task_id2 = accept_update(
+        "req-u2",
+        &[("item-c", "sh.600006"), ("item-d", "sz.000001")],
+    );
+    let items2 = vec![
+        UpdateBatchItem {
+            task_id: task_id2.clone(),
+            item_id: "item-c".into(),
+            publication_id: "upd-c".into(),
+            run_id: RUN.into(),
+            symbol: "sh.600006".into(),
+            occupancy_key: occupancy("sh.600006"),
+            prepared: UpdateBatchPrepared::Append {
+                base_version_id: "v2".into(),
+                result_version_id: "v3".into(),
+                upserts: vec![bar(4, 140), bar(4, 141)],
+                continuity: continuity(),
+            },
+        },
+        UpdateBatchItem {
+            task_id: task_id2.clone(),
+            item_id: "item-d".into(),
+            publication_id: "upd-d".into(),
+            run_id: RUN.into(),
+            symbol: "sz.000001".into(),
+            occupancy_key: occupancy("sz.000001"),
+            prepared: UpdateBatchPrepared::NoChange {
+                base_version_id: "v1b".into(),
+                range_start_day: 0,
+                range_end_day: 3,
+                continuity: continuity(),
+            },
+        },
+    ];
+    let results2 = repo.commit_update_batch(&task_id2, &items2).unwrap();
+    assert!(results2[0].is_err());
+    assert_eq!(results2[1].as_ref().unwrap().version_id, "v1b");
+    let task2 = repo.task(&task_id2).unwrap();
+    assert_eq!(
+        task2.task.status,
+        crate::task_control::Status::PartiallyFailed
+    );
+    let item_c = task2
+        .items
+        .iter()
+        .find(|i| i.spec.item_id == "item-c")
+        .unwrap();
+    assert_eq!(item_c.stage, crate::task_control::Stage::Finished);
+    assert!(!item_c.outcome.as_ref().unwrap().success);
+    // The failed append left no staged rows: no v3 version exists.
+    let v3_rows: i64 = repo
+        .read(|c| {
+            c.query_row(
+                "SELECT count(*) FROM data_versions WHERE version_id='v3'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(storage)
+        })
+        .unwrap();
+    assert_eq!(v3_rows, 0);
+
+    // Structural error (an item absent from the task) aborts the whole
+    // batch: even the sibling's savepoint-released writes roll back and
+    // the claim never lands.
+    let task_id3 = accept_update("req-u3", &[("item-e", "sh.600006")]);
+    let items3 = vec![
+        UpdateBatchItem {
+            task_id: task_id3.clone(),
+            item_id: "item-e".into(),
+            publication_id: "upd-e".into(),
+            run_id: RUN.into(),
+            symbol: "sh.600006".into(),
+            occupancy_key: occupancy("sh.600006"),
+            prepared: UpdateBatchPrepared::NoChange {
+                base_version_id: "v2".into(),
+                range_start_day: 0,
+                range_end_day: 4,
+                continuity: continuity(),
+            },
+        },
+        UpdateBatchItem {
+            task_id: task_id3.clone(),
+            item_id: "ghost".into(),
+            publication_id: "upd-ghost".into(),
+            run_id: RUN.into(),
+            symbol: "sh.600006".into(),
+            occupancy_key: occupancy("sh.600006"),
+            prepared: UpdateBatchPrepared::NoChange {
+                base_version_id: "v2".into(),
+                range_start_day: 0,
+                range_end_day: 4,
+                continuity: continuity(),
+            },
+        },
+    ];
+    assert!(repo.commit_update_batch(&task_id3, &items3).is_err());
+    let task3 = repo.task(&task_id3).unwrap();
+    assert_eq!(task3.task.status, crate::task_control::Status::Pending);
+    assert!(
+        task3
+            .items
+            .iter()
+            .all(|i| i.stage == crate::task_control::Stage::Pending)
+    );
+
+    // After the rollback the same task commits cleanly on retry.
+    let retry = repo.commit_update_batch(&task_id3, &items3[..1]).unwrap();
+    assert_eq!(retry[0].as_ref().unwrap().version_id, "v2");
+    assert_eq!(
+        repo.task(&task_id3).unwrap().task.status,
+        crate::task_control::Status::Succeeded
+    );
+}

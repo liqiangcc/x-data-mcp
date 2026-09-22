@@ -13,7 +13,7 @@ use crate::compact_market::{
 
 const MAX_DEPTH: u32 = 256;
 const OUTCOME_LIMIT: usize = 192;
-const REGISTRY_MARKET_UPDATE: i64 = 1;
+pub(crate) const REGISTRY_MARKET_UPDATE: i64 = 1;
 pub(crate) const REGISTRY_PUBLICATION: i64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +116,21 @@ pub(crate) fn commit_market_update(
     c: &mut Connection,
     command: &MarketUpdateCommit,
 ) -> Result<StoredMarketUpdateResult, Error> {
+    let tx = c
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage)?;
+    let result = commit_market_update_tx(&tx, command)?;
+    tx.commit().map_err(storage)?;
+    Ok(result)
+}
+
+/// Transaction-level market-update commit shared by the per-item ops path
+/// and the update batch writer (#259 S5G-6): the caller supplies the
+/// atomicity boundary.
+pub(crate) fn commit_market_update_tx(
+    c: &Connection,
+    command: &MarketUpdateCommit,
+) -> Result<StoredMarketUpdateResult, Error> {
     compact_market::epoch_date(command.range_start_day).map_err(integrity)?;
     compact_market::epoch_date(command.range_end_day).map_err(integrity)?;
     if command.range_start_day > command.range_end_day {
@@ -138,48 +153,45 @@ pub(crate) fn commit_market_update(
         MarketUpdateChange::Full => None,
     };
 
-    let tx = c
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    let base = compact_versions::result_facts(&tx, command.base_version_key)?;
+    let base = compact_versions::result_facts(c, command.base_version_key)?;
     if base.state != CompactVersionState::Published {
         return Err(integrity("update base version is not published"));
     }
-    compact_versions::verified_source_binding(&tx, &command.source_binding_digest)?;
-    if compact_versions::verified_evidence_kind(&tx, &command.evidence_digest)?
+    compact_versions::verified_source_binding(c, &command.source_binding_digest)?;
+    if compact_versions::verified_evidence_kind(c, &command.evidence_digest)?
         != EvidenceKind::Continuity
     {
         return Err(integrity("market update evidence is not continuity"));
     }
-    let plan = plan_market_update(&tx, command, &base)?;
-    register_result(&tx, &command.result_id, REGISTRY_MARKET_UPDATE)?;
-    require_item_unused(&tx, &command.task_id, &command.item_id)?;
-    check_required_heads(&tx, &command.required_heads)?;
-    check_binding(&tx, &command.task_id, &command.item_id, &command.binding)?;
+    let plan = plan_market_update(c, command, &base)?;
+    register_result(c, &command.result_id, REGISTRY_MARKET_UPDATE)?;
+    require_item_unused(c, &command.task_id, &command.item_id)?;
+    check_required_heads(c, &command.required_heads)?;
+    check_binding(c, &command.task_id, &command.item_id, &command.binding)?;
     if plan.outcome == UpdateOutcome::Published {
         let published_at = command
             .published_at
             .ok_or_else(|| integrity("published update lacks published_at"))?;
-        compact_versions::publish(&tx, plan.result.key, published_at)?;
+        compact_versions::publish(c, plan.result.key, published_at)?;
         // Clip-level verified read: the staged version was fully verified
         // at stage time; publish only flips state, so re-verifying the
         // stored projection digests is sufficient here (the legacy JSON
         // envelope is not needed on the commit path).
-        compact_versions::verify_leaf_projection(&tx, plan.result.key)?;
+        compact_versions::verify_leaf_projection(c, plan.result.key)?;
         if plan.continuity == ContinuityMode::Append
             && plan.result.manifest_mode == ManifestMode::Checkpoint
         {
             // Delta-chain rollover materialized a checkpoint from
             // base+ops at stage time; verify that identity at clip level.
-            let base_compact = compact_versions::leaf_bars(&tx, base.key)?;
+            let base_compact = compact_versions::leaf_bars(c, base.key)?;
             let applied = compact_versions::apply_stored_delta(
-                &tx,
+                c,
                 &base_compact,
                 &plan.append_ops,
                 &plan.result.entity,
                 plan.result.period,
             )?;
-            let actual = compact_versions::leaf_bars(&tx, plan.result.key)?;
+            let actual = compact_versions::leaf_bars(c, plan.result.key)?;
             if applied != actual {
                 return Err(integrity("checkpoint append does not match base plus ops"));
             }
@@ -206,7 +218,7 @@ pub(crate) fn commit_market_update(
     };
     let result_digest =
         compact_market::market_update_result_digest(&identity).map_err(integrity)?;
-    tx.execute(
+    c.execute(
         "INSERT INTO market_update_results(result_id,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,source_binding_digest,continuity_mode,prefix_bytes,base_projection_digest,result_projection_digest,delta_digest,evidence_digest,task_revision,result_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
         params![
             command.result_id,
@@ -230,12 +242,12 @@ pub(crate) fn commit_market_update(
         ],
     )
     .map_err(conflict_or_storage)?;
-    let result_key = tx.last_insert_rowid();
+    let result_key = c.last_insert_rowid();
     for (seq, op) in plan.append_ops.iter().enumerate() {
         let StoredDeltaKind::Upsert(stored) = &op.kind else {
             return Err(integrity("append result op is not an upsert"));
         };
-        tx.execute(
+        c.execute(
             "INSERT INTO market_update_delta_clips(result_key,seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 result_key,
@@ -251,13 +263,13 @@ pub(crate) fn commit_market_update(
         .map_err(storage)?;
     }
     if plan.outcome == UpdateOutcome::Published {
-        tx.execute(
+        c.execute(
             "INSERT INTO task_publications(task_id,version_key,result_id) VALUES(?1,?2,?3)",
             params![command.task_id, plan.result.key, command.result_id],
         )
         .map_err(conflict_or_storage)?;
         apply_head(
-            &tx,
+            c,
             &command.head,
             &plan.result.entity,
             plan.result.period,
@@ -267,14 +279,13 @@ pub(crate) fn commit_market_update(
         )?;
     }
     finish_item_and_task(
-        &tx,
+        c,
         &command.task_id,
         &command.item_id,
         expected_revision_i64,
         task_revision_i64,
         &outcome_json,
     )?;
-    tx.commit().map_err(storage)?;
     Ok(StoredMarketUpdateResult {
         result_key,
         base_version_key: base.key,

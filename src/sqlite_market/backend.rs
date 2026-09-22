@@ -194,6 +194,130 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
             }
         }
     }
+    fn update_base_facts(
+        &self,
+        base_version_id: &str,
+    ) -> Result<Option<crate::market_update::UpdateBaseFacts>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::update_base_facts(
+                    m,
+                    base_version_id,
+                )
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::update_base_facts(
+                    m,
+                    base_version_id,
+                )
+            }
+        }
+    }
+    fn base_bars_in_range(
+        &self,
+        base_version_id: &str,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+    ) -> Result<Option<Vec<crate::market_data::Bar>>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::base_bars_in_range(
+                    m,
+                    base_version_id,
+                    start,
+                    end,
+                )
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::base_bars_in_range(
+                    m,
+                    base_version_id,
+                    start,
+                    end,
+                )
+            }
+        }
+    }
+    fn commit_range_ops_typed(
+        &self,
+        command: &crate::market_storage::Publication,
+        scope: &crate::market_storage::Scope,
+        base_version_id: &str,
+        upserts: &[crate::market_data::Bar],
+        removes: &[chrono::NaiveDate],
+        continuity_evidence: Option<&serde_json::Value>,
+    ) -> Result<Option<Receipt>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::commit_range_ops_typed(
+                    m,
+                    command,
+                    scope,
+                    base_version_id,
+                    upserts,
+                    removes,
+                    continuity_evidence,
+                )
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::commit_range_ops_typed(
+                    m,
+                    command,
+                    scope,
+                    base_version_id,
+                    upserts,
+                    removes,
+                    continuity_evidence,
+                )
+            }
+        }
+    }
+    fn commit_range_no_change_typed(
+        &self,
+        command: &crate::market_storage::Publication,
+        base_version_id: &str,
+        range: &crate::market_update::DateRange,
+        continuity_evidence: Option<&serde_json::Value>,
+    ) -> Result<Option<Receipt>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::commit_range_no_change_typed(
+                    m,
+                    command,
+                    base_version_id,
+                    range,
+                    continuity_evidence,
+                )
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::commit_range_no_change_typed(
+                    m,
+                    command,
+                    base_version_id,
+                    range,
+                    continuity_evidence,
+                )
+            }
+        }
+    }
+    fn commit_update_batch(
+        &self,
+        task_id: &str,
+        items: &[crate::market_update::UpdateBatchItem],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::commit_update_batch(
+                    m, task_id, items,
+                )
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::commit_update_batch(
+                    m, task_id, items,
+                )
+            }
+        }
+    }
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
         match self {
             Self::Legacy(m) => m.range_receipt(id),

@@ -110,6 +110,20 @@ pub trait RangeRepository: MarketRepository {
     ) -> Result<Option<Receipt>, Error> {
         Ok(None)
     }
+    /// Task-level batched update commit (#259 S5G-6): one write
+    /// transaction covers every prepared item — claim, per-item start,
+    /// staging, publication commit and item finish. Content-level item
+    /// failures are recorded as item outcomes inside the batch;
+    /// structural errors roll the whole transaction back and the caller
+    /// re-runs each item individually. `Ok(None)` means the backend lacks
+    /// a typed update path; the caller keeps the per-item loop.
+    fn commit_update_batch(
+        &self,
+        _task_id: &str,
+        _items: &[crate::market_update::UpdateBatchItem],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        Ok(None)
+    }
     fn range_receipt(&self, id: &str) -> Result<Option<Receipt>, Error>;
     fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error>;
     fn transition_task(
