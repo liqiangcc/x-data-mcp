@@ -1169,8 +1169,17 @@ fn commit_tx(c: &mut Connection, plan: &PublishPlan) -> Result<Receipt, Error> {
             .yearly_derivation
             .as_ref()
             .ok_or_else(|| integrity("base digest without yearly lineage"))?;
-        let base = materialize_checked(c, &lineage.base_daily_version_id, false)?;
-        if base.raw["integrity_sha256"].as_str() != Some(digest.as_str()) {
+        // Typed facts only: the stored integrity digest is the authoritative
+        // binding — no need to materialize thousands of base bars to compare
+        // it.
+        let base_key = version_key(c, &lineage.base_daily_version_id)?;
+        let base = compact_versions::result_facts(c, base_key)?;
+        if base.state != CompactVersionState::Published
+            || base
+                .integrity_digest
+                .map(|d| compact_market::digest_hex(&d) == *digest)
+                != Some(true)
+        {
             return Err(Error::Base("fixed base changed since validation".into()));
         }
     }

@@ -1135,7 +1135,18 @@ fn verify_lineage(
     compact_market::epoch_date(lineage.first_trade_day).map_err(integrity)?;
     compact_market::epoch_date(lineage.last_trade_day).map_err(integrity)?;
     let as_of = compact_market::epoch_date(lineage.as_of_day).map_err(integrity)?;
-    let base_version = fixed_by_key(c, lineage.base_daily_version_key)?.version;
+    // Windowed base read: lineage bounds already enclose every base bar of
+    // the selected years, so only overlapping segments decode. A truncated
+    // or shifted window changes the re-aggregation output and fails the
+    // projection equality below — fail-closed.
+    let base_bars = leaf_bars_in_range(
+        c,
+        lineage.base_daily_version_key,
+        lineage.first_trade_day,
+        lineage.last_trade_day,
+    )?;
+    let base_evidence = verify_version_evidence(c, &base.evidence_digest)?;
+    let base_version = to_effective_version(c, &base, &base_bars, base_evidence)?;
     let records = bars
         .iter()
         .map(|bar| bar.to_bar(period))
