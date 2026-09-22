@@ -1476,6 +1476,65 @@ pub(crate) fn materialize(c: &Connection, version_id: &str) -> Result<Materializ
     })
 }
 
+/// Windowed published-version materialization (#262 yearly read path):
+/// identical header/binding/lineage reads as `materialize`, but the leaf
+/// bars come from `leaf_bars_in_range`, decoding only segments that overlap
+/// `[start_day, end_day]`. Chain linkage and clip digests are still
+/// enforced; the row's stored `integrity_digest` remains the authoritative
+/// content binding — callers must not re-digest the partial projection.
+/// Non-published versions are `NotFound`, matching `fixed()` semantics.
+pub(crate) fn materialize_windowed(
+    c: &Connection,
+    version_id: &str,
+    start_day: i64,
+    end_day: i64,
+) -> Result<MaterializedVersion, Error> {
+    let row = read_version_row_by_id(c, version_id)?.ok_or(Error::NotFound)?;
+    let state = match row.state {
+        1 => CompactVersionState::Staged,
+        2 => CompactVersionState::Validated,
+        3 => CompactVersionState::Published,
+        _ => return Err(integrity("malformed version state")),
+    };
+    if state != CompactVersionState::Published {
+        return Err(Error::NotFound);
+    }
+    let evidence = verify_version_evidence(c, &row.evidence_digest)?;
+    let bars = leaf_bars_in_range(c, row.key, start_day, end_day)?;
+    let version = to_effective_version(c, &row, &bars, evidence.clone())?;
+    let source_binding = read_source_binding(c, &row.source_binding_digest)?;
+    let (kind, canonical) = read_evidence(c, &source_binding.evidence_digest)?;
+    if kind != EvidenceKind::Generation {
+        return Err(integrity("source binding evidence is not generation"));
+    }
+    let generation_evidence: Value = serde_json::from_str(&canonical).map_err(integrity)?;
+    let parent_version_id = match row.parent_version_key {
+        Some(parent) => Some(
+            read_version_row(c, parent)?
+                .ok_or_else(|| integrity("parent version missing"))?
+                .version_id,
+        ),
+        None => None,
+    };
+    Ok(MaterializedVersion {
+        key: row.key,
+        state,
+        version,
+        coverage_status: match row.coverage_status {
+            1 => CoverageStatus::Complete,
+            2 => CoverageStatus::Incomplete,
+            3 => CoverageStatus::Unknown,
+            _ => return Err(integrity("unknown coverage_status")),
+        },
+        coverage_reason: evidence.coverage_reason,
+        source_binding,
+        generation_evidence,
+        parent_version_id,
+        projection_digest: row.projection_digest,
+        integrity_digest: row.integrity_digest,
+    })
+}
+
 pub(crate) fn check_draft_static(c: &Connection, draft: &VersionDraft) -> Result<(), Error> {
     if draft.version_id.is_empty() {
         return Err(integrity("version_id is empty"));

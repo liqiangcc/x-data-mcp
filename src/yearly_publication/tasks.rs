@@ -105,45 +105,35 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
         if !future.is_empty() {
             return Err(invalid(format!("future yearly write rejected: {future:?}")));
         }
-        let ids = input
-            .items
-            .iter()
-            .map(|i| i.base_daily_version_id.clone())
-            .collect::<Vec<_>>();
-        let comparisons: Vec<_> = input
-            .items
-            .iter()
-            .map(|i| match &i.intent {
+        let mut scopes = BTreeSet::new();
+        let mut items = vec![];
+        for item in input.items.into_iter() {
+            let comparison_id = match &item.intent {
                 PublishIntent::CurrentHead {
                     expected_yearly_head,
                     ..
                 } => expected_yearly_head.clone(),
-                _ => i.comparison_version_id.clone(),
-            })
-            .collect();
-        let mut all_ids = ids.clone();
-        all_ids.extend(comparisons.iter().flatten().cloned());
-        let all = self
-            .repository
-            .fixed_many(&all_ids)
-            .map_err(repository_error)?;
-        if all.len() != all_ids.len() {
-            return Err(Error::NeedsVerification("incomplete version lookup".into()));
-        }
-        let mut prior_records = all.iter().skip(ids.len());
-        let bases = all.iter().take(ids.len());
-        if ids.len() != input.items.len() {
-            return Err(Error::NeedsVerification(
-                "incomplete fixed base lookup".into(),
-            ));
-        }
-        let mut scopes = BTreeSet::new();
-        let mut items = vec![];
-        for ((item, base), comparison_id) in input.items.into_iter().zip(bases).zip(comparisons) {
-            let comparison = comparison_id.map(|_| prior_records.next().unwrap());
-            if comparison.is_some_and(|p| {
-                p.version().symbol != item.symbol || p.version().period != Period::Year
-            }) {
+                _ => item.comparison_version_id.clone(),
+            };
+            // Windowed base read: only bars in the selected years decode —
+            // year-presence and identity/digest facts are all the admission
+            // check needs, and both come from the same verified projection.
+            let first = NaiveDate::from_ymd_opt(*item.years.first().unwrap(), 1, 1)
+                .ok_or_else(|| invalid("selected year out of range"))?;
+            let last = NaiveDate::from_ymd_opt(*item.years.last().unwrap(), 12, 31)
+                .ok_or_else(|| invalid("selected year out of range"))?;
+            let base = self
+                .repository
+                .fixed_window(&item.base_daily_version_id, first, last)
+                .map_err(repository_error)?;
+            let comparison = comparison_id
+                .map(|id| self.repository.fixed_facts(&id))
+                .transpose()
+                .map_err(repository_error)?;
+            if comparison
+                .as_ref()
+                .is_some_and(|p| p.symbol != item.symbol || p.period != Period::Year)
+            {
                 return Err(invalid("comparison yearly identity/period mismatch"));
             }
             if base.version().symbol != item.symbol
@@ -172,7 +162,7 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
                 progress_unit: "security_period".into(),
                 frozen_inputs: {
                     let mut value = frozen(&item.base_daily_version_id,base.raw()["integrity_sha256"].as_str().unwrap(),&item.years,&item.intent);
-                    value["comparison"] = comparison.map(|p|json!({"version_id":p.version().version_id,"integrity_sha256":p.raw()["integrity_sha256"]})).unwrap_or(Value::Null);
+                    value["comparison"] = comparison.map(|p|json!({"version_id":p.version_id,"integrity_sha256":p.integrity_sha256})).unwrap_or(Value::Null);
                     value
                 },
             });

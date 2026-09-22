@@ -796,7 +796,18 @@ fn synthesize(m: &MaterializedVersion) -> Result<CheckedRecord, Error> {
     if let Some(parent) = &m.parent_version_id {
         raw["compact_parent_version_id"] = json!(parent);
     }
-    raw["integrity_sha256"] = json!(compat::legacy_digest(&raw)?);
+    // Published versions report the stored typed integrity digest — the
+    // authoritative content binding verified at commit — so every
+    // frozen/derived digest comparison reads the same value cheap reads
+    // expose. Staged/validated candidates keep the legacy envelope digest:
+    // `compat::check` requires the staged envelope to be self-consistent.
+    raw["integrity_sha256"] = match m.state {
+        CompactVersionState::Published => json!(hex_bytes(
+            &m.integrity_digest
+                .ok_or_else(|| integrity("published version lacks integrity digest"))?
+        )),
+        _ => json!(compat::legacy_digest(&raw)?),
+    };
     Ok(CheckedRecord {
         raw,
         version: m.version.clone(),
@@ -1514,7 +1525,19 @@ impl MarketRepository for SqliteCompactMarket {
                 Some(id) => id.to_owned(),
                 None => head_id(c, scope)?.ok_or(Error::NotFound)?,
             };
-            let m = compact_versions::materialize(c, &id)?;
+            // Published versions take the windowed leaf read — the range
+            // bounds already scope which segments must be decoded. Validated
+            // (unpublished) versions keep full staged materialization.
+            let m = match compact_versions::materialize_windowed(
+                c,
+                &id,
+                compact_market::epoch_day(range.start),
+                compact_market::epoch_day(range.end),
+            ) {
+                Ok(m) => m,
+                Err(Error::NotFound) => compact_versions::materialize(c, &id)?,
+                Err(e) => return Err(e),
+            };
             if !matches!(
                 m.state,
                 CompactVersionState::Validated | CompactVersionState::Published
@@ -1577,6 +1600,43 @@ impl MarketRepository for SqliteCompactMarket {
             ids.iter()
                 .map(|id| materialize_checked(c, id, false))
                 .collect()
+        })
+    }
+    fn fixed_facts(&self, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+        self.read(|c| {
+            let key = version_key(c, id)?;
+            let facts = compact_versions::result_facts(c, key)?;
+            if facts.state != CompactVersionState::Published {
+                return Err(Error::NotFound);
+            }
+            let integrity = facts
+                .integrity_digest
+                .ok_or_else(|| integrity("published version lacks integrity digest"))?;
+            Ok(crate::market_storage::FixedFacts {
+                version_id: facts.version_id,
+                symbol: facts.entity,
+                period: facts.period,
+                integrity_sha256: hex_bytes(&integrity),
+            })
+        })
+    }
+    fn fixed_window(
+        &self,
+        id: &str,
+        first_day: NaiveDate,
+        last_day: NaiveDate,
+    ) -> Result<CheckedRecord, Error> {
+        self.read(|c| {
+            let m = compact_versions::materialize_windowed(
+                c,
+                id,
+                compact_market::epoch_day(first_day),
+                compact_market::epoch_day(last_day),
+            )?;
+            // `synthesize` reports the stored integrity digest for published
+            // versions — the complete version's authoritative binding even
+            // though `records` holds only the window.
+            synthesize(&m)
         })
     }
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error> {

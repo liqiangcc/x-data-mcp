@@ -100,6 +100,27 @@ impl crate::market_storage::MarketRepository for MarketBackend {
             Self::Compact(m) => m.fixed_many(ids),
         }
     }
+    fn fixed_facts(&self, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+        match self {
+            Self::Legacy(m) => crate::market_storage::MarketRepository::fixed_facts(m, id),
+            Self::Compact(m) => crate::market_storage::MarketRepository::fixed_facts(m, id),
+        }
+    }
+    fn fixed_window(
+        &self,
+        id: &str,
+        first_day: chrono::NaiveDate,
+        last_day: chrono::NaiveDate,
+    ) -> Result<CheckedRecord, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_storage::MarketRepository::fixed_window(m, id, first_day, last_day)
+            }
+            Self::Compact(m) => {
+                crate::market_storage::MarketRepository::fixed_window(m, id, first_day, last_day)
+            }
+        }
+    }
     fn task(&self, id: &str) -> Result<crate::task_control::TaskSnapshot, Error> {
         match self {
             Self::Legacy(m) => m.task(id),

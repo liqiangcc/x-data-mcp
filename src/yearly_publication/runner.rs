@@ -276,19 +276,33 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         let base_id = frozen["base_daily_version_id"]
             .as_str()
             .ok_or_else(|| Error::Integrity("frozen base missing".into()))?;
-        let base = self.repository.fixed(base_id)?;
+        let years: BTreeSet<i32> = serde_json::from_value(frozen["years"].clone())
+            .map_err(|e| Error::Integrity(e.to_string()))?;
+        let (first_year, last_year) = match (years.first(), years.last()) {
+            (Some(first), Some(last)) => (*first, *last),
+            _ => return Err(Error::Integrity("frozen years empty".into())),
+        };
+        let (first_day, last_day) = match (
+            chrono::NaiveDate::from_ymd_opt(first_year, 1, 1),
+            chrono::NaiveDate::from_ymd_opt(last_year, 12, 31),
+        ) {
+            (Some(first), Some(last)) => (first, last),
+            _ => return Err(Error::Integrity("frozen years out of range".into())),
+        };
+        // Windowed base read: the verifier and derivation only consume bars
+        // inside the selected years. `raw()["integrity_sha256"]` still
+        // carries the stored digest of the complete version.
+        let base = self.repository.fixed_window(base_id, first_day, last_day)?;
         if base.raw()["integrity_sha256"] != frozen["base_integrity_sha256"] {
             return Err(Error::Integrity(
                 "fixed base differs from accepted digest".into(),
             ));
         }
-        let years: BTreeSet<i32> = serde_json::from_value(frozen["years"].clone())
-            .map_err(|e| Error::Integrity(e.to_string()))?;
         let intent: PublishIntent = serde_json::from_value(frozen["intent"].clone())
             .map_err(|e| Error::Integrity(e.to_string()))?;
         let prior = frozen["comparison"]["version_id"].as_str();
         if let Some(id) = prior
-            && self.repository.fixed(id)?.raw()["integrity_sha256"]
+            && self.repository.fixed_facts(id)?.integrity_sha256
                 != frozen["comparison"]["integrity_sha256"]
         {
             return Err(Error::Integrity(

@@ -120,12 +120,37 @@ impl Range {
         Ok(())
     }
 }
+/// O(1) published-version identity/integrity facts — the fields accept and
+/// execution guards actually read, without bar materialization.
+#[derive(Debug, Clone)]
+pub struct FixedFacts {
+    pub version_id: String,
+    pub symbol: String,
+    pub period: Period,
+    /// Stored authoritative integrity digest of the complete version.
+    pub integrity_sha256: String,
+}
 pub trait MarketRepository {
     fn stage(&self, raw: &Value) -> Result<(), Error>;
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error>;
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error>;
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error>;
     fn fixed_many(&self, ids: &[String]) -> Result<Vec<CheckedRecord>, Error>;
+    /// O(1) header read for digest/identity checks on a published version.
+    fn fixed_facts(&self, id: &str) -> Result<FixedFacts, Error>;
+    /// Published read whose `version().records`/`batch.bars` contain at least
+    /// every stored bar in `[first_day, last_day]`; the compact backend
+    /// restricts to the window (O(window), verified per-clip digests), the
+    /// legacy backend may return the full version. `raw()` is a projection
+    /// for inspection only: `raw()["integrity_sha256"]` is the stored digest
+    /// of the complete version, not a recompute over the window — never
+    /// stage or re-digest a windowed record.
+    fn fixed_window(
+        &self,
+        id: &str,
+        first_day: NaiveDate,
+        last_day: NaiveDate,
+    ) -> Result<CheckedRecord, Error>;
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error>;
     /// O(1) task-row projection for hot-loop guards; full snapshots are for
     /// explicit task/progress reads.

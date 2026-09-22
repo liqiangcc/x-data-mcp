@@ -1843,3 +1843,182 @@ fn update_batch_commit_mixed_isolation_and_rollback() {
         crate::task_control::Status::Succeeded
     );
 }
+
+#[test]
+fn fixed_window_and_facts_read_without_full_materialization() {
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+    let ymd = |y, m, d| compact_market::epoch_day(NaiveDate::from_ymd_opt(y, m, d).unwrap());
+    let days = [
+        ymd(2024, 6, 14),
+        ymd(2025, 3, 10),
+        ymd(2025, 11, 20),
+        ymd(2026, 1, 5),
+    ];
+    let base = mk_version(
+        "v1",
+        days.iter()
+            .enumerate()
+            .map(|(i, d)| bar(*d, 100 + i as i64))
+            .collect(),
+    );
+    repo.stage(&envelope(&base, source("gen-1"), None)).unwrap();
+    let checked = repo.candidate("v1").unwrap();
+    repo.mark_validated(&checked).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: checked.clone(),
+        required_heads: vec![(Scope::of(&checked.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    // `fixed_facts` is the typed row projection: identity + stored digest.
+    let facts = repo.fixed_facts("v1").unwrap();
+    assert_eq!(facts.version_id, "v1");
+    assert_eq!(facts.symbol, "sh.600006");
+    assert_eq!(facts.period, Period::Day);
+    let stored_integrity: String = repo
+        .read(|c| {
+            c.query_row(
+                "SELECT lower(hex(integrity_digest)) FROM data_versions WHERE version_id='v1'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(storage)
+        })
+        .unwrap();
+    assert_eq!(facts.integrity_sha256, stored_integrity);
+
+    // Published reads report the stored typed digest, not a legacy envelope
+    // recompute — that is what every frozen digest comparison binds to.
+    let fixed = repo.fixed("v1").unwrap();
+    assert_eq!(fixed.raw()["integrity_sha256"], json!(stored_integrity));
+
+    // Windowed read: only in-window bars, still the stored digest.
+    let window = repo
+        .fixed_window(
+            "v1",
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(window.raw()["integrity_sha256"], json!(stored_integrity));
+    assert_eq!(window.version().version_id, "v1");
+    assert_eq!(window.version().symbol, "sh.600006");
+    let expected: Vec<Bar> = days[1..3]
+        .iter()
+        .enumerate()
+        .map(|(i, d)| bar(*d, 101 + i as i64))
+        .collect();
+    assert_eq!(window.version().records, expected);
+    assert_eq!(window.batch.bars, expected);
+    // A window covering nothing yields an empty projection, not an error.
+    let empty = repo
+        .fixed_window(
+            "v1",
+            NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2020, 12, 31).unwrap(),
+        )
+        .unwrap();
+    assert!(empty.version().records.is_empty());
+    assert_eq!(empty.raw()["integrity_sha256"], json!(stored_integrity));
+
+    // Windowed read on a non-published version is NotFound, matching `fixed`.
+    let staged = mk_version("v-staged", vec![bar(days[0], 100)]);
+    repo.stage(&envelope(&staged, source("gen-1"), None))
+        .unwrap();
+    assert!(matches!(
+        repo.fixed_window(
+            "v-staged",
+            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 12, 31).unwrap(),
+        ),
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(repo.fixed_facts("v-staged"), Err(Error::NotFound)));
+    assert!(matches!(repo.fixed_facts("missing"), Err(Error::NotFound)));
+}
+
+/// Manual timing probe on a real capacity DB (#262 yearly read path):
+/// `X_CAPACITY_DB=/path/to/market.db cargo test --release fixed_window_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "manual probe against a populated capacity DB"]
+fn fixed_window_timing_probe() {
+    use std::time::Instant;
+    let path = PathBuf::from(std::env::var("X_CAPACITY_DB").expect("X_CAPACITY_DB"));
+    let repo = SqliteCompactMarket::open(&path).unwrap();
+    // Deepest histories first (most bars), plus a broad sample.
+    let ids: Vec<String> = repo
+        .read(|c| {
+            c.prepare(
+                "SELECT version_id FROM data_versions \
+                 WHERE state=3 AND period=1 ORDER BY record_count DESC LIMIT 10",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)
+        })
+        .unwrap();
+    let sample: Vec<String> = repo
+        .read(|c| {
+            c.prepare(
+                "SELECT version_id FROM data_versions \
+                 WHERE state=3 AND period=1 ORDER BY version_key LIMIT 40",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)
+        })
+        .unwrap();
+    let all: Vec<String> = ids.into_iter().chain(sample).collect();
+    let first = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let last = NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+    let mut full_ms = Vec::new();
+    let mut window_ms = Vec::new();
+    let mut bars_full = 0usize;
+    let mut bars_window = 0usize;
+    for id in &all {
+        let t = Instant::now();
+        let r = repo.fixed(id).unwrap();
+        full_ms.push(t.elapsed().as_secs_f64() * 1e3);
+        bars_full += r.version().records.len();
+        let t = Instant::now();
+        let w = repo.fixed_window(id, first, last).unwrap();
+        window_ms.push(t.elapsed().as_secs_f64() * 1e3);
+        bars_window += w.version().records.len();
+        // Digest consistency: the windowed projection reports the stored
+        // digest of the complete version.
+        assert_eq!(w.raw()["integrity_sha256"], r.raw()["integrity_sha256"]);
+    }
+    let total_full: f64 = full_ms.iter().sum();
+    let total_window: f64 = window_ms.iter().sum();
+    println!(
+        "n={} full={total_full:.1}ms window={total_window:.1}ms ratio={:.1}x bars_full={bars_full} bars_window={bars_window}",
+        all.len(),
+        total_full / total_window,
+    );
+    let mut sorted = full_ms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!(
+        "full p50={:.1}ms p90={:.1}ms max={:.1}ms",
+        sorted[sorted.len() / 2],
+        sorted[(sorted.len() as f64 * 0.9) as usize],
+        sorted[sorted.len() - 1]
+    );
+    let mut sorted = window_ms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!(
+        "window p50={:.1}ms p90={:.1}ms max={:.1}ms",
+        sorted[sorted.len() / 2],
+        sorted[(sorted.len() as f64 * 0.9) as usize],
+        sorted[sorted.len() - 1]
+    );
+}

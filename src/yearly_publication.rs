@@ -66,9 +66,18 @@ impl<R: MarketRepository> Publisher<R> {
         {
             return Err(Error::Invalid("explicit yearly identity/selection".into()));
         }
+        // Windowed base read: only bars inside the selected years decode.
+        // Header facts and the stored integrity digest are unchanged.
+        let (first_day, last_day) = match (
+            NaiveDate::from_ymd_opt(*request.years.first().unwrap(), 1, 1),
+            NaiveDate::from_ymd_opt(*request.years.last().unwrap(), 12, 31),
+        ) {
+            (Some(first), Some(last)) => (first, last),
+            _ => return Err(Error::Invalid("selected years out of range".into())),
+        };
         let base = self
             .repository
-            .fixed(&request.base_daily_version_id)
+            .fixed_window(&request.base_daily_version_id, first_day, last_day)
             .map_err(base_error)?;
         let daily = base.version();
         if daily.symbol != request.symbol || daily.period != Period::Day {
@@ -162,10 +171,9 @@ impl<R: MarketRepository> Publisher<R> {
         }
         let base = self
             .repository
-            .fixed(&candidate.base_daily_version_id)
+            .fixed_facts(&candidate.base_daily_version_id)
             .map_err(base_error)?;
-        if base.raw()["integrity_sha256"].as_str() != Some(candidate.base_integrity_sha256.as_str())
-        {
+        if base.integrity_sha256 != candidate.base_integrity_sha256 {
             return Err(Error::Base("fixed daily changed after derivation".into()));
         }
         if let PublishIntent::CurrentHead {

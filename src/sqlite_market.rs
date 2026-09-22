@@ -778,6 +778,29 @@ impl MarketRepository for SqliteMarket {
                 .collect()
         })
     }
+    fn fixed_facts(&self, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+        // Legacy rows are monolithic JSON; the header fields come from the
+        // stored record without a dedicated typed path.
+        let record = SqliteMarket::fixed(self, id)?;
+        Ok(crate::market_storage::FixedFacts {
+            version_id: record.version().version_id.clone(),
+            symbol: record.version().symbol.clone(),
+            period: record.version().period,
+            integrity_sha256: record.raw()["integrity_sha256"]
+                .as_str()
+                .ok_or_else(|| Error::Integrity("fixed record lacks integrity digest".into()))?
+                .into(),
+        })
+    }
+    fn fixed_window(
+        &self,
+        id: &str,
+        _first_day: chrono::NaiveDate,
+        _last_day: chrono::NaiveDate,
+    ) -> Result<CheckedRecord, Error> {
+        // The contract permits returning a superset of the window.
+        SqliteMarket::fixed(self, id)
+    }
     fn task(&self, id: &str) -> Result<crate::task_control::TaskSnapshot, Error> {
         self.read(|c| {
             crate::sqlite_tasks::read_bound_task(c, id)?
