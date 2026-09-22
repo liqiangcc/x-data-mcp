@@ -1,0 +1,90 @@
+{
+  "evidence": "issue-262-full-market-collection",
+  "date": "2026-09-22",
+  "release": {
+    "tag": "v0.2.0-preview.18",
+    "commit": "8e280a7020e80b742b614a75ce2cace6ccb92864",
+    "binary_sha256": "eccd1bc6bdd44de1ad21ef1d8d88c8b1756e807c44a9835d19eaf118793ecfb4"
+  },
+  "environment": {
+    "host": "ecs-node",
+    "arch": "x86_64",
+    "vcpu": 2,
+    "ram_gib": 2,
+    "disk_gb": 40,
+    "topology": "two-mcp: data_service(preview.sqlite) + acquire_service(generations)",
+    "generation_id": "804c5a63b5283a4cc02ce582166dde25cbb76057e54a54a2910bc4bba8b07d0b",
+    "official_snapshot": "2026-09-21",
+    "schema_version": 19
+  },
+  "method": {
+    "interface": "MCP-only via mcp_connect over unix socket; no shell/SQLite in data path",
+    "task_shape": "production-shaped 100-item tasks (collect.rs write selection budget 1..100)",
+    "daily_path": "start_collection explicit selection, 52 sequential tasks",
+    "yearly_path": "update_data market.yearly items (explicit-yearly-task-v1), 52 sequential tasks",
+    "yearly_years": "per-item years = [2025,2026] intersected with entity daily availability range (get_data_availability batch=100); entities lacking a requested year are rejected at accept with ACCEPTANCE_NEEDS_VERIFICATION",
+    "note_duplicate_attempt": "an overlapping earlier yearly attempt published yearly versions for ~200 entities (sh.603xxx, sh.688xxx); the canonical sweep's chunks 13/19 correctly refused via PUBLISH_PRECONDITION effective-head-changed (CAS working as designed); coverage is complete regardless"
+  },
+  "results": {
+    "securities_catalog": {
+      "records": 5226,
+      "status": "published"
+    },
+    "market_daily": {
+      "entities_published": 5221,
+      "tasks": 53,
+      "new_items_this_run": 5121,
+      "window_seconds": 754.1,
+      "window_utc": ["2026-09-22T10:12:36Z", "2026-09-22T10:25:10Z"],
+      "per_item_ms": 147,
+      "failed_entities": [
+        {"symbol": "sz.001246", "error": "member absent in official hsjday pack"},
+        {"symbol": "sz.301569", "error": "member absent in official hsjday pack"},
+        {"symbol": "sz.301660", "error": "member absent in official hsjday pack"},
+        {"symbol": "sz.301686", "error": "member absent in official hsjday pack"},
+        {"symbol": "sz.301716", "error": "member absent in official hsjday pack"}
+      ]
+    },
+    "market_yearly": {
+      "entities_published": 5221,
+      "tasks": 52,
+      "task_internal_sum_seconds": 4114.7,
+      "end_to_end_seconds": 10600,
+      "end_to_end_note": "includes ~10min get_data_availability pre-pass (52 batch calls) plus sequential accept/poll driver overhead",
+      "per_item_ms_task": 804,
+      "publish_precondition_refusals": 200
+    },
+    "update_probe": {
+      "description": "update_data default selection re-run over 100 existing daily heads, same generation",
+      "items": 100,
+      "outcome": "no_change",
+      "db_growth_bytes": 178000,
+      "per_item_bytes": 1780,
+      "note": "typed market_update_results rows only; no bar arrays stored in audit/result records"
+    }
+  },
+  "storage": {
+    "preview_sqlite_bytes": 836767744,
+    "preview_sqlite_wal_bytes": 16777216,
+    "total_bytes": 853544960,
+    "segment_bars_mib": 711.55,
+    "segment_bars_rows": 16665628,
+    "evidence_bundles_mib": 36.98,
+    "bar_segments_daily": 35098,
+    "bar_segments_yearly": 5221,
+    "no_payloads_table": true,
+    "no_compat_json": true,
+    "audit_materialization": "read-side synthesized from typed digest rows"
+  },
+  "acceptance": {
+    "first_collection_le_2_5_gib": {"target_gib": 2.5, "measured_gib": 0.83, "status": "PASS"},
+    "daily_delta_probe": {"growth_per_100_items_bytes": 178000, "status": "bounded, no payload retention"},
+    "mcp_only": {"shell_in_data_path": false, "status": "PASS"},
+    "production_ready": false,
+    "caveats": [
+      "5 catalog securities have no .day member in the official pack and fail as documented data gaps",
+      "yearly end-to-end includes driver-side sequential polling; concurrent task submission was not measured",
+      "preview-only filesystem opt-out X_DATA_MCP_UNSAFE_NONLOCAL_FS in effect; production deployment requires approved local filesystem"
+    ]
+  }
+}
