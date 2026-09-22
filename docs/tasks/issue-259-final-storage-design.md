@@ -825,6 +825,25 @@ S5A-2 执行结果（2026-09-21）：`SqliteCompactMarket` 已实现并覆盖 `T
 
 验收：重跑 `s5b_retained_capacity`（`X_CAPACITY_PHASES=initial`），目标 11,783 items **≤10min**（硬门 ≤20min、5,221 scope 目标 ≤15min），`result.json` initial 段更新并分项报告 parse/stage/commit/fsync 耗时；等价性测试 + 全量 suite + clippy + fmt 绿；容量断言（48.2B/bar、WAL、RSS）不回退。
 
+#### S5G（日更端到端 O(delta)）
+
+契约（执行时冻结，owner 已明确不需要兼容性）：
+
+- 目标不是过 ≤5min 门，是把日更压到复杂度地板：**任何组件工作量 ∝ 变化量，不 ∝ 存量**。触到 fail-closed 红线（跳过 member 全量 sha256、信任未验证的 stored digest、削弱 binding/head CAS）即停。
+- **ops-first 为 schema-19 唯一写路径**：envelope `commit`/`commit_range` 降级为 legacy-only（仅服务 schema-18 适配器）；runner 单路径，无 fallback 分支；digest/验证/head CAS/fail-closed 语义不变，schema-18 Legacy 适配器与对外读 API 不变。
+- `AcquiredBatch` 只产 typed bars + coverage 证据字段，不构 `combined` envelope（~1.1MB JSON/item 纯浪费）。
+- diff 窗口化：base bars 只取 `[member_first_day, base_last_day]` 重叠区间（日更通常 0-30 行），不做 `fixed(base)` 全物化、不做 `prepare` 全量 merge。compact 侧新增 `windowed_bars(version_key, day_range)` 原语：clip 元数据定位重叠段，只解码窗口内 segment。
+- `commit_update_batch`：task 级批量写事务（复用 S5F 的 ≤100 items/txn 边界），item 级失败隔离语义同 S5F（内容级记 outcome 不中止批；结构性错误整批回滚，调用方逐 item 隔离）。
+- member 读/sha256/解码流水线化出 writer 关键路径（复用 S5F 预取模式）。
+- **先测量后优化**：runner 先加相位计时（parse / member-hash / base-read / diff / stage / commit / fsync 分项），第一把跑真实分布再动手改，数据落进 evidence。
+- 等价性：typed 路径自身即 canonical；保留一个对照测试证明与既有 ops 路径语义不变即可，不要求长期双轨。
+
+预期地板：~5-10ms/item → 5,221 全量日更 **30-60s**（对照：现状 ~10min，adapter 级 17ms/item≈1.5min）。adapter 侧 `stage_ops_delta` 已是 O(ops)（leaf digest 增量式 `H(parent_digest || delta_digest)`），无契约改动；残留 O(history) 全在 runner/acquire 侧。
+
+验收：release profile 实测 5,221 scope 全量日更，分项耗时表 + wall time 落 `evidence/issue-259-s5g-daily-ops/result.json`；既有 250 天 soak/no-change/append/integrity 断言不回退。
+
+执行结果：（实现后回填）
+
 ### S6：release 与 ECS
 
 构建固定 release 包，SHA-256 对账后 ECS fresh deploy；只通过两个 MCP server + repository Skill 执行 generation/status/data workflow。
