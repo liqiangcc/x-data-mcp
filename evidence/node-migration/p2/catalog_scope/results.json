@@ -17,8 +17,8 @@
       "total": 5659,
       "scope": 5230,
       "bj_market": 348,
-      "b_share": 0,
-      "anomalous": 81
+      "b_share": 78,
+      "anomalous": 3
     }
   },
   "probe": {
@@ -46,5 +46,6 @@
     "reconciliation throws ScopeBoundaryError when sum != total (Rust debug_assert made unconditional — fail-closed)"
   ],
   "out_of_scope": "ex_code name join, incon dictionary, CatalogSnapshot, DB/services",
-  "limitations": []
+  "limitations": [],
+  "revision": "R1 — REVIEW-NM-023 evidence consistency fix: class counts corrected to oracle/probe 78 BShare / 3 Anomalous (was stale 0/81)"
 }
