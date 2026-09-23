@@ -6,7 +6,7 @@ serde_json::to_vec_pretty bytes, tmp+fsync+rename+dir-fsync ordering.
 
 ## Contents
 
-- `probe-results.jsonl` — 21 rows, all PASS (11 live Rust oracle +
+- `probe-results.jsonl` — 23 rows, all PASS (11 live Rust oracle +
   5 lease/boundary).
 - `rust-oracle.jsonl`, `negative-selftest.jsonl` (exit 1), `results.json`.
 
@@ -27,3 +27,5 @@ node scripts/node_migration_p2/generation_active_probe.mjs . act # selftest, exi
 - Reopen proves readability, not crash durability.
 
 R1: tmp symlink refused (O_NOFOLLOW), serde short-escapes byte-exact, counted write loop, single json prefix; activation_request_id accepts arbitrary wellformed strings (JSON field, not path).
+
+R2: pointer JSON encoded to Buffer before counted write; writeAllFd rejects strings; multibyte 1-byte-step injection proves byte-exact persistence.

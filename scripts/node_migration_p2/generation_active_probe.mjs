@@ -146,6 +146,18 @@ for (const o of oracle) {
   try { writeAllFd(fd2, Buffer.from("x"), () => 0); emit("zero_write_io", "FAIL", "accepted"); }
   catch (e) { emit("zero_write_io", e.kind === "io" ? "PASS" : "FAIL", e.kind); }
   closeSync(fd2);
+  // string input is rejected (string overload would corrupt offsets)
+  const fd3 = openSync(tgt, "w");
+  try { writeAllFd(fd3, "abcdef", () => 1); emit("string_input_rejected", "FAIL", "accepted string"); }
+  catch (e) { emit("string_input_rejected", e.kind === "invalid_input" ? "PASS" : "FAIL", e.kind); }
+  closeSync(fd3);
+  // multibyte short-write through the same byte path activate uses:
+  // Buffer.from(pretty) with a multibyte request id, 1-byte writer
+  const mbytes = Buffer.from(JSON.stringify({ r: "中😀x" }), "utf8");
+  const fd4 = openSync(tgt, "w");
+  writeAllFd(fd4, mbytes, (f, b, o, l) => writeSyncReal(f, b, o, 1));
+  closeSync(fd4);
+  emit("multibyte_short_write", readFileSync(tgt).equals(mbytes) ? "PASS" : "FAIL", `${mbytes.length}B persisted byte-exact`);
 }
 // malformed-JSON prefix normalized once (finding 4)
 {

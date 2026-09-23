@@ -17,5 +17,7 @@
 {"family":"generation_active","id":"tmp_symlink_reject","status":"PASS","detail":"io","expected":null,"actual":null}
 {"family":"generation_active","id":"short_write_loops","status":"PASS","detail":"calls=3","expected":null,"actual":null}
 {"family":"generation_active","id":"zero_write_io","status":"PASS","detail":"io","expected":null,"actual":null}
+{"family":"generation_active","id":"string_input_rejected","status":"PASS","detail":"invalid_input","expected":null,"actual":null}
+{"family":"generation_active","id":"multibyte_short_write","status":"PASS","detail":"16B persisted byte-exact","expected":null,"actual":null}
 {"family":"generation_active","id":"json_prefix_once","status":"PASS","detail":"manifest JSON invalid: key must be a string","expected":null,"actual":null}
 {"family":"generation_active","id":"bad_now_no_mutation","status":"PASS","detail":"invalid_input","expected":null,"actual":null}

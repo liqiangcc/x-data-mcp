@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-035-R1",
+  "task_id": "NM-035-R2",
   "baseline_sha": "d24570f71093af2d8f091e09ca0e48419bd9b3f4",
   "source_ported": "generation/mod.rs::{active,activate,ActivePointer}",
   "rust_oracle": "rust-oracle.jsonl — 11 cases via live Store (rustc 1.98.1) incl. verbatim activation_conflict Debug text and to_vec_pretty bytes",
@@ -19,15 +19,15 @@
   "probe": {
     "command": "node scripts/node_migration_p2/generation_active_probe.mjs .",
     "exit": 0,
-    "cases": 21,
+    "cases": 23,
     "totals": {
-      "pass": 21,
+      "pass": 23,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
       "live_rust_oracle": 12,
-      "lease_and_boundary": 9
+      "lease_and_boundary": 11
     },
     "selftest": "node ... act -> exit 1 (negative-selftest.jsonl)"
   },
@@ -39,12 +39,13 @@
   },
   "limits": "reopen proves readability not crash durability; concurrent activation without caller exclusion unsupported (same as Rust); production integration future",
   "out_of_scope": "no real activation, no DB/service, no VERIFIED_COMPATIBLE inference",
-  "review": "REVIEW-NM-035 R0 — four findings fixed",
+  "review": "REVIEW-NM-035-R1 — string-vs-byte counted write fixed",
   "r1_fixes": {
     "tmp_symlink": "tmp open now O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW — pre-planted symlink -> io ELOOP, outside target untouched (tmp_symlink_reject)",
     "serde_escapes": "short escapes \\b \\t \\n \\f \\r \\\" \\\\ then \\uXXXX; DEL/non-ASCII raw — oracle activate_escapes byte-compared (req field carries controls+quote+backslash+中+😀 verbatim)",
     "counted_write": "writeAllFd loops until all bytes; zero-write -> io; injected 2-byte short writes prove loop, zero-write refuses",
     "json_prefix": "strictJson prefix normalized once — 'manifest JSON invalid: <inner>'",
     "request_id_scope": "activation_request_id is a JSON field (not path) — backslash/control chars accepted like Rust; only wellformed-string boundary remains"
-  }
+  },
+  "r2_fix": "activate now Buffer.from(toPrettyJson(...),'utf8') before writeAllFd; writeAllFd rejects strings outright (Node string overload treats offset as file position and length as UTF-16 units). Probes: string rejection + multibyte 1-byte-step short write byte-exact + zero-write refusal."
 }

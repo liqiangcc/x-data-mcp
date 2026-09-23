@@ -290,7 +290,7 @@ export class GenerationStore {
       previous_generation_id: current ? current.generation_id : null,
       activation_request_id: requestId,
     };
-    const bytes = toPrettyJson(pointer);
+    const bytes = Buffer.from(toPrettyJson(pointer), "utf8");
     const tmp = join(this.root, `.${ACTIVE_NAME}.tmp`);
     mkdirSync(this.root, { recursive: true });
     // write + fsync file, rename over pointer, fsync parent — same order
@@ -346,8 +346,14 @@ export class GenerationStore {
 }
 
 // Counted write loop — Node may return a short count; zero-write is an
-// error. Exported for probe injection of deterministic short writes.
+// error. BYTE-INPUT ONLY: strings are rejected because Node's string
+// overload treats `offset` as a file position and `length` as UTF-16
+// code units — silently persisting wrong bytes for multibyte content.
+// Exported for probe injection of deterministic short writes.
 export function writeAllFd(fd, bytes, _writeSync = writeSync) {
+  if (!(bytes instanceof Uint8Array)) {
+    throw err("invalid_input", "writeAllFd requires Buffer/Uint8Array");
+  }
   let off = 0;
   while (off < bytes.length) {
     const n = _writeSync(fd, bytes, off, bytes.length - off);
