@@ -6,6 +6,24 @@ import { inflateRawSync } from "node:zlib";
 const MAX_MEMBER = 64 * 1024 * 1024; // 64 MiB inflated bound
 const SIG_CD = 0x02014b50, SIG_LH = 0x04034b50, SIG_EOCD = 0x06054b50;
 
+// CRC32 (IEEE) — the zip crate wraps extraction in Crc32Reader and
+// rejects a mismatch with the central-directory CRC. We must do the
+// same or a manifest-pinned but internally corrupt archive would parse.
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+const crc32 = (b) => {
+  let c = 0xffffffff;
+  for (const x of b) c = CRC_TABLE[(c ^ x) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+
 // Parse EOCD + central directory, validating signatures/bounds/methods.
 // Throws Error("invalid ZIP: ...") on structural failure.
 export function zipOpen(buf) {
@@ -26,10 +44,11 @@ export function zipOpen(buf) {
     const compSize = buf.readUInt32LE(off + 20);
     const uncompSize = buf.readUInt32LE(off + 24);
     const nameLen = buf.readUInt16LE(off + 28), extraLen = buf.readUInt16LE(off + 30), cmtLen = buf.readUInt16LE(off + 32);
+    const crc = buf.readUInt32LE(off + 16);
     const lho = buf.readUInt32LE(off + 42);
     if (off + 46 + nameLen > buf.length) throw new Error("invalid ZIP: name out of bounds");
     const name = buf.subarray(off + 46, off + 46 + nameLen).toString("latin1");
-    entries.push({ name, method, compSize, uncompSize, lho });
+    entries.push({ name, method, compSize, uncompSize, crc, lho });
     off += 46 + nameLen + extraLen + cmtLen;
   }
   return entries;
@@ -60,5 +79,8 @@ export function zipMember(buf, name, maxOut = MAX_MEMBER) {
   if (out.length !== e.uncompSize) {
     throw new Error(`size mismatch: declared ${e.uncompSize} got ${out.length}`);
   }
+  // zip crate Crc32Reader failure text is "Invalid checksum" — kept
+  // verbatim so member() wraps it as `unreadable: Invalid checksum`.
+  if (crc32(out) !== e.crc) throw new Error("Invalid checksum");
   return out;
 }

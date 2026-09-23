@@ -46,13 +46,22 @@ function readBounded(path, limitPlusOne) {
   } finally { closeSync(fd); }
 }
 
-function readAll(path) {
+// Bounded read with deterministic premature-EOF rejection: reads
+// exactly `maxBytes`; a 0-length read before that is a hard error (a
+// readSync==0 spin would hang). Only ever used for the inspected
+// base.zip/gbbq.zip artifacts — bounded by the manifest-declared size.
+export function readBoundedFile(path, maxBytes) {
   const fd = openSync(path, "r");
   try {
     const size = fstatSync(fd).size;
+    if (size > maxBytes) throw new Error(`file exceeds declared bound: ${size}`);
     const buf = Buffer.allocUnsafe(size);
     let off = 0;
-    while (off < size) off += readSync(fd, buf, off, size - off, off);
+    while (off < size) {
+      const n = readSync(fd, buf, off, size - off, off);
+      if (n === 0) throw new Error(`unexpected EOF at ${off} of ${size}`);
+      off += n;
+    }
     return buf;
   } finally { closeSync(fd); }
 }
@@ -91,7 +100,7 @@ export function assembleCandidate(target, manifestPath, inputRoot, now) {
   const artifact = (role) => {
     const f = inspection.files.find((x) => x.role === role);
     if (f === undefined) throw sf(`snapshot lacks role ${ROLE_DEBUG[role]}`);
-    return join(inputRoot, f.relative_path);
+    return { path: join(inputRoot, f.relative_path), bytes: f.bytes };
   };
   // acquired_at = max file completion timestamp at full ordering
   // precision (leap slots + nanoseconds), not string max.
@@ -106,8 +115,10 @@ export function assembleCandidate(target, manifestPath, inputRoot, now) {
   }
 
   // Rust order: base.zip open+parse members first, then gbbq.zip.
+  // Read bound = manifest-declared bytes (already byte-verified by
+  // inspect); post-verify truncation surfaces as unreadable, not a hang.
   let baseBytes;
-  try { baseBytes = readAll(artifact("base_industry")); }
+  try { const a = artifact("base_industry"); baseBytes = readBoundedFile(a.path, a.bytes); }
   catch (e) { throw sf(`base.zip unreadable: ${e.message}`); }
   try { zipOpen(baseBytes); } catch (e) { throw sf(`base.zip invalid: ${e.message}`); }
   const tdxhyRows = (() => { try { return parseTdxhy(member(baseBytes, "tdxhy.cfg")); }
@@ -116,7 +127,7 @@ export function assembleCandidate(target, manifestPath, inputRoot, now) {
     catch (e) { throw e instanceof CatalogSourceError ? e : sf(e.message); } })();
 
   let gbbqBytes;
-  try { gbbqBytes = readAll(artifact("gbbq")); }
+  try { const a = artifact("gbbq"); gbbqBytes = readBoundedFile(a.path, a.bytes); }
   catch (e) { throw sf(`gbbq.zip unreadable: ${e.message}`); }
   try { zipOpen(gbbqBytes); } catch (e) { throw sf(`gbbq.zip invalid: ${e.message}`); }
   const sections = (() => {

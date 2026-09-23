@@ -2,7 +2,7 @@
 // TdxCatalogExecutor::run) against a live Rust oracle. Synthetic fixtures
 // + retained gen-2 bytes (hardlinks, read-only). Exit nonzero on FAIL.
 // Usage: node catalog_source_probe.mjs <root> [selftest]
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, linkSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, linkSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, basename } from "node:path";
 import { deflateRawSync } from "node:zlib";
@@ -67,6 +67,17 @@ function patchCdSize(zip, name, newSize) {
   }
   return zip;
 }
+// patch a member's CD-declared CRC32 (for corruption tests)
+function patchCdCrc(zip, name, newCrc) {
+  const nb = Buffer.from(name, "latin1");
+  for (let i = 0; i + 46 <= zip.length; i++) {
+    if (zip.readUInt32LE(i) === 0x02014b50) {
+      const nl = zip.readUInt16LE(i + 28);
+      if (zip.subarray(i + 46, i + 46 + nl).equals(nb)) zip.writeUInt32LE(newCrc, i + 16);
+    }
+  }
+  return zip;
+}
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 
 const ROLE_URL = {
@@ -74,10 +85,11 @@ const ROLE_URL = {
   gbbq: "https://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
   day: "https://data.tdx.com.cn/vipdoc/hsjday.zip",
 };
-function writeSnapshot(dir, tdxhy, ex, incon, { skipTdxhy = false, oversizeTdxhy = false } = {}) {
+function writeSnapshot(dir, tdxhy, ex, incon, { skipTdxhy = false, oversizeTdxhy = false, badCrc = false } = {}) {
   const baseMembers = skipTdxhy ? [["infoharbor_ex.code", ex]] : [["tdxhy.cfg", tdxhy], ["infoharbor_ex.code", ex]];
   let base = mkZip(baseMembers.map(([n, d]) => ({ name: n, data: d })));
   if (oversizeTdxhy) base = patchCdSize(base, "tdxhy.cfg", 64 * 1024 * 1024 + 1);
+  if (badCrc) base = patchCdCrc(base, "tdxhy.cfg", 0);
   const zhb = mkZip([{ name: "incon.dat", data: incon }]);
   const gbbq = mkZip([{ name: "zhb.zip", data: zhb }]);
   const day = mkZip([{ name: "placeholder", data: Buffer.from("x") }]);
@@ -116,6 +128,8 @@ const CASES = {
     return [{ scope: "current_sh_sz_a" }, writeSnapshot(d, Buffer.from("not-a-cfg\r\n"), E_BYTES, I_BYTES), d]; },
   member_oversize: () => { const d = join(FIX, "big"); mkdirSync(d);
     return [{ scope: "current_sh_sz_a" }, writeSnapshot(d, T, E_BYTES, I_BYTES, { oversizeTdxhy: true }), d]; },
+  member_crc_bad: () => { const d = join(FIX, "crc"); mkdirSync(d);
+    return [{ scope: "current_sh_sz_a" }, writeSnapshot(d, T, E_BYTES, I_BYTES, { badCrc: true }), d]; },
   empty_candidate: () => { const d = join(FIX, "empty"); mkdirSync(d);
     return [{ scope: "current_sh_sz_a" }, writeSnapshot(d, Buffer.from("0|000001|T1001|||X500102\r\n"), UNNAMED, I_BYTES), d]; },
   real_gen2: () => {
@@ -166,6 +180,30 @@ for (const o of oracle) {
     }
     const ok = o.status === "error" && e.message === wantMsg;
     emit(o.id, ok ? "PASS" : "FAIL", ok ? `error verbatim` : `error mismatch`, wantMsg, e.message);
+  }
+}
+
+// ---------- bounded-read helper: deterministic EOF/bound tests ----------
+{
+  const { readBoundedFile } = await import("../../src_node/catalog/source_candidate.mjs");
+  const tp = join(FIX, "trunc.bin");
+  writeFileSync(tp, Buffer.alloc(100));
+  try { const b = readBoundedFile(tp, 100); emit("read_bounded_size", b.length === 100 ? "PASS" : "FAIL", "100B ok"); }
+  catch (e) { emit("read_bounded_size", "FAIL", e.message); }
+  try { const b = readBoundedFile(tp, 200); emit("read_bounded_under", b.length === 100 ? "PASS" : "FAIL", "bound>size ok"); }
+  catch (e) { emit("read_bounded_under", "FAIL", e.message); }
+  // file exceeds declared bound -> hard error (not hang)
+  try { readBoundedFile(tp, 50); emit("read_bounded_over", "FAIL", "accepted oversize"); }
+  catch (e) { emit("read_bounded_over", "PASS", e.message.slice(0, 60)); }
+  // deterministic premature EOF: sysfs files report st_size=4096 but
+  // return a short read then EOF -> the 0-read branch errors, no race.
+  const sysf = "/sys/devices/system/cpu/online";
+  const sz = statSync(sysf).size;
+  if (sz > 0) {
+    try { readBoundedFile(sysf, 1 << 20); emit("read_bounded_eof", "FAIL", "accepted short sysfs read"); }
+    catch (e) { emit("read_bounded_eof", e.message.includes("unexpected EOF") ? "PASS" : "FAIL", e.message.slice(0, 80)); }
+  } else {
+    emit("read_bounded_eof", "NOT_RUN", "sysfs size not reported");
   }
 }
 

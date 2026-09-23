@@ -5,6 +5,21 @@ import { inflateRawSync } from "node:zlib";
 const MAX_MEMBER = 64 * 1024 * 1024; // 64 MiB inflated bound
 const SIG_CD = 0x02014b50, SIG_LH = 0x04034b50, SIG_EOCD = 0x06054b50;
 
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+const crc32 = (b) => {
+  let c = 0xffffffff;
+  for (const x of b) c = CRC_TABLE[(c ^ x) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+
 export function zipMember(buf, name, maxOut = MAX_MEMBER) {
   if (!(buf instanceof Uint8Array)) throw new Error("zip input must be bytes");
   const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
@@ -19,6 +34,7 @@ export function zipMember(buf, name, maxOut = MAX_MEMBER) {
       throw new Error(`invalid ZIP: central entry ${i} signature`);
     }
     const method = buf.readUInt16LE(off + 10);
+    const crc = buf.readUInt32LE(off + 16);
     const compSize = buf.readUInt32LE(off + 20);
     const uncompSize = buf.readUInt32LE(off + 24);
     const nameLen = buf.readUInt16LE(off + 28), extraLen = buf.readUInt16LE(off + 30), cmtLen = buf.readUInt16LE(off + 32);
@@ -35,10 +51,11 @@ export function zipMember(buf, name, maxOut = MAX_MEMBER) {
       const dataOff = lho + 30 + lNameLen + lExtraLen;
       if (dataOff + compSize > buf.length) throw new Error("invalid ZIP: data out of bounds");
       const data = buf.subarray(dataOff, dataOff + compSize);
-      const out = method === 0 ? data : inflateRawSync(data, { maxOutputLength: maxOut });
+      const out = method === 0 ? Buffer.from(data) : inflateRawSync(data, { maxOutputLength: maxOut });
       if (out.length !== uncompSize) {
         throw new Error(`size mismatch: declared ${uncompSize} got ${out.length}`);
       }
+      if (crc32(out) !== crc) throw new Error("Invalid checksum");
       return out;
     }
     off += 46 + nameLen + extraLen + cmtLen;

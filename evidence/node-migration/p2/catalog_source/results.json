@@ -1,6 +1,6 @@
 {
-  "task_id": "NM-028",
-  "baseline_sha": "6080502c1ce3d7a5d7c9d21b790dc72c50c2c9ee",
+  "task_id": "NM-028-R1",
+  "baseline_sha": "6414a5c397aaa234c78ff120a04474b94571cbf1 (R0)",
   "source_ported": "catalog_tdx/source.rs TdxCatalogExecutor::run — pre-publication part only (no SqliteCatalog/publish)",
   "rust_oracle": "rust-oracle.jsonl — 8 cases: ok_small, unsupported_scope, manifest_mismatch, member_missing, member_corrupt, member_oversize, empty_candidate, real_gen2 (live rustc 1.98.1 + x_data_mcp rlib + zip crate)",
   "environment": {
@@ -38,13 +38,17 @@
   "probe": {
     "command": "node scripts/node_migration_p2/catalog_source_probe.mjs .",
     "exit": 0,
-    "cases": 8,
+    "cases": 13,
     "totals": {
-      "pass": 8,
+      "pass": 13,
       "fail": 0,
       "not_run": 0
     },
-    "selftest": "node ... source -> exit 1 (committed negative-selftest.jsonl)"
+    "selftest": "node ... source -> exit 1 (committed negative-selftest.jsonl)",
+    "regressions": {
+      "NM-024 incon_probe": "58/58 PASS (zip_member CRC parity)",
+      "NM-025 compose_probe": "26/26 PASS"
+    }
   },
   "synthetic_source_normalization": "`source` field is manifest-sha-bound; synthetic fixture zip bytes differ between rustc-zip and node-zip builders, so synthetic cases compare with source normalized + format-pinned (official-file:<16hex>); real_gen2 verifies source verbatim (identical manifest bytes)",
   "node_specific_deltas": [
@@ -55,5 +59,10 @@
     "snapshot byte inspection does NOT establish cross-file compatibility, origin authorization, or production readiness — none inferred",
     "no proof insertion; no publish/SQLite/CLI wiring"
   ],
-  "out_of_scope": "publish_official/SQLite/head, downloads, generation activation, services, deploy"
+  "out_of_scope": "publish_official/SQLite/head, downloads, generation activation, services, deploy",
+  "review": "REVIEW-NM-028 R0 — two hardening findings fixed",
+  "r1_fixes": {
+    "crc32": "zip_member.mjs now verifies CRC32 of decompressed bytes against the CD entry (zip crate Crc32Reader semantics); mismatch throws 'Invalid checksum' verbatim -> member() wraps as 'unreadable: Invalid checksum'. Oracle case member_crc_bad patches CD crc to 0 while the manifest binds the corrupt archive — snapshot inspection passes, extraction fails closed. Same check added to the probe-side scripts/zip_member.mjs for parity.",
+    "premature_eof": "readAll replaced by exported readBoundedFile(path,maxBytes): bound = manifest-declared bytes; fstat size > bound -> error; readSync==0 before size -> 'unexpected EOF' error (previously an infinite spin). Deterministic tests: 100B file at/under/over bound + sysfs /sys/devices/system/cpu/online (st_size=4096, early EOF) hits the 0-read branch without races."
+  }
 }

@@ -9,7 +9,7 @@ reconciliation -> compose -> in-memory candidate + evidence.
 
 ## Contents
 
-- `probe-results.jsonl` — 8 rows, all PASS; probe exits nonzero on FAIL.
+- `probe-results.jsonl` — 13 rows, all PASS; probe exits nonzero on FAIL.
 - `rust-oracle.jsonl` — live Rust oracle replicating `run` pre-publish.
 - `negative-selftest.jsonl` — selftest proof (exit 1).
 - `results.json` — semantics, provenance, deltas.
@@ -37,3 +37,9 @@ authorization / production readiness; no proof insertion. Inner
 io/zip error text differs from Rust `Display` (categories + member
 names + parser texts verbatim). Synthetic `source` normalized
 (manifest-bound); real gen-2 verifies it verbatim.
+
+R1 additions (REVIEW-NM-028): ZIP CRC32 verification against the CD entry
+(zip crate `Crc32Reader` parity — `Invalid checksum` verbatim); bounded
+`readBoundedFile` with premature-EOF rejection (sysfs deterministic test,
+no races). Probe-side zip_member.mjs carries the same CRC check;
+NM-024/NM-025 probes rerun: 58/58 and 26/26 PASS.

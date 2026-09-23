@@ -5,4 +5,9 @@
 {"family":"catalog_source","id":"member_corrupt","status":"PASS","detail":"error verbatim","expected":"CATALOG_SOURCE_FAILURE: tdxhy.cfg line 1 has 1 fields, expected 6","actual":"CATALOG_SOURCE_FAILURE: tdxhy.cfg line 1 has 1 fields, expected 6"}
 {"family":"catalog_source","id":"member_oversize","status":"PASS","detail":"error verbatim","expected":"CATALOG_SOURCE_FAILURE: member tdxhy.cfg exceeds the bounded size limit","actual":"CATALOG_SOURCE_FAILURE: member tdxhy.cfg exceeds the bounded size limit"}
 {"family":"catalog_source","id":"empty_candidate","status":"PASS","detail":"error verbatim","expected":"CATALOG_REJECTED: no publishable members; nameless scope members: 0:000001","actual":"CATALOG_REJECTED: no publishable members; nameless scope members: 0:000001"}
+{"family":"catalog_source","id":"member_crc_bad","status":"PASS","detail":"error verbatim","expected":"CATALOG_SOURCE_FAILURE: member tdxhy.cfg unreadable: Invalid checksum","actual":"CATALOG_SOURCE_FAILURE: member tdxhy.cfg unreadable: Invalid checksum"}
 {"family":"catalog_source","id":"real_gen2","status":"PASS","detail":"n=5224","expected":null,"actual":null}
+{"family":"catalog_source","id":"read_bounded_size","status":"PASS","detail":"100B ok","expected":null,"actual":null}
+{"family":"catalog_source","id":"read_bounded_under","status":"PASS","detail":"bound>size ok","expected":null,"actual":null}
+{"family":"catalog_source","id":"read_bounded_over","status":"PASS","detail":"file exceeds declared bound: 100","expected":null,"actual":null}
+{"family":"catalog_source","id":"read_bounded_eof","status":"PASS","detail":"unexpected EOF at 4 of 4096","expected":null,"actual":null}

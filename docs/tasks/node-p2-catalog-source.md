@@ -3,9 +3,9 @@
 任务：NM-028（agent-coordination/node-migration）。日期：2026-09-23。
 基线：`6080502c1ce3d7a5d7c9d21b790dc72c50c2c9ee`（`migration/node-devin`）。Node v20.19.2。
 关联：Epic #271；#6 P1 ruling 5710586446；`src/catalog_tdx/source.rs` S0–S6；已验收 NM-021/022/023/024/025/026 组件。
-证据：`evidence/node-migration/p2/catalog_source/`（probe-results.jsonl 8 行全 PASS、rust-oracle.jsonl、negative-selftest.jsonl、results.json、SHA256SUMS、README）。
+证据：`evidence/node-migration/p2/catalog_source/`（probe-results.jsonl 13 行全 PASS、rust-oracle.jsonl、negative-selftest.jsonl、results.json、SHA256SUMS、README）。
 
-**结果：8/8 PASS / 0 FAIL —— 真实 gen-2 全 serde 候选与 live Rust 逐位一致（5,224 条记录）。**
+**结果（R1）：13/13 PASS / 0 FAIL —— 真实 gen-2 全 serde 候选与 live Rust 逐位一致（5,224 条记录）。**
 
 ## 1. 移植：`src_node/catalog/source_candidate.mjs`
 
@@ -21,7 +21,9 @@
 
 候选以 Rust serde 形状输出（`Exchange` Shanghai/Shenzhen、`AShare`、`{Assigned:{code,name,scheme}}`/`{Missing:{reason}}`、`{Complete:{expected_count}}`）——即从 NM-025 内部标签映射。
 
-新生产库 `src_node/lib/zip_member.mjs`（NM-024 R3 加固语义）：`zipOpen` 结构校验 / `zipMemberSize` 声明大小 / `zipMember` 有界提取。
+新生产库 `src_node/lib/zip_member.mjs`（NM-024 R3 加固语义）：`zipOpen` 结构校验 / `zipMemberSize` 声明大小 / `zipMember` 有界提取 + **CRC32 对 CD 条目校验**（zip crate `Crc32Reader` 语义；不匹配 → `Invalid checksum` 逐字 → `unreadable:` 包装）。probe 侧 `scripts/zip_member.mjs` 同步加 CRC。
+
+> R1（REVIEW-NM-028）：ZIP CRC32 校验补齐——manifest 绑定但归档内部损坏的成员现拒绝（oracle `member_crc_bad`：CD crc 置 0 + manifest 绑定损坏字节 → inspect 通过、提取失败）。`readAll` 换为 `readBoundedFile`（界=清单声明字节；readSync==0 → `unexpected EOF` 拒绝，不再空转）；确定性 sysfs 短读测试覆盖 EOF 分支。NM-024/025 回归 58/58、26/26 PASS。
 
 ## 2. 治理边界
 
@@ -38,7 +40,7 @@
 | ok_small（合成） | PASS（全结构比对，source 归一化） |
 | unsupported_scope | PASS（I/O 前 `CATALOG_REJECTED` 逐字） |
 | manifest_mismatch | PASS（`snapshot inspection failed: artifact bytes do not match manifest: Day` 逐字） |
-| member_missing / member_corrupt / member_oversize | PASS（逐字） |
+| member_missing / member_corrupt / member_oversize / member_crc_bad | PASS（逐字） |
 | empty_candidate | PASS（`CATALOG_REJECTED` + 无名成员表逐字） |
 | real_gen2 | PASS（全 serde 候选逐位一致；n=5224、6 无名排除、0 缺失行业、0 残码、t 字典已查、分区 5659/5230/348/78/3） |
 | 自测 `source` | exit 1 |
@@ -51,7 +53,7 @@
 
 | 命令 | 退出码 |
 |---|---|
-| `node scripts/node_migration_p2/catalog_source_probe.mjs .` | 0（8 PASS） |
+| `node scripts/node_migration_p2/catalog_source_probe.mjs .` | 0（13 PASS） |
 | `node ... source`（自测负证） | 1 |
 | `rustc` oracle（`target/debug/src_oracle`） | 0 |
 | `sha256sum -c` / `git diff --check` | 0 |
