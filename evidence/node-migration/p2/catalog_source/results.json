@@ -1,0 +1,59 @@
+{
+  "task_id": "NM-028",
+  "baseline_sha": "6080502c1ce3d7a5d7c9d21b790dc72c50c2c9ee",
+  "source_ported": "catalog_tdx/source.rs TdxCatalogExecutor::run — pre-publication part only (no SqliteCatalog/publish)",
+  "rust_oracle": "rust-oracle.jsonl — 8 cases: ok_small, unsupported_scope, manifest_mismatch, member_missing, member_corrupt, member_oversize, empty_candidate, real_gen2 (live rustc 1.98.1 + x_data_mcp rlib + zip crate)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/catalog/source_candidate.mjs"
+  },
+  "structure": [
+    "scope gate first: target.scope != current_sh_sz_a -> CATALOG_REJECTED before I/O",
+    "manifest read bounded 1MiB+1 -> accepted snapshot.inspect",
+    "roles -> artifact paths via Inspection; acquired_at = max completion at full ns+leap ordering precision",
+    "base.zip -> tdxhy.cfg/infoharbor_ex.code; gbbq.zip -> zhb.zip -> incon.dat; member declared-size bound 64MiB",
+    "Rust member() 3-step verbatim: unavailable / exceeds the bounded size limit / unreadable; archive-level {name} invalid",
+    "scope -> reconciliation identity -> compose -> candidate + pre-publish evidence fields",
+    "zero publishable members -> CATALOG_REJECTED with verbatim nameless member list"
+  ],
+  "serde_shapes": "candidate emitted in Rust serde encodings (Exchange Shanghai/Shenzhen, SecurityType AShare, IndustryInfo {Assigned|Missing}, Completeness {Complete:{expected_count}}) — normalized from NM-025 internal labels",
+  "real_gen2": {
+    "source": "official-file:b8a0d7b9aec1a270 (manifest b8a0d7b9 verified vs retained bytes via hardlinks)",
+    "published_count": 5224,
+    "candidate_digest": "0ae391619f691ad1 (full serde candidate identical to live Rust)",
+    "evidence": {
+      "reject_candidate_exclusions": 6,
+      "missing_industry": 0,
+      "t_code_residuals": 0,
+      "t_dictionary_checked": true,
+      "scope_partition": {
+        "total": 5659,
+        "scope": 5230,
+        "bj_market": 348,
+        "b_share": 78,
+        "anomalous": 3
+      }
+    }
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/catalog_source_probe.mjs .",
+    "exit": 0,
+    "cases": 8,
+    "totals": {
+      "pass": 8,
+      "fail": 0,
+      "not_run": 0
+    },
+    "selftest": "node ... source -> exit 1 (committed negative-selftest.jsonl)"
+  },
+  "synthetic_source_normalization": "`source` field is manifest-sha-bound; synthetic fixture zip bytes differ between rustc-zip and node-zip builders, so synthetic cases compare with source normalized + format-pinned (official-file:<16hex>); real_gen2 verifies source verbatim (identical manifest bytes)",
+  "node_specific_deltas": [
+    "inner io/zip error text differs from io::Error/zip::ZipError Display (outer CATALOG_* prefixes + member names + parser texts verbatim)",
+    "fixture zip bytes differ from oracle builder — manifest-bound source normalized for synthetic cases only"
+  ],
+  "governance_limits": [
+    "snapshot byte inspection does NOT establish cross-file compatibility, origin authorization, or production readiness — none inferred",
+    "no proof insertion; no publish/SQLite/CLI wiring"
+  ],
+  "out_of_scope": "publish_official/SQLite/head, downloads, generation activation, services, deploy"
+}
