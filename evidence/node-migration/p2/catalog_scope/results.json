@@ -1,0 +1,50 @@
+{
+  "task_id": "NM-023",
+  "baseline_sha": "02128b573cc6f7d4173f06124dfc6dce4f5c10b2",
+  "source_ported": "src/catalog_tdx/scope.rs::apply + ScopeOutcome::reconciliation",
+  "rust_oracle": "rust-oracle.jsonl — 17 synthetic partition cases + member digests/rows (live rustc 1.98.1 + x_data_mcp rlib)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/catalog/scope.mjs (pure JS, zero deps)"
+  },
+  "retained_member": {
+    "zip": "official-base.zip sha256 dcdf6b49... (MANIFEST-verified)",
+    "member": "tdxhy.cfg 150,332B sha256 df7cb705... (NM-021 parser, unmodified)",
+    "partition": "5,230 scoped members + 429 excluded",
+    "members_sha256": "c96c914b4a437161deae147e740abccb75f1cfd8cef2fb9d485ce72129ab1e0a",
+    "excluded_sha256": "ad9cc4eade1c462b4787f04873e93e07c4849366549e073ab421f28ba0b160f8",
+    "reconciliation": {
+      "total": 5659,
+      "scope": 5230,
+      "bj_market": 348,
+      "b_share": 0,
+      "anomalous": 81
+    }
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/catalog_scope_probe.mjs .",
+    "exit": 0,
+    "cases": 35,
+    "totals": {
+      "pass": 35,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "synthetic_oracle": 17,
+      "typed_boundary": 11,
+      "recon_mismatch": 1,
+      "manifest+extract": 2,
+      "member": 1,
+      "member_ex_rows": 3
+    }
+  },
+  "semantics_mirrored": [
+    "market==2 -> BjMarket regardless of codes; market 0/1 + both codes -> member",
+    "market 0/1 + missing T/X -> BShare iff code prefix 200/900 else Anomalous",
+    "input order preserved; disjoint exhaustive partition; identity asserted",
+    "reconciliation throws ScopeBoundaryError when sum != total (Rust debug_assert made unconditional — fail-closed)"
+  ],
+  "out_of_scope": "ex_code name join, incon dictionary, CatalogSnapshot, DB/services",
+  "limitations": []
+}
