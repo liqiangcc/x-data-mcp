@@ -28,6 +28,13 @@
 {"family":"generation_binding","id":"reject_id_surrogate","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs must be a JSON value","expected":null,"actual":null}
 {"family":"generation_binding","id":"reject_key_surrogate","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs must be a JSON value","expected":null,"actual":null}
 {"family":"generation_binding","id":"reject_frozen_class","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs must be a JSON value","expected":null,"actual":null}
+{"family":"generation_binding","id":"getter_binding","status":"PASS","detail":"GenerationBindingInputError","expected":null,"actual":null}
+{"family":"generation_binding","id":"getter_frozen_inputs","status":"PASS","detail":"GenerationBindingInputError","expected":null,"actual":null}
+{"family":"generation_binding","id":"getter_nested","status":"PASS","detail":"GenerationBindingInputError","expected":null,"actual":null}
+{"family":"generation_binding","id":"setter_binding","status":"PASS","detail":"GenerationBindingInputError","expected":null,"actual":null}
+{"family":"generation_binding","id":"symbol_key","status":"PASS","detail":"GenerationBindingInputError","expected":null,"actual":null}
+{"family":"generation_binding","id":"nonenum_binding","status":"PASS","detail":"GenerationBindingInputError","expected":null,"actual":null}
+{"family":"generation_binding","id":"getters_never_invoked","status":"PASS","detail":"getterCalls=0","expected":null,"actual":null}
 {"family":"generation_binding","id":"proto_key_absent","status":"PASS","detail":"GenerationBindingInputError","expected":null,"actual":null}
 {"family":"generation_binding","id":"dunder_proto_own_key","status":"PASS","detail":"own __proto__ data key inert","expected":"gen-p","actual":{"ok":true,"generation_id":"gen-p"}}
 {"family":"generation_binding","id":"null_proto_ok","status":"PASS","detail":"null-prototype frozen map binds","expected":"gen-x","actual":{"ok":true,"generation_id":"gen-x"}}

@@ -1,6 +1,6 @@
 {
-  "task_id": "NM-031",
-  "baseline_sha": "40440f99b2354e12456b9f97042e019947e96a5f",
+  "task_id": "NM-031-R1",
+  "baseline_sha": "d8e9fabb7d43814a1c67b1a4ffad701b5403848c (R0)",
   "source_ported": "data_supply/generation.rs::{binding_of,uniform_binding} — pure frozen-generation binding decision",
   "rust_oracle": "rust-oracle.jsonl — 21 cases (live rustc 1.98.1), refusal = Debug name verbatim",
   "environment": {
@@ -18,20 +18,26 @@
   "probe": {
     "command": "node scripts/node_migration_p2/generation_binding_probe.mjs .",
     "exit": 0,
-    "cases": 34,
+    "cases": 41,
     "totals": {
-      "pass": 34,
+      "pass": 41,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
       "live_rust_oracle": 21,
       "typed_boundary": 9,
+      "accessor_descriptor": 7,
       "prototype_safety": 4
     },
     "selftest": "node ... binding -> exit 1 (negative-selftest.jsonl)"
   },
   "serde_equivalence_limits": "none observed — all oracle rows byte-identical",
   "purity": "deterministic, read-only; no active pointer/fallback/open/pin/usable-source claim",
-  "out_of_scope": "store integration, task scheduling, service/MCP, deploy"
+  "out_of_scope": "store integration, task scheduling, service/MCP, deploy",
+  "review": "REVIEW-NM-031 R0 — accessor getters could manufacture bindings; now rejected via own-data-descriptor checks without invocation",
+  "r1_fixes": {
+    "accessor_descriptors": "plainDataProps requires every own property (incl. non-enumerable) to be an enumerable data property — getters/setters reject via getOwnPropertyDescriptor before any invocation; symbol keys and non-enumerable props also reject. Applies to items, frozen_inputs, and all nested JSON values.",
+    "probes": "getter on source_generation_id, getter on item.frozen_inputs, nested getter, setter, symbol key, non-enumerable binding — all reject; getters_never_invoked counter proves zero invocation."
+  }
 }

@@ -75,6 +75,31 @@ bnd("reject_id_surrogate", () => uniformBinding([with_("g\ud800")]));
 bnd("reject_key_surrogate", () => uniformBinding([itemF({ ["a\ud800"]: "x", [K]: "g" })]));
 bnd("reject_frozen_class", () => uniformBinding([itemF(new Map())]));
 
+// accessor getters must reject WITHOUT invocation (side-effect counter)
+let getterCalls = 0;
+const gcount = (v) => () => { getterCalls++; return v; };
+{
+  const f = {}; Object.defineProperty(f, K, { get: gcount("gen-evil"), enumerable: true });
+  try { uniformBinding([itemF(f)]); emit("getter_binding", "FAIL", "getter produced binding"); }
+  catch (e) { emit("getter_binding", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const it = {}; Object.defineProperty(it, "frozen_inputs", { get: gcount({ [K]: "gen-evil" }), enumerable: true });
+  try { uniformBinding([it]); emit("getter_frozen_inputs", "FAIL", "getter produced frozen_inputs"); }
+  catch (e) { emit("getter_frozen_inputs", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const nested = { [K]: { get x() { getterCalls++; return "y"; } } };
+  try { uniformBinding([itemF(nested)]); emit("getter_nested", "FAIL", "nested getter accepted"); }
+  catch (e) { emit("getter_nested", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const setter = {}; Object.defineProperty(setter, K, { set(v) { getterCalls++; }, enumerable: true });
+  try { uniformBinding([itemF(setter)]); emit("setter_binding", "FAIL", "setter accepted"); }
+  catch (e) { emit("setter_binding", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const sym = { [K]: "gen-s", [Symbol("k")]: 1 };
+  try { uniformBinding([itemF(sym)]); emit("symbol_key", "FAIL", "symbol key accepted"); }
+  catch (e) { emit("symbol_key", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const hidden = {}; Object.defineProperty(hidden, K, { value: "gen-h", enumerable: false });
+  try { uniformBinding([itemF(hidden)]); emit("nonenum_binding", "FAIL", "non-enumerable binding accepted"); }
+  catch (e) { emit("nonenum_binding", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  emit("getters_never_invoked", getterCalls === 0 ? "PASS" : "FAIL", `getterCalls=${getterCalls}`);
+}
+
 // prototype-safety: inherited names can never manufacture a binding
 {
   // frozen_inputs object inheriting source_generation_id: custom

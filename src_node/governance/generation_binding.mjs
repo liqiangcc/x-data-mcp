@@ -28,10 +28,28 @@ export class GenerationBindingInputError extends Error {
 
 const isStr = (v) => typeof v === "string" && v.isWellFormed();
 
+// Own data-property descriptor lookup: JSON/serde values carry only
+// data properties — accessor descriptors (get/set) are rejected
+// WITHOUT invoking them.
+const ownData = (obj, key) => {
+  const d = Object.getOwnPropertyDescriptor(obj, key);
+  return d === undefined ? { present: false }
+    : "value" in d ? { present: true, value: d.value }
+    : { present: true, accessor: true };
+};
+// Every own property (incl. non-enumerable) must be a data property
+// with a wellformed string key — serde maps have neither accessors
+// nor non-enumerable/symbol members.
+const plainDataProps = (obj) =>
+  Object.getOwnPropertySymbols(obj).length === 0 &&
+  Object.getOwnPropertyNames(obj).every((k) => {
+    const d = Object.getOwnPropertyDescriptor(obj, k);
+    return "value" in d && d.enumerable && k.isWellFormed();
+  });
 // Deep JSON-shape check for a serde_json::Value: scalars (null/bool/
-// finite number/string), arrays, and null-prototype-equivalent objects
-// with string keys. Getters/prototype members are ignored — the check
-// reads only own enumerable data properties.
+// finite number/wellformed string), arrays, and plain or null-prototype
+// objects whose every own property is an enumerable data property.
+// Accessor descriptors reject before any invocation.
 function isJsonValue(v) {
   if (v === null) return true;
   const t = typeof v;
@@ -42,7 +60,8 @@ function isJsonValue(v) {
   if (t === "object") {
     if (Object.getPrototypeOf(v) !== Object.prototype &&
         Object.getPrototypeOf(v) !== null) return false;
-    return Object.keys(v).every((k) => k.isWellFormed() && isJsonValue(v[k]));
+    if (!plainDataProps(v)) return false;
+    return Object.keys(v).every((k) => isJsonValue(v[k]));
   }
   return false;
 }
@@ -54,19 +73,25 @@ function bindingOf(item) {
   if (item === null || typeof item !== "object" || Array.isArray(item)) {
     throw new GenerationBindingInputError("item must be an object");
   }
-  if (!Object.hasOwn(item, "frozen_inputs")) {
+  // An ItemSpec is a serde struct — accessor/non-enumerable/symbol own
+  // properties are unrepresentable; descriptors checked, never invoked.
+  if (!plainDataProps(item)) {
+    throw new GenerationBindingInputError("item has non-data properties");
+  }
+  const fp = ownData(item, "frozen_inputs");
+  if (!fp.present) {
     throw new GenerationBindingInputError("item.frozen_inputs required");
   }
-  const frozen = item.frozen_inputs;
+  const frozen = fp.value;
   if (!isJsonValue(frozen)) {
     throw new GenerationBindingInputError("item.frozen_inputs must be a JSON value");
   }
   if (frozen === null || typeof frozen !== "object" || Array.isArray(frozen)) {
     return { kind: "missing" };
   }
-  if (!Object.hasOwn(frozen, SOURCE_GENERATION_KEY)) return { kind: "missing" };
-  const v = frozen[SOURCE_GENERATION_KEY];
-  return isStr(v) ? { kind: "id", id: v } : { kind: "null" };
+  const kp = ownData(frozen, SOURCE_GENERATION_KEY); // data prop (checked above)
+  if (!kp.present) return { kind: "missing" };
+  return isStr(kp.value) ? { kind: "id", id: kp.value } : { kind: "null" };
 }
 
 const sameBinding = (a, b) =>
