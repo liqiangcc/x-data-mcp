@@ -1,0 +1,41 @@
+{
+  "task_id": "NM-019",
+  "baseline_sha": "47d9efeac96e91093a283cf6f39b86e48d84e77e",
+  "source_ported": "src/yearly.rs::aggregate + sum_known exactness chain",
+  "golden_oracle": "P0 yearly_aggregate (5 rows, all PASS)",
+  "rust_oracle": "rust-oracle.jsonl — 21 cases live rustc 1.98.1 + x_data_mcp rlib (evidence/identity invalidity, empty selection, as_of before bars, unknown units, OHLC invalidity, duplicate date, negative sums, exact-MAX boundary, precision-loss, selected years, already-yearly, blank identity)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/algorithms/yearly.mjs on NM-013 Dec engine (BigInt, zero deps)"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/yearly_probe.mjs .",
+    "exit": 0,
+    "cases": 26,
+    "totals": {
+      "pass": 26,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "golden": 5,
+      "rust_oracle": 21,
+      "supplementary_exact_sum": 1
+    }
+  },
+  "semantics_mirrored": [
+    "validation order: identity/period/evidence -> empty input/selection -> per-bar scan (date<=as_of, strictly increasing, OHLC bounds, non-negative vol/amt) -> missing-year (ascending, first) -> per-year sums",
+    "natural-year contiguous groups; first-open/max-high/min-low/last-close; actual last trading date; year_unfinished = year==as_of.year",
+    "sum_known: unit unconfirmed OR any None -> unknown BEFORE overflow; checked_add chain + subtraction round-trip verify -> InexactSum on any precision loss (no silent rescale-to-fit)",
+    "lineage {base_daily_version_id, local-natural-year-v1, first/last trading dates}; output mirrors AnnualSeries",
+    "error text verbatim: 'invalid fixed QFQ daily input: {reason}' / 'requested natural year is absent: {y}' / 'exact decimal sum is not representable'"
+  ],
+  "notes": [
+    "no JS Number for contract values — all arithmetic via Dec BigInt engine",
+    "checked_sub overflow maps to InexactSum consistent with Rust None-path"
+  ],
+  "out_of_scope": "memoized aggregate_key, DB/service wiring, all-market generation",
+  "limitations": [
+    "evidence modelled as {confirmed,value} shape mirroring EvidenceValue::is_confirmed — typed boundary documented"
+  ]
+}
