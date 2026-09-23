@@ -8,8 +8,8 @@ fsync-dir.
 
 ## Contents
 
-- `probe-results.jsonl` — 25 rows, all PASS (16 live Rust oracle +
-  8 request_id boundary + 1 durability observation).
+- `probe-results.jsonl` — 30 rows, all PASS (19 live Rust oracle +
+  10 request_id/boundary + 1 durability observation).
 - `rust-oracle.jsonl` — live oracle incl. reopen/installed-ids rows.
 - `negative-selftest.jsonl` — exit-1 proof.
 - `results.json` — ordering, durability notes, limits.
@@ -30,3 +30,8 @@ node scripts/node_migration_p2/generation_store_probe.mjs . store # selftest, ex
 - Durability: same-fs rename + `fsync(generations dir)`; reopen rows
   show post-rename state; no in-process crash-fault claim.
 - Stage bytes preserved after failed install (`stage_kept_after_fail`).
+
+R1 (REVIEW-NM-033): UTF-8 byte sort for installed_ids (unicode case),
+atomic renameat2(RENAME_NOREPLACE) via committed N-API source (built at
+probe time; .node uncommitted regenerable), strict ENOENT-only absence,
+atomic exclusive mkdir for create_stage.

@@ -16,8 +16,18 @@
 // limits are documented in the task evidence (not claimed absolute).
 
 import { createHash } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+
+// Atomic no-overwrite rename: renameat2(RENAME_NOREPLACE). Node's
+// renameSync silently replaces an existing EMPTY target directory —
+// that would break the immutable-generation identity under a racing
+// writer. The binding must be built (gcc -shared -fPIC -O2 -o
+// src_node/native/rename_noreplace.node rename_noreplace.c
+// -I/usr/include/node); absence fails closed at load time.
+const require_ = createRequire(import.meta.url);
+const { rename_noreplace: renameNoreplace } = require_("../native/rename_noreplace.node");
 import { inspect, strictJson, InspectionError } from "./snapshot.mjs";
 import { readBoundedFile } from "../lib/zip_member.mjs";
 import { GenerationUsableError, MANIFEST_NAME } from "./generation_usable.mjs";
@@ -60,10 +70,26 @@ export class GenerationStore {
   /** create_stage: once per request; exists -> staging refusal. */
   createStage(requestId) {
     const dir = this.stageDir(requestId);
-    if (exists(dir)) {
-      throw err("staging", `staging area for request ${requestId} is already sealed or missing`);
+    // Atomic exclusive mkdir: two concurrent creators must not both
+    // succeed (recursive mkdir would accept a racing creation).
+    try { mkdirSync(dir); }
+    catch (e) {
+      if (e.code === "EEXIST") {
+        throw err("staging", `staging area for request ${requestId} is already sealed or missing`);
+      }
+      if (e.code === "ENOENT") {
+        mkdirSync(join(this.root, STAGING_DIR), { recursive: true });
+        try { mkdirSync(dir); }
+        catch (e2) {
+          if (e2.code === "EEXIST") {
+            throw err("staging", `staging area for request ${requestId} is already sealed or missing`);
+          }
+          throw err("io", `io: ${e2.message}`);
+        }
+        return dir;
+      }
+      throw err("io", `io: ${e.message}`);
     }
-    mkdirSync(dir, { recursive: true });
     return dir;
   }
 
@@ -87,7 +113,7 @@ export class GenerationStore {
     const { bytes: manifestBytes, manifest } = this.stagedManifest(requestId);
     const generationId = createHash("sha256").update(manifestBytes).digest("hex");
     const target = this.generationDir(generationId);
-    if (exists(target)) {
+    if (statOrNull(target) !== null) {
       throw err("already_installed",
         `generation ${generationId} already installed; refusing to overwrite immutable bytes`);
     }
@@ -100,7 +126,18 @@ export class GenerationStore {
         "snapshot inspection failed: inspection must not approve production readiness");
     }
     mkdirSync(join(this.root, GENERATIONS_DIR), { recursive: true });
-    renameSync(stage, target);
+    // Atomic no-overwrite: a target created between the check above and
+    // here fails EEXIST (never replaced). Rust fs::rename relies on the
+    // caller's single-writer exclusion; RENAME_NOREPLACE makes the
+    // guarantee local to this call.
+    try { renameNoreplace(stage, target); }
+    catch (e) {
+      if (e.code === "EEXIST") {
+        throw err("already_installed",
+          `generation ${generationId} already installed; refusing to overwrite immutable bytes`);
+      }
+      throw err("io", `io: ${e.message}`);
+    }
     fsyncDir(join(this.root, GENERATIONS_DIR));
     return {
       generation_id: generationId,
@@ -111,18 +148,27 @@ export class GenerationStore {
     };
   }
 
-  /** installed_ids: sorted UTF-8 directory names under generations/. */
+  /** installed_ids: directory names under generations/, UTF-8-byte
+   *  sorted (Rust Vec<String>::sort orders bytes, not UTF-16 units). */
   installedIds() {
     const dir = join(this.root, GENERATIONS_DIR);
-    if (!exists(dir)) return [];
+    if (statOrNull(dir) === null) return [];
     return readdirSync(dir, { withFileTypes: true })
       .filter((e) => e.isDirectory() && e.name.isWellFormed())
       .map((e) => e.name)
-      .sort();
+      .sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
   }
 }
 
-const exists = (p) => { try { statSync(p); return true; } catch { return false; } };
+// ENOENT/ENOTDIR mean absent; every other stat failure propagates —
+// permission or I/O errors must not masquerade as "not present".
+const statOrNull = (p) => {
+  try { return statSync(p); }
+  catch (e) {
+    if (e.code === "ENOENT" || e.code === "ENOTDIR") return null;
+    throw err("io", `io: ${e.message}`);
+  }
+};
 const fsyncDir = (dir) => {
   const fd = openSync(dir, "r");
   try {

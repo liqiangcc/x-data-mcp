@@ -12,5 +12,9 @@
 {"id":"install_already","kind":"already_installed","message":"generation 70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0 already installed; refusing to overwrite immutable bytes","status":"error"}
 {"id":"stage_kept_after_fail","status":"ok","value":true}
 {"id":"installed_ids","status":"ok","value":["70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0","aaa","zzz"]}
-{"id":"reopen_ids","status":"ok","value":["70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0","aaa","zzz"]}
+{"id":"installed_ids_unicode","status":"ok","value":["70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0","aaa","zzz","","𐀀"]}
+{"id":"reopen_ids","status":"ok","value":["70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0","aaa","zzz","","𐀀"]}
 {"id":"reopen_verify","status":"ok","value":{"gid":"70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0"}}
+{"id":"install_empty_target","kind":"already_installed","message":"generation 15089b6d2925367701205583d10f8e34c9d02d13ac0bdcc93fe2fd4e9e4a9c5e already installed; refusing to overwrite immutable bytes","status":"error"}
+{"id":"target_still_empty","status":"ok","value":true}
+{"id":"stage_preserved","status":"ok","value":true}
