@@ -52,7 +52,7 @@
 | 命令 | 退出码 |
 |---|---|
 | `gcc -shared -fPIC -O2 -o linux_guards.node linux_guards.c -I/usr/include/node` | 0 |
-| `node scripts/node_migration_p1/native_probe.mjs /dev/shm/nm009` | 0（9 PASS/1 NOT_RUN/1 INFO） |
+| `node scripts/node_migration_p1/native_probe.mjs /dev/shm/nm009` | 0（8 PASS/1 NOT_RUN/1 INFO） |
 | `json.tool` / `sha256sum -c` / `git diff --check`（本次文件） | 0 |
 
 ## 6. 范围声明
