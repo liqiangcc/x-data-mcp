@@ -154,10 +154,10 @@ function strictJson(text) {
 // chrono RFC3339: `[Tt ]` separator, required Z/z or ±HH:MM offset
 // (HH<=23, MM<=59), second may be 60 (leap) on any minute, calendar
 // strict, frac digits -> nanos (AutoSi output: 3-digit groups).
-// Interval comparison uses full nanosecond precision on a x2 scale so
-// leap :60 orders strictly between :59.999999999 and the next minute —
-// no representational skew in ordering. Output preserves literal :60
-// and nanos; `ms` is retained only for Date construction.
+// Interval ordering key = (baseNs*2 + leapBit)*1e9 + fracNs:
+// :59.f -> base*2e9+f; :60.f (leap) -> base*2e9+1e9+f — strictly after
+// every :59.x and strictly before the next minute's :00.x, with full
+// fractional ordering inside the leap second. No representational skew.
 const TS_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|([+-])(\d{2}):(\d{2}))$/;
 const DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 function parseTs(s) {
@@ -187,10 +187,8 @@ function parseTs(s) {
   const wallMs = Date.UTC(year, month - 1, day, hour, min, baseSec, 0);
   const fracMs = Number(fracNs / 1_000_000n);
   const ms = wallMs + fracMs - offMin * 60000;
-  // ns2 ordering key: normal instant = ns*2; leap second = (next minute)*2 - 1
-  // so it sorts strictly after :59.999999999 and before the next minute.
-  const secNs = BigInt(wallMs - offMin * 60000) * 1_000_000n + fracNs;
-  const ns2 = sec === 60 ? (secNs + 1_000_000_000n - fracNs) * 2n - 1n : secNs * 2n;
+  const baseNs = BigInt(wallMs - offMin * 60000) * 1_000_000n;
+  const ns2 = (baseNs * 2n + (sec === 60 ? 1n : 0n)) * 1_000_000_000n + fracNs;
   // canonical output: UTC date/time + frac + Z; leap second stays in the
   // (offset-adjusted) minute — chrono emits e.g. 22:59:60Z.
   const dt = new Date(ms);
@@ -308,7 +306,7 @@ export function inspect(manifestBytes, root, now) {
     }
     const started = parseTs(input.acquisition_started_at).ns2;
     const completed = parseTs(input.acquisition_completed_at).ns2;
-    const nowNs2 = BigInt(nowMs) * 2_000_000n;
+    const nowNs2 = BigInt(nowMs) * 2_000_000_000_000_000n;
     if (started > completed || completed > nowNs2) {
       throw invalid("inverted/future acquisition interval");
     }

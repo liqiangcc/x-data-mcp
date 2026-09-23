@@ -173,6 +173,13 @@ const CASES = {
   ts_off_2359_ok: () => [fx("ts_off_2359_ok", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00+23:59")},${gg()}`))],
   ts_nanos_inverted: () => [fx("ts_nanos_inverted", std), B(man(
     `${good()},${gd().replace("2026-09-11T01:00:00Z", "2026-09-11T01:00:00.000000001Z").replace("2026-09-11T02:00:00Z", "2026-09-11T01:00:00Z")},${gg()}`))],
+  // ---- R3: leap-second fractional ordering ----
+  ts_leap_frac_inverted: () => [fx("leapfrac", std), B(man(
+    `${good()},${gd().replace("2026-09-11T01:00:00Z", "2026-09-11T23:59:60.9Z").replace("2026-09-11T02:00:00Z", "2026-09-11T23:59:60.1Z")},${gg()}`))],
+  ts_leap_frac_ok: () => [fx("leapfrac2", std), B(man(
+    `${good()},${gd().replace("2026-09-11T01:00:00Z", "2026-09-11T23:59:60.1Z").replace("2026-09-11T02:00:00Z", "2026-09-11T23:59:60.9Z")},${gg()}`))],
+  ts_leap_after_59999: () => [fx("leapboundary", std), B(man(
+    `${good()},${gd().replace("2026-09-11T01:00:00Z", "2026-09-11T23:59:60.9Z").replace("2026-09-11T02:00:00Z", "2026-09-11T23:59:59.999999999Z")},${gg()}`))],
 };
 
 for (const o of oracle.filter((r) => r.id !== "real_gen2")) {

@@ -1,9 +1,9 @@
 {
-  "task_id": "NM-026-R2",
-  "baseline_sha": "68f67eadaba0155cdeaa9f702d45f2abe3f23a32 (R1) / 6c8718d (initial)",
-  "review": "REVIEW-NM-026 R2 — four live Rust differentials confirmed by Lead; all fixed with oracle evidence",
+  "task_id": "NM-026-R3",
+  "baseline_sha": "93cfd86949a21ff6693d03b27f34c871de8351ac (R2) / 6c8718d (initial)",
+  "review": "REVIEW-NM-026 R2-review — same-leap-second .9/.1 inversion accepted by Node; fixed with full leap fractional ordering",
   "source_ported": "src/snapshot.rs::inspect (read-only governance primitive)",
-  "rust_oracle": "rust-oracle.jsonl — 59 rows: 46 error + 13 ok incl. real_gen2 (live rustc 1.98.1 + x_data_mcp rlib)",
+  "rust_oracle": "rust-oracle.jsonl — 62 rows: 48 error + 14 ok incl. real_gen2",
   "environment": {
     "node": "v20.19.2",
     "module": "src_node/governance/snapshot.mjs"
@@ -30,14 +30,14 @@
   "probe": {
     "command": "node scripts/node_migration_p2/snapshot_probe.mjs .",
     "exit": 0,
-    "cases": 66,
+    "cases": 69,
     "totals": {
-      "pass": 66,
+      "pass": 69,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
-      "synthetic_oracle": 58,
+      "synthetic_oracle": 61,
       "typed_boundary": 3,
       "real_retained_sha": 3,
       "real_gen2_inspection": 1,
@@ -47,8 +47,8 @@
   },
   "node_specific_deltas": [
     "json/io message text differs from serde/io::Error (category preserved; invalid/mismatch verbatim)",
-    "interval ordering exact at ns scale incl. leap-second slot; only same-leap-second fractions compare equal (documented)",
-    "frac digits >9 truncated to nanos in output and ordering (chrono-equivalent domain)"
+    "interval ordering exact at ns scale incl. leap-second fractional ordering",
+    "frac digits >9 truncate to nanos in output and ordering (chrono-equivalent domain)"
   ],
   "out_of_scope": "inspect_snapshot CLI, source executor, download, activation, SQLite, services",
   "r2_fixes": {
@@ -63,6 +63,14 @@
       "ts_off_2360",
       "ts_off_2359_ok",
       "ts_nanos_inverted"
+    ]
+  },
+  "r3_fixes": {
+    "leap_frac_ordering": "ordering key now (baseNs*2 + leapBit)*1e9 + fracNs: leap :60.f sorts after every :59.x, before next-minute :00.x, ordered by frac within the leap second — ts_leap_frac_inverted/ts_leap_frac_ok/ts_leap_after_59999 all match Rust",
+    "oracle_cases": [
+      "ts_leap_frac_inverted",
+      "ts_leap_frac_ok",
+      "ts_leap_after_59999"
     ]
   }
 }
