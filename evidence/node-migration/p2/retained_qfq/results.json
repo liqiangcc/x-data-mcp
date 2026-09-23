@@ -1,0 +1,55 @@
+{
+  "task_id": "NM-018",
+  "baseline_sha": "e65e9694266c82d1ba6e3141144b706656668f2f",
+  "integration": "day_file.parse + gbbq_file.parse + gbbq_decode.decodeEvents + category-1 caller filter + forwardAdjust + eventDayMarks — the NM-011..NM-017 modules composed unmodified",
+  "symbol_selection": {
+    "code": "000002",
+    "market": 0,
+    "member": "sz\\lday\\sz000002.day",
+    "rationale": "GBBQ member events for code 000002 are all market=0 (SZ); 112 total events, 36 category-1. sh000002.day exists but has no (market=1, 000002) events — mapping is unambiguous, documented in the probe selection row",
+    "filter": "official_market.rs semantics: category==1 keyed by (market, code); other categories excluded uninterpreted"
+  },
+  "inputs": {
+    "official-hsjday.zip": "sha256 c82f852a7bc2e52c7e89347a1e0d1878b01ce997946c2745f7af323752270892 (MANIFEST-verified); bounded member extract 271,328B sha256 6f168cf053ca561fedde1aa97c3b38d71876854ade3dae5f1a2c9ba9f6b63826",
+    "official-gbbq-member": "sha256 4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77 (MANIFEST-verified)"
+  },
+  "equivalence": {
+    "parsed_records": 8479,
+    "raw_digest": "c482596abad3ebecdba1e11417fb5d8f5ff9b49606689bc8dabe112ae283cdbc",
+    "cat1_events": 36,
+    "fq_bars": 8479,
+    "fq_digest": "836c91178e8b5f7e302df0cb7ccbadf49169ef9edd246229e61c3e5907972d46",
+    "marks": 36,
+    "sampled_bars": "all event-boundary transitions + first/last (~72) byte-identical",
+    "serialization": "raw: 'date,o,h,l,c,amount_bits,vol,r7'; fq: 'date,open,high,low,close,chain_count,amount_bits,vol,r7' — one line per bar, sha256 in order"
+  },
+  "environment": {
+    "node": "v20.19.2",
+    "oracle": "rustc 1.98.1 + x_data_mcp rlib, same input bytes"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/retained_qfq_probe.mjs .",
+    "exit": 0,
+    "cases": 115,
+    "totals": {
+      "pass": 115,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "manifest_sha": 2,
+      "member_extract": 1,
+      "selection": 1,
+      "raw_digest": 1,
+      "fq_digest": 1,
+      "sampled_bars": 72,
+      "marks": 37
+    }
+  },
+  "scope_claim": "ONE SYMBOL ONLY (sz000002) — no whole-market equivalence claim",
+  "out_of_scope": "yearly, DB, services, ECS, deploy",
+  "limitations": [
+    "zip reader handles store+deflate via node:zlib — bounded to member extraction, not a general archiver",
+    "negative adjusted prices (early bars ~-8.8) are correct Rust-semantics output"
+  ]
+}
