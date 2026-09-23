@@ -45,7 +45,8 @@
     },
     "digest_rfc8785": {
       "ok": 1,
-      "error": 0
+      "error": 0,
+      "not_run": 1
     },
     "compact_bar": {
       "ok": 1,
@@ -57,21 +58,35 @@
     }
   },
   "observed_vs_source_derived": {
-    "observed": "all vectors are actual outputs of public lib functions executed in the harness",
-    "source_derived": [
-      "amount_f32_projection mirrors the private expression at src/official_market.rs:396-397 verbatim (materialize_daily env path NOT_RUN)",
+    "observed_public_api": "44 rows: actual return/error of cited public lib functions in nm003-oracle-run-1",
+    "source_derived_expression": "6 rows (amount_f32_projection): verbatim mirror of the private expression at src/official_market.rs:396-397; enclosing materialize_daily env path is NOT_RUN — these are expression outputs, not public-API outputs",
+    "justified_not_run": "1 row (digest_rfc8785 reject_boundary): total serializer over serde_json::Value — no reject case exists in-domain; reject coverage delegated to digest_canonical_evidence",
+    "notes": [
       "metric_ratio_change 512-bit integer budget is unreachable from Decimal inputs (96-bit mantissa + scale<=28 -> ~230 bits); documented not demonstrated",
       "non-Linux behavior and official .day files NOT_RUN"
     ]
   },
   "not_run": [
-    "official_market::materialize_daily (needs env-pinned snapshot)",
+    "official_market::materialize_daily (needs env-pinned snapshot; amount projection covered as mirrored expression only)",
     "metrics::consecutive::evaluate full outcome (ratio_change frozen; evaluate wire path via compute_metrics belongs to MCP freeze)",
     "gbbq::decode_events/decrypt (needs real retained gbbq member; structural vector can be added later)",
+    "digest_rfc8785 reject/boundary (total serializer over Value — justified, see vectors.jsonl not_run row)",
     "official inputs",
     "ECS"
   ],
   "files": {
-    "vectors.jsonl": "bc340f5787283d684e0efc9e187a7a897dc4a082b812152fbf8b4558f50f737e"
-  }
+    "vectors.jsonl": "acb5ac6b8c62c97bb6fc2f4af85a7178fdf83ef8123e21384480c8d66289c18a"
+  },
+  "not_run_marker_rows": 1,
+  "runs": {
+    "nm003-oracle-run-1": {
+      "command": "target/debug/nm003-oracle > vectors.jsonl (binary built per README: rustc --edition 2024 --extern x_data_mcp/serde_json/serde/rust_decimal/chrono/serde_json_canonicalizer scripts/node_migration_p0/oracle.rs)",
+      "exit_code": 0,
+      "captured_at": "2026-09-23",
+      "oracle_code_sha": "32c29e0c57832b74925316ec8b601c16d5696fae",
+      "note": "binary deleted post-capture for disk headroom; deterministic rebuild via README reproduces identical vectors.jsonl"
+    }
+  },
+  "per_row_fields": "each vectors.jsonl row: family,id,input,observed,semantics,source,oracle_sha,run_ref,provenance",
+  "harness_io": "harness reads one committed fixture (tests/fixtures/issue79/legacy-records.json) for the legacy-digest vector; all other inputs are source literals; no env/clock/randomness"
 }

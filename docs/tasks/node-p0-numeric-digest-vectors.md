@@ -1,11 +1,15 @@
 # Node 迁移 P0 — 精确数值与摘要 golden 向量
 
 任务：NM-003（agent-coordination/node-migration）。日期：2026-09-23。
-基线：`32c29e0c57832b74925316ec8b601c16d5696fae`（`migration/node-devin`）。Oracle 代码 SHA = 基线 SHA（向量为基线上公共库函数的真实输出）。
+基线：`32c29e0c57832b74925316ec8b601c16d5696fae`（`migration/node-devin`）。Oracle 代码 SHA = 基线 SHA（44 行公共库函数真实输出 + 6 行镜像私有表达式输出 + 1 行论证 NOT_RUN 标记）。
 关联：Epic #271、#262（OPEN，不授权迁移范围）。上游：`node-p0-inventory.md`、`node-p0-mcp-contract.md`。
-证据：`evidence/node-migration/p0/numeric/`（vectors.jsonl 50 条、summary.json、SHA256SUMS、README 复现步骤）；harness 源码 `scripts/node_migration_p0/oracle.rs`（单文件、字面量输入、无 env/IO/时钟）。
+证据：`evidence/node-migration/p0/numeric/`（vectors.jsonl 51 行、summary.json、SHA256SUMS、README 复现步骤）；harness 源码 `scripts/node_migration_p0/oracle.rs`（单文件；输入为源码字面量 + 一个已提交 fixture 文件 `tests/fixtures/issue79/legacy-records.json`，无 env/时钟/随机性）。
 
-**全部为观察到的实际输出**，非源码推断的预期值；唯一的 source-derived 标注：`amount_f32_projection` 逐字镜像 `src/official_market.rs:396-397` 的私有表达式（外层 materialize 路径 NOT_RUN）。
+**Provenance 三分**（逐行 `provenance` 字段，附 `oracle_sha` 与 `run_ref` 可回溯至 summary.json 的 `runs` 命令/退出码）：
+
+- `observed_public_api`（44 行）：公共库函数在 `nm003-oracle-run-1` 中的实际返回/错误。
+- `source_derived_expression`（6 行，`amount_f32_projection`）：逐字镜像 `src/official_market.rs:396-397` 的**私有**表达式输出；外层 `materialize_daily` env 路径 NOT_RUN。这不是公共 API 输出。
+- `justified_not_run`（1 行，`digest_rfc8785/reject_boundary`）：`serde_json_canonicalizer::to_string` 对 `serde_json::Value` 是全函数，输入域内不存在拒绝用例；拒绝语义由 `canonical_evidence` 层（3 个 reject 向量）承担。
 
 ## 1. 向量族与关键观察值
 
@@ -20,7 +24,7 @@
 | `metric_ratio_change` | 5 合法 + 1 拒绝 | (105,100)→`0.050000000000`；(1,3)→`-0.666666666667`；BigInt 精确有理 half-even 12dp 单次取整；**平局偶商**：(8193,8192)→`0.000122070312`（10¹²/8192=122070312.5，商偶不进位）；**平局奇商**：(8195,8192)→`0.000366210938`（366210937.5→938）；anchor≤0 → `positive ratio inputs required` |
 | `digest_legacy_published` | 2 合法 + 1 拒绝 | fixture record0 → `6192fbe5…b277e1`（sha256 of serde_json bytes minus `integrity_sha256`）；非对象 → `MARKET_INTEGRITY: record must be object` |
 | `digest_canonical_evidence` | 1 合法 + 3 拒绝 | Version 证据 → JCS 键序 canonical_json + `x-data-evidence-v1\0` 域分离 sha256；内嵌 `records` 数组 → `evidence embeds a bars/records array`；形状不符 → `version evidence shape mismatch`；非对象 → `evidence is not a JSON object` |
-| `digest_rfc8785` | 1 例 | `{"z":1,"a":{"y":[true,null]},"é":2}` → `{"a":{"y":[true,null]},"z":1,"é":2}`（JCS；é 不转义） |
+| `digest_rfc8785` | 1 例 + reject NOT_RUN | `{"z":1,"a":{"y":[true,null]},"é":2}` → `{"a":{"y":[true,null]},"z":1,"é":2}`（JCS；é 不转义）；reject/boundary 经论证 NOT_RUN（全函数无域内拒绝） |
 | `compact_bar` | 1 合法 + 5 拒绝 | Bar → trade_day=epoch(19724)、OHLC→整数分、amount `"150225000"` 规范十进制文本；`15.105` → `price is not exactly 2dp`；Year+r7 → `yearly bar must not carry r7_raw`；`"1.230"` → `not canonical`；`"abc"` → `not a decimal`；`"-5"` → `negative amount` |
 | `segment_digest` | 1 合法 + 2 拒绝 | 2-bar 段 `sh.600006`/day → `660ecea1…2f93c1`（`x-data-segment-v1\0` 二进制帧 sha256）；空段 → `row_count out of bounds`；实体非 `sh./sz.+6位` → `non-canonical entity` |
 
@@ -50,6 +54,7 @@
 - `official_market::materialize_daily` 端到端（env-pinned 官方快照路径）——投影表达式已逐字镜像并标注 source-derived。
 - `metrics::consecutive::evaluate` 完整 Outcome（run 检测/边界语义）——`ratio_change` 已冻结；evaluate 经 compute_metrics 属后续故障/执行切片。
 - `gbbq::decode_events`/`decrypt_record` 真实 GBBQ 字节解码（需要 retained 成员字节；结构解析已覆盖）。
+- `digest_rfc8785` reject/boundary：全函数无域内拒绝，justified NOT_RUN（见 vectors.jsonl 第 42 行 not_run 标记）。
 - 非 Linux 差异、官方输入、ECS：NOT_RUN/未访问。
 
 ## 5. 范围声明
