@@ -1,0 +1,77 @@
+{
+  "task_id": "NM-003",
+  "baseline_sha": "32c29e0c57832b74925316ec8b601c16d5696fae",
+  "oracle_binary": "target/debug/nm003-oracle (rustc --edition 2024 vs libx_data_mcp rlib, debug)",
+  "harness_source": "scripts/node_migration_p0/oracle.rs",
+  "captured_at": "2026-09-23",
+  "environment": "Box grok-bot-vm-411252337; rustup stable 1.98.1; deterministic literal inputs; no env/IO/clock",
+  "vector_count": 50,
+  "families": {
+    "day_parse": {
+      "ok": 1,
+      "error": 3
+    },
+    "amount_f32_projection": {
+      "ok": 6,
+      "error": 0
+    },
+    "gbbq_factor_normalize": {
+      "ok": 6,
+      "error": 0
+    },
+    "qfq_affine": {
+      "ok": 3,
+      "error": 0
+    },
+    "qfq_forward_adjust": {
+      "ok": 2,
+      "error": 1
+    },
+    "yearly_aggregate": {
+      "ok": 2,
+      "error": 3
+    },
+    "metric_ratio_change": {
+      "ok": 5,
+      "error": 1
+    },
+    "digest_legacy_published": {
+      "ok": 2,
+      "error": 1
+    },
+    "digest_canonical_evidence": {
+      "ok": 1,
+      "error": 3
+    },
+    "digest_rfc8785": {
+      "ok": 1,
+      "error": 0
+    },
+    "compact_bar": {
+      "ok": 1,
+      "error": 5
+    },
+    "segment_digest": {
+      "ok": 1,
+      "error": 2
+    }
+  },
+  "observed_vs_source_derived": {
+    "observed": "all vectors are actual outputs of public lib functions executed in the harness",
+    "source_derived": [
+      "amount_f32_projection mirrors the private expression at src/official_market.rs:396-397 verbatim (materialize_daily env path NOT_RUN)",
+      "metric_ratio_change 512-bit integer budget is unreachable from Decimal inputs (96-bit mantissa + scale<=28 -> ~230 bits); documented not demonstrated",
+      "non-Linux behavior and official .day files NOT_RUN"
+    ]
+  },
+  "not_run": [
+    "official_market::materialize_daily (needs env-pinned snapshot)",
+    "metrics::consecutive::evaluate full outcome (ratio_change frozen; evaluate wire path via compute_metrics belongs to MCP freeze)",
+    "gbbq::decode_events/decrypt (needs real retained gbbq member; structural vector can be added later)",
+    "official inputs",
+    "ECS"
+  ],
+  "files": {
+    "vectors.jsonl": "bc340f5787283d684e0efc9e187a7a897dc4a082b812152fbf8b4558f50f737e"
+  }
+}
