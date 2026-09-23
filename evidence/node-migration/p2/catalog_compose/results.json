@@ -1,0 +1,65 @@
+{
+  "task_id": "NM-025",
+  "baseline_sha": "a289e40fc98e8c30e3a0a2e8899fcd75ce986e6e",
+  "source_ported": "src/catalog_tdx/compose.rs::compose (pure; name join + TDXRSHY L2 assignment + diagnostics + snapshot)",
+  "rust_oracle": "rust-oracle.jsonl — 10 synthetic + real_gen2 full outcome + real_digest (live rustc 1.98.1 + x_data_mcp rlib)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/catalog/compose.mjs (pure; composes accepted scope/ex_code/incon modules)"
+  },
+  "fixed_test_metadata": {
+    "source": "official-file:deadbeefcafe0001",
+    "acquired_at": "2023-11-14T22:13:20+00:00",
+    "note": "labeled test values only — does NOT claim actual manifest identity or acquisition time"
+  },
+  "real_gen2": {
+    "paths": "official-base.zip!tdxhy.cfg + official-base.zip!infoharbor_ex.code + official-gbbq.zip!zhb.zip!incon.dat (source.rs paths)",
+    "outer_hashes_verified_at_runtime": {
+      "official-base.zip": "dcdf6b49...",
+      "official-gbbq.zip": "daad6290..."
+    },
+    "members": {
+      "tdxhy.cfg": "df7cb705... 150,332B",
+      "infoharbor_ex.code": "79eed0f6... 182,145B",
+      "incon.dat": "86f758b2... 67,543B"
+    },
+    "compose": {
+      "scope": 5230,
+      "records": 5224,
+      "nameless": 6,
+      "missing_industry": 0,
+      "t_code_residuals": 0,
+      "t_dictionary_checked": true,
+      "outcome_sha256": "8ddfaba2c9a81c9f1bf36240d01f4cc3f653cc935516e4fe60f45b5f1d8f915c",
+      "full_outcome_json_bytes": 1330712
+    }
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/catalog_compose_probe.mjs .",
+    "exit": 0,
+    "cases": 26,
+    "totals": {
+      "pass": 26,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "synthetic_oracle": 10,
+      "typed_boundary": 9,
+      "manifest_outer": 2,
+      "member_sha": 3,
+      "real_digest+outcome": 2
+    }
+  },
+  "semantics_mirrored": [
+    "MissingDictionary(TDXRSHY) before any member — even empty members reject",
+    "TDXNHY absent -> t_dictionary_checked=false, residual check skipped",
+    "per member: BadMarket BEFORE nameless check (nameless member with bad market rejects)",
+    "nameless = governed exclusions, verbatim, no industry/T diagnostics (P1 ruling)",
+    "all nameless -> snapshot null (not publishable)",
+    "industry: researchLevel2(x_code) null -> Missing 'no level-2 code derivable from {x}'; l2 absent TDXRSHY -> Missing 'level-2 code {l2} absent from TDXRSHY'; else Assigned{code,name,scheme=tdx_research_industry}",
+    "records: input order, exchange shanghai/shenzhen, a_share, source_security_id tdxhy:{market}:{code}, fixed source/acquired_at",
+    "completeness = published-member count, NOT market-wide"
+  ],
+  "out_of_scope": "source.rs orchestration, snapshot inspection, SQLite publish, services"
+}
