@@ -1,0 +1,181 @@
+{
+  "task_id": "NM-004",
+  "baseline_sha": "9fc6a11036fbe8806b4213f98506e33ff82c7703",
+  "library_source_identity": "src/ and tests/ are byte-identical between ea14ede (build SHA of binaries used) and 9fc6a11 (verified via git diff --stat); test binaries compiled by cargo at 9fc6a11 worktree",
+  "status_legend": {
+    "observed_test": "existing test executed this task under TMPDIR=/dev/shm, exit 0 (test-name evidence)",
+    "observed_test+live_probe": "additionally confirmed by a synthetic live CLI run this task (live-runs.jsonl)",
+    "source_mapped": "mechanism read in source only; not executed in this task",
+    "not_run": "not executed; reason recorded"
+  },
+  "test_run": {
+    "command": "TMPDIR=/dev/shm cargo test --locked --test sqlite_tasks --test retry --test cancel --test occupancy --test stopped_verification --test sqlite_market --test local_runtime --test acquire_service --test publication_verification --test data_supply_generation",
+    "exit_code": 0,
+    "totals": {"passed": 118, "failed": 0, "ignored": 0},
+    "per_file": {
+      "tests/sqlite_tasks.rs": 16, "tests/retry.rs": 4, "tests/cancel.rs": 6,
+      "tests/occupancy.rs": 5, "tests/stopped_verification.rs": 36,
+      "tests/sqlite_market.rs": 19, "tests/local_runtime.rs": 13,
+      "tests/acquire_service.rs": 11, "tests/publication_verification.rs": 2,
+      "tests/data_supply_generation.rs": 6
+    },
+    "environment": "Box grok-bot-vm-411252337 overlayfs worktree; TMPDIR=/dev/shm (tmpfs whitelisted); rustup stable 1.98.1"
+  },
+  "rows": [
+    {
+      "id": "task-idempotency-replay",
+      "category": "task request idempotency/conflict",
+      "status": "observed_test",
+      "mechanism": "requests.request_id PRIMARY KEY + command_digest + task_id UNIQUE + outcome_kind CHECK (task XOR terminal); same request_id+same normalized command replays stored outcome; same id+different params rejects whole batch atomically",
+      "source": ["migrations/tasks/001.sql:9-11", "src/sqlite_tasks.rs"],
+      "tests": ["tests/sqlite_tasks.rs::two_connections_serialize_same_id_same_semantics",
+                "tests/sqlite_tasks.rs::two_connections_conflicting_id_or_scope_never_partially_accept",
+                "tests/sqlite_tasks.rs::normalized_compound_request_is_one_task_and_complete_intent_controls_replay",
+                "tests/sqlite_tasks.rs::partial_batch_conflict_rolls_back_all_and_unrelated_scope_is_available",
+                "tests/sqlite_tasks.rs::non_security_contract_shares_control_and_replay_never_resolves_dynamic_selection_again",
+                "tests/acquire_service.rs::request_replay_and_crash_reconciliation"],
+      "expected_fail_closed": "conflict → whole-batch rejection, no partial accept; replay returns identical stored outcome",
+      "result": "6 named tests passed"
+    },
+    {
+      "id": "revision-cas",
+      "category": "revision CAS / head CAS",
+      "status": "observed_test",
+      "mechanism": "tasks.state_revision CAS column (migrations/tasks/001.sql:4); publication head expected_previous binding; generation activate(expected_previous) CAS pointer swap",
+      "source": ["migrations/tasks/001.sql:3-4", "src/generation/mod.rs::activate", "src/market_storage/mod.rs::PublishPlan"],
+      "tests": ["tests/sqlite_market.rs::two_real_connections_compete_for_expected_head_without_last_writer_wins",
+                "tests/sqlite_market.rs::cancellation_revision_and_occupancy_changes_block_publication",
+                "tests/sqlite_market.rs::current_yearly_conflicts_when_daily_or_yearly_head_advances",
+                "tests/sqlite_market.rs::base_missing_corrupt_identity_period_and_adjustment_are_not_head_conflicts",
+                "tests/acquire_service.rs::conditional_activation_conflict_and_replay",
+                "tests/acquire_service.rs::stale_generation_mix_stays_not_verified_and_never_activates"],
+      "expected_fail_closed": "CAS miss → conflict rejection, no last-writer-wins",
+      "result": "6 named tests passed"
+    },
+    {
+      "id": "occupancy-claim",
+      "category": "occupancy/claim",
+      "status": "observed_test",
+      "mechanism": "scope_occupancy(scope_key PK → task_id,state_revision); claims persist across restarts and needs_verification; released only together at terminal execution",
+      "source": ["migrations/tasks/001.sql:19", "src/sqlite_tasks.rs", "src/market_storage/mod.rs::occupancy_key"],
+      "tests": ["tests/occupancy.rs (all 5): same_request_is_idempotent_before_its_own_occupancy_is_checked, running_status_remains_occupied_until_terminal_and_does_not_execute_on_read, occupancy_survives_store_rebuild_and_needs_verification_keeps_it, one_conflicting_scope_rejects_the_whole_batch_without_writes, terminal_execution_releases_all_scopes_together",
+                "tests/sqlite_tasks.rs::disjoint_dates_do_not_narrow_security_period_occupancy",
+                "tests/retry.rs::retry_occupancy_conflict_rejects_without_creating_retry_task"],
+      "expected_fail_closed": "conflicting scope claim → rejection without writes; occupancy never dropped by restart or verification",
+      "result": "7 named tests passed"
+    },
+    {
+      "id": "cancel-retry",
+      "category": "cancel/retry semantics",
+      "status": "observed_test",
+      "mechanism": "cancel is a persisted request until controlled stop; retry creates a new task binding original identity; in-flight completion uses actual outcomes",
+      "source": ["src/sqlite_tasks.rs", "src/bin data_service tools: cancel_task, retry_task"],
+      "tests": ["tests/cancel.rs (all 6): pending_cancel_never_calls_source_and_worker_skips_it, running_cancel_finishes_current_scope_then_stops_and_releases_once, controlled_resume_preserves_cancel_requested_after_current_scope, persisted_cancel_requested_is_finalized_without_source, needs_verification_cancel_does_not_release_or_change_status, terminal_cancel_returns_actual_terminal_record_without_rewriting",
+                "tests/retry.rs (all 4): retry_request_is_idempotent_and_conflicting_parameters_are_rejected, invalid_retry_selection_rejects_as_a_whole_without_writes, retry_occupancy_conflict_rejects_without_creating_retry_task, retries_only_unfinished_subset_and_preserves_original_after_restart",
+                "tests/sqlite_tasks.rs::cancel_is_request_until_controlled_stop_and_retry_preserves_original",
+                "tests/sqlite_tasks.rs::completion_during_cancellation_uses_actual_outcomes_and_keeps_unfinished_items",
+                "tests/sqlite_tasks.rs::application_retry_owns_legacy_precedence_and_typed_ineligible_items_without_mcp"],
+      "expected_fail_closed": "cancel on needs_verification changes nothing; retry only unfinished subset, preserves original",
+      "result": "13 named tests passed"
+    },
+    {
+      "id": "exit-response-loss-needs-verification",
+      "category": "process exit / response loss / needs_verification",
+      "status": "observed_test+live_probe",
+      "mechanism": "status needs_verification persists execution uncertainty without finishing items or releasing claims; stopped-runner verification tasks bind durable receipts; already-interrupted requests bind terminal results",
+      "source": ["src/sqlite_tasks.rs", "src/bin task tools: inspect_verification_task, verify_stopped_writes (Linux-gated)", "migrations/tasks/007_stopped_checks.sql+008+009+010"],
+      "tests": ["tests/stopped_verification.rs (all 36): incl. execution…uncertainty persisted, stopped_runner_reconciles_committed_response_loss_and_keeps_unknown_execution_protected, stopped_audit_insertion_failure_rolls_back_both_tasks_and_all_claims, never_started_* family, determinate_check_* family",
+                "tests/sqlite_tasks.rs::execution_uncertainty_is_persisted_without_finishing_items_or_releasing_claims",
+                "tests/sqlite_tasks.rs::uncertainty_write_failure_preserves_old_state_and_bad_marker_is_rejected",
+                "tests/sqlite_tasks.rs::residual_records_fail_closed_without_read_repair",
+                "tests/sqlite_tasks.rs::every_old_nonterminal_run_is_visible_but_not_executable_or_released",
+                "tests/publication_verification.rs (2): malformed_evidence_port_result_cannot_leave_check_looking_normally_running, publication_check_preserves_mixed_published_running_and_never_started_items"],
+      "expected_fail_closed": "uncertainty never resolves silently; unknown execution stays protected; old nonterminal runs never re-execute",
+      "result": "42 named tests passed; live SIGKILL-restart probe observed (live-runs.jsonl live-sigkill-restart)"
+    },
+    {
+      "id": "atomic-publish-head-receipt",
+      "category": "atomic publish / head / result / receipt",
+      "status": "observed_test",
+      "mechanism": "publication facts commit atomically with head transition; receipts are unique and non-aliasing; staging never promotes unverified input",
+      "source": ["src/market_storage/mod.rs", "src/sqlite_market/", "migrations/tasks/005_update_results.sql,006,016,018,019"],
+      "tests": ["tests/sqlite_market.rs::head_task_and_batch_write_failures_roll_back_every_publication_fact",
+                "tests/sqlite_market.rs::publication_receipt_cannot_alias_another_valid_publication",
+                "tests/sqlite_market.rs::publication_item_projection_tampering_is_rejected",
+                "tests/sqlite_market.rs::composite_task_keeps_protection_until_last_publication_commits",
+                "tests/sqlite_market.rs::missing_digest_or_unverified_input_is_never_promoted_by_staging",
+                "tests/sqlite_market.rs::historical_fixed_base_publishes_but_never_promotes_even_after_daily_advances",
+                "tests/sqlite_market.rs::fixed_base_change_after_prepare_is_rejected_without_recomputing_or_rebinding",
+                "tests/sqlite_market.rs::yearly_lineage_projection_tampering_and_forged_published_flag_are_rejected",
+                "tests/sqlite_market.rs::damaged_published_state_or_missing_version_is_not_reported_as_no_data",
+                "tests/sqlite_market.rs::frozen_old_digest_matches_independent_literals_and_preserves_missing_null",
+                "tests/sqlite_market.rs::compat_bar_metadata_and_evidence_tampering_reject_without_fallback",
+                "tests/sqlite_market.rs::version_list_freezes_members_and_tie_sort_order",
+                "tests/sqlite_market.rs::fixed_paging_ignores_new_head_preserves_conditions_and_rejects_later_damage"],
+      "expected_fail_closed": "any fact failure rolls back everything; tampered/committed-state mismatch rejects; no silent promotion",
+      "result": "13 named tests passed (19 total in file)"
+    },
+    {
+      "id": "generation-pin-activate-retire",
+      "category": "generation session pin + activation/retire TOCTOU",
+      "status": "observed_test",
+      "mechanism": "pins dir blocks retire while bound; activate uses expected_previous CAS; session binding freezes generation_id at accept; retire keeps evidence-only (raw bytes deleted, audit retained)",
+      "source": ["src/generation/mod.rs::pin/pins/activate/retire_bytes", "src/acquire/service.rs::activate_generation/retire_generation", "src/acquire/mcp.rs tool registry"],
+      "tests": ["tests/acquire_service.rs::acquire_verify_activate_full_lifecycle",
+                "tests/acquire_service.rs::conditional_activation_conflict_and_replay",
+                "tests/acquire_service.rs::pins_block_retire_and_retire_keeps_evidence_only",
+                "tests/acquire_service.rs::verify_decision_written_once_and_corrupt_bytes_fail_closed",
+                "tests/acquire_service.rs::malformed_archive_never_gains_evidence",
+                "tests/acquire_service.rs::hot_capacity_refuses_new_candidates_without_deletion",
+                "tests/data_supply_generation.rs (all 6): acceptance_freezes_source_generation_id_and_worker_reads_it, missing_and_null_bindings_refuse_the_source, uniform_binding_resolution_is_fail_closed, bound_session_survives_activation_and_blocks_retire, yearly_derivation_runs_against_bound_generation, yearly_derivation_without_binding_refuses"],
+      "expected_fail_closed": "pin → retire refused; activation CAS conflict → reject; unverified/corrupt generation never gains evidence",
+      "result": "13 named tests passed"
+    },
+    {
+      "id": "fs-uid-lease-socket-guards",
+      "category": "unsupported filesystem / symlink / UID / lease / socket permissions",
+      "status": "observed_test+live_probe",
+      "mechanism": "private_metadata (UID-owned, mode&0o077==0, non-symlink); supported_file fstatfs whitelist (ext/xfs/btrfs/tmpfs); DatabaseLease try_lock flock+inode identity; Endpoint owner-marker + no-clobber; SO_PEERCRED authorize",
+      "source": ["src/local_runtime/paths.rs", "src/local_filesystem.rs", "src/local_runtime/server.rs"],
+      "tests": ["tests/local_runtime.rs (all 13): incl. private_endpoint_rejects_symlink_unregistered_files_and_database_replacement, session_panic_stops_service_instead_of_silently_continuing_the_run, real_shutdown_budget_exit_retains_running_task_and_occupancy, executing_sqlite_task_survives_disconnect_allows_concurrent_cancel_and_stops_new_claims, real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal, real_service_restart_does_not_resume_old_nonterminal_tasks, ipc_frame_and_client_limits_close_only_the_session_without_database_writes, fragmented_frames_are_preserved_and_partial_timeout_eof_utf8, idle_session_survives_multiple_read_budgets_and_stops_without_business_writes"],
+      "live_evidence": ["live-runs.jsonl: 0755-parent reject, symlink-parent reject, db-symlink reject, overlayfs-db reject, lease-contention reject (flock would-block), tampered-owner.json reject, garbage-db reject (file is not a database), empty-db reject (pragma mismatch), non-socket connect reject, unregistered-endpoint no-clobber, bare-relative-path reject, SIGKILL-restart recovery"],
+      "expected_fail_closed": "every violation rejects before serving; lease is non-blocking; owner marker binds DB inode",
+      "result": "13 tests passed + 13 live probes observed (all exit 1 with fail-closed errors except SIGKILL-restart which recovered as designed)"
+    },
+    {
+      "id": "peer-uid-authorize-negative",
+      "category": "SO_PEERCRED cross-UID rejection",
+      "status": "not_run",
+      "mechanism": "Endpoint::authorize checks SO_PEERCRED uid == service uid; mismatched uid → connect refused",
+      "source": ["src/local_runtime/paths.rs::Endpoint::authorize"],
+      "reason": "no second UID available on Box to spawn a foreign-UID client; tests cover socket-side guards but a live cross-UID connect was not performed",
+      "expected_fail_closed": "connection rejected before any frame read"
+    },
+    {
+      "id": "mid-write-crash-with-wal",
+      "category": "crash during in-flight task write (WAL recovery)",
+      "status": "source_mapped",
+      "mechanism": "SQLite WAL + transactions: uncommitted item writes roll back on process death; committed needs_verification markers persist",
+      "source": ["src/sqlite_tasks.rs (transactions around item writes)", "tests/sqlite_tasks.rs::execution_uncertainty_is_persisted_without_finishing_items_or_releasing_claims (commit-boundary proof)", "tests/stopped_verification.rs (recovery semantics)"],
+      "reason": "kill -9 mid-transaction against a live service is covered logically by committed-marker tests; a byte-level torn-write demonstration was not executed this task",
+      "expected_fail_closed": "post-restart state shows uncertainty, never a fabricated success"
+    },
+    {
+      "id": "non-linux-surface",
+      "category": "non-Linux platform behavior",
+      "status": "not_run",
+      "reason": "Box is Linux-only; cfg(target_os=linux) variants (e.g., 19-tool non-Linux data registry) not executed",
+      "expected_fail_closed": "guards reject on unsupported platforms"
+    }
+  ],
+  "gaps_blocking_p3_p4": [
+    "Node must reproduce: requests PK idempotency + outcome_kind CHECK + command_digest equality (conflict never partially accepts)",
+    "state_revision CAS + expected_previous head/pointer CAS semantics",
+    "scope_occupancy persistence across restart/needs_verification with all-or-nothing release",
+    "needs_verification + stopped-runner receipt binding (the entire stopped_verification surface, 36 tests)",
+    "publication atomicity incl. receipt non-aliasing and unverified-input staging refusal",
+    "generation pin/activate/retire CAS + pin-blocks-retire fail-closed",
+    "Linux guards: private_metadata, fstatfs whitelist, flock lease, owner-marker no-clobber, SO_PEERCRED — Node-API equivalents needed (node:fs metadata, fs.statfs or ioctl equivalent, fs flock via fs-ext or native, getsockopt SO_PEERCRED)"
+  ],
+  "files": {"live-runs.jsonl": "see SHA256SUMS"}
+}

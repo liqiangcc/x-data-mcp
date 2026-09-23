@@ -1,0 +1,13 @@
+{"run":"live-0755-parent","cmd":"data_service db19.sqlite <0755-parent>/x.sock","exit":1,"output":"runtime path must be owned by this UID, private, and not a symlink"}
+{"run":"live-symlink-parent","cmd":"data_service db19.sqlite <symlink-parent>/x.sock","exit":1,"output":"runtime path must be owned by this UID, private, and not a symlink"}
+{"run":"live-symlink-db","cmd":"data_service <db-symlink> x.sock","exit":1,"output":"runtime path must be owned by this UID, private, and not a symlink"}
+{"run":"live-overlayfs-db","cmd":"data_service <worktree>/dev-nm004.sqlite x.sock","exit":1,"output":"service requires a supported local filesystem"}
+{"run":"live-lease-contention","cmd":"data_service db19.sqlite mcp2.sock (while first holds db19.sqlite)","exit":1,"output":"database service already active or lock unavailable: lock acquisition failed because the operation would block"}
+{"run":"live-tampered-owner-json","cmd":"data_service db19.sqlite mcp.sock (owner.json with forged database_identity field)","exit":1,"output":"unknown field `database_identity`, expected `device` or `inode` at line 1 column 20"}
+{"run":"live-garbage-db-mcp_data","cmd":"mcp_data garbage.bin","exit":1,"output":"STORAGE_UNAVAILABLE: STORAGE_UNAVAILABLE: file is not a database"}
+{"run":"live-empty-db-mcp_data","cmd":"mcp_data empty.db","exit":1,"output":"STORAGE_UNAVAILABLE: STORAGE_UNAVAILABLE: connection pragmas differ from task contract"}
+{"run":"live-garbage-db-task_sqlite-upgrade","cmd":"task_sqlite upgrade garbage.bin","exit":1,"output":"STORAGE_UNAVAILABLE: file is not a database"}
+{"run":"live-non-socket-connect","cmd":"mcp_connect fake.sock (600 regular file)","exit":1,"output":"endpoint is not a socket"}
+{"run":"live-stale-file-at-bind","cmd":"data_service db19.sqlite fake.sock (regular file exists)","exit":1,"output":"unregistered existing endpoint; no clobber"}
+{"run":"live-bare-relative-socket","cmd":"data_service db19.sqlite mcp.sock (relative, no dir component)","exit":1,"output":"socket requires an explicit private parent directory"}
+{"run":"live-sigkill-restart","cmd":"data_service db19.sqlite mcp.sock; kill -9; restart same db+socket","exit":0,"output":"stale socket+owner.json persist post-SIGKILL; restart validates owner marker vs DB inode and rebinds successfully"}
