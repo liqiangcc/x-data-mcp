@@ -1,0 +1,44 @@
+{
+  "task_id": "NM-009",
+  "baseline_sha": "67c647992cf1d898f2f4f50f773886766e35efd7",
+  "oracle": "src/local_runtime/paths.rs::peer() (SO_PEERCRED ucred.uid==geteuid) + DatabaseLease try_lock (flock LOCK_EX|LOCK_NB on fd); NM-004/NM-008 evidence",
+  "environment": {
+    "node": "v20.19.2",
+    "euid": 1000,
+    "gcc": "14.2.0",
+    "make": "absent",
+    "headers": "libnode-dev 20.19.2 (system-installed) /usr/include/node",
+    "build_command": "gcc -shared -fPIC -O2 -o linux_guards.node linux_guards.c -I/usr/include/node",
+    "note": "no make/node-gyp/system install — direct gcc compile of N-API addon"
+  },
+  "artifact_sha256": {
+    "linux_guards.c": "ccb77aca6b5edf048618b334751ed60c50be6331551c670666893aa1488f549f",
+    "linux_guards.node": "11289943e66598630e59de3d63dd17fe1939a22435daafa2b3581670b404412a",
+    "linux_guards.node_note": "regenerable ABI artifact — committed source + build command reproduce it; binary not committed"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p1/native_probe.mjs /dev/shm/nm009",
+    "exit": 0,
+    "cases": 10,
+    "totals": {
+      "pass": 9,
+      "fail": 0,
+      "not_run": 1,
+      "info": 1
+    }
+  },
+  "validated": {
+    "SO_PEERCRED": "REAL — getsockopt(SOL_SOCKET,SO_PEERCRED) on accepted unix-socket fd returns kernel ucred {pid,uid,gid}; uid==euid authorizes; non-socket fd rejected; cross-UID NOT_RUN (single-UID box, kernel cannot be forged)",
+    "flock_fd_lease": "REAL — flock(LOCK_EX|LOCK_NB) on fd owned by Node process; second OFD contention -> EWOULDBLOCK(11); external util-linux flock sees lease (exit 1) proving kernel-enforced; release on close; cross-process child -> EWOULDBLOCK; EBADF on invalid fd",
+    "no_substitutes": "no subprocess for the lease itself, no PID files, no skipped UID check; flock binary used only as external proof-of-enforcement"
+  },
+  "limitations": [
+    "addon built for Node v20.19.2 ABI; production builds need a toolchain-capable step (prebuildify/node-gyp or pinned gcc invocation) — build recipe recorded",
+    "socket._handle.fd is a Node-internal accessor; stable on v20.19.2, flagged for re-verification on Node 24",
+    "cross-UID authorize reject path unexercised locally (kernel returns real uid only)"
+  ],
+  "decision": {
+    "binding": "hand-rolled minimal N-API addon (linux_guards.c, ~80 lines, two functions)",
+    "why": "smallest maintained-dependency-free real binding; koffi FFI alternative unnecessary once headers proven present; fs-ext/proper-lockfile rejected in NM-008"
+  }
+}

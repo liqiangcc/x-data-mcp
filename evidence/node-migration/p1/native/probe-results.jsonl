@@ -1,0 +1,10 @@
+{"primitive":"runtime","id":"build","status":"INFO","detail":null,"evidence":{"node":"v20.19.2","euid":1000,"addon":"scripts/node_migration_p1/native/linux_guards.node","build":"gcc -shared -fPIC -O2 -I/usr/include/node (libnode-dev headers; no make/node-gyp)","exports":["getpeereuid","flockfd"]}}
+{"primitive":"peer_cred","id":"same_uid_accepted","status":"PASS","detail":null,"evidence":{"peer":{"pid":2271907,"uid":1000,"gid":1000},"fd":23}}
+{"primitive":"peer_cred","id":"non_socket_fd_rejected","status":"PASS","detail":null,"evidence":{"reject":"getsockopt(SO_PEERCRED) failed"}}
+{"primitive":"peer_cred","id":"cross_uid_rejected","status":"NOT_RUN","detail":"single UID on Box; kernel returns real ucred so a foreign-UID peer cannot be forged locally. Same-UID authorization proven on a live socket; reject branch is a one-line uid!=euid check.","evidence":null}
+{"primitive":"flock_fd","id":"acquire_release_cycle","status":"PASS","detail":null,"evidence":{"acquire":0,"unlock":0,"reacquire":0,"released_on_close":true}}
+{"primitive":"flock_fd","id":"contention_second_fd_rejected","status":"PASS","detail":null,"evidence":{"held":0,"contend_errno":11,"ewouldblock":true,"note":"fd2 flock is on a separate open file description -> real kernel contention"}}
+{"primitive":"flock_fd","id":"external_flock_binary_sees_lease","status":"PASS","detail":null,"evidence":{"held":0,"external_attempt_exit":1,"proof":"util-linux flock sees the N-API lease -> real kernel flock, not simulation"}}
+{"primitive":"flock_fd","id":"release_on_fd_close","status":"PASS","detail":null,"evidence":{"reacquire_after_close":0}}
+{"primitive":"flock_fd","id":"cross_process_contention_rejected","status":"PASS","detail":"held=0 child_errno=11","evidence":{"expected":11}}
+{"primitive":"flock_fd","id":"invalid_fd_rejected","status":"PASS","detail":null,"evidence":{"errno":9}}
