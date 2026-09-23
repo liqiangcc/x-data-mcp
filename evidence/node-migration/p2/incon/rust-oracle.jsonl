@@ -1,0 +1,44 @@
+{"id":"empty_file","status":"ok","sections":[]}
+{"id":"header_only","status":"ok","sections":[{"entries":[],"name":"SEC"}]}
+{"id":"single_section","status":"ok","sections":[{"entries":[{"code":"A","extra":[],"line":2,"name":"农、林、牧、渔业"},{"code":"A01","extra":[],"line":3,"name":"农业"}],"name":"ZJHHY"}]}
+{"id":"multi_section","status":"ok","sections":[{"entries":[{"code":"01","extra":[],"line":2,"name":"name1"}],"name":"S1"},{"entries":[{"code":"02","extra":[],"line":4,"name":"name2"}],"name":"S2"}]}
+{"id":"extra_columns","status":"ok","sections":[{"entries":[{"code":"01","extra":["c3","c4","c5"],"line":2,"name":"name"},{"code":"02","extra":[],"line":3,"name":"n2"}],"name":"SEC"}]}
+{"id":"trailing_empty_section","status":"ok","sections":[{"entries":[{"code":"01","extra":[],"line":2,"name":"name"}],"name":"S1"},{"entries":[],"name":"#####"}]}
+{"id":"empty_section_name","status":"ok","sections":[{"entries":[{"code":"01","extra":[],"line":2,"name":"name"}],"name":""}]}
+{"id":"dup_same_section","status":"error","error":"incon.dat section \"S\" repeats code \"01\" (lines 2 and 4)"}
+{"id":"dup_across_sections_ok","status":"ok","sections":[{"entries":[{"code":"01","extra":[],"line":2,"name":"a"}],"name":"S1"},{"entries":[{"code":"01","extra":[],"line":4,"name":"b"}],"name":"S2"}]}
+{"id":"entry_before_header","status":"error","error":"incon.dat line 1 has content before the first section header"}
+{"id":"empty_middle_line","status":"error","error":"incon.dat line 3 has 0 fields, expected at least 2"}
+{"id":"malformed_1_field","status":"error","error":"incon.dat line 2 has 1 fields, expected at least 2"}
+{"id":"empty_code","status":"error","error":"incon.dat line 2 has a non-ASCII or empty code"}
+{"id":"nonascii_code","status":"error","error":"incon.dat line 2 has a non-ASCII or empty code"}
+{"id":"empty_name","status":"error","error":"incon.dat line 2 has an empty name"}
+{"id":"decode_bad","status":"error","error":"incon.dat is not valid GB18030"}
+{"id":"precedence_decode","status":"error","error":"incon.dat is not valid GB18030"}
+{"id":"precedence_fields_before_code","status":"error","error":"incon.dat line 2 has 1 fields, expected at least 2"}
+{"id":"lf_only","status":"ok","sections":[{"entries":[{"code":"01","extra":["b\n"],"line":2,"name":"a\n02"}],"name":"S"}]}
+{"id":"double_trailing_crlf","status":"error","error":"incon.dat line 3 has 0 fields, expected at least 2"}
+{"id":"dup_esc_quote","status":"error","error":"incon.dat section \"S\" repeats code \"0\\\"\" (lines 2 and 3)"}
+{"id":"dup_esc_section","status":"error","error":"incon.dat section \"S\\\\x\" repeats code \"01\" (lines 2 and 3)"}
+{"id":"helper_T01","status":"ok","code_level":1,"research_level2":null}
+{"id":"helper_T0102","status":"ok","code_level":2,"research_level2":"T0102"}
+{"id":"helper_T010203","status":"ok","code_level":3,"research_level2":"T0102"}
+{"id":"helper_X01","status":"ok","code_level":1,"research_level2":null}
+{"id":"helper_X500102","status":"ok","code_level":3,"research_level2":"X5001"}
+{"id":"helper_X5001020","status":"ok","code_level":null,"research_level2":null}
+{"id":"helper_A","status":"ok","code_level":null,"research_level2":null}
+{"id":"helper_AB","status":"ok","code_level":null,"research_level2":null}
+{"id":"helper_ABCD","status":"ok","code_level":null,"research_level2":null}
+{"id":"helper_A1","status":"ok","code_level":null,"research_level2":null}
+{"id":"helper_A1234","status":"ok","code_level":2,"research_level2":"A1234"}
+{"id":"helper_101","status":"ok","code_level":null,"research_level2":null}
+{"id":"helper_T01a","status":"ok","code_level":null,"research_level2":null}
+{"id":"helper_t01","status":"ok","code_level":1,"research_level2":null}
+{"id":"helper_Z999999","status":"ok","code_level":3,"research_level2":"Z9999"}
+{"id":"helper_","status":"ok","code_level":null,"research_level2":null}
+{"id":"helper_T0112","status":"ok","code_level":2,"research_level2":"T0112"}
+{"id":"incon_member","status":"ok","sections":37,"total_entries":3554,"sha256":"e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc","names":["ZJHHY","#####","TDXNHY","#####","SWHY","#####","HKHY","#####","MGHY","#####","FUND_LB","#####","FUND_TZLB","#####","ZB_GPXT","#####","FUND_TZStyle","#####","FUND_Company","#####","SBHY_TZ","SBQS_TZ","#####","TDXXHYFL","#####","TDXRSHY","#####","ZXHY","#####","CJHY","#####","ZZHY","#####","ZQGS_JGID","#####","FUND_JGID","#####"],"counts":[110, 0, 145, 0, 313, 0, 43, 0, 40, 0, 8, 0, 7, 0, 32, 0, 17, 0, 221, 0, 268, 80, 0, 273, 0, 473, 0, 424, 0, 465, 0, 270, 0, 155, 0, 210, 0]}
+{"id":"secmap_ZJHHY","status":"ok","entries":110}
+{"id":"secmap_TJGSHY","status":"ok","entries":null}
+{"id":"secmap_DFCFHY","status":"ok","entries":null}
+{"id":"secmap_XXXXX","status":"ok","entries":null}

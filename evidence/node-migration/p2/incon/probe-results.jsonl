@@ -1,0 +1,49 @@
+{"family":"incon","id":"empty_file","status":"PASS","detail":null,"expected":[],"actual":[]}
+{"family":"incon","id":"header_only","status":"PASS","detail":null,"expected":[{"entries":[],"name":"SEC"}],"actual":[{"entries":[],"name":"SEC"}]}
+{"family":"incon","id":"single_section","status":"PASS","detail":null,"expected":[{"entries":[{"code":"A","extra":[],"line":2,"name":"农、林、牧、渔业"},{"code":"A01","extra":[],"line":3,"name":"农业"}],"name":"ZJHHY"}],"actual":[{"entries":[{"code":"A","extra":[],"line":2,"name":"农、林、牧、渔业"},{"code":"A01","extra":[],"line":3,"name":"农业"}],"name":"ZJHHY"}]}
+{"family":"incon","id":"multi_section","status":"PASS","detail":null,"expected":[{"entries":[{"code":"01","extra":[],"line":2,"name":"name1"}],"name":"S1"},{"entries":[{"code":"02","extra":[],"line":4,"name":"name2"}],"name":"S2"}],"actual":[{"entries":[{"code":"01","extra":[],"line":2,"name":"name1"}],"name":"S1"},{"entries":[{"code":"02","extra":[],"line":4,"name":"name2"}],"name":"S2"}]}
+{"family":"incon","id":"extra_columns","status":"PASS","detail":null,"expected":[{"entries":[{"code":"01","extra":["c3","c4","c5"],"line":2,"name":"name"},{"code":"02","extra":[],"line":3,"name":"n2"}],"name":"SEC"}],"actual":[{"entries":[{"code":"01","extra":["c3","c4","c5"],"line":2,"name":"name"},{"code":"02","extra":[],"line":3,"name":"n2"}],"name":"SEC"}]}
+{"family":"incon","id":"trailing_empty_section","status":"PASS","detail":null,"expected":[{"entries":[{"code":"01","extra":[],"line":2,"name":"name"}],"name":"S1"},{"entries":[],"name":"#####"}],"actual":[{"entries":[{"code":"01","extra":[],"line":2,"name":"name"}],"name":"S1"},{"entries":[],"name":"#####"}]}
+{"family":"incon","id":"empty_section_name","status":"PASS","detail":null,"expected":[{"entries":[{"code":"01","extra":[],"line":2,"name":"name"}],"name":""}],"actual":[{"entries":[{"code":"01","extra":[],"line":2,"name":"name"}],"name":""}]}
+{"family":"incon","id":"dup_same_section","status":"PASS","detail":null,"expected":"incon.dat section \"S\" repeats code \"01\" (lines 2 and 4)","actual":"incon.dat section \"S\" repeats code \"01\" (lines 2 and 4)"}
+{"family":"incon","id":"dup_across_sections_ok","status":"PASS","detail":null,"expected":[{"entries":[{"code":"01","extra":[],"line":2,"name":"a"}],"name":"S1"},{"entries":[{"code":"01","extra":[],"line":4,"name":"b"}],"name":"S2"}],"actual":[{"entries":[{"code":"01","extra":[],"line":2,"name":"a"}],"name":"S1"},{"entries":[{"code":"01","extra":[],"line":4,"name":"b"}],"name":"S2"}]}
+{"family":"incon","id":"entry_before_header","status":"PASS","detail":null,"expected":"incon.dat line 1 has content before the first section header","actual":"incon.dat line 1 has content before the first section header"}
+{"family":"incon","id":"empty_middle_line","status":"PASS","detail":null,"expected":"incon.dat line 3 has 0 fields, expected at least 2","actual":"incon.dat line 3 has 0 fields, expected at least 2"}
+{"family":"incon","id":"malformed_1_field","status":"PASS","detail":null,"expected":"incon.dat line 2 has 1 fields, expected at least 2","actual":"incon.dat line 2 has 1 fields, expected at least 2"}
+{"family":"incon","id":"empty_code","status":"PASS","detail":null,"expected":"incon.dat line 2 has a non-ASCII or empty code","actual":"incon.dat line 2 has a non-ASCII or empty code"}
+{"family":"incon","id":"nonascii_code","status":"PASS","detail":null,"expected":"incon.dat line 2 has a non-ASCII or empty code","actual":"incon.dat line 2 has a non-ASCII or empty code"}
+{"family":"incon","id":"empty_name","status":"PASS","detail":null,"expected":"incon.dat line 2 has an empty name","actual":"incon.dat line 2 has an empty name"}
+{"family":"incon","id":"decode_bad","status":"PASS","detail":null,"expected":"incon.dat is not valid GB18030","actual":"incon.dat is not valid GB18030"}
+{"family":"incon","id":"precedence_decode","status":"PASS","detail":null,"expected":"incon.dat is not valid GB18030","actual":"incon.dat is not valid GB18030"}
+{"family":"incon","id":"precedence_fields_before_code","status":"PASS","detail":null,"expected":"incon.dat line 2 has 1 fields, expected at least 2","actual":"incon.dat line 2 has 1 fields, expected at least 2"}
+{"family":"incon","id":"lf_only","status":"PASS","detail":null,"expected":[{"entries":[{"code":"01","extra":["b\n"],"line":2,"name":"a\n02"}],"name":"S"}],"actual":[{"entries":[{"code":"01","extra":["b\n"],"line":2,"name":"a\n02"}],"name":"S"}]}
+{"family":"incon","id":"double_trailing_crlf","status":"PASS","detail":null,"expected":"incon.dat line 3 has 0 fields, expected at least 2","actual":"incon.dat line 3 has 0 fields, expected at least 2"}
+{"family":"incon","id":"dup_esc_quote","status":"PASS","detail":null,"expected":"incon.dat section \"S\" repeats code \"0\\\"\" (lines 2 and 3)","actual":"incon.dat section \"S\" repeats code \"0\\\"\" (lines 2 and 3)"}
+{"family":"incon","id":"dup_esc_section","status":"PASS","detail":null,"expected":"incon.dat section \"S\\\\x\" repeats code \"01\" (lines 2 and 3)","actual":"incon.dat section \"S\\\\x\" repeats code \"01\" (lines 2 and 3)"}
+{"family":"incon","id":"helper_T01","status":"PASS","detail":null,"expected":{"code_level":1,"research_level2":null},"actual":{"code_level":1,"research_level2":null}}
+{"family":"incon","id":"helper_T0102","status":"PASS","detail":null,"expected":{"code_level":2,"research_level2":"T0102"},"actual":{"code_level":2,"research_level2":"T0102"}}
+{"family":"incon","id":"helper_T010203","status":"PASS","detail":null,"expected":{"code_level":3,"research_level2":"T0102"},"actual":{"code_level":3,"research_level2":"T0102"}}
+{"family":"incon","id":"helper_X01","status":"PASS","detail":null,"expected":{"code_level":1,"research_level2":null},"actual":{"code_level":1,"research_level2":null}}
+{"family":"incon","id":"helper_X500102","status":"PASS","detail":null,"expected":{"code_level":3,"research_level2":"X5001"},"actual":{"code_level":3,"research_level2":"X5001"}}
+{"family":"incon","id":"helper_X5001020","status":"PASS","detail":null,"expected":{"code_level":null,"research_level2":null},"actual":{"code_level":null,"research_level2":null}}
+{"family":"incon","id":"helper_A","status":"PASS","detail":null,"expected":{"code_level":null,"research_level2":null},"actual":{"code_level":null,"research_level2":null}}
+{"family":"incon","id":"helper_AB","status":"PASS","detail":null,"expected":{"code_level":null,"research_level2":null},"actual":{"code_level":null,"research_level2":null}}
+{"family":"incon","id":"helper_ABCD","status":"PASS","detail":null,"expected":{"code_level":null,"research_level2":null},"actual":{"code_level":null,"research_level2":null}}
+{"family":"incon","id":"helper_A1","status":"PASS","detail":null,"expected":{"code_level":null,"research_level2":null},"actual":{"code_level":null,"research_level2":null}}
+{"family":"incon","id":"helper_A1234","status":"PASS","detail":null,"expected":{"code_level":2,"research_level2":"A1234"},"actual":{"code_level":2,"research_level2":"A1234"}}
+{"family":"incon","id":"helper_101","status":"PASS","detail":null,"expected":{"code_level":null,"research_level2":null},"actual":{"code_level":null,"research_level2":null}}
+{"family":"incon","id":"helper_T01a","status":"PASS","detail":null,"expected":{"code_level":null,"research_level2":null},"actual":{"code_level":null,"research_level2":null}}
+{"family":"incon","id":"helper_t01","status":"PASS","detail":null,"expected":{"code_level":1,"research_level2":null},"actual":{"code_level":1,"research_level2":null}}
+{"family":"incon","id":"helper_Z999999","status":"PASS","detail":null,"expected":{"code_level":3,"research_level2":"Z9999"},"actual":{"code_level":3,"research_level2":"Z9999"}}
+{"family":"incon","id":"helper_","status":"PASS","detail":null,"expected":{"code_level":null,"research_level2":null},"actual":{"code_level":null,"research_level2":null}}
+{"family":"incon","id":"helper_T0112","status":"PASS","detail":null,"expected":{"code_level":2,"research_level2":"T0112"},"actual":{"code_level":2,"research_level2":"T0112"}}
+{"family":"incon","id":"reject_string","status":"PASS","detail":"invalid_input: incon.dat input must be a Buffer or Uint8Array","expected":null,"actual":null}
+{"family":"incon","id":"reject_null","status":"PASS","detail":"invalid_input: incon.dat input must be a Buffer or Uint8Array","expected":null,"actual":null}
+{"family":"incon","id":"accept_uint8array","status":"PASS","detail":null,"expected":null,"actual":null}
+{"family":"incon","id":"member_source","status":"PASS","detail":"official-client deb ./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat 65,853B sha256 ca941e57... (NOT gen-2 base.zip — member absent there)","expected":null,"actual":null}
+{"family":"incon","id":"incon_member","status":"PASS","detail":"sections=37 entries=3554 sha256=e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc","expected":{"sections":37,"total":3554,"sha256":"e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc"},"actual":{"sections":37,"total":3554,"sha256":"e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc"}}
+{"family":"incon","id":"secmap_ZJHHY","status":"PASS","detail":null,"expected":110,"actual":110}
+{"family":"incon","id":"secmap_TJGSHY","status":"PASS","detail":null,"expected":null,"actual":null}
+{"family":"incon","id":"secmap_DFCFHY","status":"PASS","detail":null,"expected":null,"actual":null}
+{"family":"incon","id":"secmap_XXXXX","status":"PASS","detail":null,"expected":null,"actual":null}
+{"family":"incon","id":"secmap_first_match","status":"PASS","detail":"\"#####\" sections: 18, first-match entries=0","expected":null,"actual":null}

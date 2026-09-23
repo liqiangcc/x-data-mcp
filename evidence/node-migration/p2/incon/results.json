@@ -1,0 +1,50 @@
+{
+  "task_id": "NM-024",
+  "baseline_sha": "f94b5e79c7601fc5c009e7a1e710fec6894f1a3f",
+  "source_ported": "src/catalog_tdx/incon.rs::parse + code_level + research_level2 + section_map",
+  "rust_oracle": "rust-oracle.jsonl — 21 synthetic + 17 helper + member digest/secmap rows (live rustc 1.98.1 + x_data_mcp + encoding_rs rlibs)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/parsers/incon.mjs (pure JS; strict GB18030 via TextDecoder(fatal))"
+  },
+  "retained_member": {
+    "task_assumption": "gen-2 official-base.zip member incon.dat",
+    "actual": "NOT PRESENT in official-base.zip or gen3/base.zip (listing-verified; members are base.dbf/base.map/block*.dat/tdxhy*.cfg/tdxzsbase*.cfg/xgcode.cfg/infoharbor_*)",
+    "used_instead": "official client package com.tdx.tdxcfv_7.64_amd64.deb (MANIFEST-registered input) -> ./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat",
+    "extraction": "ar p <deb> data.tar.xz | python lzma->tarfile -> member only; 65,853B sha256 ca941e57a21d0717ee6108ac3ccfee5fab85289e26ee154d89b3e1cbbe8bc6c9",
+    "parsed": "37 sections (incl. retained trailing '#####' sections), 3,554 entries",
+    "sections_sha256": "e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/incon_probe.mjs .",
+    "exit": 0,
+    "cases": 49,
+    "totals": {
+      "pass": 49,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "synthetic_oracle": 21,
+      "helpers": 17,
+      "typed_boundary": 3,
+      "member_source+digest": 2,
+      "secmap": 5,
+      "first_match": 1
+    }
+  },
+  "semantics_mirrored": [
+    "strict whole-buffer GB18030 before split; '#'-prefixed headers (name may be empty/'#####'), entries under current section only",
+    ">=2 pipe fields; code non-empty ASCII; name non-empty; fields 2.. -> extra verbatim",
+    "duplicate code per-section rejects (across sections legal); {:?} escaping on section+code",
+    "code_level: len 3|5|7, ANY ascii letter + digits -> (len-1)/2 else null (verified: 't01','Z999999','A1234' all level)",
+    "research_level2: level2->self, level3->first5, else null",
+    "section_map: first matching name only",
+    "LF-only line accepted as one line (name/extra embed LF — Rust-verified)",
+    "error precedence decode->empty/header-before-entry->fields->code->name->dup; verbatim texts"
+  ],
+  "out_of_scope": "catalog name join/composition, DB/services, industry meaning beyond level formula",
+  "limitations": [
+    "retained comparison is against the official client deb's incon.dat (65,853B), NOT the absent base.zip member — flagged for Lead decision"
+  ]
+}
