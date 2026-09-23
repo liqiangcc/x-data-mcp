@@ -1,0 +1,61 @@
+{
+  "task_id": "NM-016",
+  "baseline_sha": "a7c75a19eb4bd9c5de9d2df3f222b73d2a0662d7",
+  "source_ported": "src/gbbq.rs: decrypt_record (decrypt_block + 4176B key table), event_from_clear, decode_record, decode_events",
+  "rust_oracle": "rust-oracle.jsonl — 4 synthetic encrypt->decode (incl. 2 invalid-UTF-8 code + empty code) + 7 member events + full-corpus digest/histogram, live rustc 1.98.1 + x_data_mcp rlib",
+  "retained_probe": {
+    "path": "/home/box/retained-inputs/official-gbbq-member (read-only, not committed)",
+    "sha256": "4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77 (MANIFEST-verified)",
+    "full_corpus_decoded_sha256": "a33ff825b118de4b7dc6ade4889443db411bef54c01f25b29fdbc5b720ff1adc",
+    "digest_serialization": "per-event line 'i,market,code,date_raw,category,<8-hex c_raw_bits x4>\\n' sha256'd in order",
+    "count": 205776,
+    "categories": {
+      "1": 68669,
+      "2": 4865,
+      "3": 4920,
+      "4": 2,
+      "5": 116312,
+      "6": 84,
+      "7": 19,
+      "8": 683,
+      "9": 7977,
+      "10": 304,
+      "11": 1805,
+      "12": 8,
+      "13": 11,
+      "14": 16,
+      "15": 101
+    }
+  },
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/parsers/gbbq_decode.mjs (pure JS, u32 wrapping via >>>0, zero deps)"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/gbbq_decode_probe.mjs .",
+    "exit": 0,
+    "cases": 19,
+    "totals": {
+      "pass": 19,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "synthetic_decrypt_decode": 4,
+      "member_sample_events": 7,
+      "member_digest_histogram": 2,
+      "typed_boundary": 6
+    }
+  },
+  "semantics_mirrored": [
+    "Feistel block decrypt: j=0x40..4 step -4, u32 LE, wrapping add, key offsets 0x448/0x48/0x848/0xC48/j, final XOR key[0..4]; bytes 24..29 raw",
+    "event_from_clear: market=b0, code=UTF-8(b1..8) trailing-NUL trim, date_raw=u32le(8..12), category=b12, c_raw=f32le(13..29)",
+    "lossless: c_raw_bits (u32) exposed alongside widened f64 c_raw values",
+    "invalid code bytes -> 'GBBQ record {i} code bytes are not UTF-8: [b0, b1, ...]' Rust debug-format verbatim",
+    "typed boundary: 29-byte Uint8Array required; wrong length/type -> invalid_input"
+  ],
+  "out_of_scope": "category business interpretation, QFQ integration, event-day marks, service wiring",
+  "limitations": [
+    "decrypted-all-zero record rejects invalid_code as designed (documented, matches Rust)"
+  ]
+}
