@@ -1,9 +1,9 @@
 {
-  "task_id": "NM-026-R3",
-  "baseline_sha": "93cfd86949a21ff6693d03b27f34c871de8351ac (R2) / 6c8718d (initial)",
-  "review": "REVIEW-NM-026 R2-review — same-leap-second .9/.1 inversion accepted by Node; fixed with full leap fractional ordering",
+  "task_id": "NM-026-R4",
+  "baseline_sha": "5abb0fc69bb31289bfd22792f09b05fa34f36de1 (R3) / 6c8718d (initial)",
+  "review": "REVIEW-NM-026 R3-review — fractional-now scale bug: .900 completed vs .100 now accepted; fixed with one precise key for all times",
   "source_ported": "src/snapshot.rs::inspect (read-only governance primitive)",
-  "rust_oracle": "rust-oracle.jsonl — 62 rows: 48 error + 14 ok incl. real_gen2",
+  "rust_oracle": "rust-oracle.jsonl — 65 rows: 49 error + 16 ok incl. real_gen2",
   "environment": {
     "node": "v20.19.2",
     "module": "src_node/governance/snapshot.mjs"
@@ -30,14 +30,14 @@
   "probe": {
     "command": "node scripts/node_migration_p2/snapshot_probe.mjs .",
     "exit": 0,
-    "cases": 69,
+    "cases": 72,
     "totals": {
-      "pass": 69,
+      "pass": 72,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
-      "synthetic_oracle": 61,
+      "synthetic_oracle": 64,
       "typed_boundary": 3,
       "real_retained_sha": 3,
       "real_gen2_inspection": 1,
@@ -47,8 +47,8 @@
   },
   "node_specific_deltas": [
     "json/io message text differs from serde/io::Error (category preserved; invalid/mismatch verbatim)",
-    "interval ordering exact at ns scale incl. leap-second fractional ordering",
-    "frac digits >9 truncate to nanos in output and ordering (chrono-equivalent domain)"
+    "interval ordering exact incl. leap-second fractions and fractional-now comparisons (single key scale)",
+    "frac digits >9 truncate to nanos in output and ordering; `now` input at ms precision (manifest times at ns)"
   ],
   "out_of_scope": "inspect_snapshot CLI, source executor, download, activation, SQLite, services",
   "r2_fixes": {
@@ -71,6 +71,14 @@
       "ts_leap_frac_inverted",
       "ts_leap_frac_ok",
       "ts_leap_after_59999"
+    ]
+  },
+  "r4_fixes": {
+    "now_scale": "now key was nowMs*2e15 — wrong frac scale (100ms -> +2e17 vs manifest .100 -> +1e8). Now computed as floor-sec ns *2e9 + ms-frac*1e6 on the SAME (baseNs*2+leap)*1e9+fracNs scale",
+    "oracle_cases": [
+      "ts_completed_after_frac_now",
+      "ts_completed_before_frac_now",
+      "ts_completed_eq_frac_now"
     ]
   }
 }

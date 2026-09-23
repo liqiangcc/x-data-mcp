@@ -180,12 +180,19 @@ const CASES = {
     `${good()},${gd().replace("2026-09-11T01:00:00Z", "2026-09-11T23:59:60.1Z").replace("2026-09-11T02:00:00Z", "2026-09-11T23:59:60.9Z")},${gg()}`))],
   ts_leap_after_59999: () => [fx("leapboundary", std), B(man(
     `${good()},${gd().replace("2026-09-11T01:00:00Z", "2026-09-11T23:59:60.9Z").replace("2026-09-11T02:00:00Z", "2026-09-11T23:59:59.999999999Z")},${gg()}`))],
+  // ---- R4: fractional-now scale (oracle supplies its own now) ----
+  ts_completed_after_frac_now: () => [fx("fracnow", std), B(man(
+    `${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00.900Z")},${gg()}`)), "2026-09-11T02:00:00.100Z"],
+  ts_completed_before_frac_now: () => [fx("fracnow2", std), B(man(
+    `${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00.100Z")},${gg()}`)), "2026-09-11T02:00:00.900Z"],
+  ts_completed_eq_frac_now: () => [fx("fracnow3", std), B(man(
+    `${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00.500Z")},${gg()}`)), "2026-09-11T02:00:00.500Z"],
 };
 
 for (const o of oracle.filter((r) => r.id !== "real_gen2")) {
-  const [dir, mbytes] = CASES[o.id]();
+  const [dir, mbytes, caseNow] = CASES[o.id]();
   try {
-    const ins = inspect(mbytes, dir, NOW);
+    const ins = inspect(mbytes, dir, caseNow ?? NOW);
     const ok = o.status === "ok" && JSON.stringify(ins) === JSON.stringify(o.inspection);
     emit(o.id, ok ? "PASS" : "FAIL", ok ? null : "inspection mismatch", o.inspection, ins);
   } catch (e) {

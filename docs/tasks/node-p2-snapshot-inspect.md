@@ -1,17 +1,19 @@
 # Node 迁移 P2 — 快照清单字节检查（inspect）
 
-任务：NM-026 R3（agent-coordination/node-migration）。日期：2026-09-23。
+任务：NM-026 R4（agent-coordination/node-migration）。日期：2026-09-23。
 基线：`6c8718d48f3580688e6aa3ee258621cf55fdacb7`（`migration/node-devin`）。Node v20.19.2。
 关联：Epic #271；`src/snapshot.rs` + `tests/snapshot.rs` + `docs/snapshot-input.md`；gen-2 retained manifest `evidence/issue-3-acceptance-run/snapshot-manifest.json`。
-证据：`evidence/node-migration/p2/snapshot_inspect/`（probe-results.jsonl 69 行全 PASS + negative-retained-sha.jsonl、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
+证据：`evidence/node-migration/p2/snapshot_inspect/`（probe-results.jsonl 72 行全 PASS + negative-retained-sha.jsonl、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
 
-**结果（R3）：69/69 PASS / 0 FAIL —— 真实 gen-2 全 Inspection 与 live Rust 逐位一致，549MB 全程流式。**
+**结果（R4）：72/72 PASS / 0 FAIL —— 真实 gen-2 全 Inspection 与 live Rust 逐位一致，549MB 全程流式。**
 
 > R1（REVIEW-NM-026）：serde Option 省略→null；strictJson 重复键拒绝（`duplicate field`）；fatal UTF-8 解码；chrono 严格 RFC3339（空格/小写分隔、必需偏移<24h、严格历法、任意分钟闰秒 :60、纳秒三位组 AutoSi）；mkdtemp + exit 钩子清理；retained pin 流式哈希；全进程 VmHWM 测量；`retained_sha` 自测 exit-1 负证。
 >
 > R2：null-prototype 对象（`__proto__` 未知字段拒绝）；`\u` 代理对校验（孤代理拒绝）；偏移分量边界（`+00:99`/`+23:60` 拒，`+23:59` 解析后区间判）；纳秒区间比较 ns×2 排序键（`.000000001` 反转捕获）。
 >
 > R3：完整闰秒分数排序——键 `(baseNs*2 + leapBit)*1e9 + fracNs`，`:60.f` 位于全部 `:59.x` 之后、下一分 `:00.x` 之前且按分数排序（`.9`/`.1` 反转逐字拒收；`:60.9` > `:59.999999999`）。
+>
+> R4：全时间统一排序键尺度——`now` 曾按不同尺度换算（`.100` now > manifest `.900`）；改为 floor-sec ns×2e9 + ms-frac×1e6（`.900` completed vs `.100` now 逐字拒收；`.1`/`.9` 与相等边界正确）。
 
 ## 1. 移植：`src_node/governance/snapshot.mjs`
 
@@ -30,13 +32,13 @@ manifest `b8a0d7b9…`；三个 retained zip 先对 `manifest-sha256.txt` 校验
 
 ## 3. Node 差异（已记录）
 
-`json`/`io` 类别保持、消息文本为 Node 实现文案（serde 期望列表+行列 / `io::Error` Display 不可复刻）；时间戳重序列化 RFC3339 `Z`——纳秒三位组、闰秒字面 `:60` 重放；区间排序在 ns 尺度精确含闰秒内分数排序；>9 位小数按纳秒截断。
+`json`/`io` 类别保持、消息文本为 Node 实现文案（serde 期望列表+行列 / `io::Error` Display 不可复刻）；时间戳重序列化 RFC3339 `Z`——纳秒三位组、闰秒字面 `:60` 重放；区间排序在 ns 尺度精确含闰秒分数与分数 now 比较（单一键尺度；`now` 输入为 ms 精度）；>9 位小数按纳秒截断。
 
 ## 4. 验证矩阵（45 例）
 
 | 组 | 例数 | 结果 |
 |---|---|---|
-| 合成 oracle | 61（原 58 + 闰秒分数×3；早前含原 52 + `__proto__` / 孤代理 / `+00:99` / `+23:60` / `+23:59` / ns 反转；早前含 Option 省略 / dup 键×2 / 非法 UTF-8 / ts 矩阵 11 例：no-offset、空格、小写、month13、feb30、leap、leap61、offset、off24、nanos、.5fracvalid/序/嵌套/内链、超大/坏 JSON/未知字段×2、schema/计数/空、dup×2、路径×4、文件名、URL×9、区间×2、hash/size×4、缺失/非常规/外链/改字节） | PASS（invalid/mismatch 逐字；json/io 同类别） |
+| 合成 oracle | 64（原 61 + 分数 now×3；早前含原 58 + 闰秒分数×3；早前含原 52 + `__proto__` / 孤代理 / `+00:99` / `+23:60` / `+23:59` / ns 反转；早前含 Option 省略 / dup 键×2 / 非法 UTF-8 / ts 矩阵 11 例：no-offset、空格、小写、month13、feb30、leap、leap61、offset、off24、nanos、.5fracvalid/序/嵌套/内链、超大/坏 JSON/未知字段×2、schema/计数/空、dup×2、路径×4、文件名、URL×9、区间×2、hash/size×4、缺失/非常规/外链/改字节） | PASS（invalid/mismatch 逐字；json/io 同类别） |
 | 类型边界 | 3 | PASS |
 | 真实 | 5（3 retained sha 流式 + Inspection + 清理） | PASS |
 | 负证 | `retained_sha` selftest → exit 1 | PASS |
@@ -49,7 +51,7 @@ manifest `b8a0d7b9…`；三个 retained zip 先对 `manifest-sha256.txt` 校验
 
 | 命令 | 退出码 |
 |---|---|
-| `node scripts/node_migration_p2/snapshot_probe.mjs .` | 0（69 PASS）
+| `node scripts/node_migration_p2/snapshot_probe.mjs .` | 0（72 PASS）
 | `node ... retained_sha`（自测负证） | 1 |
 | `rustc` oracle（`target/debug/snap_oracle`） | 0 |
 | `json.tool` / `sha256sum -c` / `git diff --check` | 0 |

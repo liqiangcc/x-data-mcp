@@ -4,8 +4,8 @@ Baseline `6c8718d48f3580688e6aa3ee258621cf55fdacb7` (`migration/node-devin`). No
 
 ## Contents
 
-- `probe-results.jsonl` — 69 rows, all PASS; probe exits nonzero on FAIL. `negative-retained-sha.jsonl` — selftest proof (exit 1).
-- `rust-oracle.jsonl` — live `rustc 1.98.1` + `x_data_mcp` rlib: 48 error + 14 ok incl. `real_gen2` full Inspection JSON.
+- `probe-results.jsonl` — 72 rows, all PASS; probe exits nonzero on FAIL. `negative-retained-sha.jsonl` — selftest proof (exit 1).
+- `rust-oracle.jsonl` — live `rustc 1.98.1` + `x_data_mcp` rlib: 49 error + 16 ok incl. `real_gen2` full Inspection JSON.
 - `results.json` — semantics, provenance, bounded measurement, Node deltas.
 - `SHA256SUMS` — over the three files.
 
@@ -30,3 +30,5 @@ R1 additions (REVIEW-NM-026): serde Option omission → null; strictJson duplica
 R2 additions (REVIEW-NM-026 R1-review): null-prototype objects (`__proto__` reject), `\u` surrogate-pair validation, offset component bounds (`+00:99`/`+23:60` reject, `+23:59` parses), nanosecond interval compare via ns*2 ordering keys (`.000000001` inversion caught, leap `:60` ordered between `:59.999999999` and next minute).
 
 R3 additions (REVIEW-NM-026 R2-review): full leap-second fractional ordering — key `(baseNs*2 + leapBit)*1e9 + fracNs` places `:60.f` after all `:59.x`, before next-minute `:00.x`, ordered by fraction inside the leap second (`.9`/`.1` inversion now rejects verbatim).
+
+R4 additions (REVIEW-NM-026 R3-review): single ordering-key scale for all times — `now` was computed at a mismatched scale (`.100` now > manifest `.900`); now key = floor-sec ns ×2e9 + ms-frac×1e6 on the same `(baseNs*2+leap)*1e9+fracNs` scale. `.900`-completed vs `.100`-now rejects verbatim.

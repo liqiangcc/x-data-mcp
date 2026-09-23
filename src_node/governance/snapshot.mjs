@@ -306,7 +306,10 @@ export function inspect(manifestBytes, root, now) {
     }
     const started = parseTs(input.acquisition_started_at).ns2;
     const completed = parseTs(input.acquisition_completed_at).ns2;
-    const nowNs2 = BigInt(nowMs) * 2_000_000_000_000_000n;
+    // now key on the SAME scale: floor-sec ns *2e9 + ms-frac*1e6.
+    const nowSec = Math.floor(nowMs / 1000);
+    const nowNs2 = BigInt(nowSec) * 2_000_000_000_000_000_000n +
+      BigInt(nowMs - nowSec * 1000) * 1_000_000n;
     if (started > completed || completed > nowNs2) {
       throw invalid("inverted/future acquisition interval");
     }
