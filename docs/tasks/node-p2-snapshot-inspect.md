@@ -1,11 +1,13 @@
 # Node 迁移 P2 — 快照清单字节检查（inspect）
 
-任务：NM-026（agent-coordination/node-migration）。日期：2026-09-23。
+任务：NM-026 R1（agent-coordination/node-migration）。日期：2026-09-23。
 基线：`6c8718d48f3580688e6aa3ee258621cf55fdacb7`（`migration/node-devin`）。Node v20.19.2。
 关联：Epic #271；`src/snapshot.rs` + `tests/snapshot.rs` + `docs/snapshot-input.md`；gen-2 retained manifest `evidence/issue-3-acceptance-run/snapshot-manifest.json`。
-证据：`evidence/node-migration/p2/snapshot_inspect/`（probe-results.jsonl 45 行全 PASS、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
+证据：`evidence/node-migration/p2/snapshot_inspect/`（probe-results.jsonl 60 行全 PASS + negative-retained-sha.jsonl、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
 
-**结果：45/45 PASS / 0 FAIL —— 真实 gen-2 全 Inspection 与 live Rust 逐位一致，549MB 走流式。**
+**结果（R1）：60/60 PASS / 0 FAIL —— 真实 gen-2 全 Inspection 与 live Rust 逐位一致，549MB 全程流式。**
+
+> R1（REVIEW-NM-026）：serde Option 省略→null；strictJson 重复键拒绝（`duplicate field`）；fatal UTF-8 解码；chrono 严格 RFC3339（空格/小写分隔、必需偏移<24h、严格历法、任意分钟闰秒 :60、纳秒三位组 AutoSi）；mkdtemp + exit 钩子清理；retained pin 流式哈希；全进程 VmHWM 测量；`retained_sha` 自测 exit-1 负证。
 
 ## 1. 移植：`src_node/governance/snapshot.mjs`
 
@@ -20,19 +22,20 @@
 
 ## 2. 真实 gen-2（committed manifest + retained 字节）
 
-manifest `b8a0d7b9…`；三个 retained zip 先对 `manifest-sha256.txt` 校验（`dcdf6b49`/`daad6290`/`c82f852a`），同文件系统硬链接挂入 mkdtemp 私有根（源只读、事后清理）→ Inspection 与 Rust 逐位一致。**有界测量**：549MB 文件 64KiB 流式，~512ms、RSS Δ ~1.1MiB —— 仅证明未整读入内存，不做性能声明。
+manifest `b8a0d7b9…`；三个 retained zip 先对 `manifest-sha256.txt` 校验（`dcdf6b49`/`daad6290`/`c82f852a`），同文件系统硬链接挂入 mkdtemp 私有根（源只读、事后清理）→ Inspection 与 Rust 逐位一致。**有界测量**：549MB 文件 64KiB 流式 ~517ms；全进程 VmHWM 64.3MiB（含流式 retained pins）——不做性能声明。
 
 ## 3. Node 差异（已记录）
 
-`json`/`io` 类别保持、消息文本为 Node 实现文案（serde 期望列表+行列 / `io::Error` Display 不可复刻）；时间戳重序列化为 RFC3339 `Z`（亚毫秒输入按 ms 截断）。
+`json`/`io` 类别保持、消息文本为 Node 实现文案（serde 期望列表+行列 / `io::Error` Display 不可复刻）；时间戳重序列化 RFC3339 `Z`——纳秒保留三位组、闰秒字面 `:60` 重放，但区间比较按 ms/`:59` 即时（<1s 偏差，已记录）。
 
 ## 4. 验证矩阵（45 例）
 
 | 组 | 例数 | 结果 |
 |---|---|---|
-| 合成 oracle | 37（valid/序/嵌套/内链、超大/坏 JSON/未知字段×2、schema/计数/空、dup×2、路径×4、文件名、URL×9、区间×2、hash/size×4、缺失/非常规/外链/改字节） | PASS（invalid/mismatch 逐字；json/io 同类别） |
+| 合成 oracle | 52（原 37 + Option 省略 / dup 键×2 / 非法 UTF-8 / ts 矩阵 11 例：no-offset、空格、小写、month13、feb30、leap、leap61、offset、off24、nanos、.5fracvalid/序/嵌套/内链、超大/坏 JSON/未知字段×2、schema/计数/空、dup×2、路径×4、文件名、URL×9、区间×2、hash/size×4、缺失/非常规/外链/改字节） | PASS（invalid/mismatch 逐字；json/io 同类别） |
 | 类型边界 | 3 | PASS |
-| 真实 | 5（3 retained sha + Inspection + 清理） | PASS |
+| 真实 | 5（3 retained sha 流式 + Inspection + 清理） | PASS |
+| 负证 | `retained_sha` selftest → exit 1 | PASS |
 
 ## 5. 范围边界
 
@@ -42,7 +45,8 @@ manifest `b8a0d7b9…`；三个 retained zip 先对 `manifest-sha256.txt` 校验
 
 | 命令 | 退出码 |
 |---|---|
-| `node scripts/node_migration_p2/snapshot_probe.mjs .` | 0（45 PASS） |
+| `node scripts/node_migration_p2/snapshot_probe.mjs .` | 0（60 PASS）
+| `node ... retained_sha`（自测负证） | 1 |
 | `rustc` oracle（`target/debug/snap_oracle`） | 0 |
 | `json.tool` / `sha256sum -c` / `git diff --check` | 0 |
 

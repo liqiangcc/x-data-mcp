@@ -1,58 +1,53 @@
 {
-  "task_id": "NM-026",
-  "baseline_sha": "6c8718d48f3580688e6aa3ee258621cf55fdacb7",
+  "task_id": "NM-026-R1",
+  "baseline_sha": "c456cbb2e67a2fab565fd2a7095524b823231872 (initial: 6c8718d)",
+  "review": "REVIEW-NM-026 R1 — confirmed Rust/Node fail-closed gaps + verifier/evidence gaps; all fixed",
   "source_ported": "src/snapshot.rs::inspect (read-only governance primitive)",
-  "rust_oracle": "rust-oracle.jsonl — 38 rows: 32 error + 6 ok incl. real_gen2 full Inspection (live rustc 1.98.1 + x_data_mcp rlib)",
+  "rust_oracle": "rust-oracle.jsonl — 53 rows: 40 error + 13 ok incl. real_gen2 full Inspection (live rustc 1.98.1 + x_data_mcp rlib)",
   "environment": {
     "node": "v20.19.2",
-    "module": "src_node/governance/snapshot.mjs (pure; streaming 64KiB hashing)"
+    "module": "src_node/governance/snapshot.mjs"
+  },
+  "r1_fixes": {
+    "omitted_option_fields": "serde Option<String>: last_modified/etag omitted -> null accepted (was json reject); non-string present still rejects",
+    "duplicate_keys": "strictJson recursive-descent parser: duplicate object key anywhere -> json 'duplicate field `x`' (was silent last-wins)",
+    "illegal_utf8": "fatal UTF-8 decode before parse -> json category (was lossy replacement accepting)",
+    "strict_rfc3339": "chrono semantics: [Tt ] separator, required Z/z or +/-HH:MM (<24h), calendar strict (month 1-12, day per month incl. leap years), second 0-60 (leap allowed any minute), frac -> ns 3-digit-group AutoSi output; no-offset rejects",
+    "temp_ownership": "mkdtemp fixture + real roots; no fixed-path rmSync; exit-handler cleanup guarantees removal on any exit incl. selftest",
+    "streaming_pins": "retained SHA256 via 1MiB-chunk streaming read — 549MB never in memory",
+    "peak_rss": "whole-process VmHWM from /proc/self/status (peakRss absent in Node 20): 64.3MiB for full verification incl. 549MB artifact",
+    "negative_proof": "selftest retained_sha -> exit 1 with expected/actual detail (negative-retained-sha.jsonl); probe exits nonzero on any FAIL"
   },
   "real_gen2": {
-    "manifest": "evidence/issue-3-acceptance-run/snapshot-manifest.json (committed)",
     "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
-    "artifacts": {
-      "base.zip": "dcdf6b49... 16,411,232B",
-      "gbbq.zip": "daad6290... 6,358,077B",
-      "hsjday.zip": "c82f852a... 549,387,306B"
-    },
-    "exposure": "private root via same-fs hardlinks (sources read-only, cleaned after)",
-    "inspection": "byte_integrity FILE_BYTES_VERIFIED; all NOT_VERIFIED/NOT_AUTHENTICATED preserved; production_ready false; roles sorted [base_industry,day,gbbq]",
-    "bounded_measurement": {
-      "elapsed_ms": 511.7,
-      "rss_delta_mib": 1.1,
-      "note": "549MB artifact hashed via 64KiB streaming — RSS delta ~1MiB confirms no whole-file load; bounded verification only, NO performance claim"
+    "inspection": "byte-identical to Rust; FILE_BYTES_VERIFIED; roles sorted; limitation strings verbatim",
+    "measurement": {
+      "elapsed_ms": 517.2,
+      "peak_rss_mib": 64.3,
+      "note": "VmHWM whole-process incl. streamed pins + 549MB streamed artifact hash; bounded verification only, no perf claim"
     }
   },
   "probe": {
     "command": "node scripts/node_migration_p2/snapshot_probe.mjs .",
     "exit": 0,
-    "cases": 45,
+    "cases": 60,
     "totals": {
-      "pass": 45,
+      "pass": 60,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
-      "synthetic_oracle": 37,
+      "synthetic_oracle": 52,
       "typed_boundary": 3,
       "real_retained_sha": 3,
       "real_gen2_inspection": 1,
       "realroot_cleanup": 1
-    }
+    },
+    "selftest": "node ... retained_sha -> exit 1 (negative proof file committed)"
   },
-  "semantics_mirrored": [
-    "manifest >1MiB rejects BEFORE parse; deny_unknown_fields + field types -> json category",
-    "schema/count/dup-role-path/path-components/filename/URL/interval/hash-size ordered checks -> invalid verbatim",
-    "URL: scheme strip + split_once('/'), no whitespace, host no @:?#, role-specific host+exact path",
-    "Path::components normalization: interior '.' and repeat separators collapse, leading './' CurDir + '..' reject; dup-path component equality",
-    "canonicalize root then artifact; resolved-outside-root / nonregular / io errors; streaming sha256+size -> Mismatch(PascalRole)",
-    "role sort base_industry<day<gbbq; manifest_sha256 over raw bytes; fixed limitation strings verbatim",
-    "NO success Inspection after any failed check; probe exits nonzero on FAIL"
-  ],
   "node_specific_deltas": [
-    "Json error text: Node message lacks serde expected-list + line/column (category preserved)",
-    "Io error text: Node errno message vs Rust io::Error Display (category preserved)",
-    "timestamps reserialized canonical RFC3339 Z (sub-ms inputs truncate at ms — documented)"
+    "json/io message text differs from serde/io::Error (category preserved; invalid/mismatch verbatim)",
+    "ms-precision instant for interval compare: sub-ms nanos truncate; leap :60 compares as :59 (<1s skew) — output preserves literal :60 and nanos via 3-digit groups"
   ],
   "out_of_scope": "inspect_snapshot CLI, source executor, download, activation, SQLite, services"
 }

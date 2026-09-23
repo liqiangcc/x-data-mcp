@@ -2,13 +2,13 @@
 // Rust oracle — synthetic fixture matrix + gen-2 real bytes.
 // Usage: node scripts/node_migration_p2/snapshot_probe.mjs <worktree-root>
 import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, symlinkSync,
-  linkSync, rmSync, readdirSync, unlinkSync } from "node:fs";
+  linkSync, rmSync, existsSync, unlinkSync, openSync, readSync, closeSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { inspect, InspectionError } from "../../src_node/governance/snapshot.mjs";
 
 const ROOT = process.argv[2] || ".";
+const SELFTEST = process.argv[3] || null;
 const oracle = readFileSync(join(ROOT, "evidence/node-migration/p2/snapshot_inspect/rust-oracle.jsonl"), "utf8")
   .split("\n").filter(Boolean).map(JSON.parse);
 
@@ -18,6 +18,26 @@ const emit = (id, status, detail, expected = null, actual = null) => {
   console.log(JSON.stringify({ family: "snapshot_inspect", id, status, detail, expected, actual }));
 };
 const sha256 = (b) => createHash("sha256").update(b).digest("hex");
+// streaming file sha256 — never whole-file into memory (549MB member)
+const fileSha256 = (path) => {
+  const hash = createHash("sha256");
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.allocUnsafe(1024 * 1024);
+    for (;;) {
+      const n = readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) break;
+      hash.update(buf.subarray(0, n));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
+};
+const peakRss = () => {
+  const m = /VmHWM:\s*(\d+) kB/.exec(readFileSync("/proc/self/status", "utf8"));
+  return m ? +m[1] * 1024 : null;
+};
 const NOW = "2026-09-12T00:00:00Z";
 const NOW_REAL = "2026-09-23T00:00:00Z";
 
@@ -29,10 +49,18 @@ const ent = (role, name, url, data, extra = "") =>
 const man = (files, extra = "") =>
   `{"schema":"x-data-mcp.official-file-input.v1","files":[${files}]${extra}}`;
 const B = (s) => Buffer.from(s, "latin1");
+// entry without last_modified/etag (serde Option: omitted -> null)
+const noopt = (role, name, url, data) =>
+  `{"role":"${role}","relative_path":"${name}","source_url":"${url}","acquisition_started_at":"2026-09-11T01:00:00Z","acquisition_completed_at":"2026-09-11T02:00:00Z","bytes":${data.length},"sha256":"${sha256(data)}"}`;
 
-const FIX = "/dev/shm/snapfix_node";
-rmSync(FIX, { recursive: true, force: true });
-mkdirSync(FIX, { recursive: true });
+// owned scratch roots via mkdtemp — no fixed-path deletion (REVIEW R1);
+// exit-handler cleanup guarantees removal even on selftest/FAIL exits.
+const FIX = mkdtempSync("/dev/shm/nm26-fix-");
+const REALROOT = mkdtempSync("/home/box/nm26-realroot-");
+process.on("exit", () => {
+  rmSync(FIX, { recursive: true, force: true });
+  rmSync(REALROOT, { recursive: true, force: true });
+});
 const fx = (id, setup) => {
   const dir = join(FIX, id);
   mkdirSync(dir, { recursive: true });
@@ -102,13 +130,39 @@ const CASES = {
     std(d); unlinkSync(join(d, "hsjday.zip")); mkdirSync(join(d, "hsjday.zip"));
   }), B(man(`${good()},${gd()},${gg()}`))],
   external_symlink: () => [fx("extsym", (d) => {
-    std(d); writeFileSync("/dev/shm/outside_target_node", B("base"));
+    std(d); writeFileSync(join(FIX, "outside_target_node"), B("base"));
     unlinkSync(join(d, "base.zip"));
-    symlinkSync("/dev/shm/outside_target_node", join(d, "base.zip"));
+    symlinkSync(join(FIX, "outside_target_node"), join(d, "base.zip"));
   }), B(man(`${good()},${gd()},${gg()}`))],
   changed_bytes: () => [fx("changed", (d) => {
     std(d); writeFileSync(join(d, "gbbq.zip"), B("CHANGED"));
   }), B(man(`${good()},${gd()},${gg()}`))],
+  // ---- R1: serde Option omission / duplicate keys / illegal UTF-8 / ts ----
+  omitted_options: () => [fx("r1", std), B(man(
+    `${noopt("base_industry", "base.zip", BURL, B("base"))},` +
+    `${noopt("day", "hsjday.zip", DURL, B("day"))},` +
+    `${noopt("gbbq", "gbbq.zip", GURL, B("gbbq"))}`))],
+  dup_schema_key: () => [fx("dupk", std), B(
+    `{"schema":"x","schema":"x-data-mcp.official-file-input.v1","files":[${good()},${gd()},${gg()}]}`)],
+  dup_files_key: () => [fx("dupk", std), B(
+    `{"schema":"x-data-mcp.official-file-input.v1","files":[${gd()}],"files":[${good()},${gd()},${gg()}]}`)],
+  illegal_utf8: () => {
+    const m = B(man(`${good(',"last_modified":"bad"')},${gd()},${gg()}`));
+    const at = m.indexOf(B("bad"));
+    m[at] = 0xff;
+    return [fx("utf8", std), m];
+  },
+  ts_no_offset: () => [fx("ts_no_offset", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00")},${gg()}`))],
+  ts_space_ok: () => [fx("ts_space_ok", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11 02:00:00Z")},${gg()}`))],
+  ts_lower_ok: () => [fx("ts_lower_ok", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11t02:00:00z")},${gg()}`))],
+  ts_month13: () => [fx("ts_month13", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-13-11T02:00:00Z")},${gg()}`))],
+  ts_feb30: () => [fx("ts_feb30", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-02-30T02:00:00Z")},${gg()}`))],
+  ts_leap_ok: () => [fx("ts_leap_ok", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T23:59:60Z")},${gg()}`))],
+  ts_leap61: () => [fx("ts_leap61", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T23:59:61Z")},${gg()}`))],
+  ts_offset_ok: () => [fx("ts_offset_ok", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T10:00:00+08:00")},${gg()}`))],
+  ts_off24: () => [fx("ts_off24", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00+24:00")},${gg()}`))],
+  ts_nanos: () => [fx("ts_nanos", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00.123456789Z")},${gg()}`))],
+  ts_frac_500: () => [fx("ts_frac_500", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00.5Z")},${gg()}`))],
 };
 
 for (const o of oracle.filter((r) => r.id !== "real_gen2")) {
@@ -142,43 +196,40 @@ bnd("reject_bad_root", () => inspect(B("{}"), 5, NOW));
 bnd("reject_bad_now", () => inspect(B("{}"), "/tmp", "junk"));
 
 // ---------- real gen-2 (committed manifest + retained bytes, hardlinked
-// private root, cleaned after; streaming hash over 549MB) ----------
-const REALROOT = mkdtempSync("/home/box/nm26-realroot-");
-const manifestBytes = readFileSync(join(ROOT, "evidence/issue-3-acceptance-run/snapshot-manifest.json"));
-const manifestSha = sha256(manifestBytes);
-{
+// private root, cleaned in finally; streaming hashes over 549MB) ----------
+const realOracle = oracle.find((r) => r.id === "real_gen2");
+let ins = null, elapsedMs = 0, peak = null;
+try {
+  const manifestBytes = readFileSync(join(ROOT, "evidence/issue-3-acceptance-run/snapshot-manifest.json"));
   const retained = readFileSync("/home/box/retained-inputs/manifest-sha256.txt", "utf8")
     .split("\n").filter(Boolean)
     .map((l) => { const [h, ...p] = l.trim().split(/\s+/); return { h, p: p.join(" ") }; });
   for (const [ret, link] of [["official-base.zip", "base.zip"],
     ["official-gbbq.zip", "gbbq.zip"], ["official-hsjday.zip", "hsjday.zip"]]) {
-    const sha = sha256(readFileSync(`/home/box/retained-inputs/${ret}`));
+    const sha = fileSha256(`/home/box/retained-inputs/${ret}`); // streaming
     const entry = retained.find((e) => e.p === ret);
-    if (entry === undefined || entry.h !== sha) {
-      emit(`real_${ret}`, "FAIL", `retained sha ${sha} manifest ${entry?.h ?? "absent"} — STOP`);
+    const expectSha = SELFTEST === "retained_sha" ? "0".repeat(64) : entry?.h;
+    if (entry === undefined || expectSha !== sha) {
+      emit(`real_${ret}`, "FAIL", `retained sha ${sha} expected ${expectSha ?? "absent"} — STOP`);
       process.exit(1);
     }
     linkSync(`/home/box/retained-inputs/${ret}`, join(REALROOT, link));
-    emit(`real_${ret}`, "PASS", `${ret} sha=${sha} -> ${link} (hardlink, source read-only)`);
+    emit(`real_${ret}`, "PASS", `${ret} sha=${sha} -> ${link} (hardlink, source read-only, streamed)`);
   }
-}
-const realOracle = oracle.find((r) => r.id === "real_gen2");
-const rssBefore = process.memoryUsage().rss;
-const t0 = performance.now();
-const ins = inspect(manifestBytes, REALROOT, NOW_REAL);
-const elapsedMs = performance.now() - t0;
-const rssAfter = process.memoryUsage().rss;
-{
+  const t0 = performance.now();
+  ins = inspect(manifestBytes, REALROOT, NOW_REAL);
+  elapsedMs = performance.now() - t0;
+  peak = peakRss(); // VmHWM covers the whole verification process
   const ok = JSON.stringify(ins) === JSON.stringify(realOracle.inspection);
   emit("real_gen2", ok ? "PASS" : "FAIL",
     `manifest_sha256=${ins.manifest_sha256} roles=[${ins.files.map((f) => f.role)}] ` +
-    `elapsed=${elapsedMs.toFixed(1)}ms rss_delta=${((rssAfter - rssBefore) / 1048576).toFixed(1)}MiB ` +
-    `(bounded verification only — no perf claim)`,
+    `elapsed=${elapsedMs.toFixed(1)}ms peak_rss=${peak === null ? "n/a" : (peak / 1048576).toFixed(1) + "MiB"} ` +
+    `(whole-process VmHWM incl. streamed retained pins; bounded only — no perf claim)`,
     realOracle.inspection.manifest_sha256, ins.manifest_sha256);
+} finally {
+  rmSync(REALROOT, { recursive: true, force: true });
 }
-rmSync(REALROOT, { recursive: true, force: true });
-emit("realroot_cleaned", readdirSync("/home/box").includes(REALROOT.split("/").pop()) ? "FAIL" : "PASS",
-  `temp root ${REALROOT} removed; sources untouched`);
-rmSync(FIX, { recursive: true, force: true });
+emit("realroot_cleaned", existsSync(REALROOT) ? "FAIL" : "PASS",
+  `temp root ${REALROOT} removed (finally); sources untouched`);
 
 process.exit(failures === 0 ? 0 : 1);

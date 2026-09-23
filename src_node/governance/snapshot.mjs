@@ -46,14 +46,136 @@ const FILE_FIELDS = new Set([
   "acquisition_completed_at", "last_modified", "etag", "bytes", "sha256",
 ]);
 
-const isRfc3339 = (s) => typeof s === "string" && !Number.isNaN(Date.parse(s)) &&
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s);
-// chrono serde emits RFC3339 UTC with `Z` and fractional digits only when
-// nonzero; Date has ms precision (sub-ms input truncates — documented delta).
-const canonTs = (s) => {
-  const iso = new Date(s).toISOString();
-  return iso.endsWith(".000Z") ? iso.slice(0, -5) + "Z" : iso;
-};
+// Strict JSON parse mirroring serde's duplicate-field rejection (serde
+// struct deserialization fails on duplicate keys anywhere in the manifest;
+// JSON.parse silently takes the last value — this closes that gap).
+// Bounded recursive-descent parser; depth-capped.
+function strictJson(text) {
+  let i = 0;
+  const ws = () => { while (i < text.length && " \t\n\r".includes(text[i])) i++; };
+  const fail = (m) => { throw jsonErr(m); };
+  function value(depth) {
+    if (depth > 64) fail("nesting too deep");
+    ws();
+    const ch = text[i];
+    if (ch === "{") {
+      i++;
+      const obj = {};
+      const seen = new Set();
+      ws();
+      if (text[i] === "}") { i++; return obj; }
+      for (;;) {
+        ws();
+        if (text[i] !== '"') fail("key must be a string");
+        const k = str();
+        if (seen.has(k)) fail(`duplicate field \`${k}\``);
+        seen.add(k);
+        ws();
+        if (text[i] !== ":") fail("expected `:`");
+        i++;
+        obj[k] = value(depth + 1);
+        ws();
+        if (text[i] === ",") { i++; continue; }
+        if (text[i] === "}") { i++; return obj; }
+        fail("expected `,` or `}`");
+      }
+    }
+    if (ch === "[") {
+      i++;
+      const arr = [];
+      ws();
+      if (text[i] === "]") { i++; return arr; }
+      for (;;) {
+        arr.push(value(depth + 1));
+        ws();
+        if (text[i] === ",") { i++; continue; }
+        if (text[i] === "]") { i++; return arr; }
+        fail("expected `,` or `]`");
+      }
+    }
+    if (ch === '"') return str();
+    const num = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(i, i + 30));
+    if (num && /^[0-9-]/.test(ch ?? "")) { i += num[0].length; return Number(num[0]); }
+    if (text.startsWith("true", i)) { i += 4; return true; }
+    if (text.startsWith("false", i)) { i += 5; return false; }
+    if (text.startsWith("null", i)) { i += 4; return null; }
+    fail("expected value");
+  }
+  function str() {
+    i++; // opening quote
+    let out = "";
+    while (i < text.length) {
+      const c = text[i];
+      if (c === '"') { i++; return out; }
+      if (c === "\\") {
+        i++;
+        const e = text[i++];
+        if (e === "u") {
+          const h = text.slice(i, i + 4);
+          if (!/^[0-9a-fA-F]{4}$/.test(h)) fail("invalid \\u escape");
+          i += 4;
+          out += String.fromCharCode(parseInt(h, 16));
+        } else {
+          const map = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+          if (!(e in map)) fail("invalid escape");
+          out += map[e];
+        }
+      } else if (c < " ") {
+        fail("control character in string");
+      } else {
+        out += c;
+        i++;
+      }
+    }
+    fail("unterminated string");
+  }
+  ws();
+  const v = value(0);
+  ws();
+  if (i !== text.length) fail("trailing characters");
+  return v;
+}
+
+// chrono RFC3339: `[Tt ]` separator, required Z/z or ±HH:MM offset
+// (<24h), second may be 60 (leap) on any minute, calendar strict, frac
+// digits -> nanos (AutoSi output: 3-digit groups). Node represents the
+// instant at ms precision; leap `:60` compares as `:59` (<1s skew) and
+// re-emits literally — both documented deltas.
+const TS_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|([+-])(\d{2}):(\d{2}))$/;
+const DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+function parseTs(s) {
+  if (typeof s !== "string") return null;
+  const m = TS_RE.exec(s);
+  if (!m) return null;
+  const [, y, mo, d, hh, mm, ss, frac, , sign, oh, om] = m;
+  const year = +y, month = +mo, day = +d, hour = +hh, min = +mm, sec = +ss;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  if (month < 1 || month > 12 || day < 1 || day > DIM[month - 1] + (month === 2 && leap ? 1 : 0) ||
+      hour > 23 || min > 59 || sec > 60) return null;
+  const offMin = oh === undefined ? 0 : (+oh * 60 + +om) * (sign === "-" ? -1 : 1);
+  if (oh !== undefined && +oh * 60 + +om >= 24 * 60) return null;
+  // nanos canonical: input digits -> ns (truncate beyond 9), output in
+  // 3-digit groups per chrono AutoSi.
+  let fracOut = "";
+  let fracMs = 0;
+  if (frac !== undefined) {
+    const ns9 = (frac.slice(0, 9) + "000000000").slice(0, 9);
+    let g = ns9;
+    while (g.length > 3 && g.endsWith("000")) g = g.slice(0, -3);
+    if (!/^0+$/.test(g)) fracOut = "." + g;
+    fracMs = Math.floor(parseInt(ns9, 10) / 1e6);
+  }
+  const baseSec = sec === 60 ? 59 : sec;
+  const ms = Date.UTC(year, month - 1, day, hour, min, baseSec, fracMs) - offMin * 60000;
+  // canonical output: UTC date/time + frac + Z; leap second stays in the
+  // (offset-adjusted) minute — chrono emits e.g. 22:59:60Z.
+  const dt = new Date(ms);
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  const out = `${pad(dt.getUTCFullYear(), 4)}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}` +
+    `T${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}:${pad(sec === 60 ? 60 : dt.getUTCSeconds())}` +
+    fracOut + "Z";
+  return { ms, out };
+}
 
 function declaredOfficialUrl(role, url) {
   if (typeof url !== "string") return false;
@@ -95,10 +217,12 @@ function validateShape(m) {
     }
     if (typeof f.relative_path !== "string") throw jsonErr(`files[${i}].relative_path must be a string`);
     if (typeof f.source_url !== "string") throw jsonErr(`files[${i}].source_url must be a string`);
-    if (!isRfc3339(f.acquisition_started_at)) throw jsonErr(`files[${i}].acquisition_started_at invalid`);
-    if (!isRfc3339(f.acquisition_completed_at)) throw jsonErr(`files[${i}].acquisition_completed_at invalid`);
-    if (f.last_modified !== null && typeof f.last_modified !== "string") throw jsonErr(`files[${i}].last_modified invalid`);
-    if (f.etag !== null && typeof f.etag !== "string") throw jsonErr(`files[${i}].etag invalid`);
+    if (parseTs(f.acquisition_started_at) === null) throw jsonErr(`files[${i}].acquisition_started_at invalid`);
+    if (parseTs(f.acquisition_completed_at) === null) throw jsonErr(`files[${i}].acquisition_completed_at invalid`);
+    // serde Option<String>: omitted key -> null (accepted), non-string
+    // present value -> reject.
+    if (f.last_modified !== null && f.last_modified !== undefined && typeof f.last_modified !== "string") throw jsonErr(`files[${i}].last_modified invalid`);
+    if (f.etag !== null && f.etag !== undefined && typeof f.etag !== "string") throw jsonErr(`files[${i}].etag invalid`);
     if (!Number.isSafeInteger(f.bytes) || f.bytes < 0) throw jsonErr(`files[${i}].bytes invalid`);
     if (typeof f.sha256 !== "string") throw jsonErr(`files[${i}].sha256 must be a string`);
   }
@@ -121,8 +245,11 @@ export function inspect(manifestBytes, root, now) {
   if (manifestBytes.length > 1024 * 1024) throw invalid("manifest exceeds 1 MiB");
   let manifest;
   try {
-    manifest = JSON.parse(Buffer.from(manifestBytes).toString("utf8"));
+    // strict UTF-8 first — lossy decoding would accept bytes serde rejects
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes);
+    manifest = strictJson(text);
   } catch (e) {
+    if (e instanceof InspectionError) throw e;
     throw jsonErr(e.message);
   }
   validateShape(manifest);
@@ -155,8 +282,8 @@ export function inspect(manifestBytes, root, now) {
     if (!declaredOfficialUrl(input.role, input.source_url)) {
       throw invalid("expected role-specific declared TDX http(s) URL");
     }
-    const started = Date.parse(input.acquisition_started_at);
-    const completed = Date.parse(input.acquisition_completed_at);
+    const started = parseTs(input.acquisition_started_at).ms;
+    const completed = parseTs(input.acquisition_completed_at).ms;
     if (started > completed || completed > nowMs) {
       throw invalid("inverted/future acquisition interval");
     }
@@ -172,6 +299,7 @@ export function inspect(manifestBytes, root, now) {
     throw ioErr(e);
   }
   const rootPrefix = canonRoot.endsWith("/") ? canonRoot : canonRoot + "/";
+  const tsOut = (s) => parseTs(s).out;
   for (const input of manifest.files) {
     let resolved;
     try {
@@ -223,10 +351,10 @@ export function inspect(manifestBytes, root, now) {
       role: f.role,
       relative_path: f.relative_path,
       source_url: f.source_url,
-      acquisition_started_at: canonTs(f.acquisition_started_at),
-      acquisition_completed_at: canonTs(f.acquisition_completed_at),
-      last_modified: f.last_modified,
-      etag: f.etag,
+      acquisition_started_at: tsOut(f.acquisition_started_at),
+      acquisition_completed_at: tsOut(f.acquisition_completed_at),
+      last_modified: f.last_modified ?? null,
+      etag: f.etag ?? null,
       bytes: f.bytes,
       sha256: f.sha256,
     }))
