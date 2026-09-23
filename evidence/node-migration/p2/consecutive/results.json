@@ -1,0 +1,42 @@
+{
+  "task_id": "NM-030",
+  "baseline_sha": "1a0737be7202e00e6648979f89e58fa0d4d8a85d",
+  "source_ported": "metrics::consecutive::evaluate + ratio_change (pure); Outcome/Reason/RunKind serde verbatim",
+  "rust_oracle": "rust-oracle.jsonl — 48 cases (live rustc 1.98.1 + x_data_mcp rlib + rust_decimal): 33 evaluate + 15 ratio_change",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/algorithms/consecutive.mjs"
+  },
+  "decimal": "shared _dec engine (qfq_affine.mjs) — {m:BigInt mantissa,s:scale}; from_str half-up>28dp, MAX96 bound; Display verbatim; comparison exact via scale-aligned BigInt",
+  "ratio_change": "verbatim BigInt port: coefficients scale-aligned, numerator*10^12, 512-bit budget, magnitude quotient + half-even once, - sign only when nonzero, padStart(13)",
+  "semantics": [
+    "budget first: start_year<1||end>9999||start>end||end-start>=1000||obs>1000||min_periods outside 1..=1000 -> INVALID_MARKET_COMMAND",
+    "ordered/dup/out-of-range/date-year-mismatch -> INVALID_MARKET_COMMAND verbatim",
+    "missing last-year -> missing_year before tail exclusion; completed_only strips trailing unfinished (excluded_tail ordered), window_too_short if <2",
+    "provisional = !completed_only && end.unfinished; check() b-then-a order; nonpositive/unknown/incomplete reasons",
+    "run walks newest->oldest; exact vs lower_bound; matches true/false/null; anchor/first_change only when run>0; cumulative_change half-even once",
+    "actual_input_range = [data[earliest_checked].year, end.year]; observations_used = len-earliest_checked",
+    "limitations: not_computable -> inferred-coverage line; lower_bound -> left-boundary line; exact -> []"
+  ],
+  "hand_vectors": "#81 independent vectors covered via oracle (tests/consecutive.rs rows incl. half-even 4-tuple, 2/3 repeating, MAX/1e-28)",
+  "probe": {
+    "command": "node scripts/node_migration_p2/consecutive_probe.mjs .",
+    "exit": 0,
+    "cases": 67,
+    "totals": {
+      "pass": 67,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "live_rust_oracle": 48,
+      "typed_boundary": 19
+    },
+    "selftest": "node ... consecutive -> exit 1 (negative-selftest.jsonl)"
+  },
+  "regressions": {
+    "qfq_affine_probe": "37/37 PASS (shared _dec engine untouched)"
+  },
+  "purity": "deterministic, read-only; no storage verification/service/publish; completion evidence not caller-supplied",
+  "out_of_scope": "storage/MCP wiring, completion provenance, deploy"
+}

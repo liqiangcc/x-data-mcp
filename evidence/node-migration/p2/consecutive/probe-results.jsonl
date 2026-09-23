@@ -1,0 +1,67 @@
+{"family":"consecutive","id":"up3","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"down3_lb","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"down2_lb_null","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"down3_exact","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"flat_break","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"reverse_break","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"flat_exact_dec","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"missing_last_year","status":"PASS","detail":"not_computable","expected":null,"actual":null}
+{"family":"consecutive","id":"missing_middle","status":"PASS","detail":"not_computable","expected":null,"actual":null}
+{"family":"consecutive","id":"missing_left_boundary","status":"PASS","detail":"not_computable","expected":null,"actual":null}
+{"family":"consecutive","id":"unknown_completion","status":"PASS","detail":"not_computable","expected":null,"actual":null}
+{"family":"consecutive","id":"incomplete_middle","status":"PASS","detail":"not_computable","expected":null,"actual":null}
+{"family":"consecutive","id":"incomplete_end_completed_only","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"incomplete_end_provisional","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"excluded_tail_two","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"unfinished_mid_completed","status":"PASS","detail":"not_computable","expected":null,"actual":null}
+{"family":"consecutive","id":"short_after_exclusion","status":"PASS","detail":"not_computable","expected":null,"actual":null}
+{"family":"consecutive","id":"nonpositive_zero","status":"PASS","detail":"not_computable","expected":null,"actual":null}
+{"family":"consecutive","id":"nonpositive_neg","status":"PASS","detail":"not_computable","expected":null,"actual":null}
+{"family":"consecutive","id":"err_unordered","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations","actual":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations"}
+{"family":"consecutive","id":"err_dup_year","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations","actual":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations"}
+{"family":"consecutive","id":"err_out_of_range","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations","actual":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations"}
+{"family":"consecutive","id":"err_1000yr","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required","actual":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required"}
+{"family":"consecutive","id":"err_start_gt_end","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required","actual":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required"}
+{"family":"consecutive","id":"err_start_zero","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required","actual":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required"}
+{"family":"consecutive","id":"err_end_10000","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required","actual":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required"}
+{"family":"consecutive","id":"err_min_periods_0","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required","actual":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required"}
+{"family":"consecutive","id":"err_min_periods_1001","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required","actual":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required"}
+{"family":"consecutive","id":"err_obs_1001","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required","actual":"INVALID_MARKET_COMMAND: bounded years/observations/min_periods required"}
+{"family":"consecutive","id":"err_date_mismatch_year","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations","actual":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations"}
+{"family":"consecutive","id":"err_last_next_year","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations","actual":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations"}
+{"family":"consecutive","id":"err_first_gt_last","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations","actual":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations"}
+{"family":"consecutive","id":"real_dates","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"rc_half_even_05","status":"PASS","detail":"0.000000000000","expected":"0.000000000000","actual":"0.000000000000"}
+{"family":"consecutive","id":"rc_half_even_15","status":"PASS","detail":"0.000000000002","expected":"0.000000000002","actual":"0.000000000002"}
+{"family":"consecutive","id":"rc_half_even_neg05","status":"PASS","detail":"0.000000000000","expected":"0.000000000000","actual":"0.000000000000"}
+{"family":"consecutive","id":"rc_half_even_neg15","status":"PASS","detail":"-0.000000000002","expected":"-0.000000000002","actual":"-0.000000000002"}
+{"family":"consecutive","id":"rc_third","status":"PASS","detail":"-0.333333333333","expected":"-0.333333333333","actual":"-0.333333333333"}
+{"family":"consecutive","id":"rc_max","status":"PASS","detail":"792281625142643375935439503349999999999999999999999999999.000000000000","expected":"792281625142643375935439503349999999999999999999999999999.000000000000","actual":"792281625142643375935439503349999999999999999999999999999.000000000000"}
+{"family":"consecutive","id":"rc_repeat","status":"PASS","detail":"-0.666666666667","expected":"-0.666666666667","actual":"-0.666666666667"}
+{"family":"consecutive","id":"rc_leadzero","status":"PASS","detail":"-0.900000000000","expected":"-0.900000000000","actual":"-0.900000000000"}
+{"family":"consecutive","id":"rc_trailzero","status":"PASS","detail":"-0.500000000000","expected":"-0.500000000000","actual":"-0.500000000000"}
+{"family":"consecutive","id":"rc_neg","status":"PASS","detail":"-0.500000000000","expected":"-0.500000000000","actual":"-0.500000000000"}
+{"family":"consecutive","id":"rc_scale_mix","status":"PASS","detail":"-0.400000000000","expected":"-0.400000000000","actual":"-0.400000000000"}
+{"family":"consecutive","id":"rc_max_exact","status":"PASS","detail":"0.000000000000","expected":"0.000000000000","actual":"0.000000000000"}
+{"family":"consecutive","id":"rc_err_zero","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: positive ratio inputs required","actual":"INVALID_MARKET_COMMAND: positive ratio inputs required"}
+{"family":"consecutive","id":"rc_err_neg","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: positive ratio inputs required","actual":"INVALID_MARKET_COMMAND: positive ratio inputs required"}
+{"family":"consecutive","id":"rc_err_end_neg","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: positive ratio inputs required","actual":"INVALID_MARKET_COMMAND: positive ratio inputs required"}
+{"family":"consecutive","id":"reject_input_notarray","status":"PASS","detail":"ConsecutiveInputError: input must be an array","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_year_float","status":"PASS","detail":"ConsecutiveInputError: input[0].year invalid","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_year_str","status":"PASS","detail":"ConsecutiveInputError: input[0].year invalid","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_date_junk","status":"PASS","detail":"ConsecutiveInputError: input[0].first/last must be YYYY-MM-DD","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_date_feb30","status":"PASS","detail":"ConsecutiveInputError: input[0].first/last must be YYYY-MM-DD","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_date_nopad","status":"PASS","detail":"ConsecutiveInputError: input[0].first/last must be YYYY-MM-DD","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_close_bad","status":"PASS","detail":"ConsecutiveInputError: input[0].close is not a valid Decimal","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_close_num","status":"PASS","detail":"ConsecutiveInputError: input[0].close is not a valid Decimal","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_close_over96","status":"PASS","detail":"ConsecutiveInputError: input[0].close is not a valid Decimal","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_close_surrogate","status":"PASS","detail":"ConsecutiveInputError: input[0].close is not a valid Decimal","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_completion_bad","status":"PASS","detail":"ConsecutiveInputError: input[0].completion invalid","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_unfinished_str","status":"PASS","detail":"ConsecutiveInputError: input[0].unfinished must be boolean","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_direction_bad","status":"PASS","detail":"ConsecutiveInputError: parameters.direction invalid","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_min_float","status":"PASS","detail":"ConsecutiveInputError: parameters.min_periods must be an integer","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_completed_only_str","status":"PASS","detail":"ConsecutiveInputError: parameters.completed_only must be boolean","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_price_field","status":"PASS","detail":"ConsecutiveInputError: parameters.price_field invalid","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_equal_policy","status":"PASS","detail":"ConsecutiveInputError: parameters.equal_policy invalid","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_range_str","status":"PASS","detail":"ConsecutiveInputError: range must be {start_year,end_year} integers","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_obs_null","status":"PASS","detail":"ConsecutiveInputError: input[0] must be an object","expected":null,"actual":null}
