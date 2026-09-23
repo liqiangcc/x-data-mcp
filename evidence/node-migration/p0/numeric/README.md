@@ -4,7 +4,8 @@ Baseline `32c29e0c57832b74925316ec8b601c16d5696fae` (`migration/node-devin`).
 
 ## Contents
 
-- `vectors.jsonl` — 51 rows, one JSON per line: `{family,id,input,observed,semantics,source,oracle_sha,run_ref,provenance}`. Provenance split: 44 rows `observed_public_api` (actual return/error of the cited public function in run `nm003-oracle-run-1`), 6 rows `source_derived_expression` (the `amount_f32_projection` family — verbatim mirror of the private expression at `src/official_market.rs:396-397`; the enclosing `materialize_daily` env path is NOT_RUN), 1 row `justified_not_run` (`digest_rfc8785` reject/boundary — `serde_json_canonicalizer::to_string` is a total serializer over `serde_json::Value`, so no reject case exists in-domain; reject coverage lives at the `canonical_evidence` layer).
+- `vectors.jsonl` — 51 rows, one JSON per line: `{family,id,input,library_source_sha,observed,provenance,run_ref,semantics,source}`. 50 executable oracle rows + 1 justified NOT_RUN marker. Provenance split: 44 rows `observed_public_api` (actual return/error of the cited public function in run `nm003-oracle-run-1`), 6 rows `source_derived_expression` (the `amount_f32_projection` family — verbatim mirror of the private expression at `src/official_market.rs:396-397`; the enclosing `materialize_daily` env path is NOT_RUN), 1 row `justified_not_run` (`digest_rfc8785` reject/boundary — `serde_json_canonicalizer::to_string` is a total serializer over `serde_json::Value`, so no reject case exists in-domain; reject coverage lives at the `canonical_evidence` layer).
+- `library_source_sha` identifies the x_data_mcp library source the invoked functions were compiled from (baseline `32c29e0…`). Harness revisions: observed run used `oracle.rs` @ `94e7bab`; current file @ `44c4c16`+ emits the extra provenance fields and the not_run row. Byte-identical rebuild equivalence is expected but NOT_RUN (not verified; no rebuild under current disk headroom).
 - `summary.json` — manifest: run record (command + exit code), family counts, observed vs source-derived split, NOT_RUN list, file hash.
 - `SHA256SUMS` — sha256 over the above.
 - Harness source (committed in repo): `scripts/node_migration_p0/oracle.rs`.
@@ -22,7 +23,7 @@ TMPDIR=/dev/shm ~/.cargo/bin/cargo build --locked          # builds lib rlib
   --extern chrono=$(ls target/debug/deps/libchrono-*.rlib | head -1) \
   --extern serde_json_canonicalizer=$(ls target/debug/deps/libserde_json_canonicalizer-*.rlib | head -1) \
   scripts/node_migration_p0/oracle.rs -o target/debug/nm003-oracle
-target/debug/nm003-oracle > vectors.jsonl                  # deterministic; diff vs committed
+target/debug/nm003-oracle > vectors.jsonl                  # expected deterministic; byte-identical equivalence NOT verified this round
 ```
 
 The harness reads one committed fixture file — `tests/fixtures/issue79/legacy-records.json` relative to the worktree root — for the legacy-digest vector; all other inputs are source literals (no env, no clock, no randomness).

@@ -1,11 +1,11 @@
 # Node 迁移 P0 — 精确数值与摘要 golden 向量
 
 任务：NM-003（agent-coordination/node-migration）。日期：2026-09-23。
-基线：`32c29e0c57832b74925316ec8b601c16d5696fae`（`migration/node-devin`）。Oracle 代码 SHA = 基线 SHA（44 行公共库函数真实输出 + 6 行镜像私有表达式输出 + 1 行论证 NOT_RUN 标记）。
+基线：`32c29e0c57832b74925316ec8b601c16d5696fae`（`migration/node-devin`）。`library_source_sha` = 基线 SHA，标识被调用函数所属库源码修订；harness 源修订另记于 summary.json（观测运行 `94e7bab`，当前 `44c4c16+`）。向量构成：44 行公共库函数真实输出 + 6 行镜像私有表达式输出 + 1 行论证 NOT_RUN 标记。
 关联：Epic #271、#262（OPEN，不授权迁移范围）。上游：`node-p0-inventory.md`、`node-p0-mcp-contract.md`。
 证据：`evidence/node-migration/p0/numeric/`（vectors.jsonl 51 行、summary.json、SHA256SUMS、README 复现步骤）；harness 源码 `scripts/node_migration_p0/oracle.rs`（单文件；输入为源码字面量 + 一个已提交 fixture 文件 `tests/fixtures/issue79/legacy-records.json`，无 env/时钟/随机性）。
 
-**Provenance 三分**（逐行 `provenance` 字段，附 `oracle_sha` 与 `run_ref` 可回溯至 summary.json 的 `runs` 命令/退出码）：
+**Provenance 三分**（逐行 `provenance` 字段；`library_source_sha` 记录被调用函数的库源码基线 `32c29e0…`，`run_ref` 回溯至 summary.json `runs` 的命令/退出码。harness 源修订：观测运行于 `94e7bab` 版本，当前文件 `44c4c16+` 增发 provenance 字段与 not_run 行；字节级重跑等价性为预期但未验证 = NOT_RUN）：
 
 - `observed_public_api`（44 行）：公共库函数在 `nm003-oracle-run-1` 中的实际返回/错误。
 - `source_derived_expression`（6 行，`amount_f32_projection`）：逐字镜像 `src/official_market.rs:396-397` 的**私有**表达式输出；外层 `materialize_daily` env 路径 NOT_RUN。这不是公共 API 输出。
@@ -42,7 +42,7 @@
 |---|---|---|
 | `cargo build --locked`（rustup 1.98.1, TMPDIR=/dev/shm） | 0 | lib rlib |
 | `rustc --edition 2024 --test … tests/{qfq,consecutive,day_file,yearly,gbbq,gbbq_semantic,storage_roundtrip,sqlite_market}.rs` + 逐一执行 | 0/测试全过 | 6+7+3+6+2+7+1+19 = **51 passed, 0 failed**（yearly 内 1 ignored 计时探针） |
-| `rustc … oracle.rs && ./nm003-oracle` | 0 | 50 向量 JSONL |
+| `rustc … oracle.rs && ./nm003-oracle` | 0 | 50 可执行向量 + 后续修正追加 1 条 justified not_run 标记 = 51 行 JSONL |
 | `python3 -m json.tool summary.json`、逐行 json.loads vectors | 0 | 合法 |
 | `sha256sum` | 0 | 写入 SHA256SUMS |
 | `git diff --check` | 0 | 干净 |

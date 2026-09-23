@@ -2,8 +2,8 @@
 //! functions as golden JSONL vectors for the Node.js migration.
 //! Deterministic: all inputs are source literals except one committed fixture
 //! file (tests/fixtures/issue79/legacy-records.json); no env, clocks or randomness.
-//! Each line: {"family","id","input","observed","semantics","source",
-//! "oracle_sha","run_ref","provenance"}.
+//! Each line: {"family","id","input","library_source_sha","observed",
+//! "provenance","run_ref","semantics","source"}.
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
@@ -18,7 +18,9 @@ fn d(date: &str) -> NaiveDate {
 fn dec(s: &str) -> Decimal {
     Decimal::from_str(s).unwrap()
 }
-const ORACLE_SHA: &str = "32c29e0c57832b74925316ec8b601c16d5696fae";
+// Git SHA of the x_data_mcp library source these functions were compiled
+// from (baseline), not the revision of this harness file.
+const LIBRARY_SOURCE_SHA: &str = "32c29e0c57832b74925316ec8b601c16d5696fae";
 const RUN_REF: &str = "nm003-oracle-run-1";
 
 fn emit(family: &str, id: &str, input: Value, observed: Value, semantics: &str, source: &str) {
@@ -32,7 +34,7 @@ fn emit(family: &str, id: &str, input: Value, observed: Value, semantics: &str, 
         serde_json::to_string(&json!({
             "family": family, "id": id, "input": input,
             "observed": observed, "semantics": semantics, "source": source,
-            "oracle_sha": ORACLE_SHA, "run_ref": RUN_REF, "provenance": provenance,
+            "library_source_sha": LIBRARY_SOURCE_SHA, "run_ref": RUN_REF, "provenance": provenance,
         }))
         .unwrap()
     );
@@ -293,7 +295,7 @@ fn main() {
                 "reason": "serde_json_canonicalizer::to_string is a total serializer over serde_json::Value: every Value input serializes, so no reject case exists in this domain. Reject semantics live at the canonical_evidence layer (non-object / shape / embedded-bars vectors cover them)."},
             "semantics": "justified limitation: total function over Value domain; boundary coverage delegated to digest_canonical_evidence rejects",
             "source": "serde_json_canonicalizer =0.3.2; src/compact_market.rs::canonical_evidence",
-            "oracle_sha": ORACLE_SHA, "run_ref": Value::Null, "provenance": "justified_not_run",
+            "library_source_sha": LIBRARY_SOURCE_SHA, "run_ref": Value::Null, "provenance": "justified_not_run",
         }))
         .unwrap()
     );

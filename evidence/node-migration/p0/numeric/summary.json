@@ -2,10 +2,14 @@
   "task_id": "NM-003",
   "baseline_sha": "32c29e0c57832b74925316ec8b601c16d5696fae",
   "oracle_binary": "target/debug/nm003-oracle (rustc --edition 2024 vs libx_data_mcp rlib, debug)",
-  "harness_source": "scripts/node_migration_p0/oracle.rs",
+  "harness_source": {
+    "observed_run_revision": "scripts/node_migration_p0/oracle.rs @ 94e7babbe05583937c7fb5c0e87160da1d82568f",
+    "current_revision": "scripts/node_migration_p0/oracle.rs @ 44c4c1686dd715fecb2ae57f13f017b10cf3a9b8 (emits provenance fields + not_run row; invoked functions unchanged)",
+    "byte_identical_rebuild": "NOT_RUN — expected deterministic but not verified in this correction round (no rebuild per review constraint)"
+  },
   "captured_at": "2026-09-23",
-  "environment": "Box grok-bot-vm-411252337; rustup stable 1.98.1; deterministic literal inputs; no env/IO/clock",
-  "vector_count": 50,
+  "environment": "Box grok-bot-vm-411252337; rustup stable 1.98.1; deterministic source-literal inputs plus one committed fixture read (tests/fixtures/issue79/legacy-records.json); no env vars, no clock, no randomness",
+  "vector_count": 51,
   "families": {
     "day_parse": {
       "ok": 1,
@@ -75,7 +79,7 @@
     "ECS"
   ],
   "files": {
-    "vectors.jsonl": "acb5ac6b8c62c97bb6fc2f4af85a7178fdf83ef8123e21384480c8d66289c18a"
+    "vectors.jsonl": "4eb13e5c258bf1f26c5060a0bd42f32a29ed968cfdb4df1d139c6f859d6385a1"
   },
   "not_run_marker_rows": 1,
   "runs": {
@@ -83,10 +87,17 @@
       "command": "target/debug/nm003-oracle > vectors.jsonl (binary built per README: rustc --edition 2024 --extern x_data_mcp/serde_json/serde/rust_decimal/chrono/serde_json_canonicalizer scripts/node_migration_p0/oracle.rs)",
       "exit_code": 0,
       "captured_at": "2026-09-23",
-      "oracle_code_sha": "32c29e0c57832b74925316ec8b601c16d5696fae",
-      "note": "binary deleted post-capture for disk headroom; deterministic rebuild via README reproduces identical vectors.jsonl"
+      "note": "binary deleted post-capture for disk headroom; deterministic rebuild via README reproduces identical vectors.jsonl",
+      "library_source_sha": "32c29e0c57832b74925316ec8b601c16d5696fae",
+      "harness_source_revision": "oracle.rs as of commit 94e7babbe05583937c7fb5c0e87160da1d82568f (emitted family/id/input/observed/semantics/source; provenance fields added by correction commits)"
     }
   },
-  "per_row_fields": "each vectors.jsonl row: family,id,input,observed,semantics,source,oracle_sha,run_ref,provenance",
-  "harness_io": "harness reads one committed fixture (tests/fixtures/issue79/legacy-records.json) for the legacy-digest vector; all other inputs are source literals; no env/clock/randomness"
+  "per_row_fields": "each vectors.jsonl row: family,id,input,library_source_sha,observed,provenance,run_ref,semantics,source",
+  "harness_io": "harness reads one committed fixture (tests/fixtures/issue79/legacy-records.json) for the legacy-digest vector; all other inputs are source literals; no env/clock/randomness",
+  "executable_oracle_rows": 50,
+  "field_definitions": {
+    "library_source_sha": "git SHA of the x_data_mcp library source the invoked functions were compiled from (baseline 32c29e0…)",
+    "run_ref": "key into runs{} identifying the capture command/exit code",
+    "provenance": "observed_public_api | source_derived_expression | justified_not_run"
+  }
 }
