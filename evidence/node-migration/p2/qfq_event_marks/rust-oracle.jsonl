@@ -1,0 +1,13 @@
+{"id":"valid_single","status":"ok","value":[{"category":1,"displayed_previous_close":"14.14","event_date":20240104,"previous_bar_date":"2024-01-03"}]}
+{"id":"no_prior_bar","status":"ok","value":[{"category":1,"displayed_previous_close":null,"event_date":20240101,"previous_bar_date":null}]}
+{"id":"event_between_bars","status":"ok","value":[{"category":1,"displayed_previous_close":"14.00","event_date":20240103,"previous_bar_date":"2024-01-02"}]}
+{"id":"event_after_all","status":"ok","value":[{"category":1,"displayed_previous_close":"9.41","event_date":20240110,"previous_bar_date":"2024-01-04"}]}
+{"id":"duplicate_dates","status":"ok","value":[{"category":1,"displayed_previous_close":"14.14","event_date":20240104,"previous_bar_date":"2024-01-03"},{"category":2,"displayed_previous_close":"12.16","event_date":20240104,"previous_bar_date":"2024-01-03"}]}
+{"id":"unsorted_events_order_preserved","status":"ok","value":[{"category":1,"displayed_previous_close":"9.41","event_date":20240110,"previous_bar_date":"2024-01-04"},{"category":2,"displayed_previous_close":"15.00","event_date":20240103,"previous_bar_date":"2024-01-02"},{"category":3,"displayed_previous_close":null,"event_date":20240101,"previous_bar_date":null}]}
+{"id":"unsorted_bars","status":"ok","value":[{"category":1,"displayed_previous_close":"14.14","event_date":20240104,"previous_bar_date":"2024-01-03"}]}
+{"id":"nonfinite_with_prior_bar","status":"error","error":"GBBQ factor 0 is not a finite decimal input"}
+{"id":"nonfinite_no_prior_bar","status":"error","error":"GBBQ factor 1 is not a finite decimal input"}
+{"id":"empty_bars","status":"ok","value":[{"category":1,"displayed_previous_close":null,"event_date":20240104,"previous_bar_date":null}]}
+{"id":"empty_events","status":"ok","value":[]}
+{"id":"nonfinite_index3","status":"error","error":"GBBQ factor 3 is not a finite decimal input"}
+{"id":"event_same_day_as_first_bar","status":"ok","value":[{"category":1,"displayed_previous_close":null,"event_date":20240102,"previous_bar_date":null}]}

@@ -1,0 +1,43 @@
+{
+  "task_id": "NM-017",
+  "baseline_sha": "588d19981faf8c2c80b801786a247f8775bbfe61",
+  "source_ported": "src/qfq.rs::event_day_marks (+ narrow typed-boundary fix to qfq_forward.mjs per REVIEW-NM-014 condition)",
+  "rust_oracle": "rust-oracle.jsonl — 13 cases live rustc 1.98.1 + x_data_mcp rlib (valid/no-prior/between-bars/after-all/duplicates/unsorted-events/unsorted-bars/3x nonfinite priority/empty/same-day)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/algorithms/qfq_event_marks.mjs + qfq_forward.mjs fix"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/qfq_event_marks_probe.mjs .",
+    "exit": 0,
+    "cases": 29,
+    "totals": {
+      "pass": 29,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "rust_oracle": 13,
+      "marks_typed_boundary": 9,
+      "fwd_boundary_followup": 7
+    }
+  },
+  "regression": {
+    "qfq_forward_probe.mjs": "15/15 PASS after narrow fix"
+  },
+  "semantics_mirrored": [
+    "bars sorted ascending (stable); events keep input order",
+    "per event: factors normalized BEFORE bar lookup -> NonFiniteFactor fires even with no prior bar",
+    "previous = last bar strictly before date_raw (ymd < date_raw); same-day bar excluded",
+    "displayed_previous_close via NM-013 engine or null; previous_bar_date null when none",
+    "output {category, displayed_previous_close, event_date, previous_bar_date}"
+  ],
+  "typed_boundary": {
+    "marks": "u32 date_raw / u8 category / 4x u32 ohlc_raw / ISO date all reject before arithmetic (TypedBoundaryError); boundary checks precede factor checks",
+    "forward_adjust": "date_raw now strict u32 (was >>>0 coercion), ohlc_raw strict 4x u32, malformed bar date rejects — REVIEW-NM-014 condition now ENFORCED AND TESTED, not merely documented"
+  },
+  "out_of_scope": "category business interpretation, service wiring, yearly, DB",
+  "limitations": [
+    "structural boundary checks precede factor errors (both fail-closed; Rust has no structural layer — typed inputs are static there)"
+  ]
+}

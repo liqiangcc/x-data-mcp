@@ -52,7 +52,14 @@ function partitionPoint(dated, from, barDate) {
  * @throws {QfqError} non_finite_factor (verbatim Rust error text)
  */
 export function forwardAdjust(bars, events) {
-  const dated = events.map((e) => [e.date_raw >>> 0, factors(e.c_raw)]);
+  // Typed boundary (REVIEW-NM-014 condition): date_raw must already be an
+  // exact u32 — reject malformed values instead of `>>> 0` coercion.
+  const dated = events.map((e, i) => {
+    if (!Number.isInteger(e.date_raw) || e.date_raw < 0 || e.date_raw > 0xffffffff) {
+      throw new RangeError(`events[${i}].date_raw must be u32 integer, got ${e.date_raw}`);
+    }
+    return [e.date_raw, factors(e.c_raw)];
+  });
   dated.sort((a, b) => a[0] - b[0]); // stable — mirrors sort_by_key
 
   const chains = new Array(dated.length + 1);
@@ -61,8 +68,12 @@ export function forwardAdjust(bars, events) {
 
   let k = 0;
   let lastBarDate = 0;
-  return bars.map((bar) => {
+  return bars.map((bar, bi) => {
     const barDate = ymdInt(bar.date);
+    if (!Array.isArray(bar.ohlc_raw) || bar.ohlc_raw.length !== 4 ||
+        !bar.ohlc_raw.every((v) => Number.isInteger(v) && v >= 0 && v <= 0xffffffff)) {
+      throw new RangeError(`bars[${bi}].ohlc_raw must be four u32 values`);
+    }
     k = barDate >= lastBarDate
       ? k + partitionPoint(dated, k, barDate)
       : partitionPoint(dated, 0, barDate);
