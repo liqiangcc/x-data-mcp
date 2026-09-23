@@ -25,6 +25,8 @@
 [每日同步说明](docs/daily-sync.md)记录双 MCP server、generation 状态机和 Devin Skill 编排边界。
 SQLite 专项入口由整体设计统一引用。设计目标不表示实现、来源或部署已经验收。
 
+[全量 Node.js 改造方案](docs/tasks/nodejs-full-migration-plan.md)为迁移设计草案，覆盖全部业务与服务、验证和切换；尚未实施，不代表当前 Rust 运行入口已变更。
+
 ## 与旧项目的关系
 
 [liqiangcc/x](https://github.com/liqiangcc/x) 是需求线索、历史实现、数据契约与回归场景的参考。旧行为不能替代已确认业务要求；不整体复制旧仓库的数据、运行记录或实现。
