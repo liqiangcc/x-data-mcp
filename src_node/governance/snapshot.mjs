@@ -20,6 +20,7 @@
 
 import { createHash } from "node:crypto";
 import { openSync, readSync, realpathSync, statSync, closeSync } from "node:fs";
+import { parseTs, nowKey } from "./ts.mjs";
 
 export class InspectionError extends Error {
   constructor(kind, message, extra = {}) {
@@ -151,54 +152,6 @@ function strictJson(text) {
   return v;
 }
 
-// chrono RFC3339: `[Tt ]` separator, required Z/z or ±HH:MM offset
-// (HH<=23, MM<=59), second may be 60 (leap) on any minute, calendar
-// strict, frac digits -> nanos (AutoSi output: 3-digit groups).
-// Interval ordering key = (baseNs*2 + leapBit)*1e9 + fracNs:
-// :59.f -> base*2e9+f; :60.f (leap) -> base*2e9+1e9+f — strictly after
-// every :59.x and strictly before the next minute's :00.x, with full
-// fractional ordering inside the leap second. No representational skew.
-const TS_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|([+-])(\d{2}):(\d{2}))$/;
-const DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-function parseTs(s) {
-  if (typeof s !== "string") return null;
-  const m = TS_RE.exec(s);
-  if (!m) return null;
-  const [, y, mo, d, hh, mm, ss, frac, , sign, oh, om] = m;
-  const year = +y, month = +mo, day = +d, hour = +hh, min = +mm, sec = +ss;
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  if (month < 1 || month > 12 || day < 1 || day > DIM[month - 1] + (month === 2 && leap ? 1 : 0) ||
-      hour > 23 || min > 59 || sec > 60) return null;
-  // offset: each component bounded (chrono rejects +00:99 / +23:60 / +24:00)
-  if (oh !== undefined && (+oh > 23 || +om > 59)) return null;
-  const offMin = oh === undefined ? 0 : (+oh * 60 + +om) * (sign === "-" ? -1 : 1);
-  // nanos canonical: input digits -> ns (truncate beyond 9), output in
-  // 3-digit groups per chrono AutoSi.
-  let fracOut = "";
-  let fracNs = 0n;
-  if (frac !== undefined) {
-    const ns9 = (frac.slice(0, 9) + "000000000").slice(0, 9);
-    let g = ns9;
-    while (g.length > 3 && g.endsWith("000")) g = g.slice(0, -3);
-    if (!/^0+$/.test(g)) fracOut = "." + g;
-    fracNs = BigInt(ns9);
-  }
-  const baseSec = sec === 60 ? 59 : sec;
-  const wallMs = Date.UTC(year, month - 1, day, hour, min, baseSec, 0);
-  const fracMs = Number(fracNs / 1_000_000n);
-  const ms = wallMs + fracMs - offMin * 60000;
-  const baseNs = BigInt(wallMs - offMin * 60000) * 1_000_000n;
-  const ns2 = (baseNs * 2n + (sec === 60 ? 1n : 0n)) * 1_000_000_000n + fracNs;
-  // canonical output: UTC date/time + frac + Z; leap second stays in the
-  // (offset-adjusted) minute — chrono emits e.g. 22:59:60Z.
-  const dt = new Date(ms);
-  const pad = (n, w = 2) => String(n).padStart(w, "0");
-  const out = `${pad(dt.getUTCFullYear(), 4)}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}` +
-    `T${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}:${pad(sec === 60 ? 60 : dt.getUTCSeconds())}` +
-    fracOut + "Z";
-  return { ms, ns2, out };
-}
-
 function declaredOfficialUrl(role, url) {
   if (typeof url !== "string") return false;
   const rest = url.startsWith("https://") ? url.slice(8)
@@ -306,10 +259,7 @@ export function inspect(manifestBytes, root, now) {
     }
     const started = parseTs(input.acquisition_started_at).ns2;
     const completed = parseTs(input.acquisition_completed_at).ns2;
-    // now key on the SAME scale: floor-sec ns *2e9 + ms-frac*1e6.
-    const nowSec = Math.floor(nowMs / 1000);
-    const nowNs2 = BigInt(nowSec) * 2_000_000_000_000_000_000n +
-      BigInt(nowMs - nowSec * 1000) * 1_000_000n;
+    const nowNs2 = nowKey(nowMs);
     if (started > completed || completed > nowNs2) {
       throw invalid("inverted/future acquisition interval");
     }

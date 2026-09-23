@@ -1,0 +1,48 @@
+{
+  "task_id": "NM-027",
+  "baseline_sha": "aafc20aaa7d8990839aafdc14d2b8da482f6a51c",
+  "source_ported": "src/file_consistency.rs::validate (pure decision)",
+  "rust_oracle": "rust-oracle.jsonl — 28 cases: 5 VERIFIED_COMPATIBLE / 14 NOT_VERIFIED / 9 CONFLICT (live rustc 1.98.1 + x_data_mcp rlib); real_131 decision == committed decision.json",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/governance/file_consistency.mjs (pure; no fs/network/DB)"
+  },
+  "shared_helper": "src_node/governance/ts.mjs extracted from snapshot.mjs (parseTs+nowKey); NM-026 regression rerun: 72/72 PASS unchanged",
+  "semantics_mirrored": [
+    "sort+exact-dedup files by full FileFact order (role<bytes<sha256<url<started<completed<last_modified<etag<integrity<rev<ident; Option None<Some)",
+    "missing_role/conflicting_duplicate per required role; unverified/invalid interval/invalid hash per deduped file",
+    "compatibility None -> missing_compatibility_evidence early-return, refs=[]",
+    "incomplete evidence (empty ref/wrong version/empty rev/empty identity/wrong binding count/noncanonical binding hash) -> early-return refs=[ref]",
+    "invalid window -> conflict early-return",
+    "per-role single-fact binding checks: hash_mismatch / rev+ident mismatch-or-missing-bound / acquisition outside window",
+    "conflict priority preserved through incomplete/missing evidence paths",
+    "reasons sorted by serialized {code,role} string; evidence_refs sorted",
+    "timestamps via shared chrono ordering key (ns + leap-second slots)"
+  ],
+  "real_evidence": {
+    "issue_131": "input.json+compatibility -> decision byte-identical to committed decision.json AND live Rust oracle (VERIFIED_COMPATIBLE, pinned set only per #131 Final Gate)",
+    "gen2_facts_no_proof": "NM-026 manifest facts + compatibility:null -> NOT_VERIFIED/missing_compatibility_evidence (no proof inferred)",
+    "gen3": "evidence/issue-217-gen3-acquisition/consistency-{input,decision}.json are 0-byte placeholders — NOT_RUN, flagged"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/file_consistency_probe.mjs .",
+    "exit": 0,
+    "cases": 36,
+    "totals": {
+      "pass": 36,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "synthetic_oracle": 26,
+      "real": 2,
+      "typed_boundary": 8
+    },
+    "selftest": "node ... decision -> exit 1"
+  },
+  "notable_oracle_findings": [
+    "invalid_file_hash day->'BAD' produces BOTH invalid_file_hash AND hash_mismatch -> CONFLICT (binding sees different sha)",
+    "noncanonical binding hash is IncompleteCompatibilityEvidence (checked before binding compare)"
+  ],
+  "out_of_scope": "proof creation/auth, generation activation, CLI/service, QFQ publish"
+}
