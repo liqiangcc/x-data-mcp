@@ -32,9 +32,13 @@ const { rename_noreplace: renameNoreplace, openat_dir: openatDir, openat_create_
 import { inspect, strictJson, InspectionError } from "./snapshot.mjs";
 import { readBoundedFile } from "../lib/zip_member.mjs";
 import { DECISION_NAME, GenerationUsableError, MANIFEST_NAME } from "./generation_usable.mjs";
+import { parseTs } from "./ts.mjs";
+import { renameSync } from "node:fs";
 
 export const STAGING_DIR = "staging";
 export const GENERATIONS_DIR = "generations";
+export const ACTIVE_NAME = "active-generation.json";
+export const ACTIVE_SCHEMA = "x-data-mcp.active-generation.v1";
 const MAX_MANIFEST = 1 * 1024 * 1024;
 
 const err = (kind, msg) => new GenerationUsableError(kind, msg);
@@ -232,6 +236,73 @@ export class GenerationStore {
     }
   }
 
+  /** active: raw pointer read — null when absent; malformed bytes or
+   *  schema violations reject (Rust serde from_slice -> Json). */
+  active() {
+    const path = join(this.root, ACTIVE_NAME);
+    let bytes;
+    try { bytes = readBoundedFile(path, MAX_MANIFEST); }
+    catch (e) {
+      if (e.code === "ENOENT") return null;
+      throw err("io", `io: ${e.message}`);
+    }
+    let p;
+    try { p = strictJson(bytes.toString("utf8")); }
+    catch (e) { throw err("json", `manifest JSON invalid: ${e.message}`); }
+    validateActivePointer(p);
+    return p;
+  }
+
+  /** activate: conditional CAS swap — expected_previous compared against
+   *  the current generation_id (or null); conflict leaves the pointer
+   *  bytes untouched. On success writes serde_json::to_vec_pretty bytes
+   *  into `.active-generation.json.tmp`, fsyncs, renames over the
+   *  pointer, fsyncs the root dir. Callers MUST hold single-writer
+   *  exclusion — Rust assumes it; this port documents it. */
+  activate(installed, expectedPrevious, requestId, now) {
+    checkGenerationId(installed?.generation_id);
+    if (typeof installed?.manifest_sha256 !== "string" || !installed.manifest_sha256.isWellFormed()) {
+      throw err("invalid_input", "installed.manifest_sha256 must be a string");
+    }
+    checkRequestId(requestId);
+    if (expectedPrevious !== null && typeof expectedPrevious !== "string") {
+      throw err("invalid_input", "expected_previous must be null or string");
+    }
+    const activatedAt = emitTs(now); // reject malformed timestamps pre-mutation
+    const current = this.active();
+    const actual = current ? current.generation_id : null;
+    if (actual !== expectedPrevious) {
+      throw err("activation_conflict",
+        `active pointer conflict: expected ${fmtOpt(expectedPrevious)}, found ${fmtOpt(actual)}`);
+    }
+    const pointer = {
+      schema: ACTIVE_SCHEMA,
+      generation_id: installed.generation_id,
+      manifest_sha256: installed.manifest_sha256,
+      activated_at: activatedAt,
+      previous_generation_id: current ? current.generation_id : null,
+      activation_request_id: requestId,
+    };
+    const bytes = toPrettyJson(pointer);
+    const tmp = join(this.root, `.${ACTIVE_NAME}.tmp`);
+    mkdirSync(this.root, { recursive: true });
+    // write + fsync file, rename over pointer, fsync parent — same order
+    // as Rust's activate.
+    const fd = openSync(tmp, "w");
+    let firstErr = null;
+    try {
+      writeSync(fd, bytes);
+      fsyncSync(fd);
+    } catch (e) { firstErr = err("io", `io: ${e.message}`); }
+    try { closeSync(fd); }
+    catch (e) { if (firstErr === null) firstErr = err("io", `io: ${e.message}`); }
+    if (firstErr) throw firstErr;
+    try { renameSync(tmp, join(this.root, ACTIVE_NAME)); }
+    catch (e) { throw err("io", `io: ${e.message}`); }
+    fsyncDir(this.root);
+    return pointer;
+  }
+
   /** Installed-generation dir for writes, pinned by fds: opens
    *  generations/ with O_DIRECTORY|O_NOFOLLOW, then generations/<gid>
    *  via openat relative to that fd — a symlink swap after opening
@@ -260,6 +331,73 @@ export class GenerationStore {
     }
     return { gfd, dfd };
   }
+}
+
+// Rust Debug fmt for Option<String>: Some("x") / None
+const fmtOpt = (v) => v === null || v === undefined ? "None" : `Some(${JSON.stringify(v)})`;
+
+// serde deny_unknown_fields ActivePointer boundary — exact known-field
+// set; `schema` is a plain String (serde does NOT enforce the constant —
+// oracle verified), `previous_generation_id` is Option and defaults to
+// null when absent.
+const POINTER_FIELDS = ["schema", "generation_id", "manifest_sha256",
+  "activated_at", "previous_generation_id", "activation_request_id"];
+const POINTER_REQUIRED = POINTER_FIELDS.filter((k) => k !== "previous_generation_id");
+function validateActivePointer(p) {
+  if (p === null || typeof p !== "object" || Array.isArray(p)) {
+    throw err("json", "manifest JSON invalid: invalid type: expected struct ActivePointer");
+  }
+  for (const k of Object.keys(p)) {
+    if (!POINTER_FIELDS.includes(k)) {
+      throw err("json", `manifest JSON invalid: unknown field \`${k}\``);
+    }
+  }
+  for (const k of POINTER_REQUIRED) {
+    if (!(k in p)) {
+      throw err("json", `manifest JSON invalid: missing field \`${k}\``);
+    }
+  }
+  const strField = (k) => {
+    if (typeof p[k] !== "string" || !p[k].isWellFormed()) {
+      throw err("json", `manifest JSON invalid: invalid type for field \`${k}\``);
+    }
+  };
+  strField("schema"); strField("generation_id"); strField("manifest_sha256");
+  strField("activated_at"); strField("activation_request_id");
+  if ("previous_generation_id" in p &&
+      p.previous_generation_id !== null && typeof p.previous_generation_id !== "string") {
+    throw err("json", "manifest JSON invalid: invalid type for field `previous_generation_id`");
+  }
+  if (!("previous_generation_id" in p)) p.previous_generation_id = null;
+  if (parseTs(p.activated_at) === null) {
+    throw err("json", "manifest JSON invalid: invalid timestamp for field `activated_at`");
+  }
+}
+
+// serde_json::to_vec_pretty equivalent for the flat ActivePointer —
+// 2-space indent, `"k": v`, field order preserved. activated_at arrives
+// pre-serialized by emitTs (chrono AutoSi format).
+function toPrettyJson(pointer) {
+  const q = (s) => {
+    // serde_json string escaping: ", \, control chars -> \uXXXX; raw UTF-8
+    return `"${s.replace(/["\\\x00-\x1f]/g, (c) =>
+      c === '"' ? '\\"' : c === "\\" ? "\\\\"
+        : `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}"`;
+  };
+  const lines = POINTER_FIELDS.map((k) => {
+    const v = pointer[k];
+    return `  ${q(k)}: ${v === null ? "null" : q(v)}`;
+  });
+  return `{\n${lines.join(",\n")}\n}`;
+}
+
+// chrono serde DateTime<Utc> emission — parseTs already returns the
+// canonical AutoSi `out` (Z, leap second literal, 3-digit ns groups).
+function emitTs(now) {
+  const s = now instanceof Date ? now.toISOString() : now;
+  const p = parseTs(s);
+  if (p === null) throw err("invalid_input", `invalid timestamp: ${String(s).slice(0, 40)}`);
+  return p.out;
 }
 
 // gid/name boundary checks — stricter than Rust (documented): Rust

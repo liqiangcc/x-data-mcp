@@ -1,0 +1,42 @@
+{
+  "task_id": "NM-035",
+  "baseline_sha": "d24570f71093af2d8f091e09ca0e48419bd9b3f4",
+  "source_ported": "generation/mod.rs::{active,activate,ActivePointer}",
+  "rust_oracle": "rust-oracle.jsonl — 11 cases via live Store (rustc 1.98.1) incl. verbatim activation_conflict Debug text and to_vec_pretty bytes",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/governance/generation_store.mjs",
+    "fixtures": "/tmp/nm35-act-* mkdtemp, cleaned"
+  },
+  "ordering": [
+    "active(): ENOENT -> null; strictJson + serde field check -> json (unknown field verbatim; missing previous_generation_id -> null via Option default; schema is plain String — wrong values ACCEPTED, oracle-verified)",
+    "activate(): boundary checks -> emitTs (reject malformed now pre-mutation) -> active() read -> CAS compare -> activation_conflict verbatim Debug fmt -> to_vec_pretty bytes -> .tmp write+fsync -> rename -> fsync_dir(root)"
+  ],
+  "discovered_semantics": "serde does NOT enforce the schema constant and Option<previous_generation_id> accepts absent — both oracle-verified",
+  "caller_exclusion": "activate holds no lock itself (Rust parity). Probe proves caller-held exclusion via real kernel flock on a lease file (linux_guards.node flockfd, cross-process EWOULDBLOCK verified)",
+  "stricter_than_rust": "request_id/generation_id boundary; expected_previous typed null|string; bounded pointer read",
+  "conflict_proof": "activate_conflict_none/activate_conflict_wrong leave pointer bytes sha-identical (pointer_after_conflict)",
+  "probe": {
+    "command": "node scripts/node_migration_p2/generation_active_probe.mjs .",
+    "exit": 0,
+    "cases": 16,
+    "totals": {
+      "pass": 16,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "live_rust_oracle": 11,
+      "lease_and_boundary": 5
+    },
+    "selftest": "node ... act -> exit 1 (negative-selftest.jsonl)"
+  },
+  "regressions": {
+    "NM-034": "45/45 PASS",
+    "NM-033": "38/38 PASS",
+    "NM-032": "28/28 PASS",
+    "NM-026": "72/72 PASS"
+  },
+  "limits": "reopen proves readability not crash durability; concurrent activation without caller exclusion unsupported (same as Rust); production integration future",
+  "out_of_scope": "no real activation, no DB/service, no VERIFIED_COMPATIBLE inference"
+}
