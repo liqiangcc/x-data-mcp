@@ -6,8 +6,8 @@ missing/null/mixed/no-items are refusals, never fallbacks.
 
 ## Contents
 
-- `probe-results.jsonl` — 41 rows, all PASS (21 live Rust oracle +
-  9 typed-boundary + 7 accessor-descriptor + 4 prototype-safety).
+- `probe-results.jsonl` — 44 rows, all PASS (21 live Rust oracle +
+  9 typed-boundary + 10 accessor-descriptor + 4 prototype-safety).
 - `rust-oracle.jsonl` — live oracle (BindingRefusal Debug verbatim).
 - `negative-selftest.jsonl` — exit-1 proof.
 - `results.json` — semantics, matrix, limits.
@@ -34,3 +34,5 @@ R1 (REVIEW-NM-031): own-data-descriptor checks — getter/setter,
 symbol, and non-enumerable properties reject without invocation
 (side-effect counter proves zero calls) at item, frozen_inputs, and
 nested-value levels.
+
+R2: array boundary is descriptor-based (index getters/named/non-enumerable elements reject uninvoked).

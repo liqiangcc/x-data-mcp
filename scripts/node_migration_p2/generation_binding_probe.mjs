@@ -97,6 +97,16 @@ const gcount = (v) => () => { getterCalls++; return v; };
   const hidden = {}; Object.defineProperty(hidden, K, { value: "gen-h", enumerable: false });
   try { uniformBinding([itemF(hidden)]); emit("nonenum_binding", "FAIL", "non-enumerable binding accepted"); }
   catch (e) { emit("nonenum_binding", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  // R2: index getter inside an array value must reject uninvoked
+  const arr = ["gen-ok"]; Object.defineProperty(arr, "0", { get: gcount("gen-evil"), enumerable: true });
+  try { uniformBinding([itemF({ [K]: arr }), itemF({ [K]: "gen-x" })]); emit("getter_array_index", "FAIL", "array getter produced binding"); }
+  catch (e) { emit("getter_array_index", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const arrNamed = [1]; Object.defineProperty(arrNamed, "x", { get: gcount(2), enumerable: true });
+  try { uniformBinding([itemF({ [K]: arrNamed })]); emit("getter_array_named", "FAIL", "named array prop accepted"); }
+  catch (e) { emit("getter_array_named", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const arrHidden = [1]; Object.defineProperty(arrHidden, "0", { value: "gen-h", enumerable: false });
+  try { uniformBinding([itemF({ [K]: arrHidden })]); emit("nonenum_array_elem", "FAIL", "non-enumerable array elem accepted"); }
+  catch (e) { emit("nonenum_array_elem", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
   emit("getters_never_invoked", getterCalls === 0 ? "PASS" : "FAIL", `getterCalls=${getterCalls}`);
 }
 

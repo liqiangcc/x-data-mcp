@@ -56,7 +56,18 @@ function isJsonValue(v) {
   if (t === "boolean") return true;
   if (t === "number") return Number.isFinite(v);
   if (t === "string") return v.isWellFormed();
-  if (Array.isArray(v)) return v.every(isJsonValue);
+  if (Array.isArray(v)) {
+    // Array elements are indexed own properties — read via descriptor
+    // (never v[i]/v.every, which would invoke index getters).
+    if (Object.getOwnPropertySymbols(v).length !== 0) return false;
+    const len = Object.getOwnPropertyDescriptor(v, "length");
+    if (len === undefined || !("value" in len)) return false;
+    return Object.getOwnPropertyNames(v).every((k) => {
+      if (k === "length") return true;
+      const d = Object.getOwnPropertyDescriptor(v, k);
+      return "value" in d && d.enumerable && isJsonValue(d.value);
+    });
+  }
   if (t === "object") {
     if (Object.getPrototypeOf(v) !== Object.prototype &&
         Object.getPrototypeOf(v) !== null) return false;
