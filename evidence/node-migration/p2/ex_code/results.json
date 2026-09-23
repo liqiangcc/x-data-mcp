@@ -1,0 +1,44 @@
+{
+  "task_id": "NM-022",
+  "baseline_sha": "926a9068b9925262d9bca94dc8fb26a51408aed3",
+  "source_ported": "src/catalog_tdx/ex_code.rs::parse (+name_map projection)",
+  "rust_oracle": "rust-oracle.jsonl — 28 synthetic cases + member digest/rows (live rustc 1.98.1 + x_data_mcp + encoding_rs rlibs)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/parsers/ex_code.mjs (pure JS; strict GB18030 via TextDecoder(fatal) — WHATWG spec same as encoding_rs)"
+  },
+  "gb18030_equivalence": "TextDecoder('gb18030',{fatal:true}) throws on the same byte classes encoding_rs rejects: lone trail 0xbf, truncated lead, 0xff, EF BB BF, bad 4-byte 95 32 82 FF; valid 2-byte and 4-byte sequences decode identically (verified via member digest)",
+  "retained_member": {
+    "zip": "official-base.zip sha256 dcdf6b49... (MANIFEST-verified)",
+    "member": "infoharbor_ex.code 182,145B sha256 79eed0f6857ffde3d1d3cc8966ceff6e400f45e6e2387224446e453850fb5281",
+    "parsed": "5,571 rows",
+    "rows_sha256": "124bc22df3c980c016430cf0d468ca752f82a39ad794eb5b59a8532a8b3b2622"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/ex_code_probe.mjs .",
+    "exit": 0,
+    "cases": 38,
+    "totals": {
+      "pass": 38,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "synthetic_oracle": 28,
+      "typed_boundary": 3,
+      "manifest+extract": 2,
+      "member_digest": 1,
+      "member_rows": 4
+    }
+  },
+  "semantics_mirrored": [
+    "strict whole-buffer GB18030 BEFORE splitting (trail bytes can be '|')",
+    ">=3 pipe fields; only code+name bound; keywords uninterpreted incl. extra '|'",
+    "single trailing empty tolerated; mid-empty rejects; LF-only line accepted as one line (verified: name field may embed LF via keywords)",
+    "code exactly six digits; empty name rejects; duplicate code identity rejects (first-seen line pair)",
+    "BadCode/DuplicateCode values rendered via Rust {:?} Debug escaping",
+    "error precedence decode->line->fields->code->name->duplicate; verbatim texts"
+  ],
+  "out_of_scope": "keywords interpretation, catalog scope/compose, DB/services",
+  "limitations": []
+}

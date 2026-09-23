@@ -1,0 +1,33 @@
+{"id":"empty_file","status":"ok","rows":[]}
+{"id":"single_valid","status":"ok","rows":[{"code":"000001","line":1,"name":"平安银行"}]}
+{"id":"four_fields","status":"ok","rows":[{"code":"000002","line":1,"name":"万 科Ａ"}]}
+{"id":"no_trailing_crlf","status":"ok","rows":[{"code":"000001","line":1,"name":"平安银行"}]}
+{"id":"multi_valid","status":"ok","rows":[{"code":"000001","line":1,"name":"平安银行"},{"code":"000002","line":2,"name":"万 科Ａ"},{"code":"600006","line":3,"name":"东风汽车"}]}
+{"id":"decode_ascii_single","status":"error","error":"infoharbor_ex.code line 1 has 1 fields, expected at least 3"}
+{"id":"decode_lone_trail","status":"error","error":"infoharbor_ex.code is not valid GB18030"}
+{"id":"decode_truncated_lead","status":"error","error":"infoharbor_ex.code is not valid GB18030"}
+{"id":"decode_ff","status":"error","error":"infoharbor_ex.code is not valid GB18030"}
+{"id":"decode_efbbbf","status":"error","error":"infoharbor_ex.code is not valid GB18030"}
+{"id":"decode_bad4","status":"error","error":"infoharbor_ex.code is not valid GB18030"}
+{"id":"lf_only","status":"ok","rows":[{"code":"000001","line":1,"name":"abc"}]}
+{"id":"empty_middle_line","status":"error","error":"infoharbor_ex.code line 2 is empty"}
+{"id":"double_trailing_crlf","status":"error","error":"infoharbor_ex.code line 2 is empty"}
+{"id":"field_count_2","status":"error","error":"infoharbor_ex.code line 1 has 2 fields, expected at least 3"}
+{"id":"field_count_1","status":"error","error":"infoharbor_ex.code line 1 has 1 fields, expected at least 3"}
+{"id":"code_5_digits","status":"error","error":"infoharbor_ex.code line 1 code \"00001\" is not exactly six digits"}
+{"id":"code_7_digits","status":"error","error":"infoharbor_ex.code line 1 code \"0000012\" is not exactly six digits"}
+{"id":"code_letter","status":"error","error":"infoharbor_ex.code line 1 code \"00000a\" is not exactly six digits"}
+{"id":"code_with_pipe_extra","status":"ok","rows":[{"code":"000001","line":1,"name":"平安"}]}
+{"id":"empty_name","status":"error","error":"infoharbor_ex.code line 1 has an empty name"}
+{"id":"duplicate_code","status":"error","error":"infoharbor_ex.code code \"000001\" appears more than once (lines 1 and 3)"}
+{"id":"duplicate_adjacent","status":"error","error":"infoharbor_ex.code code \"000001\" appears more than once (lines 1 and 2)"}
+{"id":"precedence_decode_first","status":"error","error":"infoharbor_ex.code is not valid GB18030"}
+{"id":"esc_code_quote","status":"error","error":"infoharbor_ex.code line 1 code \"00000\\\"\" is not exactly six digits"}
+{"id":"esc_code_backslash","status":"error","error":"infoharbor_ex.code line 1 code \"0000\\\\0\" is not exactly six digits"}
+{"id":"esc_code_tab","status":"error","error":"infoharbor_ex.code line 1 code \"0000\\t0\" is not exactly six digits"}
+{"id":"esc_code_nul","status":"error","error":"infoharbor_ex.code line 1 code \"0000\\00\" is not exactly six digits"}
+{"id":"excode_member","status":"ok","rows":5571,"sha256":"124bc22df3c980c016430cf0d468ca752f82a39ad794eb5b59a8532a8b3b2622"}
+{"id":"member_row_0","status":"ok","row":{"code":"000001","line":1,"name":"平安银行"}}
+{"id":"member_row_1","status":"ok","row":{"code":"000002","line":2,"name":"万  科Ａ"}}
+{"id":"member_row_2785","status":"ok","row":{"code":"301486","line":2786,"name":"致尚科技"}}
+{"id":"member_row_5570","status":"ok","row":{"code":"920992","line":5571,"name":"中科美菱"}}

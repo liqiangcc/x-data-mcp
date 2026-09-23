@@ -1,0 +1,38 @@
+{"family":"ex_code","id":"empty_file","status":"PASS","detail":null,"expected":[],"actual":[]}
+{"family":"ex_code","id":"single_valid","status":"PASS","detail":null,"expected":[{"code":"000001","line":1,"name":"平安银行"}],"actual":[{"code":"000001","line":1,"name":"平安银行"}]}
+{"family":"ex_code","id":"four_fields","status":"PASS","detail":null,"expected":[{"code":"000002","line":1,"name":"万 科Ａ"}],"actual":[{"code":"000002","line":1,"name":"万 科Ａ"}]}
+{"family":"ex_code","id":"no_trailing_crlf","status":"PASS","detail":null,"expected":[{"code":"000001","line":1,"name":"平安银行"}],"actual":[{"code":"000001","line":1,"name":"平安银行"}]}
+{"family":"ex_code","id":"multi_valid","status":"PASS","detail":null,"expected":[{"code":"000001","line":1,"name":"平安银行"},{"code":"000002","line":2,"name":"万 科Ａ"},{"code":"600006","line":3,"name":"东风汽车"}],"actual":[{"code":"000001","line":1,"name":"平安银行"},{"code":"000002","line":2,"name":"万 科Ａ"},{"code":"600006","line":3,"name":"东风汽车"}]}
+{"family":"ex_code","id":"decode_ascii_single","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 has 1 fields, expected at least 3","actual":"infoharbor_ex.code line 1 has 1 fields, expected at least 3"}
+{"family":"ex_code","id":"decode_lone_trail","status":"PASS","detail":null,"expected":"infoharbor_ex.code is not valid GB18030","actual":"infoharbor_ex.code is not valid GB18030"}
+{"family":"ex_code","id":"decode_truncated_lead","status":"PASS","detail":null,"expected":"infoharbor_ex.code is not valid GB18030","actual":"infoharbor_ex.code is not valid GB18030"}
+{"family":"ex_code","id":"decode_ff","status":"PASS","detail":null,"expected":"infoharbor_ex.code is not valid GB18030","actual":"infoharbor_ex.code is not valid GB18030"}
+{"family":"ex_code","id":"decode_efbbbf","status":"PASS","detail":null,"expected":"infoharbor_ex.code is not valid GB18030","actual":"infoharbor_ex.code is not valid GB18030"}
+{"family":"ex_code","id":"decode_bad4","status":"PASS","detail":null,"expected":"infoharbor_ex.code is not valid GB18030","actual":"infoharbor_ex.code is not valid GB18030"}
+{"family":"ex_code","id":"lf_only","status":"PASS","detail":null,"expected":[{"code":"000001","line":1,"name":"abc"}],"actual":[{"code":"000001","line":1,"name":"abc"}]}
+{"family":"ex_code","id":"empty_middle_line","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 2 is empty","actual":"infoharbor_ex.code line 2 is empty"}
+{"family":"ex_code","id":"double_trailing_crlf","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 2 is empty","actual":"infoharbor_ex.code line 2 is empty"}
+{"family":"ex_code","id":"field_count_2","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 has 2 fields, expected at least 3","actual":"infoharbor_ex.code line 1 has 2 fields, expected at least 3"}
+{"family":"ex_code","id":"field_count_1","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 has 1 fields, expected at least 3","actual":"infoharbor_ex.code line 1 has 1 fields, expected at least 3"}
+{"family":"ex_code","id":"code_5_digits","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 code \"00001\" is not exactly six digits","actual":"infoharbor_ex.code line 1 code \"00001\" is not exactly six digits"}
+{"family":"ex_code","id":"code_7_digits","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 code \"0000012\" is not exactly six digits","actual":"infoharbor_ex.code line 1 code \"0000012\" is not exactly six digits"}
+{"family":"ex_code","id":"code_letter","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 code \"00000a\" is not exactly six digits","actual":"infoharbor_ex.code line 1 code \"00000a\" is not exactly six digits"}
+{"family":"ex_code","id":"code_with_pipe_extra","status":"PASS","detail":null,"expected":[{"code":"000001","line":1,"name":"平安"}],"actual":[{"code":"000001","line":1,"name":"平安"}]}
+{"family":"ex_code","id":"empty_name","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 has an empty name","actual":"infoharbor_ex.code line 1 has an empty name"}
+{"family":"ex_code","id":"duplicate_code","status":"PASS","detail":null,"expected":"infoharbor_ex.code code \"000001\" appears more than once (lines 1 and 3)","actual":"infoharbor_ex.code code \"000001\" appears more than once (lines 1 and 3)"}
+{"family":"ex_code","id":"duplicate_adjacent","status":"PASS","detail":null,"expected":"infoharbor_ex.code code \"000001\" appears more than once (lines 1 and 2)","actual":"infoharbor_ex.code code \"000001\" appears more than once (lines 1 and 2)"}
+{"family":"ex_code","id":"precedence_decode_first","status":"PASS","detail":null,"expected":"infoharbor_ex.code is not valid GB18030","actual":"infoharbor_ex.code is not valid GB18030"}
+{"family":"ex_code","id":"esc_code_quote","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 code \"00000\\\"\" is not exactly six digits","actual":"infoharbor_ex.code line 1 code \"00000\\\"\" is not exactly six digits"}
+{"family":"ex_code","id":"esc_code_backslash","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 code \"0000\\\\0\" is not exactly six digits","actual":"infoharbor_ex.code line 1 code \"0000\\\\0\" is not exactly six digits"}
+{"family":"ex_code","id":"esc_code_tab","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 code \"0000\\t0\" is not exactly six digits","actual":"infoharbor_ex.code line 1 code \"0000\\t0\" is not exactly six digits"}
+{"family":"ex_code","id":"esc_code_nul","status":"PASS","detail":null,"expected":"infoharbor_ex.code line 1 code \"0000\\00\" is not exactly six digits","actual":"infoharbor_ex.code line 1 code \"0000\\00\" is not exactly six digits"}
+{"family":"ex_code","id":"reject_string","status":"PASS","detail":"invalid_input: infoharbor_ex.code input must be a Buffer or Uint8Array","expected":null,"actual":null}
+{"family":"ex_code","id":"reject_null","status":"PASS","detail":"invalid_input: infoharbor_ex.code input must be a Buffer or Uint8Array","expected":null,"actual":null}
+{"family":"ex_code","id":"accept_uint8array","status":"PASS","detail":null,"expected":null,"actual":null}
+{"family":"ex_code","id":"manifest_zip","status":"PASS","detail":"official-base.zip sha256","expected":null,"actual":null}
+{"family":"ex_code","id":"member_extract","status":"PASS","detail":"182145B sha256=79eed0f6857ffde3d1d3cc8966ceff6e400f45e6e2387224446e453850fb5281","expected":null,"actual":null}
+{"family":"ex_code","id":"excode_member","status":"PASS","detail":"rows=5571 sha256=124bc22df3c980c016430cf0d468ca752f82a39ad794eb5b59a8532a8b3b2622","expected":{"rows":5571,"sha256":"124bc22df3c980c016430cf0d468ca752f82a39ad794eb5b59a8532a8b3b2622"},"actual":null}
+{"family":"ex_code","id":"member_row_0","status":"PASS","detail":null,"expected":{"code":"000001","line":1,"name":"平安银行"},"actual":{"code":"000001","line":1,"name":"平安银行"}}
+{"family":"ex_code","id":"member_row_1","status":"PASS","detail":null,"expected":{"code":"000002","line":2,"name":"万  科Ａ"},"actual":{"code":"000002","line":2,"name":"万  科Ａ"}}
+{"family":"ex_code","id":"member_row_2785","status":"PASS","detail":null,"expected":{"code":"301486","line":2786,"name":"致尚科技"},"actual":{"code":"301486","line":2786,"name":"致尚科技"}}
+{"family":"ex_code","id":"member_row_5570","status":"PASS","detail":null,"expected":{"code":"920992","line":5571,"name":"中科美菱"},"actual":{"code":"920992","line":5571,"name":"中科美菱"}}
