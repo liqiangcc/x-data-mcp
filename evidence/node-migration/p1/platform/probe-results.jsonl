@@ -1,0 +1,14 @@
+{"case":"runtime","status":"INFO","detail":null,"evidence":{"node":"v20.19.2","npm_execpath":null,"better_sqlite3":"11.10.0"}}
+{"case":"node:sqlite","status":"NOT_RUN","detail":"ERR_UNKNOWN_BUILTIN_MODULE: requires Node >=22.5; system Node is v20.19.2","evidence":null}
+{"case":"open_schema19_readonly","status":"PASS","detail":null,"evidence":{"user_version":19,"journal_mode":"wal","table_count":31,"required_present":["tasks","requests","scope_occupancy"]}}
+{"case":"open_schema18_readonly","status":"PASS","detail":null,"evidence":{"user_version":18,"table_count":30}}
+{"case":"empty_db_schema_detection","status":"PASS","detail":null,"evidence":{"tables":0,"user_version":0,"rust_equivalent":"STORAGE_UNAVAILABLE: connection pragmas differ from task contract"}}
+{"case":"garbage_db_rejected","status":"PASS","detail":"SQLITE_NOTADB file is not a database","evidence":null}
+{"case":"tx_commit","status":"PASS","detail":null,"evidence":{"rows":[{"v":"a","k":"req-1"}]}}
+{"case":"tx_rollback","status":"PASS","detail":null,"evidence":{"thrown":"SQLITE_CONSTRAINT_PRIMARYKEY","rows_after":1}}
+{"case":"bigint_precision","status":"PASS","detail":null,"evidence":{"roundtrip":["9007199254740993","-9223372036854775808","9223372036854775807","12345678901234567"],"all_bigint":true}}
+{"case":"default_int64_boundary","status":"PASS","detail":null,"evidence":{"note":"without safeIntegers, i64 beyond 2^53 loses precision — adapter must opt in","raw":[9007199254740992,-9223372036854776000,9223372036854776000,12345678901234568]}}
+{"case":"wal_checkpoint","status":"PASS","detail":null,"evidence":{"journal_mode":"wal","wal_bytes_during_write":8272,"wal_bytes_after_truncate_checkpoint":0}}
+{"case":"busy_locking","status":"PASS","detail":null,"evidence":{"writer_holds":"EXCLUSIVE","second_writer":"SQLITE_BUSY","concurrent_read":0}}
+{"case":"readonly_write_rejected","status":"PASS","detail":"SQLITE_READONLY attempt to write a readonly database","evidence":null}
+{"case":"no_implicit_migration","status":"PASS","detail":null,"evidence":{"user_version":0,"size_bytes":0,"note":"init/upgrade must be explicit ops, mirroring Rust boundary"}}
