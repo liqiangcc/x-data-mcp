@@ -8,7 +8,7 @@ fsync-dir.
 
 ## Contents
 
-- `probe-results.jsonl` — 30 rows, all PASS (19 live Rust oracle +
+- `probe-results.jsonl` — 35 rows, all PASS (19 live Rust oracle +
   10 request_id/boundary + 1 durability observation).
 - `rust-oracle.jsonl` — live oracle incl. reopen/installed-ids rows.
 - `negative-selftest.jsonl` — exit-1 proof.
@@ -35,3 +35,5 @@ R1 (REVIEW-NM-033): UTF-8 byte sort for installed_ids (unicode case),
 atomic renameat2(RENAME_NOREPLACE) via committed N-API source (built at
 probe time; .node uncommitted regenerable), strict ENOENT-only absence,
 atomic exclusive mkdir for create_stage.
+
+R2: native binding rejects NUL/truncated/non-string paths (EINVAL before syscall); direct native conflict proof EEXIST+both-intact, distinct from store precheck.

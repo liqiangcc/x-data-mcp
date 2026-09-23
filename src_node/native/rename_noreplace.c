@@ -25,11 +25,24 @@ static napi_value rename_noreplace(napi_env env, napi_callback_info info) {
     return NULL;
   }
   char src[4096], dst[4096];
+  /* Length-check first: get_value_string_utf8 writes at most buflen-1
+   * and reports bytes copied, so a truncated copy is invisible to a
+   * post-copy size check. Query the full length, reject overflow, then
+   * verify the copy is complete and contains no embedded NUL (which
+   * would silently mutate which path the syscall operates on). */
+  size_t len1 = 0, len2 = 0;
+  if (napi_get_value_string_utf8(env, argv[0], NULL, 0, &len1) != napi_ok ||
+      napi_get_value_string_utf8(env, argv[1], NULL, 0, &len2) != napi_ok ||
+      len1 >= sizeof src || len2 >= sizeof dst) {
+    napi_throw_type_error(env, "EINVAL", "paths must be utf8 strings < 4096 bytes");
+    return NULL;
+  }
   size_t n1 = 0, n2 = 0;
   if (napi_get_value_string_utf8(env, argv[0], src, sizeof src, &n1) != napi_ok ||
       napi_get_value_string_utf8(env, argv[1], dst, sizeof dst, &n2) != napi_ok ||
-      n1 >= sizeof src || n2 >= sizeof dst) {
-    napi_throw_type_error(env, "EINVAL", "paths must be utf8 strings < 4096 bytes");
+      n1 != len1 || n2 != len2 ||
+      strlen(src) != n1 || strlen(dst) != n2) {
+    napi_throw_type_error(env, "EINVAL", "paths must be utf8 strings without embedded NUL");
     return NULL;
   }
   int rc = syscall(SYS_renameat2, AT_FDCWD, src, AT_FDCWD, dst, RENAME_NOREPLACE);

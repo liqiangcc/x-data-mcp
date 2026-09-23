@@ -1,6 +1,6 @@
 {
-  "task_id": "NM-033-R1",
-  "baseline_sha": "af866dae7451aa088fb1d7964f3b822c2b73d435 (R0)",
+  "task_id": "NM-033-R2",
+  "baseline_sha": "41e111040e848910f0491703e58679907bcf84ae (R1)",
   "source_ported": "generation/mod.rs::{create_stage,staged_manifest,install_staged,installed_ids} — immutable generation staging + install",
   "rust_oracle": "rust-oracle.jsonl — 16 cases via live Store (rustc 1.98.1): staging/unverified_stage/json/not_verified/already_installed + reopen durability rows",
   "environment": {
@@ -21,16 +21,17 @@
   "probe": {
     "command": "node scripts/node_migration_p2/generation_store_probe.mjs .",
     "exit": 0,
-    "cases": 30,
+    "cases": 35,
     "totals": {
-      "pass": 30,
+      "pass": 35,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
       "live_rust_oracle": 19,
       "typed_boundary": 10,
-      "durability_note": 1
+      "durability_note": 1,
+      "native_direct": 5
     },
     "selftest": "node ... store -> exit 1 (negative-selftest.jsonl)"
   },
@@ -43,11 +44,16 @@
   "also_fixed": "stale post-fstat comment in generation_usable.mjs per REVIEW-NM-032-FINAL (comment only)",
   "purity": "local fs only; no official download/copy, no active pointer/decision/pin/retire/service/DB",
   "untested_crash_cases": "mid-rename crash, fsync failure, cross-device rename — not exercised (no fault injection available); overlayfs rename semantics assumed same-fs",
-  "review": "REVIEW-NM-033 R0 — three findings fixed",
+  "review": "REVIEW-NM-033-R1 — native NUL/length boundary + direct conflict proof",
   "r1_fixes": {
     "utf8_sort": "installedIds sorts via Buffer.compare on UTF-8 bytes (Rust Vec<String>::sort semantics); oracle case installed_ids_unicode pins [U+E000, U+10000] order",
     "atomic_noreplace": "src_node/native/rename_noreplace.c — N-API binding to renameat2(RENAME_NOREPLACE); build: gcc -shared -fPIC -O2 -o rename_noreplace.node rename_noreplace.c -I/usr/include/node (libnode-dev headers, same toolchain recipe as P1 linux_guards; .node artifact not committed). Empty pre-created target -> EEXIST -> already_installed verbatim, stage+target intact (install_empty_target/target_still_empty/stage_preserved)",
     "exists_strict": "exists() replaced by statOrNull — only ENOENT/ENOTDIR mean absent; other errors propagate as io. createStage uses atomic exclusive mkdirSync (EEXIST -> staging refusal) instead of exists+recursive-mkdir."
   },
-  "native_binding": "rename_noreplace.c committed source; .node built at probe time (ABI-stable N-API); absence fails closed at module load"
+  "native_binding": "rename_noreplace.c committed source; .node built at probe time (ABI-stable N-API); absence fails closed at module load",
+  "r2_fixes": {
+    "native_nul": "rename_noreplace.c now queries full UTF-8 length first, rejects >=4096, verifies complete copy and strlen==copied (embedded NUL -> EINVAL before syscall)",
+    "direct_conflict": "probe calls the native binding directly: NUL/long/non-string -> EINVAL; existing empty target -> EEXIST with both dirs intact; happy-path rename verified. Distinct from the store-precheck proof (install_empty_target)",
+    "packaging_note": "probe-time gcc build is development evidence only; production packaging is P6 — not claimed"
+  }
 }

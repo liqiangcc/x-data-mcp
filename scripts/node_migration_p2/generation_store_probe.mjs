@@ -193,6 +193,32 @@ const bnd = (id, fn, kind = "invalid_request_id") => {
   emit("durability_note", existsSync(join(FIX, "generations", GID)) ? "PASS" : "FAIL", "installed dir persists across reopen");
 }
 
+// ---------- direct native-boundary proof (not via store precheck) ----------
+{
+  const { createRequire } = await import("node:module");
+  const native = createRequire(import.meta.url)("../../src_node/native/rename_noreplace.node");
+  const nsrc = join(FIX, "nat-src"), ndst = join(FIX, "nat-dst");
+  mkdirSync(nsrc); mkdirSync(ndst);
+  // embedded NUL must reject EINVAL, source intact
+  try { native.rename_noreplace(nsrc + " ignored", join(FIX, "nat-x")); emit("native_nul_reject", "FAIL", "NUL path accepted"); }
+  catch (e) { emit("native_nul_reject", e.code === "EINVAL" && existsSync(nsrc) ? "PASS" : "FAIL", `code=${e.code}`); }
+  // overlong path rejects EINVAL
+  try { native.rename_noreplace(nsrc, join(FIX, "x".repeat(5000))); emit("native_long_reject", "FAIL", "long path accepted"); }
+  catch (e) { emit("native_long_reject", e.code === "EINVAL" ? "PASS" : "FAIL", `code=${e.code}`); }
+  // non-string rejects
+  try { native.rename_noreplace(42, ndst); emit("native_nonstr_reject", "FAIL", "non-string accepted"); }
+  catch (e) { emit("native_nonstr_reject", e.code === "EINVAL" ? "PASS" : "FAIL", `code=${e.code}`); }
+  // DIRECT conflict proof: existing empty target -> EEXIST, both intact
+  // (bypasses the store's statOrNull precheck entirely)
+  try { native.rename_noreplace(nsrc, ndst); emit("native_conflict_eexist", "FAIL", "replaced existing target"); }
+  catch (e) {
+    emit("native_conflict_eexist", e.code === "EEXIST" && existsSync(nsrc) && readdirEmpty(ndst) ? "PASS" : "FAIL", `code=${e.code}`);
+  }
+  // happy path
+  try { native.rename_noreplace(nsrc, join(FIX, "nat-moved")); emit("native_move_ok", existsSync(join(FIX, "nat-moved")) && !existsSync(nsrc) ? "PASS" : "FAIL", "renamed"); }
+  catch (e) { emit("native_move_ok", "FAIL", e.message); }
+}
+
 // selftest
 if (SELFTEST === "store") {
   const s = new GenerationStore(join(FIX, "self"));
