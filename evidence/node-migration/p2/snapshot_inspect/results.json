@@ -1,9 +1,9 @@
 {
-  "task_id": "NM-026-R1",
-  "baseline_sha": "c456cbb2e67a2fab565fd2a7095524b823231872 (initial: 6c8718d)",
-  "review": "REVIEW-NM-026 R1 — confirmed Rust/Node fail-closed gaps + verifier/evidence gaps; all fixed",
+  "task_id": "NM-026-R2",
+  "baseline_sha": "68f67eadaba0155cdeaa9f702d45f2abe3f23a32 (R1) / 6c8718d (initial)",
+  "review": "REVIEW-NM-026 R2 — four live Rust differentials confirmed by Lead; all fixed with oracle evidence",
   "source_ported": "src/snapshot.rs::inspect (read-only governance primitive)",
-  "rust_oracle": "rust-oracle.jsonl — 53 rows: 40 error + 13 ok incl. real_gen2 full Inspection (live rustc 1.98.1 + x_data_mcp rlib)",
+  "rust_oracle": "rust-oracle.jsonl — 59 rows: 46 error + 13 ok incl. real_gen2 (live rustc 1.98.1 + x_data_mcp rlib)",
   "environment": {
     "node": "v20.19.2",
     "module": "src_node/governance/snapshot.mjs"
@@ -22,22 +22,22 @@
     "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
     "inspection": "byte-identical to Rust; FILE_BYTES_VERIFIED; roles sorted; limitation strings verbatim",
     "measurement": {
-      "elapsed_ms": 517.2,
-      "peak_rss_mib": 64.3,
+      "elapsed_ms": 546.9,
+      "peak_rss_mib": 63.7,
       "note": "VmHWM whole-process incl. streamed pins + 549MB streamed artifact hash; bounded verification only, no perf claim"
     }
   },
   "probe": {
     "command": "node scripts/node_migration_p2/snapshot_probe.mjs .",
     "exit": 0,
-    "cases": 60,
+    "cases": 66,
     "totals": {
-      "pass": 60,
+      "pass": 66,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
-      "synthetic_oracle": 52,
+      "synthetic_oracle": 58,
       "typed_boundary": 3,
       "real_retained_sha": 3,
       "real_gen2_inspection": 1,
@@ -47,7 +47,22 @@
   },
   "node_specific_deltas": [
     "json/io message text differs from serde/io::Error (category preserved; invalid/mismatch verbatim)",
-    "ms-precision instant for interval compare: sub-ms nanos truncate; leap :60 compares as :59 (<1s skew) — output preserves literal :60 and nanos via 3-digit groups"
+    "interval ordering exact at ns scale incl. leap-second slot; only same-leap-second fractions compare equal (documented)",
+    "frac digits >9 truncated to nanos in output and ordering (chrono-equivalent domain)"
   ],
-  "out_of_scope": "inspect_snapshot CLI, source executor, download, activation, SQLite, services"
+  "out_of_scope": "inspect_snapshot CLI, source executor, download, activation, SQLite, services",
+  "r2_fixes": {
+    "__proto__": "strictJson objects now Object.create(null) — '__proto__' stays an own key -> unknown field json reject (was proto-setter swallow -> success)",
+    "lone_surrogate": "strictJson \\u escapes validate surrogate pairs: unpaired high/low -> json reject (was String.fromCharCode accepting)",
+    "offset_minutes": "offset components bounded: HH<=23 AND MM<=59 (+00:99, +23:60 reject; +23:59 parses then interval-checks)",
+    "nanosecond_interval": "interval compare on ns*2 ordering keys — .000000001 > .000 inversion caught; leap :60 = (next minute)*2-1 orders strictly between :59.999999999 and next minute; frac-on-leap ordering collapsed (documented)",
+    "oracle_cases": [
+      "proto_field",
+      "lone_surrogate",
+      "ts_off_0099",
+      "ts_off_2360",
+      "ts_off_2359_ok",
+      "ts_nanos_inverted"
+    ]
+  }
 }

@@ -163,6 +163,16 @@ const CASES = {
   ts_off24: () => [fx("ts_off24", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00+24:00")},${gg()}`))],
   ts_nanos: () => [fx("ts_nanos", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00.123456789Z")},${gg()}`))],
   ts_frac_500: () => [fx("ts_frac_500", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00.5Z")},${gg()}`))],
+  // ---- R2: __proto__ / lone surrogate / offset bounds / ns interval ----
+  proto_field: () => [fx("proto", std), B(
+    `{"__proto__":{"evil":true},"schema":"x-data-mcp.official-file-input.v1","files":[${good()},${gd()},${gg()}]}`)],
+  lone_surrogate: () => [fx("surr", std), B(
+    man(`${good().replace('"last_modified":null', '"last_modified":"x\\ud800y"')},${gd()},${gg()}`))],
+  ts_off_0099: () => [fx("ts_off_0099", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00+00:99")},${gg()}`))],
+  ts_off_2360: () => [fx("ts_off_2360", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00+23:60")},${gg()}`))],
+  ts_off_2359_ok: () => [fx("ts_off_2359_ok", std), B(man(`${good()},${gd().replace("2026-09-11T02:00:00Z", "2026-09-11T02:00:00+23:59")},${gg()}`))],
+  ts_nanos_inverted: () => [fx("ts_nanos_inverted", std), B(man(
+    `${good()},${gd().replace("2026-09-11T01:00:00Z", "2026-09-11T01:00:00.000000001Z").replace("2026-09-11T02:00:00Z", "2026-09-11T01:00:00Z")},${gg()}`))],
 };
 
 for (const o of oracle.filter((r) => r.id !== "real_gen2")) {

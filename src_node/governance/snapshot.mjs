@@ -60,7 +60,7 @@ function strictJson(text) {
     const ch = text[i];
     if (ch === "{") {
       i++;
-      const obj = {};
+      const obj = Object.create(null); // "__proto__" must stay an own key
       const seen = new Set();
       ws();
       if (text[i] === "}") { i++; return obj; }
@@ -114,7 +114,22 @@ function strictJson(text) {
           const h = text.slice(i, i + 4);
           if (!/^[0-9a-fA-F]{4}$/.test(h)) fail("invalid \\u escape");
           i += 4;
-          out += String.fromCharCode(parseInt(h, 16));
+          let cp = parseInt(h, 16);
+          // serde rejects unpaired JSON \u surrogates
+          if (cp >= 0xd800 && cp <= 0xdbff) {
+            if (text[i] !== "\\" || text[i + 1] !== "u") fail("lone leading surrogate in hex escape");
+            const h2 = text.slice(i + 2, i + 6);
+            if (!/^[0-9a-fA-F]{4}$/.test(h2)) fail("invalid \\u escape");
+            const lo = parseInt(h2, 16);
+            if (lo < 0xdc00 || lo > 0xdfff) fail("lone leading surrogate in hex escape");
+            i += 6;
+            cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
+            out += String.fromCodePoint(cp);
+          } else if (cp >= 0xdc00 && cp <= 0xdfff) {
+            fail("lone trailing surrogate in hex escape");
+          } else {
+            out += String.fromCharCode(cp);
+          }
         } else {
           const map = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
           if (!(e in map)) fail("invalid escape");
@@ -137,10 +152,12 @@ function strictJson(text) {
 }
 
 // chrono RFC3339: `[Tt ]` separator, required Z/z or ±HH:MM offset
-// (<24h), second may be 60 (leap) on any minute, calendar strict, frac
-// digits -> nanos (AutoSi output: 3-digit groups). Node represents the
-// instant at ms precision; leap `:60` compares as `:59` (<1s skew) and
-// re-emits literally — both documented deltas.
+// (HH<=23, MM<=59), second may be 60 (leap) on any minute, calendar
+// strict, frac digits -> nanos (AutoSi output: 3-digit groups).
+// Interval comparison uses full nanosecond precision on a x2 scale so
+// leap :60 orders strictly between :59.999999999 and the next minute —
+// no representational skew in ordering. Output preserves literal :60
+// and nanos; `ms` is retained only for Date construction.
 const TS_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|([+-])(\d{2}):(\d{2}))$/;
 const DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 function parseTs(s) {
@@ -152,21 +169,28 @@ function parseTs(s) {
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   if (month < 1 || month > 12 || day < 1 || day > DIM[month - 1] + (month === 2 && leap ? 1 : 0) ||
       hour > 23 || min > 59 || sec > 60) return null;
+  // offset: each component bounded (chrono rejects +00:99 / +23:60 / +24:00)
+  if (oh !== undefined && (+oh > 23 || +om > 59)) return null;
   const offMin = oh === undefined ? 0 : (+oh * 60 + +om) * (sign === "-" ? -1 : 1);
-  if (oh !== undefined && +oh * 60 + +om >= 24 * 60) return null;
   // nanos canonical: input digits -> ns (truncate beyond 9), output in
   // 3-digit groups per chrono AutoSi.
   let fracOut = "";
-  let fracMs = 0;
+  let fracNs = 0n;
   if (frac !== undefined) {
     const ns9 = (frac.slice(0, 9) + "000000000").slice(0, 9);
     let g = ns9;
     while (g.length > 3 && g.endsWith("000")) g = g.slice(0, -3);
     if (!/^0+$/.test(g)) fracOut = "." + g;
-    fracMs = Math.floor(parseInt(ns9, 10) / 1e6);
+    fracNs = BigInt(ns9);
   }
   const baseSec = sec === 60 ? 59 : sec;
-  const ms = Date.UTC(year, month - 1, day, hour, min, baseSec, fracMs) - offMin * 60000;
+  const wallMs = Date.UTC(year, month - 1, day, hour, min, baseSec, 0);
+  const fracMs = Number(fracNs / 1_000_000n);
+  const ms = wallMs + fracMs - offMin * 60000;
+  // ns2 ordering key: normal instant = ns*2; leap second = (next minute)*2 - 1
+  // so it sorts strictly after :59.999999999 and before the next minute.
+  const secNs = BigInt(wallMs - offMin * 60000) * 1_000_000n + fracNs;
+  const ns2 = sec === 60 ? (secNs + 1_000_000_000n - fracNs) * 2n - 1n : secNs * 2n;
   // canonical output: UTC date/time + frac + Z; leap second stays in the
   // (offset-adjusted) minute — chrono emits e.g. 22:59:60Z.
   const dt = new Date(ms);
@@ -174,7 +198,7 @@ function parseTs(s) {
   const out = `${pad(dt.getUTCFullYear(), 4)}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}` +
     `T${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}:${pad(sec === 60 ? 60 : dt.getUTCSeconds())}` +
     fracOut + "Z";
-  return { ms, out };
+  return { ms, ns2, out };
 }
 
 function declaredOfficialUrl(role, url) {
@@ -282,9 +306,10 @@ export function inspect(manifestBytes, root, now) {
     if (!declaredOfficialUrl(input.role, input.source_url)) {
       throw invalid("expected role-specific declared TDX http(s) URL");
     }
-    const started = parseTs(input.acquisition_started_at).ms;
-    const completed = parseTs(input.acquisition_completed_at).ms;
-    if (started > completed || completed > nowMs) {
+    const started = parseTs(input.acquisition_started_at).ns2;
+    const completed = parseTs(input.acquisition_completed_at).ns2;
+    const nowNs2 = BigInt(nowMs) * 2_000_000n;
+    if (started > completed || completed > nowNs2) {
       throw invalid("inverted/future acquisition interval");
     }
     if (input.bytes === 0 || !/^[0-9a-f]{64}$/.test(input.sha256)) {
