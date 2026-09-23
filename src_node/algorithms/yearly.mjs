@@ -43,8 +43,79 @@ const decMax = (xs) => xs.reduce((a, b) => (decCmp(a, b) >= 0 ? a : b));
 const decMin = (xs) => xs.reduce((a, b) => (decCmp(a, b) <= 0 ? a : b));
 
 const confirmed = (e) => e != null && e.confirmed === true;
-const ymdOf = (iso) => Number(iso.slice(0, 4) + iso.slice(5, 7) + iso.slice(8, 10));
-const yearOf = (iso) => Number(iso.slice(0, 4));
+
+// Typed boundary (REVIEW-NM-019): Rust receives NaiveDate/BTreeSet<i32>/
+// Decimal — values that cannot exist there. Malformed JS inputs must
+// reject deterministically instead of producing NaN comparisons or
+// coerced fragments. Checked BEFORE the Rust validation order.
+export class YearlyTypedBoundaryError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "YearlyTypedBoundaryError";
+    this.kind = "typed_boundary";
+  }
+}
+
+const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+// Strict proleptic-Gregorian ISO date -> yyyymmdd int (same strictness as
+// the .day parser: year 1..9999, month 1..12, day within month incl. leap).
+const ymdOf = (iso) => {
+  const m = ISO_RE.exec(typeof iso === "string" ? iso : "");
+  if (!m) throw new YearlyTypedBoundaryError(`expected strict YYYY-MM-DD date, got ${iso}`);
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (y < 1 || y > 9999 || mo < 1 || mo > 12 || d < 1 || d > 31) {
+    throw new YearlyTypedBoundaryError(`invalid calendar date: ${iso}`);
+  }
+  const t = new Date(0);
+  t.setUTCFullYear(y, mo - 1, d);
+  t.setUTCHours(0, 0, 0, 0);
+  if (t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d) {
+    throw new YearlyTypedBoundaryError(`invalid calendar date: ${iso}`);
+  }
+  return y * 10000 + mo * 100 + d;
+};
+const yearOf = (iso) => Math.floor(ymdOf(iso) / 10000);
+
+// Dec shape check: {m: BigInt, s: integer 0..28}
+const isDec = (v) =>
+  v !== null && typeof v === "object" && typeof v.m === "bigint" &&
+  Number.isInteger(v.s) && v.s >= 0 && v.s <= 28;
+const checkDec = (v, field) => {
+  if (!isDec(v)) throw new YearlyTypedBoundaryError(`${field} must be a Dec {m:bigint,s:0..28}`);
+};
+const checkDecOpt = (v, field) => {
+  if (v === undefined || (v !== null && !isDec(v))) {
+    throw new YearlyTypedBoundaryError(`${field} must be a Dec or null`);
+  }
+};
+
+const I32_MIN = -2147483648, I32_MAX = 2147483647;
+const checkYear = (y, field) => {
+  if (!Number.isInteger(y) || y < I32_MIN || y > I32_MAX) {
+    throw new YearlyTypedBoundaryError(`${field} must be an i32 integer year, got ${y}`);
+  }
+};
+
+const validateDaily = (daily) => {
+  if (daily === null || typeof daily !== "object" || Array.isArray(daily)) {
+    throw new YearlyTypedBoundaryError("daily must be an EffectiveVersion-shaped object");
+  }
+  if (!Array.isArray(daily.records)) {
+    throw new YearlyTypedBoundaryError("daily.records must be an array");
+  }
+  daily.records.forEach((b, i) => {
+    if (b === null || typeof b !== "object") {
+      throw new YearlyTypedBoundaryError(`records[${i}] must be a bar object`);
+    }
+    ymdOf(b.date); // strict calendar validation per bar
+    checkDec(b.open, `records[${i}].open`);
+    checkDec(b.high, `records[${i}].high`);
+    checkDec(b.low, `records[${i}].low`);
+    checkDec(b.close, `records[${i}].close`);
+    checkDecOpt(b.volume, `records[${i}].volume`);
+    checkDecOpt(b.amount, `records[${i}].amount`);
+  });
+};
 
 function sumKnown(values, unitConfirmed) {
   if (!unitConfirmed) return null;
@@ -81,6 +152,16 @@ function sumKnown(values, unitConfirmed) {
  * Returns {symbol, source, base_daily_version_id, as_of, unit_currency, records}.
  */
 export function aggregate(daily, years, asOf) {
+  // Typed boundary first (deterministic rejects for malformed JS input);
+  // then the Rust validation order for valid typed inputs.
+  validateDaily(daily);
+  const asOfYmd = ymdOf(asOf);
+  if (years !== null) {
+    if (!Array.isArray(years)) {
+      throw new YearlyTypedBoundaryError("years must be an array of i32 years or null");
+    }
+    years.forEach((y, i) => checkYear(y, `years[${i}]`));
+  }
   if (daily.period !== "day" || daily.yearly_derivation != null ||
       typeof daily.version_id !== "string" || daily.version_id.trim() === "" ||
       typeof daily.symbol !== "string" || daily.symbol.trim() === "" ||
@@ -94,19 +175,19 @@ export function aggregate(daily, years, asOf) {
   if (daily.records.length === 0 || (years !== null && years.length === 0)) {
     throw invalidInput("empty input or selection");
   }
-  const asOfYmd = ymdOf(asOf);
-  const asOfYear = yearOf(asOf);
+  const asOfYear = Math.floor(asOfYmd / 10000);
   const groups = [];
   let previousYmd = null;
   daily.records.forEach((bar, index) => {
     const ymd = ymdOf(bar.date);
-    if (yearOf(bar.date) <= 0 || ymd > asOfYmd ||
+    const volume = bar.volume ?? null, amount = bar.amount ?? null;
+    if (Math.floor(ymd / 10000) <= 0 || ymd > asOfYmd ||
         (previousYmd !== null && previousYmd >= ymd) ||
         decCmp(bar.high, bar.low) < 0 || decCmp(bar.open, bar.low) < 0 ||
         decCmp(bar.open, bar.high) > 0 || decCmp(bar.close, bar.low) < 0 ||
         decCmp(bar.close, bar.high) > 0 ||
-        (bar.volume !== null && bar.volume.m < 0n) ||
-        (bar.amount !== null && bar.amount.m < 0n)) {
+        (volume !== null && volume.m < 0n) ||
+        (amount !== null && amount.m < 0n)) {
       throw invalidInput("invalid bar or date order");
     }
     previousYmd = ymd;
@@ -131,7 +212,7 @@ export function aggregate(daily, years, asOf) {
     const first = bars[0], last = bars[bars.length - 1];
     records.push({
       bar: {
-        amount: sumKnown(bars.map((b) => b.amount),
+        amount: sumKnown(bars.map((b) => b.amount ?? null),
           confirmed(daily.unit_currency.amount_unit) &&
           confirmed(daily.unit_currency.amount_currency)),
         close: last.close,
@@ -140,7 +221,7 @@ export function aggregate(daily, years, asOf) {
         low: decMin(bars.map((b) => b.low)),
         open: first.open,
         r7_raw: null,
-        volume: sumKnown(bars.map((b) => b.volume),
+        volume: sumKnown(bars.map((b) => b.volume ?? null),
           confirmed(daily.unit_currency.volume_unit)),
       },
       lineage: {

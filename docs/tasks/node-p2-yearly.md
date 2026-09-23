@@ -5,7 +5,7 @@
 关联：Epic #271。来源：`src/yearly.rs::aggregate` + `sum_known`。上游：NM-013 Dec 引擎。
 证据：`evidence/node-migration/p2/yearly/`（probe-results.jsonl 26 行全 PASS、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
 
-**结果：26/26 PASS / 0 FAIL —— 5 个 P0 golden + 20 个 Rust 实测边界全过。**
+**结果（R1）：52/52 PASS / 0 FAIL —— 5 个 P0 golden + 20 个 Rust 实测边界 + 26 个类型边界回归（REVIEW-NM-019 修复后）。**
 
 ## 1. 移植：`src_node/algorithms/yearly.mjs`
 
@@ -28,6 +28,7 @@
 | golden | 5（two_years、missing_year、None 传播、MAX×4 溢出、乱序拒） | PASS |
 | rust_oracle | 20（selected year/both、空选择、as_of 在 bar 前/中、adjustment unknown/非qfq、volume/amount 单位未知、open>high、负 volume/amount、重复日期、空记录、**精确 MAX 和**、精度损失、blank version_id、already-yearly） | PASS |
 | 补充 | 1（0.05+0.05 精确和，验证无 Number 路径） | PASS |
+| typed_boundary（R1） | 26（asOf junk/Feb-30/月13/日0/年0/残缺/数字/null；bar 日期同类；years 浮点/字符串/NaN/Inf/>i32/非数组；daily null/records 非数组/Dec 字段畸形/scale>28/volume undefined；边界先于 Rust 层；i32 边缘年仍达 MissingYear） | PASS |
 
 ## 3. 范围边界
 
@@ -39,7 +40,7 @@
 
 | 命令 | 退出码 |
 |---|---|
-| `node scripts/node_migration_p2/yearly_probe.mjs .` | 0（26 PASS） |
+| `node scripts/node_migration_p2/yearly_probe.mjs .` | 0（52 PASS，R1） |
 | `rustc` oracle（`target/debug/yearly_oracle`） | 0 |
 | `json.tool` / `sha256sum -c` / `git diff --check` | 0 |
 

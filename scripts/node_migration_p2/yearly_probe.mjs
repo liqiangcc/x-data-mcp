@@ -140,6 +140,51 @@ for (const o of oracle) {
   }
 }
 
+// ---------- typed-boundary regressions (REVIEW-NM-019) ----------
+const bnd = (id, fn) => {
+  try { fn(); emit(id, "FAIL", "accepted malformed input"); }
+  catch (e) { emit(id, e.kind === "typed_boundary" ? "PASS" : "FAIL", `${e.name}(${e.kind}): ${e.message}`); }
+};
+const D = fourBars();
+bnd("asof_junk", () => aggregate(D, null, "junk"));
+bnd("asof_feb30", () => aggregate(D, null, "2023-02-30"));
+bnd("asof_month13", () => aggregate(D, null, "2024-13-01"));
+bnd("asof_day0", () => aggregate(D, null, "2024-01-00"));
+bnd("asof_year0", () => aggregate(D, null, "0000-06-01"));
+bnd("asof_partial", () => aggregate(D, null, "2024-6-1"));
+bnd("asof_number", () => aggregate(D, null, 20240601));
+bnd("asof_null", () => aggregate(D, null, null));
+bnd("bar_date_feb30", () => aggregate(version([{ ...D.records[0], date: "2023-02-30" }]), null, "2024-06-01"));
+bnd("bar_date_junk", () => aggregate(version([{ ...D.records[0], date: "junk" }]), null, "2024-06-01"));
+bnd("bar_date_missing", () => aggregate(version([{ ...D.records[0], date: undefined }]), null, "2024-06-01"));
+bnd("years_float", () => aggregate(D, [2024.5], "2024-06-01"));
+bnd("years_string", () => aggregate(D, ["2024"], "2024-06-01"));
+bnd("years_nan", () => aggregate(D, [NaN], "2024-06-01"));
+bnd("years_infinity", () => aggregate(D, [Infinity], "2024-06-01"));
+bnd("years_i32_over", () => aggregate(D, [2147483648], "2024-06-01"));
+bnd("years_not_array", () => aggregate(D, 2024, "2024-06-01"));
+bnd("daily_null", () => aggregate(null, null, "2024-06-01"));
+bnd("daily_records_not_array", () => aggregate({ ...D, records: {} }, null, "2024-06-01"));
+bnd("dec_field_string", () => aggregate(version([{ ...D.records[0], open: "10" }]), null, "2024-06-01"));
+bnd("dec_field_float", () => aggregate(version([{ ...D.records[0], high: { m: 10.5, s: 0 } }]), null, "2024-06-01"));
+bnd("dec_scale_over28", () => aggregate(version([{ ...D.records[0], low: { m: 1n, s: 29 } }]), null, "2024-06-01"));
+bnd("volume_undefined", () => aggregate(version([{ ...D.records[0], volume: undefined }]), null, "2024-06-01"));
+// boundary checks precede Rust-order errors (both fail-closed)
+bnd("boundary_precedes_invalid_input", () => aggregate({ ...D, records: [{}] }, null, "junk"));
+// valid i32 edge years still reach the Rust layer (missing-year error, not boundary)
+try {
+  aggregate(D, [-2147483648], "2024-06-01");
+  emit("i32_min_year_reaches_rust", "FAIL", "accepted");
+} catch (e) {
+  emit("i32_min_year_reaches_rust", e.kind === "missing_year" && e.message.includes("-2147483648") ? "PASS" : "FAIL", `${e.kind}: ${e.message}`);
+}
+try {
+  aggregate(D, [2147483647], "2024-06-01");
+  emit("i32_max_year_reaches_rust", "FAIL", "accepted");
+} catch (e) {
+  emit("i32_max_year_reaches_rust", e.kind === "missing_year" ? "PASS" : "FAIL", `${e.kind}: ${e.message}`);
+}
+
 // ---------- supplementary: no silent rounding ----------
 try {
   // sum 0.05 + 0.05 must stay exact (never 0.1 via float)

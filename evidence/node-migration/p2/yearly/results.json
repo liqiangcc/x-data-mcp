@@ -11,16 +11,17 @@
   "probe": {
     "command": "node scripts/node_migration_p2/yearly_probe.mjs .",
     "exit": 0,
-    "cases": 26,
+    "cases": 52,
     "totals": {
-      "pass": 26,
+      "pass": 52,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
       "golden": 5,
-      "rust_oracle": 21,
-      "supplementary_exact_sum": 1
+      "rust_oracle": 20,
+      "supplementary_exact_sum": 1,
+      "typed_boundary_regressions": 26
     }
   },
   "semantics_mirrored": [
@@ -37,5 +38,17 @@
   "out_of_scope": "memoized aggregate_key, DB/service wiring, all-market generation",
   "limitations": [
     "evidence modelled as {confirmed,value} shape mirroring EvidenceValue::is_confirmed — typed boundary documented"
-  ]
+  ],
+  "revision": "R1 — REVIEW-NM-019 typed-boundary fix (2026-09-23)",
+  "typed_boundary": {
+    "defect": "ymdOf accepted non-dates: 'junk'->NaN comparisons and '2023-02-30'->unchecked fragments skipped the date>as_of reject",
+    "fix": [
+      "strict proleptic-Gregorian ISO validation (year 1..9999, month/day bounds, setUTCFullYear+readback) for asOf and every bar date — YearlyTypedBoundaryError (kind='typed_boundary')",
+      "selected years must be finite i32 integers; years must be an array or null",
+      "daily must be an object with records array; each bar must have strict date + Dec {m:bigint,s:0..28} fields; volume/amount must be Dec or explicit null (undefined rejects)",
+      "boundary checks run BEFORE the Rust validation order — fail-closed precedence, Rust error text preserved for valid typed inputs"
+    ],
+    "probe_cases": 26,
+    "regression": "all 26 original vectors still PASS"
+  }
 }

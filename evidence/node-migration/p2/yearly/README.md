@@ -4,7 +4,7 @@ Baseline `47d9efeac96e91093a283cf6f39b86e48d84e77e` (`migration/node-devin`). No
 
 ## Contents
 
-- `probe-results.jsonl` — 26 rows, all PASS: 5 accepted P0 goldens + 20 live rust-oracle cases + 1 supplementary exact-sum.
+- `probe-results.jsonl` — 52 rows, all PASS: 5 accepted P0 goldens + 20 live rust-oracle cases + 1 supplementary exact-sum + 26 typed-boundary regressions (REVIEW-NM-019 R1).
 - `rust-oracle.jsonl` — expected outputs produced live by `rustc 1.98.1` + `x_data_mcp` rlib (`target/debug/yearly_oracle`, not committed).
 - `results.json` — ported function, mirrored semantics, scope boundary.
 - `SHA256SUMS` — over the three files (excludes itself).
@@ -20,3 +20,7 @@ Module: `src_node/algorithms/yearly.mjs` (uses NM-013 `qfq_affine.mjs` Dec engin
 ## Exactness guarantee
 
 `sum_known` never silently rounds: unit unconfirmed or any `None` → field `null` (presence pass before overflow), then every `checked_add` partial sum must satisfy `next-sum==value && next-value==sum` — any precision loss or overflow → `exact decimal sum is not representable`. Verified against the real crate incl. exact `Decimal::MAX` boundary.
+
+## R1 typed-boundary fix (REVIEW-NM-019)
+
+`aggregate` previously accepted `asOf="junk"` / `"2023-02-30"` (NaN/unchecked fragments skipped the `date>as_of` reject). Now: strict calendar validation for `asOf` and every bar date, i32-year and array checks for `years`, object/records/Dec-shape validation for `daily` — `YearlyTypedBoundaryError` precedes the Rust validation order. Valid i32 edge years (±2³¹) still reach the Rust layer (`MissingYear`), not the boundary.
