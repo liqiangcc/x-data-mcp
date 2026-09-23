@@ -1,0 +1,40 @@
+{
+  "task_id": "NM-029",
+  "baseline_sha": "600afc4853f3ab508904bf328022021a435f6cdf",
+  "source_ported": "catalog.rs::validate_snapshot + validate_record — pure pre-publication decision; RejectReason serde payloads",
+  "rust_oracle": "rust-oracle.jsonl — 34 cases via CatalogService::refresh (live rustc 1.98.1), refresh_status Rejected (previous present) vs NotReady (none)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/catalog/validate.mjs"
+  },
+  "semantics": [
+    "source blank (Rust White_Space trim — U+FEFF NOT blank) -> InvalidRecord 'catalog source must not be empty'",
+    "Complete{0} -> EmptySnapshot; Complete{n!=len} -> Incomplete 'expected N records but received M'",
+    "Incomplete/Unknown{reason} -> Incomplete{reason}",
+    "records: field blank check order symbol,name,source_security_id,source; source != snapshot.source -> IdentityConflict verbatim",
+    "exchange outside Shanghai/Shenzhen; security_type outside AShare",
+    "industry Assigned blank code/name; Missing/Conflicted blank reason",
+    "dup key same sid -> DuplicateSecurity{key}; dup key diff sid -> IdentityConflict (SecurityKey Debug verbatim); sid on two keys -> IdentityConflict",
+    "previous: disappeared keys sorted (exchange ord Shanghai<Shenzhen<Other, symbol UTF-8) -> MemberDisappeared",
+    "rule precedence preserved: source gate -> completeness -> per-record fields -> dup -> disappeared"
+  ],
+  "typed_boundary": "non-serde shapes throw ValidationInputError (23 cases): wrong types, unknown enum variants, extra/missing record fields, unpaired surrogates, bad previous shape",
+  "debug_escaping": "SecurityKey {:?} verbatim incl. escape_debug: CJK literal, U+FEFF -> \\u{feff}, quote -> \\\"",
+  "real_gen2": "5,224-record NM-028 candidate accepted; -2 members -> MemberDisappeared sorted; +1 member -> accepted",
+  "probe": {
+    "command": "node scripts/node_migration_p2/catalog_validate_probe.mjs .",
+    "exit": 0,
+    "cases": 57,
+    "totals": {
+      "pass": 57,
+      "fail": 0,
+      "not_run": 0
+    },
+    "selftest": "node ... validate -> exit 1 (negative-selftest.jsonl)"
+  },
+  "purity": "deterministic, read-only; no DB/head CAS/service/generation/network/publish; no completeness inference from counts",
+  "node_specific_deltas": [
+    "none — all oracle decisions byte-identical including Debug-escaped messages"
+  ],
+  "out_of_scope": "publish, SQLite head CAS, services, deploy"
+}

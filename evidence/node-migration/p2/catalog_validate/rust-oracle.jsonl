@@ -1,0 +1,34 @@
+{"id":"empty_source","reason":{"InvalidRecord":{"message":"catalog source must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"ws_source","reason":{"InvalidRecord":{"message":"catalog source must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"feff_source","reason":{"IdentityConflict":{"message":"record source official-file:0123456789abcdef differs from snapshot source ﻿"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"complete_zero","reason":"EmptySnapshot","refresh_status":"NotReady","status":"rejected"}
+{"id":"complete_mismatch","reason":{"Incomplete":{"message":"expected 5 records but received 2"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"complete_ok","status":"accepted"}
+{"id":"incomplete_reason","reason":{"Incomplete":{"message":"partial"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"unknown_reason","reason":{"Incomplete":{"message":"unbounded"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"blank_symbol","reason":{"InvalidRecord":{"message":"symbol must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"blank_name","reason":{"InvalidRecord":{"message":"name must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"blank_sid","reason":{"InvalidRecord":{"message":"source_security_id must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"blank_rec_source","reason":{"InvalidRecord":{"message":"source must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"feff_symbol","status":"accepted"}
+{"id":"source_mismatch","reason":{"IdentityConflict":{"message":"record source other differs from snapshot source official-file:0123456789abcdef"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"exchange_other","reason":{"InvalidRecord":{"message":"record exchange is outside the Shanghai/Shenzhen scope"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"type_other","reason":{"InvalidRecord":{"message":"record security type is outside the A-share scope"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"ind_assigned_blank_code","reason":{"InvalidRecord":{"message":"assigned industry requires code and name"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"ind_assigned_blank_name","reason":{"InvalidRecord":{"message":"assigned industry requires code and name"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"ind_missing_blank","reason":{"InvalidRecord":{"message":"industry missing/conflict requires a reason"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"ind_conflicted_blank","reason":{"InvalidRecord":{"message":"industry missing/conflict requires a reason"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"ind_conflicted_ok","status":"accepted"}
+{"id":"dup_key_same_sid","reason":{"DuplicateSecurity":{"key":{"exchange":"Shenzhen","symbol":"000001"}}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"dup_key_diff_sid","reason":{"IdentityConflict":{"message":"security key SecurityKey { exchange: Shenzhen, symbol: \"000001\" } maps to both source security ids tdxhy:0:000001 and tdxhy:0:DIFF"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"sid_on_two_keys","reason":{"IdentityConflict":{"message":"source security id tdxhy:0:000001 maps to both SecurityKey { exchange: Shenzhen, symbol: \"000001\" } and SecurityKey { exchange: Shenzhen, symbol: \"000002\" }"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"sid_conflict_unicode","reason":{"IdentityConflict":{"message":"source security id tdxhy:0:000001 maps to both SecurityKey { exchange: Shenzhen, symbol: \"000001\" } and SecurityKey { exchange: Shenzhen, symbol: \"中\\u{feff}x\\\"\" }"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"members_disappeared","reason":{"MemberDisappeared":{"members":[{"exchange":"Shanghai","symbol":"600009"},{"exchange":"Shenzhen","symbol":"000099"}]}},"refresh_status":"Rejected","status":"rejected"}
+{"id":"new_member_ok","status":"accepted"}
+{"id":"same_members_ok","status":"accepted"}
+{"id":"prec_source_first","reason":{"InvalidRecord":{"message":"catalog source must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"prec_field_before_dup","reason":{"InvalidRecord":{"message":"symbol must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
+{"id":"prec_dup_before_disappear","reason":{"DuplicateSecurity":{"key":{"exchange":"Shenzhen","symbol":"000001"}}},"refresh_status":"Rejected","status":"rejected"}
+{"id":"real_gen2_accept","status":"accepted"}
+{"id":"gen2_members_disappeared","reason":{"MemberDisappeared":{"members":[{"exchange":"Shanghai","symbol":"600009"},{"exchange":"Shenzhen","symbol":"000099"}]}},"refresh_status":"Rejected","status":"rejected"}
+{"id":"gen2_new_member_ok","status":"accepted"}
