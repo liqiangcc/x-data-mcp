@@ -7,7 +7,7 @@ reason:<serde RejectReason>}`.
 
 ## Contents
 
-- `probe-results.jsonl` — 65 rows, all PASS (36 live Rust oracle + 28 boundary/auxiliary
+- `probe-results.jsonl` — 65 rows, all PASS (36 live Rust oracle + 28 typed-boundary rejects + 1 serde-default acceptance
   typed-boundary rejects).
 - `rust-oracle.jsonl` — oracle via `CatalogService::refresh` reason serde.
 - `negative-selftest.jsonl` — exit-1 proof.
@@ -27,7 +27,7 @@ node scripts/node_migration_p2/catalog_validate_probe.mjs . validate  # selftest
 - RejectReason serde external tagging verbatim, incl. unit variant
   `"EmptySnapshot"` as bare string and `SecurityKey` Debug escaping
   (`中` literal, `﻿` → `\u{feff}`, `"` → `\"`).
-- Disappeared members sorted by (exchange ordinal, UTF-8 symbol).
+- Disappeared members sorted by (exchange ordinal, Other payload UTF-8, UTF-8 symbol).
 - Pure/read-only; no publish, DB, completeness inference, or proof.
 
 R1 additions (REVIEW-NM-029): Other(String) payload ordering in

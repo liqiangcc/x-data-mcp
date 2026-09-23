@@ -1,8 +1,8 @@
 {
-  "task_id": "NM-029-R2",
-  "baseline_sha": "99c03954156edcedaf373be766814f8946364310 (R1)",
+  "task_id": "NM-029-R3",
+  "baseline_sha": "92d1edad8daa5cf46b7887d54687a6e8c439ee7b (R2)",
   "source_ported": "catalog.rs::validate_snapshot + validate_record — pure pre-publication decision; RejectReason serde payloads",
-  "rust_oracle": "rust-oracle.jsonl — 34 cases via CatalogService::refresh (live rustc 1.98.1), refresh_status Rejected (previous present) vs NotReady (none)",
+  "rust_oracle": "rust-oracle.jsonl — 36 cases via CatalogService::refresh (live rustc 1.98.1), refresh_status Rejected (previous present) vs NotReady (none)",
   "environment": {
     "node": "v20.19.2",
     "module": "src_node/catalog/validate.mjs"
@@ -15,10 +15,10 @@
     "exchange outside Shanghai/Shenzhen; security_type outside AShare",
     "industry Assigned blank code/name; Missing/Conflicted blank reason",
     "dup key same sid -> DuplicateSecurity{key}; dup key diff sid -> IdentityConflict (SecurityKey Debug verbatim); sid on two keys -> IdentityConflict",
-    "previous: disappeared keys sorted (exchange ord Shanghai<Shenzhen<Other, symbol UTF-8) -> MemberDisappeared",
+    "previous: disappeared keys sorted by SecurityKey Ord — exchange discriminant (Shanghai<Shenzhen<Other), Other(String) payload UTF-8, then symbol UTF-8 -> MemberDisappeared",
     "rule precedence preserved: source gate -> completeness -> per-record fields -> dup -> disappeared"
   ],
-  "typed_boundary": "non-serde shapes throw ValidationInputError (23 cases): wrong types, unknown enum variants, extra/missing record fields, unpaired surrogates, bad previous shape",
+  "typed_boundary": "non-serde shapes throw ValidationInputError (28 cases): wrong types, unknown enum variants, extra/missing record fields, unpaired surrogates, bad previous shape, serde-incompatible timestamps",
   "debug_escaping": "SecurityKey {:?} verbatim incl. escape_debug: CJK literal, U+FEFF -> \\u{feff}, quote -> \\\"",
   "real_gen2": "5,224-record NM-028 candidate accepted; -2 members -> MemberDisappeared sorted; +1 member -> accepted",
   "probe": {
@@ -36,7 +36,7 @@
     },
     "groups": {
       "live_rust_oracle": 36,
-      "typed_boundary": 26,
+      "typed_boundary": 28,
       "accept_scheme_undefined": 1
     }
   },
@@ -45,7 +45,7 @@
     "none — all oracle decisions byte-identical including Debug-escaped messages"
   ],
   "out_of_scope": "publish, SQLite head CAS, services, deploy",
-  "review": "REVIEW-NM-029 R1 — evidence consistency correction (committed probe-results were generated against the stale 34-case oracle before the 36-case copy landed; no code defect)",
+  "review": "REVIEW-NM-029 R2 — metadata-only: stale descriptive fields corrected",
   "r1_fixes": {
     "other_payload_order": "disappeared-member sort now compares Other(String) payload (UTF-8) before symbol — Rust derived Ord on Exchange. Oracle other_order_disappeared: Shanghai:5 < Other(a):9 < Other(z):0.",
     "scheme_serde_default": "Assigned without `scheme` key = null (#[serde(default)]); present-but-undefined also treated absent; unknown scheme labels still rejected.",
