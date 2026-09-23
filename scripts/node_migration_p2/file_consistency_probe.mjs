@@ -70,6 +70,9 @@ const CASES = {
   conflict_plus_incomplete: () => { const s = s3(); const dv = file("day", 100); dv.etag = "other";
     const p = ev(); p.compatibility_set_identity = "";
     return [[s[0], s[1], dv, s[2]], p]; },
+  dup_utf8_order: () => { const s = s3(); const d1 = file("day", 100); d1.etag = "\ue000";
+    const d2 = file("day", 100); d2.etag = "\ud83d\ude00";
+    return [[s[0], d2, d1, s[2]], ev()]; },
   real_131: () => {
     const inp = JSON.parse(readFileSync(join(ROOT, "evidence/issue-131-file-set-consistency/input.json"), "utf8"));
     return [inp.files, inp.compatibility];
@@ -120,5 +123,9 @@ bnd("reject_ts_no_offset", () => validate({ files: [{ ...s[0], acquisition_start
 bnd("reject_bad_bytes", () => validate({ files: [{ ...s[0], bytes: -1 }], compatibility: null }));
 bnd("reject_evidence_bad_window", () => validate({ files: [], compatibility: { ...ev(), valid_window: { valid_from: "junk", valid_until: instant(3) } } }));
 bnd("reject_binding_bad_role", () => validate({ files: [], compatibility: { ...ev(), member_bindings: { base_industry: ev().member_bindings.base_industry, day: ev().member_bindings.day, gbbq: ev().member_bindings.gbbq, extra: { sha256: H(1) } } } }));
+bnd("reject_role_constructor", () => validate({ files: [{ ...s[0], role: "constructor" }], compatibility: null }));
+bnd("reject_role_toString", () => validate({ files: [{ ...s[0], role: "toString" }], compatibility: null }));
+bnd("reject_integrity_hasOwnProperty", () => validate({ files: [{ ...s[0], byte_integrity: "hasOwnProperty" }], compatibility: null }));
+bnd("reject_binding_constructor", () => validate({ files: [], compatibility: { ...ev(), member_bindings: { base_industry: ev().member_bindings.base_industry, day: ev().member_bindings.day, gbbq: ev().member_bindings.gbbq, constructor: { sha256: H(1) } } } }));
 
 process.exit(failures === 0 ? 0 : 1);

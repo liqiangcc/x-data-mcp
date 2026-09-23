@@ -1,8 +1,8 @@
 {
-  "task_id": "NM-027",
-  "baseline_sha": "aafc20aaa7d8990839aafdc14d2b8da482f6a51c",
+  "task_id": "NM-027-R1",
+  "baseline_sha": "9b126f669028f67e12ea296fe8f32757d8a7e43c (R0) / aafc20a (initial)",
   "source_ported": "src/file_consistency.rs::validate (pure decision)",
-  "rust_oracle": "rust-oracle.jsonl — 28 cases: 5 VERIFIED_COMPATIBLE / 14 NOT_VERIFIED / 9 CONFLICT (live rustc 1.98.1 + x_data_mcp rlib); real_131 decision == committed decision.json",
+  "rust_oracle": "rust-oracle.jsonl — 29 cases (added dup_utf8_order: U+E000 sorts before U+1F600 per Rust String Ord)",
   "environment": {
     "node": "v20.19.2",
     "module": "src_node/governance/file_consistency.mjs (pure; no fs/network/DB)"
@@ -27,16 +27,16 @@
   "probe": {
     "command": "node scripts/node_migration_p2/file_consistency_probe.mjs .",
     "exit": 0,
-    "cases": 36,
+    "cases": 41,
     "totals": {
-      "pass": 36,
+      "pass": 41,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
-      "synthetic_oracle": 26,
+      "synthetic_oracle": 27,
       "real": 2,
-      "typed_boundary": 8
+      "typed_boundary": 12
     },
     "selftest": "node ... decision -> exit 1"
   },
@@ -44,5 +44,14 @@
     "invalid_file_hash day->'BAD' produces BOTH invalid_file_hash AND hash_mismatch -> CONFLICT (binding sees different sha)",
     "noncanonical binding hash is IncompleteCompatibilityEvidence (checked before binding compare)"
   ],
-  "out_of_scope": "proof creation/auth, generation activation, CLI/service, QFQ publish"
+  "out_of_scope": "proof creation/auth, generation activation, CLI/service, QFQ publish",
+  "review": "REVIEW-NM-027 R0 — two confirmed findings fixed: prototype-bearing `in` checks; UTF-16 vs UTF-8 string order",
+  "r1_fixes": {
+    "prototype_tables": "ROLE_IDX/BI_IDX now null-prototype; all role/integrity/binding-key checks use Object.hasOwn — 'constructor'/'toString'/'hasOwnProperty' reject (Lead reproduction: appended constructor-role fact -> ConsistencyInputError, was VERIFIED_COMPATIBLE)",
+    "utf8_order": "cmpStr via Buffer.compare for every ordered string field + evidence_refs + reason keys (Rust String Ord = UTF-8 bytewise; U+E000 < U+1F600) — dup_utf8_order oracle verified"
+  },
+  "node_specific_deltas": [
+    "json/io-style message text only in typed-boundary errors",
+    "none remaining on decision output — UTF-8 bytewise ordering now mirrors Rust String Ord exactly"
+  ]
 }

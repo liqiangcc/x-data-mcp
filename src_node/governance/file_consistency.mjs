@@ -24,8 +24,8 @@ export class ConsistencyInputError extends Error {
 
 export const CONTRACT_VERSION = "official-file-consistency-v1";
 const REQUIRED_ROLES = ["base_industry", "day", "gbbq"]; // enum order
-const ROLE_IDX = { base_industry: 0, day: 1, gbbq: 2 };
-const BI_IDX = { verified: 0, unverified: 1 };
+const ROLE_IDX = Object.assign(Object.create(null), { base_industry: 0, day: 1, gbbq: 2 });
+const BI_IDX = Object.assign(Object.create(null), { verified: 0, unverified: 1 });
 const CONFLICT_CODES = new Set([
   "conflicting_duplicate", "invalid_file_interval", "invalid_compatibility_window",
   "hash_mismatch", "source_revision_mismatch", "source_identity_mismatch",
@@ -36,6 +36,10 @@ const canonicalSha256 = (v) => /^[0-9a-f]{64}$/.test(v);
 const isStr = (v) => typeof v === "string";
 const isOptStr = (v) => v === null || typeof v === "string";
 
+// Rust String Ord is UTF-8 bytewise (e.g. U+E000 < U+1F600); JS `<` is
+// UTF-16 code-unit order. Buffer.compare gives the Rust order.
+const cmpStr = (a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+
 // Full FileFact order: role, bytes, sha256, source_url, started, completed,
 // last_modified, etag, byte_integrity, source_revision, source_identity.
 // Option<String>: None < Some; strings compare bytewise (ASCII domain).
@@ -43,20 +47,20 @@ const optStr = (v) => (v === null ? 0 : 1);
 function cmpFact(a, b) {
   const t = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
   return t(ROLE_IDX[a.role], ROLE_IDX[b.role]) ||
-    t(a.bytes, b.bytes) || t(a.sha256, b.sha256) || t(a.source_url, b.source_url) ||
+    t(a.bytes, b.bytes) || cmpStr(a.sha256, b.sha256) || cmpStr(a.source_url, b.source_url) ||
     t(a._k1, b._k1) || t(a._k2, b._k2) ||
-    t(optStr(a.last_modified), optStr(b.last_modified)) || t(a.last_modified ?? "", b.last_modified ?? "") ||
-    t(optStr(a.etag), optStr(b.etag)) || t(a.etag ?? "", b.etag ?? "") ||
+    t(optStr(a.last_modified), optStr(b.last_modified)) || cmpStr(a.last_modified ?? "", b.last_modified ?? "") ||
+    t(optStr(a.etag), optStr(b.etag)) || cmpStr(a.etag ?? "", b.etag ?? "") ||
     t(BI_IDX[a.byte_integrity], BI_IDX[b.byte_integrity]) ||
-    t(optStr(a.source_revision), optStr(b.source_revision)) || t(a.source_revision ?? "", b.source_revision ?? "") ||
-    t(optStr(a.source_identity), optStr(b.source_identity)) || t(a.source_identity ?? "", b.source_identity ?? "");
+    t(optStr(a.source_revision), optStr(b.source_revision)) || cmpStr(a.source_revision ?? "", b.source_revision ?? "") ||
+    t(optStr(a.source_identity), optStr(b.source_identity)) || cmpStr(a.source_identity ?? "", b.source_identity ?? "");
 }
 
 function checkFact(f, i) {
   if (f === null || typeof f !== "object" || Array.isArray(f)) {
     throw new ConsistencyInputError(`files[${i}] must be an object`);
   }
-  if (!isStr(f.role) || !(f.role in ROLE_IDX)) throw new ConsistencyInputError(`files[${i}].role invalid`);
+  if (!isStr(f.role) || !Object.hasOwn(ROLE_IDX, f.role)) throw new ConsistencyInputError(`files[${i}].role invalid`);
   if (!Number.isSafeInteger(f.bytes) || f.bytes < 0) throw new ConsistencyInputError(`files[${i}].bytes invalid`);
   if (!isStr(f.sha256)) throw new ConsistencyInputError(`files[${i}].sha256 must be a string`);
   if (!isStr(f.source_url)) throw new ConsistencyInputError(`files[${i}].source_url must be a string`);
@@ -65,7 +69,7 @@ function checkFact(f, i) {
   if (k2 === null) throw new ConsistencyInputError(`files[${i}].acquisition_completed_at invalid RFC3339`);
   if (!isOptStr(f.last_modified ?? null)) throw new ConsistencyInputError(`files[${i}].last_modified invalid`);
   if (!isOptStr(f.etag ?? null)) throw new ConsistencyInputError(`files[${i}].etag invalid`);
-  if (!isStr(f.byte_integrity) || !(f.byte_integrity in BI_IDX)) {
+  if (!isStr(f.byte_integrity) || !Object.hasOwn(BI_IDX, f.byte_integrity)) {
     throw new ConsistencyInputError(`files[${i}].byte_integrity invalid`);
   }
   if (!isOptStr(f.source_revision ?? null)) throw new ConsistencyInputError(`files[${i}].source_revision invalid`);
@@ -91,7 +95,7 @@ function checkEvidence(e) {
     throw new ConsistencyInputError("compatibility.member_bindings must be an object");
   }
   for (const [role, b] of Object.entries(e.member_bindings)) {
-    if (!(role in ROLE_IDX)) throw new ConsistencyInputError(`member_bindings key ${role} invalid`);
+    if (!Object.hasOwn(ROLE_IDX, role)) throw new ConsistencyInputError(`member_bindings key ${role} invalid`);
     if (b === null || typeof b !== "object" || !isStr(b.sha256) ||
         !isOptStr(b.source_revision ?? null) || !isOptStr(b.source_identity ?? null)) {
       throw new ConsistencyInputError(`member_bindings.${role} invalid`);
@@ -149,8 +153,8 @@ export function validate(input) {
   const finish = (refs) => {
     const status = reasons.some((x) => CONFLICT_CODES.has(x.code))
       ? "CONFLICT" : reasons.length === 0 ? "VERIFIED_COMPATIBLE" : "NOT_VERIFIED";
-    reasons.sort((a, b) => (rkey(a) < rkey(b) ? -1 : rkey(a) > rkey(b) ? 1 : 0));
-    refs.sort();
+    reasons.sort((a, b) => cmpStr(rkey(a), rkey(b)));
+    refs.sort(cmpStr);
     return {
       contract_version: CONTRACT_VERSION,
       status,
@@ -172,7 +176,7 @@ export function validate(input) {
       evidence.compatibility_set_revision.trim() === "" ||
       evidence.compatibility_set_identity.trim() === "" ||
       bindingKeys.length !== REQUIRED_ROLES.length ||
-      REQUIRED_ROLES.some((role) => !(role in bindings)) ||
+      REQUIRED_ROLES.some((role) => !Object.hasOwn(bindings, role)) ||
       Object.values(bindings).some((b) => !canonicalSha256(b.sha256))) {
     reasons.push(r("incomplete_compatibility_evidence"));
     return finish(refs);

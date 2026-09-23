@@ -7,8 +7,8 @@ matching URLs/dates/ETags never infer it.
 
 ## Contents
 
-- `probe-results.jsonl` — 36 rows, all PASS; probe exits nonzero on FAIL.
-- `rust-oracle.jsonl` — live `rustc 1.98.1` + `x_data_mcp` rlib: 28 cases
+- `probe-results.jsonl` — 41 rows, all PASS; probe exits nonzero on FAIL.
+- `rust-oracle.jsonl` — live `rustc 1.98.1` + `x_data_mcp` rlib: 29 cases
   (5 VERIFIED_COMPATIBLE / 14 NOT_VERIFIED / 9 CONFLICT); `real_131`
   decision is byte-identical to committed
   `evidence/issue-131-file-set-consistency/decision.json`.
@@ -51,3 +51,5 @@ NM-026 regression rerun: 72/72 PASS unchanged.
 - Reasons sorted by serialized `{"code":..,"role":..}` string;
   conflict reasons dominate status regardless of missing/incomplete
   proof.
+
+R1 additions (REVIEW-NM-027): null-prototype lookup tables + `Object.hasOwn` for role/integrity/binding keys (`constructor`/`toString`/`hasOwnProperty` reject — was accepted via prototype chain); UTF-8 bytewise `cmpStr` (Buffer.compare) for all ordered strings, evidence refs, reason keys — `dup_utf8_order` verified (U+E000 before U+1F600).
