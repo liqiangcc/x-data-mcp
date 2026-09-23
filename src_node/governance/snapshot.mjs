@@ -51,7 +51,7 @@ const FILE_FIELDS = new Set([
 // struct deserialization fails on duplicate keys anywhere in the manifest;
 // JSON.parse silently takes the last value — this closes that gap).
 // Bounded recursive-descent parser; depth-capped.
-function strictJson(text) {
+export function strictJson(text) {
   let i = 0;
   const ws = () => { while (i < text.length && " \t\n\r".includes(text[i])) i++; };
   const fail = (m) => { throw jsonErr(m); };

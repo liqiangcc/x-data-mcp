@@ -1,0 +1,43 @@
+{
+  "task_id": "NM-032",
+  "baseline_sha": "614a8c48c89cb1dda58a288b779363a64ee67e2a",
+  "source_ported": "generation/mod.rs::{verify_installed,decision_artifact,usable} — read-only installed-generation usability gate",
+  "rust_oracle": "rust-oracle.jsonl — 21 cases via live Store::usable (rustc 1.98.1): categories not_installed/corrupt/json/not_consistency_verified + full text for deterministic messages",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/governance/generation_usable.mjs",
+    "fixtures": "/tmp/nm32-usable-* mkdtemp, cleaned on exit"
+  },
+  "ordering": [
+    "dir missing -> NotInstalled; manifest read fail/bound -> Corrupt(io)",
+    "sha256(manifest_bytes) != generation_id -> Corrupt verbatim 'manifest digest does not match directory identity'",
+    "manifest serde-struct stage (strictJson + field/type/unknown checks) -> Json; semantic inspect failure -> Corrupt",
+    "decision absent -> NotConsistencyVerified; decision serde/shape fail -> Corrupt; schema/generation_id mismatch -> Corrupt verbatim 'decision does not bind this generation'",
+    "manifest_sha256 mismatch or status != VERIFIED_COMPATIBLE -> NotConsistencyVerified"
+  ],
+  "typed_boundary": "DecisionArtifact: exact 10-field set, string fields, evaluated_at RFC3339, status enum VERIFIED_COMPATIBLE/NOT_VERIFIED/CONFLICT, reasons tagged {code,role?} known variants only, evidence_sha256 string|null, probes JSON value; surrogates reject (rej_surrogate_issuer)",
+  "bounds": "manifest read <=1MiB (inspect enforces too); decision read <=1MiB; size checked pre-read",
+  "comparison_policy": "verbatim full message for deterministic categories (not_installed, not_consistency_verified, digest/binding corrupt); kind + stable prefix where inner text embeds io/serde messages (documented text delta, same as NM-026)",
+  "real_gen2": "committed manifest b8a0d7b9 + retained bytes copied into fixture root -> NotConsistencyVerified (no decision written, no proof inferred)",
+  "probe": {
+    "command": "node scripts/node_migration_p2/generation_usable_probe.mjs .",
+    "exit": 0,
+    "cases": 26,
+    "totals": {
+      "pass": 26,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "live_rust_oracle": 21,
+      "typed_boundary": 5
+    },
+    "selftest": "node ... usable -> exit 1 (negative-selftest.jsonl)"
+  },
+  "regressions": {
+    "NM-026 snapshot_probe": "72/72 PASS (strictJson export)",
+    "NM-031 generation_binding_probe": "49/49 PASS"
+  },
+  "purity": "read-only; no create/repair/activate/pin/retire; gate reads recorded decision only — does not authenticate issuer/provenance",
+  "out_of_scope": "store integration, task scheduling, service/MCP, deploy, production readiness"
+}
