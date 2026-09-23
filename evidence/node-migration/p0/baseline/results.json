@@ -1,0 +1,184 @@
+{
+  "task_id": "NM-005",
+  "baseline_sha": "5435d93eca28622bb7f546fe0ad6f78b6a42fce5",
+  "captured_at": "2026-09-23",
+  "environment": {
+    "host": "Box grok-bot-vm-411252337",
+    "cpu": "Intel Xeon (VM), nproc=8",
+    "kernel": "6.12.94+",
+    "mem_total_mb": 16013,
+    "mem_available_mb_at_capture": 7392,
+    "loadavg_at_capture": "2.68 2.75 2.01",
+    "toolchain": "rustup stable cargo/rustc 1.98.1",
+    "worktree_fs": "overlayfs (data services reject it; synthetic runtime dirs on /dev/shm tmpfs)",
+    "disk_free_at_capture": "~59G overlay, ~55M /dev/shm",
+    "concurrency": "single-threaded probes; no parallel load introduced by measurement"
+  },
+  "dev_loop": {
+    "command_scope": "cargo build --locked --bins / cargo test --locked --test day_file",
+    "cold_debug_build_ms": 33611,
+    "cold_debug_build_exit": 0,
+    "cold_release_build_ms": 92494,
+    "cold_release_build_exit": 0,
+    "warm_noop_build_ms": [
+      24141,
+      138,
+      131,
+      109
+    ],
+    "warm_noop_note": "first invocation 24141ms includes post-recreation fingerprint settling; steady-state reps 138/131/109",
+    "incremental_touch_src_lib_ms": [
+      5780,
+      5891,
+      5912,
+      5434
+    ],
+    "incremental_note": "touch src/lib.rs -> rebuild lib + relink all 12 bins",
+    "targeted_test_touch_ms": [
+      7475,
+      6074,
+      513,
+      504
+    ],
+    "targeted_test_note": "touch tests/day_file.rs -> first rep compiles test binary; steady-state ~510ms run-only"
+  },
+  "runtime_workloads": {
+    "bench_binary": "scripts/node_migration_p0/bench.rs via rustc --extern (harness -O; debug samples link debug rlib, release samples link release rlib)",
+    "profiles": {
+      "debug": "bench-debug.jsonl",
+      "release": "bench-release.jsonl"
+    },
+    "samples": "20 reps each, raw samples_ns in files; p50/p95 computed in-row",
+    "summary_ms": {
+      "day_parse_2500rec": {
+        "debug_p50": 0.888,
+        "release_p50": 0.012,
+        "debug_p95": 1.07,
+        "release_p95": 0.043
+      },
+      "qfq_adjust_250x20": {
+        "debug_p50": 1.239,
+        "release_p50": 0.15,
+        "debug_p95": 1.728,
+        "release_p95": 0.187
+      },
+      "yearly_agg_2500": {
+        "debug_p50": 1.181,
+        "release_p50": 0.201,
+        "debug_p95": 1.462,
+        "release_p95": 0.325
+      },
+      "segment_digest_250": {
+        "debug_p50": 0.659,
+        "release_p50": 0.029,
+        "debug_p95": 0.742,
+        "release_p95": 0.04
+      },
+      "normalize_factor_10k": {
+        "debug_p50": 14.997,
+        "release_p50": 1.741,
+        "debug_p95": 21.201,
+        "release_p95": 4.142
+      }
+    }
+  },
+  "mcp_latency": {
+    "mcp_data_stdio_spawn_plus_probe": {
+      "file": "mcp_data-stdio-latency.csv",
+      "reps": 20,
+      "samples_ms": [
+        19,
+        15,
+        24,
+        19,
+        16,
+        15,
+        17,
+        17,
+        17,
+        17,
+        17,
+        17,
+        15,
+        16,
+        15,
+        16,
+        15,
+        14,
+        20,
+        16
+      ],
+      "p50_ms": 16.5,
+      "p95_ms": 24,
+      "note": "process spawn + initialize + tools/list (146KB) + 3 calls, release binary, schema-19 synthetic db"
+    },
+    "socket_call_via_mcp_connect": {
+      "file": "socket-call-latency.csv",
+      "reps": 20,
+      "samples_ms": [
+        13,
+        19,
+        20,
+        16,
+        19,
+        18,
+        19,
+        19,
+        19,
+        19,
+        18,
+        18,
+        18,
+        18,
+        19,
+        18,
+        19,
+        18,
+        18,
+        18
+      ],
+      "p50_ms": 18.5,
+      "p95_ms": 20,
+      "note": "mcp_connect spawn + unix connect + 1 sync_status call + teardown"
+    },
+    "service_startup_to_socket_ms": [
+      6,
+      6,
+      6
+    ]
+  },
+  "rss": {
+    "bench_process_kb": {
+      "start": 2444,
+      "end": 3480,
+      "profile": "debug"
+    },
+    "data_service_idle_kb": [
+      8292,
+      8172,
+      8504
+    ],
+    "data_service_after_20_calls_kb": 11804
+  },
+  "db_wal_footprint": {
+    "db18_init_bytes": 319488,
+    "db19_init_bytes": 397312,
+    "during_service": {
+      "db19.sqlite-wal": 0,
+      "db19.sqlite-shm": 32768,
+      "mcp.sock": 0,
+      "mcp.sock.owner.json": 29
+    },
+    "post_stop": {
+      "socket_removed": true,
+      "owner_json_remains": true,
+      "wal_checkpointed": true
+    }
+  },
+  "honesty_notes": [
+    "debug-profile runtime numbers are NOT production performance; release column is the production-relevant baseline",
+    "no Node.js comparison is made; proposed 50% dev-feedback and 1.2x runtime/RSS budgets remain unapproved proposals",
+    "synthetic inputs only; no official data, no ECS, no full-market claims",
+    "mcp_data stdio latency includes process spawn each rep"
+  ]
+}
