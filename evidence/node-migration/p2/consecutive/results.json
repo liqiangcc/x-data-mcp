@@ -1,6 +1,6 @@
 {
-  "task_id": "NM-030",
-  "baseline_sha": "1a0737be7202e00e6648979f89e58fa0d4d8a85d",
+  "task_id": "NM-030-R1",
+  "baseline_sha": "e2db1e1030700db76c6ed7554ce3f48e330100d3 (R0)",
   "source_ported": "metrics::consecutive::evaluate + ratio_change (pure); Outcome/Reason/RunKind serde verbatim",
   "rust_oracle": "rust-oracle.jsonl — 48 cases (live rustc 1.98.1 + x_data_mcp rlib + rust_decimal): 33 evaluate + 15 ratio_change",
   "environment": {
@@ -22,15 +22,15 @@
   "probe": {
     "command": "node scripts/node_migration_p2/consecutive_probe.mjs .",
     "exit": 0,
-    "cases": 67,
+    "cases": 78,
     "totals": {
-      "pass": 67,
+      "pass": 78,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
-      "live_rust_oracle": 48,
-      "typed_boundary": 19
+      "live_rust_oracle": 52,
+      "typed_boundary": 26
     },
     "selftest": "node ... consecutive -> exit 1 (negative-selftest.jsonl)"
   },
@@ -38,5 +38,10 @@
     "qfq_affine_probe": "37/37 PASS (shared _dec engine untouched)"
   },
   "purity": "deterministic, read-only; no storage verification/service/publish; completion evidence not caller-supplied",
-  "out_of_scope": "storage/MCP wiring, completion provenance, deploy"
+  "out_of_scope": "storage/MCP wiring, completion provenance, deploy",
+  "review": "REVIEW-NM-030 R0 — Date.UTC 0-99 remap + null-for-bool default; both fixed",
+  "r1_fixes": {
+    "low_years": "isDate now uses manual proleptic-Gregorian calendar (Date.UTC maps years 0-99 to 1900-1999). Oracle: low_years (0001-0002), low_years_leap (year 4 Feb-29), year_400_leap, century_2000_leap all compute; century non-leap 1900-02-29/2100-02-29 reject at boundary.",
+    "completed_only_null": "serde(default) applies only to absent keys; explicit null for bool now rejects (was ?? true). Same absent-only enforcement verified for price_field/equal_policy/gap_policy."
+  }
 }

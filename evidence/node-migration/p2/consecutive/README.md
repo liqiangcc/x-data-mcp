@@ -5,9 +5,9 @@ Node port of `metrics::consecutive::evaluate` + `ratio_change`
 
 ## Contents
 
-- `probe-results.jsonl` — 67 rows, all PASS (48 live Rust oracle
+- `probe-results.jsonl` — 78 rows, all PASS (52 live Rust oracle
   incl. full Outcome serde + INVALID_MARKET_COMMAND errors +
-  ratio_change strings; 19 typed-boundary rejects).
+  ratio_change strings; 26 typed-boundary rejects).
 - `rust-oracle.jsonl` — live oracle.
 - `negative-selftest.jsonl` — exit-1 proof.
 - `results.json` — semantics, matrix, limits.
@@ -28,3 +28,8 @@ node scripts/node_migration_p2/consecutive_probe.mjs . consecutive # selftest, e
   nonzero, `padStart(13)` split at len-12.
 - Typed boundary rejects malformed dates/decimals/enums/params.
 - Pure/read-only — no completion-provenance or coverage inference.
+
+R1 additions (REVIEW-NM-030): manual Gregorian calendar replaces
+Date.UTC (years 0001-0099 compute; leap rules verified year 4/400/2000,
+1900/2100 Feb-29 reject); `completed_only`/`price_field`/`equal_policy`/
+`gap_policy` defaults apply to absent keys only — explicit null rejects.

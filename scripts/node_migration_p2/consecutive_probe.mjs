@@ -58,6 +58,10 @@ const CASES = {
   err_date_mismatch_year: () => [[{year:2020,first:"2019-06-01",last:"2020-12-30",close:"1",unfinished:false,completion:C},obs(2021,"0.5")], R(2020,2021), params("down",1)],
   err_last_next_year: () => [[{year:2020,first:"2020-01-02",last:"2021-01-02",close:"1",unfinished:false,completion:C},obs(2021,"0.5")], R(2020,2021), params("down",1)],
   err_first_gt_last: () => [[obsr(2020,"12-30","01-02","1"),obs(2021,"0.5")], R(2020,2021), params("down",1)],
+  low_years: () => [[obs(1,"100"),obs(2,"90")], R(1,2), params("down",1)],
+  low_years_leap: () => [[obsr(4,"02-29","12-30","100"),obsr(5,"01-02","12-30","90")], R(4,5), params("down",1)],
+  year_400_leap: () => [[obsr(400,"02-29","12-30","100"),obsr(401,"01-02","12-30","90")], R(400,401), params("down",1)],
+  century_2000_leap: () => [[obsr(2000,"02-29","12-30","100"),obsr(2001,"01-02","12-30","90")], R(2000,2001), params("down",1)],
   real_dates: () => [[obsr(2020,"01-02","12-31","100"),obsr(2021,"01-04","12-30","90"),obsr(2022,"01-03","12-29","80")], R(2020,2022), params("down",1)],
 };
 const RC = {
@@ -124,6 +128,14 @@ bnd("reject_price_field", () => evaluate(GD(), R(2020,2021), { direction:"down",
 bnd("reject_equal_policy", () => evaluate(GD(), R(2020,2021), { direction:"down", min_periods:1, equal_policy:"continue" }));
 bnd("reject_range_str", () => evaluate(GD(), { start_year:"2020", end_year:2021 }, params("down",1)));
 bnd("reject_obs_null", () => evaluate([null], R(2020,2020), params("down",1)));
+// R1: Date.UTC-independent calendar + absent-only serde defaults
+bnd("reject_date_1900_feb29", () => evaluate([{ ...obs(1900,"1"), first: "1900-02-29" }, obs(1901,"0.5")], R(1900,1901), params("down",1)));
+bnd("reject_date_2100_feb29", () => evaluate([{ ...obs(2100,"1"), first: "2100-02-29" }, obs(2101,"0.5")], R(2100,2101), params("down",1)));
+bnd("reject_completed_only_null", () => evaluate(GD(), R(2020,2021), { direction:"down", min_periods:1, completed_only:null }));
+bnd("reject_completed_only_zero", () => evaluate(GD(), R(2020,2021), { direction:"down", min_periods:1, completed_only:0 }));
+bnd("reject_price_field_null", () => evaluate(GD(), R(2020,2021), { direction:"down", min_periods:1, price_field:null }));
+bnd("reject_equal_policy_null", () => evaluate(GD(), R(2020,2021), { direction:"down", min_periods:1, equal_policy:null }));
+bnd("reject_gap_policy_null", () => evaluate(GD(), R(2020,2021), { direction:"down", min_periods:1, gap_policy:null }));
 
 // selftest
 if (SELFTEST === "consecutive") {

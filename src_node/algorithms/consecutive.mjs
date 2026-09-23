@@ -27,15 +27,19 @@ const invalid = (s) => new ConsecutiveError(s);
 const isStr = (v) => typeof v === "string" && v.isWellFormed();
 
 // ---------- typed boundary ----------
-// NaiveDate: strict YYYY-MM-DD with real calendar validity.
+// NaiveDate: strict YYYY-MM-DD with proleptic-Gregorian calendar
+// validity. Manual check — Date.UTC silently remaps years 0-99 to
+// 1900-1999, which would wrongly reject valid years 0001-0099.
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const isLeap = (y) => y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
 const isDate = (v) => {
   if (!isStr(v)) return false;
   const m = DATE_RE.exec(v);
   if (!m) return false;
-  const [_, y, mo, d] = m;
-  const dt = new Date(Date.UTC(+y, +mo - 1, +d));
-  return dt.getUTCFullYear() === +y && dt.getUTCMonth() === +mo - 1 && dt.getUTCDate() === +d;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  return mo >= 1 && mo <= 12 && d >= 1 &&
+    d <= DIM[mo - 1] + (mo === 2 && isLeap(y) ? 1 : 0);
 };
 const COMPLETIONS = new Set(["complete", "incomplete", "unknown"]);
 const isCompletion = (v) => COMPLETIONS.has(v);
@@ -48,7 +52,9 @@ function checkInput(input) {
     if (o === null || typeof o !== "object" || Array.isArray(o)) {
       throw new ConsecutiveInputError(`input[${i}] must be an object`);
     }
-    if (!Number.isSafeInteger(o.year) || o.year < 1 || o.year > 9999) {
+    // year is i32 in Rust — integer check only; range/year-1..9999
+    // bounds are domain errors (INVALID_MARKET_COMMAND) inside evaluate.
+    if (!Number.isSafeInteger(o.year)) {
       throw new ConsecutiveInputError(`input[${i}].year invalid`);
     }
     if (!isDate(o.first) || !isDate(o.last)) {
@@ -81,10 +87,12 @@ function checkParams(p) {
   if (!Number.isSafeInteger(p.min_periods)) {
     throw new ConsecutiveInputError("parameters.min_periods must be an integer");
   }
-  const completedOnly = p.completed_only ?? true; // serde default yes()
-  if (typeof completedOnly !== "boolean") {
+  // serde(default) applies ONLY to absent keys — explicit null is
+  // invalid for bool, not defaulted.
+  if (p.completed_only !== undefined && typeof p.completed_only !== "boolean") {
     throw new ConsecutiveInputError("parameters.completed_only must be boolean");
   }
+  const completedOnly = p.completed_only === undefined ? true : p.completed_only;
   for (const [k, def] of [["price_field", "close"], ["equal_policy", "break"], ["gap_policy", "reject"]]) {
     if (p[k] !== undefined && p[k] !== def) {
       throw new ConsecutiveInputError(`parameters.${k} invalid`);

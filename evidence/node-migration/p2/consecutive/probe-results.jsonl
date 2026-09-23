@@ -30,6 +30,10 @@
 {"family":"consecutive","id":"err_date_mismatch_year","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations","actual":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations"}
 {"family":"consecutive","id":"err_last_next_year","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations","actual":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations"}
 {"family":"consecutive","id":"err_first_gt_last","status":"PASS","detail":"err verbatim","expected":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations","actual":"INVALID_MARKET_COMMAND: unordered/duplicate/out-of-range observations"}
+{"family":"consecutive","id":"low_years","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"low_years_leap","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"year_400_leap","status":"PASS","detail":"computed","expected":null,"actual":null}
+{"family":"consecutive","id":"century_2000_leap","status":"PASS","detail":"computed","expected":null,"actual":null}
 {"family":"consecutive","id":"real_dates","status":"PASS","detail":"computed","expected":null,"actual":null}
 {"family":"consecutive","id":"rc_half_even_05","status":"PASS","detail":"0.000000000000","expected":"0.000000000000","actual":"0.000000000000"}
 {"family":"consecutive","id":"rc_half_even_15","status":"PASS","detail":"0.000000000002","expected":"0.000000000002","actual":"0.000000000002"}
@@ -65,3 +69,10 @@
 {"family":"consecutive","id":"reject_equal_policy","status":"PASS","detail":"ConsecutiveInputError: parameters.equal_policy invalid","expected":null,"actual":null}
 {"family":"consecutive","id":"reject_range_str","status":"PASS","detail":"ConsecutiveInputError: range must be {start_year,end_year} integers","expected":null,"actual":null}
 {"family":"consecutive","id":"reject_obs_null","status":"PASS","detail":"ConsecutiveInputError: input[0] must be an object","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_date_1900_feb29","status":"PASS","detail":"ConsecutiveInputError: input[0].first/last must be YYYY-MM-DD","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_date_2100_feb29","status":"PASS","detail":"ConsecutiveInputError: input[0].first/last must be YYYY-MM-DD","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_completed_only_null","status":"PASS","detail":"ConsecutiveInputError: parameters.completed_only must be boolean","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_completed_only_zero","status":"PASS","detail":"ConsecutiveInputError: parameters.completed_only must be boolean","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_price_field_null","status":"PASS","detail":"ConsecutiveInputError: parameters.price_field invalid","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_equal_policy_null","status":"PASS","detail":"ConsecutiveInputError: parameters.equal_policy invalid","expected":null,"actual":null}
+{"family":"consecutive","id":"reject_gap_policy_null","status":"PASS","detail":"ConsecutiveInputError: parameters.gap_policy invalid","expected":null,"actual":null}
