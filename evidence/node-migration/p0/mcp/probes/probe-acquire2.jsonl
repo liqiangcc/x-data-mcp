@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"p0-freeze","version":"0"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_acquisition_capabilities","arguments":{"contract_version":"v1"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"sync_status","arguments":{"contract_version":"v1"}}}

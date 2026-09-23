@@ -1,0 +1,203 @@
+{
+  "task_id": "NM-002",
+  "baseline_sha": "ea14ede82af049c9d71485b9d66f4a6c90a8ee16",
+  "binary_version": "0.2.0-preview.24",
+  "build_sha_reported": "ea14ede82af049c9d71485b9d66f4a6c90a8ee16",
+  "captured_at": "2026-09-23",
+  "environment": "Box grok-bot-vm-411252337; debug build via rustup cargo 1.98.1; isolated synthetic DBs and sockets on /dev/shm (tmpfs, whitelisted); no opt-out env needed; no official inputs, no ECS",
+  "protocol": {
+    "framing": "newline-delimited JSON-RPC 2.0 on stdio and unix socket (src/local_runtime/frame.rs)",
+    "initialize_result": {
+      "protocolVersion": "2025-06-18",
+      "serverInfo": {
+        "name": "x-data-mcp",
+        "version": "0.2.0-preview.24"
+      },
+      "capabilities": {
+        "tools": {}
+      }
+    },
+    "notifications": "methods starting notifications/ with no id are ignored (no response)"
+  },
+  "error_envelopes": {
+    "tool_error": {
+      "shape": "result.content[0].text = JSON of ApiError; result.structuredContent = ApiError{code,message,scopes?}; result.isError = true",
+      "sample_unknown_tool": {
+        "code": "unknown_tool",
+        "message": "unsupported tool: definitely_not_a_tool"
+      },
+      "sample_invalid_arguments": {
+        "code": "invalid_arguments",
+        "message": "missing field `contract_version`"
+      }
+    },
+    "rpc_error": {
+      "shape": "error.code (JSON-RPC int) + error.data{code,message}",
+      "samples": {
+        "unknown_method": {
+          "code": -32601,
+          "data": {
+            "code": "method_not_found"
+          }
+        },
+        "missing_tool_name": {
+          "code": -32602,
+          "data": {
+            "code": "invalid_tool_call"
+          }
+        }
+      }
+    }
+  },
+  "surfaces": {
+    "data": {
+      "served_by": [
+        "data_service (socket)",
+        "mcp_data (stdio dev)"
+      ],
+      "registry": "src/data_supply/registry.rs",
+      "tool_count_linux": 20,
+      "tool_names": [
+        "backfill_data",
+        "cancel_task",
+        "compute_metrics",
+        "get_data_availability",
+        "get_data_capabilities",
+        "get_request",
+        "get_task",
+        "get_task_progress",
+        "inspect_verification_task",
+        "list_data_versions",
+        "list_tasks",
+        "query_data",
+        "republish_data",
+        "retry_task",
+        "run_worker_once",
+        "start_collection",
+        "update_data",
+        "verify_data_gap",
+        "verify_publication_result",
+        "verify_stopped_writes"
+      ],
+      "descriptor_fields": [
+        "name",
+        "description",
+        "inputSchema",
+        "outputSchema"
+      ],
+      "schema_dialect": "https://json-schema.org/draft/2020-12/schema with $defs",
+      "capture_sha256": "1387946c18dfad9e3320101530446cf8bae35f3f2994782097f79b9c1b7c6903",
+      "cross_check": "byte-identical across mcp_data@schema18, mcp_data@schema19, data_service@schema19 (sha256 1387946c…)",
+      "platform_qualifier": "inspect_verification_task registered only under cfg(target_os=linux) → 19 tools on non-Linux",
+      "capability_revision": "generic-data-v2",
+      "production_ready": false,
+      "production_blocking_reasons": [
+        "declared_scope_non_production",
+        "generation_root_unconfigured"
+      ],
+      "capability_items": 30,
+      "limits": {
+        "max_batch_entities": 100,
+        "max_page_size": 1000,
+        "max_snapshot_bytes": 16777216,
+        "max_snapshot_rows": 100000,
+        "snapshots_per_category": 32
+      }
+    },
+    "acquire": {
+      "served_by": [
+        "acquire_service (socket)"
+      ],
+      "registry": "src/acquire/mcp.rs",
+      "tool_count": 10,
+      "tool_names": [
+        "acquire_generation",
+        "activate_generation",
+        "check_official_updates",
+        "get_acquisition_capabilities",
+        "get_acquisition_request",
+        "get_acquisition_task",
+        "retire_generation",
+        "run_worker_once",
+        "sync_status",
+        "verify_generation"
+      ],
+      "descriptor_fields": [
+        "name",
+        "description",
+        "inputSchema"
+      ],
+      "capture_sha256": "a1dbdeffca9ddcee128e775d5b786313b12b39bd3efb8ae6114a39b159044c6d",
+      "capability_revision": "x-data-acquire-v1",
+      "generation_contract_version": "official-generation-v1",
+      "consistency_contract_version": "official-file-consistency-v1+official-generation-probe-v1",
+      "runtime_readiness": "blocked",
+      "blocking_reasons": [
+        "no_active_generation"
+      ],
+      "sync_status_empty": {
+        "active": null,
+        "consistency_contract_version": "official-file-consistency-v1+official-generation-probe-v1",
+        "generation_contract_version": "official-generation-v1",
+        "generations": [],
+        "inflight_tasks": []
+      }
+    },
+    "mcp_server_legacy": {
+      "served_by": [
+        "mcp_server (stdio, JSON store)"
+      ],
+      "registry": "src/mcp.rs public_tools()",
+      "tool_count": 8,
+      "tool_names": [
+        "cancel_task",
+        "get_market_data",
+        "get_request",
+        "get_task",
+        "list_market_data_versions",
+        "retry_task",
+        "run_worker_once",
+        "start_collection"
+      ],
+      "capture_sha256": "7a073f8d55b71e3b6384cf64bc57c5d25cbe88564901fec87f501b7b31a2d0ff",
+      "unknown_tool_message": "unsupported tool: definitely_not_a_tool"
+    },
+    "mcp_sqlite_dev_legacy": {
+      "served_by": [
+        "mcp_sqlite_dev (stdio)"
+      ],
+      "registry": "src/sqlite_task_mcp.rs (filters public_tools)",
+      "tool_count": 6,
+      "tool_names": [
+        "cancel_task",
+        "get_request",
+        "get_task",
+        "retry_task",
+        "run_worker_once",
+        "start_collection"
+      ],
+      "capture_sha256": "40222ab3189f1c9e56f1a89e013f1e5931dc97b748c3ed32c70d87813847bb0c",
+      "unknown_tool_message": "unsupported development task tool: definitely_not_a_tool"
+    }
+  },
+  "files": {
+    "acquire_service-capabilities.jsonl": "44a7419d4be9575c6eff79444b590985c8371dfc4b0ce27e360275437d6c331d",
+    "acquire_service.jsonl": "a1dbdeffca9ddcee128e775d5b786313b12b39bd3efb8ae6114a39b159044c6d",
+    "data_service-schema19.jsonl": "1387946c18dfad9e3320101530446cf8bae35f3f2994782097f79b9c1b7c6903",
+    "mcp_data-schema18.jsonl": "1387946c18dfad9e3320101530446cf8bae35f3f2994782097f79b9c1b7c6903",
+    "mcp_data-schema19.jsonl": "1387946c18dfad9e3320101530446cf8bae35f3f2994782097f79b9c1b7c6903",
+    "mcp_server-legacy.jsonl": "7a073f8d55b71e3b6384cf64bc57c5d25cbe88564901fec87f501b7b31a2d0ff",
+    "mcp_sqlite_dev-legacy.jsonl": "40222ab3189f1c9e56f1a89e013f1e5931dc97b748c3ed32c70d87813847bb0c",
+    "probe-acquire.jsonl": "f4da14b3394ccd3779a90fdc3e9ab062ce4100880954ef4a84299802d9e4c895",
+    "probe-acquire2.jsonl": "d3223ab3b562dd3727831289635c5a6166812a5b9a3655ee0bb16334094d066b",
+    "probe-data.jsonl": "5142fd2c8db5509b16c7509932c51cfc252d40ffe7dc8ef8f5f8652087bd6217",
+    "probe-legacy.jsonl": "ad3c690c037b1c9e5fa9e9012a274f1b41c119786c0dfaea1fd93bf5fbf70cd5"
+  },
+  "not_run": [
+    "tools/call happy-path on any mutating tool (requires task acceptance; P0 freeze limited to descriptors/errors)",
+    "non-Linux build (inspect_verification_task absence verified only from cfg source)",
+    "acquire_generation/verify/activate execution",
+    "official input access",
+    "ECS"
+  ]
+}
