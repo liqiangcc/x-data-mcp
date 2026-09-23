@@ -37,8 +37,10 @@
 {"id":"helper_Z999999","status":"ok","code_level":3,"research_level2":"Z9999"}
 {"id":"helper_","status":"ok","code_level":null,"research_level2":null}
 {"id":"helper_T0112","status":"ok","code_level":2,"research_level2":"T0112"}
-{"id":"incon_member","status":"ok","sections":37,"total_entries":3554,"sha256":"e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc","names":["ZJHHY","#####","TDXNHY","#####","SWHY","#####","HKHY","#####","MGHY","#####","FUND_LB","#####","FUND_TZLB","#####","ZB_GPXT","#####","FUND_TZStyle","#####","FUND_Company","#####","SBHY_TZ","SBQS_TZ","#####","TDXXHYFL","#####","TDXRSHY","#####","ZXHY","#####","CJHY","#####","ZZHY","#####","ZQGS_JGID","#####","FUND_JGID","#####"],"counts":[110, 0, 145, 0, 313, 0, 43, 0, 40, 0, 8, 0, 7, 0, 32, 0, 17, 0, 221, 0, 268, 80, 0, 273, 0, 473, 0, 424, 0, 465, 0, 270, 0, 155, 0, 210, 0]}
+{"id":"incon_member","status":"ok","sections":41,"total_entries":3662,"sha256":"fd14965e05559debb49b15c55b44c6b4ce9415bd8a8340882e55f13b90dd4c54","names":["ZJHHY","#####","TDXNHY","#####","SWHY","#####","HKHY","#####","MGHY","#####","SGXHY","#####","FUND_LB","#####","FUND_TZLB","#####","ZB_GPXT","#####","FUND_TZStyle","#####","FUND_Company","#####","SBHY_TZ","SBQS_TZ","#####","TDXXHYFL","#####","TDXRSHY","#####","ZXHY","#####","CJHY","#####","ZZHY","#####","ZQGS_JGID","#####","FUND_JGID","#####","JPHY","#####"],"counts":[110, 0, 145, 0, 313, 0, 43, 0, 40, 0, 59, 0, 8, 0, 7, 0, 32, 0, 17, 0, 235, 0, 268, 80, 0, 273, 0, 474, 0, 424, 0, 465, 0, 270, 0, 155, 0, 210, 0, 34, 0]}
 {"id":"secmap_ZJHHY","status":"ok","entries":110}
-{"id":"secmap_TJGSHY","status":"ok","entries":null}
-{"id":"secmap_DFCFHY","status":"ok","entries":null}
+{"id":"secmap_SWHY","status":"ok","entries":313}
+{"id":"secmap_TDXRSHY","status":"ok","entries":474}
+{"id":"secmap_ZZHY","status":"ok","entries":270}
+{"id":"secmap_JPHY","status":"ok","entries":34}
 {"id":"secmap_XXXXX","status":"ok","entries":null}

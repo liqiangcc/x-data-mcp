@@ -40,11 +40,15 @@
 {"family":"incon","id":"reject_string","status":"PASS","detail":"invalid_input: incon.dat input must be a Buffer or Uint8Array","expected":null,"actual":null}
 {"family":"incon","id":"reject_null","status":"PASS","detail":"invalid_input: incon.dat input must be a Buffer or Uint8Array","expected":null,"actual":null}
 {"family":"incon","id":"accept_uint8array","status":"PASS","detail":null,"expected":null,"actual":null}
-{"family":"incon","id":"deb_manifest_sha","status":"PASS","detail":"deb sha256=22aff03c4b26fb67c2c049056f785d6fb56cd855fc3171dbb65a99ab9cfd4454 manifest=22aff03c4b26fb67c2c049056f785d6fb56cd855fc3171dbb65a99ab9cfd4454","expected":null,"actual":null}
-{"family":"incon","id":"member_extract","status":"PASS","detail":"deb->./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat 65853B sha256=ca941e57a21d0717ee6108ac3ccfee5fab85289e26ee154d89b3e1cbbe8bc6c9 (separate source: official client deb, NOT gen-2 base.zip — member absent there)","expected":null,"actual":null}
-{"family":"incon","id":"incon_member","status":"PASS","detail":"sections=37 entries=3554 sha256=e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc","expected":{"sections":37,"total":3554,"sha256":"e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc"},"actual":{"sections":37,"total":3554,"sha256":"e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc"}}
+{"family":"incon","id":"gbbq_manifest_sha","status":"PASS","detail":"gbbq sha256=daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9 manifest=daad6290c4f1cd478d7436b1e7077260a3e3e52cefd7eae58e4f24878fa2d0e9","expected":null,"actual":null}
+{"family":"incon","id":"zhb_member_sha","status":"PASS","detail":"zhb.zip 1411229B sha256=e1ded566dc5269642de760211ec1b67e5ebebd67ab1e6338f70cab7c05048350","expected":null,"actual":null}
+{"family":"incon","id":"member_extract","status":"PASS","detail":"gbbq.zip!zhb.zip!incon.dat 67543B sha256=86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51 (authoritative gen-2 source)","expected":null,"actual":null}
+{"family":"incon","id":"incon_member","status":"PASS","detail":"sections=41 entries=3662 sha256=fd14965e05559debb49b15c55b44c6b4ce9415bd8a8340882e55f13b90dd4c54","expected":{"sections":41,"total":3662,"sha256":"fd14965e05559debb49b15c55b44c6b4ce9415bd8a8340882e55f13b90dd4c54"},"actual":{"sections":41,"total":3662,"sha256":"fd14965e05559debb49b15c55b44c6b4ce9415bd8a8340882e55f13b90dd4c54"}}
 {"family":"incon","id":"secmap_ZJHHY","status":"PASS","detail":null,"expected":110,"actual":110}
-{"family":"incon","id":"secmap_TJGSHY","status":"PASS","detail":null,"expected":null,"actual":null}
-{"family":"incon","id":"secmap_DFCFHY","status":"PASS","detail":null,"expected":null,"actual":null}
+{"family":"incon","id":"secmap_SWHY","status":"PASS","detail":null,"expected":313,"actual":313}
+{"family":"incon","id":"secmap_TDXRSHY","status":"PASS","detail":null,"expected":474,"actual":474}
+{"family":"incon","id":"secmap_ZZHY","status":"PASS","detail":null,"expected":270,"actual":270}
+{"family":"incon","id":"secmap_JPHY","status":"PASS","detail":null,"expected":34,"actual":34}
 {"family":"incon","id":"secmap_XXXXX","status":"PASS","detail":null,"expected":null,"actual":null}
-{"family":"incon","id":"secmap_first_match","status":"PASS","detail":"\"#####\" sections: 18, first-match entries=0","expected":null,"actual":null}
+{"family":"incon","id":"secmap_first_match","status":"PASS","detail":"\"#####\" sections: 20, first-match entries=0","expected":null,"actual":null}
+{"family":"incon","id":"deb_optional_sample","status":"PASS","detail":"separate source (no gen-2 alignment claim): deb sha=22aff03c4b26 member=65853B 37 sections/3554 entries","expected":null,"actual":null}

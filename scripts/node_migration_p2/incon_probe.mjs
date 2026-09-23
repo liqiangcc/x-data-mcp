@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { inflateRawSync } from "node:zlib";
 import { join } from "node:path";
 import { parse, InconError, codeLevel, researchLevel2, sectionMap } from "../../src_node/parsers/incon.mjs";
 
@@ -76,28 +77,44 @@ bnd("reject_null", null);
 { try { parse(new Uint8Array(CASES.single_section)); emit("accept_uint8array", "PASS", null); }
   catch (e) { emit("accept_uint8array", "FAIL", e.message); } }
 
-// ---------- deb member (official client package — separate source, not
-// the absent gen-2 base.zip member; extraction reproducible) ----------
-const DEB = "/home/box/retained-inputs/official-client-com.tdx.tdxcfv_7.64_amd64.deb";
+// ---------- authoritative gen-2 member: official-gbbq.zip!zhb.zip!
+// incon.dat (Rust catalog_tdx/source.rs path; REVIEW-NM-024 source
+// correction). Nested, bounded, in-process — no persistent extraction.
+const GBBQ = "/home/box/retained-inputs/official-gbbq.zip";
 const MANIFEST = "/home/box/retained-inputs/manifest-sha256.txt";
-const MEMBER_PATH = "./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat";
 {
-  // verify deb sha256 against manifest entry
-  const debSha = sha256(readFileSync(DEB));
+  const gSha = sha256(readFileSync(GBBQ));
   const manifest = readFileSync(MANIFEST, "utf8").split("\n").filter(Boolean)
     .map((l) => { const [h, ...p] = l.trim().split(/\s+/); return { h, p: p.join(" ") }; });
-  const entry = manifest.find((e) => e.p === "official-client-com.tdx.tdxcfv_7.64_amd64.deb");
-  emit("deb_manifest_sha", entry !== undefined && entry.h === debSha ? "PASS" : "FAIL",
-    `deb sha256=${debSha} manifest=${entry?.h ?? "absent"}`);
+  const entry = manifest.find((e) => e.p === "official-gbbq.zip");
+  emit("gbbq_manifest_sha", entry !== undefined && entry.h === gSha ? "PASS" : "FAIL",
+    `gbbq sha256=${gSha} manifest=${entry?.h ?? "absent"}`);
 }
-const member = (() => {
-  const r = spawnSync("python3", [join(ROOT, "scripts/node_migration_p2/deb_member_extract.py"), DEB, MEMBER_PATH],
-    { encoding: "buffer", maxBuffer: 32 * 1024 * 1024 });
-  if (r.status !== 0) throw new Error(`extractor failed (${r.status}): ${r.stderr}`);
-  return r.stdout;
-})();
-emit("member_extract", member.length === 65853 && sha256(member) === "ca941e57a21d0717ee6108ac3ccfee5fab85289e26ee154d89b3e1cbbe8bc6c9" ? "PASS" : "FAIL",
-  `deb->${MEMBER_PATH} ${member.length}B sha256=${sha256(member)} (separate source: official client deb, NOT gen-2 base.zip — member absent there)`);
+function zipMember(buf, name) {
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  const cdCount = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  for (let i = 0; i < cdCount; i++) {
+    const method = buf.readUInt16LE(off + 10);
+    const compSize = buf.readUInt32LE(off + 20);
+    const nameLen = buf.readUInt16LE(off + 28), extraLen = buf.readUInt16LE(off + 30), cmtLen = buf.readUInt16LE(off + 32);
+    const lho = buf.readUInt32LE(off + 42);
+    const entry = buf.subarray(off + 46, off + 46 + nameLen).toString("latin1");
+    if (entry === name) {
+      const lNameLen = buf.readUInt16LE(lho + 26), lExtraLen = buf.readUInt16LE(lho + 28);
+      const data = buf.subarray(lho + 30 + lNameLen + lExtraLen, lho + 30 + lNameLen + lExtraLen + compSize);
+      return method === 0 ? data : inflateRawSync(data);
+    }
+    off += 46 + nameLen + extraLen + cmtLen;
+  }
+  throw new Error(`member not found: ${name}`);
+}
+const zhb = zipMember(readFileSync(GBBQ), "zhb.zip");
+emit("zhb_member_sha", sha256(zhb) === "e1ded566dc5269642de760211ec1b67e5ebebd67ab1e6338f70cab7c05048350" ? "PASS" : "FAIL",
+  `zhb.zip ${zhb.length}B sha256=${sha256(zhb)}`);
+const member = zipMember(zhb, "incon.dat");
+emit("member_extract", member.length === 67543 && sha256(member) === "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51" ? "PASS" : "FAIL",
+  `gbbq.zip!zhb.zip!incon.dat ${member.length}B sha256=${sha256(member)} (authoritative gen-2 source)`);
 const sections = parse(member);
 {
   const h = createHash("sha256");
@@ -129,4 +146,25 @@ for (const o of oracle.filter((r) => r.id.startsWith("secmap_"))) {
   const first = sections.find((s) => s.name === "#####");
   emit("secmap_first_match", m !== null && m.length === first.entries.length ? "PASS" : "FAIL",
     `"#####" sections: ${sections.filter((s)=>s.name==="#####").length}, first-match entries=${m?.length}`);
+}
+
+// ---------- optional separate sample: client deb incon.dat (different
+// source — NOT gen-2 alignment evidence) ----------
+{
+  const DEB = "/home/box/retained-inputs/official-client-com.tdx.tdxcfv_7.64_amd64.deb";
+  const debSha = sha256(readFileSync(DEB));
+  const manifest = readFileSync(MANIFEST, "utf8").split("\n").filter(Boolean)
+    .map((l) => { const [h, ...p] = l.trim().split(/\s+/); return { h, p: p.join(" ") }; });
+  const entry = manifest.find((e) => e.p === "official-client-com.tdx.tdxcfv_7.64_amd64.deb");
+  const debOk = entry !== undefined && entry.h === debSha;
+  const r = spawnSync("python3", [join(ROOT, "scripts/node_migration_p2/deb_member_extract.py"), DEB,
+    "./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat"], { encoding: "buffer", maxBuffer: 32 * 1024 * 1024 });
+  const debMember = r.status === 0 ? r.stdout : null;
+  const debParsed = debMember === null ? null : (() => { try { return parse(debMember); } catch { return null; } })();
+  const ok = debOk && debMember !== null &&
+    debMember.length === 65853 && sha256(debMember) === "ca941e57a21d0717ee6108ac3ccfee5fab85289e26ee154d89b3e1cbbe8bc6c9" &&
+    debParsed !== null && debParsed.length === 37 &&
+    debParsed.reduce((a, s) => a + s.entries.length, 0) === 3554;
+  emit("deb_optional_sample", ok ? "PASS" : "FAIL",
+    `separate source (no gen-2 alignment claim): deb sha=${debSha.slice(0,12)} member=${debMember?.length}B 37 sections/${debParsed?.reduce((a,s)=>a+s.entries.length,0)} entries`);
 }

@@ -4,7 +4,7 @@ Baseline `f94b5e79c7601fc5c009e7a1e710fec6894f1a3f` (`migration/node-devin`). No
 
 ## Contents
 
-- `probe-results.jsonl` — 50 rows, all PASS (49 + deb_manifest_sha runtime check).
+- `probe-results.jsonl` — 54 rows, all PASS (R2: gen-2 authoritative member).
 - `rust-oracle.jsonl` — live `rustc 1.98.1` + `x_data_mcp`/`encoding_rs` rlibs (`target/debug/incon_oracle`, not committed): 21 synthetic + 17 helper + member digest + 4 secmap rows.
 - `results.json` — ported functions, semantics, member provenance.
 - `SHA256SUMS` — over the three files (excludes itself).
@@ -13,17 +13,19 @@ Baseline `f94b5e79c7601fc5c009e7a1e710fec6894f1a3f` (`migration/node-devin`). No
 
 ```sh
 node scripts/node_migration_p2/incon_probe.mjs .
-# The probe self-contains: deb sha256 check vs manifest-sha256.txt,
-# committed extractor scripts/node_migration_p2/deb_member_extract.py
-# (bounded, read-only; ar -> data.tar.xz -> lzma -> tar member),
-# member sha256 check. No /dev/shm reliance.
+# Probe self-contains: outer official-gbbq.zip sha256 vs manifest,
+# nested zhb.zip!incon.dat extraction (in-process zipMember), nested
+# member sha256 checks. No /dev/shm reliance.
+# Optional deb sample uses scripts/node_migration_p2/deb_member_extract.py
 ```
 
 Module: `src_node/parsers/incon.mjs` (pure JS; strict GB18030 via `TextDecoder(fatal)`).
 
-## IMPORTANT member-source caveat
+## Authoritative gen-2 member (REVIEW-NM-024 source correction)
 
-The task assumes `incon.dat` exists in MANIFEST-verified `official-base.zip` — **it does not** (verified by full listing; gen-3 `base.zip` also lacks it). Real-byte comparison instead uses the **official client package's** `incon.dat` (65,853B, sha256 `ca941e57…`, MANIFEST-registered `.deb` input): 37 sections incl. retained `#####` empties, 3,554 entries, digest `e5e90ee7…` identical to live Rust. Flagged for Lead; no silent substitution made.
+`incon.dat` absent from both `base.zip` files. The correct gen-2 source per Rust `src/catalog_tdx/source.rs` is **`official-gbbq.zip!zhb.zip!incon.dat`**: outer `daad6290…` (manifest-verified at runtime), nested `zhb.zip` `e1ded566…` (1,411,229B), member `86f758b2…` (67,543B). Parsed: 41 sections incl. 20 `#####` empties + trailing, 3,662 entries, digest `fd14965e…` identical to live Rust.
+
+Optional separate sample retained: client deb `tc/incon.dat` (65,853B, `ca941e57…`, 37 sections/3,554 entries) — different source, byte-equivalence only, **no gen-2 alignment claim**.
 
 ## Helpers verified
 

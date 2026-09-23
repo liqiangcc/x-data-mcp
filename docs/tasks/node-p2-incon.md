@@ -3,15 +3,15 @@
 任务：NM-024（agent-coordination/node-migration）。日期：2026-09-23。
 基线：`f94b5e79c7601fc5c009e7a1e710fec6894f1a3f`（`migration/node-devin`）。Node v20.19.2。
 关联：Epic #271；catalog contract v1。来源：`src/catalog_tdx/incon.rs`（`parse` + `code_level` + `research_level2` + `section_map`）。
-证据：`evidence/node-migration/p2/incon/`（probe-results.jsonl 50 行全 PASS、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
+证据：`evidence/node-migration/p2/incon/`（probe-results.jsonl 54 行全 PASS、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
 
-**结果：50/50 PASS / 0 FAIL —— 合成边界 + 真实字节（官方客户端包内 incon.dat）全节/条目摘要逐位一致。**
+**结果：54/54 PASS / 0 FAIL —— 合成边界 + 真实字节（gen-2 official-gbbq.zip!zhb.zip!incon.dat）全节/条目摘要逐位一致。**
 
-## ⚠ retained member 差异（已如实上报）
+## ⚠ retained member 来源修正（REVIEW-NM-024）
 
-任务假定 `incon.dat` 在 gen-2 `official-base.zip` —— **实际不存在**（完整 listing 核验；gen-3 `base.zip` 亦无）。改用官方客户端包 `com.tdx.tdxcfv_7.64_amd64.deb`（MANIFEST 登记输入）内 `./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat`（65,853B，sha256 `ca941e57…`）做真实字节对比——来源不同已明确标注，未做静默替代。**分离来源限制保留**：deb member 不构成与 gen-2 catalog member 的同快照字典对齐（该需求留待后续组合阶段）。
+任务假定 `incon.dat` 在 `official-base.zip` —— **实际不存在**（完整 listing 核验；gen-3 `base.zip` 亦无）。按 Rust `src/catalog_tdx/source.rs` 的实际消费路径，权威 gen-2 来源为 **`official-gbbq.zip!zhb.zip!incon.dat`**：外层 `daad6290…`（运行时对 `manifest-sha256.txt` 校验）、嵌套 `zhb.zip` 1,411,229B（`e1ded566…`）、member 67,543B（`86f758b2…`）。探针进程内嵌套提取（有界、只读、无 `/dev/shm`）：41 节（含 20 个 `#####` 空节 + 尾随）、3,662 条目、节/条目摘要 `fd14965e…` 与 live Rust 一致。
 
-R1 可复现提取（REVIEW-NM-024）：探针内提交有界提取器 `deb_member_extract.py`（ar → data.tar.xz → lzma → tar member → stdout，只读、64MiB 上限、fail-closed 退出码）；运行时校验 deb sha256 对 `manifest-sha256.txt` 条目（`22aff03c…`），member sha256 `ca941e57…` 解析前校验；不依赖 `/dev/shm` 持久态。
+可选分离样本保留：客户端 deb `tc/incon.dat`（65,853B，`ca941e57…`，37 节/3,554 条目）——不同来源，仅字节等价证据，**不构成 gen-2 对齐声明**。
 
 ## 1. 移植：`src_node/parsers/incon.mjs`
 
@@ -41,7 +41,8 @@ R1 可复现提取（REVIEW-NM-024）：探针内提交有界提取器 `deb_memb
 | 合成 oracle | 21（空文件、header-only、单/多节、extra 列、尾随空节、空节名、节内/跨节重复、header 前条目、中/双空行、1 字段、空/非 ASCII code、空名、decode 坏、优先级×2、LF-only、转义×2） | PASS 逐字 |
 | helpers | 17（长度/前缀/畸形、小写字母、非 T/X 字母） | PASS |
 | 类型边界 | 3（string/null 拒 + Uint8Array 收） | PASS |
-| 真实字节 | 8（+deb manifest sha 运行时校验）（deb member 来源 + 37 节/3554 条目摘要 + 4 secmap + first-match） | PASS |
+| 真实字节（gen-2） | 10（外层 manifest sha + zhb sha + member sha + 41 节/3662 条目摘要 + 6 secmap + first-match） | PASS |
+| 分离样本（deb） | 1（来源标记，无对齐声明） | PASS |
 
 ## 4. 范围边界
 
