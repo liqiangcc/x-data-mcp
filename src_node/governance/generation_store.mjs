@@ -248,7 +248,10 @@ export class GenerationStore {
     }
     let p;
     try { p = strictJson(bytes.toString("utf8")); }
-    catch (e) { throw err("json", `manifest JSON invalid: ${e.message}`); }
+    catch (e) {
+      const m = e.message.replace(/^manifest JSON invalid: /, "");
+      throw err("json", `manifest JSON invalid: ${m}`);
+    }
     validateActivePointer(p);
     return p;
   }
@@ -264,7 +267,11 @@ export class GenerationStore {
     if (typeof installed?.manifest_sha256 !== "string" || !installed.manifest_sha256.isWellFormed()) {
       throw err("invalid_input", "installed.manifest_sha256 must be a string");
     }
-    checkRequestId(requestId);
+    // activation_request_id is a JSON field, not a path component —
+    // wellformed string is the only boundary (Rust accepts any &str).
+    if (typeof requestId !== "string" || !requestId.isWellFormed()) {
+      throw err("invalid_request_id", "invalid request_id for activation");
+    }
     if (expectedPrevious !== null && typeof expectedPrevious !== "string") {
       throw err("invalid_input", "expected_previous must be null or string");
     }
@@ -287,13 +294,18 @@ export class GenerationStore {
     const tmp = join(this.root, `.${ACTIVE_NAME}.tmp`);
     mkdirSync(this.root, { recursive: true });
     // write + fsync file, rename over pointer, fsync parent — same order
-    // as Rust's activate.
-    const fd = openSync(tmp, "w");
+    // as Rust's activate. O_NOFOLLOW: a stale/pre-planted symlink at the
+    // tmp name must not redirect the write (stricter than Rust fs::write,
+    // documented). A regular tmp file is truncated and rewritten.
+    let fd;
+    try {
+      fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o644);
+    } catch (e) { throw err("io", `io: ${e.message}`); }
     let firstErr = null;
     try {
-      writeSync(fd, bytes);
+      writeAllFd(fd, bytes);
       fsyncSync(fd);
-    } catch (e) { firstErr = err("io", `io: ${e.message}`); }
+    } catch (e) { firstErr = e instanceof GenerationUsableError ? e : err("io", `io: ${e.message}`); }
     try { closeSync(fd); }
     catch (e) { if (firstErr === null) firstErr = err("io", `io: ${e.message}`); }
     if (firstErr) throw firstErr;
@@ -330,6 +342,17 @@ export class GenerationStore {
       throw err("io", `io: ${e.message}`);
     }
     return { gfd, dfd };
+  }
+}
+
+// Counted write loop — Node may return a short count; zero-write is an
+// error. Exported for probe injection of deterministic short writes.
+export function writeAllFd(fd, bytes, _writeSync = writeSync) {
+  let off = 0;
+  while (off < bytes.length) {
+    const n = _writeSync(fd, bytes, off, bytes.length - off);
+    if (n === 0) throw err("io", "io: zero-length write");
+    off += n;
   }
 }
 
@@ -379,10 +402,20 @@ function validateActivePointer(p) {
 // pre-serialized by emitTs (chrono AutoSi format).
 function toPrettyJson(pointer) {
   const q = (s) => {
-    // serde_json string escaping: ", \, control chars -> \uXXXX; raw UTF-8
-    return `"${s.replace(/["\\\x00-\x1f]/g, (c) =>
-      c === '"' ? '\\"' : c === "\\" ? "\\\\"
-        : `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}"`;
+    // serde_json escaping: short escapes for " \ \b \t \n \f \r, other
+    // C0 controls -> \u00XX, DEL and non-ASCII emitted raw (UTF-8).
+    return `"${s.replace(/["\\\x00-\x1f]/g, (c) => {
+      switch (c) {
+        case '"': return '\\"';
+        case "\\": return "\\\\";
+        case "\b": return "\\b";
+        case "\t": return "\\t";
+        case "\n": return "\\n";
+        case "\f": return "\\f";
+        case "\r": return "\\r";
+        default: return `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+      }
+    })}"`;
   };
   const lines = POINTER_FIELDS.map((k) => {
     const v = pointer[k];

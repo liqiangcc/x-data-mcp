@@ -2,8 +2,8 @@
 // Rust oracle. Synthetic roots only. Exit nonzero on FAIL.
 // Usage: node generation_active_probe.mjs <root> [selftest]
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, writeSync as writeSyncReal, openSync, closeSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = process.argv[2] || ".";
@@ -11,7 +11,7 @@ const SELFTEST = process.argv[3] || null;
 if (!existsSync(join(ROOT, "src_node/native/rename_noreplace.node"))) {
   execSync("gcc -shared -fPIC -O2 -o src_node/native/rename_noreplace.node src_node/native/rename_noreplace.c -I/usr/include/node", { cwd: ROOT });
 }
-const { GenerationStore } = await import("../../src_node/governance/generation_store.mjs");
+const { GenerationStore, writeAllFd } = await import("../../src_node/governance/generation_store.mjs");
 const { GenerationUsableError } = await import("../../src_node/governance/generation_usable.mjs");
 
 const oracle = readFileSync(join(ROOT, "evidence/node-migration/p2/generation_active/rust-oracle.jsonl"), "utf8")
@@ -59,7 +59,14 @@ const SEQ = {
   activate_conflict_wrong: () => run(() => store.activate(installed(G2), G2, "req-2", NOW)),
   activate_second: () => run(() => { const p = store.activate(installed(G2), G1, "req-2", NOW); return { gid: p.generation_id, prev: p.previous_generation_id, bytes: [...readFileSync(AP)] }; }),
   reopen_active: () => run(() => { const p = new GenerationStore(FIX).active(); return [p.generation_id, p.previous_generation_id, p.activation_request_id]; }),
+  activate_escapes: () => run(() => {
+    const s2 = new GenerationStore(FIX_ESC);
+    const p = s2.activate(installed(G1), null, oracle.find((x) => x.id === "activate_escapes").value.req, NOW);
+    return { bytes: [...readFileSync(join(FIX_ESC, "active-generation.json"))], req: p.activation_request_id };
+  }),
 };
+const FIX_ESC = join(FIX, "esc");
+mkdirSync(FIX_ESC, { recursive: true });
 
 for (const o of oracle) {
   if (HOOKS[o.id]) HOOKS[o.id]();
@@ -110,6 +117,45 @@ for (const o of oracle) {
   const s2 = new GenerationStore(FIX);
   const got = run(() => s2.activate(installed(G2), G2, "req-3", NOW));
   emit("activate_under_lease", got.status === "ok" ? "PASS" : "FAIL", got.status === "ok" ? "ok" : got.message);
+}
+// ---------- R1: tmp-symlink negative + injected short write ----------
+{
+  const { symlinkSync, readFileSync: rf } = await import("node:fs");
+  const out = join(FIX, "tmp-escape-out.txt");
+  writeFileSync(out, "ORIGINAL");
+  const tmp = join(FIX, ".active-generation.json.tmp");
+  rmSync(tmp, { force: true });
+  symlinkSync(out, tmp);
+  const before = rf(out, "utf8");
+  try { store.activate(installed(G1), G2, "req-tmp", NOW); emit("tmp_symlink_reject", "FAIL", "wrote through symlink"); }
+  catch (e) {
+    emit("tmp_symlink_reject", e.kind === "io" && rf(out, "utf8") === before && readFileSync(tmp).length >= 0 ? "PASS" : "FAIL", e.kind);
+  }
+  rmSync(tmp, { force: true });
+}
+// short-write injection: writeAllFd must loop; zero-write is an error
+{
+  const { openSync, closeSync } = await import("node:fs");
+  const tgt = join(FIX, "shortwrite.bin");
+  const fd = openSync(tgt, "w");
+  let calls = 0;
+  writeAllFd(fd, Buffer.from("abcdef"), (f, b, o, l) => { calls++; return writeSyncReal(f, b, o, Math.min(l, 2)); });
+  closeSync(fd);
+  emit("short_write_loops", calls === 3 && readFileSync(tgt, "utf8") === "abcdef" ? "PASS" : "FAIL", `calls=${calls}`);
+  const fd2 = openSync(tgt, "w");
+  try { writeAllFd(fd2, Buffer.from("x"), () => 0); emit("zero_write_io", "FAIL", "accepted"); }
+  catch (e) { emit("zero_write_io", e.kind === "io" ? "PASS" : "FAIL", e.kind); }
+  closeSync(fd2);
+}
+// malformed-JSON prefix normalized once (finding 4)
+{
+  writeFileSync(AP, "{bad");
+  try { store.active(); emit("json_prefix_once", "FAIL", "no throw"); }
+  catch (e) {
+    emit("json_prefix_once", /^manifest JSON invalid: [^m]/.test(e.message) && !e.message.includes("manifest JSON invalid: manifest") ? "PASS" : "FAIL", e.message.slice(0, 80));
+  }
+  rmSync(AP);
+  store.activate(installed(G2), null, "req-4", NOW); // restore pointer for consistency
 }
 // malformed now rejected before any mutation
 {
