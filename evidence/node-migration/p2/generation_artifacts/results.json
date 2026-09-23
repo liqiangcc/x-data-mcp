@@ -1,0 +1,43 @@
+{
+  "task_id": "NM-034",
+  "baseline_sha": "99c8fe93380a0378b06eb942713d19eaaedf1de8",
+  "source_ported": "generation/mod.rs::{write_decision,decision,write_artifact,artifact} — once-only decision/evidence persistence",
+  "rust_oracle": "rust-oracle.jsonl — 19 cases via live Store (rustc 1.98.1): not_installed/decision_exists/artifact_exists/not_verified verbatim + read-back/reopen",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/governance/generation_store.mjs",
+    "fixtures": "/tmp/nm34-art-* mkdtemp, cleaned"
+  },
+  "ordering": [
+    "writeDecision: dir !is_dir -> not_installed; O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW -> EEXIST -> decision_exists verbatim; full write + fsync + fsync dir; sha256",
+    "writeArtifact: same with artifact_exists verbatim; name check empty///\\/NUL + wellformed (Rust check verbatim + surrogate, stricter)",
+    "decision()/artifact(): ENOENT -> null, else bytes; bounded read <=1MiB (aligned with NM-032 decision bound; artifact reads stricter than Rust, documented)",
+    "bytes must be Buffer/Uint8Array — no lossy string conversion"
+  ],
+  "stricter_than_rust": "generation_id boundary (no / \\ NUL . .., wellformed); artifact-name surrogate rejection; bounded artifact reads",
+  "conflict_proof": "existing regular file AND symlink -> *_exists verbatim; symlink target untouched; '..' resolves to dir -> artifact_exists (Rust-verbatim outcome)",
+  "durability": "file fsync + dir fsync in-path; reopen rows confirm readable state; partial/crash-write, disk-full NOT_RUN (documented)",
+  "probe": {
+    "command": "node scripts/node_migration_p2/generation_artifact_probe.mjs .",
+    "exit": 0,
+    "cases": 27,
+    "totals": {
+      "pass": 27,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "live_rust_oracle": 19,
+      "boundary": 8
+    },
+    "selftest": "node ... art -> exit 1 (negative-selftest.jsonl)"
+  },
+  "regressions": {
+    "NM-033": "38/38 PASS",
+    "NM-032": "28/28 PASS",
+    "NM-026": "72/72 PASS",
+    "P1-native": "10/10"
+  },
+  "untested": "disk-full mid-write, ENOSPC fsync failure, crash between write and fsync — not injectable on Box",
+  "out_of_scope": "no usable() semantics change, no real gen-2 decision, no DB/service/activation"
+}

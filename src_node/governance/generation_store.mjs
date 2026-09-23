@@ -17,7 +17,7 @@
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, statSync } from "node:fs";
+import { closeSync, constants, fsyncSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 // Atomic no-overwrite rename: renameat2(RENAME_NOREPLACE). Node's
@@ -30,7 +30,7 @@ const require_ = createRequire(import.meta.url);
 const { rename_noreplace: renameNoreplace } = require_("../native/rename_noreplace.node");
 import { inspect, strictJson, InspectionError } from "./snapshot.mjs";
 import { readBoundedFile } from "../lib/zip_member.mjs";
-import { GenerationUsableError, MANIFEST_NAME } from "./generation_usable.mjs";
+import { DECISION_NAME, GenerationUsableError, MANIFEST_NAME } from "./generation_usable.mjs";
 
 export const STAGING_DIR = "staging";
 export const GENERATIONS_DIR = "generations";
@@ -158,6 +158,109 @@ export class GenerationStore {
       .map((e) => e.name)
       .sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
   }
+
+  /** write_decision: once-only consistency-decision.json — exclusive
+   *  create, full write, fsync file + dir, returns sha256. */
+  writeDecision(generationId, decisionBytes) {
+    checkGenerationId(generationId);
+    const dir = this.generationDir(generationId);
+    const st = statOrNull(dir);
+    if (st === null || !st.isDirectory()) {
+      throw err("not_installed", `generation ${generationId} is not installed`);
+    }
+    writeOnce(join(dir, DECISION_NAME), decisionBytes, () => {
+      throw err("decision_exists",
+        `consistency decision already recorded for generation ${generationId}`);
+    });
+    fsyncDir(dir);
+    return createHash("sha256").update(decisionBytes).digest("hex");
+  }
+
+  /** decision: raw once-written decision bytes, or null. */
+  decision(generationId) {
+    checkGenerationId(generationId);
+    const path = join(this.generationDir(generationId), DECISION_NAME);
+    try { return readBoundedFile(path, MAX_MANIFEST); }
+    catch (e) {
+      if (e.code === "ENOENT") return null;
+      throw err("io", `io: ${e.message}`);
+    }
+  }
+
+  /** write_artifact: once-only supplementary evidence artifact. */
+  writeArtifact(generationId, name, bytes) {
+    checkGenerationId(generationId);
+    checkArtifactName(name);
+    const dir = this.generationDir(generationId);
+    const st = statOrNull(dir);
+    if (st === null || !st.isDirectory()) {
+      throw err("not_installed", `generation ${generationId} is not installed`);
+    }
+    writeOnce(join(dir, name), bytes, () => {
+      throw err("artifact_exists",
+        `artifact ${name} for generation ${generationId} already exists`);
+    });
+    fsyncDir(dir);
+    return createHash("sha256").update(bytes).digest("hex");
+  }
+
+  /** artifact: supplementary artifact bytes, or null. */
+  artifact(generationId, name) {
+    checkGenerationId(generationId);
+    checkArtifactName(name);
+    try { return readBoundedFile(join(this.generationDir(generationId), name), MAX_MANIFEST); }
+    catch (e) {
+      if (e.code === "ENOENT") return null;
+      throw err("io", `io: ${e.message}`);
+    }
+  }
+}
+
+// gid/name boundary checks — stricter than Rust (documented): Rust
+// joins raw strings; Node additionally refuses '.'/'..' components and
+// unpaired surrogates (which would WTF-8-alias to a different name).
+// Artifact names keep Rust's check verbatim (empty, '/', '\\', NUL)
+// plus wellformedness; '..' resolves to the dir itself and fails
+// EEXIST -> artifact_exists, matching Rust's outcome exactly.
+function checkGenerationId(gid) {
+  if (typeof gid !== "string" || !gid.isWellFormed() || gid === "" ||
+      gid.includes("/") || gid.includes("\\") || gid.includes("\0") ||
+      gid === "." || gid === "..") {
+    throw err("invalid_generation_id", "invalid generation_id");
+  }
+}
+function checkArtifactName(name) {
+  if (typeof name !== "string" || !name.isWellFormed() || name === "" ||
+      name.includes("/") || name.includes("\\") || name.includes("\0")) {
+    throw err("not_verified", "snapshot inspection failed: invalid artifact name");
+  }
+}
+// Once-only write: O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW — an existing
+// regular file OR symlink both fail EEXIST; the target is never
+// opened for writing. Full write + fsync + parent-dir fsync; a failed
+// or partial write leaves the exclusive-created (possibly partial)
+// file in place — never silently repaired, matching Rust.
+function writeOnce(path, bytes, onExists) {
+  if (!(bytes instanceof Uint8Array)) {
+    throw err("invalid_input", "artifact bytes must be Buffer/Uint8Array");
+  }
+  let fd;
+  try {
+    fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+  } catch (e) {
+    if (e.code === "EEXIST") return onExists();
+    throw err("io", `io: ${e.message}`);
+  }
+  try {
+    let off = 0;
+    while (off < bytes.length) {
+      const n = writeSync(fd, bytes, off, bytes.length - off);
+      if (n === 0) throw err("io", "io: zero-length write");
+      off += n;
+    }
+    fsyncSync(fd);
+  } finally { closeSync(fd); }
+  return null;
 }
 
 // ENOENT/ENOTDIR mean absent; every other stat failure propagates —
@@ -172,8 +275,8 @@ const statOrNull = (p) => {
 const fsyncDir = (dir) => {
   const fd = openSync(dir, "r");
   try {
-    // Node lacks fsync on dirs portably; use fs.fsyncSync on dir fd.
-    fsyncFd(fd);
+    // Node lacks fsync on dirs portably; fsyncSync on a dir fd is the
+    // Linux-equivalent of Rust's File::open(dir).sync_all().
+    fsyncSync(fd);
   } finally { closeSync(fd); }
 };
-const fsyncFd = fsyncSync;

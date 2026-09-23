@@ -1,0 +1,19 @@
+{"id":"decision_missing_gen","kind":"not_installed","message":"generation 0000000000000000000000000000000000000000000000000000000000000000 is not installed","status":"error"}
+{"id":"artifact_missing_gen","kind":"not_installed","message":"generation 0000000000000000000000000000000000000000000000000000000000000000 is not installed","status":"error"}
+{"id":"decision_read_missing","status":"ok","value":true}
+{"id":"decision_write","status":"ok","value":"90b90f9acf9e6e885343395252d208934c73831d873130768b021baaa2337e06"}
+{"id":"decision_read_back","status":"ok","value":{"len":32,"sha":"90b90f9acf9e6e885343395252d208934c73831d873130768b021baaa2337e06"}}
+{"id":"decision_dup","kind":"decision_exists","message":"consistency decision already recorded for generation a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1","status":"error"}
+{"id":"decision_after_dup","status":"ok","value":"90b90f9acf9e6e885343395252d208934c73831d873130768b021baaa2337e06"}
+{"id":"artifact_write","status":"ok","value":"a0da1fce57d0e4f9f0ae4e4cbe040d34dcc046255c6c8d18e97f55aaed0655f0"}
+{"id":"artifact_read","status":"ok","value":"a0da1fce57d0e4f9f0ae4e4cbe040d34dcc046255c6c8d18e97f55aaed0655f0"}
+{"id":"artifact_missing","status":"ok","value":true}
+{"id":"artifact_dup","kind":"artifact_exists","message":"artifact evidence.json for generation a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 already exists","status":"error"}
+{"id":"artifact_empty_name","kind":"not_verified","message":"snapshot inspection failed: invalid artifact name","status":"error"}
+{"id":"artifact_slash_name","kind":"not_verified","message":"snapshot inspection failed: invalid artifact name","status":"error"}
+{"id":"artifact_nul_name","kind":"not_verified","message":"snapshot inspection failed: invalid artifact name","status":"error"}
+{"id":"artifact_dotdot","kind":"artifact_exists","message":"artifact .. for generation a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 already exists","status":"error"}
+{"id":"artifact_symlink_exists","kind":"artifact_exists","message":"artifact art-link for generation a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 already exists","status":"error"}
+{"id":"symlink_target_untouched","status":"ok","value":true}
+{"id":"reopen_decision","status":"ok","value":"90b90f9acf9e6e885343395252d208934c73831d873130768b021baaa2337e06"}
+{"id":"reopen_artifact","status":"ok","value":"a0da1fce57d0e4f9f0ae4e4cbe040d34dcc046255c6c8d18e97f55aaed0655f0"}
