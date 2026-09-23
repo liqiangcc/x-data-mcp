@@ -28,6 +28,22 @@ const codeShape = (value, letter) =>
 
 const DIGITS6 = /^[0-9]{6}$/;
 
+// Rust `{:?}` Debug for &str, restricted to our ASCII input domain:
+// escapes " \ \n \r \t \0; other control bytes (0x01-0x1f, 0x7f) as
+// \u{hex}; printable ASCII (incl. ') passes through. Verified against
+// live rustc output.
+const dbg = (s) => '"' + [...s].map((ch) => {
+  const c = ch.charCodeAt(0);
+  if (ch === '"') return '\\"';
+  if (ch === '\\') return '\\\\';
+  if (ch === '\n') return '\\n';
+  if (ch === '\r') return '\\r';
+  if (ch === '\t') return '\\t';
+  if (ch === '\0') return '\\0';
+  if (c < 0x20 || c === 0x7f) return `\\u{${c.toString(16)}}`;
+  return ch;
+}).join('') + '"';
+
 /**
  * @param {Buffer|Uint8Array} bytes — typed boundary, no coercion
  * @returns {{line:number,market:number,code:string,
@@ -61,19 +77,19 @@ export function parse(bytes) {
     const market = fields[0] === "0" ? 0 : fields[0] === "1" ? 1 : fields[0] === "2" ? 2 : null;
     if (market === null) {
       throw new TdxhyError(
-        `tdxhy.cfg line ${number} f0 "${fields[0]}" is not a single digit 0..=2`,
+        `tdxhy.cfg line ${number} f0 ${dbg(fields[0])} is not a single digit 0..=2`,
         "bad_market", { line: number, value: fields[0] });
     }
     const code = fields[1];
     if (!DIGITS6.test(code)) {
       throw new TdxhyError(
-        `tdxhy.cfg line ${number} f1 "${code}" is not exactly six digits`,
+        `tdxhy.cfg line ${number} f1 ${dbg(code)} is not exactly six digits`,
         "bad_code", { line: number, value: code });
     }
     const t = fields[2];
     const tCode = t === "" ? null : codeShape(t, 0x54) ? t : (() => {
       throw new TdxhyError(
-        `tdxhy.cfg line ${number} f2 "${t}" is not a T code of anchored length`,
+        `tdxhy.cfg line ${number} f2 ${dbg(t)} is not a T code of anchored length`,
         "bad_industry_code", { line: number, value: t });
     })();
     for (const [fi, value] of [[3, fields[3]], [4, fields[4]]]) {
@@ -86,7 +102,7 @@ export function parse(bytes) {
     const x = fields[5];
     const xCode = x === "" ? null : codeShape(x, 0x58) ? x : (() => {
       throw new TdxhyError(
-        `tdxhy.cfg line ${number} f5 "${x}" is not an X code of anchored length`,
+        `tdxhy.cfg line ${number} f5 ${dbg(x)} is not an X code of anchored length`,
         "bad_research_code", { line: number, value: x });
     })();
     rows.push({ code, line: number, market, t_code: tCode, x_code: xCode });

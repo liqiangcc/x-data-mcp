@@ -53,6 +53,23 @@ const CASES = {
   precedence_market_first: B("9|abc|z||T|X\r\n"),
   precedence_f3_before_f4: B("1|600006|T01|a|b|X01\r\n"),
   precedence_t_before_reserved: B("1|600006|bad|x||T01\r\n"),
+  // R1: Rust {:?} escaping in field-value errors
+  esc_f0_quote: B('3"|600006|T01|||X01\r\n'),
+  esc_f0_backslash: B("3\\|600006|T01|||X01\r\n"),
+  esc_f0_lf: B("3\n|600006|T01|||X01\r\n"),
+  esc_f0_cr: B("3\rA|600006|T01|||X01\r\n"),
+  esc_f0_tab: B("3\t|600006|T01|||X01\r\n"),
+  esc_f0_nul: Buffer.concat([B("3"), Buffer.from([0]), B("|600006|T01|||X01\r\n")]),
+  esc_f0_ctrl01: Buffer.concat([B("3"), Buffer.from([1]), B("|600006|T01|||X01\r\n")]),
+  esc_f0_del: Buffer.concat([B("3"), Buffer.from([0x7f]), B("|600006|T01|||X01\r\n")]),
+  esc_f0_esc: Buffer.concat([B("3"), Buffer.from([0x1b]), B("|600006|T01|||X01\r\n")]),
+  esc_f0_squote: B("3'|600006|T01|||X01\r\n"),
+  esc_f1_quote: B('1|60"006|T01|||X01\r\n'),
+  esc_f1_backslash: B("1|60\\06|T01|||X01\r\n"),
+  esc_f2_quote: B('1|600006|T"a|||X01\r\n'),
+  esc_f2_backslash: B("1|600006|T\\a|||X01\r\n"),
+  esc_f5_quote: B('1|600006||||X"a\r\n'),
+  esc_f5_backslash: B("1|600006||||X\\a\r\n"),
 };
 
 for (const o of oracle.filter((r) => !r.id.startsWith("member") && r.id !== "tdxhy_member")) {

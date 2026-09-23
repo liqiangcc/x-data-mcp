@@ -34,6 +34,22 @@
 {"id":"precedence_market_first","status":"error","error":"tdxhy.cfg line 1 f0 \"9\" is not a single digit 0..=2"}
 {"id":"precedence_f3_before_f4","status":"error","error":"tdxhy.cfg line 1 reserved field f3 must be empty"}
 {"id":"precedence_t_before_reserved","status":"error","error":"tdxhy.cfg line 1 f2 \"bad\" is not a T code of anchored length"}
+{"id":"esc_f0_quote","status":"error","error":"tdxhy.cfg line 1 f0 \"3\\\"\" is not a single digit 0..=2"}
+{"id":"esc_f0_backslash","status":"error","error":"tdxhy.cfg line 1 f0 \"3\\\\\" is not a single digit 0..=2"}
+{"id":"esc_f0_lf","status":"error","error":"tdxhy.cfg line 1 f0 \"3\\n\" is not a single digit 0..=2"}
+{"id":"esc_f0_cr","status":"error","error":"tdxhy.cfg line 1 f0 \"3\\rA\" is not a single digit 0..=2"}
+{"id":"esc_f0_tab","status":"error","error":"tdxhy.cfg line 1 f0 \"3\\t\" is not a single digit 0..=2"}
+{"id":"esc_f0_nul","status":"error","error":"tdxhy.cfg line 1 f0 \"3\\0\" is not a single digit 0..=2"}
+{"id":"esc_f0_ctrl01","status":"error","error":"tdxhy.cfg line 1 f0 \"3\\u{1}\" is not a single digit 0..=2"}
+{"id":"esc_f0_del","status":"error","error":"tdxhy.cfg line 1 f0 \"3\\u{7f}\" is not a single digit 0..=2"}
+{"id":"esc_f0_esc","status":"error","error":"tdxhy.cfg line 1 f0 \"3\\u{1b}\" is not a single digit 0..=2"}
+{"id":"esc_f0_squote","status":"error","error":"tdxhy.cfg line 1 f0 \"3'\" is not a single digit 0..=2"}
+{"id":"esc_f1_quote","status":"error","error":"tdxhy.cfg line 1 f1 \"60\\\"006\" is not exactly six digits"}
+{"id":"esc_f1_backslash","status":"error","error":"tdxhy.cfg line 1 f1 \"60\\\\06\" is not exactly six digits"}
+{"id":"esc_f2_quote","status":"error","error":"tdxhy.cfg line 1 f2 \"T\\\"a\" is not a T code of anchored length"}
+{"id":"esc_f2_backslash","status":"error","error":"tdxhy.cfg line 1 f2 \"T\\\\a\" is not a T code of anchored length"}
+{"id":"esc_f5_quote","status":"error","error":"tdxhy.cfg line 1 f5 \"X\\\"a\" is not an X code of anchored length"}
+{"id":"esc_f5_backslash","status":"error","error":"tdxhy.cfg line 1 f5 \"X\\\\a\" is not an X code of anchored length"}
 {"id":"tdxhy_member","status":"ok","rows":5659,"sha256":"dcd97d9d09512e76f3a2f0321cd7eaf8d540ce1356cd80e6a57d277340e6e239","markets":{"0":2946,"1":2365,"2":348}}
 {"id":"member_row_0","status":"ok","row":{"code":"000001","line":1,"market":0,"t_code":"T1001","x_code":"X500102"}}
 {"id":"member_row_1","status":"ok","row":{"code":"000002","line":2,"market":0,"t_code":"T110201","x_code":"X530101"}}

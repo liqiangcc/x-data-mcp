@@ -5,7 +5,7 @@
 关联：Epic #271；catalog contract v1（#168）。来源：`src/catalog_tdx/tdxhy.rs::parse`。
 证据：`evidence/node-migration/p2/tdxhy/`（probe-results.jsonl 47 行全 PASS、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
 
-**结果：47/47 PASS / 0 FAIL —— 合成边界 + retained member 全行摘要逐位一致。**
+**结果（R1）：63/63 PASS / 0 FAIL —— 合成边界 + 16 例 Rust `{:?}` 转义回归 + retained member 全行摘要逐位一致。**
 
 ## 1. 移植：`src_node/parsers/tdxhy.mjs`
 
@@ -29,10 +29,15 @@
 | 合成 oracle | 37（空文件、单/多行、T/X 各长度、空可选、非 ASCII、LF-only、中空行、双尾随 CRLF、字段数、market/code/T/X 各拒、保留字段、3 例优先级） | PASS 逐字 |
 | 类型边界 | 4（string/Array/null 拒 + Uint8Array 收） | PASS |
 | retained | 6（MANIFEST sha256 + member 提取 + 全行摘要 + 4 采样行） | PASS |
+| 转义回归（R1） | 16（f0/f1/f2/f5 中 `"` `\` `\n` `\r` `\t` `\0` 控制字节 DEL ESC 单引号） | PASS |
 
 ## 3. retained member
 
 `tdxhy.cfg` 150,332B（sha256 `df7cb705…`）自 MANIFEST 验证 zip 有界提取：5,659 行、markets `{0:2946, 1:2365, 2:348}`、行摘要 `dcd97d9d…` 与 Rust 一致。原始字节不入库。
+
+## 3.1 R1 Rust `{:?}` 转义修复（REVIEW-NM-021）
+
+缺陷：四个含字段值的错误（BadMarket/BadCode/BadIndustryCode/BadResearchCode）按 Rust `{:?}` 渲染 —— Node 原样插入原始字节，`f0 "3""` 应为 `f0 "3\""`。修复：`dbg()` 实现 ASCII 域 `escape_debug`（`"` `\` `\n` `\r` `\t` `\0` 具名转义，其余控制字节 `\u{hex}`，单引号透传），已对 live rustc 输出核验。优先级不变。
 
 ## 4. 范围边界
 
@@ -42,7 +47,7 @@
 
 | 命令 | 退出码 |
 |---|---|
-| `node scripts/node_migration_p2/tdxhy_probe.mjs .` | 0（47 PASS） |
+| `node scripts/node_migration_p2/tdxhy_probe.mjs .` | 0（63 PASS，R1） |
 | `rustc` oracle（`target/debug/tdxhy_oracle`） | 0 |
 | `json.tool` / `sha256sum -c` / `git diff --check` | 0 |
 

@@ -34,6 +34,22 @@
 {"family":"tdxhy","id":"precedence_market_first","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"9\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"9\" is not a single digit 0..=2"}
 {"family":"tdxhy","id":"precedence_f3_before_f4","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 reserved field f3 must be empty","actual":"tdxhy.cfg line 1 reserved field f3 must be empty"}
 {"family":"tdxhy","id":"precedence_t_before_reserved","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f2 \"bad\" is not a T code of anchored length","actual":"tdxhy.cfg line 1 f2 \"bad\" is not a T code of anchored length"}
+{"family":"tdxhy","id":"esc_f0_quote","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3\\\"\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3\\\"\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f0_backslash","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3\\\\\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3\\\\\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f0_lf","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3\\n\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3\\n\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f0_cr","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3\\rA\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3\\rA\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f0_tab","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3\\t\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3\\t\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f0_nul","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3\\0\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3\\0\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f0_ctrl01","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3\\u{1}\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3\\u{1}\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f0_del","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3\\u{7f}\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3\\u{7f}\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f0_esc","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3\\u{1b}\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3\\u{1b}\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f0_squote","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f0 \"3'\" is not a single digit 0..=2","actual":"tdxhy.cfg line 1 f0 \"3'\" is not a single digit 0..=2"}
+{"family":"tdxhy","id":"esc_f1_quote","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f1 \"60\\\"006\" is not exactly six digits","actual":"tdxhy.cfg line 1 f1 \"60\\\"006\" is not exactly six digits"}
+{"family":"tdxhy","id":"esc_f1_backslash","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f1 \"60\\\\06\" is not exactly six digits","actual":"tdxhy.cfg line 1 f1 \"60\\\\06\" is not exactly six digits"}
+{"family":"tdxhy","id":"esc_f2_quote","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f2 \"T\\\"a\" is not a T code of anchored length","actual":"tdxhy.cfg line 1 f2 \"T\\\"a\" is not a T code of anchored length"}
+{"family":"tdxhy","id":"esc_f2_backslash","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f2 \"T\\\\a\" is not a T code of anchored length","actual":"tdxhy.cfg line 1 f2 \"T\\\\a\" is not a T code of anchored length"}
+{"family":"tdxhy","id":"esc_f5_quote","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f5 \"X\\\"a\" is not an X code of anchored length","actual":"tdxhy.cfg line 1 f5 \"X\\\"a\" is not an X code of anchored length"}
+{"family":"tdxhy","id":"esc_f5_backslash","status":"PASS","detail":null,"expected":"tdxhy.cfg line 1 f5 \"X\\\\a\" is not an X code of anchored length","actual":"tdxhy.cfg line 1 f5 \"X\\\\a\" is not an X code of anchored length"}
 {"family":"tdxhy","id":"reject_string","status":"PASS","detail":"invalid_input: tdxhy.cfg input must be a Buffer or Uint8Array","expected":null,"actual":null}
 {"family":"tdxhy","id":"reject_array","status":"PASS","detail":"invalid_input: tdxhy.cfg input must be a Buffer or Uint8Array","expected":null,"actual":null}
 {"family":"tdxhy","id":"reject_null","status":"PASS","detail":"invalid_input: tdxhy.cfg input must be a Buffer or Uint8Array","expected":null,"actual":null}
