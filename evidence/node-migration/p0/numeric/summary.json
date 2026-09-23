@@ -87,7 +87,7 @@
       "command": "target/debug/nm003-oracle > vectors.jsonl (binary built per README: rustc --edition 2024 --extern x_data_mcp/serde_json/serde/rust_decimal/chrono/serde_json_canonicalizer scripts/node_migration_p0/oracle.rs)",
       "exit_code": 0,
       "captured_at": "2026-09-23",
-      "note": "binary deleted post-capture for disk headroom; deterministic rebuild via README reproduces identical vectors.jsonl",
+      "note": "binary deleted post-capture for disk headroom; deterministic rebuild procedure is documented in README but byte-identical reproduction is NOT_RUN in this evidence",
       "library_source_sha": "32c29e0c57832b74925316ec8b601c16d5696fae",
       "harness_source_revision": "oracle.rs as of commit 94e7babbe05583937c7fb5c0e87160da1d82568f (emitted family/id/input/observed/semantics/source; provenance fields added by correction commits)"
     }
