@@ -217,6 +217,18 @@ const bnd = (id, fn, kind = "invalid_request_id") => {
   // happy path
   try { native.rename_noreplace(nsrc, join(FIX, "nat-moved")); emit("native_move_ok", existsSync(join(FIX, "nat-moved")) && !existsSync(nsrc) ? "PASS" : "FAIL", "renamed"); }
   catch (e) { emit("native_move_ok", "FAIL", e.message); }
+  // unpaired surrogates: UTF-8 conversion would alias to U+FFFD — must
+  // reject EINVAL and leave the real U+FFFD-named dir untouched
+  const sur = join(FIX, "sur-dir");
+  mkdirSync(sur);
+  try { native.rename_noreplace(sur + "\ud800", join(FIX, "sur-x")); emit("native_surrogate_high", "FAIL", "lone high surrogate accepted"); }
+  catch (e) { emit("native_surrogate_high", e.code === "EINVAL" && existsSync(sur) ? "PASS" : "FAIL", `code=${e.code}`); }
+  try { native.rename_noreplace(sur + "\udc00", join(FIX, "sur-y")); emit("native_surrogate_low", "FAIL", "lone low surrogate accepted"); }
+  catch (e) { emit("native_surrogate_low", e.code === "EINVAL" && existsSync(sur) ? "PASS" : "FAIL", `code=${e.code}`); }
+  const pair = join(FIX, "pair-😀");
+  mkdirSync(pair);
+  try { native.rename_noreplace(pair, join(FIX, "pair-dst")); emit("native_pair_ok", existsSync(join(FIX, "pair-dst")) ? "PASS" : "FAIL", "valid pair moved"); }
+  catch (e) { emit("native_pair_ok", "FAIL", e.message); }
 }
 
 // selftest

@@ -24,6 +24,46 @@ static napi_value rename_noreplace(napi_env env, napi_callback_info info) {
     napi_throw_type_error(env, "EINVAL", "rename_noreplace(src, dst) takes 2 args");
     return NULL;
   }
+  /* Unpaired UTF-16 surrogates would be lossy-replaced by U+FFFD during
+   * UTF-8 conversion, silently aliasing a different real path. Validate
+   * the original code units first — lone high/low -> EINVAL, valid pairs
+   * allowed. */
+  char16_t src16[4096], dst16[4096];
+  size_t u1 = 0, u2 = 0;
+  if (napi_get_value_string_utf16(env, argv[0], NULL, 0, &u1) != napi_ok ||
+      napi_get_value_string_utf16(env, argv[1], NULL, 0, &u2) != napi_ok ||
+      u1 >= sizeof src16 / sizeof(char16_t) || u2 >= sizeof dst16 / sizeof(char16_t) ||
+      napi_get_value_string_utf16(env, argv[0], src16, sizeof src16 / sizeof(char16_t), &u1) != napi_ok ||
+      napi_get_value_string_utf16(env, argv[1], dst16, sizeof dst16 / sizeof(char16_t), &u2) != napi_ok) {
+    napi_throw_type_error(env, "EINVAL", "paths must be strings < 4096 utf16 units");
+    return NULL;
+  }
+  for (size_t i = 0; i < u1; i++) {
+    char16_t c = src16[i];
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      if (i + 1 >= u1 || src16[i + 1] < 0xDC00 || src16[i + 1] > 0xDFFF) {
+        napi_throw_type_error(env, "EINVAL", "path has unpaired surrogate");
+        return NULL;
+      }
+      i++;
+    } else if (c >= 0xDC00 && c <= 0xDFFF) {
+      napi_throw_type_error(env, "EINVAL", "path has unpaired surrogate");
+      return NULL;
+    }
+  }
+  for (size_t i = 0; i < u2; i++) {
+    char16_t c = dst16[i];
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      if (i + 1 >= u2 || dst16[i + 1] < 0xDC00 || dst16[i + 1] > 0xDFFF) {
+        napi_throw_type_error(env, "EINVAL", "path has unpaired surrogate");
+        return NULL;
+      }
+      i++;
+    } else if (c >= 0xDC00 && c <= 0xDFFF) {
+      napi_throw_type_error(env, "EINVAL", "path has unpaired surrogate");
+      return NULL;
+    }
+  }
   char src[4096], dst[4096];
   /* Length-check first: get_value_string_utf8 writes at most buflen-1
    * and reports bytes copied, so a truncated copy is invisible to a
