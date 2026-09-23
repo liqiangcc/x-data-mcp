@@ -169,6 +169,28 @@ bnd("dec_field_string", () => aggregate(version([{ ...D.records[0], open: "10" }
 bnd("dec_field_float", () => aggregate(version([{ ...D.records[0], high: { m: 10.5, s: 0 } }]), null, "2024-06-01"));
 bnd("dec_scale_over28", () => aggregate(version([{ ...D.records[0], low: { m: 1n, s: 29 } }]), null, "2024-06-01"));
 bnd("volume_undefined", () => aggregate(version([{ ...D.records[0], volume: undefined }]), null, "2024-06-01"));
+// R2: 96-bit mantissa bound — |m| <= 2^96-1 (positive and negative)
+const OVER = 79228162514264337593543950336n; // 2^96
+bnd("open_over_max96", () => aggregate(version([{ ...D.records[0], open: { m: OVER, s: 0 }, high: { m: OVER, s: 0 }, close: { m: OVER, s: 0 } }]), null, "2024-06-01"));
+bnd("high_over_max96", () => aggregate(version([{ ...D.records[0], high: { m: OVER, s: 0 } }]), null, "2024-06-01"));
+bnd("low_under_neg_max96", () => aggregate(version([{ ...D.records[0], low: { m: -OVER, s: 0 } }]), null, "2024-06-01"));
+bnd("close_under_neg_max96", () => aggregate(version([{ ...D.records[0], close: { m: -OVER, s: 0 } }]), null, "2024-06-01"));
+bnd("volume_over_max96", () => aggregate(version([{ ...D.records[0], volume: { m: OVER, s: 0 } }]), null, "2024-06-01"));
+bnd("volume_under_neg_max96", () => aggregate(version([{ ...D.records[0], volume: { m: -OVER, s: 0 } }]), null, "2024-06-01"));
+bnd("amount_over_max96", () => aggregate(version([{ ...D.records[0], amount: { m: OVER, s: 0 } }]), null, "2024-06-01"));
+bnd("amount_under_neg_max96", () => aggregate(version([{ ...D.records[0], amount: { m: -OVER, s: 0 } }]), null, "2024-06-01"));
+// acceptance AT the exact bound (positive and negative), then normal aggregation
+{
+  const atBound = version([
+    // open=high=+MAX96, low=close=-MAX96 — within OHLC bounds -> valid bar
+    bar("2023-01-03", { m: MAX.m, s: 0 }, { m: MAX.m, s: 0 }, { m: -MAX.m, s: 0 }, { m: -MAX.m, s: 0 }, null, null),
+  ]);
+  try {
+    const s = aggregate(atBound, null, "2024-06-01");
+    emit("bound_exact_accept", s.records[0].bar.high.m === MAX.m && s.records[0].bar.low.m === -MAX.m ? "PASS" : "FAIL",
+      "±MAX96 accepted and aggregated");
+  } catch (e) { emit("bound_exact_accept", "FAIL", e.message); }
+}
 // boundary checks precede Rust-order errors (both fail-closed)
 bnd("boundary_precedes_invalid_input", () => aggregate({ ...D, records: [{}] }, null, "junk"));
 // valid i32 edge years still reach the Rust layer (missing-year error, not boundary)

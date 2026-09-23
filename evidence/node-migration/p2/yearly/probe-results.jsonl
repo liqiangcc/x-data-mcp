@@ -42,10 +42,19 @@
 {"family":"yearly_aggregate","id":"years_not_array","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): years must be an array of i32 years or null","expected":null,"actual":null}
 {"family":"yearly_aggregate","id":"daily_null","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): daily must be an EffectiveVersion-shaped object","expected":null,"actual":null}
 {"family":"yearly_aggregate","id":"daily_records_not_array","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): daily.records must be an array","expected":null,"actual":null}
-{"family":"yearly_aggregate","id":"dec_field_string","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].open must be a Dec {m:bigint,s:0..28}","expected":null,"actual":null}
-{"family":"yearly_aggregate","id":"dec_field_float","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].high must be a Dec {m:bigint,s:0..28}","expected":null,"actual":null}
-{"family":"yearly_aggregate","id":"dec_scale_over28","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].low must be a Dec {m:bigint,s:0..28}","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"dec_field_string","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].open must be a Dec {m:bigint |m|<=2^96-1, s:0..28}","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"dec_field_float","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].high must be a Dec {m:bigint |m|<=2^96-1, s:0..28}","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"dec_scale_over28","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].low must be a Dec {m:bigint |m|<=2^96-1, s:0..28}","expected":null,"actual":null}
 {"family":"yearly_aggregate","id":"volume_undefined","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].volume must be a Dec or null","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"open_over_max96","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].open must be a Dec {m:bigint |m|<=2^96-1, s:0..28}","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"high_over_max96","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].high must be a Dec {m:bigint |m|<=2^96-1, s:0..28}","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"low_under_neg_max96","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].low must be a Dec {m:bigint |m|<=2^96-1, s:0..28}","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"close_under_neg_max96","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].close must be a Dec {m:bigint |m|<=2^96-1, s:0..28}","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"volume_over_max96","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].volume must be a Dec or null","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"volume_under_neg_max96","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].volume must be a Dec or null","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"amount_over_max96","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].amount must be a Dec or null","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"amount_under_neg_max96","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): records[0].amount must be a Dec or null","expected":null,"actual":null}
+{"family":"yearly_aggregate","id":"bound_exact_accept","status":"PASS","detail":"±MAX96 accepted and aggregated","expected":null,"actual":null}
 {"family":"yearly_aggregate","id":"boundary_precedes_invalid_input","status":"PASS","detail":"YearlyTypedBoundaryError(typed_boundary): expected strict YYYY-MM-DD date, got undefined","expected":null,"actual":null}
 {"family":"yearly_aggregate","id":"i32_min_year_reaches_rust","status":"PASS","detail":"missing_year: requested natural year is absent: -2147483648","expected":null,"actual":null}
 {"family":"yearly_aggregate","id":"i32_max_year_reaches_rust","status":"PASS","detail":"missing_year: requested natural year is absent: 2147483647","expected":null,"actual":null}

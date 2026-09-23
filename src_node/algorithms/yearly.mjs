@@ -76,12 +76,15 @@ const ymdOf = (iso) => {
 };
 const yearOf = (iso) => Math.floor(ymdOf(iso) / 10000);
 
-// Dec shape check: {m: BigInt, s: integer 0..28}
+// Dec shape check: {m: BigInt, s: integer 0..28} with the Rust Decimal
+// 96-bit mantissa domain — |m| <= 2^96-1 (positive and negative).
+const MAX96 = 79228162514264337593543950335n;
 const isDec = (v) =>
   v !== null && typeof v === "object" && typeof v.m === "bigint" &&
+  v.m >= -MAX96 && v.m <= MAX96 &&
   Number.isInteger(v.s) && v.s >= 0 && v.s <= 28;
 const checkDec = (v, field) => {
-  if (!isDec(v)) throw new YearlyTypedBoundaryError(`${field} must be a Dec {m:bigint,s:0..28}`);
+  if (!isDec(v)) throw new YearlyTypedBoundaryError(`${field} must be a Dec {m:bigint |m|<=2^96-1, s:0..28}`);
 };
 const checkDecOpt = (v, field) => {
   if (v === undefined || (v !== null && !isDec(v))) {
