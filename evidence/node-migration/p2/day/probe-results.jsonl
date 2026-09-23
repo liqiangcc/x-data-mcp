@@ -1,0 +1,13 @@
+{"family":"day_parse","id":"two_valid_records","status":"PASS","detail":null,"expected":[{"amount_float32_bits":1292846086,"date":"2024-01-02","ohlc_raw":[1500,1520,1495,1510],"r7_raw":65536,"volume_raw":1234567},{"amount_float32_bits":1287537166,"date":"2024-01-03","ohlc_raw":[1512,1530,1508,1525],"r7_raw":65536,"volume_raw":987654}],"actual":[{"amount_float32_bits":1292846086,"date":"2024-01-02","ohlc_raw":[1500,1520,1495,1510],"r7_raw":65536,"volume_raw":1234567},{"amount_float32_bits":1287537166,"date":"2024-01-03","ohlc_raw":[1512,1530,1508,1525],"r7_raw":65536,"volume_raw":987654}]}
+{"family":"day_parse","id":"truncated_31_bytes","status":"PASS","detail":null,"expected":"day file byte count 31 is not divisible by 32","actual":"day file byte count 31 is not divisible by 32"}
+{"family":"day_parse","id":"invalid_month_13","status":"PASS","detail":null,"expected":"invalid calendar date 20241301 at record 0","actual":"invalid calendar date 20241301 at record 0"}
+{"family":"day_parse","id":"non_increasing_date","status":"PASS","detail":null,"expected":"non-increasing date at record 1","actual":"non-increasing date at record 1"}
+{"family":"day_parse","id":"sup_year_zero_reject","status":"PASS","detail":"invalid_date: invalid calendar date 0 at record 0","expected":null,"actual":null}
+{"family":"day_parse","id":"sup_equal_dates_reject","status":"PASS","detail":"date_order: non-increasing date at record 1","expected":null,"actual":null}
+{"family":"day_parse","id":"sup_feb30_reject","status":"PASS","detail":"invalid_date: invalid calendar date 20240230 at record 0","expected":null,"actual":null}
+{"family":"day_parse","id":"sup_leap_feb29_accept","status":"PASS","detail":null,"expected":null,"actual":"2024-02-29"}
+{"family":"day_parse","id":"sup_empty_file","status":"PASS","detail":null,"expected":null,"actual":0}
+{"family":"day_parse","id":"sup_truncation_precedence","status":"PASS","detail":"truncated: day file byte count 33 is not divisible by 32","expected":null,"actual":null}
+{"family":"day_parse","id":"sup_day_zero_reject","status":"PASS","detail":"invalid_date: invalid calendar date 20240100 at record 0","expected":null,"actual":null}
+{"family":"day_parse","id":"sup_month_zero_reject","status":"PASS","detail":"invalid_date: invalid calendar date 20240015 at record 0","expected":null,"actual":null}
+{"family":"day_parse","id":"sup_error_kind_discrimination","status":"PASS","detail":"kind=truncated name=DayFileError","expected":null,"actual":null}

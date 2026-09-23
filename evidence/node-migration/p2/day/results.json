@@ -1,0 +1,35 @@
+{
+  "task_id": "NM-011",
+  "baseline_sha": "88bc6ebe5068d6d414587cddb5937b4f1edc5445",
+  "source_ported": "src/day_file.rs::parse (+ DayFileError enum, RECORD_BYTES=32)",
+  "golden_oracle": "evidence/node-migration/p0/numeric/vectors.jsonl day_parse family (4 rows, accepted)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/parsers/day_file.mjs (pure JS, zero deps)"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/day_probe.mjs .",
+    "exit": 0,
+    "cases": 13,
+    "totals": {
+      "pass": 13,
+      "fail": 0,
+      "not_run": 0
+    },
+    "golden_rows": 4,
+    "supplementary_rows": 9
+  },
+  "semantics_mirrored": [
+    "byte count % 32 checked before any record (truncation precedence)",
+    "word0 YYYYMMDD as u32; year gate 1..=9999 before calendar check",
+    "strict proleptic-Gregorian validation incl. leap rules; month 0/13, day 0, Feb 30 all reject",
+    "strictly increasing dates; equal dates reject",
+    "ohlc_raw/amount_float32_bits/volume_raw/r7_raw preserved as u32 verbatim",
+    "error text byte-identical to Rust enum variants; DayFileError.kind discriminator for consumers",
+    "empty input -> [] (0 % 32 == 0)"
+  ],
+  "out_of_scope": "QFQ/yearly aggregation, f32->decimal projection, service wiring — later P2 slices",
+  "limitations": [
+    "module returns ISO date strings + raw u32 fields; f32 interpretation is a separate codec layer (NM-007-proven)"
+  ]
+}
