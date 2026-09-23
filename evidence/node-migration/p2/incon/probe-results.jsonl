@@ -40,7 +40,8 @@
 {"family":"incon","id":"reject_string","status":"PASS","detail":"invalid_input: incon.dat input must be a Buffer or Uint8Array","expected":null,"actual":null}
 {"family":"incon","id":"reject_null","status":"PASS","detail":"invalid_input: incon.dat input must be a Buffer or Uint8Array","expected":null,"actual":null}
 {"family":"incon","id":"accept_uint8array","status":"PASS","detail":null,"expected":null,"actual":null}
-{"family":"incon","id":"member_source","status":"PASS","detail":"official-client deb ./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat 65,853B sha256 ca941e57... (NOT gen-2 base.zip — member absent there)","expected":null,"actual":null}
+{"family":"incon","id":"deb_manifest_sha","status":"PASS","detail":"deb sha256=22aff03c4b26fb67c2c049056f785d6fb56cd855fc3171dbb65a99ab9cfd4454 manifest=22aff03c4b26fb67c2c049056f785d6fb56cd855fc3171dbb65a99ab9cfd4454","expected":null,"actual":null}
+{"family":"incon","id":"member_extract","status":"PASS","detail":"deb->./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat 65853B sha256=ca941e57a21d0717ee6108ac3ccfee5fab85289e26ee154d89b3e1cbbe8bc6c9 (separate source: official client deb, NOT gen-2 base.zip — member absent there)","expected":null,"actual":null}
 {"family":"incon","id":"incon_member","status":"PASS","detail":"sections=37 entries=3554 sha256=e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc","expected":{"sections":37,"total":3554,"sha256":"e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc"},"actual":{"sections":37,"total":3554,"sha256":"e5e90ee747d85fed85bf488bc90b1654a6827f2128a909a77664f40d8dfc83dc"}}
 {"family":"incon","id":"secmap_ZJHHY","status":"PASS","detail":null,"expected":110,"actual":110}
 {"family":"incon","id":"secmap_TJGSHY","status":"PASS","detail":null,"expected":null,"actual":null}

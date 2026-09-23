@@ -4,7 +4,7 @@ Baseline `f94b5e79c7601fc5c009e7a1e710fec6894f1a3f` (`migration/node-devin`). No
 
 ## Contents
 
-- `probe-results.jsonl` — 49 rows, all PASS.
+- `probe-results.jsonl` — 50 rows, all PASS (49 + deb_manifest_sha runtime check).
 - `rust-oracle.jsonl` — live `rustc 1.98.1` + `x_data_mcp`/`encoding_rs` rlibs (`target/debug/incon_oracle`, not committed): 21 synthetic + 17 helper + member digest + 4 secmap rows.
 - `results.json` — ported functions, semantics, member provenance.
 - `SHA256SUMS` — over the three files (excludes itself).
@@ -12,11 +12,11 @@ Baseline `f94b5e79c7601fc5c009e7a1e710fec6894f1a3f` (`migration/node-devin`). No
 ## Reproduction
 
 ```sh
-# extract the deb member (single file, no full deb unpack)
-ar p /home/box/retained-inputs/official-client-com.tdx.tdxcfv_7.64_amd64.deb data.tar.xz \
-  | python3 -c "import sys,lzma,tarfile,io; t=tarfile.open(fileobj=io.BytesIO(lzma.decompress(sys.stdin.buffer.read()))); \
-    open('/dev/shm/incon.dat','wb').write(t.extractfile('./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat').read())"
 node scripts/node_migration_p2/incon_probe.mjs .
+# The probe self-contains: deb sha256 check vs manifest-sha256.txt,
+# committed extractor scripts/node_migration_p2/deb_member_extract.py
+# (bounded, read-only; ar -> data.tar.xz -> lzma -> tar member),
+# member sha256 check. No /dev/shm reliance.
 ```
 
 Module: `src_node/parsers/incon.mjs` (pure JS; strict GB18030 via `TextDecoder(fatal)`).
@@ -30,3 +30,7 @@ The task assumes `incon.dat` exists in MANIFEST-verified `official-base.zip` —
 - `codeLevel`: len 3|5|7, **any** ASCII letter + digits → `(len-1)/2` (`t01`, `Z999999`, `A1234` verified), else null.
 - `researchLevel2`: level 2 → self, level 3 → first 5 chars, else null.
 - `sectionMap`: first matching name only (verified on 14 repeated `#####` sections).
+
+## R1 reproducible extraction (REVIEW-NM-024)
+
+`deb_manifest_sha` verifies the deb sha256 against `retained-inputs/manifest-sha256.txt` at runtime; `member_extract` runs the committed bounded extractor and verifies member sha256 `ca941e57…` before parsing. Separate-source limitation retained: deb member does not establish same-snapshot dictionary alignment with gen-2 catalog members.

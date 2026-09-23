@@ -3,13 +3,15 @@
 任务：NM-024（agent-coordination/node-migration）。日期：2026-09-23。
 基线：`f94b5e79c7601fc5c009e7a1e710fec6894f1a3f`（`migration/node-devin`）。Node v20.19.2。
 关联：Epic #271；catalog contract v1。来源：`src/catalog_tdx/incon.rs`（`parse` + `code_level` + `research_level2` + `section_map`）。
-证据：`evidence/node-migration/p2/incon/`（probe-results.jsonl 49 行全 PASS、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
+证据：`evidence/node-migration/p2/incon/`（probe-results.jsonl 50 行全 PASS、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
 
-**结果：49/49 PASS / 0 FAIL —— 合成边界 + 真实字节（官方客户端包内 incon.dat）全节/条目摘要逐位一致。**
+**结果：50/50 PASS / 0 FAIL —— 合成边界 + 真实字节（官方客户端包内 incon.dat）全节/条目摘要逐位一致。**
 
 ## ⚠ retained member 差异（已如实上报）
 
-任务假定 `incon.dat` 在 gen-2 `official-base.zip` —— **实际不存在**（完整 listing 核验；gen-3 `base.zip` 亦无）。改用官方客户端包 `com.tdx.tdxcfv_7.64_amd64.deb`（MANIFEST 登记输入）内 `./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat`（65,853B，sha256 `ca941e57…`）做真实字节对比——来源不同已明确标注，未做静默替代。
+任务假定 `incon.dat` 在 gen-2 `official-base.zip` —— **实际不存在**（完整 listing 核验；gen-3 `base.zip` 亦无）。改用官方客户端包 `com.tdx.tdxcfv_7.64_amd64.deb`（MANIFEST 登记输入）内 `./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat`（65,853B，sha256 `ca941e57…`）做真实字节对比——来源不同已明确标注，未做静默替代。**分离来源限制保留**：deb member 不构成与 gen-2 catalog member 的同快照字典对齐（该需求留待后续组合阶段）。
+
+R1 可复现提取（REVIEW-NM-024）：探针内提交有界提取器 `deb_member_extract.py`（ar → data.tar.xz → lzma → tar member → stdout，只读、64MiB 上限、fail-closed 退出码）；运行时校验 deb sha256 对 `manifest-sha256.txt` 条目（`22aff03c…`），member sha256 `ca941e57…` 解析前校验；不依赖 `/dev/shm` 持久态。
 
 ## 1. 移植：`src_node/parsers/incon.mjs`
 
@@ -39,7 +41,7 @@
 | 合成 oracle | 21（空文件、header-only、单/多节、extra 列、尾随空节、空节名、节内/跨节重复、header 前条目、中/双空行、1 字段、空/非 ASCII code、空名、decode 坏、优先级×2、LF-only、转义×2） | PASS 逐字 |
 | helpers | 17（长度/前缀/畸形、小写字母、非 T/X 字母） | PASS |
 | 类型边界 | 3（string/null 拒 + Uint8Array 收） | PASS |
-| 真实字节 | 7（deb member 来源 + 37 节/3554 条目摘要 + 4 secmap + first-match） | PASS |
+| 真实字节 | 8（+deb manifest sha 运行时校验）（deb member 来源 + 37 节/3554 条目摘要 + 4 secmap + first-match） | PASS |
 
 ## 4. 范围边界
 

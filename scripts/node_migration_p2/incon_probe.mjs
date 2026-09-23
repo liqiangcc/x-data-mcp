@@ -3,6 +3,7 @@
 // Usage: node scripts/node_migration_p2/incon_probe.mjs <worktree-root>
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { parse, InconError, codeLevel, researchLevel2, sectionMap } from "../../src_node/parsers/incon.mjs";
 
@@ -75,10 +76,28 @@ bnd("reject_null", null);
 { try { parse(new Uint8Array(CASES.single_section)); emit("accept_uint8array", "PASS", null); }
   catch (e) { emit("accept_uint8array", "FAIL", e.message); } }
 
-// ---------- deb member (official client package, not base.zip member) ----------
-const member = readFileSync("/dev/shm/incon.dat");
-emit("member_source", member.length === 65853 && sha256(member) === "ca941e57a21d0717ee6108ac3ccfee5fab85289e26ee154d89b3e1cbbe8bc6c9" ? "PASS" : "FAIL",
-  "official-client deb ./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat 65,853B sha256 ca941e57... (NOT gen-2 base.zip — member absent there)");
+// ---------- deb member (official client package — separate source, not
+// the absent gen-2 base.zip member; extraction reproducible) ----------
+const DEB = "/home/box/retained-inputs/official-client-com.tdx.tdxcfv_7.64_amd64.deb";
+const MANIFEST = "/home/box/retained-inputs/manifest-sha256.txt";
+const MEMBER_PATH = "./opt/apps/com.tdx.tdxcfv/files/tc/incon.dat";
+{
+  // verify deb sha256 against manifest entry
+  const debSha = sha256(readFileSync(DEB));
+  const manifest = readFileSync(MANIFEST, "utf8").split("\n").filter(Boolean)
+    .map((l) => { const [h, ...p] = l.trim().split(/\s+/); return { h, p: p.join(" ") }; });
+  const entry = manifest.find((e) => e.p === "official-client-com.tdx.tdxcfv_7.64_amd64.deb");
+  emit("deb_manifest_sha", entry !== undefined && entry.h === debSha ? "PASS" : "FAIL",
+    `deb sha256=${debSha} manifest=${entry?.h ?? "absent"}`);
+}
+const member = (() => {
+  const r = spawnSync("python3", [join(ROOT, "scripts/node_migration_p2/deb_member_extract.py"), DEB, MEMBER_PATH],
+    { encoding: "buffer", maxBuffer: 32 * 1024 * 1024 });
+  if (r.status !== 0) throw new Error(`extractor failed (${r.status}): ${r.stderr}`);
+  return r.stdout;
+})();
+emit("member_extract", member.length === 65853 && sha256(member) === "ca941e57a21d0717ee6108ac3ccfee5fab85289e26ee154d89b3e1cbbe8bc6c9" ? "PASS" : "FAIL",
+  `deb->${MEMBER_PATH} ${member.length}B sha256=${sha256(member)} (separate source: official client deb, NOT gen-2 base.zip — member absent there)`);
 const sections = parse(member);
 {
   const h = createHash("sha256");
