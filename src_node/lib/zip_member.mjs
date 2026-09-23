@@ -1,6 +1,7 @@
 // Bounded, read-only ZIP member access — production location (hardened
 // NM-024 R3 semantics). Reads from an in-memory archive buffer; no
 // writes, no persistent state.
+import { openSync, readSync, closeSync, fstatSync } from "node:fs";
 import { inflateRawSync } from "node:zlib";
 
 const MAX_MEMBER = 64 * 1024 * 1024; // 64 MiB inflated bound
@@ -83,4 +84,25 @@ export function zipMember(buf, name, maxOut = MAX_MEMBER) {
   // verbatim so member() wraps it as `unreadable: Invalid checksum`.
   if (crc32(out) !== e.crc) throw new Error("Invalid checksum");
   return out;
+}
+
+// Bounded fd read with deterministic premature-EOF rejection: reads
+// exactly `maxBytes` (bound from fstat after open); a 0-length read
+// before that is a hard error (a readSync==0 spin would hang). A file
+// that grew after fstat contributes only its declared prefix — callers
+// digest-check or parse-fail downstream, staying fail-closed.
+export function readBoundedFile(path, maxBytes) {
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size;
+    if (size > maxBytes) throw new Error(`file exceeds declared bound: ${size}`);
+    const buf = Buffer.allocUnsafe(size);
+    let off = 0;
+    while (off < size) {
+      const n = readSync(fd, buf, off, size - off, off);
+      if (n === 0) throw new Error(`unexpected EOF at ${off} of ${size}`);
+      off += n;
+    }
+    return buf;
+  } finally { closeSync(fd); }
 }

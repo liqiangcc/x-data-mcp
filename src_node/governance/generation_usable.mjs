@@ -11,7 +11,8 @@
 // text differs from serde's (stable portions identical); documented.
 
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
+import { readBoundedFile } from "../lib/zip_member.mjs";
 import { join } from "node:path";
 import { inspect, strictJson, InspectionError } from "./snapshot.mjs";
 import { parseTs } from "./ts.mjs";
@@ -37,17 +38,15 @@ const notVerified = (g) => new GenerationUsableError(
   "not_consistency_verified",
   `generation ${g} carries no verified compatibility decision`);
 
-// ---------- bounded reads ----------
+// ---------- bounded fd reads ----------
+// readBoundedFile (shared lib): bound = fstat size at open; reads at
+// most that many bytes; 0-read EOF is an error; post-fstat growth is
+// ignored (prefix only — digest/parse checks stay fail-closed).
+// Stricter than Rust's fs::read for the manifest (>1MiB refuses before
+// read rather than inside inspect) — same Corrupt category, same
+// outcome; documented.
 const MAX_MANIFEST = 1 * 1024 * 1024;   // same bound inspect enforces
 const MAX_DECISION = 1 * 1024 * 1024;   // decision artifact bound
-function readBounded(path, max, onErr) {
-  try {
-    const st = statSync(path);
-    if (!st.isFile()) throw new Error("not a regular file");
-    if (st.size > max) throw new Error(`size ${st.size} exceeds bound ${max}`);
-    return readFileSync(path);
-  } catch (e) { return onErr(e); }
-}
 
 // ---------- decision artifact typed boundary ----------
 const ROLES = new Set(["base_industry", "day", "gbbq"]);
@@ -147,8 +146,9 @@ function serdeManifestShape(m) {
 export function verifyInstalled(root, generationId, nowMs) {
   const dir = join(root, "generations", generationId);
   if (!statDir(dir)) throw notInstalled(generationId);
-  const manifestBytes = readBounded(join(dir, MANIFEST_NAME), MAX_MANIFEST,
-    (e) => { throw corrupt(generationId, e.message); });
+  let manifestBytes;
+  try { manifestBytes = readBoundedFile(join(dir, MANIFEST_NAME), MAX_MANIFEST); }
+  catch (e) { throw corrupt(generationId, e.message); }
   const sha = createHash("sha256").update(manifestBytes).digest("hex");
   if (sha !== generationId) {
     throw corrupt(generationId, "manifest digest does not match directory identity");
@@ -184,13 +184,15 @@ const statDir = (dir) => {
 export function decisionArtifact(root, generationId) {
   const path = join(root, "generations", generationId, DECISION_NAME);
   let bytes;
-  try { bytes = readFileSync(path); }
+  try { bytes = readBoundedFile(path, MAX_DECISION); }
   catch (e) {
     if (e.code === "ENOENT") return null;
+    // Oversized decision: Rust reads unbounded then serde fails ->
+    // Corrupt either way; keep the category, note the bound.
+    if (/exceeds declared bound/.test(e.message)) {
+      throw corrupt(generationId, `decision artifact exceeds bound ${MAX_DECISION}`);
+    }
     throw new GenerationUsableError("io", `io: ${e.message}`);
-  }
-  if (bytes.length > MAX_DECISION) {
-    throw corrupt(generationId, `decision artifact exceeds bound ${MAX_DECISION}`);
   }
   let artifact;
   try { artifact = parseDecision(bytes.toString("utf8")); }

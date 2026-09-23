@@ -8,8 +8,8 @@ VERIFIED_COMPATIBLE.
 
 ## Contents
 
-- `probe-results.jsonl` — 26 rows, all PASS (21 live Rust oracle +
-  5 typed-boundary).
+- `probe-results.jsonl` — 28 rows, all PASS (21 live Rust oracle +
+  5 typed-boundary + 2 bounded-read).
 - `rust-oracle.jsonl` — live oracle over synthetic roots + real gen-2.
 - `negative-selftest.jsonl` — exit-1 proof.
 - `results.json` — ordering, comparison policy, limits.
@@ -34,3 +34,7 @@ node scripts/node_migration_p2/generation_usable_probe.mjs . usable # selftest, 
 - Real gen-2 exercised only as a no-decision negative — no proof
   fabricated.
 - Reads bounded: manifest ≤1MiB, decision ≤1MiB.
+
+R1 (REVIEW-NM-032): fd-based bounded reads (no unbounded allocation,
+EOF-safe); gen-2 fixture via same-fs hardlinks — no copy; boundary
+probes require the exact error kind. NM-028 regression 13/13 PASS.

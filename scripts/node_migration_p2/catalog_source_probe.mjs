@@ -185,7 +185,7 @@ for (const o of oracle) {
 
 // ---------- bounded-read helper: deterministic EOF/bound tests ----------
 {
-  const { readBoundedFile } = await import("../../src_node/catalog/source_candidate.mjs");
+  const { readBoundedFile } = await import("../../src_node/lib/zip_member.mjs");
   const tp = join(FIX, "trunc.bin");
   writeFileSync(tp, Buffer.alloc(100));
   try { const b = readBoundedFile(tp, 100); emit("read_bounded_size", b.length === 100 ? "PASS" : "FAIL", "100B ok"); }

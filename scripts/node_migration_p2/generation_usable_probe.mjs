@@ -3,7 +3,7 @@
 // retained bytes (negative no-decision). Exit nonzero on FAIL.
 // Usage: node generation_usable_probe.mjs <root> [selftest]
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { usable, verifyInstalled, decisionArtifact, GenerationUsableError } from "../../src_node/governance/generation_usable.mjs";
 
@@ -20,7 +20,9 @@ const emit = (id, status, detail, expected = null, actual = null) => {
 };
 
 const sha = (b) => createHash("sha256").update(b).digest("hex");
-const FIX = mkdtempSync("/tmp/nm32-usable-");
+// fixture root under /home/box — same filesystem as retained-inputs
+// so gen-2 hardlinks work (cross-device links fail closed as FAIL)
+const FIX = mkdtempSync("/home/box/.nm32-usable-");
 process.on("exit", () => rmSync(FIX, { recursive: true, force: true }));
 const rootOf = (name) => { const d = join(FIX, name); mkdirSync(d, { recursive: true }); return d; };
 
@@ -89,8 +91,9 @@ const FIXT = {
     const gid = sha(mb);
     const dir = join(r, "generations", gid); mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "snapshot-manifest.json"), mb);
+    // hardlinks, not copies — read-only, same filesystem as retained-inputs
     for (const [src, dst] of [["official-base.zip", "base.zip"], ["official-gbbq.zip", "gbbq.zip"], ["official-hsjday.zip", "hsjday.zip"]]) {
-      copyFileSync(join("/home/box/retained-inputs", src), join(dir, dst));
+      linkSync(join("/home/box/retained-inputs", src), join(dir, dst));
     }
     return [r, gid];
   },
@@ -136,9 +139,14 @@ for (const o of oracle) {
 }
 
 // ---------- typed boundary (Node-only) ----------
-const bnd = (id, fn) => {
+// Decision-parse rejects must surface as GenerationUsableError kind
+// "corrupt" — never let unrelated/infrastructure errors pass.
+const bnd = (id, fn, kind = "corrupt", part = "fails inspection:") => {
   try { fn(); emit(id, "FAIL", "accepted malformed input"); }
-  catch (e) { emit(id, e instanceof GenerationUsableError || e instanceof Error ? "PASS" : "FAIL", `${e.name}: ${e.message.slice(0, 80)}`); }
+  catch (e) {
+    const ok = e instanceof GenerationUsableError && e.kind === kind && e.message.includes(part);
+    emit(id, ok ? "PASS" : "FAIL", ok ? `${kind}` : `${e.name}(${e.kind ?? "-"}): ${e.message.slice(0, 80)}`, kind, e.message);
+  }
 };
 // decision artifact typed-boundary rejects (serde-unrepresentable)
 {
@@ -160,6 +168,16 @@ const bnd = (id, fn) => {
       '{"schema":"x-data-mcp.consistency-decision.v1","generation_id":"' + gid +
       '","manifest_sha256":"' + gid + '","issuer":"\\ud800","validator_contract_version":"official-file-consistency-v1","evaluated_at":"2026-09-01T00:00:02Z","status":"VERIFIED_COMPATIBLE","reasons":[],"evidence_sha256":null,"probes":{}}'));
     bnd("rej_surrogate_issuer", () => usable(r, gid, NOW)); }
+}
+// bounded-read cases: oversized decision/manifest fail closed
+{
+  const r = rootOf("big"); const gid = mkgen(r, STDF, null);
+  writeFileSync(join(r, "generations", gid, "consistency-decision.json"), Buffer.alloc(1024 * 1024 + 1, 0x20));
+  bnd("decision_oversize", () => usable(r, gid, NOW));
+  const mb2 = Buffer.alloc(1024 * 1024 + 1, 0x20);
+  const gid2 = sha(mb2); const d2 = join(r, "generations", gid2); mkdirSync(d2, { recursive: true });
+  writeFileSync(join(d2, "snapshot-manifest.json"), mb2);
+  bnd("manifest_oversize", () => usable(r, gid2, NOW));
 }
 // selftest
 if (SELFTEST === "usable") {

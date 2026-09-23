@@ -12,11 +12,12 @@
 // establish cross-file compatibility, origin authorization, or
 // production readiness, and no proof is inserted here.
 
-import { openSync, readSync, closeSync, fstatSync } from "node:fs";
+
+import { openSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
 import { inspect } from "../governance/snapshot.mjs";
 import { parseTs } from "../governance/ts.mjs";
-import { zipOpen, zipMember, zipMemberSize } from "../lib/zip_member.mjs";
+import { zipOpen, zipMember, zipMemberSize , readBoundedFile } from "../lib/zip_member.mjs";
 import { parse as parseTdxhy } from "../parsers/tdxhy.mjs";
 import { parse as parseEx, nameMap } from "../parsers/ex_code.mjs";
 import { parse as parseIncon } from "../parsers/incon.mjs";
@@ -46,25 +47,6 @@ function readBounded(path, limitPlusOne) {
   } finally { closeSync(fd); }
 }
 
-// Bounded read with deterministic premature-EOF rejection: reads
-// exactly `maxBytes`; a 0-length read before that is a hard error (a
-// readSync==0 spin would hang). Only ever used for the inspected
-// base.zip/gbbq.zip artifacts — bounded by the manifest-declared size.
-export function readBoundedFile(path, maxBytes) {
-  const fd = openSync(path, "r");
-  try {
-    const size = fstatSync(fd).size;
-    if (size > maxBytes) throw new Error(`file exceeds declared bound: ${size}`);
-    const buf = Buffer.allocUnsafe(size);
-    let off = 0;
-    while (off < size) {
-      const n = readSync(fd, buf, off, size - off, off);
-      if (n === 0) throw new Error(`unexpected EOF at ${off} of ${size}`);
-      off += n;
-    }
-    return buf;
-  } finally { closeSync(fd); }
-}
 
 // Rust member(): by_name -> unavailable; declared size > limit ->
 // "exceeds the bounded size limit"; read -> unreadable.
