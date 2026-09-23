@@ -21,7 +21,7 @@
     "exit": 0,
     "cases": 10,
     "totals": {
-      "pass": 9,
+      "pass": 8,
       "fail": 0,
       "not_run": 1,
       "info": 1

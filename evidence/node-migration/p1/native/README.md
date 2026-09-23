@@ -4,7 +4,7 @@ Baseline `67c647992cf1d898f2f4f50f773886766e35efd7` (`migration/node-devin`). No
 
 ## Contents
 
-- `probe-results.jsonl` — 11 cases: 9 PASS / 1 NOT_RUN / 1 INFO / 0 FAIL.
+- `probe-results.jsonl` — 10 cases: 8 PASS / 1 NOT_RUN / 1 INFO / 0 FAIL.
 - `results.json` — environment, build recipe, artifact hashes, validated semantics, limitations.
 - `SHA256SUMS` — over the two files (excludes itself).
 

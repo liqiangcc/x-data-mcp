@@ -3,9 +3,9 @@
 任务：NM-009（agent-coordination/node-migration）。日期：2026-09-23。
 基线：`67c647992cf1d898f2f4f50f773886766e35efd7`（`migration/node-devin`）。Node v20.19.2，euid 1000。
 关联：Epic #271。补 NM-008 的 SO_PEERCRED/真 fd 租约缺口。
-证据：`evidence/node-migration/p1/native/`（probe-results.jsonl 11 行、results.json、SHA256SUMS、README）。
+证据：`evidence/node-migration/p1/native/`（probe-results.jsonl 10 行、results.json、SHA256SUMS、README）。
 
-**结果：9 PASS / 1 NOT_RUN / 1 INFO / 0 FAIL —— 真内核 syscall，非模拟；非 BLOCKED。**
+**结果：8 PASS / 1 NOT_RUN / 1 INFO / 0 FAIL —— 真内核 syscall，非模拟；非 BLOCKED。**
 
 ## 1. 实现：最小 N-API addon（~80 行 C，两个函数）
 
