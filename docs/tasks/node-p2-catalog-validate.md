@@ -3,9 +3,9 @@
 任务：NM-029（agent-coordination/node-migration）。日期：2026-09-23。
 基线：`600afc4853f3ab508904bf328022021a435f6cdf`（`migration/node-devin`）。Node v20.19.2。
 关联：Epic #271；`src/catalog.rs::validate_snapshot`/`validate_record`；`tests/catalog.rs`。
-证据：`evidence/node-migration/p2/catalog_validate/`（probe-results.jsonl 57 行全 PASS、rust-oracle.jsonl、negative-selftest.jsonl、results.json、SHA256SUMS、README）。
+证据：`evidence/node-migration/p2/catalog_validate/`（probe-results.jsonl 63 行全 PASS、rust-oracle.jsonl、negative-selftest.jsonl、results.json、SHA256SUMS、README）。
 
-**结果：57/57 PASS / 0 FAIL —— 34 例 live Rust oracle 全字节一致（含 5,224 条真实 gen-2 候选）。**
+**结果（R1）：63/63 PASS / 0 FAIL —— 34 例 live Rust oracle 全字节一致（含 5,224 条真实 gen-2 候选）。**
 
 ## 1. 移植：`src_node/catalog/validate.mjs`
 
@@ -16,6 +16,8 @@
 - Rust `trim` = Unicode `White_Space`——`U+FEFF` **不**空白（JS `.trim()` 会误删；oracle `feff_source`/`feff_symbol` 验证）
 - 成员消失排序：exchange 序（Shanghai<Shenzhen<Other）→ symbol UTF-8 字节序
 - 类型边界：非 serde 形状抛 `ValidationInputError`（类型错误、未知枚举变体、多余/缺失字段、孤立代理、坏前版本形状）——23 例
+
+> R1（REVIEW-NM-029）：① 消失成员排序含 `Other(payload)`——payload UTF-8 先于 symbol（Rust 派生 Ord）；oracle `other_order_disappeared` 验证 Shanghai:5 < Other(a):9 < Other(z):0。② `Assigned.scheme` 为 `#[serde(default)]`——缺键视为 null（含 undefined）；未知 scheme 标签仍拒收。③ 全部时间戳字段（snapshot.records.acquired_at、previous.{published_at,acquired_at,records}）经严格 RFC3339 解析——`"junk"`/无偏移/非法日历在类型边界拒绝（原实现只查类型，会 `accepted:true` 放行）。
 
 ## 2. 纯净性
 
@@ -28,10 +30,10 @@
 | source/completeness 门 | 8 | PASS |
 | 记录字段/范围/industry | 13 | PASS |
 | 重复键/身份冲突 | 4 | PASS |
-| 前版本（消失/新增/相同） | 3 | PASS |
+| 前版本（消失/新增/相同/Other 序） | 4 | PASS |
 | 优先级 | 3 | PASS |
 | 真实 gen-2（验收/消失/新增） | 3 | PASS |
-| 类型边界 | 23 | PASS |
+| 类型边界 | 26 | PASS |
 | 自测 `validate` | exit 1 | |
 
 ## 4. 范围边界
@@ -42,7 +44,7 @@
 
 | 命令 | 退出码 |
 |---|---|
-| `node scripts/node_migration_p2/catalog_validate_probe.mjs .` | 0（57 PASS） |
+| `node scripts/node_migration_p2/catalog_validate_probe.mjs .` | 0（63 PASS） |
 | `node ... validate`（自测负证） | 1 |
 | `rustc` val_oracle | 0 |
 | `sha256sum -c` / `git diff --check` | 0 |

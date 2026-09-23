@@ -29,6 +29,8 @@
 {"id":"prec_source_first","reason":{"InvalidRecord":{"message":"catalog source must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
 {"id":"prec_field_before_dup","reason":{"InvalidRecord":{"message":"symbol must not be empty"}},"refresh_status":"NotReady","status":"rejected"}
 {"id":"prec_dup_before_disappear","reason":{"DuplicateSecurity":{"key":{"exchange":"Shenzhen","symbol":"000001"}}},"refresh_status":"Rejected","status":"rejected"}
+{"id":"other_order_disappeared","reason":{"MemberDisappeared":{"members":[{"exchange":"Shanghai","symbol":"5"},{"exchange":{"Other":"a"},"symbol":"9"},{"exchange":{"Other":"z"},"symbol":"0"}]}},"refresh_status":"Rejected","status":"rejected"}
+{"id":"legacy_scheme_absent","status":"accepted"}
 {"id":"real_gen2_accept","status":"accepted"}
 {"id":"gen2_members_disappeared","reason":{"MemberDisappeared":{"members":[{"exchange":"Shanghai","symbol":"600009"},{"exchange":"Shenzhen","symbol":"000099"}]}},"refresh_status":"Rejected","status":"rejected"}
 {"id":"gen2_new_member_ok","status":"accepted"}

@@ -54,4 +54,10 @@
 {"family":"catalog_validate","id":"reject_rec_extra_field","status":"PASS","detail":"ValidationInputError: snapshot.records[0] invalid shape","expected":null,"actual":null}
 {"family":"catalog_validate","id":"reject_rec_missing_field","status":"PASS","detail":"ValidationInputError: snapshot.records[0] invalid shape","expected":null,"actual":null}
 {"family":"catalog_validate","id":"reject_record_nonobj","status":"PASS","detail":"ValidationInputError: snapshot.records[0] invalid shape","expected":null,"actual":null}
-{"family":"catalog_validate","id":"reject_acquired_num","status":"PASS","detail":"ValidationInputError: snapshot.acquired_at must be a string","expected":null,"actual":null}
+{"family":"catalog_validate","id":"reject_acquired_num","status":"PASS","detail":"ValidationInputError: snapshot.acquired_at invalid timestamp","expected":null,"actual":null}
+{"family":"catalog_validate","id":"reject_snap_ts_junk","status":"PASS","detail":"ValidationInputError: snapshot.acquired_at invalid timestamp","expected":null,"actual":null}
+{"family":"catalog_validate","id":"reject_snap_ts_nooffset","status":"PASS","detail":"ValidationInputError: snapshot.acquired_at invalid timestamp","expected":null,"actual":null}
+{"family":"catalog_validate","id":"reject_rec_ts_junk","status":"PASS","detail":"ValidationInputError: snapshot.records[0] invalid shape","expected":null,"actual":null}
+{"family":"catalog_validate","id":"reject_prev_ts_junk","status":"PASS","detail":"ValidationInputError: previous.published_at invalid timestamp","expected":null,"actual":null}
+{"family":"catalog_validate","id":"reject_prev_rec_ts_junk","status":"PASS","detail":"ValidationInputError: previous.records[0] invalid shape","expected":null,"actual":null}
+{"family":"catalog_validate","id":"accept_scheme_undefined","status":"PASS","detail":"accepted","expected":null,"actual":null}

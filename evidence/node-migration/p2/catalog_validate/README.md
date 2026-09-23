@@ -7,7 +7,7 @@ reason:<serde RejectReason>}`.
 
 ## Contents
 
-- `probe-results.jsonl` — 57 rows, all PASS (34 live Rust oracle + 23
+- `probe-results.jsonl` — 63 rows, all PASS (36 live Rust oracle + 26
   typed-boundary rejects).
 - `rust-oracle.jsonl` — oracle via `CatalogService::refresh` reason serde.
 - `negative-selftest.jsonl` — exit-1 proof.
@@ -29,3 +29,8 @@ node scripts/node_migration_p2/catalog_validate_probe.mjs . validate  # selftest
   (`中` literal, `﻿` → `\u{feff}`, `"` → `\"`).
 - Disappeared members sorted by (exchange ordinal, UTF-8 symbol).
 - Pure/read-only; no publish, DB, completeness inference, or proof.
+
+R1 additions (REVIEW-NM-029): Other(String) payload ordering in
+disappeared-member sort; `scheme` serde-default absence = null;
+serde-compatible timestamp validation (snapshot/records/previous) —
+"junk"/offset-less/invalid-calendar reject at the typed boundary.

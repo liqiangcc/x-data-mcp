@@ -72,6 +72,14 @@ const CASES = {
   prec_field_before_dup: () => { const rs = good(); rs[0].symbol = ""; rs.push(rec("000001", "b", "Shenzhen", "tdxhy:0:000001", { Missing: { reason: "r" } })); return [snap(S, COMPLETE(3), rs), null]; },
   prec_dup_before_disappear: () => { const rs = good(); rs.push(rec("000001", "b", "Shenzhen", "tdxhy:0:000001", { Missing: { reason: "r" } }));
     return [snap(S, COMPLETE(3), rs), prev([rec("999999", "老", "Shenzhen", "tdxhy:0:999999", { Missing: { reason: "r" } })])]; },
+  other_order_disappeared: () => {
+    const p = prev([...good(),
+      rec("0", "z", { Other: "z" }, "sid-z", { Missing: { reason: "r" } }),
+      rec("9", "a", { Other: "a" }, "sid-a", { Missing: { reason: "r" } }),
+      rec("5", "sh", "Shanghai", "sid-sh", { Missing: { reason: "r" } })]);
+    return [snap(S, COMPLETE(2), good()), p]; },
+  legacy_scheme_absent: () => { const rs = good(); rs[0].industry = { Assigned: { code: "X5001", name: "软件服务" } };
+    return [snap(S, COMPLETE(2), rs), null]; },
   real_gen2_accept: () => [GEN2, null],
   gen2_members_disappeared: () => {
     const cur = JSON.parse(JSON.stringify(GEN2));
@@ -139,6 +147,16 @@ bnd("reject_rec_extra_field", () => { const rs = good(); rs[0].extra = 1; return
 bnd("reject_rec_missing_field", () => { const rs = good(); delete rs[0].symbol; return validateSnapshot(snap(S, COMPLETE(2), rs), null); });
 bnd("reject_record_nonobj", () => validateSnapshot(snap(S, COMPLETE(1), ["x"]), null));
 bnd("reject_acquired_num", () => validateSnapshot({ ...G(), acquired_at: 5 }, null));
+// R1: serde-incompatible timestamps reject at the boundary
+bnd("reject_snap_ts_junk", () => validateSnapshot({ ...G(), acquired_at: "junk" }, null));
+bnd("reject_snap_ts_nooffset", () => validateSnapshot({ ...G(), acquired_at: "2026-09-01T00:00:00" }, null));
+bnd("reject_rec_ts_junk", () => { const rs = good(); rs[0].acquired_at = "not-a-date"; return validateSnapshot(snap(S, COMPLETE(2), rs), null); });
+bnd("reject_prev_ts_junk", () => { const p = prev(good()); p.published_at = "yesterday"; return validateSnapshot(G(), p); });
+bnd("reject_prev_rec_ts_junk", () => { const p = prev(good()); p.records[0].acquired_at = "2026-13-40T99:99:99Z"; return validateSnapshot(G(), p); });
+// present-but-undefined `scheme` serializes as absent — serde(default) null
+{ const rs = good(); const ind = { Assigned: { code: "X", name: "n" } }; ind.Assigned.scheme = undefined;
+  rs[0].industry = ind; const d = validateSnapshot(snap(S, COMPLETE(2), rs), null);
+  emit("accept_scheme_undefined", d.accepted === true ? "PASS" : "FAIL", d.accepted ? "accepted" : canon(d.reason)); }
 
 // selftest: wrong expectation must FAIL -> exit 1
 if (SELFTEST === "validate") {

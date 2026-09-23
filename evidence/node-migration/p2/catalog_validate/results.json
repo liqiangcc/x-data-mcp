@@ -1,6 +1,6 @@
 {
-  "task_id": "NM-029",
-  "baseline_sha": "600afc4853f3ab508904bf328022021a435f6cdf",
+  "task_id": "NM-029-R1",
+  "baseline_sha": "84faaec7fff075d25d41f66596a4dbc3d357b868 (R0)",
   "source_ported": "catalog.rs::validate_snapshot + validate_record — pure pre-publication decision; RejectReason serde payloads",
   "rust_oracle": "rust-oracle.jsonl — 34 cases via CatalogService::refresh (live rustc 1.98.1), refresh_status Rejected (previous present) vs NotReady (none)",
   "environment": {
@@ -24,17 +24,26 @@
   "probe": {
     "command": "node scripts/node_migration_p2/catalog_validate_probe.mjs .",
     "exit": 0,
-    "cases": 57,
+    "cases": 63,
     "totals": {
-      "pass": 57,
+      "pass": 63,
       "fail": 0,
       "not_run": 0
     },
-    "selftest": "node ... validate -> exit 1 (negative-selftest.jsonl)"
+    "selftest": "node ... validate -> exit 1 (negative-selftest.jsonl)",
+    "regressions": {
+      "NM-028 catalog_source_probe": "8 cases PASS (after validate.mjs boundary changes)"
+    }
   },
   "purity": "deterministic, read-only; no DB/head CAS/service/generation/network/publish; no completeness inference from counts",
   "node_specific_deltas": [
     "none — all oracle decisions byte-identical including Debug-escaped messages"
   ],
-  "out_of_scope": "publish, SQLite head CAS, services, deploy"
+  "out_of_scope": "publish, SQLite head CAS, services, deploy",
+  "review": "REVIEW-NM-029 R0 — three fail-closed/compat gaps fixed",
+  "r1_fixes": {
+    "other_payload_order": "disappeared-member sort now compares Other(String) payload (UTF-8) before symbol — Rust derived Ord on Exchange. Oracle other_order_disappeared: Shanghai:5 < Other(a):9 < Other(z):0.",
+    "scheme_serde_default": "Assigned without `scheme` key = null (#[serde(default)]); present-but-undefined also treated absent; unknown scheme labels still rejected.",
+    "timestamp_boundary": "acquired_at/published_at (snapshot, records, previous incl. prev.records) must deserialize via strict RFC3339 parser (leap+ns preserved); 'junk'/no-offset/invalid calendar reject as ValidationInputError instead of accepted:true."
+  }
 }

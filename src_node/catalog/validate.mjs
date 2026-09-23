@@ -37,9 +37,12 @@ const isIndustry = (v) => {
   if (ks.length !== 1) return false;
   if (ks[0] === "Assigned") {
     const a = v.Assigned;
-    return a !== null && typeof a === "object" && !Array.isArray(a) &&
-      Object.keys(a).sort().join(",") === "code,name,scheme" &&
-      isStr(a.code) && isStr(a.name) && (a.scheme === null || SCHEMES.has(a.scheme));
+    if (a === null || typeof a !== "object" || Array.isArray(a)) return false;
+    // scheme has #[serde(default)]: absent == null; present must be a
+    // known scheme label.
+    const aks = Object.keys(a).sort().join(",");
+    return (aks === "code,name" || aks === "code,name,scheme") &&
+      isStr(a.code) && isStr(a.name) && (a.scheme === undefined || a.scheme === null || SCHEMES.has(a.scheme));
   }
   if (ks[0] === "Missing" || ks[0] === "Conflicted") {
     const x = v[ks[0]];
@@ -48,11 +51,14 @@ const isIndustry = (v) => {
   }
   return false;
 };
+// Timestamps must be serde-deserializable DateTime<Utc> — the shared
+// strict parser covers the chrono/serde set incl. leap + ns.
+const isTs = (v) => isStr(v) && parseTs(v) !== null;
 const isRecord = (r) => r !== null && typeof r === "object" && !Array.isArray(r) &&
   Object.keys(r).sort().join(",") ===
     "acquired_at,exchange,industry,name,security_type,source,source_security_id,symbol" &&
   isStr(r.symbol) && isStr(r.name) && isEx(r.exchange) && isSt(r.security_type) &&
-  isStr(r.source_security_id) && isIndustry(r.industry) && isStr(r.source) && isStr(r.acquired_at);
+  isStr(r.source_security_id) && isIndustry(r.industry) && isStr(r.source) && isTs(r.acquired_at);
 
 const isCompleteness = (c) => {
   if (c === null || typeof c !== "object" || Array.isArray(c)) return false;
@@ -76,7 +82,7 @@ function checkSnapshotShape(s) {
     throw new ValidationInputError("snapshot must be an object");
   }
   if (!isStr(s.source)) throw new ValidationInputError("snapshot.source must be a string");
-  if (!isStr(s.acquired_at)) throw new ValidationInputError("snapshot.acquired_at must be a string");
+  if (!isTs(s.acquired_at)) throw new ValidationInputError("snapshot.acquired_at invalid timestamp");
   if (!isCompleteness(s.completeness)) throw new ValidationInputError("snapshot.completeness invalid");
   if (!Array.isArray(s.records)) throw new ValidationInputError("snapshot.records must be an array");
   s.records.forEach((r, i) => {
@@ -87,9 +93,10 @@ function checkVersionShape(v) {
   if (v === null || typeof v !== "object" || Array.isArray(v)) {
     throw new ValidationInputError("previous version must be an object");
   }
-  for (const k of ["version_id", "published_at", "source", "acquired_at"]) {
-    if (!isStr(v[k])) throw new ValidationInputError(`previous.${k} must be a string`);
-  }
+  if (!isStr(v.version_id)) throw new ValidationInputError("previous.version_id must be a string");
+  if (!isStr(v.source)) throw new ValidationInputError("previous.source must be a string");
+  if (!isTs(v.published_at)) throw new ValidationInputError("previous.published_at invalid timestamp");
+  if (!isTs(v.acquired_at)) throw new ValidationInputError("previous.acquired_at invalid timestamp");
   if (!Array.isArray(v.records)) throw new ValidationInputError("previous.records must be an array");
   v.records.forEach((r, i) => {
     if (!isRecord(r)) throw new ValidationInputError(`previous.records[${i}] invalid shape`);
@@ -119,7 +126,17 @@ const dbgStr = (s) => {
 const exName = (e) => typeof e === "string" ? e : `Other(${dbgStr(e.Other)})`;
 const dbgKey = (k) => `SecurityKey { exchange: ${exName(k.exchange)}, symbol: ${dbgStr(k.symbol)} }`;
 const keyOrd = (k) => [EX_ORD[typeof k.exchange === "string" ? k.exchange : "Other"], k.symbol];
-const cmpKey = (a, b) => keyOrd(a)[0] - keyOrd(b)[0] || cmpStr(keyOrd(a)[1], keyOrd(b)[1]);
+// Rust derived Ord on SecurityKey: exchange discriminant, then for
+// Other the String payload (UTF-8), then symbol (UTF-8).
+const cmpKey = (a, b) => {
+  const ea = keyOrd(a)[0], eb = keyOrd(b)[0];
+  if (ea !== eb) return ea - eb;
+  if (ea === 2) {
+    const c = cmpStr(a.exchange.Other, b.exchange.Other);
+    if (c !== 0) return c;
+  }
+  return cmpStr(a.symbol, b.symbol);
+};
 
 const rej = (reason) => ({ accepted: false, reason });
 
