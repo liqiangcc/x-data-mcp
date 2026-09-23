@@ -1,0 +1,66 @@
+{
+  "task_id": "NM-008",
+  "baseline_sha": "2364c7de8513891395cb476cac2d356ade77f3cd",
+  "oracle": "NM-004 Rust live/test evidence (evidence/node-migration/p0/recovery/)",
+  "environment": {
+    "node": "v20.19.2",
+    "euid": 1000,
+    "flock": "util-linux 2.41.5",
+    "statfsSync": "node:fs built-in",
+    "O_NOFOLLOW": "fs.constants (0x20000)",
+    "toolchain_gap": "make absent — no node-gyp builds possible"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p1/linux_probe.mjs /dev/shm/nm008",
+    "exit": 0,
+    "cases": 21,
+    "totals": {
+      "pass": 18,
+      "fail": 0,
+      "not_run": 2,
+      "info": 1
+    }
+  },
+  "per_primitive": {
+    "supported_fs": {
+      "status": "PASS",
+      "node_path": "fs.statfsSync(path).type vs whitelist {0xef53,0x58465342,0x9123683e,0x01021994}; overlayfs 0x794c7630 rejected",
+      "caveat": "path-based fstatfs vs Rust fd-based — mount-point cannot change fs type mid-check; documented TOCTOU delta"
+    },
+    "private_metadata": {
+      "status": "PASS (cross-UID NOT_RUN)",
+      "node_path": "fs.lstatSync: uid==geteuid() && (mode&0o077)==0 && !isSymbolicLink — identical reject text",
+      "coverage": "0700 accept; 0755 dir/file, symlink dir/file rejected verbatim"
+    },
+    "nofollow": {
+      "status": "PASS",
+      "node_path": "fs.openSync(path, O_RDONLY|O_NOFOLLOW) -> ELOOP on symlink"
+    },
+    "flock_lease": {
+      "status": "PASS",
+      "node_path": "/usr/bin/flock -n <file> sleep infinity helper process holds lease; contending attempt exits 1 = Rust 'operation would block'",
+      "caveat": "lease held by helper process, not by fd in main process — equivalent mutual exclusion, different failure modes documented"
+    },
+    "inode_identity": {
+      "status": "PASS",
+      "node_path": "statSync dev+ino comparison detects file replacement"
+    },
+    "socket_owner_noclobber": {
+      "status": "PASS",
+      "node_path": "net.Server listen + lstat isSocket + wx noclobber owner.json + O_NOFOLLOW read + strict {device,inode} shape + connect-probe stale cleanup + chmod 0600 — mirrors Endpoint::bind ordering",
+      "coverage": "unregistered file reject, tampered owner reject, foreign identity reject, SIGKILL-stale rebind, active endpoint reject, non-private parent reject, bare-relative path reject"
+    },
+    "peer_cred_SO_PEERCRED": {
+      "status": "NOT_RUN",
+      "node_path": "no getsockopt API in Node; selected path = minimal N-API/neon addon once toolchain provisioned",
+      "mitigation": "socket in 0700 private dir already prevents cross-UID traversal; SO_PEERCRED is defense-in-depth — required for parity, toolchain decision pending",
+      "rust_ref": "src/local_runtime/paths.rs::peer()"
+    }
+  },
+  "decision": {
+    "fs_guards": "pure node:fs — no dependency",
+    "lease": "/usr/bin/flock helper process (util-linux present); fs-ext rejected — node-gyp needs make (absent); proper-lockfile rejected — wrong semantics (no inode identity, stale detection)",
+    "peer_cred": "NOT_RUN — N-API/neon addon path selected, pending toolchain",
+    "socket_lifecycle": "pure node:net + node:fs mirror of Endpoint::bind protocol"
+  }
+}

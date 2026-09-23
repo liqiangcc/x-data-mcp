@@ -1,0 +1,21 @@
+{"primitive":"runtime","id":"facts","status":"INFO","detail":null,"evidence":{"node":"v20.19.2","euid":1000,"statfsSync":"function","O_NOFOLLOW":131072,"flock_binary":"flock from util-linux 2.41.5"}}
+{"primitive":"supported_fs","id":"tmpfs_accepted","status":"PASS","detail":null,"evidence":{"path":"/dev/shm/nm008","type":16914836}}
+{"primitive":"supported_fs","id":"overlayfs_rejected","status":"PASS","detail":" service requires a supported local filesystem","evidence":null}
+{"primitive":"supported_fs","id":"whitelist_table_matches_rust","status":"PASS","detail":null,"evidence":{"allow":true,"deny":true}}
+{"primitive":"private_metadata","id":"private_dir_accepted","status":"PASS","detail":null,"evidence":{"mode":"700","uid":1000}}
+{"primitive":"private_metadata","id":"mode_0755_rejected","status":"PASS","detail":" runtime path must be owned by this UID, private, and not a symlink","evidence":null}
+{"primitive":"private_metadata","id":"symlink_dir_rejected","status":"PASS","detail":" runtime path must be owned by this UID, private, and not a symlink","evidence":null}
+{"primitive":"private_metadata","id":"symlink_file_rejected","status":"PASS","detail":" runtime path must be owned by this UID, private, and not a symlink","evidence":null}
+{"primitive":"private_metadata","id":"mode_0644_file_rejected","status":"PASS","detail":" runtime path must be owned by this UID, private, and not a symlink","evidence":null}
+{"primitive":"private_metadata","id":"cross_uid_rejected","status":"NOT_RUN","detail":"no second UID on Box to create foreign-owned fixture; same check line as NM-004 peer-uid boundary","evidence":null}
+{"primitive":"nofollow","id":"symlink_open_rejected","status":"PASS","detail":"ELOOP ELOOP: too many symbolic links encountered, open '/dev/shm/nm008/linkfile'","evidence":null}
+{"primitive":"flock","id":"contention_rejected","status":"PASS","detail":null,"evidence":{"holder_pid":2269870,"second_attempt_exit":1,"rust_equiv":"lock acquisition failed because the operation would block"}}
+{"primitive":"inode_identity","id":"replacement_detected","status":"PASS","detail":null,"evidence":{"before":{"device":51,"inode":1359021},"after":{"device":51,"inode":1359022}}}
+{"primitive":"socket_guard","id":"unregistered_file_rejected","status":"PASS","detail":"unregistered existing endpoint; no clobber","evidence":null}
+{"primitive":"socket_guard","id":"tampered_owner_rejected","status":"PASS","detail":"owner marker parse: unexpected field or type","evidence":null}
+{"primitive":"socket_guard","id":"foreign_owner_rejected","status":"PASS","detail":"endpoint belongs to another database","evidence":null}
+{"primitive":"socket_guard","id":"stale_socket_rebound","status":"PASS","detail":null,"evidence":{"socket_mode":"600","is_socket":true,"identity":{"device":51,"inode":1359032}}}
+{"primitive":"socket_guard","id":"nonprivate_parent_rejected","status":"PASS","detail":"runtime path must be owned by this UID, private, and not a symlink","evidence":null}
+{"primitive":"peer_cred","id":"same_uid_authorization","status":"NOT_RUN","detail":"Node has no getsockopt(SO_PEERCRED) API and no native addon can be built on this box (make absent). Selected path: minimal N-API/neon helper once toolchain is provisioned; interim invariant = socket inside 0700 private dir already blocks cross-UID traversal. Rust reference: src/local_runtime/paths.rs::peer() getsockopt->ucred.uid==geteuid.","evidence":null}
+{"primitive":"socket_guard","id":"bare_relative_path_rejected","status":"PASS","detail":" socket requires an explicit private parent directory","evidence":null}
+{"primitive":"socket_guard","id":"active_socket_rejected","status":"PASS","detail":"endpoint already active","evidence":null}
