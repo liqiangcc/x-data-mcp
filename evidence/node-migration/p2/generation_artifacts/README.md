@@ -6,7 +6,7 @@ sha256 return, null reads, verbatim refusal categories.
 
 ## Contents
 
-- `probe-results.jsonl` — 41 rows, all PASS (19 live Rust oracle +
+- `probe-results.jsonl` — 45 rows, all PASS (19 live Rust oracle +
   22 boundary).
 - `rust-oracle.jsonl`, `negative-selftest.jsonl` (exit 1), `results.json`.
 
@@ -30,3 +30,5 @@ R1 (REVIEW-NM-034): lstat real-dir checks block symlinked generation
 paths; reserved immutable names rejected in writeArtifact; write bound
 (1MiB) matches read bound and refuses before creation; write/fsync
 errors surfaced as typed io.
+
+R2: fd-pinned writes via native openat (O_DIRECTORY|O_NOFOLLOW) — ancestor-symlink swap cannot redirect; close/fsync errors surface as typed io (injected probes).

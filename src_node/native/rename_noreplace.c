@@ -16,6 +16,88 @@
 #define RENAME_NOREPLACE (1U << 0)
 #endif
 
+/* Validate UTF-16 code units (reject lone surrogates that would alias
+ * via U+FFFD) then copy the UTF-8 form; NULL out on rejection. */
+static int get_path(napi_env env, napi_value arg, char *out, size_t cap) {
+  char16_t u16[4096];
+  size_t ulen = 0;
+  if (napi_get_value_string_utf16(env, arg, NULL, 0, &ulen) != napi_ok ||
+      ulen >= sizeof u16 / sizeof(char16_t) ||
+      napi_get_value_string_utf16(env, arg, u16, sizeof u16 / sizeof(char16_t), &ulen) != napi_ok) {
+    return 0;
+  }
+  for (size_t i = 0; i < ulen; i++) {
+    char16_t c = u16[i];
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      if (i + 1 >= ulen || u16[i + 1] < 0xDC00 || u16[i + 1] > 0xDFFF) return 0;
+      i++;
+    } else if (c >= 0xDC00 && c <= 0xDFFF) return 0;
+  }
+  size_t len = 0, n = 0;
+  if (napi_get_value_string_utf8(env, arg, NULL, 0, &len) != napi_ok ||
+      len >= cap ||
+      napi_get_value_string_utf8(env, arg, out, cap, &n) != napi_ok ||
+      n != len || strlen(out) != n) {
+    return 0;
+  }
+  return 1;
+}
+
+/* openat(dirfd, name, O_RDONLY|O_DIRECTORY|O_NOFOLLOW) -> pinned dir fd */
+static napi_value openat_dir(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  int32_t dfd = -1;
+  char name[4096];
+  if (argc != 2 || napi_get_value_int32(env, argv[0], &dfd) != napi_ok ||
+      dfd < 0 || !get_path(env, argv[1], name, sizeof name)) {
+    napi_throw_type_error(env, "EINVAL", "openat_dir(dirfd, name)");
+    return NULL;
+  }
+  int fd = openat(dfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0) {
+    int e = errno;
+    const char *code = e == ENOENT ? "ENOENT" : e == ENOTDIR ? "ENOTDIR"
+      : e == ELOOP ? "ELOOP" : e == EACCES ? "EACCES" : "EIO";
+    char msg[160];
+    snprintf(msg, sizeof msg, "openat_dir failed: %s", strerror(e));
+    napi_throw_error(env, code, msg);
+    return NULL;
+  }
+  napi_value out;
+  napi_create_int32(env, fd, &out);
+  return out;
+}
+
+/* openat(dirfd, name, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0644) -> file fd */
+static napi_value openat_create_excl(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  int32_t dfd = -1;
+  char name[4096];
+  if (argc != 2 || napi_get_value_int32(env, argv[0], &dfd) != napi_ok ||
+      dfd < 0 || !get_path(env, argv[1], name, sizeof name)) {
+    napi_throw_type_error(env, "EINVAL", "openat_create_excl(dirfd, name)");
+    return NULL;
+  }
+  int fd = openat(dfd, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+  if (fd < 0) {
+    int e = errno;
+    const char *code = e == EEXIST ? "EEXIST" : e == ENOENT ? "ENOENT"
+      : e == ENOTDIR ? "ENOTDIR" : e == ELOOP ? "ELOOP"
+      : e == EACCES ? "EACCES" : "EIO";
+    char msg[160];
+    snprintf(msg, sizeof msg, "openat_create_excl failed: %s", strerror(e));
+    napi_throw_error(env, code, msg);
+    return NULL;
+  }
+  napi_value out;
+  napi_create_int32(env, fd, &out);
+  return out;
+}
+
 static napi_value rename_noreplace(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2];
@@ -24,65 +106,13 @@ static napi_value rename_noreplace(napi_env env, napi_callback_info info) {
     napi_throw_type_error(env, "EINVAL", "rename_noreplace(src, dst) takes 2 args");
     return NULL;
   }
-  /* Unpaired UTF-16 surrogates would be lossy-replaced by U+FFFD during
-   * UTF-8 conversion, silently aliasing a different real path. Validate
-   * the original code units first — lone high/low -> EINVAL, valid pairs
-   * allowed. */
-  char16_t src16[4096], dst16[4096];
-  size_t u1 = 0, u2 = 0;
-  if (napi_get_value_string_utf16(env, argv[0], NULL, 0, &u1) != napi_ok ||
-      napi_get_value_string_utf16(env, argv[1], NULL, 0, &u2) != napi_ok ||
-      u1 >= sizeof src16 / sizeof(char16_t) || u2 >= sizeof dst16 / sizeof(char16_t) ||
-      napi_get_value_string_utf16(env, argv[0], src16, sizeof src16 / sizeof(char16_t), &u1) != napi_ok ||
-      napi_get_value_string_utf16(env, argv[1], dst16, sizeof dst16 / sizeof(char16_t), &u2) != napi_ok) {
-    napi_throw_type_error(env, "EINVAL", "paths must be strings < 4096 utf16 units");
-    return NULL;
-  }
-  for (size_t i = 0; i < u1; i++) {
-    char16_t c = src16[i];
-    if (c >= 0xD800 && c <= 0xDBFF) {
-      if (i + 1 >= u1 || src16[i + 1] < 0xDC00 || src16[i + 1] > 0xDFFF) {
-        napi_throw_type_error(env, "EINVAL", "path has unpaired surrogate");
-        return NULL;
-      }
-      i++;
-    } else if (c >= 0xDC00 && c <= 0xDFFF) {
-      napi_throw_type_error(env, "EINVAL", "path has unpaired surrogate");
-      return NULL;
-    }
-  }
-  for (size_t i = 0; i < u2; i++) {
-    char16_t c = dst16[i];
-    if (c >= 0xD800 && c <= 0xDBFF) {
-      if (i + 1 >= u2 || dst16[i + 1] < 0xDC00 || dst16[i + 1] > 0xDFFF) {
-        napi_throw_type_error(env, "EINVAL", "path has unpaired surrogate");
-        return NULL;
-      }
-      i++;
-    } else if (c >= 0xDC00 && c <= 0xDFFF) {
-      napi_throw_type_error(env, "EINVAL", "path has unpaired surrogate");
-      return NULL;
-    }
-  }
   char src[4096], dst[4096];
-  /* Length-check first: get_value_string_utf8 writes at most buflen-1
-   * and reports bytes copied, so a truncated copy is invisible to a
-   * post-copy size check. Query the full length, reject overflow, then
-   * verify the copy is complete and contains no embedded NUL (which
-   * would silently mutate which path the syscall operates on). */
-  size_t len1 = 0, len2 = 0;
-  if (napi_get_value_string_utf8(env, argv[0], NULL, 0, &len1) != napi_ok ||
-      napi_get_value_string_utf8(env, argv[1], NULL, 0, &len2) != napi_ok ||
-      len1 >= sizeof src || len2 >= sizeof dst) {
-    napi_throw_type_error(env, "EINVAL", "paths must be utf8 strings < 4096 bytes");
-    return NULL;
-  }
-  size_t n1 = 0, n2 = 0;
-  if (napi_get_value_string_utf8(env, argv[0], src, sizeof src, &n1) != napi_ok ||
-      napi_get_value_string_utf8(env, argv[1], dst, sizeof dst, &n2) != napi_ok ||
-      n1 != len1 || n2 != len2 ||
-      strlen(src) != n1 || strlen(dst) != n2) {
-    napi_throw_type_error(env, "EINVAL", "paths must be utf8 strings without embedded NUL");
+  /* get_path validates UTF-16 code units (lone surrogate -> reject,
+   * no U+FFFD aliasing), bounds the UTF-8 length, verifies complete
+   * copy and rejects embedded NUL — all before the syscall. */
+  if (!get_path(env, argv[0], src, sizeof src) ||
+      !get_path(env, argv[1], dst, sizeof dst)) {
+    napi_throw_type_error(env, "EINVAL", "paths must be valid utf8/utf16 strings < 4096 bytes, no NUL");
     return NULL;
   }
   int rc = syscall(SYS_renameat2, AT_FDCWD, src, AT_FDCWD, dst, RENAME_NOREPLACE);
@@ -105,6 +135,12 @@ static napi_value init(napi_env env, napi_value exports) {
   napi_create_function(env, "rename_noreplace", NAPI_AUTO_LENGTH,
                        rename_noreplace, NULL, &fn);
   napi_set_named_property(env, exports, "rename_noreplace", fn);
+  napi_create_function(env, "openat_dir", NAPI_AUTO_LENGTH,
+                       openat_dir, NULL, &fn);
+  napi_set_named_property(env, exports, "openat_dir", fn);
+  napi_create_function(env, "openat_create_excl", NAPI_AUTO_LENGTH,
+                       openat_create_excl, NULL, &fn);
+  napi_set_named_property(env, exports, "openat_create_excl", fn);
   return exports;
 }
 NAPI_MODULE(rename_noreplace, init)

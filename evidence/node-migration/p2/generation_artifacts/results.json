@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-034-R1",
+  "task_id": "NM-034-R2",
   "baseline_sha": "99c8fe93380a0378b06eb942713d19eaaedf1de8",
   "source_ported": "generation/mod.rs::{write_decision,decision,write_artifact,artifact} — once-only decision/evidence persistence",
   "rust_oracle": "rust-oracle.jsonl — 19 cases via live Store (rustc 1.98.1): not_installed/decision_exists/artifact_exists/not_verified verbatim + read-back/reopen",
@@ -20,15 +20,16 @@
   "probe": {
     "command": "node scripts/node_migration_p2/generation_artifact_probe.mjs .",
     "exit": 0,
-    "cases": 41,
+    "cases": 45,
     "totals": {
-      "pass": 41,
+      "pass": 45,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
       "live_rust_oracle": 19,
-      "boundary": 22
+      "boundary": 22,
+      "fd_pin_and_injection": 4
     },
     "selftest": "node ... art -> exit 1 (negative-selftest.jsonl)"
   },
@@ -40,11 +41,15 @@
   },
   "untested": "disk-full mid-write, ENOSPC fsync failure, crash between write and fsync — not injectable on Box",
   "out_of_scope": "no usable() semantics change, no real gen-2 decision, no DB/service/activation",
-  "review": "REVIEW-NM-034 R0 — four findings fixed",
+  "review": "REVIEW-NM-034-R1 — ancestor-symlink race + close errors fixed",
   "r1_fixes": {
     "symlinked_gen_dir": "requireRealGenerationDir lstat-checks generations/ AND generations/<gid> — symlinked path -> not_installed, outside dir verified untouched",
     "reserved_names": "writeArtifact rejects snapshot-manifest.json, consistency-decision.json, base.zip, gbbq.zip, hsjday.zip (not_verified verbatim); compatibility-evidence.json still allowed",
     "write_bound": "bytes >1MiB refused invalid_input BEFORE exclusive create — matches the 1MiB read bound; no file created on refusal",
     "typed_io": "write/fsync/close errors wrapped as GenerationUsableError io; unwritable-dir probe proves open-path io typing"
+  },
+  "r2_fixes": {
+    "fd_pinning": "openGenerationDirFds pins generations/ (O_DIRECTORY|O_NOFOLLOW) and <gid> via native openat_dir; writes use openat_create_excl relative to pinned fd — path swaps after pinning cannot redirect. Deterministic proof: real dir pinned, path swapped to symlink, write lands in real dir; outside untouched",
+    "close_errors": "writeOnceAt/fsyncFdClose/closeSync errors surface as typed io — first failure wins, close-only failure still io. Injected close/write failure probes prove typing + partial-file preservation"
   }
 }

@@ -2,7 +2,8 @@
 // write_artifact/artifact against a live Rust oracle. Synthetic roots.
 // Exit nonzero on FAIL. Usage: node generation_artifact_probe.mjs <root> [selftest]
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { writeSync as writeSyncReal } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 
@@ -11,7 +12,7 @@ const SELFTEST = process.argv[3] || null;
 if (!existsSync(join(ROOT, "src_node/native/rename_noreplace.node"))) {
   execSync("gcc -shared -fPIC -O2 -o src_node/native/rename_noreplace.node src_node/native/rename_noreplace.c -I/usr/include/node", { cwd: ROOT });
 }
-const { GenerationStore } = await import("../../src_node/governance/generation_store.mjs");
+const { GenerationStore, writeOnceAt } = await import("../../src_node/governance/generation_store.mjs");
 const { GenerationUsableError } = await import("../../src_node/governance/generation_usable.mjs");
 
 const oracle = readFileSync(join(ROOT, "evidence/node-migration/p2/generation_artifacts/rust-oracle.jsonl"), "utf8")
@@ -148,6 +149,68 @@ for (const nm of ["consistency-decision.json", "snapshot-manifest.json", "base.z
   symlinkSync("/etc/hostname", join(FIX, "generations", G, "decision-link"));
   bnd("artifact_symlink_decision_name", () => store.writeArtifact(G, "decision-link", Buffer.from("x")), "artifact_exists");
   emit("decision_link_target_untouched", existsSync("/etc/hostname") ? "PASS" : "FAIL", "target intact");
+}
+// ---------- R2: deterministic ancestor-swap proof (fd pinning) ----------
+{
+  const { constants: FC, openSync, closeSync } = await import("node:fs");
+  const { createRequire } = await import("node:module");
+  const native = createRequire(import.meta.url)("../../src_node/native/rename_noreplace.node");
+  const realName = "pin-gen";
+  const realDir = join(FIX, "pinroot", "generations");
+  const outDir = join(FIX, "pinroot", "outside");
+  mkdirSync(join(realDir, realName), { recursive: true });
+  mkdirSync(outDir, { recursive: true });
+  // pin generations/ and <gid> via fds
+  const pfd = openSync(realDir, FC.O_RDONLY | FC.O_DIRECTORY | FC.O_NOFOLLOW);
+  const gfd2 = native.openat_dir(pfd, realName);
+  // swap the checked path to a symlink AFTER pinning
+  renameSync(join(realDir, realName), join(realDir, realName + "-moved"));
+  symlinkSync(outDir, join(realDir, realName));
+  const wr = run(() => writeOnceAt(gfd2, "swapped.json", Buffer.from("pinned"), () => { throw new Error("exists"); }));
+  const landedInReal = existsSync(join(realDir, realName + "-moved", "swapped.json"));
+  const outsideClean = readdirSync(outDir).length === 0;
+  emit("fd_pin_survives_swap", wr.status === "ok" && landedInReal && outsideClean ? "PASS" : "FAIL",
+    `wrote through pinned fd to real dir; outside untouched=${outsideClean}`);
+  closeSync(gfd2); closeSync(pfd);
+  // openat on a symlinked dir name -> refused (ENOTDIR/ELOOP)
+  try { native.openat_dir(pfd === -1 ? openSync(realDir, FC.O_RDONLY | FC.O_DIRECTORY) : openSync(realDir, FC.O_RDONLY | FC.O_DIRECTORY | FC.O_NOFOLLOW), realName); emit("openat_symlink_dir", "FAIL", "opened symlinked dir"); }
+  catch (e) { emit("openat_symlink_dir", ["ENOTDIR", "ELOOP", "ENOENT"].includes(e.code) ? "PASS" : "FAIL", `code=${e.code}`); }
+}
+// ---------- R2: injected close/write failure -> typed io ----------
+{
+  const { constants: FC, openSync } = await import("node:fs");
+  const { createRequire } = await import("node:module");
+  const native = createRequire(import.meta.url)("../../src_node/native/rename_noreplace.node");
+  const dfd = openSync(join(FIX, "generations"), FC.O_RDONLY | FC.O_DIRECTORY);
+  const gfd3 = native.openat_dir(dfd, G);
+  // sole close failure -> typed io, partial file left in place
+  const closeImpl = {
+    openat: native.openat_create_excl,
+    writeSync: (fd, b, o, l) => writeSyncReal(fd, b, o, l),
+    fsyncSync: () => {},
+    closeSync: () => { const e = new Error("injected close"); e.code = "EBADF"; throw e; },
+  };
+  try {
+    writeOnceAt(gfd3, "closefail.json", Buffer.from("data"), () => { throw new Error("exists"); }, closeImpl);
+    emit("close_fail_typed_io", "FAIL", "close error swallowed");
+  } catch (e) {
+    emit("close_fail_typed_io", e instanceof GenerationUsableError && e.kind === "io" && existsSync(join(FIX, "generations", G, "closefail.json")) ? "PASS" : "FAIL",
+      `${e.kind}: ${e.message.slice(0, 60)}`);
+  }
+  // write failure -> typed io, partial file preserved
+  const writeImpl = {
+    openat: native.openat_create_excl,
+    writeSync: () => { const e = new Error("injected write"); e.code = "EIO"; throw e; },
+    fsyncSync: () => {},
+    closeSync: () => {},
+  };
+  try {
+    writeOnceAt(gfd3, "writefail.json", Buffer.from("data"), () => { throw new Error("exists"); }, writeImpl);
+    emit("write_fail_typed_io", "FAIL", "write error swallowed");
+  } catch (e) {
+    emit("write_fail_typed_io", e instanceof GenerationUsableError && e.kind === "io" && existsSync(join(FIX, "generations", G, "writefail.json")) ? "PASS" : "FAIL",
+      `${e.kind}: ${e.message.slice(0, 60)}`);
+  }
 }
 // selftest
 if (SELFTEST === "art") {
