@@ -2,7 +2,7 @@
 use super::{YearlyCandidate, tasks};
 use crate::market_storage::{
     Error, MarketRepository, Publication, PublishIntent, PublishPlan, Publisher, Receipt,
-    compat::{self, CheckedRecord},
+    compat::CheckedRecord,
 };
 use serde_json::{Value, json};
 
@@ -99,15 +99,15 @@ impl<R: MarketRepository> Publisher<R> {
                 ));
             }
         }
-        let next = compat::check(&candidate.raw)?;
-        crate::market_storage::validate_base_facts(&next, &self.repository, &base_facts)?;
+        let next = &candidate.checked;
+        crate::market_storage::validate_base_facts(next, &self.repository, &base_facts)?;
         if prior.as_ref().is_some_and(|p| {
             p.version().symbol != next.version().symbol
                 || p.version().period != next.version().period
         }) {
             return Err(Error::Base("prior yearly identity/period".into()));
         }
-        let no_change = prior.as_ref().is_some_and(|p| equivalent(p, &next));
+        let no_change = prior.as_ref().is_some_and(|p| equivalent(p, next));
         let publication = if no_change {
             let prior = prior.as_ref().unwrap();
             let mut command = command;

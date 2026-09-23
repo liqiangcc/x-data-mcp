@@ -1,5 +1,7 @@
 # Issue #262 交接文档（→ Codex）
 
+> 2026-09-23 本机性能优化续篇：[修改、测量与后续工作](issue-262-local-performance-handoff.md)。本文件下述部署信息为原交接时点的记录。
+
 > 目标：AI 仅通过两个 MCP server + 仓库 Skill 完成每日市场数据更新，无 shell/SSH/SQLite 旁路。
 > 本文件交接当前状态、已验证事实、遗留工作与操作要点。所有性能数字均注明规模/环境/版本。
 

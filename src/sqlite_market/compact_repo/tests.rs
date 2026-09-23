@@ -2023,3 +2023,162 @@ fn fixed_window_timing_probe() {
         sorted[sorted.len() - 1]
     );
 }
+
+/// Local synthetic SQLite path, stub source verification, no MCP or network.
+#[test]
+#[ignore = "manual release pipeline timing on fresh tmpfs databases"]
+fn yearly_pipeline_timing_probe() {
+    use std::time::Instant;
+    let mut samples = Vec::new();
+    for _ in 0..10 {
+        use crate::market_update::tasks::Operation;
+        use crate::task_control::{Contract, RequestOutcome};
+        use crate::yearly_publication::{
+            DerivationEvidence,
+            runner::{YearlyExecution, YearlyRunner, YearlyVerifier},
+            tasks::YearlyContract,
+        };
+
+        struct Stub;
+        impl YearlyVerifier for Stub {
+            fn verify(
+                &self,
+                base: &CheckedRecord,
+                years: &BTreeSet<i32>,
+                _annual: &crate::yearly::AnnualSeries,
+                derived_at: DateTime<Utc>,
+            ) -> Result<DerivationEvidence, crate::market_data::SourceError> {
+                Ok(DerivationEvidence {
+                    base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
+                    years: years.clone(),
+                    as_of: derived_at
+                        .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                        .date_naive(),
+                    coverage: CoverageEvidence::complete("stub re-aggregation verified"),
+                })
+            }
+        }
+
+        let dir = tempdir();
+        let (_, repo) = repo(&dir);
+        // Publish a daily base covering 2025 and 2026 through the real path.
+        let task_id = accept_task(&repo);
+        let revision = start_item(&repo, &task_id);
+        let last = NaiveDate::from_ymd_opt(2026, 9, 18).unwrap();
+        let days =
+            (0..10000).map(|i| compact_market::epoch_day(last - chrono::Duration::days(9999 - i)));
+        let version = mk_version(
+            "v1",
+            days.enumerate()
+                .map(|(i, d)| bar(d, 100 + i as i64))
+                .collect(),
+        );
+        repo.stage(&envelope(&version, source("gen-1"), None))
+            .unwrap();
+        let candidate = repo.candidate("v1").unwrap();
+        repo.mark_validated(&candidate).unwrap();
+        repo.commit(&PublishPlan {
+            command: collect_command(&task_id, "pub-1", "v1", revision),
+            record: candidate.clone(),
+            required_heads: vec![(Scope::of(&candidate.version), None)],
+            promote: None,
+            base_digest: None,
+        })
+        .unwrap();
+
+        // Accept the yearly task through the real contract, then run the item.
+        let contract = YearlyContract {
+            operation: Operation::Update,
+            repository: repo.clone(),
+            today: || NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+        };
+        let acceptance_started = Instant::now();
+        let work = contract
+            .resolve(&json!({"items":[{
+                "symbol":"sh.600006",
+                "base_daily_version_id":"v1",
+                "years":[2025,2026],
+                "intent":{"CurrentHead":{"expected_daily_head":"v1","expected_yearly_head":null}},
+                "comparison_version_id":null
+            }]}))
+            .unwrap();
+        let command = Command {
+            key: contract.key(),
+            intent: json!({}),
+        };
+        let acceptance = repo
+            .accept("req-yearly", &command, &work, RUN, None)
+            .unwrap();
+        let RequestOutcome::Task(snapshot) = acceptance.record.outcome else {
+            panic!("expected task outcome")
+        };
+        let yearly_task = snapshot.task.task_id.clone();
+        let item_id = snapshot.items[0].spec.item_id.clone();
+
+        let runner = YearlyRunner {
+            repository: repo.clone(),
+            run_id: RUN.into(),
+            derived_at: ts(),
+        };
+        let accept_ms = acceptance_started.elapsed().as_secs_f64() * 1000.0;
+        let execution_started = Instant::now();
+        let outcome = runner.run_item(&yearly_task, &item_id, &Stub).unwrap();
+        let YearlyExecution::Published(receipt) = outcome else {
+            let snap = repo.task(&yearly_task).unwrap();
+            panic!("yearly item did not publish: {:?}", snap.items[0].outcome)
+        };
+
+        let execution_ms = execution_started.elapsed().as_secs_f64() * 1000.0;
+        samples.push((accept_ms, execution_ms));
+        let fixed = repo.fixed(&receipt.version_id).unwrap();
+        assert_eq!(fixed.version.period, Period::Year);
+        assert_eq!(fixed.version.records.len(), 2);
+        assert_eq!(
+            fixed
+                .version
+                .yearly_derivation
+                .as_ref()
+                .unwrap()
+                .base_daily_version_id,
+            "v1"
+        );
+        // A derived version inherits the published base's source binding.
+        assert_eq!(
+            fixed.raw()["compact_source"]["generation_id"],
+            json!("gen-1")
+        );
+        let head = repo
+            .versions(&Scope {
+                symbol: "sh.600006".into(),
+                period: Period::Year,
+            })
+            .unwrap();
+        assert_eq!(head.len(), 1);
+        assert_eq!(head[0].version_id, receipt.version_id);
+
+        // Re-running the committed item replays the stored receipt.
+        let YearlyExecution::Published(replay) =
+            runner.run_item(&yearly_task, &item_id, &Stub).unwrap()
+        else {
+            panic!("yearly replay did not publish")
+        };
+        assert_eq!(replay, receipt);
+
+        // The audit projection requires the stored result to link its daily
+        // derivation base (schema-19 task-progress reads hit this path).
+        let (audit, _) = repo
+            .read(|c| {
+                compact_results::read_yearly_audit(c, &receipt.publication_id).map(|o| o.unwrap())
+            })
+            .unwrap();
+        assert_eq!(audit["base_daily_version_id"], json!("v1"));
+    }
+    let mut accept: Vec<f64> = samples.iter().map(|s| s.0).collect();
+    let mut execution: Vec<f64> = samples.iter().map(|s| s.1).collect();
+    accept.sort_by(f64::total_cmp);
+    execution.sort_by(f64::total_cmp);
+    eprintln!(
+        "pipeline fresh_dbs=10 daily_bars=10000 years=2 accept_p50_ms={:.3} execution_p50_ms={:.3} execution_max_ms={:.3}",
+        accept[5], execution[5], execution[9]
+    );
+}

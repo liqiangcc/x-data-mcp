@@ -141,3 +141,78 @@ fn calendar_end_flag_does_not_fabricate_a_december_31_bar() {
     assert!(!aggregate(&daily, None, date("2027-01-01")).unwrap().records[2].year_unfinished);
     assert_eq!(output.records[2].bar.date, date("2026-01-05"));
 }
+
+#[path = "support/yearly_reference.rs"]
+mod reference;
+
+#[test]
+fn optimized_aggregation_matches_reference() {
+    let mut daily = input();
+    for missing in [false, true] {
+        if missing {
+            daily.records[1].amount = None;
+        }
+        for years in [
+            None,
+            Some(BTreeSet::from([2024, 2026])),
+            Some(BTreeSet::from([2023])),
+        ] {
+            assert_eq!(
+                aggregate(&daily, years.as_ref(), date("2026-09-12")),
+                reference::aggregate(&daily, years.as_ref(), date("2026-09-12"))
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "manual release A/B timing; synthetic CPU-only aggregation, no storage"]
+fn aggregation_ab_timing() {
+    use std::{hint::black_box, time::Instant};
+    let mut daily = input();
+    let template = daily.records[0].clone();
+    daily.records = (0..10000)
+        .map(|i| {
+            let mut bar = template.clone();
+            bar.date = date("1990-01-01") + chrono::Duration::days(i);
+            bar
+        })
+        .collect();
+    let as_of = date("2026-09-12");
+    assert_eq!(
+        aggregate(&daily, None, as_of),
+        reference::aggregate(&daily, None, as_of)
+    );
+    let mut old = Vec::new();
+    let mut new = Vec::new();
+    for round in 0..21 {
+        for optimized in if round % 2 == 0 {
+            [false, true]
+        } else {
+            [true, false]
+        } {
+            let start = Instant::now();
+            for _ in 0..20 {
+                black_box(if optimized {
+                    aggregate(black_box(&daily), None, as_of)
+                } else {
+                    reference::aggregate(black_box(&daily), None, as_of)
+                })
+                .unwrap();
+            }
+            if optimized {
+                new.push(start.elapsed().as_secs_f64() / 20.0);
+            } else {
+                old.push(start.elapsed().as_secs_f64() / 20.0);
+            }
+        }
+    }
+    old.sort_by(f64::total_cmp);
+    new.sort_by(f64::total_cmp);
+    eprintln!(
+        "bars=10000 rounds=21 iterations=20 old_p50_us={:.1} new_p50_us={:.1} speedup={:.3}",
+        old[10] * 1e6,
+        new[10] * 1e6,
+        old[10] / new[10]
+    );
+}
