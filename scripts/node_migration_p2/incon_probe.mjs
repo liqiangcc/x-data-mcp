@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { inflateRawSync } from "node:zlib";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { join } from "node:path";
 import { parse, InconError, codeLevel, researchLevel2, sectionMap } from "../../src_node/parsers/incon.mjs";
 
@@ -12,8 +12,11 @@ const ROOT = process.argv[2] || ".";
 const oracle = readFileSync(join(ROOT, "evidence/node-migration/p2/incon/rust-oracle.jsonl"), "utf8")
   .split("\n").filter(Boolean).map(JSON.parse);
 
-const emit = (id, status, detail, expected = null, actual = null) =>
+let failures = 0;
+const emit = (id, status, detail, expected = null, actual = null) => {
+  if (status === "FAIL") failures++;
   console.log(JSON.stringify({ family: "incon", id, status, detail, expected, actual }));
+};
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 const hx = (h) => Buffer.from(h.replace(/\s/g, ""), "hex");
 
@@ -82,28 +85,57 @@ bnd("reject_null", null);
 // correction). Nested, bounded, in-process — no persistent extraction.
 const GBBQ = "/home/box/retained-inputs/official-gbbq.zip";
 const MANIFEST = "/home/box/retained-inputs/manifest-sha256.txt";
+const SELFTEST = process.argv[3] || null; // negative-verification selector
+const abort = (id, detail) => { emit(id, "FAIL", detail); process.exit(1); };
 {
   const gSha = sha256(readFileSync(GBBQ));
   const manifest = readFileSync(MANIFEST, "utf8").split("\n").filter(Boolean)
     .map((l) => { const [h, ...p] = l.trim().split(/\s+/); return { h, p: p.join(" ") }; });
   const entry = manifest.find((e) => e.p === "official-gbbq.zip");
-  emit("gbbq_manifest_sha", entry !== undefined && entry.h === gSha ? "PASS" : "FAIL",
-    `gbbq sha256=${gSha} manifest=${entry?.h ?? "absent"}`);
+  const expected = SELFTEST === "outer_sha" ? "0".repeat(64) : entry?.h;
+  if (entry === undefined || expected !== gSha) {
+    abort("gbbq_manifest_sha",
+      `ABORT before extraction: gbbq sha256=${gSha} manifest=${entry?.h ?? "absent"}`);
+  }
+  emit("gbbq_manifest_sha", "PASS", `gbbq sha256=${gSha} manifest=${entry.h}`);
 }
-function zipMember(buf, name) {
+const MAX_MEMBER = 64 * 1024 * 1024; // 64 MiB bound on inflated members
+const SIG_CD = 0x02014b50, SIG_LH = 0x04034b50, SIG_EOCD = 0x06054b50;
+function zipMember(buf, name, maxOut = MAX_MEMBER) {
+  if (!(buf instanceof Uint8Array)) throw new Error("zip input must be bytes");
   const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (eocd < 0 || eocd + 22 > buf.length || buf.readUInt32LE(eocd) !== SIG_EOCD) {
+    throw new Error("invalid ZIP: EOCD signature not found");
+  }
   const cdCount = buf.readUInt16LE(eocd + 10);
   let off = buf.readUInt32LE(eocd + 16);
+  if (off + 46 * cdCount > eocd) throw new Error("invalid ZIP: central directory out of bounds");
   for (let i = 0; i < cdCount; i++) {
+    if (off + 46 > buf.length || buf.readUInt32LE(off) !== SIG_CD) {
+      throw new Error(`invalid ZIP: central entry ${i} signature`);
+    }
     const method = buf.readUInt16LE(off + 10);
     const compSize = buf.readUInt32LE(off + 20);
+    const uncompSize = buf.readUInt32LE(off + 24);
     const nameLen = buf.readUInt16LE(off + 28), extraLen = buf.readUInt16LE(off + 30), cmtLen = buf.readUInt16LE(off + 32);
     const lho = buf.readUInt32LE(off + 42);
+    if (off + 46 + nameLen > buf.length) throw new Error("invalid ZIP: name out of bounds");
     const entry = buf.subarray(off + 46, off + 46 + nameLen).toString("latin1");
     if (entry === name) {
+      if (method !== 0 && method !== 8) throw new Error(`unsupported ZIP method ${method}`);
+      if (uncompSize > maxOut) throw new Error(`member exceeds bound: ${uncompSize}`);
+      if (lho + 30 > buf.length || buf.readUInt32LE(lho) !== SIG_LH) {
+        throw new Error("invalid ZIP: local header signature");
+      }
       const lNameLen = buf.readUInt16LE(lho + 26), lExtraLen = buf.readUInt16LE(lho + 28);
-      const data = buf.subarray(lho + 30 + lNameLen + lExtraLen, lho + 30 + lNameLen + lExtraLen + compSize);
-      return method === 0 ? data : inflateRawSync(data);
+      const dataOff = lho + 30 + lNameLen + lExtraLen;
+      if (dataOff + compSize > buf.length) throw new Error("invalid ZIP: data out of bounds");
+      const data = buf.subarray(dataOff, dataOff + compSize);
+      const out = method === 0 ? data : inflateRawSync(data, { maxOutputLength: maxOut });
+      if (out.length !== uncompSize) {
+        throw new Error(`size mismatch: declared ${uncompSize} got ${out.length}`);
+      }
+      return out;
     }
     off += 46 + nameLen + extraLen + cmtLen;
   }
@@ -113,7 +145,9 @@ const zhb = zipMember(readFileSync(GBBQ), "zhb.zip");
 emit("zhb_member_sha", sha256(zhb) === "e1ded566dc5269642de760211ec1b67e5ebebd67ab1e6338f70cab7c05048350" ? "PASS" : "FAIL",
   `zhb.zip ${zhb.length}B sha256=${sha256(zhb)}`);
 const member = zipMember(zhb, "incon.dat");
-emit("member_extract", member.length === 67543 && sha256(member) === "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51" ? "PASS" : "FAIL",
+const EXPECT_MEMBER = SELFTEST === "member_sha" ? "0".repeat(64)
+  : "86f758b29033632fae23b85a7f002b4a6906fb88a3d2904495865c3b2cfb6f51";
+emit("member_extract", member.length === 67543 && sha256(member) === EXPECT_MEMBER ? "PASS" : "FAIL",
   `gbbq.zip!zhb.zip!incon.dat ${member.length}B sha256=${sha256(member)} (authoritative gen-2 source)`);
 const sections = parse(member);
 {
@@ -148,6 +182,59 @@ for (const o of oracle.filter((r) => r.id.startsWith("secmap_"))) {
     `"#####" sections: ${sections.filter((s)=>s.name==="#####").length}, first-match entries=${m?.length}`);
 }
 
+// ---------- negative verification: corrupted/oversize ZIP members and
+// fail-closed semantics (R3) ----------
+{
+  const g = readFileSync(GBBQ);
+  // corrupt central-directory signature of the first entry
+  const bad = Buffer.from(g);
+  const eocd = bad.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  const cdOff = bad.readUInt32LE(eocd + 16);
+  bad.writeUInt32LE(0xdeadbeef, cdOff);
+  try { zipMember(bad, "zhb.zip"); emit("neg_cd_signature", "FAIL", "accepted corrupted CD"); }
+  catch (e) { emit("neg_cd_signature", "PASS", e.message); }
+}
+{
+  // method byte forced to unsupported value on zhb.zip entry
+  const g = readFileSync(GBBQ);
+  const bad = Buffer.from(g);
+  const eocd = bad.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  let off = bad.readUInt32LE(eocd + 16);
+  const count = bad.readUInt16LE(eocd + 10);
+  for (let i = 0; i < count; i++) {
+    const nl = bad.readUInt16LE(off + 28), el = bad.readUInt16LE(off + 30), cl = bad.readUInt16LE(off + 32);
+    if (bad.subarray(off + 46, off + 46 + nl).toString("latin1") === "zhb.zip") {
+      bad.writeUInt16LE(99, off + 10); break;
+    }
+    off += 46 + nl + el + cl;
+  }
+  try { zipMember(bad, "zhb.zip"); emit("neg_bad_method", "FAIL", "accepted method 99"); }
+  catch (e) { emit("neg_bad_method", "PASS", e.message); }
+}
+{
+  // declared uncompressed size > bound
+  const g = readFileSync(GBBQ);
+  const bad = Buffer.from(g);
+  const eocd = bad.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  let off = bad.readUInt32LE(eocd + 16);
+  const count = bad.readUInt16LE(eocd + 10);
+  for (let i = 0; i < count; i++) {
+    const nl = bad.readUInt16LE(off + 28), el = bad.readUInt16LE(off + 30), cl = bad.readUInt16LE(off + 32);
+    if (bad.subarray(off + 46, off + 46 + nl).toString("latin1") === "zhb.zip") {
+      bad.writeUInt32LE(0xffffffff, off + 24); break;
+    }
+    off += 46 + nl + el + cl;
+  }
+  try { zipMember(bad, "zhb.zip"); emit("neg_oversize_declared", "FAIL", "accepted 4GiB declared"); }
+  catch (e) { emit("neg_oversize_declared", "PASS", e.message); }
+}
+{
+  // zip bomb shape: tiny input, inflate > maxOut
+  const payload = deflateRawSync(Buffer.alloc(2 * 1024 * 1024, 0x41)); // ~2KiB -> 2MiB
+  try { inflateRawSync(payload, { maxOutputLength: 1024 }); emit("neg_inflate_bound", "FAIL", "unbounded inflate"); }
+  catch (e) { emit("neg_inflate_bound", "PASS", `bounded: ${e.message.slice(0, 60)}`); }
+}
+
 // ---------- optional separate sample: client deb incon.dat (different
 // source — NOT gen-2 alignment evidence) ----------
 {
@@ -168,3 +255,6 @@ for (const o of oracle.filter((r) => r.id.startsWith("secmap_"))) {
   emit("deb_optional_sample", ok ? "PASS" : "FAIL",
     `separate source (no gen-2 alignment claim): deb sha=${debSha.slice(0,12)} member=${debMember?.length}B 37 sections/${debParsed?.reduce((a,s)=>a+s.entries.length,0)} entries`);
 }
+
+// fail closed: nonzero exit on any failed check
+process.exit(failures === 0 ? 0 : 1);

@@ -20,9 +20,9 @@
   "probe": {
     "command": "node scripts/node_migration_p2/incon_probe.mjs .",
     "exit": 0,
-    "cases": 54,
+    "cases": 58,
     "totals": {
-      "pass": 54,
+      "pass": 58,
       "fail": 0,
       "not_run": 0
     },
@@ -37,7 +37,9 @@
       "secmap": 6,
       "first_match": 1,
       "deb_optional_sample": 1,
-      "member_notes": 1
+      "member_notes": 1,
+      "negative_zip": 4,
+      "selftest_aborts": 2
     }
   },
   "semantics_mirrored": [
@@ -54,5 +56,18 @@
   "limitations": [
     "deb sample remains a separate source (optional); gen-2 authoritative member now used for the real-byte oracle"
   ],
-  "revision": "R2 — REVIEW-NM-024 source correction: authoritative gen-2 official-gbbq.zip!zhb.zip!incon.dat"
+  "revision": "R3 — REVIEW-NM-024 verifier semantics: nonzero exit, abort-before-extract, bounded/validated zipMember, negative proofs",
+  "fail_closed_verifier": {
+    "exit_code": "probe exits 1 on any FAIL row (was print-only exit 0)",
+    "abort_before_extraction": "outer gbbq sha mismatch vs manifest -> FAIL + immediate exit 1 BEFORE nested extraction",
+    "zipMember": "EOCD/CD/local signatures validated; method restricted {0,8}; central dir bounds; name/data bounds; declared uncompSize <= 64MiB BEFORE inflate; inflateRawSync maxOutputLength bound; actual size == declared",
+    "negative_proofs": [
+      "neg_cd_signature: corrupted CD signature -> reject",
+      "neg_bad_method: method 99 -> reject",
+      "neg_oversize_declared: declared 4GiB -> reject pre-inflate",
+      "neg_inflate_bound: 2MiB bomb vs 1KiB maxOutputLength -> reject",
+      "selftest outer_sha: probe . outer_sha -> ABORT before extraction, exit 1 (neg_outer.jsonl)",
+      "selftest member_sha: probe . member_sha -> member_extract FAIL, exit 1 (neg_member.jsonl)"
+    ]
+  }
 }

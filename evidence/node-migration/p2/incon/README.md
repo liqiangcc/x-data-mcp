@@ -4,7 +4,7 @@ Baseline `f94b5e79c7601fc5c009e7a1e710fec6894f1a3f` (`migration/node-devin`). No
 
 ## Contents
 
-- `probe-results.jsonl` — 54 rows, all PASS (R2: gen-2 authoritative member).
+- `probe-results.jsonl` — 58 rows, all PASS (R3: +4 negative zip cases; exits nonzero on FAIL).
 - `rust-oracle.jsonl` — live `rustc 1.98.1` + `x_data_mcp`/`encoding_rs` rlibs (`target/debug/incon_oracle`, not committed): 21 synthetic + 17 helper + member digest + 4 secmap rows.
 - `results.json` — ported functions, semantics, member provenance.
 - `SHA256SUMS` — over the three files (excludes itself).
@@ -36,3 +36,10 @@ Optional separate sample retained: client deb `tc/incon.dat` (65,853B, `ca941e57
 ## R1 reproducible extraction (REVIEW-NM-024)
 
 `deb_manifest_sha` verifies the deb sha256 against `retained-inputs/manifest-sha256.txt` at runtime; `member_extract` runs the committed bounded extractor and verifies member sha256 `ca941e57…` before parsing. Separate-source limitation retained: deb member does not establish same-snapshot dictionary alignment with gen-2 catalog members.
+
+## R3 fail-closed verifier (REVIEW-NM-024)
+
+- Probe exits 1 on any FAIL (was print-only).
+- Outer sha mismatch → `gbbq_manifest_sha` FAIL + **abort before extraction** (`neg_outer.jsonl`, exit 1).
+- `zipMember` hardened: EOCD/CD/local signatures, method {0,8}, bounds, declared-size cap pre-inflate, `maxOutputLength`, actual==declared.
+- Negative proofs: `neg_outer.jsonl`/`neg_member.jsonl` (selftest selectors, exit 1) + 4 in-process corrupted-member rejects.

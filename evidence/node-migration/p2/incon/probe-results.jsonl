@@ -51,4 +51,8 @@
 {"family":"incon","id":"secmap_JPHY","status":"PASS","detail":null,"expected":34,"actual":34}
 {"family":"incon","id":"secmap_XXXXX","status":"PASS","detail":null,"expected":null,"actual":null}
 {"family":"incon","id":"secmap_first_match","status":"PASS","detail":"\"#####\" sections: 20, first-match entries=0","expected":null,"actual":null}
+{"family":"incon","id":"neg_cd_signature","status":"PASS","detail":"invalid ZIP: central entry 0 signature","expected":null,"actual":null}
+{"family":"incon","id":"neg_bad_method","status":"PASS","detail":"unsupported ZIP method 99","expected":null,"actual":null}
+{"family":"incon","id":"neg_oversize_declared","status":"PASS","detail":"member exceeds bound: 4294967295","expected":null,"actual":null}
+{"family":"incon","id":"neg_inflate_bound","status":"PASS","detail":"bounded: Cannot create a Buffer larger than 1024 bytes","expected":null,"actual":null}
 {"family":"incon","id":"deb_optional_sample","status":"PASS","detail":"separate source (no gen-2 alignment claim): deb sha=22aff03c4b26 member=65853B 37 sections/3554 entries","expected":null,"actual":null}

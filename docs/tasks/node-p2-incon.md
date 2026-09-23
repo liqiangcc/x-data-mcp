@@ -3,9 +3,9 @@
 任务：NM-024（agent-coordination/node-migration）。日期：2026-09-23。
 基线：`f94b5e79c7601fc5c009e7a1e710fec6894f1a3f`（`migration/node-devin`）。Node v20.19.2。
 关联：Epic #271；catalog contract v1。来源：`src/catalog_tdx/incon.rs`（`parse` + `code_level` + `research_level2` + `section_map`）。
-证据：`evidence/node-migration/p2/incon/`（probe-results.jsonl 54 行全 PASS、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
+证据：`evidence/node-migration/p2/incon/`（probe-results.jsonl 58 行全 PASS、rust-oracle.jsonl、results.json、SHA256SUMS、README）。
 
-**结果：54/54 PASS / 0 FAIL —— 合成边界 + 真实字节（gen-2 official-gbbq.zip!zhb.zip!incon.dat）全节/条目摘要逐位一致。**
+**结果：58/58 PASS / 0 FAIL —— 合成边界 + 真实字节（gen-2 official-gbbq.zip!zhb.zip!incon.dat）全节/条目摘要逐位一致。**
 
 ## ⚠ retained member 来源修正（REVIEW-NM-024）
 
@@ -43,6 +43,7 @@
 | 类型边界 | 3（string/null 拒 + Uint8Array 收） | PASS |
 | 真实字节（gen-2） | 10（外层 manifest sha + zhb sha + member sha + 41 节/3662 条目摘要 + 6 secmap + first-match） | PASS |
 | 分离样本（deb） | 1（来源标记，无对齐声明） | PASS |
+| 负向验证（R3） | 4+2（CD 签名/非法 method/超大声明/inflate 上限拒绝 + outer/member sha selftest 退出 1） | PASS |
 
 ## 4. 范围边界
 
