@@ -1,0 +1,46 @@
+{
+  "task_id": "NM-020",
+  "baseline_sha": "fa004a093aa727c65d4e15abcc9e759d0e21f646",
+  "source_ported": "src/dbf.rs::parse + DbfRecord::field_bytes",
+  "rust_oracle": "rust-oracle.jsonl — 19 synthetic cases + retained member digest/field rows (live rustc 1.98.1 + x_data_mcp rlib)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/parsers/dbf_file.mjs (pure JS, zero deps)"
+  },
+  "retained_member": {
+    "zip": "official-base.zip sha256 dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6 (MANIFEST-verified)",
+    "member": "base.dbf 4,270,189B sha256 6e6480bbefcfa4145f1214e586457862f144dc5a563f14a285021e5e3ebcc770",
+    "parsed": "version 0x03, 8,875 records, 40 fields, header_length 1313, record_length 481, code_page 0x7a",
+    "records_sha256": "ff2fba6ddbf6c15225c648ac271ad85b4b00ba9d1245f7f4ddfa1f255ceea71c",
+    "fields_sha256": "a26db4456abd6723b334f62bc2c7a... (see rust-oracle.jsonl)"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/dbf_file_probe.mjs .",
+    "exit": 0,
+    "cases": 68,
+    "totals": {
+      "pass": 68,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "synthetic_oracle": 19,
+      "typed_boundary": 5,
+      "field_bytes": 1,
+      "manifest+extract": 2,
+      "base_member": 1,
+      "base_field_bytes": 40
+    }
+  },
+  "semantics_mirrored": [
+    "version gate {0x03,0x83,0x30,0x31,0x32,0x43,0x63}; error precedence: HeaderTruncated(len<32) -> UnsupportedVersion -> InvalidHeaderLength(<33) -> InvalidRecordLength(<1) -> HeaderTruncated(<header_end) -> descriptor terminator 0x0d -> descriptor loop -> ZeroLengthField -> FieldsExceedRecord -> body truncation",
+    "field names: bytes[..NUL|11] via Rust-equivalent from_utf8_lossy (per-sequence U+FFFD, error_len resync — NOT WHATWG TextDecoder)",
+    "sum(field lengths)+1 <= record_length; vendor tail preserved in raw",
+    "surplus trailing bytes after body allowed; records = fresh copies with deletion marker",
+    "error text verbatim; typed boundary: only Buffer/Uint8Array"
+  ],
+  "out_of_scope": "code-page/business decoding, catalog mapping, DB/services",
+  "limitations": [
+    "declared record_count drives allocation AFTER expected-length check (u32 max 4G * rlen — Number.isSafeInteger guard equivalent to RecordCountOverflow)"
+  ]
+}

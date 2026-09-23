@@ -1,0 +1,68 @@
+{"family":"dbf_file","id":"zero_fields_zero_records","status":"PASS","detail":null,"expected":{"code_page":87,"fields":[],"header_length":33,"last_update":[125,9,14],"record_count":0,"record_length":1,"records":0,"version":3},"actual":{"code_page":87,"fields":[],"header_length":33,"last_update":[125,9,14],"record_count":0,"record_length":1,"records":0,"version":3}}
+{"family":"dbf_file","id":"one_field_zero_records","status":"PASS","detail":null,"expected":{"code_page":87,"fields":[{"decimals":0,"length":10,"name":"CODE","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":0,"record_length":11,"records":0,"version":3},"actual":{"code_page":87,"fields":[{"decimals":0,"length":10,"name":"CODE","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":0,"record_length":11,"records":0,"version":3}}
+{"family":"dbf_file","id":"two_fields_one_record","status":"PASS","detail":null,"expected":{"code_page":87,"fields":[{"decimals":0,"length":6,"name":"CODE","type":67},{"decimals":2,"length":8,"name":"PRICE","type":78}],"header_length":97,"last_update":[125,9,14],"record_count":1,"record_length":15,"records":1,"version":131},"actual":{"code_page":87,"fields":[{"decimals":0,"length":6,"name":"CODE","type":67},{"decimals":2,"length":8,"name":"PRICE","type":78}],"header_length":97,"last_update":[125,9,14],"record_count":1,"record_length":15,"records":1,"version":131}}
+{"family":"dbf_file","id":"deleted_marker","status":"PASS","detail":null,"expected":{"code_page":87,"fields":[{"decimals":0,"length":4,"name":"X","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":2,"record_length":5,"records":2,"version":3},"actual":{"code_page":87,"fields":[{"decimals":0,"length":4,"name":"X","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":2,"record_length":5,"records":2,"version":3}}
+{"family":"dbf_file","id":"vendor_tail","status":"PASS","detail":null,"expected":{"code_page":87,"fields":[{"decimals":0,"length":2,"name":"A","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":1,"record_length":8,"records":1,"version":48},"actual":{"code_page":87,"fields":[{"decimals":0,"length":2,"name":"A","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":1,"record_length":8,"records":1,"version":48}}
+{"family":"dbf_file","id":"unsupported_version","status":"PASS","detail":null,"expected":"unsupported DBF version 0x02","actual":"unsupported DBF version 0x02"}
+{"family":"dbf_file","id":"short_file","status":"PASS","detail":null,"expected":"DBF header is truncated: 3 bytes","actual":"DBF header is truncated: 3 bytes"}
+{"family":"dbf_file","id":"empty_file","status":"PASS","detail":null,"expected":"DBF header is truncated: 0 bytes","actual":"DBF header is truncated: 0 bytes"}
+{"family":"dbf_file","id":"header_len_too_small","status":"PASS","detail":null,"expected":"DBF header length 20 is smaller than field descriptors 33","actual":"DBF header length 20 is smaller than field descriptors 33"}
+{"family":"dbf_file","id":"record_len_zero","status":"PASS","detail":null,"expected":"DBF record length must include deletion marker","actual":"DBF record length must include deletion marker"}
+{"family":"dbf_file","id":"header_beyond_file","status":"PASS","detail":null,"expected":"DBF header is truncated: 65 bytes","actual":"DBF header is truncated: 65 bytes"}
+{"family":"dbf_file","id":"missing_terminator","status":"PASS","detail":null,"expected":"DBF field descriptor area is truncated","actual":"DBF field descriptor area is truncated"}
+{"family":"dbf_file","id":"zero_length_field","status":"PASS","detail":null,"expected":"DBF field 0 has zero length","actual":"DBF field 0 has zero length"}
+{"family":"dbf_file","id":"fields_exceed_record","status":"PASS","detail":null,"expected":"DBF fields require 6 bytes but record length is 3","actual":"DBF fields require 6 bytes but record length is 3"}
+{"family":"dbf_file","id":"body_truncated","status":"PASS","detail":null,"expected":"DBF body is truncated: expected 68 bytes, got 67","actual":"DBF body is truncated: expected 68 bytes, got 67"}
+{"family":"dbf_file","id":"surplus_tail_ok","status":"PASS","detail":null,"expected":{"code_page":87,"fields":[{"decimals":0,"length":2,"name":"A","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":1,"record_length":3,"records":1,"version":3},"actual":{"code_page":87,"fields":[{"decimals":0,"length":2,"name":"A","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":1,"record_length":3,"records":1,"version":3}}
+{"family":"dbf_file","id":"descriptor_ragged","status":"PASS","detail":null,"expected":"DBF field descriptor area is truncated","actual":"DBF field descriptor area is truncated"}
+{"family":"dbf_file","id":"utf8_lossy_name","status":"PASS","detail":null,"expected":{"code_page":87,"fields":[{"decimals":0,"length":3,"name":"��","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":0,"record_length":4,"records":0,"version":3},"actual":{"code_page":87,"fields":[{"decimals":0,"length":3,"name":"��","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":0,"record_length":4,"records":0,"version":3}}
+{"family":"dbf_file","id":"name_no_nul_11","status":"PASS","detail":null,"expected":{"code_page":87,"fields":[{"decimals":0,"length":3,"name":"ABCDEFGHIJK","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":0,"record_length":4,"records":0,"version":3},"actual":{"code_page":87,"fields":[{"decimals":0,"length":3,"name":"ABCDEFGHIJK","type":67}],"header_length":65,"last_update":[125,9,14],"record_count":0,"record_length":4,"records":0,"version":3}}
+{"family":"dbf_file","id":"reject_string","status":"PASS","detail":"invalid_input: DBF input must be a Buffer or Uint8Array","expected":null,"actual":null}
+{"family":"dbf_file","id":"reject_array","status":"PASS","detail":"invalid_input: DBF input must be a Buffer or Uint8Array","expected":null,"actual":null}
+{"family":"dbf_file","id":"reject_null","status":"PASS","detail":"invalid_input: DBF input must be a Buffer or Uint8Array","expected":null,"actual":null}
+{"family":"dbf_file","id":"reject_number","status":"PASS","detail":"invalid_input: DBF input must be a Buffer or Uint8Array","expected":null,"actual":null}
+{"family":"dbf_file","id":"accept_uint8array","status":"PASS","detail":null,"expected":null,"actual":null}
+{"family":"dbf_file","id":"field_bytes_slices","status":"PASS","detail":null,"expected":["363030303036","3132332e34350000",null,null],"actual":["363030303036","3132332e34350000",null,null]}
+{"family":"dbf_file","id":"manifest_zip","status":"PASS","detail":"official-base.zip sha256","expected":null,"actual":null}
+{"family":"dbf_file","id":"member_extract","status":"PASS","detail":"4270189B sha256=6e6480bbefcfa4145f1214e586457862f144dc5a563f14a285021e5e3ebcc770","expected":null,"actual":null}
+{"family":"dbf_file","id":"base_member","status":"PASS","detail":"v3 recs=8875 hdr=1313 rlen=481 cp=122 fields=40","expected":{"records_sha256":"ff2fba6ddbf6c15225c648ac271ad85b4b00ba9d1245f7f4ddfa1f255ceea71c","fields_sha256":"a26db4456abd6723b334f62bc2c7abe09a93ef6d0afb9ec81da60e1a9a30aa8f"},"actual":null}
+{"family":"dbf_file","id":"base_fb_0","status":"PASS","detail":null,"expected":"30","actual":"30"}
+{"family":"dbf_file","id":"base_fb_1","status":"PASS","detail":null,"expected":"303030303031","actual":"303030303031"}
+{"family":"dbf_file","id":"base_fb_2","status":"PASS","detail":null,"expected":"3230323630383135","actual":"3230323630383135"}
+{"family":"dbf_file","id":"base_fb_3","status":"PASS","detail":null,"expected":"20202020313934303539312e3838","actual":"20202020313934303539312e3838"}
+{"family":"dbf_file","id":"base_fb_4","status":"PASS","detail":null,"expected":"20202020202020313936362e3030","actual":"20202020202020313936362e3030"}
+{"family":"dbf_file","id":"base_fb_5","status":"PASS","detail":null,"expected":"20202032343837303030302e3030","actual":"20202032343837303030302e3030"}
+{"family":"dbf_file","id":"base_fb_6","status":"PASS","detail":null,"expected":"20202036393338353030302e3030","actual":"20202036393338353030302e3030"}
+{"family":"dbf_file","id":"base_fb_7","status":"PASS","detail":null,"expected":"20202020202020202020302e3030","actual":"20202020202020202020302e3030"}
+{"family":"dbf_file","id":"base_fb_8","status":"PASS","detail":null,"expected":"20202020202020202020302e3030","actual":"20202020202020202020302e3030"}
+{"family":"dbf_file","id":"base_fb_9","status":"PASS","detail":null,"expected":"20202020313934303536382e3530","actual":"20202020313934303536382e3530"}
+{"family":"dbf_file","id":"base_fb_10","status":"PASS","detail":null,"expected":"20202020202020202020312e3234","actual":"20202020202020202020312e3234"}
+{"family":"dbf_file","id":"base_fb_11","status":"PASS","detail":null,"expected":"0000000000000000000000000000","actual":"0000000000000000000000000000"}
+{"family":"dbf_file","id":"base_fb_12","status":"PASS","detail":null,"expected":"2020363032383738353135322e30","actual":"2020363032383738353135322e30"}
+{"family":"dbf_file","id":"base_fb_13","status":"PASS","detail":null,"expected":"2020202020202020202020302e30","actual":"2020202020202020202020302e30"}
+{"family":"dbf_file","id":"base_fb_14","status":"PASS","detail":null,"expected":"2020202031303436343030302e30","actual":"2020202031303436343030302e30"}
+{"family":"dbf_file","id":"base_fb_15","status":"PASS","detail":null,"expected":"2020202020353431353030302e30","actual":"2020202020353431353030302e30"}
+{"family":"dbf_file","id":"base_fb_16","status":"PASS","detail":null,"expected":"2020202020203435303731322e30","actual":"2020202020203435303731322e30"}
+{"family":"dbf_file","id":"base_fb_17","status":"PASS","detail":null,"expected":"2020202020202020202020302e30","actual":"2020202020202020202020302e30"}
+{"family":"dbf_file","id":"base_fb_18","status":"PASS","detail":null,"expected":"2020202020202020202020302e30","actual":"2020202020202020202020302e30"}
+{"family":"dbf_file","id":"base_fb_19","status":"PASS","detail":null,"expected":"2020202038303432383030302e30","actual":"2020202038303432383030302e30"}
+{"family":"dbf_file","id":"base_fb_20","status":"PASS","detail":null,"expected":"2020203534383231343031362e30","actual":"2020203534383231343031362e30"}
+{"family":"dbf_file","id":"base_fb_21","status":"PASS","detail":null,"expected":"2020202037303631373030302e30","actual":"2020202037303631373030302e30"}
+{"family":"dbf_file","id":"base_fb_22","status":"PASS","detail":null,"expected":"2020202033393738393030302e30","actual":"2020202033393738393030302e30"}
+{"family":"dbf_file","id":"base_fb_23","status":"PASS","detail":null,"expected":"2020202020202020202020302e30","actual":"2020202020202020202020302e30"}
+{"family":"dbf_file","id":"base_fb_24","status":"PASS","detail":null,"expected":"2020202033303832383030302e30","actual":"2020202033303832383030302e30"}
+{"family":"dbf_file","id":"base_fb_25","status":"PASS","detail":null,"expected":"2020202031313532363030302e30","actual":"2020202031313532363030302e30"}
+{"family":"dbf_file","id":"base_fb_26","status":"PASS","detail":null,"expected":"2020203231353031323030302e30","actual":"2020203231353031323030302e30"}
+{"family":"dbf_file","id":"base_fb_27","status":"PASS","detail":null,"expected":"2020202d35313439353030302e30","actual":"2020202d35313439353030302e30"}
+{"family":"dbf_file","id":"base_fb_28","status":"PASS","detail":null,"expected":"2020202020202020202020302e30","actual":"2020202020202020202020302e30"}
+{"family":"dbf_file","id":"base_fb_29","status":"PASS","detail":null,"expected":"2020202033303739353030302e30","actual":"2020202033303739353030302e30"}
+{"family":"dbf_file","id":"base_fb_30","status":"PASS","detail":null,"expected":"2020202032353639363030302e30","actual":"2020202032353639363030302e30"}
+{"family":"dbf_file","id":"base_fb_31","status":"PASS","detail":null,"expected":"2020202032353639363030302e30","actual":"2020202032353639363030302e30"}
+{"family":"dbf_file","id":"base_fb_32","status":"PASS","detail":null,"expected":"2020203238373835363939322e30","actual":"2020203238373835363939322e30"}
+{"family":"dbf_file","id":"base_fb_33","status":"PASS","detail":null,"expected":"202020202020202032342e313330","actual":"202020202020202032342e313330"}
+{"family":"dbf_file","id":"base_fb_34","status":"PASS","detail":null,"expected":"203138","actual":"203138"}
+{"family":"dbf_file","id":"base_fb_35","status":"PASS","detail":null,"expected":"20202031","actual":"20202031"}
+{"family":"dbf_file","id":"base_fb_36","status":"PASS","detail":null,"expected":"2036","actual":"2036"}
+{"family":"dbf_file","id":"base_fb_37","status":"PASS","detail":null,"expected":"3139393130343033","actual":"3139393130343033"}
+{"family":"dbf_file","id":"base_fb_38","status":"PASS","detail":null,"expected":"203132383731","actual":"203132383731"}
+{"family":"dbf_file","id":"base_fb_39","status":"PASS","detail":null,"expected":"2020343530373132","actual":"2020343530373132"}

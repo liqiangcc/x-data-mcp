@@ -1,0 +1,60 @@
+{"id":"zero_fields_zero_records","status":"ok","version":3,"record_count":0,"header_length":33,"record_length":1,"code_page":87,"last_update":[125,9,14],"fields":[],"records":0}
+{"id":"one_field_zero_records","status":"ok","version":3,"record_count":0,"header_length":65,"record_length":11,"code_page":87,"last_update":[125,9,14],"fields":[{"decimals":0,"length":10,"name":"CODE","type":67}],"records":0}
+{"id":"two_fields_one_record","status":"ok","version":131,"record_count":1,"header_length":97,"record_length":15,"code_page":87,"last_update":[125,9,14],"fields":[{"decimals":0,"length":6,"name":"CODE","type":67},{"decimals":2,"length":8,"name":"PRICE","type":78}],"records":1}
+{"id":"deleted_marker","status":"ok","version":3,"record_count":2,"header_length":65,"record_length":5,"code_page":87,"last_update":[125,9,14],"fields":[{"decimals":0,"length":4,"name":"X","type":67}],"records":2}
+{"id":"vendor_tail","status":"ok","version":48,"record_count":1,"header_length":65,"record_length":8,"code_page":87,"last_update":[125,9,14],"fields":[{"decimals":0,"length":2,"name":"A","type":67}],"records":1}
+{"id":"unsupported_version","status":"error","error":"unsupported DBF version 0x02"}
+{"id":"short_file","status":"error","error":"DBF header is truncated: 3 bytes"}
+{"id":"empty_file","status":"error","error":"DBF header is truncated: 0 bytes"}
+{"id":"header_len_too_small","status":"error","error":"DBF header length 20 is smaller than field descriptors 33"}
+{"id":"record_len_zero","status":"error","error":"DBF record length must include deletion marker"}
+{"id":"header_beyond_file","status":"error","error":"DBF header is truncated: 65 bytes"}
+{"id":"missing_terminator","status":"error","error":"DBF field descriptor area is truncated"}
+{"id":"zero_length_field","status":"error","error":"DBF field 0 has zero length"}
+{"id":"fields_exceed_record","status":"error","error":"DBF fields require 6 bytes but record length is 3"}
+{"id":"body_truncated","status":"error","error":"DBF body is truncated: expected 68 bytes, got 67"}
+{"id":"surplus_tail_ok","status":"ok","version":3,"record_count":1,"header_length":65,"record_length":3,"code_page":87,"last_update":[125,9,14],"fields":[{"decimals":0,"length":2,"name":"A","type":67}],"records":1}
+{"id":"descriptor_ragged","status":"error","error":"DBF field descriptor area is truncated"}
+{"id":"utf8_lossy_name","status":"ok","version":3,"record_count":0,"header_length":65,"record_length":4,"code_page":87,"last_update":[125,9,14],"fields":[{"decimals":0,"length":3,"name":"��","type":67}],"records":0}
+{"id":"name_no_nul_11","status":"ok","version":3,"record_count":0,"header_length":65,"record_length":4,"code_page":87,"last_update":[125,9,14],"fields":[{"decimals":0,"length":3,"name":"ABCDEFGHIJK","type":67}],"records":0}
+{"id":"base_member","status":"ok","version":3,"record_count":8875,"header_length":1313,"record_length":481,"code_page":122,"fields":40,"records":8875,"records_sha256":"ff2fba6ddbf6c15225c648ac271ad85b4b00ba9d1245f7f4ddfa1f255ceea71c","fields_sha256":"a26db4456abd6723b334f62bc2c7abe09a93ef6d0afb9ec81da60e1a9a30aa8f"}
+{"id":"base_fb_0","status":"ok","hex":"30"}
+{"id":"base_fb_1","status":"ok","hex":"303030303031"}
+{"id":"base_fb_2","status":"ok","hex":"3230323630383135"}
+{"id":"base_fb_3","status":"ok","hex":"20202020313934303539312e3838"}
+{"id":"base_fb_4","status":"ok","hex":"20202020202020313936362e3030"}
+{"id":"base_fb_5","status":"ok","hex":"20202032343837303030302e3030"}
+{"id":"base_fb_6","status":"ok","hex":"20202036393338353030302e3030"}
+{"id":"base_fb_7","status":"ok","hex":"20202020202020202020302e3030"}
+{"id":"base_fb_8","status":"ok","hex":"20202020202020202020302e3030"}
+{"id":"base_fb_9","status":"ok","hex":"20202020313934303536382e3530"}
+{"id":"base_fb_10","status":"ok","hex":"20202020202020202020312e3234"}
+{"id":"base_fb_11","status":"ok","hex":"0000000000000000000000000000"}
+{"id":"base_fb_12","status":"ok","hex":"2020363032383738353135322e30"}
+{"id":"base_fb_13","status":"ok","hex":"2020202020202020202020302e30"}
+{"id":"base_fb_14","status":"ok","hex":"2020202031303436343030302e30"}
+{"id":"base_fb_15","status":"ok","hex":"2020202020353431353030302e30"}
+{"id":"base_fb_16","status":"ok","hex":"2020202020203435303731322e30"}
+{"id":"base_fb_17","status":"ok","hex":"2020202020202020202020302e30"}
+{"id":"base_fb_18","status":"ok","hex":"2020202020202020202020302e30"}
+{"id":"base_fb_19","status":"ok","hex":"2020202038303432383030302e30"}
+{"id":"base_fb_20","status":"ok","hex":"2020203534383231343031362e30"}
+{"id":"base_fb_21","status":"ok","hex":"2020202037303631373030302e30"}
+{"id":"base_fb_22","status":"ok","hex":"2020202033393738393030302e30"}
+{"id":"base_fb_23","status":"ok","hex":"2020202020202020202020302e30"}
+{"id":"base_fb_24","status":"ok","hex":"2020202033303832383030302e30"}
+{"id":"base_fb_25","status":"ok","hex":"2020202031313532363030302e30"}
+{"id":"base_fb_26","status":"ok","hex":"2020203231353031323030302e30"}
+{"id":"base_fb_27","status":"ok","hex":"2020202d35313439353030302e30"}
+{"id":"base_fb_28","status":"ok","hex":"2020202020202020202020302e30"}
+{"id":"base_fb_29","status":"ok","hex":"2020202033303739353030302e30"}
+{"id":"base_fb_30","status":"ok","hex":"2020202032353639363030302e30"}
+{"id":"base_fb_31","status":"ok","hex":"2020202032353639363030302e30"}
+{"id":"base_fb_32","status":"ok","hex":"2020203238373835363939322e30"}
+{"id":"base_fb_33","status":"ok","hex":"202020202020202032342e313330"}
+{"id":"base_fb_34","status":"ok","hex":"203138"}
+{"id":"base_fb_35","status":"ok","hex":"20202031"}
+{"id":"base_fb_36","status":"ok","hex":"2036"}
+{"id":"base_fb_37","status":"ok","hex":"3139393130343033"}
+{"id":"base_fb_38","status":"ok","hex":"203132383731"}
+{"id":"base_fb_39","status":"ok","hex":"2020343530373132"}
