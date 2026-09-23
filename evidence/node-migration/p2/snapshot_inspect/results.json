@@ -1,0 +1,58 @@
+{
+  "task_id": "NM-026",
+  "baseline_sha": "6c8718d48f3580688e6aa3ee258621cf55fdacb7",
+  "source_ported": "src/snapshot.rs::inspect (read-only governance primitive)",
+  "rust_oracle": "rust-oracle.jsonl — 38 rows: 32 error + 6 ok incl. real_gen2 full Inspection (live rustc 1.98.1 + x_data_mcp rlib)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/governance/snapshot.mjs (pure; streaming 64KiB hashing)"
+  },
+  "real_gen2": {
+    "manifest": "evidence/issue-3-acceptance-run/snapshot-manifest.json (committed)",
+    "manifest_sha256": "b8a0d7b9aec1a270549d1e53ba26c0ab04842a23c05d1d1f7e75dd44a9f444d3",
+    "artifacts": {
+      "base.zip": "dcdf6b49... 16,411,232B",
+      "gbbq.zip": "daad6290... 6,358,077B",
+      "hsjday.zip": "c82f852a... 549,387,306B"
+    },
+    "exposure": "private root via same-fs hardlinks (sources read-only, cleaned after)",
+    "inspection": "byte_integrity FILE_BYTES_VERIFIED; all NOT_VERIFIED/NOT_AUTHENTICATED preserved; production_ready false; roles sorted [base_industry,day,gbbq]",
+    "bounded_measurement": {
+      "elapsed_ms": 511.7,
+      "rss_delta_mib": 1.1,
+      "note": "549MB artifact hashed via 64KiB streaming — RSS delta ~1MiB confirms no whole-file load; bounded verification only, NO performance claim"
+    }
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/snapshot_probe.mjs .",
+    "exit": 0,
+    "cases": 45,
+    "totals": {
+      "pass": 45,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "synthetic_oracle": 37,
+      "typed_boundary": 3,
+      "real_retained_sha": 3,
+      "real_gen2_inspection": 1,
+      "realroot_cleanup": 1
+    }
+  },
+  "semantics_mirrored": [
+    "manifest >1MiB rejects BEFORE parse; deny_unknown_fields + field types -> json category",
+    "schema/count/dup-role-path/path-components/filename/URL/interval/hash-size ordered checks -> invalid verbatim",
+    "URL: scheme strip + split_once('/'), no whitespace, host no @:?#, role-specific host+exact path",
+    "Path::components normalization: interior '.' and repeat separators collapse, leading './' CurDir + '..' reject; dup-path component equality",
+    "canonicalize root then artifact; resolved-outside-root / nonregular / io errors; streaming sha256+size -> Mismatch(PascalRole)",
+    "role sort base_industry<day<gbbq; manifest_sha256 over raw bytes; fixed limitation strings verbatim",
+    "NO success Inspection after any failed check; probe exits nonzero on FAIL"
+  ],
+  "node_specific_deltas": [
+    "Json error text: Node message lacks serde expected-list + line/column (category preserved)",
+    "Io error text: Node errno message vs Rust io::Error Display (category preserved)",
+    "timestamps reserialized canonical RFC3339 Z (sub-ms inputs truncate at ms — documented)"
+  ],
+  "out_of_scope": "inspect_snapshot CLI, source executor, download, activation, SQLite, services"
+}
