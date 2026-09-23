@@ -1,0 +1,37 @@
+{
+  "task_id": "NM-012",
+  "baseline_sha": "b6e710febb780e4d982916de36d86e3c3215368f",
+  "source_ported": "src/official_market.rs:396-398 — Decimal::from_str(&f64::from(f32::from_bits(bits)).to_string()).ok()",
+  "golden_oracle": "evidence/node-migration/p0/numeric/vectors.jsonl amount_f32_projection (6 rows, accepted)",
+  "rust_verification": "boundary expectations produced by rustc 1.98.1 + real rust_decimal rlib (target/debug/deps), run live on this box",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/codecs/amount_f32.mjs (pure JS, zero deps)"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/amount_f32_probe.mjs .",
+    "exit": 0,
+    "cases": 25,
+    "totals": {
+      "pass": 25,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "golden": 6,
+      "rust_verified_boundary": 12,
+      "input_validation_reject": 7
+    }
+  },
+  "semantics_mirrored": [
+    "u32 bits -> f32 reinterpret -> exact f64 widen",
+    "Rust f64 Display = shortest round-trip positional (JS String digit-identical; e-notation expanded at >=1e21/<1e-6)",
+    "Decimal::from_str: scale>28 rounds half-up at 28dp; mantissa>2^96-1 -> Err->null; NaN/inf -> null; -0 -> '0'",
+    "contract output = Decimal::to_string with scale preserved (underflow -> '0.'+28 zeros)",
+    "fail-closed input: non-uint32 -> AmountF32Error throw"
+  ],
+  "out_of_scope": "Decimal arithmetic library, QFQ/yearly, service wiring",
+  "limitations": [
+    "semantic port covers rust_decimal from_str/to_string for f64-Display inputs (<=17 significant digits); not a general decimal library"
+  ]
+}
