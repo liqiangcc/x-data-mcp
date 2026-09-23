@@ -1,0 +1,41 @@
+{
+  "task_id": "NM-014",
+  "baseline_sha": "6344d667f1610693dd79b7b8d7895c8ace1aff6c",
+  "source_ported": "src/qfq.rs::forward_adjust (+ cent/raw_price/ymd helpers)",
+  "golden_oracle": "evidence/node-migration/p0/numeric/vectors.jsonl qfq_forward_adjust (3 rows, accepted)",
+  "rust_oracle": "rust-oracle.jsonl — 8 edge cases generated live by rustc 1.98.1 + x_data_mcp rlib on this box",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/algorithms/qfq_forward.mjs + qfq_affine.mjs (pure JS+BigInt, zero deps)"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/qfq_forward_probe.mjs .",
+    "exit": 0,
+    "cases": 15,
+    "totals": {
+      "pass": 15,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "golden": 3,
+      "rust_oracle_edges": 8,
+      "fail_closed_structural": 4
+    }
+  },
+  "semantics_mirrored": [
+    "factors normalized BEFORE sort; fail-closed NonFiniteFactor verbatim text + index",
+    "stable sort by date_raw (duplicate dates keep input order — affects compose order)",
+    "events strictly after bar date (event_date > bar_date) applied oldest->newest",
+    "suffix-memoized compose_chain per distinct boundary (identical arithmetic to per-bar fold)",
+    "out-of-order bars handled by full partition fallback",
+    "prices = round_dp(chain.apply(cents/100), 2, MidpointAwayFromZero) -> decimal to_string",
+    "chain_event_count = strictly-later event count; raw fields verbatim"
+  ],
+  "output_shape": "{amount_float32_bits,chain_event_count,close,date,high,low,open,r7_raw,volume_raw} — QfqBar fields; prices are Decimal to_string contract strings",
+  "out_of_scope": "GBBQ byte decrypt, EventDayMark, yearly, service wiring, DB",
+  "limitations": [
+    "unsorted_events edge: stable-sort ordering of equal dates mirrored (Rust sort_by_key stable)",
+    "bars passed as day_file.parse records; caller enforces category filtering as in Rust"
+  ]
+}
