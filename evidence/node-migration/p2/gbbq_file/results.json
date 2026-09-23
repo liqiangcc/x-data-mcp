@@ -1,0 +1,45 @@
+{
+  "task_id": "NM-015",
+  "baseline_sha": "ed61961ef57341a3fa6f34f8f271a954d747100e",
+  "source_ported": "src/gbbq.rs::parse + RawFile/Error (HeaderTruncated, LengthMismatch, RecordCountOverflow)",
+  "rust_oracle": "rust-oracle.jsonl — 14 cases generated live by rustc 1.98.1 + x_data_mcp rlib on this box (all error texts captured verbatim)",
+  "retained_input_probe": {
+    "path": "/home/box/retained-inputs/official-gbbq-member (read-only)",
+    "sha256": "4a3e9b862247a8a3fec406cc25b9a5a6ee3303f740780822519c99decaa09d77",
+    "manifest_match": true,
+    "record_count": 205776,
+    "bytes": 5966087
+  },
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/parsers/gbbq_file.mjs (pure JS, zero deps)"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/gbbq_file_probe.mjs .",
+    "exit": 0,
+    "cases": 21,
+    "totals": {
+      "pass": 21,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "rust_oracle": 14,
+      "input_type_rejects": 5,
+      "no_alloc_check": 1,
+      "retained_member": 1
+    }
+  },
+  "semantics_mirrored": [
+    "typed boundary: only Buffer/Uint8Array accepted (REV-NM-014 condition), no coercion",
+    "header <4 -> 'GBBQ file is shorter than its count header: N bytes' verbatim",
+    "expected=count*29+4 checked before any allocation; mismatch text verbatim",
+    "record_count u32 LE; huge declared count allocates nothing (length check first)",
+    "records preserved verbatim as fresh per-record copies (Rust to_vec ownership)",
+    "RecordCountOverflow branch kept for parity (unreachable: u32*29+4 fits safe integer)"
+  ],
+  "out_of_scope": "record decryption/interpretation (decrypt_record/decode_events), categories, factors, service wiring",
+  "limitations": [
+    "retained probe is structural only — record content is still encrypted bytes, uninterpreted per task scope"
+  ]
+}

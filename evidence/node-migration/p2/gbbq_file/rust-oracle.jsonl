@@ -1,0 +1,14 @@
+{"id":"header_0_bytes","status":"error","error":"GBBQ file is shorter than its count header: 0 bytes"}
+{"id":"header_1_byte","status":"error","error":"GBBQ file is shorter than its count header: 1 bytes"}
+{"id":"header_2_bytes","status":"error","error":"GBBQ file is shorter than its count header: 2 bytes"}
+{"id":"header_3_bytes","status":"error","error":"GBBQ file is shorter than its count header: 3 bytes"}
+{"id":"empty_file_valid","status":"ok","record_count":0,"records":[]}
+{"id":"one_record","status":"ok","record_count":1,"records":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}
+{"id":"three_records","status":"ok","record_count":3,"records":["1111111111111111111111111111111111111111111111111111111111","2222222222222222222222222222222222222222222222222222222222","3333333333333333333333333333333333333333333333333333333333"]}
+{"id":"body_short_28","status":"error","error":"GBBQ length 32 does not equal 4 + count(1) * 29 = 33"}
+{"id":"body_surplus_30","status":"error","error":"GBBQ length 34 does not equal 4 + count(1) * 29 = 33"}
+{"id":"count2_body1","status":"error","error":"GBBQ length 33 does not equal 4 + count(2) * 29 = 62"}
+{"id":"count0_with_body","status":"error","error":"GBBQ length 33 does not equal 4 + count(0) * 29 = 4"}
+{"id":"huge_count_short","status":"error","error":"GBBQ length 5 does not equal 4 + count(4294967295) * 29 = 124554051559"}
+{"id":"count_0x80000000","status":"error","error":"GBBQ length 33 does not equal 4 + count(2147483648) * 29 = 62277025796"}
+{"id":"record_bytes_verbatim","status":"ok","record_count":1,"records":["0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d"]}
