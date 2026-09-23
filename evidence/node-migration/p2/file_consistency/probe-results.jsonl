@@ -39,3 +39,7 @@
 {"family":"file_consistency","id":"reject_role_toString","status":"PASS","detail":"ConsistencyInputError: files[0].role invalid","expected":null,"actual":null}
 {"family":"file_consistency","id":"reject_integrity_hasOwnProperty","status":"PASS","detail":"ConsistencyInputError: files[0].byte_integrity invalid","expected":null,"actual":null}
 {"family":"file_consistency","id":"reject_binding_constructor","status":"PASS","detail":"ConsistencyInputError: member_bindings key constructor invalid","expected":null,"actual":null}
+{"family":"file_consistency","id":"reject_url_lone_surrogate","status":"PASS","detail":"ConsistencyInputError: files[0].source_url must be a string","expected":null,"actual":null}
+{"family":"file_consistency","id":"reject_etag_lone_surrogate","status":"PASS","detail":"ConsistencyInputError: files[0].etag invalid","expected":null,"actual":null}
+{"family":"file_consistency","id":"reject_evidence_ref_surrogate","status":"PASS","detail":"ConsistencyInputError: compatibility.evidence_ref must be a string","expected":null,"actual":null}
+{"family":"file_consistency","id":"reject_binding_identity_surrogate","status":"PASS","detail":"ConsistencyInputError: member_bindings.day invalid","expected":null,"actual":null}

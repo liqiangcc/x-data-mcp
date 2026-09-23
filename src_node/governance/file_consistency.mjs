@@ -33,8 +33,11 @@ const CONFLICT_CODES = new Set([
 ]);
 
 const canonicalSha256 = (v) => /^[0-9a-f]{64}$/.test(v);
-const isStr = (v) => typeof v === "string";
-const isOptStr = (v) => v === null || typeof v === "string";
+// Rust String is always valid UTF-8; a JS string containing unpaired
+// UTF-16 surrogates has no Rust representation — reject at the boundary
+// (Buffer.from would silently lossy-replace).
+const isStr = (v) => typeof v === "string" && v.isWellFormed();
+const isOptStr = (v) => v === null || typeof v === "string" && v.isWellFormed();
 
 // Rust String Ord is UTF-8 bytewise (e.g. U+E000 < U+1F600); JS `<` is
 // UTF-16 code-unit order. Buffer.compare gives the Rust order.

@@ -7,7 +7,7 @@ matching URLs/dates/ETags never infer it.
 
 ## Contents
 
-- `probe-results.jsonl` — 41 rows, all PASS; probe exits nonzero on FAIL.
+- `probe-results.jsonl` — 45 rows, all PASS; probe exits nonzero on FAIL.
 - `rust-oracle.jsonl` — live `rustc 1.98.1` + `x_data_mcp` rlib: 29 cases
   (5 VERIFIED_COMPATIBLE / 14 NOT_VERIFIED / 9 CONFLICT); `real_131`
   decision is byte-identical to committed
@@ -53,3 +53,5 @@ NM-026 regression rerun: 72/72 PASS unchanged.
   proof.
 
 R1 additions (REVIEW-NM-027): null-prototype lookup tables + `Object.hasOwn` for role/integrity/binding keys (`constructor`/`toString`/`hasOwnProperty` reject — was accepted via prototype chain); UTF-8 bytewise `cmpStr` (Buffer.compare) for all ordered strings, evidence refs, reason keys — `dup_utf8_order` verified (U+E000 before U+1F600).
+
+R2 additions (REVIEW-NM-027 R1-review): all string fields (FileFact + CompatibilityEvidence incl. binding members) require `isWellFormed()` — unpaired UTF-16 surrogates reject at the typed boundary (Rust `String` cannot represent them; `Buffer.from` would lossy-replace). Supplementary characters (e.g. U+1F600) still accepted.

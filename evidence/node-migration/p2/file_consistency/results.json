@@ -1,6 +1,6 @@
 {
-  "task_id": "NM-027-R1",
-  "baseline_sha": "9b126f669028f67e12ea296fe8f32757d8a7e43c (R0) / aafc20a (initial)",
+  "task_id": "NM-027-R2",
+  "baseline_sha": "c3f19bbbfaeafe08069f6e1b5631271517770e05 (R1) / aafc20a (initial)",
   "source_ported": "src/file_consistency.rs::validate (pure decision)",
   "rust_oracle": "rust-oracle.jsonl — 29 cases (added dup_utf8_order: U+E000 sorts before U+1F600 per Rust String Ord)",
   "environment": {
@@ -27,16 +27,16 @@
   "probe": {
     "command": "node scripts/node_migration_p2/file_consistency_probe.mjs .",
     "exit": 0,
-    "cases": 41,
+    "cases": 45,
     "totals": {
-      "pass": 41,
+      "pass": 45,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
       "synthetic_oracle": 27,
       "real": 2,
-      "typed_boundary": 12
+      "typed_boundary": 16
     },
     "selftest": "node ... decision -> exit 1"
   },
@@ -45,7 +45,7 @@
     "noncanonical binding hash is IncompleteCompatibilityEvidence (checked before binding compare)"
   ],
   "out_of_scope": "proof creation/auth, generation activation, CLI/service, QFQ publish",
-  "review": "REVIEW-NM-027 R0 — two confirmed findings fixed: prototype-bearing `in` checks; UTF-16 vs UTF-8 string order",
+  "review": "REVIEW-NM-027 R1 — malformed UTF-16 (unpaired surrogate) boundary accepted; fixed",
   "r1_fixes": {
     "prototype_tables": "ROLE_IDX/BI_IDX now null-prototype; all role/integrity/binding-key checks use Object.hasOwn — 'constructor'/'toString'/'hasOwnProperty' reject (Lead reproduction: appended constructor-role fact -> ConsistencyInputError, was VERIFIED_COMPATIBLE)",
     "utf8_order": "cmpStr via Buffer.compare for every ordered string field + evidence_refs + reason keys (Rust String Ord = UTF-8 bytewise; U+E000 < U+1F600) — dup_utf8_order oracle verified"
@@ -53,5 +53,14 @@
   "node_specific_deltas": [
     "json/io-style message text only in typed-boundary errors",
     "none remaining on decision output — UTF-8 bytewise ordering now mirrors Rust String Ord exactly"
-  ]
+  ],
+  "r2_fixes": {
+    "well_formed_utf16": "isStr/isOptStr now require String.isWellFormed() — unpaired surrogates reject at the typed boundary for every FileFact and CompatibilityEvidence string field incl. binding members (Buffer.from would silently lossy-replace); valid supplementary chars still accepted (dup_utf8_order retains 😀)",
+    "oracle_cases": [
+      "reject_url_lone_surrogate (Lead reproduction on #131 input)",
+      "reject_etag_lone_surrogate",
+      "reject_evidence_ref_surrogate",
+      "reject_binding_identity_surrogate"
+    ]
+  }
 }

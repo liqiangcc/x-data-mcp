@@ -127,5 +127,14 @@ bnd("reject_role_constructor", () => validate({ files: [{ ...s[0], role: "constr
 bnd("reject_role_toString", () => validate({ files: [{ ...s[0], role: "toString" }], compatibility: null }));
 bnd("reject_integrity_hasOwnProperty", () => validate({ files: [{ ...s[0], byte_integrity: "hasOwnProperty" }], compatibility: null }));
 bnd("reject_binding_constructor", () => validate({ files: [], compatibility: { ...ev(), member_bindings: { base_industry: ev().member_bindings.base_industry, day: ev().member_bindings.day, gbbq: ev().member_bindings.gbbq, constructor: { sha256: H(1) } } } }));
+// R2: malformed UTF-16 (unpaired surrogates) — no Rust String equivalent
+bnd("reject_url_lone_surrogate", () => {
+  const inp = JSON.parse(readFileSync(join(ROOT, "evidence/issue-131-file-set-consistency/input.json"), "utf8"));
+  const files = [{ ...inp.files[0], source_url: "\ud800" }, ...inp.files.slice(1)];
+  validate({ files, compatibility: inp.compatibility }); });
+bnd("reject_etag_lone_surrogate", () => validate({ files: [{ ...s[0], etag: "x\udfff" }], compatibility: null }));
+bnd("reject_evidence_ref_surrogate", () => validate({ files: s3(), compatibility: { ...ev(), evidence_ref: "e\ud801" } }));
+bnd("reject_binding_identity_surrogate", () => { const p = ev(); p.member_bindings.day.source_identity = "\uda00x";
+  validate({ files: s3(), compatibility: p }); });
 
 process.exit(failures === 0 ? 0 : 1);
