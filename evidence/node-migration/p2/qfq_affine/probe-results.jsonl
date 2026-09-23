@@ -1,0 +1,37 @@
+{"family":"gbbq_factor_normalize","id":"tenth","status":"PASS","detail":null,"expected":"0.10","actual":"0.10"}
+{"family":"gbbq_factor_normalize","id":"round_up_1_005","status":"PASS","detail":null,"expected":"1.00","actual":"1.00"}
+{"family":"gbbq_factor_normalize","id":"exact_1_25","status":"PASS","detail":null,"expected":"1.25","actual":"1.25"}
+{"family":"gbbq_factor_normalize","id":"neg_small","status":"PASS","detail":null,"expected":"0.00","actual":"0.00"}
+{"family":"gbbq_factor_normalize","id":"nan","status":"PASS","detail":null,"expected":null,"actual":null}
+{"family":"gbbq_factor_normalize","id":"pos_inf","status":"PASS","detail":null,"expected":null,"actual":null}
+{"family":"qfq_affine","id":"event_transform","status":"PASS","detail":null,"expected":{"a":"0.9090909090909090909090909091","b":"0.2727272727272727272727272727"},"actual":{"a":"0.9090909090909090909090909091","b":"0.2727272727272727272727272727"}}
+{"family":"qfq_affine","id":"compose_chain_two_events","status":"PASS","detail":null,"expected":{"a":"0.7575757575757575757575757576","b":"0.1439393939393939393939393939"},"actual":{"a":"0.7575757575757575757575757576","b":"0.1439393939393939393939393939"}}
+{"family":"qfq_affine","id":"displayed_previous_close","status":"PASS","detail":null,"expected":"9.36","actual":"9.36"}
+{"family":"rust_oracle","id":"ev_all_zero","status":"PASS","detail":null,"expected":{"id":"ev_all_zero","a":"1","b":"0"},"actual":{"a":"1","b":"0"}}
+{"family":"rust_oracle","id":"ev_cash_only","status":"PASS","detail":null,"expected":{"id":"ev_cash_only","a":"1","b":"-0.10"},"actual":{"a":"1","b":"-0.10"}}
+{"family":"rust_oracle","id":"ev_terminating_denominator","status":"PASS","detail":null,"expected":{"id":"ev_terminating_denominator","a":"0.8","b":"-0.04"},"actual":{"a":"0.8","b":"-0.04"}}
+{"family":"rust_oracle","id":"ev_negative_factor","status":"PASS","detail":null,"expected":{"id":"ev_negative_factor","a":"1","b":"0.10"},"actual":{"a":"1","b":"0.10"}}
+{"family":"rust_oracle","id":"chain_single","status":"PASS","detail":null,"expected":{"id":"chain_single","a":"0.8","b":"0"},"actual":{"a":"0.8","b":"0"}}
+{"family":"rust_oracle","id":"chain_three","status":"PASS","detail":null,"expected":{"id":"chain_three","a":"0.7272727272727272727272727273","b":"-0.1109090909090909090909090909"},"actual":{"a":"0.7272727272727272727272727273","b":"-0.1109090909090909090909090909"}}
+{"family":"rust_oracle","id":"chain_empty","status":"PASS","detail":null,"expected":{"id":"chain_empty","a":"1","b":"0"},"actual":{"a":"1","b":"0"}}
+{"family":"rust_oracle","id":"dpc_half_tie_up","status":"PASS","detail":null,"expected":{"id":"dpc_half_tie_up","v":"9.98"},"actual":{"v":"9.98"}}
+{"family":"rust_oracle","id":"dpc_terminating","status":"PASS","detail":null,"expected":{"id":"dpc_terminating","v":"8.00"},"actual":{"v":"8.00"}}
+{"family":"rust_oracle","id":"dpc_apply_chain","status":"PASS","detail":null,"expected":{"id":"dpc_apply_chain","v":"9.00"},"actual":{"v":"9.00"}}
+{"family":"rust_oracle","id":"nf_nan","status":"PASS","detail":null,"expected":{"id":"nf_nan","v":null},"actual":{"v":null}}
+{"family":"rust_oracle","id":"nf_inf","status":"PASS","detail":null,"expected":{"id":"nf_inf","v":null},"actual":{"v":null}}
+{"family":"rust_oracle","id":"nf_neg_half_up","status":"PASS","detail":null,"expected":{"id":"nf_neg_half_up","v":"0.00"},"actual":{"v":"0.00"}}
+{"family":"rust_oracle","id":"nf_1004","status":"PASS","detail":null,"expected":{"id":"nf_1004","v":"1.00"},"actual":{"v":"1.00"}}
+{"family":"decimal_semantics","id":"div_10_4","status":"PASS","detail":null,"expected":"2.50","actual":"2.50"}
+{"family":"decimal_semantics","id":"div_10_2","status":"PASS","detail":null,"expected":"5","actual":"5"}
+{"family":"decimal_semantics","id":"div_10_5_00","status":"PASS","detail":null,"expected":"2","actual":"2"}
+{"family":"decimal_semantics","id":"div_1_40","status":"PASS","detail":null,"expected":"0.025","actual":"0.025"}
+{"family":"decimal_semantics","id":"mul_0_5_2","status":"PASS","detail":null,"expected":"1.0","actual":"1.0"}
+{"family":"decimal_semantics","id":"mul_rescale_half_even","status":"PASS","detail":null,"expected":"0.7575757575757575757575757576","actual":"0.7575757575757575757575757576"}
+{"family":"decimal_semantics","id":"add_scale_align","status":"PASS","detail":null,"expected":"10.00","actual":"10.00"}
+{"family":"decimal_semantics","id":"add_zero_shortcircuit_1","status":"PASS","detail":null,"expected":"0","actual":"0"}
+{"family":"decimal_semantics","id":"add_zero_shortcircuit_2","status":"PASS","detail":null,"expected":"0.0","actual":"0.0"}
+{"family":"decimal_semantics","id":"mul_zero_shortcircuit","status":"PASS","detail":null,"expected":"0","actual":"0"}
+{"family":"decimal_semantics","id":"neg_zero_display","status":"PASS","detail":null,"expected":"0","actual":"0"}
+{"family":"fail_closed","id":"non_finite_factor_reject","status":"PASS","detail":"GBBQ factor 1 is not a finite decimal input","expected":null,"actual":null}
+{"family":"fail_closed","id":"inf_factor_reject","status":"PASS","detail":"GBBQ factor 0 is not a finite decimal input","expected":null,"actual":null}
+{"family":"fail_closed","id":"empty_chain_identity","status":"PASS","expected":null,"actual":null}

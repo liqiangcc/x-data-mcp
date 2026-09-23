@@ -1,0 +1,44 @@
+{
+  "task_id": "NM-013",
+  "baseline_sha": "b60b0ab28bd54c3c4be8323558147eb14d039387",
+  "source_ported": "src/gbbq.rs: normalize_factor, Event::factors, event_transform, compose_chain, Affine::apply, reference_price, displayed_previous_close",
+  "golden_oracle": "evidence/node-migration/p0/numeric/vectors.jsonl — gbbq_factor_normalize (6) + qfq_affine (3)",
+  "rust_oracle": "rust-oracle.jsonl — 14 supplementary expected values generated live by rustc 1.98.1 + x_data_mcp/rust_decimal 1.43.0 rlibs on this box",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/algorithms/qfq_affine.mjs (pure JS, BigInt, zero deps)"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/qfq_affine_probe.mjs .",
+    "exit": 0,
+    "cases": 37,
+    "totals": {
+      "pass": 37,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "golden": 9,
+      "rust_oracle_supplementary": 14,
+      "decimal_op_semantics": 11,
+      "fail_closed": 3
+    }
+  },
+  "decimal_engine_semantics_mirrored": [
+    "Dec = (signed mantissa, scale 0..28); add/sub zero-operand short-circuit returns other operand verbatim",
+    "mul: scale sums; zero product -> Decimal::ZERO (scale 0); overflow rescale drops digits HALF-EVEN",
+    "div: integer quotient then <=9-digit remainder iterations; remainder==0&&scale>=0 fast path; cap 28 rounds HALF-EVEN",
+    "post-remainder unscale strips trailing zeros chunked {8 (requires mantissa%2^32==0),4,2,1}",
+    "from_str: scale>28 HALF_UP at 28dp; mantissa>2^96-1 -> Err->null",
+    "round_dp MidpointAwayFromZero for business 2dp; -0 -> '0'"
+  ],
+  "qfq_semantics_mirrored": [
+    "event_transform: a=10/(10+C3+C4), b=(C4*C2-C1)/(10+C3+C4) on 2dp-normalized factors",
+    "compose_chain oldest->newest: chain.a*=t.a; chain.b=t.a*chain.b+t.b — no intermediate rounding",
+    "empty chain -> identity; non-finite factor -> 'GBBQ factor {index} is not a finite decimal input' verbatim"
+  ],
+  "out_of_scope": "forward_adjust bar traversal, GBBQ record decode/decrypt, yearly, service wiring",
+  "limitations": [
+    "decimal_overflow paths (mantissa>2^96 post-rescale) implemented as fail-closed throw; unreachable in QFQ domain"
+  ]
+}

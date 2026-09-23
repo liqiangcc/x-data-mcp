@@ -1,0 +1,14 @@
+{"id":"ev_all_zero","a":"1","b":"0"}
+{"id":"ev_cash_only","a":"1","b":"-0.10"}
+{"id":"ev_terminating_denominator","a":"0.8","b":"-0.04"}
+{"id":"ev_negative_factor","a":"1","b":"0.10"}
+{"id":"chain_single","a":"0.8","b":"0"}
+{"id":"chain_three","a":"0.7272727272727272727272727273","b":"-0.1109090909090909090909090909"}
+{"id":"chain_empty","a":"1","b":"0"}
+{"id":"dpc_half_tie_up","v":"9.98"}
+{"id":"dpc_terminating","v":"8.00"}
+{"id":"dpc_apply_chain","v":"9.00"}
+{"id":"nf_nan","v":null}
+{"id":"nf_inf","v":null}
+{"id":"nf_neg_half_up","v":"0.00"}
+{"id":"nf_1004","v":"1.00"}
