@@ -1,6 +1,6 @@
 {
-  "task_id": "NM-029-R1",
-  "baseline_sha": "84faaec7fff075d25d41f66596a4dbc3d357b868 (R0)",
+  "task_id": "NM-029-R2",
+  "baseline_sha": "99c03954156edcedaf373be766814f8946364310 (R1)",
   "source_ported": "catalog.rs::validate_snapshot + validate_record — pure pre-publication decision; RejectReason serde payloads",
   "rust_oracle": "rust-oracle.jsonl — 34 cases via CatalogService::refresh (live rustc 1.98.1), refresh_status Rejected (previous present) vs NotReady (none)",
   "environment": {
@@ -24,15 +24,20 @@
   "probe": {
     "command": "node scripts/node_migration_p2/catalog_validate_probe.mjs .",
     "exit": 0,
-    "cases": 63,
+    "cases": 65,
     "totals": {
-      "pass": 63,
+      "pass": 65,
       "fail": 0,
       "not_run": 0
     },
     "selftest": "node ... validate -> exit 1 (negative-selftest.jsonl)",
     "regressions": {
-      "NM-028 catalog_source_probe": "8 cases PASS (after validate.mjs boundary changes)"
+      "NM-028 catalog_source_probe": "13/13 PASS (after validate.mjs boundary changes)"
+    },
+    "groups": {
+      "live_rust_oracle": 36,
+      "typed_boundary": 26,
+      "accept_scheme_undefined": 1
     }
   },
   "purity": "deterministic, read-only; no DB/head CAS/service/generation/network/publish; no completeness inference from counts",
@@ -40,7 +45,7 @@
     "none — all oracle decisions byte-identical including Debug-escaped messages"
   ],
   "out_of_scope": "publish, SQLite head CAS, services, deploy",
-  "review": "REVIEW-NM-029 R0 — three fail-closed/compat gaps fixed",
+  "review": "REVIEW-NM-029 R1 — evidence consistency correction (committed probe-results were generated against the stale 34-case oracle before the 36-case copy landed; no code defect)",
   "r1_fixes": {
     "other_payload_order": "disappeared-member sort now compares Other(String) payload (UTF-8) before symbol — Rust derived Ord on Exchange. Oracle other_order_disappeared: Shanghai:5 < Other(a):9 < Other(z):0.",
     "scheme_serde_default": "Assigned without `scheme` key = null (#[serde(default)]); present-but-undefined also treated absent; unknown scheme labels still rejected.",

@@ -3,9 +3,9 @@
 任务：NM-029（agent-coordination/node-migration）。日期：2026-09-23。
 基线：`600afc4853f3ab508904bf328022021a435f6cdf`（`migration/node-devin`）。Node v20.19.2。
 关联：Epic #271；`src/catalog.rs::validate_snapshot`/`validate_record`；`tests/catalog.rs`。
-证据：`evidence/node-migration/p2/catalog_validate/`（probe-results.jsonl 63 行全 PASS、rust-oracle.jsonl、negative-selftest.jsonl、results.json、SHA256SUMS、README）。
+证据：`evidence/node-migration/p2/catalog_validate/`（probe-results.jsonl 65 行全 PASS、rust-oracle.jsonl、negative-selftest.jsonl、results.json、SHA256SUMS、README）。
 
-**结果（R1）：63/63 PASS / 0 FAIL —— 34 例 live Rust oracle 全字节一致（含 5,224 条真实 gen-2 候选）。**
+**结果（R2）：65/65 PASS / 0 FAIL —— 34 例 live Rust oracle 全字节一致（含 5,224 条真实 gen-2 候选）。**
 
 ## 1. 移植：`src_node/catalog/validate.mjs`
 
@@ -44,7 +44,9 @@
 
 | 命令 | 退出码 |
 |---|---|
-| `node scripts/node_migration_p2/catalog_validate_probe.mjs .` | 0（63 PASS） |
+| `node scripts/node_migration_p2/catalog_validate_probe.mjs .` | 0（65 PASS） |
 | `node ... validate`（自测负证） | 1 |
 | `rustc` val_oracle | 0 |
 | `sha256sum -c` / `git diff --check` | 0 |
+
+> R2（REVIEW-NM-029 R1 仅证据）：更正提交证据计数——probe-results 系在旧 34 例 oracle 上生成；重跑提交版脚本+36 例 oracle → 65 PASS。results.json 中 NM-028 回归更正为 13/13。

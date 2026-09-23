@@ -7,7 +7,7 @@ reason:<serde RejectReason>}`.
 
 ## Contents
 
-- `probe-results.jsonl` — 63 rows, all PASS (36 live Rust oracle + 26
+- `probe-results.jsonl` — 65 rows, all PASS (36 live Rust oracle + 28 boundary/auxiliary
   typed-boundary rejects).
 - `rust-oracle.jsonl` — oracle via `CatalogService::refresh` reason serde.
 - `negative-selftest.jsonl` — exit-1 proof.
