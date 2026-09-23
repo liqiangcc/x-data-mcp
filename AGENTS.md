@@ -10,7 +10,7 @@
 
 ## 项目约束
 
-- 实现语言为 Rust。跨语言工程规范适用，Java 专项不直接套用；需要的 Rust 专项约定由真实用例推动形成。
+- 当前实现为 Rust；用户已指定全量 Node.js 迁移方向，迁移设计见 `docs/tasks/nodejs-full-migration-plan.md`。迁移按契约与阶段验收推进，不能提前宣称已切换。跨语言工程规范适用，Java 专项不直接套用。
 - 数据治理是核心职责，MCP 是入口 Adapter；业务决策、流程编排、能力契约、技术实现与装配分别维护。
 - 研发任务以本仓库 Issue 为入口。AC 来自需求共识、业务规则或公开 Contract，不能仅依据旧项目或当前实现反推。
 - 未确认的数据范围、存储策略、历史时点语义和性能阈值不能写成既定要求。只阻塞依赖该决定的工作。
@@ -34,3 +34,32 @@ ECS 部署目标 `ecs-node`（OpenSSH 别名，key auth，`ssh ecs-node` 直接�
 截至 2026-09-21，100-item ECS 功能 smoke 已完成而 #259 容量 AC 未通过；当前 schema
 禁止在 ECS 上启动 5,221-symbol collection，须先修复 audit history payload 与
 canonical `bar_json` 布局。
+
+## Codex / Devin 协作（2026-09-23）
+
+用户指定 Codex 为 Lead，通过 tmux 指挥全新 Devin 会话，Devin 固定使用 `swe-2-high`。正式迁移采用全新 Lead + 全新 Worker；当前 `codex` 会话只负责建立规则和交接。这是本项目的分工协议；不假定两个会话共享上下文，也不把 tmux 存活视为自动持续调度。
+
+### 角色与隔离
+
+- 新 Lead 会话命名 `codex-node-lead`：负责需求、任务拆分、架构裁决、审查、独立验证和阶段验收。Devin Worker 会话命名 `devin-node`：完成有界任务、自测、提交证据、报告阻塞。只有完成接管握手的新 Lead 可以派发正式任务；旧 `codex` 会话接管后停止派单，用户明确重新指定除外。
+- Lead 独立 worktree 为 `/home/box/x-data-mcp-node-lead`，初始分支 `migration/node-lead`；Worker 独立 worktree 为 `/home/box/x-data-mcp-node`，初始分支 `migration/node-devin`。两者从同一冻结提交创建，必须包含本协作规则。主工作区仍为 `/home/box/x-data-mcp`。运行前核对实际路径、分支、SHA、工作区状态与模型，不能凭此表假定现场不变。
+- 新建会话不等于已经交接。初始化者留下 BOOTSTRAP.md：用户目标与已授权范围、规则提交 SHA、迁移方案路径、已确认事实/待决问题、实际会话与 worktree 映射、首项任务、接管状态。新 Lead 读取后写 TAKEOVER.md，核对两端身份与基线并完成 Worker ACK，才将 session.json 的 active_lead 指向自己；初始化者看到 TAKEOVER 后不再派单。未握手时状态为 BOOTSTRAPPING，不启动迁移实现。
+- 不复用 `d` 或 `devin-epic` 的上下文，不向它们发键、不停止它们、不改变其工作区。历史事实通过已提交文档和证据引入。Lead 审查执行 worktree 时以只读为默认；需要修改先交接所有权，禁止双方同时修改同一文件。
+- 新会话显式阅读本文件、README、docs/conventions.md、迁移方案和本轮任务文件。全量迁移实施需建立独立 Issue/Epic，关联 #262；#262 不自动代表迁移范围已验收。启动握手和只读盘点可先执行。
+
+### tmux 通信与持久交接
+
+- tmux 用于投递短指令、查看输出和通知；长任务与结果使用文件。共享邮箱位于 `$(git rev-parse --path-format=absolute --git-common-dir)/agent-coordination/node-migration/`，不提交会话日志、终端转储或秘密。Lead 维护 `session.json`，记录两端 session/pane ID、worktree、分支、基线 SHA、模型和当前 task ID。
+- 使用唯一 task ID（如 `NM-000`）；Lead 写 `TASK-<id>.md`，包括目标、关联 Issue/来源、基线、允许修改范围、非目标、AC、验证命令和停止条件。Devin 写 `ACK-<id>.md` 与 `RESULT-<id>.md`，Lead 写 `REVIEW-<id>.md`。每个文件只有一个写入者，临时文件加 rename 发布完整结果。
+- 同时最多一个未验收实现任务。状态为 DISPATCHED → ACK → RUNNING → READY_FOR_REVIEW → ACCEPTED / CHANGES_REQUESTED；阻塞用 BLOCKED，并写明证据和所需决策。ACK 必须复述范围、实际 cwd/branch/SHA/model。重复投递相同 task ID 只确认状态，不重复执行副作用。
+- 投递前用 `tmux list-panes` 核对目标 pane ID、cwd 和前台程序，用 `capture-pane` 确认输入状态。仅在 agent 输入框可接收消息时，以 `tmux send-keys -t <pane-id> -l -- '<短指令>'` 发送文字，再单独发送 Enter；多行正文通过任务文件读取。不得向 shell、权限弹窗、未知进程或用户正在编辑的输入框盲发文字/Enter；不得自动发送 Ctrl-C、Escape 或选择批准。
+- Devin 回报先落盘，再用 `tmux display-message -t <lead-pane-id> 'NM-xxx READY_FOR_REVIEW: <结果路径>'` 通知。Lead 活跃时轮询结果文件并读取执行 pane。display-message 是提示，不保证唤醒或投递给模型；Lead 忙时禁止向其输入框盲注入。Lead 空闲且输入状态已确认时才可 send-keys 投递短回报。Lead 不在线时保留结果并等待，不擅自推进下一阶段。
+- 未见 ACK 时先检查 pane 和文件；不能因超时重复提交任务。会话重启/压缩后从 session.json、当前 TASK/RESULT/REVIEW、git 状态恢复，不以滚屏或历史总结替代事实。
+
+### 验收与推进
+
+- RESULT 包含实际修改文件与提交 SHA（未提交则明确说明）、命令与退出码、证据位置、PASS/FAIL/NOT_RUN、风险及下一步建议。提交完成或 Devin 自报 PASS 均不代表 Lead 验收。
+- Lead 检查 diff、契约/业务规则及证据，独立运行相关验证；写 REVIEW 后才派下一任务。性能报告固定输入、环境、代码 SHA、并发、计时边界和原始样本，分别说明开发反馈速度、运行耗时、内存和 DB/WAL；不因改成 Node 就断言更快。
+- 默认按迁移方案 P0–P6 推进。先冻结契约与基线，再验证精确数值/摘要、SQLite 原子发布与恢复、Linux 租约/UID 能力；保持 fail-closed、数据治理和历史版本语义。
+- 任务授权范围内的本地修改、测试与修复自主完成；不得因协作协议擅自部署、切换真实数据库、删除数据、push/merge 或发布。需要外部动作时由 Lead 核对用户已有授权，不能反复索要已给出的授权。
+- 不自动切换模型。`swe-2-high` 不可用、上下文不足或任务边界不清时先报告；更换会话要写交接并重新握手。执行者完成当前任务后等待 Lead，不能仅凭宏观目标自派未审查的新阶段。
