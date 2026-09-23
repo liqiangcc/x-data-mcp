@@ -1,0 +1,35 @@
+{"family":"generation_binding","id":"no_items","status":"PASS","detail":"refused NoItems","expected":"NoItems","actual":{"ok":false,"refusal":"NoItems"}}
+{"family":"generation_binding","id":"one_missing","status":"PASS","detail":"refused Missing","expected":"Missing","actual":{"ok":false,"refusal":"Missing"}}
+{"family":"generation_binding","id":"one_null","status":"PASS","detail":"refused Null","expected":"Null","actual":{"ok":false,"refusal":"Null"}}
+{"family":"generation_binding","id":"one_nonstr","status":"PASS","detail":"refused Null","expected":"Null","actual":{"ok":false,"refusal":"Null"}}
+{"family":"generation_binding","id":"one_bool","status":"PASS","detail":"refused Null","expected":"Null","actual":{"ok":false,"refusal":"Null"}}
+{"family":"generation_binding","id":"one_obj","status":"PASS","detail":"refused Null","expected":"Null","actual":{"ok":false,"refusal":"Null"}}
+{"family":"generation_binding","id":"uniform_id","status":"PASS","detail":"ok \"gen-a\"","expected":{"generation_id":"gen-a","id":"uniform_id","status":"ok"},"actual":{"ok":true,"generation_id":"gen-a"}}
+{"family":"generation_binding","id":"diff_ids","status":"PASS","detail":"refused Mixed","expected":"Mixed","actual":{"ok":false,"refusal":"Mixed"}}
+{"family":"generation_binding","id":"present_then_missing","status":"PASS","detail":"refused Mixed","expected":"Mixed","actual":{"ok":false,"refusal":"Mixed"}}
+{"family":"generation_binding","id":"missing_then_present","status":"PASS","detail":"refused Mixed","expected":"Mixed","actual":{"ok":false,"refusal":"Mixed"}}
+{"family":"generation_binding","id":"present_then_null","status":"PASS","detail":"refused Mixed","expected":"Mixed","actual":{"ok":false,"refusal":"Mixed"}}
+{"family":"generation_binding","id":"null_then_present","status":"PASS","detail":"refused Mixed","expected":"Mixed","actual":{"ok":false,"refusal":"Mixed"}}
+{"family":"generation_binding","id":"all_missing","status":"PASS","detail":"refused Missing","expected":"Missing","actual":{"ok":false,"refusal":"Missing"}}
+{"family":"generation_binding","id":"all_null","status":"PASS","detail":"refused Null","expected":"Null","actual":{"ok":false,"refusal":"Null"}}
+{"family":"generation_binding","id":"missing_and_null","status":"PASS","detail":"refused Mixed","expected":"Mixed","actual":{"ok":false,"refusal":"Mixed"}}
+{"family":"generation_binding","id":"perm_aba","status":"PASS","detail":"refused Mixed","expected":"Mixed","actual":{"ok":false,"refusal":"Mixed"}}
+{"family":"generation_binding","id":"perm_missing_mid","status":"PASS","detail":"refused Mixed","expected":"Mixed","actual":{"ok":false,"refusal":"Mixed"}}
+{"family":"generation_binding","id":"empty_string","status":"PASS","detail":"ok \"\"","expected":{"generation_id":"","id":"empty_string","status":"ok"},"actual":{"ok":true,"generation_id":""}}
+{"family":"generation_binding","id":"frozen_nonstr","status":"PASS","detail":"refused Missing","expected":"Missing","actual":{"ok":false,"refusal":"Missing"}}
+{"family":"generation_binding","id":"frozen_nonstr_mixed","status":"PASS","detail":"refused Mixed","expected":"Mixed","actual":{"ok":false,"refusal":"Mixed"}}
+{"family":"generation_binding","id":"unicode_id","status":"PASS","detail":"ok \"gen-中😀\"","expected":{"generation_id":"gen-中😀","id":"unicode_id","status":"ok"},"actual":{"ok":true,"generation_id":"gen-中😀"}}
+{"family":"generation_binding","id":"reject_items_notarray","status":"PASS","detail":"GenerationBindingInputError: items must be an array","expected":null,"actual":null}
+{"family":"generation_binding","id":"reject_item_nonobj","status":"PASS","detail":"GenerationBindingInputError: item must be an object","expected":null,"actual":null}
+{"family":"generation_binding","id":"reject_item_no_frozen","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs required","expected":null,"actual":null}
+{"family":"generation_binding","id":"reject_frozen_undefined","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs must be a JSON value","expected":null,"actual":null}
+{"family":"generation_binding","id":"reject_frozen_nan","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs must be a JSON value","expected":null,"actual":null}
+{"family":"generation_binding","id":"reject_frozen_fn","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs must be a JSON value","expected":null,"actual":null}
+{"family":"generation_binding","id":"reject_id_surrogate","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs must be a JSON value","expected":null,"actual":null}
+{"family":"generation_binding","id":"reject_key_surrogate","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs must be a JSON value","expected":null,"actual":null}
+{"family":"generation_binding","id":"reject_frozen_class","status":"PASS","detail":"GenerationBindingInputError: item.frozen_inputs must be a JSON value","expected":null,"actual":null}
+{"family":"generation_binding","id":"proto_key_absent","status":"PASS","detail":"GenerationBindingInputError","expected":null,"actual":null}
+{"family":"generation_binding","id":"dunder_proto_own_key","status":"PASS","detail":"own __proto__ data key inert","expected":"gen-p","actual":{"ok":true,"generation_id":"gen-p"}}
+{"family":"generation_binding","id":"null_proto_ok","status":"PASS","detail":"null-prototype frozen map binds","expected":"gen-x","actual":{"ok":true,"generation_id":"gen-x"}}
+{"family":"generation_binding","id":"constructor_key_ignored","status":"PASS","detail":"own 'constructor' key is inert","expected":"gen-y","actual":{"ok":true,"generation_id":"gen-y"}}
+{"family":"generation_binding","id":"selftest_binding","status":"FAIL","detail":"expected refusal on uniform input — STOP","expected":null,"actual":null}

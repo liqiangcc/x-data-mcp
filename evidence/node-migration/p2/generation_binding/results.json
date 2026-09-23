@@ -1,0 +1,37 @@
+{
+  "task_id": "NM-031",
+  "baseline_sha": "40440f99b2354e12456b9f97042e019947e96a5f",
+  "source_ported": "data_supply/generation.rs::{binding_of,uniform_binding} — pure frozen-generation binding decision",
+  "rust_oracle": "rust-oracle.jsonl — 21 cases (live rustc 1.98.1), refusal = Debug name verbatim",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/governance/generation_binding.mjs"
+  },
+  "semantics": [
+    "binding_of: frozen_inputs non-object OR key absent -> Missing class; present non-string -> Null class; present string -> id",
+    "uniform_binding: [] -> NoItems; any binding != first -> Mixed (checked before interpreting first); all-missing -> Missing; all-null -> Null; uniform string -> Ok(id)",
+    "empty string binds Ok(\"\") verbatim — Store::usable is a separate later gate; pure contract preserved",
+    "frozen_inputs is serde_json::Value — non-object (string/number/bool/null/array) means key absent",
+    "own-property lookup (Object.hasOwn) — inherited/prototype members cannot manufacture a binding; non-Object.prototype/null-prototype frozen maps reject at typed boundary"
+  ],
+  "typed_boundary": "GenerationBindingInputError (9 cases): non-array items, non-object item, missing frozen_inputs, undefined/NaN/function values, unpaired surrogates in keys/ids, class-instance frozen_inputs",
+  "probe": {
+    "command": "node scripts/node_migration_p2/generation_binding_probe.mjs .",
+    "exit": 0,
+    "cases": 34,
+    "totals": {
+      "pass": 34,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "live_rust_oracle": 21,
+      "typed_boundary": 9,
+      "prototype_safety": 4
+    },
+    "selftest": "node ... binding -> exit 1 (negative-selftest.jsonl)"
+  },
+  "serde_equivalence_limits": "none observed — all oracle rows byte-identical",
+  "purity": "deterministic, read-only; no active pointer/fallback/open/pin/usable-source claim",
+  "out_of_scope": "store integration, task scheduling, service/MCP, deploy"
+}
