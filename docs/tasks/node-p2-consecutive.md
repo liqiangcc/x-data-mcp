@@ -5,7 +5,7 @@
 关联：Epic #271；#81 裁决 5645740750 / 实现 5645809215；`src/metrics/consecutive.rs`、`wire.rs`、`tests/consecutive.rs`。
 证据：`evidence/node-migration/p2/consecutive/`（probe-results.jsonl 78 行全 PASS、rust-oracle.jsonl、negative-selftest.jsonl、results.json、SHA256SUMS、README）。
 
-**结果（R1）：78/78 PASS / 0 FAIL —— 48 例 live Rust oracle 全字段一致（含全部 INVALID_MARKET_COMMAND 文本与 ratio_change 字符串）。**
+**结果（R2）：78/78 PASS / 0 FAIL —— 52 例 live Rust oracle 全字段一致（含全部 INVALID_MARKET_COMMAND 文本与 ratio_change 字符串）。**
 
 ## 1. 移植：`src_node/algorithms/consecutive.mjs`
 
@@ -20,11 +20,11 @@
 
 确定性、只读；无 SQLite/已验证读适配器/服务/调度/网络/发布/代际/部署；完成性证据不由 MCP 调用方自报。
 
-## 3. 验证矩阵（67 例）
+## 3. 验证矩阵（78 例）
 
 | 组 | 例数 | 结果 |
 |---|---|---|
-| evaluate oracle（方向/断点/门槛/尾部/缺失/完成态/非正价/错误/真实日期） | 33 | PASS |
+| evaluate oracle（方向/断点/门槛/尾部/缺失/完成态/非正价/错误/低年份/真实日期） | 37 | PASS |
 | ratio_change oracle（half-even 正负/循环/前导尾随零/高精度/MAX/错误） | 15 | PASS |
 | 类型边界 | 26 | PASS |
 | 自测 `consecutive` | exit 1 | |
@@ -42,3 +42,5 @@
 | `node scripts/node_migration_p2/qfq_affine_probe.mjs .`（_dec 回归） | 0（37 PASS） |
 | `rustc` cons_oracle | 0 |
 | `sha256sum -c` / `git diff --check` | 0 |
+
+> R2（REVIEW-NM-030 R1 仅元数据）：results.json 的 rust_oracle 计数与文档标题/矩阵更正为 52 例 oracle（37 evaluate + 15 ratio）与 78 总例。

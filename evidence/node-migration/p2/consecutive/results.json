@@ -1,8 +1,8 @@
 {
-  "task_id": "NM-030-R1",
-  "baseline_sha": "e2db1e1030700db76c6ed7554ce3f48e330100d3 (R0)",
+  "task_id": "NM-030-R2",
+  "baseline_sha": "d0c0bcf69a17db17817c2f65f25cab2f4ae1fa3a (R1)",
   "source_ported": "metrics::consecutive::evaluate + ratio_change (pure); Outcome/Reason/RunKind serde verbatim",
-  "rust_oracle": "rust-oracle.jsonl — 48 cases (live rustc 1.98.1 + x_data_mcp rlib + rust_decimal): 33 evaluate + 15 ratio_change",
+  "rust_oracle": "rust-oracle.jsonl — 52 cases (live rustc 1.98.1 + x_data_mcp rlib + rust_decimal): 37 evaluate + 15 ratio_change",
   "environment": {
     "node": "v20.19.2",
     "module": "src_node/algorithms/consecutive.mjs"
@@ -39,7 +39,7 @@
   },
   "purity": "deterministic, read-only; no storage verification/service/publish; completion evidence not caller-supplied",
   "out_of_scope": "storage/MCP wiring, completion provenance, deploy",
-  "review": "REVIEW-NM-030 R0 — Date.UTC 0-99 remap + null-for-bool default; both fixed",
+  "review": "REVIEW-NM-030 R1 — metadata-only: stale R0 counts corrected (52 live / 37 evaluate / 15 ratio / 26 typed / 78 total)",
   "r1_fixes": {
     "low_years": "isDate now uses manual proleptic-Gregorian calendar (Date.UTC maps years 0-99 to 1900-1999). Oracle: low_years (0001-0002), low_years_leap (year 4 Feb-29), year_400_leap, century_2000_leap all compute; century non-leap 1900-02-29/2100-02-29 reject at boundary.",
     "completed_only_null": "serde(default) applies only to absent keys; explicit null for bool now rejects (was ?? true). Same absent-only enforcement verified for price_field/equal_policy/gap_policy."
