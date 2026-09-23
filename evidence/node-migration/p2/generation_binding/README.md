@@ -6,8 +6,8 @@ missing/null/mixed/no-items are refusals, never fallbacks.
 
 ## Contents
 
-- `probe-results.jsonl` — 44 rows, all PASS (21 live Rust oracle +
-  9 typed-boundary + 10 accessor-descriptor + 4 prototype-safety).
+- `probe-results.jsonl` — 49 rows, all PASS (21 live Rust oracle +
+  9 typed-boundary + 14 accessor/shape + 4 prototype-safety).
 - `rust-oracle.jsonl` — live oracle (BindingRefusal Debug verbatim).
 - `negative-selftest.jsonl` — exit-1 proof.
 - `results.json` — semantics, matrix, limits.
@@ -36,3 +36,5 @@ symbol, and non-enumerable properties reject without invocation
 nested-value levels.
 
 R2: array boundary is descriptor-based (index getters/named/non-enumerable elements reject uninvoked).
+
+R3: sparse arrays, named data properties, and sparse+named count-coincidence reject; dense index must be canonical.

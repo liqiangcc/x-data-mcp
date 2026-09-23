@@ -57,13 +57,20 @@ function isJsonValue(v) {
   if (t === "number") return Number.isFinite(v);
   if (t === "string") return v.isWellFormed();
   if (Array.isArray(v)) {
-    // Array elements are indexed own properties — read via descriptor
-    // (never v[i]/v.every, which would invoke index getters).
+    // serde arrays = dense indexed data elements only. Every element
+    // read via descriptor (never v[i]/v.every — index getters must not
+    // fire). Sparse holes and named/extra properties are not
+    // JSON-representable -> reject.
     if (Object.getOwnPropertySymbols(v).length !== 0) return false;
-    const len = Object.getOwnPropertyDescriptor(v, "length");
-    if (len === undefined || !("value" in len)) return false;
-    return Object.getOwnPropertyNames(v).every((k) => {
+    const names = Object.getOwnPropertyNames(v);
+    if (names.length !== v.length + 1) return false; // sparse or extra props
+    return names.every((k) => {
       if (k === "length") return true;
+      const i = Number(k);
+      // canonical dense index "0".."len-1"
+      if (!Number.isSafeInteger(i) || i < 0 || i >= v.length || String(i) !== k) {
+        return false;
+      }
       const d = Object.getOwnPropertyDescriptor(v, k);
       return "value" in d && d.enumerable && isJsonValue(d.value);
     });

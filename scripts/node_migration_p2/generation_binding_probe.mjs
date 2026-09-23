@@ -107,6 +107,23 @@ const gcount = (v) => () => { getterCalls++; return v; };
   const arrHidden = [1]; Object.defineProperty(arrHidden, "0", { value: "gen-h", enumerable: false });
   try { uniformBinding([itemF({ [K]: arrHidden })]); emit("nonenum_array_elem", "FAIL", "non-enumerable array elem accepted"); }
   catch (e) { emit("nonenum_array_elem", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  // R3: sparse arrays and named data props are not JSON-representable
+  const sparse = ["gen-ok", , "gen-ok2"];
+  try { uniformBinding([itemF({ [K]: sparse })]); emit("sparse_array", "FAIL", "sparse array accepted"); }
+  catch (e) { emit("sparse_array", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const sparseGetter = ["gen-ok"]; sparseGetter.length = 3;
+  Object.defineProperty(sparseGetter, "1", { get: gcount("x"), enumerable: true });
+  try { uniformBinding([itemF({ [K]: sparseGetter })]); emit("sparse_plus_getter", "FAIL", "accepted"); }
+  catch (e) { emit("sparse_plus_getter", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const namedData = ["gen-ok"]; namedData.extra = "x";
+  try { uniformBinding([itemF({ [K]: namedData })]); emit("named_array_prop", "FAIL", "named data prop accepted"); }
+  catch (e) { emit("named_array_prop", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  const sparseNamed = ["gen-ok"]; sparseNamed.length = 3; sparseNamed.x = 1; // 3 names + len = len(3)+1 coincidence
+  try { uniformBinding([itemF({ [K]: sparseNamed })]); emit("sparse_named_coincidence", "FAIL", "count coincidence accepted"); }
+  catch (e) { emit("sparse_named_coincidence", e instanceof GenerationBindingInputError ? "PASS" : "FAIL", `${e.name}`); }
+  // valid dense array still binds as non-string -> Null
+  { const got = uniformBinding([itemF({ [K]: ["a", 2] }), itemF({ [K]: "x" })]);
+    emit("array_value_null", got.ok === false && got.refusal === "Mixed" ? "PASS" : "FAIL", "array is non-string value", "Mixed", got); }
   emit("getters_never_invoked", getterCalls === 0 ? "PASS" : "FAIL", `getterCalls=${getterCalls}`);
 }
 
