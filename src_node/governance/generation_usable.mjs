@@ -41,7 +41,7 @@ const notVerified = (g) => new GenerationUsableError(
 // ---------- bounded fd reads ----------
 // readBoundedFile (shared lib): bound = fstat size at open; reads at
 // most that many bytes; 0-read EOF is an error; post-fstat growth is
-// ignored (prefix only — digest/parse checks stay fail-closed).
+// rejected via a same-fd tail probe (not an atomic snapshot).
 // Stricter than Rust's fs::read for the manifest (>1MiB refuses before
 // read rather than inside inspect; mid-read growth rejects rather than
 // prefix-returning) — same Corrupt category, same outcome; documented.
@@ -109,7 +109,7 @@ const FILE_FIELDS = new Set(["role", "relative_path", "source_url",
   "etag", "bytes", "sha256"]);
 const FILE_ROLES = new Set(["base_industry", "day", "gbbq"]);
 const jbad = (m) => { throw new Error(m); };
-function serdeManifestShape(m) {
+export function validateManifestSerde(m) {
   if (m === null || typeof m !== "object" || Array.isArray(m)) {
     jbad("invalid type: expected struct SnapshotManifest");
   }
@@ -157,7 +157,7 @@ export function verifyInstalled(root, generationId, nowMs) {
   let manifest;
   try {
     manifest = strictJson(manifestBytes.toString("utf8"));
-    serdeManifestShape(manifest); // serde struct stage -> Json errors
+    validateManifestSerde(manifest); // serde struct stage -> Json errors
   } catch (e) {
     throw manifestJson(e instanceof InspectionError
       ? e.message.replace(/^manifest JSON invalid: /, "")

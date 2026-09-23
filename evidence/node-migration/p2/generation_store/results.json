@@ -1,0 +1,45 @@
+{
+  "task_id": "NM-033",
+  "baseline_sha": "fedac79105516e06219ba3be2bb0810b976412e9",
+  "source_ported": "generation/mod.rs::{create_stage,staged_manifest,install_staged,installed_ids} — immutable generation staging + install",
+  "rust_oracle": "rust-oracle.jsonl — 16 cases via live Store (rustc 1.98.1): staging/unverified_stage/json/not_verified/already_installed + reopen durability rows",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/governance/generation_store.mjs",
+    "fixtures": "/tmp/nm33-store-* mkdtemp, cleaned on exit"
+  },
+  "ordering": [
+    "create_stage: dir exists -> staging refusal verbatim",
+    "staged_manifest: read fail -> unverified_stage; parse/struct fail -> json",
+    "install_staged: gid=sha256(manifest bytes); target exists -> already_installed; inspect fail -> not_verified('snapshot inspection failed: ...'); production_ready guard; mkdir generations + rename + fsync_dir",
+    "installed_ids: sorted dir names; missing dir -> []; staging ghosts excluded"
+  ],
+  "durability": "same-fs rename + fsync of generations dir; reopen_ids/reopen_verify exercise a fresh Store on the same root (post-rename state observable). NOT a crash-durability proof — no fault injection between rename and fsync is possible in-process on Box; documented.",
+  "stricter_than_rust": "request_id boundary (non-empty wellformed; no / \\ NUL . ..) rejects escapes before mutation — Rust accepts arbitrary ids into stage_dir",
+  "bounds": "staged manifest read <=1MiB via readBoundedFile",
+  "comparison_policy": "verbatim where deterministic; io/serde inner text by kind+prefix (documented delta)",
+  "probe": {
+    "command": "node scripts/node_migration_p2/generation_store_probe.mjs .",
+    "exit": 0,
+    "cases": 25,
+    "totals": {
+      "pass": 25,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "live_rust_oracle": 16,
+      "typed_boundary": 8,
+      "durability_note": 1
+    },
+    "selftest": "node ... store -> exit 1 (negative-selftest.jsonl)"
+  },
+  "regressions": {
+    "NM-032": "28/28 PASS",
+    "NM-026": "72/72 PASS",
+    "NM-028": "14/14 PASS"
+  },
+  "also_fixed": "stale post-fstat comment in generation_usable.mjs per REVIEW-NM-032-FINAL (comment only)",
+  "purity": "local fs only; no official download/copy, no active pointer/decision/pin/retire/service/DB",
+  "untested_crash_cases": "mid-rename crash, fsync failure, cross-device rename — not exercised (no fault injection available); overlayfs rename semantics assumed same-fs"
+}

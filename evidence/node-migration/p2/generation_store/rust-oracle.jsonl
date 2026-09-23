@@ -1,0 +1,16 @@
+{"id":"create_fresh","status":"ok","value":{"dir":{"Unix":[114,101,113,45,49]}}}
+{"id":"create_dup","kind":"staging","message":"staging area for request req-1 is already sealed or missing","status":"error"}
+{"id":"staged_missing","kind":"unverified_stage","message":"staged request req-1 has no canonical manifest","status":"error"}
+{"id":"staged_ok","status":"ok","value":{"sha":"70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0"}}
+{"id":"install_no_artifacts","kind":"not_verified","message":"snapshot inspection failed: local input unavailable: No such file or directory (os error 2)","status":"error"}
+{"id":"install_bad_json","kind":"json","message":"manifest JSON invalid: key must be a string at line 1 column 2","status":"error"}
+{"id":"install_wrong_shape","kind":"not_verified","message":"snapshot inspection failed: invalid manifest: schema or required role count","status":"error"}
+{"id":"install_no_stage","kind":"unverified_stage","message":"staged request req-zzz has no canonical manifest","status":"error"}
+{"id":"install_tampered","kind":"not_verified","message":"snapshot inspection failed: artifact bytes do not match manifest: BaseIndustry","status":"error"}
+{"id":"install_ok","status":"ok","value":{"gid":"70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0","msha":"70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0"}}
+{"id":"install_repeat","kind":"unverified_stage","message":"staged request req-5 has no canonical manifest","status":"error"}
+{"id":"install_already","kind":"already_installed","message":"generation 70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0 already installed; refusing to overwrite immutable bytes","status":"error"}
+{"id":"stage_kept_after_fail","status":"ok","value":true}
+{"id":"installed_ids","status":"ok","value":["70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0","aaa","zzz"]}
+{"id":"reopen_ids","status":"ok","value":["70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0","aaa","zzz"]}
+{"id":"reopen_verify","status":"ok","value":{"gid":"70873f45e6491b749970dc3e540b1bd3143ed26ffeebeb22c603463c6464d8b0"}}
