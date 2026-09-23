@@ -1,0 +1,41 @@
+{"id":"empty_file","status":"ok","rows":[]}
+{"id":"single_valid","status":"ok","rows":[{"code":"600006","line":1,"market":1,"t_code":"T01","x_code":"X0101"}]}
+{"id":"no_trailing_crlf","status":"ok","rows":[{"code":"000001","line":1,"market":0,"t_code":"T0102","x_code":"X01"}]}
+{"id":"multi_valid","status":"ok","rows":[{"code":"600006","line":1,"market":1,"t_code":"T01","x_code":"X0101"},{"code":"000001","line":2,"market":0,"t_code":"T0102","x_code":"X01"},{"code":"899001","line":3,"market":2,"t_code":null,"x_code":null}]}
+{"id":"t_len3","status":"ok","rows":[{"code":"600006","line":1,"market":1,"t_code":"T01","x_code":null}]}
+{"id":"t_len5","status":"ok","rows":[{"code":"600006","line":1,"market":1,"t_code":"T0102","x_code":null}]}
+{"id":"t_len7","status":"ok","rows":[{"code":"600006","line":1,"market":1,"t_code":"T010203","x_code":null}]}
+{"id":"x_len3","status":"ok","rows":[{"code":"600006","line":1,"market":1,"t_code":null,"x_code":"X01"}]}
+{"id":"x_len7","status":"ok","rows":[{"code":"600006","line":1,"market":1,"t_code":null,"x_code":"X010203"}]}
+{"id":"both_empty","status":"ok","rows":[{"code":"600006","line":1,"market":1,"t_code":null,"x_code":null}]}
+{"id":"non_ascii","status":"error","error":"tdxhy.cfg is not pure ASCII"}
+{"id":"lf_only","status":"error","error":"tdxhy.cfg line 1 has 11 fields, expected 6"}
+{"id":"empty_middle_line","status":"error","error":"tdxhy.cfg line 2 is empty"}
+{"id":"double_trailing_crlf","status":"error","error":"tdxhy.cfg line 2 is empty"}
+{"id":"field_count_5","status":"error","error":"tdxhy.cfg line 1 has 5 fields, expected 6"}
+{"id":"field_count_7","status":"error","error":"tdxhy.cfg line 1 has 7 fields, expected 6"}
+{"id":"market_3","status":"error","error":"tdxhy.cfg line 1 f0 \"3\" is not a single digit 0..=2"}
+{"id":"market_empty","status":"error","error":"tdxhy.cfg line 1 f0 \"\" is not a single digit 0..=2"}
+{"id":"market_two_digits","status":"error","error":"tdxhy.cfg line 1 f0 \"10\" is not a single digit 0..=2"}
+{"id":"code_5_digits","status":"error","error":"tdxhy.cfg line 1 f1 \"60006\" is not exactly six digits"}
+{"id":"code_7_digits","status":"error","error":"tdxhy.cfg line 1 f1 \"6000060\" is not exactly six digits"}
+{"id":"code_letter","status":"error","error":"tdxhy.cfg line 1 f1 \"60000a\" is not exactly six digits"}
+{"id":"t_len2","status":"error","error":"tdxhy.cfg line 1 f2 \"T1\" is not a T code of anchored length"}
+{"id":"t_len4","status":"error","error":"tdxhy.cfg line 1 f2 \"T123\" is not a T code of anchored length"}
+{"id":"t_len6","status":"error","error":"tdxhy.cfg line 1 f2 \"T12345\" is not a T code of anchored length"}
+{"id":"t_len8","status":"error","error":"tdxhy.cfg line 1 f2 \"T1234567\" is not a T code of anchored length"}
+{"id":"t_wrong_letter","status":"error","error":"tdxhy.cfg line 1 f2 \"S01\" is not a T code of anchored length"}
+{"id":"t_non_digit","status":"error","error":"tdxhy.cfg line 1 f2 \"T0a\" is not a T code of anchored length"}
+{"id":"x_len4","status":"error","error":"tdxhy.cfg line 1 f5 \"X123\" is not an X code of anchored length"}
+{"id":"x_wrong_letter","status":"error","error":"tdxhy.cfg line 1 f5 \"T01\" is not an X code of anchored length"}
+{"id":"x_non_digit","status":"error","error":"tdxhy.cfg line 1 f5 \"X0a\" is not an X code of anchored length"}
+{"id":"f3_nonempty","status":"error","error":"tdxhy.cfg line 1 reserved field f3 must be empty"}
+{"id":"f4_nonempty","status":"error","error":"tdxhy.cfg line 1 reserved field f4 must be empty"}
+{"id":"precedence_market_first","status":"error","error":"tdxhy.cfg line 1 f0 \"9\" is not a single digit 0..=2"}
+{"id":"precedence_f3_before_f4","status":"error","error":"tdxhy.cfg line 1 reserved field f3 must be empty"}
+{"id":"precedence_t_before_reserved","status":"error","error":"tdxhy.cfg line 1 f2 \"bad\" is not a T code of anchored length"}
+{"id":"tdxhy_member","status":"ok","rows":5659,"sha256":"dcd97d9d09512e76f3a2f0321cd7eaf8d540ce1356cd80e6a57d277340e6e239","markets":{"0":2946,"1":2365,"2":348}}
+{"id":"member_row_0","status":"ok","row":{"code":"000001","line":1,"market":0,"t_code":"T1001","x_code":"X500102"}}
+{"id":"member_row_1","status":"ok","row":{"code":"000002","line":2,"market":0,"t_code":"T110201","x_code":"X530101"}}
+{"id":"member_row_2829","status":"ok","row":{"code":"301488","line":2830,"market":0,"t_code":"T040202","x_code":"X260305"}}
+{"id":"member_row_5658","status":"ok","row":{"code":"920992","line":5659,"market":2,"t_code":"T0403","x_code":"X270302"}}

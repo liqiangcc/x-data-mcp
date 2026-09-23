@@ -1,0 +1,42 @@
+{
+  "task_id": "NM-021",
+  "baseline_sha": "f02178e8625313ed65c4d11dfdb081c1b96bd1e2",
+  "source_ported": "src/catalog_tdx/tdxhy.rs::parse (contract v1, #168)",
+  "rust_oracle": "rust-oracle.jsonl — 37 synthetic cases + member digest/rows (live rustc 1.98.1 + x_data_mcp rlib)",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/parsers/tdxhy.mjs (pure JS, zero deps)"
+  },
+  "retained_member": {
+    "zip": "official-base.zip sha256 dcdf6b49898926675698263535021aed7ad92b34be82a1a9e8a2a8982bd68bc6 (MANIFEST-verified)",
+    "member": "tdxhy.cfg 150,332B sha256 df7cb7051d0f73a0d1381e9b36eafa33c8f5081d28ddef87cad406dd28ed8ea6",
+    "parsed": "5,659 rows; markets {0:2946, 1:2365, 2:348}",
+    "rows_sha256": "dcd97d9d09512e76f3a2f0321cd7eaf8d540ce1356cd80e6a57d277340e6e239"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p2/tdxhy_probe.mjs .",
+    "exit": 0,
+    "cases": 47,
+    "totals": {
+      "pass": 47,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "synthetic_oracle": 37,
+      "typed_boundary": 4,
+      "manifest+extract": 2,
+      "member_digest": 1,
+      "member_rows": 4
+    }
+  },
+  "semantics_mirrored": [
+    "pure-ASCII gate; CRLF split; single trailing empty tolerated, mid-file empty rejects",
+    "six | fields; f0 digit 0..2; f1 exactly six digits (leading zeroes kept as string)",
+    "f2 T-code / f5 X-code: letter + 2|4|6 digits (len 3|5|7); empty -> null",
+    "f3/f4 must be empty (f3 checked before f4); error precedence market->code->t->reserved->x",
+    "1-based line numbers; whole file fails on first bad line; error text verbatim"
+  ],
+  "out_of_scope": "exchange/industry business meaning, catalog scope/compose/source, DB/services",
+  "limitations": []
+}
