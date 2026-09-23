@@ -1,0 +1,70 @@
+{
+  "task_id": "NM-010",
+  "baseline_sha": "a6338e812b50c0978614170bfd4a76bec624e4a0",
+  "artifact": {
+    "source": "scripts/node_migration_p1/native/linux_guards.c",
+    "source_sha256": "ccb77aca6b5edf048618b334751ed60c50be6331551c670666893aa1488f549f",
+    "built": "scripts/node_migration_p1/native/linux_guards.node",
+    "built_sha256": "11289943e66598630e59de3d63dd17fe1939a22435daafa2b3581670b404412a",
+    "abi": {
+      "node": "v20.19.2",
+      "napi_version": "9",
+      "node_module_version": "115",
+      "arch": "linux-x64 glibc"
+    }
+  },
+  "build": {
+    "command": "npm run build:native -> gcc -shared -fPIC -O2 -I/usr/include/node (CC/NODE_INCLUDE overridable)",
+    "requires": [
+      "gcc (14.2.0 present)",
+      "libnode-dev headers /usr/include/node/node_api.h (present)"
+    ],
+    "system_package_mutation": "none — build consumes existing tools only; npm ci adds no system packages"
+  },
+  "reproducibility": {
+    "build1_sha256": "11289943e66598630e59de3d63dd17fe1939a22435daafa2b3581670b404412a",
+    "build2_sha256": "11289943e66598630e59de3d63dd17fe1939a22435daafa2b3581670b404412a",
+    "nm009_artifact_sha256": "11289943e66598630e59de3d63dd17fe1939a22435daafa2b3581670b404412a",
+    "byte_identical_across_3_builds": true
+  },
+  "install_path": {
+    "postinstall": "npm run build:native — hard-fails npm ci/install when toolchain/headers absent (fail-closed stop rule)",
+    "verify": "npm run verify:native — post-install smoke (flock acquire/release + SO_PEERCRED euid check) exit 0",
+    "escape": "npm ci --ignore-scripts documented for pure-JS contexts; loader then throws fail-closed if native features are invoked"
+  },
+  "stop_rules_proven": {
+    "missing_headers": {
+      "command": "NODE_INCLUDE=/nonexistent node build.mjs",
+      "exit": 1,
+      "output": "BLOCKED + missing node_api.h"
+    },
+    "missing_compiler": {
+      "command": "CC=/nonexistent-cc node build.mjs",
+      "exit": 1,
+      "output": "BLOCKED + missing cc"
+    },
+    "missing_artifact_loader": {
+      "command": "import index.mjs without .node",
+      "exit": 3,
+      "output": "throws — no fallback"
+    },
+    "no_silent_fallback": "loader/build never substitute shell flock or PID files; absence = hard stop"
+  },
+  "npm_ci_end_to_end": {
+    "exit": 0,
+    "packages": 39,
+    "audit_vulnerabilities": 0,
+    "postinstall_built_artifact": true,
+    "verify_native": "PASS"
+  },
+  "totals": {
+    "pass": 7,
+    "fail": 0,
+    "not_run": 0
+  },
+  "limitations": [
+    "deterministic hash holds on this toolchain (gcc 14.2.0 + same source); other compiler versions may produce different bytes — functional verify is the cross-toolchain check",
+    "socket._handle.fd internal accessor re-verify on Node 24 (carried from NM-009)",
+    "postinstall hard-fail means npm ci on a headerless box refuses to install — intentional fail-closed, --ignore-scripts escape documented"
+  ]
+}

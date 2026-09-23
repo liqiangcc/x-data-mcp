@@ -10,5 +10,10 @@
   "dependencies": {
     "better-sqlite3": "11.10.0",
     "canonicalize": "2.1.0"
+  },
+  "scripts": {
+    "build:native": "node scripts/node_migration_p1/native_packaging/build.mjs",
+    "verify:native": "node scripts/node_migration_p1/native_packaging/verify.mjs",
+    "postinstall": "npm run build:native"
   }
 }

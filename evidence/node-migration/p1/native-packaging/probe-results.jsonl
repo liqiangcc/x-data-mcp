@@ -1,0 +1,7 @@
+{"case":"rebuild_byte_identical","status":"PASS","detail":"build1==build2==nm009 artifact sha256 11289943…","evidence":{"sha256":"11289943e66598630e59de3d63dd17fe1939a22435daafa2b3581670b404412a"}}
+{"case":"missing_headers_blocked","status":"PASS","detail":"exit 1 BLOCKED listing missing node_api.h; no fallback","evidence":{"exit":1}}
+{"case":"missing_compiler_blocked","status":"PASS","detail":"exit 1 BLOCKED listing missing cc","evidence":{"exit":1}}
+{"case":"missing_artifact_loader_throws","status":"PASS","detail":"index.mjs import throws fail-closed (no substitute)","evidence":{"exit":3}}
+{"case":"npm_ci_end_to_end","status":"PASS","detail":"39 pkgs, postinstall built .node, 0 vulns","evidence":{"exit":0}}
+{"case":"verify_native_smoke","status":"PASS","detail":"flock acquire/release + SO_PEERCRED euid","evidence":{"exit":0}}
+{"case":"abi_metadata_recorded","status":"PASS","detail":"node v20.19.2 napi 9 modules 115 emitted by build.mjs","evidence":null}
