@@ -17,7 +17,7 @@
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { closeSync, constants, fsyncSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from "node:fs";
+import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 // Atomic no-overwrite rename: renameat2(RENAME_NOREPLACE). Node's
@@ -163,11 +163,7 @@ export class GenerationStore {
    *  create, full write, fsync file + dir, returns sha256. */
   writeDecision(generationId, decisionBytes) {
     checkGenerationId(generationId);
-    const dir = this.generationDir(generationId);
-    const st = statOrNull(dir);
-    if (st === null || !st.isDirectory()) {
-      throw err("not_installed", `generation ${generationId} is not installed`);
-    }
+    const dir = this.requireRealGenerationDir(generationId);
     writeOnce(join(dir, DECISION_NAME), decisionBytes, () => {
       throw err("decision_exists",
         `consistency decision already recorded for generation ${generationId}`);
@@ -191,11 +187,7 @@ export class GenerationStore {
   writeArtifact(generationId, name, bytes) {
     checkGenerationId(generationId);
     checkArtifactName(name);
-    const dir = this.generationDir(generationId);
-    const st = statOrNull(dir);
-    if (st === null || !st.isDirectory()) {
-      throw err("not_installed", `generation ${generationId} is not installed`);
-    }
+    const dir = this.requireRealGenerationDir(generationId);
     writeOnce(join(dir, name), bytes, () => {
       throw err("artifact_exists",
         `artifact ${name} for generation ${generationId} already exists`);
@@ -214,6 +206,24 @@ export class GenerationStore {
       throw err("io", `io: ${e.message}`);
     }
   }
+
+  /** Installed-generation dir for writes: must be a REAL directory —
+   *  lstat (no symlink following) on both the generation dir and the
+   *  generations parent, so a symlinked path cannot escape the store.
+   *  Stricter than Rust's is_dir() (documented). */
+  requireRealGenerationDir(generationId) {
+    const parent = join(this.root, GENERATIONS_DIR);
+    const pst = statOrNullL(parent);
+    if (pst === null || !pst.isDirectory() || pst.isSymbolicLink()) {
+      throw err("not_installed", `generation ${generationId} is not installed`);
+    }
+    const dir = join(parent, generationId);
+    const st = statOrNullL(dir);
+    if (st === null || !st.isDirectory() || st.isSymbolicLink()) {
+      throw err("not_installed", `generation ${generationId} is not installed`);
+    }
+    return dir;
+  }
 }
 
 // gid/name boundary checks — stricter than Rust (documented): Rust
@@ -229,9 +239,17 @@ function checkGenerationId(gid) {
     throw err("invalid_generation_id", "invalid generation_id");
   }
 }
+// Reserved immutable inputs: writeArtifact must not be able to create or
+// resurrect the manifest, the decision, or declared artifact bytes —
+// those have dedicated writers (install staging, write_decision) with
+// their own verification. compatibility-evidence.json remains allowed.
+const RESERVED_ARTIFACT_NAMES = new Set([
+  MANIFEST_NAME, DECISION_NAME, "base.zip", "gbbq.zip", "hsjday.zip",
+]);
 function checkArtifactName(name) {
   if (typeof name !== "string" || !name.isWellFormed() || name === "" ||
-      name.includes("/") || name.includes("\\") || name.includes("\0")) {
+      name.includes("/") || name.includes("\\") || name.includes("\0") ||
+      RESERVED_ARTIFACT_NAMES.has(name)) {
     throw err("not_verified", "snapshot inspection failed: invalid artifact name");
   }
 }
@@ -243,6 +261,12 @@ function checkArtifactName(name) {
 function writeOnce(path, bytes, onExists) {
   if (!(bytes instanceof Uint8Array)) {
     throw err("invalid_input", "artifact bytes must be Buffer/Uint8Array");
+  }
+  // Read bound is 1MiB (aligned with NM-032's decision bound): writing a
+  // larger object would create an unreadable, unreplaceable file — refuse
+  // before exclusive creation. Stricter than Rust (documented).
+  if (bytes.length > MAX_MANIFEST) {
+    throw err("invalid_input", `artifact bytes exceed bound ${MAX_MANIFEST}`);
   }
   let fd;
   try {
@@ -259,7 +283,14 @@ function writeOnce(path, bytes, onExists) {
       off += n;
     }
     fsyncSync(fd);
-  } finally { closeSync(fd); }
+  } catch (e) {
+    // Write/fsync failure: the exclusive-created (possibly partial) file
+    // stays in place — never silently repaired, matching Rust.
+    if (e instanceof GenerationUsableError) throw e;
+    throw err("io", `io: ${e.message}`);
+  } finally {
+    try { closeSync(fd); } catch { /* fd may already be closed */ }
+  }
   return null;
 }
 
@@ -272,11 +303,23 @@ const statOrNull = (p) => {
     throw err("io", `io: ${e.message}`);
   }
 };
+const statOrNullL = (p) => {
+  try { return lstatSync(p); }
+  catch (e) {
+    if (e.code === "ENOENT" || e.code === "ENOTDIR") return null;
+    throw err("io", `io: ${e.message}`);
+  }
+};
 const fsyncDir = (dir) => {
-  const fd = openSync(dir, "r");
   try {
-    // Node lacks fsync on dirs portably; fsyncSync on a dir fd is the
-    // Linux-equivalent of Rust's File::open(dir).sync_all().
-    fsyncSync(fd);
-  } finally { closeSync(fd); }
+    const fd = openSync(dir, "r");
+    try {
+      // Node lacks fsync on dirs portably; fsyncSync on a dir fd is the
+      // Linux-equivalent of Rust's File::open(dir).sync_all().
+      fsyncSync(fd);
+    } finally { try { closeSync(fd); } catch { /* already closed */ } }
+  } catch (e) {
+    if (e instanceof GenerationUsableError) throw e;
+    throw err("io", `io: ${e.message}`);
+  }
 };

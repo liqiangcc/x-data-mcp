@@ -2,7 +2,7 @@
 // write_artifact/artifact against a live Rust oracle. Synthetic roots.
 // Exit nonzero on FAIL. Usage: node generation_artifact_probe.mjs <root> [selftest]
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 
@@ -90,6 +90,53 @@ bnd("gid_slash", () => store.writeDecision("a/b", DEC), "invalid_generation_id")
 bnd("gid_surrogate", () => store.writeDecision("g\ud800", DEC), "invalid_generation_id");
 bnd("name_surrogate", () => store.writeArtifact(G, "e\ud800.json", Buffer.from("x")), "not_verified");
 bnd("bytes_string", () => store.writeDecision(G, "not-a-buffer"), "invalid_input");
+// symlinked generation dir must not escape the store (finding 1)
+{
+  const out = join(FIX, "outside");
+  mkdirSync(join(out), { recursive: true });
+  const SG = "b2".repeat(32);
+  symlinkSync(out, join(FIX, "generations", SG));
+  bnd("gendir_symlink_decision", () => store.writeDecision(SG, DEC), "not_installed");
+  bnd("gendir_symlink_artifact", () => store.writeArtifact(SG, "ev.json", Buffer.from("x")), "not_installed");
+  emit("outside_dir_untouched", readdirSync(out).length === 0 ? "PASS" : "FAIL", `outside has ${readdirSync(out).length} entries`);
+}
+// symlinked generations parent must not escape (finding 1)
+{
+  const out2 = join(FIX, "outside-parent");
+  mkdirSync(out2, { recursive: true });
+  const s3 = new GenerationStore(join(FIX, "escroot"));
+  mkdirSync(join(FIX, "escroot"), { recursive: true });
+  symlinkSync(out2, join(FIX, "escroot", "generations"));
+  bnd("parent_symlink_decision", () => s3.writeDecision(G, DEC), "not_installed");
+  emit("parent_outside_untouched", readdirSync(out2).length === 0 ? "PASS" : "FAIL", "outside-parent untouched");
+}
+// reserved immutable names rejected by writeArtifact (finding 2)
+for (const nm of ["consistency-decision.json", "snapshot-manifest.json", "base.zip", "gbbq.zip", "hsjday.zip"]) {
+  bnd(`reserved_${nm.replace(/[^a-z0-9]+/g, "_")}`, () => store.writeArtifact(G, nm, Buffer.from("bypass")), "not_verified");
+}
+// named compatibility evidence artifact allowed
+{
+  const got = run(() => store.writeArtifact(G, "compatibility-evidence.json", Buffer.from("ev")));
+  emit("evidence_name_allowed", got.status === "ok" ? "PASS" : "FAIL", `sha=${got.value ?? got.message}`);
+}
+// oversized write refused BEFORE creation; fs unchanged (finding 3)
+{
+  const big = Buffer.alloc(1024 * 1024 + 1, 0x42);
+  bnd("decision_oversize_write", () => store.writeArtifact(G, "big2.json", big), "invalid_input");
+  emit("oversize_no_file", !existsSync(join(FIX, "generations", G, "big2.json")) ? "PASS" : "FAIL", "no file created");
+}
+// open-path io typing: unwritable dir -> typed io (finding 4, open path)
+{
+  const CG = "c3".repeat(32);
+  mkdirSync(join(FIX, "generations", CG), { recursive: true });
+  writeFileSync(join(FIX, "generations", CG, "perm-marker"), "x");
+  try {
+    const { chmodSync } = await import("node:fs");
+    chmodSync(join(FIX, "generations", CG), 0o555);
+    bnd("unwritable_dir_io", () => store.writeArtifact(CG, "x.json", Buffer.from("x")), "io");
+    chmodSync(join(FIX, "generations", CG), 0o755);
+  } catch (e) { emit("unwritable_dir_io", "NOT_RUN", e.message); }
+}
 // decision read bound: >1MiB decision file -> io (stricter than Rust, documented)
 {
   const big = Buffer.alloc(1024 * 1024 + 1, 0x41);

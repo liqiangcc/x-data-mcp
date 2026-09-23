@@ -22,6 +22,20 @@
 {"family":"generation_artifact","id":"gid_surrogate","status":"PASS","detail":"GenerationUsableError(invalid_generation_id)","expected":"invalid_generation_id","actual":"invalid generation_id"}
 {"family":"generation_artifact","id":"name_surrogate","status":"PASS","detail":"GenerationUsableError(not_verified)","expected":"not_verified","actual":"snapshot inspection failed: invalid artifact name"}
 {"family":"generation_artifact","id":"bytes_string","status":"PASS","detail":"GenerationUsableError(invalid_input)","expected":"invalid_input","actual":"artifact bytes must be Buffer/Uint8Array"}
+{"family":"generation_artifact","id":"gendir_symlink_decision","status":"PASS","detail":"GenerationUsableError(not_installed)","expected":"not_installed","actual":"generation b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 is n"}
+{"family":"generation_artifact","id":"gendir_symlink_artifact","status":"PASS","detail":"GenerationUsableError(not_installed)","expected":"not_installed","actual":"generation b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 is n"}
+{"family":"generation_artifact","id":"outside_dir_untouched","status":"PASS","detail":"outside has 0 entries","expected":null,"actual":null}
+{"family":"generation_artifact","id":"parent_symlink_decision","status":"PASS","detail":"GenerationUsableError(not_installed)","expected":"not_installed","actual":"generation a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 is n"}
+{"family":"generation_artifact","id":"parent_outside_untouched","status":"PASS","detail":"outside-parent untouched","expected":null,"actual":null}
+{"family":"generation_artifact","id":"reserved_consistency_decision_json","status":"PASS","detail":"GenerationUsableError(not_verified)","expected":"not_verified","actual":"snapshot inspection failed: invalid artifact name"}
+{"family":"generation_artifact","id":"reserved_snapshot_manifest_json","status":"PASS","detail":"GenerationUsableError(not_verified)","expected":"not_verified","actual":"snapshot inspection failed: invalid artifact name"}
+{"family":"generation_artifact","id":"reserved_base_zip","status":"PASS","detail":"GenerationUsableError(not_verified)","expected":"not_verified","actual":"snapshot inspection failed: invalid artifact name"}
+{"family":"generation_artifact","id":"reserved_gbbq_zip","status":"PASS","detail":"GenerationUsableError(not_verified)","expected":"not_verified","actual":"snapshot inspection failed: invalid artifact name"}
+{"family":"generation_artifact","id":"reserved_hsjday_zip","status":"PASS","detail":"GenerationUsableError(not_verified)","expected":"not_verified","actual":"snapshot inspection failed: invalid artifact name"}
+{"family":"generation_artifact","id":"evidence_name_allowed","status":"PASS","detail":"sha=67d35554c1f60638d6d72a0edc045450a841f7efabe0f9843b7e653499094538","expected":null,"actual":null}
+{"family":"generation_artifact","id":"decision_oversize_write","status":"PASS","detail":"GenerationUsableError(invalid_input)","expected":"invalid_input","actual":"artifact bytes exceed bound 1048576"}
+{"family":"generation_artifact","id":"oversize_no_file","status":"PASS","detail":"no file created","expected":null,"actual":null}
+{"family":"generation_artifact","id":"unwritable_dir_io","status":"PASS","detail":"GenerationUsableError(io)","expected":"io","actual":"io: EACCES: permission denied, open '/tmp/nm34-art-NSSYG3/generations/c3c3c3c3c3"}
 {"family":"generation_artifact","id":"artifact_oversize_read","status":"PASS","detail":"GenerationUsableError(io)","expected":"io","actual":"io: file exceeds declared bound: 1048577"}
 {"family":"generation_artifact","id":"artifact_symlink_decision_name","status":"PASS","detail":"GenerationUsableError(artifact_exists)","expected":"artifact_exists","actual":"artifact decision-link for generation a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"}
 {"family":"generation_artifact","id":"decision_link_target_untouched","status":"PASS","detail":"target intact","expected":null,"actual":null}

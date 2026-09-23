@@ -6,8 +6,8 @@ sha256 return, null reads, verbatim refusal categories.
 
 ## Contents
 
-- `probe-results.jsonl` — 27 rows, all PASS (19 live Rust oracle +
-  8 boundary).
+- `probe-results.jsonl` — 41 rows, all PASS (19 live Rust oracle +
+  22 boundary).
 - `rust-oracle.jsonl`, `negative-selftest.jsonl` (exit 1), `results.json`.
 
 ## Reproduce
@@ -25,3 +25,8 @@ node scripts/node_migration_p2/generation_artifact_probe.mjs . art # selftest, e
 - Reads bounded ≤1MiB (decision aligned with NM-032); artifact reads
   stricter than Rust — documented.
 - Reopen proves readable state, not crash durability.
+
+R1 (REVIEW-NM-034): lstat real-dir checks block symlinked generation
+paths; reserved immutable names rejected in writeArtifact; write bound
+(1MiB) matches read bound and refuses before creation; write/fsync
+errors surfaced as typed io.
