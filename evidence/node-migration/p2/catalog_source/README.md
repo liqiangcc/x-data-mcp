@@ -9,7 +9,7 @@ reconciliation -> compose -> in-memory candidate + evidence.
 
 ## Contents
 
-- `probe-results.jsonl` — 13 rows, all PASS; probe exits nonzero on FAIL.
+- `probe-results.jsonl` — 14 rows, all PASS; probe exits nonzero on FAIL.
 - `rust-oracle.jsonl` — live Rust oracle replicating `run` pre-publish.
 - `negative-selftest.jsonl` — selftest proof (exit 1).
 - `results.json` — semantics, provenance, deltas.
@@ -43,3 +43,5 @@ R1 additions (REVIEW-NM-028): ZIP CRC32 verification against the CD entry
 `readBoundedFile` with premature-EOF rejection (sysfs deterministic test,
 no races). Probe-side zip_member.mjs carries the same CRC check;
 NM-024/NM-025 probes rerun: 58/58 and 26/26 PASS.
+
+R-update (NM-032 R2): readBoundedFile moved to lib/zip_member.mjs + post-fstat growth probe; 14 rows.

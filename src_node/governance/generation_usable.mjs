@@ -43,8 +43,9 @@ const notVerified = (g) => new GenerationUsableError(
 // most that many bytes; 0-read EOF is an error; post-fstat growth is
 // ignored (prefix only — digest/parse checks stay fail-closed).
 // Stricter than Rust's fs::read for the manifest (>1MiB refuses before
-// read rather than inside inspect) — same Corrupt category, same
-// outcome; documented.
+// read rather than inside inspect; mid-read growth rejects rather than
+// prefix-returning) — same Corrupt category, same outcome; documented.
+// Not an atomic snapshot; see lib/zip_member.mjs.
 const MAX_MANIFEST = 1 * 1024 * 1024;   // same bound inspect enforces
 const MAX_DECISION = 1 * 1024 * 1024;   // decision artifact bound
 
@@ -187,10 +188,10 @@ export function decisionArtifact(root, generationId) {
   try { bytes = readBoundedFile(path, MAX_DECISION); }
   catch (e) {
     if (e.code === "ENOENT") return null;
-    // Oversized decision: Rust reads unbounded then serde fails ->
-    // Corrupt either way; keep the category, note the bound.
-    if (/exceeds declared bound/.test(e.message)) {
-      throw corrupt(generationId, `decision artifact exceeds bound ${MAX_DECISION}`);
+    // Oversized or mid-read-grown decision: Rust reads unbounded then
+    // serde fails -> Corrupt either way; keep the category.
+    if (/exceeds declared bound|grew during read/.test(e.message)) {
+      throw corrupt(generationId, `decision artifact rejected by bounded read: ${e.message}`);
     }
     throw new GenerationUsableError("io", `io: ${e.message}`);
   }

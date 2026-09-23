@@ -86,11 +86,15 @@ export function zipMember(buf, name, maxOut = MAX_MEMBER) {
   return out;
 }
 
-// Bounded fd read with deterministic premature-EOF rejection: reads
-// exactly `maxBytes` (bound from fstat after open); a 0-length read
-// before that is a hard error (a readSync==0 spin would hang). A file
-// that grew after fstat contributes only its declared prefix — callers
-// digest-check or parse-fail downstream, staying fail-closed.
+// Bounded fd read with deterministic change rejection: reads exactly
+// the fstat-declared size, then probes one byte at offset `size` on the
+// same fd — a file that grew between fstat and the end of the read is
+// rejected ("file grew during read") rather than returning a prefix
+// that could parse as valid. A 0-length read early is a hard EOF error
+// (a readSync==0 spin would hang). NOT an atomic snapshot — a file
+// concurrently replaced via rename or written in place then grown and
+// shrunk inside the read window can still evade detection; callers
+// stay fail-closed through digest/parse checks downstream.
 export function readBoundedFile(path, maxBytes) {
   const fd = openSync(path, "r");
   try {
@@ -102,6 +106,10 @@ export function readBoundedFile(path, maxBytes) {
       const n = readSync(fd, buf, off, size - off, off);
       if (n === 0) throw new Error(`unexpected EOF at ${off} of ${size}`);
       off += n;
+    }
+    const tail = Buffer.allocUnsafe(1);
+    if (readSync(fd, tail, 0, 1, size) !== 0) {
+      throw new Error(`file grew during read beyond declared size ${size}`);
     }
     return buf;
   } finally { closeSync(fd); }

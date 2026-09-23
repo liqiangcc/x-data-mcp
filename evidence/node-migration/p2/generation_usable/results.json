@@ -1,6 +1,6 @@
 {
-  "task_id": "NM-032-R1",
-  "baseline_sha": "c5bfcb91be7b0d5d4135be6bcc2b1f051214bf08 (R0)",
+  "task_id": "NM-032-R2",
+  "baseline_sha": "cad38873b60f7b42234e92919e236477668da7bc (R1)",
   "source_ported": "generation/mod.rs::{verify_installed,decision_artifact,usable} — read-only installed-generation usability gate",
   "rust_oracle": "rust-oracle.jsonl — 21 cases via live Store::usable (rustc 1.98.1): categories not_installed/corrupt/json/not_consistency_verified + full text for deterministic messages",
   "environment": {
@@ -43,10 +43,11 @@
   },
   "purity": "read-only; no create/repair/activate/pin/retire; gate reads recorded decision only — does not authenticate issuer/provenance",
   "out_of_scope": "store integration, task scheduling, service/MCP, deploy, production readiness",
-  "review": "REVIEW-NM-032 R0 — three findings fixed",
+  "review": "REVIEW-NM-032 R1 — post-fstat growth returned a valid prefix; now rejected",
   "r1_fixes": {
     "bounded_reads": "manifest+decision now via shared fd-based readBoundedFile (fstat bound pre-read, at most declared bytes, 0-read EOF error); oversized decision maps to corrupt (Rust would fail serde anyway) — documented stricter read-stage refusal, same category",
     "no_copy": "gen-2 fixture uses hardlinks on the same /home filesystem (fixture root /home/box/.nm32-usable-*, cleaned on exit); no official bytes copied",
     "strict_bnd": "typed-boundary probes require GenerationUsableError with expected kind + stable message part — unrelated exceptions no longer pass"
-  }
+  },
+  "r2_fix": "readBoundedFile probes one byte at offset=size on the same fd after the read; growth => 'file grew during read' error (manifest->corrupt, decision->corrupt via same-category mapping). Deterministic test: /proc/self/status reports st_size=0 but yields bytes -> read_bounded_growth in catalog probe. Not an atomic snapshot — documented honestly."
 }

@@ -38,9 +38,9 @@
   "probe": {
     "command": "node scripts/node_migration_p2/catalog_source_probe.mjs .",
     "exit": 0,
-    "cases": 13,
+    "cases": 14,
     "totals": {
-      "pass": 13,
+      "pass": 14,
       "fail": 0,
       "not_run": 0
     },
@@ -64,5 +64,6 @@
   "r1_fixes": {
     "crc32": "zip_member.mjs now verifies CRC32 of decompressed bytes against the CD entry (zip crate Crc32Reader semantics); mismatch throws 'Invalid checksum' verbatim -> member() wraps as 'unreadable: Invalid checksum'. Oracle case member_crc_bad patches CD crc to 0 while the manifest binds the corrupt archive — snapshot inspection passes, extraction fails closed. Same check added to the probe-side scripts/zip_member.mjs for parity.",
     "premature_eof": "readAll replaced by exported readBoundedFile(path,maxBytes): bound = manifest-declared bytes; fstat size > bound -> error; readSync==0 before size -> 'unexpected EOF' error (previously an infinite spin). Deterministic tests: 100B file at/under/over bound + sysfs /sys/devices/system/cpu/online (st_size=4096, early EOF) hits the 0-read branch without races."
-  }
+  },
+  "r2_note": "NM-032 R2 moved readBoundedFile into lib/zip_member.mjs and added a same-fd post-read growth check; probe-results regenerated (14 rows: +read_bounded_growth via /proc/self/status)."
 }

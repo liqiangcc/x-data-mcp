@@ -205,6 +205,11 @@ for (const o of oracle) {
   } else {
     emit("read_bounded_eof", "NOT_RUN", "sysfs size not reported");
   }
+  // deterministic growth: procfs files report st_size=0 but deliver
+  // bytes — the post-read tail probe catches growth past declared size.
+  const pf = "/proc/self/status";
+  try { readBoundedFile(pf, 1 << 20); emit("read_bounded_growth", "FAIL", "accepted grown file"); }
+  catch (e) { emit("read_bounded_growth", /grew during read/.test(e.message) ? "PASS" : "FAIL", e.message.slice(0, 80)); }
 }
 
 // selftest: a deliberately wrong expectation must produce FAIL -> exit 1

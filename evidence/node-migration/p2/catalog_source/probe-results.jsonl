@@ -11,3 +11,4 @@
 {"family":"catalog_source","id":"read_bounded_under","status":"PASS","detail":"bound>size ok","expected":null,"actual":null}
 {"family":"catalog_source","id":"read_bounded_over","status":"PASS","detail":"file exceeds declared bound: 100","expected":null,"actual":null}
 {"family":"catalog_source","id":"read_bounded_eof","status":"PASS","detail":"unexpected EOF at 4 of 4096","expected":null,"actual":null}
+{"family":"catalog_source","id":"read_bounded_growth","status":"PASS","detail":"file grew during read beyond declared size 0","expected":null,"actual":null}

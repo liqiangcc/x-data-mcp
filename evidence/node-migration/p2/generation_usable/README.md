@@ -38,3 +38,5 @@ node scripts/node_migration_p2/generation_usable_probe.mjs . usable # selftest, 
 R1 (REVIEW-NM-032): fd-based bounded reads (no unbounded allocation,
 EOF-safe); gen-2 fixture via same-fs hardlinks — no copy; boundary
 probes require the exact error kind. NM-028 regression 13/13 PASS.
+
+R2: post-fstat growth detected via same-fd tail probe ("file grew during read"); deterministic procfs test; not an atomic snapshot — documented.
