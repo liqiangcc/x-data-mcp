@@ -1,0 +1,39 @@
+{
+  "task_id": "NM-007",
+  "baseline_sha": "ff1d5506309fde836ad77be936ca1914dec3a141",
+  "golden_source": "evidence/node-migration/p0/numeric/vectors.jsonl (51 rows, accepted P0 oracle)",
+  "environment": {
+    "node": "v20.19.2",
+    "dependencies": {
+      "better-sqlite3": "11.10.0 (unused by probe)",
+      "canonicalize": "2.1.0 (pure-JS RFC8785 cross-check only)"
+    }
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p1/codec_probe.mjs .",
+    "exit": 0,
+    "totals": {
+      "rows": 51,
+      "pass": 39,
+      "fail": 0,
+      "not_run": 12
+    }
+  },
+  "coverage": {
+    "day_parse": "4/4 PASS — 32-byte LE record codec, calendar-date + strict-order rejects reproduced",
+    "amount_f32_projection": "6/6 PASS — f32 bits -> promoted f64 -> shortest round-trip string -> canonical decimal; NaN/inf -> null",
+    "gbbq_factor_normalize": "6/6 PASS — exact dyadic HALF_UP 2dp via BigInt rational; non-finite -> null",
+    "metric_ratio_change": "6/6 PASS — exact rational half-even 12dp incl. tie-even/tie-odd quotients; non-positive reject",
+    "digest_legacy_published": "3/3 PASS — sha256 of sorted-keys compact JSON minus integrity_sha256 (serde_json to_vec byte-equivalent on this domain); non-object MARKET_INTEGRITY reject",
+    "digest_canonical_evidence": "4/4 PASS — semantics checks (object/bars-records/VersionEvidence shape) + JCS canonical_json + x-data-evidence-v1\\0 domain-separated sha256",
+    "digest_rfc8785": "1 PASS (nested_ordering; subset output == canonicalize pkg) + 1 NOT_RUN (golden's own justified_not_run marker)",
+    "compact_bar": "6/6 PASS — cents exact-2dp, volume integral non-negative i64, canonical amount lexical rules, r7-on-yearly reject, epoch_day",
+    "segment_digest": "3/3 PASS — x-data-segment-v1\\0 + entity + period + count + bar frames, sha256",
+    "qfq_affine/qfq_forward_adjust/yearly_aggregate": "11 rows NOT_RUN — decimal affine/exact-sum arithmetic is algorithm migration, outside codec slice"
+  },
+  "boundaries": [
+    "jcs() subset: full JSON value domain; rejects non-finite numbers and bigint; keys sorted by UTF-16 code units; cross-checked against canonicalize@2.1.0 on every emitted canonical form",
+    "safe-integer boundary: all i64 values carried as BigInt inside the adapter; serde_json byte path equals JCS subset only where inputs are ASCII-safe (fixture verified by digest equality)",
+    "parseDecimal lexical subset: [+-]?digits[.digits]; exponent forms accepted by rust_decimal::from_str are NOT covered (documented edge, no vector needs it)"
+  ]
+}

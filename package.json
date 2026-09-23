@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "better-sqlite3": "11.10.0"
+    "better-sqlite3": "11.10.0",
+    "canonicalize": "2.1.0"
   }
 }
