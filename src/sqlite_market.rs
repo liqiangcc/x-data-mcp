@@ -782,6 +782,18 @@ impl MarketRepository for SqliteMarket {
         // Legacy rows are monolithic JSON; the header fields come from the
         // stored record without a dedicated typed path.
         let record = SqliteMarket::fixed(self, id)?;
+        let first_day = record
+            .version()
+            .records
+            .first()
+            .ok_or_else(|| Error::Integrity("fixed record has no bars".into()))?
+            .date;
+        let last_day = record
+            .version()
+            .records
+            .last()
+            .ok_or_else(|| Error::Integrity("fixed record has no bars".into()))?
+            .date;
         Ok(crate::market_storage::FixedFacts {
             version_id: record.version().version_id.clone(),
             symbol: record.version().symbol.clone(),
@@ -790,6 +802,8 @@ impl MarketRepository for SqliteMarket {
                 .as_str()
                 .ok_or_else(|| Error::Integrity("fixed record lacks integrity digest".into()))?
                 .into(),
+            first_day,
+            last_day,
         })
     }
     fn fixed_window(

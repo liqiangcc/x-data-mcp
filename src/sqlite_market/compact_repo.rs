@@ -1637,14 +1637,18 @@ impl MarketRepository for SqliteCompactMarket {
             if facts.state != CompactVersionState::Published {
                 return Err(Error::NotFound);
             }
-            let integrity = facts
+            let integrity_digest = facts
                 .integrity_digest
                 .ok_or_else(|| integrity("published version lacks integrity digest"))?;
             Ok(crate::market_storage::FixedFacts {
                 version_id: facts.version_id,
                 symbol: facts.entity,
                 period: facts.period,
-                integrity_sha256: hex_bytes(&integrity),
+                integrity_sha256: hex_bytes(&integrity_digest),
+                first_day: compact_market::epoch_date(facts.first_day)
+                    .map_err(|e| integrity(e.to_string()))?,
+                last_day: compact_market::epoch_date(facts.last_day)
+                    .map_err(|e| integrity(e.to_string()))?,
             })
         })
     }

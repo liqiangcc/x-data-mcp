@@ -117,6 +117,22 @@ fn inputs(store: &SqliteMarket, version: &str) -> (Derivation, DerivationEvidenc
     };
     (request, evidence)
 }
+fn derive(
+    publisher: &Publisher<SqliteMarket>,
+    request: &Derivation,
+    evidence: &DerivationEvidence,
+) -> Result<x_data_mcp::yearly_publication::YearlyCandidate, Error> {
+    let base = publisher
+        .repository
+        .fixed(&request.base_daily_version_id)?;
+    let annual = x_data_mcp::yearly::aggregate(
+        base.version(),
+        Some(&request.years),
+        evidence.as_of,
+    )
+    .map_err(|e| Error::Base(e.to_string()))?;
+    publisher.derive_yearly(request, evidence, &base, &annual)
+}
 fn command(store: &SqliteMarket, id: &str, intent: PublishIntent) -> Publication {
     let ctl = TaskControl::new(
         store.tasks.clone(),
@@ -166,7 +182,7 @@ fn local_candidate_publishes_and_queries_fixed_year_with_original_daily_untouche
         repository: store.clone(),
     };
     let (request, evidence) = inputs(&store, "local-year");
-    let candidate = publisher.derive_yearly(&request, &evidence).unwrap();
+    let candidate = derive(&publisher, &request, &evidence).unwrap();
     assert_eq!(candidate.raw()["records"][0]["close"], "11.75");
     assert_eq!(
         candidate.raw()["yearly_derivation"]["first_trading_date"],
@@ -223,7 +239,7 @@ fn yearly_envelope_expands_exactly_and_missing_payload_fails_closed() {
         repository: store.clone(),
     };
     let (request, evidence) = inputs(&store, "local-year");
-    let candidate = publisher.derive_yearly(&request, &evidence).unwrap();
+    let candidate = derive(&publisher, &request, &evidence).unwrap();
     let cmd = command(
         &store,
         "local-year",
@@ -289,7 +305,7 @@ fn coverage_binding_and_base_identity_reject_before_staging() {
             }
         }
         assert!(
-            publisher.derive_yearly(&request, &evidence).is_err(),
+            derive(&publisher, &request, &evidence).is_err(),
             "case {case}"
         );
         assert!(store.candidate("rejected").is_err());
@@ -305,7 +321,7 @@ fn historical_base_can_publish_after_daily_advances_but_current_intent_conflicts
             repository: store.clone(),
         };
         let (request, evidence) = inputs(&store, "derived");
-        let candidate = publisher.derive_yearly(&request, &evidence).unwrap();
+        let candidate = derive(&publisher, &request, &evidence).unwrap();
         let cmd = command(
             &store,
             "derived",
@@ -354,7 +370,7 @@ fn fixed_base_damage_after_derivation_never_substitutes_another_version() {
         repository: store.clone(),
     };
     let (request, evidence) = inputs(&store, "derived");
-    let candidate = publisher.derive_yearly(&request, &evidence).unwrap();
+    let candidate = derive(&publisher, &request, &evidence).unwrap();
     let cmd = command(&store, "derived", PublishIntent::HistoricalFixedBase);
     Connection::open(store.tasks.path())
         .unwrap()
@@ -377,7 +393,7 @@ fn selected_historical_year_cannot_discard_other_years_from_effective_head() {
     let (mut request, mut evidence) = inputs(&store, "both-years");
     request.years = [2024, 2025].into();
     evidence.years = request.years.clone();
-    let all = publisher.derive_yearly(&request, &evidence).unwrap();
+    let all = derive(&publisher, &request, &evidence).unwrap();
     let cmd = command(
         &store,
         "both-years",
@@ -389,7 +405,7 @@ fn selected_historical_year_cannot_discard_other_years_from_effective_head() {
     let plan = publisher.prepare_derived_yearly(cmd, &all).unwrap();
     store.commit(&plan).unwrap();
     let (request, evidence) = inputs(&store, "selected-year");
-    let selected = publisher.derive_yearly(&request, &evidence).unwrap();
+    let selected = derive(&publisher, &request, &evidence).unwrap();
     let cmd = command(
         &store,
         "selected-year",
@@ -642,7 +658,7 @@ fn yearly_publication_is_bound_to_accepted_years_base_and_intent() {
         repository: store.clone(),
     };
     let (mut request, mut evidence) = inputs(&store, "accepted-year");
-    let valid = publisher.derive_yearly(&request, &evidence).unwrap();
+    let valid = derive(&publisher, &request, &evidence).unwrap();
     let cmd = Publication {
         publication_id: "accepted-result".into(),
         version_id: "accepted-year".into(),
@@ -665,7 +681,7 @@ fn yearly_publication_is_bound_to_accepted_years_base_and_intent() {
     ));
     request.years = [2024, 2025].into();
     evidence.years = request.years.clone();
-    let widened = publisher.derive_yearly(&request, &evidence).unwrap();
+    let widened = derive(&publisher, &request, &evidence).unwrap();
     assert!(matches!(
         publisher.prepare_derived_yearly(cmd.clone(), &widened),
         Err(Error::Conflict(_))
@@ -726,7 +742,7 @@ fn result_plan(
     let publisher = Publisher {
         repository: store.clone(),
     };
-    let candidate = publisher.derive_yearly(&request, &evidence).unwrap();
+    let candidate = derive(&publisher, &request, &evidence).unwrap();
     publisher
         .prepare_yearly_result(
             Publication {
@@ -890,7 +906,7 @@ fn numerically_equal_yearly_from_a_different_daily_version_is_not_reuse() {
         .unwrap()
         .into();
     evidence.coverage.reason = "fixture range".into();
-    let candidate = publisher.derive_yearly(&request, &evidence).unwrap();
+    let candidate = derive(&publisher, &request, &evidence).unwrap();
     let cmd = command(
         &store,
         "new-lineage",
@@ -934,7 +950,7 @@ fn crossing_year_boundary_changes_version_state_without_claiming_full_coverage()
     let (mut request, mut evidence) = inputs(&store, "unfinished");
     request.derived_at = "2025-12-31T08:00:00Z".parse().unwrap();
     evidence.as_of = "2025-12-31".parse().unwrap();
-    let first = publisher.derive_yearly(&request, &evidence).unwrap();
+    let first = derive(&publisher, &request, &evidence).unwrap();
     let cmd = command(
         &store,
         "unfinished",
@@ -946,7 +962,7 @@ fn crossing_year_boundary_changes_version_state_without_claiming_full_coverage()
     let plan = publisher.prepare_yearly_result(cmd, &first, None).unwrap();
     store.commit_yearly(&plan).unwrap();
     let (request, evidence) = inputs(&store, "crossed-year");
-    let next = publisher.derive_yearly(&request, &evidence).unwrap();
+    let next = derive(&publisher, &request, &evidence).unwrap();
     let cmd = command(
         &store,
         "crossed-year",
@@ -990,6 +1006,7 @@ impl YearlyVerifier for FixtureYearlyVerifier {
         &self,
         base: &x_data_mcp::market_storage::compat::CheckedRecord,
         years: &std::collections::BTreeSet<i32>,
+        _annual: &x_data_mcp::yearly::AnnualSeries,
         at: chrono::DateTime<Utc>,
     ) -> Result<DerivationEvidence, x_data_mcp::market_data::SourceError> {
         self.calls.set(self.calls.get() + 1);

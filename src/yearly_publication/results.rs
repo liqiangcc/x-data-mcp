@@ -69,10 +69,21 @@ impl<R: MarketRepository> Publisher<R> {
                 "reuse comparison must bind expected yearly head".into(),
             ));
         }
-        let base = self.repository.fixed(&candidate.base_daily_version_id)?;
-        if base.raw()["integrity_sha256"] != candidate.base_integrity_sha256 {
+        let base_facts = self
+            .repository
+            .fixed_facts(&candidate.base_daily_version_id)?;
+        if base_facts.integrity_sha256 != candidate.base_integrity_sha256 {
             return Err(Error::Base("fixed base changed after derivation".into()));
         }
+        // One-day window: full version metadata with a single-segment read
+        // on compact backends; the legacy backend falls back to `fixed`,
+        // which keeps `plan.base.raw` identical to the stored record its
+        // commit path re-compares.
+        let base = self.repository.fixed_window(
+            &candidate.base_daily_version_id,
+            base_facts.first_day,
+            base_facts.first_day,
+        )?;
         let prior = prior_id.map(|id| self.repository.fixed(id)).transpose()?;
         let binding = self
             .repository
@@ -89,7 +100,7 @@ impl<R: MarketRepository> Publisher<R> {
             }
         }
         let next = compat::check(&candidate.raw)?;
-        crate::market_storage::validate_base(&next, Some(&base))?;
+        crate::market_storage::validate_base_facts(&next, &self.repository, &base_facts)?;
         if prior.as_ref().is_some_and(|p| {
             p.version().symbol != next.version().symbol
                 || p.version().period != next.version().period

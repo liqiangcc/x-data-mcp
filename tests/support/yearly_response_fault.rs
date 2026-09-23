@@ -31,6 +31,25 @@ impl MarketRepository for ResponseFault {
     fn fixed_many(&self, ids: &[String]) -> Result<Vec<CheckedRecord>, Error> {
         self.db.fixed_many(ids)
     }
+    fn fixed_facts(&self, id: &str) -> Result<FixedFacts, Error> {
+        MarketRepository::fixed_facts(&self.db, id)
+    }
+    fn fixed_window(
+        &self,
+        id: &str,
+        first_day: chrono::NaiveDate,
+        last_day: chrono::NaiveDate,
+    ) -> Result<CheckedRecord, Error> {
+        MarketRepository::fixed_window(&self.db, id, first_day, last_day)
+    }
+    fn fixed_window_years(
+        &self,
+        id: &str,
+        first_day: chrono::NaiveDate,
+        last_day: chrono::NaiveDate,
+    ) -> Result<std::collections::BTreeSet<i32>, Error> {
+        MarketRepository::fixed_window_years(&self.db, id, first_day, last_day)
+    }
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error> {
         self.db.task(id)
     }
