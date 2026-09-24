@@ -385,6 +385,188 @@ c.execute("UPDATE acquisition_tasks SET state='running', stage='verify' WHERE st
     "running task + installed gen, no decision -> reconcile realign");
 };
 
+// ---------- NM-100 storage-level scenarios ----------
+
+const scenarioBatchKill = () => {
+  const per = {};
+  for (const impl of ["rust", "node"]) {
+    const dir = join(ROOT, `batch-${impl}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const db = join(dir, "b.db");
+    mkDb(db);
+    runSync(impl, "batch_kill", [db]); // dies by SIGKILL mid-tx
+    const post = runSync(impl, "batch_state", [db]);
+    per[impl] = post.out;
+    rec("batch_kill", impl, post.out);
+  }
+  verdict("batch_kill", canon(per.rust) === canon(per.node),
+    per.rust, per.node, "SIGKILL mid multi-table tx -> both empty");
+};
+
+const scenarioWalResidue = () => {
+  const per = {};
+  for (const impl of ["rust", "node"]) {
+    const dir = join(ROOT, `wal-${impl}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const db = join(dir, "w.db");
+    mkDb(db);
+    runSync(impl, "commit_kill", [db, "8", "4"]);
+    const open = runSync(impl, "reopen_state", [db]);
+    const closed = runSync(impl, "reopen_close", [db]);
+    per[impl] = { during: open.out?.wal_left, after: closed.out?.wal_after_close,
+      rows: closed.out?.rows };
+    rec("wal_residue", impl, per[impl]);
+  }
+  verdict("wal_residue", canon(per.rust) === canon(per.node),
+    per.rust, per.node, "-wal during reopen + after clean close");
+};
+
+const scenarioSchemaMismatch = () => {
+  // Direction A: schema-19 file through the LEGACY gate (both impls).
+  // Direction B: schema-18 file through the 19-only compact gate —
+  // Rust's SqliteCompactMarket::open is pub(crate) -> NOT_RUN; Node's
+  // coordinatorOpenExisting is exported -> RUN. Documented asymmetry.
+  const per = {};
+  const dirR = join(ROOT, "sm-rust"), dirN = join(ROOT, "sm-node");
+  for (const d of [dirR, dirN]) fs.mkdirSync(d, { recursive: true });
+  const db19 = join(dirR, "v19.db"), db18 = join(dirN, "v18.db");
+  for (const d of [dirR, dirN]) fs.chmodSync(d, 0o700);
+  // seed both via the Rust oracle (Node has no init path)
+  runSync("rust", "schema19_init", [db19]);
+  runSync("rust", "schema18_init", [db18]);
+  for (const f of [db19, db18]) fs.chmodSync(f, 0o600); // lease private-metadata
+  // A: 19 file through legacy candidates
+  const rA = runSync("rust", "candidates", [db19, "run-x"]);
+  const nA = runSync("node", "candidates", [db19, "run-x"]);
+  rec("schema_mismatch_legacy19", "rust", { exit: rA.exit, error: rA.out?.error });
+  rec("schema_mismatch_legacy19", "node", { exit: nA.exit, error: nA.out?.error,
+    out: nA.out });
+  per.legacy19 = { rust: { exit: rA.exit, error: rA.out?.error },
+    node: { exit: nA.exit, error: nA.out?.error ?? nA.out } };
+  // B: 18 file through the 19-only gate
+  const nB = runSync("node", "compact_open", [db18]);
+  rec("schema_mismatch_compact18", "node", { exit: nB.exit, error: nB.out?.error });
+  rec("schema_mismatch_compact18", "rust",
+    { verdict: "NOT_RUN", reason: "SqliteCompactMarket::open is pub(crate)" });
+  per.compact18 = { node: { exit: nB.exit, error: nB.out?.error }, rust: "NOT_RUN" };
+  // verdict: both impls refuse *somewhere* fail-closed; exact-text parity
+  // only on the symmetric arm (A).
+  const refused = (x) => x.exit === 42 || typeof x?.error === "string";
+  verdict("schema_mismatch",
+    refused(per.legacy19.rust) && per.legacy19.rust.error === per.legacy19.node.error
+      && refused(per.compact18.node),
+    per.legacy19, { node: per.compact18.node, rust: "NOT_RUN(pub(crate))" },
+    "18-by-19-gate (node-only arm) + 19-by-legacy-gate (symmetric arm)");
+};
+
+const scenarioCheckpointCorruption = () => {
+  // tamper the schema_migrations checksum chain -> gated open/read must
+  // fail closed. (Data-level manifest-node corruption needs a committed
+  // compact version — no seed path without the full commit pipeline:
+  // documented NOT_RUN for that arm.)
+  const per = {};
+  for (const impl of ["rust", "node"]) {
+    const dir = join(ROOT, `chk-${impl}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const db = join(dir, "c.db");
+    runSync("rust", "schema18_init", [db]); // rust seeds; impl under test reads
+    fs.chmodSync(db, 0o600);
+    spawnSync("python3", ["-c",
+      `import sqlite3; c=sqlite3.connect("${db}");
+c.execute("UPDATE schema_migrations SET checksum='tampered' WHERE version=1"); c.commit();`]);
+    const r = runSync(impl, "candidates", [db, "run-x"]);
+    per[impl] = { exit: r.exit, error: r.out?.error };
+    rec("checkpoint_corruption", impl, per[impl]);
+  }
+  // rust Error Display prefixes the kind ("STORAGE_UNAVAILABLE: msg");
+  // Node carries kind as a structured field, message bare — normalize.
+  const bare = (e) => typeof e === "string" ? e.replace(/^[A-Z_]+: /, "") : e;
+  verdict("checkpoint_corruption",
+    per.rust.exit === per.node.exit && bare(per.rust.error) === bare(per.node.error),
+    per.rust, per.node, "tampered schema_migrations checksum -> fail closed");
+};
+
+const scenarioDoubleBind = async () => {
+  const per = {};
+  for (const impl of ["rust", "node"]) {
+    const dir = join(ROOT, `dbl-${impl}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, 0o700);
+    mkDb(join(dir, "svc.db"));
+    const r = runSync(impl, "bind_twice", [dir, "svc.db"]);
+    per[impl] = { exit: r.exit, error: r.out?.error ?? null,
+      bound: r.out?.double_bound ?? false };
+    rec("double_bind", impl, per[impl]);
+  }
+  verdict("double_bind",
+    per.rust.exit === per.node.exit && per.rust.error === per.node.error &&
+    per.rust.bound === per.node.bound,
+    per.rust, per.node, "second bind on live endpoint");
+};
+
+const scenarioOversizedFrame = async () => {
+  const per = {};
+  for (const impl of ["rust", "node"]) {
+    const dir = join(ROOT, `big-${impl}`);
+    const { p, sock } = await startDaemon(impl, dir);
+    // 5MiB frame without newline -> exceeds 4MiB limit -> drop conn.
+    await new Promise((res) => {
+      const s = net.createConnection(sock);
+      s.on("connect", () => {
+        s.write(Buffer.alloc(5 * 1024 * 1024, 65)); // 'A'*5MiB, no \n
+        s.end();
+      });
+      s.on("close", res); s.on("error", res);
+      setTimeout(res, 3000);
+    });
+    let alive = null;
+    try { const r = await daemonCall(sock, "tools/list", {}); alive = Array.isArray(r.result?.tools); }
+    catch { alive = false; }
+    const exit = await new Promise((res) => {
+      p.on("exit", (c) => res({ code: c }));
+      p.kill("SIGTERM");
+      setTimeout(() => { p.kill("SIGKILL"); res({ code: null }); }, 10000);
+    });
+    per[impl] = { alive, exit: exit.code };
+    rec("oversized_frame", impl, per[impl]);
+  }
+  verdict("oversized_frame",
+    per.rust.alive === per.node.alive && per.rust.exit === per.node.exit,
+    per.rust, per.node, "5MiB frame -> drop conn, daemon survives");
+};
+
+const scenarioEpipe = async () => {
+  const per = {};
+  for (const impl of ["rust", "node"]) {
+    const dir = join(ROOT, `ep-${impl}`);
+    const { p, sock } = await startDaemon(impl, dir);
+    // request then slam the socket shut -> server write hits EPIPE.
+    await new Promise((res) => {
+      const s = net.createConnection(sock);
+      s.on("connect", () => {
+        s.write(JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) + "\n");
+        s.destroy(); // RST — response write will EPIPE
+      });
+      s.on("close", res); s.on("error", res);
+      setTimeout(res, 2000);
+    });
+    let alive = null;
+    try { const r = await daemonCall(sock, "tools/list", {}); alive = Array.isArray(r.result?.tools); }
+    catch { alive = false; }
+    const exit = await new Promise((res) => {
+      p.on("exit", (c) => res({ code: c }));
+      p.kill("SIGTERM");
+      setTimeout(() => { p.kill("SIGKILL"); res({ code: null }); }, 10000);
+    });
+    per[impl] = { alive, exit: exit.code };
+    rec("epipe", impl, per[impl]);
+  }
+  verdict("epipe",
+    per.rust.alive === per.node.alive && per.rust.exit === per.node.exit,
+    per.rust, per.node, "client RST mid-dispatch -> daemon survives");
+};
+
 // ---------- run ----------
 const t0 = Date.now();
 await scenarioLeaseContention();
@@ -395,6 +577,14 @@ scenarioUnsupportedFs();
 await scenarioFrameEof();
 scenarioCorruptGen();
 scenarioMidVerify();
+// NM-100 storage-level expansion
+scenarioBatchKill();
+scenarioWalResidue();
+scenarioSchemaMismatch();
+scenarioCheckpointCorruption();
+await scenarioDoubleBind();
+await scenarioOversizedFrame();
+await scenarioEpipe();
 
 let divergences = 0;
 for (const r of records) {
@@ -402,5 +592,5 @@ for (const r of records) {
   console.log(JSON.stringify(r));
 }
 console.log(JSON.stringify({ check: "summary", elapsed_ms: Date.now() - t0,
-  scenarios: 8, divergences, records: records.length }));
+  scenarios: 15, divergences, records: records.length }));
 process.exit(0); // divergences are findings, not failures

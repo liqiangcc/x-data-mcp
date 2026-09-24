@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use std::process;
 use x_data_mcp::acquire::service::{self, Source};
 use x_data_mcp::local_runtime::{DatabaseLease, Endpoint};
+use x_data_mcp::sqlite_market::backend::MarketBackend;
+use x_data_mcp::sqlite_tasks::SqliteTasks;
 
 fn out(v: serde_json::Value) {
     println!("{}", serde_json::to_string(&v).unwrap());
@@ -152,6 +154,103 @@ fn main() {
                         "generations": gens }));
                     0
                 }
+                Err(e) => { out(err_json(&e)); 42 }
+            }
+        }
+        // schema18_init <db> — SqliteTasks::initialize (schema 18).
+        "schema18_init" => {
+            match SqliteTasks::new(PathBuf::from(&args[1])).initialize() {
+                Ok(()) => { out(serde_json::json!({ "initialized": 18 })); 0 }
+                Err(e) => { out(err_json(&e)); 42 }
+            }
+        }
+        // backend_open <db> — MarketBackend::open: dispatches on durable
+        // schema (18->Legacy, 19->Compact). The 19-only open itself is
+        // pub(crate) — NOT_RUN on Rust; this is the closest public arm.
+        "backend_open" => {
+            match MarketBackend::open(&SqliteTasks::new(PathBuf::from(&args[1]))) {
+                Ok(MarketBackend::Compact(_)) => {
+                    out(serde_json::json!({ "opened": "compact" })); 0
+                }
+                Ok(MarketBackend::Legacy(_)) => {
+                    out(serde_json::json!({ "opened": "legacy" })); 0
+                }
+                Err(e) => { out(err_json(&e)); 42 }
+            }
+        }
+        // batch_kill <db> — multi-table tx: BEGIN + inserts into t1+t2,
+        // SIGKILL mid-batch; reopen must show both tables empty.
+        "batch_kill" => {
+            let db = PathBuf::from(&args[1]);
+            let c = rusqlite::Connection::open(&db).unwrap();
+            c.execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 CREATE TABLE IF NOT EXISTS t1(id INTEGER PRIMARY KEY, v TEXT);
+                 CREATE TABLE IF NOT EXISTS t2(id INTEGER PRIMARY KEY, v TEXT);",
+            ).unwrap();
+            c.execute_batch("BEGIN IMMEDIATE").unwrap();
+            for i in 0..6 {
+                c.execute("INSERT INTO t1(v) VALUES(?1)", [&format!("a-{i}")]).unwrap();
+                c.execute("INSERT INTO t2(v) VALUES(?1)", [&format!("b-{i}")]).unwrap();
+                if i == 2 { unsafe { libc::kill(libc::getpid(), libc::SIGKILL) }; }
+            }
+            c.execute_batch("COMMIT").unwrap();
+            out(serde_json::json!({ "committed": true }));
+            0
+        }
+        // batch_state <db> — rows in t1 + t2 + wal presence.
+        "batch_state" => {
+            let db = PathBuf::from(&args[1]);
+            let c = rusqlite::Connection::open(&db).unwrap();
+            let n1: i64 = c.query_row("SELECT count(*) FROM t1", [], |r| r.get(0)).unwrap_or(-1);
+            let n2: i64 = c.query_row("SELECT count(*) FROM t2", [], |r| r.get(0)).unwrap_or(-1);
+            let wal = PathBuf::from(format!("{}-wal", db.display())).exists();
+            out(serde_json::json!({ "t1": n1, "t2": n2, "wal_left": wal }));
+            0
+        }
+        // reopen_close <db> — open, count, close cleanly, then report
+        // whether -wal remains after last-connection close.
+        "reopen_close" => {
+            let db = PathBuf::from(&args[1]);
+            let n = {
+                let c = rusqlite::Connection::open(&db).unwrap();
+                c.query_row("SELECT count(*) FROM k", [], |r| r.get::<_, i64>(0)).unwrap_or(-1)
+            };
+            let wal = PathBuf::from(format!("{}-wal", db.display())).exists();
+            out(serde_json::json!({ "rows": n, "wal_after_close": wal }));
+            0
+        }
+        // bind_twice <dir> <dbname> — lease once, bind socket, bind
+        // again on the live endpoint -> verbatim refusal.
+        "bind_twice" => {
+            let dir = PathBuf::from(&args[1]);
+            let dbp = dir.join(&args[2]);
+            match DatabaseLease::acquire(&dbp)
+                .and_then(|lease| {
+                    Endpoint::bind(&dir.join("svc.sock"), &lease)
+                        .map(|ep| (lease, ep))
+                })
+                .and_then(|(lease, ep)| {
+                    Endpoint::bind(&dir.join("svc.sock"), &lease)
+                        .map(|e2| (ep, e2))
+                }) {
+                Ok((_e1, _e2)) => { out(serde_json::json!({ "double_bound": true })); 0 }
+                Err(e) => { out(err_json(&e)); 42 }
+            }
+        }
+        // schema19_init <db> — SqliteTasks::initialize19.
+        "schema19_init" => {
+            match SqliteTasks::new(PathBuf::from(&args[1])).initialize19() {
+                Ok(()) => { out(serde_json::json!({ "initialized": 19 })); 0 }
+                Err(e) => { out(err_json(&e)); 42 }
+            }
+        }
+        // candidates <db> <run> — SqliteTasks::candidates: gated read.
+        "candidates" => {
+            use x_data_mcp::task_control::TaskRepository;
+            match SqliteTasks::new(PathBuf::from(&args[1]))
+                .candidates(&args[2]) {
+                Ok(v) => { out(serde_json::json!({ "candidates": v.len() })); 0 }
                 Err(e) => { out(err_json(&e)); 42 }
             }
         }
