@@ -34,8 +34,10 @@ import { parseTs } from "../governance/ts.mjs";
 import { parse as parseDay } from "../parsers/day_file.mjs";
 import { parse as parseGbbq } from "../parsers/gbbq_file.mjs";
 import { decodeEvents } from "../parsers/gbbq_decode.mjs";
-import { forwardAdjust } from "../algorithms/qfq_forward.mjs";
-import { __cmpDec, __parseDate } from "../market/record_codec.mjs";
+import {
+  factors, composeChain, decAdd, decMul, decToString, _dec,
+} from "../algorithms/qfq_affine.mjs";
+import { __cmpDec } from "../market/record_codec.mjs";
 
 export const SOURCE_NAME = "tdx-official-file-snapshot";
 export const ADAPTER_VERSION = "tdx-market-source-v1";
@@ -698,6 +700,17 @@ export class TdxMarketSource {
   }
 }
 
+// qfq_forward.mjs::partition_point — count of dated[k0..] with
+// date <= barDate (the strict-later event boundary walk).
+function partitionPoint(dated, from, barDate) {
+  let lo = from, hi = dated.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dated[mid][0] <= barDate) lo = mid + 1; else hi = mid;
+  }
+  return lo - from;
+}
+
 export class MaterializeSession {
   constructor(source) {
     this.source = source;
@@ -827,24 +840,86 @@ export class MaterializeSession {
   }
 
   // Map verified-raw .day records through the QFQ event chain into
-  // publishable bars.
+  // publishable bars. Same traversal as
+  // algorithms/qfq_forward.mjs::forwardAdjust (u32 guards, stable
+  // date_raw sort, partition-point walk, memoized suffix chains,
+  // strict-later events, 2dp HALF_UP) fused with the final Bar map —
+  // one regex per bar and no intermediate QfqBar objects — plus one
+  // inert fast path: rawPrice(cents) is built directly instead of via
+  // decDiv. The division c/100 always resolves in one scale-9
+  // iteration + the crate's one-pass unscale chain, so
+  //   decDiv({m:c,s:0},{m:100,s:0}) ≡
+  //     c%100==0 ? {m:c/100,s:0} : unscale({m:c*10^7,s:9})
+  // — verified rep-identical over 200k u32 cases + 2^32-boundary edges;
+  // the {m,s} rep reaching decMul is bit-identical, keeping every
+  // downstream op (rescaleFit/roundAway/decToString) byte-identical.
   static qfqBars(rawBars, events) {
-    let adjusted;
     try {
-      adjusted = forwardAdjust(rawBars, events);
+      const dated = events.map((e, i) => {
+        if (!Number.isInteger(e.date_raw) || e.date_raw < 0 ||
+            e.date_raw > 0xffffffff) {
+          throw new RangeError(
+            `events[${i}].date_raw must be u32 integer, got ${e.date_raw}`);
+        }
+        return [e.date_raw, factors(e.c_raw)];
+      });
+      dated.sort((a, b) => a[0] - b[0]); // stable — mirrors sort_by_key
+      const chains = new Array(dated.length + 1);
+      const chainAt = (k) =>
+        (chains[k] ??= composeChain(dated.slice(k).map(([, f]) => f)));
+      let k = 0;
+      let lastBarDate = 0;
+      const out = new Array(rawBars.length);
+      for (let bi = 0; bi < rawBars.length; bi++) {
+        const bar = rawBars[bi];
+        const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(bar.date);
+        if (dm === null) {
+          throw new RangeError(`expected ISO date, got ${bar.date}`);
+        }
+        if (!Array.isArray(bar.ohlc_raw) || bar.ohlc_raw.length !== 4 ||
+            !bar.ohlc_raw.every(
+              (v) => Number.isInteger(v) && v >= 0 && v <= 0xffffffff)) {
+          throw new RangeError(`bars[${bi}].ohlc_raw must be four u32 values`);
+        }
+        const barDate = Number(dm[1]) * 10000 + Number(dm[2]) * 100 +
+          Number(dm[3]);
+        k = barDate >= lastBarDate
+          ? k + partitionPoint(dated, k, barDate)
+          : partitionPoint(dated, 0, barDate);
+        lastBarDate = barDate;
+        const chain = chainAt(k);
+        const price = (cents) => {
+          // rawPrice — decDiv({m:c,s:0},{m:100,s:0}) inlined (see note).
+          let m, s;
+          if (cents % 100 === 0) { m = BigInt(cents / 100); s = 0; }
+          else {
+            m = BigInt(cents) * 10000000n; s = 9;
+            while (s >= 8 && m % 4294967296n === 0n && m % 100000000n === 0n) {
+              m /= 100000000n; s -= 8;
+            }
+            if (s >= 4 && m % 10000n === 0n) { m /= 10000n; s -= 4; }
+            if (s >= 2 && m % 100n === 0n) { m /= 100n; s -= 2; }
+            if (s >= 1 && m % 10n === 0n) { m /= 10n; s -= 1; }
+          }
+          return decToString(_dec.roundAway(
+            decAdd(decMul(chain.a, { m, s }), chain.b), 2));
+        };
+        out[bi] = {
+          date: { y: Number(dm[1]), mo: Number(dm[2]), d: Number(dm[3]),
+                  s: bar.date },
+          open: price(bar.ohlc_raw[0]),
+          high: price(bar.ohlc_raw[1]),
+          low: price(bar.ohlc_raw[2]),
+          close: price(bar.ohlc_raw[3]),
+          volume: String(bar.volume_raw), // Decimal::from(u32)
+          amount: amountFromBits(bar.amount_float32_bits),
+          r7_raw: bar.r7_raw,
+        };
+      }
+      return out;
     } catch (e) {
       throw srcInvalidResponse(`qfq chain failed: ${e.message}`);
     }
-    return adjusted.map((b) => ({
-      date: __parseDate(b.date),
-      open: b.open,
-      high: b.high,
-      low: b.low,
-      close: b.close,
-      volume: String(b.volume_raw), // Decimal::from(u32)
-      amount: amountFromBits(b.amount_float32_bits),
-      r7_raw: b.r7_raw,
-    }));
   }
 
   // Build the snapshot-bound batch: the same bars plus bindings covering

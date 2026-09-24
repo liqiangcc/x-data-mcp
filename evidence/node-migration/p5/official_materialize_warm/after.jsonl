@@ -1,0 +1,5 @@
+{"type":"env","code_sha":"52cfb8ce2af8a68cfeabf7dca2c3214535fec76e","node":"v20.19.2","rustc":"rustc 1.98.1 (48a229cea 2026-09-01)","uname":"Linux 6.12.94+ #1 SMP PREEMPT_DYNAMIC Fri Sep 18 16:05:18 UTC 2026 x86_64 GNU/Linux","concurrency":1,"bench_iters":200,"bench_warmup":20}
+{"surface":"materialize_warm","impl":"rust","iters":200,"p50_ns":4902246,"p95_ns":5693301,"max_ns":46912644,"mean_ns":5245910,"input_bytes":6393,"peak_rss_kb":42740}
+{"surface":"materialize_warm","impl":"node","iters":200,"p50_ns":53200632,"p95_ns":69637523,"max_ns":117944722,"mean_ns":55548837,"input_bytes":6393,"peak_rss_kb":367620}
+{"surface":"materialize_cold","impl":"rust","iters":30,"p50_ns":156435932,"p95_ns":165922714,"max_ns":184490636,"mean_ns":157939809,"input_bytes":6393,"peak_rss_kb":46724}
+{"surface":"materialize_cold","impl":"node","iters":30,"p50_ns":2123724971,"p95_ns":2446475531,"max_ns":2474573702,"mean_ns":2069270541,"input_bytes":6393,"peak_rss_kb":836904}
