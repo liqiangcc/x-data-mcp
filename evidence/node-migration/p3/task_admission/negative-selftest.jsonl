@@ -1,0 +1,10 @@
+{"family":"task_admission","id":"admit_creates_all_rows","status":"PASS","detail":null,"expected":{"task_id":"task-e3f05f2610dc54bef451586d94e76b17","revision":"0","occupancy_rev0":true},"actual":null}
+{"family":"task_admission","id":"admit_replay_identical","status":"PASS","detail":null,"expected":{"reused":true},"actual":null}
+{"family":"task_admission","id":"admit_conflict_no_mutation","status":"PASS","detail":null,"expected":{"code":"conflict","unchanged":true},"actual":null}
+{"family":"task_admission","id":"scope_overlap_range_conflict","status":"PASS","detail":null,"expected":{"code":"range_conflict","conflict_list":"RANGE_CONFLICT: [\"scope-B\"]"},"actual":null}
+{"family":"task_admission","id":"malformed_plan_rejects","status":"PASS","detail":null,"expected":{"rejected":5},"actual":null}
+{"family":"task_admission","id":"forced_constraint_rolls_back","status":"PASS","detail":null,"expected":{"rolled_back":true,"driver_code":"SQLITE_CONSTRAINT_PRIMARYKEY"},"actual":null}
+{"family":"task_admission","id":"reopen_readback","status":"PASS","detail":null,"expected":{"readback":true,"task_id":"task-fa462f298d01fcf0128853160e000cc4"},"actual":null}
+{"family":"task_admission","id":"implicit_mode_denied","status":"PASS","detail":"invalid_input task_admission: explicit mode readwrite|create required","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_admission","id":"garbage_gated","status":"PASS","detail":"corrupt file is not a database","expected":"corrupt","actual":"corrupt"}
+{"family":"task_admission","id":"selftest_adm","status":"FAIL","detail":"unexpected success — STOP (task-de9b60720470f613c9eb70e9303bed90)","expected":null,"actual":null}

@@ -1,0 +1,40 @@
+{
+  "task_id": "NM-042",
+  "baseline_sha": "2c9da0bffb4d8037daf260a72443e2b503a484b8",
+  "source_ported": "sqlite_tasks.rs::accept_tx — request replay/conflict, orphan + 5 integrity gates, digest gate, scope RangeConflict, task/items/scopes/occupancy/request inserts",
+  "contract": [
+    "ordering verbatim: replay/conflict -> orphan check -> integrity gates -> digest gate -> scope conflicts -> inserts",
+    "task_id = 'task-'+lower(hex(randomblob(16))); status pending, state_revision 0, owner NULL, item_count=items_pending=len, evidence_digest from frozen work",
+    "occupancy rows bind same task_id at revision 0; task_scopes row per scope",
+    "conflicts -> 'RANGE_CONFLICT: [list]' (plan order); conflict/replay/overlap leave zero partial rows"
+  ],
+  "fixture": "db18.sqlite (NM-006) copy; synthetic plans via repo only",
+  "probe": {
+    "command": "node scripts/node_migration_p3/task_admission_probe.mjs .",
+    "exit": 0,
+    "cases": 9,
+    "totals": {
+      "pass": 9,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "admission": 2,
+      "replay_conflict_overlap": 2,
+      "malformed_rollback": 2,
+      "readback": 1,
+      "boundary": 2,
+      "selftest": "exit 1"
+    }
+  },
+  "regressions": {
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "no worker transitions/CAS post-admission/crash recovery/services/production readiness; retry path out of slice"
+}
