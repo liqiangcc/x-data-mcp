@@ -1,0 +1,19 @@
+{
+  "task": "NM-106",
+  "baseline": "16df795",
+  "scenarios": 137,
+  "match": 137,
+  "diffs": 0,
+  "oracle_panics": 0,
+  "ops": {
+    "verify_decode": 13,
+    "admission_new": 4,
+    "admission_normalize": 9,
+    "admission_resolve": 10,
+    "inspect": 39,
+    "prepare": 33,
+    "validate_audit": 9,
+    "existing_accept": 20
+  },
+  "probe_exit": 0
+}
