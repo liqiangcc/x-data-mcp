@@ -9,7 +9,7 @@ revision 0.
 
 ## Contents
 
-- `probe-results.jsonl` — 9 rows, all PASS.
+- `probe-results.jsonl` — 11 rows, all PASS.
 - `negative-selftest.jsonl` (exit 1), `results.json`, `SHA256SUMS`.
 
 ## Reproduce
@@ -25,3 +25,5 @@ node scripts/node_migration_p3/task_admission_probe.mjs . adm  # selftest, exit 
 - Any failure rolls back all rows — verified on conflict, overlap,
   malformed plans, and a forced PK violation.
 - Retry path and worker transitions are outside this slice.
+
+R1: replay reuse requires the durable binding to match the plan (key/run/retry/work/items/scopes) — divergence rejects inconsistent, DB unchanged (REVIEW-NM-042 R0).

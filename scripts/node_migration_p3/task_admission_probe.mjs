@@ -82,6 +82,49 @@ run("admit_replay_identical", () => {
   return { reused: true };
 });
 
+// replay with identical command bytes but divergent durable binding —
+// each divergence rejects inconsistent, DB unchanged
+run("replay_binding_divergence", () => {
+  const before = sha(DB);
+  const divergences = [
+    ["run", plan({ runId: "run-DIFFERENT" })],
+    ["retry", plan({ retryOf: "task-x" })],
+    ["work", plan({ workJson: JSON.stringify({ items: 9 }) })],
+    ["items", plan({ items: [plan().items[0]] })],
+    ["scopes", plan({ scopes: ["scope-A", "scope-X"] })],
+  ];
+  const repo = TaskAdmission.open(DB, { mode: "readwrite" });
+  const out = [];
+  for (const [field, p] of divergences) {
+    try { repo.admit(p); out.push(`${field}:ACCEPTED?!`); }
+    catch (e) {
+      if (e.code !== "inconsistent") { repo.close(); throw new Error(`${field}: ${e.code} ${e.message}`); }
+      out.push(`${field}:${e.message.slice(0, 60)}`);
+    }
+  }
+  repo.close();
+  if (sha(DB) !== before) throw new Error("divergence rejection mutated DB");
+  if (count("tasks") !== 1) throw new Error("divergence created rows");
+  return { rejections: out };
+});
+// bound task missing (request bound to deleted task) -> inconsistent
+run("replay_missing_binding", () => {
+  const p = join(FIX, "missing-bind.db");
+  copyFileSync(DB, p);
+  const w = openDatabase(p, { mode: "readwrite" });
+  // bypass FK: disable then delete
+  w.pragma("foreign_keys=OFF");
+  w.run("DELETE FROM tasks WHERE task_id=(SELECT task_id FROM requests WHERE request_id='req-adm-1')");
+  w.close();
+  const repo = TaskAdmission.open(p, { mode: "readwrite" });
+  try { repo.admit(plan()); repo.close(); throw new Error("accepted orphan binding"); }
+  catch (e) {
+    repo.close();
+    if (e.code !== "inconsistent" || e.message !== "bound execution record missing") throw e;
+    return { code: e.code, message: e.message };
+  }
+});
+
 run("admit_conflict_no_mutation", () => {
   const before = sha(DB);
   const repo = TaskAdmission.open(DB, { mode: "readwrite" });

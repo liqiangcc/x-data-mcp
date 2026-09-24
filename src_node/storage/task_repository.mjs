@@ -214,6 +214,41 @@ export class TaskAdmission {
         if (existing.command_json !== p.commandJson) {
           throw new StorageError("conflict", "REQUEST_CONFLICT");
         }
+        // Identical command bytes alone do not authorize reuse: the
+        // durable task binding must match the supplied plan — execution
+        // key, run, retry, frozen work, items, ordered scopes.
+        const bound = db.get(
+          "SELECT t.task_id,command_key_json,accepted_run_id,retry_of,frozen_work_json FROM tasks t JOIN requests r ON r.task_id=t.task_id WHERE r.request_id=?",
+          p.requestId);
+        if (!bound) {
+          throw new StorageError("inconsistent", "bound execution record missing");
+        }
+        const div = [];
+        if (bound.command_key_json !== p.executionKeyJson) div.push("command_key_json");
+        if (bound.accepted_run_id !== p.runId) div.push("accepted_run_id");
+        if (bound.retry_of !== p.retryOf) div.push("retry_of");
+        if (bound.frozen_work_json !== p.workJson) div.push("frozen_work_json");
+        const storedItems = db.query(
+          "SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json FROM task_items WHERE task_id=? ORDER BY item_id",
+          bound.task_id);
+        const planItems = [...p.items].sort((a, b) => a.item_id < b.item_id ? -1 : 1);
+        if (storedItems.length !== planItems.length ||
+            storedItems.some((r, i) => {
+              const q = planItems[i];
+              return r.item_id !== q.item_id || r.target_json !== q.target_json ||
+                r.progress_unit !== q.progress_unit || r.frozen_inputs_json !== q.frozen_inputs_json ||
+                r.scope_keys_json !== q.scope_keys_json;
+            })) div.push("items");
+        const storedScopes = db.query(
+          "SELECT scope_key FROM task_scopes WHERE task_id=? ORDER BY scope_key",
+          bound.task_id).map((r) => r.scope_key);
+        const planScopes = [...p.scopes].sort();
+        if (storedScopes.length !== planScopes.length ||
+            storedScopes.some((s, i) => s !== planScopes[i])) div.push("scopes");
+        if (div.length) {
+          throw new StorageError("inconsistent",
+            `request binding diverges from plan: ${div.join(",")}`);
+        }
         return { reused: true, record: db.get(
           "SELECT request_id,command_json,command_digest,outcome_kind,task_id,terminal_json FROM requests WHERE request_id=?",
           p.requestId) };

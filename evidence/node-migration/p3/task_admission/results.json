@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-042",
+  "task_id": "NM-042-R1",
   "baseline_sha": "2c9da0bffb4d8037daf260a72443e2b503a484b8",
   "source_ported": "sqlite_tasks.rs::accept_tx — request replay/conflict, orphan + 5 integrity gates, digest gate, scope RangeConflict, task/items/scopes/occupancy/request inserts",
   "contract": [
@@ -12,9 +12,9 @@
   "probe": {
     "command": "node scripts/node_migration_p3/task_admission_probe.mjs .",
     "exit": 0,
-    "cases": 9,
+    "cases": 11,
     "totals": {
-      "pass": 9,
+      "pass": 11,
       "fail": 0,
       "not_run": 0
     },
@@ -24,7 +24,8 @@
       "malformed_rollback": 2,
       "readback": 1,
       "boundary": 2,
-      "selftest": "exit 1"
+      "selftest": "exit 1",
+      "binding_divergence": 2
     }
   },
   "regressions": {
@@ -36,5 +37,7 @@
     "NM-036": "35/35",
     "NM-035": "23/23"
   },
-  "limits": "no worker transitions/CAS post-admission/crash recovery/services/production readiness; retry path out of slice"
+  "limits": "no worker transitions/CAS post-admission/crash recovery/services/production readiness; retry path out of slice",
+  "review": "REVIEW-NM-042 R0 + TASK-NM-042-R1 — replay binding verification",
+  "r1_fix": "on identical command bytes, the bound task's execution key, accepted_run_id, retry_of, frozen_work_json, item set (id+target+unit+inputs+scope_keys), and ordered scope binding are compared to the plan; any divergence -> inconsistent 'request binding diverges from plan: ...'; missing bound task -> 'bound execution record missing' verbatim. DB bytes unchanged on every rejection."
 }
