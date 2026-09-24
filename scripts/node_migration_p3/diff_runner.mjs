@@ -12,8 +12,11 @@ const { TaskAdmission } = await import("../../src_node/storage/task_repository.m
 const { openDatabase, StorageError } = await import("../../src_node/storage/sqlite_adapter.mjs");
 const { ser } = await import("../../src_node/storage/verification_storage.mjs");
 const RC = await import("../../src_node/market/record_codec.mjs");
+const MR = await import("../../src_node/market/market_read.mjs");
 
-copyFileSync("/dev/shm/nm006/db18.sqlite", dbPath);
+const preseeded = process.env.DIFF_NOINIT === "1";
+
+copyFileSync(preseeded ? process.env.DIFF_PRESEED : "/dev/shm/nm006/db18.sqlite", dbPath);
 const repo = TaskAdmission.open(dbPath, { mode: "readwrite" });
 const db = repo._db;
 
@@ -190,6 +193,78 @@ for (const line of lines) {
             unchanged: true,
           };
         }
+        break;
+      }
+      case "seed": {
+        rec = { status: "ok", seeded: true };
+        break;
+      }
+      case "exec_sql": {
+        try {
+          for (const stmt of op.sql.split(";").map((x) => x.trim()).filter(Boolean)) {
+            db.run(stmt);
+          }
+          rec = { status: "ok" };
+        } catch (e) {
+          rec = { status: "error", code: "Storage", message: String(e.message), unchanged: true };
+        }
+        break;
+      }
+      case "head": {
+        try {
+          const scope = { symbol: op.symbol, period: op.period === "day" ? "Day" : "Year" };
+          const v = MR.head(db, scope);
+          rec = { status: "ok", version_id: v };
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
+        break;
+      }
+      case "read_record": {
+        try {
+          const r = op.mode === "fixed"
+            ? MR.readRecord(db, op.version_id, true, true)
+            : MR.readRecord(db, op.version_id, false, true);
+          rec = { status: "ok", record: {
+            version_id: r.version.version_id,
+            integrity_sha256: r.raw.integrity_sha256,
+            period: r.version.period,
+            records: r.version.records.length,
+            first: r.version.records[0]?.date.s ?? null,
+            last: r.version.records.at(-1)?.date.s ?? null,
+          }};
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
+        break;
+      }
+      case "range": {
+        try {
+          const scope = { symbol: op.symbol, period: op.period === "day" ? "Day" : "Year" };
+          const p = MR.range(db, scope, op.version_id ?? null, {
+            start: op.start, end: op.end,
+            after: op.after ?? null, limit: op.limit,
+          });
+          rec = { status: "ok", page: {
+            integrity_sha256: p.integrity_sha256,
+            version_id: p.version.version_id,
+            next_after: p.next_after ?? null,
+            rows: p.rows.map((b) => ({
+              date: typeof b.date === "string" ? b.date : b.date.s ?? b.date,
+              open: MR.__decStr(b.open), high: MR.__decStr(b.high),
+              low: MR.__decStr(b.low), close: MR.__decStr(b.close),
+              volume: b.volume === null || b.volume === undefined ? null : MR.__decStr(b.volume),
+              amount: b.amount === null || b.amount === undefined ? null : MR.__decStr(b.amount),
+            })),
+          }};
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
+        break;
+      }
+      case "versions": {
+        try {
+          const scope = { symbol: op.symbol, period: op.period === "day" ? "Day" : "Year" };
+          const list = MR.versions(db, scope);
+          rec = { status: "ok", versions: list.map((v) => ({
+            version_id: v.version_id, published_at: MR.__toRfc3339(v.published_at),
+            records: v.records.length,
+          }))};
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
         break;
       }
       case "checkpoint": {

@@ -1,0 +1,4 @@
+{"op":"seed","records":"valid_daily.json,valid_yearly.json"}
+{"op":"exec_sql","sql":"PRAGMA foreign_keys=OFF; DELETE FROM data_versions WHERE version_id='legacy-daily'; PRAGMA foreign_keys=ON"}
+{"op":"versions","symbol":"sh.600006","period":"day"}
+{"op":"read_record","version_id":"legacy-daily","mode":"fixed"}

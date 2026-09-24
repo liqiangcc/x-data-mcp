@@ -41,6 +41,8 @@ canonical `bar_json` 布局。
 
 ### 角色与隔离
 
+- Lead 模型由用户指定为 `gpt-6-sol`，推理强度 `medium`；Worker 仍为 `swe-2-high`。未经用户指定不自动升级；启动时核验实际模型与强度，配置意图不等于生效证明。
+
 - 新 Lead 会话命名 `codex-node-lead`：负责需求、任务拆分、架构裁决、审查、独立验证和阶段验收。Devin Worker 会话命名 `devin-node`：完成有界任务、自测、提交证据、报告阻塞。只有完成接管握手的新 Lead 可以派发正式任务；旧 `codex` 会话接管后停止派单，用户明确重新指定除外。
 - Lead 独立 worktree 为 `/home/box/x-data-mcp-node-lead`，初始分支 `migration/node-lead`；Worker 独立 worktree 为 `/home/box/x-data-mcp-node`，初始分支 `migration/node-devin`。两者从同一冻结提交创建，必须包含本协作规则。主工作区仍为 `/home/box/x-data-mcp`。运行前核对实际路径、分支、SHA、工作区状态与模型，不能凭此表假定现场不变。
 - 新建会话不等于已经交接。初始化者留下 BOOTSTRAP.md：用户目标与已授权范围、规则提交 SHA、迁移方案路径、已确认事实/待决问题、实际会话与 worktree 映射、首项任务、接管状态。新 Lead 读取后写 TAKEOVER.md，核对两端身份与基线并完成 Worker ACK，才将 session.json 的 active_lead 指向自己；初始化者看到 TAKEOVER 后不再派单。未握手时状态为 BOOTSTRAPPING，不启动迁移实现。
@@ -54,6 +56,9 @@ canonical `bar_json` 布局。
 - 同时最多一个未验收实现任务。状态为 DISPATCHED → ACK → RUNNING → READY_FOR_REVIEW → ACCEPTED / CHANGES_REQUESTED；阻塞用 BLOCKED，并写明证据和所需决策。ACK 必须复述范围、实际 cwd/branch/SHA/model。重复投递相同 task ID 只确认状态，不重复执行副作用。
 - 投递前用 `tmux list-panes` 核对目标 pane ID、cwd 和前台程序，用 `capture-pane` 确认输入状态。仅在 agent 输入框可接收消息时，以 `tmux send-keys -t <pane-id> -l -- '<短指令>'` 发送文字，再单独发送 Enter；多行正文通过任务文件读取。不得向 shell、权限弹窗、未知进程或用户正在编辑的输入框盲发文字/Enter；不得自动发送 Ctrl-C、Escape 或选择批准。
 - Devin 回报先落盘，再用 `tmux display-message -t <lead-pane-id> 'NM-xxx READY_FOR_REVIEW: <结果路径>'` 通知。Lead 活跃时轮询结果文件并读取执行 pane。display-message 是提示，不保证唤醒或投递给模型；Lead 忙时禁止向其输入框盲注入。Lead 空闲且输入状态已确认时才可 send-keys 投递短回报。Lead 不在线时保留结果并等待，不擅自推进下一阶段。
+- **投递必须验证闭环**：先用 `send-keys -l` 输入文字，等终端处理完成并确认完整文字仍在目标 agent 的输入框，再独立执行 `tmux send-keys -t <pane-id> Enter`（Enter 不使用 `-l`，否则可能输入字面文本）。不要把粘贴与 Enter 紧邻发送后就假定成功；终端的粘贴/输入处理可能尚未完成。
+- 发送 Enter 后再次读取目标可见 pane，确认该消息成为已提交对话、输入框清空或 agent 出现处理/工具执行状态；再等待对应 task ID 的 ACK。`send-keys` 退出码为 0 只说明按键已投递，不证明消息已提交或任务已受理。状态分为 TEXT_ENTERED、SUBMITTED、ACKED；只有确认提交才能报告“已发送”，只有 ACK 才能报告“已接收”。
+- 若文字仍留在输入框且目标 agent 明确空闲、没有权限弹窗，也没有用户介入，补发一次 Enter 并重新检查；不要重复粘贴全文，不要连续盲按 Enter。若状态不明确，先检查或报告阻塞。该规则同时适用于 Lead→Worker 与 Worker→Lead。
 - 未见 ACK 时先检查 pane 和文件；不能因超时重复提交任务。会话重启/压缩后从 session.json、当前 TASK/RESULT/REVIEW、git 状态恢复，不以滚屏或历史总结替代事实。
 
 ### 验收与推进
@@ -63,3 +68,12 @@ canonical `bar_json` 布局。
 - 默认按迁移方案 P0–P6 推进。先冻结契约与基线，再验证精确数值/摘要、SQLite 原子发布与恢复、Linux 租约/UID 能力；保持 fail-closed、数据治理和历史版本语义。
 - 任务授权范围内的本地修改、测试与修复自主完成；不得因协作协议擅自部署、切换真实数据库、删除数据、push/merge 或发布。需要外部动作时由 Lead 核对用户已有授权，不能反复索要已给出的授权。
 - 不自动切换模型。`swe-2-high` 不可用、上下文不足或任务边界不清时先报告；更换会话要写交接并重新握手。执行者完成当前任务后等待 Lead，不能仅凭宏观目标自派未审查的新阶段。
+
+## Lead/Worker completion delivery hard gate (2026-09-23)
+
+- A tmux notification is not delivered until the text and the Enter key are sent as separate operations.
+- After `send-keys -l`, capture the target pane and confirm the complete message remains in the agent input box.
+- Send a separate `Enter` (without `-l`), then capture the pane again and confirm the message was submitted, the input cleared, or the agent entered processing.
+- If text is present but not submitted and the target is visibly idle with no user interaction or permission prompt, send one Enter only; never paste the message again or press Enter blindly.
+- A successful `send-keys` exit code alone is TEXT_ENTERED, not SUBMITTED or ACKED. Record the state honestly.
+

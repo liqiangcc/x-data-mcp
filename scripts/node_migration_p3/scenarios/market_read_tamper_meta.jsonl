@@ -1,0 +1,3 @@
+{"op":"seed","records":"valid_daily.json,valid_yearly.json"}
+{"op":"exec_sql","sql":"UPDATE data_versions SET record_count=99 WHERE version_id='legacy-daily'"}
+{"op":"read_record","version_id":"legacy-daily","mode":"fixed"}

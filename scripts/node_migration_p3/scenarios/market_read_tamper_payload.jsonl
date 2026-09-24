@@ -1,0 +1,3 @@
+{"op":"seed","records":"valid_daily.json,valid_yearly.json"}
+{"op":"exec_sql","sql":"DELETE FROM payloads WHERE payload_id IN (SELECT payload_id FROM payloads LIMIT 1)"}
+{"op":"read_record","version_id":"legacy-daily","mode":"fixed"}

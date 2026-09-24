@@ -444,3 +444,10 @@ export const check = (raw) => {
   }
   return { raw, version, batch };
 };
+
+// NM-051 read-path internals (same module family; not new public API)
+export const __integrity = integrity;
+export const __decNorm = decNorm;
+export const __cmpDec = cmpDec;
+export const __ucEq = ucEq;
+export const __parseDate = parseDate;

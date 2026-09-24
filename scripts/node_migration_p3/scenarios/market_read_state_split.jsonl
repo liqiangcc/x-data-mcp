@@ -1,0 +1,4 @@
+{"op":"seed","records":"valid_daily.json,valid_yearly.json"}
+{"op":"exec_sql","sql":"PRAGMA foreign_keys=OFF; DELETE FROM publication_batches WHERE version_id='legacy-yearly'; DELETE FROM task_publications WHERE version_id='legacy-yearly'; UPDATE data_versions SET state='staging' WHERE version_id='legacy-yearly'; PRAGMA foreign_keys=ON"}
+{"op":"read_record","version_id":"legacy-yearly","mode":"fixed"}
+{"op":"read_record","version_id":"legacy-yearly","mode":"candidate"}

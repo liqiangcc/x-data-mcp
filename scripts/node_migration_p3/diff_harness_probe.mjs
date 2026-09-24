@@ -2,7 +2,7 @@
 // BOTH the Rust oracle (diff_harness::run, real SqliteTasks) and the
 // Node runner, then diffs per-op outcomes. Exit nonzero on any DIFF.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = process.argv[2] || ".";
@@ -40,22 +40,40 @@ for (const file of scenarios) {
   const nodeOut = join(dir, "node.jsonl");
   const name = file.replace(/\.jsonl$/, "");
   try {
+    const scenText = readFileSync(scen, "utf8");
+    const seed = scenText.includes('"op":"seed"');
+    const rustDb = join(dir, "rust.db"), nodeDb = join(dir, "node.db");
+    const extra = {};
+    if (seed) {
+      const fixture = join(dir, "fixture.db");
+      const recs = JSON.parse(scenText.split("\n")[0]).records;
+      execFileSync(CARGO, ["test", "--lib", "diff_harness::build_market_fixture", "--",
+        "--nocapture", "--test-threads=1"], {
+        cwd: ROOT,
+        env: { ...process.env, DIFF_DB: fixture, DIFF_FIXTURES: REC_FIXTURES,
+          DIFF_RECORDS: recs, TMPDIR: "/dev/shm" },
+        stdio: ["ignore", "ignore", "pipe"], timeout: 600000,
+      });
+      copyFileSync(fixture, rustDb);
+      extra.DIFF_NOINIT = "1";
+      extra.DIFF_PRESEED = fixture;
+    }
     execFileSync(CARGO, ["test", "--lib", "diff_harness::run", "--",
       "--nocapture", "--test-threads=1"], {
       cwd: ROOT,
       env: {
         ...process.env, DIFF_SCENARIO: scen,
-        DIFF_DB: join(dir, "rust.db"), DIFF_OUT: rustOut,
+        DIFF_DB: rustDb, DIFF_OUT: rustOut,
         DIFF_FIXTURES: REC_FIXTURES,
-        TMPDIR: "/dev/shm",
+        TMPDIR: "/dev/shm", ...extra,
       },
       stdio: ["ignore", "ignore", "pipe"], timeout: 600000,
     });
     execFileSync("node", [
       "scripts/node_migration_p3/diff_runner.mjs", scen,
-      join(dir, "node.db"), nodeOut,
+      nodeDb, nodeOut,
     ], { cwd: ROOT,
-      env: { ...process.env, DIFF_FIXTURES: REC_FIXTURES },
+      env: { ...process.env, DIFF_FIXTURES: REC_FIXTURES, ...extra },
       stdio: ["ignore", "ignore", "pipe"] });
     const cmp = execFileSync("node", [
       "scripts/node_migration_p3/diff_compare.mjs", rustOut, nodeOut,

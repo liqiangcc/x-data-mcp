@@ -1,0 +1,66 @@
+{
+  "task_id": "NM-051",
+  "baseline_sha": "47957eea916f49f99e41de563a859be2284bc29b",
+  "source_ported": "src/sqlite_market.rs read path + envelope.rs + manifest read + query.rs Range; publish validators reused via NM-050",
+  "module": "src_node/market/market_read.mjs",
+  "contract": [
+    "is_compact_schema: publication_batches absence; compact DB -> typed unsupported (compact dispatch deferred per task)",
+    "read_projection verbatim: NotFound vs integrity split on row/publication existence; published-state gate; envelope $ref expand (manifest segments + payloads); compat::check; identity (version_id/integrity_sha256/digest_format); daily-context yearly rejection (Base 'base period is not daily'); publication link; metadata projection equality; evidence_digest recompute; yearly/lineage projections; daily carries no yearly rows",
+    "base_record + validate_base_identity + validate_base via ported yearly::aggregate",
+    "range: Range::validate; head default; scope mismatch; limit+1 next_after paging; segment-backed manifest clip read vs payload-backed expand",
+    "versions: publication_batches orphan -> integrity; published_at DESC,version_id ASC; published-or-referenced filter"
+  ],
+  "fixture": "built by the REAL Rust stage path (diff_harness::build_market_fixture): init -> stage(valid_daily) -> mark published (publication_batches/task_publications/effective_heads consistent rows) -> stage(valid_yearly) -> published; segment-backed daily + payload-backed yearly",
+  "differential": {
+    "new_ops": [
+      "head",
+      "read_record",
+      "range",
+      "versions",
+      "exec_sql",
+      "seed"
+    ],
+    "scenarios": {
+      "market_read": 20,
+      "market_read_state_split": 4,
+      "market_read_tamper_payload": 3,
+      "market_read_tamper_meta": 3,
+      "market_read_tamper_orphan": 4,
+      "market_read_tamper_env": 3
+    },
+    "diffs": 0
+  },
+  "tamper_cases": [
+    "payload row delete -> referenced payload missing",
+    "metadata column divergence",
+    "orphan publication_batches (FK off) -> versions integrity + record NotFound-vs-integrity",
+    "staging-state split: fixed NotFound / candidate ok",
+    "broken envelope $ref -> unknown reference"
+  ],
+  "probe": {
+    "command": "node scripts/node_migration_p3/diff_harness_probe.mjs .",
+    "exit": 0,
+    "scenarios": 14,
+    "ops": 124,
+    "diffs": 0
+  },
+  "regressions": {
+    "NM-050": "in-suite",
+    "NM-049": "14 scenarios",
+    "NM-048": "10/10",
+    "NM-047": "14/14",
+    "NM-046": "17/17",
+    "NM-045": "15/15",
+    "NM-044": "19/19",
+    "NM-043": "13/13",
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "no stage/publish/commit writes on the Node side, no compact backend, no gaps/verification execution, no services"
+}
