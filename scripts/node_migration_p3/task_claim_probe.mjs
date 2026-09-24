@@ -48,9 +48,10 @@ db0.close();
 
 run("claim_happy", () => {
   const repo = TaskAdmission.open(DB, { mode: "readwrite" });
-  const t = repo.claim(TID, 0n, "run-owner", "2026-01-02T00:01:00Z");
+  // claimed by the ACCEPTING run (Rust decide run-identity gate)
+  const t = repo.claim(TID, 0n, "run-0", "2026-01-02T00:01:00Z");
   repo.close();
-  if (t.status !== "running" || t.owner_run_id !== "run-owner" ||
+  if (t.status !== "running" || t.owner_run_id !== "run-0" ||
       t.state_revision !== 1n || t.last_progress_at !== "2026-01-02T00:01:00Z") {
     throw new Error(JSON.stringify(t));
   }
@@ -61,13 +62,13 @@ run("claim_happy", () => {
   d.close();
   if (items.length !== 1 || items[0].stage !== "pending" ||
       occ.length !== 1 || occ[0].state_revision !== 0n) throw new Error("items/occupancy touched");
-  return { status: "running", revision: "1", owner: "run-owner", items_untouched: true, occupancy_rev0: true };
+  return { status: "running", revision: "1", owner: "run-0", items_untouched: true, occupancy_rev0: true };
 });
 
 run("claim_again_revision_conflict", () => {
   const before = sha(DB);
   const repo = TaskAdmission.open(DB, { mode: "readwrite" });
-  try { repo.claim(TID, 0n, "run-other", "2026-01-02T00:02:00Z"); repo.close(); throw new Error("double-claimed"); }
+  try { repo.claim(TID, 0n, "run-0", "2026-01-02T00:02:00Z"); repo.close(); throw new Error("double-claimed"); }
   catch (e) {
     repo.close();
     if (e.code !== "revision_conflict") throw e;
@@ -78,7 +79,7 @@ run("claim_again_revision_conflict", () => {
 run("claim_stale_revision", () => {
   const before = sha(DB);
   const repo = TaskAdmission.open(DB, { mode: "readwrite" });
-  try { repo.claim(TID, 99n, "run-x", "2026-01-02T00:03:00Z"); repo.close(); throw new Error("stale accepted"); }
+  try { repo.claim(TID, 99n, "run-0", "2026-01-02T00:03:00Z"); repo.close(); throw new Error("stale accepted"); }
   catch (e) {
     repo.close();
     if (e.code !== "revision_conflict") throw e;
@@ -88,18 +89,52 @@ run("claim_stale_revision", () => {
 });
 run("claim_missing_task", () => {
   const repo = TaskAdmission.open(DB, { mode: "readwrite" });
-  try { repo.claim("task-nope", 0n, "run-x", "2026-01-02T00:03:00Z"); repo.close(); throw new Error("claimed missing"); }
+  try { repo.claim("task-nope", 0n, "run-0", "2026-01-02T00:03:00Z"); repo.close(); throw new Error("claimed missing"); }
   catch (e) {
     repo.close();
     if (e.code !== "task_not_found") throw e;
     return { code: e.code };
   }
 });
-run("claim_already_owned", () => {
-  // second claim on the now-running task under its real revision
+run("claim_cross_run_pending", () => {
+  // a SECOND pending task admitted by run-B, claimed by run-C ->
+  // needs_verification (accepted_run_id != run)
+  const d0 = openDatabase(DB, { mode: "readwrite" });
+  const r0 = new TaskAdmission(d0, null);
+  const a = r0.admit({
+    requestId: "req-claim-b", commandJson: JSON.stringify({ key: { operation: "c2" } }),
+    executionKeyJson: JSON.stringify({ operation: "c2" }), workJson: "{}",
+    items: [{ item_id: "i-1", target_json: "{}", progress_unit: "d", frozen_inputs_json: "{}", scope_keys_json: "[]" }],
+    scopes: ["s-B"], runId: "run-B", createdAt: "2026-01-02T00:00:30Z",
+  });
+  d0.close();
   const before = sha(DB);
   const repo = TaskAdmission.open(DB, { mode: "readwrite" });
-  try { repo.claim(TID, 1n, "run-y", "2026-01-02T00:04:00Z"); repo.close(); throw new Error("reclaimed owned"); }
+  try { repo.claim(a.task_id, 0n, "run-C", "2026-01-02T00:04:00Z"); repo.close(); throw new Error("cross-run claimed"); }
+  catch (e) {
+    repo.close();
+    if (e.code !== "needs_verification" || !e.message.includes("old run or unresolved execution")) throw e;
+    if (sha(DB) !== before) throw new Error("mutated");
+    return { code: e.code, message: e.message };
+  }
+});
+run("claim_nonowner_on_running", () => {
+  // running task owned by run-0; claim by run-D -> needs_verification
+  const before = sha(DB);
+  const repo = TaskAdmission.open(DB, { mode: "readwrite" });
+  try { repo.claim(TID, 1n, "run-D", "2026-01-02T00:04:30Z"); repo.close(); throw new Error("non-owner claimed"); }
+  catch (e) {
+    repo.close();
+    if (e.code !== "needs_verification") throw e;
+    if (sha(DB) !== before) throw new Error("mutated");
+    return { code: e.code };
+  }
+});
+run("claim_owner_on_nonpending", () => {
+  // owning run claims the already-running task -> revision_conflict
+  const before = sha(DB);
+  const repo = TaskAdmission.open(DB, { mode: "readwrite" });
+  try { repo.claim(TID, 1n, "run-0", "2026-01-02T00:04:45Z"); repo.close(); throw new Error("reclaimed running"); }
   catch (e) {
     repo.close();
     if (e.code !== "revision_conflict") throw e;
@@ -117,7 +152,7 @@ run("claim_terminal_rejected", () => {
   w.close();
   const before = sha(p);
   const repo = TaskAdmission.open(p, { mode: "readwrite" });
-  try { repo.claim(TID, 1n, "run-z", "2026-01-02T00:05:00Z"); repo.close(); throw new Error("claimed terminal"); }
+  try { repo.claim(TID, 1n, "run-0", "2026-01-02T00:05:00Z"); repo.close(); throw new Error("claimed terminal"); }
   catch (e) {
     repo.close();
     if (e.code !== "revision_conflict" || sha(p) !== before) throw e;
@@ -139,7 +174,7 @@ run("claim_reopen_readback", () => {
   const d = openDatabase(DB);
   const t = d.get("SELECT * FROM tasks WHERE task_id=?", TID);
   d.close();
-  if (t.status !== "running" || t.owner_run_id !== "run-owner" || t.state_revision !== 1n) {
+  if (t.status !== "running" || t.owner_run_id !== "run-0" || t.state_revision !== 1n) {
     throw new Error(JSON.stringify(t));
   }
   return { durable: true };

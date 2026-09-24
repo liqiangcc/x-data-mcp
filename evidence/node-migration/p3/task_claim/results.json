@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-043",
+  "task_id": "NM-043-R1",
   "baseline_sha": "83a4becf064685a492195662612674dc9ba3fd09",
   "source_ported": "task_control decide(Change::Claim) + sqlite_tasks transition_tx/guarded_task_update",
   "contract": [
@@ -11,14 +11,14 @@
   "probe": {
     "command": "node scripts/node_migration_p3/task_claim_probe.mjs .",
     "exit": 0,
-    "cases": 11,
+    "cases": 13,
     "totals": {
-      "pass": 11,
+      "pass": 13,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
-      "happy_and_guards": 6,
+      "happy_and_guards": 8,
       "boundary": 4,
       "readback": 1,
       "selftest": "exit 1"
@@ -34,5 +34,7 @@
     "NM-036": "35/35",
     "NM-035": "23/23"
   },
-  "limits": "claim only — no item transitions/cancel/retry/worker/services/production readiness"
+  "limits": "claim only — no item transitions/cancel/retry/worker/services/production readiness",
+  "review": "REVIEW-NM-043 R0 + TASK-NM-043-R1 — run-identity gate",
+  "r1_fix": "claim() reproduces decide order: exists -> stored revision==expected -> terminal -> visible-status gate (accepted_run_id!=run OR owner set!=run -> needs_verification 'old run or unresolved execution') -> pending+owner-NULL -> CAS. Happy path claims with accepting run; new rejections: cross-run pending claim, non-owner claim on running, owner claim on non-pending."
 }

@@ -8,7 +8,7 @@ untouched (Rust stamps claims at read time from the live revision).
 
 ## Contents
 
-- `probe-results.jsonl` — 11 rows, all PASS.
+- `probe-results.jsonl` — 13 rows, all PASS.
 - `negative-selftest.jsonl` (exit 1), `results.json`, `SHA256SUMS`.
 
 ## Reproduce
@@ -24,3 +24,5 @@ node scripts/node_migration_p3/task_claim_probe.mjs . claim  # selftest, exit 1
   `empty run identity`.
 - No mutation on any rejection — DB sha verified unchanged.
 - No item/cancel/retry transitions in this slice.
+
+R1: run-identity gate — accepted_run_id must equal run (and owner, if set) else `needs_verification` before the pending+owner-NULL arm (REVIEW-NM-043 R0).

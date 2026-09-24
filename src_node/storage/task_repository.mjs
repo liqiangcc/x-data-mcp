@@ -383,9 +383,22 @@ Object.assign(TaskAdmission.prototype, {
     }
     return this._db.transaction(() => {
       const t = this._db.get(
-        "SELECT status,state_revision,owner_run_id FROM tasks WHERE task_id=?", taskId);
+        "SELECT status,state_revision,owner_run_id,accepted_run_id FROM tasks WHERE task_id=?",
+        taskId);
       if (!t) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
-      // decide guard: Claim requires pending + no owner
+      // decide order: stored revision -> terminal -> visible-status
+      // (run identity) -> pending+owner-NULL arm -> CAS.
+      if (t.state_revision !== expectedRevision) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      if (TERMINAL_STATUSES.includes(t.status)) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      if (t.accepted_run_id !== runId ||
+          (t.owner_run_id !== null && t.owner_run_id !== runId)) {
+        throw new StorageError("needs_verification",
+          "ACCEPTANCE_NEEDS_VERIFICATION: old run or unresolved execution");
+      }
       if (t.status !== "pending" || t.owner_run_id !== null) {
         throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
       }
