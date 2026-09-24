@@ -415,3 +415,138 @@ Object.assign(TaskAdmission.prototype, {
     });
   },
 });
+
+// ---------------------------------------------------------------------
+// NM-044 — atomic item start/finish transitions (decide StartItem /
+// FinishItem + write_item_row + counter_delta + execution-start marker).
+// Same transaction gate order as claim: exists -> stored revision ->
+// terminal -> run-identity (visible_status) -> decide arm -> guarded
+// task-row CAS.
+
+const COUNTER_DELTA = {
+  start: ",items_pending=items_pending-1,items_running=items_running+1",
+  finish_ok: ",items_running=items_running-1,items_finished=items_finished+1,items_succeeded=items_succeeded+1",
+  finish_fail: ",items_running=items_running-1,items_finished=items_finished+1",
+};
+
+Object.assign(TaskAdmission.prototype, {
+  /** Shared pre-arm gates for item transitions (decide order). */
+  _transitionGate(taskId, expectedRevision, runId, now) {
+    if (!wellformedStr(taskId) || taskId === "") {
+      throw new StorageError("invalid_input", "task_admission: task_id must be a non-empty string");
+    }
+    if (typeof expectedRevision !== "bigint" || expectedRevision < 0n) {
+      throw new StorageError("invalid_input", "task_admission: expectedRevision must be a non-negative bigint");
+    }
+    if (!wellformedStr(runId) || runId.trim() === "") {
+      throw new StorageError("invalid_input", "empty run identity");
+    }
+    if (!wellformedStr(now)) {
+      throw new StorageError("invalid_input", "task_admission: now must be an RFC3339 string");
+    }
+    const t = this._db.get(
+      "SELECT status,state_revision,owner_run_id,accepted_run_id FROM tasks WHERE task_id=?",
+      taskId);
+    if (!t) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+    if (t.state_revision !== expectedRevision ||
+        TERMINAL_STATUSES.includes(t.status)) {
+      throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+    }
+    if (t.accepted_run_id !== runId ||
+        (t.owner_run_id !== null && t.owner_run_id !== runId)) {
+      throw new StorageError("needs_verification",
+        "ACCEPTANCE_NEEDS_VERIFICATION: old run or unresolved execution");
+    }
+    return t;
+  },
+
+  /** decide(Change::StartItem): running+owned task, no other item
+   *  running, named item pending -> stage='running' + counter delta +
+   *  execution-start marker. Returns the new task row. */
+  startItem(taskId, expectedRevision, runId, itemId, now) {
+    if (!wellformedStr(itemId) || itemId === "") {
+      throw new StorageError("invalid_input", "task_admission: item_id must be a non-empty string");
+    }
+    return this._db.transaction(() => {
+      const t = this._transitionGate(taskId, expectedRevision, runId, now);
+      // StartItem arm: status must be running AND owned by run
+      if (t.status !== "running" || t.owner_run_id !== runId) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      if (this._db.get(
+        "SELECT EXISTS(SELECT 1 FROM task_items WHERE task_id=? AND stage='running') x",
+        taskId).x !== 0n) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      const item = this._db.get(
+        "SELECT stage FROM task_items WHERE task_id=? AND item_id=?",
+        taskId, itemId);
+      if (!item || item.stage !== "pending") {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      const next = expectedRevision + 1n;
+      // item row first (Rust writes items before the guarded task row)
+      this._db.run(
+        "UPDATE task_items SET stage='running',outcome_json=NULL WHERE task_id=? AND item_id=?",
+        taskId, itemId);
+      const res = this._db.run(
+        `UPDATE tasks SET status='running',state_revision=?,owner_run_id=?,
+         last_progress_at=?,result_json=result_json${COUNTER_DELTA.start}
+         WHERE task_id=? AND state_revision=?`,
+        next, runId, now, taskId, expectedRevision);
+      if (res.changes !== 1) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      this._db.run(
+        "INSERT INTO task_item_execution_starts VALUES(?,?,?,?,?)",
+        taskId, itemId, runId, next, now);
+      return this._db.get("SELECT * FROM tasks WHERE task_id=?", taskId);
+    });
+  },
+
+  /** decide(Change::FinishItem): owner-bound (any non-terminal status,
+   *  incl. cancel_requested); item running -> finished + outcome_json.
+   *  outcome: {success, error?, evidence?} — serde shape verbatim.
+   *  success with error is InvalidCommand ("success with error"). */
+  finishItem(taskId, expectedRevision, runId, itemId, outcome, now) {
+    if (!wellformedStr(itemId) || itemId === "") {
+      throw new StorageError("invalid_input", "task_admission: item_id must be a non-empty string");
+    }
+    if (outcome === null || typeof outcome !== "object" ||
+        typeof outcome.success !== "boolean") {
+      throw new StorageError("invalid_input", "task_admission: outcome must be {success:boolean,...}");
+    }
+    if (outcome.success && outcome.error != null) {
+      throw new StorageError("invalid_input", "success with error");
+    }
+    const outcomeJson = JSON.stringify(outcome);
+    return this._db.transaction(() => {
+      const t = this._transitionGate(taskId, expectedRevision, runId, now);
+      // FinishItem arm: owner-bound only (no task-status arm —
+      // finish is allowed while cancel_requested)
+      if (t.owner_run_id !== runId) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      const item = this._db.get(
+        "SELECT stage FROM task_items WHERE task_id=? AND item_id=?",
+        taskId, itemId);
+      if (!item || item.stage !== "running") {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      const next = expectedRevision + 1n;
+      this._db.run(
+        "UPDATE task_items SET stage='finished',outcome_json=? WHERE task_id=? AND item_id=?",
+        outcomeJson, taskId, itemId);
+      const delta = outcome.success ? COUNTER_DELTA.finish_ok : COUNTER_DELTA.finish_fail;
+      const res = this._db.run(
+        `UPDATE tasks SET status=status,state_revision=?,owner_run_id=owner_run_id,
+         last_progress_at=?,result_json=result_json${delta}
+         WHERE task_id=? AND state_revision=?`,
+        next, now, taskId, expectedRevision);
+      if (res.changes !== 1) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      return this._db.get("SELECT * FROM tasks WHERE task_id=?", taskId);
+    });
+  },
+});

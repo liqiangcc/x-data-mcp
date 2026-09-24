@@ -1,0 +1,17 @@
+{"family":"item_transition","id":"start_item_happy","status":"PASS","detail":null,"expected":{"rev":"2","counters":"pending-1,running+1","marker":{"run_id":"run-0","rev":"2"}},"actual":null}
+{"family":"item_transition","id":"start_second_while_running_rejects","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"item_transition","id":"finish_item_success","status":"PASS","detail":null,"expected":{"stage":"finished","outcome_verbatim":true,"counters":"running-1,finished+1,succeeded+1"},"actual":null}
+{"family":"item_transition","id":"start_and_finish_failure","status":"PASS","detail":null,"expected":{"outcome_error":true,"succeeded_stays":"1"},"actual":null}
+{"family":"item_transition","id":"start_not_owner","status":"PASS","detail":null,"expected":{"code":"needs_verification"},"actual":null}
+{"family":"item_transition","id":"start_finished_item","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"item_transition","id":"finish_not_running_item","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"item_transition","id":"finish_wrong_owner","status":"PASS","detail":null,"expected":{"code":"needs_verification"},"actual":null}
+{"family":"item_transition","id":"transition_missing_task","status":"PASS","detail":null,"expected":{"code":"task_not_found"},"actual":null}
+{"family":"item_transition","id":"transition_stale_rev","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"item_transition","id":"success_with_error","status":"PASS","detail":"invalid_input success with error","expected":"invalid_input","actual":"invalid_input"}
+{"family":"item_transition","id":"empty_run_start","status":"PASS","detail":"invalid_input empty run identity","expected":"invalid_input","actual":"invalid_input"}
+{"family":"item_transition","id":"bad_outcome_shape","status":"PASS","detail":"invalid_input task_admission: outcome must be {success:boolean,...}","expected":"invalid_input","actual":"invalid_input"}
+{"family":"item_transition","id":"implicit_mode_denied","status":"PASS","detail":"invalid_input task_admission: explicit mode readwrite|create required","expected":"invalid_input","actual":"invalid_input"}
+{"family":"item_transition","id":"start_on_pending_task","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"item_transition","id":"reopen_readback","status":"PASS","detail":null,"expected":{"durable":true,"revision":"5"},"actual":null}
+{"family":"item_transition","id":"selftest_item","status":"FAIL","detail":"correctly rejected — selftest FAIL as designed (revision_conflict)","expected":null,"actual":null}

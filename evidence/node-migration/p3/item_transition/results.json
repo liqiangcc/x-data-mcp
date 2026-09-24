@@ -1,0 +1,40 @@
+{
+  "task_id": "NM-044",
+  "baseline_sha": "0c0445f9e11e4b0c72901dc78988b3c4ca3d0058",
+  "source_ported": "task_control decide StartItem/FinishItem + sqlite_tasks write_item_row/counter_delta/task_item_execution_starts",
+  "contract": [
+    "shared tx gate: exists -> stored rev==expected -> terminal -> run-identity (accepted!=run or owner!=run -> needs_verification)",
+    "startItem: status='running' && owner==run -> else revision_conflict; any item running -> revision_conflict; named item pending else revision_conflict; UPDATE stage='running'; incremental counter_delta (pending-1,running+1); INSERT execution_starts(task,item,run,new_rev,now)",
+    "finishItem: owner==run (any non-terminal status incl. cancel_requested); success&&error -> invalid_input 'success with error' verbatim; item running else revision_conflict; stage='finished'+outcome_json serde shape (success/error/evidence optional verbatim); counter_delta running-1,finished+1[,succeeded+1]"
+  ],
+  "fixture": "db18.sqlite (NM-006) + task admitted via NM-042 + claimed via NM-043",
+  "probe": {
+    "command": "node scripts/node_migration_p3/item_transition_probe.mjs .",
+    "exit": 0,
+    "cases": 16,
+    "totals": {
+      "pass": 16,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "happy_start_finish": 4,
+      "rejections_unchanged": 7,
+      "boundary": 4,
+      "readback": 1,
+      "selftest": "exit 1"
+    }
+  },
+  "regressions": {
+    "NM-043": "13/13",
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "item transitions only — no finish_execution/cancel/reconcile/retry/workers/services/production readiness"
+}
