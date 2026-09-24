@@ -1,0 +1,43 @@
+{
+  "task_id": "NM-040",
+  "baseline_sha": "1225b3a2cbdbf756b1b5ec7825de54127d021952",
+  "source": "Rust sqlite_tasks read contract: read_request/read_task column lists, digest check, created_at,task_id ordering",
+  "fixture": {
+    "source_db": "db18.sqlite (NM-006) + 4 synthetic tasks + 4 synthetic requests inserted via adapter",
+    "post_fixture_sha256": "3f0b86c7afc0945f81ab4c896b3197bbcfc0bbbdd3c986f2a87347d9c8967117 (pre-fixture)"
+  },
+  "design": [
+    "TaskRepository.open -> gateDatabase (schema gate) + openDatabase readonly; unsupported/corrupt fail closed before any query",
+    "getRequest verifies sha256(command_json)==command_digest verbatim ('command digest mismatch' -> inconsistent)",
+    "getTask/getTaskForRequest/getRequestForTask: nullable preserved, counters bigint",
+    "listTasks: keyset cursor (created_at,task_id) + explicit limit 1..10000; owner_run_id explicit input, null=all owners (documented opt-out)",
+    "no SQL interpolation — bound params only"
+  ],
+  "probe": {
+    "command": "node scripts/node_migration_p3/task_repository_probe.mjs .",
+    "exit": 0,
+    "cases": 19,
+    "totals": {
+      "pass": 19,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "open_and_rows": 6,
+      "ordering_owner": 2,
+      "integrity": 1,
+      "boundary": 5,
+      "failclosed": 3,
+      "bytes": 1,
+      "selftest": "exit 1"
+    }
+  },
+  "regressions": {
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "read-only slice — no writes/CAS/revision/occupancy, no worker execution, no crash recovery, no services, no production readiness"
+}

@@ -1,0 +1,20 @@
+{"family":"task_repository","id":"repo_opens_via_gate","status":"PASS","detail":null,"expected":{"schemaVersion":18,"kind":"legacy"},"actual":null}
+{"family":"task_repository","id":"get_task_typed","status":"PASS","detail":null,"expected":{"status":"running","owner":"run-A","counters":["2","1"],"nullable":true},"actual":null}
+{"family":"task_repository","id":"get_task_missing_null","status":"PASS","detail":null,"expected":{"missing":null},"actual":null}
+{"family":"task_repository","id":"get_request_digest_verified","status":"PASS","detail":null,"expected":{"outcome_kind":"task","task_id":"t-002"},"actual":null}
+{"family":"task_repository","id":"get_request_terminal","status":"PASS","detail":null,"expected":{"outcome_kind":"terminal"},"actual":null}
+{"family":"task_repository","id":"task_for_request","status":"PASS","detail":null,"expected":{"bound":"t-003","terminal_unbound":true},"actual":null}
+{"family":"task_repository","id":"request_for_task_reverse","status":"PASS","detail":null,"expected":{"request_id":"r-001","unbound":null},"actual":null}
+{"family":"task_repository","id":"list_sorted_paginated","status":"PASS","detail":null,"expected":{"page1":["t-001","t-002"],"page2":["t-003","t-004"],"deterministic_order":"created_at,task_id"},"actual":null}
+{"family":"task_repository","id":"owner_scope_explicit","status":"PASS","detail":null,"expected":{"owner_A":["t-001","t-002"],"owner_B":["t-003"],"unscoped_total":4},"actual":null}
+{"family":"task_repository","id":"digest_tamper_inconsistent","status":"PASS","detail":null,"expected":{"code":"inconsistent","message":"command digest mismatch"},"actual":null}
+{"family":"task_repository","id":"limit_zero","status":"PASS","detail":"invalid_input task_repository: limit must be an integer 1..10000","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_repository","id":"limit_huge","status":"PASS","detail":"invalid_input task_repository: limit must be an integer 1..10000","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_repository","id":"cursor_malformed","status":"PASS","detail":"invalid_input task_repository: cursor must be {created_at, task_id} strings","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_repository","id":"bad_request_id","status":"PASS","detail":"invalid_input task_repository: request_id must be a non-empty string","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_repository","id":"bad_owner","status":"PASS","detail":"invalid_input task_repository: owner must be a wellformed non-empty string or null","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_repository","id":"repo_on_garbage","status":"PASS","detail":"corrupt file is not a database","expected":"corrupt","actual":"corrupt"}
+{"family":"task_repository","id":"repo_on_empty","status":"PASS","detail":"unavailable unsupported/uninitialized schema 0; explicit initialization/upgrade required","expected":"unavailable","actual":"unavailable"}
+{"family":"task_repository","id":"repo_on_missing","status":"PASS","detail":"unavailable sqlite_adapter: database does not exist: /tmp/nm40-repo-F1toAn/no.db","expected":"unavailable","actual":"unavailable"}
+{"family":"task_repository","id":"repo_bytes_unchanged","status":"PASS","detail":null,"expected":{"bytesUnchanged":true},"actual":null}
+{"family":"task_repository","id":"selftest_repo","status":"FAIL","detail":"expected a phantom row — STOP","expected":null,"actual":null}
