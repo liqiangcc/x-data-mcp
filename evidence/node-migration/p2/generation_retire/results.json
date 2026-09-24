@@ -26,7 +26,7 @@
     },
     "groups": {
       "live_rust_oracle": 9,
-      "symlink_pin_boundary": 3
+      "symlink_gid_boundary": 3
     },
     "selftest": "node ... retire -> exit 1 (negative-selftest.jsonl)"
   },

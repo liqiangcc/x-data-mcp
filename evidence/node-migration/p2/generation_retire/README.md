@@ -7,7 +7,7 @@ decision, evidence and the generation dir, fsyncs the directory.
 ## Contents
 
 - `probe-results.jsonl` — 12 rows, all PASS (9 live Rust oracle +
-  3 symlink/pin boundary).
+  3 symlink/gid boundary).
 - `rust-oracle.jsonl`, `negative-selftest.jsonl` (exit 1), `results.json`.
 
 ## Reproduce
