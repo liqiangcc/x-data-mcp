@@ -1,0 +1,42 @@
+{
+  "task_id": "NM-046",
+  "baseline_sha": "88634588453c130396bbb74ff399c5dc9e51b1be",
+  "source_ported": "decide RequireVerification/Reconcile + reconcile_tx + candidates_tx + read-stamped claims",
+  "contract": [
+    "requireVerification: gate order verbatim; arm guards (empty reason/owner!=run/status not running|cancel_requested/item not running -> revision_conflict); writes status=needs_verification + execution_uncertainty result_json (sorted keys, previous_result/status verbatim); item row untouched; rev+1 RECOUNT CAS",
+    "reconcile: selects non-terminal accepted<>run OR foreign-owned; visible!=status -> needs_verification rev+1 WITHOUT last_progress_at stamp; consistent rows no-op bytes-unchanged; returns count",
+    "candidates: accepted=run AND owner NULL AND pending|cancel_requested ORDER BY created_at,task_id; claims stamped live revision at read; needs_verification tasks excluded"
+  ],
+  "fixture": "db18.sqlite + lifecycle via admitted primitives",
+  "probe": {
+    "command": "node scripts/node_migration_p3/recovery_probe.mjs .",
+    "exit": 0,
+    "cases": 12,
+    "totals": {
+      "pass": 12,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "require_verification": 3,
+      "reconcile": 2,
+      "candidates": 2,
+      "boundary": 4,
+      "selftest": "exit 1"
+    }
+  },
+  "regressions": {
+    "NM-045": "15/15",
+    "NM-044": "19/19",
+    "NM-043": "13/13",
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "no retry/verification-inspection/market repos/workers/services/production readiness"
+}

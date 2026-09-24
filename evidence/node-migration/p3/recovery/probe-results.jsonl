@@ -1,0 +1,12 @@
+{"family":"recovery","id":"require_verification_happy","status":"PASS","detail":null,"expected":{"status":"needs_verification","item_stays_running":true,"result_verbatim":true},"actual":null}
+{"family":"recovery","id":"require_verification_under_cancel","status":"PASS","detail":null,"expected":{"previous_status":"cancel_requested"},"actual":null}
+{"family":"recovery","id":"rv_guards","status":"PASS","detail":null,"expected":{"codes":["revision_conflict","revision_conflict","needs_verification"]},"actual":null}
+{"family":"recovery","id":"rv_pending_status","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"recovery","id":"reconcile_marks_foreign_owned","status":"PASS","detail":null,"expected":{"reconciled":3,"status":"needs_verification","progress_unchanged":true},"actual":null}
+{"family":"recovery","id":"reconcile_noop_consistent","status":"PASS","detail":null,"expected":{"reconciled":0,"bytes_unchanged":true},"actual":null}
+{"family":"recovery","id":"candidates_order_scope","status":"PASS","detail":null,"expected":{"ordered":["created_at asc"],"claims_stamped_live":true},"actual":null}
+{"family":"recovery","id":"candidates_excludes_needs_verification","status":"PASS","detail":null,"expected":{"excluded":true},"actual":null}
+{"family":"recovery","id":"candidates_empty_run","status":"PASS","detail":"invalid_input empty run identity","expected":"invalid_input","actual":"invalid_input"}
+{"family":"recovery","id":"reconcile_empty_run","status":"PASS","detail":"invalid_input empty run identity","expected":"invalid_input","actual":"invalid_input"}
+{"family":"recovery","id":"rv_empty_itemid","status":"PASS","detail":"invalid_input task_admission: item_id must be a non-empty string","expected":"invalid_input","actual":"invalid_input"}
+{"family":"recovery","id":"implicit_mode_denied","status":"PASS","detail":"invalid_input task_admission: explicit mode readwrite|create required","expected":"invalid_input","actual":"invalid_input"}

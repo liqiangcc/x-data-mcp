@@ -697,3 +697,120 @@ Object.assign(TaskAdmission.prototype, {
     return this._finish(taskId, expectedRevision, runId, now, true);
   },
 });
+
+// ---------------------------------------------------------------------
+// NM-046 — recovery surface: requireVerification + reconcile +
+// candidates. Reconcile is the recovery arm: no last_progress_at stamp.
+
+Object.assign(TaskAdmission.prototype, {
+  /** decide(Change::RequireVerification): binds the owner run on a
+   *  running/cancel_requested task with a named running item; writes
+   *  status=needs_verification + execution_uncertainty result_json
+   *  (serde-sorted inner keys; previous_* verbatim). The item row is
+   *  NOT written — RequireVerification binds, it does not transition
+   *  the item. */
+  requireVerification(taskId, expectedRevision, runId, itemId, reason, now) {
+    if (!wellformedStr(itemId) || itemId === "") {
+      throw new StorageError("invalid_input", "task_admission: item_id must be a non-empty string");
+    }
+    if (!wellformedStr(reason)) {
+      throw new StorageError("invalid_input", "task_admission: reason must be a string");
+    }
+    if (!wellformedStr(now)) {
+      throw new StorageError("invalid_input", "task_admission: now must be an RFC3339 string");
+    }
+    return this._db.transaction(() => {
+      const t = this._transitionGate(taskId, expectedRevision, runId, now);
+      // arm guards verbatim — all revision_conflict
+      if (reason.trim() === "" || t.owner_run_id !== runId ||
+          (t.status !== "running" && t.status !== "cancel_requested")) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      const item = this._db.get(
+        "SELECT stage FROM task_items WHERE task_id=? AND item_id=?",
+        taskId, itemId);
+      if (!item || item.stage !== "running") {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      const prev = this._db.get(
+        "SELECT result_json FROM tasks WHERE task_id=?", taskId);
+      const uncertainty = {
+        execution_uncertainty: {
+          item_id: itemId,
+          previous_result: prev.result_json === null ? null : JSON.parse(prev.result_json),
+          previous_status: t.status,
+          reason,
+        },
+      };
+      const next = expectedRevision + 1n;
+      const res = this._db.run(
+        `UPDATE tasks SET status='needs_verification',state_revision=?,
+         last_progress_at=?,result_json=?${RECOUNT_COUNTERS}
+         WHERE task_id=? AND state_revision=?`,
+        next, now, JSON.stringify(uncertainty), taskId, expectedRevision);
+      if (res.changes !== 1) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      return { changed: true, task: this._db.get("SELECT * FROM tasks WHERE task_id=?", taskId) };
+    });
+  },
+
+  /** reconcile_tx: non-terminal tasks with accepted!=run or a foreign
+   *  owner; each -> needs_verification, rev+1, NO progress stamp.
+   *  Returns the number of tasks marked. */
+  reconcile(runId) {
+    if (!wellformedStr(runId) || runId.trim() === "") {
+      throw new StorageError("invalid_input", "empty run identity");
+    }
+    return this._db.transaction(() => {
+      const ids = this._db.query(
+        `SELECT task_id FROM tasks WHERE status NOT IN (${TERMINAL_STATUSES.map((x) => `'${x}'`).join(",")})
+         AND (accepted_run_id<>? OR (owner_run_id IS NOT NULL AND owner_run_id<>?))`,
+        runId, runId).map((r) => r.task_id);
+      let count = 0;
+      for (const id of ids) {
+        const t = this._db.get(
+          "SELECT status,state_revision FROM tasks WHERE task_id=?", id);
+        // visible_status(run) for this selection is needs_verification;
+        // skip if already there (no write).
+        if (t.status === "needs_verification") continue;
+        const res = this._db.run(
+          `UPDATE tasks SET status='needs_verification',state_revision=state_revision+1
+           ${RECOUNT_COUNTERS} WHERE task_id=? AND state_revision=?`,
+          id, t.state_revision);
+        if (res.changes !== 1) {
+          throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+        }
+        count++;
+      }
+      return { reconciled: count };
+    });
+  },
+
+  /** candidates_tx: claimable tasks for run — accepted=run, owner NULL,
+   *  pending/cancel_requested, ORDER BY created_at,task_id. Read path
+   *  only: claims stamped with the live revision (no writes). */
+  candidates(runId) {
+    if (!wellformedStr(runId) || runId.trim() === "") {
+      throw new StorageError("invalid_input", "empty run identity");
+    }
+    return this._db.transaction(() => {
+      const ids = this._db.query(
+        `SELECT task_id FROM tasks WHERE accepted_run_id=? AND owner_run_id IS NULL
+         AND status IN ('pending','cancel_requested') ORDER BY created_at,task_id`,
+        runId).map((r) => r.task_id);
+      return ids.map((id) => {
+        const task = this._db.get("SELECT * FROM tasks WHERE task_id=?", id);
+        const items = this._db.query(
+          "SELECT * FROM task_items WHERE task_id=? ORDER BY item_id", id);
+        const scopes = this._db.query(
+          "SELECT scope_key FROM task_scopes WHERE task_id=? ORDER BY scope_key", id)
+          .map((r) => r.scope_key);
+        const claims = this._db.query(
+          "SELECT scope_key,state_revision FROM scope_occupancy WHERE task_id=? ORDER BY scope_key",
+          id).map((r) => ({ scope_key: r.scope_key, state_revision: task.state_revision }));
+        return { task, items, scopes, claims };
+      });
+    });
+  },
+});
