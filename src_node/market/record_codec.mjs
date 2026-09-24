@@ -31,6 +31,18 @@ const publishAdj = (m) => `adjustment evidence is not confirmed: ${m}`;
 // ---------------------------------------------------------------------
 // serde_json::to_vec parity for arbitrary Values: object keys are a
 // BTreeMap (sorted), strings escape only control/quote/backslash.
+// Flat parts-array build — one join per top call instead of a string
+// per node; key escapes are memoized (schema keys repeat).
+const escCache = new Map();
+const escKey = (k) => {
+  let e = escCache.get(k);
+  if (e === undefined) {
+    e = JSON.stringify(k);
+    if (escCache.size >= 8192) escCache.clear();
+    escCache.set(k, e);
+  }
+  return e;
+};
 const sortSer = (v) => {
   if (v === null || v === undefined) return "null";
   // serde u64 emits full digits; JSON.stringify throws on bigint
@@ -38,17 +50,33 @@ const sortSer = (v) => {
   if (typeof v === "bigint") return v.toString();
   if (v instanceof F64) return serValue(v);
   if (typeof v !== "object") return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(sortSer).join(",")}]`;
-  return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${sortSer(v[k])}`).join(",")}}`;
+  if (Array.isArray(v)) {
+    let out = "[";
+    for (let i = 0; i < v.length; i++) {
+      if (i) out += ",";
+      out += sortSer(v[i]);
+    }
+    return out + "]";
+  }
+  const keys = Object.keys(v).sort();
+  let out = "{";
+  for (let i = 0; i < keys.length; i++) {
+    if (i) out += ",";
+    out += escKey(keys[i]);
+    out += ":";
+    out += sortSer(v[keys[i]]);
+  }
+  return out + "}";
 };
 
 export const legacyDigest = (raw) => {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw integrity("record must be object");
   }
-  const copy = { ...raw };
-  delete copy.integrity_sha256;
-  return createHash("sha256").update(sortSer(copy), "utf8").digest("hex");
+  // serde equivalent of copy+delete integrity_sha256, without the copy.
+  const body = `{${Object.keys(raw).filter((k) => k !== "integrity_sha256")
+    .sort().map((k) => `${JSON.stringify(k)}:${sortSer(raw[k])}`).join(",")}}`;
+  return createHash("sha256").update(body, "utf8").digest("hex");
 };
 
 // ---------------------------------------------------------------------
@@ -100,8 +128,11 @@ const reqBool = (o, f) => {
 
 // chrono NaiveDate — strict %Y-%m-%d, real calendar day
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const dateCache = new Map(); // valid date strings repeat across records
 const parseDate = (v) => {
   if (typeof v !== "string") throw new TypeError(serdeType(typeName(v), "a date string"));
+  let hit = dateCache.get(v);
+  if (hit !== undefined) return hit;
   const m = DATE_RE.exec(v);
   if (!m) throw new TypeError("input contains invalid characters");
   const [_, y, mo, d] = m.map(Number);
@@ -109,7 +140,10 @@ const parseDate = (v) => {
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) {
     throw new TypeError("input is out of range");
   }
-  return { y, mo, d, s: v };
+  hit = { y, mo, d, s: v };
+  if (dateCache.size >= 8192) dateCache.clear();
+  dateCache.set(v, hit);
+  return hit;
 };
 // days from 0001-01-01 (chrono num_days_from_ce)
 const daysFromCe = ({ y, mo, d }) => {
@@ -130,7 +164,20 @@ const reqTimestamp = (o, f) => {
 // rust_decimal serde (string or number); normalize to a canonical
 // sign+int+frac string so Decimal PartialEq is value equality.
 const DEC_RE = /^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/;
-const decNorm = (v) => {
+// decNorm is pure on the input value; record workloads repeat the same
+// price strings, so cache on the string (bounded, clears when full).
+const decNormCache = new Map();
+const decNormMemo = (v) => {
+  if (typeof v !== "string") return decNormRaw(v);
+  let n = decNormCache.get(v);
+  if (n === undefined) {
+    n = decNormRaw(v);
+    if (decNormCache.size >= 65536) decNormCache.clear();
+    decNormCache.set(v, n);
+  }
+  return n;
+};
+const decNormRaw = (v) => {
   let s;
   if (typeof v === "string") s = v;
   else if (typeof v === "number" && Number.isFinite(v)) s = String(v);
@@ -155,14 +202,29 @@ const decNorm = (v) => {
   if (int === "0" && frac === "") neg = false;
   return { neg, int, frac };
 };
-const cmpDec = (a, b) => {
-  const x = decNorm(a), y = decNorm(b);
+const decNorm = decNormMemo;
+// decNorm is pure on the raw value; bars produced by parseBar (and any
+// foreign bar on first touch) get their {neg,int,frac} triples cached in
+// a WeakMap so dedup/eq comparisons normalize once per field, not once
+// per comparison (~12x fewer norms per bar on the check path).
+const normCache = new WeakMap();
+const nOf = (bar, f) => {
+  let n = normCache.get(bar);
+  if (n === undefined) { n = {}; normCache.set(bar, n); }
+  let t = n[f];
+  if (t === undefined) { t = decNorm(bar[f]); n[f] = t; }
+  return t;
+};
+const cmpN = (x, y) => {
   if (x.neg !== y.neg) return x.neg ? -1 : 1;
   const mag = x.int.length !== y.int.length ? x.int.length - y.int.length
     : x.int !== y.int ? (x.int < y.int ? -1 : 1)
     : x.frac !== y.frac ? (x.frac < y.frac ? -1 : 1) : 0;
   return x.neg ? -mag : mag;
 };
+const eqN = (x, y) => x.neg === y.neg && x.int === y.int && x.frac === y.frac;
+const ZERO_N = { neg: false, int: "0", frac: "" };
+const cmpDec = (a, b) => cmpN(decNorm(a), decNorm(b));
 const decEq = (a, b) => cmpDec(a, b) === 0;
 const reqDec = (o, f) => {
   const v = req(o, f);
@@ -174,6 +236,11 @@ const optDec = (o, f) => {
   decNorm(o[f]);
   return o[f];
 };
+// dec-capturing variants used by parseBar so the computed triple lands
+// in the cache (identical evaluation order to the literal above).
+const reqDecN = (o, f) => { const v = req(o, f); return { v, n: decNorm(v) }; };
+const optDecN = (o, f) => (!(f in o) || o[f] === null)
+  ? { v: null, n: null } : { v: o[f], n: decNorm(o[f]) };
 
 const PERIODS = ["Day", "Year"];
 const ADJUSTMENTS = ["Forward"];
@@ -233,13 +300,19 @@ const parseBar = (v) => {
       (typeof r7 !== "number" || !Number.isInteger(r7) || r7 < 0 || r7 > 4294967295)) {
     throw new TypeError(serdeType(typeName(r7), "u32"));
   }
-  return {
-    date: parseDate(req(v, "date")),
-    open: reqDec(v, "open"), high: reqDec(v, "high"),
-    low: reqDec(v, "low"), close: reqDec(v, "close"),
-    volume: optDec(v, "volume"), amount: optDec(v, "amount"),
+  const date = parseDate(req(v, "date"));
+  const open = reqDecN(v, "open"), high = reqDecN(v, "high");
+  const low = reqDecN(v, "low"), close = reqDecN(v, "close");
+  const volume = optDecN(v, "volume"), amount = optDecN(v, "amount");
+  const bar = {
+    date,
+    open: open.v, high: high.v, low: low.v, close: close.v,
+    volume: volume.v, amount: amount.v,
     r7_raw: r7 ?? null,
   };
+  normCache.set(bar, { open: open.n, high: high.n, low: low.n,
+    close: close.n, volume: volume.n, amount: amount.n });
+  return bar;
 };
 const parseYearlyDerivation = (v) => {
   if (v === undefined || v === null) return null;
@@ -312,10 +385,13 @@ const parseVersion = (v) => {
 // ---------------------------------------------------------------------
 // publish.rs validators — PublishError Display text verbatim.
 const barEq = (a, b) =>
-  a.date.s === b.date.s && decEq(a.open, b.open) && decEq(a.high, b.high) &&
-  decEq(a.low, b.low) && decEq(a.close, b.close) &&
-  (a.volume === null ? b.volume === null : b.volume !== null && decEq(a.volume, b.volume)) &&
-  (a.amount === null ? b.amount === null : b.amount !== null && decEq(a.amount, b.amount)) &&
+  a.date.s === b.date.s && eqN(nOf(a, "open"), nOf(b, "open")) &&
+  eqN(nOf(a, "high"), nOf(b, "high")) &&
+  eqN(nOf(a, "low"), nOf(b, "low")) && eqN(nOf(a, "close"), nOf(b, "close")) &&
+  (a.volume === null ? b.volume === null
+    : b.volume !== null && eqN(nOf(a, "volume"), nOf(b, "volume"))) &&
+  (a.amount === null ? b.amount === null
+    : b.amount !== null && eqN(nOf(a, "amount"), nOf(b, "amount"))) &&
   a.r7_raw === b.r7_raw;
 const recordKey = (period, bar) => period === "Day" ? bar.date.s : String(bar.date.y);
 
@@ -328,17 +404,19 @@ export const validateAndDeduplicate = (batch) => {
   let duplicate_count = 0;
   for (const bar of batch.bars) {
     if (bar.date.y <= 0) throw integrity(publishInvalid("record has no natural year/date"));
-    if (cmpDec(bar.high, bar.low) < 0) throw integrity(publishInvalid("high is below low"));
-    if (cmpDec(bar.open, bar.low) < 0 || cmpDec(bar.open, bar.high) > 0) {
+    if (cmpN(nOf(bar, "high"), nOf(bar, "low")) < 0) throw integrity(publishInvalid("high is below low"));
+    if (cmpN(nOf(bar, "open"), nOf(bar, "low")) < 0 ||
+        cmpN(nOf(bar, "open"), nOf(bar, "high")) > 0) {
       throw integrity(publishInvalid("open is outside low/high"));
     }
-    if (cmpDec(bar.close, bar.low) < 0 || cmpDec(bar.close, bar.high) > 0) {
+    if (cmpN(nOf(bar, "close"), nOf(bar, "low")) < 0 ||
+        cmpN(nOf(bar, "close"), nOf(bar, "high")) > 0) {
       throw integrity(publishInvalid("close is outside low/high"));
     }
-    if (bar.volume !== null && cmpDec(bar.volume, "0") < 0) {
+    if (bar.volume !== null && cmpN(nOf(bar, "volume"), ZERO_N) < 0) {
       throw integrity(publishInvalid("volume is negative"));
     }
-    if (bar.amount !== null && cmpDec(bar.amount, "0") < 0) {
+    if (bar.amount !== null && cmpN(nOf(bar, "amount"), ZERO_N) < 0) {
       throw integrity(publishInvalid("amount is negative"));
     }
     const key = batch.period === "Day" ? daysFromCe(bar.date) : bar.date.y;

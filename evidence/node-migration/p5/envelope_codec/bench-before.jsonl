@@ -1,0 +1,10 @@
+{"type":"env","code_sha":"64d5c834671ec5438904fde8c27a9bae0c23e841","node":"v20.19.2","rustc":"rustc 1.98.1 (48a229cea 2026-09-01)","uname":"Linux 6.12.94+ #1 SMP PREEMPT_DYNAMIC Fri Sep 18 16:05:18 UTC 2026 x86_64 GNU/Linux","concurrency":1,"bench_iters":300,"bench_warmup":40,"day_input_bytes":279200,"serde_input_bytes":136057,"record_count":3}
+{"surface":"day_parse","impl":"node","iters":300,"p50_ns":857311,"p95_ns":1690769,"max_ns":2388244,"mean_ns":1008552,"input_bytes":279200,"peak_rss_kb":96172}
+{"surface":"serde_json_decode","impl":"node","iters":300,"p50_ns":1226778,"p95_ns":1839548,"max_ns":7298888,"mean_ns":1309630,"input_bytes":136057,"peak_rss_kb":96452}
+{"surface":"serde_json_encode","impl":"node","iters":300,"p50_ns":1442536,"p95_ns":1836447,"max_ns":2162724,"mean_ns":1475547,"input_bytes":136057,"peak_rss_kb":107132}
+{"surface":"mcp_roundtrip","impl":"node","iters":300,"p50_ns":21398,"p95_ns":42163,"max_ns":366560,"mean_ns":23665,"input_bytes":83,"peak_rss_kb":107276}
+{"surface":"acquire_store_accept","impl":"node","iters":300,"p50_ns":144615,"p95_ns":185977,"max_ns":4249186,"mean_ns":164007,"input_bytes":0,"peak_rss_kb":109228,"db_bytes":81920,"wal_bytes":0}
+{"surface":"acquire_store_read","impl":"node","iters":300,"p50_ns":86356,"p95_ns":102962,"max_ns":168656,"mean_ns":88752,"input_bytes":0,"peak_rss_kb":109228,"db_bytes":81920,"wal_bytes":0}
+{"surface":"envelope_pack","impl":"node","iters":300,"p50_ns":3263960,"p95_ns":3781685,"max_ns":5340699,"mean_ns":3371403,"input_bytes":32000,"peak_rss_kb":109708}
+{"surface":"envelope_expand","impl":"node","iters":300,"p50_ns":622270,"p95_ns":1087092,"max_ns":1690819,"mean_ns":671620,"input_bytes":32000,"peak_rss_kb":109736}
+{"surface":"record_check","impl":"node","iters":300,"p50_ns":273102,"p95_ns":478450,"max_ns":1730552,"mean_ns":312606,"input_bytes":6976,"peak_rss_kb":110628,"records":3}

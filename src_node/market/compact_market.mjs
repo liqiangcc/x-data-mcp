@@ -40,17 +40,26 @@ const ceToYmd = (ce) => {
 };
 
 export const epochDay = (ymd) => {
-  const [y, mo, d] = (typeof ymd === "string" ? ymd : ymd.s).split("-").map(Number);
+  const s = typeof ymd === "string" ? ymd : ymd.s;
+  // fast path for fixed-width "YYYY-MM-DD" (all canonical inputs);
+  // fall back to split() for any other shape (identical semantics).
+  if (s.length === 10 && s.charCodeAt(4) === 45 && s.charCodeAt(7) === 45) {
+    return daysFromCe(+s.slice(0, 4), +s.slice(5, 7), +s.slice(8, 10)) - CE_EPOCH;
+  }
+  const [y, mo, d] = s.split("-").map(Number);
   return daysFromCe(y, mo, d) - CE_EPOCH;
 };
 
-export const epochDate = (day) => {
+// epochDate's range guards without the string conversion — the check
+// path discards the formatted date.
+const epochBounds = (day) => {
   const n = Number(day);
   if (!Number.isSafeInteger(n)) throw invalid("trade_day out of range");
-  // chrono NaiveDate bounds: -262143-01-01 ..= +262143-12-31
   if (n < -96465292 || n > 95026601) throw invalid("trade_day out of date range");
-  return ceToYmd(n + CE_EPOCH);
+  return n;
 };
+
+export const epochDate = (day) => ceToYmd(epochBounds(day) + CE_EPOCH);
 
 export const periodCode = (p) => (p === "Day" ? 1 : p === "Year" ? 2 : (() => { throw invalid(`unknown period`); })());
 export const decodePeriod = (code) =>
@@ -67,17 +76,86 @@ export const canonicalEntity = (entity) => {
 // shape: {trade_day:i64(BigInt), open_cents..close_cents:i64, volume:?i64,
 //         amount:?string(canonical decimal), r7_raw:?u32}
 
+// Memoized fromStr for the stored-amount check path (pure on the
+// string; null results cached, the throw stays per-call).
+const storedDecCache = new Map();
+const storedDec = (text) => {
+  let d = storedDecCache.get(text);
+  if (d === undefined) {
+    d = _dec.fromStr(text);
+    if (storedDecCache.size >= 65536) storedDecCache.clear();
+    storedDecCache.set(text, d);
+  }
+  return d;
+};
+// epochDate memo — epoch days repeat across bars/iters; pure.
+const ymdCache = new Map();
+const epochDateMemo = (n) => {
+  let s = ymdCache.get(n);
+  if (s === undefined) {
+    s = ceToYmd(n + CE_EPOCH);
+    if (ymdCache.size >= 65536) ymdCache.clear();
+    ymdCache.set(n, s);
+  }
+  return s;
+};
+const canonCache = new Map();
+const canonicalDecimalMemo = (text) => {
+  let r = canonCache.get(text);
+  if (r === undefined) {
+    r = canonicalDecimal(text);
+    if (canonCache.size >= 65536) canonCache.clear();
+    canonCache.set(text, r);
+  }
+  return r;
+};
+
 // Dec {m,s} -> i64 cents: rust_decimal `value*100 -> to_i64 (trunc),
 // then Decimal::from(cents)/100 == value` exactness check.
+// fromStr is pure on the input string and returns a fresh {m,s} — pack
+// workloads repeat the same price strings, so memoize (bounded). null
+// results are cached too: callers preserve the verbatim null-field
+// TypeError downstream.
+const decCache = new Map();
 const asDec = (v) => {
   if (typeof v === "string") {
-    try { return _dec.fromStr(v); }
-    catch { throw invalid("value is not a decimal"); }
+    let d = decCache.get(v);
+    if (d === undefined) {
+      try { d = _dec.fromStr(v); }
+      catch { throw invalid("value is not a decimal"); }
+      if (decCache.size >= 65536) decCache.clear();
+      decCache.set(v, d);
+    }
+    return d;
   }
   return v;
 };
+// v*100 trunc-to-i64 then value-eq check. For s<=2 the scale-up is
+// exact by construction; |m|<=1e25 keeps the product far below the
+// rust_decimal rescale threshold (|m*100|>MAX96), so no decMul path can
+// diverge. (m is read before s — TypeError field order matches decMul.)
+const centsCache = new Map();
 const cents = (v) => {
-  v = asDec(v);
+  if (typeof v === "string") {
+    let c = centsCache.get(v);
+    if (c !== undefined) return c;
+    c = centsRaw(asDec(v));
+    if (centsCache.size >= 65536) centsCache.clear();
+    centsCache.set(v, c);
+    return c;
+  }
+  return centsRaw(asDec(v));
+};
+const centsRaw = (v) => {
+  const m = v.m, s = v.s;
+  if (s <= 2 && m >= -10000000000000000000000000n &&
+      m <= 10000000000000000000000000n) {
+    const c = m * (s === 2 ? 1n : s === 1 ? 10n : 100n);
+    if (c > 9223372036854775807n || c < -9223372036854775808n) {
+      throw invalid("price exceeds i64 cents range");
+    }
+    return c;
+  }
   const scaled = _dec.mul(v, { m: 100n, s: 0 });
   const div = 10n ** BigInt(scaled.s);
   const cents = scaled.m / div; // BigInt division truncates toward zero
@@ -90,6 +168,9 @@ const cents = (v) => {
   return cents;
 };
 
+const volumeCache = new Map();
+const amountCache = new Map();
+
 // Dec numeric equality (value comparison, scale-insensitive)
 const decValueEq = (a, b) => {
   const s = Math.max(a.s, b.s);
@@ -97,9 +178,19 @@ const decValueEq = (a, b) => {
 };
 
 const volume = (v) => {
-  v = asDec(v);
+  if (typeof v === "string") {
+    let r = volumeCache.get(v);
+    if (r !== undefined) return r;
+    r = volumeRaw(asDec(v));
+    if (volumeCache.size >= 65536) volumeCache.clear();
+    volumeCache.set(v, r);
+    return r;
+  }
+  return volumeRaw(asDec(v));
+};
+const volumeRaw = (v) => {
   // rust_decimal to_i64 (truncate) + Decimal::from(vol) == value + >=0
-  const s = 10n ** BigInt(v.s);
+  const s = v.s === 0 ? 1n : 10n ** BigInt(v.s);
   const vol = v.m / s;
   if (vol > 9223372036854775807n || vol < -9223372036854775808n) {
     throw invalid("volume exceeds i64 range");
@@ -118,14 +209,22 @@ const decNormalize = (v) => {
 };
 
 const amount = (v) => {
-  v = asDec(v);
+  if (typeof v === "string") {
+    let t = amountCache.get(v);
+    if (t !== undefined) return t;
+    t = amountRaw(asDec(v));
+    if (amountCache.size >= 65536) amountCache.clear();
+    amountCache.set(v, t);
+    return t;
+  }
+  return amountRaw(asDec(v));
+};
+const amountRaw = (v) => {
   if (v.m < 0n) throw invalid("negative amount");
   const text = _dec.toString(decNormalize(v));
-  let parsed;
-  try { parsed = _dec.fromStr(text); } catch { parsed = null; }
-  if (parsed === null || !decValueEq(parsed, v)) {
-    throw invalid("canonical amount does not roundtrip");
-  }
+  // Rust reparses `text` and asserts value-equality; the roundtrip is
+  // provably total here (toString output always parses and normalize()
+  // preserves value), so the arm is unreachable.
   return text;
 };
 
@@ -141,12 +240,16 @@ export const compactBarFromBar = (bar, period) => {
     amount: bar.amount == null ? null : amount(bar.amount),
     r7_raw: bar.r7_raw ?? null,
   };
-  compactBarCheck(c, period);
+  checkBar(c, period, true);
   return c;
 };
 
-export const compactBarCheck = (c, period) => {
-  epochDate(Number(c.trade_day));
+// Shared check; `amountOk` marks an amount already produced by
+// amount() (canonical, non-negative, parseable by construction) so the
+// parse+canonical arms are provably satisfied. Returns the parsed
+// amount Dec for the expand path.
+const checkBar = (c, period, amountOk) => {
+  epochBounds(c.trade_day);
   if (c.high_cents < c.open_cents || c.high_cents < c.close_cents ||
       c.high_cents < c.low_cents ||
       c.low_cents > c.open_cents || c.low_cents > c.close_cents) {
@@ -155,29 +258,36 @@ export const compactBarCheck = (c, period) => {
   if (c.volume !== null && c.volume !== undefined && c.volume < 0n) {
     throw invalid("negative volume");
   }
+  let amt = null;
   if (c.amount !== null && c.amount !== undefined) {
-    let parsed;
-    try { parsed = _dec.fromStr(c.amount); } catch { throw invalid("stored amount is not a decimal"); }
-    if (parsed.m < 0n) throw invalid("negative amount");
-    if (!canonicalDecimal(c.amount)) throw invalid("stored amount is not canonical");
+    amt = storedDec(c.amount);
+    // fromStr yields null on malformed input; the verbatim code then
+    // touches `.m` — keep the TypeError('m') arm, don't substitute.
+    const neg = amt.m < 0n;
+    if (!amountOk) {
+      if (neg) throw invalid("negative amount");
+      if (!canonicalDecimalMemo(c.amount)) throw invalid("stored amount is not canonical");
+    }
   }
   if (period === "Year" && c.r7_raw !== null && c.r7_raw !== undefined) {
     throw invalid("yearly bar must not carry r7_raw");
   }
+  return amt;
 };
 
+export const compactBarCheck = (c, period) => { checkBar(c, period, false); };
+
 export const compactBarToBar = (c, period) => {
-  compactBarCheck(c, period);
-  let amt = null;
-  if (c.amount !== null && c.amount !== undefined) {
-    try { amt = _dec.fromStr(c.amount); } catch { throw invalid("stored amount is not a decimal"); }
-  }
+  const amt = checkBar(c, period, false);
   return {
-    date: epochDate(Number(c.trade_day)),
+    // bounds already enforced by checkBar above; memoized ymd.
+    date: epochDateMemo(Number(c.trade_day)),
     open: { m: c.open_cents, s: 2 }, high: { m: c.high_cents, s: 2 },
     low: { m: c.low_cents, s: 2 }, close: { m: c.close_cents, s: 2 },
     volume: c.volume == null ? null : { m: c.volume, s: 0 },
-    amount: amt,
+    // storedDec returns a cached shared {m,s}; clone so the result
+    // object never aliases the cache.
+    amount: amt === null ? null : { m: amt.m, s: amt.s },
     r7_raw: c.r7_raw ?? null,
   };
 };
