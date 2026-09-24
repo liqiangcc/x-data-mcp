@@ -1,0 +1,10 @@
+{
+  "probe": "mcp_connect",
+  "total": 16,
+  "pass": 16,
+  "fail": 0,
+  "not_run": [
+    "foreign-owner peer UID (single-UID box)"
+  ],
+  "oracle": "target/debug/mcp_connect"
+}
