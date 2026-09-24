@@ -943,7 +943,8 @@ function detailBytes(detail) {
 export const taskView = (task) => ({
   task_id: task.task_id, request_id: task.request_id, kind: task.kind,
   state: task.state, generation_id: task.generation_id,
-  stage: task.stage, bytes_done: task.bytes_done, error: task.error,
+  stage: task.stage, bytes_done: u64json(task.bytes_done),
+  error: task.error,
   detail: task.detail, created_at: toRfc3339(task.created_at),
   updated_at: toRfc3339(task.updated_at),
 });

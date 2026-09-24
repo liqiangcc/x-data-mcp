@@ -354,23 +354,34 @@ const scenarioMidVerify = () => {
 c.execute("UPDATE acquisition_tasks SET state='running', stage='verify' WHERE state='succeeded'"); c.commit();`]);
     const reopen = runSync(impl, "acquire_open", [root, mirror]);
     per[impl] = reopen.out;
+    // F-001 assertion: post-reconcile syncStatus must serialize and its
+    // u64 columns must be JSON numbers (serde u64 parity).
+    const bdt = reopen.out?.status?.inflight_tasks?.[0]?.bytes_done;
     rec("mid_verify", impl, { exit: reopen.exit, error: reopen.out?.error,
       stderr: reopen.stderr, tasks: reopen.out?.tasks,
-      generations: reopen.out?.generations });
+      generations: reopen.out?.generations,
+      sync_status_ok: reopen.out?.opened === true,
+      bytes_done_type: bdt === undefined ? "absent" : typeof bdt });
   }
   const normT = (ts) => (ts ?? []).map((t) => {
     const c = t.split("|");
     return [c[0], c[1], c[2], c[4], c[5]].join("|");
   });
   const normG = (gs) => (gs ?? []).map((g) => g.split("|").slice(1).join("|"));
+  const bdtType = (s) =>
+    s?.status?.inflight_tasks?.[0]?.bytes_done === undefined ? "absent"
+      : typeof s.status.inflight_tasks[0].bytes_done;
   verdict("mid_verify",
     canon(normT(per.rust?.tasks)) === canon(normT(per.node?.tasks)) &&
     canon(normG(per.rust?.generations)) === canon(normG(per.node?.generations)) &&
-    canon(per.rust?.error ?? null) === canon(per.node?.error ?? null),
+    canon(per.rust?.error ?? null) === canon(per.node?.error ?? null) &&
+    bdtType(per.rust) === bdtType(per.node),
     { tasks: normT(per.rust?.tasks), generations: normG(per.rust?.generations),
-      error: per.rust?.error ?? null },
+      error: per.rust?.error ?? null,
+      bytes_done_type: per.rust?.status?.inflight_tasks?.[0]?.bytes_done },
     { tasks: normT(per.node?.tasks), generations: normG(per.node?.generations),
-      error: per.node?.error ?? null },
+      error: per.node?.error ?? null,
+      bytes_done_type: per.node?.status?.inflight_tasks?.[0]?.bytes_done },
     "running task + installed gen, no decision -> reconcile realign");
 };
 
