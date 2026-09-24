@@ -482,6 +482,18 @@ NEEDS_ESCAPE[34] = 1; NEEDS_ESCAPE[92] = 1;
 // Byte-level emit: a single growable buffer, no per-leaf string
 // allocation. Strings are scanned once for escapable chars; clean
 // spans go through one Buffer.utf8 write.
+//
+// NM-113: emitted-bytes memoization. The encode cost is dominated by
+// the per-string JS escape scan + the fixed ~120ns Buffer.write call
+// overhead; both collapse to one memcpy (Buffer.set) on a memo hit.
+//   STR_ENC: string  -> '"'+escaped+'"'   (content <= 128 chars)
+//   KEY_ENC: key     -> '"'+escaped+'":'  (fused colon)
+// Both are content-addressed — cached bytes are the exact bytes the
+// un-memoized path emits, so output stays byte-identical. Bounded at
+// 4096 entries each; over-cap strings encode inline every time.
+const MEMO_CAP = 4096, MEMO_MAXLEN = 128;
+const STR_ENC = new Map();
+const KEY_ENC = new Map();
 class ByteWriter {
   constructor() {
     this.b = Buffer.allocUnsafe(1 << 16);
@@ -507,8 +519,12 @@ class ByteWriter {
     this.need(s.length * 3 + 2);
     this.p += this.b.write(s, this.p, "utf8");
   }
-  str(s) { // quoted + escaped
-    this.byte(34);
+  raw(b) { // pre-encoded bytes verbatim
+    this.need(b.length);
+    this.b.set(b, this.p);
+    this.p += b.length;
+  }
+  strBody(s) { // escaped content, no quotes
     let start = 0;
     const n = s.length;
     for (let i = 0; i < n; i++) {
@@ -538,7 +554,43 @@ class ByteWriter {
     }
     if (start === 0) this.utf8(s);
     else if (start < n) this.utf8(s.slice(start));
+  }
+  str(s) { // quoted + escaped
+    if (s.length <= MEMO_MAXLEN) {
+      const e = STR_ENC.get(s);
+      if (e !== undefined) { this.raw(e); return; }
+      const at = this.p;
+      this.byte(34);
+      this.strBody(s);
+      this.byte(34);
+      if (STR_ENC.size < MEMO_CAP)
+        STR_ENC.set(s, Buffer.from(this.b.subarray(at, this.p)));
+      return;
+    }
     this.byte(34);
+    this.strBody(s);
+    this.byte(34);
+  }
+  key(k) { // '"'+escaped+'":' fused
+    let e = KEY_ENC.get(k);
+    if (e === undefined) {
+      if (KEY_ENC.size >= MEMO_CAP) {
+        this.byte(34);
+        this.strBody(k);
+        this.byte(34);
+        this.byte(58);
+        return;
+      }
+      const at = this.p;
+      this.byte(34);
+      this.strBody(k);
+      this.byte(34);
+      this.byte(58);
+      e = Buffer.from(this.b.subarray(at, this.p));
+      KEY_ENC.set(k, e);
+      return;
+    }
+    this.raw(e);
   }
   bytes() { return this.b.subarray(0, this.p); }
   text() { return this.b.toString("utf8", 0, this.p); }
@@ -570,8 +622,7 @@ const serInto = (v, w) => {
   if (keys.length > 1) keys.sort(keyCmp);
   for (let i = 0; i < keys.length; i++) {
     if (i) w.byte(44);
-    w.str(keys[i]);
-    w.byte(58);
+    w.key(keys[i]);
     serInto(v[keys[i]], w);
   }
   w.byte(125);
