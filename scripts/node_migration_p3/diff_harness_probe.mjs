@@ -53,6 +53,7 @@ for (const file of scenarios) {
       if (seedOp.tasks) extra.DIFF_TASKS = seedOp.tasks;
       if (seedOp.compact) extra.DIFF_INIT = "19";
       if (seedOp.norm_ts) extra.DIFF_NORM_TS = "1";
+      if (seedOp.check) extra.DIFF_CHECK = "1";
       execFileSync(CARGO, ["test", "--lib", "diff_harness::build_market_fixture", "--",
         "--nocapture", "--test-threads=1"], {
         cwd: ROOT,

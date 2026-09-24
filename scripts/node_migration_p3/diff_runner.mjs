@@ -4,13 +4,14 @@
 //
 // Usage: node diff_runner.mjs <scenario.jsonl> <db> <out.jsonl>
 import { createHash } from "node:crypto";
-import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const [, , scenarioPath, dbPath, outPath] = process.argv;
 const { TaskAdmission } = await import("../../src_node/storage/task_repository.mjs");
 const { openDatabase, StorageError } = await import("../../src_node/storage/sqlite_adapter.mjs");
-const { ser } = await import("../../src_node/storage/verification_storage.mjs");
+const VST = await import("../../src_node/storage/verification_storage.mjs");
+const { ser } = VST;
 const RC = await import("../../src_node/market/record_codec.mjs");
 const MR = await import("../../src_node/market/market_read.mjs");
 const MW = await import("../../src_node/market/market_write.mjs");
@@ -18,6 +19,13 @@ const MC = await import("../../src_node/market/market_commit.mjs");
 const CMR = await import("../../src_node/market/compact_read.mjs");
 const CMM = await import("../../src_node/market/compact_market.mjs");
 const CW = await import("../../src_node/market/compact_write.mjs");
+const GAPS = await import("../../src_node/market/gaps.mjs");
+const YR = await import("../../src_node/market/yearly_results.mjs");
+const COLL = await import("../../src_node/market/collection.mjs");
+const VF = await import("../../src_node/market/verification_facts.mjs");
+const PC = await import("../../src_node/storage/publication_checks.mjs");
+const BE = await import("../../src_node/market/backend.mjs");
+const { DatabaseLease } = await import("../../src_node/storage/database_lease.mjs");
 const isCompact = () => MR.isCompactSchema(db);
 const marketDigest = () => {
   const tables = [
@@ -69,6 +77,16 @@ const normDeep = (v, set) => {
 copyFileSync(preseeded ? process.env.DIFF_PRESEED : "/dev/shm/nm006/db18.sqlite", dbPath);
 const repo = TaskAdmission.open(dbPath, { mode: "readwrite" });
 const db = repo._db;
+// Production posture: a compact (schema-19) market is always opened under
+// the DatabaseLease flock — mirror it so open/open_shared lock semantics
+// differential against the Rust coordinator lease.
+let heldLease = null;
+if (MR.isCompactSchema(db)) {
+  // match the harness's chmod-to-0600 before the lease gate.
+  chmodSync(dbPath, 0o600);
+  const { DatabaseLease } = await import("../../src_node/storage/database_lease.mjs");
+  heldLease = DatabaseLease.acquire(dbPath);
+}
 
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 const syms = new Map(); // symbol -> real task_id; "rev:<sym>" -> revision
@@ -148,6 +166,14 @@ const stateDigest = () => {
     cdump("SELECT result_key,seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM market_update_delta_clips ORDER BY result_key,seq", "CMD");
     cdump("SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM publication_results ORDER BY result_key", "CPR");
   }
+  if (!isCompact()) {
+    dump("SELECT result_id,task_id,item_id,base_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM market_update_results ORDER BY result_id", "MU");
+    dump("SELECT result_id,task_id,item_id,base_daily_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM yearly_execution_results ORDER BY result_id", "YR");
+  }
+  dump("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions ORDER BY decision_id", "GD");
+  dump("SELECT gap_id,symbol,period,start_date,end_date,evidence_kind,evidence_id,evidence_digest,observed_at FROM proven_gaps ORDER BY gap_id", "PG");
+  dump("SELECT gap_id,version_id,covered_at FROM gap_coverings ORDER BY gap_id", "GC");
+  dump("SELECT verification_task_id,target_task_id,audit_json,audit_sha256 FROM publication_checks ORDER BY 1", "PC");
   let joined = lines.join("\n");
   for (const [k, real] of syms) {
     if (!k.startsWith("rev:")) joined = joined.split(real).join(`$${k}`);
@@ -503,6 +529,193 @@ for (const line of lines) {
         const s = repo._readBoundTaskValidated(op.task);
         if (s) refreshRev(op.task, s.task.state_revision);
         rec = { status: "ok", task: projection(s) };
+        break;
+      }
+
+      // ---- NM-056 — market tail ops ----
+      case "record_gap_decision":
+      case "record_gap_decision_guarded": {
+        try {
+          const inserted = name.endsWith("guarded")
+            ? GAPS.recordGapDecisionGuarded(db, op.decision)
+            : GAPS.recordGapDecision(db, op.decision);
+          rec = { status: "ok", inserted };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "record_proven_gap": {
+        try {
+          rec = { status: "ok", inserted: GAPS.recordProvenGap(db, op.gap) };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "cover_gap": {
+        try {
+          rec = { status: "ok",
+            inserted: GAPS.coverGap(db, op.covering, isCompact()) };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "gap_verification_decision": {
+        try {
+          rec = { status: "ok",
+            decision: GAPS.gapVerificationDecision(db, op.decision_id) };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "proven_gap": {
+        try {
+          rec = { status: "ok", gap: GAPS.provenGap(db, op.gap_id) };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "open_proven_gaps": {
+        try {
+          rec = { status: "ok", gaps: GAPS.openProvenGaps(
+            db, op.symbol, op.period === "year" ? "Year" : "Day") };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "gap_coverings": {
+        try {
+          rec = { status: "ok", coverings: GAPS.gapCoverings(db, op.gap_id) };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "yearly_read_result": {
+        try {
+          const r = YR.readResult(db, op.result_id);
+          rec = r === null
+            ? { status: "ok", audit_sha256: null, receipt: null }
+            : { status: "ok",
+                audit_sha256: sha(CMM.canonicalJson(r[0])),
+                receipt: r[1] };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "collection_receipt": {
+        try {
+          rec = { status: "ok",
+            receipt: COLL.collectionReceipt(db, op.task, op.item) };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "effective_head": {
+        try {
+          rec = { status: "ok", version_id: COLL.effectiveHead(
+            db, { symbol: op.symbol,
+                  period: op.period === "year" ? "Year" : "Day" }) };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "read_facts": {
+        try {
+          const facts = VF.readFacts(db, resolve(op.task),
+            (x) => repo._readBoundTaskValidated(resolve(x)));
+          rec = { status: "ok", facts: {
+            task: VST.snapshotCanon(facts.task),
+            items: facts.items,
+          } };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "check_receipt": {
+        try {
+          const r = PC.readCheckReceipt(db, resolve(op.id),
+            (x) => repo._readBoundTaskValidated(resolve(x)),
+            (x) => VF.readFacts(db, resolve(x),
+              (y) => repo._readBoundTaskValidated(resolve(y))));
+          rec = { status: "ok", receipt: r === null ? null : r[1] };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "backend_open_shared": {
+        const target = op.target === "copy"
+          ? (() => {
+              const dst = `${dbPath}.backend-copy`;
+              copyFileSync(dbPath, dst);
+              chmodSync(dst, 0o600);
+              return dst;
+            })()
+          : op.target === "missing" ? `${dbPath}.backend-missing` : op.target;
+        try {
+          const leasePath = target === `${dbPath}.backend-missing` ? dbPath : target;
+          let lease;
+          try { lease = DatabaseLease.acquire(leasePath); }
+          catch (e) {
+            rec = { status: "error", code: "base_unavailable",
+              message: `BASE_UNAVAILABLE: database lease: ${e.message}`,
+              unchanged: stateDigest() === before };
+            break;
+          }
+          try {
+            const b = BE.backendOpenShared(target, lease);
+            rec = { status: "ok", kind: b.kind };
+            if (b.lease) b.lease.close();
+            lease.close();
+          } catch (e) {
+            try { lease.close(); } catch { /* */ }
+            throw e;
+          }
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "backend_open": {
+        const target = op.target === "copy"
+          ? (() => {
+              const dst = `${dbPath}.backend-copy`;
+              copyFileSync(dbPath, dst);
+              chmodSync(dst, 0o600);
+              return dst;
+            })()
+          : op.target === "missing" ? `${dbPath}.backend-missing` : op.target;
+        try {
+          const b = BE.backendOpen(target);
+          rec = { status: "ok", kind: b.kind };
+          if (b.lease) b.lease.close();
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
         break;
       }
       default:

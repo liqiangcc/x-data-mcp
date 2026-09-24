@@ -4,6 +4,7 @@
 // runtime registration / claim guard. Fail-closed, verbatim error texts.
 import { createHash } from "node:crypto";
 import { canonEq } from "./task_repository.mjs";
+import { serdeDateTime } from "../market/compact_market.mjs";
 import { StorageError } from "./sqlite_adapter.mjs";
 
 const sha256 = (b) => createHash("sha256").update(b).digest("hex");
@@ -16,7 +17,7 @@ export const VERIFICATION_KEY = {
   contract_version: "stopped-writes-task-v1",
 };
 export const PUBLICATION_KEY = {
-  operation: "check_publication",
+  operation: "verify_publication_result",
   dataset: "task.verification",
   contract_version: "publication-check-task-v1",
 };
@@ -104,8 +105,9 @@ export const snapshotCanon = (snap) => ({
     state_revision: Number(snap.task.state_revision),
     accepted_run_id: snap.task.accepted_run_id,
     owner_run_id: snap.task.owner_run_id,
-    created_at: snap.task.created_at,
-    last_progress_at: snap.task.last_progress_at,
+    // serde DateTime<Utc> emits "Z"; the row stores chrono "+00:00".
+    created_at: serdeDateTime(snap.task.created_at),
+    last_progress_at: serdeDateTime(snap.task.last_progress_at),
     work: typeof snap.task.frozen_work_json === "string"
       ? JSON.parse(snap.task.frozen_work_json) : snap.task.work,
     result: snap.task.result_json === null || snap.task.result_json === undefined

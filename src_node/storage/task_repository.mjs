@@ -23,6 +23,7 @@ import {
   claimWithRuntimeGuard, validateAbsentRequest, validateTaskRequest,
   validateTerminalStop, validateTerminalInspection, readAudit,
 } from "./verification_storage.mjs";
+import { validateTaskLink as publicationCheckLink } from "./publication_checks.mjs";
 
 const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
@@ -942,6 +943,21 @@ Object.assign(TaskAdmission.prototype, {
     const parseJson = (v, what) => {
       try { return JSON.parse(v); } catch { inc(`${what} unparseable`); }
     };
+    // command_key_json decodes first in Rust's read_task (column order);
+    // serde reports missing required fields at the closing brace column.
+    const keyJson = t.command_key_json;
+    let taskKey;
+    try { taskKey = JSON.parse(keyJson); }
+    catch { inc("expected value at line 1 column 1"); }
+    if (taskKey === null || typeof taskKey !== "object" || Array.isArray(taskKey)) {
+      inc(`invalid type: ${typeof taskKey === "number" ? "integer" : typeof taskKey} ${
+        JSON.stringify(taskKey)}, expected struct CommandKey at line 1 column 1`);
+    }
+    for (const f of ["operation", "dataset", "contract_version"]) {
+      if (taskKey[f] === undefined) {
+        inc(`missing field \`${f}\` at line 1 column ${keyJson.length}`);
+      }
+    }
     const work = parseJson(t.frozen_work_json, "frozen work");
     const items = db.query(
       "SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=? ORDER BY item_id",
@@ -954,7 +970,7 @@ Object.assign(TaskAdmission.prototype, {
         outcome: r.outcome_json === null ? null : parseJson(r.outcome_json, "item outcome"),
       }));
     const claims = db.query(
-      "SELECT scope_key,task_id FROM scope_occupancy WHERE task_id=? ORDER BY scope_key", id);
+      "SELECT scope_key,task_id,state_revision FROM scope_occupancy WHERE task_id=? ORDER BY scope_key", id);
     const scopes = new Set(db.query(
       "SELECT scope_key FROM task_scopes WHERE task_id=? ORDER BY scope_key", id)
       .map((r) => r.scope_key));
@@ -1105,6 +1121,7 @@ Object.assign(TaskAdmission.prototype, {
     if (!handled) {
       verifyTaskLink(db, snapshot, (x) => this._readBoundTaskValidated(x));
     }
+    publicationCheckLink(db, snapshot);
     return {
       task: t, items, scopes: [...scopes], requestId: req.request_id,
       claims: claims.map((c) => ({ scope_key: c.scope_key, state_revision: t.state_revision })),

@@ -1,0 +1,3 @@
+{"task":"NM-056","verdict":"PASS","scenarios":27,"ops":350,"diffs":0,
+ "scenarios_detail":{"market_tail":52,"compact_tail":38},
+ "selftest_exit":1,"sha":"UNSTAMPED"}

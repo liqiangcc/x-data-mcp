@@ -241,6 +241,16 @@ fn state_digest(db: &str, syms: &Syms) -> String {
         dump(&c, "SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM publication_results ORDER BY result_key", "CPR", 13, &mut lines);
     }
 
+    if !compact {
+        dump(&c, "SELECT result_id,task_id,item_id,base_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM market_update_results ORDER BY result_id", "MU", 9, &mut lines);
+        dump(&c, "SELECT result_id,task_id,item_id,base_daily_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM yearly_execution_results ORDER BY result_id", "YR", 9, &mut lines);
+    }
+    // gap + publication-check tables are schema-neutral (migration 011).
+    dump(&c, "SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions ORDER BY decision_id", "GD", 14, &mut lines);
+    dump(&c, "SELECT gap_id,symbol,period,start_date,end_date,evidence_kind,evidence_id,evidence_digest,observed_at FROM proven_gaps ORDER BY gap_id", "PG", 9, &mut lines);
+    dump(&c, "SELECT gap_id,version_id,covered_at FROM gap_coverings ORDER BY gap_id", "GC", 3, &mut lines);
+    dump(&c, "SELECT verification_task_id,target_task_id,audit_json,audit_sha256 FROM publication_checks ORDER BY 1", "PC", 4, &mut lines);
+
     let joined = lines.join("\n");
     let mut out = joined;
     for (k, real) in syms {
@@ -436,7 +446,7 @@ fn run() {
             },
             "seed" => json!({"status":"ok","seeded":true}),
             "lookup_task" => {
-                let ids: Vec<String> = repo
+                let ids: Vec<String> = op_repo
                     .read(|c| {
                         c.prepare("SELECT task_id FROM tasks ORDER BY rowid")
                             .map_err(storage_task)?
@@ -981,6 +991,296 @@ fn run() {
                     Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
                 }
             }
+
+            // ---- NM-056 — market tail ops ----
+            "record_gap_decision" | "record_gap_decision_guarded" => {
+                let d: crate::market_storage::GapVerificationDecision =
+                    serde_json::from_value(op["decision"].clone()).unwrap();
+                let guarded = name.ends_with("guarded");
+                let res = if let Some(m) = &compact_market {
+                    m.tx(|c| crate::sqlite_market::gaps::record_gap_decision_tx(
+                        c, &d, guarded))
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    if guarded {
+                        market.record_gap_decision_guarded(&d)
+                    } else {
+                        market.record_gap_decision(&d)
+                    }
+                };
+                match res {
+                    Ok(b) => json!({"status":"ok","inserted":b}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "record_proven_gap" => {
+                let gap: crate::market_storage::ProvenGap =
+                    serde_json::from_value(op["gap"].clone()).unwrap();
+                let res = if let Some(m) = &compact_market {
+                    m.tx(|c| {
+                        use crate::market_storage::Error as ME;
+                        let st = |e: rusqlite::Error| ME::Storage(e.to_string());
+                        let pt = match gap.period {
+                            crate::market_data::Period::Day => "day",
+                            crate::market_data::Period::Year => "year",
+                        };
+                        gap.validate()?;
+                        match c.execute(
+                            "INSERT INTO proven_gaps VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                            rusqlite::params![
+                                gap.gap_id, gap.symbol, pt,
+                                gap.start_date.to_string(), gap.end_date.to_string(),
+                                gap.evidence_kind, gap.evidence_id,
+                                gap.evidence_digest, gap.observed_at.to_rfc3339()],
+                        ).map_err(st) {
+                            Ok(_) => Ok(true),
+                            Err(insert) => {
+                                let present = c.query_row(
+                                    "SELECT count(*) FROM proven_gaps WHERE gap_id=?1 AND symbol=?2 AND period=?3 AND start_date=?4 AND end_date=?5 AND evidence_kind=?6 AND evidence_id=?7 AND evidence_digest=?8 AND observed_at=?9",
+                                    rusqlite::params![gap.gap_id, gap.symbol, pt,
+                                        gap.start_date.to_string(), gap.end_date.to_string(),
+                                        gap.evidence_kind, gap.evidence_id,
+                                        gap.evidence_digest, gap.observed_at.to_rfc3339()],
+                                    |r| r.get::<_, i64>(0)).map_err(st)?;
+                                if present == 1 { return Ok(false); }
+                                let any = c.query_row(
+                                    "SELECT count(*) FROM proven_gaps WHERE gap_id=?1",
+                                    rusqlite::params![gap.gap_id], |r| r.get::<_, i64>(0))
+                                    .map_err(st)?;
+                                if any > 0 {
+                                    Err(ME::Integrity("proven gap identity conflict".into()))
+                                } else { Err(insert) }
+                            }
+                        }
+                    })
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    market.record_proven_gap(&gap)
+                };
+                match res {
+                    Ok(b) => json!({"status":"ok","inserted":b}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "cover_gap" => {
+                let cov: crate::market_storage::GapCovering =
+                    serde_json::from_value(op["covering"].clone()).unwrap();
+                let res = if let Some(m) = &compact_market {
+                    use crate::market_update::publication::RangeRepository;
+                    m.cover_gap(&cov)
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    market.cover_gap(&cov)
+                };
+                match res {
+                    Ok(b) => json!({"status":"ok","inserted":b}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "gap_verification_decision" => {
+                let id = op["decision_id"].as_str().unwrap();
+                let res = if let Some(m) = &compact_market {
+                    m.read(|c| crate::sqlite_market::gaps::read_decision(c, id))
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    market.gap_verification_decision(id)
+                };
+                match res {
+                    Ok(v) => json!({"status":"ok",
+                        "decision":serde_json::to_value(&v).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "proven_gap" => {
+                let id = op["gap_id"].as_str().unwrap();
+                let res = if let Some(m) = &compact_market {
+                    m.read(|c| crate::sqlite_market::gaps::read_open_gaps(
+                            c, "", crate::market_data::Period::Day))
+                        .map(|g| g.into_iter().find(|x| x.gap_id == id))
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    market.proven_gap(id)
+                };
+                match res {
+                    Ok(v) => json!({"status":"ok",
+                        "gap":serde_json::to_value(&v).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "open_proven_gaps" => {
+                let sym = op["symbol"].as_str().unwrap();
+                let per = if op["period"].as_str().unwrap() == "year" {
+                    crate::market_data::Period::Year
+                } else {
+                    crate::market_data::Period::Day
+                };
+                let res = if let Some(m) = &compact_market {
+                    m.read(|c| crate::sqlite_market::gaps::read_open_gaps(c, sym, per))
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    market.open_proven_gaps(sym, per)
+                };
+                match res {
+                    Ok(v) => json!({"status":"ok",
+                        "gaps":serde_json::to_value(&v).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "gap_coverings" => {
+                let id = op["gap_id"].as_str().unwrap();
+                let res = if let Some(m) = &compact_market {
+                    use crate::market_update::publication::RangeRepository;
+                    m.gap_coverings(id)
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    market.gap_coverings(id)
+                };
+                match res {
+                    Ok(v) => json!({"status":"ok",
+                        "coverings":serde_json::to_value(&v).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "yearly_read_result" => {
+                let id = op["result_id"].as_str().unwrap();
+                let res = if let Some(c) = &compact_conn {
+                    crate::sqlite_market::yearly_results::read_result(c, id)
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    market.read(|c| crate::sqlite_market::yearly_results::read_result(c, id))
+                };
+                match res {
+                    Ok(Some((audit, receipt))) => json!({"status":"ok",
+                        "audit_sha256":crate::hash::sha256(
+                            serde_json::to_string(&audit).unwrap().as_bytes()),
+                        "receipt":serde_json::to_value(&receipt).unwrap()}),
+                    Ok(None) => json!({"status":"ok","audit_sha256":null,"receipt":null}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "collection_receipt" => {
+                let res = if let Some(m) = &compact_market {
+                    use crate::official_market::DailyCollectionRepository;
+                    DailyCollectionRepository::collection_receipt(
+                        m, op["task"].as_str().unwrap(), op["item"].as_str().unwrap())
+                } else {
+                    use crate::official_market::DailyCollectionRepository;
+                    let market = SqliteMarket::new(op_repo.clone());
+                    DailyCollectionRepository::collection_receipt(
+                        &market, op["task"].as_str().unwrap(), op["item"].as_str().unwrap())
+                };
+                match res {
+                    Ok(v) => json!({"status":"ok",
+                        "receipt":serde_json::to_value(&v).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "read_facts" => {
+                let id = op["task"].as_str().unwrap();
+                let res = if let Some(m) = &compact_market {
+                    use crate::publication_verification::EvidenceRepository;
+                    m.publication_facts(id)
+                } else {
+                    use crate::publication_verification::EvidenceRepository;
+                    let market = SqliteMarket::new(op_repo.clone());
+                    market.publication_facts(id)
+                };
+                match res {
+                    Ok(f) => json!({"status":"ok",
+                        "facts":serde_json::to_value(&f).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "check_receipt" => {
+                let id = op["id"].as_str().unwrap();
+                let res = if let Some(m) = &compact_market {
+                    crate::publication_verification::decision::AuditStore::check_receipt(m, id)
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    crate::publication_verification::decision::AuditStore::check_receipt(
+                        &market, id)
+                };
+                match res {
+                    Ok(v) => json!({"status":"ok",
+                        "receipt":serde_json::to_value(&v).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "backend_open" => {
+                // target: a path OTHER than the live db ("copy" clones it)
+                let target = match op["target"].as_str().unwrap() {
+                    "copy" => {
+                        let dst = format!("{db_path}.backend-copy");
+                        fs::copy(&db_path, &dst).unwrap();
+                        use std::os::unix::fs::PermissionsExt;
+                        fs::set_permissions(&dst, fs::Permissions::from_mode(0o600)).unwrap();
+                        dst
+                    }
+                    "missing" => format!("{db_path}.backend-missing"),
+                    other => other.to_string(),
+                };
+                match crate::sqlite_market::backend::MarketBackend::open(
+                    &SqliteTasks::new(std::path::Path::new(&target))) {
+                    Ok(b) => {
+                        let kind = match b {
+                            crate::sqlite_market::backend::MarketBackend::Legacy(_) => "legacy",
+                            crate::sqlite_market::backend::MarketBackend::Compact(_) => "compact",
+                        };
+                        json!({"status":"ok","kind":kind})
+                    }
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "backend_open_shared" => {
+                let target = match op["target"].as_str().unwrap() {
+                    "copy" => {
+                        let dst = format!("{db_path}.backend-copy");
+                        fs::copy(&db_path, &dst).unwrap();
+                        use std::os::unix::fs::PermissionsExt;
+                        fs::set_permissions(&dst, fs::Permissions::from_mode(0o600)).unwrap();
+                        dst
+                    }
+                    "missing" => format!("{db_path}.backend-missing"),
+                    other => other.to_string(),
+                };
+                // open_shared only consults the lease on the compact arm;
+                // acquire it on the live db so the "missing" target still
+                // reaches the dispatch.
+                let lease_path = if target == format!("{db_path}.backend-missing") {
+                    db_path.clone()
+                } else { target.clone() };
+                let lease = crate::local_runtime::DatabaseLease::acquire(
+                    std::path::Path::new(&lease_path));
+                match lease {
+                    Err(e) => json!({"status":"error","code":"Base",
+                        "message":format!("BASE_UNAVAILABLE: database lease: {e}")}),
+                    Ok(lease) => match crate::sqlite_market::backend::MarketBackend::open_shared(
+                        &SqliteTasks::new(std::path::Path::new(&target)),
+                        std::sync::Arc::new(lease)) {
+                        Ok(b) => {
+                            let kind = match b {
+                                crate::sqlite_market::backend::MarketBackend::Legacy(_) => "legacy",
+                                crate::sqlite_market::backend::MarketBackend::Compact(_) => "compact",
+                            };
+                            json!({"status":"ok","kind":kind})
+                        }
+                        Err(e) => json!({"status":"error","code":market_code(&e),
+                            "message":e.to_string()}),
+                    },
+                }
+            }
             other => panic!("unknown op {other}"),
         };
         if rec["status"] == "error" {
@@ -1017,6 +1317,16 @@ fn build_market_fixture() {
         // via the crate's compact write helpers on a raw connection.
         repo.initialize19().expect("init schema-19");
         build_compact_records(&db_path);
+        if std::env::var("DIFF_CHECK").is_ok() {
+            // compact check pair: failed-item target -> Missing evidence
+            // -> not_applicable audit via the real prepare/commit path.
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&db_path, fs::Permissions::from_mode(0o600))
+                .unwrap();
+            let m = crate::sqlite_market::compact_repo::SqliteCompactMarket::open(
+                std::path::Path::new(&db_path)).expect("compact open");
+            build_check_fixture(&m.tasks(), &m, false);
+        }
         return;
     }
     repo.initialize().expect("init");
@@ -1310,6 +1620,11 @@ fn build_market_fixture() {
                 .unwrap();
         }
     }
+    if std::env::var("DIFF_CHECK").is_ok() {
+        let market = SqliteMarket::new(repo.clone());
+        build_check_fixture(&repo, &market, true);
+    }
+
  }
 
 /// NM-054 — compact (schema-19) fixture: builds real compact rows via the
@@ -1503,5 +1818,236 @@ fn build_compact_records(db_path: &str) {
                 .unwrap();
             }
         }
+    }
+}
+
+/// NM-056 — DIFF_CHECK=1 fixture body, generic over the market handle so
+/// the same seed works on schema-18 (SqliteMarket) and schema-19
+/// (SqliteCompactMarket via its tasks() bound repo).
+fn build_check_fixture<T>(
+    repo: &SqliteTasks,
+    market: &T,
+    with_result: bool,
+) where
+    T: crate::publication_verification::EvidenceRepository
+        + crate::publication_verification::decision::AuditStore,
+{
+    // target task + committed no_change result + committed check publication-check fixture — a Daily-contract target
+    // task T owning a committed (reused/no_change) market_update_results
+    // row, plus a succeeded verify_publication_result check task with a
+    // committed publication_checks audit row built by the real
+    // decision::prepare + commit_check_tx path.
+    {
+        let occ = "[\"market\",\"sh.600006\",\"day\"]";
+        let acc = repo
+            .accept(
+                "req-check-target",
+                &serde_json::from_value::<Command>(json!({
+                    "key":{"operation":"update_data","dataset":"market.daily",
+                           "contract_version":"explicit-range-task-v1"},
+                    "intent":{}
+                }))
+                .unwrap(),
+                &serde_json::from_value::<FrozenWork>(json!({
+                    "items":[{"item_id":"i1","target":{"symbol":"sh.600006","period":"day"},
+                              "progress_unit":"x","frozen_inputs":{},"scope_keys":[occ]}],
+                    "scopes":[occ]
+                }))
+                .unwrap(),
+                "run-check",
+                None,
+            )
+            .unwrap();
+        let target = match acc.record.outcome {
+            RequestOutcome::Task(s) => s.task.task_id,
+            _ => panic!("task outcome"),
+        };
+        repo.transition(&target, 0, "run-check", Change::Claim).unwrap();
+        repo.transition(&target, 1, "run-check", Change::StartItem("i1".into()))
+            .unwrap();
+        repo.transition(&target, 2, "run-check",
+            Change::FinishItem("i1".into(),
+                ItemOutcome { success: with_result, error: None, evidence: None }))
+            .unwrap();
+        let snap = repo
+            .transition(&target, 3, "run-check", Change::FinishExecution)
+            .unwrap();
+        let trev = snap.task.state_revision;
+        // no_change result row: reused base — needs no batch rows.
+        // Compact storage has no market_update_results table; the compact
+        // fixture seeds the not_applicable arm instead.
+        if with_result {
+        let base_sha: String = repo
+            .read(|c| {
+                c.query_row(
+                    "SELECT content_digest FROM data_versions WHERE version_id='legacy-daily'",
+                    [], |r| r.get(0))
+                    .map_err(storage_task)
+            })
+            .unwrap();
+        let seg_ref: String = repo
+            .read(|c| {
+                c.query_row("SELECT payload_id FROM payloads LIMIT 1", [], |r| r.get(0))
+                    .map_err(storage_task)
+            })
+            .unwrap();
+        let command = json!({
+            "publication_id": "res-ck", "version_id": "legacy-daily",
+            "task_id": target, "item_id": "i1", "run_id": "run-check",
+            "expected_revision": 0,
+            "intent": {"Daily": {"expected_head": "legacy-daily"}},
+        });
+        let receipt = json!({
+            "publication_id": "res-ck", "version_id": "legacy-daily",
+            "task_id": target, "task_revision": trev,
+        });
+        let audit = json!({
+            "algorithm_version": "local-range-update-v1",
+            "command": command,
+            "base_integrity_sha256": base_sha,
+            "result_integrity_sha256": base_sha,
+            "segment": {"bars": {"$ref": format!("payload:{seg_ref}")}},
+            "range": {"start": "2025-01-02", "end": "2025-12-31"},
+            "evidence": {"base_version_id": "legacy-daily"},
+            "combined": true,
+            "no_change": true,
+        });
+        let audit_json = serde_json::to_string(&audit).unwrap();
+        let receipt_json = serde_json::to_string(&receipt).unwrap();
+        let digest = crate::hash::sha256(
+            serde_json::json!([audit_json, receipt_json]).to_string().as_bytes());
+        repo.write(|c| {
+            c.execute(
+                "INSERT INTO market_update_results VALUES(?1,?2,'i1','legacy-daily','legacy-daily',1,?3,?4,?5)",
+                rusqlite::params![format!("res-ck"), target, audit_json, digest, receipt_json],
+            )
+            .map_err(storage_task)
+        })
+        .unwrap();
+        }
+        // Legacy-contract task owning the two publication_batches rows —
+        // exercises the legacy read_facts arm (committed publication
+        // evidence + receipt digest + task_publications count).
+        if with_result {
+            let occd = "[\"market\",\"sh.600006\",\"day\"]";
+            let occy = "[\"market\",\"sh.600006\",\"year\"]";
+            let acc3 = repo
+                .accept(
+                    "req-legacy-collect",
+                    &serde_json::from_value::<Command>(json!({
+                        "key":{"operation":"start_collection",
+                               "dataset":"market.daily",
+                               "contract_version":"v1"},
+                        "intent":{}
+                    }))
+                    .unwrap(),
+                    &serde_json::from_value::<FrozenWork>(json!({
+                        "items":[
+                            {"item_id":"i1","target":{"symbol":"sh.600006","period":"day"},
+                             "progress_unit":"x","frozen_inputs":{},"scope_keys":[occd]},
+                            {"item_id":"i2","target":{"symbol":"sh.600006","period":"year"},
+                             "progress_unit":"x","frozen_inputs":{},"scope_keys":[occy]}
+                        ],
+                        "scopes":[occd,occy]
+                    }))
+                    .unwrap(),
+                    "run-check",
+                    None,
+                )
+                .unwrap();
+            let t4 = match acc3.record.outcome {
+                RequestOutcome::Task(s) => s.task.task_id,
+                _ => panic!("task outcome"),
+            };
+            repo.transition(&t4, 0, "run-check", Change::Claim).unwrap();
+            repo.transition(&t4, 1, "run-check", Change::StartItem("i1".into()))
+                .unwrap();
+            repo.transition(&t4, 2, "run-check",
+                Change::FinishItem("i1".into(),
+                    ItemOutcome { success: true, error: None, evidence: None }))
+                .unwrap();
+            repo.transition(&t4, 3, "run-check", Change::StartItem("i2".into()))
+                .unwrap();
+            repo.transition(&t4, 4, "run-check",
+                Change::FinishItem("i2".into(),
+                    ItemOutcome { success: true, error: None, evidence: None }))
+                .unwrap();
+            let t4snap = repo
+                .transition(&t4, 5, "run-check", Change::FinishExecution)
+                .unwrap();
+            let t4rev = t4snap.task.state_revision;
+            repo.write(|c| {
+                for (pid, vid, item, intent) in [
+                    ("pub-legacy-daily", "legacy-daily", "i1",
+                        json!({"Daily": {"expected_head": null}})),
+                    ("pub-legacy-yearly", "legacy-yearly", "i2",
+                        json!("HistoricalFixedBase")),
+                ] {
+                    let cmd = serde_json::to_string(&json!({
+                        "publication_id": pid, "version_id": vid,
+                        "task_id": t4, "item_id": item, "run_id": "run-check",
+                        "expected_revision": 0,
+                        "intent": intent,
+                    })).unwrap();
+                    let rcpt = serde_json::to_string(&json!({
+                        "publication_id": pid, "version_id": vid,
+                        "task_id": t4, "task_revision": t4rev,
+                    })).unwrap();
+                    c.execute(
+                        "UPDATE publication_batches SET task_id=?1,item_id=?2,command_json=?3,receipt_json=?4 WHERE publication_id=?5",
+                        rusqlite::params![t4, item, cmd, rcpt, pid],
+                    ).map_err(storage_task)?;
+                    c.execute(
+                        "UPDATE task_publications SET task_id=?1 WHERE publication_id=?2",
+                        rusqlite::params![t4, pid],
+                    ).map_err(storage_task)?;
+                }
+                Ok(())
+            }).unwrap();
+        }
+        // the verification check task: one running item, verification
+        // scope bound to the target
+        let vscope = crate::task_verification::verification_scope(&target);
+        let target_snap = repo.read_task(&target).unwrap().unwrap();
+        let acc2 = repo
+            .accept(
+                "req-check",
+                &serde_json::from_value::<Command>(json!({
+                    "key":serde_json::to_value(
+                        crate::publication_verification::admission::command_key()).unwrap(),
+                    "intent":{"target_task_id":target}
+                }))
+                .unwrap(),
+                &serde_json::from_value::<FrozenWork>(json!({
+                    "items":[{"item_id":"publication-results",
+                              "target":{"task_id":target},
+                              "progress_unit":"evidence_check",
+                              "frozen_inputs":{"target_task_id":target,
+                                               "accepted_run_id":target_snap.task.accepted_run_id},
+                              "scope_keys":[vscope]}],
+                    "scopes":[vscope]
+                }))
+                .unwrap(),
+                "run-check",
+                None,
+            )
+            .unwrap();
+        let check_id = match acc2.record.outcome {
+            RequestOutcome::Task(s) => s.task.task_id,
+            _ => panic!("task outcome"),
+        };
+        repo.transition(&check_id, 0, "run-check", Change::Claim).unwrap();
+        let check = repo
+            .transition(&check_id, 1, "run-check",
+                Change::StartItem("publication-results".into()))
+            .unwrap();
+        
+        let facts = crate::publication_verification::EvidenceRepository::publication_facts(
+            market, &target).unwrap();
+        let plan = crate::publication_verification::decision::prepare(
+            check.clone(), facts, "run-check", "actor-check", chrono::Utc::now())
+            .unwrap();
+        crate::publication_verification::decision::AuditStore::commit_check(
+            market, &plan).unwrap();
     }
 }

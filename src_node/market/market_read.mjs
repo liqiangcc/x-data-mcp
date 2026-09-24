@@ -707,4 +707,5 @@ export const itemReceipt = (db, task, item) => {
   return r[1];
 };
 export const __readItemBinding = readItemBinding;
+export const __validateBase = validateBase;
 export const rangeReceipt = (db, id) => readResult(db, id)?.[1] ?? null;
