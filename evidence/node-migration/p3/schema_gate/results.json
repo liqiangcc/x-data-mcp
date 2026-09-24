@@ -1,0 +1,42 @@
+{
+  "task_id": "NM-039",
+  "baseline_sha": "93cc9eb7f521fd67bb3b94b4b504c7e740ee9411",
+  "source_ported": "sqlite_tasks.rs::check_schema (user_version gate + schema_migrations checksum chain) + structural table/index/column check from committed migrations",
+  "contract": {
+    "version_gate": "user_version 0 or not in {18,19} -> unavailable 'unsupported/uninitialized schema {v}; explicit initialization/upgrade required' (Rust check_schema text verbatim)",
+    "checksum_chain": "schema_migrations rows: count==version, ordered versions 1..v, checksum==sha256(migrations/tasks/NNN*.sql bytes) -> else 'schema migration identity mismatch' verbatim",
+    "structure": "post-migration required tables/indexes/columns parsed from committed SQL incl. DROP/RENAME/ADD COLUMN chain + Rust post-migration drop (version_segments at v17); post-checksum tamper detection",
+    "schema19": "reported as kind=compact (#259 opt-in); Rust legacy adapter refuses it — gate is the neutral reader, not compatibility"
+  },
+  "fixture_sha256": {
+    "db18.sqlite": "3f0b86c7afc0945f81ab4c896b3197bbcfc0bbbdd3c986f2a87347d9c8967117",
+    "db19.sqlite": "7cb040f798a411cb0b15e53a3f46b54429020acf7a4ff270a2b8b8ebd9e17ca3",
+    "empty.db": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "garbage.bin": "e88fa8352ec71bf6d484cdc20ae028e73ef719f3ecf3b6a55e6806884392c8ec"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p3/schema_gate_probe.mjs .",
+    "exit": 0,
+    "cases": 15,
+    "totals": {
+      "pass": 15,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "positive": 3,
+      "version_gate": 4,
+      "chain_integrity": 2,
+      "structure": 3,
+      "side_effects": 2,
+      "selftest": "exit 1"
+    }
+  },
+  "regressions": {
+    "NM-038": "24/24 PASS",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "read-only capability reader only — no repository CRUD, no migration execution, no crash recovery, no services, no production readiness"
+}
