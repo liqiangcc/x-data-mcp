@@ -1,0 +1,38 @@
+{
+  "task_id": "NM-043",
+  "baseline_sha": "83a4becf064685a492195662612674dc9ba3fd09",
+  "source_ported": "task_control decide(Change::Claim) + sqlite_tasks transition_tx/guarded_task_update",
+  "contract": [
+    "guard: status='pending' AND owner_run_id IS NULL else revision_conflict (STATE_REVISION_CONFLICT verbatim); missing task -> task_not_found (TASK_NOT_FOUND); empty run -> invalid_input 'empty run identity'",
+    "guarded UPDATE tasks SET status='running',state_revision=rev+1,owner_run_id=run,last_progress_at=now + RECOUNT_COUNTERS WHERE task_id AND state_revision=expected; changes!=1 -> revision_conflict (in-DB CAS)",
+    "item rows and scope_occupancy untouched by claim (Rust stamps claims at read time from live revision)"
+  ],
+  "fixture": "db18.sqlite (NM-006) + one task admitted via NM-042 TaskAdmission",
+  "probe": {
+    "command": "node scripts/node_migration_p3/task_claim_probe.mjs .",
+    "exit": 0,
+    "cases": 11,
+    "totals": {
+      "pass": 11,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "happy_and_guards": 6,
+      "boundary": 4,
+      "readback": 1,
+      "selftest": "exit 1"
+    }
+  },
+  "regressions": {
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "claim only — no item transitions/cancel/retry/worker/services/production readiness"
+}

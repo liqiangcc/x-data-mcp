@@ -347,3 +347,58 @@ export class TaskAdmission {
     });
   }
 }
+
+// ---------------------------------------------------------------------
+// NM-043 — atomic task claim CAS (decide(Change::Claim) + transition_tx).
+// One transaction: task existence -> pending && owner-NULL guard ->
+// guarded UPDATE ... WHERE task_id=? AND state_revision=? (in-DB CAS;
+// changed_rows!=1 -> RevisionConflict). Item rows and occupancy rows
+// are not touched by a claim (Rust stamps claims at read time from the
+// live revision). Counters recount verbatim.
+
+const RECOUNT_COUNTERS =
+  ",item_count=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id)" +
+  ",items_pending=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id AND i.stage='pending')" +
+  ",items_running=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id AND i.stage='running')" +
+  ",items_finished=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id AND i.stage='finished')" +
+  ",items_succeeded=(SELECT count(*) FROM task_items i WHERE i.task_id=tasks.task_id AND i.stage='finished' AND json_extract(i.outcome_json,'$.success')=1)";
+
+Object.assign(TaskAdmission.prototype, {
+  /** Claim a pending task for runId under expectedRevision.
+   *  Returns the new task row. Typed errors: invalid_input (empty
+   *  run/now), task_not_found, revision_conflict (stale/wrong
+   *  status/owned/CAS miss). No mutation on any failure. */
+  claim(taskId, expectedRevision, runId, now) {
+    if (!wellformedStr(taskId) || taskId === "") {
+      throw new StorageError("invalid_input", "task_admission: task_id must be a non-empty string");
+    }
+    if (typeof expectedRevision !== "bigint" || expectedRevision < 0n) {
+      throw new StorageError("invalid_input", "task_admission: expectedRevision must be a non-negative bigint");
+    }
+    if (!wellformedStr(runId) || runId.trim() === "") {
+      throw new StorageError("invalid_input", "empty run identity");
+    }
+    if (!wellformedStr(now)) {
+      throw new StorageError("invalid_input", "task_admission: now must be an RFC3339 string");
+    }
+    return this._db.transaction(() => {
+      const t = this._db.get(
+        "SELECT status,state_revision,owner_run_id FROM tasks WHERE task_id=?", taskId);
+      if (!t) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+      // decide guard: Claim requires pending + no owner
+      if (t.status !== "pending" || t.owner_run_id !== null) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      const next = expectedRevision + 1n;
+      const res = this._db.run(
+        `UPDATE tasks SET status='running',state_revision=?,owner_run_id=?,
+         last_progress_at=?,result_json=result_json${RECOUNT_COUNTERS}
+         WHERE task_id=? AND state_revision=?`,
+        next, runId, now, taskId, expectedRevision);
+      if (res.changes !== 1) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      return this._db.get("SELECT * FROM tasks WHERE task_id=?", taskId);
+    });
+  },
+});

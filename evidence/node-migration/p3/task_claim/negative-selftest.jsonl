@@ -1,0 +1,12 @@
+{"family":"task_claim","id":"claim_happy","status":"PASS","detail":null,"expected":{"status":"running","revision":"1","owner":"run-owner","items_untouched":true,"occupancy_rev0":true},"actual":null}
+{"family":"task_claim","id":"claim_again_revision_conflict","status":"PASS","detail":null,"expected":{"code":"revision_conflict","unchanged":true},"actual":null}
+{"family":"task_claim","id":"claim_stale_revision","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"task_claim","id":"claim_missing_task","status":"PASS","detail":null,"expected":{"code":"task_not_found"},"actual":null}
+{"family":"task_claim","id":"claim_already_owned","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"task_claim","id":"claim_terminal_rejected","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"task_claim","id":"claim_empty_run","status":"PASS","detail":"invalid_input empty run identity","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_claim","id":"claim_bad_revision_type","status":"PASS","detail":"invalid_input task_admission: expectedRevision must be a non-negative bigint","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_claim","id":"claim_empty_taskid","status":"PASS","detail":"invalid_input task_admission: task_id must be a non-empty string","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_claim","id":"claim_implicit_mode","status":"PASS","detail":"invalid_input task_admission: explicit mode readwrite|create required","expected":"invalid_input","actual":"invalid_input"}
+{"family":"task_claim","id":"claim_reopen_readback","status":"PASS","detail":null,"expected":{"durable":true},"actual":null}
+{"family":"task_claim","id":"selftest_claim","status":"FAIL","detail":"correctly rejected — selftest FAIL as designed (revision_conflict)","expected":null,"actual":null}
