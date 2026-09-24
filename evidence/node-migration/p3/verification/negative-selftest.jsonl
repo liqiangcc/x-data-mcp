@@ -1,0 +1,11 @@
+{"family":"verification","id":"receipt_read_happy","status":"PASS","detail":null,"expected":{"conclusion":"not_applicable","receipt_verbatim":true},"actual":null}
+{"family":"verification","id":"receipt_absent_null","status":"PASS","detail":null,"expected":{"absent":true},"actual":null}
+{"family":"verification","id":"receipt_interrupted_link","status":"PASS","detail":null,"expected":{"conclusion":"interrupted","link_verified":true},"actual":null}
+{"family":"verification","id":"link_tamper_fails_closed","status":"PASS","detail":null,"expected":{"code":"needs_verification"},"actual":null}
+{"family":"verification","id":"inspection_predicates","status":"PASS","detail":null,"expected":{"absent_negative":true,"terminal_replay":true},"actual":null}
+{"family":"verification","id":"runtime_claim_guard","status":"PASS","detail":null,"expected":{"claim_revision":1,"bound":true},"actual":null}
+{"family":"verification","id":"runtime_guard_busy","status":"PASS","detail":null,"expected":{"busy":true},"actual":null}
+{"family":"verification","id":"runtime_overlayfs_refused","status":"PASS","detail":null,"expected":{"kind":"not_verified"},"actual":null}
+{"family":"verification","id":"registration_orphan","status":"PASS","detail":null,"expected":{"code":"needs_verification"},"actual":null}
+{"family":"verification","id":"read_receipt_implicit_mode","status":"PASS","detail":"invalid_input task_admission: explicit mode readwrite|create required","expected":"invalid_input","actual":"invalid_input"}
+{"family":"verification","id":"selftest_ver","status":"FAIL","detail":"unexpected — STOP","expected":null,"actual":null}

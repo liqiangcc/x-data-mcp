@@ -15,6 +15,14 @@
 import { createHash } from "node:crypto";
 import { gateDatabase } from "./schema_gate.mjs";
 import { openDatabase, StorageError } from "./sqlite_adapter.mjs";
+// NM-048: task-link validators (verification + inspection registries).
+// Deferred-call imports — safe under the ESM cycle with
+// verification_storage.mjs (which imports canonEq/StorageError).
+import {
+  inspectionTaskLink, verifyTaskLink, readReceipt, runtimeRegistration,
+  claimWithRuntimeGuard, validateAbsentRequest, validateTaskRequest,
+  validateTerminalStop, validateTerminalInspection, readAudit,
+} from "./verification_storage.mjs";
 
 const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
@@ -901,7 +909,7 @@ Object.assign(TaskAdmission.prototype, {
 
 const TERMINAL_RESULT_REQUIRED = new Set(TERMINAL_STATUSES);
 
-const canonEq = (a, b) => {
+export const canonEq = (a, b) => {
   // structural equality for parsed JSON values
   if (a === b) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
@@ -1072,6 +1080,21 @@ Object.assign(TaskAdmission.prototype, {
     // request binding must exist for a task row (read_bound_task parity)
     const req = db.get("SELECT request_id FROM requests WHERE task_id=?", id);
     if (!req) inc("task binding/execution missing");
+    // NM-048: registered task-link validators (Rust read_bound_task calls
+    // both validate_task_link registries here). Inspection link runs
+    // first; when it handles the task it returns true and the
+    // verification side is skipped.
+    const snapshot = {
+      task: t, items, scopes: [...scopes],
+      claims: claims.map((c) => ({ scope_key: c.scope_key, task_id: c.task_id,
+        state_revision: t.state_revision })),
+    };
+    const handled = inspectionTaskLink(db, snapshot,
+      (x) => this._readBoundTaskValidated(x),
+      (x) => db.get("SELECT * FROM requests WHERE request_id=?", x));
+    if (!handled) {
+      verifyTaskLink(db, snapshot, (x) => this._readBoundTaskValidated(x));
+    }
     return {
       task: t, items, scopes: [...scopes], requestId: req.request_id,
       claims: claims.map((c) => ({ scope_key: c.scope_key, state_revision: t.state_revision })),
@@ -1126,5 +1149,19 @@ Object.assign(TaskAdmission.prototype, {
         return { task, items, scopes, claims };
       });
     });
+  },
+});
+
+// NM-048 — TaskAdmission facade methods for the verification surface.
+Object.assign(TaskAdmission.prototype, {
+  readReceipt(id) {
+    return this._db.transaction(() =>
+      readReceipt(this._db, id, (x) => this._readBoundTaskValidated(x)));
+  },
+  runtimeRegistration(id) {
+    return runtimeRegistration(this._db, this, id);
+  },
+  claimWithRuntimeGuard(plan, guard, dbPath) {
+    return claimWithRuntimeGuard(this._db, this, plan, guard, dbPath);
   },
 });

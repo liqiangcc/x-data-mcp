@@ -1,0 +1,51 @@
+{
+  "task_id": "NM-048",
+  "baseline_sha": "9aa2321f75ea6f255cf5d7c9f6a9332a3193f8b8",
+  "source_ported": "sqlite_verification.rs + sqlite_verification_inspection.rs + sqlite_verification_runtime.rs + verification_runtime.rs",
+  "contract": [
+    "readAudit: sha256 column==digest, association binding, validate_audit replays prepare() with Recorded inspector",
+    "readReceipt: absent->null (task still bound-read); verification_after==stored, target_after==stored, AlreadyVerified prior chain recursion",
+    "validate_task_link (verification): interrupted->interruption.verification_task_id / stopped_write_check->task_id; expected==snapshot else integrity",
+    "inspection validate_task_link: returns bool, runs first; interrupted+supported key required; audit.after==snapshot; request command==audit.command",
+    "validate_terminal both copies; validate_absent_request; validate_task_request (inspection key must never bind a task)",
+    "runtime: readRegistration (digest/shape/revision/protocol/task/run/key binding), runtimeRegistration (orphan detection), claimWithRuntimeGuard triple verify_binding ordering",
+    "verification_runtime.mjs: Context (canonicalized db, statfs local gate, FileIdentity dev+ino+nlink1, boot_id, lock dir), create (temp+flock+descriptor+persist+dir fsync), tryAcquire (nonblocking), verifyBinding (3-way)"
+  ],
+  "fixture": "tmpfs /dev/shm DB (local-fs gate); lifecycle via admitted primitives; audits built by the ported prepare() and verified by replay",
+  "probe": {
+    "command": "node scripts/node_migration_p3/verification_probe.mjs .",
+    "exit": 0,
+    "cases": 10,
+    "totals": {
+      "pass": 10,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "receipt": 2,
+      "interrupted_link": 1,
+      "link_tamper": 1,
+      "inspection_predicates": 1,
+      "runtime": 3,
+      "orphan": 1,
+      "boundary": 1,
+      "selftest": "exit 1"
+    }
+  },
+  "regressions": {
+    "NM-047": "14/14",
+    "NM-046": "17/17",
+    "NM-045": "15/15",
+    "NM-044": "19/19",
+    "NM-043": "13/13",
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "commit_stop_check/bind_existing_stop/commit_inspection write paths NOT in scope (task lists reads+claim only); no market repos/publication registry/workers/services/production readiness"
+}

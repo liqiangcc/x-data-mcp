@@ -11,6 +11,8 @@
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/statfs.h>
+#include <sys/file.h>
 
 #ifndef RENAME_NOREPLACE
 #define RENAME_NOREPLACE (1U << 0)
@@ -156,6 +158,53 @@ static napi_value rename_noreplace(napi_env env, napi_callback_info info) {
   return undef;
 }
 
+/* flockfd(fd, op) -> 0 | errno — flock(LOCK_EX|LOCK_NB) parity with
+   * the P1 linux_guards binding (verification runtime exclusion). */
+static napi_value flockfd(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 2) {
+    napi_throw_type_error(env, NULL, "flockfd expects (fd:number, operation:number)");
+    return NULL;
+  }
+  int32_t fd, op;
+  if (napi_get_value_int32(env, argv[0], &fd) != napi_ok
+      || napi_get_value_int32(env, argv[1], &op) != napi_ok) {
+    napi_throw_type_error(env, NULL, "fd and operation must be int32");
+    return NULL;
+  }
+  errno = 0;
+  int r = flock(fd, op);
+  napi_value out;
+  napi_create_int32(env, r == 0 ? 0 : errno, &out);
+  return out;
+}
+
+/* statfsmagic(fd) -> f_type as a double — local-filesystem gate. */
+static napi_value statfsmagic(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1) {
+    napi_throw_type_error(env, NULL, "statfsmagic expects (fd:number)");
+    return NULL;
+  }
+  int32_t fd;
+  if (napi_get_value_int32(env, argv[0], &fd) != napi_ok) {
+    napi_throw_type_error(env, NULL, "fd must be int32");
+    return NULL;
+  }
+  struct statfs s;
+  if (fstatfs(fd, &s) != 0) {
+    int e = errno;
+    napi_throw_error(env, NULL, "fstatfs failed");
+    errno = e;
+    return NULL;
+  }
+  napi_value out;
+  napi_create_double(env, (double)s.f_type, &out);
+  return out;
+}
+
 static napi_value init(napi_env env, napi_value exports) {
   napi_value fn;
   napi_create_function(env, "rename_noreplace", NAPI_AUTO_LENGTH,
@@ -170,6 +219,12 @@ static napi_value init(napi_env env, napi_value exports) {
   napi_create_function(env, "unlinkat_file", NAPI_AUTO_LENGTH,
                        unlinkat_file, NULL, &fn);
   napi_set_named_property(env, exports, "unlinkat_file", fn);
+  napi_create_function(env, "flockfd", NAPI_AUTO_LENGTH,
+                       flockfd, NULL, &fn);
+  napi_set_named_property(env, exports, "flockfd", fn);
+  napi_create_function(env, "statfsmagic", NAPI_AUTO_LENGTH,
+                       statfsmagic, NULL, &fn);
+  napi_set_named_property(env, exports, "statfsmagic", fn);
   return exports;
 }
 NAPI_MODULE(rename_noreplace, init)
