@@ -61,6 +61,11 @@ const serdeBytes = fs.readFileSync(serdePath);
 
 // pre-NM-090 implementation (git-show baseline copy; F64/serF64 bound
 // to the current module so instanceof works).
+// pre-NM-091 parser: baseline serde_json.mjs written to /dev/shm lazily
+// by the decode surface below.
+const OLD_PARSE_SRC = execSync(
+  "git show 558cb98:src_node/mcp/serde_json.mjs",
+  { encoding: "utf8" });
 const keyCmpOld = (a, b) =>
   Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
 const serValueOld = (v) => {
@@ -88,3 +93,16 @@ console.log(JSON.stringify(meta));
 
 const v = parseJsonBytes(serdeBytes).value;
 console.log(stats("serde_json_encode", timed(() => ser(v)), serdeBytes.length));
+
+// NM-091 decode surface — same harness shape; --impl selects old/new
+// parser via an extracted baseline module.
+if (IMPL === "old") {
+  fs.writeFileSync("/dev/shm/_serde_bench_old.mjs", OLD_PARSE_SRC);
+}
+const oldParse = IMPL === "old"
+  ? (await import("/dev/shm/_serde_bench_old.mjs")).parseJsonBytes
+  : null;
+const dec = IMPL === "old" ? oldParse : parseJsonBytes;
+console.log(stats("serde_json_decode",
+  timed(() => { const r = dec(serdeBytes);
+    if (!r.ok) throw new Error("decode"); return r; }), serdeBytes.length));

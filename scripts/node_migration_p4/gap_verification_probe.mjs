@@ -21,7 +21,7 @@ import * as C from "../../src_node/gap_verification/contract.mjs";
 import * as R from "../../src_node/gap_verification/runner.mjs";
 import { GapRepository } from "../../src_node/gap_verification/store.mjs";
 import { stage } from "../../src_node/market/market_write.mjs";
-import { buildMarketFixture, acceptGapTask, SKELETON, NOW } from "./gap_fixture.mjs";
+import { buildMarketFixture, acceptGapTask, ensureSkeleton, NOW } from "./gap_fixture.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO = join(here, "..", "..");
@@ -30,6 +30,7 @@ const SELFTEST = process.argv.includes("--selftest");
 const OUT = process.argv.includes("--out")
   ? process.argv[process.argv.indexOf("--out") + 1] : null;
 const FIX = mkdtempSync(join(tmpdir(), "nm076-"));
+const SKELETON = ensureSkeleton(FIX);
 process.on("exit", () => rmSync(FIX, { recursive: true, force: true }));
 
 const results = [];
@@ -94,7 +95,7 @@ const DECIDED_AT = "2026-09-15T01:00:00Z";
 
 const fixtureRepo = (name) => {
   const path = join(FIX, `${name}.db`);
-  const f = buildMarketFixture(path);
+  const f = buildMarketFixture(path, SKELETON);
   return { ...f, repo: new GapRepository(f.db, f.adm) };
 };
 const counts = (db) => [

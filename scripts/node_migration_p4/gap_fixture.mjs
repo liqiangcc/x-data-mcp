@@ -6,7 +6,8 @@
 // All writes go through already-landed ports (market_write.stage,
 // TaskAdmission, market_commit.commitPublication) — the only raw SQL
 // is the mark_validated step, replicating Publisher::prepare verbatim.
-import { copyFileSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDatabase, StorageError } from "../../src_node/storage/sqlite_adapter.mjs";
@@ -18,8 +19,19 @@ import * as MR from "../../src_node/market/market_read.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO = join(here, "..", "..");
-export const SKELETON = "/dev/shm/nm006/db18.sqlite";
 export const NOW = "2026-01-02T00:00:00Z";
+
+// Schema-18 skeleton seeded privately per probe run — the shared
+// /dev/shm/nm006 path is mutable across lanes (another worker's
+// probe polluted it with committed versions). `task_sqlite init`
+// reproduces sqlite_market::tests::setup()'s fresh schema-18 db.
+export const ensureSkeleton = (dir) => {
+  const p = join(dir, "db18-skeleton.sqlite");
+  if (!existsSync(p)) {
+    execFileSync(join(REPO, "target/debug/task_sqlite"), ["init", p]);
+  }
+  return p;
+};
 
 // serde_json::to_string of a Value: map keys sort (BTreeMap).
 export const sortJson = (v) => {
@@ -50,8 +62,8 @@ const COLLECTION_KEY = {
 
 /** Build a populated market db: published legacy-daily + head.
  *  Returns { db, adm, taskId, itemId, path }. */
-export const buildMarketFixture = (path) => {
-  copyFileSync(SKELETON, path);
+export const buildMarketFixture = (path, skeleton) => {
+  copyFileSync(skeleton, path);
   const capability = gateDatabase(path);
   const db = openDatabase(path, { mode: "readwrite" });
   const adm = new TaskAdmission(db, capability);
