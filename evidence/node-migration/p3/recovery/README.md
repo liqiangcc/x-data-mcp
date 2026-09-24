@@ -6,7 +6,7 @@ decide RequireVerification + Reconcile arms, `reconcile_tx`,
 
 ## Contents
 
-- `probe-results.jsonl` — 12 rows, all PASS.
+- `probe-results.jsonl` — 17 rows, all PASS.
 - `negative-selftest.jsonl` (exit 1), `results.json`, `SHA256SUMS`.
 
 ## Reproduce
@@ -25,3 +25,5 @@ node scripts/node_migration_p3/recovery_probe.mjs . rec   # selftest, exit 1
   needs_verification WITHOUT a progress stamp; consistent rows no-op.
 - `candidates` returns accepted=run owner-NULL pending/cancel_requested
   rows ordered created_at,task_id; claims stamped live revision.
+
+R1: candidates/reconcile run the validated bound read (validate_snapshot parity); tampered evidence_digest/occupancy/item-outcome/owner/uncertainty rows fail closed. Task-link registries deferred to their own slices (REVIEW-NM-046 R0).

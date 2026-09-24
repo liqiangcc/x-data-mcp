@@ -6,6 +6,11 @@
 {"family":"recovery","id":"reconcile_noop_consistent","status":"PASS","detail":null,"expected":{"reconciled":0,"bytes_unchanged":true},"actual":null}
 {"family":"recovery","id":"candidates_order_scope","status":"PASS","detail":null,"expected":{"ordered":["created_at asc"],"claims_stamped_live":true},"actual":null}
 {"family":"recovery","id":"candidates_excludes_needs_verification","status":"PASS","detail":null,"expected":{"excluded":true},"actual":null}
+{"family":"recovery","id":"tamper_evidence_digest","status":"PASS","detail":null,"expected":{"candidates":"inconsistent","reconcile":"inconsistent"},"actual":null}
+{"family":"recovery","id":"tamper_occupancy_deleted","status":"PASS","detail":null,"expected":{"candidates":"inconsistent","reconcile":"inconsistent"},"actual":null}
+{"family":"recovery","id":"tamper_success_with_error","status":"PASS","detail":null,"expected":{"candidates":"inconsistent","reconcile":"inconsistent"},"actual":null}
+{"family":"recovery","id":"tamper_running_no_owner","status":"PASS","detail":null,"expected":{"candidates":"ACCEPTED","reconcile":"inconsistent"},"actual":null}
+{"family":"recovery","id":"tamper_uncertainty_marker","status":"PASS","detail":null,"expected":{"candidates":"ACCEPTED","reconcile":"needs_verification"},"actual":null}
 {"family":"recovery","id":"candidates_empty_run","status":"PASS","detail":"invalid_input empty run identity","expected":"invalid_input","actual":"invalid_input"}
 {"family":"recovery","id":"reconcile_empty_run","status":"PASS","detail":"invalid_input empty run identity","expected":"invalid_input","actual":"invalid_input"}
 {"family":"recovery","id":"rv_empty_itemid","status":"PASS","detail":"invalid_input task_admission: item_id must be a non-empty string","expected":"invalid_input","actual":"invalid_input"}

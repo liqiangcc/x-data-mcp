@@ -41,8 +41,12 @@ const seed = (opts = {}) => {
   const repo = new TaskAdmission(d, null);
   const a = repo.admit({
     requestId: `req-r${seq}`, commandJson: JSON.stringify({ key: { operation: `r${seq}` } }),
-    executionKeyJson: "{}", workJson: "{}",
-    items: items.map((i) => ({ item_id: i, target_json: "{}", progress_unit: "d", frozen_inputs_json: "{}", scope_keys_json: "[]" })),
+    executionKeyJson: "{}",
+    workJson: JSON.stringify({
+      items: items.map((i) => ({ item_id: i, target: {}, progress_unit: "d", frozen_inputs: {}, scope_keys: [`s-r${seq}`] })),
+      scopes: [`s-r${seq}`],
+    }),
+    items: items.map((i) => ({ item_id: i, target_json: "{}", progress_unit: "d", frozen_inputs_json: "{}", scope_keys_json: `["s-r${seq}"]` })),
     scopes: [`s-r${seq}`], runId: run, createdAt: `2026-01-02T05:00:${String(seq).padStart(2, "0")}Z`,
   });
   d.close();
@@ -165,8 +169,12 @@ run("candidates_order_scope", () => {
   const repo = new TaskAdmission(d, null);
   const mk = (rid, run, ts) => repo.admit({
     requestId: rid, commandJson: JSON.stringify({ key: { operation: rid } }),
-    executionKeyJson: "{}", workJson: "{}",
-    items: [{ item_id: "a", target_json: "{}", progress_unit: "d", frozen_inputs_json: "{}", scope_keys_json: "[]" }],
+    executionKeyJson: "{}",
+    workJson: JSON.stringify({
+      items: [{ item_id: "a", target: {}, progress_unit: "d", frozen_inputs: {}, scope_keys: [`sc-${rid}`] }],
+      scopes: [`sc-${rid}`],
+    }),
+    items: [{ item_id: "a", target_json: "{}", progress_unit: "d", frozen_inputs_json: "{}", scope_keys_json: `["sc-${rid}"]` }],
     scopes: [`sc-${rid}`], runId: run, createdAt: ts,
   });
   const t1 = mk("req-c1", "run-7", "2026-01-02T06:00:02Z");
@@ -192,6 +200,69 @@ run("candidates_excludes_needs_verification", () => {
   if (c.some((x) => x.task.task_id === tid)) throw new Error("nv task in candidates");
   return { excluded: true };
 });
+
+// ---- validated bound read: tamper cases fail closed ----
+// helper: fresh copy with one seeded pending task, then mutate raw
+const seededCopy = (name, mutate) => {
+  const p = join(FIX, `${name}.db`);
+  copyFileSync(DB, p);
+  const d = openDatabase(p, { mode: "readwrite" });
+  const repo = new TaskAdmission(d, null);
+  const a = repo.admit({
+    requestId: `req-tp-${name}`, commandJson: JSON.stringify({ key: { operation: `tp-${name}` } }),
+    executionKeyJson: "{}",
+    workJson: JSON.stringify({
+      items: [{ item_id: "a", target: {}, progress_unit: "d", frozen_inputs: {}, scope_keys: [`sc-${name}`] }],
+      scopes: [`sc-${name}`],
+    }),
+    items: [{ item_id: "a", target_json: "{}", progress_unit: "d", frozen_inputs_json: "{}", scope_keys_json: `["sc-${name}"]` }],
+    scopes: [`sc-${name}`], runId: "run-tp", createdAt: "2026-01-02T08:00:00Z",
+  });
+  mutate(d, a.task_id);
+  d.close();
+  return { path: p, tid: a.task_id };
+};
+const tamperFailsClosed = (id, name, mutate, { pendingSafe = true } = {}) => run(id, () => {
+  const { path, tid } = seededCopy(name, mutate);
+  const repo = TaskAdmission.open(path, { mode: "readwrite" });
+  const res = {};
+  try { repo.candidates("run-tp"); res.candidates = "ACCEPTED"; }
+  catch (e) { res.candidates = e.code; }
+  try { repo.reconcile("run-OTHER"); res.reconcile = "ACCEPTED"; }
+  catch (e) { res.reconcile = e.code; }
+  repo.close();
+  // pending-status-preserving tampers must fail BOTH paths; status-
+  // changing tampers are legitimately absent from candidates but must
+  // still fail reconcile (the tampered task is foreign-accepted).
+  if (pendingSafe) {
+    if (res.candidates !== "inconsistent" && res.candidates !== "needs_verification") {
+      throw new Error(`candidates: ${res.candidates}`);
+    }
+  } else if (res.candidates !== "ACCEPTED") {
+    throw new Error(`candidates: ${res.candidates}`);
+  }
+  if (res.reconcile !== "inconsistent" && res.reconcile !== "needs_verification") {
+    throw new Error(`reconcile: ${res.reconcile}`);
+  }
+  return res;
+});
+
+tamperFailsClosed("tamper_evidence_digest", "evdig",
+  (d, tid) => d.run("UPDATE tasks SET evidence_digest='tampered' WHERE task_id=?", tid));
+tamperFailsClosed("tamper_occupancy_deleted", "occ",
+  (d, tid) => d.run("DELETE FROM scope_occupancy WHERE task_id=?", tid));
+// (finished without outcome_json is unreachable — the task_items CHECK
+// rejects it at write time; proven by the driver's constraint error)
+tamperFailsClosed("tamper_success_with_error", "fout",
+  (d, tid) => d.run(
+    "UPDATE task_items SET stage='finished',outcome_json='{\"success\":true,\"error\":\"bogus\"}' WHERE task_id=? AND item_id='a'",
+    tid));
+tamperFailsClosed("tamper_running_no_owner", "noowner",
+  (d, tid) => d.run("UPDATE tasks SET status='running' WHERE task_id=?", tid), { pendingSafe: false });
+tamperFailsClosed("tamper_uncertainty_marker", "unc",
+  (d, tid) => d.run(
+    `UPDATE tasks SET status='needs_verification',result_json='{"execution_uncertainty":{"item_id":5}}' WHERE task_id=?`,
+    tid), { pendingSafe: false });
 
 // boundary
 expectCode("candidates_empty_run", "invalid_input",

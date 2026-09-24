@@ -814,3 +814,239 @@ Object.assign(TaskAdmission.prototype, {
     });
   },
 });
+
+// ---------------------------------------------------------------------
+// NM-046 R1 — validated bound read (read_task + validate_snapshot
+// parity). Deferred by design: the two validate_task_link registries
+// (sqlite_verification + publication_checks) belong to their own P3
+// slices. Any violation -> typed inconsistent/needs_verification.
+
+const TERMINAL_RESULT_REQUIRED = new Set(TERMINAL_STATUSES);
+
+const canonEq = (a, b) => {
+  // structural equality for parsed JSON values
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a).sort(), kb = Object.keys(b).sort();
+  return ka.length === kb.length && ka.every((k, i) => k === kb[i] && canonEq(a[k], b[k]));
+};
+
+Object.assign(TaskAdmission.prototype, {
+  /** read_task + validate_snapshot for one bound task inside the
+   *  current transaction. Returns {task, items, scopes, claims,
+   *  requestId}. Throws typed errors on any divergence. */
+  _readBoundTaskValidated(id) {
+    const db = this._db;
+    const t = db.get(
+      "SELECT task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest FROM tasks WHERE task_id=?",
+      id);
+    if (!t) return null;
+    const inc = (m) => { throw new StorageError("inconsistent", m); };
+    const parseJson = (v, what) => {
+      try { return JSON.parse(v); } catch { inc(`${what} unparseable`); }
+    };
+    const work = parseJson(t.frozen_work_json, "frozen work");
+    const items = db.query(
+      "SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=? ORDER BY item_id",
+      id).map((r) => ({
+        item_id: r.item_id, target: parseJson(r.target_json, "item target"),
+        progress_unit: r.progress_unit,
+        frozen_inputs: parseJson(r.frozen_inputs_json, "item inputs"),
+        scope_keys: new Set(parseJson(r.scope_keys_json, "item scope keys")),
+        stage: r.stage,
+        outcome: r.outcome_json === null ? null : parseJson(r.outcome_json, "item outcome"),
+      }));
+    const claims = db.query(
+      "SELECT scope_key,task_id FROM scope_occupancy WHERE task_id=? ORDER BY scope_key", id);
+    const scopes = new Set(db.query(
+      "SELECT scope_key FROM task_scopes WHERE task_id=? ORDER BY scope_key", id)
+      .map((r) => r.scope_key));
+
+    // execution_uncertainty marker (result_json.execution_uncertainty)
+    const result = t.result_json === null ? null : parseJson(t.result_json, "result");
+    let uncertainty = null;
+    if (result && typeof result === "object" && "execution_uncertainty" in result) {
+      const m = result.execution_uncertainty;
+      const okShape = m && typeof m === "object" &&
+        typeof m.item_id === "string" && typeof m.reason === "string" &&
+        typeof m.previous_status === "string" && "previous_result" in m;
+      if (!okShape ||
+          (m.previous_status !== "running" && m.previous_status !== "cancel_requested") ||
+          t.status !== "needs_verification" || t.owner_run_id === null ||
+          m.reason.trim() === "" ||
+          !items.some((i) => i.item_id === m.item_id && i.stage === "running")) {
+        throw new StorageError("needs_verification", "invalid execution uncertainty");
+      }
+      uncertainty = m;
+    }
+
+    // FrozenWork.validate() — items/scopes non-empty, unique non-blank
+    // item ids + progress units, item scope_keys union == scopes and
+    // each non-empty, no blank scope, evidence markers == shared digest
+    const witems = Array.isArray(work?.items) ? work.items : null;
+    const wscopes = Array.isArray(work?.scopes) ? work.scopes : null;
+    const wfail = (m) => inc(m);
+    if (!witems || !wscopes || witems.length === 0 || wscopes.length === 0) {
+      wfail("empty work");
+    }
+    const ids = new Set();
+    for (const it of witems) {
+      if (typeof it?.item_id !== "string" || it.item_id.trim() === "" ||
+          typeof it?.progress_unit !== "string" || it.progress_unit.trim() === "" ||
+          ids.has(it.item_id)) {
+        wfail("invalid/duplicate item");
+      }
+      ids.add(it.item_id);
+    }
+    const union = new Set();
+    for (const it of witems) {
+      const ks = Array.isArray(it?.scope_keys) ? it.scope_keys : [];
+      if (ks.length === 0) wfail("item resource bindings differ from scopes");
+      for (const k of ks) union.add(k);
+    }
+    if (union.size !== wscopes.length || !wscopes.every((k) => union.has(k))) {
+      wfail("item resource bindings differ from scopes");
+    }
+    if (wscopes.some((s) => typeof s !== "string" || s.trim() === "")) {
+      wfail("empty scope");
+    }
+    const sharedDigest = (work.shared_evidence && typeof work.shared_evidence === "object" &&
+      typeof work.shared_evidence.evidence_digest === "string")
+      ? work.shared_evidence.evidence_digest : null;
+    for (const it of witems) {
+      const marker = it?.frozen_inputs?.selection_evidence?.evidence_digest;
+      if (typeof marker === "string" && marker !== sharedDigest) {
+        wfail("item evidence marker mismatches shared evidence");
+      }
+    }
+
+    // column digest vs blob digest
+    if ((t.evidence_digest ?? null) !== sharedDigest) {
+      inc("task evidence digest column/blob mismatch");
+    }
+    // task/frozen work binding
+    if (t.accepted_run_id.trim() === "" ||
+        wscopes.length !== scopes.size || !wscopes.every((k) => scopes.has(k)) ||
+        items.length !== witems.length) {
+      inc("task/frozen work incomplete");
+    }
+    // per-item: spec in work.items, finished<=>outcome, no success+error
+    for (const i of items) {
+      const spec = witems.find((w) => w.item_id === i.item_id);
+      if (!spec || !canonEq(spec.target, i.target) ||
+          spec.progress_unit !== i.progress_unit ||
+          !canonEq(spec.frozen_inputs, i.frozen_inputs) ||
+          ![...i.scope_keys].every((k) => spec.scope_keys?.includes(k)) ||
+          i.scope_keys.size !== (spec.scope_keys?.length ?? -1)) {
+        inc("item evidence inconsistent");
+      }
+      if ((i.stage === "finished") !== (i.outcome !== null) ||
+          (i.outcome && i.outcome.success === true && i.outcome.error != null)) {
+        inc("item evidence inconsistent");
+      }
+    }
+    // owner/stage invariants
+    if ((t.status === "running" && t.owner_run_id === null) ||
+        (t.status === "pending" && (t.owner_run_id !== null ||
+          items.some((i) => i.stage !== "pending")))) {
+      inc("execution owner/stage missing or inconsistent");
+    }
+    // claims<->scopes binding on non-terminal; none on terminal
+    const terminal = TERMINAL_STATUSES.includes(t.status);
+    if (!terminal) {
+      const claimSet = new Set(claims.map((c) => c.scope_key));
+      if (claimSet.size !== scopes.size ||
+          ![...claimSet].every((k) => scopes.has(k)) ||
+          claims.some((c) => c.task_id !== t.task_id)) {
+        inc("active occupancy missing/inconsistent");
+      }
+    } else if (claims.length !== 0 || t.result_json === null ||
+               items.some((i) => i.stage === "running")) {
+      inc("terminal execution/claims inconsistent");
+    }
+    // counters vs items
+    const fin = items.filter((i) => i.stage === "finished").length;
+    const suc = items.filter((i) => i.outcome?.success === true).length;
+    const run = items.filter((i) => i.stage === "running").length;
+    const total = items.length;
+    if (Number(t.item_count) !== total ||
+        Number(t.items_pending) !== total - fin - run ||
+        Number(t.items_running) !== run ||
+        Number(t.items_finished) !== fin ||
+        Number(t.items_succeeded) !== suc) {
+      inc("task item counters diverged from items");
+    }
+    // status/outcome validity
+    const valid =
+      t.status === "succeeded" ? fin === total && suc === total :
+      t.status === "failed" ? fin === total && suc === 0 :
+      t.status === "partially_failed" ? fin === total && suc > 0 && suc < total :
+      t.status === "interrupted" ? result?.interruption !== undefined :
+      t.status === "cancelled" ? fin < total ||
+        (suc < total && result?.cancellation_acknowledged === true) :
+      t.status === "needs_verification" ? t.result_json === null || uncertainty !== null :
+      t.result_json === null;
+    if (!valid || (t.owner_run_id !== null && t.owner_run_id.trim() === "") ||
+        (t.owner_run_id === null && items.some((i) => i.stage !== "pending"))) {
+      inc("execution status/outcomes inconsistent");
+    }
+    // request binding must exist for a task row (read_bound_task parity)
+    const req = db.get("SELECT request_id FROM requests WHERE task_id=?", id);
+    if (!req) inc("task binding/execution missing");
+    return {
+      task: t, items, scopes: [...scopes], requestId: req.request_id,
+      claims: claims.map((c) => ({ scope_key: c.scope_key, state_revision: t.state_revision })),
+    };
+  },
+});
+
+// Route candidates + reconcile through the validated bound read:
+// divergent rows fail the whole call closed.
+Object.assign(TaskAdmission.prototype, {
+  reconcile(runId) {
+    if (!wellformedStr(runId) || runId.trim() === "") {
+      throw new StorageError("invalid_input", "empty run identity");
+    }
+    return this._db.transaction(() => {
+      const ids = this._db.query(
+        `SELECT task_id FROM tasks WHERE status NOT IN (${TERMINAL_STATUSES.map((x) => `'${x}'`).join(",")})
+         AND (accepted_run_id<>? OR (owner_run_id IS NOT NULL AND owner_run_id<>?))`,
+        runId, runId).map((r) => r.task_id);
+      let count = 0;
+      for (const id of ids) {
+        // validated bound read — a tampered row fails the whole call
+        const snap = this._readBoundTaskValidated(id);
+        if (!snap) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+        const t = snap.task;
+        if (t.status === "needs_verification") continue;
+        const res = this._db.run(
+          `UPDATE tasks SET status='needs_verification',state_revision=state_revision+1
+           ${RECOUNT_COUNTERS} WHERE task_id=? AND state_revision=?`,
+          id, t.state_revision);
+        if (res.changes !== 1) {
+          throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+        }
+        count++;
+      }
+      return { reconciled: count };
+    });
+  },
+  candidates(runId) {
+    if (!wellformedStr(runId) || runId.trim() === "") {
+      throw new StorageError("invalid_input", "empty run identity");
+    }
+    return this._db.transaction(() => {
+      const ids = this._db.query(
+        `SELECT task_id FROM tasks WHERE accepted_run_id=? AND owner_run_id IS NULL
+         AND status IN ('pending','cancel_requested') ORDER BY created_at,task_id`,
+        runId).map((r) => r.task_id);
+      return ids.map((id) => {
+        const snap = this._readBoundTaskValidated(id);
+        if (!snap) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+        const { task, items, scopes, claims } = snap;
+        return { task, items, scopes, claims };
+      });
+    });
+  },
+});

@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-046",
+  "task_id": "NM-046-R1",
   "baseline_sha": "88634588453c130396bbb74ff399c5dc9e51b1be",
   "source_ported": "decide RequireVerification/Reconcile + reconcile_tx + candidates_tx + read-stamped claims",
   "contract": [
@@ -11,9 +11,9 @@
   "probe": {
     "command": "node scripts/node_migration_p3/recovery_probe.mjs .",
     "exit": 0,
-    "cases": 12,
+    "cases": 17,
     "totals": {
-      "pass": 12,
+      "pass": 17,
       "fail": 0,
       "not_run": 0
     },
@@ -22,7 +22,8 @@
       "reconcile": 2,
       "candidates": 2,
       "boundary": 4,
-      "selftest": "exit 1"
+      "selftest": "exit 1",
+      "tamper_failclosed": 5
     }
   },
   "regressions": {
@@ -38,5 +39,7 @@
     "NM-036": "35/35",
     "NM-035": "23/23"
   },
-  "limits": "no retry/verification-inspection/market repos/workers/services/production readiness"
+  "limits": "no retry/verification-inspection/market repos/workers/services/production readiness",
+  "review": "REVIEW-NM-046 R0 + TASK-NM-046-R1 — validated bound read",
+  "r1_fix": "candidates and reconcile now route through _readBoundTaskValidated (read_task + validate_snapshot parity): execution_uncertainty marker, FrozenWork::validate, evidence_digest column vs blob, task/scopes/items binding, per-item spec+finished<=>outcome+no success&&error, owner/stage invariants, claims<->scopes (non-terminal)/no-claims (terminal), counters vs items, status/outcome validity, request binding. Any violation -> inconsistent/needs_verification, whole call fails. Deferred: sqlite_verification + publication_checks validate_task_link registries (own P3 slices)."
 }
