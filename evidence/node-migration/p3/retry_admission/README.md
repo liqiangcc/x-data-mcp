@@ -7,7 +7,7 @@ ORIGINAL's key, retry_of bound.
 
 ## Contents
 
-- `probe-results.jsonl` — 13 rows, all PASS.
+- `probe-results.jsonl` — 14 rows, all PASS.
 - `negative-selftest.jsonl` (exit 1), `results.json`, `SHA256SUMS`.
 
 ## Reproduce
@@ -25,3 +25,5 @@ node scripts/node_migration_p3/retry_probe.mjs . retry   # selftest, exit 1
 - Replay of a retry request_id compares the durable binding against
   the original's stored key (NM-042 replay rule, retry-aware).
 - Scope conflicts still enforced; rejections leave bytes unchanged.
+
+R1: intent compared wholesale (exactly {original_task_id,selected_items}; extra keys reject) — REVIEW-NM-047 R0.

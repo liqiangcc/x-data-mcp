@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-047",
+  "task_id": "NM-047-R1",
   "baseline_sha": "3c8bb86edeac499f88322ea3f4c3e838ec340f15",
   "source_ported": "accept_tx RetryGuard branch (sqlite_tasks.rs:1246-1287) + RetryGuard",
   "contract": [
@@ -11,15 +11,15 @@
   "probe": {
     "command": "node scripts/node_migration_p3/retry_probe.mjs .",
     "exit": 0,
-    "cases": 13,
+    "cases": 14,
     "totals": {
-      "pass": 13,
+      "pass": 14,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
       "happy": 1,
-      "guard_rejections": 8,
+      "guard_rejections": 9,
       "scope_conflict": 1,
       "replay": 1,
       "boundary": 1,
@@ -40,5 +40,7 @@
     "NM-036": "35/35",
     "NM-035": "23/23"
   },
-  "limits": "no retry policy/selection UX/verification inspection/market repos/workers/services/production readiness"
+  "limits": "no retry policy/selection UX/verification inspection/market repos/workers/services/production readiness",
+  "review": "REVIEW-NM-047 R0 + TASK-NM-047-R1 — whole-object intent equality",
+  "r1_fix": "command.intent now compared wholesale via canonEq against exactly {original_task_id, selected_items} — extra keys reject invalid_retry_selection (Rust Value equality); probe retry_intent_extra_key."
 }

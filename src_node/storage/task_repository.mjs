@@ -348,10 +348,10 @@ export class TaskAdmission {
         const command = JSON.parse(p.commandJson);
         const oldKey = JSON.parse(old.task.command_key_json);
         const selected = [...p.retry.selectedItems].sort();
-        const intent = command?.intent;
-        if (!intent || intent.original_task_id !== p.retry.originalTaskId ||
-            !Array.isArray(intent.selected_items) ||
-            !canonEq(intent.selected_items, selected)) {
+        // Rust compares the intent Value wholesale: exactly
+        // {original_task_id, selected_items} — extra keys reject.
+        if (!canonEq(command?.intent,
+          { original_task_id: p.retry.originalTaskId, selected_items: selected })) {
           irs("command intent does not match retry selection");
         }
         if (command?.key?.operation !== "retry_task" ||

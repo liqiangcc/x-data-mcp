@@ -136,6 +136,12 @@ rej("retry_intent_mismatch", "invalid_retry_selection", {
     intent: { original_task_id: ORIG, selected_items: ["a", "b"] }, // doesn't match guard
   }),
 });
+rej("retry_intent_extra_key", "invalid_retry_selection", {
+  commandJson: JSON.stringify({
+    key: { operation: "retry_task", dataset: "ds", contract_version: "1" },
+    intent: { original_task_id: ORIG, selected_items: ["b"], extra: "not in the contract" },
+  }),
+});
 rej("retry_key_not_retry_task", "invalid_retry_selection", {
   commandJson: JSON.stringify({
     key: { operation: "collect", dataset: "ds", contract_version: "1" },
