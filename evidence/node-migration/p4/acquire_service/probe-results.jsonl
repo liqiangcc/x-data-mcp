@@ -1,0 +1,24 @@
+{"id":"open_initializes_dirs_db_mode","status":"PASS","detail":null,"evidence":{"db":true,"mode":"0600"}}
+{"id":"check_updates_first_run_unknown","status":"PASS","detail":null,"evidence":{"unknown":["base_industry","gbbq","day"]}}
+{"id":"check_updates_unchanged_on_etag","status":"PASS","detail":null,"evidence":{"unchanged":["base_industry","gbbq","day"]}}
+{"id":"check_updates_changed_on_etag","status":"PASS","detail":null,"evidence":{"changed":["gbbq"]}}
+{"id":"check_updates_fetch_failure_unknown","status":"PASS","detail":null,"evidence":{"unknown":["base_industry","gbbq","day"]}}
+{"id":"acquire_generation_accept","status":"PASS","detail":null,"evidence":{"task_id":"acq-9456bdfa12ea76959c94a357"}}
+{"id":"acquire_generation_replay","status":"PASS","detail":null,"evidence":{"task_id":"acq-9456bdfa12ea76959c94a357","reused":true}}
+{"id":"acquire_binding_lost","status":"PASS","detail":null,"evidence":{"err":"request_binding_lost"}}
+{"id":"worker_once_fetch_chain","status":"PASS","detail":null,"evidence":{"stages":["fetch:gbbq","fetch:day","manifest"],"bytes_done":"42"}}
+{"id":"worker_once_manifest_written","status":"PASS","detail":null,"evidence":{"roles":["base_industry","gbbq","day"],"manifest":true}}
+{"id":"worker_once_install_succeeds","status":"PASS","detail":null,"evidence":{"generation_id":"aff42b552307465f5801e09cc4a909bae314fabc3ba4482020135caa11a84644","state":"byte_verified"}}
+{"id":"worker_once_empty","status":"PASS","detail":null,"evidence":{"idle":true}}
+{"id":"acquire_replay_after_done","status":"PASS","detail":null,"evidence":{"state":"succeeded"}}
+{"id":"task_not_found_refused","status":"PASS","detail":null,"evidence":{"err":"task_not_found"}}
+{"id":"request_unbound","status":"PASS","detail":null,"evidence":{"bound":false}}
+{"id":"fetch_resume_keeps_pinned_bytes","status":"PASS","detail":null,"evidence":{"base_fetches":1,"stage":"fetch:gbbq"}}
+{"id":"reconcile_running_returns_accepted","status":"PASS","detail":null,"evidence":{"state":"accepted"}}
+{"id":"reconcile_adopts_orphan_install","status":"PASS","detail":null,"evidence":{"generation_id":"aff42b552307465f5801e09cc4a909bae314fabc3ba4482020135caa11a84644","state":"byte_verified"}}
+{"id":"reconcile_corrupt_dir_recorded","status":"PASS","detail":null,"evidence":{"state":"corrupt","kept":true}}
+{"id":"reconcile_pointer_realigns_state","status":"PASS","detail":null,"evidence":{"state":"active"}}
+{"id":"reconcile_cleans_terminal_staging","status":"PASS","detail":null,"evidence":{"removed":true}}
+{"id":"capacity_refused_at_six_hot","status":"PASS","detail":null,"evidence":{"refused":"generation_capacity","outcome_durable":true}}
+{"id":"advance_unknown_stage_fails_task","status":"PASS","detail":null,"evidence":{"state":"failed","error":"unknown_stage"}}
+{"id":"summary","status":"PASS","detail":"0 failures","evidence":null}

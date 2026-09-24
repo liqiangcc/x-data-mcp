@@ -84,7 +84,7 @@ const jsonErr = (e) =>
 // chrono DateTime<Utc>::to_rfc3339(): +00:00 offset, subsecond digits
 // only when nonzero (AutoSi). Date is ms-precision — emit .mmm when
 // ms !== 0, else no fraction.
-const toRfc3339 = (d) => {
+export const toRfc3339 = (d) => {
   const iso = d.toISOString(); // YYYY-MM-DDTHH:MM:SS.mmmZ
   return iso.endsWith(".000Z")
     ? iso.slice(0, -5) + "+00:00"
