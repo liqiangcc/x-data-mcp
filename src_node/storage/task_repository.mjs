@@ -1213,7 +1213,9 @@ const tcNeedsVerification = (m) =>
   TCError("needs_verification", `ACCEPTANCE_NEEDS_VERIFICATION: ${m}`);
 
 const TASK_TERMINAL = ["succeeded", "partially_failed", "failed", "cancelled", "interrupted"];
-const visibleStatusOf = (status, accepted, owner, run) =>
+/** task_control::TaskSnapshot::visible_status — non-terminal tasks under a
+ *  foreign accepted/owner run report needs_verification. */
+export const visibleStatusOf = (status, accepted, owner, run) =>
   !TASK_TERMINAL.includes(status) && (accepted !== run || (owner !== null && owner !== run))
     ? "needs_verification" : status;
 

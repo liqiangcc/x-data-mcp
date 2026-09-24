@@ -74,3 +74,23 @@ per-dataset examples and schema digests.
 - `negative-selftest.jsonl` — injected byte flip + detection proof.
 - `results.json` — counts and oracle identity.
 - `SHA256SUMS` — checksums of this directory.
+
+
+## NM-088 prep — real handler bodies (2026-09-24, w2)
+
+`src_node/data_supply/mcp.mjs` `query.mjs` `observe.mjs` +
+`src_node/metrics/service.mjs` `sqlite_metrics.mjs` — all DataApi
+handler bodies ported verbatim over the SqliteSupply interface shape
+(NM-074, in-flight in the w1 worktree) and the TaskControl service
+surface (S6/S7). The `RepositorySeam`/`ControlSeam` classes remain as
+the documented fail-closed defaults until those lanes land.
+
+Evidence:
+- `bodies-probe-results.jsonl` — 26 checks on the ported bodies
+  (cursor LRU/key+access binding, page shapes, filters, progress
+  counts, availability classes, acceptance/control arms, compute).
+- End-to-end verified against w1's `sqlite_supply.mjs` on a
+  `gap_fixture` DB: query_data/list_data_versions/list_tasks/
+  get_task_progress/get_data_availability all returned real rows.
+- `probe-results.jsonl` — 275-line differential unchanged (207 pass /
+  68 documented seam divergences / 0 fail); matcher retires post-merge.

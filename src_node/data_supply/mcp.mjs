@@ -23,7 +23,7 @@ import { createHash } from "node:crypto";
 import { serValue } from "../mcp/serde_json.mjs";
 import { ApiError } from "../mcp/transport.mjs";
 import { Access, StorageError } from "./access.mjs";
-import { Observer } from "./observe.mjs";
+import { Observer, summary } from "./observe.mjs";
 import { MAX_BYTES, MAX_ROWS, Queries } from "./query.mjs";
 import {
   CancelV1, CapabilitiesQuery, Collection, Decode,
@@ -35,6 +35,8 @@ import {
 import { Compute } from "../metrics/wire.mjs";
 import { Metrics } from "../metrics/service.mjs";
 import { entries, capabilityExample, Handler } from "./registry.mjs";
+import { visibleStatusOf } from "../storage/task_repository.mjs";
+import { accept as pubAccept } from "../publication_verification/existing.mjs";
 
 const DECLARED_SCOPE =
   "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); overall production certification pending #225";
@@ -147,28 +149,55 @@ const republishPayload = (command) => ({
     end_date: i.end_date,
   })),
 });
+// The documented repository seam (NM-074 SqliteSupply shape):
+// ReadRepository + ObservationRepository. Every call fails closed with
+// the typed storage error — an unwired call is never a silent success.
 export class RepositorySeam {
-  // Queries/Observer read surface (SqliteSupply)
   query() { throw new StorageError("storage", seamMsg("repository.query")); }
-  versions() { throw new StorageError("storage", seamMsg("repository.versions")); }
   verify() { throw new StorageError("storage", seamMsg("repository.verify")); }
-  verifyVersions() { throw new StorageError("storage", seamMsg("repository.verify_versions")); }
-  task() { throw new StorageError("storage", seamMsg("repository.task")); }
+  versions() { throw new StorageError("storage", seamMsg("repository.versions")); }
   tasks() { throw new StorageError("storage", seamMsg("repository.tasks")); }
+  task() { throw new StorageError("storage", seamMsg("repository.task")); }
   availability() { throw new StorageError("storage", seamMsg("repository.availability")); }
-  // task_control::TaskRepository + service surface
-  readRequest() { throw seamErr("read_request"); }
-  accept() { throw seamErr("accept"); }
-  cancel() { throw seamErr("cancel"); }
-  retry() { throw seamErr("retry"); }
-  inspectVerification() { throw seamErr("verification_inspection::inspect"); }
-  publicationVerify() { throw seamErr("publication_verification::accept"); }
-  stoppedVerify() { throw seamErr("task_verification::accept"); }
-  gapAccept() { throw seamErr("gap_verification::accept"); }
-  workerRunOnce() { throw seamErr("worker::run_once"); }
-  // metrics::service InputRepository::observations
+  verifyVersions() { throw new StorageError("storage", seamMsg("repository.verify_versions")); }
+  verifyRangeResults() { throw new StorageError("storage", seamMsg("repository.verify_range_results")); }
+  verifyYearlyResults() { throw new StorageError("storage", seamMsg("repository.verify_yearly_results")); }
+  verifyPublicationCheck() { throw new StorageError("storage", seamMsg("repository.verify_publication_check")); }
+  verifyStoppedCheck() { throw new StorageError("storage", seamMsg("repository.verify_stopped_check")); }
+  // metrics::service InputRepository::observations (SqliteMetrics)
   observations() { throw new StorageError("storage", seamMsg("metrics::observations")); }
 }
+
+// task_control::service::TaskControl-shaped seam (S6/S7): the service
+// surface the handler bodies call — read_request/accept/cancel/retry
+// plus `repository` + `runId` for the domain verifiers.
+export class ControlSeam {
+  constructor(runId) { this.runId = runId; this.repository = this; }
+  readRequest() { throw seamErr("task_control::read_request"); }
+  readTask() { throw seamErr("task_control::read_task"); }
+  accept() { throw seamErr("task_control::accept"); }
+  cancel() { throw seamErr("task_control::cancel"); }
+  retry() { throw seamErr("task_control::retry"); }
+  // task_control::TaskRepository — the domain-verifier surface the S6/S7
+  // SqliteTasks binding satisfies (NM-056/NM-059 storage fns behind it).
+  knownPublication() { throw seamErr("repository::known_publication"); }
+  bindKnownPublication() { throw seamErr("repository::bind_known_publication"); }
+  readFacts() { throw seamErr("repository::read_facts"); }
+  checkReceipt() { throw seamErr("repository::check_receipt"); }
+  commitCheck() { throw seamErr("repository::commit_check"); }
+  transition() { throw seamErr("repository::transition"); }
+  claim() { throw seamErr("repository::claim"); }
+  candidates() { throw seamErr("repository::candidates"); }
+}
+
+// metrics Reason Debug format (mcp.rs `format!("{reason:?}")`).
+const reasonDebug = (r) => ({
+  window_too_short: "WindowTooShort",
+  missing_year: "MissingYear",
+  unknown_completion: "UnknownCompletion",
+  incomplete_period: "IncompletePeriod",
+  non_positive_price: "NonPositivePrice",
+}[r] ?? String(r));
 
 // GenerationSource::from_env + TdxMarketSource::from_env presence rules
 // (generation.active_verified_id stays null until the generation store
@@ -218,6 +247,30 @@ const taskError = (e) => {
   }[e.kind] ?? "storage_error";
   return new ApiError(code, String(e));
 };
+// RequestTerminal is untagged: Stopped/Publication are
+// {kind:"already_verified", receipt}, Inspection is
+// {kind:"verification_inspection", receipt}. Structural gate mirrors
+// serde untagged decode; per-variant receipt field validation lands
+// with the domain decoders (S6/S7) — stored terminal values are
+// produced by our own commit paths and always well-formed.
+const UNTAGGED_MISS =
+  "data did not match any variant of untagged enum RequestTerminal";
+const terminalShape = (v) =>
+  v !== null && typeof v === "object" && !Array.isArray(v) &&
+  (v.kind === "already_verified" || v.kind === "verification_inspection") &&
+  v.receipt !== null && typeof v.receipt === "object";
+const decodeRequestTerminal = (v) => {
+  if (!terminalShape(v))
+    throw new ApiError("unsupported_request_outcome",
+      `terminal contract: ${UNTAGGED_MISS}`);
+  return v;
+};
+const decodeInspectionTerminal = (v) => {
+  if (!terminalShape(v))
+    throw new ApiError("needs_verification",
+      `inspection terminal contract: ${UNTAGGED_MISS}`);
+  return v;
+};
 const decode = (dec, input) => {
   try {
     return dec(input);
@@ -229,20 +282,50 @@ const decode = (dec, input) => {
 const encode = (v) => v; // serde to_value is infallible for these shapes
 
 export class DataApi {
-  // DataApi::new tasks/run_id/access — skeleton takes the wired seams:
-  //   { access, runId?, seam?, generation?, marketSource? }
-  // generation/marketSource default to env-presence; the seam defaults to
-  // RepositorySeam (all repository ops -> typed storage_error).
-  constructor({ access, runId, seam, generation, marketSource } = {}) {
-    const repo = seam ?? new RepositorySeam();
+  // DataApi::new_in registry/tasks/market/access/market_source/
+  //   generation_source + the seam split documented for the dep wall:
+  //   repository  — SqliteSupply shape (NM-074): query/verify/versions/
+  //                 tasks/task/availability + verify_* re-checks.
+  //   control     — task_control::service::TaskControl shape (S6/S7):
+  //                 {runId, repository, readRequest, accept, cancel, retry}.
+  //   metrics     — Metrics over SqliteMetrics (metrics/sqlite_metrics.mjs);
+  //                 defaults to the seam until the market backend is wired.
+  //   inspectFn   — verification_inspection::service::inspect (S6/S7).
+  //   stoppedVerify — task_verification::existing::accept (unported domain —
+  //                 lands with its own task; seam until then).
+  //   workerRun   — worker::run_once (S6/S7); workerGate = WorkersGate.
+  //   pubVerify   — publication_verification::existing::accept (NM-098,
+  //                 landed — real default).
+  constructor({ access, runId, repository, control, metrics, generation,
+                marketSource, workerRun, inspectFn, stoppedVerify,
+                pubVerify, workerGate, market } = {}) {
+    const repo = repository ?? new RepositorySeam();
     this.access = access ?? Access.local();
     this.generation = generation === undefined ? generationFromEnv() : generation;
     this.market_source = marketSource === undefined ? null : marketSource;
     this.repository = repo;
+    this.market = market ?? null; // backend for worker::run_once
     this.observer = new Observer(repo, runId ?? `data-${process.pid}-0`);
-    this.queries = new Queries(repo, this.observer);
-    this.metrics = new Metrics(repo);
-    this.legacy = { control: repo, run_id: this.observer.run_id };
+    this.queries = new Queries(repo);
+    // Metrics' InputRepository is SqliteMetrics{market} — a different
+    // object from the supply; post-NM-074 the caller wires
+    // new Metrics(sqliteMetrics(market)) over the same backend.
+    this.metrics = metrics ?? new Metrics({
+      observations: () => {
+        throw new StorageError("storage", seamMsg("metrics::observations"));
+      },
+    });
+    const ctl = control ?? new ControlSeam(
+      runId ?? this.observer.run_id);
+    this.legacy = { control: ctl, run_id: ctl.runId };
+    this.inspectFn = inspectFn ??
+      (() => { throw seamErr("verification_inspection::service::inspect"); });
+    this.stoppedVerify = stoppedVerify ??
+      (() => { throw seamErr("task_verification::existing::accept"); });
+    this.pubVerify = pubVerify ?? pubAccept;
+    this.workerRun = workerRun ??
+      (() => { throw seamErr("worker::run_once"); });
+    this.workerGate = workerGate ?? { acquire: () => null };
   }
   sourceReady() {
     return this.generation
@@ -329,12 +412,12 @@ export class DataApi {
       production_blocking_reasons: productionBlocking,
     });
   }
-  // WriteAcceptance mapping — only reachable behind the control seam;
-  // visible_status is the task_control codec (lands with S12c).
+  // WriteAcceptance mapping — the RequestOutcome must bind a task
+  // (serde externally-tagged {Task: snapshot} | {Terminal: value}).
   acceptance(id, a) {
-    if (a.record.outcome.kind !== "task")
+    const f = a.record.outcome.Task;
+    if (f === undefined)
       throw new ApiError("unsupported_request_outcome", "task binding required");
-    const f = a.record.outcome.task;
     const block = this.#taskRuntimeBlock(f.task.key);
     return encode({
       request_id: id,
@@ -342,7 +425,8 @@ export class DataApi {
       dataset: f.task.key.dataset,
       contract_version: f.task.key.contract_version,
       reused: a.reused,
-      status: f.visibleStatus(this.legacy.run_id),
+      status: visibleStatusOf(f.task.status, f.task.accepted_run_id,
+        f.task.owner_run_id, this.legacy.control.runId),
       item_ids: f.items.map((i) => i.spec.item_id),
       runtime_readiness: block ? "blocked" : "ready",
       blocking_reasons: block ? [block] : [],
@@ -352,7 +436,8 @@ export class DataApi {
     const dailyWrite = key.dataset === DATASET_DAILY &&
       ["start_collection", "update_data", "backfill_data", "republish_data"]
         .includes(key.operation);
-    if ((dailyWrite || key.dataset === "market.data_gap") && !this.sourceReady())
+    // crate::gap_verification::DATASET — "market.gap_verification".
+    if ((dailyWrite || key.dataset === "market.gap_verification") && !this.sourceReady())
       return this.sourceBlock();
     if (key.dataset === DATASET_CATALOG && !this.sourceReady())
       return this.generation
@@ -365,30 +450,64 @@ export class DataApi {
       throw new ApiError("forbidden", "control requires local-owner context");
     if (name === "get_task") {
       const a = decode(TaskV1, input);
-      this.repository.task(a.task_id, this.access); // seam
-      throw new ApiError("internal_error", "seam returned"); // unreachable
+      // ObservationRepository::task -> TaskSummary (observer run id).
+      return encode(summary(
+        this.repository.task(a.task_id, this.access),
+        this.observer.run_id));
     }
     if (name === "get_request") {
       const a = decode(RequestV1, input);
-      this.legacy.control.readRequest(a.request_id); // seam
-      throw new ApiError("internal_error", "seam returned");
+      const r = this.legacy.control.readRequest(a.request_id);
+      // RequestOutcome {Task: snapshot} | {Terminal: value}; an unknown
+      // request is bound:false — never an error.
+      let task = null, terminalResult = null;
+      if (r !== null && r !== undefined) {
+        if (r.outcome.Task !== undefined) {
+          task = summary({
+            request_id: a.request_id, snapshot: r.outcome.Task,
+            publications: [], range_results: [], yearly_results: [],
+          }, this.legacy.control.runId);
+        } else {
+          // Untagged RequestTerminal decode: kind-tagged terminal shapes
+          // (already_verified | verification_inspection + receipt).
+          terminalResult = decodeRequestTerminal(r.outcome.Terminal);
+        }
+      }
+      return encode({
+        request_id: a.request_id,
+        bound: task !== null || terminalResult !== null,
+        task,
+        terminal_result: terminalResult,
+      });
     }
     if (name === "cancel_task") {
       const a = decode(CancelV1, input);
-      this.legacy.control.cancel(a.task_id, a.expected_revision); // seam
-      throw new ApiError("internal_error", "seam returned");
+      const s = this.legacy.control.cancel(a.task_id, a.expected_revision);
+      return encode({
+        task_id: s.task.task_id,
+        status: visibleStatusOf(s.task.status, s.task.accepted_run_id,
+          s.task.owner_run_id, this.observer.run_id),
+        state_revision: s.task.state_revision,
+      });
     }
     if (name === "start_collection") {
       const command = decode(Collection, input);
       if (command.request_id.trim() === "")
         throw new ApiError("empty_request_id", "request_id required");
-      this.legacy.control.accept(command.request_id, command); // seam
-      throw new ApiError("internal_error", "seam returned");
+      // CollectionContract::key + Collection::payload (request_id
+      // dropped — the envelope never enters the normalized command).
+      const { request_id, ...payload } = command;
+      return this.acceptance(command.request_id,
+        this.legacy.control.accept(command.request_id,
+          { operation: "start_collection", dataset: command.dataset,
+            contract_version: "v1" },
+          payload));
     }
     if (name === "retry_task") {
       const a = decode(RetryItems, input);
-      this.legacy.control.retry(a.original_task_id, a.new_request_id, a.item_ids); // seam
-      throw new ApiError("internal_error", "seam returned");
+      return this.acceptance(a.new_request_id,
+        this.legacy.control.retry(
+          a.original_task_id, a.new_request_id, new Set(a.item_ids)));
     }
     throw new ApiError("unknown_tool", `unsupported tool: ${name}`);
   }
@@ -410,26 +529,44 @@ export class DataApi {
       case Handler.InspectVerification: {
         localOnly("verification inspection requires local owner access");
         const command = decode(InspectVerification, input);
-        this.legacy.control.inspectVerification(command); // seam
-        break;
+        // verification_inspection::service::inspect — one retry on a
+        // known rollback precondition conflict is inside the service.
+        const acceptance = this.inspectFn(this.legacy.control.repository,
+          command.request_id, command.target_task_id,
+          this.legacy.control.runId, this.access.principal);
+        const term = acceptance.record.outcome.Terminal;
+        if (term === undefined)
+          throw new ApiError("needs_verification",
+            "bounded inspection has an invalid task outcome");
+        return encode({
+          request_id: command.request_id, bound: true,
+          task: null, terminal_result: decodeInspectionTerminal(term),
+        });
       }
       case Handler.VerifyPublication: {
         localOnly("verification requires local owner access");
         const command = decode(VerifyV1, input);
-        this.legacy.control.publicationVerify(command); // seam
-        break;
+        return this.acceptance(command.request_id,
+          this.pubVerify(this.legacy.control, command.request_id,
+            command.target_task_id));
       }
       case Handler.VerifyStopped: {
         localOnly("verification requires local owner access");
         const command = decode(VerifyV1, input);
-        this.legacy.control.stoppedVerify(command); // seam
-        break;
+        return this.acceptance(command.request_id,
+          this.stoppedVerify(this.legacy.control, command.request_id,
+            command.target_task_id));
       }
       case Handler.VerifyGap: {
         localOnly("write controls require local owner access");
         const command = decode(VerifyDataGap, input);
-        this.legacy.control.gapAccept(command); // seam
-        break;
+        // gap_verification::command_key + payload {target}.
+        return this.acceptance(command.request_id,
+          this.legacy.control.accept(command.request_id,
+            { operation: "verify_data_gap",
+              dataset: "market.gap_verification",
+              contract_version: "gap-verification-task-v1" },
+            { target: command.target }));
       }
       case Handler.RangeUpdate:
       case Handler.RangeBackfill: {
@@ -438,28 +575,44 @@ export class DataApi {
         // RangeWrite::payload() (range.rs) — items XOR selection checked at
         // accept-admission before any repository work.
         const payload = rangeWritePayload(command);
-        this.legacy.control.accept(command.request_id,
-          commandKey(e.name === Handler.RangeUpdate ? "update_data" : "backfill_data", command), payload); // seam
-        break;
+        return this.acceptance(command.request_id,
+          this.legacy.control.accept(command.request_id,
+            commandKey(e.handler === Handler.RangeUpdate
+              ? "update_data" : "backfill_data", command),
+            payload));
       }
       case Handler.Republish: {
         localOnly("write controls require local owner access");
         const command = decode(RepublishWrite, input);
-        this.legacy.control.accept(command.request_id,
-          commandKey("republish_data", command), republishPayload(command)); // seam
-        break;
+        return this.acceptance(command.request_id,
+          this.legacy.control.accept(command.request_id,
+            commandKey("republish_data", command),
+            republishPayload(command)));
       }
       case Handler.Compute: {
-        // metrics::compute(&*market, decode) — validation inside
-        // Metrics::compute (service.mjs), repository behind the seam.
-        this.metrics.compute(decode(Compute, input), this.access);
-        break;
+        // metrics::compute(&*market, decode) — Metrics::compute over
+        // SqliteMetrics; a NotComputable outcome maps to the typed
+        // not_computable error with the computation as details.
+        const computed = this.metrics.compute(
+          decode(Compute, input), this.access);
+        if (computed.result.outcome === "not_computable")
+          throw new ApiError("not_computable",
+            reasonDebug(computed.result.reason), { details: computed });
+        return encode(computed);
       }
       case Handler.Worker: {
         localOnly("worker requires local owner access");
         decode(WorkerInput, input);
-        this.legacy.control.workerRunOnce(); // seam
-        break;
+        this.workerGate.acquire();
+        const s = this.workerRun(this.legacy.control, this.market,
+          this.market_source, this.generation);
+        return encode({
+          idle: s === null || s === undefined,
+          task_id: s?.task?.task_id ?? null,
+          status: s === null || s === undefined ? null
+            : visibleStatusOf(s.task.status, s.task.accepted_run_id,
+              s.task.owner_run_id, this.legacy.control.runId),
+        });
       }
       case Handler.Collection:
       case Handler.Retry:
