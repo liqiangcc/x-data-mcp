@@ -7,7 +7,7 @@ idempotent unpin, keep-predicate sweep, RAII-style release.
 ## Contents
 
 - `probe-results.jsonl` — 35 rows, all PASS (19 live Rust oracle +
-  7 RAII/symlink/boundary).
+  16 RAII/symlink/boundary).
 - `rust-oracle.jsonl`, `negative-selftest.jsonl` (exit 1), `results.json`.
 
 ## Reproduce
