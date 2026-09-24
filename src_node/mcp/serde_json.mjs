@@ -388,18 +388,147 @@ export function serF64(v) {
   return sign + mant + "e" + (e10 < 0 ? "-" : "+") + Math.abs(e10);
 }
 
-const keyCmp = (a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+// Object-key order: serde_json BTreeMap = UTF-8 byte order == code
+// point order (UTF-8 is order-preserving). Code-unit compare is wrong
+// for supplementary-plane keys (a surrogate pair's lead unit sits in
+// 0xD800-0xDFFF, below the BMP range its code point exceeds), so when
+// either side holds a surrogate we compare by code point.
+const keyCmp = (a, b) => {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const ca = a.charCodeAt(i), cb = b.charCodeAt(i);
+    if (ca === cb) continue;
+    if ((ca & 0xf800) === 0xd800 || (cb & 0xf800) === 0xd800) {
+      return a.codePointAt(i) - b.codePointAt(i);
+    }
+    return ca - cb;
+  }
+  return a.length - b.length;
+};
+
+// serde_json string escape policy — identical to JSON.stringify:
+// \b \t \n \f \r \" \\ plus C0 < 0x20 as \u00xx (lowercase hex);
+// DEL and everything >= 0x20 passes through raw (UTF-8 encoded).
+const ESCAPE = new Array(128);
+for (let i = 0; i < 0x20; i++) {
+  ESCAPE[i] = "\\u" + i.toString(16).padStart(4, "0");
+}
+ESCAPE[8] = "\\b"; ESCAPE[9] = "\\t"; ESCAPE[10] = "\\n";
+ESCAPE[12] = "\\f"; ESCAPE[13] = "\\r";
+ESCAPE[34] = '\\"'; ESCAPE[92] = "\\\\";
+const NEEDS_ESCAPE = new Uint8Array(128);
+for (let i = 0; i < 0x20; i++) NEEDS_ESCAPE[i] = 1;
+NEEDS_ESCAPE[34] = 1; NEEDS_ESCAPE[92] = 1;
+
+// Byte-level emit: a single growable buffer, no per-leaf string
+// allocation. Strings are scanned once for escapable chars; clean
+// spans go through one Buffer.utf8 write.
+class ByteWriter {
+  constructor() {
+    this.b = Buffer.allocUnsafe(1 << 16);
+    this.p = 0;
+  }
+  need(n) {
+    if (this.p + n <= this.b.length) return;
+    const nb = Buffer.allocUnsafe(
+      Math.max(this.b.length * 2, this.b.length + n));
+    this.b.copy(nb, 0, 0, this.p);
+    this.b = nb;
+  }
+  byte(c) {
+    if (this.p >= this.b.length) this.need(8);
+    this.b[this.p++] = c;
+  }
+  lit(s) { // ASCII-only literal
+    const n = s.length;
+    this.need(n);
+    for (let i = 0; i < n; i++) this.b[this.p++] = s.charCodeAt(i);
+  }
+  utf8(s) {
+    this.need(s.length * 3 + 2);
+    this.p += this.b.write(s, this.p, "utf8");
+  }
+  str(s) { // quoted + escaped
+    this.byte(34);
+    let start = 0;
+    const n = s.length;
+    for (let i = 0; i < n; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 0x80) {
+        if (NEEDS_ESCAPE[c]) {
+          if (i > start) this.utf8(s.slice(start, i));
+          this.lit(ESCAPE[c]);
+          start = i + 1;
+        }
+        continue;
+      }
+      // Lone surrogates: JSON.stringify emits \udXXX (lowercase);
+      // utf8Write would emit U+FFFD. Valid pairs pass through raw.
+      if (c >= 0xd800 && c <= 0xdbff &&
+          (i + 1 >= n || !(s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff))) {
+        if (i > start) this.utf8(s.slice(start, i));
+        this.lit("\\u" + c.toString(16).padStart(4, "0"));
+        start = i + 1;
+      } else if (c >= 0xdc00 && c <= 0xdfff) {
+        if (i > start) this.utf8(s.slice(start, i));
+        this.lit("\\u" + c.toString(16).padStart(4, "0"));
+        start = i + 1;
+      } else if (c >= 0xd800 && c <= 0xdbff) {
+        i++; // valid pair — consume the trail too
+      }
+    }
+    if (start === 0) this.utf8(s);
+    else if (start < n) this.utf8(s.slice(start));
+    this.byte(34);
+  }
+  bytes() { return this.b.subarray(0, this.p); }
+  text() { return this.b.toString("utf8", 0, this.p); }
+}
+
+const serInto = (v, w) => {
+  if (v === null || v === undefined) { w.lit("null"); return; }
+  const t = typeof v;
+  if (t === "string") { w.str(v); return; }
+  if (t === "number") {
+    w.lit(Number.isInteger(v) ? String(v) : serF64(v));
+    return;
+  }
+  if (t === "boolean") { w.lit(v ? "true" : "false"); return; }
+  if (t === "bigint") { w.lit(v.toString()); return; }
+  if (v instanceof F64) { w.lit(serF64(v.v)); return; }
+  if (typeof v.toJSON === "function") { serInto(v.toJSON(), w); return; }
+  if (Array.isArray(v)) {
+    w.byte(91);
+    for (let i = 0; i < v.length; i++) {
+      if (i) w.byte(44);
+      serInto(v[i], w);
+    }
+    w.byte(93);
+    return;
+  }
+  w.byte(123);
+  const keys = Object.keys(v);
+  if (keys.length > 1) keys.sort(keyCmp);
+  for (let i = 0; i < keys.length; i++) {
+    if (i) w.byte(44);
+    w.str(keys[i]);
+    w.byte(58);
+    serInto(v[keys[i]], w);
+  }
+  w.byte(125);
+};
 
 // serde_json::to_string(&Value) parity: BTreeMap-sorted keys, compact.
+// Byte-level emit (NM-090): the returned Buffer is a live view over
+// the writer's scratch — copy before storing if the bytes must
+// outlive the caller's own writes.
+export function serValueBytes(v) {
+  const w = new ByteWriter();
+  serInto(v, w);
+  return w.bytes();
+}
 export function serValue(v) {
-  if (v === null || v === undefined) return "null";
-  if (v instanceof F64) return serF64(v.v);
-  if (typeof v === "bigint") return v.toString();
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : serF64(v);
-  if (typeof v === "string") return JSON.stringify(v);
-  if (typeof v === "boolean") return v ? "true" : "false";
-  if (typeof v.toJSON === "function") return serValue(v.toJSON());
-  if (Array.isArray(v)) return `[${v.map(serValue).join(",")}]`;
-  const keys = Object.keys(v).sort(keyCmp);
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${serValue(v[k])}`).join(",")}}`;
+  const w = new ByteWriter();
+  serInto(v, w);
+  return w.text();
 }
