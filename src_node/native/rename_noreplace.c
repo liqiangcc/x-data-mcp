@@ -98,6 +98,32 @@ static napi_value openat_create_excl(napi_env env, napi_callback_info info) {
   return out;
 }
 
+/* unlinkat(dirfd, name, 0) — unlink never follows the final symlink;
+ * ancestor dirs pinned by the fd. EEXIST impossible; ENOENT/ENOTDIR
+ * mapped for idempotent-remove callers. */
+static napi_value unlinkat_file(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  int32_t dfd = -1;
+  char name[4096];
+  if (argc != 2 || napi_get_value_int32(env, argv[0], &dfd) != napi_ok ||
+      dfd < 0 || !get_path(env, argv[1], name, sizeof name)) {
+    napi_throw_type_error(env, "EINVAL", "unlinkat_file(dirfd, name)");
+    return NULL;
+  }
+  if (unlinkat(dfd, name, 0) < 0) {
+    int e = errno;
+    const char *code = e == ENOENT ? "ENOENT" : e == ENOTDIR ? "ENOTDIR"
+      : e == EISDIR ? "EISDIR" : e == EACCES ? "EACCES" : "EIO";
+    char msg[160];
+    snprintf(msg, sizeof msg, "unlinkat failed: %s", strerror(e));
+    napi_throw_error(env, code, msg);
+    return NULL;
+  }
+  return NULL;
+}
+
 static napi_value rename_noreplace(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2];
@@ -141,6 +167,9 @@ static napi_value init(napi_env env, napi_value exports) {
   napi_create_function(env, "openat_create_excl", NAPI_AUTO_LENGTH,
                        openat_create_excl, NULL, &fn);
   napi_set_named_property(env, exports, "openat_create_excl", fn);
+  napi_create_function(env, "unlinkat_file", NAPI_AUTO_LENGTH,
+                       unlinkat_file, NULL, &fn);
+  napi_set_named_property(env, exports, "unlinkat_file", fn);
   return exports;
 }
 NAPI_MODULE(rename_noreplace, init)

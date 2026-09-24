@@ -27,7 +27,8 @@ import { join } from "node:path";
 // src_node/native/rename_noreplace.node rename_noreplace.c
 // -I/usr/include/node); absence fails closed at load time.
 const require_ = createRequire(import.meta.url);
-const { rename_noreplace: renameNoreplace, openat_dir: openatDir, openat_create_excl: openatCreateExcl } =
+const { rename_noreplace: renameNoreplace, openat_dir: openatDir,
+        openat_create_excl: openatCreateExcl, unlinkat_file: unlinkatFile } =
   require_("../native/rename_noreplace.node");
 import { inspect, strictJson, InspectionError } from "./snapshot.mjs";
 import { readBoundedFile } from "../lib/zip_member.mjs";
@@ -39,6 +40,7 @@ export const STAGING_DIR = "staging";
 export const GENERATIONS_DIR = "generations";
 export const ACTIVE_NAME = "active-generation.json";
 export const PINS_DIR = "pins";
+export const REQUIRED_ARTIFACTS = ["base.zip", "gbbq.zip", "hsjday.zip"];
 export const ACTIVE_SCHEMA = "x-data-mcp.active-generation.v1";
 const MAX_MANIFEST = 1 * 1024 * 1024;
 
@@ -383,6 +385,36 @@ export class GenerationStore {
       }
     }
     return removed;
+  }
+
+  /** retire_bytes: evidence-only retirement — remove only the required
+   *  raw source artifacts, retain manifest/decision/evidence and the
+   *  generation directory, fsync the dir. Missing artifacts idempotent.
+   *  Removal runs via unlinkat on the pinned generation-dir fd:
+   *  ancestors can't be swapped out and unlink never follows the final
+   *  symlink. Does NOT check active/pin/authorization — caller-held
+   *  preconditions, same as Rust. */
+  retireBytes(generationId) {
+    checkGenerationId(generationId);
+    const { gfd, dfd } = this.openGenerationDirFds(generationId);
+    let firstErr = null;
+    try {
+      for (const name of REQUIRED_ARTIFACTS) {
+        try { unlinkatFile(dfd, name); }
+        catch (e) {
+          if (e.code === "ENOENT" || e.code === "ENOTDIR") continue;
+          throw err("io", `io: ${e.message}`);
+        }
+      }
+      fsyncFd(dfd);
+    } catch (e) {
+      firstErr = e;
+    }
+    for (const fd of [dfd, gfd]) {
+      try { closeSync(fd); }
+      catch (e) { if (firstErr === null) firstErr = err("io", `io: ${e.message}`); }
+    }
+    if (firstErr) throw firstErr;
   }
 
   /** Installed-generation dir for writes, pinned by fds: opens

@@ -1,0 +1,43 @@
+{
+  "task_id": "NM-037",
+  "baseline_sha": "ce120d2fd5f067d6e4a6a8d316ceea98eff4097f",
+  "source_ported": "generation/mod.rs::retire_bytes + required_artifacts",
+  "rust_oracle": "rust-oracle.jsonl — 9 cases via live Store (rustc 1.98.1) incl. retained artifact listing, idempotency, partial removal, dir-artifact io",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/governance/generation_store.mjs",
+    "fixtures": "/tmp/nm37-ret-* mkdtemp, cleaned"
+  },
+  "ordering": [
+    "retireBytes(): fd-pinned gen dir (O_DIRECTORY|O_NOFOLLOW ancestors) -> unlinkat each of base.zip/gbbq.zip/hsjday.zip (ENOENT/ENOTDIR idempotent, EISDIR/other -> io) -> fsync pinned dir fd",
+    "retained: snapshot-manifest.json, consistency-decision.json, compatibility-evidence.json + generation dir itself — listing oracle-verified"
+  ],
+  "fd_pinning": "new native unlinkat_file export; unlink never follows the final symlink — symlinked base.zip removed as link, outside target byte-identical; symlinked gen dir -> not_installed, outside untouched",
+  "stricter_than_rust": "gid boundary rejects '../x' at boundary (Rust resolves -> not_installed); symlinked gen dir rejected pre-removal",
+  "explicitly_not_checked": "active pointer, pin markers, authorization — caller-held preconditions, same as Rust (documented in method docstring)",
+  "probe": {
+    "command": "node scripts/node_migration_p2/generation_retire_probe.mjs .",
+    "exit": 0,
+    "cases": 12,
+    "totals": {
+      "pass": 12,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "live_rust_oracle": 9,
+      "symlink_pin_boundary": 3
+    },
+    "selftest": "node ... retire -> exit 1 (negative-selftest.jsonl)"
+  },
+  "regressions": {
+    "NM-036": "35/35 PASS",
+    "NM-035": "23/23 PASS",
+    "NM-034": "45/45 PASS",
+    "NM-033": "38/38 PASS",
+    "NM-032": "28/28 PASS",
+    "NM-026": "72/72 PASS"
+  },
+  "limits": "crash durability mid-retire NOT_RUN; service-level confirmation tokens, active/pin policy checks, DB updates, production readiness outside this slice",
+  "out_of_scope": "no acquire service, DB, MCP, real generation paths"
+}

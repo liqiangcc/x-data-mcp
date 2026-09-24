@@ -1,0 +1,12 @@
+{"family":"generation_retire","id":"artifacts_set","status":"PASS","detail":"ok","expected":["base.zip","gbbq.zip","hsjday.zip"],"actual":["base.zip","gbbq.zip","hsjday.zip"]}
+{"family":"generation_retire","id":"retire_missing_gen","status":"PASS","detail":"not_installed (boundary)","expected":"generation dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd is not installed","actual":"generation dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd is not installed"}
+{"family":"generation_retire","id":"retire_first","status":"PASS","detail":"ok","expected":true,"actual":true}
+{"family":"generation_retire","id":"listing_after","status":"PASS","detail":"ok","expected":["compatibility-evidence.json","consistency-decision.json","snapshot-manifest.json"],"actual":["compatibility-evidence.json","consistency-decision.json","snapshot-manifest.json"]}
+{"family":"generation_retire","id":"retire_idempotent","status":"PASS","detail":"ok","expected":true,"actual":true}
+{"family":"generation_retire","id":"listing_after_repeat","status":"PASS","detail":"ok","expected":["compatibility-evidence.json","consistency-decision.json","snapshot-manifest.json"],"actual":["compatibility-evidence.json","consistency-decision.json","snapshot-manifest.json"]}
+{"family":"generation_retire","id":"retire_partial","status":"PASS","detail":"ok","expected":true,"actual":true}
+{"family":"generation_retire","id":"listing_partial","status":"PASS","detail":"ok","expected":[],"actual":[]}
+{"family":"generation_retire","id":"retire_artifact_is_dir","status":"PASS","detail":"io (boundary)","expected":"io: Is a directory (os error 21)","actual":"io: unlinkat failed: Is a directory"}
+{"family":"generation_retire","id":"retire_bad_gid","status":"PASS","detail":"not_installed (boundary)","expected":"generation ../x is not installed","actual":"invalid generation_id"}
+{"family":"generation_retire","id":"retire_symlink_artifact","status":"PASS","detail":"symlink removed, outside untouched, status=ok","expected":null,"actual":null}
+{"family":"generation_retire","id":"retire_symlink_gendir","status":"PASS","detail":"not_installed","expected":null,"actual":null}

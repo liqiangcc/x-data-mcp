@@ -1,0 +1,10 @@
+{"id":"artifacts_set","status":"ok","value":["base.zip","gbbq.zip","hsjday.zip"]}
+{"id":"retire_missing_gen","kind":"not_installed","message":"generation dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd is not installed","status":"error"}
+{"id":"retire_first","status":"ok","value":true}
+{"id":"listing_after","status":"ok","value":["compatibility-evidence.json","consistency-decision.json","snapshot-manifest.json"]}
+{"id":"retire_idempotent","status":"ok","value":true}
+{"id":"listing_after_repeat","status":"ok","value":["compatibility-evidence.json","consistency-decision.json","snapshot-manifest.json"]}
+{"id":"retire_partial","status":"ok","value":true}
+{"id":"listing_partial","status":"ok","value":[]}
+{"id":"retire_artifact_is_dir","kind":"io","message":"io: Is a directory (os error 21)","status":"error"}
+{"id":"retire_bad_gid","kind":"not_installed","message":"generation ../x is not installed","status":"error"}
