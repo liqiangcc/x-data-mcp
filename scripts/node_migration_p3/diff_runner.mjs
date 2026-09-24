@@ -33,6 +33,10 @@ const BE = await import("../../src_node/market/backend.mjs");
 const { DatabaseLease } = await import("../../src_node/storage/database_lease.mjs");
 const SL = await import("../../src_node/storage/schema_lifecycle.mjs");
 const CRT = await import("../../src_node/market/compact_runtime.mjs");
+const DS = await import("../../src_node/data_supply/wire.mjs");
+const DSQ = await import("../../src_node/data_supply/query.mjs");
+const { Access } = await import("../../src_node/data_supply/access.mjs");
+const SS = await import("../../src_node/data_supply/sqlite_supply.mjs");
 const isCompact = () => MR.isCompactSchema(db);
 const marketDigest = () => {
   const tables = [
@@ -222,6 +226,47 @@ const resolve = (v) => {
 };
 
 const sortedValue = (v) => JSON.parse(ser(v)); // canonical Value (sorted keys)
+
+// ——— NM-074 — SqliteSupply helpers ———
+// Access isn't serde — {local:true} or {principal?,datasets,securities}.
+const supplyAccess = (op) => {
+  const a = op.access ?? {};
+  if (a.local === true) return Access.local();
+  return new Access({
+    principal: a.principal ?? "harness",
+    datasets: new Set(a.datasets ?? []),
+    securities: a.securities === null || a.securities === undefined
+      ? null : new Set(a.securities),
+  });
+};
+// SqliteSupply on the raw conn shim — the market backend's `.read` is
+// the same connection-scope boundary on the runner side.
+const mkSupply = () => SS.sqliteSupply(
+  { read: (fn) => fn(db) },
+  (x) => repo._readBoundTaskValidated(resolve(x)),
+  (x) => VF.readFacts(db, resolve(x),
+    (y) => repo._readBoundTaskValidated(resolve(y))));
+// data_supply::Error emit — code is the raw storage-level code
+// (compare maps the Rust variant), message is the Display text.
+// MarketError.message already carries the tag; access.mjs's StorageError
+// prefixes via toString; adapter StorageError.message is the full text.
+const KIND2CODE = { storage: "unavailable", integrity: "inconsistent",
+  invalid: "invalid_input", conflict: "conflict", base: "base_unavailable",
+  notfound: "not_found", outcome: "outcome_unknown",
+  basis: "basis_not_verified" };
+const supplyErr = (e, before) => ({
+  status: "error",
+  code: e?.code ?? KIND2CODE[e?.kind] ?? "internal",
+  message: e?.name === "MarketError" || typeof e?.kind !== "string"
+    ? String(e.message) : e.toString(),
+  unchanged: stateDigest() === before,
+});
+// {"cap":"X"} / {"cap":"X","field":"f"} — captured-value lookup.
+const capVal = (v) =>
+  (v !== null && typeof v === "object" && !Array.isArray(v) &&
+    typeof v.cap === "string")
+    ? (v.field !== undefined ? caps.get(v.cap)?.[v.field] : caps.get(v.cap))
+    : v;
 
 // verification_execution::prepare_claim — the Claim-plan builder used
 // by the runtime-guard claim op (claim_with_runtime_guard is ported).
@@ -1545,6 +1590,90 @@ for (const line of lines) {
         }
         break;
       }
+      // ——— NM-074 — SqliteSupply read/observation ops ———
+      case "supply_query": {
+        try {
+          const access = supplyAccess(op);
+          const supply = mkSupply();
+          const args = DS.decode(DS.Query, op.args);
+          const plan = new DSQ.QueryPlan(args, access);
+          const snap = supply.query(plan, access);
+          if (typeof op.cap === "string") {
+            caps.set(op.cap, snap.manifest
+              .map((m) => m.version_ref).filter((r) => r != null));
+          }
+          rec = { status: "ok", result: sortedValue(deepZ(snap)) };
+        } catch (e) { rec = supplyErr(e, before); }
+        break;
+      }
+      case "supply_versions": {
+        try {
+          const access = supplyAccess(op);
+          const args = DS.decode(DS.VersionsQuery, op.args);
+          rec = { status: "ok", items: sortedValue(deepZ(
+            mkSupply().versions(args, access))) };
+        } catch (e) { rec = supplyErr(e, before); }
+        break;
+      }
+      case "supply_verify": {
+        try {
+          const refs = capVal(op.refs).map((r) => DS.decode(DS.VersionRef, r));
+          mkSupply().verify(refs);
+          rec = { status: "ok" };
+        } catch (e) { rec = supplyErr(e, before); }
+        break;
+      }
+      case "supply_task": case "supply_tasks": case "supply_availability":
+      case "supply_verify_versions": case "supply_verify_pub":
+      case "supply_verify_stop": case "supply_verify_yearly":
+      case "supply_verify_range": {
+        try {
+          const access = supplyAccess(op);
+          const supply = mkSupply();
+          let result;
+          if (name === "supply_task") {
+            const facts = supply.task(op.id, access);
+            if (typeof op.cap === "string") {
+              caps.set(op.cap, {
+                range_results: facts.range_results,
+                yearly_results: facts.yearly_results,
+              });
+            }
+            result = facts;
+          } else if (name === "supply_tasks") {
+            result = supply.tasks(access);
+          } else if (name === "supply_availability") {
+            const args = DS.decode(DS.Query, op.args);
+            const plan = new DSQ.QueryPlan(args, access);
+            result = supply.availability(plan, access);
+          } else if (name === "supply_verify_versions") {
+            result = supply.verifyVersions(
+              capVal(op.refs).map((r) => DS.decode(DS.VersionRef, r)));
+          } else if (name === "supply_verify_pub") {
+            result = supply.verifyPublicationCheck(capVal(op.receipt) ?? null);
+          } else if (name === "supply_verify_stop") {
+            result = supply.verifyStoppedCheck(capVal(op.receipt) ?? null);
+          } else if (name === "supply_verify_yearly") {
+            result = supply.verifyYearlyResults(
+              (capVal(op.results) ?? []).map((r) => DS.decode(DS.YearlyExecutionResult, r)));
+          } else {
+            result = supply.verifyRangeResults(
+              (capVal(op.results) ?? []).map((r) => DS.decode(DS.RangeExecutionResult, r)));
+          }
+          rec = { status: "ok",
+            result: result === undefined ? null : sortedValue(deepZ(result)) };
+        } catch (e) { rec = supplyErr(e, before); }
+        break;
+      }
+      case "supply_range_result": case "supply_yearly_result": {
+        try {
+          const fn = name === "supply_range_result"
+            ? SS.rangeResult : SS.yearlyResult;
+          rec = { status: "ok",
+            result: sortedValue(deepZ(fn(db, op.id))) };
+        } catch (e) { rec = supplyErr(e, before); }
+        break;
+      }
       default:
         throw new Error(`unknown op ${name}`);
     }
@@ -1553,6 +1682,9 @@ for (const line of lines) {
       status: "error", code: errCode(e), message: String(e.message),
       unchanged: stateDigest() === before,
     };
+  }
+  if (typeof op.cap === "string" && rec.receipt !== undefined) {
+    caps.set(op.cap, rec.receipt ?? null);
   }
   rec.seq = seq++;
   rec.op = name;

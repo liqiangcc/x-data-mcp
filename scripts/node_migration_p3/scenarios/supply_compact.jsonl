@@ -1,0 +1,35 @@
+{"op":"seed","compact":true,"norm_ts":true,"records":"compact_daily.json,compact_daily2.json,compact_yearly.json|staged,compact_yearly2.json","catalog":true}
+{"op":"lookup_task","count":0}
+{"op":"admit","as":"T1","request_id":"rq-sc1","run":"run-t1","command":{"key":{"operation":"update_data","dataset":"market.daily","contract_version":"explicit-range-task-v1"},"intent":{}},"work":{"items":[{"item_id":"i1","target":{"symbol":"sh.600006","period":"day"},"progress_unit":"x","frozen_inputs":{},"scope_keys":["[\"market\",\"sh.600006\",\"day\"]"]}],"scopes":["[\"market\",\"sh.600006\",\"day\"]"]}}
+{"op":"claim","task":"$T1","revision":"$REV:T1","run":"run-t1"}
+{"op":"startItem","task":"$T1","revision":"$REV:T1","run":"run-t1","item":"i1"}
+{"op":"commit_range","plan":{"command":{"publication_id":"crp-s1","task_id":"$T1","item_id":"i1","version_id":"c-day-2","run_id":"run-t1","expected_revision":"$REV:T1","intent":{"Daily":{"expected_head":"c-day-2"}}},"record":"@base","base":"@base","base_version_id":"c-day-2","required_heads":[["sh.600006","day","c-day-2"]],"promote":null,"no_change":true,"audit":{"range":{"start":"2025-01-02","end":"2025-01-07"},"algorithm_version":"ops-v1","evidence":{"continuity":{"note":"nc"}}}}}
+{"op":"admit","as":"T2","request_id":"rq-sc2","run":"run-t2","command":{"key":{"operation":"update_data","dataset":"market.yearly","contract_version":"explicit-range-task-v1"},"intent":{}},"work":{"items":[{"item_id":"i1","target":{"symbol":"sh.600006","period":"year"},"progress_unit":"x","frozen_inputs":{},"scope_keys":["[\"market\",\"sh.600006\",\"year\"]"]}],"scopes":["[\"market\",\"sh.600006\",\"year\"]"]}}
+{"op":"claim","task":"$T2","revision":"$REV:T2","run":"run-t2"}
+{"op":"startItem","task":"$T2","revision":"$REV:T2","run":"run-t2","item":"i1"}
+{"op":"commit_yearly","plan":{"command":{"publication_id":"ync-s1","task_id":"$T2","item_id":"i1","version_id":"c-year-2","run_id":"run-t2","expected_revision":"$REV:T2","intent":"HistoricalFixedBase"},"record":"@base","base":"@base","base_version_id":"c-day-2","required_heads":[],"no_change":true,"audit":{}}}
+{"op":"supply_query","cap":"QD","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_query","args":{"dataset":"market.yearly","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"yearly","start_year":2020,"end_year":2030},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_query","args":{"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"catalog","code":null,"name_query":null,"industry_code":null},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_versions","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"batch","entities":[{"exchange":"sh","code":"600006"}]},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_versions","args":{"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_verify","refs":{"cap":"QD"},"access":{"local":true}}
+{"op":"supply_task","id":"$T1","access":{"local":true},"cap":"TF"}
+{"op":"supply_task","id":"$T2","access":{"local":true},"cap":"TF2"}
+{"op":"supply_tasks","access":{"local":true}}
+{"op":"supply_task","id":"$T1","access":{"principal":"p","datasets":["market.daily"],"securities":[]}}
+{"op":"supply_task","id":"task-00000000000000000000000000000000","access":{"local":true}}
+{"op":"supply_availability","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_range_result","id":"crp-s1"}
+{"op":"supply_range_result","id":"ghost"}
+{"op":"supply_yearly_result","id":"ync-s1"}
+{"op":"supply_yearly_result","id":"ghost"}
+{"op":"supply_verify_range","results":{"cap":"TF","field":"range_results"},"access":{"local":true}}
+{"op":"supply_verify_yearly","results":{"cap":"TF2","field":"yearly_results"},"access":{"local":true}}
+{"op":"supply_verify_versions","refs":{"cap":"QD"},"access":{"local":true}}
+{"op":"exec_sql","sql":"UPDATE market_update_results SET result_digest=X'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' WHERE result_id='crp-s1'"}
+{"op":"supply_verify_range","results":{"cap":"TF","field":"range_results"},"access":{"local":true}}
+{"op":"supply_task","id":"$T1","access":{"local":true}}
+{"op":"exec_sql","sql":"UPDATE publication_results SET result_digest=X'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' WHERE publication_id='ync-s1'"}
+{"op":"supply_verify_yearly","results":{"cap":"TF2","field":"yearly_results"},"access":{"local":true}}
+{"op":"supply_task","id":"$T2","access":{"local":true}}

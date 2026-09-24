@@ -267,7 +267,7 @@ impl SqliteCatalog {
 /// head swap, and in-transaction read-back verification. Schema identity is
 /// enforced by the caller (`SqliteTasks::write` checks the v18 gate, and a
 /// coordinator-bound handle validates the compact schema identity instead).
-fn publish_in_tx(
+pub(crate) fn publish_in_tx(
     tx: &Connection,
     id: &str,
     snapshot: CatalogSnapshot,

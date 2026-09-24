@@ -1,0 +1,66 @@
+{"op":"seed","records":"valid_daily.json,valid_yearly.json,nm052_result.json|pub=res-ch|nohead","results":true,"check":true,"catalog":true,"yearly_result":true,"norm_ts":true}
+{"op":"lookup_task","sym":"FX"}
+{"op":"record_gap_decision","decision":{"decision_id":"d-src","symbol":"sh.600006","period":"Day","start_date":"2025-03-03","end_date":"2025-03-07","subject_version_id":"legacy-daily","subject_version_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","conclusion":"source_limitation","basis_kind":"source_empty","basis_ref":"ref-1","basis_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","verifier_id":"v1","decided_at":"2026-01-05T00:00:00+00:00","decision_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}
+{"op":"record_proven_gap","gap":{"gap_id":"7e01b07b8cd28ac1104cfd0ed98b59b5c332d9faaf0afb54fe0150142a47ee04","symbol":"sh.600006","period":"Day","start_date":"2025-06-02","end_date":"2025-06-06","evidence_kind":"manual","evidence_id":"ev-1","evidence_digest":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","observed_at":"2026-01-06T00:00:00+00:00"}}
+{"op":"supply_query","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true},"cap":"QD"}
+{"op":"supply_query","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"explicit_version_map","versions":[{"entity":{"exchange":"sh","code":"600006"},"version_id":"legacy-daily"}]},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_query","args":{"dataset":"market.yearly","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"yearly","start_year":2024,"end_year":2026},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true},"cap":"QY"}
+{"op":"supply_query","args":{"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"catalog","code":null,"name_query":null,"industry_code":null},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true},"cap":"QC"}
+{"op":"supply_query","args":{"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"catalog","code":null,"name_query":null,"industry_code":null},"version":{"kind":"catalog_version","version_id":"catalog-v1"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_query","args":{"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"catalog","code":null,"name_query":null,"industry_code":"C25"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_query","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sz","code":"000001"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_query","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"datasets":["market.daily"],"securities":[{"exchange":"sz","code":"000001"}]}}
+{"op":"supply_query","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"yearly","start_year":2024,"end_year":2026},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_query","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"catalog_version","version_id":"catalog-v1"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_versions","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_versions","args":{"dataset":"market.yearly","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_versions","args":{"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_verify","refs":{"cap":"QD"},"access":{"local":true}}
+{"op":"supply_verify","refs":{"cap":"QC"},"access":{"local":true}}
+{"op":"supply_verify","refs":[{"dataset":"market.daily","contract_version":"v1","entity":{"exchange":"sh","code":"600006"},"version_id":"legacy-daily","integrity_sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}],"access":{"local":true}}
+{"op":"supply_verify","refs":[{"dataset":"market.daily","contract_version":"v1","entity":null,"version_id":"legacy-daily","integrity_sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}],"access":{"local":true}}
+{"op":"supply_verify","refs":[{"dataset":"market.daily","contract_version":"v1","entity":{"exchange":"sh","code":"600006"},"version_id":"legacy-daily","integrity_sha256":"aa"},{"dataset":"market.daily","contract_version":"v1","entity":{"exchange":"sh","code":"600006"},"version_id":"legacy-daily","integrity_sha256":"aa"}],"access":{"local":true}}
+{"op":"supply_task","id":"$FX_3","access":{"local":true},"cap":"TF4"}
+{"op":"supply_task","id":"$FX_4","access":{"local":true},"cap":"TF5"}
+{"op":"supply_task","id":"$FX_5","access":{"local":true}}
+{"op":"supply_task","id":"$FX_5","access":{"datasets":["market.daily"],"securities":null}}
+{"op":"supply_task","id":"task-0000000000000000000000000000000000","access":{"local":true}}
+{"op":"supply_tasks","access":{"local":true}}
+{"op":"supply_tasks","access":{"datasets":["market.daily","market.yearly"],"securities":[{"exchange":"sh","code":"600006"}]}}
+{"op":"supply_tasks","access":{"datasets":["market.daily"],"securities":[]}}
+{"op":"supply_availability","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_availability","args":{"dataset":"market.yearly","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"yearly","start_year":2024,"end_year":2026},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_availability","args":{"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"catalog","code":null,"name_query":null,"industry_code":null},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_availability","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sz","code":"000001"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_range_result","id":"res-ck"}
+{"op":"supply_range_result","id":"res-ch"}
+{"op":"supply_range_result","id":"ghost"}
+{"op":"supply_yearly_result","id":"pub-legacy-yearly"}
+{"op":"supply_yearly_result","id":"ghost"}
+{"op":"check_receipt","id":"$FX_5","cap":"PUB"}
+{"op":"supply_verify_pub","receipt":{"cap":"PUB"},"access":{"local":true}}
+{"op":"supply_verify_pub","receipt":null,"access":{"local":true}}
+{"op":"admit","as":"V1","run":"run-v1","request_id":"rq-v1","command":{"key":{"operation":"verify_stopped_writes","dataset":"task.verification","contract_version":"stopped-writes-task-v1"},"intent":{"target_task_id":"$FX_3"}},"work":{"items":[{"item_id":"stopped-writes","target":{"task_id":"$FX_3"},"progress_unit":"evidence_check","frozen_inputs":{"target_task_id":"$FX_3","accepted_run_id":"run-check"},"scope_keys":["verification:task:$FX_3"]}],"scopes":["verification:task:$FX_3"]}}
+{"op":"claim","task":"$V1","revision":0,"run":"run-v1"}
+{"op":"startItem","task":"$V1","revision":1,"run":"run-v1","item":"stopped-writes"}
+{"op":"commit_stop_check","verification":"$V1","target":"$FX_3","run":"run-v1","actor":"auditor","now":"2026-02-01T00:00:00Z"}
+{"op":"stop_receipt","id":"$V1","cap":"STOP"}
+{"op":"supply_verify_stop","receipt":{"cap":"STOP"},"access":{"local":true}}
+{"op":"supply_verify_stop","receipt":null,"access":{"local":true}}
+{"op":"supply_verify_versions","refs":{"cap":"QD"},"access":{"local":true}}
+{"op":"supply_verify_range","results":{"cap":"TF4","field":"range_results"},"access":{"local":true}}
+{"op":"supply_verify_yearly","results":{"cap":"TF5","field":"yearly_results"},"access":{"local":true}}
+{"op":"exec_sql","sql":"UPDATE data_versions SET content_digest='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' WHERE version_id='nm052-result'"}
+{"op":"supply_availability","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"explicit_version_map","versions":[{"entity":{"exchange":"sh","code":"600006"},"version_id":"nm052-result"}]},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_query","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"explicit_version_map","versions":[{"entity":{"exchange":"sh","code":"600006"},"version_id":"nm052-result"}]},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"supply_verify_range","results":[],"access":{"local":true}}
+{"op":"exec_sql","sql":"UPDATE market_update_results SET result_sha256='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' WHERE result_id='res-ck'"}
+{"op":"supply_verify_range","results":{"cap":"TF4","field":"range_results"},"access":{"local":true}}
+{"op":"exec_sql","sql":"UPDATE yearly_execution_results SET audit_json='{}' WHERE result_id='pub-legacy-yearly'"}
+{"op":"supply_verify_yearly","results":{"cap":"TF5","field":"yearly_results"},"access":{"local":true}}
+{"op":"exec_sql","sql":"UPDATE publication_checks SET audit_json='{}' WHERE verification_task_id='$FX_5'"}
+{"op":"supply_verify_pub","receipt":{"cap":"PUB"},"access":{"local":true}}
+{"op":"supply_availability","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}
+{"op":"exec_sql","sql":"UPDATE stopped_write_checks SET audit_json='{}' WHERE verification_task_id='$V1'"}
+{"op":"supply_verify_stop","receipt":{"cap":"STOP"},"access":{"local":true}}
+{"op":"supply_query","args":{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},"filter":{"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"},"version":{"kind":"latest_per_entity"},"page_size":1000,"cursor":null},"access":{"local":true}}

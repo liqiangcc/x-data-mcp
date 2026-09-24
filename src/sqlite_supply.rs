@@ -35,7 +35,7 @@ fn catalog_ref(v: &crate::catalog::CatalogVersion) -> Result<VersionRef, Error> 
         integrity_sha256: sqlite_catalog::digest(v)?,
     })
 }
-fn read_market(
+pub(crate) fn read_market(
     c: &Connection,
     dataset: Dataset,
     entity: &Security,
@@ -327,7 +327,7 @@ pub(crate) fn yearly_row_meta(
     ))
 }
 
-fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
+pub(crate) fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
     let v = r.version();
     let u = &v.unit_currency;
     let units = [
@@ -369,7 +369,7 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
 use crate::data_supply::observe::{
     AvailabilityFacts, ObservationRepository, TaskFacts, authorized,
 };
-fn task_facts(
+pub(crate) fn task_facts(
     c: &Connection,
     id: &str,
     access: &Access,
@@ -491,7 +491,7 @@ fn task_facts(
         publications,
     })
 }
-fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts>, Error> {
+pub(crate) fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts>, Error> {
     let mut q=c.prepare("SELECT task_id,command_key_json,frozen_work_json FROM tasks ORDER BY created_at DESC,task_id ASC").map_err(storage)?;
     let rows = q
         .query_map([], |r| {
@@ -692,7 +692,7 @@ impl ObservationRepository for SqliteSupply {
     }
 }
 
-fn range_result(c: &Connection, id: &str) -> Result<RangeExecutionResult, Error> {
+pub(crate) fn range_result(c: &Connection, id: &str) -> Result<RangeExecutionResult, Error> {
     let (audit, receipt) = crate::sqlite_market::update::read_result(c, id)?
         .ok_or_else(|| Error::Integrity("range result missing".into()))?;
     let base_id = audit["evidence"]["base_version_id"]
@@ -720,7 +720,7 @@ fn range_result(c: &Connection, id: &str) -> Result<RangeExecutionResult, Error>
     .map_err(|e| Error::Integrity(format!("range result projection: {e}")))
 }
 
-fn yearly_result(c: &Connection, id: &str) -> Result<YearlyExecutionResult, Error> {
+pub(crate) fn yearly_result(c: &Connection, id: &str) -> Result<YearlyExecutionResult, Error> {
     let (audit, receipt) = crate::sqlite_market::yearly_results::read_result(c, id)?
         .ok_or_else(|| Error::Integrity("yearly result missing".into()))?;
     let base_id = audit["base_daily_version_id"]

@@ -59,6 +59,8 @@ for (const file of scenarios) {
       if (seedOp.migrated) extra.DIFF_INIT = "up"; // schema-18 init + upgrade_compact
       if (seedOp.norm_ts) extra.DIFF_NORM_TS = "1";
       if (seedOp.check) extra.DIFF_CHECK = "1";
+      if (seedOp.catalog) extra.DIFF_CATALOG = "1";
+      if (seedOp.yearly_result) extra.DIFF_YEARLY_RESULT = "1";
       migratedVariant = seedOp.compact && !seedOp.migrated;
       execFileSync(CARGO, ["test", "--lib", "diff_harness::build_market_fixture", "--",
         "--nocapture", "--test-threads=1"], {

@@ -141,6 +141,88 @@ fn market_digest(repo: &SqliteTasks, syms: &Syms) -> String {
     .unwrap()
 }
 
+// ——— NM-074 — sqlite_supply harness surface ———
+// `Access` isn't serde — scenarios describe it as {"local":true} or
+// {principal?, datasets:[...], securities:[{exchange,code}]}.
+fn supply_access(op: &Value) -> crate::data_supply::Access {
+    use crate::data_supply::{
+        Access,
+        wire::{Dataset, Security},
+    };
+    if op["access"]["local"].as_bool().unwrap_or(false) {
+        return Access::local();
+    }
+    let datasets: BTreeSet<Dataset> = op["access"]["datasets"]
+        .as_array()
+        .map(|xs| {
+            xs.iter()
+                .map(|d| serde_json::from_value::<Dataset>(d.clone()).unwrap())
+                .collect()
+        })
+        .unwrap_or_default();
+    let securities: Option<BTreeSet<Security>> =
+        op["access"]["securities"].as_array().map(|xs| {
+            xs.iter()
+                .map(|s| serde_json::from_value::<Security>(s.clone()).unwrap())
+                .collect()
+        });
+    Access {
+        principal: op["access"]["principal"]
+            .as_str()
+            .unwrap_or("harness")
+            .into(),
+        datasets,
+        securities,
+    }
+}
+fn supply_backend(
+    repo: &SqliteTasks,
+    compact: &Option<crate::sqlite_market::compact_repo::SqliteCompactMarket>,
+) -> crate::sqlite_market::backend::MarketBackend {
+    match compact {
+        Some(m) => crate::sqlite_market::backend::MarketBackend::Compact(m.clone()),
+        None => crate::sqlite_market::backend::MarketBackend::Legacy(
+            SqliteMarket::new(repo.clone()),
+        ),
+    }
+}
+fn task_facts_json(f: &crate::data_supply::observe::TaskFacts) -> Value {
+    json!({
+        "request_id": f.request_id,
+        "snapshot": serde_json::to_value(&f.snapshot).unwrap(),
+        "publications": serde_json::to_value(&f.publications).unwrap(),
+        "range_results": serde_json::to_value(&f.range_results).unwrap(),
+        "yearly_results": serde_json::to_value(&f.yearly_results).unwrap(),
+    })
+}
+fn availability_facts_json(
+    f: &crate::data_supply::observe::AvailabilityFacts,
+) -> Value {
+    json!({
+        "entity": serde_json::to_value(&f.entity).unwrap(),
+        "manifest": serde_json::to_value(&f.manifest).unwrap(),
+        "first_record": f.first_record,
+        "last_record": f.last_record,
+        "record_count": f.record_count,
+        "integrity_failure": f.integrity_failure,
+        "proven_gaps": serde_json::to_value(&f.proven_gaps).unwrap(),
+        "related_tasks": f.related_tasks.iter().map(task_facts_json)
+            .collect::<Vec<_>>(),
+    })
+}
+/// {"cap":"X"} / {"cap":"X","field":"f"} — pull a captured value (or a
+/// named field of it) out of the scenario cap table.
+fn cap_val(v: &Value, caps: &BTreeMap<String, Value>) -> Value {
+    if let Some(c) = v.get("cap").and_then(|x| x.as_str()) {
+        let base = caps[c].clone();
+        if let Some(f) = v.get("field").and_then(|x| x.as_str()) {
+            return base[f].clone();
+        }
+        return base;
+    }
+    v.clone()
+}
+
 fn err_code(e: &Error) -> String {
     use Error::*;
     match e {
@@ -1330,6 +1412,29 @@ fn run() {
                                 })
                             }
                         });
+                        // "@"-templates resolve fixture-derived values (the
+                        // audit embeds the full candidate + digests) — must
+                        // run before `record` moves into `publication`.
+                        let mut audit = p["audit"].clone();
+                        if audit.is_object() {
+                            if audit["candidate"].as_str() == Some("@record") {
+                                audit["candidate"] = record.raw().clone();
+                            }
+                            if let Some(b) = &base
+                                && audit["base_integrity_sha256"].as_str() == Some("@base")
+                            {
+                                audit["base_integrity_sha256"] =
+                                    b.raw["integrity_sha256"].clone();
+                            }
+                            if audit["result_integrity_sha256"].as_str() == Some("@record") {
+                                audit["result_integrity_sha256"] =
+                                    record.raw()["integrity_sha256"].clone();
+                            }
+                            if audit["prior_integrity_sha256"].as_str() == Some("@record") {
+                                audit["prior_integrity_sha256"] =
+                                    record.raw()["integrity_sha256"].clone();
+                            }
+                        }
                         let publication = crate::market_storage::PublishPlan {
                             command,
                             record,
@@ -1356,7 +1461,7 @@ fn run() {
                                         base,
                                         prior: None,
                                         no_change: p["no_change"].as_bool().unwrap_or(false),
-                                        audit: p["audit"].clone(),
+                                        audit,
                                         audit_payloads: vec![],
                                     };
                                     match &compact_market {
@@ -2787,8 +2892,164 @@ fn run() {
                         "message":e.to_string()}),
                 }
             }
+            // ——— NM-074 — SqliteSupply read/observation ops ———
+            "supply_query" => {
+                use crate::data_supply::query::{QueryPlan, ReadRepository};
+                let args = serde_json::from_value(op["args"].clone()).unwrap();
+                let access = supply_access(&op);
+                let supply = crate::sqlite_supply::SqliteSupply {
+                    market: supply_backend(&repo, &compact_market),
+                };
+                let res = QueryPlan::new(args, &access)
+                    .and_then(|plan| supply.query(&plan, &access))
+                    .map(|s| serde_json::to_value(&s).unwrap());
+                if let Some(cap) = op["cap"].as_str()
+                    && let Ok(v) = &res
+                {
+                    caps.insert(cap.to_string(), v["manifest"]
+                        .as_array().unwrap()
+                        .iter().map(|m| m["version_ref"].clone())
+                        .filter(|r| !r.is_null()).collect::<Vec<_>>().into());
+                }
+                match res {
+                    Ok(v) => json!({"status":"ok","result":v}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "supply_versions" => {
+                use crate::data_supply::query::ReadRepository;
+                let args = serde_json::from_value(op["args"].clone()).unwrap();
+                let access = supply_access(&op);
+                let supply = crate::sqlite_supply::SqliteSupply {
+                    market: supply_backend(&repo, &compact_market),
+                };
+                match supply.versions(&args, &access) {
+                    Ok(v) => json!({"status":"ok",
+                        "items":serde_json::to_value(&v).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "supply_verify" => {
+                use crate::data_supply::query::ReadRepository;
+                let refs: Vec<crate::data_supply::wire::VersionRef> =
+                    serde_json::from_value(
+                        cap_val(&op["refs"], &caps)).unwrap();
+                let supply = crate::sqlite_supply::SqliteSupply {
+                    market: supply_backend(&repo, &compact_market),
+                };
+                match supply.verify(&refs) {
+                    Ok(()) => json!({"status":"ok"}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "supply_task" | "supply_tasks" | "supply_availability"
+            | "supply_verify_versions" | "supply_verify_pub"
+            | "supply_verify_stop" | "supply_verify_yearly"
+            | "supply_verify_range" => {
+                use crate::data_supply::observe::ObservationRepository;
+                let access = supply_access(&op);
+                let supply = crate::sqlite_supply::SqliteSupply {
+                    market: supply_backend(&repo, &compact_market),
+                };
+                let res = match name.as_str() {
+                    "supply_task" => supply
+                        .task(op["id"].as_str().unwrap(), &access)
+                        .map(|f| {
+                            if let Some(cap) = op["cap"].as_str() {
+                                caps.insert(cap.to_string(), json!({
+                                    "range_results": serde_json::to_value(
+                                        &f.range_results).unwrap(),
+                                    "yearly_results": serde_json::to_value(
+                                        &f.yearly_results).unwrap(),
+                                }));
+                            }
+                            task_facts_json(&f)
+                        }),
+                    "supply_tasks" => supply
+                        .tasks(&access)
+                        .map(|fs| {
+                            json!(fs.iter().map(task_facts_json)
+                                .collect::<Vec<_>>())
+                        }),
+                    "supply_availability" => {
+                        let args = serde_json::from_value(
+                            op["args"].clone(),
+                        )
+                        .unwrap();
+                        crate::data_supply::query::QueryPlan::new(
+                            args, &access,
+                        )
+                        .and_then(|plan| {
+                            supply
+                                .availability(&plan, &access)
+                                .map(|fs| {
+                                    json!(fs
+                                        .iter()
+                                        .map(availability_facts_json)
+                                        .collect::<Vec<_>>())
+                                })
+                        })
+                    }
+                    "supply_verify_versions" => supply
+                        .verify_versions(&serde_json::from_value::<
+                            Vec<crate::data_supply::wire::VersionRef>>(
+                            cap_val(&op["refs"], &caps)).unwrap())
+                        .map(|_| Value::Null),
+                    "supply_verify_pub" => supply
+                        .verify_publication_check(&serde_json::from_value(
+                            cap_val(&op["receipt"], &caps)).unwrap())
+                        .map(|_| Value::Null),
+                    "supply_verify_stop" => supply
+                        .verify_stopped_check(&serde_json::from_value(
+                            cap_val(&op["receipt"], &caps)).unwrap())
+                        .map(|_| Value::Null),
+                    "supply_verify_yearly" => supply
+                        .verify_yearly_results(&serde_json::from_value::<
+                            Vec<crate::data_supply::wire::YearlyExecutionResult>>(
+                            cap_val(&op["results"], &caps)).unwrap())
+                        .map(|_| Value::Null),
+                    _ => supply
+                        .verify_range_results(&serde_json::from_value::<
+                            Vec<crate::data_supply::wire::RangeExecutionResult>>(
+                            cap_val(&op["results"], &caps)).unwrap())
+                        .map(|_| Value::Null),
+                };
+                match res {
+                    Ok(v) => json!({"status":"ok","result":v}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "supply_range_result" | "supply_yearly_result" => {
+                let supply = crate::sqlite_supply::SqliteSupply {
+                    market: supply_backend(&repo, &compact_market),
+                };
+                let id = op["id"].as_str().unwrap();
+                let res = supply.market.read(|c| {
+                    if name == "supply_range_result" {
+                        crate::sqlite_supply::range_result(c, id)
+                            .map(|v| serde_json::to_value(&v).unwrap())
+                    } else {
+                        crate::sqlite_supply::yearly_result(c, id)
+                            .map(|v| serde_json::to_value(&v).unwrap())
+                    }
+                });
+                match res {
+                    Ok(v) => json!({"status":"ok", "result":v}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
             other => panic!("unknown op {other}"),
         };
+        if let Some(cap) = op["cap"].as_str()
+            && let Some(r) = rec.get("receipt")
+        {
+            caps.insert(cap.to_string(), r.clone());
+        }
         if rec["status"] == "error" {
             rec["unchanged"] = json!(state_digest(&db_path, &syms) == before);
         }
@@ -2838,6 +3099,17 @@ fn build_market_fixture() {
             repo.initialize19().expect("init schema-19");
         }
         build_compact_records(&db_path);
+        if std::env::var("DIFF_CATALOG").is_ok() {
+            // Coordinator-gated writes — the compact fixture seeds via a
+            // raw conn + publish_in_tx (the same SQL publish_fixture runs).
+            let c2 = rusqlite::Connection::open(&db_path).unwrap();
+            c2.execute_batch("BEGIN IMMEDIATE").unwrap();
+            crate::sqlite_catalog::publish_in_tx(
+                &c2, "catalog-v1", catalog_fixture(), catalog_ts(), None,
+            )
+            .unwrap();
+            c2.execute_batch("COMMIT").unwrap();
+        }
         if std::env::var("DIFF_CHECK").is_ok() {
             // compact check pair: failed-item target -> Missing evidence
             // -> not_applicable audit via the real prepare/commit path.
@@ -3068,7 +3340,8 @@ fn build_market_fixture() {
                 "command": command,
                 "base_integrity_sha256": base_sha,
                 "result_integrity_sha256": result_sha,
-                "segment": {"bars": {"$ref": format!("payload:{seg_ref}")}},
+                "segment": {"bars": {"$ref": format!("payload:{seg_ref}")},
+                        "provenance": {"acquired_at": "2026-01-01T00:00:00+00:00"}},
                 "range": {"start": "2025-01-02", "end": "2025-12-31"},
                 "evidence": {"base_version_id": "legacy-daily"},
                 "combined": true,
@@ -3141,12 +3414,111 @@ fn build_market_fixture() {
                 .unwrap();
         }
     }
+    if std::env::var("DIFF_CATALOG").is_ok() {
+        crate::sqlite_catalog::SqliteCatalog::new(repo.clone())
+            .publish_fixture("catalog-v1", catalog_fixture(), None)
+            .unwrap();
+    }
     if std::env::var("DIFF_CHECK").is_ok() {
         let market = SqliteMarket::new(repo.clone());
         build_check_fixture(&repo, &market, true);
     }
+    // NM-074 — a real yearly_execution_results row (changed arm):
+    // pub-legacy-yearly's publication_batches receipt IS the result
+    // receipt; the task is the fixture's first accepted row (req-pub).
+    if std::env::var("DIFF_YEARLY_RESULT").is_ok() {
+        let dir2 = std::env::var("DIFF_FIXTURES")
+            .unwrap_or_else(|_| "scripts/node_migration_p3/records".into());
+        let raw: Value = serde_json::from_str(
+            &fs::read_to_string(std::path::Path::new(&dir2).join("valid_yearly.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let pub_task: String = repo
+            .read(|c| {
+                c.query_row(
+                    "SELECT task_id FROM publication_batches WHERE publication_id='pub-legacy-yearly'",
+                    [], |r| r.get(0)).map_err(storage_task)
+            })
+            .unwrap();
+        let snap = crate::task_control::TaskRepository::read_task(&repo, &pub_task)
+            .unwrap().unwrap();
+        let trev = snap.task.state_revision;
+        let base_sha: String = repo
+            .read(|c| {
+                crate::sqlite_market::read_record(c, "legacy-daily", true, true)
+                    .map_err(storage_task)
+            })
+            .unwrap().raw["integrity_sha256"].as_str().unwrap().into();
+        let res_sha: String = raw["integrity_sha256"].as_str().unwrap().into();
+        let receipt = json!({
+            "publication_id": "pub-legacy-yearly", "version_id": "legacy-yearly",
+            "task_id": pub_task, "task_revision": trev,
+        });
+        let audit = json!({
+            "format": "local-yearly-result-v1",
+            "command": {
+                "publication_id": "pub-legacy-yearly",
+                "version_id": "legacy-yearly",
+                "task_id": pub_task, "item_id": "i2", "run_id": "run-pub",
+                "expected_revision": 0,
+                "intent": "HistoricalFixedBase",
+            },
+            "no_change": false,
+            "base_daily_version_id": "legacy-daily",
+            "candidate": raw,
+            "base_integrity_sha256": base_sha,
+            "result_integrity_sha256": res_sha,
+        });
+        let audit_json = serde_json::to_string(&audit).unwrap();
+        let receipt_json = serde_json::to_string(&receipt).unwrap();
+        let dg = crate::hash::sha256(
+            serde_json::json!([audit_json, receipt_json]).to_string().as_bytes());
+        repo.write(|c| {
+            c.execute(
+                "INSERT INTO yearly_execution_results VALUES(?1,?2,'i2','legacy-daily','legacy-yearly',0,?3,?4,?5)",
+                rusqlite::params!["pub-legacy-yearly", pub_task, audit_json, dg, receipt_json],
+            ).map_err(storage_task)
+        }).unwrap();
+    }
 
  }
+
+/// NM-074 — the supply scenario's fixed catalog seed: one `fixture:`
+/// source + two records (sh.600006 assigned / sz.000001 missing) —
+/// exercises the catalog read/verify/query arms.
+fn catalog_ts() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00+00:00")
+        .unwrap()
+        .to_utc()
+}
+fn catalog_fixture() -> crate::catalog::CatalogSnapshot {
+    use crate::catalog::{
+        CatalogSnapshot, CompletenessEvidence, Exchange, IndustryInfo,
+        IndustryScheme, SecurityRecord, SecurityType,
+    };
+    let at = catalog_ts();
+    let rec = |symbol: &str, name: &str, exchange: Exchange, sid: &str,
+               industry: IndustryInfo| SecurityRecord {
+        symbol: symbol.into(), name: name.into(), exchange,
+        security_type: SecurityType::AShare, source_security_id: sid.into(),
+        industry, source: "fixture:supply".into(), acquired_at: at,
+    };
+    CatalogSnapshot {
+        source: "fixture:supply".into(),
+        acquired_at: at,
+        completeness: CompletenessEvidence::Complete { expected_count: 2 },
+        records: vec![
+            rec("600006", "Six-O-Six", Exchange::Shanghai, "sid-1",
+                IndustryInfo::Assigned {
+                    code: "C25".into(), name: "Manufacturing".into(),
+                    scheme: Some(IndustryScheme::TdxResearchIndustry),
+                }),
+            rec("000001", "PingAn", Exchange::Shenzhen, "sid-2",
+                IndustryInfo::Missing { reason: "unclassified".into() }),
+        ],
+    }
+}
 
 /// NM-054 — compact (schema-19) fixture: builds real compact rows via the
 /// crate's own write helpers (insert_segment / put_evidence /
@@ -3427,7 +3799,8 @@ fn build_check_fixture<T>(
             "command": command,
             "base_integrity_sha256": base_sha,
             "result_integrity_sha256": base_sha,
-            "segment": {"bars": {"$ref": format!("payload:{seg_ref}")}},
+            "segment": {"bars": {"$ref": format!("payload:{seg_ref}")},
+                        "provenance": {"acquired_at": "2026-01-01T00:00:00+00:00"}},
             "range": {"start": "2025-01-02", "end": "2025-12-31"},
             "evidence": {"base_version_id": "legacy-daily"},
             "combined": true,
