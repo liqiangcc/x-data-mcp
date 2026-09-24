@@ -318,7 +318,7 @@ function parseEocd64(fd, off, maxSize) {
   };
 }
 
-class ArchiveIndex {
+export class ArchiveIndex {
   // Rust ArchiveIndex::open — File::open then ZipArchive::new →
   // get_metadata: find_central_directory + CentralDirectoryInfo::try_from
   // + read_central_header, retrying below the EOCD on CD-level failure.
