@@ -78,17 +78,25 @@ for (let i = 0; i < R.length; i++) {
     // commit_ops_* run in the coordinator's autocommit write() — Rust
     // rejects after evidence/registry inserts which stay committed; the
     // digest comparison proves identical partial state on both sides.
-    const PARTIAL_OK = new Set(["commit_ops_update", "commit_ops_no_change"]);
+    const PARTIAL_OK = new Set(["commit_ops_update", "commit_ops_no_change",
+      // the ops variants stage in their own committed tx before the
+      // verify/commit — a rejected verify leaves the staged version on
+      // both sides (digest comparison proves identical partial state).
+      "commit_range_ops", "commit_range_ops_typed",
+      "commit_range_no_change_typed", "commit_update_batch",
+      "commit_range", "stage_ops_delta"]);
     if (!PARTIAL_OK.has(r.op)) {
       if (r.status === "error" && r.unchanged !== true) issues.push("oracle rejection mutated state");
       if (n.status === "error" && n.unchanged !== true) issues.push("node rejection mutated state");
     }
   } else {
-    for (const f of ["task", "candidates", "reconciled"]) {
-      if (f in r || f in n) {
-        if (!eq(r[f] ?? null, n[f] ?? null)) {
-          issues.push(`${f} ${JSON.stringify(r[f])} != ${JSON.stringify(n[f])}`);
-        }
+    // every emitted field is contractual — compare all except
+    // seq/op/status (and the runner-local digest key is compared too).
+    const keys = new Set([...Object.keys(r), ...Object.keys(n)]);
+    for (const f of keys) {
+      if (f === "seq" || f === "op" || f === "status") continue;
+      if (!eq(r[f] ?? null, n[f] ?? null)) {
+        issues.push(`${f} ${JSON.stringify(r[f])} != ${JSON.stringify(n[f])}`);
       }
     }
   }

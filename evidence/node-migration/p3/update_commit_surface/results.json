@@ -1,0 +1,23 @@
+{
+  "task_id": "NM-057",
+  "baseline_sha": "6daf4e5e4da8bb16cf694fc44b972c5a8fdb5520",
+  "source_ported": "src/sqlite_market/compact_repo.rs commit_range_tx/commit_range_ops*/commit_update_batch/commit_tx + src/sqlite_market/compact_results.rs commit_publication/commit_market_update/yearly_no_change_tx/read_* + src/market_update/publication.rs RangeRepository trait surface",
+  "modules": [
+    "src_node/market/compact_write.mjs",
+    "src_node/storage/task_repository.mjs",
+    "src_node/market/compact_market.mjs"
+  ],
+  "harness": [
+    "src/diff_harness.rs",
+    "scripts/node_migration_p3/diff_runner.mjs",
+    "scripts/node_migration_p3/diff_compare.mjs",
+    "scripts/node_migration_p3/scenarios/compact_commit_surface.jsonl"
+  ],
+  "differential": {
+    "scenarios_pass": 28,
+    "compact_commit_surface_ops": 64,
+    "diffs": 0,
+    "compared_fields": "all emitted fields except runner-local seq/op/status + state digest"
+  },
+  "selftest_exit": 1
+}

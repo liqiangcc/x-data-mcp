@@ -13,11 +13,13 @@ const { openDatabase, StorageError } = await import("../../src_node/storage/sqli
 const VST = await import("../../src_node/storage/verification_storage.mjs");
 const { ser } = VST;
 const RC = await import("../../src_node/market/record_codec.mjs");
+const { MarketError } = RC;
 const MR = await import("../../src_node/market/market_read.mjs");
 const MW = await import("../../src_node/market/market_write.mjs");
 const MC = await import("../../src_node/market/market_commit.mjs");
 const CMR = await import("../../src_node/market/compact_read.mjs");
 const CMM = await import("../../src_node/market/compact_market.mjs");
+const { _dec: DEC } = await import("../../src_node/algorithms/qfq_affine.mjs");
 const CW = await import("../../src_node/market/compact_write.mjs");
 const GAPS = await import("../../src_node/market/gaps.mjs");
 const YR = await import("../../src_node/market/yearly_results.mjs");
@@ -41,9 +43,18 @@ const marketDigest = () => {
     ["task_publications", "task_id, version_id"],
     ["market_update_results", "result_id"],
   ];
+  const symText = (v) => {
+    for (let i = 0; i < v.length; i++) {
+      if (typeof v[i] === "string") {
+        for (const [k, real] of syms) {
+          if (!k.startsWith("rev:")) v[i] = v[i].split(real).join(`$${k}`);
+        }
+      }
+    }
+  };
   let acc = "";
   for (const [table, pk] of tables) {
-    acc += table;
+    acc += table + "\n";
     for (const r of db.query(`SELECT * FROM ${table} ORDER BY ${pk}`)) {
       const vals = Object.values(r).map((v) =>
         v === null ? null : typeof v === "bigint"
@@ -51,25 +62,92 @@ const marketDigest = () => {
           : v instanceof Uint8Array
             ? [...v].map((x) => x.toString(16).padStart(2, "0")).join("")
             : v);
+      // market_update_results.result_sha256 binds the audit bytes
+      // including the random task id — recompute over the symbolized
+      // audit so the digest input is runner-stable.
+      if (table === "market_update_results" && vals.length === 9) {
+        let symmed = vals[6];
+        for (const [k, real] of syms) {
+          if (!k.startsWith("rev:")) symmed = symmed.split(real).join(`$${k}`);
+        }
+        vals[7] = sha(symmed);
+      }
+      symText(vals);
       acc += JSON.stringify(vals) + "\n";
     }
   }
-  for (const [k, real] of syms) {
-    if (!k.startsWith("rev:")) acc = acc.split(real).join(`$${k}`);
-  }
-  return sha(acc);
+  // wall-clock columns (created_at/published_at inside rows and
+  // audit/receipt JSON) differ per runner — normalize RFC3339 text.
+  acc = acc.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(\+00:00|Z)/g, "<TS>");
+  // order-stable digest input — task ids are random per-runner;
+  // the trailing newline leaves no empty line (Rust's .lines() drops it).
+  return sha(acc.split("\n").filter((x) => x !== "").sort().join("\n"));
 };
 
 const preseeded = process.env.DIFF_NOINIT === "1";
 const NORM_TS = process.env.DIFF_NORM_TS === "1";
-const normSet = () => new Set(db.query(
-  "SELECT DISTINCT v FROM (SELECT created_at AS v FROM data_versions UNION ALL SELECT published_at AS v FROM data_versions UNION ALL SELECT hex(integrity_digest) AS v FROM data_versions WHERE integrity_digest IS NOT NULL)")
-  .map((r) => r.v));
+const normSet = () => {
+  // Volatile columns only — the union is built over tables that actually
+  // exist (result tables are compact-only).
+  const has = (t) => db.get(
+    "SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name=?", t).n > 0n;
+  const col = (t, k) => db.get(
+    "SELECT count(*) AS n FROM pragma_table_info(?) WHERE name=?", t, k).n > 0n;
+  const parts = [];
+  if (col("data_versions", "created_at")) {
+    parts.push("SELECT created_at AS v FROM data_versions");
+  }
+  if (col("data_versions", "published_at")) {
+    parts.push("SELECT published_at AS v FROM data_versions");
+  }
+  if (col("data_versions", "integrity_digest")) {
+    parts.push("SELECT hex(integrity_digest) AS v FROM data_versions");
+  }
+  if (has("gap_verification_decisions")) {
+    parts.push("SELECT decided_at AS v FROM gap_verification_decisions",
+      "SELECT decision_sha256 AS v FROM gap_verification_decisions");
+  }
+  if (has("proven_gaps")) {
+    parts.push("SELECT observed_at AS v FROM proven_gaps",
+      "SELECT evidence_digest AS v FROM proven_gaps");
+  }
+  if (has("gap_coverings")) parts.push("SELECT covered_at AS v FROM gap_coverings");
+  if (has("market_update_results")) {
+    // legacy column: result_sha256; compact column: result_digest
+    parts.push(`SELECT hex(${col("market_update_results", "result_digest")
+      ? "result_digest" : "result_sha256"}) AS v FROM market_update_results`);
+  }
+  if (has("publication_results")) {
+    parts.push("SELECT hex(result_digest) AS v FROM publication_results");
+  }
+  if (has("tasks")) {
+    parts.push("SELECT created_at AS v FROM tasks",
+      "SELECT last_progress_at AS v FROM tasks");
+  }
+  if (parts.length === 0) parts.push("SELECT CAST(NULL AS TEXT) AS v WHERE 0");
+  const out = new Set();
+  for (const r of db.query(
+    `SELECT DISTINCT v FROM (${parts.join(" UNION ALL ")}) WHERE v IS NOT NULL AND v != ''`)) {
+    // serde DateTime emits "Z" where the stored text is "+00:00" —
+    // cover both forms.
+    if (typeof r.v === "string" && r.v.endsWith("+00:00")) {
+      out.add(`${r.v.slice(0, -6)}Z`);
+    }
+    out.add(r.v);
+  }
+  return out;
+};
 const normDeep = (v, set) => {
   if (typeof v === "string" && set.has(v)) return "<norm>";
   if (Array.isArray(v)) return v.map((x) => normDeep(x, set));
   if (v !== null && typeof v === "object") {
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, normDeep(x, set)]));
+    // Digests computed over task-bound/wall-clock content can't be
+    // string-matched — norm by field name; content parity is proven by
+    // the normalized state digest and the remaining emitted fields.
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k,
+      ((k === "evidence_sha256" || k === "audit_sha256") &&
+       typeof x === "string" && /^[0-9a-f]{64}$/.test(x))
+        ? "<norm>" : normDeep(x, set)]));
   }
   return v;
 };
@@ -117,6 +195,16 @@ const resolve = (v) => {
 };
 
 const sortedValue = (v) => JSON.parse(ser(v)); // canonical Value (sorted keys)
+// serde_json::to_value emits: sorted keys at every level, DateTime<Utc> as
+// "Z", NaiveDate as "YYYY-MM-DD". Stored rows carry chrono "+00:00".
+const deepZ = (v) =>
+  typeof v === "string" && /T\d{2}:\d{2}:\d{2}(\.\d+)?\+00:00$/.test(v)
+    ? CMM.serdeDateTime(v)
+    : Array.isArray(v) ? v.map(deepZ)
+    : v !== null && typeof v === "object"
+      ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deepZ(x)]))
+      : v;
+const serdeEmit = (v) => sortedValue(deepZ(v));
 const sortedArr = (a) => [...a].sort();
 
 const stateDigest = () => {
@@ -162,22 +250,93 @@ const stateDigest = () => {
     cdump("SELECT hex(source_binding_digest),generation_id,hex(generation_manifest_sha256),hex(day_member_sha256),hex(security_event_sha256),hex(evidence_digest) FROM source_bindings ORDER BY source_binding_digest", "CSB");
     cdump("SELECT task_id,version_key,result_id FROM task_publications ORDER BY 1,2", "CTP");
     cdump("SELECT result_id,result_kind FROM result_registry ORDER BY result_id", "CRR");
-    cdump("SELECT result_key,result_id,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,hex(source_binding_digest),continuity_mode,prefix_bytes,hex(base_projection_digest),hex(result_projection_digest),hex(delta_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM market_update_results ORDER BY result_key", "CMU");
+    // result_digest binds the runner-local task id — recompute it with
+    // the task id symbolized so the digest verifies deterministically.
+    const vid = (k) => db.get("SELECT version_id FROM data_versions WHERE version_key=?", k)?.version_id ?? "";
+    const hx = (x) => Buffer.from(x, "hex");
+    for (const r of db.query("SELECT result_key,result_id,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,hex(source_binding_digest) AS sbd,continuity_mode,prefix_bytes,hex(base_projection_digest) AS bpd,hex(result_projection_digest) AS rpd,hex(delta_digest) AS dd,hex(evidence_digest) AS ed,task_revision,hex(result_digest) AS rd0 FROM market_update_results ORDER BY result_key")) {
+      // NULL digests (hex() -> "") can't recompute — emit the stored
+      // digest verbatim like the Rust arm's fallback.
+      let rd = (r.sbd && r.bpd && r.rpd && r.ed) ? null : r.rd0;
+      if (rd === null) try {
+        rd = Buffer.from(CMM.marketUpdateResultDigest({
+          result_id: r.result_id, task_id: symOf(r.task_id), item_id: r.item_id,
+          base_version_id: vid(r.base_version_key),
+          result_version_id: vid(r.result_version_key),
+          outcome: Number(r.outcome),
+          range_start_day: Number(r.range_start_day),
+          range_end_day: Number(r.range_end_day),
+          algorithm_version: r.algorithm_version,
+          source_binding_digest: hx(r.sbd), continuity_mode: Number(r.continuity_mode),
+          prefix_bytes: r.prefix_bytes === null ? null : Number(r.prefix_bytes),
+          base_projection_digest: hx(r.bpd), result_projection_digest: hx(r.rpd),
+          delta_digest: (r.dd === null || r.dd === "") ? null : hx(r.dd),
+          evidence_digest: hx(r.ed), task_revision: r.task_revision,
+        })).toString("hex");
+      } catch { rd = "<ERR>"; }
+      lines.push(`CMU:${[cvs(r.result_key), cvs(r.result_id), symOf(r.task_id), cvs(r.item_id),
+        cvs(r.base_version_key), cvs(r.result_version_key), cvs(r.outcome), cvs(r.range_start_day),
+        cvs(r.range_end_day), cvs(r.algorithm_version), cvs(r.sbd), cvs(r.continuity_mode),
+        cvs(r.prefix_bytes), cvs(r.bpd), cvs(r.rpd), cvs(r.dd), cvs(r.ed), cvs(r.task_revision),
+        rd].join("|")}`);
+    }
     cdump("SELECT result_key,seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM market_update_delta_clips ORDER BY result_key,seq", "CMD");
-    cdump("SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM publication_results ORDER BY result_key", "CPR");
+    for (const r of db.query("SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest) AS sbd,hex(evidence_digest) AS ed,task_revision,hex(result_digest) AS rd0 FROM publication_results ORDER BY result_key")) {
+      let rd = (r.sbd && r.ed) ? null : r.rd0;
+      if (rd === null) try {
+        rd = Buffer.from(CMM.publicationResultDigest({
+          publication_id: r.publication_id, task_id: symOf(r.task_id), item_id: r.item_id,
+          publication_kind: Number(r.publication_kind),
+          base_version_id: r.base_version_key === null ? null : vid(r.base_version_key),
+          result_version_id: vid(r.result_version_key),
+          outcome: Number(r.outcome), algorithm_version: r.algorithm_version,
+          source_binding_digest: hx(r.sbd), evidence_digest: hx(r.ed),
+          task_revision: r.task_revision,
+        })).toString("hex");
+      } catch { rd = "<ERR>"; }
+      lines.push(`CPR:${[cvs(r.result_key), cvs(r.publication_id), symOf(r.task_id), cvs(r.item_id),
+        cvs(r.publication_kind), cvs(r.base_version_key), cvs(r.result_version_key), cvs(r.outcome),
+        cvs(r.algorithm_version), cvs(r.sbd), cvs(r.ed), cvs(r.task_revision), rd].join("|")}`);
+    }
   }
   if (!isCompact()) {
     dump("SELECT result_id,task_id,item_id,base_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM market_update_results ORDER BY result_id", "MU");
     dump("SELECT result_id,task_id,item_id,base_daily_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM yearly_execution_results ORDER BY result_id", "YR");
   }
-  dump("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions ORDER BY decision_id", "GD");
-  dump("SELECT gap_id,symbol,period,start_date,end_date,evidence_kind,evidence_id,evidence_digest,observed_at FROM proven_gaps ORDER BY gap_id", "PG");
-  dump("SELECT gap_id,version_id,covered_at FROM gap_coverings ORDER BY gap_id", "GC");
+  // Wall-clock columns + the digests binding them are normalized like the
+  // compact integrity column: fixed stamp + recompute.
+  const TS_FIX = "0000-01-01T00:00:00+00:00";
+  const decisionRow = (r) => ({
+    decision_id: r.decision_id, symbol: r.symbol,
+    period: r.period === "day" ? "Day" : "Year",
+    start_date: r.start_date, end_date: r.end_date,
+    subject_version_id: r.subject_version_id,
+    subject_version_digest: r.subject_version_digest,
+    conclusion: r.conclusion, basis_kind: r.basis_kind, basis_ref: r.basis_ref,
+    basis_sha256: r.basis_sha256, verifier_id: r.verifier_id,
+    decided_at: TS_FIX, decision_sha256: r.decision_sha256 });
+  for (const r of db.query("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions ORDER BY decision_id")) {
+    lines.push(`GD:${[r.decision_id, r.symbol, r.period, r.start_date, r.end_date,
+      r.subject_version_id, r.subject_version_digest, r.conclusion, r.basis_kind,
+      r.basis_ref, r.basis_sha256, r.verifier_id, TS_FIX,
+      GAPS.decisionContentDigest(decisionRow(r))].join("|")}`);
+  }
+  for (const r of db.query("SELECT gap_id,symbol,period,start_date,end_date,evidence_kind,evidence_id,evidence_digest,observed_at FROM proven_gaps ORDER BY gap_id")) {
+    const d = db.get("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions WHERE decision_id=?", r.evidence_id);
+    const evd = d ? GAPS.decisionContentDigest(decisionRow(d)) : r.evidence_digest;
+    lines.push(`PG:${[r.gap_id, r.symbol, r.period, r.start_date, r.end_date,
+      r.evidence_kind, r.evidence_id, evd, TS_FIX].join("|")}`);
+  }
+  dump("SELECT gap_id,version_id,'0000-01-01T00:00:00+00:00' FROM gap_coverings ORDER BY gap_id", "GC");
   dump("SELECT verification_task_id,target_task_id,audit_json,audit_sha256 FROM publication_checks ORDER BY 1", "PC");
   let joined = lines.join("\n");
   for (const [k, real] of syms) {
     if (!k.startsWith("rev:")) joined = joined.split(real).join(`$${k}`);
   }
+  // task ids are random per-runner — sort the symbolized lines so the
+  // digest input is order-stable.
+  joined = joined.split("\n").sort().join("\n");
+  if (process.env.DIFF_DIGEST_DUMP) writeFileSync(process.env.DIFF_DIGEST_DUMP, joined);
   return sha(joined);
 };
 
@@ -210,6 +369,26 @@ const refreshRev = (taskId, rev) => {
 };
 
 const errCode = (e) => e instanceof StorageError ? e.code : "internal";
+// market_code + err_code PascalCase for batch per-item errors
+const codeMap = (e) => {
+  if (e instanceof MarketError) {
+    return { integrity: "Integrity", conflict: "Conflict", invalid: "Invalid",
+      not_found: "NotFound", base: "Base", storage: "Storage",
+      outcome_unknown: "OutcomeUnknown", basis_not_verified: "BasisNotVerified" }[e.code]
+      ?? "Storage";
+  }
+  if (e instanceof StorageError) {
+    return { revision_conflict: "RevisionConflict",
+      needs_verification: "NeedsVerification",
+      invalid_retry_selection: "InvalidRetrySelection",
+      conflict: "RequestConflict", range_conflict: "RangeConflict",
+      invalid_input: "InvalidCommand", unavailable: "StorageUnavailable",
+      task_not_found: "TaskNotFound", outcome_unknown: "OutcomeUnknown",
+      unsupported_contract: "UnsupportedContract",
+      inconsistent: "Internal" }[e.code] ?? "StorageUnavailable";
+  }
+  return "Storage";
+};
 const results = [];
 const lines = readFileSync(scenarioPath, "utf8").split("\n").filter((l) => l.trim());
 let seq = 0;
@@ -228,10 +407,17 @@ for (const line of lines) {
           requestId: op.request_id,
           commandJson,
           executionKeyJson: ser(op.command.key, "key"),
-          workJson: ser({
-            items: work.items.map((i) => ({ ...i, scope_keys: sortedArr(i.scope_keys) })),
+          // serde struct order: items then scopes; nested Values
+          // (target/frozen_inputs) are BTreeMap-sorted by serde.
+          workJson: JSON.stringify({
+            items: work.items.map((i) => ({
+              item_id: i.item_id, target: sortedValue(i.target),
+              progress_unit: i.progress_unit,
+              frozen_inputs: sortedValue(i.frozen_inputs),
+              scope_keys: sortedArr(i.scope_keys) })),
             scopes: sortedArr(work.scopes),
-          }, "work"),
+            ...(work.shared_evidence !== undefined ? { shared_evidence: sortedValue(work.shared_evidence) } : {}),
+          }),
           items: work.items.map((i) => ({
             item_id: i.item_id,
             target_json: ser(sortedValue(i.target)),
@@ -330,7 +516,9 @@ for (const line of lines) {
           const r = MR.readResult(db, resolve(op.result_id));
           rec = r === null ? { status: "ok", found: false }
             : { status: "ok", found: true,
-                audit_sha256: sha(RC.__ser(r[0])),
+                // audit embeds wall-clock integrity digests + the random
+                // task id — normalize both before hashing the canonical form.
+                audit_sha256: sha(ser(normDeep(normalizeIds(r[0]), normSet()))),
                 receipt: r[1] };
         } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
         break;
@@ -347,7 +535,11 @@ for (const line of lines) {
         try {
           const p = op.plan;
           const dir = process.env.DIFF_FIXTURES || "scripts/node_migration_p3/records";
-          const load = (n) => RC.check(JSON.parse(readFileSync(`${dir}/${n}`, "utf8")));
+          const load = (n) => {
+            if (n === "@candidate") return CMR.materializeChecked(db, command.version_id, true);
+            if (n === "@base") return CMR.materializeChecked(db, p.base_version_id, false);
+            return RC.check(JSON.parse(readFileSync(`${dir}/${n}`, "utf8")));
+          };
           const command = { ...p.command, task_id: resolve(p.command.task_id) };
           command.expected_revision = Number(command.expected_revision);
           if (command.intent?.Daily) {
@@ -386,8 +578,85 @@ for (const line of lines) {
             audit,
             audit_payloads: p.audit_payloads ?? [],
           };
-          const r = MC.commitRangeTx(db, plan, op.now ?? "2026-09-24T00:00:00Z");
-          rec = { status: "ok", receipt: r, digest: marketDigest() };
+          const r = isCompact()
+            ? CW.commitRangeTx(db, plan)
+            : MC.commitRangeTx(db, plan, op.now ?? "2026-09-24T00:00:00Z");
+          rec = { status: "ok",
+            receipt: { ...r, task_revision: Number(r.task_revision) },
+            digest: isCompact() ? sha(stateDigest()) : marketDigest() };
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
+        break;
+      }
+      // NM-057 — publish/result commit entry points:
+      //   commit_publication -> MarketRepository::commit (commit_tx)
+      //   commit_yearly      -> YearlyRepository::commit_yearly
+      //     (yearly_no_change_tx / commit_tx -> commit_publication)
+      case "commit_publication":
+      case "commit_yearly": {
+        try {
+          const p = op.plan;
+          const dir = process.env.DIFF_FIXTURES || "scripts/node_migration_p3/records";
+          const load = (n, ver) => {
+            if (n === "@candidate") return CMR.materializeChecked(db, ver, true);
+            if (n === "@base" || n === "@fixed") return CMR.materializeChecked(db, ver, false);
+            return RC.check(JSON.parse(readFileSync(`${dir}/${n}`, "utf8")));
+          };
+          const command = { ...p.command, task_id: resolve(p.command.task_id) };
+          command.expected_revision = Number(command.expected_revision);
+          if (command.intent?.Daily) {
+            command.intent = { Daily: { expected_head: resolve(command.intent.Daily.expected_head) } };
+          } else if (command.intent?.CurrentHead) {
+            command.intent = { CurrentHead: {
+              expected_daily_head: resolve(command.intent.CurrentHead.expected_daily_head),
+              expected_yearly_head: resolve(command.intent.CurrentHead.expected_yearly_head) } };
+          }
+          const per = (x) => x === "day" ? "Day" : "Year";
+          const publication = {
+            command,
+            record: load(p.record, command.version_id),
+            required_heads: (p.required_heads ?? []).map((h) =>
+              [{ symbol: h[0], period: per(h[1]) }, h[2] == null ? null : resolve(h[2])]),
+            promote: p.promote ? { symbol: p.promote.symbol, period: per(p.promote.period) } : null,
+            base_digest: p.base_digest ?? null,
+          };
+          let r;
+          if (op.op === "commit_publication") {
+            r = isCompact()
+              ? CW.commitTx(db, publication)
+              : MC.commitPublication(db, publication, op.now ?? "2026-09-24T00:00:00Z");
+          } else {
+            const base = p.base == null ? null : load(p.base, p.base_version_id);
+            if (base === null) throw Object.assign(new Error("MARKET_INTEGRITY: yearly plan base missing"), { code: "inconsistent" });
+            const plan = { publication, base, prior: null,
+              no_change: !!p.no_change, audit: p.audit ?? {}, audit_payloads: [] };
+            if (!isCompact()) throw Object.assign(new Error("commit_yearly not ported on legacy"), { code: "unsupported_contract" });
+            r = CW.commitYearly(db, plan);
+          }
+          rec = { status: "ok",
+            receipt: { ...r, task_revision: Number(r.task_revision) },
+            digest: isCompact() ? sha(stateDigest()) : marketDigest() };
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
+        break;
+      }
+      case "yearly_receipt":
+      case "yearly_item_receipt":
+      case "receipt": {
+        try {
+          let r;
+          if (op.op === "yearly_receipt") {
+            r = isCompact() ? CW.yearlyReceipt(db, resolve(op.id))
+              : YR.yearlyReceipt(db, resolve(op.id));
+          } else if (op.op === "yearly_item_receipt") {
+            r = isCompact() ? CW.yearlyItemReceipt(db, resolve(op.task_id), op.item_id)
+              : YR.yearlyItemReceipt(db, resolve(op.task_id), op.item_id);
+          } else {
+            r = isCompact() ? CW.receipt(db, resolve(op.id))
+              : MC.receipt?.(db, resolve(op.id)) ?? null;
+          }
+          rec = r === null || r === undefined
+            ? { status: "ok", found: false }
+            : { status: "ok", found: true,
+                receipt: { ...r, task_revision: Number(r.task_revision) } };
         } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
         break;
       }
@@ -470,9 +739,23 @@ for (const line of lines) {
       case "commit_ops_update":
       case "commit_ops_no_change":
       case "update_base_facts":
-      case "base_bars_in_range": {
+      case "base_bars_in_range":
+      case "commit_range_ops":
+      case "commit_range_ops_typed":
+      case "commit_range_no_change_typed":
+      case "commit_update_batch": {
         try {
           let out;
+          if (!isCompact()) {
+            // trait/inherent absent on legacy — Ok(None) per op shape
+            out = name === "stage_ops_delta" ? { version_key: null }
+              : name === "update_base_facts" ? { facts: null }
+              : name === "base_bars_in_range" ? { bars: null }
+              : name === "commit_update_batch" ? { items: null }
+              : { receipt: null };
+            rec = { status: "ok", digest: sha(stateDigest()), ...out };
+            break;
+          }
           if (name === "stage_ops_delta") {
             out = { version_key: Number(CW.stageOpsDelta(
               db, op.entity, op.base_version_id, op.version_id,
@@ -506,14 +789,50 @@ for (const line of lines) {
               task_id: r.task_id, task_revision: Number(r.task_revision) } };
           } else if (name === "update_base_facts") {
             out = CW.updateBaseFacts(db, op.base_version_id);
+          } else if (name === "commit_range_ops" || name === "commit_range_ops_typed") {
+            {
+              const command = op.command;
+              const scope = { symbol: op.scope.symbol,
+                period: op.scope.period === "year" ? "Year" : "Day" };
+              const r = name === "commit_range_ops"
+                ? CW.commitRangeOps(db, command, scope, op.base_version_id,
+                    op.upserts ?? [], op.removes ?? [], op.expected ?? [])
+                : CW.commitRangeOpsTyped(db, command, scope, op.base_version_id,
+                    op.upserts ?? [], op.removes ?? [],
+                    op.continuity_evidence ?? null);
+              out = { receipt: r === null ? null : {
+                publication_id: r.publication_id, version_id: r.version_id,
+                task_id: r.task_id, task_revision: Number(r.task_revision) } };
+            }
+          } else if (name === "commit_range_no_change_typed") {
+            {
+              const r = CW.commitRangeNoChangeTyped(db, op.command,
+                op.base_version_id, op.range, op.continuity_evidence ?? null);
+              out = { receipt: r === null ? null : {
+                publication_id: r.publication_id, version_id: r.version_id,
+                task_id: r.task_id, task_revision: Number(r.task_revision) } };
+            }
+          } else if (name === "commit_update_batch") {
+            {
+              const outs = CW.commitUpdateBatch(db, op.task_id, op.items);
+              out = { items: outs.map((x) => x.ok
+                ? { ok: { publication_id: x.receipt.publication_id,
+                    version_id: x.receipt.version_id, task_id: x.receipt.task_id,
+                    task_revision: Number(x.receipt.task_revision) } }
+                : { err: `${codeMap(x.error)}:${x.error.message}` }) };
+            }
           } else {
             const bars = CW.baseBarsInRange(db, op.base_version_id, op.start, op.end);
+            // serde Bar: sorted keys, Decimal keeps its scale ("10.60").
+            const decWire = (v) => v !== null && typeof v === "object" && typeof v.m === "bigint"
+              ? DEC.toString(v) : v;
             out = { bars: bars.map((b) => ({
-              date: b.date, open: MR.__decStr(b.open), high: MR.__decStr(b.high),
-              low: MR.__decStr(b.low), close: MR.__decStr(b.close),
-              volume: b.volume === null ? null : MR.__decStr(b.volume),
-              amount: b.amount === null ? null : MR.__decStr(b.amount),
+              amount: b.amount === null ? null : decWire(b.amount),
+              close: decWire(b.close), date: b.date,
+              high: decWire(b.high), low: decWire(b.low),
+              open: decWire(b.open),
               r7_raw: b.r7_raw === null || b.r7_raw === undefined ? null : Number(b.r7_raw),
+              volume: b.volume === null ? null : decWire(b.volume),
             })) };
           }
           rec = { status: "ok", digest: sha(stateDigest()), ...out };
@@ -568,7 +887,7 @@ for (const line of lines) {
       case "gap_verification_decision": {
         try {
           rec = { status: "ok",
-            decision: GAPS.gapVerificationDecision(db, op.decision_id) };
+            decision: serdeEmit(GAPS.gapVerificationDecision(db, op.decision_id)) };
         } catch (e) {
           rec = { status: "error", code: e.code ?? "internal",
             message: String(e.message), unchanged: stateDigest() === before };
@@ -577,7 +896,7 @@ for (const line of lines) {
       }
       case "proven_gap": {
         try {
-          rec = { status: "ok", gap: GAPS.provenGap(db, op.gap_id) };
+          rec = { status: "ok", gap: serdeEmit(GAPS.provenGap(db, op.gap_id)) };
         } catch (e) {
           rec = { status: "error", code: e.code ?? "internal",
             message: String(e.message), unchanged: stateDigest() === before };
@@ -586,8 +905,8 @@ for (const line of lines) {
       }
       case "open_proven_gaps": {
         try {
-          rec = { status: "ok", gaps: GAPS.openProvenGaps(
-            db, op.symbol, op.period === "year" ? "Year" : "Day") };
+          rec = { status: "ok", gaps: serdeEmit(GAPS.openProvenGaps(
+            db, op.symbol, op.period === "year" ? "Year" : "Day")) };
         } catch (e) {
           rec = { status: "error", code: e.code ?? "internal",
             message: String(e.message), unchanged: stateDigest() === before };
@@ -596,7 +915,7 @@ for (const line of lines) {
       }
       case "gap_coverings": {
         try {
-          rec = { status: "ok", coverings: GAPS.gapCoverings(db, op.gap_id) };
+          rec = { status: "ok", coverings: serdeEmit(GAPS.gapCoverings(db, op.gap_id)) };
         } catch (e) {
           rec = { status: "error", code: e.code ?? "internal",
             message: String(e.message), unchanged: stateDigest() === before };
@@ -729,7 +1048,13 @@ for (const line of lines) {
   }
   rec.seq = seq++;
   rec.op = name;
-  results.push(NORM_TS ? normDeep(rec, normSet()) : rec);
+  let out2 = JSON.stringify(NORM_TS ? normDeep(rec, normSet()) : rec);
+  // symbolize emitted task ids — task-<hex> differs across runners and
+  // the comparator byte-compares every emitted field.
+  for (const [k, real] of syms) {
+    if (!k.startsWith("rev:")) out2 = out2.split(real).join(`$${k}`);
+  }
+  results.push(JSON.parse(out2));
 }
 repo.close();
 writeFileSync(outPath, results.map((r) => JSON.stringify(r)).join("\n") + "\n");
