@@ -1,0 +1,12 @@
+{"id":"args_0_--version","status":"PASS","detail":null,"evidence":{"exit":0,"out":"x-data-acquire 0.2.0-preview.24 <SHA> NOT_PRODUCTION_READY"}}
+{"id":"args_1_none","status":"PASS","detail":null,"evidence":{"exit":1,"out":"usage: acquire_service <generation-root> <private-socket> [--poll-ms <10..60000>"}}
+{"id":"args_2_--poll-ms","status":"PASS","detail":null,"evidence":{"exit":1,"out":"--poll-ms requires a value"}}
+{"id":"args_3_--poll-ms","status":"PASS","detail":null,"evidence":{"exit":1,"out":"invalid digit found in string"}}
+{"id":"args_4_--poll-ms","status":"PASS","detail":null,"evidence":{"exit":1,"out":"poll interval outside 10..60000 ms"}}
+{"id":"args_5_--poll-ms","status":"PASS","detail":null,"evidence":{"exit":1,"out":"poll interval outside 10..60000 ms"}}
+{"id":"args_6_--poll-ms","status":"PASS","detail":null,"evidence":{"exit":1,"out":"cannot parse integer from empty string"}}
+{"id":"args_7_--mirror","status":"PASS","detail":null,"evidence":{"exit":1,"out":"--mirror requires a directory"}}
+{"id":"args_8_only-one-positional","status":"PASS","detail":null,"evidence":{"exit":1,"out":"usage: acquire_service <generation-root> <private-socket> [--poll-ms <10..60000>"}}
+{"id":"e2e_node_full_flow","status":"PASS","detail":null,"evidence":{"tools":10,"shutdown":0}}
+{"id":"e2e_differential_node_vs_rust","status":"PASS","detail":null,"evidence":{"compared":11,"rust_exit":0}}
+{"id":"summary","status":"PASS","detail":"0 failures","evidence":null}

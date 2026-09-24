@@ -256,6 +256,28 @@ export class AcquireService {
     }
   }
 
+  /** Worker-side attach — the daemon's single open() already created
+   *  the store layout and reconciled durable state; a handler worker
+   *  binds the same durable store without re-running them (Rust shares
+   *  one Arc'd service via factory closure; JS workers cannot share).
+   *  Fails closed when the store is absent or unreadable — attach is
+   *  never a creator. */
+  static attach(root, source) {
+    try {
+      const store = new GenerationStore(root);
+      const dbPath = join(root, "acquire.sqlite");
+      const db = new Db(dbPath);
+      if (!db.existsReadable()) {
+        throw new AcquireStoreError("storage",
+          "acquire store absent or unreadable");
+      }
+      return new AcquireService({
+        store, db, fetcher: toFetcher(source) });
+    } catch (e) {
+      throw svcErr(e);
+    }
+  }
+
   /** The durable acquisition store path — the daemon leases this inode. */
   dbPath() { return join(this.store.root, "acquire.sqlite"); }
   /** The generation store — source-session pinning + read paths. */

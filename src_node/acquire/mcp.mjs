@@ -314,6 +314,21 @@ export class AcquireApi {
   constructor(service, opts = {}) {
     this.service = service;
     this.ApiError = opts.ApiError ?? DefaultApiError;
+    this.gate = null; // set by serve workers via withWorkerGate
+  }
+
+  /** worker_entry calls api.withWorkerGate(gate) after createHandler.
+   *  Rust serializes the five mutating calls on the shared service's
+   *  `mutations` Mutex (blocking lock); per-worker service instances
+   *  need the SharedArrayBuffer gate for the same cross-worker
+   *  serialization — gate.acquireBlocking() is Mutex::lock parity. */
+  withWorkerGate(gate) {
+    this.gate = gate;
+  }
+  _mutate(fn) {
+    if (this.gate === null) return fn();
+    const guard = this.gate.acquireBlocking();
+    try { return fn(); } finally { guard.release(); }
   }
 
   /** mcp.rs:83-120 — capabilities report; blocking reasons for no
@@ -404,7 +419,8 @@ export class AcquireApi {
         return run(() => svc.checkUpdates());
       case "acquire_generation": {
         const a = dec("AcquireGeneration");
-        return run(() => svc.acquireGeneration(a.request_id));
+        return run(() => this._mutate(() =>
+          svc.acquireGeneration(a.request_id)));
       }
       case "get_acquisition_task": {
         const a = dec("GetAcquisitionTask");
@@ -416,25 +432,25 @@ export class AcquireApi {
       }
       case "verify_generation": {
         const a = dec("VerifyGeneration");
-        return run(() =>
-          svc.verifyGeneration(a.request_id, a.generation_id));
+        return run(() => this._mutate(() =>
+          svc.verifyGeneration(a.request_id, a.generation_id)));
       }
       case "activate_generation": {
         const a = dec("ActivateGeneration");
-        return run(() => svc.activateGeneration(
-          a.request_id, a.generation_id, a.expected_previous ?? null));
+        return run(() => this._mutate(() => svc.activateGeneration(
+          a.request_id, a.generation_id, a.expected_previous ?? null)));
       }
       case "retire_generation": {
         const a = dec("RetireGeneration");
-        return run(() => svc.retireGeneration(
-          a.request_id, a.generation_id, a.confirm_token));
+        return run(() => this._mutate(() => svc.retireGeneration(
+          a.request_id, a.generation_id, a.confirm_token)));
       }
       case "sync_status":
         dec("SyncStatus");
         return run(() => svc.syncStatus());
       case "run_worker_once": {
         dec("WorkerOnce");
-        const task = run(() => svc.workerOnce());
+        const task = run(() => this._mutate(() => svc.workerOnce()));
         let view = null;
         if (task !== null) {
           try {

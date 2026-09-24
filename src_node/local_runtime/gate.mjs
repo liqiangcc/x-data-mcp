@@ -44,6 +44,29 @@ export class WorkerGate {
         if (!released) {
           released = true;
           Atomics.store(this.cells, LOCK, 0);
+          Atomics.notify(this.cells, LOCK); // wake acquireBlocking waiters
+        }
+      },
+    };
+  }
+
+  // Blocking Mutex::lock() parity — the acquire service's `mutations`
+  // mutex serializes acquire/verify/activate/retire/worker_once across
+  // threads; per-worker service instances need the SAB to see each
+  // other, so the adapter wraps those calls in this blocking acquire.
+  // No stopping check — Mutex::lock() grants unconditionally; shutdown
+  // teardown is the serve stop budget's job, same as Rust.
+  acquireBlocking() {
+    while (Atomics.compareExchange(this.cells, LOCK, 0, 1) !== 0) {
+      Atomics.wait(this.cells, LOCK, 1);
+    }
+    let released = false;
+    return {
+      release: () => {
+        if (!released) {
+          released = true;
+          Atomics.store(this.cells, LOCK, 0);
+          Atomics.notify(this.cells, LOCK);
         }
       },
     };

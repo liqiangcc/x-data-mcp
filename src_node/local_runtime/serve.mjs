@@ -231,11 +231,15 @@ export async function serve({
     // :185-189 — budget expired. Rust detaches the threads and lets
     // process teardown reap them; here we terminate so the workers
     // cannot pin the event loop after serve() reports the error.
+    for (const c of clients) { try { c.sock.destroy(); } catch { /**/ } }
     for (const c of clients) { try { await c.rec.worker.terminate(); } catch { /**/ } }
     try { await bg.worker.terminate(); } catch { /**/ }
     throw ioErr(
       "shutdown budget expired; unfinished task state retained for verification");
   }
+  // Rust teardown drops each session's socket; without destroy the
+  // still-open sockets would pin the event loop after serve() returns.
+  for (const c of clients) { try { c.sock.destroy(); } catch { /**/ } }
   // :190-196 — client panic join (covers panics during the drain too)
   if ([...clients].some((c) => c.rec.panicked)) {
     throw ioErr("MCP session panicked; no automatic retry");
