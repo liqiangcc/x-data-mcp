@@ -52,7 +52,7 @@ export const SECURITY_EVENTS_ROLE = "gbbq-security-events";
 // schema carries exactly three file entries and stays far below this.
 const MANIFEST_LIMIT = 1 << 20;
 
-const sha256hex = (b) => createHash("sha256").update(b).digest("hex");
+export const sha256hex = (b) => createHash("sha256").update(b).digest("hex");
 
 // ---------------------------------------------------------------------
 // market_data::SourceError — Display text verbatim; `kind` mirrors the
@@ -64,10 +64,10 @@ export class SourceError extends Error {
     this.kind = kind;
   }
 }
-const srcNotVerified = (m) => new SourceError("not_verified", `SOURCE_NOT_VERIFIED: ${m}`);
-const srcUnsupported = (m) => new SourceError("unsupported", `unsupported request: ${m}`);
-const srcInvocation = (m) => new SourceError("invocation", `source invocation failed: ${m}`);
-const srcInvalidResponse = (m) => new SourceError("invalid_response", `invalid source response: ${m}`);
+export const srcNotVerified = (m) => new SourceError("not_verified", `SOURCE_NOT_VERIFIED: ${m}`);
+export const srcUnsupported = (m) => new SourceError("unsupported", `unsupported request: ${m}`);
+export const srcInvocation = (m) => new SourceError("invocation", `source invocation failed: ${m}`);
+export const srcInvalidResponse = (m) => new SourceError("invalid_response", `invalid source response: ${m}`);
 // Timeout{timeout_ms} — declared for completeness; this source never times out.
 export const srcTimeout = (timeout_ms) =>
   new SourceError("timeout", `source invocation timed out after ${timeout_ms} ms`);
@@ -75,7 +75,7 @@ export const srcTimeout = (timeout_ms) =>
 // Rust {:?} Debug formatting for &str: double-quoted, \n \r \t \\ \" \0
 // escapes, other control chars as \u{..}. ASCII inputs are identical to
 // JSON.stringify.
-const rustDebugStr = (s) => {
+export const rustDebugStr = (s) => {
   let out = '"';
   for (const ch of s) {
     const cp = ch.codePointAt(0);
