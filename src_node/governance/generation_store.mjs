@@ -38,6 +38,7 @@ import { renameSync } from "node:fs";
 export const STAGING_DIR = "staging";
 export const GENERATIONS_DIR = "generations";
 export const ACTIVE_NAME = "active-generation.json";
+export const PINS_DIR = "pins";
 export const ACTIVE_SCHEMA = "x-data-mcp.active-generation.v1";
 const MAX_MANIFEST = 1 * 1024 * 1024;
 
@@ -315,6 +316,74 @@ export class GenerationStore {
     return pointer;
   }
 
+  /** pin: one durable marker pins/<gid>/<holder> protecting the
+   *  installed generation from retire. Marker is a 0-byte file, write+
+   *  create+truncate, file fsync + dir fsync — same ordering as Rust.
+   *  Returns a Pin handle; release()/dispose() unpins. */
+  pin(generationId, holder) {
+    checkGenerationId(generationId);
+    if (!statOrNull(join(this.root, GENERATIONS_DIR, generationId))?.isDirectory()) {
+      throw err("not_installed", `generation ${generationId} is not installed`);
+    }
+    if (typeof holder !== "string" || !holder.isWellFormed() ||
+        holder === "" || holder.includes("/") || holder.includes("\\") || holder.includes("\0")) {
+      throw err("not_verified", "snapshot inspection failed: invalid pin holder");
+    }
+    const dir = join(this.root, PINS_DIR, generationId);
+    mkdirSync(dir, { recursive: true });
+    // write+create+truncate, O_NOFOLLOW: a symlink at the holder name is
+    // refused rather than followed (stricter than Rust, documented).
+    let fd;
+    try {
+      fd = openSync(join(dir, holder), constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o644);
+    } catch (e) { throw err("io", `io: ${e.message}`); }
+    let firstErr = null;
+    try { fsyncSync(fd); }
+    catch (e) { firstErr = err("io", `io: ${e.message}`); }
+    try { closeSync(fd); }
+    catch (e) { if (firstErr === null) firstErr = err("io", `io: ${e.message}`); }
+    if (firstErr) throw firstErr;
+    fsyncDir(dir);
+    return new Pin(this, generationId, holder);
+  }
+
+  /** pins: sorted regular-file holder names (UTF-8 byte order). */
+  pins(generationId) {
+    checkGenerationId(generationId);
+    const dir = join(this.root, PINS_DIR, generationId);
+    const st = statOrNull(dir);
+    if (st === null || !st.isDirectory()) return [];
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); }
+    catch (e) { throw err("io", `io: ${e.message}`); }
+    return entries
+      .filter((e) => e.isFile() && isWellformedUtf8Name(e.name))
+      .map((e) => e.name)
+      .sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
+  }
+
+  /** unpin: remove one holder marker; missing marker is idempotent. */
+  unpin(generationId, holder) {
+    checkGenerationId(generationId);
+    try { rmSync(join(this.root, PINS_DIR, generationId, holder)); }
+    catch (e) {
+      if (e.code !== "ENOENT") throw err("io", `io: ${e.message}`);
+    }
+    fsyncDir(join(this.root, PINS_DIR, generationId));
+  }
+
+  /** sweep_pins: remove every holder rejected by keep(). */
+  sweepPins(generationId, keep) {
+    const removed = [];
+    for (const holder of this.pins(generationId)) {
+      if (!keep(holder)) {
+        this.unpin(generationId, holder);
+        removed.push(holder);
+      }
+    }
+    return removed;
+  }
+
   /** Installed-generation dir for writes, pinned by fds: opens
    *  generations/ with O_DIRECTORY|O_NOFOLLOW, then generations/<gid>
    *  via openat relative to that fd — a symlink swap after opening
@@ -344,6 +413,33 @@ export class GenerationStore {
     return { gfd, dfd };
   }
 }
+
+import { rmSync } from "node:fs";
+
+// Pin handle — RAII release. JS has no Drop: release()/dispose() is the
+// deterministic path (Symbol.dispose/AsyncDisposable for `using`); a
+// FinalizationRegistry is deliberately NOT used because GC timing is
+// not a semantic guarantee.
+export class Pin {
+  constructor(store, generationId, holder) {
+    this._store = store;
+    this.generationId = generationId;
+    this.holder = holder;
+    this._released = false;
+  }
+  /** Best-effort unpin, mirroring Rust Drop. Idempotent. */
+  release() {
+    if (this._released) return;
+    this._released = true;
+    this._store.unpin(this.generationId, this.holder);
+  }
+  get generation_id() { return this.generationId; }
+  [Symbol.dispose]() { this.release(); }
+}
+
+// Node readdir surfaces non-UTF-8 names as WTF-8 mangled strings; Rust
+// to_str() simply skips them. Wellformed check approximates that skip.
+const isWellformedUtf8Name = (name) => name.isWellFormed();
 
 // Counted write loop — Node may return a short count; zero-write is an
 // error. BYTE-INPUT ONLY: strings are rejected because Node's string

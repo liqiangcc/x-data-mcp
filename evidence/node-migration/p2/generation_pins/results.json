@@ -1,0 +1,44 @@
+{
+  "task_id": "NM-036",
+  "baseline_sha": "1c5c34087cc17dc0d26f1017f04a0698b64ef2f8",
+  "source_ported": "generation/mod.rs::{pin,pins,unpin,sweep_pins,Pin}",
+  "rust_oracle": "rust-oracle.jsonl — 19 cases via live Store (rustc 1.98.1) incl. marker mode/size, UTF-8 sort order, RAII drop, sweep list",
+  "environment": {
+    "node": "v20.19.2",
+    "module": "src_node/governance/generation_store.mjs",
+    "fixtures": "/tmp/nm36-pin-* mkdtemp, cleaned"
+  },
+  "ordering": [
+    "pin(): gen-dir is_dir gate -> not_installed; holder empty///\\\\/NUL/unwellformed -> not_verified 'snapshot inspection failed: invalid pin holder' verbatim; mkdir pins/<gid> -> open write+create+truncate+O_NOFOLLOW -> fsync file -> fsync dir -> Pin",
+    "pins(): regular files only, wellformed names, UTF-8 byte sort",
+    "unpin(): remove_file ENOENT idempotent -> fsync pin_dir (missing dir -> io, verbatim)",
+    "sweepPins(): keep-predicate negative removal -> removed list (sorted order)",
+    "Pin.release()/Symbol.dispose -> unpin (Rust Drop parity; no `using` on Node 20, explicit release is the deterministic path)"
+  ],
+  "stricter_than_rust": "holder marker O_NOFOLLOW (symlink holder refused, outside target untouched); gid boundary; surrogate holder rejected",
+  "marker": "0-byte regular file mode 100644 — oracle + node both verified; live marker blocks future retire precondition (retire not implemented)",
+  "probe": {
+    "command": "node scripts/node_migration_p2/generation_pin_probe.mjs .",
+    "exit": 0,
+    "cases": 26,
+    "totals": {
+      "pass": 26,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "live_rust_oracle": 19,
+      "raii_symlink_boundary": 7
+    },
+    "selftest": "node ... pin -> exit 1 (negative-selftest.jsonl)"
+  },
+  "regressions": {
+    "NM-035": "23/23 PASS",
+    "NM-034": "45/45 PASS",
+    "NM-033": "38/38 PASS",
+    "NM-032": "28/28 PASS",
+    "NM-026": "72/72 PASS"
+  },
+  "limits": "reopen is readability not crash durability; concurrent pin/unpin without caller single-writer policy out of slice; GC-based release not provided (explicit release/Symbol.dispose only)",
+  "out_of_scope": "no retire, no service/MCP/DB, no real generation paths"
+}

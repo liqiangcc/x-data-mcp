@@ -1,0 +1,20 @@
+{"id":"pin_missing_gen","kind":"not_installed","message":"generation bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb is not installed","status":"error"}
+{"id":"pin_empty_holder","kind":"not_verified","message":"snapshot inspection failed: invalid pin holder","status":"error"}
+{"id":"pin_slash_holder","kind":"not_verified","message":"snapshot inspection failed: invalid pin holder","status":"error"}
+{"id":"pin_backslash_holder","kind":"not_verified","message":"snapshot inspection failed: invalid pin holder","status":"error"}
+{"id":"pin_nul_holder","kind":"not_verified","message":"snapshot inspection failed: invalid pin holder","status":"error"}
+{"id":"pin_first","status":"ok","value":true}
+{"id":"marker_meta","status":"ok","value":{"file":true,"mode":"100644","size":0}}
+{"id":"pin_dup","status":"ok","value":true}
+{"id":"pin_pre_drop","status":"ok","value":["drop-me","task-1"]}
+{"id":"pin_post_drop","status":"ok","value":["task-1"]}
+{"id":"pins_sorted","status":"ok","value":["Mango","apple","task-1","zebra","","😀"]}
+{"id":"pins_missing_gen","status":"ok","value":[]}
+{"id":"unpin_ok","status":"ok","value":true}
+{"id":"unpin_idempotent","status":"ok","value":true}
+{"id":"pins_after_unpin","status":"ok","value":["Mango","task-1","zebra","","😀"]}
+{"id":"sweep","status":"ok","value":["Mango","task-1","","😀"]}
+{"id":"pins_after_sweep","status":"ok","value":["zebra"]}
+{"id":"sweep_missing","status":"ok","value":[]}
+{"id":"unpin_nodir","kind":"io","message":"io: No such file or directory (os error 2)","status":"error"}
+{"id":"pins_skips_dirs","status":"ok","value":["zebra"]}

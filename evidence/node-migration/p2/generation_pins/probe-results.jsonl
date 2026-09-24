@@ -1,0 +1,26 @@
+{"family":"generation_pin","id":"pin_missing_gen","status":"PASS","detail":"not_installed","expected":"generation bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb is not installed","actual":"generation bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb is not installed"}
+{"family":"generation_pin","id":"pin_empty_holder","status":"PASS","detail":"not_verified","expected":"snapshot inspection failed: invalid pin holder","actual":"snapshot inspection failed: invalid pin holder"}
+{"family":"generation_pin","id":"pin_slash_holder","status":"PASS","detail":"not_verified","expected":"snapshot inspection failed: invalid pin holder","actual":"snapshot inspection failed: invalid pin holder"}
+{"family":"generation_pin","id":"pin_backslash_holder","status":"PASS","detail":"not_verified","expected":"snapshot inspection failed: invalid pin holder","actual":"snapshot inspection failed: invalid pin holder"}
+{"family":"generation_pin","id":"pin_nul_holder","status":"PASS","detail":"not_verified","expected":"snapshot inspection failed: invalid pin holder","actual":"snapshot inspection failed: invalid pin holder"}
+{"family":"generation_pin","id":"pin_first","status":"PASS","detail":"ok","expected":true,"actual":true}
+{"family":"generation_pin","id":"marker_meta","status":"PASS","detail":"ok","expected":{"file":true,"mode":"100644","size":0},"actual":{"file":true,"mode":"100644","size":0}}
+{"family":"generation_pin","id":"pin_dup","status":"PASS","detail":"ok","expected":true,"actual":true}
+{"family":"generation_pin","id":"pin_pre_drop","status":"PASS","detail":"ok","expected":["drop-me","task-1"],"actual":["drop-me","task-1"]}
+{"family":"generation_pin","id":"pin_post_drop","status":"PASS","detail":"ok","expected":["task-1"],"actual":["task-1"]}
+{"family":"generation_pin","id":"pins_sorted","status":"PASS","detail":"ok","expected":["Mango","apple","task-1","zebra","","😀"],"actual":["Mango","apple","task-1","zebra","","😀"]}
+{"family":"generation_pin","id":"pins_missing_gen","status":"PASS","detail":"ok","expected":[],"actual":[]}
+{"family":"generation_pin","id":"unpin_ok","status":"PASS","detail":"ok","expected":true,"actual":true}
+{"family":"generation_pin","id":"unpin_idempotent","status":"PASS","detail":"ok","expected":true,"actual":true}
+{"family":"generation_pin","id":"pins_after_unpin","status":"PASS","detail":"ok","expected":["Mango","task-1","zebra","","😀"],"actual":["Mango","task-1","zebra","","😀"]}
+{"family":"generation_pin","id":"sweep","status":"PASS","detail":"ok","expected":["Mango","task-1","","😀"],"actual":["Mango","task-1","","😀"]}
+{"family":"generation_pin","id":"pins_after_sweep","status":"PASS","detail":"ok","expected":["zebra"],"actual":["zebra"]}
+{"family":"generation_pin","id":"sweep_missing","status":"PASS","detail":"ok","expected":[],"actual":[]}
+{"family":"generation_pin","id":"unpin_nodir","status":"PASS","detail":"io","expected":"io: No such file or directory (os error 2)","actual":"io: ENOENT: no such file or directory, open '/tmp/nm36-pin-3iD0wP/pins/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"}
+{"family":"generation_pin","id":"pins_skips_dirs","status":"PASS","detail":"ok","expected":["zebra"],"actual":["zebra"]}
+{"family":"generation_pin","id":"dispose_release","status":"PASS","detail":"marker released","expected":null,"actual":null}
+{"family":"generation_pin","id":"symbol_dispose","status":"PASS","detail":"Symbol.dispose released","expected":null,"actual":null}
+{"family":"generation_pin","id":"release_idempotent","status":"PASS","detail":"second release no-op","expected":null,"actual":null}
+{"family":"generation_pin","id":"holder_symlink_reject","status":"PASS","detail":"io","expected":null,"actual":null}
+{"family":"generation_pin","id":"holder_surrogate","status":"PASS","detail":"not_verified","expected":null,"actual":null}
+{"family":"generation_pin","id":"marker_blocks_retire_precondition","status":"PASS","detail":"holders=[\"zebra\"]","expected":null,"actual":null}
