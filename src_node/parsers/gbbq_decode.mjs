@@ -128,10 +128,19 @@ const checkRecord = (record) => {
 };
 
 // decrypt_block: 8-byte block -> 8-byte clear block (u32 wrapping via >>>0).
+// Hot-path form: byte-index u32 LE reads (no per-block DataView/alloc)
+// and direct byte writes into `out` at `start`. Bit-identical to the
+// DataView version -- same wrapping u32 semantics.
+const u32le = (r, o) =>
+  (r[o] | (r[o + 1] << 8) | (r[o + 2] << 16) | (r[o + 3] << 24)) >>> 0;
+const w32le = (out, o, v) => {
+  out[o] = v; out[o + 1] = v >>> 8; out[o + 2] = v >>> 16;
+  out[o + 3] = v >>> 24;
+};
+
 function decryptBlock(record, start, out) {
-  const bv = new DataView(record.buffer, record.byteOffset, record.byteLength);
-  let num = (keyU32(0x44) ^ bv.getUint32(start, true)) >>> 0;
-  let numold = bv.getUint32(start + 4, true);
+  let num = (keyU32(0x44) ^ u32le(record, start)) >>> 0;
+  let numold = u32le(record, start + 4);
   for (let j = 0x40; j >= 4; j -= 4) {
     let eax = keyU32(((num & 0xff0000) >>> 16) * 4 + 0x448);
     eax = (eax + keyU32((num >>> 24) * 4 + 0x48)) >>> 0;
@@ -143,21 +152,24 @@ function decryptBlock(record, start, out) {
     numold = old;
   }
   numold = (numold ^ keyU32(0)) >>> 0;
-  const ov = new DataView(out.buffer);
-  ov.setUint32(0, numold, true);
-  ov.setUint32(4, num, true);
+  w32le(out, start, numold);
+  w32le(out, start + 4, num);
+}
+
+/// Decrypt one 29-byte record into `out` (29-byte Uint8Array).
+function decryptInto(record, out) {
+  decryptBlock(record, 0, out);
+  decryptBlock(record, 8, out);
+  decryptBlock(record, 16, out);
+  out[24] = record[24]; out[25] = record[25]; out[26] = record[26];
+  out[27] = record[27]; out[28] = record[28];
 }
 
 /// Decrypt one 29-byte record to its clear bytes (fresh Uint8Array).
 export function decryptRecord(record) {
   checkRecord(record);
   const clear = new Uint8Array(29);
-  for (let block = 0; block < 3; block++) {
-    const tmp = new Uint8Array(8);
-    decryptBlock(record, block * 8, tmp);
-    clear.set(tmp, block * 8);
-  }
-  clear.set(record.subarray(24, 29), 24);
+  decryptInto(record, clear);
   return clear;
 }
 
@@ -165,31 +177,28 @@ const utf8 = new TextDecoder("utf-8", { fatal: true });
 
 /// Decode one 29-byte clear record into a typed event.
 /// Mirrors event_from_clear; error text byte-identical for invalid code.
-export function eventFromClear(index, clear) {
+/// `cv` may be a shared DataView over `clear` (internal hot path).
+export function eventFromClear(index, clear, cv = null) {
   checkRecord(clear);
-  const codeBytes = Array.from(clear.subarray(1, 8));
+  cv ??= new DataView(clear.buffer, clear.byteOffset, clear.byteLength);
   let code;
   try {
     code = utf8.decode(clear.subarray(1, 8)).replace(/ +$/, "");
   } catch {
+    const codeBytes = Array.from(clear.subarray(1, 8));
     throw new GbbqDecodeError(
       `GBBQ record ${index} code bytes are not UTF-8: [${codeBytes.join(", ")}]`,
       "invalid_code", { index, bytes: codeBytes });
-  }
-  const cv = new DataView(clear.buffer, clear.byteOffset, clear.byteLength);
-  const cRaw = [], cRawBits = [];
-  for (let i = 0; i < 4; i++) {
-    const off = 13 + i * 4;
-    cRawBits.push(cv.getUint32(off, true));
-    cRaw.push(cv.getFloat32(off, true));
   }
   return {
     market: clear[0],
     code,
     date_raw: cv.getUint32(8, true),
     category: clear[12],
-    c_raw: cRaw,
-    c_raw_bits: cRawBits,
+    c_raw: [cv.getFloat32(13, true), cv.getFloat32(17, true),
+      cv.getFloat32(21, true), cv.getFloat32(25, true)],
+    c_raw_bits: [cv.getUint32(13, true), cv.getUint32(17, true),
+      cv.getUint32(21, true), cv.getUint32(25, true)],
   };
 }
 
@@ -205,5 +214,17 @@ export function decodeEvents(file) {
   if (!file || !Array.isArray(file.records)) {
     throw new GbbqDecodeError("expected a parsed RawFile {records}", "invalid_input");
   }
-  return file.records.map((record, index) => decodeRecord(index, record));
+  const records = file.records;
+  const out = new Array(records.length);
+  // Scratch reuse is safe: eventFromClear copies every field into the
+  // returned object and never retains `clear`.
+  const clear = new Uint8Array(29);
+  const cv = new DataView(clear.buffer);
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    checkRecord(record);
+    decryptInto(record, clear);
+    out[i] = eventFromClear(i, clear, cv);
+  }
+  return out;
 }

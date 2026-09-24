@@ -1,0 +1,8 @@
+{"fixture":"official-gbbq.zip","records":205776,"cur":"753ab57d7b1fa17db2d0f2da7b9122f9788e11eceebcaa077b44c8c633a05311","old":"753ab57d7b1fa17db2d0f2da7b9122f9788e11eceebcaa077b44c8c633a05311","equal":true}
+{"fixture":"gbbq.zip","records":206034,"cur":"b8ca6073851b3ab19cfbb905a8fcc7e43414dccf36e13e17ce2e4eccf77da3ac","old":"b8ca6073851b3ab19cfbb905a8fcc7e43414dccf36e13e17ce2e4eccf77da3ac","equal":true}
+{"edge":0,"same":true,"a":{"err":"GBBQ record 0 code bytes are not UTF-8: [169, 203, 98, 28, 254, 212, 104]","kind":"invalid_code"},"b":{"err":"GBBQ record 0 code bytes are not UTF-8: [169, 203, 98, 28, 254, 212, 104]","kind":"invalid_code"}}
+{"edge":1,"same":true,"a":{"err":"GBBQ record 1 code bytes are not UTF-8: [99, 11, 214, 174, 68, 109, 152]","kind":"invalid_code"},"b":{"err":"GBBQ record 1 code bytes are not UTF-8: [99, 11, 214, 174, 68, 109, 152]","kind":"invalid_code"}}
+{"edge":2,"same":true,"a":{"err":"GBBQ record must be a 29-byte Uint8Array, got 31","kind":"invalid_input"},"b":{"err":"GBBQ record must be a 29-byte Uint8Array, got 31","kind":"invalid_input"}}
+{"edge":3,"same":true,"a":{"err":"GBBQ record 3 code bytes are not UTF-8: [160, 29, 21, 23, 245, 60, 82]","kind":"invalid_code"},"b":{"err":"GBBQ record 3 code bytes are not UTF-8: [160, 29, 21, 23, 245, 60, 82]","kind":"invalid_code"}}
+{"parity":"PASS"}
+{"records":205776,"iters":30,"p50_ms":150.8,"p95_ms":234,"min_ms":127.3,"digest":"753ab57d7b1fa17db2d0f2da7b9122f9788e11eceebcaa077b44c8c633a05311"}
