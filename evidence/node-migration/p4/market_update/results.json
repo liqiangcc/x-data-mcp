@@ -1,0 +1,24 @@
+{
+  "task": "NM-082",
+  "baseline": "2666e45",
+  "scenarios": 232,
+  "match": 232,
+  "diffs": 0,
+  "oracle_panics": 0,
+  "ops": {
+    "dec": 34,
+    "date": 24,
+    "datetime": 10,
+    "parse_batch": 9,
+    "digest": 3,
+    "prepare": 36,
+    "key": 3,
+    "normalize": 33,
+    "resolve": 16,
+    "prepare_range": 32,
+    "run_items": 17,
+    "run_item": 15
+  },
+  "verification": "byte-level canonical equality (deep key-sorted JSON parse) + probe eq()",
+  "probe_exit": 0
+}
