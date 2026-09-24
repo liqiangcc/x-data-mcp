@@ -1,0 +1,62 @@
+{
+  "task_id": "NM-038",
+  "baseline_sha": "20a4ccd509d55af8de4f005366b78d2156a6b651",
+  "source": "NM-006 accepted decision: better-sqlite3@11.10.0; P1 sqlite_probe contract",
+  "driver": {
+    "name": "better-sqlite3",
+    "version": "11.10.0",
+    "package_lock_sha256": "d38316dd99f662860f19912b1b46c195d061bf0b1011502977df4a61f69433a6",
+    "node": "v20.19.2",
+    "sqlite_bundled": "3.49.2"
+  },
+  "environment": {
+    "fixtures": "NM-006 synthetic DBs copied from /dev/shm/nm006 (db18/db19/empty/garbage) + fresh work/wal/ints DBs in /tmp/nm38-sql-* mkdtemp"
+  },
+  "fixture_sha256": {
+    "db18.sqlite": "3f0b86c7afc0945f81ab4c896b3197bbcfc0bbbdd3c986f2a87347d9c8967117",
+    "db19.sqlite": "7cb040f798a411cb0b15e53a3f46b54429020acf7a4ff270a2b8b8ebd9e17ca3",
+    "empty.db": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "garbage.bin": "e88fa8352ec71bf6d484cdc20ae028e73ef719f3ecf3b6a55e6806884392c8ec"
+  },
+  "modes": [
+    "readonly (fileMustExist, never creates/writes)",
+    "readwrite (fileMustExist)",
+    "create (explicit creation only)"
+  ],
+  "typed_codes": [
+    "busy",
+    "readonly",
+    "corrupt",
+    "unavailable",
+    "constraint",
+    "closed",
+    "invalid_input",
+    "error (driver code preserved)"
+  ],
+  "defaults": "safeIntegers ON unless explicitly disabled; busyTimeoutMs optional pragma",
+  "probe": {
+    "command": "node scripts/node_migration_p3/sqlite_adapter_probe.mjs .",
+    "exit": 0,
+    "cases": 21,
+    "totals": {
+      "pass": 21,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "modes_and_fail_closed": 9,
+      "precision_and_tx": 4,
+      "wal_busy": 3,
+      "boundary": 5
+    },
+    "selftest": "node ... sql -> exit 1 (negative-selftest.jsonl)"
+  },
+  "regressions": {
+    "NM-006 sqlite_probe": "12 PASS / 1 INFO / 1 NOT_RUN (node:sqlite)",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "no business repos, no schema-18/19 migration logic, no crash recovery, no services, no production readiness",
+  "out_of_scope": "node:sqlite (requires Node>=22.5, not provisioned); driver 13.x (engines>=22)"
+}

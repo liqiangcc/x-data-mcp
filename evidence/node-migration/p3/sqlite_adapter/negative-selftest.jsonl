@@ -1,0 +1,22 @@
+{"family":"sqlite_adapter","id":"adapter_info","status":"PASS","detail":null,"expected":{"driver":"better-sqlite3@11.10.0","node":"20.19.2"},"actual":null}
+{"family":"sqlite_adapter","id":"driver_version_pinned","status":"PASS","detail":null,"expected":{"lock":"11.10.0","pinned":"11.10.0"},"actual":null}
+{"family":"sqlite_adapter","id":"readonly_missing_no_create","status":"PASS","detail":null,"expected":{"code":"unavailable","created":false},"actual":null}
+{"family":"sqlite_adapter","id":"readwrite_missing_no_create","status":"PASS","detail":null,"expected":{"code":"unavailable","created":false},"actual":null}
+{"family":"sqlite_adapter","id":"open_schema19_readonly","status":"PASS","detail":null,"expected":{"user_version":"n:19","journal_mode":"wal","table_count":31,"bytes_unchanged":true},"actual":null}
+{"family":"sqlite_adapter","id":"open_schema18_readonly","status":"PASS","detail":null,"expected":{"user_version":"n:18","table_count":30,"bytes_unchanged":true},"actual":null}
+{"family":"sqlite_adapter","id":"empty_db_zero_schema","status":"PASS","detail":null,"expected":{"tables":0,"user_version":0,"size_bytes":0},"actual":null}
+{"family":"sqlite_adapter","id":"garbage_db_corrupt","status":"PASS","detail":"corrupt file is not a database","expected":"corrupt","actual":"corrupt"}
+{"family":"sqlite_adapter","id":"readonly_write_rejected","status":"PASS","detail":"readonly attempt to write a readonly database","expected":"readonly","actual":"readonly"}
+{"family":"sqlite_adapter","id":"explicit_create_only","status":"PASS","detail":null,"expected":{"created":true},"actual":null}
+{"family":"sqlite_adapter","id":"bigint_precision_default","status":"PASS","detail":null,"expected":{"roundtrip":["9007199254740993","-9223372036854775808","9223372036854775807"],"all_bigint":true},"actual":null}
+{"family":"sqlite_adapter","id":"safeintegers_off_boundary","status":"PASS","detail":null,"expected":{"note":"safeIntegers:false loses i64>2^53 — deliberate opt-out","raw":["9007199254740992","-9223372036854776000","9223372036854776000"]},"actual":null}
+{"family":"sqlite_adapter","id":"tx_commit","status":"PASS","detail":null,"expected":{"count":"2"},"actual":null}
+{"family":"sqlite_adapter","id":"tx_rollback_atomic","status":"PASS","detail":null,"expected":{"rolled_back":true,"count":"2"},"actual":null}
+{"family":"sqlite_adapter","id":"wal_checkpoint","status":"PASS","detail":null,"expected":{"journal_mode":"wal","wal_bytes_during_write":8272,"wal_bytes_after":0},"actual":null}
+{"family":"sqlite_adapter","id":"busy_locking","status":"PASS","detail":null,"expected":{"second_writer":"busy"},"actual":null}
+{"family":"sqlite_adapter","id":"busy_timeout_set","status":"PASS","detail":null,"expected":{"busy_timeout":250},"actual":null}
+{"family":"sqlite_adapter","id":"mode_unsupported","status":"PASS","detail":"invalid_input sqlite_adapter: unsupported mode \"magic\"","expected":"invalid_input","actual":"invalid_input"}
+{"family":"sqlite_adapter","id":"path_nul","status":"PASS","detail":"invalid_input sqlite_adapter: path must be a wellformed non-empty string","expected":"invalid_input","actual":"invalid_input"}
+{"family":"sqlite_adapter","id":"path_empty","status":"PASS","detail":"invalid_input sqlite_adapter: path must be a wellformed non-empty string","expected":"invalid_input","actual":"invalid_input"}
+{"family":"sqlite_adapter","id":"closed_handle_rejected","status":"PASS","detail":null,"expected":{"code":"closed"},"actual":null}
+{"family":"sqlite_adapter","id":"selftest_sql","status":"FAIL","detail":"expected missing file — STOP","expected":null,"actual":null}
