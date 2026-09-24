@@ -99,6 +99,21 @@ run("cancel_terminal_noop_any_run", () => {
   }
   return { terminal_noop_precedes_run_gate: true };
 });
+run("cancel_requested_foreign_run_rejected", () => {
+  // already-cancel_requested no-op is AFTER run-identity: a foreign run
+  // gets needs_verification, not a silent Ok
+  const tid = seedTask();
+  withRepo((repo) => repo.requestCancel(tid, 0n, "run-0", "2026-01-02T03:04:30Z"));
+  const before = sha(DB);
+  try {
+    withRepo((repo) => repo.requestCancel(tid, 1n, "run-FOREIGN", "2026-01-02T03:04:45Z"));
+    throw new Error("foreign-run cancel no-op accepted");
+  } catch (e) {
+    if (e.code !== "needs_verification" ||
+        !e.message.includes("old run or unresolved execution") || sha(DB) !== before) throw e;
+    return { code: e.code, verbatim: true };
+  }
+});
 run("cancel_cross_run_rejected", () => {
   const tid = seedTask();
   const before = sha(DB);

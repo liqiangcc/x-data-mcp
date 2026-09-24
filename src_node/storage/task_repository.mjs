@@ -608,13 +608,18 @@ Object.assign(TaskAdmission.prototype, {
       }
       const full = () => this._db.get("SELECT * FROM tasks WHERE task_id=?", taskId);
       // terminal no-op precedes the run-identity gate (decide)
-      if (TERMINAL_STATUSES.includes(t.status) || t.status === "cancel_requested") {
+      if (TERMINAL_STATUSES.includes(t.status)) {
         return { changed: false, task: full() };
       }
       if (t.accepted_run_id !== runId ||
           (t.owner_run_id !== null && t.owner_run_id !== runId)) {
         throw new StorageError("needs_verification",
           "ACCEPTANCE_NEEDS_VERIFICATION: old run or unresolved execution");
+      }
+      // already-cancel_requested no-op lives inside the arm — AFTER
+      // the run-identity gate (a foreign run gets needs_verification).
+      if (t.status === "cancel_requested") {
+        return { changed: false, task: full() };
       }
       const next = expectedRevision + 1n;
       const res = this._db.run(

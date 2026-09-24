@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-045",
+  "task_id": "NM-045-R1",
   "baseline_sha": "4ed3a2fe6003239daade6466bbded83e42db36f8",
   "source_ported": "task_control decide RequestCancel/FinishExecution/FinishCancellation + write_task_delta terminal path",
   "contract": [
@@ -12,14 +12,14 @@
   "probe": {
     "command": "node scripts/node_migration_p3/terminal_transition_probe.mjs .",
     "exit": 0,
-    "cases": 14,
+    "cases": 15,
     "totals": {
-      "pass": 14,
+      "pass": 15,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
-      "cancel": 4,
+      "cancel": 5,
       "finish_derivations": 3,
       "finish_guards": 3,
       "cancellation": 3,
@@ -39,5 +39,7 @@
     "NM-036": "35/35",
     "NM-035": "23/23"
   },
-  "limits": "no require_verification/reconcile/candidates/retry/workers/services/production readiness"
+  "limits": "no require_verification/reconcile/candidates/retry/workers/services/production readiness",
+  "review": "REVIEW-NM-045 R0 + TASK-NM-045-R1 — cancel_requested no-op ordering",
+  "r1_fix": "requestCancel order now: exists -> stored rev -> terminal no-op (precedes run gate) -> run-identity -> cancel_requested no-op (inside arm, AFTER gate) -> write. Foreign run on cancel_requested -> needs_verification verbatim; new probe cancel_requested_foreign_run_rejected."
 }
