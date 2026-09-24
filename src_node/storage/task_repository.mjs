@@ -171,13 +171,34 @@ function validatePlan(plan) {
   }
   if (!wellformedStr(runId) || runId === "") bad("runId must be a wellformed non-empty string");
   if (retryOf !== null && !wellformedStr(retryOf)) bad("retryOf must be a string or null");
+  // RetryGuard (accept_tx retry branch): retry carries the original
+  // binding; when present it IS the source of retry_of and the stored
+  // command key (the original's, not retry_task's).
+  const retry = plan.retry ?? null;
+  if (retry !== null) {
+    if (typeof retry !== "object" ||
+        !wellformedStr(retry.originalTaskId) || retry.originalTaskId === "") {
+      bad("retry.originalTaskId must be a wellformed non-empty string");
+    }
+    if (typeof retry.expectedRevision !== "bigint" || retry.expectedRevision < 0n) {
+      bad("retry.expectedRevision must be a non-negative bigint");
+    }
+    if (!Array.isArray(retry.selectedItems) ||
+        retry.selectedItems.some((x) => !wellformedStr(x) || x === "") ||
+        new Set(retry.selectedItems).size !== retry.selectedItems.length) {
+      bad("retry.selectedItems must be unique wellformed non-empty strings");
+    }
+    if (retryOf !== retry.originalTaskId) {
+      bad("retryOf must equal retry.originalTaskId when retry is present");
+    }
+  }
   if (!wellformedStr(createdAt)) bad("createdAt (RFC3339) must be supplied by the caller");
   // evidence_digest comes from the frozen work object, as in Rust
   // work.evidence_digest() — a JSON field, not a parameter.
   const work = JSON.parse(workJson);
   const evidenceDigest = (work && typeof work === "object" && !Array.isArray(work) &&
     wellformedStr(work.evidence_digest)) ? work.evidence_digest : null;
-  return { requestId, commandJson, executionKeyJson, workJson, items, scopes, runId, retryOf, createdAt, evidenceDigest };
+  return { requestId, commandJson, executionKeyJson, workJson, items, scopes, runId, retryOf, retry, createdAt, evidenceDigest };
 }
 
 export class TaskAdmission {
@@ -224,7 +245,15 @@ export class TaskAdmission {
           throw new StorageError("inconsistent", "bound execution record missing");
         }
         const div = [];
-        if (bound.command_key_json !== p.executionKeyJson) div.push("command_key_json");
+        // For a retry the durable command key is the ORIGINAL's —
+        // replay must compare against that, not the retry_task key.
+        let expectedKeyJson = p.executionKeyJson;
+        if (p.retry !== null) {
+          const orig = db.get("SELECT command_key_json FROM tasks WHERE task_id=?",
+            p.retry.originalTaskId);
+          if (orig) expectedKeyJson = orig.command_key_json;
+        }
+        if (bound.command_key_json !== expectedKeyJson) div.push("command_key_json");
         if (bound.accepted_run_id !== p.runId) div.push("accepted_run_id");
         if (bound.retry_of !== p.retryOf) div.push("retry_of");
         if (bound.frozen_work_json !== p.workJson) div.push("frozen_work_json");
@@ -304,6 +333,55 @@ export class TaskAdmission {
           throw new StorageError("inconsistent", "command digest mismatch");
         }
       }
+      // 4b. RetryGuard (accept_tx retry branch) — original exists ->
+      // stored revision -> command intent+key -> request binding ->
+      // item selection/spec/outcome -> count. Stored execution key is
+      // the ORIGINAL's command_key_json.
+      let storedKeyJson = p.executionKeyJson;
+      if (p.retry !== null) {
+        const old = this._readBoundTaskValidated(p.retry.originalTaskId);
+        if (!old) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+        const irs = (m) => { throw new StorageError("invalid_retry_selection", m); };
+        if (old.task.state_revision !== p.retry.expectedRevision) {
+          throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+        }
+        const command = JSON.parse(p.commandJson);
+        const oldKey = JSON.parse(old.task.command_key_json);
+        const selected = [...p.retry.selectedItems].sort();
+        const intent = command?.intent;
+        if (!intent || intent.original_task_id !== p.retry.originalTaskId ||
+            !Array.isArray(intent.selected_items) ||
+            !canonEq(intent.selected_items, selected)) {
+          irs("command intent does not match retry selection");
+        }
+        if (command?.key?.operation !== "retry_task" ||
+            command.key.dataset !== oldKey.dataset ||
+            command.key.contract_version !== oldKey.contract_version) {
+          irs("command key is not retry_task with the original key");
+        }
+        const boundReq = db.get(
+          "SELECT request_id FROM requests WHERE task_id=?", p.retry.originalTaskId);
+        if (boundReq && boundReq.request_id === p.requestId) {
+          throw new StorageError("conflict", "REQUEST_CONFLICT");
+        }
+        const workItems = JSON.parse(p.workJson).items;
+        for (const w of workItems) {
+          const spec = old.items.find((i) => i.item_id === w.item_id);
+          if (!p.retry.selectedItems.includes(w.item_id) || !spec ||
+              !canonEq(spec.target, w.target) ||
+              spec.progress_unit !== w.progress_unit ||
+              !canonEq(spec.frozen_inputs, w.frozen_inputs) ||
+              spec.scope_keys.size !== (w.scope_keys?.length ?? -1) ||
+              ![...spec.scope_keys].every((k) => w.scope_keys.includes(k)) ||
+              (spec.outcome !== null && spec.outcome.success === true)) {
+            irs("retry item not selectable or diverges from original");
+          }
+        }
+        if (workItems.length !== p.retry.selectedItems.length) {
+          irs("retry selection size mismatch");
+        }
+        storedKeyJson = old.task.command_key_json;
+      }
       // 5. scope conflicts — collected in plan order (Rust work.scopes order)
       const conflicts = [];
       for (const scope of p.scopes) {
@@ -324,7 +402,7 @@ export class TaskAdmission {
         accepted_run_id,owner_run_id,created_at,last_progress_at,
         frozen_work_json,result_json,retry_of,item_count,items_pending,
         evidence_digest) VALUES(?,?,'pending',0,?,NULL,?,?,?,NULL,?,?,?,?)`,
-        taskId, p.executionKeyJson, p.runId, p.createdAt, p.createdAt,
+        taskId, storedKeyJson, p.runId, p.createdAt, p.createdAt,
         p.workJson, p.retryOf, BigInt(p.items.length), BigInt(p.items.length),
         p.evidenceDigest);
       for (const i of p.items) {

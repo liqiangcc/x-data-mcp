@@ -1,0 +1,13 @@
+{"family":"retry_admission","id":"retry_failed_item_happy","status":"PASS","detail":null,"expected":{"stored_key":"original","retry_of":true,"item":"b"},"actual":null}
+{"family":"retry_admission","id":"retry_succeeded_item_rejected","status":"PASS","detail":null,"expected":{"code":"invalid_retry_selection"},"actual":null}
+{"family":"retry_admission","id":"retry_spec_divergence","status":"PASS","detail":null,"expected":{"code":"invalid_retry_selection"},"actual":null}
+{"family":"retry_admission","id":"retry_stale_revision","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"retry_admission","id":"retry_missing_original","status":"PASS","detail":null,"expected":{"code":"task_not_found"},"actual":null}
+{"family":"retry_admission","id":"retry_intent_mismatch","status":"PASS","detail":null,"expected":{"code":"invalid_retry_selection"},"actual":null}
+{"family":"retry_admission","id":"retry_key_not_retry_task","status":"PASS","detail":null,"expected":{"code":"invalid_retry_selection"},"actual":null}
+{"family":"retry_admission","id":"retry_reuse_original_request_id","status":"PASS","detail":null,"expected":{"code":"conflict"},"actual":null}
+{"family":"retry_admission","id":"retry_replay_binding_divergence","status":"PASS","detail":null,"expected":{"code":"inconsistent"},"actual":null}
+{"family":"retry_admission","id":"retry_selection_size_mismatch","status":"PASS","detail":null,"expected":{"code":"invalid_retry_selection"},"actual":null}
+{"family":"retry_admission","id":"retry_scope_conflict","status":"PASS","detail":null,"expected":{"code":"range_conflict"},"actual":null}
+{"family":"retry_admission","id":"retry_request_replay","status":"PASS","detail":null,"expected":{"reused":true,"bound":"task-4fb"},"actual":null}
+{"family":"retry_admission","id":"implicit_mode_denied","status":"PASS","detail":"invalid_input task_admission: explicit mode readwrite|create required","expected":"invalid_input","actual":"invalid_input"}
