@@ -1,0 +1,6 @@
+{
+  "probe": "serde_writer",
+  "total": 34,
+  "pass": 34,
+  "fail": 0
+}

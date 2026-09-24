@@ -1,0 +1,2 @@
+{"type":"env","code_sha":"9ff742a769b6c363753a568a86e84a5d2b730a77","node":"v20.19.2","uname":"Linux 6.12.94+ #1 SMP PREEMPT_DYNAMIC Fri Sep 18 16:05:18 UTC 2026 x86_64 GNU/Linux","concurrency":1,"bench_iters":400,"bench_warmup":20,"serde_input_bytes":136057}
+{"surface":"serde_json_encode","impl":"node-new","iters":400,"p50_ns":1407172,"p95_ns":1664155,"max_ns":2240416,"mean_ns":1448075,"input_bytes":136057,"peak_rss_kb":68900}

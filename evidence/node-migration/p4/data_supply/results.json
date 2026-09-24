@@ -1,8 +1,8 @@
 {
   "probe": "data_supply",
-  "total": 218,
-  "pass": 159,
+  "total": 275,
+  "pass": 207,
   "fail": 0,
-  "divergence": 59,
+  "divergence": 68,
   "oracle": "target/debug/mcp_data <scratch-db> (SqliteSupply fails closed)"
 }

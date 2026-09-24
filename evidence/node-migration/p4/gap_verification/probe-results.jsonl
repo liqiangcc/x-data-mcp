@@ -1,0 +1,19 @@
+{"family":"gap_verification","id":"A1_stub_basis_not_verified","status":"PASS","detail":""}
+{"family":"gap_verification","id":"A2_fixture_commit_atomic","status":"PASS","detail":""}
+{"family":"gap_verification","id":"A3a_missing_subject_notfound","status":"PASS","detail":""}
+{"family":"gap_verification","id":"A3b_staged_unpublished_notfound","status":"PASS","detail":""}
+{"family":"gap_verification","id":"A3c_damaged_record_fails_closed","status":"PASS","detail":""}
+{"family":"gap_verification","id":"A4_forged_subject_binding","status":"PASS","detail":""}
+{"family":"gap_verification","id":"A5_moved_head_aborts","status":"PASS","detail":""}
+{"family":"gap_verification","id":"A6_non_gap_conclusion","status":"PASS","detail":""}
+{"family":"gap_verification","id":"A7_basis_mismatches","status":"PASS","detail":""}
+{"family":"gap_verification","id":"A8_verifier_identity_mismatch","status":"PASS","detail":""}
+{"family":"gap_verification","id":"B1_accept_rejects_passthrough_fields","status":"PASS","detail":""}
+{"family":"gap_verification","id":"B2_accept_rejects_bad_targets","status":"PASS","detail":""}
+{"family":"gap_verification","id":"B3_freeze_at_acceptance","status":"PASS","detail":""}
+{"family":"gap_verification","id":"C1_runner_stub_fails_closed","status":"PASS","detail":""}
+{"family":"gap_verification","id":"C2_runner_e2e","status":"PASS","detail":""}
+{"family":"gap_verification","id":"C3_runner_head_drift","status":"PASS","detail":""}
+{"family":"gap_verification","id":"B4_replay_acceptance","status":"PASS","detail":""}
+{"family":"gap_verification","id":"C4_runner_cancelled_closes","status":"PASS","detail":""}
+{"family":"gap_verification","id":"summary","status":"PASS","detail":"18 checks, 0 failed"}

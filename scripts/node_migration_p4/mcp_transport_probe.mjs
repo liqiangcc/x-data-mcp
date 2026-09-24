@@ -20,7 +20,8 @@ import { fileURLToPath } from "node:url";
 import { parseJsonBytes, serValue, F64 } from "../../src_node/mcp/serde_json.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const ROOT = process.argv[2] ? join(process.cwd(), process.argv[2]) : join(here, "..", "..");
+const ROOT = process.argv[2] && process.argv[2] !== "diff"
+  ? join(process.cwd(), process.argv[2]) : join(here, "..", "..");
 const SELFTEST = process.argv.includes("diff");
 const CARGO = process.env.CARGO || join(process.env.HOME, ".cargo/bin/cargo");
 const SERVER = join(ROOT, "target/debug/mcp_server");
@@ -31,7 +32,7 @@ const emit = (id, status, detail) => {
 const line = (r) => JSON.stringify(r);
 
 // --- build oracle -------------------------------------------------------
-execSync(`${CARGO} build --bin mcp_server`, { cwd: ROOT, stdio: "pipe" });
+execFileSync(CARGO, ["build", "--bin", "mcp_server"], { cwd: ROOT, stdio: "pipe" });
 const store = mkdtempSync(join(tmpdir(), "nm58-store-"));
 const env = { ...process.env, X_DATA_MCP_STORE: store };
 

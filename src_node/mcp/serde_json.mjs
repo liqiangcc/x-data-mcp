@@ -26,11 +26,23 @@ export class F64 {
   }
 }
 
-const WS = new Set([0x20, 0x09, 0x0a, 0x0d]);
+const WS8 = new Uint8Array(256);
+WS8[0x20] = WS8[0x09] = WS8[0x0a] = WS8[0x0d] = 1;
 const DIGIT = (b) => b >= 0x30 && b <= 0x39;
 const I64_MIN = -(1n << 63n);
 const U64_MAX = (1n << 64n) - 1n;
+const BMIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
+const BMAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const RECURSION_LIMIT = 128;
+
+// Internal failure carrier — keeps the success path unboxed. The
+// public contract (run()) still returns {ok,message}|{ok:true,value}.
+class ParseError extends Error {
+  constructor(message, eofKind = null) {
+    super(message);
+    this.eofKind = eofKind;
+  }
+}
 
 class Parse {
   constructor(buf) {
@@ -43,14 +55,11 @@ class Parse {
   // offending byte; `eof()` reports at the current (end) position.
   at(idx, kind) {
     this.pos = idx;
-    return { ok: false, message: `${kind} at line 1 column ${this.pos}` };
+    throw new ParseError(`${kind} at line 1 column ${this.pos}`);
   }
   eof(kind) {
-    return {
-      ok: false,
-      eofKind: kind,
-      message: `EOF while parsing ${kind} at line 1 column ${this.pos}`,
-    };
+    throw new ParseError(
+      `EOF while parsing ${kind} at line 1 column ${this.pos}`, kind);
   }
   peek() {
     return this.pos < this.buf.length ? this.buf[this.pos] : -1;
@@ -59,42 +68,46 @@ class Parse {
     return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
   }
   skipWs() {
-    while (this.pos < this.buf.length && WS.has(this.buf[this.pos])) this.pos++;
+    const b = this.buf;
+    let p = this.pos;
+    while (p < b.length && WS8[b[p]]) p++;
+    this.pos = p;
   }
 
   run() {
-    this.skipWs();
-    const v = this.value();
-    if (!v.ok) return v;
-    this.skipWs();
-    if (this.pos < this.buf.length) return this.at(this.pos + 1, "trailing characters");
-    return { ok: true, value: v.value };
+    try {
+      this.skipWs();
+      const v = this.value();
+      this.skipWs();
+      if (this.pos < this.buf.length) {
+        this.at(this.pos + 1, "trailing characters");
+      }
+      return { ok: true, value: v };
+    } catch (e) {
+      if (e instanceof ParseError) return { ok: false, message: e.message };
+      throw e;
+    }
   }
 
   value() {
     const b = this.peek();
-    if (b < 0) return this.eof("a value");
+    if (b < 0) this.eof("a value");
     switch (b) {
       case 0x7b: // {
         return this.container(true);
       case 0x5b: // [
         return this.container(false);
-      case 0x22: {
-        // "
-        const s = this.string();
-        if (!s.ok) return s;
-        return { ok: true, value: s.value };
-      }
+      case 0x22: // "
+        return this.string();
       case 0x74:
         return this.ident("rue", true);
       case 0x66:
         return this.ident("alse", false);
       case 0x6e:
         return this.ident("ull", null);
-      case 0x2d: // -
       default:
         if (b === 0x2d || DIGIT(b)) return this.number();
-        return this.at(this.pos + 1, "expected value");
+        this.at(this.pos + 1, "expected value");
     }
   }
 
@@ -102,17 +115,17 @@ class Parse {
     this.pos++; // consume first byte already matched by caller
     for (const ch of rest) {
       const b = this.next();
-      if (b < 0) return this.eof("a value");
-      if (b !== ch.charCodeAt(0)) return this.at(this.pos, "expected ident");
+      if (b < 0) this.eof("a value");
+      if (b !== ch.charCodeAt(0)) this.at(this.pos, "expected ident");
     }
-    return { ok: true, value };
+    return value;
   }
 
   container(isObj) {
     this.pos++; // consume { or [
     this.depth++;
     if (this.depth > RECURSION_LIMIT - 1)
-      return this.at(this.pos, "recursion limit exceeded");
+      this.at(this.pos, "recursion limit exceeded");
     const kind = isObj ? "an object" : "a list";
     const close = isObj ? 0x7d : 0x5d; // } or ]
     const commaErr = isObj ? "expected `,` or `}`" : "expected `,` or `]`";
@@ -121,73 +134,107 @@ class Parse {
     let first = true;
     for (;;) {
       let b = this.peek();
-      if (b < 0) return this.eof(kind);
+      if (b < 0) this.eof(kind);
       if (!first) {
         // position after element: only , or close is legal
         if (b === close) {
           this.pos++;
           this.depth--;
-          return { ok: true, value: out };
+          return out;
         }
-        if (b !== 0x2c) return this.at(this.pos + 1, commaErr);
+        if (b !== 0x2c) this.at(this.pos + 1, commaErr);
         this.pos++;
         this.skipWs();
         const c = this.peek();
-        if (c === close) return this.at(this.pos + 1, "trailing comma");
+        if (c === close) this.at(this.pos + 1, "trailing comma");
         // EOF here lands in the element/key context below
       } else if (b === close) {
         this.pos++;
         this.depth--;
-        return { ok: true, value: out };
+        return out;
       }
       first = false;
       if (isObj) {
         const k = this.peek();
         // serde: post-comma key position EOF is a value-context error; the
         // first-element EOF was already reported as "an object" above.
-        if (k < 0) return this.eof("a value");
-        if (k !== 0x22) return this.at(this.pos + 1, "key must be a string");
-        const key = this.string();
-        // serde maps EOF inside an object key to the object context
-        if (!key.ok) return key.eofKind === "a string" ? this.eof(kind) : key;
+        if (k < 0) this.eof("a value");
+        if (k !== 0x22) this.at(this.pos + 1, "key must be a string");
+        let key;
+        try {
+          key = this.string();
+        } catch (e) {
+          // serde maps EOF inside an object key to the object context
+          if (e instanceof ParseError && e.eofKind === "a string") {
+            this.eof(kind);
+          }
+          throw e;
+        }
         this.skipWs();
         const colon = this.next();
-        if (colon < 0) return this.eof(kind);
-        if (colon !== 0x3a) return this.at(this.pos, "expected `:`");
+        if (colon < 0) this.eof(kind);
+        if (colon !== 0x3a) this.at(this.pos, "expected `:`");
         this.skipWs();
-        const v = this.value();
-        if (!v.ok) return v;
-        out[key.value] = v.value;
+        out[key] = this.value();
       } else {
-        const v = this.value();
-        if (!v.ok) return v;
-        out.push(v.value);
+        out.push(this.value());
       }
       this.skipWs();
     }
   }
 
   string() {
-    // on entry pos points at the opening quote
-    this.pos++;
-    const parts = [];
-    let start = this.pos;
-    const flush = (end) => {
-      if (end > start) parts.push(this.buf.toString("utf8", start, end));
-    };
-    for (;;) {
-      const b = this.next();
-      if (b < 0) return this.eof("a string");
-      if (b === 0x22) {
-        flush(this.pos - 1);
-        return { ok: true, value: parts.join("") };
+    // on entry pos points at the opening quote.
+    // Prescan with a local cursor: a clean string (no `"` terminator,
+    // backslash, or <0x20 byte until the close) decodes in one
+    // toString without parts[] machinery. `\\`/C0/EOF falls into
+    // stringSlow with byte-exact error positions.
+    const b = this.buf;
+    let p = this.pos + 1;
+    while (p < b.length) {
+      const c = b[p];
+      if (c === 0x22) {
+        const s = b.toString("utf8", this.pos + 1, p);
+        this.pos = p + 1;
+        return s;
       }
-      if (b < 0x20)
-        return this.at(this.pos, "control character (\\u0000-\\u001F) found while parsing a string");
-      if (b !== 0x5c) continue;
-      flush(this.pos - 1); // bytes before the backslash
+      if (c === 0x5c || c < 0x20) break;
+      p++;
+    }
+    return this.stringSlow(p);
+  }
+
+  // pos still points at the opening quote; p0 is the first byte the
+  // prescan stopped at (a `\\`, a C0 control, or EOF).
+  stringSlow(p0) {
+    const b = this.buf;
+    const parts = [];
+    if (p0 > this.pos + 1) parts.push(b.toString("utf8", this.pos + 1, p0));
+    let start = p0;
+    let p = p0;
+    for (;;) {
+      if (p >= b.length) {
+        this.pos = p;
+        this.eof("a string");
+      }
+      const c = b[p];
+      if (c === 0x22) {
+        if (p > start) parts.push(b.toString("utf8", start, p));
+        this.pos = p + 1;
+        return parts.join("");
+      }
+      if (c < 0x20) {
+        this.pos = p + 1;
+        this.at(this.pos, "control character (\\u0000-\\u001F) found while parsing a string");
+      }
+      if (c !== 0x5c) {
+        p++;
+        continue;
+      }
+      if (p > start) parts.push(b.toString("utf8", start, p));
+      this.pos = p + 1; // step onto the escape letter
       const e = this.next();
-      if (e < 0) return this.eof("a string");
+      if (e < 0) this.eof("a string");
       switch (e) {
         case 0x22:
           parts.push('"');
@@ -213,16 +260,14 @@ class Parse {
         case 0x74:
           parts.push("\t");
           break;
-        case 0x75: {
-          const u = this.hexEscape();
-          if (!u.ok) return u;
-          parts.push(u.value);
+        case 0x75:
+          parts.push(this.hexEscape());
           break;
-        }
         default:
-          return this.at(this.pos, "invalid escape");
+          this.at(this.pos, "invalid escape");
       }
       start = this.pos;
+      p = this.pos;
     }
   }
 
@@ -231,7 +276,7 @@ class Parse {
     let v = 0;
     for (let i = 0; i < 4; i++) {
       const b = this.next();
-      if (b < 0) return { ok: false, eof: true };
+      if (b < 0) this.eof("a string");
       const d =
         b >= 0x30 && b <= 0x39 ? b - 0x30 :
         b >= 0x61 && b <= 0x66 ? b - 0x61 + 10 :
@@ -239,97 +284,100 @@ class Parse {
       if (d < 0) {
         // consume the remaining digits like serde's 4-byte read
         while (++i < 4) {
-          if (this.next() < 0) return { ok: false, eof: true };
+          if (this.next() < 0) this.eof("a string");
         }
-        return { ok: false, eof: false };
+        this.at(this.pos, "invalid escape");
       }
       v = v * 16 + d;
     }
-    return { ok: true, value: v };
+    return v;
   }
 
   hexEscape() {
     const u = this.hex4();
-    if (!u.ok) {
-      if (u.eof) return this.eof("a string");
-      return this.at(this.pos, "invalid escape");
-    }
-    let cp = u.value;
+    let cp = u;
     if (cp >= 0xd800 && cp <= 0xdbff) {
       // high surrogate: serde expects a second \uXXXX low surrogate
       const b = this.next();
-      if (b < 0) return this.eof("a string");
-      if (b !== 0x5c) return this.at(this.pos, "unexpected end of hex escape");
+      if (b < 0) this.eof("a string");
+      if (b !== 0x5c) this.at(this.pos, "unexpected end of hex escape");
       const u2 = this.next();
-      if (u2 < 0) return this.eof("a string");
-      if (u2 !== 0x75) return this.at(this.pos, "unexpected end of hex escape");
+      if (u2 < 0) this.eof("a string");
+      if (u2 !== 0x75) this.at(this.pos, "unexpected end of hex escape");
       const lo = this.hex4();
-      if (!lo.ok) {
-        if (lo.eof) return this.eof("a string");
-        return this.at(this.pos, "invalid escape");
-      }
-      if (lo.value < 0xdc00 || lo.value > 0xdfff)
-        return this.at(this.pos, "lone leading surrogate in hex escape");
-      cp = 0x10000 + ((cp - 0xd800) << 10) + (lo.value - 0xdc00);
-      return { ok: true, value: String.fromCodePoint(cp) };
+      if (lo < 0xdc00 || lo > 0xdfff)
+        this.at(this.pos, "lone leading surrogate in hex escape");
+      cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
+      return String.fromCodePoint(cp);
     }
     if (cp >= 0xdc00 && cp <= 0xdfff)
-      return this.at(this.pos, "lone leading surrogate in hex escape");
-    return { ok: true, value: String.fromCharCode(cp) };
+      this.at(this.pos, "lone leading surrogate in hex escape");
+    return String.fromCharCode(cp);
   }
 
   number() {
     const start = this.pos;
+    const b = this.buf;
     let neg = false;
-    if (this.peek() === 0x2d) {
+    if (b[this.pos] === 0x2d) {
       this.pos++;
       neg = true;
     }
-    let b = this.peek();
-    if (b < 0) return this.eof("a value");
-    if (!DIGIT(b)) return this.at(this.pos + 1, "invalid number");
+    let c = this.peek();
+    if (c < 0) this.eof("a value");
+    if (!DIGIT(c)) this.at(this.pos + 1, "invalid number");
     let isFloat = false;
-    if (b === 0x30) {
+    // digit-accumulated value is only used when digits <= 15 (< 1e15,
+    // always < 2^53 -> exact); longer lexemes take the BigInt path.
+    let intVal = 0, digits = 0;
+    if (c === 0x30) {
       this.pos++;
+      digits = 1;
       const n = this.peek();
-      if (n >= 0 && DIGIT(n)) return this.at(this.pos + 1, "invalid number");
+      if (n >= 0 && DIGIT(n)) this.at(this.pos + 1, "invalid number");
     } else {
-      while (DIGIT(this.peek())) this.pos++;
+      while (this.pos < b.length && DIGIT(b[this.pos])) {
+        intVal = intVal * 10 + b[this.pos] - 0x30;
+        this.pos++;
+        digits++;
+      }
     }
-    if (this.peek() === 0x2e) {
+    if (b[this.pos] === 0x2e) {
       // '.'
       isFloat = true;
       this.pos++;
-      b = this.peek();
-      if (b < 0) return this.eof("a value");
-      if (!DIGIT(b)) return this.at(this.pos + 1, "invalid number");
-      while (DIGIT(this.peek())) this.pos++;
+      c = this.peek();
+      if (c < 0) this.eof("a value");
+      if (!DIGIT(c)) this.at(this.pos + 1, "invalid number");
+      while (this.pos < b.length && DIGIT(b[this.pos])) this.pos++;
     }
-    if (this.peek() === 0x65 || this.peek() === 0x45) {
+    if (b[this.pos] === 0x65 || b[this.pos] === 0x45) {
       // e/E
       isFloat = true;
       this.pos++;
       const s = this.peek();
       if (s === 0x2b || s === 0x2d) this.pos++;
-      b = this.peek();
-      if (b < 0) return this.eof("a value");
-      if (!DIGIT(b)) return this.at(this.pos + 1, "invalid number");
-      while (DIGIT(this.peek())) this.pos++;
+      c = this.peek();
+      if (c < 0) this.eof("a value");
+      if (!DIGIT(c)) this.at(this.pos + 1, "invalid number");
+      while (this.pos < b.length && DIGIT(b[this.pos])) this.pos++;
     }
-    const lexeme = this.buf.toString("ascii", start, this.pos);
     if (!isFloat) {
-      if (neg && lexeme === "-0") return { ok: true, value: new F64(-0) };
+      if (neg && digits === 1 && intVal === 0) return new F64(-0);
+      if (digits <= 15) return neg ? -intVal : intVal;
+      const lexeme = b.toString("ascii", start, this.pos);
       const big = BigInt(lexeme);
       if (big >= I64_MIN && big <= U64_MAX) {
-        if (big >= BigInt(Number.MIN_SAFE_INTEGER) && big <= BigInt(Number.MAX_SAFE_INTEGER))
-          return { ok: true, value: Number(big) };
-        return { ok: true, value: big };
+        if (big >= BMIN_SAFE && big <= BMAX_SAFE)
+          return Number(big);
+        return big;
       }
-      return { ok: true, value: new F64(Number(lexeme)) }; // integer overflow -> f64
+      return new F64(Number(lexeme)); // integer overflow -> f64
     }
+    const lexeme = b.toString("ascii", start, this.pos);
     const v = Number(lexeme);
-    if (!Number.isFinite(v)) return this.at(this.pos, "number out of range");
-    return { ok: true, value: new F64(v) };
+    if (!Number.isFinite(v)) this.at(this.pos, "number out of range");
+    return new F64(v);
   }
 }
 
@@ -388,18 +436,147 @@ export function serF64(v) {
   return sign + mant + "e" + (e10 < 0 ? "-" : "+") + Math.abs(e10);
 }
 
-const keyCmp = (a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+// Object-key order: serde_json BTreeMap = UTF-8 byte order == code
+// point order (UTF-8 is order-preserving). Code-unit compare is wrong
+// for supplementary-plane keys (a surrogate pair's lead unit sits in
+// 0xD800-0xDFFF, below the BMP range its code point exceeds), so when
+// either side holds a surrogate we compare by code point.
+const keyCmp = (a, b) => {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const ca = a.charCodeAt(i), cb = b.charCodeAt(i);
+    if (ca === cb) continue;
+    if ((ca & 0xf800) === 0xd800 || (cb & 0xf800) === 0xd800) {
+      return a.codePointAt(i) - b.codePointAt(i);
+    }
+    return ca - cb;
+  }
+  return a.length - b.length;
+};
+
+// serde_json string escape policy — identical to JSON.stringify:
+// \b \t \n \f \r \" \\ plus C0 < 0x20 as \u00xx (lowercase hex);
+// DEL and everything >= 0x20 passes through raw (UTF-8 encoded).
+const ESCAPE = new Array(128);
+for (let i = 0; i < 0x20; i++) {
+  ESCAPE[i] = "\\u" + i.toString(16).padStart(4, "0");
+}
+ESCAPE[8] = "\\b"; ESCAPE[9] = "\\t"; ESCAPE[10] = "\\n";
+ESCAPE[12] = "\\f"; ESCAPE[13] = "\\r";
+ESCAPE[34] = '\\"'; ESCAPE[92] = "\\\\";
+const NEEDS_ESCAPE = new Uint8Array(128);
+for (let i = 0; i < 0x20; i++) NEEDS_ESCAPE[i] = 1;
+NEEDS_ESCAPE[34] = 1; NEEDS_ESCAPE[92] = 1;
+
+// Byte-level emit: a single growable buffer, no per-leaf string
+// allocation. Strings are scanned once for escapable chars; clean
+// spans go through one Buffer.utf8 write.
+class ByteWriter {
+  constructor() {
+    this.b = Buffer.allocUnsafe(1 << 16);
+    this.p = 0;
+  }
+  need(n) {
+    if (this.p + n <= this.b.length) return;
+    const nb = Buffer.allocUnsafe(
+      Math.max(this.b.length * 2, this.b.length + n));
+    this.b.copy(nb, 0, 0, this.p);
+    this.b = nb;
+  }
+  byte(c) {
+    if (this.p >= this.b.length) this.need(8);
+    this.b[this.p++] = c;
+  }
+  lit(s) { // ASCII-only literal
+    const n = s.length;
+    this.need(n);
+    for (let i = 0; i < n; i++) this.b[this.p++] = s.charCodeAt(i);
+  }
+  utf8(s) {
+    this.need(s.length * 3 + 2);
+    this.p += this.b.write(s, this.p, "utf8");
+  }
+  str(s) { // quoted + escaped
+    this.byte(34);
+    let start = 0;
+    const n = s.length;
+    for (let i = 0; i < n; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 0x80) {
+        if (NEEDS_ESCAPE[c]) {
+          if (i > start) this.utf8(s.slice(start, i));
+          this.lit(ESCAPE[c]);
+          start = i + 1;
+        }
+        continue;
+      }
+      // Lone surrogates: JSON.stringify emits \udXXX (lowercase);
+      // utf8Write would emit U+FFFD. Valid pairs pass through raw.
+      if (c >= 0xd800 && c <= 0xdbff &&
+          (i + 1 >= n || !(s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff))) {
+        if (i > start) this.utf8(s.slice(start, i));
+        this.lit("\\u" + c.toString(16).padStart(4, "0"));
+        start = i + 1;
+      } else if (c >= 0xdc00 && c <= 0xdfff) {
+        if (i > start) this.utf8(s.slice(start, i));
+        this.lit("\\u" + c.toString(16).padStart(4, "0"));
+        start = i + 1;
+      } else if (c >= 0xd800 && c <= 0xdbff) {
+        i++; // valid pair — consume the trail too
+      }
+    }
+    if (start === 0) this.utf8(s);
+    else if (start < n) this.utf8(s.slice(start));
+    this.byte(34);
+  }
+  bytes() { return this.b.subarray(0, this.p); }
+  text() { return this.b.toString("utf8", 0, this.p); }
+}
+
+const serInto = (v, w) => {
+  if (v === null || v === undefined) { w.lit("null"); return; }
+  const t = typeof v;
+  if (t === "string") { w.str(v); return; }
+  if (t === "number") {
+    w.lit(Number.isInteger(v) ? String(v) : serF64(v));
+    return;
+  }
+  if (t === "boolean") { w.lit(v ? "true" : "false"); return; }
+  if (t === "bigint") { w.lit(v.toString()); return; }
+  if (v instanceof F64) { w.lit(serF64(v.v)); return; }
+  if (typeof v.toJSON === "function") { serInto(v.toJSON(), w); return; }
+  if (Array.isArray(v)) {
+    w.byte(91);
+    for (let i = 0; i < v.length; i++) {
+      if (i) w.byte(44);
+      serInto(v[i], w);
+    }
+    w.byte(93);
+    return;
+  }
+  w.byte(123);
+  const keys = Object.keys(v);
+  if (keys.length > 1) keys.sort(keyCmp);
+  for (let i = 0; i < keys.length; i++) {
+    if (i) w.byte(44);
+    w.str(keys[i]);
+    w.byte(58);
+    serInto(v[keys[i]], w);
+  }
+  w.byte(125);
+};
 
 // serde_json::to_string(&Value) parity: BTreeMap-sorted keys, compact.
+// Byte-level emit (NM-090): the returned Buffer is a live view over
+// the writer's scratch — copy before storing if the bytes must
+// outlive the caller's own writes.
+export function serValueBytes(v) {
+  const w = new ByteWriter();
+  serInto(v, w);
+  return w.bytes();
+}
 export function serValue(v) {
-  if (v === null || v === undefined) return "null";
-  if (v instanceof F64) return serF64(v.v);
-  if (typeof v === "bigint") return v.toString();
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : serF64(v);
-  if (typeof v === "string") return JSON.stringify(v);
-  if (typeof v === "boolean") return v ? "true" : "false";
-  if (typeof v.toJSON === "function") return serValue(v.toJSON());
-  if (Array.isArray(v)) return `[${v.map(serValue).join(",")}]`;
-  const keys = Object.keys(v).sort(keyCmp);
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${serValue(v[k])}`).join(",")}}`;
+  const w = new ByteWriter();
+  serInto(v, w);
+  return w.text();
 }
