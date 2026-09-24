@@ -6,9 +6,11 @@
 // Handlers are synchronous, matching the Rust &self method shape (all
 // storage drivers are synchronous better-sqlite3 calls).
 //
-// Handler `args` arrive unwrapped: F64 -> Number, i64/u64 beyond the JS
-// safe range -> BigInt (exactness preserved; float-lexeme `1.0` arrives
-// as 1 — same loss as JSON.parse). The request `id` is echoed verbatim.
+// Handler `args` arrive as the parsed Value: integer lexemes -> Number or
+// BigInt (exactness beyond 2^53 preserved), float lexemes -> F64 —
+// floatness MUST survive into handlers because serde_json::from_value
+// reports "floating point `1.0`" where JSON.parse would lose it. The
+// request `id` is echoed verbatim.
 
 import { Buffer, isUtf8 } from "node:buffer";
 import { once } from "node:events";
@@ -41,10 +43,11 @@ export class ApiError extends Error {
 
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
-// Deep-convert parsed arguments for the handler: F64 -> Number.
-// BigInt stays (safe-range integers already arrive as Number).
+// Deep-convert parsed arguments for the handler — NM-058 kept this as a
+// container copy with F64 -> Number unwrapping; from_value parity needs
+// the floatness, so containers are copied but leaf values stay raw.
 const unwrap = (v) => {
-  if (v instanceof F64) return v.v;
+  if (v instanceof F64) return v;
   if (Array.isArray(v)) return v.map(unwrap);
   if (isObject(v)) {
     const out = {};
