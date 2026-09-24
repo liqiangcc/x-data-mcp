@@ -2,7 +2,7 @@
 // BOTH the Rust oracle (diff_harness::run, real SqliteTasks) and the
 // Node runner, then diffs per-op outcomes. Exit nonzero on any DIFF.
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = process.argv[2] || ".";
@@ -86,10 +86,12 @@ for (const file of scenarios) {
       "scripts/node_migration_p3/diff_compare.mjs", rustOut, nodeOut,
     ], { cwd: ROOT, encoding: "utf8" });
     const verdict = JSON.parse(cmp.trim().split("\n").pop());
+    if (verdict.verdict !== "MATCH") writeFileSync(`/tmp/cmp-${name}.txt`, cmp);
     emit(name, verdict.verdict === "MATCH" ? "PASS" : "FAIL",
       `${verdict.ops} ops, ${verdict.diffs} diffs`);
   } catch (e) {
     const tail = (e.stdout ? String(e.stdout) : String(e.message)) + " | stderr:" + String(e.stderr||"");
+    writeFileSync(`/tmp/cmp-${name}.txt`, tail);
     emit(name, "FAIL", tail.slice(0, 900));
   } finally {
     rmSync(dir, { recursive: true, force: true });

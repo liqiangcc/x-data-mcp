@@ -64,7 +64,13 @@ function checkFact(f, i) {
     throw new ConsistencyInputError(`files[${i}] must be an object`);
   }
   if (!isStr(f.role) || !Object.hasOwn(ROLE_IDX, f.role)) throw new ConsistencyInputError(`files[${i}].role invalid`);
-  if (!Number.isSafeInteger(f.bytes) || f.bytes < 0) throw new ConsistencyInputError(`files[${i}].bytes invalid`);
+  // Rust bytes: u64 — serde accepts [0, 2^64-1]. The boundary decoder
+  // passes exact bigints; programmatic callers may pass numbers (safe
+  // integers only — a float above 2^53 is already imprecise).
+  const okBytes = typeof f.bytes === "bigint"
+    ? f.bytes >= 0n && f.bytes <= 18446744073709551615n
+    : typeof f.bytes === "number" && Number.isSafeInteger(f.bytes) && f.bytes >= 0;
+  if (!okBytes) throw new ConsistencyInputError(`files[${i}].bytes invalid`);
   if (!isStr(f.sha256)) throw new ConsistencyInputError(`files[${i}].sha256 must be a string`);
   if (!isStr(f.source_url)) throw new ConsistencyInputError(`files[${i}].source_url must be a string`);
   const k1 = parseTs(f.acquisition_started_at), k2 = parseTs(f.acquisition_completed_at);

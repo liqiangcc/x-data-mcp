@@ -37,8 +37,13 @@ export const IO_TEXT = {
   EACCES: "Permission denied (os error 13)",
   ENOTDIR: "Not a directory (os error 20)",
   EISDIR: "Is a directory (os error 21)",
+  EPIPE: "Broken pipe (os error 32)",
   ENAMETOOLONG: "File name too long (os error 36)",
   ELOOP: "Too many levels of symbolic links (os error 40)",
+  ECONNABORTED: "Software caused connection abort (os error 103)",
+  ECONNRESET: "Connection reset by peer (os error 104)",
+  ETIMEDOUT: "Connection timed out (os error 110)",
+  ECONNREFUSED: "Connection refused (os error 111)",
 };
 export function ioText(e) {
   if (e && typeof e.code === "string" && IO_TEXT[e.code]) return IO_TEXT[e.code];

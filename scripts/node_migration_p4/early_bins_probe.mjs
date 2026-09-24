@@ -18,7 +18,7 @@
 // cases where the ported snapshot parser intentionally keeps Node-side
 // diagnostic text (documented delta from the snapshot slice).
 // "divergence" cases assert a documented Node-side boundary instead of
-// parity (currently: bytes > 2^53 hits isSafeInteger in checkFact).
+// parity. (bytes > 2^53 was one — NM-077 made it exact parity.)
 
 import { spawnSync } from "node:child_process";
 import {
@@ -157,13 +157,10 @@ const SCENARIOS = [
   { name: "cc-real-131", bin: "consistency_check", args: ["{ccReal}"] },
   ...ccFixtures,
   {
+    // NM-077: full u64 range now accepted — exact parity with the Rust
+    // oracle (exit 0, identical decision output).
     name: "cc-divergence-u64max", bin: "consistency_check",
     args: [join(FIX, "cc/divergence-u64max.json")],
-    divergence: {
-      rust: { exit: 0 },
-      node: { exit: 1, stderr: "files[0].bytes invalid\n" },
-      note: "ported checkFact uses Number.isSafeInteger — u64 > 2^53 rejected at the governance layer (out of lane)",
-    },
   },
   { name: "cc-no-args", bin: "consistency_check", args: [] },
   { name: "cc-two-args", bin: "consistency_check", args: ["{ccReal}", "{ccReal}"] },

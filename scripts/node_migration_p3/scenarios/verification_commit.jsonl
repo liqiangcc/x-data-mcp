@@ -1,0 +1,77 @@
+{"op": "seed", "records": "valid_daily.json,valid_yearly.json,nm052_result.json|pub=res-ch|nohead", "results": true, "check": true, "norm_ts": true}
+{"op": "lookup_task", "sym": "FX"}
+{"op": "checkpoint", "task": "$FX_5"}
+{"op": "check_receipt", "id": "$FX_5"}
+{"op": "known_publication", "target": "$FX_3"}
+{"op": "admit", "as": "T1", "request_id": "rq-t1", "command": {"key": {"operation": "update_data", "dataset": "market.daily", "contract_version": "explicit-range-task-v1"}, "intent": {}}, "work": {"items": [{"item_id": "i1", "target": {"symbol": "sh.600006", "period": "day"}, "progress_unit": "x", "frozen_inputs": {}, "scope_keys": ["[\"market\",\"sh.600006\",\"day\"]"]}], "scopes": ["[\"market\",\"sh.600006\",\"day\"]"]}, "run": "run-t1"}
+{"op": "claim", "task": "$T1", "revision": 0, "run": "run-t1"}
+{"op": "startItem", "task": "$T1", "revision": 1, "run": "run-t1", "item": "i1"}
+{"op": "requireVerification", "task": "$T1", "revision": 2, "run": "run-t1", "item": "i1", "reason": "writer vanished mid-flight"}
+{"op": "admit", "as": "V1", "request_id": "rq-v1", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$T1"}}, "work": {"items": [{"item_id": "stopped-writes", "target": {"task_id": "$T1"}, "progress_unit": "evidence_check", "frozen_inputs": {"target_task_id": "$T1", "accepted_run_id": "run-t1"}, "scope_keys": ["verification:task:$T1"]}], "scopes": ["verification:task:$T1"]}, "run": "run-v1"}
+{"op": "claim", "task": "$V1", "revision": 0, "run": "run-v1"}
+{"op": "startItem", "task": "$V1", "revision": 1, "run": "run-v1", "item": "stopped-writes"}
+{"op": "capture", "as": "t1-before", "kind": "snapshot", "task": "$T1"}
+{"op": "capture", "as": "stop-plan-a", "kind": "stop_plan", "verification": "$V1", "target": "$T1", "run": "run-v1", "actor": "auditor-a", "now": "2026-02-01T00:00:00Z", "observation": {"kind": "stopped", "evidence_ref": "ev-ledger-1"}}
+{"op": "commit_stop_check", "audit_cap": "stop-plan-a"}
+{"op": "stop_receipt", "id": "$V1"}
+{"op": "checkpoint", "task": "$V1"}
+{"op": "checkpoint", "task": "$T1"}
+{"op": "commit_stop_check", "audit_cap": "stop-plan-a"}
+{"op": "commit_stop_check", "audit_cap": "stop-plan-a", "tweak": {"receipt.reason": "forged conclusion"}}
+{"op": "stop_receipt", "id": "$V1"}
+{"op": "bind_existing_stop", "request_id": "req-stop-bind", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$T1"}}, "target": {"task": "$T1"}, "result": {"kind": "already_verified", "receipt": {"verification_task_id": "$V1", "target_task_id": "$T1", "conclusion": "interrupted", "verification_revision": 3, "target_revision": 4, "reason": "verified stopped; original task not resumed"}}}
+{"op": "bind_existing_stop", "request_id": "req-stop-bind", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$T1"}}, "target": {"task": "$T1"}, "result": {"kind": "already_verified", "receipt": {"verification_task_id": "$V1", "target_task_id": "$T1", "conclusion": "interrupted", "verification_revision": 3, "target_revision": 4, "reason": "verified stopped; original task not resumed"}}}
+{"op": "bind_existing_stop", "request_id": "req-stop-bind2", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$FX_3"}}, "target": {"task": "$T1"}, "result": {"kind": "already_verified", "receipt": {"verification_task_id": "$V1", "target_task_id": "$T1", "conclusion": "interrupted", "verification_revision": 3, "target_revision": 4, "reason": "verified stopped; original task not resumed"}}}
+{"op": "bind_existing_stop", "request_id": "req-stop-bind3", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$T1"}}, "target": {"cap": "t1-before"}, "result": {"kind": "already_verified", "receipt": {"verification_task_id": "$V1", "target_task_id": "$T1", "conclusion": "interrupted", "verification_revision": 3, "target_revision": 4, "reason": "verified stopped; original task not resumed"}}}
+{"op": "bind_existing_stop", "request_id": "req-stop-bind4", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$T1"}}, "target": {"task": "$T1"}, "result": {"kind": "already_verified", "receipt": {"verification_task_id": "$V1", "target_task_id": "$T1", "conclusion": "not_applicable", "verification_revision": 3, "target_revision": 4, "reason": "verified stopped; original task not resumed"}}}
+{"op": "never_started_facts", "id": "$T1"}
+{"op": "determinate_facts", "id": "$T1"}
+{"op": "determinate_facts", "id": "$FX_3"}
+{"op": "never_started_facts", "id": "$FX_2"}
+{"op": "admit", "as": "V2", "request_id": "rq-v2", "command": {"key": {"operation": "verify_publication_result", "dataset": "task.verification", "contract_version": "publication-check-task-v1"}, "intent": {"target_task_id": "$FX_3"}}, "work": {"items": [{"item_id": "publication-results", "target": {"task_id": "$FX_3"}, "progress_unit": "evidence_check", "frozen_inputs": {"target_task_id": "$FX_3", "accepted_run_id": "run-check"}, "scope_keys": ["verification:task:$FX_3"]}], "scopes": ["verification:task:$FX_3"]}, "run": "run-v2"}
+{"op": "claim", "task": "$V2", "revision": 0, "run": "run-v2"}
+{"op": "startItem", "task": "$V2", "revision": 1, "run": "run-v2", "item": "publication-results"}
+{"op": "known_publication", "target": "$FX_3"}
+{"op": "bind_known_publication", "request_id": "req-pub-bind", "command": {"key": {"operation": "verify_publication_result", "dataset": "task.verification", "contract_version": "publication-check-task-v1"}, "intent": {"target_task_id": "$FX_3"}}, "target": {"task": "$FX_3"}, "result": {"kind": "already_verified", "receipt": {"verification_task_id": "$FX_5", "target_task_id": "$FX_3", "verification_revision": 3, "target_revision": 4, "conclusion": "all_recorded", "reason": "all task items have verified fixed publication evidence; this does not prove writers stopped", "missing_receipt_item_ids": []}}}
+{"op": "bind_known_publication", "request_id": "req-pub-bind", "command": {"key": {"operation": "verify_publication_result", "dataset": "task.verification", "contract_version": "publication-check-task-v1"}, "intent": {"target_task_id": "$FX_3"}}, "target": {"task": "$FX_3"}, "result": {"kind": "already_verified", "receipt": {"verification_task_id": "$FX_5", "target_task_id": "$FX_3", "verification_revision": 3, "target_revision": 4, "conclusion": "all_recorded", "reason": "all task items have verified fixed publication evidence; this does not prove writers stopped", "missing_receipt_item_ids": []}}}
+{"op": "bind_known_publication", "request_id": "req-pub-bind2", "command": {"key": {"operation": "verify_publication_result", "dataset": "task.verification", "contract_version": "publication-check-task-v1"}, "intent": {"target_task_id": "$FX_3"}}, "target": {"task": "$FX_3"}, "result": {"kind": "already_verified", "receipt": {"verification_task_id": "$FX_5", "target_task_id": "$FX_3", "verification_revision": 3, "target_revision": 4, "conclusion": "not_applicable", "reason": "x", "missing_receipt_item_ids": []}}}
+{"op": "capture", "as": "check-plan-a", "kind": "check_plan", "verification": "$V2", "target": "$FX_3", "run": "run-v2", "actor": "auditor-b", "now": "2026-02-02T00:00:00Z"}
+{"op": "commit_check", "verification": "$V2", "target": "$FX_3", "run": "run-v2", "actor": "auditor-b", "now": "2026-02-02T00:00:00Z"}
+{"op": "check_receipt", "id": "$V2"}
+{"op": "checkpoint", "task": "$V2"}
+{"op": "commit_check", "audit_cap": "check-plan-a"}
+{"op": "commit_check", "audit_cap": "check-plan-a", "tweak": {"receipt.reason": "forged"}}
+{"op": "admit", "as": "T3", "request_id": "rq-t3", "command": {"key": {"operation": "update_data", "dataset": "market.daily", "contract_version": "explicit-range-task-v1"}, "intent": {}}, "work": {"items": [{"item_id": "i1", "target": {"symbol": "sh.600006", "period": "day"}, "progress_unit": "x", "frozen_inputs": {}, "scope_keys": ["[\"market\",\"sh.600006\",\"day\"]"]}], "scopes": ["[\"market\",\"sh.600006\",\"day\"]"]}, "run": "run-t3"}
+{"op": "claim", "task": "$T3", "revision": 0, "run": "run-t3"}
+{"op": "admit", "as": "V3", "request_id": "rq-v3", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$T3"}}, "work": {"items": [{"item_id": "stopped-writes", "target": {"task_id": "$T3"}, "progress_unit": "evidence_check", "frozen_inputs": {"target_task_id": "$T3", "accepted_run_id": "run-t3"}, "scope_keys": ["verification:task:$T3"]}], "scopes": ["verification:task:$T3"]}, "run": "run-v3"}
+{"op": "claim_runtime", "task": "$V3", "run": "run-v3", "now": "2026-02-03T00:00:00Z"}
+{"op": "inspection_facts", "id": "$V3"}
+{"op": "probe_execution", "id": "$V3"}
+{"op": "commit_inspection", "request_id": "req-insp-1", "target": "$V3", "run": "run-v3", "actor": "auditor-c", "now": "2026-02-03T01:00:00Z", "observation": "@probe"}
+{"op": "checkpoint", "task": "$V3"}
+{"op": "commit_inspection", "request_id": "req-insp-1", "target": "$V3", "run": "run-v3", "actor": "auditor-c", "now": "2026-02-03T01:00:00Z", "observation": "@probe"}
+{"op": "commit_inspection", "request_id": "req-insp-1", "target": "$T3", "run": "run-v3", "actor": "auditor-c", "now": "2026-02-03T01:00:00Z", "observation": "Busy"}
+{"op": "admit", "as": "V4", "request_id": "rq-v4", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$T3"}}, "work": {"items": [{"item_id": "stopped-writes", "target": {"task_id": "$T3"}, "progress_unit": "evidence_check", "frozen_inputs": {"target_task_id": "$T3", "accepted_run_id": "run-t3"}, "scope_keys": ["verification:task:$T3"]}], "scopes": ["verification:task:$T3"]}, "run": "run-v4"}
+{"op": "claim_runtime", "task": "$V4", "run": "run-v4", "now": "2026-02-03T02:00:00Z"}
+{"op": "commit_inspection", "request_id": "req-insp-2", "target": "$V4", "run": "run-v4", "actor": "auditor-c", "now": "2026-02-03T02:30:00Z", "observation": "Busy"}
+{"op": "admit", "as": "V1B", "request_id": "rq-v1b", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$T1"}}, "work": {"items": [{"item_id": "stopped-writes", "target": {"task_id": "$T1"}, "progress_unit": "evidence_check", "frozen_inputs": {"target_task_id": "$T1", "accepted_run_id": "run-t1"}, "scope_keys": ["verification:task:$T1"]}], "scopes": ["verification:task:$T1"]}, "run": "run-v1b"}
+{"op": "claim", "task": "$V1B", "revision": 0, "run": "run-v1b"}
+{"op": "startItem", "task": "$V1B", "revision": 1, "run": "run-v1b", "item": "stopped-writes"}
+{"op": "commit_stop_check", "verification": "$V1B", "target": "$T1", "run": "run-v1b", "actor": "auditor-a", "now": "2026-02-01T01:00:00Z"}
+{"op": "stop_receipt", "id": "$V1B"}
+{"op": "checkpoint", "task": "$V1B"}
+{"op": "exec_sql", "sql": "UPDATE tasks SET state_revision=99 WHERE task_id=(SELECT verification_task_id FROM publication_checks ORDER BY rowid DESC LIMIT 1)"}
+{"op": "checkpoint", "task": "$V2"}
+{"op": "exec_sql", "sql": "UPDATE verification_inspections SET target_task_id=(SELECT task_id FROM tasks ORDER BY rowid LIMIT 1)"}
+{"op": "checkpoint", "task": "$V3"}
+{"op": "exec_sql", "sql": "UPDATE stopped_write_checks SET audit_sha256='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'"}
+{"op": "stop_receipt", "id": "$V1"}
+{"op": "checkpoint", "task": "$V1"}
+{"op": "exec_sql", "sql": "UPDATE verification_inspections SET audit_sha256='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'"}
+{"op": "checkpoint", "task": "$V3"}
+{"op": "exec_sql", "sql": "UPDATE publication_checks SET audit_sha256='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'"}
+{"op": "check_receipt", "id": "$V2"}
+{"op": "check_receipt", "id": "$FX_5"}
+{"op": "checkpoint", "task": "$FX_5"}
+{"op": "exec_sql", "sql": "UPDATE requests SET terminal_json='{\"kind\":\"already_verified\",\"receipt\":{\"verification_task_id\":\"x\",\"target_task_id\":\"y\",\"conclusion\":\"interrupted\",\"verification_revision\":1,\"target_revision\":1,\"reason\":\"z\"}}' WHERE request_id='req-stop-bind'"}
+{"op": "bind_existing_stop", "request_id": "req-stop-bind", "command": {"key": {"operation": "verify_stopped_writes", "dataset": "task.verification", "contract_version": "stopped-writes-task-v1"}, "intent": {"target_task_id": "$T1"}}, "target": {"task": "$T1"}, "result": {"kind": "already_verified", "receipt": {"verification_task_id": "$V1", "target_task_id": "$T1", "conclusion": "interrupted", "verification_revision": 3, "target_revision": 4, "reason": "verified stopped; original task not resumed"}}}

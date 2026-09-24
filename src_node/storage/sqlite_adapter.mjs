@@ -38,6 +38,9 @@ export class StorageError extends Error {
 }
 const mapErr = (e) => {
   if (e instanceof StorageError) return e;
+  // Domain errors raised inside a transaction body (e.g. MarketError from
+  // market commit paths) carry their own code — pass through unchanged.
+  if (e?.name === "MarketError") return e;
   const dc = e.code || "SQLITE_ERROR";
   const kind =
     /BUSY|LOCKED/.test(dc) ? "busy" :

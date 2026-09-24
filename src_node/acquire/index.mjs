@@ -7,3 +7,6 @@ export {
   GENERATION_CONTRACT_VERSION, PROBE_CONTRACT_VERSION,
   MAX_HOT_GENERATIONS,
 } from "./service.mjs";
+export {
+  AcquireApi, CAPABILITY_REVISION, DefaultApiError,
+} from "./mcp.mjs";

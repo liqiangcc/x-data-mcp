@@ -26,6 +26,9 @@ const YR = await import("../../src_node/market/yearly_results.mjs");
 const COLL = await import("../../src_node/market/collection.mjs");
 const VF = await import("../../src_node/market/verification_facts.mjs");
 const PC = await import("../../src_node/storage/publication_checks.mjs");
+const VI = await import("../../src_node/storage/verification_inspection.mjs");
+const VRT = await import("../../src_node/storage/verification_runtime.mjs");
+const { canonEq } = await import("../../src_node/storage/task_repository.mjs");
 const BE = await import("../../src_node/market/backend.mjs");
 const { DatabaseLease } = await import("../../src_node/storage/database_lease.mjs");
 const isCompact = () => MR.isCompactSchema(db);
@@ -167,7 +170,17 @@ if (MR.isCompactSchema(db)) {
 }
 
 const sha = (s) => createHash("sha256").update(s).digest("hex");
+// Descriptor cells bind runner-local paths/inodes — normalize so the
+// cross-runner digest verifies the descriptor pipeline, not the path.
+const normDesc = (s) => String(s)
+  .replace(/"(database_path|lock_path)":"[^"]*"/g, '"$1":"<p>"')
+  .replace(/"(database_identity|lock_identity)":\{[^}]*\}/g,
+    '"$1":{"device":0,"inode":0}');
 const syms = new Map(); // symbol -> real task_id; "rev:<sym>" -> revision
+// $CAP: captured serde values (bound snapshots / inspection facts) —
+// audits and bind plans embed full snapshots whose volatile fields
+// (task ids, wall-clock stamps) must come from this runner's own reads.
+const caps = new Map();
 const symOf = (id) => {
   for (const [k, v] of syms) if (!k.startsWith("rev:") && v === id) return `$${k}`;
   return id;
@@ -185,7 +198,18 @@ const resolve = (v) => {
       const r = syms.get(`rev:${v.slice(5)}`);
       return r === undefined ? -1n : BigInt(r);
     }
-    return v.startsWith("$") ? (syms.get(v.slice(1)) ?? v) : v;
+    if (v.startsWith("$") && syms.has(v.slice(1))) return syms.get(v.slice(1));
+    if (v.includes("$")) {
+      // Embedded "$SYM" inside a longer string (e.g. the
+      // verification:task:<id> scope key). Longest name first.
+      let out = v;
+      for (const k of [...syms.keys()].sort((a, b) => b.length - a.length)) {
+        if (k.startsWith("rev:")) continue;
+        out = out.split(`$${k}`).join(syms.get(k));
+      }
+      return out;
+    }
+    return v;
   }
   if (Array.isArray(v)) return v.map(resolve);
   if (v !== null && typeof v === "object") {
@@ -195,6 +219,33 @@ const resolve = (v) => {
 };
 
 const sortedValue = (v) => JSON.parse(ser(v)); // canonical Value (sorted keys)
+
+// verification_execution::prepare_claim — the Claim-plan builder used
+// by the runtime-guard claim op (claim_with_runtime_guard is ported).
+const prepareClaim = (snap, descriptor, now) => {
+  const isSupported = (key) =>
+    canonEq(key, VST.VERIFICATION_KEY) || canonEq(key, VST.PUBLICATION_KEY);
+  if (!isSupported(snap.task.key)) {
+    throw new StorageError("unsupported_contract", "UNSUPPORTED_CONTRACT");
+  }
+  if (descriptor.protocol !== VRT.PROTOCOL ||
+      descriptor.task_id !== snap.task.task_id ||
+      descriptor.run_id !== snap.task.accepted_run_id ||
+      snap.task.status !== "pending" ||
+      snap.task.owner_run_id !== null) {
+    throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+  }
+  const after = JSON.parse(JSON.stringify(snap));
+  // task_control::decide(Claim) — status running, owner=run, rev+1,
+  // last_progress_at=now, claims stamped with the new revision.
+  after.task.status = "running";
+  after.task.owner_run_id = descriptor.run_id;
+  after.task.state_revision += 1;
+  after.task.last_progress_at = now;
+  for (const c of after.claims) c.state_revision = after.task.state_revision;
+  return { before: snap, after, descriptor };
+};
+
 // serde_json::to_value emits: sorted keys at every level, DateTime<Utc> as
 // "Z", NaiveDate as "YYYY-MM-DD". Stored rows carry chrono "+00:00".
 const deepZ = (v) =>
@@ -218,7 +269,36 @@ const stateDigest = () => {
   dump("SELECT task_id,item_id,stage,outcome_json FROM task_items ORDER BY task_id,item_id", "I");
   dump("SELECT scope_key,task_id,state_revision FROM scope_occupancy ORDER BY 1,2", "O");
   dump("SELECT task_id,scope_key FROM task_scopes ORDER BY 1,2", "S");
-  dump("SELECT request_id,command_digest,outcome_kind,task_id,terminal_json FROM requests ORDER BY 1", "R");
+  {
+    // command_digest binds the random task id inside command_json —
+    // recompute over the symbolized text like the result digests.
+    const normCell = (x) => {
+      if (x === null || x === undefined) return "";
+      let o = normDesc(String(x)
+        .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(\+00:00|Z)/g, "<TS>"));
+      for (const [k, real] of syms) {
+        if (!k.startsWith("rev:")) o = o.split(real).join(`$${k}`);
+      }
+      return o;
+    };
+    for (const r of db.query("SELECT request_id,command_json,outcome_kind,task_id,terminal_json FROM requests ORDER BY 1")) {
+      lines.push(`R:${symOf(r.request_id)}|${sha(normCell(r.command_json))}|${r.outcome_kind ?? ""}|${r.task_id === null ? "" : symOf(r.task_id)}|${r.terminal_json ?? ""}`);
+    }
+    // Verification registries: *_sha256 cells hash text that binds task
+    // ids/timestamps/descriptor paths — emit the sha recomputed over the
+    // normalized text so the digest proves the pipeline, not runner bytes.
+    for (const [tag, sql] of [
+      ["PC", "SELECT verification_task_id AS a,target_task_id AS b,audit_json AS t FROM publication_checks ORDER BY 1"],
+      ["SC", "SELECT verification_task_id AS a,target_task_id AS b,audit_json AS t FROM stopped_write_checks ORDER BY 1"],
+      ["VI", "SELECT request_id AS a,target_task_id AS b,audit_json AS t FROM verification_inspections ORDER BY 1"],
+      ["VG", "SELECT task_id AS a,claim_revision AS b,descriptor_json AS t FROM verification_runtime_guards ORDER BY 1"],
+    ]) {
+      for (const r of db.query(sql)) {
+        const text = normCell(r.t);
+        lines.push(`${tag}:${symOf(r.a)}|${normCell(String(r.b ?? ""))}|${text}|${sha(text)}`);
+      }
+    }
+  }
   dump("SELECT task_id,item_id,run_id,start_revision FROM task_item_execution_starts ORDER BY 1,2", "X");
   if (isCompact()) {
     const cvs = (x) => x === null ? "" : x instanceof Uint8Array
@@ -328,8 +408,11 @@ const stateDigest = () => {
       r.evidence_kind, r.evidence_id, evd, TS_FIX].join("|")}`);
   }
   dump("SELECT gap_id,version_id,'0000-01-01T00:00:00+00:00' FROM gap_coverings ORDER BY gap_id", "GC");
-  dump("SELECT verification_task_id,target_task_id,audit_json,audit_sha256 FROM publication_checks ORDER BY 1", "PC");
-  let joined = lines.join("\n");
+  // (verification registry rows emitted above with recomputed digests)
+  // Embedded RFC3339 stamps inside audit/result/terminal blobs bind
+  // wall-clock values — normalize before symbolization.
+  let joined = lines.join("\n")
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(\+00:00|Z)/g, "<TS>");
   for (const [k, real] of syms) {
     if (!k.startsWith("rev:")) joined = joined.split(real).join(`$${k}`);
   }
@@ -971,13 +1054,306 @@ for (const line of lines) {
         }
         break;
       }
+      case "capture": {
+        try {
+          const name = op.as;
+          const kind = op.kind ?? "snapshot";
+          const id = resolve(op.task);
+          if (kind === "snapshot") {
+            const s = repo._readBoundTaskValidated(id);
+            if (!s) throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" });
+            caps.set(name, VST.snapshotCanon(s));
+          } else if (kind === "inspection_facts") {
+            caps.set(name, VI.inspectionFacts(db, id,
+              (x) => repo._readBoundTaskValidated(x)));
+          } else if (kind === "stop_plan") {
+            const readBound = (x) => repo._readBoundTaskValidated(x);
+            const v = readBound(resolve(op.verification));
+            if (!v) throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" });
+            const t = readBound(resolve(op.target));
+            if (!t) throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" });
+            const o = op.observation;
+            const obs = o === undefined ? null
+              : o.kind === "insufficient" ? { kind: "insufficient", reason: o.reason }
+              : { kind: "stopped",
+                  snapshot_sha256: VST.snapshotDigest(t),
+                  evidence_ref: o.evidence_ref };
+            const plan = VST.prepareStop(VST.snapshotCanon(v), VST.snapshotCanon(t),
+              op.run, op.actor, op.now, obs);
+            caps.set(name, plan.audit);
+          } else if (kind === "check_plan") {
+            const readBound = (x) => repo._readBoundTaskValidated(x);
+            const check = readBound(resolve(op.verification));
+            if (!check) throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" });
+            const facts = VF.readFacts(db, resolve(op.target), readBound);
+            facts.task = VST.snapshotCanon(facts.task);
+            const plan = PC.prepareCheck(VST.snapshotCanon(check), facts,
+              op.run, op.actor, op.now);
+            caps.set(name, plan.audit);
+          } else throw new Error(`capture kind ${kind}`);
+          rec = { status: "ok" };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "commit_stop_check": {
+        try {
+          const readBound = (x) => repo._readBoundTaskValidated(x);
+          if (op.audit_cap !== undefined) {
+            const a = JSON.parse(JSON.stringify(caps.get(op.audit_cap)));
+            for (const [path, val] of Object.entries(op.tweak ?? {})) {
+              const parts = path.split(".");
+              let cur = a;
+              for (const pp of parts.slice(0, -1)) cur = cur[pp];
+              cur[parts[parts.length - 1]] = val;
+            }
+            const receipt = VST.commitStopCheck(db, { audit: a }, readBound);
+            rec = { status: "ok", receipt: sortedValue(receipt), digest: stateDigest() };
+            break;
+          }
+          const vid = resolve(op.verification);
+          const tid = resolve(op.target);
+          const v = readBound(vid);
+          if (!v) throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" });
+          const t = readBound(tid);
+          if (!t) throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" });
+          const o = op.observation;
+          const obs = o === undefined ? null
+            : o.kind === "insufficient" ? { kind: "insufficient", reason: o.reason }
+            : { kind: "stopped",
+                snapshot_sha256: VST.snapshotDigest(t),
+                evidence_ref: o.evidence_ref };
+          const plan = VST.prepareStop(VST.snapshotCanon(v), VST.snapshotCanon(t),
+            op.run, op.actor, op.now, obs);
+          const receipt = VST.commitStopCheck(db, plan, readBound);
+          rec = { status: "ok", receipt: sortedValue(receipt), digest: stateDigest() };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "stop_receipt": {
+        try {
+          const r = VST.stopReceipt(db, resolve(op.id),
+            (x) => repo._readBoundTaskValidated(x));
+          rec = { status: "ok", receipt: r === null ? null : sortedValue(r) };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "bind_existing_stop": {
+        try {
+          const readBound = (x) => repo._readBoundTaskValidated(x);
+          const target = op.target.cap !== undefined
+            ? caps.get(op.target.cap)
+            : VST.snapshotCanon(readBound(resolve(op.target.task)) ??
+              (() => { throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" }); })());
+          const acc = VST.bindExistingStop(db, {
+            request_id: op.request_id, command: op.command,
+            target, result: op.result,
+          }, readBound,
+            (x) => VF.readFacts(db, resolve(x),
+              (y) => repo._readBoundTaskValidated(resolve(y))));
+          rec = { status: "ok", reused: acc.reused,
+            outcome_kind: "Task" in acc.record.outcome ? "task" : "terminal",
+            digest: stateDigest() };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "commit_check": {
+        try {
+          const readBound = (x) => repo._readBoundTaskValidated(x);
+          const readFactsFn = (x) => VF.readFacts(db, x, readBound);
+          if (op.audit_cap !== undefined) {
+            const a = JSON.parse(JSON.stringify(caps.get(op.audit_cap)));
+            for (const [path, val] of Object.entries(op.tweak ?? {})) {
+              const parts = path.split(".");
+              let cur = a;
+              for (const pp of parts.slice(0, -1)) cur = cur[pp];
+              cur[parts[parts.length - 1]] = val;
+            }
+            const receipt = PC.commitCheck(db, { audit: a }, readBound, readFactsFn);
+            rec = { status: "ok", receipt: sortedValue(receipt), digest: stateDigest() };
+            break;
+          }
+          const vid = resolve(op.verification);
+          const tid = resolve(op.target);
+          const check = readBound(vid);
+          if (!check) throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" });
+          const facts = readFactsFn(tid);
+          facts.task = VST.snapshotCanon(facts.task);
+          const plan = PC.prepareCheck(VST.snapshotCanon(check), facts,
+            op.run, op.actor, op.now);
+          const receipt = PC.commitCheck(db, plan, readBound, readFactsFn);
+          rec = { status: "ok", receipt: sortedValue(receipt), digest: stateDigest() };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "known_publication": {
+        try {
+          const readBound = (x) => repo._readBoundTaskValidated(x);
+          const r = PC.knownPublication(db, resolve(op.target), readBound,
+            (x) => VF.readFacts(db, x, readBound));
+          rec = { status: "ok", receipt: r === null ? null : sortedValue(r) };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "bind_known_publication": {
+        try {
+          const readBound = (x) => repo._readBoundTaskValidated(x);
+          const readFactsFn = (x) => VF.readFacts(db, x, readBound);
+          const target = op.target.cap !== undefined
+            ? caps.get(op.target.cap)
+            : VST.snapshotCanon(readBound(resolve(op.target.task)) ??
+              (() => { throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" }); })());
+          const acc = PC.bindKnownPublication(db, {
+            request_id: op.request_id, command: op.command,
+            target, result: op.result,
+          }, readBound, readFactsFn);
+          rec = { status: "ok", reused: acc.reused,
+            outcome_kind: "Task" in acc.record.outcome ? "task" : "terminal",
+            digest: stateDigest() };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "inspection_facts": {
+        try {
+          const f = VI.inspectionFacts(db, resolve(op.id),
+            (x) => repo._readBoundTaskValidated(x));
+          const fv = JSON.parse(JSON.stringify(f));
+          if (typeof fv.completion_digest === "string") {
+            fv.completion_digest = "<digest>";
+          }
+          if (fv.registration?.descriptor) {
+            fv.registration.descriptor.database_path = "<db>";
+            fv.registration.descriptor.database_identity = "<id>";
+            fv.registration.descriptor.lock_identity = "<id>";
+            fv.registration.descriptor.lock_path = "<lock>";
+          }
+          rec = { status: "ok", facts: fv };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "probe_execution": {
+        try {
+          const f = VI.inspectionFacts(db, resolve(op.id),
+            (x) => repo._readBoundTaskValidated(x));
+          const p = VI.probeExecution(dbPath, f);
+          const g = p.guard;
+          if (g) g.close(); // Rust drops the probe guard at op end
+          rec = { status: "ok", observation: p.observation,
+            guard: g !== null && g !== undefined };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "commit_inspection": {
+        try {
+          const readBound = (x) => repo._readBoundTaskValidated(x);
+          const readFactsFn = (x) => VF.readFacts(db, x, readBound);
+          const tid = resolve(op.target);
+          const facts = op.facts_cap !== undefined
+            ? caps.get(op.facts_cap)
+            : VI.inspectionFacts(db, tid, readBound);
+          const probe = op.observation === "@probe"
+            ? VI.probeExecution(dbPath, facts)
+            : { observation: op.observation, guard: null };
+          const command = { key: VST.INSPECTION_KEY,
+            intent: { target_task_id: tid } };
+          const plan = op.audit_cap !== undefined
+            ? { audit: caps.get(op.audit_cap) }
+            : VI.prepareInspection(op.request_id, command, facts,
+              probe.observation, op.run, op.actor, op.now);
+          const acc = VI.commitInspection(db, dbPath, plan, probe,
+            readBound, readFactsFn);
+          if (probe.guard) probe.guard.close();
+          rec = { status: "ok", reused: acc.reused,
+            outcome_kind: "Task" in acc.record.outcome ? "task" : "terminal",
+            digest: stateDigest() };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "claim_runtime": {
+        try {
+          const id = resolve(op.task);
+          const t = repo._readBoundTaskValidated(id);
+          if (!t) throw Object.assign(new Error("TASK_NOT_FOUND"), { code: "task_not_found" });
+          const guard = VRT.create(dbPath, id, op.run);
+          try {
+            const plan = prepareClaim(VST.snapshotCanon(t), guard.descriptor, op.now);
+            const snap = VST.claimWithRuntimeGuard(db, repo, plan, guard, dbPath);
+            rec = { status: "ok", snapshot: VST.snapshotCanon(snap) };
+          } finally { guard.close(); }
+        } catch (e) {
+          const rtMap = (x) => x instanceof VRT.RuntimeGuardError
+            ? (x.kind === "io"
+              ? { code: "unavailable", message: `STORAGE_UNAVAILABLE: ${x.message}` }
+              : { code: "needs_verification",
+                  message: `ACCEPTANCE_NEEDS_VERIFICATION: ${x.message}` })
+            : null;
+          const mapped = rtMap(e);
+          rec = mapped === null
+            ? { status: "error", code: e.code ?? "internal",
+                message: String(e.message), unchanged: stateDigest() === before }
+            : { status: "error", code: mapped.code,
+                message: mapped.message, unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "never_started_facts": {
+        try {
+          const f = VST.neverStartedFacts(db, resolve(op.id),
+            (x) => repo._readBoundTaskValidated(x));
+          rec = { status: "ok", facts: f };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "determinate_facts": {
+        try {
+          const f = VST.determinateFacts(db, resolve(op.id),
+            (x) => repo._readBoundTaskValidated(x));
+          rec = { status: "ok", facts: f };
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
       case "check_receipt": {
         try {
           const r = PC.readCheckReceipt(db, resolve(op.id),
             (x) => repo._readBoundTaskValidated(resolve(x)),
             (x) => VF.readFacts(db, resolve(x),
               (y) => repo._readBoundTaskValidated(resolve(y))));
-          rec = { status: "ok", receipt: r === null ? null : r[1] };
+          rec = { status: "ok", receipt: r === null ? null : sortedValue(r[1]) };
         } catch (e) {
           rec = { status: "error", code: e.code ?? "internal",
             message: String(e.message), unchanged: stateDigest() === before };

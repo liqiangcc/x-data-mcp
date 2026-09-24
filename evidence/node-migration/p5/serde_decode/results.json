@@ -1,0 +1,6 @@
+{
+  "probe": "serde_decode",
+  "total": 92,
+  "pass": 92,
+  "fail": 0
+}

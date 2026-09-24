@@ -5,10 +5,15 @@
 import { createHash } from "node:crypto";
 import { canonEq } from "./task_repository.mjs";
 import { serdeDateTime } from "../market/compact_market.mjs";
+import { validateTerminal as pubValidateTerminal } from "./publication_checks.mjs";
+import { validateInspectionAudit } from "./verification_inspection.mjs";
 import { StorageError } from "./sqlite_adapter.mjs";
 
 const sha256 = (b) => createHash("sha256").update(b).digest("hex");
-const integrity = (m) => new StorageError("needs_verification", String(m));
+// Error::NeedsVerification Display carries the ACCEPTANCE_ prefix — emit it
+// verbatim (the differential comparator checks needs_verification messages).
+const integrity = (m) =>
+  new StorageError("needs_verification", `ACCEPTANCE_NEEDS_VERIFICATION: ${m}`);
 const storage = (m) => new StorageError("unavailable", String(m));
 
 export const VERIFICATION_KEY = {
@@ -57,6 +62,20 @@ const STRUCT_ORDER = {
   command: ["key", "intent"],
   facts: ["target", "original", "registration", "finished",
     "has_business_effects", "completion_digest"],
+  checkAudit: ["actor", "checked_at", "facts", "verification_before",
+    "verification_after", "receipt"],
+  checkFacts: ["task", "items"],
+  itemEvidence: ["item_id", "evidence"],
+  evidence: ["Missing", "Committed"],
+  committed: ["receipt", "reused_version", "evidence_sha256"],
+  pubReceipt: ["publication_id", "version_id", "task_id", "task_revision"],
+  inspectionResult: ["kind", "receipt"],
+  checkReceipt: ["verification_task_id", "target_task_id",
+    "verification_revision", "target_revision", "conclusion", "reason",
+    "missing_receipt_item_ids"],
+  inspectionReceipt: ["request_id", "target_task_id", "actor", "checked_at",
+    "conclusion", "target_revision", "target_status", "target_result",
+    "reason"],
 };
 
 const SKIP_NONE = new Set(["shared_evidence", "evidence"]); // skip_serializing_if
@@ -64,7 +83,9 @@ const SKIP_NONE = new Set(["shared_evidence", "evidence"]); // skip_serializing_
 export const ser = (v, shape) => {
   if (v === null || v === undefined) return "null";
   if (typeof v !== "object") return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map((x) => ser(x)).join(",")}]`;
+  // Arrays carry the element shape (childShape returns the element type
+  // for array-typed keys) — each element is serialized with that shape.
+  if (Array.isArray(v)) return `[${v.map((x) => ser(x, shape)).join(",")}]`;
   const order = shape ? STRUCT_ORDER[shape] : null;
   const keys = order
     ? order.filter((k) => k in v && !(SKIP_NONE.has(k) && v[k] === null))
@@ -82,11 +103,23 @@ const childShape = (shape, key) => {
       receipt: "receipt" }[key];
   }
   if (shape === "inspectionAudit") {
-    return { command: "command", facts: "facts", after: "snapshot" }[key];
+    return { command: "command", facts: "facts", after: "snapshot",
+      result: "inspectionResult" }[key];
   }
+  if (shape === "inspectionResult") return { receipt: "inspectionReceipt" }[key];
+  if (shape === "itemEvidence") return { evidence: "evidence" }[key];
+  if (shape === "evidence") return { Committed: "committed" }[key];
+  if (shape === "committed") return { receipt: "pubReceipt" }[key];
   if (shape === "command") return { key: "key" }[key];
   if (shape === "facts") {
     return { target: "snapshot", original: "snapshot", registration: "registration" }[key];
+  }
+  if (shape === "checkAudit") {
+    return { facts: "checkFacts", verification_before: "snapshot",
+      verification_after: "snapshot", receipt: "checkReceipt" }[key];
+  }
+  if (shape === "checkFacts") {
+    return { task: "snapshot", items: "itemEvidence" }[key];
   }
   if (shape === "registration") return { descriptor: "descriptor" }[key];
   if (shape === "descriptor") {
@@ -370,6 +403,7 @@ export const readInspectionAudit = (db, id) => {
   if (audit?.request_id !== id || audit?.facts?.target?.task?.task_id !== row.target_task_id) {
     throw integrity("inspection association differs");
   }
+  validateInspectionAudit(audit);
   return audit;
 };
 
@@ -470,7 +504,7 @@ export const writeTaskSnapshot = (db, snapJson, expected) => {
      WHERE task_id=? AND state_revision=?`,
     snapJson.task.status, BigInt(snapJson.task.state_revision),
     snapJson.task.owner_run_id, snapJson.task.last_progress_at,
-    snapJson.task.result === null ? null : JSON.stringify(snapJson.task.result),
+    snapJson.task.result === null ? null : ser(snapJson.task.result),
     snapJson.task.task_id, BigInt(expected));
   if (res.changes !== 1) {
     throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
@@ -524,4 +558,157 @@ export const runtimeRegistration = (db, repo, id) => {
     throw integrity("orphan runtime registration");
   }
   throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+};
+
+// ---------------------------------------------------------------------
+// NM-059 — sqlite_verification.rs commit surface: commit_stop_check /
+// bind_existing_stop / stop_receipt + durable/facts readers.
+
+/** sqlite_tasks::read_request — request row -> RequestRecord, with the
+ *  terminal-arm validator chain (stop / inspection / publication-check
+ *  validate_terminal) verbatim. readBound: validated bound-snapshot
+ *  reader (read_task + link validators). */
+export const readRequestRecord = (db, id, readBound, readFactsFn) => {
+  const row = db.get(
+    "SELECT command_json,command_digest,outcome_kind,task_id,terminal_json FROM requests WHERE request_id=?",
+    id);
+  if (!row) {
+    validateAbsentRequest(db, id);
+    return null;
+  }
+  if (sha256(row.command_json) !== row.command_digest) {
+    throw integrity("command digest mismatch");
+  }
+  let command;
+  try { command = JSON.parse(row.command_json); }
+  catch (e) { throw integrity(e.message); }
+  let outcome;
+  if (row.outcome_kind === "task" && row.task_id !== null && row.terminal_json === null) {
+    validateTaskRequest(db, id, command);
+    const s = readBound(row.task_id);
+    if (!s) throw integrity("bound execution record missing");
+    const key = JSON.parse(s.task.command_key_json);
+    const expected = s.task.retry_of !== null
+      ? { operation: "retry_task", dataset: key.dataset, contract_version: key.contract_version }
+      : key;
+    if (!canonEq(command.key, expected)) {
+      throw integrity("request/task contract mismatch");
+    }
+    outcome = { Task: snapshotCanon(s) };
+  } else if (row.outcome_kind === "terminal" && row.task_id === null && row.terminal_json !== null) {
+    let value;
+    try { value = JSON.parse(row.terminal_json); }
+    catch (e) { throw integrity(e.message); }
+    validateTerminalStop(db, command, value, readBound);
+    validateTerminalInspection(db, id, command, value);
+    pubValidateTerminal(db, command, value, readBound, readFactsFn);
+    outcome = { Terminal: value };
+  } else {
+    throw integrity("request outcome incomplete");
+  }
+  return { request_id: id, command, outcome };
+};
+
+/** StopRepository::commit_stop_check — SqliteTasks::write tx. */
+export const commitStopCheck = (db, plan, readBound) => db.transaction(() => {
+  const audit = plan.audit;
+  const id = audit.receipt.verification_task_id;
+  const prior = readReceipt(db, id, readBound);
+  if (prior !== null) {
+    if (!canonEq(prior.audit, audit)) {
+      throw new StorageError("conflict", "REQUEST_CONFLICT");
+    }
+    return prior.receipt;
+  }
+  const target = readBound(audit.receipt.target_task_id);
+  if (target === null) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+  const verification = readBound(id);
+  if (verification === null) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+  if (!snapshotEq(target, audit.target_before) ||
+      !snapshotEq(verification, audit.verification_before)) {
+    throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+  }
+  if (audit.target_after !== null && audit.target_after !== undefined) {
+    writeTaskSnapshot(db, audit.target_after, target.task.state_revision);
+  }
+  writeTaskSnapshot(db, audit.verification_after, verification.task.state_revision);
+  const raw = ser(audit, "audit");
+  db.run("INSERT INTO stopped_write_checks VALUES(?,?,?,?)",
+    id, audit.receipt.target_task_id, raw, sha256(raw));
+  const stored = readReceipt(db, id, readBound);
+  if (!stored) throw integrity("inserted stopped check missing");
+  return stored.receipt;
+});
+
+/** StopRepository::stop_receipt. */
+export const stopReceipt = (db, id, readBound) =>
+  readReceipt(db, id, readBound)?.receipt ?? null;
+
+/** ExistingStopRepository::bind_existing_stop — replay -> bound equality
+ *  -> validate_terminal -> terminal request insert. */
+export const bindExistingStop = (db, plan, readBound, readFactsFn) => db.transaction(() => {
+  const record = readRequestRecord(db, plan.request_id, readBound, readFactsFn);
+  if (record !== null) {
+    if (!canonEq(record.command, plan.command)) {
+      throw new StorageError("conflict", "REQUEST_CONFLICT");
+    }
+    return { record, reused: true };
+  }
+  const actual = readBound(plan.target.task.task_id);
+  if (!actual || !snapshotEq(actual, plan.target)) {
+    throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+  }
+  const value = plan.result;
+  validateTerminalStop(db, plan.command, value, readBound);
+  const cmdJson = ser(plan.command, "command");
+  const termJson = ser(value);
+  db.run("INSERT INTO requests VALUES(?,?,?,'terminal',NULL,?)",
+    plan.request_id, cmdJson, sha256(cmdJson), termJson);
+  return {
+    record: { request_id: plan.request_id, command: plan.command,
+      outcome: { Terminal: value } },
+    reused: false,
+  };
+});
+
+/** durable_effects — schema-aware EXISTS union. */
+export const durableEffects = (db, taskId) => {
+  // is_compact_schema: publication_batches absent on schema-19.
+  const compact = db.get(
+    "SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='publication_batches') x").x !== 0n;
+  const sql = compact
+    ? "SELECT EXISTS(SELECT 1 FROM task_publications WHERE task_id=? UNION ALL SELECT 1 FROM market_update_results WHERE task_id=? UNION ALL SELECT 1 FROM publication_results WHERE task_id=?) x"
+    : "SELECT EXISTS(SELECT 1 FROM publication_batches WHERE task_id=? UNION ALL SELECT 1 FROM task_publications WHERE task_id=? UNION ALL SELECT 1 FROM market_update_results WHERE task_id=? UNION ALL SELECT 1 FROM yearly_execution_results WHERE task_id=?) x";
+  const args = compact ? [taskId, taskId, taskId] : [taskId, taskId, taskId, taskId];
+  return db.get(sql, ...args).x !== 0n;
+};
+const isCompactSchema = (db) =>
+  db.get("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='publication_batches') x").x !== 0n;
+
+/** never_started_facts — {snapshot, has_durable_effects}. */
+export const neverStartedFacts = (db, taskId, readBound) => {
+  const snapshot = readBound(taskId);
+  if (!snapshot) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+  return { snapshot: snapshotCanon(snapshot),
+    has_durable_effects: durableEffects(db, taskId) };
+};
+
+/** determinate_facts — {snapshot, started_items, committed_items,
+ *  has_durable_effects}; committed_items union is schema-aware. */
+export const determinateFacts = (db, taskId, readBound) => {
+  const snapshot = readBound(taskId);
+  if (!snapshot) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+  const startedItems = db.query(
+    "SELECT item_id FROM task_item_execution_starts WHERE task_id=?", taskId)
+    .map((r) => r.item_id).sort();
+  const committedSql = isCompactSchema(db)
+    ? "SELECT item_id FROM market_update_results WHERE task_id=? UNION SELECT item_id FROM publication_results WHERE task_id=?"
+    : "SELECT item_id FROM market_update_results WHERE task_id=? UNION SELECT item_id FROM yearly_execution_results WHERE task_id=? UNION SELECT item_id FROM publication_batches WHERE task_id=?";
+  const committedArgs = isCompactSchema(db)
+    ? [taskId, taskId] : [taskId, taskId, taskId];
+  const committedItems = db.query(committedSql, ...committedArgs)
+    .map((r) => r.item_id).sort();
+  return { snapshot: snapshotCanon(snapshot), started_items: startedItems,
+    committed_items: committedItems,
+    has_durable_effects: durableEffects(db, taskId) };
 };
