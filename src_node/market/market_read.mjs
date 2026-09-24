@@ -2,6 +2,7 @@
 // envelope::expand / base_record / validate_base / range / versions /
 // candidate / fixed. Verbatim port of src/sqlite_market.rs read helpers.
 import { createHash } from "node:crypto";
+import { serValue, parseJsonValue } from "../mcp/serde_json.mjs";
 import { gateDatabase } from "../storage/schema_gate.mjs";
 import { openDatabase, StorageError } from "../storage/sqlite_adapter.mjs";
 import * as RC from "./record_codec.mjs";
@@ -80,7 +81,7 @@ const fetchPayload = (db, id) => {
   if (!row) throw integrity("referenced payload missing");
   const json = row.payload_json;
   if (sha(json) !== id) throw integrity("payload content digest mismatch");
-  return JSON.parse(json);
+  return parseJsonValue(json);
 };
 const resolve = (db, versionId, v, records) => {
   const r = v !== null && typeof v === "object" && !Array.isArray(v) ? v.$ref : undefined;
@@ -110,7 +111,7 @@ const inflateRef = (db, v) => {
   return fetchPayload(db, r.slice(8));
 };
 export const expand = (db, versionId, env) => {
-  const raw = JSON.parse(JSON.stringify(env));
+  const raw = parseJsonValue(serValue(env));
   const records = resolve(db, versionId, raw.records, undefined);
   raw.records = records;
   if (raw.batch && "bars" in raw.batch) {
@@ -159,7 +160,7 @@ export const manifestBars = (db, root) => {
       "SELECT bar_json FROM segment_bars WHERE segment_id=? AND trade_date>=? AND trade_date<=? ORDER BY trade_date",
       n.segment_id, n.clip_start, n.clip_end);
     if (BigInt(rows.length) !== n.row_count) throw integrity("manifest clip length mismatch");
-    for (const r of rows) out.push(JSON.parse(r.bar_json));
+    for (const r of rows) out.push(parseJsonValue(r.bar_json));
   }
   return out;
 };
@@ -260,8 +261,8 @@ const checkPublicationLink = (db, version) => {
     "SELECT b.publication_id,b.command_json,b.receipt_json,b.task_id,b.item_id FROM publication_batches b JOIN task_publications p ON p.publication_id=b.publication_id AND p.task_id=b.task_id AND p.version_id=b.version_id WHERE b.version_id=?",
     version);
   if (!row) throw integrity("published version lacks atomic publication evidence");
-  const command = parsePublication(JSON.parse(row.command_json));
-  const receipt = parseReceipt(JSON.parse(row.receipt_json));
+  const command = parsePublication(parseJsonValue(row.command_json));
+  const receipt = parseReceipt(parseJsonValue(row.receipt_json));
   if (command.publication_id !== row.publication_id ||
       command.version_id !== version || command.task_id !== row.task_id ||
       command.item_id !== row.item_id ||
@@ -285,7 +286,7 @@ export function readProjection(db, id, published, allowYearly) {
     throw publicationExists ? integrity("published version state changed") : notFound();
   }
   let env;
-  try { env = JSON.parse(row.envelope_json); } catch (e) { throw integrity(e.message); }
+  try { env = parseJsonValue(row.envelope_json); } catch (e) { throw integrity(e.message); }
   const raw = expand(db, id, env);
   const record = RC.check(raw); // throws integrity verbatim
   if (record.version.version_id !== id ||
@@ -302,10 +303,10 @@ export function readProjection(db, id, published, allowYearly) {
   const actual = db.query(
     "SELECT symbol,period,adjustment,source,published_at,CAST(record_count AS TEXT),CAST(unique_count AS TEXT),CAST(duplicate_count AS TEXT),coverage_status,coverage_reason,first_date,last_date FROM data_versions WHERE version_id=?",
     id).map((r) => Object.values(r).map((x) => x === null ? null : String(x)));
-  if (JSON.stringify(actual) !== JSON.stringify([metadata(record)])) {
+  if (serValue(actual) !== serValue([metadata(record)])) {
     throw integrity("version metadata projection");
   }
-  const evDigest = sha(JSON.stringify(evidenceRows(record)));
+  const evDigest = sha(serValue(evidenceRows(record)));
   if (row.evidence_digest !== evDigest) throw integrity("unit/adjustment projection");
   const yearly = db.query(
     "SELECT CAST(year AS TEXT) AS y,trade_date,open,high,low,close,volume,amount,first_trade_date,last_trade_date,CAST(is_finished AS TEXT) AS f FROM yearly_bars WHERE version_id=? ORDER BY year",
@@ -316,8 +317,8 @@ export function readProjection(db, id, published, allowYearly) {
   if (record.version.period === "Day") {
     if (yearly.length || lineage.length) throw integrity("daily projection");
   } else if (
-    JSON.stringify(yearly) !== JSON.stringify(annualValues(record, base)) ||
-    JSON.stringify(lineage) !== JSON.stringify([lineageValues(record)])
+    serValue(yearly) !== serValue(annualValues(record, base)) ||
+    serValue(lineage) !== serValue([lineageValues(record)])
   ) {
     throw integrity("yearly/lineage projection");
   }
@@ -402,7 +403,7 @@ export const validateRange = (range) => {
 };
 
 const parseBarJson = (j) => {
-  const b = JSON.parse(j);
+  const b = parseJsonValue(j);
   delete b.r7_raw; // internal evidence, not part of the range wire value
   return b;
 };
@@ -432,7 +433,7 @@ export function rangeRows(db, id, p, range) {
       jsons = out;
     } else {
       const envRow = db.get("SELECT envelope_json FROM data_versions WHERE version_id=?", id);
-      const env = JSON.parse(envRow.envelope_json);
+      const env = parseJsonValue(envRow.envelope_json);
       const raw = expand(db, id, env);
       if (!Array.isArray(raw.records)) throw integrity("record lacks records array");
       jsons = raw.records
@@ -442,7 +443,7 @@ export function rangeRows(db, id, p, range) {
             (range.after === null || range.after === undefined || d > range.after);
         })
         .slice(0, range.limit + 1)
-        .map((b) => JSON.stringify(b));
+        .map((b) => serValue(b));
     }
     return jsons.map(parseBarJson);
   }
@@ -529,7 +530,7 @@ export const __baseRecord = baseRecord;
 export const __validateBaseIdentity = validateBaseIdentity;
 
 // ---------------- NM-052: update.rs result/receipt reads ----------------
-const resultDigest = (audit, receipt) => sha(`[${JSON.stringify(audit)},${JSON.stringify(receipt)}]`);
+const resultDigest = (audit, receipt) => sha(`[${serValue(audit)},${serValue(receipt)}]`);
 
 // envelope::require_refs — fail closed on stored audit referencing absent payloads
 export const requireRefs = (db, v) => {
@@ -561,12 +562,12 @@ const readItemBinding = (db, taskId, itemId) => {
   if (!h || !i) return null;
   const item = {
     spec: {
-      item_id: i.item_id, target: JSON.parse(i.target_json),
-      progress_unit: i.progress_unit, frozen_inputs: JSON.parse(i.frozen_inputs_json),
-      scope_keys: JSON.parse(i.scope_keys_json),
+      item_id: i.item_id, target: parseJsonValue(i.target_json),
+      progress_unit: i.progress_unit, frozen_inputs: parseJsonValue(i.frozen_inputs_json),
+      scope_keys: parseJsonValue(i.scope_keys_json),
     },
     stage: i.stage,
-    outcome: i.outcome_json === null ? null : JSON.parse(i.outcome_json),
+    outcome: i.outcome_json === null ? null : parseJsonValue(i.outcome_json),
   };
   const marker = item.spec.frozen_inputs?.selection_evidence?.evidence_digest;
   if (typeof marker === "string" && marker !== h.evidence_digest) {
@@ -580,13 +581,13 @@ const readItemBinding = (db, taskId, itemId) => {
   return {
     head: {
       task_id: taskId,
-      key: JSON.parse(h.command_key_json),
+      key: parseJsonValue(h.command_key_json),
       status: h.status,
       state_revision: h.state_revision,
       accepted_run_id: h.accepted_run_id,
       owner_run_id: h.owner_run_id,
       last_progress_at: h.last_progress_at,
-      result: h.result_json === null ? null : JSON.parse(h.result_json),
+      result: h.result_json === null ? null : parseJsonValue(h.result_json),
       counts: {
         total: h.item_count, pending: h.items_pending, running: h.items_running,
         finished: h.items_finished, succeeded: h.items_succeeded,
@@ -650,10 +651,10 @@ export const readResult = (db, id) => {
   if (resultDigest(row.audit_json, row.receipt_json) !== row.result_sha256) {
     throw integrity("range audit digest mismatch");
   }
-  const audit = JSON.parse(row.audit_json);
+  const audit = parseJsonValue(row.audit_json);
   requireRefs(db, audit.segment);
   const command = parsePublication(audit.command);
-  const receipt = parseReceipt(JSON.parse(row.receipt_json));
+  const receipt = parseReceipt(parseJsonValue(row.receipt_json));
   const intentMatch = command.intent &&
     Object.keys(command.intent).length === 1 &&
     command.intent.Daily !== undefined &&
@@ -686,7 +687,7 @@ export const readResult = (db, id) => {
     const published = db.get(
       "SELECT receipt_json FROM publication_batches WHERE publication_id=?", id);
     if (!published) throw integrity("range publication missing");
-    const pubReceipt = parseReceipt(JSON.parse(published.receipt_json));
+    const pubReceipt = parseReceipt(parseJsonValue(published.receipt_json));
     if (pubReceipt.publication_id !== receipt.publication_id ||
         pubReceipt.version_id !== receipt.version_id ||
         pubReceipt.task_id !== receipt.task_id ||

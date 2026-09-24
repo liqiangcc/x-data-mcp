@@ -5,6 +5,7 @@
 // Ports src/sqlite_market/compact_repo.rs (ops entry points) and
 // src/sqlite_market/compact_results.rs verbatim.
 import { MarketError, legacyDigest as _legacyDigest, __decNorm } from "./record_codec.mjs";
+import { parseJsonValue } from "../mcp/serde_json.mjs";
 import * as CM from "./compact_market.mjs";
 import * as CR from "./compact_read.mjs";
 import { __readItemBinding as readItemBinding } from "./market_read.mjs";
@@ -957,7 +958,7 @@ export const updateBaseFacts = (db, baseVersionId) => {
   const [kind, evidenceJson] = CR.__readEvidence(db, facts.evidence_digest);
   if (kind !== "version") throw integrity("base version evidence kind mismatch");
   let evidence;
-  try { evidence = JSON.parse(evidenceJson); }
+  try { evidence = parseJsonValue(evidenceJson); }
   catch (e) { throw integrity(`version evidence malformed: ${e.message}`); }
   if (facts.integrity_digest === null) {
     throw integrity("published base lacks integrity digest");

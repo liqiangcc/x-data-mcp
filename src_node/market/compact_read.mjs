@@ -2,6 +2,7 @@
 // + compact_versions materialization + compact_repo synthesize/dispatch.
 // Digests recompute over stored rows; every mismatch fails closed.
 import * as CM from "./compact_market.mjs";
+import { parseJsonValue } from "../mcp/serde_json.mjs";
 import * as RC from "./record_codec.mjs";
 import { MarketError } from "./record_codec.mjs";
 import * as Y from "../algorithms/yearly.mjs";
@@ -415,7 +416,7 @@ const verifyVersionEvidence = (db, digest) => {
   const [kind, canonical] = readEvidence(db, digest);
   if (kind !== "version") throw integrity("version evidence kind mismatch");
   let v;
-  try { v = JSON.parse(canonical); }
+  try { v = parseJsonValue(canonical); }
   catch { throw integrity("expected value at line 1 column 1"); }
   return v; // {source, coverage_reason, unit_currency, adjustment_evidence}
 };
@@ -749,7 +750,7 @@ export const materialize = (db, versionId) => {
   const [kind, canonical] = readEvidence(db, sourceBinding.evidence_digest);
   if (kind !== "generation") throw integrity("source binding evidence is not generation");
   let generationEvidence;
-  try { generationEvidence = JSON.parse(canonical); }
+  try { generationEvidence = parseJsonValue(canonical); }
   catch { throw integrity("expected value at line 1 column 1"); }
   let parentVersionId = null;
   if (row.parent_version_key !== null) {

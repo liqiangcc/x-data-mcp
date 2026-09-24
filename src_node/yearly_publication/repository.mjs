@@ -12,6 +12,7 @@
 // `commit_yearly` -> YearlySeamError (the atomic commit arm lands with
 // the runner wiring task).
 import * as RC from "../market/record_codec.mjs";
+import { parseJsonValue } from "../mcp/serde_json.mjs";
 import * as MR from "../market/market_read.mjs";
 import * as CR from "../market/compact_read.mjs";
 import * as MW from "../market/market_write.mjs";
@@ -193,13 +194,13 @@ const readTaskHead = (db, id) => {
   if (!h) return null;
   return {
     task_id: id,
-    key: JSON.parse(h.command_key_json),
+    key: parseJsonValue(h.command_key_json),
     status: h.status,
     state_revision: h.state_revision,
     accepted_run_id: h.accepted_run_id,
     owner_run_id: h.owner_run_id,
     last_progress_at: h.last_progress_at,
-    result: h.result_json === null ? null : JSON.parse(h.result_json),
+    result: h.result_json === null ? null : parseJsonValue(h.result_json),
     counts: {
       total: h.item_count, pending: h.items_pending,
       running: h.items_running, finished: h.items_finished,
@@ -219,13 +220,13 @@ const readBoundTask = (db, id) => {
     head,
     items: rows.map((r) => ({
       spec: {
-        item_id: r.item_id, target: JSON.parse(r.target_json),
+        item_id: r.item_id, target: parseJsonValue(r.target_json),
         progress_unit: r.progress_unit,
-        frozen_inputs: JSON.parse(r.frozen_inputs_json),
-        scope_keys: JSON.parse(r.scope_keys_json),
+        frozen_inputs: parseJsonValue(r.frozen_inputs_json),
+        scope_keys: parseJsonValue(r.scope_keys_json),
       },
       stage: r.stage,
-      outcome: r.outcome_json === null ? null : JSON.parse(r.outcome_json),
+      outcome: r.outcome_json === null ? null : parseJsonValue(r.outcome_json),
     })),
   };
 };

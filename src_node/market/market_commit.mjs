@@ -3,6 +3,7 @@
 // ported task write path (decideHead/persistDecided) and the NM-051
 // read helpers. All writes happen inside one BEGIN IMMEDIATE tx.
 import { createHash } from "node:crypto";
+import { serValue, parseJsonValue } from "../mcp/serde_json.mjs";
 import { StorageError } from "../storage/sqlite_adapter.mjs";
 import { decideHead, persistDecided, canonEq } from "../storage/task_repository.mjs";
 import * as RC from "./record_codec.mjs";
@@ -17,11 +18,11 @@ const baseErr = (m) => new RC.MarketError("base", `BASE_UNAVAILABLE: ${m}`);
 
 // serde struct-order serialization (Value members sorted via __ser)
 const serPub = (p) =>
-  `{"publication_id":${JSON.stringify(p.publication_id)},"version_id":${JSON.stringify(p.version_id)},"task_id":${JSON.stringify(p.task_id)},"item_id":${JSON.stringify(p.item_id)},"run_id":${JSON.stringify(p.run_id)},"expected_revision":${JSON.stringify(p.expected_revision)},"intent":${RC.__ser(p.intent)}}`;
+  `{"publication_id":${JSON.stringify(p.publication_id)},"version_id":${JSON.stringify(p.version_id)},"task_id":${JSON.stringify(p.task_id)},"item_id":${JSON.stringify(p.item_id)},"run_id":${JSON.stringify(p.run_id)},"expected_revision":${serValue(p.expected_revision)},"intent":${RC.__ser(p.intent)}}`;
 const serReceipt = (r) =>
-  `{"publication_id":${JSON.stringify(r.publication_id)},"version_id":${JSON.stringify(r.version_id)},"task_id":${JSON.stringify(r.task_id)},"task_revision":${JSON.stringify(r.task_revision)}}`;
+  `{"publication_id":${JSON.stringify(r.publication_id)},"version_id":${JSON.stringify(r.version_id)},"task_id":${JSON.stringify(r.task_id)},"task_revision":${serValue(r.task_revision)}}`;
 const resultDigest = (auditJson, receiptJson) =>
-  sha(`[${JSON.stringify(auditJson)},${JSON.stringify(receiptJson)}]`);
+  sha(`[${serValue(auditJson)},${serValue(receiptJson)}]`);
 
 const periodName = (p) => p === "Day" ? "day" : "year";
 const scopeOf = (v) => ({ symbol: v.symbol, period: v.period });
@@ -70,7 +71,7 @@ export const commitPublication = (db, plan, now) => {
     "SELECT command_json,receipt_json FROM publication_batches WHERE publication_id=?",
     command.publication_id);
   if (old) {
-    const storedCommand = JSON.parse(old.command_json);
+    const storedCommand = parseJsonValue(old.command_json);
     if (!canonEq(storedCommand, command)) {
       throw conflict("publication identity reused with different command");
     }
@@ -78,7 +79,7 @@ export const commitPublication = (db, plan, now) => {
     if (!rawEq(stored.raw, plan.record.raw)) {
       throw integrity("published record differs from prepared command");
     }
-    return JSON.parse(old.receipt_json);
+    return parseJsonValue(old.receipt_json);
   }
   const reused = db.get(
     "SELECT EXISTS(SELECT 1 FROM market_update_results WHERE result_id=? UNION ALL SELECT 1 FROM yearly_execution_results WHERE result_id=?) AS x",

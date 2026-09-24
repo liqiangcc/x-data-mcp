@@ -10,6 +10,7 @@ import {
   readRequestRecord, ser,
 } from "./verification_storage.mjs";
 import { StorageError } from "./sqlite_adapter.mjs";
+import { parseJsonValue } from "../mcp/serde_json.mjs";
 import { MarketError } from "../market/record_codec.mjs";
 import { contractKind } from "../market/verification_facts.mjs";
 
@@ -46,7 +47,7 @@ export const readCheckAudit = (db, id) => {
     throw integrity("publication check audit digest differs");
   }
   let audit;
-  try { audit = JSON.parse(row.audit_json); }
+  try { audit = parseJsonValue(row.audit_json); }
   catch (e) { throw integrity(e.message); }
   if (audit.receipt?.verification_task_id !== id ||
       audit.receipt?.target_task_id !== row.target_task_id) {
@@ -123,7 +124,7 @@ export const prepareCheck = (check, facts, run, actor, now) => {
     : conclusion === "insufficient_evidence"
       ? "one or more task items lack a committed publication receipt; absence does not prove failure or non-publication; original protection retained"
       : "target no longer requires publication inspection; missing receipts are not classified as publication failure";
-  const after = JSON.parse(JSON.stringify(check));
+  const after = parseJsonValue(ser(check, "snapshot"));
   after.task.status = "succeeded";
   const rev = BigInt(after.task.state_revision) + 1n;
   if (rev > 18446744073709551615n) throw tcConflict();
@@ -194,7 +195,7 @@ export const readCheckReceipt = (db, id, readBound, readFactsFn) => {
 // Storage -> StorageUnavailable, other -> NeedsVerification(Display)).
 export const validateTaskLink = (db, snap) => {
   const key = typeof snap.task.command_key_json === "string"
-    ? JSON.parse(snap.task.command_key_json)
+    ? parseJsonValue(snap.task.command_key_json)
     : snap.task.key;
   if (!canonEq(key, CHECK_KEY) || snap.task.status !== "succeeded") {
     return;
@@ -288,7 +289,7 @@ export function validateTerminal(db, command, value, readBound, readFactsFn) {
     throw tcNeedsVerification(String(e?.message ?? e));
   };
   let result;
-  try { result = typeof value === "string" ? JSON.parse(value) : value; }
+  try { result = typeof value === "string" ? parseJsonValue(value) : value; }
   catch (e) { throw tc(e); }
   // TerminalResult serde is internally tagged: {"kind":"already_verified",...}
   const expected = result?.kind === "already_verified" ? result.receipt : undefined;

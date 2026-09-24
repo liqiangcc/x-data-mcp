@@ -72,7 +72,10 @@ export const U64_MAX = (1n << 64n) - 1n;
 export const tInt = (name, lo, hi) => (v) => {
   const i = intKind(v);
   if (i !== null) {
-    if (i >= lo && i <= hi) return Number(i);
+    // serde u64/i64 exactness: keep bigint outside the safe-integer range —
+    // Number() above 2^53 loses digits serde emits verbatim (F-001 class).
+    if (i >= lo && i <= hi)
+      return i >= -(2n ** 53n) && i <= 2n ** 53n ? Number(i) : i;
     if (i >= I64_MIN) fail(`invalid value: integer \`${i}\`, expected ${name}`);
     invalidType(v, name);
   }

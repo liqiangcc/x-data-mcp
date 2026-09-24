@@ -1,0 +1,25 @@
+{"op":"seed","records":"valid_daily.json,valid_yearly.json,nm052_result.json|pub=res-ch|nohead","results":true,"check":true}
+{"op":"lookup_task","sym":"FX"}
+{"op":"check_receipt","id":"$FX_5"}
+{"op":"known_publication","target":"$FX_3"}
+{"op":"known_publication","target":"$FX_4"}
+{"op":"read_facts","task":"$FX_3"}
+{"op":"capture","kind":"check_plan","as":"A","verification":"$FX_5","target":"$FX_3","run":"run-check","actor":"actor-check","now":"2026-01-02T00:00:00Z"}
+{"op":"admit","request_id":"req-chk2","command":{"key":{"operation":"verify_publication_result","dataset":"task.verification","contract_version":"publication-check-task-v1"},"intent":{"target_task_id":"$FX_4"}},"work":{"items":[{"item_id":"publication-results","target":{"task_id":"$FX_4"},"progress_unit":"evidence_check","frozen_inputs":{"target_task_id":"$FX_4","accepted_run_id":"run-check","admission_revision":6,"admission_snapshot_sha256":"0000000000000000000000000000000000000000000000000000000000000000"},"scope_keys":["verification:task:$FX_4"]}],"scopes":["verification:task:$FX_4"]},"run":"run-check","as":"CHK2"}
+{"op":"claim","task":"$CHK2","revision":"$REV:CHK2","run":"run-check"}
+{"op":"startItem","task":"$CHK2","revision":"$REV:CHK2","run":"run-check","item":"publication-results"}
+{"op":"capture","kind":"check_plan","as":"B","verification":"$CHK2","target":"$FX_4","run":"run-check","actor":"actor-check","now":"2026-01-02T00:00:00Z"}
+{"op":"commit_check","audit_cap":"B"}
+{"op":"commit_check","audit_cap":"B"}
+{"op":"commit_check","audit_cap":"B","tweak":{"receipt.reason":"tampered reason"}}
+{"op":"check_receipt","id":"$CHK2"}
+{"op":"known_publication","target":"$FX_4"}
+{"op":"bind_known_publication","request_id":"req-known-1","command":{"key":{"operation":"verify_publication_result","dataset":"task.verification","contract_version":"publication-check-task-v1"},"intent":{"target_task_id":"$FX_3"}},"target":{"task":"$FX_3"},"result":{"kind":"already_verified","receipt":{"verification_task_id":"$FX_5","target_task_id":"$FX_3","verification_revision":3,"target_revision":4,"conclusion":"all_recorded","reason":"all task items have verified fixed publication evidence; this does not prove writers stopped","missing_receipt_item_ids":[]}}}
+{"op":"bind_known_publication","request_id":"req-known-1","command":{"key":{"operation":"verify_publication_result","dataset":"task.verification","contract_version":"publication-check-task-v1"},"intent":{"target_task_id":"$FX_3"}},"target":{"task":"$FX_3"},"result":{"kind":"already_verified","receipt":{"verification_task_id":"$FX_5","target_task_id":"$FX_3","verification_revision":3,"target_revision":4,"conclusion":"all_recorded","reason":"all task items have verified fixed publication evidence; this does not prove writers stopped","missing_receipt_item_ids":[]}}}
+{"op":"bind_known_publication","request_id":"req-known-1","command":{"key":{"operation":"verify_publication_result","dataset":"task.verification","contract_version":"publication-check-task-v1"},"intent":{"target_task_id":"$FX_4"}},"target":{"task":"$FX_3"},"result":{"kind":"already_verified","receipt":{"verification_task_id":"$FX_5","target_task_id":"$FX_3","verification_revision":3,"target_revision":4,"conclusion":"all_recorded","reason":"all task items have verified fixed publication evidence; this does not prove writers stopped","missing_receipt_item_ids":[]}}}
+{"op":"exec_sql","sql":"UPDATE publication_checks SET audit_sha256='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' WHERE verification_task_id='$CHK2'"}
+{"op":"check_receipt","id":"$CHK2"}
+{"op":"exec_sql","sql":"DELETE FROM publication_checks WHERE verification_task_id='$CHK2'"}
+{"op":"check_receipt","id":"$CHK2"}
+{"op":"known_publication","target":"$FX_4"}
+{"op":"checkpoint","task":"$CHK2"}

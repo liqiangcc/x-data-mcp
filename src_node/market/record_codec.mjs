@@ -3,6 +3,7 @@
 // MarketDataBatch serde behavior, validate_and_deduplicate,
 // validate_unit_currency_evidence, validate_adjustment_evidence.
 import { createHash } from "node:crypto";
+import { F64, serValue } from "../mcp/serde_json.mjs";
 
 export const DIGEST_FORMAT = "legacy-published-record-v1";
 export const MAX_RECORDS = 100_000;
@@ -32,6 +33,10 @@ const publishAdj = (m) => `adjustment evidence is not confirmed: ${m}`;
 // BTreeMap (sorted), strings escape only control/quote/backslash.
 const sortSer = (v) => {
   if (v === null || v === undefined) return "null";
+  // serde u64 emits full digits; JSON.stringify throws on bigint
+  // (F-001 class). F64 carries the serde float lexeme.
+  if (typeof v === "bigint") return v.toString();
+  if (v instanceof F64) return serValue(v);
   if (typeof v !== "object") return JSON.stringify(v);
   if (Array.isArray(v)) return `[${v.map(sortSer).join(",")}]`;
   return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${sortSer(v[k])}`).join(",")}}`;

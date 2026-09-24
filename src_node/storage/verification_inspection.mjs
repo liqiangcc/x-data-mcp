@@ -4,6 +4,7 @@
 // validate_terminal, validate_task_request, validate_absent_request)
 // lives in verification_storage.mjs (NM-048).
 import { createHash } from "node:crypto";
+import { parseJsonValue } from "../mcp/serde_json.mjs";
 import { canonEq } from "./task_repository.mjs";
 import {
   VERIFICATION_KEY, PUBLICATION_KEY, INSPECTION_KEY,
@@ -258,7 +259,7 @@ export const prepareInspection = (id, commandValue, facts, observation, run, act
   }
   let after = null;
   if (conclusion === "interrupted") {
-    const next = JSON.parse(JSON.stringify(target));
+    const next = parseJsonValue(ser(target, "snapshot"));
     next.task.status = "interrupted";
     for (const i of next.items) {
       if (i.stage === "running") i.stage = "pending";
@@ -274,7 +275,7 @@ export const prepareInspection = (id, commandValue, facts, observation, run, act
     after = next;
   } else if (conclusion === "insufficient_evidence" &&
              target.task.status !== "needs_verification") {
-    const next = JSON.parse(JSON.stringify(target));
+    const next = parseJsonValue(ser(target, "snapshot"));
     next.task.status = "needs_verification";
     after = next;
   }

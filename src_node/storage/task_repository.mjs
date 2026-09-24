@@ -21,9 +21,10 @@ import { openDatabase, StorageError } from "./sqlite_adapter.mjs";
 import {
   inspectionTaskLink, verifyTaskLink, readReceipt, runtimeRegistration,
   claimWithRuntimeGuard, validateAbsentRequest, validateTaskRequest,
-  validateTerminalStop, validateTerminalInspection, readAudit,
+  validateTerminalStop, validateTerminalInspection, readAudit, ser,
 } from "./verification_storage.mjs";
 import { validateTaskLink as publicationCheckLink } from "./publication_checks.mjs";
+import { parseJsonValue } from "../mcp/serde_json.mjs";
 
 const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
@@ -157,7 +158,7 @@ function validatePlan(plan) {
   for (const [n, v] of [["commandJson", commandJson], ["executionKeyJson", executionKeyJson],
                         ["workJson", workJson]]) {
     if (!wellformedStr(v)) bad(`${n} must be wellformed JSON text`);
-    try { JSON.parse(v); } catch { bad(`${n} is not valid JSON`); }
+    try { parseJsonValue(v); } catch { bad(`${n} is not valid JSON`); }
   }
   if (!Array.isArray(items)) bad("items must be an array");
   const seen = new Set();
@@ -167,7 +168,7 @@ function validatePlan(plan) {
                           ["scope_keys_json", i?.scope_keys_json]]) {
       if (!wellformedStr(v) || v === "") bad(`item ${n} must be a wellformed non-empty string`);
     }
-    try { JSON.parse(i.target_json); JSON.parse(i.frozen_inputs_json); JSON.parse(i.scope_keys_json); }
+    try { parseJsonValue(i.target_json); parseJsonValue(i.frozen_inputs_json); parseJsonValue(i.scope_keys_json); }
     catch { bad(`item ${i.item_id} has invalid JSON field`); }
     if (seen.has(i.item_id)) bad(`duplicate item_id ${i.item_id}`);
     seen.add(i.item_id);
@@ -205,7 +206,7 @@ function validatePlan(plan) {
   if (!wellformedStr(createdAt)) bad("createdAt (RFC3339) must be supplied by the caller");
   // evidence_digest comes from the frozen work object, as in Rust
   // work.evidence_digest() — a JSON field, not a parameter.
-  const work = JSON.parse(workJson);
+  const work = parseJsonValue(workJson);
   const evidenceDigest = (work && typeof work === "object" && !Array.isArray(work) &&
     wellformedStr(work.evidence_digest)) ? work.evidence_digest : null;
   return { requestId, commandJson, executionKeyJson, workJson, items, scopes, runId, retryOf, retry, createdAt, evidenceDigest };
@@ -362,8 +363,8 @@ export class TaskAdmission {
         if (old.task.state_revision !== p.retry.expectedRevision) {
           throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
         }
-        const command = JSON.parse(p.commandJson);
-        const oldKey = JSON.parse(old.task.command_key_json);
+        const command = parseJsonValue(p.commandJson);
+        const oldKey = parseJsonValue(old.task.command_key_json);
         const selected = [...p.retry.selectedItems].sort();
         // Rust compares the intent Value wholesale: exactly
         // {original_task_id, selected_items} — extra keys reject.
@@ -381,7 +382,7 @@ export class TaskAdmission {
         if (boundReq && boundReq.request_id === p.requestId) {
           throw new StorageError("conflict", "REQUEST_CONFLICT");
         }
-        const workItems = JSON.parse(p.workJson).items;
+        const workItems = parseJsonValue(p.workJson).items;
         for (const w of workItems) {
           const spec = old.items.find((i) => i.item_id === w.item_id);
           if (!p.retry.selectedItems.includes(w.item_id) || !spec ||
@@ -628,10 +629,11 @@ Object.assign(TaskAdmission.prototype, {
     if (outcome.success && outcome.error != null) {
       throw new StorageError("invalid_input", "success with error");
     }
-    const outcomeJson = JSON.stringify(
+    const outcomeJson = ser(
       outcome.evidence === undefined
         ? { success: outcome.success, error: outcome.error ?? null }
-        : { success: outcome.success, error: outcome.error ?? null, evidence: outcome.evidence });
+        : { success: outcome.success, error: outcome.error ?? null, evidence: outcome.evidence },
+      "outcome");
     return this._db.transaction(() => {
       const t = this._transitionGate(taskId, expectedRevision, runId, now);
       // FinishItem arm: owner-bound only (no task-status arm —
@@ -835,7 +837,7 @@ Object.assign(TaskAdmission.prototype, {
       const uncertainty = {
         execution_uncertainty: {
           item_id: itemId,
-          previous_result: prev.result_json === null ? null : JSON.parse(prev.result_json),
+          previous_result: prev.result_json === null ? null : parseJsonValue(prev.result_json),
           previous_status: t.status,
           reason,
         },
@@ -846,7 +848,7 @@ Object.assign(TaskAdmission.prototype, {
         `UPDATE tasks SET status='needs_verification',state_revision=?,
          last_progress_at=?,result_json=?${RECOUNT_COUNTERS}
          WHERE task_id=? AND state_revision=?`,
-        next, now, JSON.stringify(uncertainty), taskId, expectedRevision);
+        next, now, ser(uncertainty), taskId, expectedRevision);
       if (res.changes !== 1) {
         throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
       }
@@ -945,13 +947,13 @@ Object.assign(TaskAdmission.prototype, {
     const inc = (m) => { throw new StorageError("needs_verification",
       `ACCEPTANCE_NEEDS_VERIFICATION: ${m}`); };
     const parseJson = (v, what) => {
-      try { return JSON.parse(v); } catch { inc(`${what} unparseable`); }
+      try { return parseJsonValue(v); } catch { inc(`${what} unparseable`); }
     };
     // command_key_json decodes first in Rust's read_task (column order);
     // serde reports missing required fields at the closing brace column.
     const keyJson = t.command_key_json;
     let taskKey;
-    try { taskKey = JSON.parse(keyJson); }
+    try { taskKey = parseJsonValue(keyJson); }
     catch { inc("expected value at line 1 column 1"); }
     if (taskKey === null || typeof taskKey !== "object" || Array.isArray(taskKey)) {
       inc(`invalid type: ${typeof taskKey === "number" ? "integer" : typeof taskKey} ${
@@ -1331,8 +1333,9 @@ const counterDelta = (changed, outcome) =>
 // serde-sorted outcome bytes (success,error[,evidence]) — write_item_row
 const outcomeJson = (o) =>
   o === null ? null :
-    JSON.stringify({ success: o.success, error: o.error ?? null,
-      ...(o.evidence !== undefined ? { evidence: o.evidence } : {}) });
+    ser({ success: o.success, error: o.error ?? null,
+      ...(o.evidence !== undefined ? { evidence: o.evidence } : {}) },
+      "outcome");
 
 // write_items_delta's whole-snapshot arm: head-level changes (Claim,
 // RequestCancel, FinishExecution/FinishCancellation, RequireVerification)
@@ -1342,7 +1345,7 @@ const outcomeJson = (o) =>
 const rewriteItemOutcomes = (db, taskId) => {
   for (const r of db.query(
     "SELECT item_id,outcome_json FROM task_items WHERE task_id=?", taskId)) {
-    const enc = r.outcome_json === null ? null : outcomeJson(JSON.parse(r.outcome_json));
+    const enc = r.outcome_json === null ? null : outcomeJson(parseJsonValue(r.outcome_json));
     if (r.outcome_json !== enc) {
       db.run("UPDATE task_items SET outcome_json=? WHERE task_id=? AND item_id=?",
         enc, taskId, r.item_id);
@@ -1350,16 +1353,11 @@ const rewriteItemOutcomes = (db, taskId) => {
   }
 };
 
-// result_json is a serde-serialized Value — maps sorted recursively
-// (serde_json::to_string sorts every object level, e.g. the nested
-// execution_uncertainty marker), not just the top level.
-const deepSortValue = (v) =>
-  Array.isArray(v) ? v.map(deepSortValue)
-    : v !== null && typeof v === "object"
-      ? Object.keys(v).sort().reduce((a, k) => (a[k] = deepSortValue(v[k]), a), {})
-      : v;
+// result_json is a serde-serialized Value — ser() sorts every object
+// level (serde_json::to_string BTreeMap order, e.g. the nested
+// execution_uncertainty marker) and emits u64 bigint digits verbatim.
 const headResultJson = (r) =>
-  r === null ? null : JSON.stringify(deepSortValue(r));
+  r === null ? null : ser(r);
 
 /** sqlite_tasks::read_bound_task → {head, items} decision snapshot for
  *  the batch/light-transition path. `head` carries the decide_head
@@ -1376,11 +1374,11 @@ export const readBoundSnapshot = (db, taskId) => {
       "ACCEPTANCE_NEEDS_VERIFICATION: task binding/execution missing");
   }
   const head = {
-    task_id: t.task_id, key: JSON.parse(t.command_key_json),
+    task_id: t.task_id, key: parseJsonValue(t.command_key_json),
     status: t.status, state_revision: t.state_revision,
     accepted_run_id: t.accepted_run_id, owner_run_id: t.owner_run_id,
     last_progress_at: t.last_progress_at,
-    result: t.result_json === null ? null : JSON.parse(t.result_json),
+    result: t.result_json === null ? null : parseJsonValue(t.result_json),
     counts: {
       total: t.item_count, pending: t.items_pending, running: t.items_running,
       finished: t.items_finished, succeeded: t.items_succeeded,
@@ -1391,12 +1389,12 @@ export const readBoundSnapshot = (db, taskId) => {
     "SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=? ORDER BY item_id",
     taskId).map((r) => ({
       spec: {
-        item_id: r.item_id, target: JSON.parse(r.target_json),
-        progress_unit: r.progress_unit, frozen_inputs: JSON.parse(r.frozen_inputs_json),
-        scope_keys: JSON.parse(r.scope_keys_json),
+        item_id: r.item_id, target: parseJsonValue(r.target_json),
+        progress_unit: r.progress_unit, frozen_inputs: parseJsonValue(r.frozen_inputs_json),
+        scope_keys: parseJsonValue(r.scope_keys_json),
       },
       stage: r.stage,
-      outcome: r.outcome_json === null ? null : JSON.parse(r.outcome_json),
+      outcome: r.outcome_json === null ? null : parseJsonValue(r.outcome_json),
     }));
   return { head, items, reload: () => readBoundSnapshot(db, taskId) };
 };
