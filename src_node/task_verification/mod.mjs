@@ -4,6 +4,7 @@
 // Repository/control calls are injected seams — unwired calls throw
 // typed errors, never silent success.
 import { createHash } from "node:crypto";
+import { ser } from "../storage/verification_storage.mjs";
 
 export const DATASET = "task.verification";
 export const CONTRACT_VERSION = "stopped-writes-task-v1";
@@ -50,61 +51,12 @@ export const snapVisible = (s, run) =>
   visibleStatus(s.task.status, s.task.accepted_run_id, s.task.owner_run_id, run);
 
 // ------------------------------------------------- serde_json emitters
-// Struct fields emit in declaration order; Value maps (dynamic objects)
-// emit BTreeMap-sorted — serde_json parity. NOTE: verification_storage's
-// `ser` drops child shapes at array elements (items emit sorted); this
-// lane carries its own serializer so `snapshot_digest` equals
-// serde_json::to_vec byte-for-byte.
-const ORDER = {
-  snapshot: ["task", "items", "claims"],
-  task: ["task_id", "key", "status", "state_revision", "accepted_run_id",
-    "owner_run_id", "created_at", "last_progress_at", "work", "result", "retry_of"],
-  key: ["operation", "dataset", "contract_version"],
-  work: ["items", "scopes", "shared_evidence"],
-  itemSpec: ["item_id", "target", "progress_unit", "frozen_inputs", "scope_keys"],
-  item: ["spec", "stage", "outcome"],
-  claim: ["scope_key", "task_id", "state_revision"],
-  outcome: ["success", "error", "evidence"],
-  receipt: ["verification_task_id", "target_task_id", "conclusion",
-    "verification_revision", "target_revision", "reason"],
-};
-const SKIP_NONE = new Set(["shared_evidence", "evidence"]); // skip_serializing_if
-const CHILD = {
-  snapshot: { task: "task", items: "item", claims: "claim" },
-  task: { key: "key", work: "work" },
-  work: { items: "itemSpec" },
-  item: { spec: "itemSpec", outcome: "outcome" },
-};
-// serSnap: serialize a canonical TaskSnapshot JSON object exactly as
-// serde_json::to_vec does — declaration-order struct fields (per ORDER),
-// sorted keys inside dynamic Value positions, arrays keep the element
-// shape (fixed relative to NM-048's ser, which drops it at arrays).
-export const serSnap = (snap) => {
-  const serX = (v, shape) => {
-    if (v === null || v === undefined) return "null";
-    if (typeof v !== "object") return JSON.stringify(v);
-    const child = CHILD[shape] ?? {};
-    if (Array.isArray(v)) {
-      // reached only for dynamic (Value) array positions
-      return `[${v.map((x) => serX(x)).join(",")}]`;
-    }
-    const order = shape ? ORDER[shape] : null;
-    // serde emits every declared struct field; Option fields absent in
-    // the object emit null (skip_serializing_if keys stay omitted).
-    const keys = order
-      ? order.filter((k) => !(SKIP_NONE.has(k) && (v[k] === null || !(k in v))))
-      : Object.keys(v).sort();
-    return `{${keys.map((k) => {
-      const val = v[k];
-      const cs = child[k];
-      if (Array.isArray(val) && cs) {
-        return `${JSON.stringify(k)}:[${val.map((x) => serX(x, cs)).join(",")}]`;
-      }
-      return `${JSON.stringify(k)}:${serX(val === undefined ? null : val, cs)}`;
-    }).join(",")}}`;
-  };
-  return serX(snap, "snapshot");
-};
+// serSnap: serde_json::to_vec(&TaskSnapshot) bytes — declaration-order
+// struct fields, sorted dynamic Value keys, skip_serializing_if. Trunk
+// `ser` (NM-059 fix) propagates child shapes into array elements, so it
+// is byte-identical for canonical snapshots; keep the named wrapper so
+// call sites state intent.
+export const serSnap = (snap) => ser(snap, "snapshot");
 
 // decision::snapshot_digest — sha256(serde_json::to_vec(&target)).
 export const snapshotDigest = (snap) =>
