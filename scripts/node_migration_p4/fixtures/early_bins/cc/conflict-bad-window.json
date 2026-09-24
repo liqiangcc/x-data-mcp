@@ -1,0 +1,70 @@
+{
+  "files": [
+    {
+      "role": "base_industry",
+      "bytes": 12345,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-01-01T00:00:00Z",
+      "acquisition_completed_at": "2026-01-01T00:00:05Z",
+      "last_modified": null,
+      "etag": null,
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    },
+    {
+      "role": "day",
+      "bytes": 12345,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-01-01T00:00:00Z",
+      "acquisition_completed_at": "2026-01-01T00:00:05Z",
+      "last_modified": null,
+      "etag": null,
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    },
+    {
+      "role": "gbbq",
+      "bytes": 12345,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-01-01T00:00:00Z",
+      "acquisition_completed_at": "2026-01-01T00:00:05Z",
+      "last_modified": null,
+      "etag": null,
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    }
+  ],
+  "compatibility": {
+    "evidence_ref": "ev/test@0",
+    "rule_version": "official-file-consistency-v1",
+    "compatibility_set_revision": "rev-1",
+    "compatibility_set_identity": "ident-1",
+    "member_bindings": {
+      "base_industry": {
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_revision": null,
+        "source_identity": null
+      },
+      "day": {
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_revision": null,
+        "source_identity": null
+      },
+      "gbbq": {
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_revision": null,
+        "source_identity": null
+      }
+    },
+    "valid_window": {
+      "valid_from": "2027-01-01T00:00:00Z",
+      "valid_until": "2025-01-01T00:00:00Z"
+    }
+  }
+}

@@ -1,9 +1,14 @@
-/* renameat2(RENAME_NOREPLACE) — atomic no-overwrite rename for immutable
- * generation install. Node fs.renameSync would silently replace an
- * existing empty target directory; this primitive fails EEXIST instead.
+/* Linux kernel-parity guards for the local runtime. Originated as
+ * renameat2(RENAME_NOREPLACE) — atomic no-overwrite rename for immutable
+ * generation install (Node fs.renameSync would silently replace an
+ * existing empty target directory; this primitive fails EEXIST instead).
+ * Now also carries flockfd / statfsmagic / openat_* / unlinkat /
+ * getpeereuid — the primitives src/local_runtime and
+ * src/local_filesystem rely on.
  * Build: gcc -shared -fPIC -O2 -o rename_noreplace.node rename_noreplace.c
  *        -I/usr/include/node
  */
+#define _GNU_SOURCE /* struct ucred for SO_PEERCRED */
 #include <node_api.h>
 #include <fcntl.h>
 #include <sys/syscall.h>
@@ -13,6 +18,7 @@
 #include <stdio.h>
 #include <sys/statfs.h>
 #include <sys/file.h>
+#include <sys/socket.h>
 
 #ifndef RENAME_NOREPLACE
 #define RENAME_NOREPLACE (1U << 0)
@@ -205,6 +211,42 @@ static napi_value statfsmagic(napi_env env, napi_callback_info info) {
   return out;
 }
 
+/* getpeereuid(fd) -> {pid, uid, gid} via getsockopt(SO_PEERCRED) —
+ * peer() in src/local_runtime/paths.rs. Throws on non-socket fds and
+ * on a truncated credential (same shape check as Rust). */
+static napi_value getpeereuid(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1) {
+    napi_throw_type_error(env, NULL, "getpeereuid expects (fd:number)");
+    return NULL;
+  }
+  int32_t fd;
+  if (napi_get_value_int32(env, argv[0], &fd) != napi_ok) {
+    napi_throw_type_error(env, NULL, "fd must be an int32");
+    return NULL;
+  }
+  struct ucred cred;
+  socklen_t len = sizeof(cred);
+  if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
+    int e = errno;
+    char msg[160];
+    snprintf(msg, sizeof msg, "getsockopt(SO_PEERCRED) failed: %s", strerror(e));
+    napi_throw_error(env, NULL, msg);
+    return NULL;
+  }
+  if (len != sizeof(cred)) {
+    napi_throw_error(env, NULL, "unexpected peer credential shape");
+    return NULL;
+  }
+  napi_value obj, v;
+  napi_create_object(env, &obj);
+  napi_create_int32(env, cred.pid, &v); napi_set_named_property(env, obj, "pid", v);
+  napi_create_uint32(env, cred.uid, &v); napi_set_named_property(env, obj, "uid", v);
+  napi_create_uint32(env, cred.gid, &v); napi_set_named_property(env, obj, "gid", v);
+  return obj;
+}
+
 static napi_value init(napi_env env, napi_value exports) {
   napi_value fn;
   napi_create_function(env, "rename_noreplace", NAPI_AUTO_LENGTH,
@@ -225,6 +267,9 @@ static napi_value init(napi_env env, napi_value exports) {
   napi_create_function(env, "statfsmagic", NAPI_AUTO_LENGTH,
                        statfsmagic, NULL, &fn);
   napi_set_named_property(env, exports, "statfsmagic", fn);
+  napi_create_function(env, "getpeereuid", NAPI_AUTO_LENGTH,
+                       getpeereuid, NULL, &fn);
+  napi_set_named_property(env, exports, "getpeereuid", fn);
   return exports;
 }
 NAPI_MODULE(rename_noreplace, init)
