@@ -1,0 +1,24 @@
+oracle: release rlib target/release/deps/libx_data_mcp-81bf3a3b3f614e4b.rlib
+{"type":"env","code_sha":"5fa3008e038a9ca31015ce8bd1b0dcacbddd1e30","node":"v20.19.2","rustc":"rustc 1.98.1 (48a229cea 2026-09-01)","uname":"Linux 6.12.94+ #1 SMP PREEMPT_DYNAMIC Fri Sep 18 16:05:18 UTC 2026 x86_64 GNU/Linux","concurrency":1,"bench_iters":300,"bench_warmup":40,"day_input_bytes":279200,"serde_input_bytes":136057,"record_count":3}
+{"surface":"day_parse","impl":"node","iters":300,"p50_ns":350685,"p95_ns":1195796,"max_ns":1889342,"mean_ns":460148,"input_bytes":279200,"peak_rss_kb":94196}
+{"surface":"serde_json_decode","impl":"node","iters":300,"p50_ns":1274415,"p95_ns":2137938,"max_ns":13681075,"mean_ns":1600928,"input_bytes":136057,"peak_rss_kb":95876}
+{"surface":"serde_json_encode","impl":"node","iters":300,"p50_ns":1417003,"p95_ns":2060853,"max_ns":2646158,"mean_ns":1519846,"input_bytes":136057,"peak_rss_kb":106680}
+{"surface":"mcp_roundtrip","impl":"node","iters":300,"p50_ns":21073,"p95_ns":47490,"max_ns":490902,"mean_ns":26734,"input_bytes":83,"peak_rss_kb":106824}
+{"surface":"acquire_store_accept","impl":"node","iters":300,"p50_ns":158136,"p95_ns":356527,"max_ns":1149966,"mean_ns":190109,"input_bytes":0,"peak_rss_kb":107532,"db_bytes":81920,"wal_bytes":0}
+{"surface":"acquire_store_read","impl":"node","iters":300,"p50_ns":95125,"p95_ns":155104,"max_ns":235173,"mean_ns":111394,"input_bytes":0,"peak_rss_kb":107532,"db_bytes":81920,"wal_bytes":0}
+{"surface":"envelope_pack","impl":"node","iters":300,"p50_ns":461082,"p95_ns":512141,"max_ns":1105848,"mean_ns":472989,"input_bytes":32000,"peak_rss_kb":108068}
+{"surface":"envelope_expand","impl":"node","iters":300,"p50_ns":143571,"p95_ns":180475,"max_ns":863268,"mean_ns":145562,"input_bytes":32000,"peak_rss_kb":108212}
+{"surface":"record_check","impl":"node","iters":300,"p50_ns":148976,"p95_ns":236106,"max_ns":1336282,"mean_ns":168840,"input_bytes":6976,"peak_rss_kb":108884,"records":3}
+{"surface":"task_admit","impl":"node","iters":300,"p50_ns":2453046,"p95_ns":3785308,"max_ns":24314957,"mean_ns":2669599,"input_bytes":0,"peak_rss_kb":120964,"db_bytes":761856,"wal_bytes":4165352}
+{"surface":"task_claim","impl":"node","iters":340,"p50_ns":162234,"p95_ns":195630,"max_ns":753166,"mean_ns":168554,"input_bytes":0,"peak_rss_kb":120976,"db_bytes":761856,"wal_bytes":4165352}
+{"surface":"day_parse","impl":"rust","iters":300,"p50_ns":43816,"p95_ns":87922,"max_ns":299049,"mean_ns":56935,"input_bytes":279200,"peak_rss_kb":3608}
+{"surface":"serde_json_decode","impl":"rust","iters":300,"p50_ns":587649,"p95_ns":882344,"max_ns":1099234,"mean_ns":659969,"input_bytes":136057,"peak_rss_kb":4124}
+{"surface":"serde_json_encode","impl":"rust","iters":300,"p50_ns":139482,"p95_ns":191521,"max_ns":240539,"mean_ns":149734,"input_bytes":136057,"peak_rss_kb":4380}
+{"surface":"mcp_roundtrip","impl":"rust","iters":300,"p50_ns":2746,"p95_ns":2982,"max_ns":17984,"mean_ns":2777,"input_bytes":83,"peak_rss_kb":3568}
+{"surface":"acquire_store_accept","impl":"rust","iters":300,"p50_ns":99143,"p95_ns":237530,"max_ns":1715762,"mean_ns":133362,"input_bytes":0,"db_bytes":86016,"wal_bytes":0,"peak_rss_kb":5480}
+{"surface":"acquire_store_read","impl":"rust","iters":300,"p50_ns":62481,"p95_ns":99797,"max_ns":659617,"mean_ns":72383,"input_bytes":0,"db_bytes":86016,"wal_bytes":0,"peak_rss_kb":5204}
+{"surface":"envelope_pack","impl":"rust","iters":300,"p50_ns":347767,"p95_ns":584244,"max_ns":854198,"mean_ns":380263,"input_bytes":32000,"peak_rss_kb":3520}
+{"surface":"envelope_expand","impl":"rust","iters":300,"p50_ns":86390,"p95_ns":133592,"max_ns":252121,"mean_ns":98238,"input_bytes":32000,"peak_rss_kb":3660}
+{"surface":"record_check","impl":"rust","iters":300,"p50_ns":84804,"p95_ns":94289,"max_ns":170948,"mean_ns":86029,"input_bytes":6976,"records":3,"peak_rss_kb":4204}
+{"surface":"task_admit","impl":"rust","iters":300,"p50_ns":2729266,"p95_ns":4279639,"max_ns":22575827,"mean_ns":2792952,"input_bytes":0,"db_bytes":794624,"wal_bytes":0,"peak_rss_kb":9268}
+{"surface":"task_claim","impl":"rust","iters":340,"p50_ns":897536,"p95_ns":1233142,"max_ns":1537084,"mean_ns":938460,"input_bytes":0,"db_bytes":1298432,"wal_bytes":0,"peak_rss_kb":7504}

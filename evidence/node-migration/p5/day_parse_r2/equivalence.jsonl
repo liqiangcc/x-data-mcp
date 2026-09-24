@@ -1,0 +1,20 @@
+{"input":"sh\\lday\\sh000001.day","match":true,"old":{"n":8725,"sha":"c7fef81f9b2ac7541fcf309d8722ab322db00adc5d5927f5da67b6d58167ed56"},"new":{"n":8725,"sha":"c7fef81f9b2ac7541fcf309d8722ab322db00adc5d5927f5da67b6d58167ed56"}}
+{"input":"sh\\lday\\sh000002.day","match":true,"old":{"n":8725,"sha":"20ccf8a547f14aa83b6325b97f719ff8ae03bdeb3f851f9894c386697f3cf806"},"new":{"n":8725,"sha":"20ccf8a547f14aa83b6325b97f719ff8ae03bdeb3f851f9894c386697f3cf806"}}
+{"input":"sz\\lday\\sz000001.day","match":true,"old":{"n":8453,"sha":"36b8a6a5eb59c7a2c79014e8da6aa942ac0fca7c393ee0eab909b4f72b4988f5"},"new":{"n":8453,"sha":"36b8a6a5eb59c7a2c79014e8da6aa942ac0fca7c393ee0eab909b4f72b4988f5"}}
+{"input":"empty","match":true,"old":{"n":0,"sha":"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},"new":{"n":0,"sha":"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"}}
+{"input":"truncated","match":true,"old":{"err":"DayFileError:truncated:day file byte count 33 is not divisible by 32"},"new":{"err":"DayFileError:truncated:day file byte count 33 is not divisible by 32"}}
+{"input":"single","match":true,"old":{"n":1,"sha":"b37067dd04b637e0acd89858eacedba9b281c71a6cb560ef02f500d6312d5d72"},"new":{"n":1,"sha":"b37067dd04b637e0acd89858eacedba9b281c71a6cb560ef02f500d6312d5d72"}}
+{"input":"leap_ok","match":true,"old":{"n":1,"sha":"b3cc9fd0687eeb80c17034f8f11a0e441fe5a29a51f86914447304a27dc8249a"},"new":{"n":1,"sha":"b3cc9fd0687eeb80c17034f8f11a0e441fe5a29a51f86914447304a27dc8249a"}}
+{"input":"leap_bad","match":true,"old":{"err":"DayFileError:invalid_date:invalid calendar date 20230229 at record 0"},"new":{"err":"DayFileError:invalid_date:invalid calendar date 20230229 at record 0"}}
+{"input":"year_1","match":true,"old":{"n":1,"sha":"d0a1f689557a3a67e6f9ceccf5d9b39f4b5a09741d6a7615eb8708d640e709a2"},"new":{"n":1,"sha":"d0a1f689557a3a67e6f9ceccf5d9b39f4b5a09741d6a7615eb8708d640e709a2"}}
+{"input":"year_9999","match":true,"old":{"n":1,"sha":"da72f3dc5bc338ebb6f2f98a759d1c06a4d2ab949ec073030f9c4a2cac204fcc"},"new":{"n":1,"sha":"da72f3dc5bc338ebb6f2f98a759d1c06a4d2ab949ec073030f9c4a2cac204fcc"}}
+{"input":"year_10000","match":true,"old":{"err":"DayFileError:invalid_date:invalid calendar date 100000101 at record 0"},"new":{"err":"DayFileError:invalid_date:invalid calendar date 100000101 at record 0"}}
+{"input":"month_0","match":true,"old":{"err":"DayFileError:invalid_date:invalid calendar date 20240001 at record 0"},"new":{"err":"DayFileError:invalid_date:invalid calendar date 20240001 at record 0"}}
+{"input":"month_13","match":true,"old":{"err":"DayFileError:invalid_date:invalid calendar date 20241301 at record 0"},"new":{"err":"DayFileError:invalid_date:invalid calendar date 20241301 at record 0"}}
+{"input":"day_0","match":true,"old":{"err":"DayFileError:invalid_date:invalid calendar date 20240100 at record 0"},"new":{"err":"DayFileError:invalid_date:invalid calendar date 20240100 at record 0"}}
+{"input":"day_32","match":true,"old":{"err":"DayFileError:invalid_date:invalid calendar date 20240132 at record 0"},"new":{"err":"DayFileError:invalid_date:invalid calendar date 20240132 at record 0"}}
+{"input":"equal_dates","match":true,"old":{"err":"DayFileError:date_order:non-increasing date at record 1"},"new":{"err":"DayFileError:date_order:non-increasing date at record 1"}}
+{"input":"descending","match":true,"old":{"err":"DayFileError:date_order:non-increasing date at record 1"},"new":{"err":"DayFileError:date_order:non-increasing date at record 1"}}
+{"input":"ascending","match":true,"old":{"n":3,"sha":"1e07702285c30b44c81ff4bb080d9538b70f0fe5a6ae7dd102e1b7e7d390d818"},"new":{"n":3,"sha":"1e07702285c30b44c81ff4bb080d9538b70f0fe5a6ae7dd102e1b7e7d390d818"}}
+{"input":"misaligned","match":true,"old":{"n":8725,"sha":"c7fef81f9b2ac7541fcf309d8722ab322db00adc5d5927f5da67b6d58167ed56"},"new":{"n":8725,"sha":"c7fef81f9b2ac7541fcf309d8722ab322db00adc5d5927f5da67b6d58167ed56"}}
+day_parse diff: 19/19 identical, 0 diffs

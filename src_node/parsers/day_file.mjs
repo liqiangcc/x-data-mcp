@@ -18,27 +18,27 @@ export class DayFileError extends Error {
   }
 }
 
-// Strict Gregorian check mirroring NaiveDate::from_ymd_opt.
-// Returns epoch day (integer) or null. Year range 1..=9999 as in Rust.
-// Pure-integer civil math (Howard Hinnant days_from_civil) — the same
-// algorithm chrono's parser uses; identical accept/reject domain.
+// Strict Gregorian check mirroring NaiveDate::from_ymd_opt — the same
+// accept/reject domain (year 1..=9999, real calendar day). Ordering needs
+// no epoch conversion: for valid dates the YYYYMMDD integer orders
+// identically to the epoch day, so `raw <= prev` is the verbatim
+// strictly-increasing check.
 const DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-function ymdToEpoch(year, month, day) {
+function ymdValid(year, month, day) {
   if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1)
-    return null;
-  const dim = DIM[month - 1] +
+    return false;
+  return day <= DIM[month - 1] +
     (month === 2 && (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0))
       ? 1 : 0);
-  if (day > dim) return null;
-  const y = month <= 2 ? year - 1 : year;
-  const era = Math.floor(y / 400); // y >= 0 always (year >= 1)
-  const yoe = y - era * 400;
-  const doy = Math.floor((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5) + day - 1;
-  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
-  return era * 146097 + doe - 719468;
 }
 
-const P2 = (n) => (n < 10 ? `0${n}` : `${n}`);
+// 2-digit pad table — avoids per-record padStart/template work.
+const P2 = Array.from({ length: 100 }, (_, i) => (i < 10 ? `0${i}` : `${i}`));
+
+// Aligned Uint32Array reads: 8 word loads per record instead of 32 byte
+// reads. Requires a 4-byte-aligned view and a little-endian platform —
+// checked once; the byte-assembly path is the verbatim fallback.
+const LE = new Uint32Array(new Uint8Array([1, 0, 0, 0]).buffer)[0] === 1;
 
 /**
  * Parse a .day file buffer into raw records.
@@ -52,33 +52,72 @@ export function parse(bytes) {
     throw new DayFileError(
       `day file byte count ${bytes.length} is not divisible by 32`, "truncated");
   }
-  // u32le via raw byte reads — faster than DataView.getUint32 in the
-  // hot loop (identical little-endian semantics, same bounds domain).
+  const count = bytes.length / RECORD_BYTES;
+  const records = new Array(count);
+  const words = LE && bytes instanceof Uint8Array &&
+      bytes.byteOffset % 4 === 0
+    ? new Uint32Array(bytes.buffer, bytes.byteOffset, count * 8) : null;
+  // u32 reads: direct word indexing on the aligned fast path; byte
+  // assembly (identical little-endian semantics) otherwise.
   const u32 = (i) =>
     (bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) |
       (bytes[i + 3] << 24)) >>> 0;
-  const count = bytes.length / RECORD_BYTES;
-  const records = new Array(count);
-  let prevDay = -Infinity;
+  let prev = -1;
+  // Dates are strictly increasing — the "YYYY-MM-" prefix changes at
+  // most once per calendar month; reuse it between records.
+  let prevYm = -1, prefix = "";
+  if (words) {
+    for (let index = 0; index < count; index++) {
+      const w = index * 8;
+      const raw = words[w];
+      const year = Math.floor(raw / 10000);
+      const month = Math.floor(raw / 100) % 100;
+      const dom = raw % 100;
+      if (!ymdValid(year, month, dom)) {
+        throw new DayFileError(
+          `invalid calendar date ${raw} at record ${index}`, "invalid_date");
+      }
+      if (raw <= prev) {
+        throw new DayFileError(`non-increasing date at record ${index}`, "date_order");
+      }
+      prev = raw;
+      const ym = year * 100 + month;
+      if (ym !== prevYm) {
+        prevYm = ym;
+        prefix = `${String(year).padStart(4, "0")}-${P2[month]}-`;
+      }
+      records[index] = {
+        amount_float32_bits: words[w + 5],
+        date: prefix + P2[dom],
+        ohlc_raw: [words[w + 1], words[w + 2], words[w + 3], words[w + 4]],
+        r7_raw: words[w + 7],
+        volume_raw: words[w + 6],
+      };
+    }
+    return records;
+  }
   for (let index = 0; index < count; index++) {
     const base = index * RECORD_BYTES;
     const raw = u32(base);
     const year = Math.floor(raw / 10000);
     const month = Math.floor(raw / 100) % 100;
     const dom = raw % 100;
-    const day = ymdToEpoch(year, month, dom);
-    if (day === null) {
+    if (!ymdValid(year, month, dom)) {
       throw new DayFileError(
         `invalid calendar date ${raw} at record ${index}`, "invalid_date");
     }
-    if (day <= prevDay) {
+    if (raw <= prev) {
       throw new DayFileError(`non-increasing date at record ${index}`, "date_order");
     }
-    prevDay = day;
+    prev = raw;
+    const ym = year * 100 + month;
+    if (ym !== prevYm) {
+      prevYm = ym;
+      prefix = `${String(year).padStart(4, "0")}-${P2[month]}-`;
+    }
     records[index] = {
       amount_float32_bits: u32(base + 20),
-      // ISO date formatted directly from the parsed ints — no Date.
-      date: `${String(year).padStart(4, "0")}-${P2(month)}-${P2(dom)}`,
+      date: prefix + P2[dom],
       ohlc_raw: [u32(base + 4), u32(base + 8), u32(base + 12), u32(base + 16)],
       r7_raw: u32(base + 28),
       volume_raw: u32(base + 24),
