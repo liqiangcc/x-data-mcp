@@ -10,6 +10,7 @@ const { TaskAdmission } = await import("../../src_node/storage/task_repository.m
 const { openDatabase, StorageError } = await import("../../src_node/storage/sqlite_adapter.mjs");
 const V = await import("../../src_node/storage/verification_storage.mjs");
 const RT = await import("../../src_node/storage/verification_runtime.mjs");
+const VI = await import("../../src_node/storage/verification_inspection.mjs");
 
 let failures = 0;
 const emit = (id, status, detail, expected = null, actual = null) => {
@@ -213,31 +214,31 @@ run("inspection_predicates", () => {
   } catch (e) {
     if (!e.message.includes("must not bind")) throw e;
   }
-  // validate_absent_request negative: plant a row
+  // validate_absent_request negative: plant a row. The audit must be a
+  // real decision::prepare-consistent audit — read_audit replays
+  // decision::validate (NM-059), and Rust's serde parse would reject a
+  // stub facts blob anyway.
   const tSeed0 = seedTarget("insp-t");
-  const auditRow = JSON.stringify({
-    request_id: "req-insp", command: { key: V.INSPECTION_KEY, intent: { target_task_id: tSeed0 } },
-    actor: "a", run_id: "r", checked_at: "2026-01-02T10:40:00Z",
-    facts: { target: { task: { task_id: tSeed0 } } }, observation: "Excluded",
-    after: null, result: { VerificationInspection: { receipt: { r: 1 } } },
-  });
+  const readBound0 = (x) => withRepo((repo) => repo._readBoundTaskValidated(x));
+  const facts0 = VI.inspectionFacts(d, tSeed0, readBound0);
+  const cmdObj = VI.command(tSeed0);
+  const plan0 = VI.prepareInspection("req-insp", cmdObj, facts0, "Excluded",
+    "r", "a", "2026-01-02T10:40:00Z");
+  const auditRow = V.ser(plan0.audit, "inspectionAudit");
   const digest = createHash("sha256").update(auditRow).digest("hex");
   // request row first (FK); target task must exist — reuse a seeded one
-  const cmd = JSON.stringify({ key: V.INSPECTION_KEY, intent: { target_task_id: tSeed0 } });
+  const cmd = V.ser(cmdObj, "command");
+  const termJson = V.ser(plan0.audit.result);
   d.run("INSERT INTO requests VALUES(?,?,?,'terminal',NULL,?)",
-    "req-insp", cmd, createHash("sha256").update(cmd).digest("hex"),
-    JSON.stringify({ VerificationInspection: { receipt: { r: 1 } } }));
+    "req-insp", cmd, createHash("sha256").update(cmd).digest("hex"), termJson);
   d.run("INSERT INTO verification_inspections VALUES(?,?,?,?)", "req-insp", tSeed0, auditRow, digest);
   try { V.validateAbsentRequest(d, "req-insp"); throw new Error("absent missed"); }
   catch (e) { if (!e.message.includes("binding missing")) throw e; }
   // validate_terminal inspection variant: replay equal -> ok; differ -> integrity
-  V.validateTerminalInspection(d, "req-insp",
-    { key: V.INSPECTION_KEY, intent: { target_task_id: tSeed0 } },
-    { VerificationInspection: { receipt: { r: 1 } } });
+  V.validateTerminalInspection(d, "req-insp", cmdObj, plan0.audit.result);
   try {
-    V.validateTerminalInspection(d, "req-insp",
-      { key: V.INSPECTION_KEY, intent: { target_task_id: tSeed0 } },
-      { VerificationInspection: { receipt: { r: 2 } } });
+    V.validateTerminalInspection(d, "req-insp", cmdObj,
+      { ...plan0.audit.result, receipt: { ...plan0.audit.result.receipt, reason: "forged" } });
     throw new Error("differing terminal accepted");
   } catch (e) { if (!e.message.includes("differs")) throw e; }
   // validate_terminal stop variant: wrong key -> early Ok; inspection key -> absent

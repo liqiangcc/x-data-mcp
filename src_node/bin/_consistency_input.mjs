@@ -146,7 +146,9 @@ function decString(n) {
 }
 function decU64(n) {
   if (n.kind === "int") {
-    if (n.v >= 0n && n.v <= U64_MAX) return Number(n.v);
+    // Full u64 range: keep the exact bigint — Number() above 2^53 loses
+    // bytes Rust accepts (serde u64 semantics).
+    if (n.v >= 0n && n.v <= U64_MAX) return n.v;
     if (n.v >= I64_MIN && n.v < 0n) // in-range negative i64
       failAt(n.end, `invalid value: integer \`${n.v}\`, expected u64`);
     // outside i64/u64 -> serde parsed the lexeme as f64

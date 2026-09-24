@@ -16,7 +16,9 @@ const invalid = (m) => Object.assign(new Error(m), { kind: "invalid_input" });
 
 const LOCAL_MAGICS = new Set([0xef53, 0x58465342, 0x9123683e, 0x01021994]);
 
-const uid = () => process.getuid();
+// Rust paths::uid() = geteuid() (src/local_runtime/paths.rs:19) —
+// effective UID, not real UID.
+const uid = () => process.geteuid();
 
 // private_metadata — lstat: owned by this uid, mode & 077 == 0, not a
 // symlink (and a directory when directory=true)
