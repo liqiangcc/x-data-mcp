@@ -954,3 +954,200 @@ export const compactRangeRows = (db, id, p, range) => {
     })
     .slice(0, range.limit + 1);
 };
+
+// ---------- compact_versions write-side helpers (NM-055) ----------
+
+// version_key lookup — compact_repo::version_key
+export const versionKey = (db, versionId) => {
+  const row = db.get("SELECT version_key FROM data_versions WHERE version_id=?", versionId);
+  if (!row) throw notFound();
+  return row.version_key;
+};
+
+// result_facts — VersionResultFacts guards verbatim
+export const resultFacts = (db, key) => {
+  const row = readVersionRow(db, key);
+  if (row === null) throw integrity("version row missing");
+  const state = STATE[row.state];
+  if (state === undefined) throw integrity("malformed version state");
+  const manifestMode = row.manifest_mode === 1 ? "checkpoint"
+    : row.manifest_mode === 2 ? "delta"
+    : (() => { throw integrity("malformed manifest_mode"); })();
+  const deltaDepth = Number(row.delta_depth);
+  if (deltaDepth < 0 || deltaDepth > MAX_DELTA_DEPTH || !Number.isSafeInteger(deltaDepth)) {
+    throw integrity("malformed delta_depth");
+  }
+  if (manifestMode === "checkpoint" &&
+      (row.parent_version_key !== null || deltaDepth !== 0)) {
+    throw integrity("checkpoint version carries parent/depth");
+  }
+  if (manifestMode === "delta" &&
+      (row.parent_version_key === null || deltaDepth < 1 || deltaDepth > MAX_DELTA_DEPTH)) {
+    throw integrity("delta version lacks parent/depth");
+  }
+  return {
+    key: row.key, version_id: row.version_id, entity: row.entity,
+    period: row.period, state,
+    source_binding_digest: row.source_binding_digest,
+    parent_version_key: row.parent_version_key,
+    manifest_mode: manifestMode, delta_depth: deltaDepth,
+    projection_digest: row.projection_digest,
+    first_day: row.first_day, last_day: row.last_day,
+    record_count: row.record_count, coverage_status: row.coverage_status,
+    evidence_digest: row.evidence_digest, integrity_digest: row.integrity_digest,
+  };
+};
+
+export const verifiedEvidenceKind = (db, digest) => readEvidence(db, digest)[0];
+export const verifiedSourceBinding = (db, digest) => readSourceBinding(db, digest);
+export const applyStoredDelta = (db, base, ops, entity, period) =>
+  applyDelta(db, base, ops, entity, period);
+export const leafBars = (db, key) => reconstructLeaf(db, key)[1];
+export const verifyLeafProjection = (db, key) => {
+  const [row, bars] = reconstructLeaf(db, key);
+  verifyPublishedNode(db, row, bars);
+};
+export { leafBarsInRange };
+
+// compact_versions::fixed — verified published leaf by version_id
+export const fixed = (db, versionId) => {
+  const row = readVersionRowById(db, versionId);
+  if (row === null) throw notFound();
+  if (row.state !== 3) throw notFound();
+  return fixedByKey(db, row.key);
+};
+
+// verify_delta_append — Ok(false) for non-append shapes (callers fall
+// back to the full staged/leaf verification), integrity on linkage/
+// projection/metadata mismatches.
+export const verifyDeltaAppend = (db, versionKey) => {
+  const row = readVersionRow(db, versionKey);
+  if (row === null) throw integrity("version row missing");
+  if (row.manifest_mode !== 2) return false;
+  const parentKey = row.parent_version_key;
+  if (parentKey === null) throw integrity("delta version lacks parent");
+  const parent = readVersionRow(db, parentKey);
+  if (parent === null) throw integrity("delta parent missing");
+  const [ops, , projection] = readDelta(db, row.key, parent.projection_digest);
+  let added = 0n;
+  let prevEnd = parent.last_day;
+  for (const op of ops) {
+    if (op.kind.kind !== "upsert") return false;
+    const stored = op.kind.clip;
+    if (op.range_start_day <= prevEnd || op.range_start_day > op.range_end_day ||
+        op.range_start_day !== stored.clip_start_day || op.range_end_day !== stored.clip_end_day) {
+      return false;
+    }
+    added += BigInt(stored.row_count);
+    prevEnd = op.range_end_day;
+  }
+  verifyPublishedFields(db, parent);
+  if (BigInt(row.delta_depth) !== BigInt(parent.delta_depth) + 1n ||
+      row.entity !== parent.entity || row.period !== parent.period) {
+    throw integrity("version chain linkage mismatch");
+  }
+  if (!Buffer.from(projection).equals(row.projection_digest)) {
+    throw integrity("delta projection digest mismatch");
+  }
+  if (row.record_count !== parent.record_count + added ||
+      row.first_day !== parent.first_day || row.last_day !== prevEnd) {
+    throw integrity("version metadata does not match append projection");
+  }
+  const evidence = verifyVersionEvidence(db, row.evidence_digest);
+  readSourceBinding(db, row.source_binding_digest);
+  const newBars = [];
+  for (const op of ops) {
+    const stored = op.kind.clip;
+    const segment = readSegment(db, op.kind.segment_key);
+    checkClipAgainstSegment(segment, stored, row.entity, row.period);
+    newBars.push(...segment.bars.filter((b) =>
+      b.trade_day >= stored.clip_start_day && b.trade_day <= stored.clip_end_day));
+  }
+  checkBarsUnits(evidence, newBars);
+  if (row.period === "Day" && storedLineage(db, row.key) !== null) {
+    throw integrity("daily version carries yearly lineage");
+  }
+  return true;
+};
+
+// mark_validated_delta — O(ops) append check else full staged verify
+export const markValidatedDelta = (db, key) => {
+  const row = readVersionRow(db, key);
+  if (row === null) throw integrity("version row missing");
+  if (row.state !== 1) throw integrity("version is not staged");
+  if (!verifyDeltaAppend(db, key)) verifyStaged(db, row);
+  const changed = db.run(
+    "UPDATE data_versions SET state=2 WHERE version_key=? AND state=1", key).changes;
+  if (changed !== 1) throw integrity("version state transition did not apply");
+};
+
+// publish_presumed — validated→published CAS (caller's tx verified facts)
+export const publishPresumed = (db, key, publishedAt) => {
+  const row = readVersionRow(db, key);
+  if (row === null) throw integrity("version row missing");
+  if (row.state !== 2) throw integrity("version is not validated");
+  const published = publishedAt; // already canonical "+00:00" (Utc::now().to_rfc3339())
+  const identity = buildIdentity(db, row, published);
+  const digest = wrap(() => CM.versionIntegrityDigest(identity));
+  const changed = db.run(
+    "UPDATE data_versions SET state=3,published_at=?,integrity_digest=? WHERE version_key=? AND state=2 AND published_at IS NULL AND integrity_digest IS NULL",
+    published, digest, key).changes;
+  if (changed !== 1) throw integrity("version publish transition did not apply");
+  return digest;
+};
+
+// publish_delta — O(ops) node check, else Ok(None) → full publish path
+export const publishDelta = (db, key, publishedAt) => {
+  const row = readVersionRow(db, key);
+  if (row === null) throw integrity("version row missing");
+  if (row.state !== 2) throw integrity("version is not validated");
+  if (!verifyDeltaAppend(db, key)) return null;
+  return publishPresumed(db, key, publishedAt);
+};
+
+// publish — full staged verification then publish_presumed
+export const publish = (db, key, publishedAt) => {
+  const row = readVersionRow(db, key);
+  if (row === null) throw integrity("version row missing");
+  if (row.state !== 2) throw integrity("version is not validated");
+  verifyStaged(db, row);
+  return publishPresumed(db, key, publishedAt);
+};
+
+// require_published_facts — facts + verified leaf (for result reads)
+export const requirePublishedFacts = (db, key) => {
+  const facts = resultFacts(db, key);
+  if (facts.state !== "published") throw integrity("referenced version is not published");
+  const verified = fixed(db, facts.version_id);
+  return [facts, verified];
+};
+
+// daily_base_version_id — lineage lookup on a yearly version key
+export const dailyBaseVersionId = (db, key) => {
+  const lineage = storedLineage(db, key);
+  if (lineage === null) return null;
+  const base = readVersionRow(db, lineage.base_daily_version_key);
+  if (base === null) throw integrity("yearly lineage base version missing");
+  return base.version_id;
+};
+
+export const __readDelta = readDelta;
+export const __readVersionRow = readVersionRow;
+export const __readSegment = readSegment;
+export const __checkClipAgainstSegment = checkClipAgainstSegment;
+export const __flattenClips = flattenClips;
+export const __applyDelta = applyDelta;
+export const __verifyLineage = verifyLineage;
+export const __readEvidence = readEvidence;
+export const __readSourceBinding = readSourceBinding;
+export const __verifyVersionEvidence = verifyVersionEvidence;
+export const __checkBarsUnits = checkBarsUnits;
+export const __buildIdentity = buildIdentity;
+export const __fixedDigest = fixedDigest;
+export const __reconstructLeaf = reconstructLeaf;
+export const __verifyPublishedNode = verifyPublishedNode;
+export const __verifyPublishedFields = verifyPublishedFields;
+export const __storedLineage = storedLineage;
+export const __wrap = wrap;
+export const __integrity = integrity;
+export const __notFound = notFound;

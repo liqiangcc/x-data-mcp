@@ -41,16 +41,18 @@ for (const file of scenarios) {
   const name = file.replace(/\.jsonl$/, "");
   try {
     const scenText = readFileSync(scen, "utf8");
-    const seed = scenText.includes('"op":"seed"');
+    const firstOp = JSON.parse(scenText.split("\n").find((l) => l.trim()));
+    const seed = firstOp.op === "seed";
     const rustDb = join(dir, "rust.db"), nodeDb = join(dir, "node.db");
     const extra = {};
     if (seed) {
       const fixture = join(dir, "fixture.db");
-      const seedOp = JSON.parse(scenText.split("\n")[0]);
+      const seedOp = firstOp;
       const recs = seedOp.records;
       if (seedOp.results) extra.DIFF_RESULTS = "1";
       if (seedOp.tasks) extra.DIFF_TASKS = seedOp.tasks;
       if (seedOp.compact) extra.DIFF_INIT = "19";
+      if (seedOp.norm_ts) extra.DIFF_NORM_TS = "1";
       execFileSync(CARGO, ["test", "--lib", "diff_harness::build_market_fixture", "--",
         "--nocapture", "--test-threads=1"], {
         cwd: ROOT,
@@ -86,8 +88,8 @@ for (const file of scenarios) {
     emit(name, verdict.verdict === "MATCH" ? "PASS" : "FAIL",
       `${verdict.ops} ops, ${verdict.diffs} diffs`);
   } catch (e) {
-    const tail = e.stdout ? String(e.stdout).split("\n").slice(-8).join("\n") : String(e.message);
-    emit(name, "FAIL", tail.slice(0, 400));
+    const tail = (e.stdout ? String(e.stdout) : String(e.message)) + " | stderr:" + String(e.stderr||"");
+    emit(name, "FAIL", tail.slice(0, 900));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

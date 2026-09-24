@@ -206,6 +206,41 @@ fn state_digest(db: &str, syms: &Syms) -> String {
     dump(&c, "SELECT task_id,scope_key FROM task_scopes ORDER BY 1,2", "S", 2, &mut lines);
     dump(&c, "SELECT request_id,command_digest,outcome_kind,task_id,terminal_json FROM requests ORDER BY 1", "R", 5, &mut lines);
     dump(&c, "SELECT task_id,item_id,run_id,start_revision FROM task_item_execution_starts ORDER BY 1,2", "X", 4, &mut lines);
+    // Compact (schema-19) DBs carry the write-side tables too. Wall-clock
+    // columns (created_at, published_at) and the integrity digest that
+    // binds them are normalized: the digest column is replaced by the
+    // recomputed identity digest over a fixed stamp, proving the digest
+    // pipeline without comparing wall-clock bytes.
+    let compact = crate::sqlite_market::is_compact_schema(&c).unwrap_or(false);
+    if compact {
+        dump(&c, "SELECT version_key,version_id,entity,period,adjustment,state,hex(source_binding_digest),parent_version_key,manifest_mode,delta_depth,record_count,first_day,last_day,coverage_status,hex(evidence_digest),hex(projection_digest),digest_format FROM data_versions ORDER BY version_key", "CV", 17, &mut lines);
+        let mut st = c.prepare("SELECT version_key,published_at IS NOT NULL FROM data_versions ORDER BY version_key").unwrap();
+        let keys: Vec<(i64, bool)> = st
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?)))
+            .unwrap().map(|r| r.unwrap()).collect();
+        for (k, pubbed) in keys {
+            let idhex = if pubbed {
+                crate::sqlite_market::compact_versions::recompute_integrity(&c, k, "0000-01-01T00:00:00+00:00")
+                    .map(|d| crate::sqlite_market::compact_repo::hex_bytes(&d))
+                    .unwrap_or_else(|_| "<ERR>".into())
+            } else { String::new() };
+            lines.push(format!("CVI:{k}:{idhex}"));
+        }
+        dump(&c, "SELECT segment_key,hex(segment_digest),entity,period,first_day,last_day,row_count FROM bar_segments ORDER BY segment_key", "CS", 7, &mut lines);
+        dump(&c, "SELECT segment_key,trade_day,open_cents,high_cents,low_cents,close_cents,volume,amount,r7_raw FROM segment_bars ORDER BY segment_key,trade_day", "CB", 9, &mut lines);
+        dump(&c, "SELECT version_key,seq,segment_key,clip_start_day,clip_end_day,row_count FROM version_checkpoint_clips ORDER BY version_key,seq", "CC", 6, &mut lines);
+        dump(&c, "SELECT version_key,seq,delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM version_delta_clips ORDER BY version_key,seq", "CD", 9, &mut lines);
+        dump(&c, "SELECT version_key,base_daily_version_key,algorithm_version,first_trade_day,last_trade_day,as_of_day FROM yearly_lineage ORDER BY version_key", "CY", 6, &mut lines);
+        dump(&c, "SELECT entity,period,adjustment,version_key FROM effective_heads ORDER BY 1,2,3", "CH", 4, &mut lines);
+        dump(&c, "SELECT hex(evidence_digest),evidence_kind,canonical_json FROM evidence_bundles ORDER BY evidence_digest", "CE", 3, &mut lines);
+        dump(&c, "SELECT hex(source_binding_digest),generation_id,hex(generation_manifest_sha256),hex(day_member_sha256),hex(security_event_sha256),hex(evidence_digest) FROM source_bindings ORDER BY source_binding_digest", "CSB", 6, &mut lines);
+        dump(&c, "SELECT task_id,version_key,result_id FROM task_publications ORDER BY 1,2", "CTP", 3, &mut lines);
+        dump(&c, "SELECT result_id,result_kind FROM result_registry ORDER BY result_id", "CRR", 2, &mut lines);
+        dump(&c, "SELECT result_key,result_id,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,hex(source_binding_digest),continuity_mode,prefix_bytes,hex(base_projection_digest),hex(result_projection_digest),hex(delta_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM market_update_results ORDER BY result_key", "CMU", 19, &mut lines);
+        dump(&c, "SELECT result_key,seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM market_update_delta_clips ORDER BY result_key,seq", "CMD", 8, &mut lines);
+        dump(&c, "SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM publication_results ORDER BY result_key", "CPR", 13, &mut lines);
+    }
+
     let joined = lines.join("\n");
     let mut out = joined;
     for (k, real) in syms {
@@ -261,12 +296,56 @@ fn run() {
     let scenario = fs::read_to_string(&scenario_path).expect("scenario");
     let mut out = fs::File::create(&out_path).expect("out");
     let mut syms: Syms = Default::default();
+    // DIFF_NORM_TS=1: replace every stored timestamp/integrity value with a
+    // placeholder in emitted JSON — wall-clock bytes differ across runs;
+    // byte-identity of the remaining columns is proven by state_digest.
+    let norm_ts = std::env::var("DIFF_NORM_TS").is_ok();
+    let norm_set = |db_path: &str| -> BTreeSet<String> {
+        let c = rusqlite::Connection::open(db_path).unwrap();
+        let mut out = BTreeSet::new();
+        let mut st = c.prepare(
+            "SELECT DISTINCT v FROM (SELECT created_at AS v FROM data_versions UNION ALL SELECT published_at FROM data_versions UNION ALL SELECT hex(integrity_digest) AS v FROM data_versions) WHERE v IS NOT NULL").unwrap();
+        let rows = st.query_map([], |r| r.get::<_, String>(0)).unwrap();
+        for r in rows { out.insert(r.unwrap()); }
+        out
+    };
+    fn norm_deep(v: &Value, set: &BTreeSet<String>) -> Value {
+        match v {
+            Value::String(s) if set.contains(s.as_str()) => json!("<norm>"),
+            Value::Array(a) => Value::Array(a.iter().map(|x| norm_deep(x, set)).collect()),
+            Value::Object(m) => Value::Object(
+                m.iter().map(|(k, x)| (k.clone(), norm_deep(x, set))).collect()),
+            _ => v.clone(),
+        }
+    }
     // Compact (schema-19) DBs bypass SqliteMarket::read's schema gate —
     // production compact reads run inside the WriteCoordinator lease; the
     // harness opens a raw connection to the same bytes instead.
     let compact_conn = rusqlite::Connection::open(&db_path)
         .ok()
         .filter(|c| crate::sqlite_market::is_compact_schema(c).unwrap_or(false));
+    let compact_market = if compact_conn.is_some() {
+        // DatabaseLease requires a private file (mode & 077 == 0); the
+        // harness fixture arrives with umask permissions — chmod to the
+        // production posture before opening the compact market.
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&db_path, fs::Permissions::from_mode(0o600)).unwrap();
+        Some(
+            crate::sqlite_market::compact_repo::SqliteCompactMarket::open(
+                std::path::Path::new(&db_path),
+            )
+            .expect("compact market open"),
+        )
+    } else {
+        None
+    };
+    // On compact DBs the task API is reached through the coordinator-bound
+    // handle (production wiring); the bare SqliteTasks gates schema-19
+    // closed. All task ops + repo.read flows go through op_repo.
+    let op_repo = compact_market
+        .as_ref()
+        .map(|m| m.tasks())
+        .unwrap_or_else(|| repo.clone());
     for (idx, line) in scenario.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -289,7 +368,7 @@ fn run() {
                         .map(|x| x.as_str().unwrap().to_string())
                         .collect::<BTreeSet<_>>(),
                 });
-                match repo.accept(
+                match op_repo.accept(
                     op["request_id"].as_str().unwrap(),
                     &command,
                     &work,
@@ -330,7 +409,7 @@ fn run() {
                     },
                 };
                 let tid = op["task"].as_str().unwrap().to_string();
-                match repo.transition(
+                match op_repo.transition(
                     &tid,
                     op["revision"].as_u64().unwrap(),
                     op["run"].as_str().unwrap(),
@@ -347,11 +426,11 @@ fn run() {
                     Err(e) => json!({"status":"error","code":err_code(&e),"message":e.to_string()}),
                 }
             }
-            "candidates" => match repo.candidates(op["run"].as_str().unwrap()) {
+            "candidates" => match op_repo.candidates(op["run"].as_str().unwrap()) {
                 Ok(list) => json!({"status":"ok","candidates":list.iter().map(|s| sym_of(&syms,&s.task.task_id)).collect::<Vec<_>>()}),
                 Err(e) => json!({"status":"error","code":err_code(&e),"message":e.to_string()}),
             },
-            "reconcile" => match repo.reconcile(op["run"].as_str().unwrap()) {
+            "reconcile" => match op_repo.reconcile(op["run"].as_str().unwrap()) {
                 Ok(n) => json!({"status":"ok","reconciled":n}),
                 Err(e) => json!({"status":"error","code":err_code(&e),"message":e.to_string()}),
             },
@@ -382,16 +461,20 @@ fn run() {
                 let raw: Value = serde_json::from_str(
                     &fs::read_to_string(std::path::Path::new(&dir).join(name)).unwrap(),
                 ).unwrap();
-                let market = SqliteMarket::new(repo.clone());
+                let market = SqliteMarket::new(op_repo.clone());
                 match market.stage(&raw) {
-                    Ok(()) => json!({"status":"ok","digest":market_digest(&repo, &syms)}),
+                    Ok(()) => json!({"status":"ok","digest":market_digest(&op_repo, &syms)}),
                     Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
                 }
             }
             "read_result" => {
                 let id = resolve_str(&op["result_id"], &syms);
-                let market = SqliteMarket::new(repo.clone());
-                match market.read(|c| crate::sqlite_market::update::read_result(c, &id)) {
+                let res = match &compact_conn {
+                    Some(c) => crate::sqlite_market::update::read_result(c, &id),
+                    None => SqliteMarket::new(op_repo.clone())
+                        .read(|c| crate::sqlite_market::update::read_result(c, &id)),
+                };
+                match res {
                     Ok(None) => json!({"status":"ok","found":false}),
                     Ok(Some((audit, receipt))) => json!({"status":"ok","found":true,
                         "audit_sha256":crate::hash::sha256(serde_json::to_string(&audit).unwrap().as_bytes()),
@@ -401,8 +484,12 @@ fn run() {
             }
             "range_receipt" => {
                 let id = resolve_str(&op["result_id"], &syms);
-                let market = SqliteMarket::new(repo.clone());
-                match market.read(|c| crate::sqlite_market::update::read_result(c, &id)) {
+                let res = match &compact_conn {
+                    Some(c) => crate::sqlite_market::update::read_result(c, &id),
+                    None => SqliteMarket::new(op_repo.clone())
+                        .read(|c| crate::sqlite_market::update::read_result(c, &id)),
+                };
+                match res {
                     Ok(None) => json!({"status":"ok","found":false}),
                     Ok(Some((audit, receipt))) => json!({"status":"ok","found":true,
                         "audit_sha256":crate::hash::sha256(serde_json::to_string(&audit).unwrap().as_bytes()),
@@ -413,9 +500,31 @@ fn run() {
             "item_receipt" => {
                 let task = resolve_str(&op["task_id"], &syms);
                 let item = op["item_id"].as_str().unwrap().to_string();
-                let market = SqliteMarket::new(repo.clone());
+                let market = SqliteMarket::new(op_repo.clone());
                 use crate::market_update::publication::RangeRepository;
-                match RangeRepository::item_receipt(&market, &task, &item) {
+                let res = match &compact_conn {
+                    Some(c) => (|| -> Result<Option<Receipt>, MarketError> {
+                        let id: Option<String> = c
+                            .query_row(
+                                "SELECT result_id FROM market_update_results WHERE task_id=?1 AND item_id=?2",
+                                rusqlite::params![task, item],
+                                |r| r.get(0),
+                            )
+                            .optional()
+                            .map_err(|e| MarketError::Storage(e.to_string()))?;
+                        match id {
+                            None => Ok(None),
+                            Some(id) => Ok(Some(
+                                crate::sqlite_market::update::read_result(c, &id)?
+                                    .map(|(_, r)| r)
+                                    .ok_or_else(|| MarketError::Integrity(
+                                        "range item receipt missing".into()))?,
+                            )),
+                        }
+                    })(),
+                    None => RangeRepository::item_receipt(&market, &task, &item),
+                };
+                match res {
                     Ok(None) => json!({"status":"ok","found":false}),
                     Ok(Some(r)) => json!({"status":"ok","found":true,
                         "receipt":serde_json::to_value(&r).unwrap()}),
@@ -542,12 +651,12 @@ fn run() {
                         }).collect())
                         .unwrap_or_default(),
                 };
-                let market = SqliteMarket::new(repo.clone());
+                let market = SqliteMarket::new(op_repo.clone());
                 use crate::market_update::publication::RangeRepository;
                 match RangeRepository::commit_range(&market, &plan) {
                     Ok(r) => json!({"status":"ok",
                         "receipt":serde_json::to_value(&r).unwrap(),
-                        "digest":market_digest(&repo, &syms)}),
+                        "digest":market_digest(&op_repo, &syms)}),
                     Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
                 }
             }
@@ -570,7 +679,7 @@ fn run() {
                 let res = match &compact_conn {
                     Some(c) => crate::sqlite_market::head(c, &scope),
                     None => {
-                        let market = SqliteMarket::new(repo.clone());
+                        let market = SqliteMarket::new(op_repo.clone());
                         market.read(|c| crate::sqlite_market::head(c, &scope))
                     }
                 };
@@ -587,7 +696,7 @@ fn run() {
                     // dispatch as SqliteMarket::{fixed,candidate}
                     Some(c) => crate::sqlite_market::read_record(c, &id, fixed, true),
                     None => {
-                        let market = SqliteMarket::new(repo.clone());
+                        let market = SqliteMarket::new(op_repo.clone());
                         if fixed { market.fixed(&id) } else { market.candidate(&id) }
                     }
                 };
@@ -672,7 +781,7 @@ fn run() {
                 let res = match &compact_conn {
                     Some(c) => compact_range(c),
                     None => {
-                        let market = SqliteMarket::new(repo.clone());
+                        let market = SqliteMarket::new(op_repo.clone());
                         market.range(&scope, id.as_deref(), &rng)
                     }
                 };
@@ -703,7 +812,7 @@ fn run() {
                         other => other,
                     })).unwrap(),
                 };
-                let market = SqliteMarket::new(repo.clone());
+                let market = SqliteMarket::new(op_repo.clone());
                 let versions_res = if let Some(c) = &compact_conn {
                     (|c: &rusqlite::Connection| -> Result<Vec<crate::publish::EffectiveVersion>, MarketError> {
                         let orphan: bool = c
@@ -758,7 +867,7 @@ fn run() {
             }
             "checkpoint" => {
                 let tid = op["task"].as_str().unwrap().to_string();
-                match repo.read_task(&tid) {
+                match op_repo.read_task(&tid) {
                     Ok(Some(s)) => {
                         if let Some(k) =
                             syms.iter().find(|(_, v)| **v == tid).map(|(k, _)| k.clone())
@@ -771,6 +880,107 @@ fn run() {
                     Err(e) => json!({"status":"error","code":err_code(&e),"message":e.to_string()}),
                 }
             }
+            "stage_ops_delta" | "validate_staged" | "commit_ops_update"
+            | "commit_ops_no_change" | "update_base_facts"
+            | "base_bars_in_range" => {
+                let m = compact_market.as_ref().unwrap();
+                let res: Result<Value, MarketError> = (|| {
+                    match name.as_str() {
+                        "stage_ops_delta" => {
+                            let upserts: Vec<crate::market_data::Bar> = op["upserts"]
+                                .as_array().unwrap().iter()
+                                .map(|b| serde_json::from_value(b.clone()).unwrap())
+                                .collect();
+                            let removes: Vec<chrono::NaiveDate> = op["removes"]
+                                .as_array().map(|a| a.iter()
+                                    .map(|d| chrono::NaiveDate::parse_from_str(
+                                        d.as_str().unwrap(), "%Y-%m-%d").unwrap())
+                                    .collect())
+                                .unwrap_or_default();
+                            let key = m.stage_ops_delta(
+                                op["entity"].as_str().unwrap(),
+                                op["base_version_id"].as_str().unwrap(),
+                                op["version_id"].as_str().unwrap(),
+                                &upserts,
+                                &removes,
+                            )?;
+                            Ok(json!({"version_key":key}))
+                        }
+                        "validate_staged" => {
+                            m.validate_staged(op["version_id"].as_str().unwrap())?;
+                            Ok(json!({}))
+                        }
+                        "commit_ops_update" => {
+                            let r = m.commit_ops_update(
+                                op["result_id"].as_str().unwrap(),
+                                op["task_id"].as_str().unwrap(),
+                                op["item_id"].as_str().unwrap(),
+                                op["base_version_id"].as_str().unwrap(),
+                                op["result_version_id"].as_str().unwrap(),
+                                op["expected_revision"].as_u64().unwrap(),
+                                op["run_id"].as_str().unwrap(),
+                                op["occupancy_key"].as_str().unwrap(),
+                                op.get("continuity_evidence"),
+                            )?;
+                            Ok(json!({"receipt":serde_json::to_value(&r).unwrap()}))
+                        }
+                        "commit_ops_no_change" => {
+                            let r = m.commit_ops_no_change(
+                                op["result_id"].as_str().unwrap(),
+                                op["task_id"].as_str().unwrap(),
+                                op["item_id"].as_str().unwrap(),
+                                op["base_version_id"].as_str().unwrap(),
+                                op["expected_revision"].as_u64().unwrap(),
+                                op["run_id"].as_str().unwrap(),
+                                op["occupancy_key"].as_str().unwrap(),
+                                op["range_start_day"].as_i64().unwrap(),
+                                op["range_end_day"].as_i64().unwrap(),
+                                op.get("continuity_evidence"),
+                            )?;
+                            Ok(json!({"receipt":serde_json::to_value(&r).unwrap()}))
+                        }
+                        "update_base_facts" => {
+                            let f = m.update_base_facts(
+                                op["base_version_id"].as_str().unwrap())?;
+                            Ok(json!({
+                                "version_id":f.version_id,
+                                "symbol":f.symbol,
+                                "record_count":f.record_count,
+                                "first_day":f.first_day.to_string(),
+                                "last_day":f.last_day.to_string(),
+                                "integrity_sha256":f.integrity_sha256,
+                                "coverage":serde_json::to_value(&f.coverage).unwrap(),
+                                "unit_currency":serde_json::to_value(&f.unit_currency).unwrap(),
+                                "source":f.source,
+                                "generation_id":f.generation_id,
+                                "generation_manifest_sha256":f.generation_manifest_sha256,
+                                "day_member_sha256":f.day_member_sha256,
+                                "security_event_sha256":f.security_event_sha256,
+                            }))
+                        }
+                        _ => {
+                            // base_bars_in_range
+                            let parse = |s: &str| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+                            let bars = m.base_bars_in_range(
+                                op["base_version_id"].as_str().unwrap(),
+                                parse(op["start"].as_str().unwrap()),
+                                parse(op["end"].as_str().unwrap()),
+                            )?;
+                            Ok(json!({"bars":bars}))
+                        }
+                    }
+                })();
+                match res {
+                    Ok(v) => {
+                        let mut o = json!({"status":"ok",
+                            "digest":crate::hash::sha256(
+                                state_digest(&db_path, &syms).as_bytes())});
+                        o.as_object_mut().unwrap().extend(v.as_object().unwrap().clone());
+                        o
+                    }
+                    Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
+                }
+            }
             other => panic!("unknown op {other}"),
         };
         if rec["status"] == "error" {
@@ -778,6 +988,11 @@ fn run() {
         }
         rec["seq"] = json!(idx);
         rec["op"] = json!(name);
+        let rec = if norm_ts {
+            norm_deep(&rec, &norm_set(&db_path))
+        } else {
+            rec
+        };
         writeln!(out, "{}", serde_json::to_string(&rec).unwrap()).unwrap();
     }
 }
@@ -1118,8 +1333,13 @@ fn build_compact_records(db_path: &str) {
     // Minimal task row for the task_publications FK (post-18 task writes
     // are gated, so the fixture seeds it directly).
     c.execute(
-        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest) VALUES('task-pub','{}','succeeded',0,'run-pub',NULL,?1,?1,?2,NULL,NULL,0,0,0,0,0,NULL)",
+        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest) VALUES('task-pub','{}','succeeded',0,'run-pub',NULL,?1,?1,?2,'{}',NULL,0,0,0,0,0,NULL)",
         rusqlite::params![PUB_AT, r#"{"items":[],"scopes":[]}"#],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO requests VALUES('req-pub','{}',?1,'task','task-pub',NULL)",
+        rusqlite::params![crate::hash::sha256(b"{}")],
     )
     .unwrap();
     for entry in list.split(',') {

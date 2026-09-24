@@ -155,9 +155,9 @@ rej("retry_reuse_original_request_id", "conflict", {
   requestId: "req-orig",
   commandJson: JSON.stringify({ key: KEY, intent: { different: true } }),
 });
-rej("retry_replay_binding_divergence", "inconsistent", {
+rej("retry_replay_binding_divergence", "needs_verification", {
   // same request_id AND same command bytes -> replay path verifies the
-  // durable binding; it diverges from the retry plan -> inconsistent
+  // durable binding; it diverges from the retry plan -> needs_verification
   requestId: "req-orig",
   commandJson: JSON.stringify({ key: KEY, intent: {} }),
 });

@@ -68,7 +68,15 @@ export const canonicalEntity = (entity) => {
 
 // Dec {m,s} -> i64 cents: rust_decimal `value*100 -> to_i64 (trunc),
 // then Decimal::from(cents)/100 == value` exactness check.
+const asDec = (v) => {
+  if (typeof v === "string") {
+    try { return _dec.fromStr(v); }
+    catch { throw invalid("value is not a decimal"); }
+  }
+  return v;
+};
 const cents = (v) => {
+  v = asDec(v);
   const scaled = _dec.mul(v, { m: 100n, s: 0 });
   const div = 10n ** BigInt(scaled.s);
   const cents = scaled.m / div; // BigInt division truncates toward zero
@@ -88,6 +96,7 @@ const decValueEq = (a, b) => {
 };
 
 const volume = (v) => {
+  v = asDec(v);
   // rust_decimal to_i64 (truncate) + Decimal::from(vol) == value + >=0
   const s = 10n ** BigInt(v.s);
   const vol = v.m / s;
@@ -108,6 +117,7 @@ const decNormalize = (v) => {
 };
 
 const amount = (v) => {
+  v = asDec(v);
   if (v.m < 0n) throw invalid("negative amount");
   const text = _dec.toString(decNormalize(v));
   let parsed;
@@ -304,6 +314,100 @@ export const deltaProjectionDigest = (parent, ops) => {
   return [delta, sha(Buffer.concat(out))];
 };
 
+export const fullRevisionDigest = (baseProjection, resultProjection) =>
+  sha(Buffer.concat([
+    Buffer.from("x-data-full-revision-v1\0"),
+    Buffer.from(baseProjection), Buffer.from(resultProjection),
+  ]));
+
+const pushU8 = (out, n) => out.push(Buffer.from([n]));
+const pushI64 = (out, v) => { const b = Buffer.alloc(8); b.writeBigInt64BE(BigInt(v)); out.push(b); };
+const pushU64 = (out, v) => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(v)); out.push(b); };
+
+// market_update_result_digest — x-data-market-update-result-v1
+// identity: {result_id,task_id,item_id,base_version_id,result_version_id,
+//   outcome(1|2),range_start_day,range_end_day,algorithm_version,
+//   source_binding_digest,continuity_mode(1|2|3),prefix_bytes(?u64),
+//   base_projection_digest,result_projection_digest,delta_digest(?),
+//   evidence_digest,task_revision(u64)}
+export const marketUpdateResultDigest = (id) => {
+  for (const f of [id.result_id, id.task_id, id.item_id,
+                   id.base_version_id, id.result_version_id, id.algorithm_version]) {
+    if (f === "") throw invalid("update result identity field is empty");
+  }
+  if (id.task_revision === 0 || id.task_revision === 0n) {
+    throw invalid("task_revision must be positive");
+  }
+  epochDate(id.range_start_day); epochDate(id.range_end_day);
+  if (id.range_start_day > id.range_end_day) throw invalid("update result range inverted");
+  if (id.outcome === 1) { // NoChange
+    if (id.continuity_mode !== 1 || id.base_version_id !== id.result_version_id ||
+        id.prefix_bytes === null || id.prefix_bytes === undefined ||
+        !Buffer.from(id.base_projection_digest).equals(id.result_projection_digest) ||
+        id.delta_digest !== null) {
+      throw invalid("no-change update result semantics violated");
+    }
+  } else { // Published
+    if (id.base_version_id === id.result_version_id || id.delta_digest === null ||
+        id.continuity_mode === 1) {
+      throw invalid("published update result semantics violated");
+    }
+    if (id.continuity_mode === 2 &&
+        (id.prefix_bytes === null || id.prefix_bytes === undefined)) {
+      throw invalid("append update result lacks prefix_bytes");
+    }
+    if (id.continuity_mode === 3 && id.prefix_bytes !== null && id.prefix_bytes !== undefined) {
+      throw invalid("full update result carries prefix_bytes");
+    }
+  }
+  const out = [Buffer.from("x-data-market-update-result-v1\0")];
+  pushText(out, id.result_id); pushText(out, id.task_id); pushText(out, id.item_id);
+  pushText(out, id.base_version_id); pushText(out, id.result_version_id);
+  pushU8(out, id.outcome);
+  pushI64(out, id.range_start_day); pushI64(out, id.range_end_day);
+  pushText(out, id.algorithm_version);
+  out.push(Buffer.from(id.source_binding_digest));
+  pushU8(out, id.continuity_mode);
+  if (id.prefix_bytes === null || id.prefix_bytes === undefined) pushU8(out, 0);
+  else { pushU8(out, 1); pushU64(out, id.prefix_bytes); }
+  out.push(Buffer.from(id.base_projection_digest), Buffer.from(id.result_projection_digest));
+  if (id.delta_digest === null || id.delta_digest === undefined) pushU8(out, 0);
+  else { pushU8(out, 1); out.push(Buffer.from(id.delta_digest)); }
+  out.push(Buffer.from(id.evidence_digest));
+  pushU64(out, id.task_revision);
+  return sha(Buffer.concat(out));
+};
+
+// publication_result_digest — x-data-publication-result-v1
+export const publicationResultDigest = (id) => {
+  for (const f of [id.publication_id, id.task_id, id.item_id,
+                   id.result_version_id, id.algorithm_version]) {
+    if (f === "") throw invalid("publication result identity field is empty");
+  }
+  if (id.task_revision === 0 || id.task_revision === 0n) {
+    throw invalid("task_revision must be positive");
+  }
+  if (id.base_version_id === "") throw invalid("base_version_id is empty");
+  if (id.outcome === 1) { // NoChange requires base == result
+    if (id.base_version_id !== id.result_version_id) {
+      throw invalid("no-change publication result requires base=result");
+    }
+  } else if (id.base_version_id === id.result_version_id) {
+    throw invalid("published publication result reuses base version");
+  }
+  const out = [Buffer.from("x-data-publication-result-v1\0")];
+  pushText(out, id.publication_id); pushText(out, id.task_id); pushText(out, id.item_id);
+  pushU8(out, id.publication_kind); // 1 collection / 2 yearly / 3 republish
+  if (id.base_version_id === null || id.base_version_id === undefined) pushU8(out, 0);
+  else { pushU8(out, 1); pushText(out, id.base_version_id); }
+  pushText(out, id.result_version_id);
+  pushU8(out, id.outcome);
+  pushText(out, id.algorithm_version);
+  out.push(Buffer.from(id.source_binding_digest), Buffer.from(id.evidence_digest));
+  pushU64(out, id.task_revision);
+  return sha(Buffer.concat(out));
+};
+
 // ---- source binding / version identity digests ----
 export const sourceBindingDigest = (b) => {
   if (b.generation_id === "") throw invalid("source binding generation_id is empty");
@@ -372,6 +476,10 @@ export const parseRfc3339Utc = (s) => {
 // serde DateTime<Utc> serialization: canonical RFC3339 with "Z"
 export const serdeDateTime = (s) => s.replace(/\+00:00$/, "Z");
 
+// Utc::now().to_rfc3339() — JS Date has ms precision; AutoSi emits
+// ".SSS" for ms-aligned nanos, matching chrono on ms-precision clocks.
+export const nowRfc3339 = () => new Date().toISOString().replace("Z", "+00:00");
+
 export const versionIntegrityDigest = (id) => {
   if (id.version_id === "") throw invalid("version_id is empty");
   canonicalEntity(id.entity);
@@ -435,6 +543,7 @@ export const versionIntegrityDigest = (id) => {
 };
 
 // ---- canonical evidence (JCS RFC-8785) ----
+// JCS (RFC 8785) canonical JSON — serde_json_canonicalizer equivalent
 const jcs = (v) => {
   if (v === null) return "null";
   if (typeof v === "boolean") return v ? "true" : "false";
@@ -550,6 +659,21 @@ export const verifyEvidence = (kind, canonicalJson, expected) => {
   }
   return value;
 };
+
+// canonical_evidence — kind semantics + JCS canonical bytes + digest
+export const canonicalEvidence = (kind, value) => {
+  checkEvidenceSemantics(kind, value);
+  const canonicalJson = jcs(value);
+  if (canonicalJson === undefined) {
+    throw invalid("evidence is not canonicalizable JSON");
+  }
+  if (Buffer.byteLength(canonicalJson, "utf8") > byteLimit(kind)) {
+    throw invalid("evidence exceeds kind byte limit");
+  }
+  return { kind, canonical_json: canonicalJson, digest: evidenceDigest(kind, canonicalJson) };
+};
+
+export const canonicalJson = jcs;
 
 export const parseEvidenceKind = (raw) =>
   EVIDENCE_KINDS.includes(raw) ? raw : (() => { throw invalid("unknown evidence kind"); })();

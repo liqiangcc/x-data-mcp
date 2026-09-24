@@ -61,7 +61,8 @@ export class TaskRepository {
       `SELECT ${REQ_COLS} FROM requests WHERE request_id=?`, requestId);
     if (!r) return null;
     if (sha256(r.command_json) !== r.command_digest) {
-      throw new StorageError("inconsistent", "command digest mismatch");
+      throw new StorageError("needs_verification",
+        "ACCEPTANCE_NEEDS_VERIFICATION: command digest mismatch");
     }
     return r;
   }
@@ -238,7 +239,8 @@ export class TaskAdmission {
         p.requestId);
       if (existing) {
         if (sha256(existing.command_json) !== existing.command_digest) {
-          throw new StorageError("inconsistent", "command digest mismatch");
+          throw new StorageError("needs_verification",
+            "ACCEPTANCE_NEEDS_VERIFICATION: command digest mismatch");
         }
         if (existing.command_json !== p.commandJson) {
           throw new StorageError("conflict", "REQUEST_CONFLICT");
@@ -250,7 +252,8 @@ export class TaskAdmission {
           "SELECT t.task_id,command_key_json,accepted_run_id,retry_of,frozen_work_json FROM tasks t JOIN requests r ON r.task_id=t.task_id WHERE r.request_id=?",
           p.requestId);
         if (!bound) {
-          throw new StorageError("inconsistent", "bound execution record missing");
+          throw new StorageError("needs_verification",
+            "ACCEPTANCE_NEEDS_VERIFICATION: bound execution record missing");
         }
         const div = [];
         // For a retry the durable command key is the ORIGINAL's —
@@ -283,8 +286,8 @@ export class TaskAdmission {
         if (storedScopes.length !== planScopes.length ||
             storedScopes.some((s, i) => s !== planScopes[i])) div.push("scopes");
         if (div.length) {
-          throw new StorageError("inconsistent",
-            `request binding diverges from plan: ${div.join(",")}`);
+          throw new StorageError("needs_verification",
+            `ACCEPTANCE_NEEDS_VERIFICATION: request binding diverges from plan: ${div.join(",")}`);
         }
         return { reused: true, record: db.get(
           "SELECT request_id,command_json,command_digest,outcome_kind,task_id,terminal_json FROM requests WHERE request_id=?",
@@ -293,7 +296,8 @@ export class TaskAdmission {
       // 2. orphan unbound-task check
       if (db.get(`SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN requests r
         ON r.task_id=t.task_id WHERE r.request_id IS NULL) x`).x !== 0n) {
-        throw new StorageError("inconsistent", "unbound execution record");
+        throw new StorageError("needs_verification",
+          "ACCEPTANCE_NEEDS_VERIFICATION: unbound execution record");
       }
       // 3. registry integrity gates (accept_tx, verbatim order/text)
       const gates = [
@@ -332,13 +336,15 @@ export class TaskAdmission {
       ];
       for (const [sql, why] of gates) {
         if (db.get(sql).x !== 0n) {
-          throw new StorageError("inconsistent", why);
+          throw new StorageError("needs_verification",
+            `ACCEPTANCE_NEEDS_VERIFICATION: ${why}`);
         }
       }
       // 4. digest gate over all stored requests
       for (const r of db.query("SELECT command_json,command_digest FROM requests")) {
         if (sha256(r.command_json) !== r.command_digest) {
-          throw new StorageError("inconsistent", "command digest mismatch");
+          throw new StorageError("needs_verification",
+            "ACCEPTANCE_NEEDS_VERIFICATION: command digest mismatch");
         }
       }
       // 4b. RetryGuard (accept_tx retry branch) — original exists ->
@@ -930,7 +936,9 @@ Object.assign(TaskAdmission.prototype, {
       "SELECT task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest FROM tasks WHERE task_id=?",
       id);
     if (!t) return null;
-    const inc = (m) => { throw new StorageError("inconsistent", m); };
+    // Rust inconsistent() == Error::NeedsVerification -> verbatim prefix
+    const inc = (m) => { throw new StorageError("needs_verification",
+      `ACCEPTANCE_NEEDS_VERIFICATION: ${m}`); };
     const parseJson = (v, what) => {
       try { return JSON.parse(v); } catch { inc(`${what} unparseable`); }
     };

@@ -3,9 +3,10 @@
 // candidate / fixed. Verbatim port of src/sqlite_market.rs read helpers.
 import { createHash } from "node:crypto";
 import { gateDatabase } from "../storage/schema_gate.mjs";
-import { openDatabase } from "../storage/sqlite_adapter.mjs";
+import { openDatabase, StorageError } from "../storage/sqlite_adapter.mjs";
 import * as RC from "./record_codec.mjs";
 import * as C from "./compact_read.mjs";
+import * as CW from "./compact_write.mjs";
 import { aggregate as yearlyAggregate } from "../algorithms/yearly.mjs";
 import { _dec } from "../algorithms/qfq_affine.mjs";
 
@@ -569,7 +570,9 @@ const readItemBinding = (db, taskId, itemId) => {
   };
   const marker = item.spec.frozen_inputs?.selection_evidence?.evidence_digest;
   if (typeof marker === "string" && marker !== h.evidence_digest) {
-    throw integrity("item evidence marker mismatches task shared evidence");
+    // task_control inconsistent() -> Error::Task(NeedsVerification) upstream
+    throw new StorageError("needs_verification",
+      "ACCEPTANCE_NEEDS_VERIFICATION: item evidence marker mismatches task shared evidence");
   }
   const bound = db.get(
     "SELECT count(*) AS c FROM scope_occupancy WHERE task_id=? AND scope_key IN (SELECT value FROM json_each(?))",
@@ -634,7 +637,10 @@ const parsePublication = (c) => {
 };
 
 export const readResult = (db, id) => {
-  if (isCompactSchema(db)) throw unsupportedCompact();
+  if (isCompactSchema(db)) {
+    const r = CW.readUpdateAudit(db, id);
+    return r === null ? null : [r.audit, r.receipt];
+  }
   const row = db.get(
     "SELECT task_id,item_id,base_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM market_update_results WHERE result_id=?",
     id);

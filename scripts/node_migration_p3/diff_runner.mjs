@@ -15,6 +15,10 @@ const RC = await import("../../src_node/market/record_codec.mjs");
 const MR = await import("../../src_node/market/market_read.mjs");
 const MW = await import("../../src_node/market/market_write.mjs");
 const MC = await import("../../src_node/market/market_commit.mjs");
+const CMR = await import("../../src_node/market/compact_read.mjs");
+const CMM = await import("../../src_node/market/compact_market.mjs");
+const CW = await import("../../src_node/market/compact_write.mjs");
+const isCompact = () => MR.isCompactSchema(db);
 const marketDigest = () => {
   const tables = [
     ["data_versions", "version_id"],
@@ -49,6 +53,18 @@ const marketDigest = () => {
 };
 
 const preseeded = process.env.DIFF_NOINIT === "1";
+const NORM_TS = process.env.DIFF_NORM_TS === "1";
+const normSet = () => new Set(db.query(
+  "SELECT DISTINCT v FROM (SELECT created_at AS v FROM data_versions UNION ALL SELECT published_at AS v FROM data_versions UNION ALL SELECT hex(integrity_digest) AS v FROM data_versions WHERE integrity_digest IS NOT NULL)")
+  .map((r) => r.v));
+const normDeep = (v, set) => {
+  if (typeof v === "string" && set.has(v)) return "<norm>";
+  if (Array.isArray(v)) return v.map((x) => normDeep(x, set));
+  if (v !== null && typeof v === "object") {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, normDeep(x, set)]));
+  }
+  return v;
+};
 
 copyFileSync(preseeded ? process.env.DIFF_PRESEED : "/dev/shm/nm006/db18.sqlite", dbPath);
 const repo = TaskAdmission.open(dbPath, { mode: "readwrite" });
@@ -98,6 +114,40 @@ const stateDigest = () => {
   dump("SELECT task_id,scope_key FROM task_scopes ORDER BY 1,2", "S");
   dump("SELECT request_id,command_digest,outcome_kind,task_id,terminal_json FROM requests ORDER BY 1", "R");
   dump("SELECT task_id,item_id,run_id,start_revision FROM task_item_execution_starts ORDER BY 1,2", "X");
+  if (isCompact()) {
+    const cvs = (x) => x === null ? "" : x instanceof Uint8Array
+      ? Buffer.from(x).toString("hex") : String(x);
+    const cdump = (sql, tag) => {
+      for (const r of db.query(sql)) {
+        lines.push(`${tag}:${Object.values(r).map(cvs).join("|")}`);
+      }
+    };
+    cdump("SELECT version_key,version_id,entity,period,adjustment,state,hex(source_binding_digest),parent_version_key,manifest_mode,delta_depth,record_count,first_day,last_day,coverage_status,hex(evidence_digest),hex(projection_digest),digest_format FROM data_versions ORDER BY version_key", "CV");
+    for (const r of db.query("SELECT version_key,published_at IS NOT NULL AS p FROM data_versions ORDER BY version_key")) {
+      let idhex = "";
+      if (r.p === 1n) {
+        try {
+          const row = CMR.__readVersionRow(db, r.version_key);
+          idhex = Buffer.from(CMM.versionIntegrityDigest(
+            CMR.__buildIdentity(db, row, "0000-01-01T00:00:00+00:00"))).toString("hex");
+        } catch { idhex = "<ERR>"; }
+      }
+      lines.push(`CVI:${r.version_key}:${idhex}`);
+    }
+    cdump("SELECT segment_key,hex(segment_digest),entity,period,first_day,last_day,row_count FROM bar_segments ORDER BY segment_key", "CS");
+    cdump("SELECT segment_key,trade_day,open_cents,high_cents,low_cents,close_cents,volume,amount,r7_raw FROM segment_bars ORDER BY segment_key,trade_day", "CB");
+    cdump("SELECT version_key,seq,segment_key,clip_start_day,clip_end_day,row_count FROM version_checkpoint_clips ORDER BY version_key,seq", "CC");
+    cdump("SELECT version_key,seq,delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM version_delta_clips ORDER BY version_key,seq", "CD");
+    cdump("SELECT version_key,base_daily_version_key,algorithm_version,first_trade_day,last_trade_day,as_of_day FROM yearly_lineage ORDER BY version_key", "CY");
+    cdump("SELECT entity,period,adjustment,version_key FROM effective_heads ORDER BY 1,2,3", "CH");
+    cdump("SELECT hex(evidence_digest),evidence_kind,canonical_json FROM evidence_bundles ORDER BY evidence_digest", "CE");
+    cdump("SELECT hex(source_binding_digest),generation_id,hex(generation_manifest_sha256),hex(day_member_sha256),hex(security_event_sha256),hex(evidence_digest) FROM source_bindings ORDER BY source_binding_digest", "CSB");
+    cdump("SELECT task_id,version_key,result_id FROM task_publications ORDER BY 1,2", "CTP");
+    cdump("SELECT result_id,result_kind FROM result_registry ORDER BY result_id", "CRR");
+    cdump("SELECT result_key,result_id,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,hex(source_binding_digest),continuity_mode,prefix_bytes,hex(base_projection_digest),hex(result_projection_digest),hex(delta_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM market_update_results ORDER BY result_key", "CMU");
+    cdump("SELECT result_key,seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM market_update_delta_clips ORDER BY result_key,seq", "CMD");
+    cdump("SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM publication_results ORDER BY result_key", "CPR");
+  }
   let joined = lines.join("\n");
   for (const [k, real] of syms) {
     if (!k.startsWith("rev:")) joined = joined.split(real).join(`$${k}`);
@@ -389,6 +439,66 @@ for (const line of lines) {
         } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
         break;
       }
+      case "stage_ops_delta":
+      case "validate_staged":
+      case "commit_ops_update":
+      case "commit_ops_no_change":
+      case "update_base_facts":
+      case "base_bars_in_range": {
+        try {
+          let out;
+          if (name === "stage_ops_delta") {
+            out = { version_key: Number(CW.stageOpsDelta(
+              db, op.entity, op.base_version_id, op.version_id,
+              op.upserts ?? [], op.removes ?? [])) };
+          } else if (name === "validate_staged") {
+            CW.validateStaged(db, op.version_id);
+            out = {};
+          } else if (name === "commit_ops_update") {
+            const r = CW.commitOpsUpdate(db, {
+              result_id: op.result_id, task_id: op.task_id, item_id: op.item_id,
+              base_version_id: op.base_version_id,
+              result_version_id: op.result_version_id,
+              expected_revision: op.expected_revision,
+              run_id: op.run_id, occupancy_key: op.occupancy_key,
+              continuity_evidence: op.continuity_evidence ?? null,
+            });
+            out = { receipt: {
+              publication_id: r.publication_id, version_id: r.version_id,
+              task_id: r.task_id, task_revision: Number(r.task_revision) } };
+          } else if (name === "commit_ops_no_change") {
+            const r = CW.commitOpsNoChange(db, {
+              result_id: op.result_id, task_id: op.task_id, item_id: op.item_id,
+              base_version_id: op.base_version_id,
+              expected_revision: op.expected_revision,
+              run_id: op.run_id, occupancy_key: op.occupancy_key,
+              range_start_day: op.range_start_day, range_end_day: op.range_end_day,
+              continuity_evidence: op.continuity_evidence ?? null,
+            });
+            out = { receipt: {
+              publication_id: r.publication_id, version_id: r.version_id,
+              task_id: r.task_id, task_revision: Number(r.task_revision) } };
+          } else if (name === "update_base_facts") {
+            out = CW.updateBaseFacts(db, op.base_version_id);
+          } else {
+            const bars = CW.baseBarsInRange(db, op.base_version_id, op.start, op.end);
+            out = { bars: bars.map((b) => ({
+              date: b.date, open: MR.__decStr(b.open), high: MR.__decStr(b.high),
+              low: MR.__decStr(b.low), close: MR.__decStr(b.close),
+              volume: b.volume === null ? null : MR.__decStr(b.volume),
+              amount: b.amount === null ? null : MR.__decStr(b.amount),
+              r7_raw: b.r7_raw === null || b.r7_raw === undefined ? null : Number(b.r7_raw),
+            })) };
+          }
+          rec = { status: "ok", digest: sha(stateDigest()), ...out };
+        } catch (e) {
+          // commit_ops_* run autocommit like the oracle — partial writes
+          // on rejection are real state; report unchanged honestly.
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
       case "checkpoint": {
         const s = repo._readBoundTaskValidated(op.task);
         if (s) refreshRev(op.task, s.task.state_revision);
@@ -406,7 +516,7 @@ for (const line of lines) {
   }
   rec.seq = seq++;
   rec.op = name;
-  results.push(rec);
+  results.push(NORM_TS ? normDeep(rec, normSet()) : rec);
 }
 repo.close();
 writeFileSync(outPath, results.map((r) => JSON.stringify(r)).join("\n") + "\n");

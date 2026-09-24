@@ -75,8 +75,14 @@ for (let i = 0; i < R.length; i++) {
     if (VERBATIM_MSG.has(rc) && stripPos(r.message) !== stripPos(n.message)) {
       issues.push(`message ${JSON.stringify(r.message)}!=${JSON.stringify(n.message)}`);
     }
-    if (r.status === "error" && r.unchanged !== true) issues.push("oracle rejection mutated state");
-    if (n.status === "error" && n.unchanged !== true) issues.push("node rejection mutated state");
+    // commit_ops_* run in the coordinator's autocommit write() — Rust
+    // rejects after evidence/registry inserts which stay committed; the
+    // digest comparison proves identical partial state on both sides.
+    const PARTIAL_OK = new Set(["commit_ops_update", "commit_ops_no_change"]);
+    if (!PARTIAL_OK.has(r.op)) {
+      if (r.status === "error" && r.unchanged !== true) issues.push("oracle rejection mutated state");
+      if (n.status === "error" && n.unchanged !== true) issues.push("node rejection mutated state");
+    }
   } else {
     for (const f of ["task", "candidates", "reconciled"]) {
       if (f in r || f in n) {

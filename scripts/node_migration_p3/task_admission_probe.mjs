@@ -98,7 +98,11 @@ run("replay_binding_divergence", () => {
   for (const [field, p] of divergences) {
     try { repo.admit(p); out.push(`${field}:ACCEPTED?!`); }
     catch (e) {
-      if (e.code !== "inconsistent") { repo.close(); throw new Error(`${field}: ${e.code} ${e.message}`); }
+      // Rust inconsistent() == Error::NeedsVerification
+      if (e.code !== "needs_verification" ||
+          !e.message.startsWith("ACCEPTANCE_NEEDS_VERIFICATION: ")) {
+        repo.close(); throw new Error(`${field}: ${e.code} ${e.message}`);
+      }
       out.push(`${field}:${e.message.slice(0, 60)}`);
     }
   }
@@ -120,7 +124,8 @@ run("replay_missing_binding", () => {
   try { repo.admit(plan()); repo.close(); throw new Error("accepted orphan binding"); }
   catch (e) {
     repo.close();
-    if (e.code !== "inconsistent" || e.message !== "bound execution record missing") throw e;
+    if (e.code !== "needs_verification" ||
+        e.message !== "ACCEPTANCE_NEEDS_VERIFICATION: bound execution record missing") throw e;
     return { code: e.code, message: e.message };
   }
 });

@@ -176,7 +176,8 @@ run("digest_tamper_inconsistent", () => {
   try { repo.getRequest("r-001"); repo.close(); throw new Error("accepted tampered"); }
   catch (e) {
     repo.close();
-    if (e.code !== "inconsistent" || e.message !== "command digest mismatch") throw e;
+    if (e.code !== "needs_verification" ||
+        e.message !== "ACCEPTANCE_NEEDS_VERIFICATION: command digest mismatch") throw e;
     return { code: e.code, message: e.message };
   }
 });
