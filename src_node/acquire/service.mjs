@@ -75,11 +75,12 @@ const EVIDENCE_NAME = "compatibility-evidence.json";
 // ---------- Error (service.rs:71-98) ----------
 
 export class AcquireServiceError extends Error {
-  constructor(kind, message, reasonCode = null) {
+  constructor(kind, message, reasonCode = null, inner = null) {
     super(message);
     this.name = "AcquireServiceError";
     this.kind = kind;
     this.reasonCode = reasonCode;
+    this.inner = inner; // source error — the adapter's mapped() needs it
   }
   /** Error::code() — stable reason code for wire replies/outcomes. */
   code() {
@@ -102,15 +103,18 @@ const refused = (code) => new AcquireServiceError("refused", code, code);
 const svcErr = (e) => {
   if (e instanceof AcquireServiceError) return e;
   if (e instanceof AcquireStoreError)
-    return new AcquireServiceError("storage", `storage: ${e.message}`);
+    return new AcquireServiceError("storage", `storage: ${e.message}`,
+      null, e);
   if (e instanceof FetchError)
-    return new AcquireServiceError("fetch", `fetch: ${e.message}`);
+    return new AcquireServiceError("fetch", `fetch: ${e.message}`,
+      null, e);
   if (e?.name === "GenerationUsableError")
-    return new AcquireServiceError("generation", `generation: ${e.message}`);
+    return new AcquireServiceError("generation", `generation: ${e.message}`,
+      null, e);
   if (e instanceof SyntaxError || e?.name === "WireError")
-    return new AcquireServiceError("json", `json: ${e.message}`);
+    return new AcquireServiceError("json", `json: ${e.message}`, null, e);
   if (typeof e?.code === "string" && /^(E[A-Z]+|ERR_)/.test(e.code))
-    return new AcquireServiceError("io", `io: ${e.message}`);
+    return new AcquireServiceError("io", `io: ${e.message}`, null, e);
   return e;
 };
 
@@ -247,6 +251,28 @@ export class AcquireService {
         store, db, fetcher: toFetcher(source) });
       service.reconcile();
       return service;
+    } catch (e) {
+      throw svcErr(e);
+    }
+  }
+
+  /** Worker-side attach — the daemon's single open() already created
+   *  the store layout and reconciled durable state; a handler worker
+   *  binds the same durable store without re-running them (Rust shares
+   *  one Arc'd service via factory closure; JS workers cannot share).
+   *  Fails closed when the store is absent or unreadable — attach is
+   *  never a creator. */
+  static attach(root, source) {
+    try {
+      const store = new GenerationStore(root);
+      const dbPath = join(root, "acquire.sqlite");
+      const db = new Db(dbPath);
+      if (!db.existsReadable()) {
+        throw new AcquireStoreError("storage",
+          "acquire store absent or unreadable");
+      }
+      return new AcquireService({
+        store, db, fetcher: toFetcher(source) });
     } catch (e) {
       throw svcErr(e);
     }
@@ -914,7 +940,7 @@ function detailBytes(detail) {
   return acc;
 }
 
-const taskView = (task) => ({
+export const taskView = (task) => ({
   task_id: task.task_id, request_id: task.request_id, kind: task.kind,
   state: task.state, generation_id: task.generation_id,
   stage: task.stage, bytes_done: task.bytes_done, error: task.error,

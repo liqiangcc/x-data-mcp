@@ -1,0 +1,39 @@
+{"check":"contract_key","status":"PASS","detail":""}
+{"check":"normalize_ok","status":"PASS","detail":""}
+{"check":"normalize_rejects","status":"PASS","detail":"15/15"}
+{"check":"normalize_sort_dedup","status":"PASS","detail":""}
+{"check":"normalize_same_symbol_conflict","status":"PASS","detail":""}
+{"check":"normalize_budget","status":"PASS","detail":""}
+{"check":"normalize_years_btreeset","status":"PASS","detail":""}
+{"check":"resolve_shape","status":"PASS","detail":""}
+{"check":"resolve_future_reject","status":"PASS","detail":""}
+{"check":"resolve_absent_year","status":"PASS","detail":"ACCEPTANCE_NEEDS_VERIFICATION: selected year absent from fixed daily"}
+{"check":"resolve_cmp_mismatch","status":"PASS","detail":""}
+{"check":"resolve_currenthead","status":"PASS","detail":""}
+{"check":"evidence_shape","status":"PASS","detail":""}
+{"check":"evidence_year_mismatch","status":"PASS","detail":""}
+{"check":"evidence_no_digest","status":"PASS","detail":""}
+{"check":"evidence_single_year","status":"PASS","detail":""}
+{"check":"verifier_official_absent","status":"PASS","detail":""}
+{"check":"verifier_unbound","status":"PASS","detail":""}
+{"check":"verifier_bound","status":"PASS","detail":""}
+{"check":"derive_candidate","status":"PASS","detail":""}
+{"check":"derive_bar_content","status":"PASS","detail":""}
+{"check":"derive_raw_layout","status":"PASS","detail":""}
+{"check":"derive_id_reject","status":"PASS","detail":""}
+{"check":"derive_evidence_reject","status":"PASS","detail":""}
+{"check":"derive_annual_reject","status":"PASS","detail":""}
+{"check":"binding_match","status":"PASS","detail":""}
+{"check":"binding_drift","status":"PASS","detail":""}
+{"check":"prepare_new","status":"PASS","detail":""}
+{"check":"prepare_stage_called","status":"PASS","detail":""}
+{"check":"prepare_mark_validated","status":"PASS","detail":""}
+{"check":"prepare_reuse","status":"PASS","detail":""}
+{"check":"prepare_head_mismatch","status":"PASS","detail":"PUBLISH_PRECONDITION: reuse comparison must bind expected yearly head"}
+{"check":"runner_contract_gate","status":"PASS","detail":""}
+{"check":"runner_receipt_replay","status":"PASS","detail":""}
+{"check":"runner_running_item","status":"PASS","detail":""}
+{"check":"runner_terminal_integrity","status":"PASS","detail":""}
+{"check":"runner_publish","status":"PASS","detail":""}
+{"check":"commit_yearly_seam","status":"PASS","detail":""}
+{"check":"summary","status":"PASS","detail":"38 PASS / 0 FAIL"}

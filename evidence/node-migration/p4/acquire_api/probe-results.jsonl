@@ -1,0 +1,15 @@
+{"id":"tools_list_byte_parity","status":"PASS","detail":null,"evidence":{"bytes":5816}}
+{"id":"tools_no_workflow_leakage","status":"PASS","detail":null,"evidence":{"names":10}}
+{"id":"contract_gate_variants","status":"PASS","detail":null,"evidence":{"gate":"unsupported_contract","decode":"invalid_arguments"}}
+{"id":"unknown_tool_code","status":"PASS","detail":null,"evidence":{"code":"unknown_tool"}}
+{"id":"check_official_updates_ok","status":"PASS","detail":null,"evidence":{"files":["base_industry","gbbq","day"]}}
+{"id":"acquire_and_read_tools","status":"PASS","detail":null,"evidence":{"gid":"d5c5ad2dccb46d40"}}
+{"id":"worker_once_idle_turn","status":"PASS","detail":null,"evidence":{"idle":true}}
+{"id":"verify_and_activate_tools","status":"PASS","detail":null,"evidence":{"verified":"VERIFIED_COMPATIBLE","active":"active"}}
+{"id":"mapped_request_conflict","status":"PASS","detail":null,"evidence":{"code":"request_conflict"}}
+{"id":"mapped_refused_code","status":"PASS","detail":null,"evidence":{"code":"task_not_found"}}
+{"id":"capabilities_blocked_fresh","status":"PASS","detail":null,"evidence":{"readiness":"blocked"}}
+{"id":"capabilities_ready_after_activate","status":"PASS","detail":null,"evidence":{"readiness":"ready"}}
+{"id":"capabilities_schema_digest","status":"PASS","detail":null,"evidence":{"digest":"f657a9ffc436cee7"}}
+{"id":"capabilities_unresolved_generation","status":"PASS","detail":null,"evidence":{"blocked":true,"reason":"generation 569ac2d4d52870532f7309f5ac3a9"}}
+{"id":"summary","status":"PASS","detail":"0 failures","evidence":null}
