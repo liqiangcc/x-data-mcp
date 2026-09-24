@@ -17,12 +17,28 @@ import {
 import { join } from "node:path";
 import { Db, AcquireStoreError, toRfc3339 } from "./store.mjs";
 import { Helper, Mirror, FetchError } from "./fetch.mjs";
-import { Change } from "./wire.mjs";
+import {
+  Change, activateReply, acquisitionAcceptance, parse as parseWire,
+  retireReply, serJson, verifyReply,
+} from "./wire.mjs";
 import {
   GENERATIONS_DIR, GenerationStore, PINS_DIR, STAGING_DIR,
 } from "../governance/generation_store.mjs";
-import { MANIFEST_NAME, verifyInstalled } from "../governance/generation_usable.mjs";
-import { CONTRACT_VERSION as CONSISTENCY_CONTRACT } from "../governance/file_consistency.mjs";
+import {
+  DECISION_SCHEMA, MANIFEST_NAME, decisionArtifact, usable,
+  verifyInstalled,
+} from "../governance/generation_usable.mjs";
+import {
+  CONTRACT_VERSION as CONSISTENCY_CONTRACT,
+  validate as validateConsistency,
+} from "../governance/file_consistency.mjs";
+import { zipMember, zipOpen } from "../lib/zip_member.mjs";
+import { parse as tdxhyParse } from "../parsers/tdxhy.mjs";
+import { parse as exCodeParse } from "../parsers/ex_code.mjs";
+import { apply as scopeApply } from "../catalog/scope.mjs";
+import { parse as gbbqParse } from "../parsers/gbbq_file.mjs";
+import { decodeEvents } from "../parsers/gbbq_decode.mjs";
+import { parse as dayParse } from "../parsers/day_file.mjs";
 
 // service.rs:33-49
 export const GENERATION_CONTRACT_VERSION = "official-generation-v1";
@@ -42,10 +58,19 @@ const ST_FAILED = "failed";
 
 const GEN_BYTE_VERIFIED = "byte_verified";
 const GEN_VERIFIED = "consistency_verified";
+const GEN_NOT_VERIFIED = "not_verified";
+const GEN_CONFLICT = "conflict";
 const GEN_ACTIVE = "active";
 const GEN_SUPERSEDED = "superseded";
 const GEN_EVIDENCE_ONLY = "evidence_only";
 const GEN_CORRUPT = "corrupt";
+
+// Probe bounds + generation::EVIDENCE_NAME (service.rs:42-49,
+// mod.rs:32) — local consts, generation_usable doesn't export the name.
+const DAY_SAMPLE = 64;
+const MAX_MISSING_SCOPED_DAY = 64;
+const STALE_DAY_TOLERANCE_DAYS = 14;
+const EVIDENCE_NAME = "compatibility-evidence.json";
 
 // ---------- Error (service.rs:71-98) ----------
 
@@ -182,6 +207,20 @@ const asU64 = (v) =>
   typeof v === "bigint" && v >= 0n ? v :
   typeof v === "number" && Number.isInteger(v) && v >= 0 ? BigInt(v) :
   null;
+
+// serde_json::Value::Object is BTreeMap — every level serializes keys
+// sorted bytewise. Rebuild a parsed/structured Value subtree that way
+// (arrays and scalars pass through) for byte-parity artifact bytes.
+const sortValue = (v) => {
+  if (v === null || typeof v !== "object") return v;
+  if (Array.isArray(v)) return v.map(sortValue);
+  const out = {};
+  for (const k of Object.keys(v).sort((a, b) =>
+    Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")))) {
+    out[k] = sortValue(v[k]);
+  }
+  return out;
+};
 
 export class AcquireService {
   constructor({ store, db, fetcher }) {
@@ -336,10 +375,10 @@ export class AcquireService {
       if (reused) {
         const task = this.db.taskByRequest(request.request_id);
         if (task === null) throw refused("request_binding_lost");
-        return {
+        return acquisitionAcceptance({
           request_id: request.request_id, task_id: task.task_id,
           state: task.state, reused: true,
-        };
+        });
       }
       const release = this.mutations.acquire();
       try {
@@ -369,10 +408,10 @@ export class AcquireService {
           this._removeStage(requestId);
         }
         this.store.createStage(requestId);
-        return {
+        return acquisitionAcceptance({
           request_id: request.request_id, task_id: taskId,
           state: ST_ACCEPTED, reused: false,
-        };
+        });
       } finally {
         release();
       }
@@ -556,6 +595,276 @@ export class AcquireService {
     }
   }
 
+  // ---------- consistency verification (D1) ----------
+
+  /** service.rs:613-632 — probe suite + #131 validator over an
+   *  installed generation; the once-written decision is durable and
+   *  replays verbatim. */
+  verifyGeneration(requestId, generationId) {
+    try {
+      const payload = serValueSorted({ generation_id: generationId });
+      const { reused } = this.db.acceptRequest(
+        requestId, KIND_VERIFY, payload, now());
+      if (reused) {
+        const outcome = this.db.outcome(requestId);
+        if (outcome !== null) {
+          const reply = parseWire.VerifyReply(outcome);
+          return verifyReply({ ...reply, reused: true });
+        }
+      }
+      const release = this.mutations.acquire();
+      try {
+        const reply = this.verifyNow(requestId, generationId);
+        this.db.recordOutcome(requestId, reply, now());
+        return reply;
+      } finally {
+        release();
+      }
+    } catch (e) {
+      throw svcErr(e);
+    }
+  }
+
+  /** service.rs:634-759 — an existing decision artifact replays; else
+   *  byte-verify, run the probe suite, issue evidence only on all-pass,
+   *  write the once-only decision, realign the generation row. */
+  verifyNow(requestId, generationId) {
+    const existing = decisionArtifact(this.store.root, generationId);
+    if (existing !== null) {
+      const row = this.db.generation(generationId);
+      const decisionBytes = this.store.decision(generationId);
+      return verifyReply({
+        request_id: requestId, generation_id: generationId,
+        state: row === null ? GEN_BYTE_VERIFIED : row.state,
+        consistency_status: existing.status,
+        consistency_reasons: existing.reasons.map((r) => JSON.stringify(r)),
+        decision_sha256: decisionBytes === null ? null
+          : sha256hex(decisionBytes),
+        reason_code: null, reused: false,
+      });
+    }
+    let installed;
+    try {
+      installed = verifyInstalled(this.store.root, generationId, now());
+    } catch (e) {
+      if (e?.name === "GenerationUsableError") {
+        return refusedVerify(requestId, generationId,
+          e.kind === "not_installed"
+            ? "generation_not_installed" : "generation_bytes_unverified");
+      }
+      throw e;
+    }
+    const probe = probes(installed);
+    const facts = fileFacts(installed);
+    const evidence = probe.failures.length === 0
+      ? buildEvidence(installed, facts) : null;
+    const evidenceBytes = evidence === null ? null
+      : Buffer.from(serJson(evidence), "utf8");
+    const evidenceSha256 = evidenceBytes === null ? null
+      : this.store.writeArtifact(generationId, EVIDENCE_NAME, evidenceBytes);
+    const decision = validateConsistency({
+      files: facts, compatibility: evidence });
+    const artifact = {
+      schema: DECISION_SCHEMA, generation_id: generationId,
+      manifest_sha256: installed.manifest_sha256,
+      issuer: "x-data-acquire.auto-probe",
+      validator_contract_version:
+        `${CONSISTENCY_CONTRACT}+${PROBE_CONTRACT_VERSION}`,
+      evaluated_at: serTs(now()),
+      status: decision.status,
+      reasons: decision.reasons,
+      evidence_sha256: evidenceSha256,
+      probes: sortValue(probe.facts), // Value subtree — sorted keys
+    };
+    const decisionBytes = Buffer.from(serPretty(artifact), "utf8");
+    const decisionSha256 = this.store.writeDecision(
+      generationId, decisionBytes);
+    const state = decision.status === "VERIFIED_COMPATIBLE" ? GEN_VERIFIED
+      : decision.status === "NOT_VERIFIED" ? GEN_NOT_VERIFIED
+      : GEN_CONFLICT;
+    const row = this.db.generation(generationId);
+    this.db.upsertGeneration({
+      generation_id: generationId, state,
+      manifest_sha256: installed.manifest_sha256,
+      consistency_status: decision.status,
+      consistency_reasons: JSON.stringify(decision.reasons),
+      decision_sha256: decisionSha256,
+      evidence_json: evidenceBytes === null ? null
+        : evidenceBytes.toString("utf8"), // from_utf8_lossy — JSON is utf8
+      acquisition_request_id: row?.acquisition_request_id ?? null,
+      installed_at: row?.installed_at ?? now(),
+      updated_at: now() });
+    return verifyReply({
+      request_id: requestId, generation_id: generationId, state,
+      consistency_status: decision.status,
+      consistency_reasons: decision.reasons.map((r) => JSON.stringify(r)),
+      decision_sha256: decisionSha256, reason_code: null, reused: false });
+  }
+
+  // ---------- activation (D5) ----------
+
+  /** service.rs:767-790 — conditional activation; refusals are durable
+   *  terminal outcomes, replay returns the same reply. */
+  activateGeneration(requestId, generationId, expectedPrevious) {
+    try {
+      const payload = serValueSorted({
+        expected_previous: expectedPrevious ?? null,
+        generation_id: generationId });
+      const { reused } = this.db.acceptRequest(
+        requestId, KIND_ACTIVATE, payload, now());
+      if (reused) {
+        const outcome = this.db.outcome(requestId);
+        if (outcome !== null) {
+          const reply = parseWire.ActivateReply(outcome);
+          return activateReply({ ...reply, reused: true });
+        }
+      }
+      const release = this.mutations.acquire();
+      try {
+        const reply = this.activateNow(requestId, generationId,
+          expectedPrevious);
+        this.db.recordOutcome(requestId, reply, now());
+        return reply;
+      } finally {
+        release();
+      }
+    } catch (e) {
+      throw svcErr(e);
+    }
+  }
+
+  /** service.rs:792-873. */
+  activateNow(requestId, generationId, expectedPrevious) {
+    let installed;
+    try {
+      installed = usable(this.store.root, generationId, now());
+    } catch (e) {
+      if (e?.name === "GenerationUsableError") {
+        const code = e.kind === "not_installed" ? "generation_not_installed"
+          : e.kind === "not_consistency_verified"
+            ? "generation_not_consistency_verified"
+            : "generation_bytes_unverified";
+        return refusedActivate(requestId, generationId, code);
+      }
+      throw e;
+    }
+    let pointer;
+    try {
+      pointer = this.store.activate(
+        installed, expectedPrevious, requestId, now());
+    } catch (e) {
+      if (e?.kind === "activation_conflict") {
+        // The conflict error carries `actual` textually; re-read the
+        // pointer under the same single-writer hold (conflict leaves it
+        // untouched) for the reply fields.
+        const actual = this.store.active()?.generation_id ?? null;
+        return activateReply({
+          request_id: requestId, generation_id: generationId,
+          state: "refused", reason_code: "activation_conflict",
+          detail: `active generation is ${fmtOpt(actual)}`,
+          manifest_sha256: null, activated_at: null,
+          previous_generation_id: actual, reused: false });
+      }
+      throw svcErr(e);
+    }
+    for (const row of this.db.generations()) {
+      const state = row.generation_id === generationId ? GEN_ACTIVE
+        : row.state === GEN_ACTIVE ? GEN_SUPERSEDED : null;
+      if (state === null) continue;
+      this.db.upsertGeneration({ ...row, state, updated_at: now() });
+    }
+    return activateReply({
+      request_id: requestId, generation_id: generationId,
+      state: GEN_ACTIVE, reason_code: null, detail: null,
+      manifest_sha256: pointer.manifest_sha256,
+      activated_at: toRfc3339(new Date(parseTsMs(pointer.activated_at))),
+      previous_generation_id: pointer.previous_generation_id,
+      reused: false });
+  }
+
+  // ---------- retire (D2/D5) ----------
+
+  /** service.rs:881-904 — destructive retire to evidence_only behind an
+   *  explicit confirm token + live-reference check. */
+  retireGeneration(requestId, generationId, confirmToken) {
+    try {
+      const payload = serValueSorted({
+        confirm_token: confirmToken, generation_id: generationId });
+      const { reused } = this.db.acceptRequest(
+        requestId, KIND_RETIRE, payload, now());
+      if (reused) {
+        const outcome = this.db.outcome(requestId);
+        if (outcome !== null) {
+          const reply = parseWire.RetireReply(outcome);
+          return retireReply({ ...reply, reused: true });
+        }
+      }
+      const release = this.mutations.acquire();
+      try {
+        const reply = this.retireNow(requestId, generationId, confirmToken);
+        this.db.recordOutcome(requestId, reply, now());
+        return reply;
+      } finally {
+        release();
+      }
+    } catch (e) {
+      throw svcErr(e);
+    }
+  }
+
+  /** service.rs:906-986 — verbatim guard order: absent row, idempotent
+   *  evidence_only, active/pointed, token mismatch, live pins, inflight
+   *  acquisition task, then retire bytes + row. */
+  retireNow(requestId, generationId, confirmToken) {
+    const row = this.db.generation(generationId);
+    if (row === null) {
+      return refusedRetire(requestId, generationId,
+        "generation_not_installed");
+    }
+    if (row.state === GEN_EVIDENCE_ONLY) {
+      return retireReply({
+        request_id: requestId, generation_id: generationId,
+        state: GEN_EVIDENCE_ONLY, reason_code: null, detail: null,
+        reused: false });
+    }
+    // || short-circuit kept verbatim — active() is not read for an
+    // already-active row.
+    if (row.state === GEN_ACTIVE ||
+        (this.store.active()?.generation_id ?? null) === generationId) {
+      return refusedRetire(requestId, generationId, "generation_active");
+    }
+    if (confirmToken !== row.manifest_sha256) {
+      return refusedRetire(requestId, generationId, "confirm_token_mismatch");
+    }
+    const pins = this.store.pins(generationId);
+    if (pins.length !== 0) {
+      return retireReply({
+        request_id: requestId, generation_id: generationId,
+        state: "refused", reason_code: "generation_referenced",
+        detail: `live pins: ${pins.join(",")}`, reused: false });
+    }
+    const acq = row.acquisition_request_id;
+    if (acq !== null) {
+      const task = this.db.taskByRequest(acq);
+      if (task !== null &&
+          (task.state === ST_ACCEPTED || task.state === ST_RUNNING)) {
+        return retireReply({
+          request_id: requestId, generation_id: generationId,
+          state: "refused", reason_code: "generation_referenced",
+          detail: `inflight acquisition task ${task.task_id}`,
+          reused: false });
+      }
+    }
+    this.store.retireBytes(generationId);
+    this.db.upsertGeneration({
+      ...row, state: GEN_EVIDENCE_ONLY, updated_at: now() });
+    return retireReply({
+      request_id: requestId, generation_id: generationId,
+      state: GEN_EVIDENCE_ONLY, reason_code: null, detail: null,
+      reused: false });
+  }
+
+
   // ---------- status (service.rs:990-1022) ----------
 
   syncStatus() {
@@ -675,4 +984,239 @@ function fileInputFromValue(v) {
     last_modified: v.last_modified ?? null, etag: v.etag ?? null,
     bytes: b, sha256: v.sha256,
   };
+}
+
+// ---------- refused reply builders (service.rs:1053-1091) ----------
+
+const refusedVerify = (requestId, generationId, code) => verifyReply({
+  request_id: requestId, generation_id: generationId, state: "refused",
+  consistency_status: null, consistency_reasons: [],
+  decision_sha256: null, reason_code: code, reused: false,
+});
+const refusedActivate = (requestId, generationId, code) => activateReply({
+  request_id: requestId, generation_id: generationId, state: "refused",
+  reason_code: code, detail: null, manifest_sha256: null,
+  activated_at: null, previous_generation_id: null, reused: false,
+});
+const refusedRetire = (requestId, generationId, code) => retireReply({
+  request_id: requestId, generation_id: generationId, state: "refused",
+  reason_code: code, detail: null, reused: false,
+});
+
+// Rust {:?} for Option<String>: None / Some("x") — JSON-escaped inside.
+const fmtOpt = (v) => v === null ? "None" : `Some(${JSON.stringify(v)})`;
+
+// RFC3339 string -> ms (probe/reply re-emission; inputs are canonical).
+const parseTsMs = (s) => Date.parse(s);
+
+// ---------- file_facts / build_evidence (service.rs:1092-1148) ----------
+
+function fileFacts(installed) {
+  return installed.manifest.files.map((f) => ({
+    role: f.role, bytes: f.bytes, sha256: f.sha256,
+    source_url: f.source_url,
+    acquisition_started_at: f.acquisition_started_at,
+    acquisition_completed_at: f.acquisition_completed_at,
+    last_modified: f.last_modified ?? null, etag: f.etag ?? null,
+    byte_integrity: "verified",
+    source_revision: f.etag ?? f.last_modified ?? null,
+    source_identity: f.source_url,
+  }));
+}
+
+function buildEvidence(installed, facts) {
+  // BTreeMap<FileRole,_> — keys serialize sorted (byte order).
+  const memberBindings = {};
+  for (const f of [...facts].sort((a, b) =>
+    Buffer.compare(Buffer.from(a.role), Buffer.from(b.role)))) {
+    memberBindings[f.role] = {
+      sha256: f.sha256, source_revision: f.source_revision,
+      source_identity: f.source_identity };
+  }
+  const started = facts.map((f) => parseTsMs(f.acquisition_started_at));
+  const completed = facts.map((f) => parseTsMs(f.acquisition_completed_at));
+  return {
+    evidence_ref: `x-data-acquire.auto-probe-v1/${installed.generation_id}`,
+    rule_version: CONSISTENCY_CONTRACT,
+    compatibility_set_revision:
+      `${PROBE_CONTRACT_VERSION}:${installed.generation_id}`,
+    compatibility_set_identity: "tdx-official-public-files",
+    member_bindings: memberBindings,
+    valid_window: {
+      valid_from: serTs(started.length ? new Date(Math.min(...started)) : now()),
+      valid_until: serTs(completed.length ? new Date(Math.max(...completed)) : now()),
+    },
+  };
+}
+
+// ---------- structural probes (service.rs:1150-1364) ----------
+
+// member_bytes — verbatim message shapes: unavailable / exceeds
+// bounded size / unreadable (64 MiB bound).
+const MAX_MEMBER = 64 << 20;
+function memberBytes(zipBuf, name) {
+  try {
+    return zipMember(zipBuf, name, MAX_MEMBER);
+  } catch (e) {
+    const m = e.message;
+    if (/not found in archive/.test(m))
+      throw new Error(`member ${name} unavailable: ${m}`);
+    if (/exceeds bound/.test(m))
+      throw new Error(`member ${name} exceeds bounded size`);
+    throw new Error(`member ${name} unreadable: ${m}`);
+  }
+}
+
+function probes(installed) {
+  const facts = {};
+  const failures = [];
+  const artifact = (role) => {
+    const f = installed.manifest.files.find((x) => x.role === role);
+    return f === undefined ? null : join(installed.dir, f.relative_path);
+  };
+  let scoped = null, day = null;
+  try {
+    scoped = probeBase(artifact("base_industry"), facts);
+  } catch (e) { failures.push(`base_archive:${e.message}`); }
+  try {
+    probeGbbq(artifact("gbbq"), facts);
+  } catch (e) { failures.push(`gbbq_archive:${e.message}`); }
+  try {
+    day = probeDay(artifact("day"), facts);
+  } catch (e) { failures.push(`day_archive:${e.message}`); }
+  if (scoped !== null && day !== null) {
+    probeCoverage(scoped, day, installed, facts, failures);
+  }
+  return { facts, failures };
+}
+
+function probeBase(path, facts) {
+  if (path === null) throw new Error("base.zip absent from manifest");
+  let buf;
+  try { buf = readFileSync(path); }
+  catch (e) { throw new Error(`unreadable: ${e.message}`); }
+  try { zipOpen(buf); }
+  catch (e) { throw new Error(`invalid zip: ${e.message}`); }
+  const tdxhy = memberBytes(buf, "tdxhy.cfg");
+  const ex = memberBytes(buf, "infoharbor_ex.code");
+  let rows, exRows;
+  try { rows = tdxhyParse(tdxhy); }
+  catch (e) { throw new Error(`tdxhy: ${e.message}`); }
+  try { exRows = exCodeParse(ex); }
+  catch (e) { throw new Error(`infoharbor_ex: ${e.message}`); }
+  const scoped = scopeApply(rows);
+  if (scoped.members.length === 0)
+    throw new Error("scope yields no members");
+  facts.base_archive = { // serde Value: keys sorted bytewise
+    excluded_rows: scoped.excluded.length,
+    infoharbor_ex_rows: exRows.length,
+    scoped_members: scoped.members.length,
+    status: "pass", tdxhy_rows: rows.length,
+  };
+  return scoped.members.map((m) => ({ market: m.market, code: m.code }));
+}
+
+function probeGbbq(path, facts) {
+  if (path === null) throw new Error("gbbq.zip absent from manifest");
+  let buf;
+  try { buf = readFileSync(path); }
+  catch (e) { throw new Error(`unreadable: ${e.message}`); }
+  try { zipOpen(buf); }
+  catch (e) { throw new Error(`invalid zip: ${e.message}`); }
+  const member = memberBytes(buf, "gbbq");
+  let raw;
+  try { raw = gbbqParse(member); }
+  catch (e) { throw new Error(`gbbq parse: ${e.message}`); }
+  let events;
+  try { events = decodeEvents(raw); }
+  catch (e) { throw new Error(`gbbq decode: ${e.message}`); }
+  if (events.length === 0)
+    throw new Error("gbbq member decodes zero events");
+  facts.gbbq_archive = {
+    events: events.length, member_bytes: member.length, status: "pass" };
+}
+
+function probeDay(path, facts) {
+  if (path === null) throw new Error("hsjday.zip absent from manifest");
+  let buf;
+  try { buf = readFileSync(path); }
+  catch (e) { throw new Error(`unreadable: ${e.message}`); }
+  let entries;
+  try { entries = zipOpen(buf); }
+  catch (e) { throw new Error(`invalid zip: ${e.message}`); }
+  const names = {}; // normalized name -> stored name (BTreeMap)
+  for (const e of entries) {
+    const n = e.name.replaceAll("\\", "/");
+    if (n.endsWith(".day") &&
+        ["sh/lday", "sz/lday", "bj/lday"].includes(n.slice(0, 7))) {
+      names[n] = e.name;
+    }
+  }
+  const keys = Object.keys(names).sort(); // ASCII names — JS order ok
+  if (keys.length === 0) throw new Error("no lday .day members");
+  const stride = Math.max(1, Math.floor(keys.length / DAY_SAMPLE));
+  const sample = keys.filter((_, i) => i % stride === 0)
+    .slice(0, DAY_SAMPLE);
+  let maxLastBar = null, parsed = 0;
+  for (const name of sample) {
+    let member;
+    try { member = memberBytes(buf, names[name]); }
+    catch (e) { throw new Error(`sample ${name}: ${e.message}`); }
+    let records;
+    try { records = dayParse(member); }
+    catch (e) { throw new Error(`sample ${name} malformed: ${e.message}`); }
+    if (records.length === 0)
+      throw new Error(`sample ${name} carries no records`);
+    parsed++;
+    const last = records[records.length - 1].date; // ISO date
+    if (maxLastBar === null || last > maxLastBar) maxLastBar = last;
+  }
+  facts.day_archive = {
+    max_sample_last_bar: maxLastBar, members: keys.length,
+    parsed_sample: parsed, status: "pass" };
+  return { member_names: names, max_last_bar: maxLastBar };
+}
+
+// crate::calendar::shanghai_date — Asia/Shanghai is fixed UTC+8 (no DST
+// since 1991): UTC ms -> civil date -> "YYYY-MM-DD".
+function shanghaiDate(ms) {
+  const d = new Date(ms + 8 * 3600_000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+const isoDay = (iso) => Date.parse(`${iso}T00:00:00Z`) / 86400000;
+
+function probeCoverage(scoped, day, installed, facts, failures) {
+  const missing = [];
+  for (const { market, code } of scoped) {
+    const marketName = market === 1 ? "sh" : "sz";
+    const member = `${marketName}/lday/${marketName}${code}.day`;
+    if (!(member in day.member_names)) missing.push(`${marketName}:${code}`);
+  }
+  const completeds = installed.manifest.files
+    .map((f) => parseTsMs(f.acquisition_completed_at))
+    .filter((x) => Number.isFinite(x));
+  const acquired = completeds.length
+    ? shanghaiDate(Math.max(...completeds)) : null;
+  let stale = false;
+  if (day.max_last_bar !== null && acquired !== null) {
+    const ageDays = isoDay(acquired) - isoDay(day.max_last_bar);
+    stale = ageDays > STALE_DAY_TOLERANCE_DAYS || ageDays < 0;
+    facts.day_recency = {
+      acquisition_date: acquired, age_days: ageDays,
+      max_sample_last_bar: day.max_last_bar,
+      tolerance_days: STALE_DAY_TOLERANCE_DAYS };
+  } else {
+    failures.push("day_recency:unmeasurable");
+  }
+  facts.cross_file_coverage = {
+    bound: MAX_MISSING_SCOPED_DAY, missing_day_members: missing.length,
+    missing_sample: missing.slice(0, 20), scoped_members: scoped.length };
+  if (missing.length > MAX_MISSING_SCOPED_DAY) {
+    failures.push(
+      `cross_file_coverage:${missing.length} scoped members lack .day members`);
+  }
+  if (stale) {
+    failures.push("day_recency:freshest bar outside acquisition tolerance");
+  }
 }

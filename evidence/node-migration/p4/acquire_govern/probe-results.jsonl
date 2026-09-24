@@ -1,0 +1,14 @@
+{"id":"lifecycle_check_updates","status":"PASS","detail":null,"evidence":{"files":3}}
+{"id":"lifecycle_install_verify","status":"PASS","detail":null,"evidence":{"gid":"8c04a708f26c5b45","status":"VERIFIED_COMPATIBLE"}}
+{"id":"lifecycle_verify_replay","status":"PASS","detail":null,"evidence":{"reused":true,"sha":"13c46f62bb3c"}}
+{"id":"lifecycle_activate","status":"PASS","detail":null,"evidence":{"active":"8c04a708f26c5b45","activated_at":"2026-09-24T08:38:23.321+00:00"}}
+{"id":"corrupt_artifact_refuses_activate","status":"PASS","detail":null,"evidence":{"refused":"generation_bytes_unverified"}}
+{"id":"stale_mix_not_verified","status":"PASS","detail":null,"evidence":{"state":"not_verified","activate":"generation_not_consistency_verified"}}
+{"id":"malformed_day_not_verified","status":"PASS","detail":null,"evidence":{"state":"not_verified"}}
+{"id":"activation_conflict_and_replay","status":"PASS","detail":null,"evidence":{"conflict_replay":true,"activated":"c8fb2948d6117ac7"}}
+{"id":"retire_guard_order","status":"PASS","detail":null,"evidence":{"order":["token","pins"]}}
+{"id":"retire_active_refused","status":"PASS","detail":null,"evidence":{"refused":"generation_active"}}
+{"id":"retire_superseded_evidence_only","status":"PASS","detail":null,"evidence":{"retired":true}}
+{"id":"verify_missing_generation","status":"PASS","detail":null,"evidence":{"refused":"generation_not_installed"}}
+{"id":"request_kind_conflict","status":"PASS","detail":null,"evidence":{"conflict":true}}
+{"id":"summary","status":"PASS","detail":"0 failures","evidence":null}
