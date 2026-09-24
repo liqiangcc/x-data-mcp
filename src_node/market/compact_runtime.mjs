@@ -86,20 +86,231 @@ export const openWriter = (path, busyMs = BUSY_MS) => {
 };
 
 // WriteCoordinator::open_existing — lease path match + validate +
-// writer + schema identity == expected.
-export const coordinatorOpenExisting = (path, lease, expected, busyMs = BUSY_MS) => {
-  if (path !== lease.path) {
-    throw base("coordinator path does not match lease");
-  }
-  try { lease.validate(); }
-  catch (e) { throw base(e.message); }
-  const writer = openWriter(path, busyMs);
-  try {
-    const identity = inspectSchemaIdentity(writer);
-    if (identity.user_version !== expected.user_version ||
-        identity.digest !== expected.digest) {
-      throw integrity("schema identity does not match expected");
-    }
-  } catch (e) { try { writer.close(); } catch { /* closing */ } throw e; }
-  return { path, lease, expected, busy: busyMs, writer };
+// writer + schema identity == expected. Returns a WriteCoordinator.
+export const coordinatorOpenExisting = (path, lease, expected, busyMs = BUSY_MS) =>
+  new WriteCoordinator(path, lease, expected, busyMs);
+
+// ---------------------------------------------------------------------
+// NM-073 — compact_runtime.rs WriteCoordinator runtime surface.
+//
+// Threading model (documented per task): Rust serializes the single
+// writer Connection behind Mutex + lifecycle RwLock + a bounded reader
+// pool (ReaderSlot/MAX_READERS=16) because tokio-style concurrency can
+// reach the coordinator from many threads. Node is single-threaded:
+// every coordinator method is a synchronous call on one event loop, so
+// mutual exclusion is inherent and the reader-slot bound has no
+// runnable equivalent (a second reader cannot interleave). The
+// observable semantics are preserved verbatim: shut-down rejection,
+// WAL-drain requirements, lease + schema-identity boundary checks, and
+// the exact checkpoint metrics tuple.
+import { statSync } from "node:fs";
+
+const base2 = base; // alias for the unavailable() mapping used below
+const walBytes = (path) => {
+  try { return BigInt(statSync(`${path}-wal`).size); }
+  catch { return 0n; }
 };
+
+// recover_leak — a write/read closure that leaks a transaction is a
+// contract violation; rollback deterministically, then fail if the
+// connection still isn't in autocommit.
+const recoverLeak = (db) => {
+  if (db._db.inTransaction === false) return; // is_autocommit
+  db.exec("ROLLBACK");
+  if (db._db.inTransaction !== false) {
+    throw integrity("connection remains transactional after rollback");
+  }
+};
+
+export class WriteCoordinator {
+  /** WriteCoordinator::open_existing — lease path match + validate +
+   *  writer + schema identity == expected. */
+  constructor(path, lease, expected, busyMs = BUSY_MS) {
+    if (path !== lease.path) {
+      throw base("coordinator path does not match lease");
+    }
+    try { lease.validate(); }
+    catch (e) { throw base(e.message); }
+    const writer = openWriter(path, busyMs);
+    try {
+      const identity = inspectSchemaIdentity(writer);
+      if (identity.user_version !== expected.user_version ||
+          identity.digest !== expected.digest) {
+        throw integrity("schema identity does not match expected");
+      }
+    } catch (e) { try { writer.close(); } catch { /* closing */ } throw e; }
+    this.path = path;
+    this.lease = lease;
+    this.expected = expected;
+    this.busy = busyMs;
+    this.writer = writer; // Handle or null once shut down
+  }
+
+  // verify_boundary — lease + schema identity unchanged.
+  _verifyBoundary(db) {
+    try { this.lease.validate(); }
+    catch (e) { throw base2(e.message); }
+    const identity = inspectSchemaIdentity(db);
+    if (identity.user_version !== this.expected.user_version ||
+        identity.digest !== this.expected.digest) {
+      throw integrity("schema identity changed");
+    }
+  }
+
+  /** write — lifecycle read + writer + boundary + autocommit + fn +
+   *  leak recovery + post-verify. fn receives the raw Handle (non-tx
+   *  writes allowed). */
+  write(fn) {
+    const conn = this.writer;
+    if (!conn) throw base("coordinator is shut down");
+    this._verifyBoundary(conn);
+    if (conn._db.inTransaction !== false) {
+      throw integrity("writer connection is not in autocommit");
+    }
+    try {
+      const value = fn(conn);
+      if (conn._db.inTransaction !== false) {
+        recoverLeak(conn);
+        throw integrity("write closure leaked a transaction");
+      }
+      this._verifyBoundary(conn);
+      return value;
+    } catch (e) {
+      // fn/leak errors -> recover the writer before propagating.
+      try { recoverLeak(conn); } catch (fatal) { throw fatal; }
+      throw e;
+    }
+  }
+
+  /** transaction — immediate tx inside write; commit failure ->
+   *  OutcomeUnknown. */
+  transaction(fn) {
+    return this.write((conn) => {
+      conn.exec("BEGIN IMMEDIATE");
+      let value;
+      try { value = fn(conn); }
+      catch (e) {
+        try { conn.exec("ROLLBACK"); } catch { /* best-effort */ }
+        throw e;
+      }
+      try { conn.exec("COMMIT"); }
+      catch (e) {
+        // market_storage OutcomeUnknown Display — verbatim.
+        throw new MarketError("outcome_unknown",
+          `PUBLISH_OUTCOME_UNKNOWN: ${e.message}; inspect the same publication_id`);
+      }
+      return value;
+    });
+  }
+
+  /** read — writer-alive check → lease → fresh read-only conn with
+   *  reader pragmas → deferred tx → identity check → fn → boundary
+   *  re-verify → commit. */
+  read(fn) {
+    if (!this.writer) throw base("coordinator is shut down");
+    try { this.lease.validate(); }
+    catch (e) { throw base2(e.message); }
+    const conn = openDatabase(this.path, { mode: "readonly",
+      busyTimeoutMs: this.busy });
+    try {
+      setPragma(conn, "foreign_keys", 1);
+      setPragma(conn, "query_only", 1);
+      verifyWal(conn);
+      conn.exec("BEGIN");
+      const before = inspectSchemaIdentity(conn);
+      if (before.user_version !== this.expected.user_version ||
+          before.digest !== this.expected.digest) {
+        throw integrity("schema identity changed");
+      }
+      const value = fn(conn);
+      try { this.lease.validate(); }
+      catch (e) { throw base2(e.message); }
+      const after = inspectSchemaIdentity(conn);
+      if (after.user_version !== this.expected.user_version ||
+          after.digest !== this.expected.digest) {
+        throw integrity("schema identity changed");
+      }
+      conn.exec("COMMIT");
+      return value;
+    } finally {
+      try { conn.exec("ROLLBACK"); } catch { /* already committed */ }
+      conn.close();
+    }
+  }
+
+  // run_checkpoint — management connection + pragmas + boundary
+  // checks around wal_checkpoint(mode).
+  _runCheckpoint(mode) {
+    const writer = this.writer;
+    this._verifyBoundary(writer);
+    const mgmt = openDatabase(this.path, { mode: "readwrite",
+      busyTimeoutMs: this.busy });
+    try {
+      verifyWal(mgmt);
+      setPragma(mgmt, "foreign_keys", 1);
+      setPragma(mgmt, "synchronous", 2);
+      setPragma(mgmt, "wal_autocheckpoint", 1000);
+      setPragma(mgmt, "journal_size_limit", JOURNAL_SIZE_LIMIT);
+      try { this.lease.validate(); }
+      catch (e) { throw base2(e.message); }
+      const idb = inspectSchemaIdentity(mgmt);
+      if (idb.user_version !== this.expected.user_version ||
+          idb.digest !== this.expected.digest) {
+        throw integrity("schema identity changed");
+      }
+      const walBefore = walBytes(this.path);
+      const row = mgmt.get(
+        `PRAGMA wal_checkpoint(${mode === "PASSIVE" ? "PASSIVE" : "TRUNCATE"})`);
+      const vals = Object.values(row);
+      const busy = BigInt(vals[0]), logFrames = BigInt(vals[1]),
+        checkpointed = BigInt(vals[2]);
+      try { this.lease.validate(); }
+      catch (e) { throw base2(e.message); }
+      const ida = inspectSchemaIdentity(mgmt);
+      if (ida.user_version !== this.expected.user_version ||
+          ida.digest !== this.expected.digest) {
+        throw integrity("schema identity changed");
+      }
+      const walAfter = walBytes(this.path);
+      return { mode, busy, log_frames: logFrames,
+        checkpointed_frames: checkpointed,
+        wal_bytes_before: walBefore, wal_bytes_after: walAfter };
+    } finally {
+      mgmt.close();
+    }
+  }
+
+  /** checkpoint_passive — writer present → PASSIVE checkpoint. */
+  checkpointPassive() {
+    if (!this.writer) throw base("coordinator is shut down");
+    return this._runCheckpoint("PASSIVE");
+  }
+
+  /** checkpoint_idle — TRUNCATE + drain requirement. */
+  checkpointIdle() {
+    if (!this.writer) throw base("coordinator is shut down");
+    const metrics = this._runCheckpoint("TRUNCATE");
+    if (metrics.busy !== 0n || metrics.wal_bytes_after !== 0n) {
+      throw base("WAL did not drain");
+    }
+    return metrics;
+  }
+
+  /** shutdown — TRUNCATE drain, then close the writer. A failed close
+   *  keeps the writer usable (Rust restores it). */
+  shutdown() {
+    if (!this.writer) throw base("coordinator is shut down");
+    const metrics = this._runCheckpoint("TRUNCATE");
+    if (metrics.busy !== 0n || metrics.wal_bytes_after !== 0n) {
+      throw base("WAL did not drain; coordinator remains usable");
+    }
+    const conn = this.writer;
+    this.writer = null;
+    try { conn.close(); }
+    catch (e) {
+      this.writer = conn;
+      throw base(`writer close failed: ${e.message}`);
+    }
+    return metrics;
+  }
+}

@@ -675,6 +675,30 @@ fn resolve(v: &Value, syms: &Syms) -> Value {
     }
 }
 
+// sha256 over the canonical DDL dump — proves migrated==fresh schema
+// byte-for-byte (state_digest covers rows only, not object shape).
+fn schema_digest(path: &str) -> Option<String> {
+    let c = rusqlite::Connection::open(path).ok()?;
+    let mut st = c
+        .prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY type,name")
+        .ok()?;
+    let rows = st
+        .query_map([], |r| {
+            Ok(format!(
+                "{}|{}|{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?
+            ))
+        })
+        .ok()?;
+    let mut parts = Vec::new();
+    for r in rows {
+        parts.push(r.ok()?);
+    }
+    Some(crate::hash::sha256(parts.join("\n").as_bytes()))
+}
+
 #[test]
 fn run() {
     let scenario_path = std::env::var("DIFF_SCENARIO").expect("DIFF_SCENARIO");
@@ -822,6 +846,11 @@ fn run() {
         .as_ref()
         .map(|m| m.tasks())
         .unwrap_or_else(|| repo.clone());
+    // Held compact market for coordinator lifecycle ops (shutdown
+    // rejection needs a coordinator that persists across ops).
+    let mut held_compact: Option<
+        crate::sqlite_market::compact_repo::SqliteCompactMarket,
+    > = None;
     for (idx, line) in scenario.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -1392,7 +1421,13 @@ fn run() {
                 }
             }
             "exec_sql" => {
-                let c = rusqlite::Connection::open(&db_path).unwrap();
+                // Optional path suffix targets a side file (used by the
+                // upgrade rejection arms to stage tampered fixtures).
+                let target = match op["path"].as_str() {
+                    Some(p) => format!("{db_path}.{p}"),
+                    None => db_path.clone(),
+                };
+                let c = rusqlite::Connection::open(&target).unwrap();
                 match c.execute_batch(op["sql"].as_str().unwrap()) {
                     Ok(()) => json!({"status":"ok"}),
                     Err(e) => json!({"status":"error","code":"Storage","message":e.to_string()}),
@@ -2597,6 +2632,161 @@ fn run() {
                         "message":e.to_string()}),
                 }
             }
+            // NM-073 — schema lifecycle + compact coordinator surface.
+            "initialize" => {
+                // SqliteTasks::initialize_target — create_new at
+                // <db_path>.<path>; compact selects initialize19.
+                let target =
+                    format!("{db_path}.{}", op["path"].as_str().unwrap());
+                let compact = op["compact"].as_bool().unwrap_or(false);
+                let repo = SqliteTasks::new(&target);
+                let res = if compact {
+                    repo.initialize19()
+                } else {
+                    repo.initialize()
+                };
+                match res {
+                    Ok(()) => json!({"status":"ok",
+                        "digest":state_digest(&target, &syms),
+                        "schema":schema_digest(&target)}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "upgrade_compact" => {
+                // SqliteTasks::upgrade_compact — explicit 18->19
+                // migration; optional path suffix targets a side file
+                // (default upgrades the live scenario DB).
+                let target = match op["path"].as_str() {
+                    Some(p) => {
+                        let t = format!("{db_path}.{p}");
+                        if op["copy_from_main"].as_bool().unwrap_or(false) {
+                            let _ = fs::remove_file(&t);
+                            let _ = fs::remove_file(format!("{t}-wal"));
+                            let _ = fs::remove_file(format!("{t}-shm"));
+                            fs::copy(&db_path, &t).unwrap();
+                        }
+                        t
+                    }
+                    None => db_path.clone(),
+                };
+                let res = SqliteTasks::new(&target).upgrade_compact();
+                // Post-call digests — null when the target isn't a tasks
+                // DB (missing/unsupported). Connection::open would create
+                // a missing file, so existence is checked first.
+                let exists = std::path::Path::new(&target).exists();
+                let digest = if exists {
+                    std::panic::catch_unwind(|| state_digest(&target, &syms))
+                        .ok()
+                } else {
+                    None
+                };
+                let schema = if exists { schema_digest(&target) } else { None };
+                match res {
+                    Ok(()) => json!({"status":"ok",
+                        "digest":digest,"schema":schema}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string(),
+                        "digest":digest,"schema":schema}),
+                }
+            }
+            "compact_admin" => {
+                // WriteCoordinator checkpoint/shutdown surface via
+                // SqliteCompactMarket::open — lease + verify_boundary +
+                // open_writer + inspect_schema_identity all inside.
+                // hold:true keeps the market for later ops; held:true
+                // acts on the held market (post-shutdown rejection).
+                let target = match op["path"].as_str() {
+                    Some(p) => format!("{db_path}.{p}"),
+                    None => db_path.clone(),
+                };
+                let res: Result<_, crate::market_storage::Error> = (|| {
+                    let mut opened = None;
+                    let m = if op["held"].as_bool().unwrap_or(false) {
+                        held_compact
+                            .as_ref()
+                            .ok_or(crate::market_storage::Error::Base(
+                                "no held compact market".into()))?
+                    } else {
+                        use std::os::unix::fs::PermissionsExt;
+                        fs::set_permissions(
+                            &target, fs::Permissions::from_mode(0o600))
+                            .map_err(|e| {
+                                crate::market_storage::Error::Storage(
+                                    e.to_string())
+                            })?;
+                        let m = crate::sqlite_market::compact_repo::SqliteCompactMarket::open(
+                            std::path::Path::new(&target))?;
+                        if op["hold"].as_bool().unwrap_or(false) {
+                            held_compact = Some(m);
+                            held_compact.as_ref().unwrap()
+                        } else {
+                            let m = opened.insert(m);
+                            m
+                        }
+                    };
+                    match op["action"].as_str().unwrap() {
+                        "checkpoint_passive" => m.coordinator().checkpoint_passive(),
+                        "checkpoint_idle" => m.coordinator().checkpoint_idle(),
+                        "shutdown" => m.coordinator().shutdown(),
+                        other => panic!("unknown action {other}"),
+                    }
+                })();
+                match res {
+                    Ok(mt) => json!({"status":"ok","metrics":{
+                        "mode":format!("{:?}", mt.mode),
+                        "busy":mt.busy.to_string(),
+                        "log_frames":mt.log_frames.to_string(),
+                        "checkpointed_frames":mt.checkpointed_frames.to_string(),
+                        "wal_bytes_before":mt.wal_bytes_before.to_string(),
+                        "wal_bytes_after":mt.wal_bytes_after.to_string()}}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            // coordinator.write / transaction / read surface + the
+            // recover_leak arm — fn shapes mirroring the contract.
+            "coord_tx" => {
+                // transaction — deferred identity check + commit;
+                // fn selects user_version through the immediate tx.
+                let m = held_compact.as_ref().expect("held compact market");
+                match m.coordinator().transaction(|c| {
+                    c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                        .map_err(|e| crate::market_storage::Error::Storage(
+                            e.to_string()))
+                }) {
+                    Ok(v) => json!({"status":"ok","user_version":v.to_string()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "coord_read" => {
+                // read — reader conn + deferred tx + boundary checks.
+                let m = held_compact.as_ref().expect("held compact market");
+                match m.coordinator().read(|c| {
+                    c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                        .map_err(|e| crate::market_storage::Error::Storage(
+                            e.to_string()))
+                }) {
+                    Ok(v) => json!({"status":"ok","user_version":v.to_string()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "coord_write_leak" => {
+                // write with a leaking closure — BEGIN leaves a live tx;
+                // write() must recover_leak + report the leak.
+                let m = held_compact.as_ref().expect("held compact market");
+                match m.coordinator().write(|c| {
+                    c.execute_batch("BEGIN").map_err(|e| {
+                        crate::market_storage::Error::Storage(e.to_string())
+                    })
+                }) {
+                    Ok(()) => json!({"status":"ok"}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
             other => panic!("unknown op {other}"),
         };
         if rec["status"] == "error" {
@@ -2633,13 +2823,20 @@ fn build_market_fixture() {
     let _ = fs::remove_file(format!("{db_path}-wal"));
     let _ = fs::remove_file(format!("{db_path}-shm"));
     let repo = SqliteTasks::new(&db_path);
-    let compact = std::env::var("DIFF_INIT").as_deref() == Ok("19")
-        || std::env::var("DIFF_INIT").as_deref() == Ok("compact");
+    let init = std::env::var("DIFF_INIT").unwrap_or_default();
+    let compact = init == "19" || init == "compact" || init == "up";
     if compact {
         // Schema-19 gated writes route through the compact coordinator —
         // SqliteTasks::write rejects post-18. The fixture builds directly
         // via the crate's compact write helpers on a raw connection.
-        repo.initialize19().expect("init schema-19");
+        if init == "up" {
+            // Migrated fixture: schema-18 initialize + upgrade_compact —
+            // exercises the real 18->19 runner instead of initialize19.
+            repo.initialize().expect("init schema-18");
+            repo.upgrade_compact().expect("upgrade to schema-19");
+        } else {
+            repo.initialize19().expect("init schema-19");
+        }
         build_compact_records(&db_path);
         if std::env::var("DIFF_CHECK").is_ok() {
             // compact check pair: failed-item target -> Missing evidence

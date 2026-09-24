@@ -1,0 +1,32 @@
+{"status":"ok","task_id":null,"seq":0,"op":"lookup_task"}
+{"status":"ok","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"b91d3cc4032419a1fac89702a6d591eef50abb1bdc4c0481b0f72102c02233b1","seq":1,"op":"initialize"}
+{"status":"ok","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"200187e22666a801608ac699b0c64efde9da6c644246ec632d6444c661e46d8f","seq":2,"op":"initialize"}
+{"status":"error","code":"unavailable","message":"File exists (os error 17)","unchanged":true,"seq":3,"op":"initialize"}
+{"status":"ok","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"200187e22666a801608ac699b0c64efde9da6c644246ec632d6444c661e46d8f","seq":4,"op":"upgrade_compact"}
+{"status":"error","code":"unavailable","message":"unsupported/uninitialized schema 19; explicit initialization/upgrade required","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"200187e22666a801608ac699b0c64efde9da6c644246ec632d6444c661e46d8f","unchanged":true,"seq":5,"op":"upgrade_compact"}
+{"status":"ok","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"b91d3cc4032419a1fac89702a6d591eef50abb1bdc4c0481b0f72102c02233b1","seq":6,"op":"initialize"}
+{"status":"ok","seq":7,"op":"exec_sql"}
+{"status":"error","code":"unavailable","message":"schema migration identity mismatch","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"b91d3cc4032419a1fac89702a6d591eef50abb1bdc4c0481b0f72102c02233b1","unchanged":true,"seq":8,"op":"upgrade_compact"}
+{"status":"ok","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"b91d3cc4032419a1fac89702a6d591eef50abb1bdc4c0481b0f72102c02233b1","seq":9,"op":"initialize"}
+{"status":"ok","seq":10,"op":"exec_sql"}
+{"status":"error","code":"unavailable","message":"schema migration identity mismatch","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"b91d3cc4032419a1fac89702a6d591eef50abb1bdc4c0481b0f72102c02233b1","unchanged":true,"seq":11,"op":"upgrade_compact"}
+{"status":"ok","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"b91d3cc4032419a1fac89702a6d591eef50abb1bdc4c0481b0f72102c02233b1","seq":12,"op":"initialize"}
+{"status":"ok","seq":13,"op":"exec_sql"}
+{"status":"error","code":"unavailable","message":"FRESH_REBUILD_REQUIRED: schema 19 compact market storage requires a new database","digest":"394ebd1e976d0cae9f5fc51c10f02535146567129b46ee1a5b9cfa4aa3df9842","schema":"b91d3cc4032419a1fac89702a6d591eef50abb1bdc4c0481b0f72102c02233b1","unchanged":true,"seq":14,"op":"upgrade_compact"}
+{"status":"ok","metrics":{"mode":"Passive","busy":"0","log_frames":"0","checkpointed_frames":"0","wal_bytes_before":"0","wal_bytes_after":"0"},"seq":15,"op":"compact_admin"}
+{"status":"ok","metrics":{"mode":"Truncate","busy":"0","log_frames":"0","checkpointed_frames":"0","wal_bytes_before":"0","wal_bytes_after":"0"},"seq":16,"op":"compact_admin"}
+{"status":"ok","metrics":{"mode":"Truncate","busy":"0","log_frames":"0","checkpointed_frames":"0","wal_bytes_before":"0","wal_bytes_after":"0"},"seq":17,"op":"compact_admin"}
+{"status":"ok","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"200187e22666a801608ac699b0c64efde9da6c644246ec632d6444c661e46d8f","seq":18,"op":"upgrade_compact"}
+{"status":"ok","seq":19,"op":"exec_sql"}
+{"status":"error","code":"base_unavailable","message":"BASE_UNAVAILABLE: journal_mode is not WAL","unchanged":true,"seq":20,"op":"compact_admin"}
+{"status":"ok","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"200187e22666a801608ac699b0c64efde9da6c644246ec632d6444c661e46d8f","seq":21,"op":"upgrade_compact"}
+{"status":"ok","metrics":{"mode":"Passive","busy":"0","log_frames":"0","checkpointed_frames":"0","wal_bytes_before":"0","wal_bytes_after":"0"},"seq":22,"op":"compact_admin"}
+{"status":"ok","metrics":{"mode":"Passive","busy":"0","log_frames":"0","checkpointed_frames":"0","wal_bytes_before":"0","wal_bytes_after":"0"},"seq":23,"op":"compact_admin"}
+{"status":"ok","user_version":"19","seq":24,"op":"coord_tx"}
+{"status":"ok","user_version":"19","seq":25,"op":"coord_read"}
+{"status":"error","code":"inconsistent","message":"MARKET_INTEGRITY: write closure leaked a transaction","unchanged":true,"seq":26,"op":"coord_write_leak"}
+{"status":"ok","metrics":{"mode":"Truncate","busy":"0","log_frames":"0","checkpointed_frames":"0","wal_bytes_before":"0","wal_bytes_after":"0"},"seq":27,"op":"compact_admin"}
+{"status":"ok","metrics":{"mode":"Truncate","busy":"0","log_frames":"0","checkpointed_frames":"0","wal_bytes_before":"0","wal_bytes_after":"0"},"seq":28,"op":"compact_admin"}
+{"status":"error","code":"base_unavailable","message":"BASE_UNAVAILABLE: coordinator is shut down","unchanged":true,"seq":29,"op":"compact_admin"}
+{"status":"error","code":"base_unavailable","message":"BASE_UNAVAILABLE: coordinator is shut down","unchanged":true,"seq":30,"op":"coord_tx"}
+{"status":"ok","digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","schema":"200187e22666a801608ac699b0c64efde9da6c644246ec632d6444c661e46d8f","seq":31,"op":"upgrade_compact"}
