@@ -94,6 +94,27 @@ export async function serve({
   // Per-connection state: {rec(worker), sock, localStop}.
   const clients = new Set();
   const active = () => [...clients].filter((c) => !c.rec.finished).length;
+  // Idle client workers — spawned once, reassigned per conn.
+  const pool = [];
+  const allClientWorkers = new Set(); // every spawned client worker
+  const releaseClient = (client) => {
+    clients.delete(client);
+    const rec = client.rec;
+    if (rec.finished || rec.panicked) return;
+    rec.assigned = false;
+    const onIdle = (m) => {
+      if (m.type === "idle") {
+        rec.worker.off("message", onIdle);
+        pool.push(rec);
+      } else if (m.type === "done") {
+        rec.worker.off("message", onIdle);
+        rec.panicked = !m.ok; rec.finished = true;
+      }
+    };
+    rec.worker.on("message", onIdle);
+    try { rec.worker.postMessage({ type: "release" }); }
+    catch { rec.finished = true; }
+  };
 
   let nextReq = 1;
   const requestReply = (client, frame) => new Promise((res, rej) => {
@@ -139,7 +160,7 @@ export async function serve({
     } catch (e) {
       client.rec.sessionError = e.message; // thread Err — reaped, not panic
     }
-    try { client.rec.worker.postMessage({ type: "stop" }); } catch { /**/ }
+    try { client.sock.destroy(); } catch { /**/ }
   };
 
   let serveErr = null;
@@ -168,16 +189,30 @@ export async function serve({
       sock.destroy();
       return;
     }
-    let rec;
-    try {
-      rec = mkWorker("client");
-    } catch (e) {
-      serveErr = e;
-      sock.destroy();
-      return;
-    }
+    // Pooled worker per conn — the isolate+module graph is amortized
+    // across conns (Rust's thread spawn is ~µs; a fresh Worker isolate
+    // is ~100ms+); 'assign' runs the handler factory fresh per conn —
+    // factory()-per-conn semantics preserved.
+    let rec = pool.pop() ?? mkWorker("client");
+    allClientWorkers.add(rec);
+    rec.assigned = false;
     const client = { rec, sock, localStop: false };
     clients.add(client);
+    const onMsg = (m) => {
+      if (m.type === "assigned") {
+        rec.worker.off("message", onMsg);
+        rec.assigned = true;
+        sock.resume();
+      } else if (m.type === "done" && !m.ok) {
+        rec.worker.off("message", onMsg);
+        rec.panicked = true; rec.finished = true;
+        try { sock.destroy(); } catch { /**/ }
+      }
+    };
+    rec.worker.on("message", onMsg);
+    rec.worker.postMessage({ type: "assign" });
+    sock.pause(); // hold frames until the handler is assigned
+    sock.once("close", () => releaseClient(client));
     runSession(client).catch(() => { /* recorded on rec */ });
   });
 
@@ -221,6 +256,10 @@ export async function serve({
     c.sock.pause();                               // shutdown(Read) equivalent
     try { c.rec.worker.postMessage({ type: "stop" }); } catch { /**/ }
   }
+  // idle pooled workers hold no conn state — stop them too.
+  for (const r of pool) {
+    try { r.worker.postMessage({ type: "stop" }); } catch { /**/ }
+  }
 
   const deadline = Date.now() + cfg.stop_budget;  // :179-184
   while ((!bg.finished || [...clients].some((c) => !c.rec.finished)) &&
@@ -233,6 +272,7 @@ export async function serve({
     // cannot pin the event loop after serve() reports the error.
     for (const c of clients) { try { c.sock.destroy(); } catch { /**/ } }
     for (const c of clients) { try { await c.rec.worker.terminate(); } catch { /**/ } }
+    for (const r of pool) { try { await r.worker.terminate(); } catch { /**/ } }
     try { await bg.worker.terminate(); } catch { /**/ }
     throw ioErr(
       "shutdown budget expired; unfinished task state retained for verification");
@@ -240,6 +280,13 @@ export async function serve({
   // Rust teardown drops each session's socket; without destroy the
   // still-open sockets would pin the event loop after serve() returns.
   for (const c of clients) { try { c.sock.destroy(); } catch { /**/ } }
+  // Pooled/in-flight workers released during drain never saw 'stop';
+  // idle (api=null) or release-pending — hard-terminate them all. Mark
+  // them done first so the exit handler doesn't report a panic.
+  for (const r of allClientWorkers) {
+    r.done ??= { type: "done", ok: true };
+    try { await r.worker.terminate(); } catch { /**/ }
+  }
   // :190-196 — client panic join (covers panics during the drain too)
   if ([...clients].some((c) => c.rec.panicked)) {
     throw ioErr("MCP session panicked; no automatic retry");

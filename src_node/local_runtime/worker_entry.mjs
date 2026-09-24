@@ -42,12 +42,12 @@ const done = (ok, error = null) => {
 };
 
 let api = null, leaseRef = null, dispatch = null, utf8 = null, initErr = null;
+let hmod = null;
 try {
-  const mod = await import(handlerModule);
-  api = await mod[handlerExport](handlerArgs);
-  api.withWorkerGate?.(gate);
-  leaseRef = lease ? new LeaseRef(lease.path, lease.identity) : null;
-  leaseRef?.attach();
+  // Module graph loads once per worker — conn-invariant (same service
+  // root). The per-conn handler is built on 'assign' — Rust's
+  // factory()-per-conn parity without a fresh isolate per conn.
+  hmod = await import(handlerModule);
   dispatch = dispatchModule
     ? (await import(dispatchModule))[dispatchExport]
     : null;
@@ -55,10 +55,20 @@ try {
 } catch (e) {
   initErr = e;
 }
+const initApi = async () => {
+  api = await hmod[handlerExport](handlerArgs);
+  api.withWorkerGate?.(gate);
+  leaseRef = lease ? new LeaseRef(lease.path, lease.identity) : null;
+  leaseRef?.attach();
+};
 
 if (initErr) {
   done(false, initErr.message);
 } else if (role === "background") {
+  try { await initApi(); } catch (e) {
+    done(false, e.message);
+    await new Promise(() => {}); // exit is scheduled; never fall through
+  }
   // server.rs:74-99 — interruptible poll, validate, one worker turn.
   try {
     while (!isStopping()) {
@@ -91,9 +101,23 @@ if (initErr) {
   // thread equivalent — one outstanding frame at a time, matching the
   // sequential read->validate->decode->handle->write order in
   // server.rs:132-148.
+  // Per-conn lifecycle: 'assign' builds a fresh api (Rust factory()
+  // per conn); 'release' drops it and returns the worker to the pool.
   parentPort.on("message", (msg) => {
     if (msg.type === "stop") { done(true); return; }
-    if (msg.type !== "frame") return;
+    if (msg.type === "assign") {
+      initApi()
+        .then(() => parentPort.postMessage({ type: "assigned" }))
+        .catch((e) => done(false, e.message)); // init Err -> serveErr
+      return;
+    }
+    if (msg.type === "release") {
+      leaseRef?.close?.();
+      api = null; leaseRef = null;
+      parentPort.postMessage({ type: "idle" });
+      return;
+    }
+    if (msg.type !== "frame" || api === null) return;
     let input;
     try {
       leaseRef?.validate();
