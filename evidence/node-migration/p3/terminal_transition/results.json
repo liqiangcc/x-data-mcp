@@ -1,0 +1,43 @@
+{
+  "task_id": "NM-045",
+  "baseline_sha": "4ed3a2fe6003239daade6466bbded83e42db36f8",
+  "source_ported": "task_control decide RequestCancel/FinishExecution/FinishCancellation + write_task_delta terminal path",
+  "contract": [
+    "requestCancel: terminal OR already-cancel_requested -> Ok no-op (no write); terminal no-op precedes run-identity; else cancel_requested,rev+1,progress stamp, occupancy kept",
+    "finishExecution/finishCancellation: FinishCancellation requires cancel_requested else revision_conflict; owned||never_started + zero running items else needs_verification 'execution has not safely ended'",
+    "derivation: cancel_finish&&success<len -> cancelled; finished==len -> succeeded/failed/partially_failed; else cancel_requested -> cancelled; else revision_conflict",
+    "result_json serde-sorted keys; cancellation_acknowledged only via finish_cancellation->cancelled; occupancy DELETEd post-update; RECOUNT_COUNTERS; rev+1"
+  ],
+  "fixture": "db18.sqlite (NM-006); lifecycle states built via admitted primitives (admit/claim/startItem/finishItem/requestCancel)",
+  "probe": {
+    "command": "node scripts/node_migration_p3/terminal_transition_probe.mjs .",
+    "exit": 0,
+    "cases": 14,
+    "totals": {
+      "pass": 14,
+      "fail": 0,
+      "not_run": 0
+    },
+    "groups": {
+      "cancel": 4,
+      "finish_derivations": 3,
+      "finish_guards": 3,
+      "cancellation": 3,
+      "readback": 1,
+      "selftest": "exit 1"
+    }
+  },
+  "regressions": {
+    "NM-044": "19/19",
+    "NM-043": "13/13",
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "no require_verification/reconcile/candidates/retry/workers/services/production readiness"
+}

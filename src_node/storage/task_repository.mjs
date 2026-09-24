@@ -566,3 +566,129 @@ Object.assign(TaskAdmission.prototype, {
     });
   },
 });
+
+// ---------------------------------------------------------------------
+// NM-045 — terminal transitions (decide RequestCancel / FinishExecution
+// / FinishCancellation + write_task_delta terminal occupancy release).
+// Shared gate order; RequestCancel's terminal no-op precedes the
+// run-identity gate. result_json keys are serde_json-sorted
+// (BTreeMap): cancellation_acknowledged < finished_items <
+// successful_items.
+
+const resultJson = (finished, successful, ack) =>
+  JSON.stringify(ack
+    ? { cancellation_acknowledged: true, finished_items: finished, successful_items: successful }
+    : { finished_items: finished, successful_items: successful });
+
+Object.assign(TaskAdmission.prototype, {
+  /** decide(Change::RequestCancel): no-op on terminal or already
+   *  cancel_requested (terminal no-op precedes run-identity); else
+   *  run-identity gate, then status -> cancel_requested, rev+1.
+   *  Returns {changed, task} — changed=false on no-op. */
+  requestCancel(taskId, expectedRevision, runId, now) {
+    if (!wellformedStr(taskId) || taskId === "") {
+      throw new StorageError("invalid_input", "task_admission: task_id must be a non-empty string");
+    }
+    if (typeof expectedRevision !== "bigint" || expectedRevision < 0n) {
+      throw new StorageError("invalid_input", "task_admission: expectedRevision must be a non-negative bigint");
+    }
+    if (!wellformedStr(runId) || runId.trim() === "") {
+      throw new StorageError("invalid_input", "empty run identity");
+    }
+    if (!wellformedStr(now)) {
+      throw new StorageError("invalid_input", "task_admission: now must be an RFC3339 string");
+    }
+    return this._db.transaction(() => {
+      const t = this._db.get(
+        "SELECT status,state_revision,owner_run_id,accepted_run_id FROM tasks WHERE task_id=?",
+        taskId);
+      if (!t) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
+      if (t.state_revision !== expectedRevision) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      const full = () => this._db.get("SELECT * FROM tasks WHERE task_id=?", taskId);
+      // terminal no-op precedes the run-identity gate (decide)
+      if (TERMINAL_STATUSES.includes(t.status) || t.status === "cancel_requested") {
+        return { changed: false, task: full() };
+      }
+      if (t.accepted_run_id !== runId ||
+          (t.owner_run_id !== null && t.owner_run_id !== runId)) {
+        throw new StorageError("needs_verification",
+          "ACCEPTANCE_NEEDS_VERIFICATION: old run or unresolved execution");
+      }
+      const next = expectedRevision + 1n;
+      const res = this._db.run(
+        `UPDATE tasks SET status='cancel_requested',state_revision=?,
+         last_progress_at=?${RECOUNT_COUNTERS}
+         WHERE task_id=? AND state_revision=?`,
+        next, now, taskId, expectedRevision);
+      if (res.changes !== 1) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      return { changed: true, task: full() };
+    });
+  },
+
+  /** decide(FinishExecution | FinishCancellation). Shared finish arm:
+   *  cancellation requires cancel_requested; owned/never_started +
+   *  no-running-items else needs_verification "execution has not
+   *  safely ended"; status derivation; terminal write releases
+   *  occupancy and recounters. */
+  _finish(taskId, expectedRevision, runId, now, cancellation) {
+    return this._db.transaction(() => {
+      const t = this._transitionGate(taskId, expectedRevision, runId, now);
+      if (cancellation && t.status !== "cancel_requested") {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      const owned = t.owner_run_id === runId;
+      const agg = this._db.get(
+        `SELECT count(*) n,
+          sum(stage='pending') pend, sum(stage='running') run,
+          sum(stage='finished') fin,
+          sum(stage='finished' AND json_extract(outcome_json,'$.success')=1) suc
+         FROM task_items WHERE task_id=?`, taskId);
+      const n = Number(agg.n), pending = Number(agg.pend ?? 0n),
+        running = Number(agg.run ?? 0n), finished = Number(agg.fin ?? 0n),
+        succeeded = Number(agg.suc ?? 0n);
+      const neverStarted = t.owner_run_id === null && pending === n;
+      if ((!owned && !neverStarted) || running > 0) {
+        throw new StorageError("needs_verification",
+          "ACCEPTANCE_NEEDS_VERIFICATION: execution has not safely ended");
+      }
+      let status;
+      if (cancellation && succeeded < n) status = "cancelled";
+      else if (finished === n) {
+        status = succeeded === finished ? "succeeded"
+          : succeeded === 0 ? "failed" : "partially_failed";
+      } else if (t.status === "cancel_requested") status = "cancelled";
+      else throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      const next = expectedRevision + 1n;
+      const ack = cancellation && status === "cancelled";
+      // write_task_delta order: item diff (none) -> guarded task row ->
+      // occupancy release on terminal.
+      const res = this._db.run(
+        `UPDATE tasks SET status=?,state_revision=?,owner_run_id=owner_run_id,
+         last_progress_at=?,result_json=?${RECOUNT_COUNTERS}
+         WHERE task_id=? AND state_revision=?`,
+        status, next, now,
+        resultJson(finished, succeeded, ack), taskId, expectedRevision);
+      if (res.changes !== 1) {
+        throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
+      }
+      this._db.run("DELETE FROM scope_occupancy WHERE task_id=?", taskId);
+      return { changed: true, task: this._db.get("SELECT * FROM tasks WHERE task_id=?", taskId) };
+    });
+  },
+  finishExecution(taskId, expectedRevision, runId, now) {
+    if (!wellformedStr(now)) {
+      throw new StorageError("invalid_input", "task_admission: now must be an RFC3339 string");
+    }
+    return this._finish(taskId, expectedRevision, runId, now, false);
+  },
+  finishCancellation(taskId, expectedRevision, runId, now) {
+    if (!wellformedStr(now)) {
+      throw new StorageError("invalid_input", "task_admission: now must be an RFC3339 string");
+    }
+    return this._finish(taskId, expectedRevision, runId, now, true);
+  },
+});

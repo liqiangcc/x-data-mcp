@@ -1,0 +1,14 @@
+{"family":"terminal_transition","id":"cancel_pending","status":"PASS","detail":null,"expected":{"status":"cancel_requested","occupancy_kept":1},"actual":null}
+{"family":"terminal_transition","id":"cancel_idempotent_noop","status":"PASS","detail":null,"expected":{"changed":false,"bytes_unchanged":true},"actual":null}
+{"family":"terminal_transition","id":"cancel_terminal_noop_any_run","status":"PASS","detail":null,"expected":{"terminal_noop_precedes_run_gate":true},"actual":null}
+{"family":"terminal_transition","id":"cancel_cross_run_rejected","status":"PASS","detail":null,"expected":{"code":"needs_verification"},"actual":null}
+{"family":"terminal_transition","id":"finish_all_success","status":"PASS","detail":null,"expected":{"status":"succeeded","result":"{\"finished_items\":2,\"successful_items\":2}","occupancy_released":true},"actual":null}
+{"family":"terminal_transition","id":"finish_partial","status":"PASS","detail":null,"expected":{"status":"partially_failed"},"actual":null}
+{"family":"terminal_transition","id":"finish_all_failed","status":"PASS","detail":null,"expected":{"status":"failed"},"actual":null}
+{"family":"terminal_transition","id":"finish_with_running_item_needs_verification","status":"PASS","detail":null,"expected":{"code":"needs_verification","verbatim":true},"actual":null}
+{"family":"terminal_transition","id":"finish_never_started_revision_conflict","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"terminal_transition","id":"finish_non_owner_needs_verification","status":"PASS","detail":null,"expected":{"code":"needs_verification"},"actual":null}
+{"family":"terminal_transition","id":"finish_cancellation_acknowledged","status":"PASS","detail":null,"expected":{"status":"cancelled","acknowledged":true,"occupancy_released":true},"actual":null}
+{"family":"terminal_transition","id":"finish_cancellation_requires_cancel","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
+{"family":"terminal_transition","id":"finish_execution_under_cancel_becomes_cancelled","status":"PASS","detail":null,"expected":{"status":"cancelled","no_ack_flag":true},"actual":null}
+{"family":"terminal_transition","id":"reopen_readback","status":"PASS","detail":null,"expected":{"terminal_tasks":6},"actual":null}
