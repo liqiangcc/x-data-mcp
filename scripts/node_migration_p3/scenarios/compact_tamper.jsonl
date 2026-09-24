@@ -1,0 +1,8 @@
+{"op":"seed","compact":true,"records":"compact_daily.json,compact_daily2.json,compact_yearly.json,compact_staged.json|staged"}
+{"op":"read_record","version_id":"c-staged","mode":"candidate"}
+{"op":"read_record","version_id":"c-staged","mode":"fixed"}
+{"op":"exec_sql","sql":"DELETE FROM version_checkpoint_clips WHERE version_key=1 AND seq=0"}
+{"op":"read_record","version_id":"c-day-1","mode":"fixed"}
+{"op":"head","symbol":"sh.600006","period":"day"}
+{"op":"versions","symbol":"sh.600006","period":"day"}
+{"op":"range","symbol":"sh.600006","period":"day","start":"2025-01-01","end":"2026-12-31","limit":10}

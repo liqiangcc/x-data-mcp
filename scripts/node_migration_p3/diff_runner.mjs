@@ -322,7 +322,7 @@ for (const line of lines) {
           }
           rec = { status: "ok" };
         } catch (e) {
-          rec = { status: "error", code: "Storage", message: String(e.message), unchanged: true };
+          rec = { status: "error", code: "unavailable", message: String(e.message), unchanged: true };
         }
         break;
       }
@@ -344,8 +344,14 @@ for (const line of lines) {
             integrity_sha256: r.raw.integrity_sha256,
             period: r.version.period,
             records: r.version.records.length,
-            first: r.version.records[0]?.date.s ?? null,
-            last: r.version.records.at(-1)?.date.s ?? null,
+            first: r.version.records[0]
+              ? (typeof r.version.records[0].date === "string"
+                  ? r.version.records[0].date : r.version.records[0].date.s)
+              : null,
+            last: r.version.records.at(-1)
+              ? (typeof r.version.records.at(-1).date === "string"
+                  ? r.version.records.at(-1).date : r.version.records.at(-1).date.s)
+              : null,
           }};
         } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
         break;

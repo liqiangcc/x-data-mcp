@@ -1,0 +1,6 @@
+{"op":"seed","compact":true,"records":"compact_daily.json,compact_yearly.json"}
+{"op":"read_record","version_id":"c-day-1","mode":"fixed"}
+{"op":"exec_sql","sql":"DELETE FROM segment_bars WHERE segment_key=1 AND trade_day=(SELECT min(trade_day) FROM segment_bars WHERE segment_key=1)"}
+{"op":"read_record","version_id":"c-day-1","mode":"fixed"}
+{"op":"range","symbol":"sh.600006","period":"day","start":"2025-01-01","end":"2026-12-31","limit":10}
+{"op":"versions","symbol":"sh.600006","period":"day"}

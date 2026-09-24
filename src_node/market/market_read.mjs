@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { gateDatabase } from "../storage/schema_gate.mjs";
 import { openDatabase } from "../storage/sqlite_adapter.mjs";
 import * as RC from "./record_codec.mjs";
+import * as C from "./compact_read.mjs";
 import { aggregate as yearlyAggregate } from "../algorithms/yearly.mjs";
 import { _dec } from "../algorithms/qfq_affine.mjs";
 
@@ -22,8 +23,15 @@ export const isCompactSchema = (db) =>
 
 const periodName = (p) => p === "Day" ? "day" : "year";
 
-// Decimal::normalize().to_string()
+// Decimal::normalize().to_string() — accepts decimal text or a
+// compact Dec {m:bigint,s:int} (compact read path emits typed Decs).
 const decStr = (v) => {
+  if (v !== null && typeof v === "object" && typeof v.m === "bigint") {
+    let { m, s } = v;
+    while (s > 0 && m % 10n === 0n) { m /= 10n; s -= 1; }
+    if (m === 0n) return "0";
+    return _dec.toString({ m, s });
+  }
   const n = RC.__decNorm(v);
   return (n.neg ? "-" : "") + n.int + (n.frac ? `.${n.frac}` : "");
 };
@@ -59,7 +67,7 @@ const asOfDate = (publishedAt) => {
 };
 
 export function head(db, scope) {
-  if (isCompactSchema(db)) throw unsupportedCompact();
+  if (isCompactSchema(db)) return C.headId(db, scope);
   return db.get(
     "SELECT version_id FROM effective_heads WHERE symbol=? AND period=? AND adjustment='qfq'",
     scope.symbol, periodName(scope.period))?.version_id ?? null;
@@ -371,6 +379,13 @@ const validateBase = (record, base) => {
 };
 
 export function readRecord(db, id, published, allowYearly) {
+  if (isCompactSchema(db)) {
+    const record = C.materializeChecked(db, id, !published);
+    if (!allowYearly && record.version.period !== "Day") {
+      throw integrity("yearly record in daily context");
+    }
+    return record;
+  }
   const record = readProjection(db, id, published, allowYearly);
   const base = baseRecord(db, record);
   validateBase(record, base);
@@ -392,7 +407,7 @@ const parseBarJson = (j) => {
 };
 
 export function rangeRows(db, id, p, range) {
-  if (isCompactSchema(db)) throw unsupportedCompact();
+  if (isCompactSchema(db)) return C.compactRangeRows(db, id, p, range);
   if (p === "Day") {
     const segBacked = db.get(
       "SELECT json_extract(envelope_json,'$.records.$ref')='segments' AS x FROM data_versions WHERE version_id=?",
@@ -475,6 +490,7 @@ export function range(db, scope, id, rangeObj) {
 }
 
 export function versions(db, scope) {
+  if (isCompactSchema(db)) return C.compactVersions(db, scope);
   const orphan = db.get(
     "SELECT EXISTS(SELECT 1 FROM publication_batches b LEFT JOIN data_versions v ON v.version_id=b.version_id WHERE v.version_id IS NULL) AS x").x === 1n;
   if (orphan) throw integrity("publication references missing version");

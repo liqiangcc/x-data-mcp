@@ -1,0 +1,17 @@
+{"op":"seed","compact":true,"records":"compact_daily.json,compact_daily2.json,compact_yearly.json"}
+{"op":"head","symbol":"sh.600006","period":"day"}
+{"op":"head","symbol":"sh.600006","period":"year"}
+{"op":"read_record","version_id":"c-day-1","mode":"fixed"}
+{"op":"read_record","version_id":"c-year-1","mode":"fixed"}
+{"op":"read_record","version_id":"c-day-2","mode":"fixed"}
+{"op":"read_record","version_id":"c-day-1","mode":"candidate"}
+{"op":"read_record","version_id":"missing","mode":"fixed"}
+{"op":"read_record","version_id":"missing","mode":"candidate"}
+{"op":"versions","symbol":"sh.600006","period":"day"}
+{"op":"versions","symbol":"sh.600006","period":"year"}
+{"op":"range","symbol":"sh.600006","period":"day","start":"2025-01-01","end":"2026-12-31","limit":10}
+{"op":"range","symbol":"sh.600006","period":"day","start":"2025-01-01","end":"2026-12-31","limit":2}
+{"op":"range","symbol":"sh.600006","period":"day","start":"2025-01-01","end":"2026-12-31","limit":2,"after":"2025-01-03"}
+{"op":"range","symbol":"sh.600006","period":"year","start":"2024-01-01","end":"2026-12-31","limit":10}
+{"op":"range","symbol":"sh.600006","period":"day","version_id":"c-year-1","start":"2025-01-01","end":"2026-12-31","limit":10}
+{"op":"range","symbol":"sh.600006","period":"day","version_id":"c-day-2","start":"2025-01-01","end":"2026-12-31","limit":10}

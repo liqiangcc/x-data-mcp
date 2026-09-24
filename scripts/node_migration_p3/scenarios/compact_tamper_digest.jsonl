@@ -1,0 +1,10 @@
+{"op":"seed","compact":true,"records":"compact_daily.json,compact_yearly.json"}
+{"op":"exec_sql","sql":"UPDATE segment_bars SET close_cents=close_cents+100 WHERE segment_key=1 AND trade_day=(SELECT min(trade_day) FROM segment_bars WHERE segment_key=1)"}
+{"op":"read_record","version_id":"c-day-1","mode":"fixed"}
+{"op":"versions","symbol":"sh.600006","period":"day"}
+{"op":"exec_sql","sql":"UPDATE data_versions SET evidence_digest=randomblob(32) WHERE version_key=1"}
+{"op":"read_record","version_id":"c-day-1","mode":"fixed"}
+{"op":"exec_sql","sql":"DELETE FROM source_bindings"}
+{"op":"read_record","version_id":"c-day-1","mode":"fixed"}
+{"op":"exec_sql","sql":"DELETE FROM evidence_bundles"}
+{"op":"read_record","version_id":"c-day-1","mode":"fixed"}

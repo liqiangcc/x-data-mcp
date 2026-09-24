@@ -50,6 +50,7 @@ for (const file of scenarios) {
       const recs = seedOp.records;
       if (seedOp.results) extra.DIFF_RESULTS = "1";
       if (seedOp.tasks) extra.DIFF_TASKS = seedOp.tasks;
+      if (seedOp.compact) extra.DIFF_INIT = "19";
       execFileSync(CARGO, ["test", "--lib", "diff_harness::build_market_fixture", "--",
         "--nocapture", "--test-threads=1"], {
         cwd: ROOT,

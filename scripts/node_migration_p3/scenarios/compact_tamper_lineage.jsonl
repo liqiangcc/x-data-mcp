@@ -1,0 +1,7 @@
+{"op":"seed","compact":true,"records":"compact_daily.json,compact_yearly.json"}
+{"op":"read_record","version_id":"c-year-1","mode":"fixed"}
+{"op":"exec_sql","sql":"UPDATE yearly_lineage SET first_trade_day=first_trade_day+1 WHERE version_key=(SELECT version_key FROM data_versions WHERE version_id='c-year-1')"}
+{"op":"read_record","version_id":"c-year-1","mode":"fixed"}
+{"op":"exec_sql","sql":"DELETE FROM effective_heads WHERE entity='sh.600006' AND period=1"}
+{"op":"head","symbol":"sh.600006","period":"day"}
+{"op":"range","symbol":"sh.600006","period":"day","start":"2025-01-01","end":"2026-12-31","limit":5}
