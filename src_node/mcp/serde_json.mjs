@@ -388,18 +388,46 @@ export function serF64(v) {
   return sign + mant + "e" + (e10 < 0 ? "-" : "+") + Math.abs(e10);
 }
 
-const keyCmp = (a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
-
 // serde_json::to_string(&Value) parity: BTreeMap-sorted keys, compact.
+// Keys sort by UTF-8 byte order; encodings are computed once per key
+// (sort comparator would otherwise allocate two Buffers per compare).
+// Emission goes through a flat parts array + one final join — avoids
+// per-level intermediate strings/arrays on deep/wide documents.
 export function serValue(v) {
-  if (v === null || v === undefined) return "null";
-  if (v instanceof F64) return serF64(v.v);
-  if (typeof v === "bigint") return v.toString();
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : serF64(v);
-  if (typeof v === "string") return JSON.stringify(v);
-  if (typeof v === "boolean") return v ? "true" : "false";
-  if (typeof v.toJSON === "function") return serValue(v.toJSON());
-  if (Array.isArray(v)) return `[${v.map(serValue).join(",")}]`;
-  const keys = Object.keys(v).sort(keyCmp);
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${serValue(v[k])}`).join(",")}}`;
+  const out = [];
+  serInto(v, out);
+  return out.join("");
+}
+function serInto(v, out) {
+  if (v === null || v === undefined) { out.push("null"); return; }
+  if (v instanceof F64) { out.push(serF64(v.v)); return; }
+  if (typeof v === "bigint") { out.push(v.toString()); return; }
+  if (typeof v === "number") {
+    out.push(Number.isInteger(v) ? String(v) : serF64(v)); return;
+  }
+  if (typeof v === "string") { out.push(JSON.stringify(v)); return; }
+  if (typeof v === "boolean") { out.push(v ? "true" : "false"); return; }
+  if (typeof v.toJSON === "function") { serInto(v.toJSON(), out); return; }
+  if (Array.isArray(v)) {
+    out.push("[");
+    for (let i = 0; i < v.length; i++) {
+      if (i) out.push(",");
+      serInto(v[i], out);
+    }
+    out.push("]");
+    return;
+  }
+  out.push("{");
+  const keys = Object.keys(v);
+  if (keys.length > 1) {
+    const enc = new Map();
+    for (const k of keys) enc.set(k, Buffer.from(k, "utf8"));
+    keys.sort((a, b) => Buffer.compare(enc.get(a), enc.get(b)));
+  }
+  for (let i = 0; i < keys.length; i++) {
+    if (i) out.push(",");
+    out.push(JSON.stringify(keys[i]), ":");
+    serInto(v[keys[i]], out);
+  }
+  out.push("}");
 }
