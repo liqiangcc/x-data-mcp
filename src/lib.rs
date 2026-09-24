@@ -74,3 +74,6 @@ pub mod local_runtime;
 
 #[cfg(target_os = "linux")]
 mod local_filesystem;
+
+#[cfg(test)]
+mod diff_harness;

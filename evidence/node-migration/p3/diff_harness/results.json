@@ -1,0 +1,61 @@
+{
+  "task_id": "NM-049",
+  "baseline_sha": "97f58831fadb337f9b8948de2a586f7fd8fc8f50",
+  "source": "TASK-NM-049.md — differential harness",
+  "vocabulary": [
+    "admit",
+    "admit_retry",
+    "claim",
+    "startItem",
+    "finishItem",
+    "requestCancel",
+    "finishExecution",
+    "finishCancellation",
+    "requireVerification",
+    "reconcile",
+    "candidates",
+    "checkpoint"
+  ],
+  "runners": {
+    "rust": "src/diff_harness.rs #[cfg(test)] — real SqliteTasks accept/transition/candidates/reconcile; env DIFF_SCENARIO/DIFF_DB/DIFF_OUT; rustup 1.98.1; /dev/shm fixtures",
+    "node": "scripts/node_migration_p3/diff_runner.mjs — same vocabulary against TaskAdmission",
+    "comparator": "scripts/node_migration_p3/diff_compare.mjs — status + mapped code + verbatim-message classes + normalized task projection + rejection digest-stability"
+  },
+  "code_map": "RevisionConflict<->revision_conflict | NeedsVerification<->needs_verification | InvalidRetrySelection/RetrySelectionInvalid/EmptyRetrySelection<->invalid_retry_selection | RequestConflict/RetryRequestIdConflict<->conflict | RangeConflict<->range_conflict | InvalidCommand/EmptyRequestId<->invalid_input | StorageUnavailable<->unavailable | TaskNotFound<->task_not_found | OutcomeUnknown<->outcome_unknown | UnsupportedContract<->unsupported_contract",
+  "scenarios": {
+    "lifecycle_ok": 8,
+    "lifecycle_cancel": 7,
+    "retry_ok": 9,
+    "retry_rejections": 11,
+    "run_identity_gate": 2,
+    "cancel_noop_order": 5,
+    "reconcile_candidates": 8,
+    "guards": 9
+  },
+  "caught_divergence_proof": "run_identity_gate scenario re-run with the NM-043 R1 gate reverted -> comparator DIFF (status error!=ok); fix restored, re-verified MATCH",
+  "harness_caught_fix": "INVALID_RETRY_SELECTION is a unit variant — Node detail-bearing messages replaced with the verbatim unit message",
+  "probe": {
+    "command": "node scripts/node_migration_p3/diff_harness_probe.mjs .",
+    "exit": 0,
+    "scenarios": 8,
+    "ops": 59,
+    "diffs": 0
+  },
+  "regressions": {
+    "NM-048": "10/10",
+    "NM-047": "14/14",
+    "NM-046": "17/17",
+    "NM-045": "15/15",
+    "NM-044": "19/19",
+    "NM-043": "13/13",
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "no market/publish ops, no verification-execution ops, no CI wiring, no services, no deployment"
+}

@@ -349,7 +349,9 @@ export class TaskAdmission {
       if (p.retry !== null) {
         const old = this._readBoundTaskValidated(p.retry.originalTaskId);
         if (!old) throw new StorageError("task_not_found", "TASK_NOT_FOUND");
-        const irs = (m) => { throw new StorageError("invalid_retry_selection", m); };
+        // Rust InvalidRetrySelection is a unit variant — verbatim
+        // INVALID_RETRY_SELECTION, no detail payload.
+        const irs = () => { throw new StorageError("invalid_retry_selection", "INVALID_RETRY_SELECTION"); };
         if (old.task.state_revision !== p.retry.expectedRevision) {
           throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
         }
@@ -360,12 +362,12 @@ export class TaskAdmission {
         // {original_task_id, selected_items} — extra keys reject.
         if (!canonEq(command?.intent,
           { original_task_id: p.retry.originalTaskId, selected_items: selected })) {
-          irs("command intent does not match retry selection");
+          irs();
         }
         if (command?.key?.operation !== "retry_task" ||
             command.key.dataset !== oldKey.dataset ||
             command.key.contract_version !== oldKey.contract_version) {
-          irs("command key is not retry_task with the original key");
+          irs();
         }
         const boundReq = db.get(
           "SELECT request_id FROM requests WHERE task_id=?", p.retry.originalTaskId);
@@ -382,11 +384,11 @@ export class TaskAdmission {
               spec.scope_keys.size !== (w.scope_keys?.length ?? -1) ||
               ![...spec.scope_keys].every((k) => w.scope_keys.includes(k)) ||
               (spec.outcome !== null && spec.outcome.success === true)) {
-            irs("retry item not selectable or diverges from original");
+            irs();
           }
         }
         if (workItems.length !== p.retry.selectedItems.length) {
-          irs("retry selection size mismatch");
+          irs();
         }
         storedKeyJson = old.task.command_key_json;
       }

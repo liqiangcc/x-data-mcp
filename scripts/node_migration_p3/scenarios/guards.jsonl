@@ -1,0 +1,9 @@
+{"op":"admit","as":"T1","request_id":"r1","command":{"key":{"operation":"collect","dataset":"ds","contract_version":"1"},"intent":{}},"work":{"items":[{"item_id":"a","target":{},"progress_unit":"d","frozen_inputs":{},"scope_keys":["sc-0"]}],"scopes":["sc-0"]},"run":"run-0"}
+{"op":"claim","task":"$T1","revision":7,"run":"run-0"}
+{"op":"claim","task":"$T1","revision":"$REV:T1","run":"run-0"}
+{"op":"claim","task":"$T1","revision":"$REV:T1","run":"run-0"}
+{"op":"checkpoint","task":"ghost-task"}
+{"op":"finishItem","task":"$T1","revision":"$REV:T1","run":"run-0","item":"a","outcome":{"success":true,"error":"x"}}
+{"op":"requestCancel","task":"$T1","revision":"$REV:T1","run":"run-0"}
+{"op":"finishExecution","task":"$T1","revision":"$REV:T1","run":"run-0"}
+{"op":"checkpoint","task":"$T1"}
