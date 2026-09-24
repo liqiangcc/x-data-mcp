@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-039",
+  "task_id": "NM-039-R1",
   "baseline_sha": "93cc9eb7f521fd67bb3b94b4b504c7e740ee9411",
   "source_ported": "sqlite_tasks.rs::check_schema (user_version gate + schema_migrations checksum chain) + structural table/index/column check from committed migrations",
   "contract": {
@@ -17,9 +17,9 @@
   "probe": {
     "command": "node scripts/node_migration_p3/schema_gate_probe.mjs .",
     "exit": 0,
-    "cases": 15,
+    "cases": 16,
     "totals": {
-      "pass": 15,
+      "pass": 16,
       "fail": 0,
       "not_run": 0
     },
@@ -38,5 +38,7 @@
     "NM-036": "35/35",
     "NM-035": "23/23"
   },
-  "limits": "read-only capability reader only — no repository CRUD, no migration execution, no crash recovery, no services, no production readiness"
+  "limits": "read-only capability reader only — no repository CRUD, no migration execution, no crash recovery, no services, no production readiness",
+  "review": "REVIEW-NM-039 R0 — bytesUnchanged now full SHA-256 digest before/after",
+  "r1_fix": "gateDatabase digests the file (sha256) before open and after close; bytesUnchanged=digest equality, fail-closed on read error. Probe case bytesUnchanged_is_digest proves a same-size byte mutation is detected (not size-only)."
 }

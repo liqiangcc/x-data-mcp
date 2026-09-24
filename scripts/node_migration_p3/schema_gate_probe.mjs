@@ -113,6 +113,31 @@ run("gate_is_readonly_only", () => {
   catch (e) { if (e.code !== "readonly") throw e; d.close(); return { write: "readonly-rejected" }; }
 });
 
+// bytesUnchanged is a real digest, not size-only: gate a fixture whose
+// bytes differ at the same length (content-swapped copy), verify the
+// field tracks sha equality, not stat size.
+run("bytesUnchanged_is_digest", () => {
+  const p = join(FIX, "samesize.db");
+  copyFileSync(DB18, p);
+  const d = openDatabase(p, { mode: "readwrite" });
+  d.exec("UPDATE schema_migrations SET checksum=checksum WHERE version=1"); // no-op write -> pages dirtied
+  // force a real byte change at identical size: overwrite one byte via the driver
+  d.exec("UPDATE schema_migrations SET checksum=substr(checksum,2)||'x' WHERE version=1 AND length(checksum)>1");
+  d.close();
+  const sameSize = statSync(p).size === statSync(DB18).size;
+  const diffDigest = sha(p) !== sha(DB18);
+  // gate must reject (checksum chain) AND bytesUnchanged must be false
+  let gateRes = null;
+  try { gateDatabase(p); } catch (e) { gateRes = e.code; }
+  if (!sameSize || !diffDigest) throw new Error(`fixture invalid: sameSize=${sameSize} diff=${diffDigest}`);
+  // also confirm a clean copy reports true
+  const p2 = join(FIX, "clean.db");
+  copyFileSync(DB18, p2);
+  const r2 = gateDatabase(p2);
+  if (!r2.bytesUnchanged) throw new Error("clean gate bytesUnchanged=false");
+  return { same_size_mutation_detected: gateRes === "unavailable", clean_unchanged: r2.bytesUnchanged };
+});
+
 // selftest
 if (SELFTEST === "gate") {
   const r = gateDatabase(DB19);

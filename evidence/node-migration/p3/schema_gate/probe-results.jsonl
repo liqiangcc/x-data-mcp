@@ -3,7 +3,7 @@
 {"family":"schema_gate","id":"gate_schema19","status":"PASS","detail":null,"expected":{"schemaVersion":19,"kind":"compact","tables":31,"indexes":2,"bytesUnchanged":true},"actual":null}
 {"family":"schema_gate","id":"gate_empty_zero_version","status":"PASS","detail":"unavailable unsupported/uninitialized schema 0; explicit initialization/upgrade required","expected":null,"actual":null}
 {"family":"schema_gate","id":"gate_garbage_corrupt","status":"PASS","detail":"corrupt file is not a database","expected":null,"actual":null}
-{"family":"schema_gate","id":"gate_missing_file","status":"PASS","detail":"unavailable sqlite_adapter: database does not exist: /tmp/nm39-gate-RU9QCb/nope.db","expected":null,"actual":null}
+{"family":"schema_gate","id":"gate_missing_file","status":"PASS","detail":"unavailable sqlite_adapter: database does not exist: /tmp/nm39-gate-MPeXff/nope.db","expected":null,"actual":null}
 {"family":"schema_gate","id":"gate_version_20","status":"PASS","detail":"unavailable unsupported/uninitialized schema 20; explicit initialization/upgrade required","expected":null,"actual":null}
 {"family":"schema_gate","id":"gate_version_10","status":"PASS","detail":"unavailable unsupported/uninitialized schema 10; explicit initialization/upgrade required","expected":null,"actual":null}
 {"family":"schema_gate","id":"gate_checksum_tamper","status":"PASS","detail":"unavailable schema migration identity mismatch","expected":null,"actual":null}
@@ -13,3 +13,4 @@
 {"family":"schema_gate","id":"gate_index_dropped","status":"PASS","detail":"unavailable schema structure incomplete: missing tables [] indexes [occupancy_task]","expected":null,"actual":null}
 {"family":"schema_gate","id":"gate_no_write_side_effects","status":"PASS","detail":null,"expected":{"bytesUnchanged":true,"sidecars_created":true},"actual":null}
 {"family":"schema_gate","id":"gate_is_readonly_only","status":"PASS","detail":null,"expected":{"write":"readonly-rejected"},"actual":null}
+{"family":"schema_gate","id":"bytesUnchanged_is_digest","status":"PASS","detail":null,"expected":{"same_size_mutation_detected":true,"clean_unchanged":true},"actual":null}

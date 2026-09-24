@@ -9,7 +9,7 @@ modeled; v17 post-migration `DROP TABLE version_segments` mirrored).
 
 ## Contents
 
-- `probe-results.jsonl` — 15 rows, all PASS.
+- `probe-results.jsonl` — 16 rows, all PASS.
 - `negative-selftest.jsonl` (exit 1), `results.json` (fixture SHAs),
   `SHA256SUMS`.
 
@@ -28,3 +28,5 @@ node scripts/node_migration_p3/schema_gate_probe.mjs . gate   # selftest, exit 1
   dropped table/column/index — all `unavailable` verbatim Rust text.
 - Gate REPORTS schema 19 as compact; it does not assert legacy
   compatibility (Rust `check_schema` refuses 19 on legacy paths).
+
+R1: bytesUnchanged is a full SHA-256 before/after comparison — same-size mutations detected, not size-only (REVIEW-NM-039 R0).

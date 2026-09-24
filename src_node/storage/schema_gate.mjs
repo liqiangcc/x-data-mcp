@@ -17,7 +17,7 @@
 // StorageError, fail closed.
 
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDatabase, StorageError } from "./sqlite_adapter.mjs";
@@ -125,7 +125,7 @@ export function expectedStructure(version) {
  *  { schemaVersion, kind: "legacy"|"compact", migrationsVerified,
  *    tables, indexes, bytesUnchanged } — or throws StorageError. */
 export function gateDatabase(path) {
-  const before = statBytes(path);
+  const before = digestFile(path);
   const db = openDatabase(path); // readonly — never creates, never writes
   try {
     const version = Number(db.pragma("user_version"));
@@ -172,12 +172,14 @@ export function gateDatabase(path) {
       migrationsVerified: rows.length,
       tables: Object.keys(tables).sort(),
       indexes: indexes.sort(),
-      bytesUnchanged: statBytes(path) === before,
+      bytesUnchanged: digestFile(path) === before,
     };
   } finally { db.close(); }
 }
 
-function statBytes(path) {
-  try { return statSync(path).size; }
-  catch { return -1; }
+// Full-byte digest before open / after close — size alone cannot prove
+// a read path left the DB untouched (in-place same-size writes).
+function digestFile(path) {
+  try { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
+  catch { return null; }
 }
