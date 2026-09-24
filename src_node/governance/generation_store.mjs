@@ -325,10 +325,7 @@ export class GenerationStore {
     if (!statOrNull(join(this.root, GENERATIONS_DIR, generationId))?.isDirectory()) {
       throw err("not_installed", `generation ${generationId} is not installed`);
     }
-    if (typeof holder !== "string" || !holder.isWellFormed() ||
-        holder === "" || holder.includes("/") || holder.includes("\\") || holder.includes("\0")) {
-      throw err("not_verified", "snapshot inspection failed: invalid pin holder");
-    }
+    checkPinHolder(holder);
     const dir = join(this.root, PINS_DIR, generationId);
     mkdirSync(dir, { recursive: true });
     // write+create+truncate, O_NOFOLLOW: a symlink at the holder name is
@@ -362,9 +359,13 @@ export class GenerationStore {
       .sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
   }
 
-  /** unpin: remove one holder marker; missing marker is idempotent. */
+  /** unpin: remove one holder marker; missing marker is idempotent.
+   *  Holder is validated BEFORE any filesystem operation — a raw
+   *  `../` or separator-bearing name must not traverse outside
+   *  pins/<gid> (stricter than Rust, which lets the error surface). */
   unpin(generationId, holder) {
     checkGenerationId(generationId);
+    checkPinHolder(holder);
     try { rmSync(join(this.root, PINS_DIR, generationId, holder)); }
     catch (e) {
       if (e.code !== "ENOENT") throw err("io", `io: ${e.message}`);
@@ -435,6 +436,17 @@ export class Pin {
   }
   get generation_id() { return this.generationId; }
   [Symbol.dispose]() { this.release(); }
+}
+
+// Pin holder boundary — empty/'/'/'\\'/NUL reject verbatim
+// ("invalid pin holder"); '.', '..' and unpaired surrogates rejected as
+// a stricter Node boundary (they would traverse out of pins/<gid>).
+function checkPinHolder(holder) {
+  if (typeof holder !== "string" || !holder.isWellFormed() ||
+      holder === "" || holder === "." || holder === ".." ||
+      holder.includes("/") || holder.includes("\\") || holder.includes("\0")) {
+    throw err("not_verified", "snapshot inspection failed: invalid pin holder");
+  }
 }
 
 // Node readdir surfaces non-UTF-8 names as WTF-8 mangled strings; Rust

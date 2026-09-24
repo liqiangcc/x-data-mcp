@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-036",
+  "task_id": "NM-036-R1",
   "baseline_sha": "1c5c34087cc17dc0d26f1017f04a0698b64ef2f8",
   "source_ported": "generation/mod.rs::{pin,pins,unpin,sweep_pins,Pin}",
   "rust_oracle": "rust-oracle.jsonl — 19 cases via live Store (rustc 1.98.1) incl. marker mode/size, UTF-8 sort order, RAII drop, sweep list",
@@ -20,15 +20,15 @@
   "probe": {
     "command": "node scripts/node_migration_p2/generation_pin_probe.mjs .",
     "exit": 0,
-    "cases": 26,
+    "cases": 35,
     "totals": {
-      "pass": 26,
+      "pass": 35,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
       "live_rust_oracle": 19,
-      "raii_symlink_boundary": 7
+      "raii_symlink_boundary": 16
     },
     "selftest": "node ... pin -> exit 1 (negative-selftest.jsonl)"
   },
@@ -40,5 +40,7 @@
     "NM-026": "72/72 PASS"
   },
   "limits": "reopen is readability not crash durability; concurrent pin/unpin without caller single-writer policy out of slice; GC-based release not provided (explicit release/Symbol.dispose only)",
-  "out_of_scope": "no retire, no service/MCP/DB, no real generation paths"
+  "out_of_scope": "no retire, no service/MCP/DB, no real generation paths",
+  "review": "REVIEW-NM-036 R0 — unpin holder path traversal fixed",
+  "r1_fix": "checkPinHolder shared by pin/unpin: empty/./../../backslash/NUL/unpaired-surrogate all reject not_verified BEFORE any fs op; unpin probes prove ../escape-me.txt and the outside file are untouched. Also covers forged Pin handles (release() -> unpin is validated)."
 }

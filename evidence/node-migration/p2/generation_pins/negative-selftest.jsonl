@@ -16,12 +16,21 @@
 {"family":"generation_pin","id":"sweep","status":"PASS","detail":"ok","expected":["Mango","task-1","","😀"],"actual":["Mango","task-1","","😀"]}
 {"family":"generation_pin","id":"pins_after_sweep","status":"PASS","detail":"ok","expected":["zebra"],"actual":["zebra"]}
 {"family":"generation_pin","id":"sweep_missing","status":"PASS","detail":"ok","expected":[],"actual":[]}
-{"family":"generation_pin","id":"unpin_nodir","status":"PASS","detail":"io","expected":"io: No such file or directory (os error 2)","actual":"io: ENOENT: no such file or directory, open '/tmp/nm36-pin-tpvvSV/pins/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"}
+{"family":"generation_pin","id":"unpin_nodir","status":"PASS","detail":"io","expected":"io: No such file or directory (os error 2)","actual":"io: ENOENT: no such file or directory, open '/tmp/nm36-pin-CZBnQL/pins/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"}
 {"family":"generation_pin","id":"pins_skips_dirs","status":"PASS","detail":"ok","expected":["zebra"],"actual":["zebra"]}
 {"family":"generation_pin","id":"dispose_release","status":"PASS","detail":"marker released","expected":null,"actual":null}
 {"family":"generation_pin","id":"symbol_dispose","status":"PASS","detail":"Symbol.dispose released","expected":null,"actual":null}
 {"family":"generation_pin","id":"release_idempotent","status":"PASS","detail":"second release no-op","expected":null,"actual":null}
 {"family":"generation_pin","id":"holder_symlink_reject","status":"PASS","detail":"io","expected":null,"actual":null}
+{"family":"generation_pin","id":"unpin_traversal_dotdot","status":"PASS","detail":"not_verified: snapshot inspection failed: invalid pin holder","expected":null,"actual":null}
+{"family":"generation_pin","id":"unpin_traversal_dotdot2","status":"PASS","detail":"not_verified: snapshot inspection failed: invalid pin holder","expected":null,"actual":null}
+{"family":"generation_pin","id":"unpin_slash","status":"PASS","detail":"not_verified: snapshot inspection failed: invalid pin holder","expected":null,"actual":null}
+{"family":"generation_pin","id":"unpin_backslash","status":"PASS","detail":"not_verified: snapshot inspection failed: invalid pin holder","expected":null,"actual":null}
+{"family":"generation_pin","id":"unpin_nul","status":"PASS","detail":"not_verified: snapshot inspection failed: invalid pin holder","expected":null,"actual":null}
+{"family":"generation_pin","id":"unpin_surrogate","status":"PASS","detail":"not_verified: snapshot inspection failed: invalid pin holder","expected":null,"actual":null}
+{"family":"generation_pin","id":"unpin_empty","status":"PASS","detail":"not_verified: snapshot inspection failed: invalid pin holder","expected":null,"actual":null}
+{"family":"generation_pin","id":"traversal_outside_untouched","status":"PASS","detail":"outside file + marker intact","expected":null,"actual":null}
+{"family":"generation_pin","id":"pin_dotdot_holder","status":"PASS","detail":"not_verified","expected":null,"actual":null}
 {"family":"generation_pin","id":"holder_surrogate","status":"PASS","detail":"not_verified","expected":null,"actual":null}
 {"family":"generation_pin","id":"marker_blocks_retire_precondition","status":"PASS","detail":"holders=[\"zebra\"]","expected":null,"actual":null}
 {"family":"generation_pin","id":"selftest_pin","status":"FAIL","detail":"expected wrong holder — STOP","expected":null,"actual":null}

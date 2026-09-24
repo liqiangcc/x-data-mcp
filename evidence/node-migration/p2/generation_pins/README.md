@@ -6,7 +6,7 @@ idempotent unpin, keep-predicate sweep, RAII-style release.
 
 ## Contents
 
-- `probe-results.jsonl` — 26 rows, all PASS (19 live Rust oracle +
+- `probe-results.jsonl` — 35 rows, all PASS (19 live Rust oracle +
   7 RAII/symlink/boundary).
 - `rust-oracle.jsonl`, `negative-selftest.jsonl` (exit 1), `results.json`.
 
@@ -26,3 +26,5 @@ node scripts/node_migration_p2/generation_pin_probe.mjs . pin  # selftest, exit 
 - `pins()` sorted by UTF-8 bytes (Rust `String::sort`), not UTF-16.
 - RAII: explicit `release()`/`Symbol.dispose` — Node 20 has no `using`
   and GC finalization is not a semantic guarantee.
+
+R1: unpin() validates holder before filesystem ops — ../a/b/NUL/surrogate reject not_verified, outside file untouched (REVIEW-NM-036 R0).

@@ -115,6 +115,39 @@ for (const o of oracle) {
     emit("holder_symlink_reject", e.kind === "io" && readFileSync(outside, "utf8") === "ORIGINAL" ? "PASS" : "FAIL", e.kind);
   }
 }
+// unpin holder path traversal — outside file must be untouched
+{
+  const s4 = new GenerationStore(join(FIX, "r4"));
+  const gidDir = join(FIX, "r4", "generations", G);
+  mkdirSync(gidDir, { recursive: true });
+  const pinDir = join(FIX, "r4", "pins", G);
+  mkdirSync(pinDir, { recursive: true });
+  const outside = join(FIX, "r4", "pins", "escape-me.txt");
+  writeFileSync(outside, "KEEP");
+  const keep = join(pinDir, "stay");
+  writeFileSync(keep, "");
+  for (const [id, h] of [["unpin_traversal_dotdot", "../escape-me.txt"],
+                        ["unpin_traversal_dotdot2", ".."],
+                        ["unpin_slash", "a/b"],
+                        ["unpin_backslash", "a\\b"],
+                        ["unpin_nul", "a\0b"],
+                        ["unpin_surrogate", "h\ud800"],
+                        ["unpin_empty", ""]]) {
+    try { s4.unpin(G, h); emit(id, "FAIL", `accepted ${JSON.stringify(h)}`); }
+    catch (e) {
+      emit(id, e.kind === "not_verified" && e.message === "snapshot inspection failed: invalid pin holder" ? "PASS" : "FAIL",
+        `${e.kind}: ${e.message.slice(0, 70)}`);
+    }
+  }
+  emit("traversal_outside_untouched", readFileSync(outside, "utf8") === "KEEP" && existsSync(keep) ? "PASS" : "FAIL", "outside file + marker intact");
+}
+// pin '.'/'..' holders also rejected before mutation
+{
+  const s5 = new GenerationStore(join(FIX, "r5"));
+  mkdirSync(join(FIX, "r5", "generations", G), { recursive: true });
+  try { s5.pin(G, ".."); emit("pin_dotdot_holder", "FAIL", "accepted"); }
+  catch (e) { emit("pin_dotdot_holder", e.kind === "not_verified" ? "PASS" : "FAIL", e.kind); }
+}
 // surrogate holder rejected at the boundary
 {
   try { store.pin(G, "h\ud800"); emit("holder_surrogate", "FAIL", "accepted"); }
