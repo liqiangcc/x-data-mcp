@@ -16,6 +16,9 @@
 {"family":"sqlite_adapter","id":"busy_locking","status":"PASS","detail":null,"expected":{"second_writer":"busy"},"actual":null}
 {"family":"sqlite_adapter","id":"busy_timeout_set","status":"PASS","detail":null,"expected":{"busy_timeout":250},"actual":null}
 {"family":"sqlite_adapter","id":"mode_unsupported","status":"PASS","detail":"invalid_input sqlite_adapter: unsupported mode \"magic\"","expected":"invalid_input","actual":"invalid_input"}
+{"family":"sqlite_adapter","id":"checkpoint_mode_unsupported","status":"PASS","detail":"invalid_input sqlite_adapter: unsupported checkpoint mode \"PASSIVE); DROP TABLE w; --\"","expected":"invalid_input","actual":"invalid_input"}
+{"family":"sqlite_adapter","id":"checkpoint_mode_injection","status":"PASS","detail":"invalid_input sqlite_adapter: unsupported checkpoint mode \"TRUNCATE);PRAGMA writable_schema=ON\"","expected":"invalid_input","actual":"invalid_input"}
+{"family":"sqlite_adapter","id":"checkpoint_all_modes_valid","status":"PASS","detail":null,"expected":{"modes":["PASSIVE","FULL","RESTART","TRUNCATE"]},"actual":null}
 {"family":"sqlite_adapter","id":"path_nul","status":"PASS","detail":"invalid_input sqlite_adapter: path must be a wellformed non-empty string","expected":"invalid_input","actual":"invalid_input"}
 {"family":"sqlite_adapter","id":"path_empty","status":"PASS","detail":"invalid_input sqlite_adapter: path must be a wellformed non-empty string","expected":"invalid_input","actual":"invalid_input"}
 {"family":"sqlite_adapter","id":"closed_handle_rejected","status":"PASS","detail":null,"expected":{"code":"closed"},"actual":null}

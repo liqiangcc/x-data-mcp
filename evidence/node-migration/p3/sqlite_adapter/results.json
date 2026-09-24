@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-038",
+  "task_id": "NM-038-R1",
   "baseline_sha": "20a4ccd509d55af8de4f005366b78d2156a6b651",
   "source": "NM-006 accepted decision: better-sqlite3@11.10.0; P1 sqlite_probe contract",
   "driver": {
@@ -37,9 +37,9 @@
   "probe": {
     "command": "node scripts/node_migration_p3/sqlite_adapter_probe.mjs .",
     "exit": 0,
-    "cases": 21,
+    "cases": 24,
     "totals": {
-      "pass": 21,
+      "pass": 24,
       "fail": 0,
       "not_run": 0
     },
@@ -47,7 +47,7 @@
       "modes_and_fail_closed": 9,
       "precision_and_tx": 4,
       "wal_busy": 3,
-      "boundary": 5
+      "boundary": 8
     },
     "selftest": "node ... sql -> exit 1 (negative-selftest.jsonl)"
   },
@@ -58,5 +58,7 @@
     "NM-035": "23/23"
   },
   "limits": "no business repos, no schema-18/19 migration logic, no crash recovery, no services, no production readiness",
-  "out_of_scope": "node:sqlite (requires Node>=22.5, not provisioned); driver 13.x (engines>=22)"
+  "out_of_scope": "node:sqlite (requires Node>=22.5, not provisioned); driver 13.x (engines>=22)",
+  "review": "REVIEW-NM-038 R0 — checkpoint mode strict whitelist",
+  "r1_fix": "checkpoint(mode) validates exact PASSIVE|FULL|RESTART|TRUNCATE before building pragma text; unsupported/injection-shaped -> invalid_input StorageError. Probes: injection rejection + all four modes execute."
 }

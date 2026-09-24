@@ -6,7 +6,7 @@ default-ON, typed `StorageError` codes, WAL/checkpoint, busy mapping.
 
 ## Contents
 
-- `probe-results.jsonl` — 21 rows, all PASS.
+- `probe-results.jsonl` — 24 rows, all PASS.
 - `negative-selftest.jsonl` (exit 1), `results.json` (fixture + lockfile
   SHA pinned), `SHA256SUMS`.
 
@@ -24,3 +24,5 @@ node scripts/node_migration_p3/sqlite_adapter_probe.mjs . sql  # selftest, exit 
 - Readonly open verified byte-unchanged (sha before/after) — no
   implicit schema init on empty.db.
 - Driver gated at load to 11.10.0 + Node>=20; package-lock pinned.
+
+R1: checkpoint(mode) strict whitelist PASSIVE|FULL|RESTART|TRUNCATE — injection-shaped modes reject invalid_input before pragma (REVIEW-NM-038 R0).

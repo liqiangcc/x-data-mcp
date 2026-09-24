@@ -49,6 +49,7 @@ const mapErr = (e) => {
 };
 
 export const OPEN_MODES = Object.freeze(["readonly", "readwrite", "create"]);
+export const CHECKPOINT_MODES = Object.freeze(["PASSIVE", "FULL", "RESTART", "TRUNCATE"]);
 
 /** Open a database. path must be a wellformed non-empty string with no
  *  NUL. mode defaults to "readonly" (never creates, never writes).
@@ -135,8 +136,14 @@ class Handle {
     try { return db.transaction(fn)(); }
     catch (e) { throw mapErr(e); }
   }
-  /** WAL checkpoint; mode PASSIVE|FULL|RESTART|TRUNCATE. */
+  /** WAL checkpoint; mode is strictly PASSIVE|FULL|RESTART|TRUNCATE —
+   *  anything else (incl. punctuation-bearing injection shapes) rejects
+   *  at the boundary before any pragma text is built. */
   checkpoint(mode = "PASSIVE") {
+    if (!CHECKPOINT_MODES.includes(mode)) {
+      throw new StorageError("invalid_input",
+        `sqlite_adapter: unsupported checkpoint mode ${JSON.stringify(mode)}`);
+    }
     try { return this._live().pragma(`wal_checkpoint(${mode})`); }
     catch (e) { throw mapErr(e); }
   }

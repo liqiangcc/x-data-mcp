@@ -215,6 +215,22 @@ run("busy_timeout_set", () => {
 
 // boundary rejects
 expectCode("mode_unsupported", "invalid_input", () => openDatabase(DB19, { mode: "magic" }));
+expectCode("checkpoint_mode_unsupported", "invalid_input", () => {
+  const d = openDatabase(join(FIX, "wal.db"));
+  try { d.checkpoint("PASSIVE); DROP TABLE w; --"); } finally { d.close(); }
+});
+expectCode("checkpoint_mode_injection", "invalid_input", () => {
+  const d = openDatabase(join(FIX, "wal.db"));
+  try { d.checkpoint("TRUNCATE);PRAGMA writable_schema=ON"); } finally { d.close(); }
+});
+run("checkpoint_all_modes_valid", () => {
+  const p = join(FIX, "wal.db");
+  const d = openDatabase(p, { mode: "readwrite" });
+  const out = {};
+  for (const m of ["PASSIVE", "FULL", "RESTART", "TRUNCATE"]) out[m] = d.checkpoint(m);
+  d.close();
+  return { modes: Object.keys(out) };
+});
 expectCode("path_nul", "invalid_input", () => openDatabase("a\0b"));
 expectCode("path_empty", "invalid_input", () => openDatabase(""));
 run("closed_handle_rejected", () => {
