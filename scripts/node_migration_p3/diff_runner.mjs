@@ -5,11 +5,13 @@
 // Usage: node diff_runner.mjs <scenario.jsonl> <db> <out.jsonl>
 import { createHash } from "node:crypto";
 import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const [, , scenarioPath, dbPath, outPath] = process.argv;
 const { TaskAdmission } = await import("../../src_node/storage/task_repository.mjs");
 const { openDatabase, StorageError } = await import("../../src_node/storage/sqlite_adapter.mjs");
 const { ser } = await import("../../src_node/storage/verification_storage.mjs");
+const RC = await import("../../src_node/market/record_codec.mjs");
 
 copyFileSync("/dev/shm/nm006/db18.sqlite", dbPath);
 const repo = TaskAdmission.open(dbPath, { mode: "readwrite" });
@@ -172,6 +174,22 @@ for (const line of lines) {
       case "reconcile": {
         const n = repo.reconcile(op.run);
         rec = { status: "ok", reconciled: n.reconciled ?? n };
+        break;
+      }
+      case "check_record": {
+        const dir = process.env.DIFF_FIXTURES ?? "scripts/node_migration_p3/records";
+        const raw = JSON.parse(readFileSync(join(dir, op.file), "utf8"));
+        try {
+          const c = RC.check(raw);
+          rec = { status: "ok", version_id: c.version.version_id };
+        } catch (e) {
+          rec = {
+            status: "error",
+            code: e.code ?? "internal",
+            message: String(e.message),
+            unchanged: true,
+          };
+        }
         break;
       }
       case "checkpoint": {

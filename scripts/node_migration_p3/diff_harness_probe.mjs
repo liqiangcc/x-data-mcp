@@ -16,6 +16,22 @@ const emit = (id, status, detail) => {
   console.log(JSON.stringify({ family: "diff_harness", id, status, detail }));
 };
 
+const REC_FIXTURES = mkdtempSync("/dev/shm/nm49-rec-");
+{
+  // copy committed records + generate the overbudget fixture on the fly
+  const { copyFileSync, mkdirSync } = await import("node:fs");
+  const recDir = join(ROOT, "scripts/node_migration_p3/records");
+  for (const f of readdirSync(recDir)) copyFileSync(join(recDir, f), join(REC_FIXTURES, f));
+  const RC = await import("../../src_node/market/record_codec.mjs");
+  const base = JSON.parse(readFileSync(join(recDir, "valid_daily.json"), "utf8"));
+  const bar = base.batch.bars[0];
+  base.records = Array.from({ length: 100001 }, () => bar);
+  base.batch.bars = Array.from({ length: 100001 }, () => bar);
+  base.integrity_sha256 = RC.legacyDigest(base);
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(join(REC_FIXTURES, "overbudget.json"), JSON.stringify(base));
+}
+process.on("exit", () => rmSync(REC_FIXTURES, { recursive: true, force: true }));
 const scenarios = readdirSync(SCEN).filter((f) => f.endsWith(".jsonl")).sort();
 for (const file of scenarios) {
   const dir = mkdtempSync("/dev/shm/nm49-");
@@ -30,6 +46,7 @@ for (const file of scenarios) {
       env: {
         ...process.env, DIFF_SCENARIO: scen,
         DIFF_DB: join(dir, "rust.db"), DIFF_OUT: rustOut,
+        DIFF_FIXTURES: REC_FIXTURES,
         TMPDIR: "/dev/shm",
       },
       stdio: ["ignore", "ignore", "pipe"], timeout: 600000,
@@ -37,7 +54,9 @@ for (const file of scenarios) {
     execFileSync("node", [
       "scripts/node_migration_p3/diff_runner.mjs", scen,
       join(dir, "node.db"), nodeOut,
-    ], { cwd: ROOT, stdio: ["ignore", "ignore", "pipe"] });
+    ], { cwd: ROOT,
+      env: { ...process.env, DIFF_FIXTURES: REC_FIXTURES },
+      stdio: ["ignore", "ignore", "pipe"] });
     const cmp = execFileSync("node", [
       "scripts/node_migration_p3/diff_compare.mjs", rustOut, nodeOut,
     ], { cwd: ROOT, encoding: "utf8" });

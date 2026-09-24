@@ -1,0 +1,153 @@
+{
+ "version_id": "legacy-daily",
+ "symbol": "sh.600006",
+ "period": "Day",
+ "adjustment": "Forward",
+ "source": "offline-fixture",
+ "records": [
+  {
+   "date": "2024-12-31",
+   "open": "10.000000000000000001",
+   "high": "12.25",
+   "low": "9.1",
+   "close": "11.05",
+   "volume": null,
+   "amount": null
+  },
+  {
+   "date": "2025-01-02",
+   "open": "10.000000000000000001",
+   "high": "12.25",
+   "low": "9.1",
+   "close": "10.05",
+   "volume": null,
+   "amount": null
+  },
+  {
+   "date": "2025-12-31",
+   "open": "10.000000000000000001",
+   "high": "12.25",
+   "low": "9.1",
+   "close": "11.75",
+   "volume": null,
+   "amount": null
+  }
+ ],
+ "published_at": "2026-01-01T00:00:00Z",
+ "validation": {
+  "record_count": 3,
+  "unique_record_count": 3,
+  "duplicate_count": 0
+ },
+ "unit_currency": {
+  "price_currency": {
+   "status": "Confirmed",
+   "value": "CNY",
+   "reason": "bounded fixture"
+  },
+  "price_unit": {
+   "status": "Confirmed",
+   "value": "yuan",
+   "reason": "bounded fixture"
+  },
+  "volume_unit": {
+   "status": "Unknown",
+   "value": null,
+   "reason": "bounded fixture"
+  },
+  "amount_currency": {
+   "status": "Unknown",
+   "value": null,
+   "reason": "bounded fixture"
+  },
+  "amount_unit": {
+   "status": "Unknown",
+   "value": null,
+   "reason": "bounded fixture"
+  }
+ },
+ "adjustment_evidence": {
+  "status": "Confirmed",
+  "value": "qfq",
+  "reason": "bounded fixture"
+ },
+ "batch": {
+  "symbol": "sh.999999",
+  "period": "Day",
+  "adjustment": "Forward",
+  "bars": [
+   {
+    "date": "2024-12-31",
+    "open": "10.000000000000000001",
+    "high": "12.25",
+    "low": "9.1",
+    "close": "11.05",
+    "volume": null,
+    "amount": null
+   },
+   {
+    "date": "2025-01-02",
+    "open": "10.000000000000000001",
+    "high": "12.25",
+    "low": "9.1",
+    "close": "10.05",
+    "volume": null,
+    "amount": null
+   },
+   {
+    "date": "2025-12-31",
+    "open": "10.000000000000000001",
+    "high": "12.25",
+    "low": "9.1",
+    "close": "11.75",
+    "volume": null,
+    "amount": null
+   }
+  ],
+  "provenance": {
+   "source": "offline-fixture",
+   "source_period": "day",
+   "source_adjustment": "qfq",
+   "symbol": "sh.600006",
+   "acquired_at": "2026-01-01T00:00:00Z",
+   "adapter_version": "fixture"
+  },
+  "coverage": {
+   "status": "Complete",
+   "reason": "fixture only"
+  },
+  "unit_currency": {
+   "price_currency": {
+    "status": "Confirmed",
+    "value": "CNY",
+    "reason": "bounded fixture"
+   },
+   "price_unit": {
+    "status": "Confirmed",
+    "value": "yuan",
+    "reason": "bounded fixture"
+   },
+   "volume_unit": {
+    "status": "Unknown",
+    "value": null,
+    "reason": "bounded fixture"
+   },
+   "amount_currency": {
+    "status": "Unknown",
+    "value": null,
+    "reason": "bounded fixture"
+   },
+   "amount_unit": {
+    "status": "Unknown",
+    "value": null,
+    "reason": "bounded fixture"
+   }
+  },
+  "adjustment_evidence": {
+   "status": "Confirmed",
+   "value": "qfq",
+   "reason": "bounded fixture"
+  }
+ },
+ "integrity_sha256": "3c96120438eaae4f58c65e2d1354a51cca41846abbe6cd459c50770af34a8994"
+}

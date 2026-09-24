@@ -1,0 +1,117 @@
+{
+ "version_id": "legacy-yearly",
+ "symbol": "sh.600006",
+ "period": "Year",
+ "adjustment": "Forward",
+ "source": "offline-fixture",
+ "records": [
+  {
+   "date": "2025-12-31",
+   "open": "10.000000000000000001",
+   "high": "12.25",
+   "low": "9.1",
+   "close": "11.75",
+   "volume": null,
+   "amount": null
+  }
+ ],
+ "published_at": "2026-01-01T00:00:00Z",
+ "validation": {
+  "record_count": 1,
+  "unique_record_count": 1,
+  "duplicate_count": 0
+ },
+ "unit_currency": {
+  "price_currency": {
+   "status": "Confirmed",
+   "value": "CNY",
+   "reason": "bounded fixture"
+  },
+  "price_unit": {
+   "status": "Confirmed",
+   "value": "yuan",
+   "reason": "bounded fixture"
+  },
+  "volume_unit": {
+   "status": "Unknown",
+   "value": null,
+   "reason": "bounded fixture"
+  },
+  "amount_currency": {
+   "status": "Unknown",
+   "value": null,
+   "reason": "bounded fixture"
+  },
+  "amount_unit": {
+   "status": "Unknown",
+   "value": null,
+   "reason": "bounded fixture"
+  }
+ },
+ "adjustment_evidence": {
+  "status": "Confirmed",
+  "value": "qfq",
+  "reason": "bounded fixture"
+ },
+ "batch": {
+  "symbol": "sh.600006",
+  "period": "Year",
+  "adjustment": "Forward",
+  "bars": [
+   {
+    "date": "2025-12-31",
+    "open": "10.000000000000000001",
+    "high": "12.25",
+    "low": "9.1",
+    "close": "11.75",
+    "volume": null,
+    "amount": null
+   }
+  ],
+  "provenance": {
+   "source": "offline-fixture",
+   "source_period": "day",
+   "source_adjustment": "qfq",
+   "symbol": "sh.600006",
+   "acquired_at": "2026-01-01T00:00:00Z",
+   "adapter_version": "fixture"
+  },
+  "coverage": {
+   "status": "Complete",
+   "reason": "fixture only"
+  },
+  "unit_currency": {
+   "price_currency": {
+    "status": "Confirmed",
+    "value": "CNY",
+    "reason": "bounded fixture"
+   },
+   "price_unit": {
+    "status": "Confirmed",
+    "value": "yuan",
+    "reason": "bounded fixture"
+   },
+   "volume_unit": {
+    "status": "Unknown",
+    "value": null,
+    "reason": "bounded fixture"
+   },
+   "amount_currency": {
+    "status": "Unknown",
+    "value": null,
+    "reason": "bounded fixture"
+   },
+   "amount_unit": {
+    "status": "Unknown",
+    "value": null,
+    "reason": "bounded fixture"
+   }
+  },
+  "adjustment_evidence": {
+   "status": "Confirmed",
+   "value": "qfq",
+   "reason": "bounded fixture"
+  }
+ },
+ "integrity_sha256": "8961f45d35d98b5172b6a2d9cb6ce5736f30b55ad84b88f4e3a7527d4fe49e00"
+}

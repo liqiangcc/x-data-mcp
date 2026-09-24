@@ -1,0 +1,14 @@
+{"op":"check_record","file":"valid_daily.json"}
+{"op":"check_record","file":"valid_null.json"}
+{"op":"check_record","file":"valid_yearly.json"}
+{"op":"check_record","file":"bad_digest.json"}
+{"op":"check_record","file":"symbol_mismatch.json"}
+{"op":"check_record","file":"dup_conflict.json"}
+{"op":"check_record","file":"dup_identical.json"}
+{"op":"check_record","file":"high_below_low.json"}
+{"op":"check_record","file":"unit_evidence_unknown.json"}
+{"op":"check_record","file":"adj_evidence_unknown.json"}
+{"op":"check_record","file":"yearly_no_derivation.json"}
+{"op":"check_record","file":"serde_missing_field.json"}
+{"op":"check_record","file":"serde_unknown_variant.json"}
+{"op":"check_record","file":"overbudget.json"}

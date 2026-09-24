@@ -1,0 +1,45 @@
+{
+  "task_id": "NM-050",
+  "baseline_sha": "7d749bfcfd3bbea659475f6fc43fcff2ca3fa1f1",
+  "source_ported": "market_storage/compat.rs + publish.rs validators + market_data.rs typed surface",
+  "module": "src_node/market/record_codec.mjs",
+  "contract": [
+    "legacy_digest: sha256 over serde-serialized record minus integrity_sha256 (BTreeMap sorted keys); DIGEST_FORMAT='legacy-published-record-v1' — byte-exact against issue79 fixtures (3/3)",
+    "check order verbatim: digest -> EffectiveVersion parse -> batch parse -> 100k budget -> dedup -> unit/currency -> adjustment -> identity cross-checks",
+    "serde-faithful typed parse: required/Option/default fields, enum variants (unknown variant text 'X or Y' for 2 / 'one of' for >2), Decimal value equality, NaiveDate calendar validity, deny-absent unknown-field tolerance",
+    "dedup: natural key per period, identical-dup counts, conflicting-dup conflict, sorted records + ValidationSummary"
+  ],
+  "fixtures": "tests/fixtures/issue79/legacy-records.json (3 records, digests byte-verified) + rehashed mutations + generated 100001-row overbudget fixture",
+  "differential": {
+    "op": "check_record",
+    "scenario": "market_records",
+    "ops": 14,
+    "diffs": 0,
+    "cases": "valid daily/null/yearly; bad digest; symbol mismatch; conflicting+identical dup; high<low; unit+adjustment evidence missing; yearly w/o derivation; serde missing-field/unknown-variant; over-budget"
+  },
+  "probe": {
+    "command": "node scripts/node_migration_p3/diff_harness_probe.mjs .",
+    "exit": 0,
+    "scenarios": 9,
+    "ops": 73,
+    "diffs": 0
+  },
+  "regressions": {
+    "NM-049": "9/9 scenarios",
+    "NM-048": "10/10",
+    "NM-047": "14/14",
+    "NM-046": "17/17",
+    "NM-045": "15/15",
+    "NM-044": "19/19",
+    "NM-043": "13/13",
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "no storage read/write paths (read_record/range/stage/publish), no envelope expansion, no compact backend, no services"
+}

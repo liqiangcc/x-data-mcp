@@ -6,6 +6,7 @@
 //! Run: DIFF_SCENARIO=... DIFF_DB=... DIFF_OUT=... cargo test \
 //!        diff_harness::run -- --nocapture --test-threads=1
 use crate::{
+    market_storage::Error as MarketError,
     sqlite_tasks::SqliteTasks,
     task_control::{
         Change, Command, Error, FrozenWork, ItemOutcome, RequestOutcome, RetryGuard,
@@ -14,6 +15,22 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, collections::BTreeSet, fs, io::Write};
+
+fn market_code(e: &MarketError) -> String {
+    use MarketError::*;
+    match e {
+        Storage(_) => "Storage",
+        Integrity(_) => "Integrity",
+        Base(_) => "Base",
+        Conflict(_) => "Conflict",
+        NotFound => "NotFound",
+        Invalid(_) => "Invalid",
+        OutcomeUnknown(_) => "OutcomeUnknown",
+        BasisNotVerified(_) => "BasisNotVerified",
+        Task(t) => return err_code(t),
+    }
+    .into()
+}
 
 fn err_code(e: &Error) -> String {
     use Error::*;
@@ -156,7 +173,11 @@ fn run() {
     let _ = fs::remove_file(format!("{db_path}-wal"));
     let _ = fs::remove_file(format!("{db_path}-shm"));
     let repo = SqliteTasks::new(&db_path);
-    repo.initialize().expect("initialize schema-18");
+    if std::env::var("DIFF_INIT").as_deref() == Ok("19") {
+        repo.initialize19().expect("initialize schema-19");
+    } else {
+        repo.initialize().expect("initialize schema-18");
+    }
     let scenario = fs::read_to_string(&scenario_path).expect("scenario");
     let mut out = fs::File::create(&out_path).expect("out");
     let mut syms: Syms = Default::default();
@@ -248,6 +269,22 @@ fn run() {
                 Ok(n) => json!({"status":"ok","reconciled":n}),
                 Err(e) => json!({"status":"error","code":err_code(&e),"message":e.to_string()}),
             },
+            "check_record" => {
+                let dir = std::env::var("DIFF_FIXTURES")
+                    .unwrap_or_else(|_| "scripts/node_migration_p3/records".into());
+                let path = std::path::Path::new(&dir).join(op["file"].as_str().unwrap());
+                let raw: Value = serde_json::from_str(
+                    &fs::read_to_string(&path).expect("record file"),
+                )
+                .unwrap();
+                match crate::market_storage::compat::check(&raw) {
+                    Ok(c) => json!({"status":"ok","version_id":c.version().version_id}),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        json!({"status":"error","code":market_code(&e),"message":msg})
+                    }
+                }
+            }
             "checkpoint" => {
                 let tid = op["task"].as_str().unwrap().to_string();
                 match repo.read_task(&tid) {

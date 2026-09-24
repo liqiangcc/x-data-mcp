@@ -32,11 +32,22 @@ const CODE_MAP = {
   TaskNotFound: "task_not_found",
   OutcomeUnknown: "outcome_unknown",
   UnsupportedContract: "unsupported_contract",
+  Integrity: "inconsistent",
+  Invalid: "invalid_input",
+  Storage: "unavailable",
+  Conflict: "conflict",
+  NotFound: "not_found",
+  Base: "base_unavailable",
+  OutcomeUnknown: "outcome_unknown",
+  BasisNotVerified: "basis_not_verified",
 };
 const VERBATIM_MSG = new Set([
   "range_conflict", "needs_verification", "inconsistent", "conflict",
   "task_not_found", "revision_conflict", "invalid_retry_selection",
+  "not_found", "base_unavailable", "outcome_unknown", "basis_not_verified",
 ]);
+// serde parse positions differ (" at line N column M") — strip for compare
+const stripPos = (m) => String(m).replace(/ at line \d+ column \d+$/, "");
 const eq = (a, b) => {
   if (a === b) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
@@ -61,7 +72,7 @@ for (let i = 0; i < R.length; i++) {
   if (r.status === "error") {
     const rc = CODE_MAP[r.code] ?? `<unmapped:${r.code}>`;
     if (rc !== n.code) issues.push(`code ${r.code}(${rc})!=${n.code}`);
-    if (VERBATIM_MSG.has(rc) && r.message !== n.message) {
+    if (VERBATIM_MSG.has(rc) && stripPos(r.message) !== stripPos(n.message)) {
       issues.push(`message ${JSON.stringify(r.message)}!=${JSON.stringify(n.message)}`);
     }
     if (r.status === "error" && r.unchanged !== true) issues.push("oracle rejection mutated state");
