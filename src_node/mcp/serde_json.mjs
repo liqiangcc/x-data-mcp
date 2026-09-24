@@ -113,10 +113,11 @@ class Parse {
 
   ident(rest, value) {
     this.pos++; // consume first byte already matched by caller
-    for (const ch of rest) {
-      const b = this.next();
-      if (b < 0) this.eof("a value");
-      if (b !== ch.charCodeAt(0)) this.at(this.pos, "expected ident");
+    const b = this.buf;
+    for (let i = 0; i < rest.length; i++) {
+      const c = this.pos < b.length ? b[this.pos++] : -1;
+      if (c < 0) this.eof("a value");
+      if (c !== rest.charCodeAt(i)) this.at(this.pos, "expected ident");
     }
     return value;
   }
@@ -191,14 +192,20 @@ class Parse {
     // stringSlow with byte-exact error positions.
     const b = this.buf;
     let p = this.pos + 1;
+    let ascii = true;
     while (p < b.length) {
       const c = b[p];
       if (c === 0x22) {
-        const s = b.toString("utf8", this.pos + 1, p);
+        // NM-115: latin1Slice skips the UTF-8 machinery when the prescan
+        // saw only <0x80 bytes — identical output for ASCII spans.
+        const s = ascii
+          ? b.latin1Slice(this.pos + 1, p)
+          : b.toString("utf8", this.pos + 1, p);
         this.pos = p + 1;
         return s;
       }
       if (c === 0x5c || c < 0x20) break;
+      if (c >= 0x80) ascii = false;
       p++;
     }
     return this.stringSlow(p);
@@ -637,8 +644,22 @@ export function serValueBytes(v) {
   serInto(v, w);
   return w.bytes();
 }
+// NM-113b: serValue pool — a fresh 64KiB allocUnsafe is a real malloc
+// (~2.1µs) that dominated small responses (mcp_roundtrip). text()
+// copies the emitted span out, so the writer's buffer never escapes
+// and can be reused; reentrant calls (a toJSON that serializes) see
+// the pool empty and allocate fresh. Oversized buffers aren't pooled
+// so one huge doc can't pin memory.
+const POOL_MAX = 1 << 19;
+let pooledWriter = null;
 export function serValue(v) {
-  const w = new ByteWriter();
-  serInto(v, w);
-  return w.text();
+  const w = pooledWriter ?? new ByteWriter();
+  pooledWriter = null;
+  w.p = 0;
+  try {
+    serInto(v, w);
+    return w.text();
+  } finally {
+    if (w.b.length <= POOL_MAX) pooledWriter = w;
+  }
 }
