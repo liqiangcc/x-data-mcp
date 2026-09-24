@@ -25,13 +25,6 @@ import { toTaskError, tcError, msError,
 } from "./mod.mjs";
 
 const sha256hex = (s) => createHash("sha256").update(s).digest("hex");
-// serde_json::Value serialization: BTreeMap — keys sort recursively.
-const sortedJson = (v) => {
-  if (v === null || typeof v !== "object") return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(sortedJson).join(",")}]`;
-  return `{${Object.keys(v).sort()
-    .map((k) => `${JSON.stringify(k)}:${sortedJson(v[k])}`).join(",")}}`;
-};
 
 // explicit tx wrappers — inner domain errors propagate unmapped.
 const readTx = (db, f) => {
@@ -168,7 +161,7 @@ export class PublicationStore {
         const cmdJson = ser(plan.command, "command");
         // serde_json::to_string(Value) — BTreeMap (recursively sorted
         // keys), same as bind_known_publication's to_string(&value).
-        const termJson = sortedJson(plan.result);
+        const termJson = ser(plan.result);
         this.db.run(
           "INSERT INTO requests VALUES(?,?,?,'terminal',NULL,?)",
           plan.request_id, cmdJson, sha256hex(cmdJson), termJson);

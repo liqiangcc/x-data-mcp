@@ -1,0 +1,17 @@
+{"family":"bigint_wire","id":"ser_bigint_leaf","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"ser_nested_bigint_array","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"ser_f64_leaf","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"tU64_bigint_exact","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"tU64_small_stays_number","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"tU64_overflow_rejected","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"tI64_neg_bigint_exact","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"parse_u64_exact","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"parse_float_f64_lexeme","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"finishItem_evidence_bigint_write","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"outcome_json_digits_exact","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"bound_read_preserves_bigint","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"rewrite_reencode_roundtrip_lossless","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"snapshot_ser_emits_bigint_digits","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"uncertainty_marker_bigint_write_path","status":"PASS","detail":""}
+{"family":"bigint_wire","id":"serValue_bigint","status":"PASS","detail":""}
+bigint_wire probe: 16 pass, 0 fail, 0 not_run of 16

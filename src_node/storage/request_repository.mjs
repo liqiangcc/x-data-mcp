@@ -14,6 +14,7 @@
 // must pass first.
 
 import { createHash } from "node:crypto";
+import { parseJsonValue } from "../mcp/serde_json.mjs";
 import { gateDatabase } from "./schema_gate.mjs";
 import { openDatabase, StorageError } from "./sqlite_adapter.mjs";
 
@@ -58,7 +59,7 @@ export class RequestRepository {
     if (typeof commandJson !== "string" || !commandJson.isWellFormed()) {
       throw new StorageError("invalid_input", "command must be wellformed JSON text");
     }
-    try { JSON.parse(commandJson); }
+    try { parseJsonValue(commandJson); }
     catch { throw new StorageError("invalid_input", "command is not valid JSON"); }
     const isTask = outcome?.kind === "task";
     const isTerm = outcome?.kind === "terminal";

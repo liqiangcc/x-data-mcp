@@ -9,6 +9,7 @@
 // write transaction machinery w1 landed (decide gates + CAS +
 // counter deltas + occupancy release + execution-start markers).
 import { openDatabase, StorageError } from "../storage/sqlite_adapter.mjs";
+import { parseJsonValue } from "../mcp/serde_json.mjs";
 import { gateDatabase } from "../storage/schema_gate.mjs";
 import { TaskAdmission } from "../storage/task_repository.mjs";
 import * as GAPS from "../market/gaps.mjs";
@@ -34,14 +35,14 @@ const readTx = (db, f) => {
 const toSnapshot = (snap) => ({
   task: {
     task_id: snap.task.task_id,
-    key: JSON.parse(snap.task.command_key_json),
+    key: parseJsonValue(snap.task.command_key_json),
     status: snap.task.status,
     state_revision: snap.task.state_revision,
     accepted_run_id: snap.task.accepted_run_id,
     owner_run_id: snap.task.owner_run_id,
     last_progress_at: snap.task.last_progress_at,
     result: snap.task.result_json === null ? null
-      : JSON.parse(snap.task.result_json),
+      : parseJsonValue(snap.task.result_json),
     counts: {
       total: snap.task.item_count,
       pending: snap.task.items_pending,

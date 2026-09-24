@@ -8,8 +8,10 @@ import { serdeDateTime } from "../market/compact_market.mjs";
 import { validateTerminal as pubValidateTerminal } from "./publication_checks.mjs";
 import { validateInspectionAudit } from "./verification_inspection.mjs";
 import { StorageError } from "./sqlite_adapter.mjs";
+import { F64, serValue, parseJsonValue } from "../mcp/serde_json.mjs";
 
 const sha256 = (b) => createHash("sha256").update(b).digest("hex");
+
 // Error::NeedsVerification Display carries the ACCEPTANCE_ prefix — emit it
 // verbatim (the differential comparator checks needs_verification messages).
 const integrity = (m) =>
@@ -82,6 +84,10 @@ const SKIP_NONE = new Set(["shared_evidence", "evidence"]); // skip_serializing_
 
 export const ser = (v, shape) => {
   if (v === null || v === undefined) return "null";
+  // serde_json scalar emission: u64/i64 emit full digits (JSON.stringify
+  // crashes on bigint); f64 carries the parsed lexeme (F64) or JSON number.
+  if (typeof v === "bigint") return v.toString();
+  if (v instanceof F64) return serValue(v);
   if (typeof v !== "object") return JSON.stringify(v);
   // Arrays carry the element shape (childShape returns the element type
   // for array-typed keys) — each element is serialized with that shape.
@@ -133,7 +139,7 @@ const childShape = (shape, key) => {
 export const snapshotCanon = (snap) => ({
   task: {
     task_id: snap.task.task_id,
-    key: JSON.parse(snap.task.command_key_json),
+    key: parseJsonValue(snap.task.command_key_json),
     status: snap.task.status,
     state_revision: Number(snap.task.state_revision),
     accepted_run_id: snap.task.accepted_run_id,
@@ -142,9 +148,9 @@ export const snapshotCanon = (snap) => ({
     created_at: serdeDateTime(snap.task.created_at),
     last_progress_at: serdeDateTime(snap.task.last_progress_at),
     work: typeof snap.task.frozen_work_json === "string"
-      ? JSON.parse(snap.task.frozen_work_json) : snap.task.work,
+      ? parseJsonValue(snap.task.frozen_work_json) : snap.task.work,
     result: snap.task.result_json === null || snap.task.result_json === undefined
-      ? null : JSON.parse(snap.task.result_json),
+      ? null : parseJsonValue(snap.task.result_json),
     retry_of: snap.task.retry_of,
   },
   items: snap.items.map((i) => ({
@@ -224,7 +230,7 @@ export const prepareStop = (verification, target, run, actor, now, observation) 
         obs.evidence_ref.trim() === "") {
       throw integrity("stop evidence does not bind inspected target");
     }
-    const next = JSON.parse(ser(target, "snapshot"));
+    const next = parseJsonValue(ser(target, "snapshot"));
     next.task.status = "interrupted";
     for (const i of next.items) {
       if (i.stage === "running") i.stage = "pending";
@@ -244,7 +250,7 @@ export const prepareStop = (verification, target, run, actor, now, observation) 
     reason = "verified stopped; original task not resumed";
     evidenceRef = obs.evidence_ref;
   }
-  const finished = JSON.parse(ser(verification, "snapshot"));
+  const finished = parseJsonValue(ser(verification, "snapshot"));
   finished.task.status = "succeeded";
   finished.items[0].stage = "finished";
   finished.items[0].outcome = { success: true, error: null };
@@ -279,7 +285,7 @@ export const readAudit = (db, id) => {
     throw integrity("stopped check digest differs");
   }
   let audit;
-  try { audit = JSON.parse(row.audit_json); }
+  try { audit = parseJsonValue(row.audit_json); }
   catch (e) { throw integrity(e.message); }
   if (audit?.receipt?.verification_task_id !== id ||
       audit?.receipt?.target_task_id !== row.target_task_id) {
@@ -342,7 +348,7 @@ export const readReceipt = (db, id, readBound) => {
 /** sqlite_verification::validate_task_link — wired into the bound read.
  *  readBound: validated snapshot reader; readRequestRow: request reader. */
 export const verifyTaskLink = (db, snap, readBound) => {
-  const result = snap.task.result_json === null ? null : JSON.parse(snap.task.result_json);
+  const result = snap.task.result_json === null ? null : parseJsonValue(snap.task.result_json);
   if (!result) return;
   let id = null;
   if (snap.task.status === "interrupted") {
@@ -369,10 +375,10 @@ export const verifyTaskLink = (db, snap, readBound) => {
 /** sqlite_verification_inspection::validate_task_link — returns true when
  *  the task's link is an inspection link (handled), false to fall through. */
 export const inspectionTaskLink = (db, snap, readBound, readRequestRow) => {
-  const result = snap.task.result_json === null ? null : JSON.parse(snap.task.result_json);
+  const result = snap.task.result_json === null ? null : parseJsonValue(snap.task.result_json);
   const id = result?.interruption?.inspection_request_id;
   if (typeof id !== "string") return false;
-  const key = JSON.parse(snap.task.command_key_json);
+  const key = parseJsonValue(snap.task.command_key_json);
   if (snap.task.status !== "interrupted" || !supportedVerification(key)) {
     throw integrity("inspection interruption on unsupported task/state");
   }
@@ -383,7 +389,7 @@ export const inspectionTaskLink = (db, snap, readBound, readRequestRow) => {
   }
   const record = readRequestRow(id);
   if (!record) throw integrity("inspection finish request missing");
-  if (!canonEq(JSON.parse(record.command_json), audit.command)) {
+  if (!canonEq(parseJsonValue(record.command_json), audit.command)) {
     throw integrity("inspection finish request differs");
   }
   return true;
@@ -398,7 +404,7 @@ export const readInspectionAudit = (db, id) => {
     throw integrity("inspection audit digest differs");
   }
   let audit;
-  try { audit = JSON.parse(row.audit_json); }
+  try { audit = parseJsonValue(row.audit_json); }
   catch (e) { throw integrity(e.message); }
   if (audit?.request_id !== id || audit?.facts?.target?.task?.task_id !== row.target_task_id) {
     throw integrity("inspection association differs");
@@ -417,7 +423,7 @@ export const validateAbsentRequest = (db, id) => {
 export const validateTerminalStop = (db, command, value, readBound) => {
   if (!canonEq(command.key, VERIFICATION_KEY)) return;
   let result;
-  try { result = typeof value === "string" ? JSON.parse(value) : value; }
+  try { result = typeof value === "string" ? parseJsonValue(value) : value; }
   catch (e) { throw integrity(e.message); }
   if (result?.kind !== "already_verified" || typeof result.receipt !== "object") {
     throw integrity("invalid terminal result");
@@ -441,7 +447,7 @@ export const validateTerminalInspection = (db, id, command, value) => {
     return validateAbsentRequest(db, id);
   }
   let result;
-  try { result = typeof value === "string" ? JSON.parse(value) : value; }
+  try { result = typeof value === "string" ? parseJsonValue(value) : value; }
   catch (e) { throw integrity(e.message); }
   const audit = readInspectionAudit(db, id);
   if (!audit) throw integrity("inspection audit missing");
@@ -471,10 +477,10 @@ export const readRegistration = (db, snap) => {
     throw integrity("runtime registration digest differs");
   }
   let descriptor;
-  try { descriptor = JSON.parse(row.descriptor_json); }
+  try { descriptor = parseJsonValue(row.descriptor_json); }
   catch (e) { throw integrity(e.message); }
   const revision = Number(row.claim_revision);
-  const key = JSON.parse(snap.task.command_key_json);
+  const key = parseJsonValue(snap.task.command_key_json);
   if (revision === 0 || revision > Number(snap.task.state_revision) ||
       descriptor.protocol !== "verification-file-guard-v1" ||
       descriptor.task_id !== snap.task.task_id ||
@@ -490,7 +496,7 @@ export const readRegistration = (db, snap) => {
 export const writeTaskSnapshot = (db, snapJson, expected) => {
   for (const i of snapJson.items) {
     db.run("UPDATE task_items SET stage=?,outcome_json=? WHERE task_id=? AND item_id=?",
-      i.stage, i.outcome === null ? null : JSON.stringify(i.outcome),
+      i.stage, i.outcome === null ? null : ser(i.outcome, "outcome"),
       snapJson.task.task_id, i.spec.item_id);
   }
   const res = db.run(
@@ -532,7 +538,7 @@ export const claimWithRuntimeGuard = (db, repo, plan, guard, dbPath) => {
     }
     guard.verifyBinding(dbPath);
     writeTaskSnapshot(db, plan.after, plan.before.task.state_revision);
-    const raw = JSON.stringify(plan.descriptor);
+    const raw = ser(plan.descriptor, "descriptor");
     db.run("INSERT INTO verification_runtime_guards VALUES(?,?,?,?)",
       plan.after.task.task_id, BigInt(plan.after.task.state_revision),
       raw, sha256(raw));
@@ -580,14 +586,14 @@ export const readRequestRecord = (db, id, readBound, readFactsFn) => {
     throw integrity("command digest mismatch");
   }
   let command;
-  try { command = JSON.parse(row.command_json); }
+  try { command = parseJsonValue(row.command_json); }
   catch (e) { throw integrity(e.message); }
   let outcome;
   if (row.outcome_kind === "task" && row.task_id !== null && row.terminal_json === null) {
     validateTaskRequest(db, id, command);
     const s = readBound(row.task_id);
     if (!s) throw integrity("bound execution record missing");
-    const key = JSON.parse(s.task.command_key_json);
+    const key = parseJsonValue(s.task.command_key_json);
     const expected = s.task.retry_of !== null
       ? { operation: "retry_task", dataset: key.dataset, contract_version: key.contract_version }
       : key;
@@ -597,7 +603,7 @@ export const readRequestRecord = (db, id, readBound, readFactsFn) => {
     outcome = { Task: snapshotCanon(s) };
   } else if (row.outcome_kind === "terminal" && row.task_id === null && row.terminal_json !== null) {
     let value;
-    try { value = JSON.parse(row.terminal_json); }
+    try { value = parseJsonValue(row.terminal_json); }
     catch (e) { throw integrity(e.message); }
     validateTerminalStop(db, command, value, readBound);
     validateTerminalInspection(db, id, command, value);

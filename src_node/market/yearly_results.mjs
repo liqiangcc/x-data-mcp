@@ -2,6 +2,7 @@
 // read_result / yearly_receipt / yearly_item_receipt. The compact
 // (schema-19) arm dispatches to compact_results::read_yearly_audit.
 import { createHash } from "node:crypto";
+import { serValue, parseJsonValue } from "../mcp/serde_json.mjs";
 import * as RC from "./record_codec.mjs";
 import * as MR from "./market_read.mjs";
 import * as CW from "./compact_write.mjs";
@@ -16,7 +17,7 @@ const CONTRACT_VERSION = "explicit-yearly-task-v1";
 // two-element JSON array of the RAW strings (strings are serialized
 // with escapes, not embedded).
 const resultDigest = (audit, receiptJson) =>
-  sha256(JSON.stringify([audit, receiptJson]));
+  sha256(serValue([audit, receiptJson]));
 
 // yearly_publication::tasks::frozen — json! shape, verbatim key order
 const frozen = (base, digest, years, intent) => ({
@@ -87,7 +88,7 @@ const parseReceipt = (c) => {
   return c;
 };
 const parseJson = (s) => {
-  try { return JSON.parse(s); }
+  try { return parseJsonValue(s); }
   catch (e) { throw integrity(e.message); }
 };
 

@@ -387,6 +387,17 @@ export function parseJsonBytes(input) {
   return new Parse(buf).run();
 }
 
+// serde_json::from_str<Value> equivalent — throws ParseError-shaped
+// Error on failure. Use for stored serde columns: u64 digits >2^53 stay
+// exact (bigint) and floats keep their F64 lexeme — JSON.parse loses
+// both and JSON.stringify then crashes or corrupts on re-encode
+// (F-001 class).
+export function parseJsonValue(input) {
+  const r = parseJsonBytes(input);
+  if (!r.ok) throw new Error(r.message);
+  return r.value;
+}
+
 // serde_json float formatting (ryu::format_finite): fixed notation for
 // decimal exponent -5..=15, scientific otherwise; integral floats gain ".0".
 export function serF64(v) {

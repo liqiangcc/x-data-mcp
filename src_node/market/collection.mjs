@@ -2,6 +2,7 @@
 // DailyCollectionRepository read surface. transition_task delegates to
 // the coordinator-bound task handle at the call site.
 import { MarketError } from "./record_codec.mjs";
+import { parseJsonValue } from "../mcp/serde_json.mjs";
 import { head, isCompactSchema } from "./market_read.mjs";
 import { readPublication } from "./compact_write.mjs";
 
@@ -9,7 +10,7 @@ const integrity = (m) => new MarketError("integrity", `MARKET_INTEGRITY: ${m}`);
 
 const parseReceipt = (s) => {
   let c;
-  try { c = JSON.parse(s); } catch (e) { throw integrity(e.message); }
+  try { c = parseJsonValue(s); } catch (e) { throw integrity(e.message); }
   if (c === null || typeof c !== "object" || Array.isArray(c)) {
     throw integrity("missing field `publication_id`");
   }

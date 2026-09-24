@@ -3,6 +3,7 @@
 // insert_record, stage(). Verbatim port of src/sqlite_market.rs write
 // helpers + envelope.rs pack side + manifest.rs build side.
 import { createHash } from "node:crypto";
+import { serValue, parseJsonValue } from "../mcp/serde_json.mjs";
 import { gateDatabase } from "../storage/schema_gate.mjs";
 import { openDatabase, StorageError } from "../storage/sqlite_adapter.mjs";
 import * as RC from "./record_codec.mjs";
@@ -36,7 +37,7 @@ const packShared = (batch, out) => {
   }
 };
 const packDaily = (raw, marker) => {
-  const env = JSON.parse(JSON.stringify(raw));
+  const env = parseJsonValue(serValue(raw));
   const out = [];
   env.records = marker;
   const bars = raw.batch.bars;
@@ -47,7 +48,7 @@ const packDaily = (raw, marker) => {
   return [env, out];
 };
 const packYearly = (raw) => {
-  const env = JSON.parse(JSON.stringify(raw));
+  const env = parseJsonValue(serValue(raw));
   const out = [];
   let annualBars = null;
   const annual = raw.local_yearly_derivation_v1?.annual?.records;
@@ -268,7 +269,7 @@ export const insertRecord = (db, r, base) => {
   const m = MR.__metadata(r);
   const [env, payloads] = pack(r.raw);
   writePayloads(db, payloads);
-  const evDigest = sha(JSON.stringify(MR.__evidenceRows(r)));
+  const evDigest = sha(serValue(MR.__evidenceRows(r)));
   db.run(
     "INSERT INTO data_versions(version_id,symbol,period,adjustment,state,source,published_at,record_count,unique_count,duplicate_count,coverage_status,coverage_reason,first_date,last_date,envelope_json,content_digest,digest_format,evidence_digest) VALUES(?,?,?,?,'staging',?,?,?,?,?,?,?,?,?,?,?,?,?)",
     v.version_id, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11],

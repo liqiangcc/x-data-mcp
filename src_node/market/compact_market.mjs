@@ -3,6 +3,7 @@
 // primitives. Error kind = "invalid" carrying the verbatim message;
 // callers wrap with integrity() like super::integrity(compact errors).
 import { createHash } from "node:crypto";
+import { F64, serValue, parseJsonValue } from "../mcp/serde_json.mjs";
 import { MarketError } from "./record_codec.mjs";
 import { _dec } from "../algorithms/qfq_affine.mjs";
 
@@ -558,6 +559,7 @@ const jcs = (v) => {
     return String(v);
   }
   if (typeof v === "bigint") return String(v);
+  if (v instanceof F64) return serValue(v);
   if (typeof v === "string") return JSON.stringify(v);
   if (Array.isArray(v)) return `[${v.map(jcs).join(",")}]`;
   const keys = Object.keys(v).sort((a, b) => {
@@ -651,7 +653,7 @@ const checkEvidenceSemantics = (kind, value) => {
 
 export const verifyEvidence = (kind, canonicalJson, expected) => {
   let value;
-  try { value = JSON.parse(canonicalJson); } catch { throw invalid("evidence is not JSON"); }
+  try { value = parseJsonValue(canonicalJson); } catch { throw invalid("evidence is not JSON"); }
   const recanonicalized = jcs(value);
   if (recanonicalized !== canonicalJson) {
     throw invalid("stored evidence is not canonical JCS");

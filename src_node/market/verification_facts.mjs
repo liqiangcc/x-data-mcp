@@ -5,6 +5,8 @@ import { createHash } from "node:crypto";
 import { MarketError } from "./record_codec.mjs";
 import { readResult as readUpdateResult, readRecord, isCompactSchema } from "./market_read.mjs";
 import { canonEq } from "../storage/task_repository.mjs";
+import { ser } from "../storage/verification_storage.mjs";
+import { parseJsonBytes } from "../mcp/serde_json.mjs";
 import { readResult as readYearlyResult } from "./yearly_results.mjs";
 
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
@@ -94,7 +96,13 @@ const parseReceiptShape = (r) => {
 const occupancyKey = (version) =>
   JSON.stringify(["market", version.symbol,
     version.period === "Day" ? "day" : "year"]);
-const parseJson = (s) => { try { return JSON.parse(s); } catch (e) { throw integrity(e.message); } };
+const parseJson = (s) => {
+  // serde_json::from_str — u64-exact (bigint); JSON.parse loses >2^53
+  // digits and stringify would crash on them (F-001 class).
+  const r = parseJsonBytes(s);
+  if (!r.ok) throw integrity(r.message);
+  return r.value;
+};
 
 // publication_verification::decision helpers live with the audit port in
 // publication_checks.mjs; readFacts only builds the Facts value.
@@ -106,7 +114,7 @@ export const readFacts = (db, taskId, readBound) => {
   const task = readBound(taskId);
   if (!task) throw taskErr("task_not_found");
   const key = typeof task.task.command_key_json === "string"
-    ? JSON.parse(task.task.command_key_json)
+    ? parseJson(task.task.command_key_json)
     : task.task.key;
   const kind = contractKind(key);
   if (kind === null) throw taskErr("unsupported_contract");
@@ -138,7 +146,7 @@ export const readFacts = (db, taskId, readBound) => {
     if (!reused) published += 1;
     found.set(item, {
       Committed: { receipt, reused_version: reused,
-        evidence_sha256: sha256(JSON.stringify([audit, receipt])) },
+        evidence_sha256: sha256(ser([audit, receipt])) },
     });
   }
   if (legacy) {
@@ -183,7 +191,7 @@ export const readFacts = (db, taskId, readBound) => {
       published += 1;
       found.set(item, {
         Committed: { receipt, reused_version: false,
-          evidence_sha256: sha256(JSON.stringify([record.raw, commandValue, receipt])) },
+          evidence_sha256: sha256(ser([record.raw, commandValue, receipt])) },
       });
     }
   }

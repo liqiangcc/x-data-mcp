@@ -8,6 +8,7 @@ import { openDatabase, StorageError } from "../../src_node/storage/sqlite_adapte
 import { DatabaseLease } from "../../src_node/storage/database_lease.mjs";
 import { Endpoint } from "../../src_node/local_runtime/paths.mjs";
 import { AcquireService, Source } from "../../src_node/acquire/service.mjs";
+import { serValue } from "../../src_node/mcp/serde_json.mjs";
 
 // acquisition_tasks/generations row digest — same column set as the
 // Rust oracle's db_rows (timestamps excluded: legitimately differ).
@@ -25,9 +26,12 @@ const dbRows = (root) => {
   return { tasks, generations };
 };
 
-const out = (v) => console.log(JSON.stringify(v));
+// serValue: serde_json::to_string(Value) — sorted keys + u64 bigint
+// digits (JSON.stringify crashes on bigint — F-001 class).
+const out = (v) => console.log(serValue(v));
 const errJson = (e) =>
-  ({ error: e instanceof Error ? `${e.message}` : String(e) });
+  ({ error: e instanceof Error ? `${e.message}` : String(e),
+     stack: e instanceof Error ? e.stack : undefined });
 const [cmd, ...args] = process.argv.slice(2);
 
 try {
