@@ -46,10 +46,11 @@ export const compactMarketOpenShared = (path, lease) => {
     lease,
     coordinator,
     // The writer connection doubles as the compact market handle for
-    // the read/write op surface (single-process coordinator parity).
+    // the read/write op surface; coordinator methods carry the lease +
+    // identity boundary checks (NM-073 WriteCoordinator parity).
     db: coordinator.writer,
-    read(fn) { return fn(coordinator.writer); },
-    write(fn) { return fn(coordinator.writer); },
+    read(fn) { return coordinator.read(fn); },
+    write(fn) { return coordinator.write(fn); },
   };
 };
 

@@ -45,6 +45,10 @@ for (const file of scenarios) {
     const seed = firstOp.op === "seed";
     const rustDb = join(dir, "rust.db"), nodeDb = join(dir, "node.db");
     const extra = {};
+    // NM-073: compact seeds run a second variant on a migrated
+    // (initialize+upgrade_compact) fixture — "all compact scenarios
+    // on the migrated DB" — .migrated suffix, same ops.
+    let migratedVariant = false;
     if (seed) {
       const fixture = join(dir, "fixture.db");
       const seedOp = firstOp;
@@ -52,8 +56,10 @@ for (const file of scenarios) {
       if (seedOp.results) extra.DIFF_RESULTS = "1";
       if (seedOp.tasks) extra.DIFF_TASKS = seedOp.tasks;
       if (seedOp.compact) extra.DIFF_INIT = "19";
+      if (seedOp.migrated) extra.DIFF_INIT = "up"; // schema-18 init + upgrade_compact
       if (seedOp.norm_ts) extra.DIFF_NORM_TS = "1";
       if (seedOp.check) extra.DIFF_CHECK = "1";
+      migratedVariant = seedOp.compact && !seedOp.migrated;
       execFileSync(CARGO, ["test", "--lib", "diff_harness::build_market_fixture", "--",
         "--nocapture", "--test-threads=1"], {
         cwd: ROOT,
@@ -89,6 +95,44 @@ for (const file of scenarios) {
     if (verdict.verdict !== "MATCH") writeFileSync(`/tmp/cmp-${name}.txt`, cmp);
     emit(name, verdict.verdict === "MATCH" ? "PASS" : "FAIL",
       `${verdict.ops} ops, ${verdict.diffs} diffs`);
+    // NM-073 migrated-fixture variant — same ops, DIFF_INIT=up fixture.
+    if (migratedVariant) {
+      const mfixture = join(dir, "fixture-up.db");
+      const mExtra = { ...extra, DIFF_INIT: "up" };
+      execFileSync(CARGO, ["test", "--lib", "diff_harness::build_market_fixture", "--",
+        "--nocapture", "--test-threads=1"], {
+        cwd: ROOT,
+        env: { ...process.env, DIFF_DB: mfixture, DIFF_FIXTURES: REC_FIXTURES,
+          DIFF_RECORDS: firstOp.records, TMPDIR: "/dev/shm", ...mExtra },
+        stdio: ["ignore", "ignore", "pipe"], timeout: 600000,
+      });
+      const mRustDb = join(dir, "rust-up.db"), mNodeDb = join(dir, "node-up.db");
+      copyFileSync(mfixture, mRustDb);
+      mExtra.DIFF_NOINIT = "1";
+      mExtra.DIFF_PRESEED = mfixture;
+      const mRustOut = join(dir, "rust-up.jsonl"), mNodeOut = join(dir, "node-up.jsonl");
+      execFileSync(CARGO, ["test", "--lib", "diff_harness::run", "--",
+        "--nocapture", "--test-threads=1"], {
+        cwd: ROOT,
+        env: { ...process.env, DIFF_SCENARIO: scen,
+          DIFF_DB: mRustDb, DIFF_OUT: mRustOut,
+          DIFF_FIXTURES: REC_FIXTURES, TMPDIR: "/dev/shm", ...mExtra },
+        stdio: ["ignore", "ignore", "pipe"], timeout: 600000,
+      });
+      execFileSync("node", [
+        "scripts/node_migration_p3/diff_runner.mjs", scen,
+        mNodeDb, mNodeOut,
+      ], { cwd: ROOT,
+        env: { ...process.env, DIFF_FIXTURES: REC_FIXTURES, ...mExtra },
+        stdio: ["ignore", "ignore", "pipe"] });
+      const mCmp = execFileSync("node", [
+        "scripts/node_migration_p3/diff_compare.mjs", mRustOut, mNodeOut,
+      ], { cwd: ROOT, encoding: "utf8" });
+      const mVerdict = JSON.parse(mCmp.trim().split("\n").pop());
+      if (mVerdict.verdict !== "MATCH") writeFileSync(`/tmp/cmp-${name}.migrated.txt`, mCmp);
+      emit(`${name}.migrated`, mVerdict.verdict === "MATCH" ? "PASS" : "FAIL",
+        `${mVerdict.ops} ops, ${mVerdict.diffs} diffs`);
+    }
   } catch (e) {
     const tail = (e.stdout ? String(e.stdout) : String(e.message)) + " | stderr:" + String(e.stderr||"");
     writeFileSync(`/tmp/cmp-${name}.txt`, tail);

@@ -4,7 +4,7 @@
 //
 // Usage: node diff_runner.mjs <scenario.jsonl> <db> <out.jsonl>
 import { createHash } from "node:crypto";
-import { copyFileSync, chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, chmodSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const [, , scenarioPath, dbPath, outPath] = process.argv;
@@ -31,6 +31,8 @@ const VRT = await import("../../src_node/storage/verification_runtime.mjs");
 const { canonEq } = await import("../../src_node/storage/task_repository.mjs");
 const BE = await import("../../src_node/market/backend.mjs");
 const { DatabaseLease } = await import("../../src_node/storage/database_lease.mjs");
+const SL = await import("../../src_node/storage/schema_lifecycle.mjs");
+const CRT = await import("../../src_node/market/compact_runtime.mjs");
 const isCompact = () => MR.isCompactSchema(db);
 const marketDigest = () => {
   const tables = [
@@ -162,6 +164,7 @@ const db = repo._db;
 // the DatabaseLease flock — mirror it so open/open_shared lock semantics
 // differential against the Rust coordinator lease.
 let heldLease = null;
+let heldCompact = null;
 if (MR.isCompactSchema(db)) {
   // match the harness's chmod-to-0600 before the lease gate.
   chmodSync(dbPath, 0o600);
@@ -258,10 +261,21 @@ const deepZ = (v) =>
 const serdeEmit = (v) => sortedValue(deepZ(v));
 const sortedArr = (a) => [...a].sort();
 
-const stateDigest = () => {
+// sha256 over the canonical DDL dump — migrated==fresh schema parity.
+const schemaDigest = (path) => {
+  let d;
+  try { d = openDatabase(path, { mode: "readonly" }); }
+  catch { return null; }
+  try {
+    const rows = d.query(
+      "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY type,name");
+    return sha(rows.map((r) => `${r.type}|${r.name}|${r.sql}`).join("\n"));
+  } finally { d.close(); }
+};
+const stateDigest = (d = db) => {
   const lines = [];
   const dump = (sql, tag) => {
-    for (const r of db.query(sql)) {
+    for (const r of d.query(sql)) {
       lines.push(`${tag}:${Object.values(r).map((x) => x === null ? "" : String(x)).join("|")}`);
     }
   };
@@ -281,7 +295,7 @@ const stateDigest = () => {
       }
       return o;
     };
-    for (const r of db.query("SELECT request_id,command_json,outcome_kind,task_id,terminal_json FROM requests ORDER BY 1")) {
+    for (const r of d.query("SELECT request_id,command_json,outcome_kind,task_id,terminal_json FROM requests ORDER BY 1")) {
       lines.push(`R:${symOf(r.request_id)}|${sha(normCell(r.command_json))}|${r.outcome_kind ?? ""}|${r.task_id === null ? "" : symOf(r.task_id)}|${r.terminal_json ?? ""}`);
     }
     // Verification registries: *_sha256 cells hash text that binds task
@@ -293,23 +307,23 @@ const stateDigest = () => {
       ["VI", "SELECT request_id AS a,target_task_id AS b,audit_json AS t FROM verification_inspections ORDER BY 1"],
       ["VG", "SELECT task_id AS a,claim_revision AS b,descriptor_json AS t FROM verification_runtime_guards ORDER BY 1"],
     ]) {
-      for (const r of db.query(sql)) {
+      for (const r of d.query(sql)) {
         const text = normCell(r.t);
         lines.push(`${tag}:${symOf(r.a)}|${normCell(String(r.b ?? ""))}|${text}|${sha(text)}`);
       }
     }
   }
   dump("SELECT task_id,item_id,run_id,start_revision FROM task_item_execution_starts ORDER BY 1,2", "X");
-  if (isCompact()) {
+  if (MR.isCompactSchema(d)) {
     const cvs = (x) => x === null ? "" : x instanceof Uint8Array
       ? Buffer.from(x).toString("hex") : String(x);
     const cdump = (sql, tag) => {
-      for (const r of db.query(sql)) {
+      for (const r of d.query(sql)) {
         lines.push(`${tag}:${Object.values(r).map(cvs).join("|")}`);
       }
     };
     cdump("SELECT version_key,version_id,entity,period,adjustment,state,hex(source_binding_digest),parent_version_key,manifest_mode,delta_depth,record_count,first_day,last_day,coverage_status,hex(evidence_digest),hex(projection_digest),digest_format FROM data_versions ORDER BY version_key", "CV");
-    for (const r of db.query("SELECT version_key,published_at IS NOT NULL AS p FROM data_versions ORDER BY version_key")) {
+    for (const r of d.query("SELECT version_key,published_at IS NOT NULL AS p FROM data_versions ORDER BY version_key")) {
       let idhex = "";
       if (r.p === 1n) {
         try {
@@ -332,9 +346,9 @@ const stateDigest = () => {
     cdump("SELECT result_id,result_kind FROM result_registry ORDER BY result_id", "CRR");
     // result_digest binds the runner-local task id — recompute it with
     // the task id symbolized so the digest verifies deterministically.
-    const vid = (k) => db.get("SELECT version_id FROM data_versions WHERE version_key=?", k)?.version_id ?? "";
+    const vid = (k) => d.get("SELECT version_id FROM data_versions WHERE version_key=?", k)?.version_id ?? "";
     const hx = (x) => Buffer.from(x, "hex");
-    for (const r of db.query("SELECT result_key,result_id,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,hex(source_binding_digest) AS sbd,continuity_mode,prefix_bytes,hex(base_projection_digest) AS bpd,hex(result_projection_digest) AS rpd,hex(delta_digest) AS dd,hex(evidence_digest) AS ed,task_revision,hex(result_digest) AS rd0 FROM market_update_results ORDER BY result_key")) {
+    for (const r of d.query("SELECT result_key,result_id,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,hex(source_binding_digest) AS sbd,continuity_mode,prefix_bytes,hex(base_projection_digest) AS bpd,hex(result_projection_digest) AS rpd,hex(delta_digest) AS dd,hex(evidence_digest) AS ed,task_revision,hex(result_digest) AS rd0 FROM market_update_results ORDER BY result_key")) {
       // NULL digests (hex() -> "") can't recompute — emit the stored
       // digest verbatim like the Rust arm's fallback.
       let rd = (r.sbd && r.bpd && r.rpd && r.ed) ? null : r.rd0;
@@ -361,7 +375,7 @@ const stateDigest = () => {
         rd].join("|")}`);
     }
     cdump("SELECT result_key,seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM market_update_delta_clips ORDER BY result_key,seq", "CMD");
-    for (const r of db.query("SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest) AS sbd,hex(evidence_digest) AS ed,task_revision,hex(result_digest) AS rd0 FROM publication_results ORDER BY result_key")) {
+    for (const r of d.query("SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest) AS sbd,hex(evidence_digest) AS ed,task_revision,hex(result_digest) AS rd0 FROM publication_results ORDER BY result_key")) {
       let rd = (r.sbd && r.ed) ? null : r.rd0;
       if (rd === null) try {
         rd = Buffer.from(CMM.publicationResultDigest({
@@ -379,7 +393,7 @@ const stateDigest = () => {
         cvs(r.algorithm_version), cvs(r.sbd), cvs(r.ed), cvs(r.task_revision), rd].join("|")}`);
     }
   }
-  if (!isCompact()) {
+  if (!MR.isCompactSchema(d)) {
     dump("SELECT result_id,task_id,item_id,base_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM market_update_results ORDER BY result_id", "MU");
     dump("SELECT result_id,task_id,item_id,base_daily_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM yearly_execution_results ORDER BY result_id", "YR");
   }
@@ -395,15 +409,15 @@ const stateDigest = () => {
     conclusion: r.conclusion, basis_kind: r.basis_kind, basis_ref: r.basis_ref,
     basis_sha256: r.basis_sha256, verifier_id: r.verifier_id,
     decided_at: TS_FIX, decision_sha256: r.decision_sha256 });
-  for (const r of db.query("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions ORDER BY decision_id")) {
+  for (const r of d.query("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions ORDER BY decision_id")) {
     lines.push(`GD:${[r.decision_id, r.symbol, r.period, r.start_date, r.end_date,
       r.subject_version_id, r.subject_version_digest, r.conclusion, r.basis_kind,
       r.basis_ref, r.basis_sha256, r.verifier_id, TS_FIX,
       GAPS.decisionContentDigest(decisionRow(r))].join("|")}`);
   }
-  for (const r of db.query("SELECT gap_id,symbol,period,start_date,end_date,evidence_kind,evidence_id,evidence_digest,observed_at FROM proven_gaps ORDER BY gap_id")) {
-    const d = db.get("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions WHERE decision_id=?", r.evidence_id);
-    const evd = d ? GAPS.decisionContentDigest(decisionRow(d)) : r.evidence_digest;
+  for (const r of d.query("SELECT gap_id,symbol,period,start_date,end_date,evidence_kind,evidence_id,evidence_digest,observed_at FROM proven_gaps ORDER BY gap_id")) {
+    const gapDec = d.get("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions WHERE decision_id=?", r.evidence_id);
+    const evd = gapDec ? GAPS.decisionContentDigest(decisionRow(gapDec)) : r.evidence_digest;
     lines.push(`PG:${[r.gap_id, r.symbol, r.period, r.start_date, r.end_date,
       r.evidence_kind, r.evidence_id, evd, TS_FIX].join("|")}`);
   }
@@ -744,13 +758,19 @@ for (const line of lines) {
         break;
       }
       case "exec_sql": {
+        // Optional path suffix targets a side file (upgrade rejection arms).
+        const target = op.path ? `${dbPath}.${op.path}` : null;
+        let d = db;
         try {
+          if (target) d = openDatabase(target, { mode: "readwrite" });
           for (const stmt of op.sql.split(";").map((x) => x.trim()).filter(Boolean)) {
-            db.run(stmt);
+            d.exec(stmt); // exec handles PRAGMA forms (run() does not)
           }
           rec = { status: "ok" };
         } catch (e) {
           rec = { status: "error", code: "unavailable", message: String(e.message), unchanged: true };
+        } finally {
+          if (d !== db) try { d.close(); } catch { /* closed */ }
         }
         break;
       }
@@ -1407,6 +1427,118 @@ for (const line of lines) {
           const b = BE.backendOpen(target);
           rec = { status: "ok", kind: b.kind };
           if (b.lease) b.lease.close();
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      // NM-073 — schema lifecycle + compact coordinator surface.
+      case "initialize": {
+        const target = `${dbPath}.${op.path}`;
+        try {
+          if (op.compact) SL.initialize19(target);
+          else SL.initialize(target);
+          const d = openDatabase(target, { mode: "readonly" });
+          rec = { status: "ok", digest: stateDigest(d),
+            schema: schemaDigest(target) };
+          d.close();
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "upgrade_compact": {
+        const target = op.path ? `${dbPath}.${op.path}` : dbPath;
+        if (op.path && op.copy_from_main) {
+          try { rmSync(target, { force: true }); } catch { /* fresh */ }
+          try { rmSync(`${target}-wal`, { force: true }); } catch { /* */ }
+          try { rmSync(`${target}-shm`, { force: true }); } catch { /* */ }
+          copyFileSync(dbPath, target);
+        }
+        const exists = target === dbPath || (() => { try { return statSync(target).isFile(); } catch { return false; } })();
+        try {
+          SL.upgradeCompact(target);
+          let digest = null;
+          if (exists) {
+            try {
+              const d = openDatabase(target, { mode: "readonly" });
+              digest = stateDigest(d);
+              d.close();
+            } catch { /* no digest on schema-less targets */ }
+          }
+          rec = { status: "ok", digest, schema: exists ? schemaDigest(target) : null };
+        } catch (e) {
+          let digest = null;
+          if (exists) {
+            try {
+              const d = openDatabase(target, { mode: "readonly" });
+              digest = stateDigest(d);
+              d.close();
+            } catch { /* no digest on schema-less targets */ }
+          }
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), digest,
+            schema: exists ? schemaDigest(target) : null,
+            unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      case "compact_admin": {
+        const target = op.path ? `${dbPath}.${op.path}` : dbPath;
+        try {
+          let m;
+          if (op.held) {
+            if (!heldCompact) {
+              throw new MarketError("base", "BASE_UNAVAILABLE: no held compact market");
+            }
+            m = heldCompact;
+          } else {
+            chmodSync(target, 0o600);
+            m = BE.compactMarketOpen(target);
+            if (op.hold) heldCompact = m;
+          }
+          const metrics = op.action === "checkpoint_passive"
+            ? m.coordinator.checkpointPassive()
+            : op.action === "checkpoint_idle"
+              ? m.coordinator.checkpointIdle()
+              : m.coordinator.shutdown();
+          rec = { status: "ok", metrics: {
+            mode: op.action === "checkpoint_passive" ? "Passive" : "Truncate",
+            busy: String(metrics.busy),
+            log_frames: String(metrics.log_frames),
+            checkpointed_frames: String(metrics.checkpointed_frames),
+            wal_bytes_before: String(metrics.wal_bytes_before),
+            wal_bytes_after: String(metrics.wal_bytes_after) } };
+          if (op.action !== "shutdown" && !op.hold && !op.held) {
+            try { m.lease.close(); } catch { /* */ }
+          }
+        } catch (e) {
+          rec = { status: "error", code: e.code ?? "internal",
+            message: String(e.message), unchanged: stateDigest() === before };
+        }
+        break;
+      }
+      // coordinator.transaction / read / write(leak) — held market only.
+      case "coord_tx":
+      case "coord_read":
+      case "coord_write_leak": {
+        try {
+          const m = heldCompact;
+          if (!m) throw new Error("no held compact market");
+          if (name === "coord_tx") {
+            const v = m.coordinator.transaction((c) =>
+              Number(c.get("PRAGMA user_version").user_version));
+            rec = { status: "ok", user_version: String(v) };
+          } else if (name === "coord_read") {
+            const v = m.coordinator.read((c) =>
+              Number(c.get("PRAGMA user_version").user_version));
+            rec = { status: "ok", user_version: String(v) };
+          } else {
+            m.coordinator.write((c) => c.exec("BEGIN"));
+            rec = { status: "ok" };
+          }
         } catch (e) {
           rec = { status: "error", code: e.code ?? "internal",
             message: String(e.message), unchanged: stateDigest() === before };

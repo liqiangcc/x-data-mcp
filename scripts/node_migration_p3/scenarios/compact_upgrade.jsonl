@@ -1,0 +1,32 @@
+{"op":"lookup_task","sym":"NONE"}
+{"op":"initialize","path":"init18"}
+{"op":"initialize","path":"init19","compact":true}
+{"op":"initialize","path":"init18"}
+{"op":"upgrade_compact","path":"init18"}
+{"op":"upgrade_compact","path":"init19"}
+{"op":"initialize","path":"badver"}
+{"op":"exec_sql","path":"badver","sql":"PRAGMA user_version=7"}
+{"op":"upgrade_compact","path":"badver"}
+{"op":"initialize","path":"badchk"}
+{"op":"exec_sql","path":"badchk","sql":"UPDATE schema_migrations SET checksum='bad' WHERE version=1"}
+{"op":"upgrade_compact","path":"badchk"}
+{"op":"initialize","path":"pop"}
+{"op":"exec_sql","path":"pop","sql":"INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest) VALUES('task-pop','{}','pending',0,'run-pop','run-pop','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z','{}',NULL,NULL,0,0,0,0,0,NULL)"}
+{"op":"upgrade_compact","path":"pop"}
+{"op":"compact_admin","path":"init19","action":"checkpoint_passive"}
+{"op":"compact_admin","path":"init19","action":"checkpoint_idle"}
+{"op":"compact_admin","path":"init19","action":"shutdown"}
+{"op":"upgrade_compact","path":"nowal","copy_from_main":true}
+{"op":"exec_sql","path":"nowal","sql":"PRAGMA journal_mode=DELETE"}
+{"op":"compact_admin","path":"nowal","action":"checkpoint_passive"}
+{"op":"upgrade_compact","path":"main19","copy_from_main":true}
+{"op":"compact_admin","path":"main19","action":"checkpoint_passive","hold":true}
+{"op":"compact_admin","held":true,"action":"checkpoint_passive"}
+{"op":"coord_tx"}
+{"op":"coord_read"}
+{"op":"coord_write_leak"}
+{"op":"compact_admin","held":true,"action":"checkpoint_idle"}
+{"op":"compact_admin","held":true,"action":"shutdown"}
+{"op":"compact_admin","held":true,"action":"checkpoint_passive"}
+{"op":"coord_tx"}
+{"op":"upgrade_compact"}
