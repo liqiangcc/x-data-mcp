@@ -26,7 +26,7 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import {
-  existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync,
+  existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -560,5 +560,7 @@ if (OUT) {
     pass: rows.length - fails.length, fail: fails.length, rows,
   }, null, 2) + "\n");
 }
+// scratch is a fresh mkdtemp dir — remove only what this run created.
+rmSync(SCRATCH, { recursive: true, force: true });
 console.log(`\n${rows.length - fails.length} pass, ${fails.length} fail`);
 process.exit(fails.length === 0 ? 0 : 1);
