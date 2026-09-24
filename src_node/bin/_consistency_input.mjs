@@ -26,6 +26,9 @@
 // boundary.
 
 import { serF64 } from "../mcp/serde_json.mjs";
+import {
+  expectedFields, I64_MIN, parseDateTime, rustStr, U64_MAX,
+} from "../mcp/serde_value.mjs";
 import { parseJsonFile } from "./_shared.mjs";
 
 // ------------------------------------------------------------ position math
@@ -117,16 +120,9 @@ function annotate(buf) {
   return node();
 }
 
-// ----------------------------------------------------------------- desc text
-const rustStr = (s) =>
-  '"' + s.replace(/[\\"\n\r\t]|[\x00-\x1f\x7f]/g, (c) => {
-    if (c === '"') return '\\"';
-    if (c === "\\") return "\\\\";
-    if (c === "\n") return "\\n";
-    if (c === "\r") return "\\r";
-    if (c === "\t") return "\\t";
-    return `\\u{${c.codePointAt(0).toString(16)}}`;
-  }) + '"';
+// ------------------------------------------------- desc text (node-shaped)
+// rustStr/expectedFields/I64_MIN/U64_MAX/parseDateTime are shared with the
+// from_value machinery — see ../mcp/serde_value.mjs.
 const desc = (n) =>
   n.kind === "null" ? "null" :
   n.kind === "bool" ? `boolean \`${n.v}\`` :
@@ -139,14 +135,8 @@ const desc = (n) =>
 const invalidType = (n, expected) =>
   failAt(n.kind === "obj" || n.kind === "arr" ? n.start : n.end,
     `invalid type: ${desc(n)}, expected ${expected}`);
-const expectedFields = (xs) =>
-  xs.length === 1 ? `\`${xs[0]}\`` :
-  xs.length === 2 ? `\`${xs[0]}\` or \`${xs[1]}\`` :
-  `one of ${xs.map((x) => `\`${x}\``).join(", ")}`;
 
 // ------------------------------------------------------------------- scalars
-const I64_MIN = -(1n << 63n);
-const U64_MAX = (1n << 64n) - 1n;
 const isObj = (n) => n.kind === "obj";
 const isArr = (n) => n.kind === "arr";
 
@@ -164,38 +154,17 @@ function decU64(n) {
   }
   invalidType(n, "u64");
 }
-// chrono DateTime<Utc> RFC3339 classes: premature end / invalid chars /
-// out of range / trailing input (+ leap :60 and signed years accepted).
+// chrono DateTime<Utc> RFC3339 classes via the shared parseDateTime
+// (premature end / invalid chars / out of range / trailing input;
+// leap :60 and signed years accepted).
 function decDateTime(n) {
   if (n.kind !== "str")
     invalidType(n, "an RFC 3339 formatted date and time string");
-  const res = chronoClassify(n.v);
-  if (res !== null) failAt(n.end, res);
+  const res = parseDateTime(n.v);
+  if (res.msg) failAt(n.end, res.msg);
   // chrono accepts signed 4+-digit years; normalize "+2026"/"-2026" so the
   // downstream canonical re-serialization matches chrono's DateTime output
   return n.v.replace(/^([+-])(\d{4})-/, "$2-");
-}
-const TS_FULL = /^([+-]?\d{4,})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|([+-])(\d{2}):(\d{2}))$/;
-function chronoClassify(s) {
-  const m = TS_FULL.exec(s);
-  if (m) {
-    const [, y, mo, d, hh, mm, ss, , , , oh, om] = m;
-    const yy = Math.abs(parseInt(y, 10));
-    const leap = yy % 4 === 0 && (yy % 100 !== 0 || yy % 400 === 0);
-    const dim = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    if (+mo < 1 || +mo > 12 || +d < 1 || +d > dim[+mo - 1] + (mo === "02" && leap ? 1 : 0) ||
-        +hh > 23 || +mm > 59 || +ss > 60 || (oh !== undefined && (+oh > 23 || +om > 59)))
-      return "input is out of range";
-    return null; // valid
-  }
-  // complete datetime shape + junk -> trailing input
-  const prefix = /^([+-]?\d{4,}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2}))/.exec(s);
-  if (prefix && s.slice(prefix[0].length).trim() !== "") return "trailing input";
-  // a valid-but-incomplete datetime prefix -> premature end
-  if (/^[+-]?\d{4,}-\d{2}-\d{2}([Tt ]\d{2}(:\d{2}(:\d{2}(\.\d*)?)?)?)?$/.test(s) ||
-      /^\d{4}(-\d{0,2}){0,2}$/.test(s))
-    return "premature end of input";
-  return "input contains invalid characters";
 }
 function decEnum(n, variants) {
   if (n.kind === "str") {

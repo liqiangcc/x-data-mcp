@@ -22,16 +22,18 @@
 import { createHash } from "node:crypto";
 import { serValue } from "../mcp/serde_json.mjs";
 import { ApiError } from "../mcp/transport.mjs";
-import { Access, StorageError, invalid } from "./access.mjs";
+import { Access, StorageError } from "./access.mjs";
 import { Observer } from "./observe.mjs";
 import { MAX_BYTES, MAX_ROWS, Queries } from "./query.mjs";
 import {
-  CancelV1, CapabilitiesQuery, Collection, Compute, Decode,
+  CancelV1, CapabilitiesQuery, Collection, Decode,
   InspectVerification, ProgressQuery, Query, RangeWrite, RepublishWrite,
   RetryItems, TaskV1, RequestV1, TasksQuery, VerifyDataGap, VerifyV1,
-  VersionsQuery, WorkerInput, securityValidate,
+  VersionsQuery, WorkerInput, securitySymbol,
   DATASET_CATALOG, DATASET_DAILY, DATASET_YEARLY, Dataset,
 } from "./wire.mjs";
+import { Compute } from "../metrics/wire.mjs";
+import { Metrics } from "../metrics/service.mjs";
 import { entries, capabilityExample, Handler } from "./registry.mjs";
 
 const DECLARED_SCOPE =
@@ -83,6 +85,68 @@ export class TaskControlError extends Error {
 // unwired call is a typed error, never a silent success.
 const seamMsg = (op) => `repository seam not wired (S12c pending): ${op}`;
 const seamErr = (op) => new TaskControlError("storage_unavailable", seamMsg(op));
+
+// range.rs — RangeWrite::key/payload + RepublishWrite::key/payload.
+// market_update::tasks Operation::key() contract versions.
+const RANGE_CONTRACT_VERSION = "explicit-range-task-v1";
+const RANGE_DEFAULT_CONTRACT_VERSION = "default-range-task-v1";
+const REPUBLISH_CONTRACT_VERSION = "explicit-republish-task-v1";
+const YEARLY_CONTRACT_VERSION = "explicit-yearly-task-v1";
+
+const commandKey = (operation, command) => {
+  const key = {
+    operation, // "update_data" | "backfill_data" | "republish_data"
+    dataset: "market.daily",
+    contract_version: operation === "republish_data"
+      ? REPUBLISH_CONTRACT_VERSION : RANGE_CONTRACT_VERSION,
+  };
+  if (command.dataset === "market.yearly") {
+    key.dataset = "market.yearly";
+    key.contract_version = YEARLY_CONTRACT_VERSION;
+  } else if (command.selection !== null && command.selection !== undefined &&
+             operation !== "republish_data") {
+    key.contract_version = RANGE_DEFAULT_CONTRACT_VERSION;
+  }
+  return key;
+};
+const rangeWritePayload = (command) => {
+  const invalidCommand = (m) => new TaskControlError("invalid_command", m);
+  if (command.dataset === "market.daily") {
+    const { items, selection } = command;
+    if (items !== null && selection === null)
+      return { items: items.map((i) => ({
+        symbol: securitySymbol(i.entity),
+        base_version_id: i.base_version_id,
+        start_date: i.start_date,
+        end_date: i.end_date,
+      })) };
+    if (items === null && selection !== null)
+      return { selection: { kind: "default" } };
+    if (items !== null && selection !== null)
+      throw invalidCommand("items and selection are mutually exclusive");
+    throw invalidCommand("items or selection required");
+  }
+  // market.yearly — ExplicitYears
+  return { items: command.items.map((i) => ({
+    symbol: securitySymbol(i.entity),
+    base_daily_version_id: i.base_daily_version_id,
+    years: [...new Set(i.years)].sort((a, b) => a - b),
+    intent: i.publication.mode === "historical_fixed_base"
+      ? "HistoricalFixedBase"
+      : { CurrentHead: { expected_daily_head: i.base_daily_version_id,
+                         expected_yearly_head: i.publication.expected_yearly_head } },
+    comparison_version_id: i.publication.mode === "historical_fixed_base"
+      ? i.publication.comparison_version_id : null,
+  })) };
+};
+const republishPayload = (command) => ({
+  items: command.items.map((i) => ({
+    symbol: securitySymbol(i.entity),
+    base_version_id: i.base_version_id,
+    start_date: i.start_date,
+    end_date: i.end_date,
+  })),
+});
 export class RepositorySeam {
   // Queries/Observer read surface (SqliteSupply)
   query() { throw new StorageError("storage", seamMsg("repository.query")); }
@@ -102,7 +166,8 @@ export class RepositorySeam {
   stoppedVerify() { throw seamErr("task_verification::accept"); }
   gapAccept() { throw seamErr("gap_verification::accept"); }
   workerRunOnce() { throw seamErr("worker::run_once"); }
-  metricsCompute() { throw new StorageError("storage", seamMsg("metrics::compute")); }
+  // metrics::service InputRepository::observations
+  observations() { throw new StorageError("storage", seamMsg("metrics::observations")); }
 }
 
 // GenerationSource::from_env + TdxMarketSource::from_env presence rules
@@ -176,6 +241,7 @@ export class DataApi {
     this.repository = repo;
     this.observer = new Observer(repo, runId ?? `data-${process.pid}-0`);
     this.queries = new Queries(repo, this.observer);
+    this.metrics = new Metrics(repo);
     this.legacy = { control: repo, run_id: this.observer.run_id };
   }
   sourceReady() {
@@ -369,40 +435,24 @@ export class DataApi {
       case Handler.RangeBackfill: {
         localOnly("write controls require local owner access");
         const command = decode(RangeWrite, input);
-        this.legacy.control.accept(command.request_id, command); // seam
+        // RangeWrite::payload() (range.rs) — items XOR selection checked at
+        // accept-admission before any repository work.
+        const payload = rangeWritePayload(command);
+        this.legacy.control.accept(command.request_id,
+          commandKey(e.name === Handler.RangeUpdate ? "update_data" : "backfill_data", command), payload); // seam
         break;
       }
       case Handler.Republish: {
         localOnly("write controls require local owner access");
         const command = decode(RepublishWrite, input);
-        this.legacy.control.accept(command.request_id, command); // seam
+        this.legacy.control.accept(command.request_id,
+          commandKey("republish_data", command), republishPayload(command)); // seam
         break;
       }
       case Handler.Compute: {
-        const request = decode(Compute, input);
-        // metrics/service.rs pre-repository validation — ported verbatim.
-        if (request.inputs.length !== 1 || request.metrics.length !== 1)
-          throw invalid("exactly one inline input and metric supported");
-        const inputRef = request.inputs[0];
-        const metric = request.metrics[0];
-        if (inputRef.input_id.trim() === "" || metric.metric_id.trim() === "" ||
-            metric.input_ids.length !== 1 ||
-            metric.input_ids[0] !== inputRef.input_id ||
-            inputRef.version_ref.version_id.trim() === "" ||
-            inputRef.version_ref.version_id === "latest" ||
-            inputRef.version_ref.integrity_sha256.length !== 64)
-          throw invalid("fixed yearly identity/digest/input reference required");
-        const entity = inputRef.version_ref.entity;
-        const bad = securityValidate(entity);
-        if (bad) throw invalid(bad);
-        this.access.require(DATASET_YEARLY, entity);
-        const range = request.range;
-        if (range.start_year < 1 || range.end_year > 9999 ||
-            range.end_year < range.start_year ||
-            range.end_year - range.start_year >= 1000 ||
-            !(metric.parameters.min_periods >= 1 && metric.parameters.min_periods <= 1000))
-          throw invalid("computation resource/range budget");
-        this.repository.metricsCompute(); // seam — repository.observations
+        // metrics::compute(&*market, decode) — validation inside
+        // Metrics::compute (service.mjs), repository behind the seam.
+        this.metrics.compute(decode(Compute, input), this.access);
         break;
       }
       case Handler.Worker: {
