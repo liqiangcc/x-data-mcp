@@ -6,7 +6,7 @@ marker, one transaction each over the NM-043 claim state.
 
 ## Contents
 
-- `probe-results.jsonl` — 16 rows, all PASS.
+- `probe-results.jsonl` — 19 rows, all PASS.
 - `negative-selftest.jsonl` (exit 1), `results.json`, `SHA256SUMS`.
 
 ## Reproduce
@@ -26,3 +26,5 @@ node scripts/node_migration_p3/item_transition_probe.mjs . item  # selftest, exi
   ItemOutcome serde shape incl. optional evidence.
 - Marker row `(task_id,item_id,run_id,start_revision,started_at)` is
   insert-only (triggers forbid update/delete).
+
+R1: outcome_json is serde-canonical (success->error->evidence order, error:null always present, evidence omitted when absent, closed key set, error string|null); exact-byte assertions + cancel_requested finish case (REVIEW-NM-044 R0).

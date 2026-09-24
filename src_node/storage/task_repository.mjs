@@ -512,14 +512,30 @@ Object.assign(TaskAdmission.prototype, {
     if (!wellformedStr(itemId) || itemId === "") {
       throw new StorageError("invalid_input", "task_admission: item_id must be a non-empty string");
     }
-    if (outcome === null || typeof outcome !== "object" ||
-        typeof outcome.success !== "boolean") {
+    // Serde-canonical ItemOutcome: closed struct — only success /
+    // error / evidence keys, order success->error->evidence, error
+    // always present (null when absent), evidence omitted when absent.
+    if (outcome === null || typeof outcome !== "object" || Array.isArray(outcome)) {
       throw new StorageError("invalid_input", "task_admission: outcome must be {success:boolean,...}");
+    }
+    for (const k of Object.keys(outcome)) {
+      if (k !== "success" && k !== "error" && k !== "evidence") {
+        throw new StorageError("invalid_input", `task_admission: unknown outcome key ${k}`);
+      }
+    }
+    if (typeof outcome.success !== "boolean") {
+      throw new StorageError("invalid_input", "task_admission: outcome.success must be boolean");
+    }
+    if (outcome.error !== undefined && outcome.error !== null && typeof outcome.error !== "string") {
+      throw new StorageError("invalid_input", "task_admission: outcome.error must be string|null");
     }
     if (outcome.success && outcome.error != null) {
       throw new StorageError("invalid_input", "success with error");
     }
-    const outcomeJson = JSON.stringify(outcome);
+    const outcomeJson = JSON.stringify(
+      outcome.evidence === undefined
+        ? { success: outcome.success, error: outcome.error ?? null }
+        : { success: outcome.success, error: outcome.error ?? null, evidence: outcome.evidence });
     return this._db.transaction(() => {
       const t = this._transitionGate(taskId, expectedRevision, runId, now);
       // FinishItem arm: owner-bound only (no task-status arm —

@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-044",
+  "task_id": "NM-044-R1",
   "baseline_sha": "0c0445f9e11e4b0c72901dc78988b3c4ca3d0058",
   "source_ported": "task_control decide StartItem/FinishItem + sqlite_tasks write_item_row/counter_delta/task_item_execution_starts",
   "contract": [
@@ -11,16 +11,16 @@
   "probe": {
     "command": "node scripts/node_migration_p3/item_transition_probe.mjs .",
     "exit": 0,
-    "cases": 16,
+    "cases": 19,
     "totals": {
-      "pass": 16,
+      "pass": 19,
       "fail": 0,
       "not_run": 0
     },
     "groups": {
-      "happy_start_finish": 4,
+      "happy_start_finish": 5,
       "rejections_unchanged": 7,
-      "boundary": 4,
+      "boundary": 6,
       "readback": 1,
       "selftest": "exit 1"
     }
@@ -36,5 +36,7 @@
     "NM-036": "35/35",
     "NM-035": "23/23"
   },
-  "limits": "item transitions only — no finish_execution/cancel/reconcile/retry/workers/services/production readiness"
+  "limits": "item transitions only — no finish_execution/cancel/reconcile/retry/workers/services/production readiness",
+  "review": "REVIEW-NM-044 R0 + TASK-NM-044-R1 — canonical outcome_json + cancel_requested finish",
+  "r1_fix": "outcome_json now serialized serde-canonically: keys success->error->evidence, error always present (null), evidence omitted when absent, unknown keys and non-string error rejected (invalid_input); probe asserts exact stored bytes for success+evidence and failure; finish under cancel_requested proven on fixture copy"
 }

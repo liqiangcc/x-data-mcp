@@ -96,8 +96,8 @@ run("finish_item_success", () => {
     { success: true, evidence: { rows: 5 } }, "2026-01-02T00:02:00Z");
   repo.close();
   const i = itemRow("i-1");
-  if (i.stage !== "finished" || JSON.parse(i.outcome_json).success !== true ||
-      JSON.parse(i.outcome_json).evidence?.rows !== 5 ||
+  if (i.stage !== "finished" ||
+      i.outcome_json !== '{"success":true,"error":null,"evidence":{"rows":5}}' ||
       t.items_running !== 0n || t.items_finished !== 1n || t.items_succeeded !== 1n ||
       t.state_revision !== 3n) throw new Error(`item=${JSON.stringify(i)} task=${JSON.stringify(t)}`);
   return { stage: "finished", outcome_verbatim: true, counters: "running-1,finished+1,succeeded+1" };
@@ -109,7 +109,8 @@ run("start_and_finish_failure", () => {
     { success: false, error: "io timeout" }, "2026-01-02T00:03:30Z");
   repo.close();
   const i = itemRow("i-2");
-  if (i.stage !== "finished" || JSON.parse(i.outcome_json).error !== "io timeout" ||
+  if (i.stage !== "finished" ||
+      i.outcome_json !== '{"success":false,"error":"io timeout"}' ||
       t.items_finished !== 2n || t.items_succeeded !== 1n ||
       t.state_revision !== 5n) throw new Error(JSON.stringify(t));
   return { outcome_error: true, succeeded_stays: "1" };
@@ -148,7 +149,43 @@ expectCode("empty_run_start", "invalid_input",
   () => TaskAdmission.open(DB, { mode: "readwrite" }).startItem(TID, 5n, " ", "i-1", "2026-01-02T00:05:00Z"));
 expectCode("bad_outcome_shape", "invalid_input",
   () => TaskAdmission.open(DB, { mode: "readwrite" }).finishItem(TID, 5n, "run-0", "i-1", "yes", "2026-01-02T00:05:00Z"));
+expectCode("outcome_unknown_key", "invalid_input",
+  () => TaskAdmission.open(DB, { mode: "readwrite" }).finishItem(TID, 5n, "run-0", "i-1",
+    { success: true, bogus: 1 }, "2026-01-02T00:05:00Z"));
+expectCode("outcome_nonstring_error", "invalid_input",
+  () => TaskAdmission.open(DB, { mode: "readwrite" }).finishItem(TID, 5n, "run-0", "i-1",
+    { success: false, error: 42 }, "2026-01-02T00:05:00Z"));
 expectCode("implicit_mode_denied", "invalid_input", () => TaskAdmission.open(DB));
+
+// finish while cancel_requested — no status arm on FinishItem
+run("finish_under_cancel_requested", () => {
+  const p = join(FIX, "cancel.db");
+  copyFileSync(DB, p);
+  // fresh task on the copy: admit+claim+start, then mark cancel_requested
+  const d = openDatabase(p, { mode: "readwrite" });
+  const r0 = new TaskAdmission(d, null);
+  const a = r0.admit({
+    requestId: "req-cr", commandJson: JSON.stringify({ key: { operation: "c3" } }),
+    executionKeyJson: "{}", workJson: "{}",
+    items: [{ item_id: "i-c", target_json: "{}", progress_unit: "d", frozen_inputs_json: "{}", scope_keys_json: "[]" }],
+    scopes: ["s-C"], runId: "run-9", createdAt: "2026-01-02T00:00:50Z",
+  });
+  r0.claim(a.task_id, 0n, "run-9", "2026-01-02T00:00:55Z");
+  r0.startItem(a.task_id, 1n, "run-9", "i-c", "2026-01-02T00:00:56Z");
+  d.run("UPDATE tasks SET status='cancel_requested',state_revision=state_revision WHERE task_id=?", a.task_id);
+  d.close();
+  const repo = TaskAdmission.open(p, { mode: "readwrite" });
+  const t = repo.finishItem(a.task_id, 2n, "run-9", "i-c",
+    { success: false, error: "cancelled mid-run" }, "2026-01-02T00:01:00Z");
+  repo.close();
+  const d2 = openDatabase(p);
+  const i = d2.get("SELECT * FROM task_items WHERE task_id=? AND item_id='i-c'", a.task_id);
+  d2.close();
+  if (t.status !== "cancel_requested" || i.stage !== "finished" ||
+      i.outcome_json !== '{"success":false,"error":"cancelled mid-run"}' ||
+      t.state_revision !== 3n) throw new Error(`${JSON.stringify(i)} ${JSON.stringify(t)}`);
+  return { status: "cancel_requested", item_finished: true };
+});
 
 // start on a still-pending task -> revision_conflict (new fixture task)
 run("start_on_pending_task", () => {

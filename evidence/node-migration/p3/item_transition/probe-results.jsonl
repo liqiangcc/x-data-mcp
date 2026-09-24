@@ -11,6 +11,9 @@
 {"family":"item_transition","id":"success_with_error","status":"PASS","detail":"invalid_input success with error","expected":"invalid_input","actual":"invalid_input"}
 {"family":"item_transition","id":"empty_run_start","status":"PASS","detail":"invalid_input empty run identity","expected":"invalid_input","actual":"invalid_input"}
 {"family":"item_transition","id":"bad_outcome_shape","status":"PASS","detail":"invalid_input task_admission: outcome must be {success:boolean,...}","expected":"invalid_input","actual":"invalid_input"}
+{"family":"item_transition","id":"outcome_unknown_key","status":"PASS","detail":"invalid_input task_admission: unknown outcome key bogus","expected":"invalid_input","actual":"invalid_input"}
+{"family":"item_transition","id":"outcome_nonstring_error","status":"PASS","detail":"invalid_input task_admission: outcome.error must be string|null","expected":"invalid_input","actual":"invalid_input"}
 {"family":"item_transition","id":"implicit_mode_denied","status":"PASS","detail":"invalid_input task_admission: explicit mode readwrite|create required","expected":"invalid_input","actual":"invalid_input"}
+{"family":"item_transition","id":"finish_under_cancel_requested","status":"PASS","detail":null,"expected":{"status":"cancel_requested","item_finished":true},"actual":null}
 {"family":"item_transition","id":"start_on_pending_task","status":"PASS","detail":null,"expected":{"code":"revision_conflict"},"actual":null}
 {"family":"item_transition","id":"reopen_readback","status":"PASS","detail":null,"expected":{"durable":true,"revision":"5"},"actual":null}
