@@ -1,0 +1,13 @@
+{"family":"request_repository","id":"admit_first","status":"PASS","detail":null,"expected":{"reused":false,"digest_verified":true},"actual":null}
+{"family":"request_repository","id":"admit_replay_identical","status":"PASS","detail":null,"expected":{"reused":true,"bytes_identical":true},"actual":null}
+{"family":"request_repository","id":"admit_conflict_no_mutation","status":"PASS","detail":null,"expected":{"code":"conflict","unchanged":true},"actual":null}
+{"family":"request_repository","id":"admit_terminal","status":"PASS","detail":null,"expected":{"outcome_kind":"terminal","nullables_preserved":true},"actual":null}
+{"family":"request_repository","id":"check_violation_rolls_back","status":"PASS","detail":null,"expected":{"rolled_back":true,"driver_code":"SQLITE_CONSTRAINT_CHECK"},"actual":null}
+{"family":"request_repository","id":"empty_request_id","status":"PASS","detail":"invalid_input empty request_id","expected":"invalid_input","actual":"invalid_input"}
+{"family":"request_repository","id":"bad_command_json","status":"PASS","detail":"invalid_input command is not valid JSON","expected":"invalid_input","actual":"invalid_input"}
+{"family":"request_repository","id":"bad_outcome_shape","status":"PASS","detail":"invalid_input outcome must be {kind:'task',taskId} or {kind:'terminal',terminalJson}","expected":"invalid_input","actual":"invalid_input"}
+{"family":"request_repository","id":"task_outcome_no_taskid","status":"PASS","detail":"invalid_input task outcome requires non-empty taskId","expected":"invalid_input","actual":"invalid_input"}
+{"family":"request_repository","id":"implicit_readonly_denied","status":"PASS","detail":"invalid_input request_repository: explicit mode readwrite|create required","expected":"invalid_input","actual":"invalid_input"}
+{"family":"request_repository","id":"open_garbage","status":"PASS","detail":"corrupt file is not a database","expected":"corrupt","actual":"corrupt"}
+{"family":"request_repository","id":"stored_digest_tamper","status":"PASS","detail":null,"expected":{"code":"inconsistent","message":"command digest mismatch"},"actual":null}
+{"family":"request_repository","id":"selftest_req","status":"FAIL","detail":"expected reuse of a nonexistent row — STOP","expected":null,"actual":null}
