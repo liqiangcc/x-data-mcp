@@ -94,9 +94,24 @@ export async function serve({
   // Per-connection state: {rec(worker), sock, localStop}.
   const clients = new Set();
   const active = () => [...clients].filter((c) => !c.rec.finished).length;
-  // Idle client workers — spawned once, reassigned per conn.
+  // Idle client workers — spawned once, reassigned per conn. Pooled
+  // workers hold a grown V8 isolate heap (~16MB each under load);
+  // beyond max_clients conns they idle indefinitely — evict after an
+  // idle window so RSS returns toward the isolate floor. The next
+  // conn then pays a fresh spawn (~112ms) — identical to Rust's
+  // thread-per-conn spawn model under cold accept.
   const pool = [];
+  const IDLE_EVICT_MS = 10_000;
   const allClientWorkers = new Set(); // every spawned client worker
+  const evict = (rec) => {
+    const i = pool.indexOf(rec);
+    if (i < 0) return; // reassigned or already gone
+    pool.splice(i, 1);
+    allClientWorkers.delete(rec);
+    rec.done ??= { type: "done", ok: true };
+    rec.finished = true;
+    rec.worker.terminate().catch(() => {});
+  };
   const releaseClient = (client) => {
     clients.delete(client);
     const rec = client.rec;
@@ -106,6 +121,8 @@ export async function serve({
       if (m.type === "idle") {
         rec.worker.off("message", onIdle);
         pool.push(rec);
+        rec.idleTimer = setTimeout(() => evict(rec), IDLE_EVICT_MS);
+        rec.idleTimer.unref?.();
       } else if (m.type === "done") {
         rec.worker.off("message", onIdle);
         rec.panicked = !m.ok; rec.finished = true;
@@ -194,6 +211,7 @@ export async function serve({
     // is ~100ms+); 'assign' runs the handler factory fresh per conn —
     // factory()-per-conn semantics preserved.
     let rec = pool.pop() ?? mkWorker("client");
+    if (rec.idleTimer) { clearTimeout(rec.idleTimer); rec.idleTimer = null; }
     allClientWorkers.add(rec);
     rec.assigned = false;
     const client = { rec, sock, localStop: false };

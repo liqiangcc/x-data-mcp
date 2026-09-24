@@ -105,6 +105,12 @@ if (initErr) {
   // per conn); 'release' drops it and returns the worker to the pool.
   parentPort.on("message", (msg) => {
     if (msg.type === "stop") { done(true); return; }
+    if (msg.type === "mem_probe") { // diag: heap composition per stage
+      import("node:v8").then((v8) => parentPort.postMessage({
+        type: "mem", id: msg.id,
+        mem: { ...process.memoryUsage(), heap: v8.getHeapStatistics() } }));
+      return;
+    }
     if (msg.type === "assign") {
       initApi()
         .then(() => parentPort.postMessage({ type: "assigned" }))
