@@ -27,11 +27,14 @@ export class RequestRepository {
       throw new StorageError("invalid_input",
         "request_repository: explicit mode readwrite|create required");
     }
-    const db = openDatabase(path, { mode });
-    try {
-      const capability = gateDatabase(path);
-      return new RequestRepository(db, capability);
-    } catch (e) { db.close(); throw e; }
+    // Gate BEFORE any writable open: the gate's readonly handle can
+    // never create or mutate a file, so a missing/garbage/uninitialized
+    // path fails closed with zero artifacts. "create" remains explicit
+    // but still requires a gated existing schema — it does not
+    // bootstrap an uninitialized database (that is the schema-init
+    // path, a future task).
+    const capability = gateDatabase(path);
+    return new RequestRepository(openDatabase(path, { mode }), capability);
   }
   constructor(db, capability) {
     this._db = db;

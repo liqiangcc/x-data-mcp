@@ -9,4 +9,8 @@
 {"family":"request_repository","id":"task_outcome_no_taskid","status":"PASS","detail":"invalid_input task outcome requires non-empty taskId","expected":"invalid_input","actual":"invalid_input"}
 {"family":"request_repository","id":"implicit_readonly_denied","status":"PASS","detail":"invalid_input request_repository: explicit mode readwrite|create required","expected":"invalid_input","actual":"invalid_input"}
 {"family":"request_repository","id":"open_garbage","status":"PASS","detail":"corrupt file is not a database","expected":"corrupt","actual":"corrupt"}
+{"family":"request_repository","id":"create_missing_no_artifact","status":"PASS","detail":null,"expected":{"rejected":"unavailable","artifact_created":false},"actual":null}
+{"family":"request_repository","id":"create_garbage_unchanged","status":"PASS","detail":null,"expected":{"rejected":"corrupt","bytes_unchanged":true},"actual":null}
+{"family":"request_repository","id":"create_empty_unchanged","status":"PASS","detail":null,"expected":{"rejected":"unavailable","still_zero_bytes":true},"actual":null}
+{"family":"request_repository","id":"readwrite_missing_no_artifact","status":"PASS","detail":null,"expected":{"rejected":"unavailable","artifact_created":false},"actual":null}
 {"family":"request_repository","id":"stored_digest_tamper","status":"PASS","detail":null,"expected":{"code":"inconsistent","message":"command digest mismatch"},"actual":null}

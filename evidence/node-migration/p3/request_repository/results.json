@@ -1,5 +1,5 @@
 {
-  "task_id": "NM-041",
+  "task_id": "NM-041-R1",
   "baseline_sha": "366382d16b429a4d9185791f297b2bd5e89a54c2",
   "source_ported": "task_control/service.rs::accept (request-id admission) + sqlite_tasks.rs INSERT INTO requests",
   "contract": [
@@ -13,9 +13,9 @@
   "probe": {
     "command": "node scripts/node_migration_p3/request_repository_probe.mjs .",
     "exit": 0,
-    "cases": 12,
+    "cases": 16,
     "totals": {
-      "pass": 12,
+      "pass": 16,
       "fail": 0,
       "not_run": 0
     },
@@ -24,7 +24,8 @@
       "rollback": 1,
       "boundary": 5,
       "integrity": 1,
-      "selftest": "exit 1"
+      "selftest": "exit 1",
+      "gate_ordering": 4
     }
   },
   "regressions": {
@@ -35,5 +36,7 @@
     "NM-036": "35/35",
     "NM-035": "23/23"
   },
-  "limits": "no task creation/CAS/revision/occupancy/worker execution/crash recovery/services/production readiness"
+  "limits": "no task creation/CAS/revision/occupancy/worker execution/crash recovery/services/production readiness",
+  "review": "REVIEW-NM-041 R0 + TASK-NM-041-R1 — gate BEFORE writable open",
+  "r1_fix": "open() now runs gateDatabase (readonly — cannot create/mutate) BEFORE openDatabase(mode). mode:'create' remains explicit but only admits already-gated schemas; missing/garbage/uninitialized paths reject with zero artifacts and unchanged bytes. Probes: create_missing_no_artifact, create_garbage_unchanged, create_empty_unchanged, readwrite_missing_no_artifact."
 }

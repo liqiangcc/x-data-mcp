@@ -2,7 +2,7 @@
 // Synthetic DBs only. Exit nonzero on FAIL.
 // Usage: node request_repository_probe.mjs <root> [selftest]
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = process.argv[2] || ".";
@@ -125,6 +125,48 @@ expectCode("implicit_readonly_denied", "invalid_input",
   () => RequestRepository.open(DB)); // mode required explicitly
 expectCode("open_garbage", "corrupt",
   () => { copyFileSync(join(SRC, "garbage.bin"), join(FIX, "g.db")); RequestRepository.open(join(FIX, "g.db"), { mode: "readwrite" }); });
+
+// gate-before-write ordering: no artifact/mutation on rejection paths
+run("create_missing_no_artifact", () => {
+  const p = join(FIX, "never-created.db");
+  try { RequestRepository.open(p, { mode: "create" }); } catch (e) {
+    if (e.code !== "unavailable") throw e;
+    if (existsSync(p) || existsSync(p + "-wal") || existsSync(p + "-shm")) {
+      throw new Error("rejection left an artifact");
+    }
+    return { rejected: e.code, artifact_created: false };
+  }
+  throw new Error("create on missing path succeeded");
+});
+run("create_garbage_unchanged", () => {
+  const p = join(FIX, "g2.db");
+  copyFileSync(join(SRC, "garbage.bin"), p);
+  const before = sha(p);
+  try { RequestRepository.open(p, { mode: "create" }); } catch (e) {
+    if (e.code !== "corrupt") throw e;
+    if (sha(p) !== before) throw new Error("garbage mutated");
+    return { rejected: e.code, bytes_unchanged: true };
+  }
+  throw new Error("create on garbage succeeded");
+});
+run("create_empty_unchanged", () => {
+  const p = join(FIX, "e2.db");
+  copyFileSync(join(SRC, "empty.db"), p);
+  try { RequestRepository.open(p, { mode: "create" }); } catch (e) {
+    if (e.code !== "unavailable" || !e.message.includes("schema 0")) throw e;
+    if (statSync(p).size !== 0) throw new Error("empty file mutated");
+    return { rejected: e.code, still_zero_bytes: true };
+  }
+  throw new Error("create on uninitialized succeeded");
+});
+run("readwrite_missing_no_artifact", () => {
+  const p = join(FIX, "never2.db");
+  try { RequestRepository.open(p, { mode: "readwrite" }); } catch (e) {
+    if (e.code !== "unavailable" || existsSync(p)) throw e;
+    return { rejected: e.code, artifact_created: false };
+  }
+  throw new Error("readwrite on missing path succeeded");
+});
 
 // replay of tampered store -> inconsistent (stored digest re-verified)
 run("stored_digest_tamper", () => {

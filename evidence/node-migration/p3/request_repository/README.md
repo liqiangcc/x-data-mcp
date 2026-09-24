@@ -7,7 +7,7 @@ byte replay -> `reused:true`, same-ID different-command -> `conflict`
 
 ## Contents
 
-- `probe-results.jsonl` — 12 rows, all PASS.
+- `probe-results.jsonl` — 16 rows, all PASS.
 - `negative-selftest.jsonl` (exit 1), `results.json`, `SHA256SUMS`.
 
 ## Reproduce
@@ -26,3 +26,5 @@ node scripts/node_migration_p3/request_repository_probe.mjs . req  # selftest, e
 - Digest = sha256(command bytes), computed at admission; byte-equality
   replay is stricter-equal to Rust's decoded-command comparison for
   canonical JSON.
+
+R1: gate runs before the writable open — create mode on missing/garbage/uninitialized paths rejects with no artifact and unchanged bytes (REVIEW-NM-041 R0 / TASK-NM-041-R1).
