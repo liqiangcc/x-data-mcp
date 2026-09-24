@@ -1,0 +1,5 @@
+{"op":"seed","records":"valid_daily.json,valid_yearly.json,nm052_result.json|pub=res-ch|nohead","results":true}
+{"op":"exec_sql","sql":"UPDATE market_update_results SET audit_json='{}' WHERE result_id='res-nc'"}
+{"op":"read_result","result_id":"res-nc"}
+{"op":"exec_sql","sql":"UPDATE publication_batches SET receipt_json='{}' WHERE publication_id='res-ch'"}
+{"op":"read_result","result_id":"res-ch"}

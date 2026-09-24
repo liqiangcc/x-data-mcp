@@ -1,0 +1,68 @@
+{
+  "task_id": "NM-052",
+  "baseline_sha": "a063d7eb98060feb0386e51decd344108bca7c3f",
+  "source_ported": "src/sqlite_market.rs stage/insert_record/write_day_segments + envelope.rs pack + manifest.rs build + update.rs read_result",
+  "modules": [
+    "src_node/market/market_write.mjs",
+    "src_node/market/market_read.mjs (result/receipt/binding reads + requireRefs)"
+  ],
+  "contract": [
+    "stage: compat::check -> BEGIN IMMEDIATE -> base_record -> validate_base_identity -> insert_record -> COMMIT; inner MarketError propagates unwrapped (adapter transaction() would remap)",
+    "insert_record: data_versions('staging', verbatim metadata projection, envelope_json via pack, content_digest=integrity_sha256, digest_format, evidence_digest recompute) + yearly_bars/yearly_lineage (yearly) + bar_segments/segment_bars + manifest::build (daily) + payloads",
+    "envelope pack verbatim: pack_daily($segments)/pack_yearly(annual_bars), shared-evidence payload extraction, content-addressed ids=sha256(serialized)",
+    "manifest build: AVL slice/concat/rebalance/mk/leaf/build_balanced; base-piece reuse of head manifest subtrees",
+    "read_result/item_receipt/range_receipt: digest check, require_refs, association, no_change==base==result, algorithm_version, base/result re-read, task binding (revision+finished+success), publication receipt match"
+  ],
+  "differential": {
+    "new_ops": [
+      "stage",
+      "read_result",
+      "range_receipt",
+      "item_receipt",
+      "lookup_task"
+    ],
+    "market_digest": "symbol-normalized ordered dump of all 11 market tables -> byte-identical staging proven",
+    "scenarios": {
+      "market_write": 20,
+      "market_write_tamper": 4,
+      "market_write_tamper_result": 5
+    },
+    "diffs": 0
+  },
+  "harness_caught": [
+    "adapter transaction() re-wraps inner MarketError -> stage uses explicit BEGIN IMMEDIATE",
+    "Base kind code map missing base_unavailable"
+  ],
+  "tamper_cases": [
+    "payload delete -> staged read fails closed",
+    "audit_json overwrite -> range audit digest mismatch",
+    "publication receipt overwrite -> range publication receipt mismatch"
+  ],
+  "probe": {
+    "command": "node scripts/node_migration_p3/diff_harness_probe.mjs .",
+    "exit": 0,
+    "scenarios": 17,
+    "ops": 149,
+    "diffs": 0
+  },
+  "regressions": {
+    "NM-051": "in-suite",
+    "NM-050": "in-suite",
+    "NM-049": "17 scenarios",
+    "NM-048": "10/10",
+    "NM-047": "14/14",
+    "NM-046": "17/17",
+    "NM-045": "15/15",
+    "NM-044": "19/19",
+    "NM-043": "13/13",
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "no publish commit (commit_range/commit_publication/head CAS), no compact backend, no gaps/update tasks, no services"
+}

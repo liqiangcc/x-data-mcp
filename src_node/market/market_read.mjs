@@ -503,3 +503,133 @@ export const MarketRepository = {
 
 export const __decStr = decStr;
 export const __toRfc3339 = toRfc3339;
+export const __nodeGet = nodeGet;
+export const __metadata = metadata;
+export const __evidenceRows = evidenceRows;
+export const __annualValues = annualValues;
+export const __lineageValues = lineageValues;
+export const __baseRecord = baseRecord;
+export const __validateBaseIdentity = validateBaseIdentity;
+
+// ---------------- NM-052: update.rs result/receipt reads ----------------
+const resultDigest = (audit, receipt) => sha(`[${JSON.stringify(audit)},${JSON.stringify(receipt)}]`);
+
+// envelope::require_refs — fail closed on stored audit referencing absent payloads
+export const requireRefs = (db, v) => {
+  if (v !== null && typeof v === "object") {
+    if (!Array.isArray(v)) {
+      const r = v.$ref;
+      if (typeof r === "string") {
+        if (r.startsWith("payload:") || r.startsWith("annual_bars:")) {
+          fetchPayload(db, r.split(":")[1]);
+        } else if (r !== "records" && r !== "segments") {
+          throw integrity("unknown audit envelope reference");
+        }
+      }
+      for (const x of Object.values(v)) requireRefs(db, x);
+    } else {
+      for (const x of v) requireRefs(db, x);
+    }
+  }
+};
+
+// sqlite_tasks::read_item_binding (task head + item + marker + occupancy)
+const readItemBinding = (db, taskId, itemId) => {
+  const h = db.get(
+    "SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,last_progress_at,result_json,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest FROM tasks WHERE task_id=?",
+    taskId);
+  const i = db.get(
+    "SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=? AND item_id=?",
+    taskId, itemId);
+  if (!h || !i) return null;
+  const item = {
+    spec: {
+      item_id: i.item_id, target: JSON.parse(i.target_json),
+      progress_unit: i.progress_unit, frozen_inputs: JSON.parse(i.frozen_inputs_json),
+      scope_keys: JSON.parse(i.scope_keys_json),
+    },
+    stage: i.stage,
+    outcome: i.outcome_json === null ? null : JSON.parse(i.outcome_json),
+  };
+  const marker = item.spec.frozen_inputs?.selection_evidence?.evidence_digest;
+  if (typeof marker === "string" && marker !== h.evidence_digest) {
+    throw integrity("item evidence marker mismatches task shared evidence");
+  }
+  const bound = db.get(
+    "SELECT count(*) AS c FROM scope_occupancy WHERE task_id=? AND scope_key IN (SELECT value FROM json_each(?))",
+    taskId, i.scope_keys_json).c;
+  return {
+    head: { state_revision: h.state_revision },
+    item,
+    scopes_bound: bound > 0n && bound === BigInt(item.spec.scope_keys.length),
+  };
+};
+
+export const readResult = (db, id) => {
+  if (isCompactSchema(db)) throw unsupportedCompact();
+  const row = db.get(
+    "SELECT task_id,item_id,base_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM market_update_results WHERE result_id=?",
+    id);
+  if (!row) return null;
+  const [taskId, itemId, baseId, versionId, noChange] =
+    [row.task_id, row.item_id, row.base_version_id, row.result_version_id, row.no_change === 1n];
+  if (resultDigest(row.audit_json, row.receipt_json) !== row.result_sha256) {
+    throw integrity("range audit digest mismatch");
+  }
+  const audit = JSON.parse(row.audit_json);
+  requireRefs(db, audit.segment);
+  const command = audit.command;
+  const receipt = JSON.parse(row.receipt_json);
+  const intentMatch = command.intent &&
+    Object.keys(command.intent).length === 1 &&
+    command.intent.Daily !== undefined &&
+    command.intent.Daily.expected_head === baseId;
+  if (command.publication_id !== id || command.task_id !== taskId ||
+      command.item_id !== itemId || command.version_id !== versionId ||
+      receipt.publication_id !== id || receipt.task_id !== taskId ||
+      receipt.version_id !== versionId ||
+      audit.evidence?.base_version_id !== baseId ||
+      audit.no_change !== noChange || !intentMatch ||
+      noChange !== (baseId === versionId) ||
+      audit.algorithm_version !== "local-range-update-v1") {
+    throw integrity("range result association mismatch");
+  }
+  const base = readRecord(db, baseId, true, true);
+  const result = readRecord(db, versionId, true, true);
+  if (audit.base_integrity_sha256 !== base.raw.integrity_sha256 ||
+      audit.result_integrity_sha256 !== result.raw.integrity_sha256) {
+    throw integrity("range result version digest mismatch");
+  }
+  const binding = readItemBinding(db, taskId, itemId);
+  if (!binding) throw integrity("range result task missing");
+  if (binding.head.state_revision < BigInt(receipt.task_revision) ||
+      BigInt(receipt.task_revision) <= BigInt(command.expected_revision) ||
+      binding.item.stage !== "finished" ||
+      !(binding.item.outcome && binding.item.outcome.success === true)) {
+    throw integrity("range result lacks successful task item");
+  }
+  if (!noChange) {
+    const published = db.get(
+      "SELECT receipt_json FROM publication_batches WHERE publication_id=?", id);
+    if (!published) throw integrity("range publication missing");
+    const pubReceipt = JSON.parse(published.receipt_json);
+    if (pubReceipt.publication_id !== receipt.publication_id ||
+        pubReceipt.version_id !== receipt.version_id ||
+        pubReceipt.task_id !== receipt.task_id ||
+        pubReceipt.task_revision !== receipt.task_revision) {
+      throw integrity("range publication receipt mismatch");
+    }
+  }
+  return [audit, receipt];
+};
+
+export const itemReceipt = (db, task, item) => {
+  const id = db.get(
+    "SELECT result_id FROM market_update_results WHERE task_id=? AND item_id=?",
+    task, item)?.result_id;
+  if (id === undefined) return null;
+  const r = readResult(db, id);
+  if (r === null) throw integrity("range item receipt missing");
+  return r[1];
+};
+export const rangeReceipt = (db, id) => readResult(db, id)?.[1] ?? null;

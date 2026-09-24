@@ -15,6 +15,7 @@ export class MarketError extends Error {
     this.code = kind === "integrity" ? "inconsistent"
       : kind === "invalid" ? "invalid_input"
       : kind === "conflict" ? "conflict"
+      : kind === "base" ? "base_unavailable"
       : kind === "storage" ? "unavailable" : kind;
   }
 }
@@ -451,3 +452,5 @@ export const __decNorm = decNorm;
 export const __cmpDec = cmpDec;
 export const __ucEq = ucEq;
 export const __parseDate = parseDate;
+export const __ser = sortSer;
+export const __jsonEq = (a, b) => sortSer(a) === sortSer(b);

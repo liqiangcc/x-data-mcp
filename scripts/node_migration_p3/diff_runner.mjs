@@ -13,6 +13,39 @@ const { openDatabase, StorageError } = await import("../../src_node/storage/sqli
 const { ser } = await import("../../src_node/storage/verification_storage.mjs");
 const RC = await import("../../src_node/market/record_codec.mjs");
 const MR = await import("../../src_node/market/market_read.mjs");
+const MW = await import("../../src_node/market/market_write.mjs");
+const marketDigest = () => {
+  const tables = [
+    ["data_versions", "version_id"],
+    ["payloads", "payload_id"],
+    ["bar_segments", "segment_id"],
+    ["segment_bars", "segment_id, trade_date"],
+    ["manifest_nodes", "node_id"],
+    ["yearly_bars", "version_id, year"],
+    ["yearly_lineage", "version_id"],
+    ["effective_heads", "symbol, period, adjustment"],
+    ["publication_batches", "publication_id"],
+    ["task_publications", "task_id, version_id"],
+    ["market_update_results", "result_id"],
+  ];
+  let acc = "";
+  for (const [table, pk] of tables) {
+    acc += table;
+    for (const r of db.query(`SELECT * FROM ${table} ORDER BY ${pk}`)) {
+      const vals = Object.values(r).map((v) =>
+        v === null ? null : typeof v === "bigint"
+          ? (v >= -(2n ** 53n) && v <= 2n ** 53n ? Number(v) : v.toString())
+          : v instanceof Uint8Array
+            ? [...v].map((x) => x.toString(16).padStart(2, "0")).join("")
+            : v);
+      acc += JSON.stringify(vals) + "\n";
+    }
+  }
+  for (const [k, real] of syms) {
+    if (!k.startsWith("rev:")) acc = acc.split(real).join(`$${k}`);
+  }
+  return sha(acc);
+};
 
 const preseeded = process.env.DIFF_NOINIT === "1";
 
@@ -197,6 +230,40 @@ for (const line of lines) {
       }
       case "seed": {
         rec = { status: "ok", seeded: true };
+        break;
+      }
+      case "lookup_task": {
+        const ids = db.query("SELECT task_id FROM tasks ORDER BY rowid").map((r) => r.task_id);
+        if (op.sym) ids.forEach((id, i) => syms.set(i === 0 ? op.sym : `${op.sym}_${i + 1}`, id));
+        rec = { status: "ok", task_id: ids[0] ?? null };
+        break;
+      }
+      case "stage": {
+        try {
+          const dir = process.env.DIFF_FIXTURES || "scripts/node_migration_p3/records";
+          const raw = JSON.parse(readFileSync(`${dir}/${op.record}`, "utf8"));
+          MW.stage(db, raw);
+          rec = { status: "ok", digest: marketDigest() };
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
+        break;
+      }
+      case "read_result":
+      case "range_receipt": {
+        try {
+          const r = MR.readResult(db, resolve(op.result_id));
+          rec = r === null ? { status: "ok", found: false }
+            : { status: "ok", found: true,
+                audit_sha256: sha(RC.__ser(r[0])),
+                receipt: r[1] };
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
+        break;
+      }
+      case "item_receipt": {
+        try {
+          const r = MR.itemReceipt(db, resolve(op.task_id), op.item_id);
+          rec = r === null ? { status: "ok", found: false }
+            : { status: "ok", found: true, receipt: r };
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
         break;
       }
       case "exec_sql": {

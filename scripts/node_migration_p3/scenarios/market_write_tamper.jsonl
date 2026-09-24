@@ -1,0 +1,4 @@
+{"op":"seed","records":"valid_daily.json,valid_yearly.json,nm052_result.json|pub=res-ch|nohead","results":true}
+{"op":"stage","record":"nm052_daily.json"}
+{"op":"exec_sql","sql":"DELETE FROM payloads WHERE payload_id IN (SELECT payload_id FROM payloads LIMIT 1)"}
+{"op":"read_record","version_id":"nm052-daily","mode":"candidate"}

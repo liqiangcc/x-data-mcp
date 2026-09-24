@@ -14,6 +14,7 @@ use crate::{
         TaskRepository, TaskSnapshot,
     },
 };
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, collections::BTreeSet, fs, io::Write};
 
@@ -35,6 +36,76 @@ fn market_code(e: &MarketError) -> String {
 
 fn storage_task(e: impl std::fmt::Display) -> Error {
     Error::StorageUnavailable(e.to_string())
+}
+
+fn resolve_str(v: &Value, syms: &Syms) -> String {
+    let s = v.as_str().unwrap();
+    if let Some(key) = s.strip_prefix('$') {
+        syms.get(key).cloned().unwrap_or_else(|| s.to_string())
+    } else {
+        s.to_string()
+    }
+}
+
+/// Deterministic digest over all market tables: ordered rows, values
+/// normalized (int->number, text->string, blob->hex). Byte-identical
+/// staging must produce identical digests on both runners.
+fn market_digest(repo: &SqliteTasks, syms: &Syms) -> String {
+    repo.read(|c| {
+        let tables: &[(&str, &str)] = &[
+            ("data_versions", "version_id"),
+            ("payloads", "payload_id"),
+            ("bar_segments", "segment_id"),
+            ("segment_bars", "segment_id, trade_date"),
+            ("manifest_nodes", "node_id"),
+            ("yearly_bars", "version_id, year"),
+            ("yearly_lineage", "version_id"),
+            ("effective_heads", "symbol, period, adjustment"),
+            ("publication_batches", "publication_id"),
+            ("task_publications", "task_id, version_id"),
+            ("market_update_results", "result_id"),
+        ];
+        let mut acc = String::new();
+        for (table, pk) in tables {
+            let sql = format!("SELECT * FROM {table} ORDER BY {pk}");
+            let mut stmt = c.prepare(&sql).map_err(storage_task)?;
+            let n = stmt.column_count();
+            let rows = stmt
+                .query_map([], |r| {
+                    (0..n)
+                        .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .map_err(storage_task)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(storage_task)?;
+            acc.push_str(table);
+            for row in rows {
+                let vals: Vec<Value> = row
+                    .iter()
+                    .map(|v| match v {
+                        rusqlite::types::Value::Null => Value::Null,
+                        rusqlite::types::Value::Integer(i) => json!(i),
+                        rusqlite::types::Value::Real(f) => json!(f),
+                        rusqlite::types::Value::Text(t) => json!(t),
+                        rusqlite::types::Value::Blob(b) => {
+                            json!(b.iter().map(|x| format!("{x:02x}")).collect::<String>())
+                        }
+                    })
+                    .collect();
+                acc.push_str(&serde_json::to_string(&vals).unwrap());
+                acc.push('\n');
+            }
+        }
+        let mut acc = acc;
+        for (k, real) in syms {
+            if !k.starts_with("rev:") {
+                acc = acc.replace(real.as_str(), &format!("${k}"));
+            }
+        }
+        Ok(crate::hash::sha256(acc.as_bytes()))
+    })
+    .unwrap()
 }
 
 fn err_code(e: &Error) -> String {
@@ -279,6 +350,72 @@ fn run() {
                 Err(e) => json!({"status":"error","code":err_code(&e),"message":e.to_string()}),
             },
             "seed" => json!({"status":"ok","seeded":true}),
+            "lookup_task" => {
+                let ids: Vec<String> = repo
+                    .read(|c| {
+                        c.prepare("SELECT task_id FROM tasks ORDER BY rowid")
+                            .map_err(storage_task)?
+                            .query_map([], |r| r.get::<_, String>(0))
+                            .map_err(storage_task)?
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(storage_task)
+                    })
+                    .unwrap();
+                if let Some(sym) = op.get("sym").and_then(|s| s.as_str()) {
+                    for (i, id) in ids.iter().enumerate() {
+                        let key = if i == 0 { sym.to_string() } else { format!("{sym}_{}", i + 1) };
+                        syms.insert(key, id.clone());
+                    }
+                }
+                json!({"status":"ok","task_id":ids.first()})
+            }
+            "stage" => {
+                let dir = std::env::var("DIFF_FIXTURES")
+                    .unwrap_or_else(|_| "scripts/node_migration_p3/records".into());
+                let name = op["record"].as_str().unwrap();
+                let raw: Value = serde_json::from_str(
+                    &fs::read_to_string(std::path::Path::new(&dir).join(name)).unwrap(),
+                ).unwrap();
+                let market = SqliteMarket::new(repo.clone());
+                match market.stage(&raw) {
+                    Ok(()) => json!({"status":"ok","digest":market_digest(&repo, &syms)}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
+                }
+            }
+            "read_result" => {
+                let id = resolve_str(&op["result_id"], &syms);
+                let market = SqliteMarket::new(repo.clone());
+                match market.read(|c| crate::sqlite_market::update::read_result(c, &id)) {
+                    Ok(None) => json!({"status":"ok","found":false}),
+                    Ok(Some((audit, receipt))) => json!({"status":"ok","found":true,
+                        "audit_sha256":crate::hash::sha256(serde_json::to_string(&audit).unwrap().as_bytes()),
+                        "receipt":serde_json::to_value(&receipt).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
+                }
+            }
+            "range_receipt" => {
+                let id = resolve_str(&op["result_id"], &syms);
+                let market = SqliteMarket::new(repo.clone());
+                match market.read(|c| crate::sqlite_market::update::read_result(c, &id)) {
+                    Ok(None) => json!({"status":"ok","found":false}),
+                    Ok(Some((audit, receipt))) => json!({"status":"ok","found":true,
+                        "audit_sha256":crate::hash::sha256(serde_json::to_string(&audit).unwrap().as_bytes()),
+                        "receipt":serde_json::to_value(&receipt).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
+                }
+            }
+            "item_receipt" => {
+                let task = resolve_str(&op["task_id"], &syms);
+                let item = op["item_id"].as_str().unwrap().to_string();
+                let market = SqliteMarket::new(repo.clone());
+                use crate::market_update::publication::RangeRepository;
+                match RangeRepository::item_receipt(&market, &task, &item) {
+                    Ok(None) => json!({"status":"ok","found":false}),
+                    Ok(Some(r)) => json!({"status":"ok","found":true,
+                        "receipt":serde_json::to_value(&r).unwrap()}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
+                }
+            }
             "exec_sql" => {
                 let c = rusqlite::Connection::open(&db_path).unwrap();
                 match c.execute_batch(op["sql"].as_str().unwrap()) {
@@ -454,14 +591,29 @@ fn build_market_fixture() {
         .unwrap_or_else(|_| "scripts/node_migration_p3/records".into());
     let list = std::env::var("DIFF_RECORDS").expect("DIFF_RECORDS");
     let market = SqliteMarket::new(repo.clone());
-    for name in list.split(',') {
+    let mut result_vid: Option<String> = None;
+    for entry in list.split(',') {
+        let mut parts = entry.split('|');
+        let name = parts.next().unwrap();
+        let mut pub_override: Option<String> = None;
+        let mut nohead = false;
+        for m in parts {
+            if let Some(p) = m.strip_prefix("pub=") {
+                pub_override = Some(p.to_string());
+            } else if m == "nohead" {
+                nohead = true;
+            }
+        }
         let raw: Value = serde_json::from_str(
             &fs::read_to_string(std::path::Path::new(&dir).join(name)).unwrap(),
         )
         .unwrap();
         market.stage(&raw).expect("stage");
         let vid = raw["version_id"].as_str().unwrap().to_string();
-        let pub_id = format!("pub-{vid}");
+        let pub_id = pub_override.unwrap_or_else(|| format!("pub-{vid}"));
+        if pub_id == "res-ch" {
+            result_vid = Some(vid.clone());
+        }
         let command = serde_json::to_string(&Publication {
             publication_id: pub_id.clone(),
             version_id: vid.clone(),
@@ -482,6 +634,7 @@ fn build_market_fixture() {
         let p: String = raw["period"].as_str().unwrap().to_string();
         let period = if p == "Day" { "day" } else { "year" }.to_string();
         let symbol = raw["symbol"].as_str().unwrap().to_string();
+        let head_sql = "INSERT OR REPLACE INTO effective_heads VALUES(?1,?2,'qfq',?3)";
         repo.write(|c| {
             c.execute(
                 "UPDATE data_versions SET state='published' WHERE version_id=?1",
@@ -498,13 +651,160 @@ fn build_market_fixture() {
                 rusqlite::params![task_id, vid, pub_id],
             )
             .map_err(storage_task)?;
-            c.execute(
-                "INSERT OR REPLACE INTO effective_heads VALUES(?1,?2,'qfq',?3)",
-                rusqlite::params![symbol, period, vid],
-            )
-            .map_err(storage_task)?;
+            if !nohead {
+                c.execute(head_sql, rusqlite::params![symbol, period, vid])
+                    .map_err(storage_task)?;
+            }
             Ok(())
         })
         .unwrap();
+    }
+    // DIFF_RESULTS=1: drive item i1 to finished-success, then seed two
+    // market_update_results rows (no_change + changed) with consistent
+    // command/receipt/digest linkage for read_result coverage.
+    if std::env::var("DIFF_RESULTS").is_ok() {
+        repo.transition(&task_id, 0, "run-pub", Change::Claim).unwrap();
+        repo.transition(&task_id, 1, "run-pub", Change::StartItem("i1".into()))
+            .unwrap();
+        let snap = repo
+            .transition(
+                &task_id,
+                2,
+                "run-pub",
+                Change::FinishItem(
+                    "i1".into(),
+                    ItemOutcome { success: true, error: None, evidence: None },
+                ),
+            )
+            .unwrap();
+        let rev = snap.task.state_revision;
+        // second task for the changed-result row (UNIQUE(task_id,item_id))
+        let acc2 = repo
+            .accept(
+                "req-pub2",
+                &serde_json::from_value::<Command>(json!({
+                    "key":{"operation":"publish","dataset":"market","contract_version":"1"},
+                    "intent":{}
+                }))
+                .unwrap(),
+                &serde_json::from_value::<FrozenWork>(json!({
+                    "items":[{"item_id":"i1","target":{},"progress_unit":"x","frozen_inputs":{},"scope_keys":["pub-scope2"]}],
+                    "scopes":["pub-scope2"]
+                }))
+                .unwrap(),
+                "run-pub",
+                None,
+            )
+            .unwrap();
+        let task2 = match acc2.record.outcome {
+            RequestOutcome::Task(s) => s.task.task_id,
+            _ => panic!("task outcome"),
+        };
+        repo.transition(&task2, 0, "run-pub", Change::Claim).unwrap();
+        repo.transition(&task2, 1, "run-pub", Change::StartItem("i1".into()))
+            .unwrap();
+        repo.transition(
+            &task2,
+            2,
+            "run-pub",
+            Change::FinishItem(
+                "i1".into(),
+                ItemOutcome { success: true, error: None, evidence: None },
+            ),
+        )
+        .unwrap();
+        let base_sha = fs::read_to_string(
+            std::path::Path::new(&dir).join("valid_daily.json"),
+        )
+        .unwrap();
+        let base_sha: Value = serde_json::from_str(&base_sha).unwrap();
+        let base_sha = base_sha["integrity_sha256"].as_str().unwrap().to_string();
+        let res_vid = result_vid.expect("DIFF_RESULTS needs a |pub=res-ch record");
+        let res_sha: String = repo
+            .read(|c| {
+                c.query_row(
+                    "SELECT content_digest FROM data_versions WHERE version_id='legacy-daily'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(storage_task)
+            })
+            .unwrap();
+        let seg_ref: String = repo
+            .read(|c| {
+                c.query_row("SELECT payload_id FROM payloads LIMIT 1", [], |r| r.get(0))
+                    .map_err(storage_task)
+            })
+            .unwrap();
+        let _ = res_sha;
+        for (rid, res_v, no_change, tid) in [
+            ("res-nc", "legacy-daily", true, task_id.clone()),
+            ("res-ch", res_vid.as_str(), false, task2.clone()),
+        ] {
+            let command = json!({
+                "publication_id": rid, "version_id": res_v, "task_id": tid,
+                "item_id": "i1", "run_id": "run-pub", "expected_revision": 0,
+                "intent": {"Daily": {"expected_head": "legacy-daily"}},
+            });
+            let receipt = json!({
+                "publication_id": rid, "version_id": res_v,
+                "task_id": tid, "task_revision": rev,
+            });
+            let result_sha: String = repo
+                .read(|c| {
+                    c.query_row(
+                        "SELECT content_digest FROM data_versions WHERE version_id=?1",
+                        [res_v],
+                        |r| r.get(0),
+                    )
+                    .map_err(storage_task)
+                })
+                .unwrap();
+            let audit = json!({
+                "algorithm_version": "local-range-update-v1",
+                "command": command,
+                "base_integrity_sha256": base_sha,
+                "result_integrity_sha256": result_sha,
+                "segment": {"bars": {"$ref": format!("payload:{seg_ref}")}},
+                "range": {"start": "2025-01-02", "end": "2025-12-31"},
+                "evidence": {"base_version_id": "legacy-daily"},
+                "combined": true,
+                "no_change": no_change,
+            });
+            let audit_json = serde_json::to_string(&audit).unwrap();
+            let receipt_json = serde_json::to_string(&receipt).unwrap();
+            let digest = crate::hash::sha256(
+                serde_json::json!([audit_json, receipt_json]).to_string().as_bytes(),
+            );
+            repo.write(|c| {
+                c.execute(
+                    "INSERT INTO market_update_results VALUES(?1,?2,'i1','legacy-daily',?3,?4,?5,?6,?7)",
+                    rusqlite::params![
+                        rid, tid, res_v, no_change, audit_json, digest, receipt_json
+                    ],
+                )
+                .map_err(storage_task)?;
+                if !no_change {
+                    let pub_command = serde_json::to_string(&serde_json::json!({
+                        "publication_id": rid, "version_id": res_v, "task_id": tid,
+                        "item_id": "i1", "run_id": "run-pub", "expected_revision": 0,
+                        "intent": {"Daily": {"expected_head": "legacy-daily"}},
+                    }))
+                    .unwrap();
+                    c.execute(
+                        "UPDATE publication_batches SET receipt_json=?1,command_json=?2,task_id=?3 WHERE publication_id='res-ch'",
+                        rusqlite::params![receipt_json, pub_command, tid],
+                    )
+                    .map_err(storage_task)?;
+                    c.execute(
+                        "UPDATE task_publications SET task_id=?1 WHERE publication_id='res-ch'",
+                        [tid],
+                    )
+                    .map_err(storage_task)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        }
     }
 }
