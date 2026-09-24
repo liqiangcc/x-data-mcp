@@ -14,6 +14,7 @@ const { ser } = await import("../../src_node/storage/verification_storage.mjs");
 const RC = await import("../../src_node/market/record_codec.mjs");
 const MR = await import("../../src_node/market/market_read.mjs");
 const MW = await import("../../src_node/market/market_write.mjs");
+const MC = await import("../../src_node/market/market_commit.mjs");
 const marketDigest = () => {
   const tables = [
     ["data_versions", "version_id"],
@@ -263,6 +264,54 @@ for (const line of lines) {
           const r = MR.itemReceipt(db, resolve(op.task_id), op.item_id);
           rec = r === null ? { status: "ok", found: false }
             : { status: "ok", found: true, receipt: r };
+        } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
+        break;
+      }
+      case "commit_range": {
+        try {
+          const p = op.plan;
+          const dir = process.env.DIFF_FIXTURES || "scripts/node_migration_p3/records";
+          const load = (n) => RC.check(JSON.parse(readFileSync(`${dir}/${n}`, "utf8")));
+          const command = { ...p.command, task_id: resolve(p.command.task_id) };
+          command.expected_revision = Number(command.expected_revision);
+          if (command.intent?.Daily) {
+            command.intent = { Daily: { expected_head: resolve(command.intent.Daily.expected_head) } };
+          } else if (command.intent?.CurrentHead) {
+            command.intent = { CurrentHead: {
+              expected_daily_head: resolve(command.intent.CurrentHead.expected_daily_head),
+              expected_yearly_head: resolve(command.intent.CurrentHead.expected_yearly_head) } };
+          }
+          const per = (x) => x === "day" ? "Day" : "Year";
+          const deepResolve = (v) => {
+            if (typeof v === "bigint") return Number(v);
+            if (typeof v === "string" && v.startsWith("$")) {
+              const r = resolve(v);
+              return typeof r === "bigint" ? Number(r) : r;
+            }
+            if (Array.isArray(v)) return v.map(deepResolve);
+            if (v !== null && typeof v === "object") {
+              return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deepResolve(x)]));
+            }
+            return v;
+          };
+          const audit = deepResolve(p.audit);
+
+          const plan = {
+            publication: {
+              command,
+              record: load(p.record),
+              required_heads: (p.required_heads ?? []).map((h) =>
+                [{ symbol: h[0], period: per(h[1]) }, h[2] == null ? null : resolve(h[2])]),
+              promote: p.promote ? { symbol: p.promote.symbol, period: per(p.promote.period) } : null,
+              base_digest: p.base_digest ?? null,
+            },
+            base: load(p.base),
+            no_change: !!p.no_change,
+            audit,
+            audit_payloads: p.audit_payloads ?? [],
+          };
+          const r = MC.commitRangeTx(db, plan, op.now ?? "2026-09-24T00:00:00Z");
+          rec = { status: "ok", receipt: r, digest: marketDigest() };
         } catch (e) { rec = { status: "error", code: e.code ?? "internal", message: String(e.message), unchanged: true }; }
         break;
       }

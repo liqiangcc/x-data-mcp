@@ -1167,3 +1167,164 @@ Object.assign(TaskAdmission.prototype, {
     return claimWithRuntimeGuard(this._db, this, plan, guard, dbPath);
   },
 });
+
+// ---------------------------------------------------------------------
+// NM-053 — decide_head + persist_decided as shared write-path functions
+// (the market commit path calls these on a caller-held binding instead of
+// re-running the whole transition). Verbatim port of
+// task_control::decide_head + sqlite_tasks::{write_item_row,
+// counter_delta, guarded_task_update, persist_decided}.
+
+const TCError = (code, msg) => Object.assign(new Error(msg), { code });
+const tcInvalid = (m) => TCError("invalid_input", `INVALID_COMMAND: ${m}`);
+const tcConflict = () => TCError("revision_conflict", "STATE_REVISION_CONFLICT");
+const tcNeedsVerification = (m) =>
+  TCError("needs_verification", `ACCEPTANCE_NEEDS_VERIFICATION: ${m}`);
+
+const TASK_TERMINAL = ["succeeded", "partially_failed", "failed", "cancelled", "interrupted"];
+const visibleStatusOf = (status, accepted, owner, run) =>
+  !TASK_TERMINAL.includes(status) && (accepted !== run || (owner !== null && owner !== run))
+    ? "needs_verification" : status;
+
+/** task_control::decide_head — pure in-memory decision on a binding. */
+export const decideHead = (head, item, run, change, now) => {
+  if (typeof run !== "string" || run.trim() === "") {
+    throw tcInvalid("empty run identity");
+  }
+  if (TASK_TERMINAL.includes(head.status)) {
+    if (change.kind === "requestCancel" || change.kind === "reconcile") return;
+    throw tcConflict();
+  }
+  const cancellationFinished = change.kind === "finishCancellation";
+  const recovery = change.kind === "reconcile";
+  if (recovery) {
+    if (visibleStatusOf(head.status, head.accepted_run_id, head.owner_run_id, run) !== head.status) {
+      head.status = "needs_verification";
+    } else {
+      return;
+    }
+  } else {
+    if (visibleStatusOf(head.status, head.accepted_run_id, head.owner_run_id, run) === "needs_verification") {
+      throw tcNeedsVerification("old run or unresolved execution");
+    }
+    switch (change.kind) {
+      case "claim":
+        if (head.status !== "pending" || head.owner_run_id !== null) throw tcConflict();
+        head.status = "running";
+        head.owner_run_id = run;
+        break;
+      case "requireVerification": {
+        const bound = item != null && item.spec.item_id === change.item_id &&
+          item.stage === "running";
+        if (typeof change.reason !== "string" || change.reason.trim() === "" ||
+            head.owner_run_id !== run ||
+            !(head.status === "running" || head.status === "cancel_requested") ||
+            !bound) {
+          throw tcConflict();
+        }
+        const previous = head.result;
+        const previousStatus = head.status;
+        head.status = "needs_verification";
+        head.result = { execution_uncertainty: {
+          item_id: change.item_id, reason: change.reason,
+          previous_result: previous ?? null, previous_status: previousStatus } };
+        break;
+      }
+      case "requestCancel":
+        if (head.status === "cancel_requested") return;
+        head.status = "cancel_requested";
+        break;
+      case "startItem":
+        if (head.status !== "running" || head.owner_run_id !== run) throw tcConflict();
+        if (head.counts.running !== 0n) throw tcConflict();
+        if (item == null || item.spec.item_id !== change.item_id || item.stage !== "pending") {
+          throw tcConflict();
+        }
+        item.stage = "running";
+        head.counts.pending -= 1n;
+        head.counts.running += 1n;
+        break;
+      case "finishItem":
+        if (head.owner_run_id !== run) throw tcConflict();
+        if (change.outcome.success === true && change.outcome.error != null) {
+          throw tcInvalid("success with error");
+        }
+        if (item == null || item.spec.item_id !== change.item_id || item.stage !== "running") {
+          throw tcConflict();
+        }
+        item.stage = "finished";
+        item.outcome = { success: change.outcome.success,
+          error: change.outcome.error ?? null,
+          ...(change.outcome.evidence !== undefined ? { evidence: change.outcome.evidence } : {}) };
+        head.counts.running -= 1n;
+        head.counts.finished += 1n;
+        if (item.outcome.success) head.counts.succeeded += 1n;
+        break;
+      case "finishExecution":
+      case "finishCancellation": {
+        if (cancellationFinished && head.status !== "cancel_requested") throw tcConflict();
+        const owned = head.owner_run_id === run;
+        const neverStarted = head.owner_run_id === null && head.counts.pending === head.counts.total;
+        if ((!owned && !neverStarted) || head.counts.running !== 0n) {
+          throw tcNeedsVerification("execution has not safely ended");
+        }
+        const { finished, succeeded: success, total } = head.counts;
+        if (cancellationFinished && success < total) {
+          head.status = "cancelled";
+        } else if (finished === total) {
+          head.status = success === finished ? "succeeded"
+            : success === 0n ? "failed" : "partially_failed";
+        } else if (head.status === "cancel_requested") {
+          head.status = "cancelled";
+        } else {
+          throw tcConflict();
+        }
+        head.result = { finished_items: Number(finished), successful_items: Number(success) };
+        if (cancellationFinished && head.status === "cancelled") {
+          head.result.cancellation_acknowledged = true;
+        }
+        break;
+      }
+      default:
+        throw tcConflict();
+    }
+  }
+  head.state_revision += 1n;
+  if (!recovery) head.last_progress_at = now;
+};
+
+const counterDelta = (changed, outcome) =>
+  !changed ? "" :
+    outcome == null ? ",items_pending=items_pending-1,items_running=items_running+1" :
+    outcome.success ? ",items_running=items_running-1,items_finished=items_finished+1,items_succeeded=items_succeeded+1"
+      : ",items_running=items_running-1,items_finished=items_finished+1";
+
+// serde-sorted outcome bytes (success,error[,evidence]) — write_item_row
+const outcomeJson = (o) =>
+  o === null ? null :
+    JSON.stringify({ success: o.success, error: o.error ?? null,
+      ...(o.evidence !== undefined ? { evidence: o.evidence } : {}) });
+
+// result_json is a serde-serialized Value map — sorted-key bytes
+const headResultJson = (r) =>
+  r === null ? null :
+    JSON.stringify(Object.keys(r).sort().reduce((a, k) => (a[k] = r[k], a), {}));
+
+/** sqlite_tasks::persist_decided — item row + guarded task CAS +
+ *  counter delta + terminal occupancy release. */
+export const persistDecided = (db, head, item, expected) => {
+  if (item != null) {
+    db.run("UPDATE task_items SET stage=?,outcome_json=? WHERE task_id=? AND item_id=?",
+      item.stage, outcomeJson(item.outcome), head.task_id, item.spec.item_id);
+  }
+  const res = db.run(
+    `UPDATE tasks SET status=?,state_revision=?,owner_run_id=?,last_progress_at=?,result_json=?${counterDelta(item != null, item?.outcome ?? null)} WHERE task_id=? AND state_revision=?`,
+    head.status, head.state_revision, head.owner_run_id,
+    head.last_progress_at,
+    headResultJson(head.result),
+    head.task_id, expected);
+  if (res.changes !== 1) throw tcConflict();
+  if (TASK_TERMINAL.includes(head.status)) {
+    db.run("DELETE FROM scope_occupancy WHERE task_id=?", head.task_id);
+  }
+};

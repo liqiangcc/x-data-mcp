@@ -46,12 +46,15 @@ for (const file of scenarios) {
     const extra = {};
     if (seed) {
       const fixture = join(dir, "fixture.db");
-      const recs = JSON.parse(scenText.split("\n")[0]).records;
+      const seedOp = JSON.parse(scenText.split("\n")[0]);
+      const recs = seedOp.records;
+      if (seedOp.results) extra.DIFF_RESULTS = "1";
+      if (seedOp.tasks) extra.DIFF_TASKS = seedOp.tasks;
       execFileSync(CARGO, ["test", "--lib", "diff_harness::build_market_fixture", "--",
         "--nocapture", "--test-threads=1"], {
         cwd: ROOT,
         env: { ...process.env, DIFF_DB: fixture, DIFF_FIXTURES: REC_FIXTURES,
-          DIFF_RECORDS: recs, TMPDIR: "/dev/shm" },
+          DIFF_RECORDS: recs, TMPDIR: "/dev/shm", ...extra },
         stdio: ["ignore", "ignore", "pipe"], timeout: 600000,
       });
       copyFileSync(fixture, rustDb);

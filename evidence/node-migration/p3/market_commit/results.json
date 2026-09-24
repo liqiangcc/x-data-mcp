@@ -1,0 +1,64 @@
+{
+  "task_id": "NM-053",
+  "baseline_sha": "579e00a2aea5bbf683a34f8ed7c856a84cc35dfe",
+  "source_ported": "src/sqlite_market/update.rs commit_range + src/sqlite_market.rs commit_publication + task_control::decide_head + sqlite_tasks::persist_decided",
+  "modules": [
+    "src_node/market/market_commit.mjs",
+    "src_node/storage/task_repository.mjs (decideHead+persistDecided exports)",
+    "src_node/market/market_read.mjs (parsePublication/parseReceipt serde-shape)"
+  ],
+  "contract": [
+    "commit_range verbatim: read_result replay (audit equality else 'range result id reused with different inputs') -> publication_id uniqueness -> base re-read + raw equality -> no_change (heads CAS -> finish_task -> persist_decided) vs commit_publication -> audit payloads -> market_update_results insert -> read-back",
+    "commit_publication verbatim: pub replay -> result-id reuse -> candidate read+raw eq -> 'validated' gate -> base digest -> required_heads CAS -> binding+finish_task -> publication_batches+task_publications -> guarded publish UPDATE -> promote head upsert (=1 row) -> persist_decided -> post-commit read_projection verify",
+    "persist_decided via ported task write path (task_repository.mjs): write_item_row + counter_delta + guarded_task_update + terminal occupancy release; decide_head full arm port",
+    "serde struct-order serialization: Publication/Receipt declaration order; Value members sorted"
+  ],
+  "differential": {
+    "op": "commit_range",
+    "coverage": [
+      "no_change publish",
+      "full publish + head promote",
+      "replay idempotent (identical audit)",
+      "divergent audit conflict",
+      "publication-id reuse (batches + results)",
+      "base-changed integrity",
+      "head-moved conflict",
+      "unvalidated candidate",
+      "bad expected_revision"
+    ],
+    "diffs": 0
+  },
+  "harness_caught": [
+    "global $REV: resolve emits BigInt -> Number coercion needed for serde payloads",
+    "probe extras (DIFF_RESULTS/DIFF_TASKS) missing from fixture-build env",
+    "serde missing-field wording for Receipt/Publication parse in read_result + check_publication_link"
+  ],
+  "probe": {
+    "command": "node scripts/node_migration_p3/diff_harness_probe.mjs .",
+    "exit": 0,
+    "scenarios": 18,
+    "ops": 180,
+    "diffs": 0
+  },
+  "regressions": {
+    "NM-052": "in-suite",
+    "NM-051": "in-suite",
+    "NM-050": "in-suite",
+    "NM-049": "18 scenarios",
+    "NM-048": "10/10",
+    "NM-047": "14/14",
+    "NM-046": "17/17",
+    "NM-045": "15/15",
+    "NM-044": "19/19",
+    "NM-043": "13/13",
+    "NM-042": "11/11",
+    "NM-041": "16/16",
+    "NM-040": "19/19",
+    "NM-039": "16/16",
+    "NM-038": "24/24",
+    "NM-037": "12/12",
+    "NM-036": "35/35",
+    "NM-035": "23/23"
+  },
+  "limits": "no compact backend, no gaps, no yearly_execution_results writers, no RangePlan producer, no verification execution, no services"
+}

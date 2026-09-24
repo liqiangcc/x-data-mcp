@@ -251,8 +251,8 @@ const checkPublicationLink = (db, version) => {
     "SELECT b.publication_id,b.command_json,b.receipt_json,b.task_id,b.item_id FROM publication_batches b JOIN task_publications p ON p.publication_id=b.publication_id AND p.task_id=b.task_id AND p.version_id=b.version_id WHERE b.version_id=?",
     version);
   if (!row) throw integrity("published version lacks atomic publication evidence");
-  const command = JSON.parse(row.command_json);
-  const receipt = JSON.parse(row.receipt_json);
+  const command = parsePublication(JSON.parse(row.command_json));
+  const receipt = parseReceipt(JSON.parse(row.receipt_json));
   if (command.publication_id !== row.publication_id ||
       command.version_id !== version || command.task_id !== row.task_id ||
       command.item_id !== row.item_id ||
@@ -559,10 +559,62 @@ const readItemBinding = (db, taskId, itemId) => {
     "SELECT count(*) AS c FROM scope_occupancy WHERE task_id=? AND scope_key IN (SELECT value FROM json_each(?))",
     taskId, i.scope_keys_json).c;
   return {
-    head: { state_revision: h.state_revision },
+    head: {
+      task_id: taskId,
+      key: JSON.parse(h.command_key_json),
+      status: h.status,
+      state_revision: h.state_revision,
+      accepted_run_id: h.accepted_run_id,
+      owner_run_id: h.owner_run_id,
+      last_progress_at: h.last_progress_at,
+      result: h.result_json === null ? null : JSON.parse(h.result_json),
+      counts: {
+        total: h.item_count, pending: h.items_pending, running: h.items_running,
+        finished: h.items_finished, succeeded: h.items_succeeded,
+      },
+      evidence_digest: h.evidence_digest,
+    },
     item,
     scopes_bound: bound > 0n && bound === BigInt(item.spec.scope_keys.length),
   };
+};
+
+// serde Receipt shape — 4 required fields; missing -> verbatim serde error
+const parseReceipt = (c) => {
+  if (c === null || typeof c !== "object" || Array.isArray(c)) {
+    throw integrity("missing field `publication_id`");
+  }
+  for (const k of ["publication_id", "version_id", "task_id"]) {
+    if (typeof c[k] !== "string") throw integrity(`missing field \`${k}\``);
+  }
+  if (typeof c.task_revision !== "number" || !Number.isInteger(c.task_revision)) {
+    throw integrity("missing field `task_revision`");
+  }
+  return c;
+};
+
+// serde Publication shape — all 7 fields required; intent one of
+// Daily{expected_head}|HistoricalFixedBase|CurrentHead{daily,yearly}
+const PUB_FIELDS = ["publication_id", "version_id", "task_id", "item_id", "run_id"];
+const parsePublication = (c) => {
+  if (c === null || typeof c !== "object" || Array.isArray(c)) {
+    throw integrity("missing field `publication_id`");
+  }
+  for (const k of PUB_FIELDS) {
+    if (typeof c[k] !== "string") throw integrity(`missing field \`${k}\``);
+  }
+  if (typeof c.expected_revision !== "number" || !Number.isInteger(c.expected_revision)) {
+    throw integrity("missing field `expected_revision`");
+  }
+  const i = c.intent;
+  if (i === undefined) throw integrity("missing field `intent`");
+  const ok = i === "HistoricalFixedBase" ||
+    (i !== null && typeof i === "object" &&
+      (("Daily" in i && "expected_head" in (i.Daily ?? {})) ||
+       ("CurrentHead" in i && typeof i.CurrentHead?.expected_daily_head === "string" &&
+         "expected_yearly_head" in (i.CurrentHead ?? {}))));
+  if (!ok) throw integrity("range command malformed");
+  return c;
 };
 
 export const readResult = (db, id) => {
@@ -578,8 +630,8 @@ export const readResult = (db, id) => {
   }
   const audit = JSON.parse(row.audit_json);
   requireRefs(db, audit.segment);
-  const command = audit.command;
-  const receipt = JSON.parse(row.receipt_json);
+  const command = parsePublication(audit.command);
+  const receipt = parseReceipt(JSON.parse(row.receipt_json));
   const intentMatch = command.intent &&
     Object.keys(command.intent).length === 1 &&
     command.intent.Daily !== undefined &&
@@ -612,7 +664,7 @@ export const readResult = (db, id) => {
     const published = db.get(
       "SELECT receipt_json FROM publication_batches WHERE publication_id=?", id);
     if (!published) throw integrity("range publication missing");
-    const pubReceipt = JSON.parse(published.receipt_json);
+    const pubReceipt = parseReceipt(JSON.parse(published.receipt_json));
     if (pubReceipt.publication_id !== receipt.publication_id ||
         pubReceipt.version_id !== receipt.version_id ||
         pubReceipt.task_id !== receipt.task_id ||
@@ -632,4 +684,5 @@ export const itemReceipt = (db, task, item) => {
   if (r === null) throw integrity("range item receipt missing");
   return r[1];
 };
+export const __readItemBinding = readItemBinding;
 export const rangeReceipt = (db, id) => readResult(db, id)?.[1] ?? null;

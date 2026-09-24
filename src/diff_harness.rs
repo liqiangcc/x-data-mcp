@@ -416,6 +416,135 @@ fn run() {
                     Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
                 }
             }
+            "commit_range" => {
+                let p = &op["plan"];
+                let dir = std::env::var("DIFF_FIXTURES")
+                    .unwrap_or_else(|_| "scripts/node_migration_p3/records".into());
+                let load = |name: &str| -> crate::market_storage::compat::CheckedRecord {
+                    let raw: Value = serde_json::from_str(
+                        &fs::read_to_string(std::path::Path::new(&dir).join(name)).unwrap(),
+                    )
+                    .unwrap();
+                    crate::market_storage::compat::check(&raw).unwrap()
+                };
+                let mut cmdv = p["command"].clone();
+                if let Some(er) = cmdv["expected_revision"].as_str() {
+                    cmdv["expected_revision"] = resolve(&json!(er), &syms);
+                }
+                let mut command: Publication =
+                    serde_json::from_value(cmdv).unwrap();
+                if let Some(t) = command.task_id.strip_prefix('$') {
+                    command.task_id = syms.get(t).cloned().unwrap_or(command.task_id);
+                }
+                {
+                    let resolve_opt = |t: &mut Option<String>| {
+                        if let Some(v) = t {
+                            if let Some(sym) = v.strip_prefix('$') {
+                                *v = syms.get(sym).cloned().unwrap_or_else(|| v.clone());
+                            }
+                        }
+                    };
+                    match &mut command.intent {
+                        PublishIntent::Daily { expected_head } => resolve_opt(expected_head),
+                        PublishIntent::CurrentHead {
+                            expected_daily_head,
+                            expected_yearly_head,
+                        } => {
+                            if let Some(sym) = expected_daily_head.strip_prefix('$') {
+                                *expected_daily_head =
+                                    syms.get(sym).cloned().unwrap_or_else(|| expected_daily_head.clone());
+                            }
+                            resolve_opt(expected_yearly_head);
+                        }
+                        _ => {}
+                    }
+                }
+                let record = load(p["record"].as_str().unwrap());
+                let base = load(p["base"].as_str().unwrap());
+                let required_heads: Vec<(Scope, Option<String>)> = p["required_heads"]
+                    .as_array()
+                    .map(|a| a.iter().map(|h| {
+                        let sym = h[0].as_str().unwrap().to_string();
+                        let per = h[1].as_str().unwrap();
+                        let exp = h.get(2).and_then(|e| e.as_str()).map(|e| {
+                            e.strip_prefix('$')
+                                .and_then(|k| syms.get(k))
+                                .cloned()
+                                .unwrap_or_else(|| e.to_string())
+                        });
+                        (
+                            Scope {
+                                symbol: sym,
+                                period: if per == "day" {
+                                    crate::market_data::Period::Day
+                                } else {
+                                    crate::market_data::Period::Year
+                                },
+                            },
+                            exp,
+                        )
+                    }).collect())
+                    .unwrap_or_default();
+                let promote = p.get("promote").and_then(|pr| {
+                    if pr.is_null() { None } else {
+                        Some(Scope {
+                            symbol: pr["symbol"].as_str().unwrap().to_string(),
+                            period: if pr["period"].as_str().unwrap() == "day" {
+                                crate::market_data::Period::Day
+                            } else {
+                                crate::market_data::Period::Year
+                            },
+                        })
+                    }
+                });
+                let plan = crate::market_update::publication::RangePlan {
+                    publication: crate::market_storage::PublishPlan {
+                        command,
+                        record,
+                        required_heads,
+                        promote,
+                        base_digest: p["base_digest"].as_str().map(|x| x.to_string()),
+                    },
+                    base,
+                    no_change: p["no_change"].as_bool().unwrap_or(false),
+                    audit: {
+                        let mut a = p["audit"].clone();
+                        fn deep(v: &mut Value, syms: &Syms) {
+                            match v {
+                                Value::String(s) => {
+                                    if let Some(k) = s.strip_prefix('$') {
+                                        if let Some(r) = syms.get(k) {
+                                            *s = r.clone();
+                                        }
+                                    }
+                                }
+                                Value::Array(xs) => xs.iter_mut().for_each(|x| deep(x, syms)),
+                                Value::Object(m) => {
+                                    m.values_mut().for_each(|x| deep(x, syms))
+                                }
+                                _ => {}
+                            }
+                        }
+                        deep(&mut a, &syms);
+                        a
+                    },
+                    audit_payloads: p["audit_payloads"]
+                        .as_array()
+                        .map(|a| a.iter().map(|x| crate::sqlite_market::envelope::Payload {
+                            id: x["id"].as_str().unwrap().to_string(),
+                            json: x["json"].as_str().unwrap().to_string(),
+                        }).collect())
+                        .unwrap_or_default(),
+                };
+                let market = SqliteMarket::new(repo.clone());
+                use crate::market_update::publication::RangeRepository;
+                match RangeRepository::commit_range(&market, &plan) {
+                    Ok(r) => json!({"status":"ok",
+                        "receipt":serde_json::to_value(&r).unwrap(),
+                        "digest":market_digest(&repo, &syms)}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
+                }
+            }
             "exec_sql" => {
                 let c = rusqlite::Connection::open(&db_path).unwrap();
                 match c.execute_batch(op["sql"].as_str().unwrap()) {
@@ -575,8 +704,8 @@ fn build_market_fixture() {
             }))
             .unwrap(),
             &serde_json::from_value::<FrozenWork>(json!({
-                "items":[{"item_id":"i1","target":{},"progress_unit":"x","frozen_inputs":{},"scope_keys":["pub-scope"]}],
-                "scopes":["pub-scope"]
+                "items":[{"item_id":"i1","target":{"symbol":"sh.600006","period":"day"},"progress_unit":"x","frozen_inputs":{},"scope_keys":["[\"market\",\"sh.600006\",\"day\"]"]}],
+                "scopes":["[\"market\",\"sh.600006\",\"day\"]"]
             }))
             .unwrap(),
             "run-pub",
@@ -597,11 +726,14 @@ fn build_market_fixture() {
         let name = parts.next().unwrap();
         let mut pub_override: Option<String> = None;
         let mut nohead = false;
+        let mut validated = false;
         for m in parts {
             if let Some(p) = m.strip_prefix("pub=") {
                 pub_override = Some(p.to_string());
             } else if m == "nohead" {
                 nohead = true;
+            } else if m == "validated" {
+                validated = true;
             }
         }
         let raw: Value = serde_json::from_str(
@@ -613,6 +745,17 @@ fn build_market_fixture() {
         let pub_id = pub_override.unwrap_or_else(|| format!("pub-{vid}"));
         if pub_id == "res-ch" {
             result_vid = Some(vid.clone());
+        }
+        if validated {
+            repo.write(|c| {
+                c.execute(
+                    "UPDATE data_versions SET state='validated' WHERE version_id=?1",
+                    [vid.clone()],
+                )
+                .map_err(storage_task)
+            })
+            .unwrap();
+            continue;
         }
         let command = serde_json::to_string(&Publication {
             publication_id: pub_id.clone(),
@@ -666,16 +809,18 @@ fn build_market_fixture() {
         repo.transition(&task_id, 0, "run-pub", Change::Claim).unwrap();
         repo.transition(&task_id, 1, "run-pub", Change::StartItem("i1".into()))
             .unwrap();
+        repo.transition(
+            &task_id,
+            2,
+            "run-pub",
+            Change::FinishItem(
+                "i1".into(),
+                ItemOutcome { success: true, error: None, evidence: None },
+            ),
+        )
+        .unwrap();
         let snap = repo
-            .transition(
-                &task_id,
-                2,
-                "run-pub",
-                Change::FinishItem(
-                    "i1".into(),
-                    ItemOutcome { success: true, error: None, evidence: None },
-                ),
-            )
+            .transition(&task_id, 3, "run-pub", Change::FinishExecution)
             .unwrap();
         let rev = snap.task.state_revision;
         // second task for the changed-result row (UNIQUE(task_id,item_id))
@@ -688,8 +833,8 @@ fn build_market_fixture() {
                 }))
                 .unwrap(),
                 &serde_json::from_value::<FrozenWork>(json!({
-                    "items":[{"item_id":"i1","target":{},"progress_unit":"x","frozen_inputs":{},"scope_keys":["pub-scope2"]}],
-                    "scopes":["pub-scope2"]
+                    "items":[{"item_id":"i1","target":{"symbol":"sh.600006","period":"day"},"progress_unit":"x","frozen_inputs":{},"scope_keys":["[\"market\",\"sh.600006\",\"day\"]"]}],
+                    "scopes":["[\"market\",\"sh.600006\",\"day\"]"]
                 }))
                 .unwrap(),
                 "run-pub",
@@ -713,6 +858,7 @@ fn build_market_fixture() {
             ),
         )
         .unwrap();
+        repo.transition(&task2, 3, "run-pub", Change::FinishExecution).unwrap();
         let base_sha = fs::read_to_string(
             std::path::Path::new(&dir).join("valid_daily.json"),
         )
@@ -807,4 +953,35 @@ fn build_market_fixture() {
             .unwrap();
         }
     }
-}
+    // DIFF_TASKS="day,day,year": extra publish-capable tasks left in
+    // running state with item i1 running (for commit_range ops).
+    if let Ok(specs) = std::env::var("DIFF_TASKS") {
+        for (i, per) in specs.split(',').enumerate() {
+            let occ = format!("[\"market\",\"sh.600006\",\"{per}\"]");
+            let acc = repo
+                .accept(
+                    &format!("req-commit-{i}"),
+                    &serde_json::from_value::<Command>(json!({
+                        "key":{"operation":"publish","dataset":"market","contract_version":"1"},
+                        "intent":{}
+                    }))
+                    .unwrap(),
+                    &serde_json::from_value::<FrozenWork>(json!({
+                        "items":[{"item_id":"i1","target":{"symbol":"sh.600006","period":per},"progress_unit":"x","frozen_inputs":{},"scope_keys":[occ]}],
+                        "scopes":[occ]
+                    }))
+                    .unwrap(),
+                    "run-pub",
+                    None,
+                )
+                .unwrap();
+            let tid = match acc.record.outcome {
+                RequestOutcome::Task(s) => s.task.task_id,
+                _ => panic!("task outcome"),
+            };
+            repo.transition(&tid, 0, "run-pub", Change::Claim).unwrap();
+            repo.transition(&tid, 1, "run-pub", Change::StartItem("i1".into()))
+                .unwrap();
+        }
+    }
+ }
