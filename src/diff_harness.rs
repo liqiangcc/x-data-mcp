@@ -175,6 +175,54 @@ fn sym_of(syms: &Syms, id: &str) -> String {
 
 /// Replace RFC3339 timestamps (`YYYY-MM-DDTHH:MM:SS[.frac][+00:00|Z]`)
 /// with a fixed marker — wall-clock bytes differ across runners.
+/// Descriptor cells bind runner-local paths/inodes — normalize so the
+/// cross-runner digest verifies the descriptor pipeline, not the path.
+fn norm_desc_text(s: &str) -> String {
+    let mut out = s.to_string();
+    for key in ["database_path", "lock_path"] {
+        let pat = format!("\"{key}\":\"");
+        let mut res = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        loop {
+            match rest.find(&pat) {
+                Some(i) => {
+                    res.push_str(&rest[..i + pat.len()]);
+                    let after = &rest[i + pat.len()..];
+                    match after.find('"') {
+                        Some(j) => { res.push_str("<p>"); rest = &after[j..]; }
+                        None => { res.push_str(after); break; }
+                    }
+                }
+                None => { res.push_str(rest); break; }
+            }
+        }
+        out = res;
+    }
+    for key in ["database_identity", "lock_identity"] {
+        let pat = format!("\"{key}\":{{");
+        let mut res = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        loop {
+            match rest.find(&pat) {
+                Some(i) => {
+                    res.push_str(&rest[..i + pat.len()]);
+                    let after = &rest[i + pat.len()..];
+                    match after.find('}') {
+                        Some(j) => {
+                            res.push_str("\"device\":0,\"inode\":0");
+                            rest = &after[j..];
+                        }
+                        None => { res.push_str(after); break; }
+                    }
+                }
+                None => { res.push_str(rest); break; }
+            }
+        }
+        out = res;
+    }
+    out
+}
+
 fn norm_ts_text(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -281,7 +329,30 @@ fn state_digest(db: &str, syms: &Syms) -> String {
     dump(&c, "SELECT task_id,item_id,stage,outcome_json FROM task_items ORDER BY task_id,item_id", "I", 4, &mut lines);
     dump(&c, "SELECT scope_key,task_id,state_revision FROM scope_occupancy ORDER BY 1,2", "O", 3, &mut lines);
     dump(&c, "SELECT task_id,scope_key FROM task_scopes ORDER BY 1,2", "S", 2, &mut lines);
-    dump(&c, "SELECT request_id,command_digest,outcome_kind,task_id,terminal_json FROM requests ORDER BY 1", "R", 5, &mut lines);
+    {
+        // command_digest binds the random task id inside command_json —
+        // recompute over the symbolized text like the result digests.
+        let mut st = c.prepare("SELECT request_id,command_json,outcome_kind,task_id,terminal_json FROM requests ORDER BY 1").unwrap();
+        let rows: Vec<Vec<rusqlite::types::Value>> = st.query_map([], |r| {
+            Ok((0..5).map(|i| r.get::<_, rusqlite::types::Value>(i).unwrap()).collect())
+        }).unwrap().map(|r| r.unwrap()).collect();
+        for r in rows {
+            let vs = |i: usize| -> String {
+                match &r[i] { rusqlite::types::Value::Null => String::new(),
+                    rusqlite::types::Value::Integer(x) => x.to_string(),
+                    rusqlite::types::Value::Text(x) => x.clone(),
+                    rusqlite::types::Value::Real(x) => x.to_string(),
+                    rusqlite::types::Value::Blob(x) => crate::hash::sha256(x) }
+            };
+            let mut cmd = norm_desc_text(&norm_ts_text(&vs(1)));
+            for (k, real) in syms.iter() {
+                if !k.starts_with("rev:") { cmd = cmd.replace(real.as_str(), &format!("${k}")); }
+            }
+            let cd = crate::hash::sha256(cmd.as_bytes());
+            lines.push(format!("R:{}|{}|{}|{}|{}", sym_of(syms, &vs(0)),
+                cd, vs(2), sym_of(syms, &vs(3)), vs(4)));
+        }
+    }
     dump(&c, "SELECT task_id,item_id,run_id,start_revision FROM task_item_execution_starts ORDER BY 1,2", "X", 4, &mut lines);
     // Compact (schema-19) DBs carry the write-side tables too. Wall-clock
     // columns (created_at, published_at) and the integrity digest that
@@ -514,9 +585,46 @@ fn state_digest(db: &str, syms: &Syms) -> String {
         }
     }
     dump(&c, "SELECT gap_id,version_id,'0000-01-01T00:00:00+00:00' FROM gap_coverings ORDER BY gap_id", "GC", 3, &mut lines);
-    dump(&c, "SELECT verification_task_id,target_task_id,audit_json,audit_sha256 FROM publication_checks ORDER BY 1", "PC", 4, &mut lines);
+    // Verification registries: the *_sha256 columns hash text that binds
+    // task ids/timestamps/descriptor paths — emit the sha recomputed over
+    // the normalized text so the digest proves the pipeline without
+    // comparing runner-local bytes.
+    {
+        let norm_cell = |x: &str| -> String {
+            let mut o = norm_desc_text(&norm_ts_text(x));
+            for (k, real) in syms.iter() {
+                if !k.starts_with("rev:") { o = o.replace(real.as_str(), &format!("${k}")); }
+            }
+            o
+        };
+        for (tag, sql) in [
+            ("PC", "SELECT verification_task_id,target_task_id,audit_json,audit_sha256 FROM publication_checks ORDER BY 1"),
+            ("SC", "SELECT verification_task_id,target_task_id,audit_json,audit_sha256 FROM stopped_write_checks ORDER BY 1"),
+            ("VI", "SELECT request_id,target_task_id,audit_json,audit_sha256 FROM verification_inspections ORDER BY 1"),
+            ("VG", "SELECT task_id,claim_revision,descriptor_json,descriptor_sha256 FROM verification_runtime_guards ORDER BY 1"),
+        ] {
+            let mut st = c.prepare(sql).unwrap();
+            let rows: Vec<Vec<rusqlite::types::Value>> = st.query_map([], |r| {
+                Ok((0..4).map(|i| r.get::<_, rusqlite::types::Value>(i).unwrap()).collect())
+            }).unwrap().map(|r| r.unwrap()).collect();
+            for r in rows {
+                let vs = |i: usize| -> String {
+                    match &r[i] { rusqlite::types::Value::Null => String::new(),
+                        rusqlite::types::Value::Integer(x) => x.to_string(),
+                        rusqlite::types::Value::Text(x) => x.clone(),
+                        rusqlite::types::Value::Real(x) => x.to_string(),
+                        rusqlite::types::Value::Blob(x) => crate::hash::sha256(x) }
+                };
+                let text = norm_cell(&vs(2));
+                lines.push(format!("{tag}:{}|{}|{}|{}", sym_of(syms, &vs(0)),
+                    norm_cell(&vs(1)), text, crate::hash::sha256(text.as_bytes())));
+            }
+        }
+    }
 
-    let joined = lines.join("\n");
+    // Embedded RFC3339 stamps inside audit/result/terminal blobs bind
+    // wall-clock values — normalize before symbolization.
+    let joined = norm_ts_text(&lines.join("\n"));
     let mut out = joined;
     for (k, real) in syms {
         if !k.starts_with("rev:") {
@@ -544,6 +652,17 @@ fn resolve(v: &Value, syms: &Syms) -> Value {
                     .unwrap_or(u64::MAX))
             } else if let Some(real) = s.strip_prefix('$').and_then(|k| syms.get(k)) {
                 json!(real.clone())
+            } else if s.contains('$') {
+                // Embedded "$SYM" inside a longer string (e.g. the
+                // verification:task:<id> scope key). Longest name first.
+                let mut out = s.clone();
+                let mut names: Vec<&String> = syms.keys().collect();
+                names.sort_by_key(|k| std::cmp::Reverse(k.len()));
+                for k in names {
+                    if k.starts_with("rev:") { continue; }
+                    out = out.replace(&format!("${k}"), &syms[k]);
+                }
+                json!(out)
             } else {
                 v.clone()
             }
@@ -577,6 +696,10 @@ fn run() {
     let scenario = fs::read_to_string(&scenario_path).expect("scenario");
     let mut out = fs::File::create(&out_path).expect("out");
     let mut syms: Syms = Default::default();
+    // $CAP: captured serde values (bound snapshots / inspection facts) —
+    // audits and bind plans embed full snapshots whose volatile fields
+    // (task ids, wall-clock stamps) must come from this runner's own reads.
+    let mut caps: BTreeMap<String, Value> = BTreeMap::new();
     // DIFF_NORM_TS=1: replace every stored timestamp/integrity value with a
     // placeholder in emitted JSON — wall-clock bytes differ across runs;
     // byte-identity of the remaining columns is proven by state_digest.
@@ -1982,6 +2105,496 @@ fn run() {
                         Err(e) => json!({"status":"error","code":market_code(&e),
                             "message":e.to_string()}),
                     },
+                }
+            }
+            "capture" => {
+                // {as, task|facts_task} — capture a serde Value for $CAP:
+                // references ("snapshot" = read_bound_task serde,
+                // "inspection_facts" = Facts serde).
+                let name = op["as"].as_str().unwrap().to_string();
+                let kind = op["kind"].as_str().unwrap_or("snapshot");
+                let got: Result<Value, Error> = (|| {
+                    let id = op["task"].as_str().unwrap_or("");
+                    match kind {
+                        "snapshot" => {
+                            let s = op_repo
+                                .read(|c| crate::sqlite_tasks::read_bound_task(c, id))?
+                                .ok_or(Error::TaskNotFound)?;
+                            Ok(serde_json::to_value(&s).unwrap())
+                        }
+                        "inspection_facts" => {
+                            use crate::verification_inspection::service::Repository;
+                            let f = op_repo.inspection_facts(id)?;
+                            Ok(serde_json::to_value(&f).unwrap())
+                        }
+                        "stop_plan" => {
+                            // capture the prepare-built audit (for
+                            // idempotent + divergent replay arms)
+                            use crate::task_verification::decision::{
+                                self, Observation, StopInspector,
+                            };
+                            struct Scen(Option<Observation>);
+                            impl StopInspector for Scen {
+                                fn inspect(&self, t: &TaskSnapshot)
+                                    -> Result<Observation, Error> {
+                                    Ok(match &self.0 {
+                                        Some(Observation::Stopped { evidence_ref, .. }) =>
+                                            Observation::Stopped {
+                                                snapshot_sha256:
+                                                    decision::snapshot_digest(t)?,
+                                                evidence_ref: evidence_ref.clone(),
+                                            },
+                                        other => other.clone().expect("obs"),
+                                    })
+                                }
+                            }
+                            let vid = op["verification"].as_str().unwrap();
+                            let tid = op["target"].as_str().unwrap();
+                            let now = chrono::DateTime::parse_from_rfc3339(
+                                op["now"].as_str().unwrap()).unwrap()
+                                .with_timezone(&chrono::Utc);
+                            let obs: Option<Observation> = op["observation"]
+                                .as_object().map(|o| match o["kind"].as_str().unwrap() {
+                                    "insufficient" => Observation::Insufficient {
+                                        reason: o["reason"].as_str().unwrap().into(),
+                                    },
+                                    "stopped" => Observation::Stopped {
+                                        snapshot_sha256: String::new(),
+                                        evidence_ref: o["evidence_ref"].as_str().unwrap().into(),
+                                    },
+                                    k => panic!("obs {k}"),
+                                });
+                            let v = op_repo
+                                .read(|c| crate::sqlite_tasks::read_bound_task(c, vid))?
+                                .ok_or(Error::TaskNotFound)?;
+                            let t = op_repo
+                                .read(|c| crate::sqlite_tasks::read_bound_task(c, tid))?
+                                .ok_or(Error::TaskNotFound)?;
+                            let plan = decision::prepare(v, t, op["run"].as_str().unwrap(),
+                                op["actor"].as_str().unwrap(), now, &Scen(obs))?;
+                            Ok(serde_json::to_value(&plan.audit).unwrap())
+                        }
+                        "check_plan" => {
+                            use crate::publication_verification::decision;
+                            let vid = op["verification"].as_str().unwrap();
+                            let tid = op["target"].as_str().unwrap();
+                            let now = chrono::DateTime::parse_from_rfc3339(
+                                op["now"].as_str().unwrap()).unwrap()
+                                .with_timezone(&chrono::Utc);
+                            let check = op_repo
+                                .read(|c| crate::sqlite_tasks::read_bound_task(c, vid))?
+                                .ok_or(Error::TaskNotFound)?;
+                            let facts = if let Some(m) = &compact_market {
+                                use crate::publication_verification::EvidenceRepository;
+                                m.publication_facts(tid)
+                                    .map_err(|e| match e {
+                                        crate::market_storage::Error::Task(t) => t,
+                                        o => Error::NeedsVerification(o.to_string()),
+                                    })?
+                            } else {
+                                use crate::publication_verification::EvidenceRepository;
+                                SqliteMarket::new(op_repo.clone())
+                                    .publication_facts(tid)
+                                    .map_err(|e| match e {
+                                        crate::market_storage::Error::Task(t) => t,
+                                        o => Error::NeedsVerification(o.to_string()),
+                                    })?
+                            };
+                            let plan = decision::prepare(check, facts,
+                                op["run"].as_str().unwrap(),
+                                op["actor"].as_str().unwrap(), now)?;
+                            Ok(serde_json::to_value(&plan.audit).unwrap())
+                        }
+                        _ => panic!("capture kind {kind}"),
+                    }
+                })();
+                match got {
+                    Ok(v) => { caps.insert(name, v); json!({"status":"ok"}) }
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "commit_stop_check" => {
+                use crate::task_verification::decision::{
+                    self, Observation, StopInspector, StopRepository,
+                };
+                struct Scen(Option<Observation>);
+                impl StopInspector for Scen {
+                    fn inspect(&self, t: &TaskSnapshot)
+                        -> Result<Observation, Error> {
+                        Ok(match &self.0 {
+                            Some(Observation::Stopped { evidence_ref, .. }) =>
+                                Observation::Stopped {
+                                    snapshot_sha256: decision::snapshot_digest(t)?,
+                                    evidence_ref: evidence_ref.clone(),
+                                },
+                            other => other.clone().expect("obs"),
+                        })
+                    }
+                }
+                let res: Result<_, Error> = (|| {
+                    if let Some(cap) = op["audit_cap"].as_str() {
+                        let mut a: decision::Audit = serde_json::from_value(
+                            caps[cap].clone())
+                            .map_err(|e| Error::InvalidCommand(e.to_string()))?;
+                        // {tweak: {"receipt.reason":"x"}} — dot-path set for
+                        // the divergent-replay arm.
+                        if let Some(tw) = op["tweak"].as_object() {
+                            let mut av = serde_json::to_value(&a).unwrap();
+                            for (path, val) in tw {
+                                let mut cur = &mut av;
+                                let parts: Vec<&str> = path.split('.').collect();
+                                for p in &parts[..parts.len()-1] {
+                                    cur = &mut cur[p];
+                                }
+                                cur[parts[parts.len()-1]] = val.clone();
+                            }
+                            a = serde_json::from_value(av)
+                                .map_err(|e| Error::InvalidCommand(e.to_string()))?;
+                        }
+                        return op_repo.commit_stop_check(
+                            &decision::StopPlan { audit: a });
+                    }
+                    let vid = op["verification"].as_str().unwrap();
+                    let tid = op["target"].as_str().unwrap();
+                    let run_s = op["run"].as_str().unwrap();
+                    let actor = op["actor"].as_str().unwrap();
+                    let now = chrono::DateTime::parse_from_rfc3339(
+                        op["now"].as_str().unwrap()).unwrap()
+                        .with_timezone(&chrono::Utc);
+                    let obs: Option<Observation> = op["observation"]
+                        .as_object().map(|o| match o["kind"].as_str().unwrap() {
+                            "insufficient" => Observation::Insufficient {
+                                reason: o["reason"].as_str().unwrap().into(),
+                            },
+                            "stopped" => Observation::Stopped {
+                                snapshot_sha256: String::new(),
+                                evidence_ref: o["evidence_ref"].as_str().unwrap().into(),
+                            },
+                            k => panic!("obs {k}"),
+                        });
+                    let v = op_repo
+                        .read(|c| crate::sqlite_tasks::read_bound_task(c, vid))?
+                        .ok_or(Error::TaskNotFound)?;
+                    let t = op_repo
+                        .read(|c| crate::sqlite_tasks::read_bound_task(c, tid))?
+                        .ok_or(Error::TaskNotFound)?;
+                    let plan = decision::prepare(v, t, run_s, actor, now,
+                        &Scen(obs))?;
+                    op_repo.commit_stop_check(&plan)
+                })();
+                match res {
+                    Ok(r) => json!({"status":"ok",
+                        "receipt":serde_json::to_value(&r).unwrap(),
+                        "digest":state_digest(&db_path,&syms)}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "stop_receipt" => {
+                use crate::task_verification::decision::StopRepository;
+                let id = op["id"].as_str().unwrap();
+                match op_repo.stop_receipt(id) {
+                    Ok(v) => json!({"status":"ok",
+                        "receipt":serde_json::to_value(&v).unwrap()}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "bind_existing_stop" => {
+                use crate::task_verification::existing::{
+                    ExistingPlan, ExistingStopRepository, TerminalResult,
+                };
+                let rid = op["request_id"].as_str().unwrap();
+                let res: Result<_, Error> = (|| {
+                    let target: TaskSnapshot = match op["target"].as_object() {
+                        Some(o) if o.get("cap").is_some() =>
+                            serde_json::from_value(
+                                caps[o["cap"].as_str().unwrap()].clone())
+                                .map_err(|e| Error::InvalidCommand(e.to_string()))?,
+                        _ => op_repo
+                            .read(|c| crate::sqlite_tasks::read_bound_task(
+                                c, op["target"]["task"].as_str().unwrap()))?
+                            .ok_or(Error::TaskNotFound)?,
+                    };
+                    let result: TerminalResult = serde_json::from_value(
+                        op["result"].clone())
+                        .map_err(|e| Error::InvalidCommand(e.to_string()))?;
+                    let command: Command = serde_json::from_value(
+                        op["command"].clone())
+                        .map_err(|e| Error::InvalidCommand(e.to_string()))?;
+                    op_repo.bind_existing_stop(&ExistingPlan {
+                        request_id: rid.into(), command, target, result,
+                    })
+                })();
+                match res {
+                    Ok(a) => json!({"status":"ok","reused":a.reused,
+                        "outcome_kind":match &a.record.outcome {
+                            RequestOutcome::Task(_) => "task",
+                            RequestOutcome::Terminal(_) => "terminal",
+                        },
+                        "digest":state_digest(&db_path,&syms)}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "commit_check" => {
+                use crate::publication_verification::decision::{
+                    self, AuditStore,
+                };
+                let res = (|| {
+                    if let Some(cap) = op["audit_cap"].as_str() {
+                        let mut a: decision::Audit = serde_json::from_value(
+                            caps[cap].clone())
+                            .map_err(|e| crate::market_storage::Error::Task(
+                                Error::InvalidCommand(e.to_string())))?;
+                        if let Some(tw) = op["tweak"].as_object() {
+                            let mut av = serde_json::to_value(&a).unwrap();
+                            for (path, val) in tw {
+                                let mut cur = &mut av;
+                                let parts: Vec<&str> = path.split('.').collect();
+                                for p in &parts[..parts.len()-1] {
+                                    cur = &mut cur[p];
+                                }
+                                cur[parts[parts.len()-1]] = val.clone();
+                            }
+                            a = serde_json::from_value(av)
+                                .map_err(|e| crate::market_storage::Error::Task(
+                                    Error::InvalidCommand(e.to_string())))?;
+                        }
+                        let plan = decision::Plan { audit: a };
+                        return if let Some(m) = &compact_market {
+                            m.commit_check(&plan)
+                        } else {
+                            SqliteMarket::new(op_repo.clone()).commit_check(&plan)
+                        };
+                    }
+                    let vid = op["verification"].as_str().unwrap();
+                    let tid = op["target"].as_str().unwrap();
+                    let run_s = op["run"].as_str().unwrap();
+                    let actor = op["actor"].as_str().unwrap();
+                    let now = chrono::DateTime::parse_from_rfc3339(
+                        op["now"].as_str().unwrap()).unwrap()
+                        .with_timezone(&chrono::Utc);
+                    let check = op_repo
+                        .read(|c| crate::sqlite_tasks::read_bound_task(c, vid))
+                        .map_err(crate::market_storage::Error::Task)?
+                        .ok_or(crate::market_storage::Error::Task(
+                            Error::TaskNotFound))?;
+                    let facts = if let Some(m) = &compact_market {
+                        use crate::publication_verification::EvidenceRepository;
+                        m.publication_facts(tid)?
+                    } else {
+                        use crate::publication_verification::EvidenceRepository;
+                        SqliteMarket::new(op_repo.clone()).publication_facts(tid)?
+                    };
+                    let plan = decision::prepare(check, facts, run_s, actor, now)
+                        .map_err(crate::market_storage::Error::Task)?;
+                    if let Some(m) = &compact_market {
+                        m.commit_check(&plan)
+                    } else {
+                        SqliteMarket::new(op_repo.clone()).commit_check(&plan)
+                    }
+                })();
+                match res {
+                    Ok(r) => json!({"status":"ok",
+                        "receipt":serde_json::to_value(&r).unwrap(),
+                        "digest":state_digest(&db_path,&syms)}),
+                    Err(e) => json!({"status":"error","code":market_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "known_publication" => {
+                use crate::publication_verification::existing::KnownRepository;
+                let t = op["target"].as_str().unwrap();
+                match op_repo.known_publication(t) {
+                    Ok(v) => json!({"status":"ok",
+                        "receipt":serde_json::to_value(&v).unwrap()}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "bind_known_publication" => {
+                use crate::publication_verification::existing::{
+                    KnownPlan, KnownRepository, TerminalResult,
+                };
+                let rid = op["request_id"].as_str().unwrap();
+                let res: Result<_, Error> = (|| {
+                    let target: TaskSnapshot = match op["target"].as_object() {
+                        Some(o) if o.get("cap").is_some() =>
+                            serde_json::from_value(
+                                caps[o["cap"].as_str().unwrap()].clone())
+                                .map_err(|e| Error::InvalidCommand(e.to_string()))?,
+                        _ => op_repo
+                            .read(|c| crate::sqlite_tasks::read_bound_task(
+                                c, op["target"]["task"].as_str().unwrap()))?
+                            .ok_or(Error::TaskNotFound)?,
+                    };
+                    let result: TerminalResult = serde_json::from_value(
+                        op["result"].clone())
+                        .map_err(|e| Error::InvalidCommand(e.to_string()))?;
+                    let command: Command = serde_json::from_value(
+                        op["command"].clone())
+                        .map_err(|e| Error::InvalidCommand(e.to_string()))?;
+                    op_repo.bind_known_publication(&KnownPlan {
+                        request_id: rid.into(), command, target, result,
+                    })
+                })();
+                match res {
+                    Ok(a) => json!({"status":"ok","reused":a.reused,
+                        "outcome_kind":match &a.record.outcome {
+                            RequestOutcome::Task(_) => "task",
+                            RequestOutcome::Terminal(_) => "terminal",
+                        },
+                        "digest":state_digest(&db_path,&syms)}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "inspection_facts" => {
+                use crate::verification_inspection::service::Repository;
+                let id = op["id"].as_str().unwrap();
+                match op_repo.inspection_facts(id) {
+                    Ok(f) => {
+                        let mut fv = serde_json::to_value(&f).unwrap();
+                        // completion_digest binds the per-runner audit bytes
+                        // (random task ids) — emit presence, content parity is
+                        // proven by the SC/PC digest columns.
+                        if fv["completion_digest"].is_string() {
+                            fv["completion_digest"] = json!("<digest>");
+                        }
+                        if let Some(r) = fv["registration"].as_object_mut() {
+                            if let Some(d) = r["descriptor"].as_object_mut() {
+                                d["database_path"] = json!("<db>");
+                                d["database_identity"] = json!("<id>");
+                                d["lock_identity"] = json!("<id>");
+                                d["lock_path"] = json!("<lock>");
+                            }
+                        }
+                        json!({"status":"ok","facts":fv})
+                    }
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "probe_execution" => {
+                use crate::verification_inspection::service::Repository;
+                let id = op["id"].as_str().unwrap();
+                let res: Result<_, Error> = (|| {
+                    let f = op_repo.inspection_facts(id)?;
+                    op_repo.probe_execution(&f)
+                })();
+                match res {
+                    Ok(p) => json!({"status":"ok",
+                        "observation":serde_json::to_value(&p.observation).unwrap(),
+                        "guard":p.guard.is_some()}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "commit_inspection" => {
+                use crate::verification_inspection::decision;
+                use crate::verification_inspection::service::{Probe, Repository};
+                let tid = op["target"].as_str().unwrap();
+                let rid = op["request_id"].as_str().unwrap();
+                let run_s = op["run"].as_str().unwrap();
+                let actor = op["actor"].as_str().unwrap();
+                let now = chrono::DateTime::parse_from_rfc3339(
+                    op["now"].as_str().unwrap()).unwrap().with_timezone(&chrono::Utc);
+                let res: Result<_, Error> = (|| {
+                    if let Some(cap) = op["audit_cap"].as_str() {
+                        let a: decision::Audit = serde_json::from_value(
+                            caps[cap].clone())
+                            .map_err(|e| Error::InvalidCommand(e.to_string()))?;
+                        let probe = Probe {
+                            observation: a.observation.clone(),
+                            guard: None,
+                        };
+                        return op_repo.commit_inspection(
+                            &decision::Plan { audit: a }, &probe);
+                    }
+                    let facts: decision::Facts =
+                        if let Some(cap) = op["facts_cap"].as_str() {
+                            serde_json::from_value(caps[cap].clone())
+                                .map_err(|e| Error::InvalidCommand(e.to_string()))?
+                        } else {
+                            op_repo.inspection_facts(tid)?
+                        };
+                    let probe = match op["observation"].as_str() {
+                        Some("@probe") => op_repo.probe_execution(&facts)?,
+                        _ => Probe {
+                            observation: serde_json::from_value(
+                                op["observation"].clone())
+                                .map_err(|e| Error::InvalidCommand(e.to_string()))?,
+                            guard: None,
+                        },
+                    };
+                    let command = crate::verification_inspection::command(tid)?;
+                    let plan = decision::prepare(rid, command, facts,
+                        probe.observation.clone(), run_s, actor, now)?;
+                    op_repo.commit_inspection(&plan, &probe)
+                })();
+                match res {
+                    Ok(a) => json!({"status":"ok","reused":a.reused,
+                        "outcome_kind":match &a.record.outcome {
+                            RequestOutcome::Task(_) => "task",
+                            RequestOutcome::Terminal(_) => "terminal",
+                        },
+                        "digest":state_digest(&db_path,&syms)}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "claim_runtime" => {
+                // verification_execution::prepare_claim +
+                // SqliteTasks::claim_with_runtime_guard — creates the
+                // runtime registration the inspection probe consumes.
+                let id = op["task"].as_str().unwrap();
+                let run_s = op["run"].as_str().unwrap();
+                let now = chrono::DateTime::parse_from_rfc3339(
+                    op["now"].as_str().unwrap()).unwrap().with_timezone(&chrono::Utc);
+                let res: Result<_, Error> = (|| {
+                    let t = op_repo
+                        .read(|c| crate::sqlite_tasks::read_bound_task(c, id))?
+                        .ok_or(Error::TaskNotFound)?;
+                    let guard = crate::verification_runtime::create(
+                        std::path::Path::new(&db_path), id, run_s)
+                        .map_err(crate::sqlite_verification_runtime::runtime_error)?;
+                    let plan = crate::verification_execution::prepare_claim(
+                        t, guard.descriptor().clone(), now)?;
+                    let out = op_repo.claim_with_runtime_guard(&plan, &guard)?;
+                    drop(guard); // release the flock at op end
+                    Ok(out)
+                })();
+                match res {
+                    Ok(snap) => json!({"status":"ok",
+                        "snapshot":serde_json::to_value(&snap).unwrap()}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "never_started_facts" => {
+                use crate::task_verification::never_started::EvidenceRepository;
+                let id = op["id"].as_str().unwrap();
+                match op_repo.never_started_facts(id) {
+                    Ok(f) => json!({"status":"ok","facts":{
+                        "snapshot":serde_json::to_value(&f.snapshot).unwrap(),
+                        "has_durable_effects":f.has_durable_effects}}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
+                }
+            }
+            "determinate_facts" => {
+                use crate::task_verification::determinate::EvidenceRepository;
+                let id = op["id"].as_str().unwrap();
+                match op_repo.determinate_facts(id) {
+                    Ok(f) => json!({"status":"ok","facts":{
+                        "snapshot":serde_json::to_value(&f.snapshot).unwrap(),
+                        "started_items":f.started_items.iter().collect::<Vec<_>>(),
+                        "committed_items":f.committed_items.iter().collect::<Vec<_>>(),
+                        "has_durable_effects":f.has_durable_effects}}),
+                    Err(e) => json!({"status":"error","code":err_code(&e),
+                        "message":e.to_string()}),
                 }
             }
             other => panic!("unknown op {other}"),
