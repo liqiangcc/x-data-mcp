@@ -1,0 +1,268 @@
+{
+  "task": "NM-075",
+  "generated_at": "2026-09-24T10:33:23.658Z",
+  "fixture": {
+    "manifest": "/home/box/x-data-mcp-node-w4/evidence/issue-4-update-gen3-acceptance/snapshot-manifest-gen3.json",
+    "root": "/home/box/retained-inputs/gen3",
+    "manifest_sha256": "1e8d1ca77e99efb218213795a1d518f5ce6e4057fa93cf99520429ebb0cd5311"
+  },
+  "synthetic_gbbq_records": [
+    {
+      "market": 1,
+      "code": "600004",
+      "category": 1,
+      "date_raw": 20040713
+    },
+    {
+      "market": 1,
+      "code": "600004",
+      "category": 14,
+      "date_raw": 20051219
+    },
+    {
+      "market": 0,
+      "code": "000001",
+      "category": 1,
+      "date_raw": 19900301
+    }
+  ],
+  "pass": 47,
+  "fail": 0,
+  "rows": [
+    {
+      "id": "real.inspect",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.mat.sh.600004",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.mat.sz.000002",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.mat.sh.600000",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.mat.sz.000001",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.sess",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.missing-member",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.missing-member2",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.unsupported.bj.123456",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.unsupported.sh.12345",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.unsupported.sh.600004x",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.unsupported.sh600004",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.unsupported.sh.600004.5",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "real.unsupported.SH.600004",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.gbbq-bad-len",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.gbbq-bad-decode",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.gbbq-absent",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-dup",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-dup-lastwins",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-both-candidates",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-absent",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-short",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-empty",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-bad-crc",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.hsjday-notzip",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-zip64",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-prefix",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-comment",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-trailing-eocd",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.day-trailing-eocd2",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.sha-mismatch.inspect",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.ok.inspect",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.ok.mat",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "synth.ok.sess",
+      "status": "pass",
+      "detail": "exact"
+    },
+    {
+      "id": "fromenv.none",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "fromenv.manifest-only",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "fromenv.dir-only",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "fromenv.bad-manifest-path",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "fromenv.bad-dir",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "fromenv.ok",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "merge.fill-unknown-amount",
+      "status": "pass",
+      "detail": "size=1"
+    },
+    {
+      "id": "merge.change-known-open",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "merge.lose-known-volume",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "merge.lose-known-r7",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "merge.change-known-r7",
+      "status": "pass",
+      "detail": ""
+    },
+    {
+      "id": "merge.append-sorted",
+      "status": "pass",
+      "detail": "size=4"
+    },
+    {
+      "id": "merge.empty-segment",
+      "status": "pass",
+      "detail": "size=1"
+    }
+  ]
+}
