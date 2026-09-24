@@ -1,0 +1,32 @@
+{"id":"exists_readable_absent","status":"PASS","detail":null,"evidence":{"v":false}}
+{"id":"open_creates_schema","status":"PASS","detail":null,"evidence":{"tables":["acquisition_tasks","generations","request_outcomes","requests","seen"]}}
+{"id":"exists_readable_corrupt_is_error","status":"PASS","detail":null,"evidence":{"err":"acquire store unavailable: file is not a database"}}
+{"id":"accept_request_new","status":"PASS","detail":null,"evidence":{"reused":false,"created_at":"2026-01-01T00:00:01.000Z"}}
+{"id":"accept_request_replay_same","status":"PASS","detail":null,"evidence":{"reused":true,"original_ts_kept":true}}
+{"id":"accept_request_conflict_payload","status":"PASS","detail":null,"evidence":{"err":"request_id already bound to a different command"}}
+{"id":"accept_request_conflict_kind","status":"PASS","detail":null,"evidence":{"err":"request_id already bound to a different command"}}
+{"id":"request_lookup","status":"PASS","detail":null,"evidence":{"found":true}}
+{"id":"outcome_bind_first_wins","status":"PASS","detail":null,"evidence":{"first_wins":true}}
+{"id":"record_outcome_json_roundtrip","status":"PASS","detail":null,"evidence":{"outcome":{"request_id":"r2","generation_id":"g1","state":"active","reason_code":null,"detail":null,"manifest_sha256":null,"activated_at":"2026-01-01T00:00:00+00:00","previous_generation_id":null,"reused":false}}}
+{"id":"task_create_lookup","status":"PASS","detail":null,"evidence":{"task_id":"t1"}}
+{"id":"task_update_whole_row","status":"PASS","detail":null,"evidence":{"state":"staged","bytes_done":"4096"}}
+{"id":"tasks_in_state_order","status":"PASS","detail":null,"evidence":{"order":["t0","t2"]}}
+{"id":"task_u64_bigint_exact","status":"PASS","detail":null,"evidence":{"bytes_done":"9007199254740997"}}
+{"id":"task_bytes_negative_clamped","status":"PASS","detail":null,"evidence":{"clamped":true}}
+{"id":"generation_upsert_and_order","status":"PASS","detail":null,"evidence":{"order":["g0","g1","g2"],"g1_state":"installed"}}
+{"id":"seen_upsert_roundtrip","status":"PASS","detail":null,"evidence":{"etag":"e2"}}
+{"id":"timestamp_rfc3339_shape","status":"PASS","detail":null,"evidence":{"stored":"2026-01-01T00:00:01+00:00"}}
+{"id":"timestamp_ms_fraction","status":"PASS","detail":null,"evidence":{"stored":"2026-01-01T00:00:03.123+00:00"}}
+{"id":"wire_parse_ok","status":"PASS","detail":null,"evidence":{"parsed":{"contract_version":"v1","request_id":"r-9"}}}
+{"id":"wire_deny_unknown_fields","status":"PASS","detail":null,"evidence":{"err":"unknown field `extra`, expected `contract_version` or `request_id`"}}
+{"id":"wire_missing_required","status":"PASS","detail":null,"evidence":{"err":"missing field `request_id`"}}
+{"id":"wire_option_absent_or_null","status":"PASS","detail":null,"evidence":{"absent":null,"explicit_null":null}}
+{"id":"wire_option_wrong_type","status":"PASS","detail":null,"evidence":{"err":"invalid type: integer `5`, expected option"}}
+{"id":"wire_version_variant","status":"PASS","detail":null,"evidence":{"err":"unknown variant `\"v2\"`, expected `v1`"}}
+{"id":"wire_workeronce_empty_only","status":"PASS","detail":null,"evidence":{"parsed":{},"err":"unknown field `stray`, there are no fields"}}
+{"id":"wire_invalid_type_string","status":"PASS","detail":null,"evidence":{"err":"invalid type: integer `5`, expected a string"}}
+{"id":"wire_reply_parse_roundtrip","status":"PASS","detail":null,"evidence":{"text":"{\"request_id\":\"r\",\"generation_id\":\"g\",\"state\":\"active\",\"reason_code\":null,\"detail\":null,\"manifest_sha256\":\"abc\",\"activated_at\":\"2026-01-01T00:00:00+00:00\",\"previous_generation_id\":\"g0\",\"reused\":false}"}}
+{"id":"wire_serialize_field_order","status":"PASS","detail":null,"evidence":{"keys":["task_id","request_id","kind","state","generation_id","stage","bytes_done","error","detail","created_at","updated_at"],"text":"{\"task_id\":\"t\",\"request_id\":\"r\",\"kind\":\"k\",\"state\":\"s\",\"generation_id\":null,\"stage\":null,\"bytes_done\":5,\"error\":null,\"detail\":null,\"created_at\":\"c\",\"updated_at\":\"u\"}"}}
+{"id":"wire_u16_range","status":"PASS","detail":null,"evidence":{"rejected":[65536,-1,1.5,"x"],"ok_status":200}}
+{"id":"wire_change_enum_variants","status":"PASS","detail":null,"evidence":{"err":"unknown variant `\"moved\"`, expected `changed`, `unchanged` or `unknown`"}}
+{"id":"summary","status":"PASS","detail":"0 failures","evidence":null}
