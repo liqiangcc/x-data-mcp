@@ -8,6 +8,8 @@ import { MarketError, legacyDigest as _legacyDigest, __decNorm } from "./record_
 import * as CM from "./compact_market.mjs";
 import * as CR from "./compact_read.mjs";
 import { __readItemBinding as readItemBinding } from "./market_read.mjs";
+import * as TR from "../storage/task_repository.mjs";
+import { StorageError } from "../storage/sqlite_adapter.mjs";
 import { canonEq } from "../storage/task_repository.mjs";
 
 const integrity = (m) => new MarketError("integrity", `MARKET_INTEGRITY: ${m}`);
@@ -15,6 +17,7 @@ const notFound = () => new MarketError("not_found", "MARKET_NOT_FOUND");
 const conflict = (m) => new MarketError("conflict", `PUBLISH_PRECONDITION: ${m}`);
 const baseErr = (m) => new MarketError("base", `BASE_UNAVAILABLE: ${m}`);
 const taskErr = (code, message) => Object.assign(new Error(message), { code });
+const invalidCmd = (m) => new MarketError("invalid", `INVALID_MARKET_COMMAND: ${m}`);
 
 // .map_err(super::integrity) on compact_market::Error — same wrap as
 // compact_read (full "compact market data invalid: ..." carried over).
@@ -271,7 +274,7 @@ const applyHead = (db, head, entity, period, baseKey, resultKey, allowMissing) =
     if (!allowMissing) throw conflict("update cannot create a head");
     const changed = db.run(
       "INSERT INTO effective_heads(entity,period,adjustment,version_key) SELECT ?,?,1,? WHERE NOT EXISTS(SELECT 1 FROM effective_heads WHERE entity=? AND period=? AND adjustment=1)",
-      entity, pc, resultKey).changes;
+      entity, pc, resultKey, entity, pc).changes;
     if (changed !== 1) throw conflict("effective head already exists");
     return;
   }
@@ -959,8 +962,8 @@ export const updateBaseFacts = (db, baseVersionId) => {
   if (facts.integrity_digest === null) {
     throw integrity("published base lacks integrity digest");
   }
-  const coverageStatus = facts.coverage_status === 1n ? "Complete"
-    : facts.coverage_status === 2n ? "Incomplete" : "Unknown";
+  const coverageStatus = facts.coverage_status === 1 ? "Complete"
+    : facts.coverage_status === 2 ? "Incomplete" : "Unknown";
   const recordCount = Number(facts.record_count);
   if (recordCount < 0 || recordCount > 4294967295 || !Number.isSafeInteger(recordCount)) {
     throw integrity("base record_count out of range");
@@ -1612,11 +1615,12 @@ export const commitTx = (db, plan) => {
     };
   }
   // Daily{None} | HistoricalFixedBase | CurrentHead
+  // serde unit variant: "HistoricalFixedBase" arrives as a bare string.
   let kind, head, baseKey, requiredHeads2;
   if (intent.Daily !== undefined) {
     kind = "collection"; head = { kind: "missing" }; baseKey = null;
     requiredHeads2 = required;
-  } else if (intent.HistoricalFixedBase !== undefined) {
+  } else if (intent === "HistoricalFixedBase" || intent.HistoricalFixedBase !== undefined) {
     kind = "yearly"; head = { kind: "keep" };
     baseKey = headKey(db, scope.symbol, scope.period);
     requiredHeads2 = required;
@@ -1738,4 +1742,331 @@ export const receipt = (db, id) => {
   }
   if (kind !== null) throw integrity("unknown result kind");
   return null;
+};
+
+// ===== NM-057 — RangeRepository commit surface =====
+const SEGMENT_ROWS = 512;
+
+// typed_replay_receipt — compact_repo.rs:452
+export const typedReplayReceipt = (db, command) => {
+  const kind = registryKind(db, command.publication_id);
+  if (kind === null) return null;
+  if (kind !== 1n) throw conflict("result identity conflict");
+  const stored = readMarketUpdate(db, command.publication_id);
+  if (stored.identity.task_id !== command.task_id ||
+      stored.identity.item_id !== command.item_id ||
+      stored.identity.result_version_id !== command.version_id) {
+    throw conflict("result identity conflict");
+  }
+  return {
+    publication_id: command.publication_id,
+    version_id: stored.identity.result_version_id,
+    task_id: command.task_id,
+    task_revision: stored.identity.task_revision,
+  };
+};
+
+// ops delta stage-if-absent shared by commit_range_ops{,_typed}
+const opsStageIfAbsent = (db, scope, baseVersionId, versionId, upserts, removes) => {
+  const exists = db.get(
+    "SELECT EXISTS(SELECT 1 FROM data_versions WHERE version_id=?) x",
+    versionId).x !== 0n;
+  if (!exists) {
+    stageOpsDelta(db, scope.symbol, baseVersionId, versionId, upserts, removes);
+  }
+};
+
+// intent == Daily{expected_head: base} gate — verbatim arm order
+const opsIntentGate = (command, baseVersionId) => {
+  const i = command.intent;
+  const ok = i !== null && typeof i === "object" && !Array.isArray(i) &&
+    Object.keys(i).length === 1 && "Daily" in i &&
+    i.Daily !== null && typeof i.Daily === "object" &&
+    i.Daily.expected_head === baseVersionId;
+  if (!ok) throw invalidCmd("ops commit must bind the expected daily head");
+};
+
+// commit_range_ops — leaf-equality content binding (compact_repo.rs:1774)
+export const commitRangeOps = (db, command, scope, baseVersionId,
+    upserts, removes, expected) => {
+  opsIntentGate(command, baseVersionId);
+  const versionId = command.version_id;
+  opsStageIfAbsent(db, scope, baseVersionId, versionId, upserts, removes);
+  {
+    const key = CR.versionKey(db, versionId);
+    const facts = CR.resultFacts(db, key);
+    if (facts.parent_version_key !== CR.versionKey(db, baseVersionId) ||
+        facts.state === "published") {
+      throw conflict("staged ops version is not a delta on the expected base");
+    }
+    const leaf = CR.leafBars(db, key);
+    const approved = expected.map((b) => CM.compactBarFromBar(b, "Day"));
+    if (!canonEq(leaf, approved)) {
+      throw integrity("staged ops projection differs from approved candidate");
+    }
+  }
+  validateStaged(db, versionId);
+  return commitOpsUpdate(db, {
+    result_id: command.publication_id, task_id: command.task_id,
+    item_id: command.item_id, base_version_id: baseVersionId,
+    result_version_id: versionId,
+    expected_revision: command.expected_revision, run_id: command.run_id,
+    occupancy_key: occupancyKey(scope.symbol, scope.period),
+    continuity_evidence: null,
+  });
+};
+
+// commit_range_ops_typed — O(ops) read-back binding (compact_repo.rs:1883)
+export const commitRangeOpsTyped = (db, command, scope, baseVersionId,
+    upserts, removes, continuity) => {
+  opsIntentGate(command, baseVersionId);
+  const replay = typedReplayReceipt(db, command);
+  if (replay !== null) return replay;
+  const versionId = command.version_id;
+  opsStageIfAbsent(db, scope, baseVersionId, versionId, upserts, removes);
+  {
+    const key = CR.versionKey(db, versionId);
+    const facts = CR.resultFacts(db, key);
+    if (facts.parent_version_key !== CR.versionKey(db, baseVersionId) ||
+        facts.state === "published") {
+      throw conflict("staged ops version is not a delta on the expected base");
+    }
+    const base = CR.resultFacts(db, facts.parent_version_key);
+    const [staged] = CR.__readDelta(db, key, base.projection_digest);
+    const bars = upserts.map((b) => CM.compactBarFromBar(b, "Day"))
+      .sort((a, b) => a.trade_day < b.trade_day ? -1 : a.trade_day > b.trade_day ? 1 : 0);
+    for (let i = 1; i < bars.length; i++) {
+      if (bars[i - 1].trade_day >= bars[i].trade_day) {
+        throw integrity("typed ops upserts are not strictly increasing");
+      }
+    }
+    const expected = [];
+    for (let i = 0; i < bars.length; i += SEGMENT_ROWS) {
+      const chunk = bars.slice(i, i + SEGMENT_ROWS);
+      expected.push([chunk[0].trade_day, chunk[chunk.length - 1].trade_day, {
+        segment_digest: CM.segmentDigest(scope.symbol, "Day", chunk),
+        clip_start_day: chunk[0].trade_day,
+        clip_end_day: chunk[chunk.length - 1].trade_day,
+        row_count: chunk.length,
+      }]);
+    }
+    for (const day of removes) {
+      const d = CM.epochDay(typeof day === "string" ? day : day.s);
+      expected.push([BigInt(d), BigInt(d), null]);
+    }
+    expected.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    const actual = staged.map((op) => [
+      op.range_start_day, op.range_end_day,
+      op.kind.kind === "upsert" ? {
+        segment_digest: op.kind.clip.segment_digest,
+        clip_start_day: op.kind.clip.clip_start_day,
+        clip_end_day: op.kind.clip.clip_end_day,
+        row_count: op.kind.clip.row_count,
+      } : null,
+    ]);
+    if (!canonEq(actual, expected)) {
+      throw integrity("staged ops differ from the requested delta");
+    }
+  }
+  validateStaged(db, versionId);
+  return commitOpsUpdate(db, {
+    result_id: command.publication_id, task_id: command.task_id,
+    item_id: command.item_id, base_version_id: baseVersionId,
+    result_version_id: versionId,
+    expected_revision: command.expected_revision, run_id: command.run_id,
+    occupancy_key: occupancyKey(scope.symbol, scope.period),
+    continuity_evidence: continuity ?? null,
+  });
+};
+
+// commit_range_no_change_typed (compact_repo.rs:2002)
+export const commitRangeNoChangeTyped = (db, command, baseVersionId,
+    range, continuity) => {
+  const i = command.intent;
+  const ok = i !== null && typeof i === "object" && !Array.isArray(i) &&
+    Object.keys(i).length === 1 && "Daily" in i &&
+    i.Daily !== null && typeof i.Daily === "object" &&
+    i.Daily.expected_head === baseVersionId;
+  if (!ok) {
+    throw invalidCmd("no-change commit must bind the expected daily head");
+  }
+  if (command.version_id !== baseVersionId) {
+    throw invalidCmd("no-change result must reuse the base version");
+  }
+  const baseKey = CR.versionKey(db, baseVersionId);
+  const entity = CR.resultFacts(db, baseKey).entity;
+  return commitOpsNoChange(db, {
+    result_id: command.publication_id, task_id: command.task_id,
+    item_id: command.item_id, base_version_id: baseVersionId,
+    expected_revision: command.expected_revision, run_id: command.run_id,
+    occupancy_key: occupancyKey(entity, "Day"),
+    range_start_day: CM.epochDay(typeof range.start === "string" ? range.start : range.start.s),
+    range_end_day: CM.epochDay(typeof range.end === "string" ? range.end : range.end.s),
+    continuity_evidence: continuity ?? null,
+  });
+};
+
+// commit_range_tx (compact_repo.rs:1386) — the RangePlan commit inside a
+// caller-supplied transaction.
+export const commitRangeTx = (db, plan) => {
+  const publication = plan.publication;
+  const command = publication.command;
+  const kind = registryKind(db, command.publication_id);
+  if (kind !== null) return replayReceipt(db, kind, command);
+  const baseKey = CR.versionKey(db, plan.base.version.version_id);
+  const base = CR.resultFacts(db, baseKey);
+  if (base.state !== "published") throw integrity("range base is not published");
+  const binding = bindingCheck(publication);
+  const required = requiredHeads(db, publication.required_heads);
+  const rangeStart = CM.epochDay(plan.audit.range.start);
+  const rangeEnd = CM.epochDay(plan.audit.range.end);
+  const evidenceValue = plan.audit.evidence ?? {};
+  let change, resultKey;
+  if (plan.no_change) {
+    const baseCount = Number(CR.resultFacts(db, baseKey).record_count);
+    change = { kind: "no_change", prefix_bytes: BigInt(baseCount) * 32n };
+    resultKey = baseKey;
+  } else {
+    const key = CR.versionKey(db, command.version_id);
+    const facts = CR.resultFacts(db, key);
+    if (facts.state !== "validated") throw conflict("candidate is not validated");
+    const stored = CR.materializeChecked(db, command.version_id, true);
+    if (!canonEq(stored.raw, publication.record.raw)) {
+      throw integrity("validated candidate changed since plan");
+    }
+    if (facts.manifest_mode === "delta") {
+      if (facts.parent_version_key !== baseKey) {
+        throw conflict("update result delta is not based on the frozen base");
+      }
+      const [ops] = CR.__readDelta(db, key, base.projection_digest);
+      const bc = CR.resultFacts(db, baseKey).record_count;
+      change = { kind: "append", prefix_bytes: bc * 32n, ops };
+    } else {
+      change = { kind: "full" };
+    }
+    resultKey = key;
+  }
+  const continuity = {
+    mode: change.kind === "no_change" ? "unchanged"
+      : change.kind === "append" ? "append" : "full",
+    base_version_id: plan.base.version.version_id,
+    source_binding_digest: Buffer.from(
+      CR.resultFacts(db, resultKey).source_binding_digest).toString("hex"),
+  };
+  if (evidenceValue.continuity !== undefined) continuity.proof = evidenceValue.continuity;
+  if (evidenceValue.same_qfq_basis_ref !== undefined) continuity.basis_ref = evidenceValue.same_qfq_basis_ref;
+  if (evidenceValue.revision_ref !== undefined) continuity.revision_ref = evidenceValue.revision_ref;
+  if (change.kind === "append" || change.kind === "no_change") {
+    continuity.prefix_bytes = Number(change.prefix_bytes);
+  }
+  const evidence = putEvidence(db, "continuity", continuity);
+  const stored = commitMarketUpdateTx(db, {
+    result_id: command.publication_id, task_id: command.task_id,
+    item_id: command.item_id,
+    base_version_key: baseKey, result_version_key: resultKey,
+    range_start_day: rangeStart, range_end_day: rangeEnd,
+    algorithm_version: plan.audit.algorithm_version ?? UPDATE_ALGORITHM,
+    source_binding_digest: CR.resultFacts(db, resultKey).source_binding_digest,
+    evidence_digest: evidence,
+    expected_task_revision: BigInt(command.expected_revision),
+    published_at: plan.no_change ? null : CM.nowRfc3339(),
+    head: plan.no_change ? { kind: "keep" } : { kind: "version", version: baseKey },
+    required_heads: required,
+    binding, change,
+  });
+  return {
+    publication_id: command.publication_id,
+    version_id: stored.identity.result_version_id,
+    task_id: command.task_id,
+    task_revision: stored.identity.task_revision,
+  };
+};
+
+// commit_update_batch (compact_repo.rs:2637) — one immediate transaction;
+// per-item savepoint confines item failures.
+export const commitUpdateBatch = (db, taskId, items) => {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const snap = TR.readBoundSnapshot(db, taskId);
+    if (!snap) throw taskErr("task_not_found", "task not found");
+    if (snap.head.status === "pending") {
+      const runId = items.length ? items[0].run_id : null;
+      if (runId === null) throw invalidCmd("update batch carries no items");
+      TR.transitionLightTx(db, snap, runId, { kind: "claim" }, CM.nowRfc3339());
+    }
+    const out = items.map((item) => updateBatchItem(db, snap, item));
+    db.exec("COMMIT");
+    return out;
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw e;
+  }
+};
+
+// update_batch_item — replay → StartItem → SAVEPOINT commit → outcome map
+const updateBatchItem = (db, snap, item) => {
+  const kind = registryKind(db, item.publication_id);
+  if (kind !== null) {
+    const stored = readMarketUpdate(db, item.publication_id);
+    if (kind !== 1n) throw conflict("update result id kind mismatch");
+    const expectedVersion = item.prepared.kind === "no_change"
+      ? item.prepared.base_version_id : item.prepared.result_version_id;
+    if (stored.identity.task_id !== item.task_id ||
+        stored.identity.item_id !== item.item_id ||
+        stored.identity.result_version_id !== expectedVersion) {
+      throw conflict("update result id replays a different commit");
+    }
+    return { ok: true, receipt: {
+      publication_id: item.publication_id,
+      version_id: stored.identity.result_version_id,
+      task_id: item.task_id,
+      task_revision: stored.identity.task_revision,
+    } };
+  }
+  // transition errors are structural — abort the whole batch.
+  TR.transitionLightTx(db, snap, item.run_id,
+    { kind: "startItem", item_id: item.item_id }, CM.nowRfc3339());
+  const revision = db.get(
+    "SELECT state_revision FROM tasks WHERE task_id=?", item.task_id).state_revision;
+  const expectedRevision = revision;
+  let committed;
+  db.run("SAVEPOINT update_batch_item");
+  try {
+    const receipt = item.prepared.kind === "no_change"
+      ? commitOpsNoChangeTx(db, {
+          result_id: item.publication_id, task_id: item.task_id,
+          item_id: item.item_id,
+          base_version_id: item.prepared.base_version_id,
+          expected_revision: expectedRevision, run_id: item.run_id,
+          occupancy_key: item.occupancy_key,
+          range_start_day: item.prepared.range_start_day,
+          range_end_day: item.prepared.range_end_day,
+          continuity_evidence: item.prepared.continuity })
+      : (stageOpsDeltaTx(db, item.symbol, item.prepared.base_version_id,
+            item.prepared.result_version_id, item.prepared.upserts, []),
+         CR.markValidatedDelta(db, CR.versionKey(db, item.prepared.result_version_id)),
+         commitOpsUpdateTx(db, {
+          result_id: item.publication_id, task_id: item.task_id,
+          item_id: item.item_id,
+          base_version_id: item.prepared.base_version_id,
+          result_version_id: item.prepared.result_version_id,
+          expected_revision: expectedRevision, run_id: item.run_id,
+          occupancy_key: item.occupancy_key,
+          continuity_evidence: item.prepared.continuity }));
+    db.run("RELEASE update_batch_item");
+    committed = { ok: true, receipt };
+  } catch (error) {
+    db.exec("ROLLBACK TO update_batch_item; RELEASE update_batch_item");
+    committed = { ok: false, error };
+  }
+  if (committed.ok) return committed;
+  const uncertain = committed.error instanceof StorageError &&
+    (committed.error.code === "unavailable" || committed.error.code === "outcome_unknown");
+  const change = uncertain
+    ? { kind: "requireVerification", item_id: item.item_id,
+        reason: "item execution result not confirmed inside update batch; committed receipt not yet established" }
+    : { kind: "finishItem", item_id: item.item_id,
+        outcome: { success: false, error: String(committed.error.message ?? committed.error) } };
+  TR.transitionLightTx(db, snap, item.run_id, change, CM.nowRfc3339());
+  return committed;
 };

@@ -41,7 +41,7 @@ const seed = (opts = {}) => {
   const repo = new TaskAdmission(d, null);
   const a = repo.admit({
     requestId: `req-r${seq}`, commandJson: JSON.stringify({ key: { operation: `r${seq}` } }),
-    executionKeyJson: "{}",
+    executionKeyJson: JSON.stringify({operation:"u",dataset:"d",contract_version:"1"}),
     workJson: JSON.stringify({
       items: items.map((i) => ({ item_id: i, target: {}, progress_unit: "d", frozen_inputs: {}, scope_keys: [`s-r${seq}`] })),
       scopes: [`s-r${seq}`],
@@ -169,7 +169,7 @@ run("candidates_order_scope", () => {
   const repo = new TaskAdmission(d, null);
   const mk = (rid, run, ts) => repo.admit({
     requestId: rid, commandJson: JSON.stringify({ key: { operation: rid } }),
-    executionKeyJson: "{}",
+    executionKeyJson: JSON.stringify({operation:"u",dataset:"d",contract_version:"1"}),
     workJson: JSON.stringify({
       items: [{ item_id: "a", target: {}, progress_unit: "d", frozen_inputs: {}, scope_keys: [`sc-${rid}`] }],
       scopes: [`sc-${rid}`],
@@ -210,7 +210,7 @@ const seededCopy = (name, mutate) => {
   const repo = new TaskAdmission(d, null);
   const a = repo.admit({
     requestId: `req-tp-${name}`, commandJson: JSON.stringify({ key: { operation: `tp-${name}` } }),
-    executionKeyJson: "{}",
+    executionKeyJson: JSON.stringify({operation:"u",dataset:"d",contract_version:"1"}),
     workJson: JSON.stringify({
       items: [{ item_id: "a", target: {}, progress_unit: "d", frozen_inputs: {}, scope_keys: [`sc-${name}`] }],
       scopes: [`sc-${name}`],

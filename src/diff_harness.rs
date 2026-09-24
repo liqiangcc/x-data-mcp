@@ -65,6 +65,17 @@ fn market_digest(repo: &SqliteTasks, syms: &Syms) -> String {
             ("task_publications", "task_id, version_id"),
             ("market_update_results", "result_id"),
         ];
+        let sym_text = |v: &mut Vec<Value>| {
+            for x in v.iter_mut() {
+                if let Value::String(t) = x {
+                    for (k, real) in syms {
+                        if !k.starts_with("rev:") {
+                            *t = t.replace(real.as_str(), &format!("${k}"));
+                        }
+                    }
+                }
+            }
+        };
         let mut acc = String::new();
         for (table, pk) in tables {
             let sql = format!("SELECT * FROM {table} ORDER BY {pk}");
@@ -80,8 +91,9 @@ fn market_digest(repo: &SqliteTasks, syms: &Syms) -> String {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(storage_task)?;
             acc.push_str(table);
+            acc.push('\n');
             for row in rows {
-                let vals: Vec<Value> = row
+                let mut vals: Vec<Value> = row
                     .iter()
                     .map(|v| match v {
                         rusqlite::types::Value::Null => Value::Null,
@@ -93,17 +105,38 @@ fn market_digest(repo: &SqliteTasks, syms: &Syms) -> String {
                         }
                     })
                     .collect();
+                // market_update_results.result_sha256 binds the audit bytes
+                // including the random task id — recompute over the
+                // symbolized audit so the digest input is runner-stable.
+                if *table == "market_update_results" && vals.len() == 9 {
+                    if let Value::String(audit) = vals[6].clone() {
+                        let mut symmed = audit;
+                        for (k, real) in syms {
+                            if !k.starts_with("rev:") {
+                                symmed = symmed.replace(real.as_str(), &format!("${k}"));
+                            }
+                        }
+                        vals[7] = json!(crate::hash::sha256(symmed.as_bytes()));
+                    }
+                }
+                sym_text(&mut vals);
                 acc.push_str(&serde_json::to_string(&vals).unwrap());
                 acc.push('\n');
             }
         }
-        let mut acc = acc;
         for (k, real) in syms {
             if !k.starts_with("rev:") {
                 acc = acc.replace(real.as_str(), &format!("${k}"));
             }
         }
-        Ok(crate::hash::sha256(acc.as_bytes()))
+        // wall-clock columns (created_at/published_at inside rows and
+        // audit/receipt JSON) differ per runner — normalize RFC3339 text.
+        let acc = norm_ts_text(&acc);
+        // task ids are random per-runner — sort symbolized lines so the
+        // digest input is order-stable (same as state_digest).
+        let mut sorted: Vec<&str> = acc.lines().collect();
+        sorted.sort();
+        Ok(crate::hash::sha256(sorted.join("\n").as_bytes()))
     })
     .unwrap()
 }
@@ -138,6 +171,50 @@ fn sym_of(syms: &Syms, id: &str) -> String {
         }
     }
     id.to_string()
+}
+
+/// Replace RFC3339 timestamps (`YYYY-MM-DDTHH:MM:SS[.frac][+00:00|Z]`)
+/// with a fixed marker — wall-clock bytes differ across runners.
+fn norm_ts_text(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < b.len() {
+        // try to match a timestamp at position i
+        let is_dig = |j: usize| j < b.len() && b[j].is_ascii_digit();
+        let fixed = |j: usize, c: u8| j < b.len() && b[j] == c;
+        let mut j = i;
+        let ok = is_dig(j) && is_dig(j + 1) && is_dig(j + 2) && is_dig(j + 3)
+            && fixed(j + 4, b'-') && is_dig(j + 5) && is_dig(j + 6)
+            && fixed(j + 7, b'-') && is_dig(j + 8) && is_dig(j + 9)
+            && fixed(j + 10, b'T') && is_dig(j + 11) && is_dig(j + 12)
+            && fixed(j + 13, b':') && is_dig(j + 14) && is_dig(j + 15)
+            && fixed(j + 16, b':') && is_dig(j + 17) && is_dig(j + 18);
+        if ok {
+            j += 19;
+            if j < b.len() && b[j] == b'.' {
+                j += 1;
+                while is_dig(j) { j += 1; }
+            }
+            if j < b.len() && b[j] == b'Z' {
+                j += 1;
+            } else if j + 5 < b.len() && b[j] == b'+' && is_dig(j + 1)
+                && is_dig(j + 2) && b[j + 3] == b':' && is_dig(j + 4) && is_dig(j + 5)
+            {
+                j += 6;
+            } else {
+                out.push_str(&s[i..j]);
+                i = j;
+                continue;
+            }
+            out.push_str("<TS>");
+            i = j;
+            continue;
+        }
+        out.push(b[i] as char);
+        i += 1;
+    }
+    out
 }
 
 fn normalize_ids(v: &Value, syms: &Syms) -> Value {
@@ -236,9 +313,118 @@ fn state_digest(db: &str, syms: &Syms) -> String {
         dump(&c, "SELECT hex(source_binding_digest),generation_id,hex(generation_manifest_sha256),hex(day_member_sha256),hex(security_event_sha256),hex(evidence_digest) FROM source_bindings ORDER BY source_binding_digest", "CSB", 6, &mut lines);
         dump(&c, "SELECT task_id,version_key,result_id FROM task_publications ORDER BY 1,2", "CTP", 3, &mut lines);
         dump(&c, "SELECT result_id,result_kind FROM result_registry ORDER BY result_id", "CRR", 2, &mut lines);
-        dump(&c, "SELECT result_key,result_id,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,hex(source_binding_digest),continuity_mode,prefix_bytes,hex(base_projection_digest),hex(result_projection_digest),hex(delta_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM market_update_results ORDER BY result_key", "CMU", 19, &mut lines);
+        // result_digest binds the runner-local task id — recompute it with
+        // the task id symbolized so the digest verifies the pipeline
+        // deterministically across runners.
+        let vid = |c: &rusqlite::Connection, k: i64| -> String {
+            c.query_row("SELECT version_id FROM data_versions WHERE version_key=?1",
+                [k], |r| r.get(0)).unwrap_or_default()
+        };
+        let hx = |x: String| -> Option<[u8; 32]> {
+            if x.len() != 64 { return None; }
+            let mut d = [0u8; 32];
+            for (i, b) in d.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&x[i * 2..i * 2 + 2], 16).unwrap();
+            }
+            Some(d)
+        };
+        {
+            let mut st = c.prepare("SELECT result_key,result_id,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,hex(source_binding_digest),continuity_mode,prefix_bytes,hex(base_projection_digest),hex(result_projection_digest),hex(delta_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM market_update_results ORDER BY result_key").unwrap();
+            let rows: Vec<Vec<rusqlite::types::Value>> = st.query_map([], |r| {
+                Ok((0..19).map(|i| r.get::<_, rusqlite::types::Value>(i).unwrap()).collect())
+            }).unwrap().map(|r| r.unwrap()).collect();
+            for r in rows {
+                let vs = |i: usize| -> String {
+                    match &r[i] { rusqlite::types::Value::Null => String::new(),
+                        rusqlite::types::Value::Integer(x) => x.to_string(),
+                        rusqlite::types::Value::Text(x) => x.clone(),
+                        rusqlite::types::Value::Real(x) => x.to_string(),
+                        rusqlite::types::Value::Blob(x) => crate::hash::sha256(x) }
+                };
+                let gi = |i: usize| -> i64 {
+                    match &r[i] { rusqlite::types::Value::Integer(x) => *x, _ => 0 }
+                };
+                let go = |i: usize| -> Option<i64> {
+                    match &r[i] { rusqlite::types::Value::Integer(x) => Some(*x), _ => None }
+                };
+                let gd = |i: usize| -> Option<[u8; 32]> {
+                    match &r[i] { rusqlite::types::Value::Text(x) => hx(x.clone()), _ => None }
+                };
+                let outcome = match gi(6) { 1 => crate::compact_market::UpdateOutcome::NoChange,
+                    _ => crate::compact_market::UpdateOutcome::Published };
+                let cont = match gi(11) { 1 => crate::compact_market::ContinuityMode::Unchanged,
+                    2 => crate::compact_market::ContinuityMode::Append,
+                    _ => crate::compact_market::ContinuityMode::Full };
+                let rd = match (hx(vs(10)), hx(vs(13)), hx(vs(14)), hx(vs(16))) {
+                    (Some(sbd), Some(bpd), Some(rpd), Some(ed)) => {
+                        let identity = crate::compact_market::MarketUpdateResultIdentity {
+                            result_id: vs(1), task_id: sym_of(syms, &vs(2)), item_id: vs(3),
+                            base_version_id: vid(&c, gi(4)), result_version_id: vid(&c, gi(5)),
+                            outcome, range_start_day: gi(7), range_end_day: gi(8),
+                            algorithm_version: vs(9),
+                            source_binding_digest: sbd,
+                            continuity_mode: cont, prefix_bytes: go(12).map(|x| x as u64),
+                            base_projection_digest: bpd,
+                            result_projection_digest: rpd,
+                            delta_digest: gd(15), evidence_digest: ed,
+                            task_revision: gi(17) as u64,
+                        };
+                        crate::compact_market::market_update_result_digest(&identity)
+                            .map(|d| crate::sqlite_market::compact_repo::hex_bytes(&d))
+                            .unwrap_or_else(|_| "<ERR>".into())
+                    }
+                    _ => vs(18),
+                };
+                lines.push(format!("CMU:{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                    vs(0), vs(1), sym_of(syms, &vs(2)), vs(3), vs(4), vs(5), vs(6), vs(7), vs(8),
+                    vs(9), vs(10), vs(11), vs(12), vs(13), vs(14), vs(15), vs(16), vs(17), rd));
+            }
+        }
         dump(&c, "SELECT result_key,seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM market_update_delta_clips ORDER BY result_key,seq", "CMD", 8, &mut lines);
-        dump(&c, "SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM publication_results ORDER BY result_key", "CPR", 13, &mut lines);
+        {
+            let mut st = c.prepare("SELECT result_key,publication_id,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,hex(source_binding_digest),hex(evidence_digest),task_revision,hex(result_digest) FROM publication_results ORDER BY result_key").unwrap();
+            let rows: Vec<Vec<rusqlite::types::Value>> = st.query_map([], |r| {
+                Ok((0..13).map(|i| r.get::<_, rusqlite::types::Value>(i).unwrap()).collect())
+            }).unwrap().map(|r| r.unwrap()).collect();
+            for r in rows {
+                let vs = |i: usize| -> String {
+                    match &r[i] { rusqlite::types::Value::Null => String::new(),
+                        rusqlite::types::Value::Integer(x) => x.to_string(),
+                        rusqlite::types::Value::Text(x) => x.clone(),
+                        rusqlite::types::Value::Real(x) => x.to_string(),
+                        rusqlite::types::Value::Blob(x) => crate::hash::sha256(x) }
+                };
+                let gi = |i: usize| -> i64 {
+                    match &r[i] { rusqlite::types::Value::Integer(x) => *x, _ => 0 }
+                };
+                let kind = match gi(4) { 1 => crate::compact_market::PublicationKind::Collection,
+                    2 => crate::compact_market::PublicationKind::Yearly,
+                    _ => crate::compact_market::PublicationKind::Republish };
+                let basek = match &r[5] { rusqlite::types::Value::Integer(x) => Some(*x), _ => None };
+                let outcome = match gi(7) { 1 => crate::compact_market::UpdateOutcome::NoChange,
+                    _ => crate::compact_market::UpdateOutcome::Published };
+                let rd = match (hx(vs(9)), hx(vs(10))) {
+                    (Some(sbd), Some(ed)) => {
+                        let identity = crate::compact_market::PublicationResultIdentity {
+                            publication_id: vs(1), task_id: sym_of(syms, &vs(2)), item_id: vs(3),
+                            publication_kind: kind,
+                            base_version_id: basek.map(|k| vid(&c, k)),
+                            result_version_id: vid(&c, gi(6)),
+                            outcome, algorithm_version: vs(8),
+                            source_binding_digest: sbd, evidence_digest: ed,
+                            task_revision: gi(11) as u64,
+                        };
+                        crate::compact_market::publication_result_digest(&identity)
+                            .map(|d| crate::sqlite_market::compact_repo::hex_bytes(&d))
+                            .unwrap_or_else(|_| "<ERR>".into())
+                    }
+                    _ => vs(12),
+                };
+                lines.push(format!("CPR:{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                    vs(0), vs(1), sym_of(syms, &vs(2)), vs(3), vs(4), vs(5), vs(6), vs(7), vs(8),
+                    vs(9), vs(10), vs(11), rd));
+            }
+        }
     }
 
     if !compact {
@@ -246,9 +432,88 @@ fn state_digest(db: &str, syms: &Syms) -> String {
         dump(&c, "SELECT result_id,task_id,item_id,base_daily_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM yearly_execution_results ORDER BY result_id", "YR", 9, &mut lines);
     }
     // gap + publication-check tables are schema-neutral (migration 011).
-    dump(&c, "SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions ORDER BY decision_id", "GD", 14, &mut lines);
-    dump(&c, "SELECT gap_id,symbol,period,start_date,end_date,evidence_kind,evidence_id,evidence_digest,observed_at FROM proven_gaps ORDER BY gap_id", "PG", 9, &mut lines);
-    dump(&c, "SELECT gap_id,version_id,covered_at FROM gap_coverings ORDER BY gap_id", "GC", 3, &mut lines);
+    // Wall-clock columns and the digests binding them are normalized like
+    // the compact integrity column: fixed stamp + recompute.
+    const TS_FIX: &str = "0000-01-01T00:00:00+00:00";
+    let fixed_ts = || chrono::DateTime::parse_from_rfc3339(TS_FIX)
+        .unwrap().to_utc();
+    {
+        let mut st = c.prepare("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions ORDER BY decision_id").unwrap();
+        let rows: Vec<Vec<rusqlite::types::Value>> = st.query_map([], |r| {
+            Ok((0..14).map(|i| r.get::<_, rusqlite::types::Value>(i).unwrap()).collect())
+        }).unwrap().map(|r| r.unwrap()).collect();
+        for r in &rows {
+            let vs = |i: usize| -> String {
+                match &r[i] { rusqlite::types::Value::Null => String::new(),
+                    rusqlite::types::Value::Integer(x) => x.to_string(),
+                    rusqlite::types::Value::Text(x) => x.clone(),
+                    rusqlite::types::Value::Real(x) => x.to_string(),
+                    rusqlite::types::Value::Blob(x) => crate::hash::sha256(x) }
+            };
+            let period = if vs(2) == "day" { crate::market_data::Period::Day }
+                else { crate::market_data::Period::Year };
+            let d = crate::market_storage::GapVerificationDecision {
+                decision_id: vs(0), symbol: vs(1), period,
+                start_date: chrono::NaiveDate::parse_from_str(&vs(3), "%Y-%m-%d").unwrap(),
+                end_date: chrono::NaiveDate::parse_from_str(&vs(4), "%Y-%m-%d").unwrap(),
+                subject_version_id: vs(5), subject_version_digest: vs(6),
+                conclusion: vs(7), basis_kind: vs(8), basis_ref: vs(9),
+                basis_sha256: vs(10), verifier_id: vs(11),
+                decided_at: fixed_ts(), decision_sha256: vs(13),
+            };
+            lines.push(format!("GD:{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                vs(0), vs(1), vs(2), vs(3), vs(4), vs(5), vs(6), vs(7), vs(8),
+                vs(9), vs(10), vs(11), TS_FIX, d.content_digest()));
+        }
+    }
+    {
+        // PG.evidence_digest binds the decision's sha (and its decided_at)
+        // — recompute via the linked decision with the fixed stamp.
+        let mut st = c.prepare("SELECT gap_id,symbol,period,start_date,end_date,evidence_kind,evidence_id,evidence_digest,observed_at FROM proven_gaps ORDER BY gap_id").unwrap();
+        let rows: Vec<Vec<rusqlite::types::Value>> = st.query_map([], |r| {
+            Ok((0..9).map(|i| r.get::<_, rusqlite::types::Value>(i).unwrap()).collect())
+        }).unwrap().map(|r| r.unwrap()).collect();
+        for r in rows {
+            let vs = |i: usize| -> String {
+                match &r[i] { rusqlite::types::Value::Null => String::new(),
+                    rusqlite::types::Value::Integer(x) => x.to_string(),
+                    rusqlite::types::Value::Text(x) => x.clone(),
+                    rusqlite::types::Value::Real(x) => x.to_string(),
+                    rusqlite::types::Value::Blob(x) => crate::hash::sha256(x) }
+            };
+            let ev = c.prepare("SELECT decision_id,symbol,period,start_date,end_date,subject_version_id,subject_version_digest,conclusion,basis_kind,basis_ref,basis_sha256,verifier_id,decided_at,decision_sha256 FROM gap_verification_decisions WHERE decision_id=?1")
+                .and_then(|mut q| q.query_row([&vs(6)], |dr| {
+                    Ok((0..14).map(|i| dr.get::<_, rusqlite::types::Value>(i).unwrap())
+                        .collect::<Vec<_>>())
+                }));
+            let evd = match ev {
+                Ok(dr) => {
+                    let dvs = |i: usize| -> String {
+                        match &dr[i] { rusqlite::types::Value::Null => String::new(),
+                            rusqlite::types::Value::Integer(x) => x.to_string(),
+                            rusqlite::types::Value::Text(x) => x.clone(),
+                            rusqlite::types::Value::Real(x) => x.to_string(),
+                            rusqlite::types::Value::Blob(x) => crate::hash::sha256(x) }
+                    };
+                    let period = if dvs(2) == "day" { crate::market_data::Period::Day }
+                        else { crate::market_data::Period::Year };
+                    crate::market_storage::GapVerificationDecision {
+                        decision_id: dvs(0), symbol: dvs(1), period,
+                        start_date: chrono::NaiveDate::parse_from_str(&dvs(3), "%Y-%m-%d").unwrap(),
+                        end_date: chrono::NaiveDate::parse_from_str(&dvs(4), "%Y-%m-%d").unwrap(),
+                        subject_version_id: dvs(5), subject_version_digest: dvs(6),
+                        conclusion: dvs(7), basis_kind: dvs(8), basis_ref: dvs(9),
+                        basis_sha256: dvs(10), verifier_id: dvs(11),
+                        decided_at: fixed_ts(), decision_sha256: dvs(13),
+                    }.content_digest()
+                }
+                Err(_) => vs(7),
+            };
+            lines.push(format!("PG:{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                vs(0), vs(1), vs(2), vs(3), vs(4), vs(5), vs(6), evd, TS_FIX));
+        }
+    }
+    dump(&c, "SELECT gap_id,version_id,'0000-01-01T00:00:00+00:00' FROM gap_coverings ORDER BY gap_id", "GC", 3, &mut lines);
     dump(&c, "SELECT verification_task_id,target_task_id,audit_json,audit_sha256 FROM publication_checks ORDER BY 1", "PC", 4, &mut lines);
 
     let joined = lines.join("\n");
@@ -258,8 +523,14 @@ fn state_digest(db: &str, syms: &Syms) -> String {
             out = out.replace(real.as_str(), &format!("${k}"));
         }
     }
-    // strip volatile bytes that differ legitimately across impls
-    // (frozen_work_json identical since canonical; command digest is stable)
+    // task ids are random per-runner — sort the symbolized lines so the
+    // digest input is order-stable.
+    let mut sorted: Vec<&str> = out.lines().collect();
+    sorted.sort();
+    let out = sorted.join("\n");
+    if let Ok(path) = std::env::var("DIFF_DIGEST_DUMP") {
+        std::fs::write(path, &out).ok();
+    }
     crate::hash::sha256(out.as_bytes())
 }
 
@@ -313,10 +584,71 @@ fn run() {
     let norm_set = |db_path: &str| -> BTreeSet<String> {
         let c = rusqlite::Connection::open(db_path).unwrap();
         let mut out = BTreeSet::new();
-        let mut st = c.prepare(
-            "SELECT DISTINCT v FROM (SELECT created_at AS v FROM data_versions UNION ALL SELECT published_at FROM data_versions UNION ALL SELECT hex(integrity_digest) AS v FROM data_versions) WHERE v IS NOT NULL").unwrap();
+        // Volatile columns only — the union is built over tables that
+        // actually exist (result tables are compact-only).
+        let has = |t: &str| -> bool {
+            c.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [t], |r| r.get::<_, i64>(0)).unwrap() > 0
+        };
+        let col = |t: &str, k: &str| -> bool {
+            c.query_row("SELECT count(*) FROM pragma_table_info(?1) WHERE name=?2",
+                [t, k], |r| r.get::<_, i64>(0)).unwrap() > 0
+        };
+        let mut parts: Vec<String> = Vec::new();
+        if col("data_versions", "created_at") {
+            parts.push("SELECT created_at AS v FROM data_versions".into());
+        }
+        if col("data_versions", "published_at") {
+            parts.push("SELECT published_at AS v FROM data_versions".into());
+        }
+        if col("data_versions", "integrity_digest") {
+            parts.push("SELECT hex(integrity_digest) AS v FROM data_versions".into());
+        }
+        if has("gap_verification_decisions") {
+            parts.push("SELECT decided_at AS v FROM gap_verification_decisions".into());
+            parts.push("SELECT decision_sha256 AS v FROM gap_verification_decisions".into());
+        }
+        if has("proven_gaps") {
+            parts.push("SELECT observed_at AS v FROM proven_gaps".into());
+            parts.push("SELECT evidence_digest AS v FROM proven_gaps".into());
+        }
+        if has("gap_coverings") {
+            parts.push("SELECT covered_at AS v FROM gap_coverings".into());
+        }
+        if has("market_update_results") {
+            // legacy column: result_sha256; compact column: result_digest
+            parts.push(format!(
+                "SELECT hex({}) AS v FROM market_update_results",
+                if col("market_update_results", "result_digest") {
+                    "result_digest"
+                } else {
+                    "result_sha256"
+                }));
+        }
+        if has("publication_results") {
+            parts.push("SELECT hex(result_digest) AS v FROM publication_results".into());
+        }
+        if has("tasks") {
+            parts.push("SELECT created_at AS v FROM tasks".into());
+            parts.push("SELECT last_progress_at AS v FROM tasks".into());
+        }
+        if parts.is_empty() {
+            parts.push("SELECT CAST(NULL AS TEXT) AS v WHERE 0".into());
+        }
+        let sql = format!(
+            "SELECT DISTINCT v FROM ({}) WHERE v IS NOT NULL AND v != ''",
+            parts.join(" UNION ALL "));
+        let mut st = c.prepare(&sql).unwrap();
         let rows = st.query_map([], |r| r.get::<_, String>(0)).unwrap();
-        for r in rows { out.insert(r.unwrap()); }
+        for r in rows {
+            let v = r.unwrap();
+            // serde DateTime emits "Z" where the stored text is "+00:00" —
+            // cover both forms.
+            if let Some(z) = v.strip_suffix("+00:00") {
+                out.insert(format!("{z}Z"));
+            }
+            out.insert(v);
+        }
         out
     };
     fn norm_deep(v: &Value, set: &BTreeSet<String>) -> Value {
@@ -324,9 +656,20 @@ fn run() {
             Value::String(s) if set.contains(s.as_str()) => json!("<norm>"),
             Value::Array(a) => Value::Array(a.iter().map(|x| norm_deep(x, set)).collect()),
             Value::Object(m) => Value::Object(
-                m.iter().map(|(k, x)| (k.clone(), norm_deep(x, set))).collect()),
+                m.iter().map(|(k, x)| (k.clone(), norm_deep_named(k, x, set))).collect()),
             _ => v.clone(),
         }
+    }
+    // Digests computed over task-bound/wall-clock content can't be
+    // string-matched — norm them by field name; content parity is proven by
+    // the normalized state digest and the remaining emitted fields.
+    fn norm_deep_named(k: &str, v: &Value, set: &BTreeSet<String>) -> Value {
+        if matches!(k, "evidence_sha256" | "audit_sha256")
+            && v.as_str().is_some_and(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+        {
+            return json!("<norm>");
+        }
+        norm_deep(v, set)
     }
     // Compact (schema-19) DBs bypass SqliteMarket::read's schema gate —
     // production compact reads run inside the WriteCoordinator lease; the
@@ -487,7 +830,12 @@ fn run() {
                 match res {
                     Ok(None) => json!({"status":"ok","found":false}),
                     Ok(Some((audit, receipt))) => json!({"status":"ok","found":true,
-                        "audit_sha256":crate::hash::sha256(serde_json::to_string(&audit).unwrap().as_bytes()),
+                        // audit embeds wall-clock integrity digests +
+                        // the random task id — normalize both before hash.
+                        "audit_sha256":crate::hash::sha256(
+                            serde_json::to_string(&norm_deep(
+                                &normalize_ids(&serde_json::to_value(&audit).unwrap(), &syms),
+                                &norm_set(&db_path))).unwrap().as_bytes()),
                         "receipt":serde_json::to_value(&receipt).unwrap()}),
                     Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
                 }
@@ -502,7 +850,12 @@ fn run() {
                 match res {
                     Ok(None) => json!({"status":"ok","found":false}),
                     Ok(Some((audit, receipt))) => json!({"status":"ok","found":true,
-                        "audit_sha256":crate::hash::sha256(serde_json::to_string(&audit).unwrap().as_bytes()),
+                        // audit embeds wall-clock integrity digests +
+                        // the random task id — normalize both before hash.
+                        "audit_sha256":crate::hash::sha256(
+                            serde_json::to_string(&norm_deep(
+                                &normalize_ids(&serde_json::to_value(&audit).unwrap(), &syms),
+                                &norm_set(&db_path))).unwrap().as_bytes()),
                         "receipt":serde_json::to_value(&receipt).unwrap()}),
                     Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
                 }
@@ -584,8 +937,43 @@ fn run() {
                         _ => {}
                     }
                 }
-                let record = load(p["record"].as_str().unwrap());
-                let base = load(p["base"].as_str().unwrap());
+                // "@base"/"@candidate" load the record through the
+                // backend's own materialization (compact synthesizes the
+                // stored raw — a fixture file can't byte-match it).
+                let loaded: Result<(crate::market_storage::compat::CheckedRecord,
+                                    crate::market_storage::compat::CheckedRecord),
+                                   MarketError> = (|| {
+                    use crate::market_storage::MarketRepository;
+                    let record = match p["record"].as_str().unwrap() {
+                        "@candidate" => compact_market.as_ref().unwrap()
+                            .candidate(command.version_id.as_str())?,
+                        "@base" => compact_market.as_ref().unwrap()
+                            .fixed(p["base_version_id"].as_str().unwrap())?,
+                        n => load(n),
+                    };
+                    let base = match p["base"].as_str().unwrap() {
+                        "@base" => compact_market.as_ref().unwrap()
+                            .fixed(p["base_version_id"].as_str().unwrap())?,
+                        n => load(n),
+                    };
+                    Ok((record, base))
+                })();
+                let (record, base) = match loaded {
+                    Ok(rb) => rb,
+                    Err(e) => {
+                        let mut r = json!({"status":"error","code":market_code(&e),
+                            "message":e.to_string(),
+                            "unchanged":state_digest(&db_path,&syms)==before});
+                        r["seq"] = json!(idx);
+                        r["op"] = json!(name);
+                        let r = if norm_ts {
+                            norm_deep(&r, &norm_set(&db_path))
+                        } else { r };
+                        writeln!(out, "{}", serde_json::to_string(&r).unwrap())
+                            .unwrap();
+                        continue;
+                    }
+                };
                 let required_heads: Vec<(Scope, Option<String>)> = p["required_heads"]
                     .as_array()
                     .map(|a| a.iter().map(|h| {
@@ -661,12 +1049,222 @@ fn run() {
                         }).collect())
                         .unwrap_or_default(),
                 };
-                let market = SqliteMarket::new(op_repo.clone());
                 use crate::market_update::publication::RangeRepository;
-                match RangeRepository::commit_range(&market, &plan) {
-                    Ok(r) => json!({"status":"ok",
-                        "receipt":serde_json::to_value(&r).unwrap(),
-                        "digest":market_digest(&op_repo, &syms)}),
+                let res = if let Some(m) = &compact_market {
+                    RangeRepository::commit_range(m, &plan)
+                } else {
+                    let market = SqliteMarket::new(op_repo.clone());
+                    RangeRepository::commit_range(&market, &plan)
+                };
+                match res {
+                    Ok(r) => {
+                        // legacy digest covers the schema-18 market tables;
+                        // compact runs use the schema-neutral state digest.
+                        let d = if compact_market.is_some() {
+                            crate::hash::sha256(state_digest(&db_path, &syms).as_bytes())
+                        } else {
+                            market_digest(&op_repo, &syms)
+                        };
+                        json!({"status":"ok",
+                            "receipt":serde_json::to_value(&r).unwrap(),
+                            "digest":d})
+                    }
+                    Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
+                }
+            }
+            // NM-057 — publish/result commit entry points:
+            //   commit_publication -> MarketRepository::commit (commit_tx)
+            //   commit_yearly      -> YearlyRepository::commit_yearly
+            //     (yearly_no_change_tx / commit_tx -> commit_publication)
+            "commit_publication" | "commit_yearly" => {
+                let p = &op["plan"];
+                let dir = std::env::var("DIFF_FIXTURES")
+                    .unwrap_or_else(|_| "scripts/node_migration_p3/records".into());
+                let load = |name: &str| -> crate::market_storage::compat::CheckedRecord {
+                    let raw: Value = serde_json::from_str(
+                        &fs::read_to_string(std::path::Path::new(&dir).join(name)).unwrap(),
+                    )
+                    .unwrap();
+                    crate::market_storage::compat::check(&raw).unwrap()
+                };
+                let mut cmdv = p["command"].clone();
+                if let Some(er) = cmdv["expected_revision"].as_str() {
+                    cmdv["expected_revision"] = resolve(&json!(er), &syms);
+                }
+                let mut command: Publication = serde_json::from_value(cmdv).unwrap();
+                if let Some(t) = command.task_id.strip_prefix('$') {
+                    command.task_id = syms.get(t).cloned().unwrap_or(command.task_id);
+                }
+                {
+                    let resolve_opt = |t: &mut Option<String>| {
+                        if let Some(v) = t {
+                            if let Some(sym) = v.strip_prefix('$') {
+                                *v = syms.get(sym).cloned().unwrap_or_else(|| v.clone());
+                            }
+                        }
+                    };
+                    match &mut command.intent {
+                        PublishIntent::Daily { expected_head } => resolve_opt(expected_head),
+                        PublishIntent::CurrentHead {
+                            expected_daily_head,
+                            expected_yearly_head,
+                        } => {
+                            if let Some(sym) = expected_daily_head.strip_prefix('$') {
+                                *expected_daily_head =
+                                    syms.get(sym).cloned().unwrap_or_else(|| expected_daily_head.clone());
+                            }
+                            resolve_opt(expected_yearly_head);
+                        }
+                        _ => {}
+                    }
+                }
+                let load_rec = |name: &str,
+                                ver: &str|
+                 -> Result<crate::market_storage::compat::CheckedRecord, MarketError> {
+                    use crate::market_storage::MarketRepository;
+                    match name {
+                        "@candidate" => compact_market.as_ref().unwrap().candidate(ver),
+                        "@base" | "@fixed" => compact_market.as_ref().unwrap().fixed(ver),
+                        n => Ok(load(n)),
+                    }
+                };
+                let loaded: Result<(crate::market_storage::compat::CheckedRecord,
+                                    Option<crate::market_storage::compat::CheckedRecord>),
+                                   MarketError> = (|| {
+                    let record = load_rec(p["record"].as_str().unwrap(), &command.version_id)?;
+                    let base = match p["base"].as_str() {
+                        Some(m) => Some(load_rec(
+                            m, p["base_version_id"].as_str().unwrap_or_default())?),
+                        None => None,
+                    };
+                    Ok((record, base))
+                })();
+                let res: Result<Receipt, MarketError> = match loaded {
+                    Err(e) => Err(e),
+                    Ok((record, base)) => {
+                        let required_heads: Vec<(Scope, Option<String>)> = p["required_heads"]
+                            .as_array()
+                            .map(|a| a.iter().map(|h| {
+                                let sym = h[0].as_str().unwrap().to_string();
+                                let per = h[1].as_str().unwrap();
+                                let exp = h.get(2).and_then(|e| e.as_str()).map(|e| {
+                                    e.strip_prefix('$')
+                                        .and_then(|k| syms.get(k))
+                                        .cloned()
+                                        .unwrap_or_else(|| e.to_string())
+                                });
+                                (
+                                    Scope {
+                                        symbol: sym,
+                                        period: if per == "day" {
+                                            crate::market_data::Period::Day
+                                        } else {
+                                            crate::market_data::Period::Year
+                                        },
+                                    },
+                                    exp,
+                                )
+                            }).collect())
+                            .unwrap_or_default();
+                        let promote = p.get("promote").and_then(|pr| {
+                            if pr.is_null() { None } else {
+                                Some(Scope {
+                                    symbol: pr["symbol"].as_str().unwrap().to_string(),
+                                    period: if pr["period"].as_str().unwrap() == "day" {
+                                        crate::market_data::Period::Day
+                                    } else {
+                                        crate::market_data::Period::Year
+                                    },
+                                })
+                            }
+                        });
+                        let publication = crate::market_storage::PublishPlan {
+                            command,
+                            record,
+                            required_heads,
+                            promote,
+                            base_digest: p["base_digest"].as_str().map(|x| x.to_string()),
+                        };
+                        if name == "commit_publication" {
+                            use crate::market_storage::MarketRepository;
+                            match &compact_market {
+                                Some(m) => MarketRepository::commit(m, &publication),
+                                None => MarketRepository::commit(
+                                    &SqliteMarket::new(op_repo.clone()), &publication),
+                            }
+                        } else {
+                            use crate::yearly_publication::results::YearlyRepository;
+                            let base = base.ok_or_else(|| MarketError::Integrity(
+                                "yearly plan base missing".into()));
+                            match base {
+                                Err(e) => Err(e),
+                                Ok(base) => {
+                                    let plan = crate::yearly_publication::results::YearlyResultPlan {
+                                        publication,
+                                        base,
+                                        prior: None,
+                                        no_change: p["no_change"].as_bool().unwrap_or(false),
+                                        audit: p["audit"].clone(),
+                                        audit_payloads: vec![],
+                                    };
+                                    match &compact_market {
+                                        Some(m) => YearlyRepository::commit_yearly(m, &plan),
+                                        None => YearlyRepository::commit_yearly(
+                                            &SqliteMarket::new(op_repo.clone()), &plan),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                match res {
+                    Ok(r) => {
+                        let d = if compact_market.is_some() {
+                            crate::hash::sha256(state_digest(&db_path, &syms).as_bytes())
+                        } else {
+                            market_digest(&op_repo, &syms)
+                        };
+                        json!({"status":"ok",
+                            "receipt":serde_json::to_value(&r).unwrap(),
+                            "digest":d})
+                    }
+                    Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
+                }
+            }
+            "yearly_receipt" | "yearly_item_receipt" | "receipt" => {
+                use crate::market_storage::MarketRepository;
+                use crate::yearly_publication::results::YearlyRepository;
+                let res: Result<Option<Receipt>, MarketError> = match name.as_str() {
+                    "yearly_receipt" => {
+                        let id = resolve_str(&op["id"], &syms);
+                        match &compact_market {
+                            Some(m) => YearlyRepository::yearly_receipt(m, &id),
+                            None => YearlyRepository::yearly_receipt(
+                                &SqliteMarket::new(op_repo.clone()), &id),
+                        }
+                    }
+                    "yearly_item_receipt" => {
+                        let task = resolve_str(&op["task_id"], &syms);
+                        let item = op["item_id"].as_str().unwrap().to_string();
+                        match &compact_market {
+                            Some(m) => YearlyRepository::yearly_item_receipt(m, &task, &item),
+                            None => YearlyRepository::yearly_item_receipt(
+                                &SqliteMarket::new(op_repo.clone()), &task, &item),
+                        }
+                    }
+                    _ => {
+                        let id = resolve_str(&op["id"], &syms);
+                        match &compact_market {
+                            Some(m) => MarketRepository::receipt(m, &id),
+                            None => MarketRepository::receipt(
+                                &SqliteMarket::new(op_repo.clone()), &id),
+                        }
+                    }
+                };
+                match res {
+                    Ok(None) => json!({"status":"ok","found":false}),
+                    Ok(Some(r)) => json!({"status":"ok","found":true,
+                        "receipt":serde_json::to_value(&r).unwrap()}),
                     Err(e) => json!({"status":"error","code":market_code(&e),"message":e.to_string()}),
                 }
             }
@@ -892,9 +1490,15 @@ fn run() {
             }
             "stage_ops_delta" | "validate_staged" | "commit_ops_update"
             | "commit_ops_no_change" | "update_base_facts"
-            | "base_bars_in_range" => {
-                let m = compact_market.as_ref().unwrap();
-                let res: Result<Value, MarketError> = (|| {
+            | "base_bars_in_range" | "commit_range_ops"
+            | "commit_range_ops_typed" | "commit_range_no_change_typed"
+            | "commit_update_batch" => {
+                // Legacy backend: the trait defaults return Ok(None) —
+                // surface it verbatim instead of unwrapping a missing
+                // compact handle.
+                let res: Result<Value, MarketError> = if let Some(m) = compact_market.as_ref() {
+                let m = m;
+                (|| {
                     match name.as_str() {
                         "stage_ops_delta" => {
                             let upserts: Vec<crate::market_data::Bar> = op["upserts"]
@@ -968,6 +1572,95 @@ fn run() {
                                 "security_event_sha256":f.security_event_sha256,
                             }))
                         }
+                        "commit_range_ops" | "commit_range_ops_typed" => {
+                            use crate::market_update::publication::RangeRepository;
+                            let command: crate::market_storage::Publication =
+                                serde_json::from_value(op["command"].clone()).unwrap();
+                            let scope = crate::market_storage::Scope {
+                                symbol: op["scope"]["symbol"].as_str().unwrap().into(),
+                                period: if op["scope"]["period"].as_str().unwrap() == "year" {
+                                    crate::market_data::Period::Year
+                                } else { crate::market_data::Period::Day },
+                            };
+                            let upserts: Vec<crate::market_data::Bar> = op["upserts"]
+                                .as_array().unwrap().iter()
+                                .map(|b| serde_json::from_value(b.clone()).unwrap())
+                                .collect();
+                            let removes: Vec<chrono::NaiveDate> = op["removes"]
+                                .as_array().map(|a| a.iter()
+                                    .map(|d| chrono::NaiveDate::parse_from_str(
+                                        d.as_str().unwrap(), "%Y-%m-%d").unwrap())
+                                    .collect())
+                                .unwrap_or_default();
+                            let r = if name == "commit_range_ops" {
+                                let expected: Vec<crate::market_data::Bar> = op["expected"]
+                                    .as_array().unwrap().iter()
+                                    .map(|b| serde_json::from_value(b.clone()).unwrap())
+                                    .collect();
+                                m.commit_range_ops(&command, &scope,
+                                    op["base_version_id"].as_str().unwrap(),
+                                    &upserts, &removes, &expected)?
+                            } else {
+                                m.commit_range_ops_typed(&command, &scope,
+                                    op["base_version_id"].as_str().unwrap(),
+                                    &upserts, &removes,
+                                    op.get("continuity_evidence"))?
+                            };
+                            Ok(json!({"receipt":r.map(|x| serde_json::to_value(&x).unwrap())}))
+                        }
+                        "commit_range_no_change_typed" => {
+                            use crate::market_update::publication::RangeRepository;
+                            let command: crate::market_storage::Publication =
+                                serde_json::from_value(op["command"].clone()).unwrap();
+                            let range = crate::market_update::DateRange {
+                                start: chrono::NaiveDate::parse_from_str(
+                                    op["range"]["start"].as_str().unwrap(), "%Y-%m-%d").unwrap(),
+                                end: chrono::NaiveDate::parse_from_str(
+                                    op["range"]["end"].as_str().unwrap(), "%Y-%m-%d").unwrap(),
+                            };
+                            let r = m.commit_range_no_change_typed(&command,
+                                op["base_version_id"].as_str().unwrap(),
+                                &range, op.get("continuity_evidence"))?;
+                            Ok(json!({"receipt":r.map(|x| serde_json::to_value(&x).unwrap())}))
+                        }
+                        "commit_update_batch" => {
+                            let items: Vec<crate::market_update::UpdateBatchItem> = op["items"]
+                                .as_array().unwrap().iter()
+                                .map(|v| {
+                                    let prepared = match v["prepared"]["kind"].as_str().unwrap() {
+                                        "no_change" => crate::market_update::UpdateBatchPrepared::NoChange {
+                                            base_version_id: v["prepared"]["base_version_id"].as_str().unwrap().into(),
+                                            range_start_day: v["prepared"]["range_start_day"].as_i64().unwrap(),
+                                            range_end_day: v["prepared"]["range_end_day"].as_i64().unwrap(),
+                                            continuity: v["prepared"]["continuity"].clone(),
+                                        },
+                                        _ => crate::market_update::UpdateBatchPrepared::Append {
+                                            base_version_id: v["prepared"]["base_version_id"].as_str().unwrap().into(),
+                                            result_version_id: v["prepared"]["result_version_id"].as_str().unwrap().into(),
+                                            upserts: v["prepared"]["upserts"].as_array().unwrap().iter()
+                                                .map(|b| serde_json::from_value(b.clone()).unwrap()).collect(),
+                                            continuity: v["prepared"]["continuity"].clone(),
+                                        },
+                                    };
+                                    crate::market_update::UpdateBatchItem {
+                                        task_id: v["task_id"].as_str().unwrap().into(),
+                                        item_id: v["item_id"].as_str().unwrap().into(),
+                                        publication_id: v["publication_id"].as_str().unwrap().into(),
+                                        run_id: v["run_id"].as_str().unwrap().into(),
+                                        symbol: v["symbol"].as_str().unwrap().into(),
+                                        occupancy_key: v["occupancy_key"].as_str().unwrap().into(),
+                                        prepared,
+                                    }
+                                })
+                                .collect();
+                            let r = m.commit_update_batch(
+                                op["task_id"].as_str().unwrap(), &items)?;
+                            let outs: Vec<Value> = r.iter().map(|x| match x {
+                                Ok(rc) => json!({"ok":serde_json::to_value(rc).unwrap()}),
+                                Err(e) => json!({"err":format!("{}:{}",market_code(e),e)}),
+                            }).collect();
+                            Ok(json!({"items": outs}))
+                        }
                         _ => {
                             // base_bars_in_range
                             let parse = |s: &str| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
@@ -979,7 +1672,17 @@ fn run() {
                             Ok(json!({"bars":bars}))
                         }
                     }
-                })();
+                })()
+                } else {
+                    // trait defaults — Ok(None) per op's own shape
+                    Ok(match name.as_str() {
+                        "stage_ops_delta" => json!({"version_key":null}),
+                        "update_base_facts" => json!({"facts":null}),
+                        "base_bars_in_range" => json!({"bars":null}),
+                        "commit_update_batch" => json!({"items":null}),
+                        _ => json!({"receipt":null}),
+                    })
+                };
                 match res {
                     Ok(v) => {
                         let mut o = json!({"status":"ok",
@@ -1293,7 +1996,15 @@ fn run() {
         } else {
             rec
         };
-        writeln!(out, "{}", serde_json::to_string(&rec).unwrap()).unwrap();
+        // Symbolize emitted task ids (task-<hex> differs across runners);
+        // the comparator byte-compares every emitted field.
+        let mut txt = serde_json::to_string(&rec).unwrap();
+        for (k, real) in syms.iter() {
+            if !k.starts_with("rev:") {
+                txt = txt.replace(real.as_str(), &format!("${k}"));
+            }
+        }
+        writeln!(out, "{}", txt).unwrap();
     }
 }
 

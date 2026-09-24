@@ -428,7 +428,10 @@ export const canonicalRfc3339 = (s) => {
   if (!RFC3339_PARSE.test(s)) throw invalid("published_at is not RFC 3339");
   const m = RFC3339_CANON.exec(s);
   if (!m) throw invalid("published_at is not canonical UTC RFC 3339");
-  const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  // Date.UTC maps years 0..99 to 1900..1999 — set the year explicitly.
+  const dt = new Date(0);
+  dt.setUTCFullYear(+m[1], +m[2] - 1, +m[3]);
+  dt.setUTCHours(+m[4], +m[5], +m[6], 0);
   if (Number.isNaN(dt.getTime()) || dt.getUTCFullYear() !== +m[1] ||
       dt.getUTCMonth() !== +m[2] - 1 || dt.getUTCDate() !== +m[3] ||
       dt.getUTCHours() !== +m[4] || dt.getUTCMinutes() !== +m[5] ||
@@ -452,8 +455,11 @@ export const parseRfc3339Utc = (s) => {
     throw invalid(`invalid timestamp ${JSON.stringify(s)}`);
   }
   let nanos = frac ? Number(frac.padEnd(9, "0").slice(0, 9)) : 0;
-  // calendar-date validity (chrono rejects e.g. Feb 30 — JS would roll)
-  const check = new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, Math.min(+sec, 59)));
+  // calendar-date validity (chrono rejects e.g. Feb 30 — JS would roll);
+  // Date.UTC maps years 0..99 to 1900..1999 — set the year explicitly.
+  const check = new Date(0);
+  check.setUTCFullYear(+y, +mo - 1, +d);
+  check.setUTCHours(+h, +mi, Math.min(+sec, 59), 0);
   if (check.getUTCFullYear() !== +y || check.getUTCMonth() !== +mo - 1 ||
       check.getUTCDate() !== +d || check.getUTCHours() !== +h ||
       check.getUTCMinutes() !== +mi) {

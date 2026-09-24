@@ -1,0 +1,1373 @@
+{
+  "summary": {
+    "probe": "early_bins",
+    "node": "v20.19.2",
+    "total": 123,
+    "pass": 122,
+    "fail": 0,
+    "divergent": 1,
+    "not_run": 0,
+    "selftest": "checked separately (--selftest exits 1)"
+  },
+  "results": [
+    {
+      "name": "day-real-sh600004",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (370B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "day-valid-3",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (363B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "day-one-record",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (363B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "day-empty",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (346B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "day-trunc5",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (45B)"
+    },
+    {
+      "name": "day-trunc33",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (46B)"
+    },
+    {
+      "name": "day-bad-date",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (43B)"
+    },
+    {
+      "name": "day-bad-year",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (45B)"
+    },
+    {
+      "name": "day-non-increasing",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (32B)"
+    },
+    {
+      "name": "day-equal-dates",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (32B)"
+    },
+    {
+      "name": "day-missing-file",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (39B)"
+    },
+    {
+      "name": "day-dir-as-file",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (29B)"
+    },
+    {
+      "name": "day-no-args",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (36B)"
+    },
+    {
+      "name": "day-two-args",
+      "bin": "inspect_day",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (37B)"
+    },
+    {
+      "name": "snapshot-real-gen3",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1872B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "snapshot-synthetic",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1704B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "snapshot-missing-manifest",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (39B)"
+    },
+    {
+      "name": "snapshot-dir-as-manifest",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (29B)"
+    },
+    {
+      "name": "snapshot-missing-root",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (64B)"
+    },
+    {
+      "name": "snapshot-missing-artifact",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (64B)"
+    },
+    {
+      "name": "snapshot-corrupt-artifact",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (43B)"
+    },
+    {
+      "name": "snapshot-oversized-manifest",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (41B)"
+    },
+    {
+      "name": "snapshot-malformed-json",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "category:manifest JSON invalid:"
+    },
+    {
+      "name": "snapshot-malformed-json2",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "category:manifest JSON invalid:"
+    },
+    {
+      "name": "snapshot-not-json-array",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "category:manifest JSON invalid:"
+    },
+    {
+      "name": "snapshot-wrong-schema",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (48B)"
+    },
+    {
+      "name": "snapshot-two-files",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (48B)"
+    },
+    {
+      "name": "snapshot-dup-role",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (38B)"
+    },
+    {
+      "name": "snapshot-dup-path",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (38B)"
+    },
+    {
+      "name": "snapshot-abs-path",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (83B)"
+    },
+    {
+      "name": "snapshot-dotdot-path",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (83B)"
+    },
+    {
+      "name": "snapshot-bad-name",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (74B)"
+    },
+    {
+      "name": "snapshot-bad-url",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (66B)"
+    },
+    {
+      "name": "snapshot-inverted-interval",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (55B)"
+    },
+    {
+      "name": "snapshot-future-interval",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (55B)"
+    },
+    {
+      "name": "snapshot-bytes-zero",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (52B)"
+    },
+    {
+      "name": "snapshot-sha-noncanonical",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (52B)"
+    },
+    {
+      "name": "snapshot-no-args",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (66B)"
+    },
+    {
+      "name": "snapshot-one-arg",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (66B)"
+    },
+    {
+      "name": "snapshot-three-args",
+      "bin": "inspect_snapshot",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (66B)"
+    },
+    {
+      "name": "cc-real-131",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1871B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-conflict-bad-window",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1623B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-conflict-hash-mismatch",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1629B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-conflict-incomplete-evidence",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1632B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-conflict-outside-window",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1849B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-e-bi-variant",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (82B)"
+    },
+    {
+      "name": "cc-e-bytes-bool",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (63B)"
+    },
+    {
+      "name": "cc-e-bytes-float",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (69B)"
+    },
+    {
+      "name": "cc-e-bytes-map",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (52B)"
+    },
+    {
+      "name": "cc-e-bytes-neg",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (62B)"
+    },
+    {
+      "name": "cc-e-bytes-neg0",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (70B)"
+    },
+    {
+      "name": "cc-e-bytes-seq",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (57B)"
+    },
+    {
+      "name": "cc-e-bytes-str",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (59B)"
+    },
+    {
+      "name": "cc-e-bytes-u64overflow",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (88B)"
+    },
+    {
+      "name": "cc-e-compat-empty",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (49B)"
+    },
+    {
+      "name": "cc-e-compat-int",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (85B)"
+    },
+    {
+      "name": "cc-e-compat-seq",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (92B)"
+    },
+    {
+      "name": "cc-e-dt-chars",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (55B)"
+    },
+    {
+      "name": "cc-e-dt-int",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (99B)"
+    },
+    {
+      "name": "cc-e-dt-leap-ok",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (835B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-e-dt-premature-notz",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (44B)"
+    },
+    {
+      "name": "cc-e-dt-premature",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (44B)"
+    },
+    {
+      "name": "cc-e-dt-range",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (43B)"
+    },
+    {
+      "name": "cc-e-dt-signed-year",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (767B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-e-dt-trailing",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (36B)"
+    },
+    {
+      "name": "cc-e-dup-field",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (44B)"
+    },
+    {
+      "name": "cc-e-dup-mb-field",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (46B)"
+    },
+    {
+      "name": "cc-e-eof-value-ml",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (45B)"
+    },
+    {
+      "name": "cc-e-etag-int",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (66B)"
+    },
+    {
+      "name": "cc-e-files-bigint",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (69B)"
+    },
+    {
+      "name": "cc-e-files-bool",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (70B)"
+    },
+    {
+      "name": "cc-e-files-int",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (67B)"
+    },
+    {
+      "name": "cc-e-files-map",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (58B)"
+    },
+    {
+      "name": "cc-e-files-null",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (60B)"
+    },
+    {
+      "name": "cc-e-files-string",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (66B)"
+    },
+    {
+      "name": "cc-e-item-empty-obj",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (41B)"
+    },
+    {
+      "name": "cc-e-item-int",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (73B)"
+    },
+    {
+      "name": "cc-e-item-null",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (66B)"
+    },
+    {
+      "name": "cc-e-item-seq",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (81B)"
+    },
+    {
+      "name": "cc-e-item-str",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (72B)"
+    },
+    {
+      "name": "cc-e-mb-badkey",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (91B)"
+    },
+    {
+      "name": "cc-e-mb-extra-field",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (107B)"
+    },
+    {
+      "name": "cc-e-mb-int",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (63B)"
+    },
+    {
+      "name": "cc-e-mb-seq",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (60B)"
+    },
+    {
+      "name": "cc-e-missing-files",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (42B)"
+    },
+    {
+      "name": "cc-e-num-top",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (68B)"
+    },
+    {
+      "name": "cc-e-role-bool",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (35B)"
+    },
+    {
+      "name": "cc-e-role-int",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (35B)"
+    },
+    {
+      "name": "cc-e-role-mapform",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (767B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-e-role-seq",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (35B)"
+    },
+    {
+      "name": "cc-e-role-variant",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (92B)"
+    },
+    {
+      "name": "cc-e-seq-len1",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (75B)"
+    },
+    {
+      "name": "cc-e-seq-len3-seq",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (40B)"
+    },
+    {
+      "name": "cc-e-seq-len3-str",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (40B)"
+    },
+    {
+      "name": "cc-e-seq-len3",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (40B)"
+    },
+    {
+      "name": "cc-e-seq-map-first",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (58B)"
+    },
+    {
+      "name": "cc-e-sha-int",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (65B)"
+    },
+    {
+      "name": "cc-e-str-top",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (67B)"
+    },
+    {
+      "name": "cc-e-syntax-bad-literal",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (35B)"
+    },
+    {
+      "name": "cc-e-syntax-open",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (45B)"
+    },
+    {
+      "name": "cc-e-syntax-x-ml",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (34B)"
+    },
+    {
+      "name": "cc-e-top-seq-empty",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (75B)"
+    },
+    {
+      "name": "cc-e-top-unknown-ml",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (78B)"
+    },
+    {
+      "name": "cc-e-top-unknown",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (79B)"
+    },
+    {
+      "name": "cc-e-unknown-field",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (233B)"
+    },
+    {
+      "name": "cc-e-url-bool",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (68B)"
+    },
+    {
+      "name": "cc-e-window-bad-dt",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (55B)"
+    },
+    {
+      "name": "cc-e-window-missing",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (48B)"
+    },
+    {
+      "name": "cc-notverified-bad-hash",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (813B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-notverified-conflicting-dup",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (2143B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-notverified-exact-dup",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (806B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-notverified-integrity",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (886B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-notverified-inverted-interval",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (874B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-notverified-missing-role",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1208B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-notverified-roles-only",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1610B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-ok-empty-files",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (402B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-ok-seq-form",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (402B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-verified-small",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 0
+      },
+      "status": "pass",
+      "stdout": "identical (1574B)",
+      "stderr": "identical (0B)"
+    },
+    {
+      "name": "cc-divergence-u64max",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 0,
+        "node": 1
+      },
+      "status": "divergence",
+      "note": "ported checkFact uses Number.isSafeInteger — u64 > 2^53 rejected at the governance layer (out of lane)",
+      "rust": {
+        "stdoutSha": "adf358b7ca5ffbed",
+        "stderr": ""
+      },
+      "node": {
+        "stderr": "files[0].bytes invalid"
+      }
+    },
+    {
+      "name": "cc-no-args",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (112B)"
+    },
+    {
+      "name": "cc-two-args",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (112B)"
+    },
+    {
+      "name": "cc-missing-file",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (39B)"
+    },
+    {
+      "name": "cc-dir-as-file",
+      "bin": "consistency_check",
+      "exit": {
+        "rust": 1,
+        "node": 1
+      },
+      "status": "pass",
+      "stdout": "identical (0B)",
+      "stderr": "identical (29B)"
+    }
+  ]
+}

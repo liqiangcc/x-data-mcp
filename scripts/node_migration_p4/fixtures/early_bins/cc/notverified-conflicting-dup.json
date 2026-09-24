@@ -1,0 +1,56 @@
+{
+  "files": [
+    {
+      "role": "day",
+      "bytes": 12345,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-01-01T00:00:00Z",
+      "acquisition_completed_at": "2026-01-01T00:00:05Z",
+      "last_modified": null,
+      "etag": null,
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    },
+    {
+      "role": "day",
+      "bytes": 12345,
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-01-01T00:00:00Z",
+      "acquisition_completed_at": "2026-01-01T00:00:05Z",
+      "last_modified": null,
+      "etag": null,
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    },
+    {
+      "role": "base_industry",
+      "bytes": 12345,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-01-01T00:00:00Z",
+      "acquisition_completed_at": "2026-01-01T00:00:05Z",
+      "last_modified": null,
+      "etag": null,
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    },
+    {
+      "role": "gbbq",
+      "bytes": 12345,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_url": "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+      "acquisition_started_at": "2026-01-01T00:00:00Z",
+      "acquisition_completed_at": "2026-01-01T00:00:05Z",
+      "last_modified": null,
+      "etag": null,
+      "byte_integrity": "verified",
+      "source_revision": null,
+      "source_identity": null
+    }
+  ]
+}

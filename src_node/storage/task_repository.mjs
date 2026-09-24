@@ -498,6 +498,7 @@ Object.assign(TaskAdmission.prototype, {
         throw new StorageError("revision_conflict", "STATE_REVISION_CONFLICT");
       }
       const next = expectedRevision + 1n;
+      rewriteItemOutcomes(this._db, taskId);
       const res = this._db.run(
         `UPDATE tasks SET status='running',state_revision=?,owner_run_id=?,
          last_progress_at=?,result_json=result_json${RECOUNT_COUNTERS}
@@ -717,6 +718,7 @@ Object.assign(TaskAdmission.prototype, {
         return { changed: false, task: full() };
       }
       const next = expectedRevision + 1n;
+      rewriteItemOutcomes(this._db, taskId);
       const res = this._db.run(
         `UPDATE tasks SET status='cancel_requested',state_revision=?,
          last_progress_at=?${RECOUNT_COUNTERS}
@@ -766,6 +768,7 @@ Object.assign(TaskAdmission.prototype, {
       const ack = cancellation && status === "cancelled";
       // write_task_delta order: item diff (none) -> guarded task row ->
       // occupancy release on terminal.
+      rewriteItemOutcomes(this._db, taskId);
       const res = this._db.run(
         `UPDATE tasks SET status=?,state_revision=?,owner_run_id=owner_run_id,
          last_progress_at=?,result_json=?${RECOUNT_COUNTERS}
@@ -838,6 +841,7 @@ Object.assign(TaskAdmission.prototype, {
         },
       };
       const next = expectedRevision + 1n;
+      rewriteItemOutcomes(this._db, taskId);
       const res = this._db.run(
         `UPDATE tasks SET status='needs_verification',state_revision=?,
          last_progress_at=?,result_json=?${RECOUNT_COUNTERS}
@@ -1330,10 +1334,106 @@ const outcomeJson = (o) =>
     JSON.stringify({ success: o.success, error: o.error ?? null,
       ...(o.evidence !== undefined ? { evidence: o.evidence } : {}) });
 
-// result_json is a serde-serialized Value map — sorted-key bytes
+// write_items_delta's whole-snapshot arm: head-level changes (Claim,
+// RequestCancel, FinishExecution/FinishCancellation, RequireVerification)
+// re-encode every stored item outcome through serde's ItemOutcome order;
+// rows whose stored bytes differ (e.g. a commit's canonical outcome) are
+// rewritten. Item-scoped changes only rewrite the touched item.
+const rewriteItemOutcomes = (db, taskId) => {
+  for (const r of db.query(
+    "SELECT item_id,outcome_json FROM task_items WHERE task_id=?", taskId)) {
+    const enc = r.outcome_json === null ? null : outcomeJson(JSON.parse(r.outcome_json));
+    if (r.outcome_json !== enc) {
+      db.run("UPDATE task_items SET outcome_json=? WHERE task_id=? AND item_id=?",
+        enc, taskId, r.item_id);
+    }
+  }
+};
+
+// result_json is a serde-serialized Value — maps sorted recursively
+// (serde_json::to_string sorts every object level, e.g. the nested
+// execution_uncertainty marker), not just the top level.
+const deepSortValue = (v) =>
+  Array.isArray(v) ? v.map(deepSortValue)
+    : v !== null && typeof v === "object"
+      ? Object.keys(v).sort().reduce((a, k) => (a[k] = deepSortValue(v[k]), a), {})
+      : v;
 const headResultJson = (r) =>
-  r === null ? null :
-    JSON.stringify(Object.keys(r).sort().reduce((a, k) => (a[k] = r[k], a), {}));
+  r === null ? null : JSON.stringify(deepSortValue(r));
+
+/** sqlite_tasks::read_bound_task → {head, items} decision snapshot for
+ *  the batch/light-transition path. `head` carries the decide_head
+ *  field set (incl. counts); `items` are spec-shaped; `reload()`
+ *  re-reads the task (used by transitionLightTx on stale snapshots). */
+export const readBoundSnapshot = (db, taskId) => {
+  const t = db.get(
+    "SELECT task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,last_progress_at,result_json,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest FROM tasks WHERE task_id=?",
+    taskId);
+  if (!t) return null;
+  const bound = db.get("SELECT request_id FROM requests WHERE task_id=?", taskId);
+  if (!bound) {
+    throw new StorageError("needs_verification",
+      "ACCEPTANCE_NEEDS_VERIFICATION: task binding/execution missing");
+  }
+  const head = {
+    task_id: t.task_id, key: JSON.parse(t.command_key_json),
+    status: t.status, state_revision: t.state_revision,
+    accepted_run_id: t.accepted_run_id, owner_run_id: t.owner_run_id,
+    last_progress_at: t.last_progress_at,
+    result: t.result_json === null ? null : JSON.parse(t.result_json),
+    counts: {
+      total: t.item_count, pending: t.items_pending, running: t.items_running,
+      finished: t.items_finished, succeeded: t.items_succeeded,
+    },
+    evidence_digest: t.evidence_digest,
+  };
+  const items = db.query(
+    "SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=? ORDER BY item_id",
+    taskId).map((r) => ({
+      spec: {
+        item_id: r.item_id, target: JSON.parse(r.target_json),
+        progress_unit: r.progress_unit, frozen_inputs: JSON.parse(r.frozen_inputs_json),
+        scope_keys: JSON.parse(r.scope_keys_json),
+      },
+      stage: r.stage,
+      outcome: r.outcome_json === null ? null : JSON.parse(r.outcome_json),
+    }));
+  return { head, items, reload: () => readBoundSnapshot(db, taskId) };
+};
+
+/** sqlite_tasks::transition_light_tx — tx-level transition on a
+ *  caller-held snapshot ({head, items}). The persisted revision gates a
+ *  silent reload; decideHead mutates the snapshot; persistDecided writes
+ *  the delta (same columns as write_task_delta) and StartItem lands the
+ *  execution-starts marker atomically. */
+export const transitionLightTx = (db, snap, run, change, now) => {
+  const persisted = db.get(
+    "SELECT state_revision FROM tasks WHERE task_id=?", snap.head.task_id);
+  if (!persisted) throw new StorageError("task_not_found", "task not found");
+  if (persisted.state_revision !== snap.head.state_revision) {
+    const fresh = snap.reload();
+    if (!fresh) throw new StorageError("task_not_found", "task not found");
+    snap.head = fresh.head;
+    snap.items = fresh.items;
+  }
+  const oldRevision = snap.head.state_revision;
+  const needsItem = change.kind === "startItem" || change.kind === "finishItem" ||
+    change.kind === "requireVerification";
+  const item = needsItem
+    ? snap.items.find((i) => i.spec.item_id === change.item_id) ?? null
+    : null;
+  decideHead(snap.head, item, run, change, now);
+  if (snap.head.state_revision !== oldRevision) {
+    persistDecided(db, snap.head,
+      change.kind === "startItem" || change.kind === "finishItem" ? item : null,
+      oldRevision);
+    if (change.kind === "startItem") {
+      db.run("INSERT INTO task_item_execution_starts VALUES(?,?,?,?,?)",
+        snap.head.task_id, change.item_id, run,
+        snap.head.state_revision, now);
+    }
+  }
+};
 
 /** sqlite_tasks::persist_decided — item row + guarded task CAS +
  *  counter delta + terminal occupancy release. */
