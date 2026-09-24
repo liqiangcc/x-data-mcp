@@ -1,0 +1,23 @@
+{"type":"env","code_sha":"3dfaf69e09d83a3494cc22d09bfa85373311d824","node":"v20.19.2","rustc":"rustc 1.98.1 (48a229cea 2026-09-01)","uname":"Linux 6.12.94+ #1 SMP PREEMPT_DYNAMIC Fri Sep 18 16:05:18 UTC 2026 x86_64 GNU/Linux","concurrency":1,"bench_iters":200,"bench_warmup":20,"day_input_bytes":279200,"serde_input_bytes":136057,"record_count":3}
+{"surface":"day_parse","impl":"node","iters":200,"p50_ns":3629501,"p95_ns":6178661,"max_ns":8487081,"mean_ns":4028332,"input_bytes":279200,"peak_rss_kb":96184}
+{"surface":"serde_json_decode","impl":"node","iters":200,"p50_ns":1927334,"p95_ns":2408349,"max_ns":3462953,"mean_ns":2002175,"input_bytes":136057,"peak_rss_kb":97672}
+{"surface":"serde_json_encode","impl":"node","iters":200,"p50_ns":3522294,"p95_ns":3993435,"max_ns":4153815,"mean_ns":3594690,"input_bytes":136057,"peak_rss_kb":102944}
+{"surface":"mcp_roundtrip","impl":"node","iters":200,"p50_ns":18934,"p95_ns":35161,"max_ns":381887,"mean_ns":22854,"input_bytes":83,"peak_rss_kb":102912}
+{"surface":"acquire_store_accept","impl":"node","iters":200,"p50_ns":138169,"p95_ns":184604,"max_ns":370324,"mean_ns":143502,"input_bytes":0,"peak_rss_kb":103980,"db_bytes":65536,"wal_bytes":0}
+{"surface":"acquire_store_read","impl":"node","iters":200,"p50_ns":83613,"p95_ns":106653,"max_ns":320468,"mean_ns":88828,"input_bytes":0,"peak_rss_kb":103984,"db_bytes":65536,"wal_bytes":0}
+{"surface":"envelope_pack","impl":"node","iters":200,"p50_ns":3327289,"p95_ns":3859831,"max_ns":4057610,"mean_ns":3424219,"input_bytes":32000,"peak_rss_kb":104328}
+{"surface":"envelope_expand","impl":"node","iters":200,"p50_ns":664549,"p95_ns":1022670,"max_ns":1211131,"mean_ns":694680,"input_bytes":32000,"peak_rss_kb":104340}
+{"surface":"record_check","impl":"node","iters":200,"p50_ns":262901,"p95_ns":352113,"max_ns":850614,"mean_ns":279534,"input_bytes":6976,"peak_rss_kb":104516,"records":3}
+{"surface":"task_admit","impl":"node","iters":200,"p50_ns":1170954,"p95_ns":2439316,"max_ns":12339649,"mean_ns":1317557,"input_bytes":0,"peak_rss_kb":121120,"db_bytes":528384,"wal_bytes":4165352}
+{"surface":"task_claim","impl":"node","iters":220,"p50_ns":140113,"p95_ns":186885,"max_ns":643104,"mean_ns":146040,"input_bytes":0,"peak_rss_kb":127280,"db_bytes":618496,"wal_bytes":4165352}
+{"surface":"day_parse","impl":"rust","iters":200,"p50_ns":43796,"p95_ns":75224,"max_ns":101589,"mean_ns":51675,"input_bytes":279200,"peak_rss_kb":3652}
+{"surface":"serde_json_decode","impl":"rust","iters":200,"p50_ns":551567,"p95_ns":727315,"max_ns":844596,"mean_ns":575025,"input_bytes":136057,"peak_rss_kb":4192}
+{"surface":"serde_json_encode","impl":"rust","iters":200,"p50_ns":132269,"p95_ns":140752,"max_ns":187307,"mean_ns":131892,"input_bytes":136057,"peak_rss_kb":4416}
+{"surface":"mcp_roundtrip","impl":"rust","iters":200,"p50_ns":2215,"p95_ns":2445,"max_ns":2822,"mean_ns":2122,"input_bytes":83,"peak_rss_kb":3328}
+{"surface":"acquire_store_accept","impl":"rust","iters":200,"p50_ns":93981,"p95_ns":109948,"max_ns":128712,"mean_ns":95567,"input_bytes":0,"db_bytes":65536,"wal_bytes":0,"peak_rss_kb":5564}
+{"surface":"acquire_store_read","impl":"rust","iters":200,"p50_ns":60249,"p95_ns":72810,"max_ns":1006509,"mean_ns":66674,"input_bytes":0,"db_bytes":65536,"wal_bytes":0,"peak_rss_kb":5196}
+{"surface":"envelope_pack","impl":"rust","iters":200,"p50_ns":351208,"p95_ns":513397,"max_ns":572706,"mean_ns":372939,"input_bytes":32000,"peak_rss_kb":3656}
+{"surface":"envelope_expand","impl":"rust","iters":200,"p50_ns":85361,"p95_ns":133624,"max_ns":171137,"mean_ns":95155,"input_bytes":32000,"peak_rss_kb":3612}
+{"surface":"record_check","impl":"rust","iters":200,"p50_ns":85051,"p95_ns":115230,"max_ns":140316,"mean_ns":90912,"input_bytes":6976,"records":3,"peak_rss_kb":4316}
+{"surface":"task_admit","impl":"rust","iters":200,"p50_ns":1770633,"p95_ns":2353554,"max_ns":2851811,"mean_ns":1752541,"input_bytes":0,"db_bytes":622592,"wal_bytes":0,"peak_rss_kb":8064}
+{"surface":"task_claim","impl":"rust","iters":220,"p50_ns":860029,"p95_ns":1212690,"max_ns":1341980,"mean_ns":915252,"input_bytes":0,"db_bytes":954368,"wal_bytes":0,"peak_rss_kb":7256}
