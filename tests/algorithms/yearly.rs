@@ -142,7 +142,7 @@ fn calendar_end_flag_does_not_fabricate_a_december_31_bar() {
     assert_eq!(output.records[2].bar.date, date("2026-01-05"));
 }
 
-#[path = "support/yearly_reference.rs"]
+#[path = "../support/yearly_reference.rs"]
 mod reference;
 
 #[test]

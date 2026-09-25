@@ -213,7 +213,11 @@ fn real_shutdown_budget_exit_retains_running_task_and_occupancy() {
     let db = database(dir.path());
     let socket = dir.path().join("child.sock");
     let mut child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "local_runtime::lifecycle::shutdown_child", "--nocapture"])
+        .args([
+            "--exact",
+            "local_runtime::lifecycle::shutdown_child",
+            "--nocapture",
+        ])
         .env("X_DATA_MCP_TEST_RUNTIME_SHUTDOWN_DB", &db)
         .spawn()
         .unwrap();
