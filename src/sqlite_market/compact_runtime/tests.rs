@@ -500,3 +500,110 @@ fn read_detects_path_swap_during_closure() {
     release_send.send(()).unwrap();
     assert!(reader.join().unwrap().is_err());
 }
+
+/// Real-DB connection-churn probe: times each fixed-cost layer of
+/// `coordinator.read`/`write` on a *copy* of the production database.
+///
+///   X_DATA_PROBE_DB=/path/copy.db   required; aborts when unset
+#[test]
+#[ignore = "manual real-DB probe; needs X_DATA_PROBE_DB=<copy>"]
+fn coordinator_boundary_cost_probe() {
+    use std::time::Instant;
+    let Ok(db) = std::env::var("X_DATA_PROBE_DB") else {
+        eprintln!("skipped: X_DATA_PROBE_DB unset");
+        return;
+    };
+    let path = Path::new(&db);
+    let n = 200;
+    let report = |label: &str, mut ms: Vec<f64>| {
+        ms.sort_by(f64::total_cmp);
+        eprintln!(
+            "  {label}: n={} p50={:.3}ms mean={:.3}ms p90={:.3}ms",
+            ms.len(),
+            ms[ms.len() / 2],
+            ms.iter().sum::<f64>() / ms.len() as f64,
+            ms[ms.len() * 9 / 10]
+        );
+    };
+
+    // Layer 1: bare open + busy_timeout only.
+    let mut ms = Vec::new();
+    for _ in 0..n {
+        let t = Instant::now();
+        let c = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        c.busy_timeout(Duration::from_secs(5)).unwrap();
+        drop(c);
+        ms.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    report("open_only", ms);
+
+    // Layer 2: open + full read() preamble pragmas.
+    let mut ms = Vec::new();
+    for _ in 0..n {
+        let t = Instant::now();
+        let c = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        c.busy_timeout(Duration::from_secs(5)).unwrap();
+        set_pragma(&c, "foreign_keys", 1).unwrap();
+        set_pragma(&c, "query_only", 1).unwrap();
+        verify_wal(&c).unwrap();
+        drop(c);
+        ms.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    report("open+pragmas", ms);
+
+    // Layer 3: inspect_schema_identity on a held connection.
+    let held = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .unwrap();
+    let mut ms = Vec::new();
+    for _ in 0..n {
+        let t = Instant::now();
+        inspect_schema_identity(&held).unwrap();
+        ms.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    report("inspect_schema_identity", ms);
+    drop(held);
+
+    // Layer 4: full coordinator.read / write on the real schema.
+    let lease = Arc::new(DatabaseLease::acquire(path).unwrap());
+    let coord = WriteCoordinator::open_existing(
+        path,
+        lease,
+        crate::sqlite_market::compact_repo::schema19_identity(),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let mut ms = Vec::new();
+    for _ in 0..n {
+        let t = Instant::now();
+        coord.read(|_| Ok(())).unwrap();
+        ms.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    report("coordinator.read(empty)", ms);
+    let mut ms = Vec::new();
+    for _ in 0..n {
+        let t = Instant::now();
+        coord.write(|_| Ok(())).unwrap();
+        ms.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    report("coordinator.write(empty)", ms);
+    let mut ms = Vec::new();
+    for _ in 0..n {
+        let t = Instant::now();
+        coord
+            .transaction(|_| -> Result<(), Error> { Ok(()) })
+            .unwrap();
+        ms.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    report("coordinator.tx(empty)", ms);
+}

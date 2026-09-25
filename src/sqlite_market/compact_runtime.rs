@@ -122,6 +122,7 @@ pub(crate) struct WriteCoordinator {
     writer: Mutex<Option<Connection>>,
     reader_count: Mutex<usize>,
     reader_idle: Condvar,
+    readers: Mutex<Vec<Connection>>,
 }
 
 impl WriteCoordinator {
@@ -150,6 +151,7 @@ impl WriteCoordinator {
             writer: Mutex::new(Some(writer)),
             reader_count: Mutex::new(0),
             reader_idle: Condvar::new(),
+            readers: Mutex::new(Vec::new()),
         })
     }
 
@@ -211,6 +213,42 @@ impl WriteCoordinator {
         })
     }
 
+    /// Pops a configured read-only connection from the pool or opens one.
+    /// Readers are bounded by `ReaderSlot` (MAX_READERS), so the pool can
+    /// never exceed that count.
+    fn take_reader(&self) -> Result<Connection, Error> {
+        if let Some(conn) = self
+            .readers
+            .lock()
+            .map_err(|_| unavailable("reader pool poisoned"))?
+            .pop()
+        {
+            return Ok(conn);
+        }
+        let conn = Connection::open_with_flags(
+            &self.path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(storage)?;
+        conn.busy_timeout(self.busy).map_err(storage)?;
+        set_pragma(&conn, "foreign_keys", 1)?;
+        set_pragma(&conn, "query_only", 1)?;
+        conn.set_prepared_statement_cache_capacity(READER_CACHE);
+        verify_wal(&conn)?;
+        Ok(conn)
+    }
+
+    /// Returns a connection to the pool. A connection that is not back in
+    /// autocommit (committed or rolled back) is dropped instead of pooled.
+    fn release_reader(&self, conn: Connection) {
+        if !conn.is_autocommit() {
+            return;
+        }
+        if let Ok(mut pool) = self.readers.lock() {
+            pool.push(conn);
+        }
+    }
+
     pub(crate) fn read<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, Error>,
@@ -229,29 +267,28 @@ impl WriteCoordinator {
         }
         drop(writer);
         self.lease.validate().map_err(unavailable)?;
-        let mut conn = Connection::open_with_flags(
-            &self.path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(storage)?;
-        conn.busy_timeout(self.busy).map_err(storage)?;
-        set_pragma(&conn, "foreign_keys", 1)?;
-        set_pragma(&conn, "query_only", 1)?;
-        conn.set_prepared_statement_cache_capacity(READER_CACHE);
-        verify_wal(&conn)?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(storage)?;
-        if inspect_schema_identity(&tx)? != self.expected {
-            return Err(integrity("schema identity changed"));
-        }
-        let value = f(&tx)?;
-        self.lease.validate().map_err(unavailable)?;
-        if inspect_schema_identity(&tx)? != self.expected {
-            return Err(integrity("schema identity changed"));
-        }
-        tx.commit().map_err(storage)?;
-        Ok(value)
+        let mut conn = self.take_reader()?;
+        // The transaction owns the snapshot: a pooled connection sees the
+        // same committed state as a freshly opened one. Identity and lease
+        // checks still run on every read, so a tampered or swapped file is
+        // caught exactly as before.
+        let outcome = (|| {
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(storage)?;
+            if inspect_schema_identity(&tx)? != self.expected {
+                return Err(integrity("schema identity changed"));
+            }
+            let value = f(&tx)?;
+            self.lease.validate().map_err(unavailable)?;
+            if inspect_schema_identity(&tx)? != self.expected {
+                return Err(integrity("schema identity changed"));
+            }
+            tx.commit().map_err(storage)?;
+            Ok(value)
+        })();
+        self.release_reader(conn);
+        outcome
     }
 
     fn run_checkpoint(
