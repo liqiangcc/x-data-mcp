@@ -64,8 +64,7 @@ fn forbidden_selection_is_rejected_before_storage_access() {
     assert!(!p.exists());
 }
 
-#[path = "support/market.rs"]
-mod market;
+use crate::support_market as market;
 #[test]
 fn real_batch_manifest_pages_pin_versions_and_reject_any_later_damage() {
     use x_data_mcp::market_storage::{MarketRepository, PublishIntent};

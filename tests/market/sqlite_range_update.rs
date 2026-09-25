@@ -98,7 +98,7 @@ fn fixture(changed: bool) -> Fixture {
     let db = SqliteMarket::new(SqliteTasks::new(dir.path().join("range.sqlite")));
     db.tasks.initialize().unwrap();
     let samples: Value =
-        serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/issue79/legacy-records.json")).unwrap();
     let base = samples[0]["record"].clone();
     db.stage(&base).unwrap();
     let publisher = Publisher {
@@ -776,7 +776,7 @@ fn range_progress_refuses_damaged_audit_and_immutable_base_without_fallback() {
     }
 }
 
-#[path = "support/market.rs"]
+#[path = "../support/market.rs"]
 mod observation_fixture;
 #[test]
 fn range_progress_cursor_rechecks_evidence_after_partial_task_snapshot() {
@@ -1109,7 +1109,7 @@ fn range_runner_cancellation_and_official_gate_never_publish() {
     }
 }
 
-#[path = "support/range_response_fault.rs"]
+#[path = "../support/range_response_fault.rs"]
 mod response_fault;
 #[test]
 fn range_runner_reconciles_lost_commit_response_and_preserves_unconfirmed_execution() {
@@ -1787,7 +1787,7 @@ fn publication_runner_cancels_only_pending_check_and_does_not_reexecute_old_or_r
     }
 }
 
-#[path = "support/publication_check_fault.rs"]
+#[path = "../support/publication_check_fault.rs"]
 mod publication_check_fault;
 #[test]
 fn publication_runner_reconciles_response_loss_cancellation_and_bounded_conflicts() {
@@ -2100,7 +2100,7 @@ mod default_runner {
         let symbol = format!("sh.{code}");
         let version_id = format!("daily-{code}");
         let samples: Value =
-            serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+            serde_json::from_str(include_str!("../fixtures/issue79/legacy-records.json")).unwrap();
         let mut raw = samples[0]["record"].clone();
         raw["version_id"] = json!(version_id);
         raw["symbol"] = json!(symbol);
@@ -2569,7 +2569,7 @@ fn two_fifty_day_append_growth_stays_bounded() {
     let db = SqliteMarket::new(SqliteTasks::new(path.clone()));
     db.tasks.initialize().unwrap();
     let samples: Value =
-        serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/issue79/legacy-records.json")).unwrap();
     let base = samples[0]["record"].clone();
     // One published base version per symbol through the real collection path.
     let mut heads: Vec<(String, Value)> = Vec::new();
@@ -2886,7 +2886,7 @@ fn production_shaped_no_change_audit_does_not_persist_history_payload() {
     let db = SqliteMarket::new(SqliteTasks::new(dir.path().join("range.sqlite")));
     db.tasks.initialize().unwrap();
     let samples: Value =
-        serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/issue79/legacy-records.json")).unwrap();
     let base = samples[0]["record"].clone();
     db.stage(&base).unwrap();
     let publisher = Publisher {

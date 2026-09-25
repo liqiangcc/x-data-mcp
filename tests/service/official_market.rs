@@ -25,7 +25,7 @@ use x_data_mcp::{
         service::TaskControl,
     },
 };
-#[path = "support/market.rs"]
+#[path = "../support/market.rs"]
 mod market;
 
 fn now() -> DateTime<Utc> {
@@ -751,7 +751,7 @@ fn retained_gen2_snapshot_reproduces_frozen_oracle_end_to_end() {
     };
     let src = make_source(&snap);
     let regression: Value = serde_json::from_str(include_str!(
-        "../evidence/issue-54-qfq-contract-regression/result.json"
+        "../../evidence/issue-54-qfq-contract-regression/result.json"
     ))
     .unwrap();
     for oracle in regression["client_oracle_bars"].as_array().unwrap() {

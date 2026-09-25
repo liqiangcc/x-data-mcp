@@ -7,7 +7,7 @@ use x_data_mcp::{
 
 fn raw() -> Value {
     let fixtures: Value =
-        serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/issue79/legacy-records.json")).unwrap();
     fixtures[0]["record"].clone()
 }
 fn checked(mut raw: Value) -> CheckedRecord {

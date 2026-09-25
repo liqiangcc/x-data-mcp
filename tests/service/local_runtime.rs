@@ -1,4 +1,3 @@
-#![cfg(target_os = "linux")]
 use serde_json::{Value, json};
 use std::{
     fs,

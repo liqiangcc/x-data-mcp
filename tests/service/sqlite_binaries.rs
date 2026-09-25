@@ -103,7 +103,7 @@ fn sqlite_cli_init_upgrade_no_clobber_and_stdio_read_never_initializes_or_upgrad
     let v1 = dir.path().join("v1.sqlite");
     let c = Connection::open(&v1).unwrap();
     c.pragma_update(None, "journal_mode", "WAL").unwrap();
-    let sql = include_str!("../migrations/tasks/001.sql");
+    let sql = include_str!("../../migrations/tasks/001.sql");
     c.execute_batch(sql).unwrap();
     c.execute(
         "INSERT INTO schema_migrations VALUES(1,?1,'test')",

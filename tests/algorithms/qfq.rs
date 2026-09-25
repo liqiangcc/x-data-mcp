@@ -16,19 +16,26 @@ use rust_decimal::Decimal;
 use serde_json::Value;
 use x_data_mcp::{day_file, gbbq, qfq};
 
-const FULL_EVENTS: &str = include_str!("../evidence/issue-54-gbbq-full-events/result.json");
-const REGRESSION: &str = include_str!("../evidence/issue-54-qfq-contract-regression/result.json");
+const FULL_EVENTS: &str = include_str!("../../evidence/issue-54-gbbq-full-events/result.json");
+const REGRESSION: &str =
+    include_str!("../../evidence/issue-54-qfq-contract-regression/result.json");
 
 fn day_bytes(security: &str) -> &'static [u8] {
     match security {
         "sh.600006" => {
-            include_bytes!("../evidence/issue-166-windows-official-behavior/raw/files/sh600006.day")
+            include_bytes!(
+                "../../evidence/issue-166-windows-official-behavior/raw/files/sh600006.day"
+            )
         }
         "sh.600004" => {
-            include_bytes!("../evidence/issue-166-windows-official-behavior/raw/files/sh600004.day")
+            include_bytes!(
+                "../../evidence/issue-166-windows-official-behavior/raw/files/sh600004.day"
+            )
         }
         "sz.000002" => {
-            include_bytes!("../evidence/issue-166-windows-official-behavior/raw/files/sz000002.day")
+            include_bytes!(
+                "../../evidence/issue-166-windows-official-behavior/raw/files/sz000002.day"
+            )
         }
         other => panic!("no committed .day for {other}"),
     }

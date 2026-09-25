@@ -16,10 +16,11 @@ use rust_decimal::{Decimal, RoundingStrategy};
 use serde_json::Value;
 use x_data_mcp::{day_file, gbbq};
 
-const FULL_EVENTS: &str = include_str!("../evidence/issue-54-gbbq-full-events/result.json");
-const REGRESSION: &str = include_str!("../evidence/issue-54-qfq-contract-regression/result.json");
+const FULL_EVENTS: &str = include_str!("../../evidence/issue-54-gbbq-full-events/result.json");
+const REGRESSION: &str =
+    include_str!("../../evidence/issue-54-qfq-contract-regression/result.json");
 const SZ000002_DAY: &[u8] =
-    include_bytes!("../evidence/issue-166-windows-official-behavior/raw/files/sz000002.day");
+    include_bytes!("../../evidence/issue-166-windows-official-behavior/raw/files/sz000002.day");
 
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len())

@@ -280,8 +280,7 @@ fn real_data_stdio_read_missing_database_does_not_initialize() {
     assert!(!p.exists());
 }
 
-#[path = "support/market.rs"]
-mod range_fixture;
+use crate::support_market as range_fixture;
 #[test]
 fn real_range_stdio_acceptance_replay_conflicts_and_blocked_execution() {
     for operation in ["update_data", "backfill_data"] {
@@ -965,7 +964,8 @@ fn real_publication_stdio_inspects_fixed_evidence_without_changing_original_task
         assert!(db.read_request("conflicting-stop").unwrap().is_none());
         if published {
             let records: Value =
-                serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+                serde_json::from_str(include_str!("../fixtures/issue79/legacy-records.json"))
+                    .unwrap();
             let market = SqliteMarket::new(db.clone());
             market.stage(&records[0]["record"]).unwrap();
             let plan = (Publisher {

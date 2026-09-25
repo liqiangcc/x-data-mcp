@@ -1,6 +1,3 @@
-mod day_file {
-    pub use x_data_mcp::hash::sha256;
-}
 use chrono::NaiveDate;
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -23,13 +20,13 @@ mod frozen_legacy {
     use std::io;
     // Only the crate path is supplied locally; body below is verbatim fixed old code.
 
-    include!("fixtures/issue79/legacy_record_digest.rs.txt");
+    include!("../fixtures/issue79/legacy_record_digest.rs.txt");
     pub fn digest(v: &Value) -> String {
         record_digest(v).unwrap()
     }
 }
 fn samples() -> Vec<Value> {
-    serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap()
+    serde_json::from_str(include_str!("../fixtures/issue79/legacy-records.json")).unwrap()
 }
 fn db() -> (tempfile::TempDir, SqliteMarket) {
     let dir = tempfile::tempdir().unwrap();

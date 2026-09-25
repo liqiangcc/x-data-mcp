@@ -6,7 +6,7 @@ use x_data_mcp::snapshot::SnapshotManifest;
 #[test]
 fn retained_issue_74_snapshot_has_byte_evidence_but_no_cross_file_approval() {
     let manifest: SnapshotManifest = serde_json::from_str(include_str!(
-        "../evidence/issue-74-snapshot-input/retained-manifest.json"
+        "../../evidence/issue-74-snapshot-input/retained-manifest.json"
     ))
     .unwrap();
     let files = manifest
