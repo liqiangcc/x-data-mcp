@@ -374,7 +374,9 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             repository: self.repository.clone(),
         };
         let candidate = publisher.derive_yearly(&request, &evidence, &base, &annual)?;
-        let plan = publisher.prepare_yearly_result(
+        // Pass the binding and base window this runner already loaded — the
+        // prepare chain would otherwise re-read them several times per item.
+        let plan = publisher.prepare_yearly_result_prefetched(
             Publication {
                 publication_id: format!("yearly-result-{id}"),
                 version_id: request.version_id,
@@ -386,6 +388,8 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             },
             &candidate,
             prior,
+            Some(&*binding),
+            Some(&base),
         )?;
         self.repository.commit_yearly(&plan)
     }

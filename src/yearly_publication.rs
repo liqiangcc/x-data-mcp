@@ -173,14 +173,36 @@ impl<R: MarketRepository> Publisher<R> {
         command: Publication,
         candidate: &YearlyCandidate,
     ) -> Result<PublishPlan, Error> {
+        self.prepare_derived_yearly_prefetched(command, candidate, None, None)
+    }
+    /// `prepare_derived_yearly` with the caller's already-loaded binding and
+    /// base facts/meta window — identical checks in the same order, minus
+    /// the redundant storage reads. Used by `prepare_yearly_result`.
+    pub(crate) fn prepare_derived_yearly_prefetched(
+        &self,
+        command: Publication,
+        candidate: &YearlyCandidate,
+        binding: Option<&crate::task_control::ItemBinding>,
+        base_view: Option<(
+            &crate::market_storage::FixedFacts,
+            &crate::market_storage::compat::CheckedRecord,
+        )>,
+    ) -> Result<PublishPlan, Error> {
         if candidate.raw["version_id"].as_str() != Some(command.version_id.as_str()) {
             return Err(Error::Invalid("yearly candidate/version binding".into()));
         }
-        match self
-            .repository
-            .task_item_binding(&command.task_id, &command.item_id)?
-        {
-            Some(binding) => tasks::validate_binding(&binding, &command, candidate)?,
+        let fetched_binding;
+        let binding = match binding {
+            Some(binding) => Some(binding),
+            None => {
+                fetched_binding = self
+                    .repository
+                    .task_item_binding(&command.task_id, &command.item_id)?;
+                fetched_binding.as_ref()
+            }
+        };
+        match binding {
+            Some(binding) => tasks::validate_binding(binding, &command, candidate)?,
             None => {
                 let head = self.repository.task_head(&command.task_id)?;
                 if matches!(head.key.operation.as_str(), "update_data" | "backfill_data") {
@@ -190,10 +212,17 @@ impl<R: MarketRepository> Publisher<R> {
                 }
             }
         }
-        let base = self
-            .repository
-            .fixed_facts(&candidate.base_daily_version_id)
-            .map_err(base_error)?;
+        let fetched_facts;
+        let base = match base_view {
+            Some((facts, _)) => facts,
+            None => {
+                fetched_facts = self
+                    .repository
+                    .fixed_facts(&candidate.base_daily_version_id)
+                    .map_err(base_error)?;
+                &fetched_facts
+            }
+        };
         if base.integrity_sha256 != candidate.base_integrity_sha256 {
             return Err(Error::Base("fixed daily changed after derivation".into()));
         }
@@ -225,24 +254,33 @@ impl<R: MarketRepository> Publisher<R> {
                 ));
             }
         }
-        match self.repository.candidate(&command.version_id) {
-            Ok(existing) if existing.raw() == candidate.raw() => {}
+        // The materialized staged record serves both the content check here
+        // and `plan_record`/`mark_validated` below — one read instead of two.
+        let staged = match self.repository.candidate(&command.version_id) {
+            Ok(existing) if existing.raw() == candidate.raw() => existing,
             // Compact backends synthesize the staged raw from typed facts,
             // adding `compact_source` and dropping the derived
             // `local_yearly_derivation_v1` projection — compare the typed
             // version content instead of the envelope bytes.
             Ok(existing)
                 if existing.raw().get("compact_source").is_some()
-                    && existing.version() == candidate.checked.version() => {}
+                    && existing.version() == candidate.checked.version() =>
+            {
+                existing
+            }
             Ok(_) => {
                 return Err(Error::Conflict(
                     "yearly candidate id has different content".into(),
                 ));
             }
-            Err(Error::NotFound) => self.repository.stage(&candidate.raw)?,
+            Err(Error::NotFound) => {
+                self.repository.stage(&candidate.raw)?;
+                self.repository.candidate(&command.version_id)?
+            }
             Err(error) => return Err(error),
-        }
-        let plan = self.prepare(command)?;
+        };
+        let plan = self.plan_record_prefetched(command, staged, binding, base_view)?;
+        self.repository.mark_validated(&plan.record)?;
         // `derive_yearly` already authenticated and parsed this immutable
         // candidate; reuse the checked record instead of repeating the full
         // JSON digest, deserialization and bar validation pass.
