@@ -122,15 +122,10 @@ fn derive(
     request: &Derivation,
     evidence: &DerivationEvidence,
 ) -> Result<x_data_mcp::yearly_publication::YearlyCandidate, Error> {
-    let base = publisher
-        .repository
-        .fixed(&request.base_daily_version_id)?;
-    let annual = x_data_mcp::yearly::aggregate(
-        base.version(),
-        Some(&request.years),
-        evidence.as_of,
-    )
-    .map_err(|e| Error::Base(e.to_string()))?;
+    let base = publisher.repository.fixed(&request.base_daily_version_id)?;
+    let annual =
+        x_data_mcp::yearly::aggregate(base.version(), Some(&request.years), evidence.as_of)
+            .map_err(|e| Error::Base(e.to_string()))?;
     publisher.derive_yearly(request, evidence, &base, &annual)
 }
 fn command(store: &SqliteMarket, id: &str, intent: PublishIntent) -> Publication {

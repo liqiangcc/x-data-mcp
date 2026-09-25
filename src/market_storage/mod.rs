@@ -564,8 +564,7 @@ pub(crate) fn validate_base_facts<R: MarketRepository + ?Sized>(
             "fixed base identity/period/adjustment/source mismatch".into(),
         ));
     }
-    let years: std::collections::BTreeSet<i32> =
-        v.records.iter().map(|b| b.date.year()).collect();
+    let years: std::collections::BTreeSet<i32> = v.records.iter().map(|b| b.date.year()).collect();
     let as_of = v
         .published_at
         .with_timezone(&FixedOffset::east_opt(8 * 3600).unwrap())
