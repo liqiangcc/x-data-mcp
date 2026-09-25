@@ -590,7 +590,7 @@ fn explicit_schema_upgrade_is_transactional_and_checks_migration_identity() {
         let db = SqliteTasks::new(dir.path().join("v1.sqlite"));
         let c = Connection::open(db.path()).unwrap();
         c.pragma_update(None, "journal_mode", "WAL").unwrap();
-        let sql = include_str!("../migrations/tasks/001.sql");
+        let sql = include_str!("../../migrations/tasks/001.sql");
         c.execute_batch(sql).unwrap();
         c.execute(
             "INSERT INTO schema_migrations VALUES(1,?1,'test')",

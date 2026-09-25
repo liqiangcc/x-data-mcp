@@ -56,8 +56,7 @@ impl Drop for Session {
         assert!(self.child.wait().unwrap().success());
     }
 }
-#[path = "support/metrics.rs"]
-mod fixture;
+use crate::support_metrics as fixture;
 #[test]
 fn compute_real_stdio_roundtrips_schema_and_fixed_version_reference() {
     let d = tempfile::tempdir().unwrap();

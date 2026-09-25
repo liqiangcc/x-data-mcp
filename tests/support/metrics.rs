@@ -1,6 +1,5 @@
 #![allow(dead_code)]
-#[path = "market.rs"]
-mod market;
+use crate::support_market as market;
 use serde_json::{Value, json};
 use x_data_mcp::{
     market_storage::{MarketRepository, PublishIntent, compat::legacy_digest},

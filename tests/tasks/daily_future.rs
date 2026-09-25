@@ -6,7 +6,7 @@ use x_data_mcp::{
     sqlite_market::SqliteMarket,
     sqlite_tasks::SqliteTasks,
 };
-#[path = "support/market.rs"]
+#[path = "../support/market.rs"]
 mod fixture;
 fn setup() -> (tempfile::TempDir, SqliteMarket, DataApi) {
     let dir = tempfile::tempdir().unwrap();

@@ -566,12 +566,12 @@ fn stopped_schema_upgrade_uses_real_v6_ddl_preserves_bindings_and_rejects_broken
         let c = rusqlite::Connection::open(&path).unwrap();
         c.pragma_update(None, "journal_mode", "WAL").unwrap();
         for (index, sql) in [
-            include_str!("../migrations/tasks/001.sql"),
-            include_str!("../migrations/tasks/002.sql"),
-            include_str!("../migrations/tasks/003_market.sql"),
-            include_str!("../migrations/tasks/004_catalog.sql"),
-            include_str!("../migrations/tasks/005_update_results.sql"),
-            include_str!("../migrations/tasks/006_yearly_results.sql"),
+            include_str!("../../migrations/tasks/001.sql"),
+            include_str!("../../migrations/tasks/002.sql"),
+            include_str!("../../migrations/tasks/003_market.sql"),
+            include_str!("../../migrations/tasks/004_catalog.sql"),
+            include_str!("../../migrations/tasks/005_update_results.sql"),
+            include_str!("../../migrations/tasks/006_yearly_results.sql"),
         ]
         .into_iter()
         .enumerate()
@@ -663,7 +663,7 @@ fn stopped_schema_upgrade_uses_real_v6_ddl_preserves_bindings_and_rejects_broken
     }
 }
 
-#[path = "support/market.rs"]
+#[path = "../support/market.rs"]
 mod market_fixture;
 #[test]
 fn stopped_compound_task_retains_verified_published_daily_and_its_original_head() {
@@ -943,7 +943,7 @@ fn stopped_runner_cancellation_before_or_during_inspection_does_not_touch_target
     }
 }
 
-#[path = "support/stop_fault.rs"]
+#[path = "../support/stop_fault.rs"]
 mod stop_fault;
 #[test]
 fn stopped_runner_reconciles_committed_response_loss_and_keeps_unknown_execution_protected() {

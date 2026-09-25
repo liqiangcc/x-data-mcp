@@ -1,5 +1,4 @@
-#[path = "support/metrics.rs"]
-mod fixture;
+use crate::support_metrics as fixture;
 use x_data_mcp::{
     data_supply::Access,
     metrics::{service::Metrics, wire::*},

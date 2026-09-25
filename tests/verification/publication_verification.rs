@@ -68,7 +68,7 @@ fn publication_check_preserves_mixed_published_running_and_never_started_items()
         )
         .unwrap();
     let records: Value =
-        serde_json::from_str(include_str!("fixtures/issue79/legacy-records.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/issue79/legacy-records.json")).unwrap();
     market.stage(&records[0]["record"]).unwrap();
     let plan = (Publisher {
         repository: market.clone(),
