@@ -267,6 +267,113 @@ pub(crate) fn query(
     Ok(result)
 }
 
+/// Availability facts for one selection: the same head resolution, version
+/// identity/period check, manifest projection, integrity-failure surface and
+/// row budget as the generic `query` path — but one verified materialization
+/// instead of two and no row serialization, since availability consumes rows
+/// only as dates/count. Yearly rows keep the `yearly_row_meta` lineage
+/// re-aggregation check `query` applied.
+type AvailabilityStats = (
+    Option<ManifestEntry>,
+    Option<chrono::NaiveDate>,
+    Option<chrono::NaiveDate>,
+    usize,
+);
+fn availability_stats(
+    c: &Connection,
+    plan: &QueryPlan,
+    entity: Option<&Security>,
+    access: &Access,
+) -> Result<AvailabilityStats, Error> {
+    let Some(entity) = entity else {
+        // Entity-less selections (catalog) reuse the generic projection.
+        let s = query(c, plan, access)?;
+        let dates = s
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Market { date, .. } => Some(*date),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        return Ok((
+            s.manifest.into_iter().next(),
+            dates.first().copied(),
+            dates.last().copied(),
+            s.rows.len(),
+        ));
+    };
+    let id = match &plan.args.version {
+        VersionChoice::ExplicitVersionMap { versions } => versions
+            .iter()
+            .find(|v| &v.entity == entity)
+            .map(|v| v.version_id.clone()),
+        _ => crate::sqlite_market::head(
+            c,
+            &Scope {
+                symbol: entity.symbol(),
+                period: plan.args.dataset.period().unwrap(),
+            },
+        )?,
+    };
+    let Some(id) = id else {
+        return Ok((
+            Some(ManifestEntry {
+                entity: Some(entity.clone()),
+                version_ref: None,
+                status: ManifestStatus::Absent,
+                metadata: None,
+            }),
+            None,
+            None,
+            0,
+        ));
+    };
+    let r = read_market(c, plan.args.dataset, entity, &id)?;
+    let manifest = ManifestEntry {
+        entity: Some(entity.clone()),
+        version_ref: Some(market_ref(plan.args.dataset, entity, &r)),
+        status: ManifestStatus::Present,
+        metadata: Some(metadata(&r)),
+    };
+    let (start, end) = match plan.args.filter {
+        Filter::Daily {
+            start_date,
+            end_date,
+        } => (start_date, end_date),
+        Filter::Yearly {
+            start_year,
+            end_year,
+        } => (
+            chrono::NaiveDate::from_ymd_opt(start_year, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(end_year, 12, 31).unwrap(),
+        ),
+        _ => return Err(invalid("market filter")),
+    };
+    let mut count = 0usize;
+    let mut first = None;
+    let mut last = None;
+    for b in r
+        .version()
+        .records
+        .iter()
+        .filter(|b| b.date >= start && b.date <= end)
+    {
+        if plan.args.dataset == Dataset::Yearly {
+            yearly_row_meta(c, &r, b)?;
+        }
+        count += 1;
+        if count > MAX_ROWS {
+            return Err(invalid("snapshot row budget exceeded"));
+        }
+        if first.is_none() {
+            first = Some(b.date);
+        }
+        last = Some(b.date);
+    }
+    Ok((Some(manifest), first, last, count))
+}
+
 /// Per-year row metadata. v18 reads the stored `yearly_bars` row; compact
 /// storage re-aggregates the verified base daily version (the same
 /// projection stage-time verification recomputes) and indexes per-year
@@ -491,7 +598,7 @@ fn task_facts(
         publications,
     })
 }
-fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts>, Error> {
+pub(crate) fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts>, Error> {
     let mut q=c.prepare("SELECT task_id,command_key_json,frozen_work_json FROM tasks ORDER BY created_at DESC,task_id ASC").map_err(storage)?;
     let rows = q
         .query_map([], |r| {
@@ -623,7 +730,30 @@ impl ObservationRepository for SqliteSupply {
         access: &Access,
     ) -> Result<Vec<AvailabilityFacts>, Error> {
         self.market.read(|c| {
-            let tasks = task_list(c, access)?;
+            let tasks: Vec<std::rc::Rc<TaskFacts>> = task_list(c, access)?
+                .into_iter()
+                .map(std::rc::Rc::new)
+                .collect();
+            // One pass over the task set instead of an entities x tasks x
+            // items scan with a TaskSnapshot clone per hit: each task index
+            // is registered under every distinct item symbol (catalog tasks
+            // under the entity-less selection). Order follows `task_list`.
+            let mut catalog_tasks = vec![];
+            let mut by_symbol: std::collections::HashMap<String, Vec<usize>> = Default::default();
+            for (i, f) in tasks.iter().enumerate() {
+                if f.snapshot.task.key.dataset == "securities.catalog" {
+                    catalog_tasks.push(i);
+                }
+                let symbols: std::collections::BTreeSet<&str> = f
+                    .snapshot
+                    .items
+                    .iter()
+                    .filter_map(|i| i.spec.target["symbol"].as_str())
+                    .collect();
+                for symbol in symbols {
+                    by_symbol.entry(symbol.into()).or_default().push(i);
+                }
+            }
             let mut out = vec![];
             let entities: Vec<Option<Security>> = if plan.args.dataset == Dataset::Catalog {
                 vec![None]
@@ -631,42 +761,32 @@ impl ObservationRepository for SqliteSupply {
                 plan.entities.iter().cloned().map(Some).collect()
             };
             for entity in entities {
-                let mut single = plan.clone();
-                if let Some(e) = &entity {
-                    single.entities = vec![e.clone()];
+                let related_tasks = match &entity {
+                    Some(e) => by_symbol
+                        .get(e.symbol().as_str())
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .collect::<Vec<usize>>(),
+                    None => catalog_tasks.clone(),
                 }
-                let related_tasks = tasks
-                    .iter()
-                    .filter(|f| {
-                        f.snapshot.items.iter().any(|i| match &entity {
-                            Some(e) => i.spec.target["symbol"] == e.symbol(),
-                            None => f.snapshot.task.key.dataset == "securities.catalog",
-                        })
-                    })
-                    .cloned()
-                    .collect();
+                .into_iter()
+                .map(|i| tasks[i].clone())
+                .collect();
                 let proven_gaps = match (&entity, plan.args.dataset.period()) {
                     (Some(e), Some(period)) => {
                         crate::sqlite_market::gaps::read_open_gaps(c, &e.symbol(), period)?
                     }
                     _ => vec![],
                 };
-                match query(c, &single, access) {
-                    Ok(s) => {
-                        let dates = s
-                            .rows
-                            .iter()
-                            .filter_map(|r| match r {
-                                Row::Market { date, .. } => Some(*date),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>();
+                match availability_stats(c, plan, entity.as_ref(), access) {
+                    Ok((manifest, first_record, last_record, record_count)) => {
                         out.push(AvailabilityFacts {
                             entity,
-                            manifest: s.manifest.into_iter().next(),
-                            first_record: dates.first().copied(),
-                            last_record: dates.last().copied(),
-                            record_count: s.rows.len(),
+                            manifest,
+                            first_record,
+                            last_record,
+                            record_count,
                             integrity_failure: None,
                             proven_gaps,
                             related_tasks,

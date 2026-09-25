@@ -2462,3 +2462,593 @@ fn yearly_stage_timing_probe() {
     run_item_ms.sort_by(f64::total_cmp);
     eprintln!("  run_item_replay: p50={:.3}ms", run_item_ms[5]);
 }
+
+/// Real-DB stage probe (#278): runs the yearly item pipeline against an
+/// isolated *copy* of the production database (never the live path). Items
+/// mirror the preview.24 shape — `years` = [2025,2026] window presence is
+/// checked per entity, intent is CurrentHead bound to the stored head in
+/// `nochange` mode or HistoricalFixedBase in `publish` mode — and the same
+/// stage decomposition as `yearly_stage_timing_probe` is reported.
+///
+///   X_DATA_PROBE_DB=/path/copy.db   required; probe aborts when unset
+///   X_PROBE_ITEMS=50                entities sampled per task (≤100/task)
+///   X_PROBE_MODE=publish|nochange   publish = new version per item;
+///                                   nochange = reuse bound to stored head
+///   X_PROBE_AVAIL=1                 also time Observer::availability over
+///                                   100-entity batches (driver pre-scan)
+#[test]
+#[ignore = "manual real-DB probe; needs X_DATA_PROBE_DB=<copy>"]
+fn yearly_real_data_probe() {
+    use crate::market_update::tasks::Operation;
+    use crate::sqlite_market::Publisher;
+    use crate::task_control::{Contract, RequestOutcome};
+    use crate::yearly_publication::{
+        Derivation, DerivationEvidence,
+        results::YearlyRepository,
+        runner::{YearlyRunner, YearlyVerifier},
+        tasks::YearlyContract,
+    };
+    use chrono::Datelike;
+    use std::path::Path;
+    use std::time::Instant;
+
+    // Mirrors runner::bound_evidence — same coverage checks and the exact
+    // stored evidence wording so `nochange` derivations reproduce the
+    // stored record bit-for-bit and exercise the reuse path.
+    struct Stub;
+    impl YearlyVerifier for Stub {
+        fn verify(
+            &self,
+            base: &CheckedRecord,
+            years: &BTreeSet<i32>,
+            annual: &crate::yearly::AnnualSeries,
+            derived_at: DateTime<Utc>,
+        ) -> Result<DerivationEvidence, crate::market_data::SourceError> {
+            let as_of = derived_at
+                .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                .date_naive();
+            if annual.base_daily_version_id != base.version().version_id
+                || annual.as_of != as_of
+                || annual.records.len() != years.len()
+                || !annual
+                    .records
+                    .iter()
+                    .map(|r| r.bar.date.year())
+                    .eq(years.iter().copied())
+            {
+                return Err(crate::market_data::SourceError::NotVerified(
+                    "aggregated annual series does not cover the requested years".into(),
+                ));
+            }
+            let generation = std::env::var("X_PROBE_GEN").unwrap_or_else(|_| {
+                "804c5a63b5283a4cc02ce582166dde25cbb76057e54a54a2910bc4bba8b07d0b".into()
+            });
+            Ok(DerivationEvidence {
+                base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
+                years: years.clone(),
+                as_of,
+                coverage: CoverageEvidence {
+                    status: crate::market_data::CoverageStatus::Complete,
+                    reason: format!(
+                        "selected years verified by re-aggregating fixed daily {} against bound generation {generation} as of {as_of}; not a listing-history claim",
+                        base.version().version_id
+                    ),
+                },
+            })
+        }
+    }
+
+    let Ok(db) = std::env::var("X_DATA_PROBE_DB") else {
+        eprintln!("skipped: X_DATA_PROBE_DB unset (point at a DB *copy*, never the live path)");
+        return;
+    };
+    let n_items: usize = std::env::var("X_PROBE_ITEMS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50);
+    let nochange = std::env::var("X_PROBE_MODE").ok().as_deref() == Some("nochange");
+    let avail = std::env::var("X_PROBE_AVAIL").ok().as_deref() == Some("1");
+    let repo = SqliteCompactMarket::open(Path::new(&db)).unwrap();
+
+    // entity -> (daily head version_id, yearly head version_id, yearly as_of_day)
+    let entities: Vec<(String, String, Option<String>, Option<i64>)> = repo
+        .read(|c| {
+            let mut s = c
+                .prepare(
+                    "SELECT v.entity, v.version_id,
+                            (SELECT v2.version_id FROM effective_heads h2
+                             JOIN data_versions v2 ON v2.version_key = h2.version_key
+                             WHERE h2.entity = v.entity AND h2.period = 2 AND h2.adjustment = 1),
+                            (SELECT l.as_of_day FROM effective_heads h2
+                             JOIN yearly_lineage l ON l.version_key = h2.version_key
+                             WHERE h2.entity = v.entity AND h2.period = 2 AND h2.adjustment = 1)
+                     FROM effective_heads h
+                     JOIN data_versions v ON v.version_key = h.version_key
+                     WHERE h.period = 1 AND h.adjustment = 1
+                     ORDER BY v.entity",
+                )
+                .map_err(storage)?;
+            s.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                ))
+            })
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)
+        })
+        .unwrap();
+    eprintln!("real-db entities={}", entities.len());
+
+    // Keep entities whose stored daily base covers the whole 2025-2026
+    // window — the years set the preview.24 driver froze into every item.
+    let (first_day, last_day) = (
+        compact_market::epoch_day(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()),
+        compact_market::epoch_day(NaiveDate::from_ymd_opt(2026, 12, 31).unwrap()),
+    );
+    let usable: Vec<_> = repo
+        .read(|c| {
+            Ok::<_, Error>(
+                entities
+                    .iter()
+                    .filter(|(_, daily, _, _)| {
+                        crate::sqlite_market::compact_versions::window_years(
+                            c, daily, first_day, last_day,
+                        )
+                        .map(|years| years.is_superset(&BTreeSet::from([2025, 2026])))
+                        .unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .unwrap();
+    eprintln!("usable(2025+2026)={}", usable.len());
+
+    if avail {
+        use crate::data_supply::{
+            Access,
+            observe::Observer,
+            wire::{ContractVersion, Dataset, Filter, Query, Selection, VersionChoice},
+        };
+        let observer = Observer::new(
+            crate::sqlite_supply::SqliteSupply {
+                market: crate::sqlite_market::backend::MarketBackend::Compact(repo.clone()),
+            },
+            "probe-run".into(),
+        );
+        let access = Access::local();
+        let securities = |chunk: &[(String, String, Option<String>, Option<i64>)]| {
+            chunk
+                .iter()
+                .map(|(symbol, ..)| {
+                    let (exchange, code) = symbol.split_once('.').unwrap();
+                    serde_json::from_value::<crate::data_supply::wire::Security>(
+                        json!({"exchange":exchange,"code":code}),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        // X_PROBE_AVAIL_DUMP=<file> walks every batch and writes the
+        // concatenated items JSON — deterministic given a fixed run_id, so
+        // identical bytes across implementations prove wire equivalence.
+        let dump = std::env::var("X_PROBE_AVAIL_DUMP").ok();
+        let mut dumped = Vec::new();
+        let chunks: Vec<_> = usable.chunks(100).collect();
+        for (i, chunk) in chunks.iter().enumerate() {
+            if dump.is_none() && i >= 3 {
+                break;
+            }
+            let query = Query {
+                dataset: Dataset::Daily,
+                contract_version: ContractVersion::V1,
+                selection: Selection::Batch {
+                    entities: securities(chunk),
+                },
+                filter: Filter::Daily {
+                    start_date: NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                    end_date: NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
+                },
+                version: VersionChoice::LatestPerEntity,
+                page_size: 1000,
+                cursor: None,
+            };
+            let t = Instant::now();
+            let page = observer.availability(query, &access).unwrap();
+            eprintln!(
+                "availability batch={} entities={} ms={:.1} (per_entity={:.2}ms)",
+                i,
+                chunk.len(),
+                t.elapsed().as_secs_f64() * 1000.0,
+                t.elapsed().as_secs_f64() * 1000.0 / chunk.len() as f64,
+            );
+            if dump.is_some() {
+                dumped.extend(page.items.iter().map(|i| serde_json::to_value(i).unwrap()));
+            }
+        }
+        if let Some(path) = dump {
+            std::fs::write(&path, serde_json::to_vec(&dumped).unwrap()).unwrap();
+            eprintln!("availability dump {} items -> {path}", dumped.len());
+        }
+        if std::env::var("X_PROBE_AVAIL_PARTS").ok().as_deref() == Some("1") {
+            // Component split of SqliteSupply::availability: task_facts scan
+            // + per-entity clone, query() per entity, open-gap read.
+            use crate::data_supply::wire::Dataset as D;
+            repo.read(|c| {
+                let t = Instant::now();
+                let tasks = crate::sqlite_supply::task_list(c, &access).unwrap();
+                let task_list_ms = t.elapsed().as_secs_f64() * 1000.0;
+                let mut scan_ms = 0.0;
+                let mut clone_ms = 0.0;
+                let mut query_ms = 0.0;
+                let mut gaps_ms = 0.0;
+                let probe: Vec<String> =
+                    usable.iter().take(20).map(|e| e.0.clone()).collect();
+                for symbol in &probe {
+                    let e = securities(&[(symbol.clone(), String::new(), None, None)])
+                        .into_iter()
+                        .next()
+                        .unwrap();
+                    let t = Instant::now();
+                    let hits: Vec<_> = tasks
+                        .iter()
+                        .filter(|f| {
+                            f.snapshot
+                                .items
+                                .iter()
+                                .any(|i| i.spec.target["symbol"] == e.symbol())
+                        })
+                        .collect();
+                    scan_ms += t.elapsed().as_secs_f64() * 1000.0;
+                    let t = Instant::now();
+                    let _cloned: Vec<_> = hits.iter().map(|f| (*f).clone()).collect();
+                    clone_ms += t.elapsed().as_secs_f64() * 1000.0;
+                    let single = crate::data_supply::query::QueryPlan::new(
+                        Query {
+                            dataset: D::Daily,
+                            contract_version: crate::data_supply::wire::ContractVersion::V1,
+                            selection: Selection::Single {
+                                entity: e.clone(),
+                            },
+                            filter: Filter::Daily {
+                                start_date: NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                                end_date: NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
+                            },
+                            version: VersionChoice::LatestPerEntity,
+                            page_size: 1000,
+                            cursor: None,
+                        },
+                        &access,
+                    )
+                    .unwrap();
+                    let t = Instant::now();
+                    let _s = crate::sqlite_supply::query(c, &single, &access).unwrap();
+                    query_ms += t.elapsed().as_secs_f64() * 1000.0;
+                    let t = Instant::now();
+                    let _g = crate::sqlite_market::gaps::read_open_gaps(
+                        c,
+                        &e.symbol(),
+                        crate::market_data::Period::Day,
+                    )
+                    .unwrap();
+                    gaps_ms += t.elapsed().as_secs_f64() * 1000.0;
+                }
+                eprintln!(
+                    "avail-parts n={} task_list={:.1}ms scan={:.2}ms/entity clone={:.2}ms/entity query={:.2}ms/entity gaps={:.2}ms/entity",
+                    probe.len(),
+                    task_list_ms,
+                    scan_ms / probe.len() as f64,
+                    clone_ms / probe.len() as f64,
+                    query_ms / probe.len() as f64,
+                    gaps_ms / probe.len() as f64,
+                );
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    // Yearly task items mirroring the preview.24 frozen shape.
+    let item_value =
+        |(symbol, daily, yearly, as_of): &(String, String, Option<String>, Option<i64>)| {
+            let (intent, comparison) = if nochange {
+                (
+                    json!({"CurrentHead":{
+                        "expected_daily_head":daily,
+                        "expected_yearly_head":yearly,
+                    }}),
+                    yearly.clone(),
+                )
+            } else {
+                (json!("HistoricalFixedBase"), None)
+            };
+            (
+                json!({
+                    "symbol":symbol,
+                    "base_daily_version_id":daily,
+                    "years":[2025,2026],
+                    "intent":intent,
+                    "comparison_version_id":comparison,
+                }),
+                *as_of,
+            )
+        };
+
+    const STAGES: [&str; 8] = [
+        "binding+receipt",
+        "claim+start_item",
+        "fixed_window",
+        "aggregate",
+        "verify",
+        "task_recheck",
+        "prepare_resid",
+        "commit(+item close)",
+    ];
+    let mut timings: [Vec<f64>; 8] = Default::default();
+    let mut totals: [Vec<f64>; 9] = Default::default();
+    let (mut accept_ms, mut resolve_ms) = (vec![], vec![]);
+    let mut run_item_ms = vec![];
+    let mut no_change_count = 0usize;
+    let mut publish_count = 0usize;
+
+    // Task A (items 0..n): manual stage replication — per-stage detail.
+    // Task B (items n..2n): production runner.run_item — honest totals.
+    let task_chunks: Vec<Vec<_>> = usable
+        .chunks(100)
+        .take(2)
+        .map(|c| c.iter().take(n_items).collect())
+        .collect();
+    for (task_ix, chunk) in task_chunks.iter().enumerate() {
+        if chunk.is_empty() {
+            break;
+        }
+        let items: Vec<_> = chunk.iter().map(|e| item_value(e)).collect();
+        let contract = YearlyContract {
+            operation: Operation::Update,
+            repository: repo.clone(),
+            today: || NaiveDate::from_ymd_opt(2026, 9, 25).unwrap(),
+        };
+        let t = Instant::now();
+        let work = contract
+            .resolve(&json!({"items":items.iter().map(|(v,_)| v.clone()).collect::<Vec<_>>()}))
+            .unwrap();
+        resolve_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        let command = Command {
+            key: contract.key(),
+            intent: json!({}),
+        };
+        let t = Instant::now();
+        let acceptance = repo
+            .accept(
+                &format!("probe-req-{task_ix}-{}", std::process::id()),
+                &command,
+                &work,
+                RUN,
+                None,
+            )
+            .unwrap();
+        accept_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        let RequestOutcome::Task(snapshot) = acceptance.record.outcome else {
+            panic!("expected task outcome")
+        };
+        let yearly_task = snapshot.task.task_id.clone();
+
+        for ((_item_value_json, as_of_day), item) in items.iter().zip(snapshot.items.iter()) {
+            let item_id = item.spec.item_id.clone();
+            // derived_at pinned to the entity's stored as_of so `nochange`
+            // derivations land identical content and take the reuse path.
+            let derived_at = match as_of_day {
+                Some(day) => compact_market::epoch_date(*day)
+                    .unwrap()
+                    .and_hms_opt(4, 0, 0)
+                    .unwrap()
+                    .and_utc(),
+                None => ts(),
+            };
+            if task_ix == 1 {
+                let runner = YearlyRunner {
+                    repository: repo.clone(),
+                    run_id: RUN.into(),
+                    derived_at,
+                };
+                let t = Instant::now();
+                let out = runner.run_item(&yearly_task, &item_id, &Stub).unwrap();
+                run_item_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+                assert!(matches!(
+                    out,
+                    crate::yearly_publication::runner::YearlyExecution::Published(_)
+                ));
+                continue;
+            }
+
+            let t = Instant::now();
+            let mut binding = repo
+                .task_item_binding(&yearly_task, &item_id)
+                .unwrap()
+                .unwrap();
+            assert!(
+                repo.yearly_item_receipt(&yearly_task, &item_id)
+                    .unwrap()
+                    .is_none()
+            );
+            timings[0].push(t.elapsed().as_secs_f64() * 1000.0);
+
+            let t = Instant::now();
+            if binding.head.status == crate::task_control::Status::Pending {
+                repo.transition_task_head(&mut binding.head, None, RUN, Change::Claim)
+                    .unwrap();
+            }
+            repo.transition_task_head(
+                &mut binding.head,
+                Some(&mut binding.item),
+                RUN,
+                Change::StartItem(item_id.clone()),
+            )
+            .unwrap();
+            timings[1].push(t.elapsed().as_secs_f64() * 1000.0);
+
+            let frozen = &binding.item.spec.frozen_inputs;
+            let base_id = frozen["base_daily_version_id"].as_str().unwrap();
+            let years: BTreeSet<i32> = serde_json::from_value(frozen["years"].clone()).unwrap();
+            let (first_day, last_day) = (
+                NaiveDate::from_ymd_opt(*years.first().unwrap(), 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(*years.last().unwrap(), 12, 31).unwrap(),
+            );
+
+            let t = Instant::now();
+            let base = repo.fixed_window(base_id, first_day, last_day).unwrap();
+            timings[2].push(t.elapsed().as_secs_f64() * 1000.0);
+
+            let as_of = derived_at
+                .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                .date_naive();
+            let t = Instant::now();
+            let annual = crate::yearly::aggregate(base.version(), Some(&years), as_of).unwrap();
+            timings[3].push(t.elapsed().as_secs_f64() * 1000.0);
+
+            let t = Instant::now();
+            let evidence = Stub.verify(&base, &years, &annual, derived_at).unwrap();
+            timings[4].push(t.elapsed().as_secs_f64() * 1000.0);
+
+            let t = Instant::now();
+            let _recheck = repo.task_head(&yearly_task).unwrap();
+            timings[5].push(t.elapsed().as_secs_f64() * 1000.0);
+
+            let id = crate::hash::sha256(json!([yearly_task, item_id]).to_string().as_bytes());
+            let request = Derivation {
+                symbol: base.version().symbol.clone(),
+                base_daily_version_id: base_id.into(),
+                version_id: format!("yearly-version-{id}"),
+                years: years.clone(),
+                derived_at,
+            };
+            let intent: PublishIntent = serde_json::from_value(frozen["intent"].clone()).unwrap();
+            let publisher = Publisher {
+                repository: repo.clone(),
+            };
+            let prior = frozen["comparison"]["version_id"].as_str();
+
+            let t = Instant::now();
+            let cand = publisher
+                .derive_yearly(&request, &evidence, &base, &annual)
+                .unwrap();
+            let derive_ms = t.elapsed().as_secs_f64() * 1000.0;
+            totals[0].push(derive_ms);
+
+            let t = Instant::now();
+            let _b = repo.task_item_binding(&yearly_task, &item_id).unwrap();
+            totals[1].push(t.elapsed().as_secs_f64() * 1000.0);
+            let t = Instant::now();
+            let _f = repo.fixed_facts(base_id).unwrap();
+            totals[2].push(t.elapsed().as_secs_f64() * 1000.0);
+            let t = Instant::now();
+            let f0 = _f.first_day;
+            let _w = repo.fixed_window(base_id, f0, f0).unwrap();
+            totals[3].push(t.elapsed().as_secs_f64() * 1000.0);
+            let vid = request.version_id.clone();
+            let t = Instant::now();
+            assert!(matches!(repo.candidate(&vid), Err(Error::NotFound)));
+            totals[4].push(t.elapsed().as_secs_f64() * 1000.0);
+            let t = Instant::now();
+            repo.stage(cand.raw()).unwrap();
+            totals[5].push(t.elapsed().as_secs_f64() * 1000.0);
+            let t = Instant::now();
+            let staged = repo.candidate(&vid).unwrap();
+            totals[6].push(t.elapsed().as_secs_f64() * 1000.0);
+            let t = Instant::now();
+            repo.mark_validated(&staged).unwrap();
+            totals[7].push(t.elapsed().as_secs_f64() * 1000.0);
+            let t = Instant::now();
+            let _pack = crate::sqlite_market::envelope::pack(cand.raw()).unwrap();
+            totals[8].push(t.elapsed().as_secs_f64() * 1000.0);
+
+            let t = Instant::now();
+            let plan = publisher
+                .prepare_yearly_result_prefetched(
+                    Publication {
+                        publication_id: format!("yearly-result-{id}"),
+                        version_id: request.version_id.clone(),
+                        task_id: binding.head.task_id.clone(),
+                        item_id: item_id.clone(),
+                        run_id: RUN.into(),
+                        expected_revision: binding.head.state_revision,
+                        intent,
+                    },
+                    &cand,
+                    prior,
+                    Some(&binding),
+                    Some(&base),
+                )
+                .unwrap();
+            timings[6].push(
+                t.elapsed().as_secs_f64() * 1000.0
+                    - derive_ms
+                    - totals[1].last().unwrap()
+                    - totals[2].last().unwrap()
+                    - totals[3].last().unwrap(),
+            );
+
+            let t = Instant::now();
+            let receipt = repo.commit_yearly(&plan).unwrap();
+            timings[7].push(t.elapsed().as_secs_f64() * 1000.0);
+            if plan.is_no_change() {
+                no_change_count += 1;
+            } else {
+                publish_count += 1;
+                if nochange && publish_count == 1 {
+                    let pr = plan.prior.as_ref().unwrap();
+                    eprintln!(
+                        "NOCHANGE-DIFF prior={} cand={}",
+                        serde_json::to_string(pr.raw()).unwrap(),
+                        serde_json::to_string(cand.raw()).unwrap(),
+                    );
+                }
+            }
+            let _ = receipt;
+        }
+    }
+
+    let p = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        if v.is_empty() {
+            return "-/-/-".to_string();
+        }
+        format!(
+            "{:.3}/{:.3}/{:.3}",
+            v[v.len() / 2],
+            v[(v.len() * 9) / 10],
+            *v.last().unwrap()
+        )
+    };
+    eprintln!(
+        "real-db mode={} items_manual={} items_runner={} no_change={} published={}",
+        if nochange { "nochange" } else { "publish" },
+        timings[0].len(),
+        run_item_ms.len(),
+        no_change_count,
+        publish_count,
+    );
+    eprintln!("  resolve_p50/p90/max_ms={}", p(&mut resolve_ms));
+    eprintln!("  accept_p50/p90/max_ms={}", p(&mut accept_ms));
+    for (i, name) in STAGES.iter().enumerate() {
+        eprintln!("  {name:>18}: ms p50/p90/max={}", p(&mut timings[i]));
+    }
+    for (name, i) in [
+        ("derive_yearly", 0),
+        ("task_item_binding", 1),
+        ("fixed_facts", 2),
+        ("fixed_window_1d", 3),
+        ("candidate_miss", 4),
+        ("stage", 5),
+        ("candidate_hit", 6),
+        ("mark_validated", 7),
+        ("envelope_pack", 8),
+    ] {
+        eprintln!("  {name:>18}: ms p50/p90/max={}", p(&mut totals[i]));
+    }
+    eprintln!("  run_item_total: ms p50/p90/max={}", p(&mut run_item_ms));
+}
