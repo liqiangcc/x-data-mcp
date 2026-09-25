@@ -23,7 +23,9 @@ pub struct AvailabilityFacts {
     pub record_count: usize,
     pub integrity_failure: Option<String>,
     pub proven_gaps: Vec<crate::market_storage::ProvenGap>,
-    pub related_tasks: Vec<TaskFacts>,
+    /// Shared task facts: one availability call relates the same task set to
+    /// every selected entity, so entries are shared rather than deep-cloned.
+    pub related_tasks: Vec<std::rc::Rc<TaskFacts>>,
 }
 /// Domain classification: storage reports facts, never decides availability policy.
 fn availability_item(
