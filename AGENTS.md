@@ -23,14 +23,12 @@
 
 实际开发暴露的规范歧义、冲突或不必要成本，按 `docs/conventions.md` 的反馈流程记录；不静默绕过，也不为了满足形式增加无价值抽象。
 
-Box（Tailscale 节点 `grok-bot-vm-411252337`，SSH `box@grok-bot-vm-411252337`；旧节点 `cursor` 已被回收下线，磁盘数据无损）环境事实：`/home` 与 `/tmp` 为 overlayfs，runtime-guard 契约对其 fail-closed，全量测试须以 `TMPDIR=/dev/shm`（tmpfs）运行；Box 自带 cargo 1.85.1 无法编译本仓库，使用 rustup stable 1.98.1（`~/.cargo/bin`）。
+开发与验收环境为本机 WSL2（`/root/x-data-mcp`，8 核 / 15GiB，cargo 1.96.0 rustup stable）：根文件系统非 overlayfs，runtime-guard 本地通过；`/dev/shm` 为 tmpfs。官方输入位于本机 `/opt/x-data-mcp-preview/official-inputs/`（见其中 snapshot-manifest.json），官方文件只下载一次入库复用，重复下载需说明理由；gen-1 retained 字节永久不可得，跨代一致性走已提交派生证据。
 
-固定证据输入目录 `/home/box/retained-inputs/`（见其中 MANIFEST.md），官方文件只下载一次入库复用，重复下载需说明理由；gen-1 retained 字节永久不可得，跨代一致性走已提交派生证据。
+Box（旧 Tailscale 节点 `grok-bot-vm-411252337`）已于 2026-09-25 回收下线：其上 `/home/box/retained-inputs/`、迁移协作 mailbox 与 agent 会话随之失效；Node.js 迁移（#271）已冻结，实现与证据保留在 `migration/*` 分支。dev/preview 场景的 `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（#213）仅限本地验收，生产禁用；客户端 `mcp_connect` 连接时同样需要该变量。
 
-Box 补充事实：本机无白名单内本地盘（唯一块设备 vda 即 overlay 后端，`/dev/shm` 仅 64MB，`CapEff=0` 无法自行挂载数据盘）。`data_service` 与验证执行器共用 `local_filesystem::supported_file` 守卫；开发/preview 场景可用显式 opt-out `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（#213）放行 overlayfs——单例租约与身份绑定语义随之失效，仅限本地验收，生产禁用；客户端 `mcp_connect` 连接时同样需要该变量。
-
-ECS 部署目标 `ecs-node`（OpenSSH 别名，key auth，`ssh ecs-node` 直接可用）：x86_64，2 vCPU，约 2GiB RAM，40GB 根盘。它用于最终部署、真实 MCP 路径与最终 disk/WAL
-验收；250 日 fixture micro-soak 可在 Box `/dev/shm` 执行，但不替代全市场 AC。
+ECS 部署目标 `ecs-node`（OpenSSH 别名，key auth，`ssh ecs-node` 本机直接可用）：x86_64，2 vCPU，约 2GiB RAM，40GB 根盘。它用于最终部署、真实 MCP 路径与最终 disk/WAL
+验收。
 截至 2026-09-21，100-item ECS 功能 smoke 已完成而 #259 容量 AC 未通过；当前 schema
 禁止在 ECS 上启动 5,221-symbol collection，须先修复 audit history payload 与
 canonical `bar_json` 布局。

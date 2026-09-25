@@ -31,3 +31,8 @@ jsonschema = { version = "0.33", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 # Reuse the already locked libc for fd-based local-filesystem verification.
 libc = "=0.2.189"
+
+[profile.dev]
+# Keep .debug_* sections out of linked binaries (separate .dwo files on Linux):
+# less link I/O and a smaller target dir for the edit-build loop.
+split-debuginfo = "unpacked"
