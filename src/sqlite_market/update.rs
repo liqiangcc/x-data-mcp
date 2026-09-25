@@ -244,15 +244,18 @@ mod tests {
             revision_ref: Some("fixture:crash-revision".into()),
             continuity: None,
         };
-        let whole = changed.then(|| CombinedEvidence {
-            base_integrity_sha256: evidence.base_integrity_sha256.clone(),
-            segment_sha256: evidence.candidate_sha256.clone(),
-            combined_integrity_sha256:
-                db.candidate(&command.version_id).unwrap().raw["integrity_sha256"]
-                    .as_str()
-                    .unwrap()
-                    .into(),
-            complete_coverage_ref: "fixture:crash-whole".into(),
+        let whole = changed.then(|| crate::market_update::runner::CombinedCandidate {
+            record: db.candidate(&command.version_id).unwrap().raw,
+            evidence: CombinedEvidence {
+                base_integrity_sha256: evidence.base_integrity_sha256.clone(),
+                segment_sha256: evidence.candidate_sha256.clone(),
+                combined_integrity_sha256:
+                    db.candidate(&command.version_id).unwrap().raw["integrity_sha256"]
+                        .as_str()
+                        .unwrap()
+                        .into(),
+                complete_coverage_ref: "fixture:crash-whole".into(),
+            },
         });
         let Preparation::Ready(plan) = (Publisher {
             repository: db.clone(),

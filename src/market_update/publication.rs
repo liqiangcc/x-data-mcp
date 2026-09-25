@@ -4,7 +4,8 @@ use crate::{
     market_data::MarketDataBatch,
     market_storage::{
         Error, MarketRepository, Publication, PublishIntent, PublishPlan, Publisher, Receipt,
-        Scope, compat::CheckedRecord,
+        Scope,
+        compat::{self, CheckedRecord},
     },
 };
 use serde::Serialize;
@@ -148,7 +149,7 @@ impl<R: MarketRepository> Publisher<R> {
         batch: &MarketDataBatch,
         range: &DateRange,
         evidence: &Evidence,
-        combined: Option<&CombinedEvidence>,
+        combined: Option<&super::runner::CombinedCandidate>,
     ) -> Result<Preparation, Error> {
         if command.publication_id.trim().is_empty()
             || command.intent
@@ -197,11 +198,14 @@ impl<R: MarketRepository> Publisher<R> {
                 let Some(whole) = combined else {
                     return Ok(Preparation::NeedsVerification(Reason::CoverageUnknown));
                 };
-                if whole.base_integrity_sha256 != prepared.base_integrity_sha256
-                    || whole.segment_sha256 != prepared.candidate_sha256
-                    || Some(whole.combined_integrity_sha256.as_str())
-                        != candidate.raw()["integrity_sha256"].as_str()
-                    || whole.complete_coverage_ref.trim().is_empty()
+                if whole.evidence.base_integrity_sha256 != prepared.base_integrity_sha256
+                    || whole.evidence.segment_sha256 != prepared.candidate_sha256
+                    || whole.evidence.complete_coverage_ref.trim().is_empty()
+                    || compat::legacy_digest(&whole.record).ok().as_deref()
+                        != Some(whole.evidence.combined_integrity_sha256.as_str())
+                    || !self
+                        .repository
+                        .staged_matches(&command.version_id, &whole.record)?
                 {
                     return Ok(Preparation::NeedsVerification(Reason::CoverageUnknown));
                 }
@@ -257,7 +261,7 @@ impl<R: MarketRepository> Publisher<R> {
             "base_integrity_sha256":base.raw()["integrity_sha256"],
             "result_integrity_sha256":publication.record.raw()["integrity_sha256"],
             "segment":segment,"range":range,"evidence":evidence,
-            "combined":combined,"no_change":no_change
+            "combined":combined.map(|c| &c.evidence),"no_change":no_change
         });
         Ok(Preparation::Ready(Box::new(RangePlan {
             publication,

@@ -678,7 +678,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             &acquired.batch,
             range,
             &acquired.evidence,
-            acquired.combined.as_ref().map(|c| &c.evidence),
+            acquired.combined.as_ref(),
         )?;
         match plan {
             Preparation::Ready(plan) => self.repository.commit_range(&plan),
