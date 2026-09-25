@@ -29,11 +29,33 @@ pub const GENERATION_ROOT_ENV: &str = "X_DATA_MCP_GENERATION_ROOT";
 #[derive(Clone)]
 pub struct GenerationSource {
     store: generation::Store,
+    /// Verified sessions shared across clones for the process lifetime:
+    /// `open_bound` otherwise re-verifies ~hundreds of MB of artifact bytes
+    /// (and re-inspects them again inside the source construction) for
+    /// every task bound to the same generation. Verification errors are
+    /// never cached — a corrupt or unverified generation retries the full
+    /// check on the next open and still fails closed. The per-open pin is
+    /// unchanged: each task holds a fresh pin, so retire fencing and pin
+    /// sweep semantics are exactly as before. Relaxation: an in-place
+    /// artifact rewrite between two opens on the same process is detected
+    /// at the next process start rather than the next open — the store
+    /// never claimed protection against concurrent byte replacement, and
+    /// pins only fence retire.
+    sessions: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<BoundSession>>>,
+    >,
+}
+/// One byte-verified generation resolution reused by every bound open.
+struct BoundSession {
+    manifest_sha256: String,
+    dir: PathBuf,
+    source: TdxMarketSource,
 }
 impl GenerationSource {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             store: generation::Store::new(root),
+            sessions: Default::default(),
         }
     }
     pub fn from_env() -> Option<Self> {
@@ -43,14 +65,18 @@ impl GenerationSource {
         &self.store
     }
     /// The generation id currently usable as a source: an active pointer
-    /// whose generation still passes byte verification plus a
+    /// whose generation passed byte verification plus a
     /// VERIFIED_COMPATIBLE decision bound to it. Anything less yields
     /// `None` — recorded into frozen inputs as `null` and refused at
-    /// execution, never silently substituted.
+    /// execution, never silently substituted. The pointer itself is
+    /// re-read on every call, so activating a different generation still
+    /// pays full verification; the byte-level verdict shares the
+    /// process-scoped session cache with `open_bound` — an in-place
+    /// artifact rewrite is detected at the next process start, exactly
+    /// as for bound opens.
     pub fn active_verified_id(&self) -> Option<String> {
         let pointer = self.store.active().ok()??;
-        self.store
-            .usable(&pointer.generation_id, chrono::Utc::now())
+        self.session(&pointer.generation_id)
             .ok()
             .map(|_| pointer.generation_id)
     }
@@ -61,26 +87,41 @@ impl GenerationSource {
         generation_id: &str,
         holder: &str,
     ) -> Result<BoundSource, SourceError> {
-        let installed = self
-            .store
-            .usable(generation_id, chrono::Utc::now())
-            .map_err(|e| SourceError::NotVerified(format!("bound generation unusable: {e}")))?;
+        let session = self.session(generation_id)?;
         let pin = self
             .store
             .pin(generation_id, holder)
             .map_err(|e| SourceError::Invocation(format!("generation pin failed: {e}")))?;
-        let source = TdxMarketSource::inspect(
-            installed.dir.clone(),
-            &installed.manifest_bytes,
-            chrono::Utc::now(),
-        )?;
         Ok(BoundSource {
-            generation_id: installed.generation_id,
+            generation_id: generation_id.into(),
+            manifest_sha256: session.manifest_sha256.clone(),
+            dir: session.dir.clone(),
+            source: session.source.clone(),
+            _pin: pin,
+        })
+    }
+    /// The process-scoped verified session for `generation_id`: the first
+    /// open byte-verifies and inspects; later opens on the same generation
+    /// reuse the verdict. Misses and failures are never cached.
+    fn session(&self, generation_id: &str) -> Result<std::sync::Arc<BoundSession>, SourceError> {
+        if let Some(session) = self.sessions.lock().unwrap().get(generation_id) {
+            return Ok(session.clone());
+        }
+        let installed = self
+            .store
+            .usable(generation_id, chrono::Utc::now())
+            .map_err(|e| SourceError::NotVerified(format!("bound generation unusable: {e}")))?;
+        let source = TdxMarketSource::from_installed(&installed)?;
+        let session = std::sync::Arc::new(BoundSession {
             manifest_sha256: installed.manifest_sha256,
             dir: installed.dir,
             source,
-            _pin: pin,
-        })
+        });
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(generation_id.into(), session.clone());
+        Ok(session)
     }
     /// Reconcile pins left by crashed sessions. `task:<id>` holders are
     /// kept while the task is nonterminal; every other holder is kept —
