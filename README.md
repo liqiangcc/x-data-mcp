@@ -118,6 +118,14 @@ git diff --check
 ```
 
 `./scripts/verify` 尚未实现，不调用不存在的命令。
+
+开发迭代（#272）：编辑循环用 `cargo check --all-targets`（本机约 2.7s）而非 `cargo build`（约 4.4s）；
+`cargo test --no-run` 会重链 43 个测试二进制（约 8–10s），迭代期用 `cargo test --test <名称>` 按需编译；
+完整 `cargo test --locked` 仍是提交前与 CI 门禁，check 不替代测试。dev profile 使用
+`split-debuginfo = "unpacked"` 将调试信息拆为 .dwo；本机对 mold/lld 链接器无显著收益，未固化。
+数字为 2026-09-25 本机 WSL2（8 核 / 15GiB，cargo 1.96.0）实测，详情与基线见
+[#272](https://github.com/liqiangcc/x-data-mcp/issues/272)。
+
 测试覆盖核心、发布门禁及真实 stdio 二进制的离线拒绝行为；Fake 不证明真实 parser/QFQ/yearly。
 归档在线测试不进入 Cargo，真实官方来源验证为 NOT_RUN；全市场覆盖和性能为 NOT_VERIFIED。
 预览包本机离线部署检查已 PASS；用户于2026-09-12报告 ChatGPT 当时会话能调用 13 工具，普通库没有已发布数据。
