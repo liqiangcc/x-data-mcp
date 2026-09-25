@@ -42,11 +42,32 @@ impl<R: MarketRepository> Publisher<R> {
         candidate: &YearlyCandidate,
         prior_id: Option<&str>,
     ) -> Result<YearlyResultPlan, Error> {
-        match self
-            .repository
-            .task_item_binding(&command.task_id, &command.item_id)?
-        {
-            Some(binding) => tasks::validate_binding(&binding, &command, candidate)?,
+        self.prepare_yearly_result_prefetched(command, candidate, prior_id, None, None)
+    }
+    /// `prepare_yearly_result` with the caller's already-loaded item binding
+    /// and base window — identical checks in the same order (#278): the same
+    /// rows were previously re-read by `prepare_derived_yearly`, `plan_record`
+    /// and `validate_base_facts` inside a single prepare call.
+    pub(crate) fn prepare_yearly_result_prefetched(
+        &self,
+        command: Publication,
+        candidate: &YearlyCandidate,
+        prior_id: Option<&str>,
+        binding: Option<&crate::task_control::ItemBinding>,
+        base_meta: Option<&CheckedRecord>,
+    ) -> Result<YearlyResultPlan, Error> {
+        let fetched_binding;
+        let binding = match binding {
+            Some(binding) => Some(binding),
+            None => {
+                fetched_binding = self
+                    .repository
+                    .task_item_binding(&command.task_id, &command.item_id)?;
+                fetched_binding.as_ref()
+            }
+        };
+        match binding {
+            Some(binding) => tasks::validate_binding(binding, &command, candidate)?,
             None => {
                 let head = self.repository.task_head(&command.task_id)?;
                 if matches!(head.key.operation.as_str(), "update_data" | "backfill_data") {
@@ -78,16 +99,30 @@ impl<R: MarketRepository> Publisher<R> {
         // One-day window: full version metadata with a single-segment read
         // on compact backends; the legacy backend falls back to `fixed`,
         // which keeps `plan.base.raw` identical to the stored record its
-        // commit path re-compares.
-        let base = self.repository.fixed_window(
-            &candidate.base_daily_version_id,
-            base_facts.first_day,
-            base_facts.first_day,
-        )?;
+        // commit path re-compares. A caller-supplied window serves the same
+        // purpose when it covers the stored first day.
+        let fetched_base;
+        let base = match base_meta {
+            Some(base)
+                if base
+                    .version()
+                    .records
+                    .iter()
+                    .any(|r| r.date == base_facts.first_day) =>
+            {
+                base
+            }
+            _ => {
+                fetched_base = self.repository.fixed_window(
+                    &candidate.base_daily_version_id,
+                    base_facts.first_day,
+                    base_facts.first_day,
+                )?;
+                &fetched_base
+            }
+        };
         let prior = prior_id.map(|id| self.repository.fixed(id)).transpose()?;
-        let binding = self
-            .repository
-            .task_item_binding(&command.task_id, &command.item_id)?
+        let binding = binding
             .ok_or_else(|| Error::Conflict("comparison item absent from accepted task".into()))?;
         if binding.head.key.contract_version == super::tasks::CONTRACT_VERSION {
             let comparison = prior.as_ref().map(|p|json!({"version_id":p.version().version_id,"integrity_sha256":p.raw()["integrity_sha256"]})).unwrap_or(Value::Null);
@@ -100,7 +135,7 @@ impl<R: MarketRepository> Publisher<R> {
             }
         }
         let next = &candidate.checked;
-        crate::market_storage::validate_base_facts(next, &self.repository, &base_facts)?;
+        crate::market_storage::validate_base_facts_meta(next, &self.repository, &base_facts, base)?;
         if prior.as_ref().is_some_and(|p| {
             p.version().symbol != next.version().symbol
                 || p.version().period != next.version().period
@@ -112,11 +147,19 @@ impl<R: MarketRepository> Publisher<R> {
             let prior = prior.as_ref().unwrap();
             let mut command = command;
             command.version_id = prior.version().version_id.clone();
-            let mut plan = self.plan_record(command, prior.clone())?;
+            // The prior's lineage may name a different base than the
+            // candidate's — fetch facts/meta inside `plan_record` as before.
+            let mut plan =
+                self.plan_record_prefetched(command, prior.clone(), Some(binding), None)?;
             plan.promote = None;
             plan
         } else {
-            self.prepare_derived_yearly(command, candidate)?
+            self.prepare_derived_yearly_prefetched(
+                command,
+                candidate,
+                Some(binding),
+                Some((&base_facts, base)),
+            )?
         };
         let (candidate_env, audit_payloads) = crate::sqlite_market::envelope::pack(&candidate.raw)?;
         let audit = json!({
@@ -130,7 +173,7 @@ impl<R: MarketRepository> Publisher<R> {
         });
         Ok(YearlyResultPlan {
             publication,
-            base,
+            base: base.clone(),
             prior,
             no_change,
             audit,

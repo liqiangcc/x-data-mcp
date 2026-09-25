@@ -357,6 +357,18 @@ impl<R: MarketRepository> Publisher<R> {
         command: Publication,
         record: CheckedRecord,
     ) -> Result<PublishPlan, Error> {
+        self.plan_record_prefetched(command, record, None, None)
+    }
+    /// `plan_record` with caller-prefetched task binding and base facts/meta —
+    /// identical check order and semantics, minus redundant storage reads.
+    /// The yearly path already holds all three.
+    pub(crate) fn plan_record_prefetched(
+        &self,
+        command: Publication,
+        record: CheckedRecord,
+        binding: Option<&crate::task_control::ItemBinding>,
+        base_meta: Option<(&FixedFacts, &CheckedRecord)>,
+    ) -> Result<PublishPlan, Error> {
         if command.publication_id.trim().is_empty() {
             return Err(Error::Invalid("empty publication_id".into()));
         }
@@ -411,18 +423,37 @@ impl<R: MarketRepository> Publisher<R> {
             // already proved this exact series, so the memo usually makes
             // this a row read plus a 2-bar comparison — no full base
             // materialization, no second aggregation.
-            let facts = self
-                .repository
-                .fixed_facts(&lineage.base_daily_version_id)
-                .map_err(base_error)?;
-            validate_base_facts(&plan.record, &self.repository, &facts)?;
-            plan.base_digest = Some(facts.integrity_sha256);
+            let owned_facts;
+            let facts = match base_meta {
+                Some((facts, _)) => facts,
+                None => {
+                    owned_facts = self
+                        .repository
+                        .fixed_facts(&lineage.base_daily_version_id)
+                        .map_err(base_error)?;
+                    &owned_facts
+                }
+            };
+            match base_meta {
+                Some((_, meta)) => {
+                    validate_base_facts_meta(&plan.record, &self.repository, facts, meta)?
+                }
+                None => validate_base_facts(&plan.record, &self.repository, facts)?,
+            }
+            plan.base_digest = Some(facts.integrity_sha256.clone());
         }
-        let binding = self
-            .repository
-            .task_item_binding(&plan.command.task_id, &plan.command.item_id)?
-            .ok_or(Error::Conflict("missing task item".into()))?;
-        plan.check_task_binding(&binding)?;
+        let owned_binding;
+        let binding = match binding {
+            Some(binding) => binding,
+            None => {
+                owned_binding = self
+                    .repository
+                    .task_item_binding(&plan.command.task_id, &plan.command.item_id)?
+                    .ok_or(Error::Conflict("missing task item".into()))?;
+                &owned_binding
+            }
+        };
+        plan.check_task_binding(binding)?;
         Ok(plan)
     }
 }
@@ -535,6 +566,7 @@ pub(crate) fn validate_base_facts<R: MarketRepository + ?Sized>(
     if v.period == Period::Day {
         return Ok(());
     }
+    // Same check-first ordering as the meta variant: fail before reading.
     let lineage = v
         .yearly_derivation
         .as_ref()
@@ -550,6 +582,32 @@ pub(crate) fn validate_base_facts<R: MarketRepository + ?Sized>(
     let meta = repository
         .fixed_window(&facts.version_id, facts.first_day, facts.first_day)
         .map_err(base_error)?;
+    validate_base_facts_meta(record, repository, facts, &meta)
+}
+/// `validate_base_facts` with the caller's already-loaded one-day base
+/// window — identical checks, skipping the redundant materialize.
+pub(crate) fn validate_base_facts_meta<R: MarketRepository + ?Sized>(
+    record: &CheckedRecord,
+    repository: &R,
+    facts: &FixedFacts,
+    meta: &CheckedRecord,
+) -> Result<(), Error> {
+    let v = &record.version;
+    if v.period == Period::Day {
+        return Ok(());
+    }
+    let lineage = v
+        .yearly_derivation
+        .as_ref()
+        .ok_or_else(|| Error::Base("yearly lineage missing".into()))?;
+    if facts.version_id != lineage.base_daily_version_id
+        || facts.symbol != v.symbol
+        || facts.period != Period::Day
+    {
+        return Err(Error::Base(
+            "fixed base identity/period/adjustment/source mismatch".into(),
+        ));
+    }
     let daily = &meta.version();
     if daily.version_id != lineage.base_daily_version_id
         || daily.symbol != v.symbol
