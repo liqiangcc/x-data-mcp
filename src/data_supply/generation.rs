@@ -65,14 +65,18 @@ impl GenerationSource {
         &self.store
     }
     /// The generation id currently usable as a source: an active pointer
-    /// whose generation still passes byte verification plus a
+    /// whose generation passed byte verification plus a
     /// VERIFIED_COMPATIBLE decision bound to it. Anything less yields
     /// `None` — recorded into frozen inputs as `null` and refused at
-    /// execution, never silently substituted.
+    /// execution, never silently substituted. The pointer itself is
+    /// re-read on every call, so activating a different generation still
+    /// pays full verification; the byte-level verdict shares the
+    /// process-scoped session cache with `open_bound` — an in-place
+    /// artifact rewrite is detected at the next process start, exactly
+    /// as for bound opens.
     pub fn active_verified_id(&self) -> Option<String> {
         let pointer = self.store.active().ok()??;
-        self.store
-            .usable(&pointer.generation_id, chrono::Utc::now())
+        self.session(&pointer.generation_id)
             .ok()
             .map(|_| pointer.generation_id)
     }

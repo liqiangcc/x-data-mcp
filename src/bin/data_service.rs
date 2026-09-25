@@ -101,6 +101,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     };
+    // One generation source for the whole service: its verified-session
+    // cache is process-scoped, so every connection's accept path and the
+    // worker share the same byte-verification verdicts.
+    let generation = x_data_mcp::data_supply::generation::GenerationSource::from_env();
     let factory = {
         let gate = gate.clone();
         move || {
@@ -109,6 +113,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 backend.clone(),
                 run_id.clone(),
                 Access::local(),
+                generation.clone(),
             )
             .map(|api| api.with_worker_gate(gate.clone()))
             .map_err(std::io::Error::other)

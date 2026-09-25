@@ -42,20 +42,18 @@ impl DataApi {
     /// Same wiring as `new` but takes a pre-opened market backend — the
     /// long-lived service holds the database lease, so the compact backend
     /// must be assembled once with `MarketBackend::open_shared` and shared
-    /// across connections instead of re-acquiring the flock per call.
+    /// across connections instead of re-acquiring the flock per call. The
+    /// generation source is likewise shared: cloning it into every
+    /// connection keeps the verified-session cache process-scoped instead
+    /// of per-connection.
     pub fn new_with_backend(
         tasks: SqliteTasks,
         backend: crate::sqlite_market::backend::MarketBackend,
         run_id: String,
         access: Access,
+        generation: Option<super::generation::GenerationSource>,
     ) -> Result<Self, crate::task_control::Error> {
-        Self::new_in(
-            tasks,
-            Some(backend),
-            run_id,
-            access,
-            super::generation::GenerationSource::from_env(),
-        )
+        Self::new_in(tasks, Some(backend), run_id, access, generation)
     }
     /// Same wiring as `new` with an explicit generation source (tests and
     /// deployment assembly): source-reading contracts freeze

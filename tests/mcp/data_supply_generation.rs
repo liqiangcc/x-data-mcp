@@ -598,4 +598,18 @@ fn bound_session_cache_verifies_once_and_keeps_per_open_pins() {
             .open_bound(&gen_id, "task:fresh")
             .is_err()
     );
+
+    // The accept path shares the session cache for the byte-level verdict:
+    // the same process still resolves the cached generation while a fresh
+    // source re-verifies and refuses — the active *pointer* itself is
+    // re-read on every call, so activation switching is unaffected.
+    assert_eq!(
+        generation.active_verified_id().as_deref(),
+        Some(gen_id.as_str())
+    );
+    assert!(
+        GenerationSource::new(root.path())
+            .active_verified_id()
+            .is_none()
+    );
 }
