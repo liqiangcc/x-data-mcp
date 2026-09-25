@@ -562,3 +562,40 @@ fn yearly_derivation_without_binding_refuses() {
             .is_none()
     );
 }
+
+/// The process-scoped verified-session cache: the first open byte-verifies
+/// and inspects the generation; later opens on the same GenerationSource
+/// reuse the verdict — but each open still takes a fresh task pin, and
+/// verification failures are never cached.
+#[test]
+fn bound_session_cache_verifies_once_and_keeps_per_open_pins() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), 600006);
+    let root = tempfile::tempdir().unwrap();
+    let service = AcquireService::open(root.path(), Source::Mirror(mirror.path().into())).unwrap();
+    let gen_id = activate_generation(&service, "req-cache", None);
+    let generation = GenerationSource::new(root.path());
+
+    // Two opens on the same generation: one verification, two live pins.
+    let a = generation.open_bound(&gen_id, "task:cache-a").unwrap();
+    let b = generation.open_bound(&gen_id, "task:cache-b").unwrap();
+    assert_eq!(
+        generation.store().pins(&gen_id).unwrap(),
+        vec!["task:cache-a".to_string(), "task:cache-b".to_string()]
+    );
+    drop(a);
+    drop(b);
+    assert!(generation.store().pins(&gen_id).unwrap().is_empty());
+
+    // Documented relaxation: artifact bytes rewritten after the process's
+    // first verification still open on the cached verdict — while a fresh
+    // GenerationSource (the next process) re-verifies and fails closed.
+    let dir = root.path().join("generations").join(&gen_id);
+    std::fs::write(dir.join("hsjday.zip"), b"tampered").unwrap();
+    generation.open_bound(&gen_id, "task:cached").unwrap();
+    assert!(
+        GenerationSource::new(root.path())
+            .open_bound(&gen_id, "task:fresh")
+            .is_err()
+    );
+}

@@ -113,6 +113,31 @@ impl TdxMarketSource {
         })
     }
 
+    /// Build a source view from an already byte-verified installed
+    /// generation. `verify_installed` ran the same `snapshot::inspect`
+    /// `inspect()` would repeat on the identical manifest bytes — the same
+    /// role/path/digest validation and the same (always false)
+    /// `production_ready` verdict — so re-hashing the artifacts here would
+    /// be pure duplicate work with no additional gate.
+    pub(crate) fn from_installed(
+        installed: &crate::generation::Installed,
+    ) -> Result<Self, SourceError> {
+        let take = |role| {
+            installed
+                .manifest
+                .files
+                .iter()
+                .find(|f| f.role == role)
+                .cloned()
+                .ok_or_else(|| SourceError::NotVerified("inspected role missing".into()))
+        };
+        Ok(Self {
+            root: installed.dir.clone(),
+            manifest_sha256: installed.manifest_sha256.clone(),
+            day: take(FileRole::Day)?,
+            gbbq: take(FileRole::Gbbq)?,
+        })
+    }
     /// Service install hook: only when `X_DATA_MCP_OFFICIAL_MANIFEST`
     /// (manifest file) and `X_DATA_MCP_OFFICIAL_DIR` (snapshot root) are both
     /// configured AND the manifest passes `inspect()` does a source exist.
