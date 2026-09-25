@@ -76,7 +76,12 @@ fn approve(db: &SqliteMarket, command: Publication, changed: bool) -> YearlyResu
     let publisher = Publisher {
         repository: db.clone(),
     };
-    let candidate = publisher.derive_yearly(&request, &evidence).unwrap();
+    let base = db.fixed(&request.base_daily_version_id).unwrap();
+    let annual =
+        crate::yearly::aggregate(base.version(), Some(&request.years), evidence.as_of).unwrap();
+    let candidate = publisher
+        .derive_yearly(&request, &evidence, &base, &annual)
+        .unwrap();
     let prior = match &command.intent {
         PublishIntent::CurrentHead {
             expected_yearly_head,

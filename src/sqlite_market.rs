@@ -778,6 +778,58 @@ impl MarketRepository for SqliteMarket {
                 .collect()
         })
     }
+    fn fixed_facts(&self, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+        // Legacy rows are monolithic JSON; the header fields come from the
+        // stored record without a dedicated typed path.
+        let record = SqliteMarket::fixed(self, id)?;
+        let first_day = record
+            .version()
+            .records
+            .first()
+            .ok_or_else(|| Error::Integrity("fixed record has no bars".into()))?
+            .date;
+        let last_day = record
+            .version()
+            .records
+            .last()
+            .ok_or_else(|| Error::Integrity("fixed record has no bars".into()))?
+            .date;
+        Ok(crate::market_storage::FixedFacts {
+            version_id: record.version().version_id.clone(),
+            symbol: record.version().symbol.clone(),
+            period: record.version().period,
+            integrity_sha256: record.raw()["integrity_sha256"]
+                .as_str()
+                .ok_or_else(|| Error::Integrity("fixed record lacks integrity digest".into()))?
+                .into(),
+            first_day,
+            last_day,
+        })
+    }
+    fn fixed_window(
+        &self,
+        id: &str,
+        _first_day: chrono::NaiveDate,
+        _last_day: chrono::NaiveDate,
+    ) -> Result<CheckedRecord, Error> {
+        // The contract permits returning a superset of the window.
+        SqliteMarket::fixed(self, id)
+    }
+    fn fixed_window_years(
+        &self,
+        id: &str,
+        first_day: chrono::NaiveDate,
+        last_day: chrono::NaiveDate,
+    ) -> Result<std::collections::BTreeSet<i32>, Error> {
+        let record = SqliteMarket::fixed(self, id)?;
+        Ok(record
+            .version()
+            .records
+            .iter()
+            .filter(|bar| bar.date >= first_day && bar.date <= last_day)
+            .map(|bar| bar.date.year())
+            .collect())
+    }
     fn task(&self, id: &str) -> Result<crate::task_control::TaskSnapshot, Error> {
         self.read(|c| {
             crate::sqlite_tasks::read_bound_task(c, id)?

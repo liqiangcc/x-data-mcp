@@ -12,7 +12,7 @@ use crate::{
     market_data::{CoverageEvidence, CoverageStatus, Period, YearlyDerivation},
     market_storage::{
         Error, MarketRepository, Publication, PublishIntent, PublishPlan, Publisher, base_error,
-        compat,
+        compat::{self, CheckedRecord},
     },
     publish::{EffectiveVersion, validate_and_deduplicate},
     yearly,
@@ -42,6 +42,7 @@ pub struct DerivationEvidence {
 #[derive(Debug, Clone)]
 pub struct YearlyCandidate {
     raw: Value,
+    checked: CheckedRecord,
     base_daily_version_id: String,
     base_integrity_sha256: String,
 }
@@ -53,10 +54,15 @@ impl YearlyCandidate {
 
 impl<R: MarketRepository> Publisher<R> {
     /// Read only. Does not stage data, change heads, acquire scopes or accept a task.
+    /// `base` is the caller's windowed read of the fixed daily version and
+    /// `annual` the deterministic re-aggregation already performed for it —
+    /// both are rechecked against the request and evidence here.
     pub fn derive_yearly(
         &self,
         request: &Derivation,
         evidence: &DerivationEvidence,
+        base: &CheckedRecord,
+        annual: &crate::yearly::AnnualSeries,
     ) -> Result<YearlyCandidate, Error> {
         if request.symbol.trim().is_empty()
             || request.version_id.trim().is_empty()
@@ -66,11 +72,10 @@ impl<R: MarketRepository> Publisher<R> {
         {
             return Err(Error::Invalid("explicit yearly identity/selection".into()));
         }
-        let base = self
-            .repository
-            .fixed(&request.base_daily_version_id)
-            .map_err(base_error)?;
         let daily = base.version();
+        if daily.version_id != request.base_daily_version_id {
+            return Err(Error::Base("fixed daily identity binding".into()));
+        }
         if daily.symbol != request.symbol || daily.period != Period::Day {
             return Err(Error::Base("fixed daily identity/period".into()));
         }
@@ -88,21 +93,45 @@ impl<R: MarketRepository> Publisher<R> {
                 "selected range coverage not verified for fixed daily/years/as_of".into(),
             ));
         }
-        let annual = yearly::aggregate(daily, Some(&request.years), as_of)
-            .map_err(|e| Error::Base(e.to_string()))?;
+        // `annual` was aggregated once by the caller over the same windowed
+        // base — verify it really is that series before trusting it.
+        if annual.base_daily_version_id != daily.version_id
+            || annual.as_of != as_of
+            || annual.records.len() != request.years.len()
+            || !annual
+                .records
+                .iter()
+                .map(|r| r.bar.date.year())
+                .eq(request.years.iter().copied())
+        {
+            return Err(Error::Base(
+                "aggregated annual series does not match the request".into(),
+            ));
+        }
         let lineage = YearlyDerivation {
             base_daily_version_id: daily.version_id.clone(),
             algorithm_version: yearly::ALGORITHM_VERSION.into(),
             first_trading_date: annual.records.first().unwrap().lineage.first_trading_date,
             last_trading_date: annual.records.last().unwrap().lineage.last_trading_date,
         };
-        let mut batch = base.batch.clone();
-        batch.period = Period::Year;
-        batch.bars = annual.records.iter().map(|r| r.bar.clone()).collect();
-        batch.coverage = evidence.coverage.clone();
-        batch.provenance.acquired_at = request.derived_at;
-        batch.provenance.adapter_version = "local-yearly-publication-v1".into();
-        batch.provenance.yearly_derivation = Some(lineage.clone());
+        // Rebuild the yearly batch from metadata instead of cloning the daily
+        // window's bars and immediately replacing them. This keeps provenance
+        // and evidence identical while avoiding a second allocation of every
+        // selected daily bar.
+        let mut provenance = base.batch.provenance.clone();
+        provenance.acquired_at = request.derived_at;
+        provenance.adapter_version = "local-yearly-publication-v1".into();
+        provenance.yearly_derivation = Some(lineage.clone());
+        let batch = crate::market_data::MarketDataBatch {
+            symbol: base.batch.symbol.clone(),
+            period: Period::Year,
+            adjustment: base.batch.adjustment,
+            bars: annual.records.iter().map(|r| r.bar.clone()).collect(),
+            provenance,
+            coverage: evidence.coverage.clone(),
+            unit_currency: base.batch.unit_currency.clone(),
+            adjustment_evidence: base.batch.adjustment_evidence.clone(),
+        };
         let (records, validation) =
             validate_and_deduplicate(&batch).map_err(|e| Error::Base(e.to_string()))?;
         let version = EffectiveVersion {
@@ -128,9 +157,10 @@ impl<R: MarketRepository> Publisher<R> {
             "base_acquired_at": base.batch.provenance.acquired_at,
         });
         raw["integrity_sha256"] = json!(compat::legacy_digest(&raw)?);
-        compat::check(&raw)?;
+        let checked = compat::check(&raw)?;
         Ok(YearlyCandidate {
             raw,
+            checked,
             base_daily_version_id: daily.version_id.clone(),
             base_integrity_sha256: evidence.base_integrity_sha256.clone(),
         })
@@ -162,10 +192,9 @@ impl<R: MarketRepository> Publisher<R> {
         }
         let base = self
             .repository
-            .fixed(&candidate.base_daily_version_id)
+            .fixed_facts(&candidate.base_daily_version_id)
             .map_err(base_error)?;
-        if base.raw()["integrity_sha256"].as_str() != Some(candidate.base_integrity_sha256.as_str())
-        {
+        if base.integrity_sha256 != candidate.base_integrity_sha256 {
             return Err(Error::Base("fixed daily changed after derivation".into()));
         }
         if let PublishIntent::CurrentHead {
@@ -174,7 +203,7 @@ impl<R: MarketRepository> Publisher<R> {
         } = &command.intent
         {
             let old = self.repository.fixed(id).map_err(base_error)?;
-            let next = compat::check(&candidate.raw)?;
+            let next = &candidate.checked;
             if old.version().symbol != next.version().symbol || old.version().period != Period::Year
             {
                 return Err(Error::Base("expected yearly identity/period".into()));
@@ -198,6 +227,13 @@ impl<R: MarketRepository> Publisher<R> {
         }
         match self.repository.candidate(&command.version_id) {
             Ok(existing) if existing.raw() == candidate.raw() => {}
+            // Compact backends synthesize the staged raw from typed facts,
+            // adding `compact_source` and dropping the derived
+            // `local_yearly_derivation_v1` projection — compare the typed
+            // version content instead of the envelope bytes.
+            Ok(existing)
+                if existing.raw().get("compact_source").is_some()
+                    && existing.version() == candidate.checked.version() => {}
             Ok(_) => {
                 return Err(Error::Conflict(
                     "yearly candidate id has different content".into(),
@@ -207,7 +243,14 @@ impl<R: MarketRepository> Publisher<R> {
             Err(error) => return Err(error),
         }
         let plan = self.prepare(command)?;
-        if plan.record.raw() != candidate.raw()
+        // `derive_yearly` already authenticated and parsed this immutable
+        // candidate; reuse the checked record instead of repeating the full
+        // JSON digest, deserialization and bar validation pass.
+        let next = &candidate.checked;
+        let same_record = plan.record.raw() == candidate.raw()
+            || (plan.record.raw().get("compact_source").is_some()
+                && plan.record.version == next.version);
+        if !same_record
             || plan.base_digest.as_deref() != Some(candidate.base_integrity_sha256.as_str())
         {
             return Err(Error::Base(

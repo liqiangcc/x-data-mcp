@@ -114,22 +114,18 @@ impl<R: MarketRepository> Contract for RangeContract<R> {
                 json!(future)
             )));
         }
-        let ids = input
-            .items
-            .iter()
-            .map(|i| i.base_version_id.clone())
-            .collect::<Vec<_>>();
-        // One repository snapshot verifies every explicit base before admission.
-        let bases = self.repository.fixed_many(&ids).map_err(repository_error)?;
-        if bases.len() != input.items.len() {
-            return Err(invalid("incomplete fixed base lookup"));
-        }
         let mut items = vec![];
         let mut scopes = BTreeSet::new();
-        for (item, base) in input.items.into_iter().zip(bases) {
-            if base.version().symbol != item.symbol
-                || base.version().period != Period::Day
-                || base.version().version_id != item.base_version_id
+        for item in input.items.into_iter() {
+            // O(1) typed facts per base: identity + stored integrity digest —
+            // admission does not materialize bars.
+            let base = self
+                .repository
+                .fixed_facts(&item.base_version_id)
+                .map_err(repository_error)?;
+            if base.symbol != item.symbol
+                || base.period != Period::Day
+                || base.version_id != item.base_version_id
             {
                 return Err(invalid("fixed daily base identity mismatch"));
             }
@@ -142,7 +138,7 @@ impl<R: MarketRepository> Contract for RangeContract<R> {
                 progress_unit: "security_period".into(),
                 frozen_inputs: frozen(
                     &item.base_version_id,
-                    base.raw()["integrity_sha256"].as_str().unwrap(),
+                    &base.integrity_sha256,
                     &DateRange {
                         start: item.start_date,
                         end: item.end_date,

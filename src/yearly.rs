@@ -1,10 +1,13 @@
 //! Issue #60 / Issue #3: exact local aggregation of one published daily version.
 //! No I/O, clock, normalization or source approval occurs in this module.
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
+use std::rc::Rc;
 
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::{
     market_data::{Bar, Period, UnitCurrencyEvidence, YearlyDerivation},
@@ -67,9 +70,13 @@ pub fn aggregate(
     if daily.records.is_empty() || years.is_some_and(BTreeSet::is_empty) {
         return Err(AggregationError::InvalidInput("empty input or selection"));
     }
-    let mut groups: BTreeMap<i32, Vec<&Bar>> = BTreeMap::new();
+    // Daily records are strictly ordered by date, so each natural year is a
+    // contiguous range. Keep only index bounds instead of allocating a Vec of
+    // references for every bar; the aggregation pass below retains the exact
+    // existing Decimal summation semantics.
+    let mut groups: Vec<(i32, usize, usize)> = Vec::with_capacity(years.map_or(4, BTreeSet::len));
     let mut previous = None;
-    for bar in &daily.records {
+    for (index, bar) in daily.records.iter().enumerate() {
         if bar.date.year() <= 0
             || bar.date > as_of
             || previous.is_some_and(|date| date >= bar.date)
@@ -84,22 +91,30 @@ pub fn aggregate(
             return Err(AggregationError::InvalidInput("invalid bar or date order"));
         }
         previous = Some(bar.date);
-        groups.entry(bar.date.year()).or_default().push(bar);
+        let year = bar.date.year();
+        if let Some((last_year, _, end)) = groups.last_mut()
+            && *last_year == year
+        {
+            *end = index + 1;
+        } else {
+            groups.push((year, index, index + 1));
+        }
     }
     if let Some(years) = years {
         for year in years {
-            if !groups.contains_key(year) {
+            if groups.binary_search_by_key(year, |group| group.0).is_err() {
                 return Err(AggregationError::MissingYear(*year));
             }
         }
     }
-    let mut records = Vec::new();
-    for (year, bars) in groups {
+    let mut records = Vec::with_capacity(years.map_or(groups.len(), BTreeSet::len));
+    for (year, start, end) in groups {
         if years.is_some_and(|years| !years.contains(&year)) {
             continue;
         }
-        let first = bars[0];
-        let last = bars[bars.len() - 1];
+        let bars = &daily.records[start..end];
+        let first = &bars[0];
+        let last = &bars[bars.len() - 1];
         let volume = sum_known(
             bars.iter().map(|bar| bar.volume),
             daily.unit_currency.volume_unit.is_confirmed(),
@@ -139,8 +154,55 @@ pub fn aggregate(
     })
 }
 
+thread_local! {
+    /// Memoized aggregates. The key binds the published base version's
+    /// stored `integrity_digest` — which itself covers bar content
+    /// (projection), evidence, source binding, and identity — together
+    /// with the selected years and `as_of`, so identical keys always
+    /// yield identical series. Lets commit-time lineage verification
+    /// reuse the derivation's computation instead of re-decoding the
+    /// base window.
+    static AGGREGATE_MEMO: RefCell<HashMap<[u8; 32], Rc<AnnualSeries>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Memo key for `aggregate_memoized`. `base_digest_hex` is the stored
+/// `integrity_sha256`/`integrity_digest` of the authenticated base
+/// version the caller verified the `EffectiveVersion` against.
+pub fn aggregate_key(base_digest_hex: &str, years: &BTreeSet<i32>, as_of: NaiveDate) -> [u8; 32] {
+    let mut payload = Vec::with_capacity(128);
+    payload.extend_from_slice(b"x-data-aggregate-v1\0");
+    payload.extend_from_slice(base_digest_hex.as_bytes());
+    payload.push(0);
+    payload.extend_from_slice(&as_of.num_days_from_ce().to_be_bytes());
+    for year in years {
+        payload.extend_from_slice(&year.to_be_bytes());
+    }
+    Sha256::digest(&payload).into()
+}
+
+/// Runs `compute` (a `aggregate` call and any reads it needs) only when
+/// the memo lacks `key`; otherwise returns the prior result.
+pub fn aggregate_memoized<E>(
+    key: [u8; 32],
+    compute: impl FnOnce() -> Result<AnnualSeries, E>,
+) -> Result<Rc<AnnualSeries>, E> {
+    if let Some(hit) = AGGREGATE_MEMO.with(|memo| memo.borrow().get(&key).cloned()) {
+        return Ok(hit);
+    }
+    let series = Rc::new(compute()?);
+    AGGREGATE_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.len() >= 16_384 {
+            memo.clear();
+        }
+        memo.insert(key, series.clone());
+    });
+    Ok(series)
+}
+
 fn sum_known(
-    values: impl Iterator<Item = Option<Decimal>>,
+    values: impl Iterator<Item = Option<Decimal>> + Clone,
     unit_confirmed: bool,
 ) -> Result<Option<Decimal>, AggregationError> {
     if !unit_confirmed {
@@ -148,11 +210,13 @@ fn sum_known(
     }
     // Missing data makes the whole year's field unknown, even if a partial sum
     // would overflow. Do not allow iteration order to change that classification.
-    let Some(values) = values.collect::<Option<Vec<_>>>() else {
+    // The callers iterate immutable slices. Cloning their iterator is O(1),
+    // and a presence pass avoids materializing an annual Decimal buffer.
+    if values.clone().any(|value| value.is_none()) {
         return Ok(None);
-    };
+    }
     let mut sum = Decimal::ZERO;
-    for value in values {
+    for value in values.flatten() {
         let next = sum.checked_add(value).ok_or(AggregationError::InexactSum)?;
         // checked_add can reduce scale to fit the 96-bit mantissa; detect loss.
         if next.checked_sub(sum) != Some(value) || next.checked_sub(value) != Some(sum) {

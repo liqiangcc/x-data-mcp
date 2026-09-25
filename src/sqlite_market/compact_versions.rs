@@ -1135,15 +1135,42 @@ fn verify_lineage(
     compact_market::epoch_date(lineage.first_trade_day).map_err(integrity)?;
     compact_market::epoch_date(lineage.last_trade_day).map_err(integrity)?;
     let as_of = compact_market::epoch_date(lineage.as_of_day).map_err(integrity)?;
-    let base_version = fixed_by_key(c, lineage.base_daily_version_key)?.version;
+    if stored_lineage(c, base.key)?.is_some() {
+        return Err(integrity("yearly base carries a lineage row"));
+    }
     let records = bars
         .iter()
         .map(|bar| bar.to_bar(period))
         .collect::<Result<Vec<_>, _>>()
         .map_err(integrity)?;
     let years: BTreeSet<i32> = records.iter().map(|bar| bar.date.year()).collect();
-    let annual = crate::yearly::aggregate(&base_version, Some(&years), as_of)
-        .map_err(|e| integrity(format!("yearly aggregation failed: {e}")))?;
+    // The windowed base re-aggregation is a pure function of the published
+    // base content — bound by its stored integrity digest — plus years and
+    // as_of. The derivation already computed it, so staged/validated/
+    // published re-verification of the same inputs reuses the memoized
+    // series instead of re-decoding the window; the projection equality
+    // below still runs on every call. On a miss, lineage bounds enclose
+    // every base bar of the selected years so only overlapping segments
+    // decode — a truncated or shifted window changes the aggregation
+    // output and fails the equality check: fail-closed.
+    let base_digest_hex = compact_market::digest_hex(
+        &base
+            .integrity_digest
+            .ok_or_else(|| integrity("published base lacks integrity digest"))?,
+    );
+    let key = crate::yearly::aggregate_key(&base_digest_hex, &years, as_of);
+    let annual = crate::yearly::aggregate_memoized(key, || {
+        let base_bars = leaf_bars_in_range(
+            c,
+            lineage.base_daily_version_key,
+            lineage.first_trade_day,
+            lineage.last_trade_day,
+        )?;
+        let base_evidence = verify_version_evidence(c, &base.evidence_digest)?;
+        let base_version = to_effective_version(c, &base, &base_bars, base_evidence)?;
+        crate::yearly::aggregate(&base_version, Some(&years), as_of)
+            .map_err(|e| integrity(format!("yearly aggregation failed: {e}")))
+    })?;
     if annual
         .records
         .iter()
@@ -1193,6 +1220,20 @@ fn stored_lineage(c: &Connection, key: i64) -> Result<Option<YearlyLineageDraft>
     )
     .optional()
     .map_err(storage)
+}
+
+/// The published daily base version_id of a yearly version's stored
+/// lineage, or None when the version has no lineage row.
+pub(crate) fn daily_base_version_id(
+    c: &Connection,
+    version_key: i64,
+) -> Result<Option<String>, Error> {
+    let Some(lineage) = stored_lineage(c, version_key)? else {
+        return Ok(None);
+    };
+    let base = read_version_row(c, lineage.base_daily_version_key)?
+        .ok_or_else(|| integrity("yearly lineage base version missing"))?;
+    Ok(Some(base.version_id))
 }
 
 fn verify_stored_lineage(
@@ -1460,6 +1501,90 @@ pub(crate) fn materialize(c: &Connection, version_id: &str) -> Result<Materializ
         projection_digest: row.projection_digest,
         integrity_digest: row.integrity_digest,
     })
+}
+
+/// Windowed published-version materialization (#262 yearly read path):
+/// identical header/binding/lineage reads as `materialize`, but the leaf
+/// bars come from `leaf_bars_in_range`, decoding only segments that overlap
+/// `[start_day, end_day]`. Chain linkage and clip digests are still
+/// enforced; the row's stored `integrity_digest` remains the authoritative
+/// content binding — callers must not re-digest the partial projection.
+/// Non-published versions are `NotFound`, matching `fixed()` semantics.
+pub(crate) fn materialize_windowed(
+    c: &Connection,
+    version_id: &str,
+    start_day: i64,
+    end_day: i64,
+) -> Result<MaterializedVersion, Error> {
+    let row = read_version_row_by_id(c, version_id)?.ok_or(Error::NotFound)?;
+    let state = match row.state {
+        1 => CompactVersionState::Staged,
+        2 => CompactVersionState::Validated,
+        3 => CompactVersionState::Published,
+        _ => return Err(integrity("malformed version state")),
+    };
+    if state != CompactVersionState::Published {
+        return Err(Error::NotFound);
+    }
+    let evidence = verify_version_evidence(c, &row.evidence_digest)?;
+    let bars = leaf_bars_in_range(c, row.key, start_day, end_day)?;
+    let version = to_effective_version(c, &row, &bars, evidence.clone())?;
+    let source_binding = read_source_binding(c, &row.source_binding_digest)?;
+    let (kind, canonical) = read_evidence(c, &source_binding.evidence_digest)?;
+    if kind != EvidenceKind::Generation {
+        return Err(integrity("source binding evidence is not generation"));
+    }
+    let generation_evidence: Value = serde_json::from_str(&canonical).map_err(integrity)?;
+    let parent_version_id = match row.parent_version_key {
+        Some(parent) => Some(
+            read_version_row(c, parent)?
+                .ok_or_else(|| integrity("parent version missing"))?
+                .version_id,
+        ),
+        None => None,
+    };
+    Ok(MaterializedVersion {
+        key: row.key,
+        state,
+        version,
+        coverage_status: match row.coverage_status {
+            1 => CoverageStatus::Complete,
+            2 => CoverageStatus::Incomplete,
+            3 => CoverageStatus::Unknown,
+            _ => return Err(integrity("unknown coverage_status")),
+        },
+        coverage_reason: evidence.coverage_reason,
+        source_binding,
+        generation_evidence,
+        parent_version_id,
+        projection_digest: row.projection_digest,
+        integrity_digest: row.integrity_digest,
+    })
+}
+
+/// Distinct calendar years with stored bars in `[start_day, end_day]` for
+/// a published version — decodes only overlapping segments (clip digests
+/// enforced) without materializing `Bar`s. Same published-only `NotFound`
+/// semantics as `materialize_windowed`.
+pub(crate) fn window_years(
+    c: &Connection,
+    version_id: &str,
+    start_day: i64,
+    end_day: i64,
+) -> Result<BTreeSet<i32>, Error> {
+    let row = read_version_row_by_id(c, version_id)?.ok_or(Error::NotFound)?;
+    if row.state != 3 {
+        return Err(Error::NotFound);
+    }
+    verify_version_evidence(c, &row.evidence_digest)?;
+    leaf_bars_in_range(c, row.key, start_day, end_day)?
+        .iter()
+        .map(|bar| {
+            compact_market::epoch_date(bar.trade_day)
+                .map(|date| date.year())
+                .map_err(integrity)
+        })
+        .collect()
 }
 
 pub(crate) fn check_draft_static(c: &Connection, draft: &VersionDraft) -> Result<(), Error> {

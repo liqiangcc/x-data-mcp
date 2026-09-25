@@ -24,7 +24,7 @@ use super::default_selection::{DefaultDailySelection, SelectionError, resolve_de
 use crate::{
     market_data::Period,
     market_storage::Scope,
-    sqlite_market::{SqliteMarket, gaps::read_open_gaps, head, read_record},
+    sqlite_market::{SqliteMarket, gaps::read_open_gaps, head, is_compact_schema, read_record},
     task_control::{self as task, Contract, FrozenWork, ItemSpec, legacy::scope_id},
 };
 use chrono::NaiveDate;
@@ -126,26 +126,60 @@ pub fn resolve_default_work_on(
         let head_id = head(c, &scope)
             .map_err(|e| invalid(format!("daily head unreadable for {symbol}: {e}")))?
             .ok_or_else(|| invalid(format!("{symbol} has no published qfq daily head")))?;
-        let base = read_record(c, &head_id, true, false)
-            .map_err(|e| invalid(format!("daily head unverifiable for {symbol}: {e}")))?;
-        if base.version().symbol != *symbol
-            || base.version().period != Period::Day
-            || base.version().version_id != head_id
+        // Compact schema: identity, stored integrity digest and day bounds are
+        // version-row facts — admission must not materialize the full history.
+        let (base_integrity_sha256, first_day, last_day) = if is_compact_schema(c)
+            .map_err(|e| invalid(format!("schema probe failed for {symbol}: {e}")))?
         {
-            return Err(invalid(format!(
-                "daily head identity mismatch for {symbol}"
-            )));
-        }
-        let base_integrity_sha256 = base.raw()["integrity_sha256"]
-            .as_str()
-            .ok_or_else(|| invalid(format!("base digest missing for {symbol}")))?
-            .to_owned();
-        let refresh = refresh_range(
-            symbol,
-            base.version().records.first().map(|b| b.date),
-            base.version().records.last().map(|b| b.date),
-            today,
-        )?;
+            let key = crate::sqlite_market::compact_repo::version_key(c, &head_id)
+                .map_err(|e| invalid(format!("daily head unreadable for {symbol}: {e}")))?;
+            let facts = crate::sqlite_market::compact_versions::result_facts(c, key)
+                .map_err(|e| invalid(format!("daily head unverifiable for {symbol}: {e}")))?;
+            let digest = facts
+                .integrity_digest
+                .ok_or_else(|| invalid(format!("base digest missing for {symbol}")))?;
+            if facts.state != crate::sqlite_market::compact_versions::CompactVersionState::Published
+                || facts.entity != *symbol
+                || facts.period != Period::Day
+                || facts.version_id != head_id
+            {
+                return Err(invalid(format!(
+                    "daily head identity mismatch for {symbol}"
+                )));
+            }
+            (
+                crate::sqlite_market::compact_repo::hex_bytes(&digest),
+                Some(
+                    crate::compact_market::epoch_date(facts.first_day)
+                        .map_err(|e| invalid(format!("base first_day invalid: {e}")))?,
+                ),
+                Some(
+                    crate::compact_market::epoch_date(facts.last_day)
+                        .map_err(|e| invalid(format!("base last_day invalid: {e}")))?,
+                ),
+            )
+        } else {
+            let base = read_record(c, &head_id, true, false)
+                .map_err(|e| invalid(format!("daily head unverifiable for {symbol}: {e}")))?;
+            if base.version().symbol != *symbol
+                || base.version().period != Period::Day
+                || base.version().version_id != head_id
+            {
+                return Err(invalid(format!(
+                    "daily head identity mismatch for {symbol}"
+                )));
+            }
+            let digest = base.raw()["integrity_sha256"]
+                .as_str()
+                .ok_or_else(|| invalid(format!("base digest missing for {symbol}")))?
+                .to_owned();
+            (
+                digest,
+                base.version().records.first().map(|b| b.date),
+                base.version().records.last().map(|b| b.date),
+            )
+        };
+        let refresh = refresh_range(symbol, first_day, last_day, today)?;
         let mut proven_gap_ranges = vec![];
         for g in read_open_gaps(c, symbol, Period::Day)
             .map_err(|e| invalid(format!("proven gaps unreadable for {symbol}: {e}")))?

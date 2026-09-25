@@ -1,0 +1,88 @@
+{
+  "evidence": "issue-262-full-market-collection",
+  "date": "2026-09-23",
+  "release": {
+    "tag": "v0.2.0-preview.24",
+    "commit": "9bf103d42b5f36d68044dce2d41dce620b8bf8b1",
+    "dist_ref": "refs/dist/v0.2.0-preview.24",
+    "tarball_sha256": "c7faf0f01533913c062aba315aaad1badabfac98a1c1784146429328b751d8ca",
+    "smoke_binary_sha256": "f10e0471d96e083b4798eeeddecf8fdd190d8df56567bbce67e63ab32bd6139a",
+    "service_binary_sha256": {
+      "data_service": "1b87eb58fcb3003063bcc6447b542bb04889a862e764adc09aa1fd83751fd42c",
+      "acquire_service": "812223dad541cdb3e898c65e9d71bb34d3a8f00da1e9da7be18ffcbc8277d1a2",
+      "local_matches_ecs": true
+    }
+  },
+  "environment": {
+    "host": "ecs-node",
+    "arch": "x86_64",
+    "vcpu": 2,
+    "ram_gib": 2,
+    "disk_gb": 40,
+    "topology": "two-mcp: data_service(preview.sqlite) + acquire_service(generations)",
+    "generation_id": "804c5a63b5283a4cc02ce582166dde25cbb76057e54a54a2910bc4bba8b07d0b",
+    "official_snapshot": "2026-09-21",
+    "schema_version": 19,
+    "fresh_db": true,
+    "contention_note": "unrelated headless-Chrome session saturated both vCPUs (load 18-24) for ~45min of the daily window; after the Chrome session was stopped, daily chunks dropped from ~200s to ~5.5s. Daily wall-clock is environment-limited, not code-limited. Yearly phase ran uncontended."
+  },
+  "method": {
+    "interface": "MCP-only via mcp_connect over unix socket; no shell/SQLite in data path",
+    "task_shape": "production-shaped 100-item tasks",
+    "daily_path": "start_collection explicit selection, 53 sequential tasks",
+    "yearly_path": "update_data market.yearly items (explicit-yearly-task-v1), 53 sequential tasks",
+    "yearly_years": "per-item years = [2025,2026] intersected with entity daily availability range"
+  },
+  "results": {
+    "securities_catalog": { "records": 5226, "status": "published" },
+    "market_daily": {
+      "entities_published": 5221,
+      "tasks": 53,
+      "window_seconds": 4550.1,
+      "window_utc": ["2026-09-23T00:51:46Z", "2026-09-23T02:07:36Z"],
+      "window_note": "inflated ~45min by external Chrome CPU contention; uncontended chunks 5-40s",
+      "failed_entities": [
+        {"symbol": "sz.001246", "error": "member absent in official hsjday pack"},
+        {"symbol": "sz.301569", "error": "member absent in official hsjday pack"},
+        {"symbol": "sz.301660", "error": "member absent in official hsjday pack"},
+        {"symbol": "sz.301686", "error": "member absent in official hsjday pack"},
+        {"symbol": "sz.301716", "error": "member absent in official hsjday pack"}
+      ]
+    },
+    "market_yearly": {
+      "entities_published": 5221,
+      "tasks": 53,
+      "task_internal_sum_seconds": 867.9,
+      "end_to_end_seconds": 1020,
+      "end_to_end_note": "includes ~2.5min get_data_availability pre-pass (52 batch calls) plus sequential accept/poll driver overhead",
+      "accept_seconds": {"p50": 1.01, "p90": 1.77, "max": 5.17},
+      "exec_seconds_per_100_items": {"p50": 15.79, "p90": 22.04, "max": 24.85},
+      "per_item_ms_p50": 158,
+      "failures": 0
+    },
+    "storage": {
+      "db_bytes": 830525440,
+      "wal_bytes": 16777216,
+      "total_mb": 847,
+      "budget_bytes": 2684354560,
+      "within_budget": true
+    }
+  },
+  "acceptance_vs_targets": {
+    "yearly_accept_under_5s_per_chunk": "PASS (p50=1.01s p90=1.77s; max 5.17s marginal)",
+    "yearly_item_under_150ms": "MARGINAL (p50=158ms vs 150ms target)",
+    "yearly_under_15min": "PASS task-internal (14.5min); e2e 17min incl driver overhead",
+    "full_market_mcp_only": "PASS",
+    "storage_under_2_5gib": "PASS (847MB)"
+  },
+  "delta_vs_preview23": {
+    "yearly_accept_p50_s": [3.42, 1.01],
+    "yearly_task_sum_s": [1036.5, 867.9],
+    "yearly_per_item_ms": [198, 158],
+    "yearly_e2e_min": [22.6, 17.0]
+  },
+  "known_gaps": [
+    "5 sz entities absent from official hsjday pack (source data gap, not system fault)",
+    "production readiness remains NOT_PRODUCTION_READY per declared scope"
+  ]
+}

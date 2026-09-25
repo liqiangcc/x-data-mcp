@@ -8,6 +8,8 @@ use crate::{
         self, Change, ItemBinding, ItemOutcome, Stage, Status, TaskHead, TaskItem, TaskSnapshot,
     },
 };
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Utc};
 use compat::CheckedRecord;
 use serde::{Deserialize, Serialize};
@@ -120,12 +122,52 @@ impl Range {
         Ok(())
     }
 }
+/// O(1) published-version identity/integrity facts — the fields accept and
+/// execution guards actually read, without bar materialization.
+#[derive(Debug, Clone)]
+pub struct FixedFacts {
+    pub version_id: String,
+    pub symbol: String,
+    pub period: Period,
+    /// Stored authoritative integrity digest of the complete version.
+    pub integrity_sha256: String,
+    /// Stored day bounds — a `[first_day, first_day]` window read returns
+    /// the full version metadata while decoding only one segment.
+    pub first_day: NaiveDate,
+    pub last_day: NaiveDate,
+}
 pub trait MarketRepository {
     fn stage(&self, raw: &Value) -> Result<(), Error>;
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error>;
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error>;
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error>;
     fn fixed_many(&self, ids: &[String]) -> Result<Vec<CheckedRecord>, Error>;
+    /// O(1) header read for digest/identity checks on a published version.
+    fn fixed_facts(&self, id: &str) -> Result<FixedFacts, Error>;
+    /// Published read whose `version().records`/`batch.bars` contain at least
+    /// every stored bar in `[first_day, last_day]`; the compact backend
+    /// restricts to the window (O(window), verified per-clip digests), the
+    /// legacy backend may return the full version. `raw()` is a projection
+    /// for inspection only: `raw()["integrity_sha256"]` is the stored digest
+    /// of the complete version, not a recompute over the window — never
+    /// stage or re-digest a windowed record.
+    fn fixed_window(
+        &self,
+        id: &str,
+        first_day: NaiveDate,
+        last_day: NaiveDate,
+    ) -> Result<CheckedRecord, Error>;
+    /// Distinct calendar years that have at least one stored bar of the
+    /// fixed version inside `[first_day, last_day]`; the compact backend
+    /// decodes only overlapping segments without building `Bar`s, the
+    /// legacy backend may derive them from a full read. Same published-only
+    /// `NotFound` semantics as `fixed_window`.
+    fn fixed_window_years(
+        &self,
+        id: &str,
+        first_day: NaiveDate,
+        last_day: NaiveDate,
+    ) -> Result<BTreeSet<i32>, Error>;
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error>;
     /// O(1) task-row projection for hot-loop guards; full snapshots are for
     /// explicit task/progress reads.
@@ -364,19 +406,18 @@ impl<R: MarketRepository> Publisher<R> {
             promote,
             base_digest: None,
         };
-        let base = if let Some(lineage) = &plan.record.version.yearly_derivation {
-            Some(
-                self.repository
-                    .fixed(&lineage.base_daily_version_id)
-                    .map_err(base_error)?,
-            )
-        } else {
-            None
-        };
-        validate_base(&plan.record, base.as_ref())?;
-        plan.base_digest = base
-            .as_ref()
-            .map(|r| r.raw["integrity_sha256"].as_str().unwrap().to_owned());
+        if let Some(lineage) = &plan.record.version.yearly_derivation {
+            // Facts + memoized/windowed validation: the runner's derivation
+            // already proved this exact series, so the memo usually makes
+            // this a row read plus a 2-bar comparison — no full base
+            // materialization, no second aggregation.
+            let facts = self
+                .repository
+                .fixed_facts(&lineage.base_daily_version_id)
+                .map_err(base_error)?;
+            validate_base_facts(&plan.record, &self.repository, &facts)?;
+            plan.base_digest = Some(facts.integrity_sha256);
+        }
         let binding = self
             .repository
             .task_item_binding(&plan.command.task_id, &plan.command.item_id)?
@@ -476,6 +517,85 @@ pub(crate) fn validate_base_identity(
     {
         return Err(Error::Base(
             "fixed base identity/period/adjustment/source mismatch".into(),
+        ));
+    }
+    Ok(())
+}
+/// Facts-based equivalent of `validate_base`: the base's identity fields
+/// come from row facts plus a one-day window read (metadata only), and the
+/// yearly re-aggregation is memoized on the base's stored integrity digest
+/// — a hit proves the identical bytes the runner already verified. A miss
+/// falls back to a lineage-bounded window read.
+pub(crate) fn validate_base_facts<R: MarketRepository + ?Sized>(
+    record: &CheckedRecord,
+    repository: &R,
+    facts: &FixedFacts,
+) -> Result<(), Error> {
+    let v = &record.version;
+    if v.period == Period::Day {
+        return Ok(());
+    }
+    let lineage = v
+        .yearly_derivation
+        .as_ref()
+        .ok_or_else(|| Error::Base("yearly lineage missing".into()))?;
+    if facts.version_id != lineage.base_daily_version_id
+        || facts.symbol != v.symbol
+        || facts.period != Period::Day
+    {
+        return Err(Error::Base(
+            "fixed base identity/period/adjustment/source mismatch".into(),
+        ));
+    }
+    let meta = repository
+        .fixed_window(&facts.version_id, facts.first_day, facts.first_day)
+        .map_err(base_error)?;
+    let daily = &meta.version();
+    if daily.version_id != lineage.base_daily_version_id
+        || daily.symbol != v.symbol
+        || daily.period != Period::Day
+        || daily.adjustment != v.adjustment
+        || daily.source != v.source
+        || daily.unit_currency != v.unit_currency
+        || !daily.adjustment_evidence.is_confirmed()
+        || daily.adjustment_evidence.value.as_deref() != Some("qfq")
+    {
+        return Err(Error::Base(
+            "fixed base identity/period/adjustment/source mismatch".into(),
+        ));
+    }
+    let years: std::collections::BTreeSet<i32> = v.records.iter().map(|b| b.date.year()).collect();
+    let as_of = v
+        .published_at
+        .with_timezone(&FixedOffset::east_opt(8 * 3600).unwrap())
+        .date_naive();
+    let key = crate::yearly::aggregate_key(&facts.integrity_sha256, &years, as_of);
+    let base_id = facts.version_id.clone();
+    let annual = crate::yearly::aggregate_memoized(key, || {
+        let window = repository
+            .fixed_window(
+                &base_id,
+                lineage.first_trading_date,
+                lineage.last_trading_date,
+            )
+            .map_err(base_error)?;
+        crate::yearly::aggregate(window.version(), Some(&years), as_of)
+            .map_err(|e| Error::Base(e.to_string()))
+    })?;
+    if annual
+        .records
+        .iter()
+        .map(|r| r.bar.clone())
+        .collect::<Vec<_>>()
+        != v.records
+        || lineage.algorithm_version != crate::yearly::ALGORITHM_VERSION
+        || annual.records.first().map(|r| r.lineage.first_trading_date)
+            != Some(lineage.first_trading_date)
+        || annual.records.last().map(|r| r.lineage.last_trading_date)
+            != Some(lineage.last_trading_date)
+    {
+        return Err(Error::Base(
+            "yearly content/lineage does not match fixed daily".into(),
         ));
     }
     Ok(())

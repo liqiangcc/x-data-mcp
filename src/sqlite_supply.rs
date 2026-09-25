@@ -440,9 +440,12 @@ fn task_facts(
         .map(|id| range_result(c, id))
         .collect::<Result<Vec<_>, _>>()?;
     let mut q = c
-        .prepare(
-            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id",
-        )
+        .prepare(if crate::sqlite_market::is_compact_schema(c)? {
+            "SELECT publication_id FROM publication_results \
+             WHERE task_id=?1 AND publication_kind=2 ORDER BY publication_id"
+        } else {
+            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id"
+        })
         .map_err(storage)?;
     let yearly_ids = q
         .query_map([id], |r| r.get::<_, String>(0))

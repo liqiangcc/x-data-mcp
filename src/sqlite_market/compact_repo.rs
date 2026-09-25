@@ -2,6 +2,7 @@
 //! `WriteCoordinator`, compact facts authoritative, legacy-compatible
 //! `CheckedRecord` envelopes synthesized in memory at read boundaries. No
 //! legacy JSON envelope is ever persisted.
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -715,7 +716,7 @@ fn period_name(period: Period) -> &'static str {
     }
 }
 
-fn version_key(c: &Connection, version_id: &str) -> Result<i64, Error> {
+pub(crate) fn version_key(c: &Connection, version_id: &str) -> Result<i64, Error> {
     c.query_row(
         "SELECT version_key FROM data_versions WHERE version_id=?1",
         [version_id],
@@ -784,8 +785,26 @@ fn synthesize(m: &MaterializedVersion) -> Result<CheckedRecord, Error> {
         unit_currency: version.unit_currency.clone(),
         adjustment_evidence: version.adjustment_evidence.clone(),
     };
-    let mut raw = serde_json::to_value(version).map_err(super::integrity)?;
-    raw["batch"] = serde_json::to_value(&batch).map_err(super::integrity)?;
+    // Published records keep the typed columns authoritative: the stored
+    // integrity digest already binds the full content, and no reader of a
+    // published envelope consumes `records`/`batch.bars` (only digests,
+    // coverage, lineage and `compact_source`). Serializing thousands of
+    // bars into the envelope per read is pure waste — omit them. Staged
+    // and validated candidates keep the complete envelope because
+    // `compat::check` and replay equality need the self-contained form.
+    let mut raw = if m.state == CompactVersionState::Published {
+        let mut slim_version = version.clone();
+        slim_version.records = Vec::new();
+        let mut raw = serde_json::to_value(&slim_version).map_err(super::integrity)?;
+        let mut slim_batch = batch.clone();
+        slim_batch.bars = Vec::new();
+        raw["batch"] = serde_json::to_value(&slim_batch).map_err(super::integrity)?;
+        raw
+    } else {
+        let mut raw = serde_json::to_value(version).map_err(super::integrity)?;
+        raw["batch"] = serde_json::to_value(&batch).map_err(super::integrity)?;
+        raw
+    };
     raw["compact_source"] = json!({
         "generation_id": m.source_binding.generation_id,
         "generation_manifest_sha256": hex_bytes(m.source_binding.generation_manifest_sha256.as_slice()),
@@ -796,7 +815,18 @@ fn synthesize(m: &MaterializedVersion) -> Result<CheckedRecord, Error> {
     if let Some(parent) = &m.parent_version_id {
         raw["compact_parent_version_id"] = json!(parent);
     }
-    raw["integrity_sha256"] = json!(compat::legacy_digest(&raw)?);
+    // Published versions report the stored typed integrity digest — the
+    // authoritative content binding verified at commit — so every
+    // frozen/derived digest comparison reads the same value cheap reads
+    // expose. Staged/validated candidates keep the legacy envelope digest:
+    // `compat::check` requires the staged envelope to be self-consistent.
+    raw["integrity_sha256"] = match m.state {
+        CompactVersionState::Published => json!(hex_bytes(
+            &m.integrity_digest
+                .ok_or_else(|| integrity("published version lacks integrity digest"))?
+        )),
+        _ => json!(compat::legacy_digest(&raw)?),
+    };
     Ok(CheckedRecord {
         raw,
         version: m.version.clone(),
@@ -823,22 +853,6 @@ pub(crate) fn materialize_checked(
 
 fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
     let record = compat::check(raw)?;
-    let source: CompactSource = serde_json::from_value(
-        raw.get("compact_source")
-            .cloned()
-            .ok_or_else(|| invalid("compact_source required for compact staging"))?,
-    )
-    .map_err(invalid)?;
-    let evidence =
-        compact_versions::put_evidence(c, EvidenceKind::Generation, &source.generation_evidence)?;
-    let binding = SourceBinding {
-        generation_id: source.generation_id.clone(),
-        generation_manifest_sha256: hex_digest(&source.generation_manifest_sha256)?,
-        day_member_sha256: hex_digest(&source.day_member_sha256)?,
-        security_event_sha256: hex_digest(&source.security_event_sha256)?,
-        evidence_digest: evidence,
-    };
-    let binding_digest = compact_versions::put_source_binding(c, &binding)?;
     let version_evidence = VersionEvidence {
         source: record.version.source.clone(),
         coverage_reason: record.batch.coverage.reason.clone(),
@@ -874,7 +888,10 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
         }
         Ok(clips)
     };
-    let yearly_lineage = match period {
+    // A yearly record carries no generation source of its own: it derives
+    // entirely from a published daily base, so it inherits that base's
+    // source binding. Daily records must carry `compact_source`.
+    let (yearly_lineage, binding_digest) = match period {
         Period::Year => {
             let derivation = record
                 .version
@@ -889,19 +906,40 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
             {
                 return Err(invalid("yearly base is not a published daily version"));
             }
-            Some(YearlyLineageDraft {
-                base_daily_version_key: base_key,
-                algorithm_version: derivation.algorithm_version.clone(),
-                first_trade_day: compact_market::epoch_day(derivation.first_trading_date),
-                last_trade_day: compact_market::epoch_day(derivation.last_trading_date),
-                as_of_day: base.last_day,
-            })
+            (
+                Some(YearlyLineageDraft {
+                    base_daily_version_key: base_key,
+                    algorithm_version: derivation.algorithm_version.clone(),
+                    first_trade_day: compact_market::epoch_day(derivation.first_trading_date),
+                    last_trade_day: compact_market::epoch_day(derivation.last_trading_date),
+                    as_of_day: base.last_day,
+                }),
+                base.source_binding_digest,
+            )
         }
         Period::Day => {
             if record.version.yearly_derivation.is_some() {
                 return Err(invalid("daily record carries yearly derivation"));
             }
-            None
+            let source: CompactSource = serde_json::from_value(
+                raw.get("compact_source")
+                    .cloned()
+                    .ok_or_else(|| invalid("compact_source required for compact staging"))?,
+            )
+            .map_err(invalid)?;
+            let evidence = compact_versions::put_evidence(
+                c,
+                EvidenceKind::Generation,
+                &source.generation_evidence,
+            )?;
+            let binding = SourceBinding {
+                generation_id: source.generation_id.clone(),
+                generation_manifest_sha256: hex_digest(&source.generation_manifest_sha256)?,
+                day_member_sha256: hex_digest(&source.day_member_sha256)?,
+                security_event_sha256: hex_digest(&source.security_event_sha256)?,
+                evidence_digest: evidence,
+            };
+            (None, compact_versions::put_source_binding(c, &binding)?)
         }
     };
     let draft = VersionDraft {
@@ -1107,7 +1145,22 @@ fn commit_tx(c: &mut Connection, plan: &PublishPlan) -> Result<Receipt, Error> {
     }
     // The sealed plan's record must still equal the stored verified facts.
     let stored = materialize_checked(c, &command.version_id, true)?;
-    if stored.raw != plan.record.raw {
+    // Compact storage keeps only typed yearly facts; the derived
+    // `local_yearly_derivation_v1` envelope projection is not reproducible,
+    // so yearly candidates compare the facts the commit actually publishes.
+    let same = match plan.record.version.period {
+        Period::Year => {
+            stored.version.version_id == plan.record.version.version_id
+                && stored.version.symbol == plan.record.version.symbol
+                && stored.version.records == plan.record.version.records
+                && stored.version.yearly_derivation == plan.record.version.yearly_derivation
+                && stored.version.source == plan.record.version.source
+                && stored.version.unit_currency == plan.record.version.unit_currency
+                && stored.batch.coverage == plan.record.batch.coverage
+        }
+        Period::Day => stored.raw == plan.record.raw,
+    };
+    if !same {
         return Err(integrity("validated candidate changed since plan"));
     }
     if let Some(digest) = &plan.base_digest {
@@ -1117,8 +1170,17 @@ fn commit_tx(c: &mut Connection, plan: &PublishPlan) -> Result<Receipt, Error> {
             .yearly_derivation
             .as_ref()
             .ok_or_else(|| integrity("base digest without yearly lineage"))?;
-        let base = materialize_checked(c, &lineage.base_daily_version_id, false)?;
-        if base.raw["integrity_sha256"].as_str() != Some(digest.as_str()) {
+        // Typed facts only: the stored integrity digest is the authoritative
+        // binding — no need to materialize thousands of base bars to compare
+        // it.
+        let base_key = version_key(c, &lineage.base_daily_version_id)?;
+        let base = compact_versions::result_facts(c, base_key)?;
+        if base.state != CompactVersionState::Published
+            || base
+                .integrity_digest
+                .map(|d| compact_market::digest_hex(&d) == *digest)
+                != Some(true)
+        {
             return Err(Error::Base("fixed base changed since validation".into()));
         }
     }
@@ -1491,7 +1553,19 @@ impl MarketRepository for SqliteCompactMarket {
                 Some(id) => id.to_owned(),
                 None => head_id(c, scope)?.ok_or(Error::NotFound)?,
             };
-            let m = compact_versions::materialize(c, &id)?;
+            // Published versions take the windowed leaf read — the range
+            // bounds already scope which segments must be decoded. Validated
+            // (unpublished) versions keep full staged materialization.
+            let m = match compact_versions::materialize_windowed(
+                c,
+                &id,
+                compact_market::epoch_day(range.start),
+                compact_market::epoch_day(range.end),
+            ) {
+                Ok(m) => m,
+                Err(Error::NotFound) => compact_versions::materialize(c, &id)?,
+                Err(e) => return Err(e),
+            };
             if !matches!(
                 m.state,
                 CompactVersionState::Validated | CompactVersionState::Published
@@ -1554,6 +1628,62 @@ impl MarketRepository for SqliteCompactMarket {
             ids.iter()
                 .map(|id| materialize_checked(c, id, false))
                 .collect()
+        })
+    }
+    fn fixed_facts(&self, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+        self.read(|c| {
+            let key = version_key(c, id)?;
+            let facts = compact_versions::result_facts(c, key)?;
+            if facts.state != CompactVersionState::Published {
+                return Err(Error::NotFound);
+            }
+            let integrity_digest = facts
+                .integrity_digest
+                .ok_or_else(|| integrity("published version lacks integrity digest"))?;
+            Ok(crate::market_storage::FixedFacts {
+                version_id: facts.version_id,
+                symbol: facts.entity,
+                period: facts.period,
+                integrity_sha256: hex_bytes(&integrity_digest),
+                first_day: compact_market::epoch_date(facts.first_day)
+                    .map_err(|e| integrity(e.to_string()))?,
+                last_day: compact_market::epoch_date(facts.last_day)
+                    .map_err(|e| integrity(e.to_string()))?,
+            })
+        })
+    }
+    fn fixed_window(
+        &self,
+        id: &str,
+        first_day: NaiveDate,
+        last_day: NaiveDate,
+    ) -> Result<CheckedRecord, Error> {
+        self.read(|c| {
+            let m = compact_versions::materialize_windowed(
+                c,
+                id,
+                compact_market::epoch_day(first_day),
+                compact_market::epoch_day(last_day),
+            )?;
+            // `synthesize` reports the stored integrity digest for published
+            // versions — the complete version's authoritative binding even
+            // though `records` holds only the window.
+            synthesize(&m)
+        })
+    }
+    fn fixed_window_years(
+        &self,
+        id: &str,
+        first_day: NaiveDate,
+        last_day: NaiveDate,
+    ) -> Result<BTreeSet<i32>, Error> {
+        self.read(|c| {
+            compact_versions::window_years(
+                c,
+                id,
+                compact_market::epoch_day(first_day),
+                compact_market::epoch_day(last_day),
+            )
         })
     }
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error> {

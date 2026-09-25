@@ -1513,11 +1513,15 @@ pub(crate) fn read_yearly_audit(
     }
     let stored = read_publication(c, result_id)?;
     let id = &stored.identity;
-    let base_id = id
-        .base_version_id
-        .as_ref()
-        .ok_or_else(|| integrity("yearly result lacks daily base"))?;
-    let _base = compact_repo::materialize_checked(c, base_id, false)?;
+    // The daily base is the result version's stored lineage — for yearly
+    // results `base_version_id` is the same-period head/result link, not
+    // the derivation base.
+    let base_id = compact_versions::daily_base_version_id(
+        c,
+        compact_repo::version_key(c, &id.result_version_id)?,
+    )?
+    .ok_or_else(|| integrity("yearly result lacks daily base"))?;
+    let _base = compact_repo::materialize_checked(c, &base_id, false)?;
     let result = compact_repo::materialize_checked(c, &id.result_version_id, false)?;
     let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
         .ok_or_else(|| integrity("yearly result task missing"))?;

@@ -7,27 +7,33 @@ use crate::{
     },
     task_control::{Change, ItemOutcome, Stage, Status, TaskSnapshot},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use std::collections::BTreeSet;
 /// Synchronous read-only verifier. Test injection never becomes a protocol input.
+/// The runner re-aggregates the fixed base once per item and hands the result
+/// in: a successful aggregate is itself the fail-closed coverage proof
+/// (missing years, invalid input and bars beyond as_of abort before this
+/// call). The verifier contributes the source gate and binds the proof into
+/// evidence.
 pub trait YearlyVerifier {
     fn verify(
         &self,
         base: &CheckedRecord,
         years: &BTreeSet<i32>,
+        annual: &crate::yearly::AnnualSeries,
         derived_at: DateTime<Utc>,
     ) -> Result<DerivationEvidence, SourceError>;
 }
 /// Real verifier for the derived-yearly path: gated on an env-installed
-/// inspected official-file source, coverage-proven by re-aggregating the
-/// fixed daily base for the requested years. Missing years, invalid input
-/// and bars beyond as_of all fail closed.
+/// inspected official-file source, coverage-proven by the runner's
+/// re-aggregation of the fixed daily base for the requested years.
 pub struct OfficialYearlyVerifier;
 impl YearlyVerifier for OfficialYearlyVerifier {
     fn verify(
         &self,
         base: &CheckedRecord,
         years: &BTreeSet<i32>,
+        annual: &crate::yearly::AnnualSeries,
         derived_at: DateTime<Utc>,
     ) -> Result<DerivationEvidence, SourceError> {
         if crate::official_market::TdxMarketSource::from_env().is_none() {
@@ -35,28 +41,13 @@ impl YearlyVerifier for OfficialYearlyVerifier {
                 "official-file source not installed".into(),
             ));
         }
-        let as_of = derived_at
-            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
-            .date_naive();
-        crate::yearly::aggregate(base.version(), Some(years), as_of)
-            .map_err(|e| SourceError::NotVerified(e.to_string()))?;
-        Ok(DerivationEvidence {
-            base_integrity_sha256: base.raw()["integrity_sha256"]
-                .as_str()
-                .ok_or_else(|| {
-                    SourceError::NotVerified("fixed base carries no integrity digest".into())
-                })?
-                .into(),
-            years: years.clone(),
-            as_of,
-            coverage: CoverageEvidence {
-                status: CoverageStatus::Complete,
-                reason: format!(
-                    "selected years verified by re-aggregating fixed daily {} from the env-installed official-file source as of {as_of}; not a listing-history claim",
-                    base.version().version_id
-                ),
-            },
-        })
+        bound_evidence(
+            base,
+            years,
+            annual,
+            derived_at,
+            "env-installed official-file source".into(),
+        )
     }
 }
 /// Generation-mode verifier: the bound session's presence already proves a
@@ -71,6 +62,7 @@ impl YearlyVerifier for BoundYearlyVerifier<'_> {
         &self,
         base: &CheckedRecord,
         years: &BTreeSet<i32>,
+        annual: &crate::yearly::AnnualSeries,
         derived_at: DateTime<Utc>,
     ) -> Result<DerivationEvidence, SourceError> {
         let Some(bound) = self.bound else {
@@ -78,30 +70,55 @@ impl YearlyVerifier for BoundYearlyVerifier<'_> {
                 "no bound generation session".into(),
             ));
         };
-        let as_of = derived_at
-            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
-            .date_naive();
-        crate::yearly::aggregate(base.version(), Some(years), as_of)
-            .map_err(|e| SourceError::NotVerified(e.to_string()))?;
-        Ok(DerivationEvidence {
-            base_integrity_sha256: base.raw()["integrity_sha256"]
-                .as_str()
-                .ok_or_else(|| {
-                    SourceError::NotVerified("fixed base carries no integrity digest".into())
-                })?
-                .into(),
-            years: years.clone(),
-            as_of,
-            coverage: CoverageEvidence {
-                status: CoverageStatus::Complete,
-                reason: format!(
-                    "selected years verified by re-aggregating fixed daily {} against bound generation {} as of {as_of}; not a listing-history claim",
-                    base.version().version_id,
-                    bound.generation_id
-                ),
-            },
-        })
+        bound_evidence(
+            base,
+            years,
+            annual,
+            derived_at,
+            format!("bound generation {}", bound.generation_id),
+        )
     }
+}
+fn bound_evidence(
+    base: &CheckedRecord,
+    years: &BTreeSet<i32>,
+    annual: &crate::yearly::AnnualSeries,
+    derived_at: DateTime<Utc>,
+    source_label: String,
+) -> Result<DerivationEvidence, SourceError> {
+    let as_of = derived_at
+        .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+        .date_naive();
+    if annual.base_daily_version_id != base.version().version_id
+        || annual.as_of != as_of
+        || annual.records.len() != years.len()
+        || !annual
+            .records
+            .iter()
+            .map(|r| r.bar.date.year())
+            .eq(years.iter().copied())
+    {
+        return Err(SourceError::NotVerified(
+            "aggregated annual series does not cover the requested years".into(),
+        ));
+    }
+    Ok(DerivationEvidence {
+        base_integrity_sha256: base.raw()["integrity_sha256"]
+            .as_str()
+            .ok_or_else(|| {
+                SourceError::NotVerified("fixed base carries no integrity digest".into())
+            })?
+            .into(),
+        years: years.clone(),
+        as_of,
+        coverage: CoverageEvidence {
+            status: CoverageStatus::Complete,
+            reason: format!(
+                "selected years verified by re-aggregating fixed daily {} against {source_label} as of {as_of}; not a listing-history claim",
+                base.version().version_id
+            ),
+        },
+    })
 }
 #[derive(Debug)]
 pub enum YearlyExecution {
@@ -276,27 +293,62 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         let base_id = frozen["base_daily_version_id"]
             .as_str()
             .ok_or_else(|| Error::Integrity("frozen base missing".into()))?;
-        let base = self.repository.fixed(base_id)?;
+        let years: BTreeSet<i32> = serde_json::from_value(frozen["years"].clone())
+            .map_err(|e| Error::Integrity(e.to_string()))?;
+        let (first_year, last_year) = match (years.first(), years.last()) {
+            (Some(first), Some(last)) => (*first, *last),
+            _ => return Err(Error::Integrity("frozen years empty".into())),
+        };
+        let (first_day, last_day) = match (
+            chrono::NaiveDate::from_ymd_opt(first_year, 1, 1),
+            chrono::NaiveDate::from_ymd_opt(last_year, 12, 31),
+        ) {
+            (Some(first), Some(last)) => (first, last),
+            _ => return Err(Error::Integrity("frozen years out of range".into())),
+        };
+        // Windowed base read: the verifier and derivation only consume bars
+        // inside the selected years. `raw()["integrity_sha256"]` still
+        // carries the stored digest of the complete version.
+        let base = self.repository.fixed_window(base_id, first_day, last_day)?;
         if base.raw()["integrity_sha256"] != frozen["base_integrity_sha256"] {
             return Err(Error::Integrity(
                 "fixed base differs from accepted digest".into(),
             ));
         }
-        let years: BTreeSet<i32> = serde_json::from_value(frozen["years"].clone())
-            .map_err(|e| Error::Integrity(e.to_string()))?;
         let intent: PublishIntent = serde_json::from_value(frozen["intent"].clone())
             .map_err(|e| Error::Integrity(e.to_string()))?;
         let prior = frozen["comparison"]["version_id"].as_str();
         if let Some(id) = prior
-            && self.repository.fixed(id)?.raw()["integrity_sha256"]
+            && self.repository.fixed_facts(id)?.integrity_sha256
                 != frozen["comparison"]["integrity_sha256"]
         {
             return Err(Error::Integrity(
                 "fixed comparison differs from accepted digest".into(),
             ));
         }
+        // One re-aggregation per item: success is the fail-closed coverage
+        // proof the verifier binds into evidence, and the same series feeds
+        // the derivation — the computation is deterministic. The memo key
+        // binds the base's stored integrity digest so commit-time lineage
+        // verification reuses this series instead of re-decoding the base
+        // window.
+        let as_of = self
+            .derived_at
+            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+            .date_naive();
+        let key = crate::yearly::aggregate_key(
+            base.raw()["integrity_sha256"]
+                .as_str()
+                .ok_or_else(|| Error::Integrity("fixed base lacks integrity digest".into()))?,
+            &years,
+            as_of,
+        );
+        let annual = crate::yearly::aggregate_memoized(key, || {
+            crate::yearly::aggregate(base.version(), Some(&years), as_of)
+        })
+        .map_err(|e| Error::Base(e.to_string()))?;
         let evidence = verifier
-            .verify(&base, &years, self.derived_at)
+            .verify(&base, &years, &annual, self.derived_at)
             .map_err(|e| Error::Base(e.to_string()))?;
         let current = self.repository.task_head(&binding.head.task_id)?;
         if current.status != Status::Running
@@ -321,7 +373,7 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         let publisher = Publisher {
             repository: self.repository.clone(),
         };
-        let candidate = publisher.derive_yearly(&request, &evidence)?;
+        let candidate = publisher.derive_yearly(&request, &evidence, &base, &annual)?;
         let plan = publisher.prepare_yearly_result(
             Publication {
                 publication_id: format!("yearly-result-{id}"),

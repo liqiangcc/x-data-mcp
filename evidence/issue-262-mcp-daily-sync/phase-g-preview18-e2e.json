@@ -1,0 +1,59 @@
+{
+  "evidence": "issue-262 MCP-only end-to-end on fresh schema-19 ECS deployment",
+  "release": "v0.2.0-preview.18",
+  "code_sha": "8e280a7020e80b742b614a75ce2cace6ccb92864",
+  "deployed_at_report": "/opt/x-data-mcp-preview/reports/preview18-phaseg-deployment.json",
+  "topology": "phase-g two-MCP (data_service mcp.sock + acquire_service acquire.sock)",
+  "channel": "mcp_connect over unix sockets only; no shell/SQLite/file bypass in workflow",
+  "generation": {
+    "active": "804c5a63b5283a4cc02ce582166dde25cbb76057e54a54a2910bc4bba8b07d0b",
+    "acquisition_request_id": "daily-20260922-preview15",
+    "consistency_status": "VERIFIED_COMPATIBLE",
+    "decision_sha256": "17658843319392025f3769ff86d0749c32341f088c894bda428d38428a485b37",
+    "activated_at": "2026-09-22T06:56:39.606647585Z",
+    "official_snapshot": "2026-09-21 (hsjday.zip Last-Modified Mon, 21 Sep 2026 07:56:17 GMT)",
+    "note": "generation state lives in the acquire store and survived the fresh schema-19 market-db rebuild; no re-acquisition was needed"
+  },
+  "steps": [
+    {
+      "step": "catalog_collection",
+      "request_id": "catalog-20260922-preview18",
+      "task_id": "task-75e763ec524dba530554a311e68b6830",
+      "status": "succeeded",
+      "items": "1/1",
+      "result": "catalog version published, 5226 records (record_count via get_data_availability)"
+    },
+    {
+      "step": "daily_collection",
+      "request_id": "daily-20260922-preview18",
+      "task_id": "task-cb973b8da2c063bd8768214c4f44461d",
+      "status": "succeeded",
+      "items": "100/100 explicit selection (capability max_batch_entities=100; catalog-resolved 5226 correctly exceeds it)",
+      "sample_query": "sh.600000 daily records through 2026-09-21 (official snapshot day)"
+    },
+    {
+      "step": "yearly_derivation",
+      "request_id": "yearly-20260922-preview18",
+      "task_id": "task-207771f89eab57c59cfc19267f04ca14",
+      "status": "succeeded",
+      "items": "100/100, mode=current_head expected_yearly_head=null",
+      "sample_query": "sh.600000 yearly: 2025 annual + 2026 YTD (first 2026-01-05, last 2026-09-21), version yearly-version-cd41b985e7f99d294722f549befc9f9e432b5266095e45dc8e72c66f310fa9df"
+    },
+    {
+      "step": "post_verification",
+      "verify_publication_result": "verification_not_applicable (no unresolved execution) for both daily and yearly tasks",
+      "verify_stopped_writes": "verification_not_applicable (target not awaiting verification)"
+    }
+  ],
+  "schema19_fixes_shipped_this_run": [
+    "644b544 fix(catalog): catalog store via coordinator-bound SqliteTasks (was side connection rejected by schema gate)",
+    "ce9389b fix(yearly): yearly stage inherits published daily base source binding; typed-facts equality for unreproducible derived envelope",
+    "dc0f8e1 fix(yearly): read_yearly_audit resolves daily base from stored yearly_lineage, not publication_results.base_version_id"
+  ],
+  "unresolved": [
+    "full-market collection >100 entities remains refused by design (FULL_MARKET_NOT_SUPPORTED)",
+    "availability freshness=unknown / unresolved_ranges for dates beyond the official snapshot are declared-scope limitations, not bugs",
+    "production_ready remains false (declared_scope_non_production)"
+  ],
+  "production": "NOT_PRODUCTION_READY"
+}

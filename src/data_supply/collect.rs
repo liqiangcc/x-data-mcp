@@ -195,14 +195,12 @@ impl Contract for CollectionContract {
                     .find(|v| v.entity == e)
                     .unwrap()
                     .version_id;
-                let base = self.repository.market.fixed(id).map_err(invalid)?;
-                if base.version().symbol != e.symbol()
-                    || base.version().period != crate::market_data::Period::Day
-                {
+                let base = self.repository.market.fixed_facts(id).map_err(invalid)?;
+                if base.symbol != e.symbol() || base.period != crate::market_data::Period::Day {
                     return Err(invalid("base identity/period mismatch"));
                 }
                 frozen["base_daily_version_id"] = json!(id);
-                frozen["base_digest"] = base.raw()["integrity_sha256"].clone();
+                frozen["base_digest"] = json!(base.integrity_sha256);
                 frozen["years"] = json!(years);
             }
             items.push(ItemSpec {
