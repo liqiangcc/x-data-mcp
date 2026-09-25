@@ -3052,3 +3052,243 @@ fn yearly_real_data_probe() {
     }
     eprintln!("  run_item_total: ms p50/p90/max={}", p(&mut run_item_ms));
 }
+/// Yearly `no_change` reuse on compact storage (#281): the stored prior
+/// carries only typed facts — the slim envelope omits the derived
+/// `local_yearly_derivation_v1` block — yet a re-derivation with the same
+/// bound base/years and same-year `as_of` must still reuse the published
+/// version instead of appending a duplicate.
+#[test]
+fn yearly_no_change_reuses_version_on_compact_schema() {
+    use crate::market_update::tasks::Operation;
+    use crate::task_control::{Contract, RequestOutcome};
+    use crate::yearly_publication::{
+        DerivationEvidence,
+        runner::{YearlyExecution, YearlyRunner, YearlyVerifier},
+        tasks::YearlyContract,
+    };
+
+    struct Stub(&'static str);
+    impl YearlyVerifier for Stub {
+        fn verify(
+            &self,
+            base: &CheckedRecord,
+            years: &BTreeSet<i32>,
+            _annual: &crate::yearly::AnnualSeries,
+            derived_at: DateTime<Utc>,
+        ) -> Result<DerivationEvidence, crate::market_data::SourceError> {
+            Ok(DerivationEvidence {
+                base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
+                years: years.clone(),
+                as_of: derived_at
+                    .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                    .date_naive(),
+                coverage: CoverageEvidence::complete(self.0),
+            })
+        }
+    }
+
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+    let days = [
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 6, 30).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 18).unwrap(),
+    ]
+    .into_iter()
+    .map(compact_market::epoch_day);
+    let version = mk_version(
+        "v1",
+        days.enumerate()
+            .map(|(i, d)| bar(d, 100 + i as i64))
+            .collect(),
+    );
+    repo.stage(&envelope(&version, source("gen-1"), None))
+        .unwrap();
+    let candidate = repo.candidate("v1").unwrap();
+    repo.mark_validated(&candidate).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: candidate.clone(),
+        required_heads: vec![(Scope::of(&candidate.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    let yearly_task = |req: &str, head: Value, years: &[i32]| {
+        let contract = YearlyContract {
+            operation: Operation::Update,
+            repository: repo.clone(),
+            today: || NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+        };
+        let work = contract
+            .resolve(&json!({"items":[{
+                "symbol":"sh.600006",
+                "base_daily_version_id":"v1",
+                "years":years,
+                "intent":head,
+                "comparison_version_id":null
+            }]}))
+            .unwrap();
+        let command = Command {
+            key: contract.key(),
+            intent: json!({}),
+        };
+        let acceptance = repo.accept(req, &command, &work, RUN, None).unwrap();
+        let RequestOutcome::Task(snapshot) = acceptance.record.outcome else {
+            panic!("expected task outcome")
+        };
+        (
+            snapshot.task.task_id.clone(),
+            snapshot.items[0].spec.item_id.clone(),
+        )
+    };
+    let publish =
+        |label: &str, task: &(String, String), derived_at: DateTime<Utc>, reason: &'static str| {
+            let runner = YearlyRunner {
+                repository: repo.clone(),
+                run_id: RUN.into(),
+                derived_at,
+            };
+            let YearlyExecution::Published(receipt) =
+                runner.run_item(&task.0, &task.1, &Stub(reason)).unwrap()
+            else {
+                let snap = repo.task(&task.0).unwrap();
+                panic!("{label} did not publish: {:?}", snap.items[0].outcome)
+            };
+            receipt
+        };
+    let intent = |yearly_head: Option<&str>| json!({"CurrentHead":{"expected_daily_head":"v1","expected_yearly_head":yearly_head}});
+
+    // First derivation publishes a new yearly version.
+    let first = publish(
+        "first",
+        &yearly_task("req-yearly-a", intent(None), &[2025, 2026]),
+        ts(),
+        "stub re-aggregation verified",
+    );
+    // A same-year re-derivation bound to that head reuses it — the stored
+    // slim record carries every compared typed fact even though it omits
+    // the derived envelope block.
+    let second = publish(
+        "second",
+        &yearly_task(
+            "req-yearly-b",
+            intent(Some(&first.version_id)),
+            &[2025, 2026],
+        ),
+        ts() + chrono::Duration::days(1),
+        "stub re-aggregation verified",
+    );
+    assert_eq!(second.version_id, first.version_id);
+
+    // A yearly derivation over a different daily base is not equivalent to
+    // the reused head: binding it to that head must publish a new version.
+    let days2 = [
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 6, 30).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 18).unwrap(),
+    ]
+    .into_iter()
+    .map(compact_market::epoch_day);
+    let version2 = mk_version(
+        "v2",
+        days2
+            .clone()
+            .enumerate()
+            .map(|(i, d)| bar(d, 100 + i as i64))
+            .chain(std::iter::once(bar(
+                compact_market::epoch_day(NaiveDate::from_ymd_opt(2026, 9, 21).unwrap()),
+                150,
+            )))
+            .collect(),
+    );
+    repo.stage(&envelope(&version2, source("gen-1"), Some("v1")))
+        .unwrap();
+    let candidate2 = repo.candidate("v2").unwrap();
+    repo.mark_validated(&candidate2).unwrap();
+    let task_id2 = {
+        let scope = task_control::legacy::scope_id("sh.600006", "day");
+        let work = FrozenWork {
+            items: vec![ItemSpec {
+                item_id: ITEM.into(),
+                target: json!({"symbol": "sh.600006", "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            }],
+            scopes: BTreeSet::from([scope]),
+            shared_evidence: None,
+        };
+        let command = Command {
+            key: CommandKey {
+                operation: "collect_data".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        let acceptance = repo.accept("req-2", &command, &work, RUN, None).unwrap();
+        match acceptance.record.outcome {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        }
+    };
+    let revision2 = start_item(&repo, &task_id2);
+    repo.commit(&PublishPlan {
+        command: Publication {
+            expected_revision: revision2,
+            intent: PublishIntent::Daily {
+                expected_head: Some("v1".into()),
+            },
+            ..collect_command(&task_id2, "pub-2", "v2", revision2)
+        },
+        record: candidate2.clone(),
+        required_heads: vec![(Scope::of(&candidate2.version), Some("v1".into()))],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+    let yearly_task_v2 = |req: &str, head: Value| {
+        let contract = YearlyContract {
+            operation: Operation::Update,
+            repository: repo.clone(),
+            today: || NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+        };
+        let work = contract
+            .resolve(&json!({"items":[{
+                "symbol":"sh.600006",
+                "base_daily_version_id":"v2",
+                "years":[2025,2026],
+                "intent":head,
+                "comparison_version_id":null
+            }]}))
+            .unwrap();
+        let command = Command {
+            key: contract.key(),
+            intent: json!({}),
+        };
+        let acceptance = repo.accept(req, &command, &work, RUN, None).unwrap();
+        let RequestOutcome::Task(snapshot) = acceptance.record.outcome else {
+            panic!("expected task outcome")
+        };
+        (
+            snapshot.task.task_id.clone(),
+            snapshot.items[0].spec.item_id.clone(),
+        )
+    };
+    let third = publish(
+        "third",
+        &yearly_task_v2(
+            "req-yearly-c",
+            json!({"CurrentHead":{"expected_daily_head":"v2","expected_yearly_head":first.version_id}}),
+        ),
+        ts(),
+        "stub re-aggregation verified",
+    );
+    assert_ne!(third.version_id, first.version_id);
+}

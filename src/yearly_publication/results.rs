@@ -181,9 +181,28 @@ impl<R: MarketRepository> Publisher<R> {
         })
     }
 }
+/// Two yearly records are equivalent when they publish the same stored
+/// content: the typed version fields, the yearly lineage binding, the
+/// coverage verdict and the derivation `as_of` year. The derived
+/// `local_yearly_derivation_v1` block itself is not compared — compact
+/// storage omits it from published envelopes, and its contents (per-year
+/// trading dates, unfinished flags, the annual records) are
+/// deterministically re-aggregated from the bound base, years and as_of
+/// that the compared fields already fix. `as_of` is matched at year
+/// granularity: it only decides which year counts as unfinished, so a
+/// same-year re-run is the same publication while a new year requires a
+/// new version.
 pub(crate) fn equivalent(prior: &CheckedRecord, next: &CheckedRecord) -> bool {
     fn facts(r: &CheckedRecord) -> Option<Value> {
-        let annual = r.raw().get("local_yearly_derivation_v1")?.get("annual")?;
+        if r.version().period != crate::market_data::Period::Year {
+            return None;
+        }
+        let as_of_year = r
+            .raw()
+            .pointer("/local_yearly_derivation_v1/annual/as_of")
+            .or_else(|| r.raw().pointer("/compact_yearly_lineage_v1/as_of"))?
+            .as_str()?
+            .get(..4)?;
         Some(json!({
             "symbol":r.version().symbol, "source":r.version().source,
             "adjustment":r.version().adjustment,
@@ -191,12 +210,9 @@ pub(crate) fn equivalent(prior: &CheckedRecord, next: &CheckedRecord) -> bool {
             "units":r.version().unit_currency, "bars":r.version().records,
             "lineage":r.version().yearly_derivation,
             "coverage":r.batch.coverage,
-            "annual_records":annual.get("records")?,
+            "as_of_year":as_of_year,
             "analysis_coverage_v1":r.raw().get("analysis_coverage_v1"),
         }))
     }
-    match (facts(prior), facts(next)) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
-    }
+    matches!((facts(prior), facts(next)), (Some(a), Some(b)) if a == b)
 }

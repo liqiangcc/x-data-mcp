@@ -1449,6 +1449,9 @@ pub(crate) struct MaterializedVersion {
     pub source_binding: SourceBinding,
     pub generation_evidence: Value,
     pub parent_version_id: Option<String>,
+    /// Stored `yearly_lineage.as_of_day` for yearly versions — derivation
+    /// metadata publication reuses; None for daily or lineage-less rows.
+    pub yearly_as_of_day: Option<i64>,
     pub projection_digest: Digest,
     pub integrity_digest: Option<Digest>,
 }
@@ -1498,6 +1501,7 @@ pub(crate) fn materialize(c: &Connection, version_id: &str) -> Result<Materializ
         source_binding,
         generation_evidence,
         parent_version_id,
+        yearly_as_of_day: stored_lineage(c, row.key)?.map(|l| l.as_of_day),
         projection_digest: row.projection_digest,
         integrity_digest: row.integrity_digest,
     })
@@ -1557,6 +1561,7 @@ pub(crate) fn materialize_windowed(
         source_binding,
         generation_evidence,
         parent_version_id,
+        yearly_as_of_day: stored_lineage(c, row.key)?.map(|l| l.as_of_day),
         projection_digest: row.projection_digest,
         integrity_digest: row.integrity_digest,
     })

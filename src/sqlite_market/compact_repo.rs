@@ -815,6 +815,18 @@ fn synthesize(m: &MaterializedVersion) -> Result<CheckedRecord, Error> {
     if let Some(parent) = &m.parent_version_id {
         raw["compact_parent_version_id"] = json!(parent);
     }
+    // Yearly derivation metadata the typed store keeps outside the slim
+    // envelope: publication equivalence (`results::equivalent`) compares
+    // the stored as_of at year granularity, and readers re-aggregate
+    // per-record lineage from it instead of storing the derived block.
+    if m.state == CompactVersionState::Published
+        && version.period == Period::Year
+        && let Some(as_of_day) = m.yearly_as_of_day
+    {
+        raw["compact_yearly_lineage_v1"] = json!({
+            "as_of": compact_market::epoch_date(as_of_day).map_err(super::integrity)?.to_string(),
+        });
+    }
     // Published versions report the stored typed integrity digest — the
     // authoritative content binding verified at commit — so every
     // frozen/derived digest comparison reads the same value cheap reads
