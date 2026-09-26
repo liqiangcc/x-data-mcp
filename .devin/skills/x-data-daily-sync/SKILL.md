@@ -32,11 +32,14 @@ allowed-tools:
 
 参数一律按 `tools/list` 中该工具的 `inputSchema` 传：schema 声明 `contract_version` 时必须为 `"v1"`；schema 未声明的字段一律不传（输入对象 `deny_unknown_fields`，多余字段即拒绝）。`update_data`/`start_collection`/`acquire_generation`/`verify_generation`/`activate_generation` 各自使用独立且唯一的 `request_id`。
 
-当前能力边界：data capability 的 `max_batch_entities=100`，default daily 和
-catalog-resolved collection 超过 100 个证券会整体拒绝，不会自动分页成多个写任务。
-#259 容量 AC 也尚未通过。因此本 Skill 当前只可执行不超过 100 个证券的有界功能
-流程；发现目标 scope 超过 100 或无法证明不超过 100 时，必须停止并报告
-`FULL_MARKET_NOT_SUPPORTED`，不得自行分片、绕过预算或在 ECS 上启动全市场 collection。
+当前能力边界：data capability 的 `max_batch_entities=100` 是**每次调用**上限——
+单次 `start_collection`/`update_data` 超过 100 个证券或 item 会整体拒绝，服务端不会自动分页。
+全市场（约 5,200 实体）已通过生产实测：编排方必须自行把目标切成 ≤100 item 的调用，
+每个 chunk 使用独立唯一 `request_id`，**串行提交**（服务端单 worker，并发提交只会排队且
+占 scope）。跨代日更全量约 30-40 分钟、同代无变更扫描约 10 分钟、年线全量约 15 分钟、
+首次全市场 collection 约 6 分钟——这些是预期时长，不是挂起信号；轮询预算按此校准。
+
+无变更日更的正确做法仍是先 `check_official_updates` 探测：全部 `unchanged` 时不建任何任务。
 
 ## 0. Revision 握手（每次执行第一步，不可跳过）
 
@@ -67,7 +70,9 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 ## 2. 获取并激活新 generation
 
 1. `mcp__x-data-acquire__acquire_generation`，`request_id` 取本次唯一值（如 `daily-<YYYYMMDD>-<短随机>`）。返回 `task_id` / `generation_id`。
-2. 有界轮询 `get_acquisition_task(task_id)`：每次一轮，最多 20 轮。task 未到终态且预算耗尽 → 停止，返回 `request_id`/`task_id`/`generation_id` 并说明仍在进行，不无限等待。
+2. 有界轮询 `get_acquisition_task(task_id)`：约 60s 一轮，总预算约 45 分钟（官方快照约 570MB，
+   实测下载 20-40 分钟）。预算耗尽仍未到终态 → 停止，返回 `request_id`/`task_id`/`generation_id`
+   并说明仍在进行，不无限等待。
 3. task `failed` → 停止，转述 `error`/`detail` 与 refs。
 4. `verify_generation(request_id=<新值>, generation_id)`：结果必须是 `consistency_verified`；`not_verified` / `conflict` / 其他 → 停止并报告。
 5. 先 `sync_status` 取当前 `active_generation_ref`；`activate_generation(request_id=<新值>, generation_id, expected_previous=<当前 active 或省略>`) 。拒绝/conflict → 停止，旧 active 不变。
@@ -75,22 +80,29 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 
 ## 3. 数据更新
 
-- 写入前先通过 catalog `query_data` 分页计数目标 scope；一旦发现第 101 个证券即
-  停止并报告 `FULL_MARKET_NOT_SUPPORTED`。不要调用 default write 试错。
-- 已有 published daily heads且目标不超过 100（`get_data_availability` 有实体覆盖）→ `mcp__x-data-mcp__update_data`，`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"selection":{"kind":"default"}}`。
-- 全新数据库（无任何 daily head）→ 两步 `start_collection`：
-  1. `{"dataset":"securities.catalog","contract_version":"v1","request_id":<唯一>,"selection":{"scope":"current_sh_sz_a"}}` → 轮询终态 → 由 `list_data_versions`（`dataset:"securities.catalog"`）取 catalog `version_id`。
-  2. 对 catalog 分页计数；超过 100 时停止并保留 catalog 事实，不创建 daily collection。
-  3. 仅当 catalog 不超过 100 时，`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"selection":{"kind":"catalog","version_id":<上一步 catalog 版本>}}` → 轮询至终态。
-  - `start_collection` 不接受 `{"kind":"default"}`；default selection 只属于 `update_data`/`backfill_data`。
+### 3a. 已有 published daily heads → `update_data`（常规日更路径）
 
-轮询 `get_task_progress(task_id)`：每次一轮，最多 60 轮；耗尽 → 停止并返回 refs。
+全市场时必须用**显式 items**；`selection:{"kind":"default"}` 只在解析结果 ≤100 实体时可用：
 
-任务终态判定：全部 item `outcome` 落终态。逐 item 检查：
+1. `get_data_availability`（`{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"daily","start_date":"1990-01-01","end_date":<今日>},"version":{"kind":"latest_per_entity"}}`）分页拉全量——每实体取 `entity`、`version_ref.version_id`、`last_record`。
+2. 构造 item：`{"entity":{"exchange","code"},"base_version_id":<head version_id>,"start_date":<last_record+1 日>,"end_date":<目标交易日>}`。`end_date` 取本次 generation 快照的实际最后交易日；取不到时用当前日期——窗口内无源 bar 只会该 item fail-closed，不影响其他 item。
+3. items 按 ≤100 分 chunk，逐 chunk 调 `update_data`（`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"items":[…]}`），串行：一个任务终态后再提下一个。
+4. 已有 head 的实体**不得**改用 `start_collection`（会返回 `existing daily head requires the update_data range path`）。
+
+### 3b. 全新数据库（无 daily head）→ `start_collection`
+
+1. `{"dataset":"securities.catalog","contract_version":"v1","request_id":<唯一>,"selection":{"scope":"current_sh_sz_a"}}` → 轮询终态 → `list_data_versions`（`dataset:"securities.catalog"`）取 catalog `version_id`。
+2. `query_data` 对该 catalog `version_id` 分页取全部成员（exchange+code）。
+3. 成员按 ≤100 分 chunk，逐 chunk `start_collection`：`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"selection":{"kind":"explicit","securities":[{exchange,code},…]}}`，串行至终态。
+- `start_collection` 不接受 `{"kind":"default"}`；`selection` 顶层为 `{"scope":"current_sh_sz_a"}`（catalog）或 `{"kind":"explicit","securities":[…]}`（daily）。
+
+轮询 `get_task_progress(task_id)`：每 ~10-15s 一轮；100-item 任务实测 8-120s（采集约 6-8s、跨代更新约 40-120s、同代无变更约 6-12s）。单任务预算 10 分钟，耗尽 → 停止并返回 refs。
+
+任务终态判定：task `status` 为 `succeeded`/`partially_failed`/`failed` 均到终态——`partially_failed` 在全市场是**正常**收尾。逐 item 检查 outcome：
 
 - `published` / `no_change` → 正常。
-- `needs_verification` 或 error 含 `NEEDS_VERIFICATION` / `NOT_VERIFIED` / `CONFLICT` / `SOURCE_NOT_VERIFIED` → **停止**，报告 item_id 与 error；不重试、不绕过、不改动数据。
-- 其他失败 → 停止并报告。
+- per-item `needs_verification`（含 `NEEDS_VERIFICATION`/`NOT_VERIFIED`/`SOURCE_NOT_VERIFIED`）或窗口内无源 bar → **预期 fail-closed 类别**：除权实体（`.day` member 非前缀追加，连续性不可证）与停牌/退市尾部在全市场日更中常规出现（实测约 3%）。**不重试、不绕过**，继续后续 chunk，聚合全部此类 item 的 `item_id`+error 上报为 fail-closed 集合。
+- 任务级失败、受理拒绝（整个调用被拒）、大面积同类 per-item 失败（系统性迹象）→ **停止**并报告，不继续提交剩余 chunk。
 
 ## 4. 验证与汇报
 
@@ -98,7 +110,7 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 - `query_data` 抽样若干实体最新交易日数据（`selection:{"kind":"single"|"batch"}`，`filter:{"kind":"daily",...}`，`version:{"kind":"latest_per_entity"}`）。
 - 汇报：active generation、published/no_change 计数、最新数据日期、全部 request/task refs。
 
-可选：派生 `market.yearly` — yearly 只接受显式 items（无 default selection）：先经 `get_data_availability`/`list_data_versions` 取得每个实体的当前 head `version_id`，再 `update_data` `dataset:"market.yearly"`，每项 `{entity, base_daily_version_id:<head>, years:[<当前年>], publication:{"CurrentHead":{"expected_yearly_head":<当前 yearly head 或 null>}}}`；同样走轮询与 fail-closed 判定。
+可选：派生 `market.yearly` — yearly 只接受显式 items（无 default selection，collection 亦被 worker 设计性拒绝）：先经 `get_data_availability`/`list_data_versions` 取得每个实体的当前 daily head `version_id` 与当前 yearly head，再按 ≤100 分 chunk 调 `update_data` `dataset:"market.yearly"`，每项 `{entity, base_daily_version_id:<daily head>, years:[<当前年>], publication:{"mode":"current_head","expected_yearly_head":<当前 yearly head version_id 或 null>}}`；串行轮询与 fail-closed 判定同上。`selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
 
 ## 5. 超时与结果不明的恢复（绝不盲发新 ID）
 
@@ -109,4 +121,4 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 
 ## 6. 全局停止条件（任一命中即停止并报告 refs）
 
-`unknown` 观测、`not_verified`/`conflict`/`corrupt` generation、item `needs_verification`、revision 不匹配、轮询预算耗尽、工具不可用。停止时旧 heads 与旧 active generation 保持不变；报告已完成的步骤、最后结构化状态和恢复用 refs。
+`unknown` 观测、`not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝、大面积同类 per-item 失败、轮询预算耗尽、工具不可用。per-item `needs_verification` 不属全局停止（见 3 节：聚合上报为 fail-closed 集合）。停止时旧 heads 与旧 active generation 保持不变；报告已完成的步骤、最后结构化状态和恢复用 refs。
