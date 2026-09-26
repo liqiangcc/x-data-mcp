@@ -67,6 +67,10 @@ impl SqliteMarket {
     pub fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
         self.read(|c| read_record(c, id, false, true))
     }
+    pub fn staged_matches(&self, version_id: &str, whole: &Value) -> Result<bool, Error> {
+        let candidate = self.candidate(version_id)?;
+        Ok(candidate.raw()["integrity_sha256"] == whole["integrity_sha256"])
+    }
     pub fn fixed(&self, id: &str) -> Result<CheckedRecord, Error> {
         self.read(|c| read_record(c, id, true, true))
     }
@@ -761,6 +765,9 @@ impl MarketRepository for SqliteMarket {
     }
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
         SqliteMarket::candidate(self, id)
+    }
+    fn staged_matches(&self, version_id: &str, whole: &Value) -> Result<bool, Error> {
+        SqliteMarket::staged_matches(self, version_id, whole)
     }
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error> {
         SqliteMarket::fixed(self, id)

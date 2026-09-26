@@ -1555,6 +1555,39 @@ impl MarketRepository for SqliteCompactMarket {
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
         self.read(|c| materialize_checked(c, id, true))
     }
+    fn staged_matches(&self, version_id: &str, whole: &Value) -> Result<bool, Error> {
+        // No envelope survives staging: compare the typed facts `stage_tx`
+        // derived from the same raw instead of the legacy digest (#288).
+        // `compat::check` also re-validates the combined envelope itself.
+        let candidate = self.candidate(version_id)?;
+        let record = compat::check(whole)?;
+        let (v, b) = (candidate.version(), &candidate.batch);
+        let (rv, rb) = (record.version(), &record.batch);
+        Ok(v.version_id == rv.version_id
+            && v.symbol == rv.symbol
+            && v.period == rv.period
+            && v.adjustment == rv.adjustment
+            && v.source == rv.source
+            && v.records == rv.records
+            && v.published_at == rv.published_at
+            && v.validation == rv.validation
+            && v.unit_currency == rv.unit_currency
+            && v.adjustment_evidence == rv.adjustment_evidence
+            && v.yearly_derivation == rv.yearly_derivation
+            && b.symbol == rb.symbol
+            && b.period == rb.period
+            && b.adjustment == rb.adjustment
+            && b.bars == rb.bars
+            && b.coverage == rb.coverage
+            && b.unit_currency == rb.unit_currency
+            && b.adjustment_evidence == rb.adjustment_evidence
+            && b.provenance.source == rb.provenance.source
+            && b.provenance.symbol == rb.provenance.symbol
+            && b.provenance.source_period == rb.provenance.source_period
+            && b.provenance.source_adjustment == rb.provenance.source_adjustment
+            && b.provenance.snapshot_inputs == rb.provenance.snapshot_inputs
+            && b.provenance.yearly_derivation == rb.provenance.yearly_derivation)
+    }
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error> {
         self.read(|c| materialize_checked(c, id, false))
     }

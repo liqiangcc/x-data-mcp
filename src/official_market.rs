@@ -38,7 +38,7 @@ use crate::{
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{collections::BTreeMap, io::Read, path::PathBuf, str::FromStr};
 
 pub const SOURCE_NAME: &str = "tdx-official-file-snapshot";
@@ -722,7 +722,16 @@ impl TdxRangeProvider<'_> {
         } else {
             base.batch.coverage.clone()
         };
-        let raw = combined_version_record(&combined_batch, ctx.candidate_id, self.published_at)?;
+        let raw = combined_version_record(
+            &combined_batch,
+            ctx.candidate_id,
+            self.published_at,
+            Some(staged_compact_fields(
+                self.session.source(),
+                &combined_batch,
+                &base.version().version_id,
+            )?),
+        )?;
         let segment_sha256 = crate::market_update::candidate_digest(segment)
             .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
         Ok(CombinedCandidate {
@@ -1219,10 +1228,53 @@ fn merge_segment_bars(
 
 /// Serialize a merged candidate batch into the immutable version record
 /// and bind its integrity digest.
+/// Backend-private fields stamped into an envelope-staged daily record
+/// before `integrity_sha256` is computed. The compact store requires
+/// `compact_source` (generation identity, member digests and inspection
+/// evidence) on every staged daily record and links the parent through
+/// `compact_parent_version_id`; the typed collection path binds the same
+/// facts inside `commit_collection_batch`, envelope staging carries them
+/// inline instead (#288). The fields are inside the digest on purpose so
+/// the staged record stays self-consistent on either backend.
+fn staged_compact_fields(
+    source: &TdxMarketSource,
+    combined_batch: &MarketDataBatch,
+    parent_version_id: &str,
+) -> Result<Value, SourceError> {
+    let inputs = combined_batch
+        .provenance
+        .snapshot_inputs
+        .as_deref()
+        .unwrap_or(&[]);
+    let member = |role: &str| -> Result<String, SourceError> {
+        inputs
+            .iter()
+            .find(|i| i.role == role)
+            .map(|i| i.member_sha256.clone())
+            .ok_or_else(|| {
+                SourceError::InvalidResponse(format!("snapshot binding lacks the {role} member"))
+            })
+    };
+    Ok(json!({
+        "compact_source": {
+            "generation_id": source.manifest_sha256(),
+            "generation_manifest_sha256": source.manifest_sha256(),
+            "day_member_sha256": member("day")?,
+            "security_event_sha256": member(SECURITY_EVENTS_ROLE)?,
+            "generation_evidence": {
+                "manifest_sha256": source.manifest_sha256(),
+                "snapshot_inputs": inputs,
+            },
+        },
+        "compact_parent_version_id": parent_version_id,
+    }))
+}
+
 fn combined_version_record(
     combined_batch: &MarketDataBatch,
     candidate_id: &str,
     published_at: DateTime<Utc>,
+    extras: Option<Value>,
 ) -> Result<Value, SourceError> {
     let (records, validation) = publish::validate_and_deduplicate(combined_batch)
         .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
@@ -1242,6 +1294,11 @@ fn combined_version_record(
     .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
     raw["batch"] = serde_json::to_value(combined_batch)
         .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
+    if let Some(Value::Object(extras)) = extras {
+        for (key, value) in extras {
+            raw[key] = value;
+        }
+    }
     raw["integrity_sha256"] = Value::String(
         crate::market_storage::compat::legacy_digest(&raw)
             .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
@@ -1327,7 +1384,16 @@ fn acquire_merged_segment(
     } else {
         base.batch.coverage.clone()
     };
-    let raw = combined_version_record(&combined_batch, candidate_id, published_at)?;
+    let raw = combined_version_record(
+        &combined_batch,
+        candidate_id,
+        published_at,
+        Some(staged_compact_fields(
+            source,
+            &combined_batch,
+            &base.version().version_id,
+        )?),
+    )?;
     let segment_sha256 = crate::market_update::candidate_digest(&segment)
         .map_err(|e| SourceError::InvalidResponse(e.to_string()))?;
     Ok(Acquisition {

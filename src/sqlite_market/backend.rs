@@ -82,6 +82,12 @@ impl crate::market_storage::MarketRepository for MarketBackend {
             Self::Compact(m) => m.candidate(id),
         }
     }
+    fn staged_matches(&self, version_id: &str, whole: &serde_json::Value) -> Result<bool, Error> {
+        match self {
+            Self::Legacy(m) => m.staged_matches(version_id, whole),
+            Self::Compact(m) => m.staged_matches(version_id, whole),
+        }
+    }
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error> {
         match self {
             Self::Legacy(m) => m.mark_validated(record),

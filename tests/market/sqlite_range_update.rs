@@ -8,6 +8,7 @@ use x_data_mcp::{
     market_update::{
         self, DateRange, Evidence, Reason,
         publication::{CombinedEvidence, Preparation, RangePlan, RangeRepository},
+        runner::CombinedCandidate,
     },
     sqlite_market::SqliteMarket,
     sqlite_tasks::SqliteTasks,
@@ -23,7 +24,7 @@ struct Fixture {
     batch: MarketDataBatch,
     range: DateRange,
     evidence: Evidence,
-    whole: Option<CombinedEvidence>,
+    whole: Option<CombinedCandidate>,
 }
 fn command(db: &SqliteMarket, request: &str, version: &str, expected: Option<&str>) -> Publication {
     command_for_range(db, request, version, expected, ("2025-01-02", "2025-01-02"))
@@ -135,11 +136,14 @@ fn fixture(changed: bool) -> Fixture {
             json!("fixture: independently checked combined coverage");
         raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
         db.stage(&raw).unwrap();
-        Some(CombinedEvidence {
-            base_integrity_sha256: evidence.base_integrity_sha256.clone(),
-            segment_sha256: evidence.candidate_sha256.clone(),
-            combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
-            complete_coverage_ref: "fixture:whole-range".into(),
+        Some(CombinedCandidate {
+            record: raw.clone(),
+            evidence: CombinedEvidence {
+                base_integrity_sha256: evidence.base_integrity_sha256.clone(),
+                segment_sha256: evidence.candidate_sha256.clone(),
+                combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
+                complete_coverage_ref: "fixture:whole-range".into(),
+            },
         })
     } else {
         None
@@ -313,7 +317,7 @@ fn range_full_coverage_evidence_cannot_be_inferred_from_segment() {
         Preparation::NeedsVerification(Reason::CoverageUnknown)
     ));
     let mut f = fixture(true);
-    f.whole.as_mut().unwrap().combined_integrity_sha256 = "other".into();
+    f.whole.as_mut().unwrap().evidence.combined_integrity_sha256 = "other".into();
     assert!(matches!(
         f.prepare().unwrap(),
         Preparation::NeedsVerification(Reason::CoverageUnknown)
@@ -331,7 +335,8 @@ fn range_candidate_must_preserve_outside_rows_even_with_bound_whole_evidence() {
     raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
     f.db.stage(&raw).unwrap();
     f.command.version_id = "wrong-merge".into();
-    f.whole.as_mut().unwrap().combined_integrity_sha256 =
+    f.whole.as_mut().unwrap().record = raw.clone();
+    f.whole.as_mut().unwrap().evidence.combined_integrity_sha256 =
         raw["integrity_sha256"].as_str().unwrap().into();
     assert!(matches!(f.prepare(), Err(Error::Invalid(_))));
 }
@@ -473,11 +478,14 @@ fn range_coverage_only_revision_publishes_and_acquisition_only_reuses() {
     raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
     f.db.stage(&raw).unwrap();
     f.command.version_id = "coverage-only".into();
-    f.whole = Some(CombinedEvidence {
-        base_integrity_sha256: f.evidence.base_integrity_sha256.clone(),
-        segment_sha256: f.evidence.candidate_sha256.clone(),
-        combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
-        complete_coverage_ref: "fixture:independent whole coverage".into(),
+    f.whole = Some(CombinedCandidate {
+        record: raw.clone(),
+        evidence: CombinedEvidence {
+            base_integrity_sha256: f.evidence.base_integrity_sha256.clone(),
+            segment_sha256: f.evidence.candidate_sha256.clone(),
+            combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
+            complete_coverage_ref: "fixture:independent whole coverage".into(),
+        },
     });
     let plan = f.plan();
     assert!(!plan.is_no_change());
@@ -2722,11 +2730,14 @@ fn two_fifty_day_append_growth_stays_bounded() {
                 revision_ref: None,
                 continuity: None,
             };
-            let whole = CombinedEvidence {
-                base_integrity_sha256: evidence.base_integrity_sha256.clone(),
-                segment_sha256: evidence.candidate_sha256.clone(),
-                combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
-                complete_coverage_ref: "soak".into(),
+            let whole = CombinedCandidate {
+                record: raw.clone(),
+                evidence: CombinedEvidence {
+                    base_integrity_sha256: evidence.base_integrity_sha256.clone(),
+                    segment_sha256: evidence.candidate_sha256.clone(),
+                    combined_integrity_sha256: raw["integrity_sha256"].as_str().unwrap().into(),
+                    complete_coverage_ref: "soak".into(),
+                },
             };
             let prepared = Publisher {
                 repository: db.clone(),

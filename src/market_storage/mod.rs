@@ -139,6 +139,13 @@ pub struct FixedFacts {
 pub trait MarketRepository {
     fn stage(&self, raw: &Value) -> Result<(), Error>;
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error>;
+    /// Binds the staged candidate to the combined record the update
+    /// evidence describes (#288): the legacy backend compares the stored
+    /// envelope `integrity_sha256`; the compact backend keeps no envelope,
+    /// so it re-parses `whole` and compares the typed facts `stage`
+    /// derived — records, coverage, units, adjustment evidence and
+    /// snapshot bindings — a strictly stronger binding for the same check.
+    fn staged_matches(&self, version_id: &str, whole: &Value) -> Result<bool, Error>;
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error>;
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error>;
     fn fixed_many(&self, ids: &[String]) -> Result<Vec<CheckedRecord>, Error>;

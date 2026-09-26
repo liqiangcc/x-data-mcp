@@ -72,6 +72,9 @@ fn day_member() -> Vec<u8> {
     .to_vec()
 }
 fn write_mirror(dir: &Path, code: u32) {
+    write_mirror_day(dir, code, &day_member())
+}
+fn write_mirror_day(dir: &Path, code: u32, day: &[u8]) {
     std::fs::create_dir_all(dir).unwrap();
     let tdxhy = format!("1|{code}|T090302|||X6102\r\n").into_bytes();
     let ex = format!("{code}|name|kw\r\n").into_bytes();
@@ -90,10 +93,7 @@ fn write_mirror(dir: &Path, code: u32) {
         )],
     );
     let name = format!("sh\\lday\\sh{code}.day");
-    write_zip(
-        &dir.join("hsjday.zip"),
-        &[(name.as_str(), day_member().as_slice())],
-    );
+    write_zip(&dir.join("hsjday.zip"), &[(name.as_str(), day)]);
 }
 fn drive(service: &AcquireService) {
     for _ in 0..16 {
@@ -612,4 +612,130 @@ fn bound_session_cache_verifies_once_and_keeps_per_open_pins() {
             .active_verified_id()
             .is_none()
     );
+}
+
+/// #288 regression: a daily `update_data` append across a generation
+/// boundary must commit on the compact backend. The typed ops path cannot
+/// carry the new coverage claim (the reason text binds the new manifest
+/// sha) nor rebind `source_bindings`, so the envelope fallback is the
+/// designed carrier — and before the fix it staged a record with no
+/// `compact_source`, which `stage_tx` rejects fail-closed.
+#[test]
+fn explicit_daily_update_appends_across_generations_on_compact() {
+    use x_data_mcp::market_storage::MarketRepository;
+    use x_data_mcp::market_update::tasks::{Operation, RangeContract};
+    use x_data_mcp::sqlite_market::backend::MarketBackend;
+
+    let today = today_u32();
+    // Gen A covers bars through yesterday; gen B is the exact same prefix
+    // plus one newer record — a real append a continuity probe can prove.
+    let member_a = [
+        day_record(today - 3, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(today - 2, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(today - 1, [1131, 1135, 1130, 1134], 0.0, 120),
+    ]
+    .concat();
+    let mut member_b = member_a.clone();
+    member_b.extend_from_slice(&day_record(today, [1134, 1138, 1133, 1137], 0.0, 130));
+
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror_day(mirror.path(), 600006, &member_a);
+    let root = tempfile::tempdir().unwrap();
+    let service = AcquireService::open(root.path(), Source::Mirror(mirror.path().into())).unwrap();
+    let gen_a = activate_generation(&service, "req-gen-a", None);
+    let generation = GenerationSource::new(root.path());
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("market.db");
+    let tasks = SqliteTasks::new(&db);
+    tasks.initialize19().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let backend = MarketBackend::open(&tasks).unwrap();
+    assert!(matches!(backend, MarketBackend::Compact(_)));
+    let tasks = backend.tasks();
+    let supply = SqliteSupply {
+        market: backend.clone(),
+    };
+    let range = RangeContract {
+        operation: Operation::Update,
+        repository: backend.clone(),
+        today: x_data_mcp::calendar::shanghai_today,
+    };
+    let range_key = range.key();
+    let control = TaskControl::new(
+        tasks.clone(),
+        "run-u".into(),
+        vec![
+            Box::new(Bound {
+                inner: Box::new(CollectionContract {
+                    dataset: Dataset::Daily,
+                    repository: supply.clone(),
+                }),
+                source: generation.clone(),
+            }) as Box<dyn Contract>,
+            Box::new(Bound {
+                inner: Box::new(range),
+                source: generation.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    // Seed the daily head from generation A.
+    control
+        .accept("req-daily", control_key(&supply), daily_payload("600006"))
+        .unwrap();
+    let done =
+        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
+            .unwrap()
+            .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+    let scope = Scope {
+        symbol: "sh.600006".into(),
+        period: Period::Day,
+    };
+    let base_id = backend.effective_head(&scope).unwrap().unwrap();
+
+    // Advance the mirror to gen B and activate it — the update task then
+    // freezes B into every item at acceptance.
+    write_mirror_day(mirror.path(), 600006, &member_b);
+    let gen_b = activate_generation(&service, "req-gen-b", Some(&gen_a));
+    let day = x_data_mcp::calendar::shanghai_today();
+    let accepted = control
+        .accept(
+            "req-update",
+            range_key,
+            json!({"items":[{"symbol":"sh.600006","base_version_id":base_id,"start_date":day,"end_date":day}]}),
+        )
+        .unwrap();
+    let snapshot = control.read_task(&task_id(&accepted)).unwrap();
+    assert_eq!(
+        snapshot.items[0].spec.frozen_inputs[SOURCE_GENERATION_KEY],
+        json!(gen_b)
+    );
+    let done =
+        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
+            .unwrap()
+            .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+
+    // The new head is a fresh immutable version bound to generation B,
+    // carrying the appended record; the source binding proves the rebind
+    // the ops path could not express.
+    let new_id = backend.effective_head(&scope).unwrap().unwrap();
+    assert_ne!(new_id, base_id);
+    let head = backend.fixed(&new_id).unwrap();
+    assert_eq!(head.version().records.len(), 4);
+    let conn = rusqlite::Connection::open(dir.path().join("market.db")).unwrap();
+    let bound: String = conn
+        .query_row(
+            "SELECT sb.generation_id FROM data_versions v \
+             JOIN source_bindings sb ON sb.source_binding_digest = v.source_binding_digest \
+             WHERE v.version_id = ?1",
+            [new_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(bound, gen_b);
 }

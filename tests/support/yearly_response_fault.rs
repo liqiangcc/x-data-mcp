@@ -22,6 +22,9 @@ impl MarketRepository for ResponseFault {
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
         self.db.candidate(id)
     }
+    fn staged_matches(&self, version_id: &str, whole: &serde_json::Value) -> Result<bool, Error> {
+        MarketRepository::staged_matches(&self.db, version_id, whole)
+    }
     fn mark_validated(&self, r: &CheckedRecord) -> Result<(), Error> {
         self.db.mark_validated(r)
     }
