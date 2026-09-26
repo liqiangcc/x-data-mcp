@@ -218,8 +218,44 @@ impl<R: MarketRepository> Publisher<R> {
                         "combined candidate discards changed metadata".into(),
                     ));
                 }
-                if v.records != prepared.records
-                    || v.symbol != batch.symbol
+                let rewrite = matches!(
+                    evidence.continuity.as_ref().map(|c| c.mode.as_str()),
+                    Some("full")
+                );
+                if rewrite {
+                    // Corporate-action rewrite (#290): the approved merge is
+                    // meaningless under a history rewrite — the staged record
+                    // must be the full new materialization instead. Bind it
+                    // fail-closed: the coverage claim is complete, every
+                    // acquired segment bar appears verbatim, and no base
+                    // record date silently disappears.
+                    use crate::market_data::CoverageStatus;
+                    if v.records.is_empty()
+                        || !matches!(candidate.batch.coverage.status, CoverageStatus::Complete)
+                    {
+                        return Ok(Preparation::NeedsVerification(Reason::CoverageUnknown));
+                    }
+                    let staged: std::collections::BTreeMap<_, _> =
+                        v.records.iter().map(|b| (b.date, b)).collect();
+                    if batch.bars.iter().any(|b| staged.get(&b.date) != Some(&b)) {
+                        return Err(Error::Invalid(
+                            "rewrite candidate omits acquired segment bars".into(),
+                        ));
+                    }
+                    if base
+                        .version()
+                        .records
+                        .iter()
+                        .any(|b| !staged.contains_key(&b.date))
+                    {
+                        return Ok(Preparation::NeedsVerification(Reason::CoverageUnknown));
+                    }
+                } else if v.records != prepared.records {
+                    return Err(Error::Invalid(
+                        "combined candidate differs from approved range merge".into(),
+                    ));
+                }
+                if v.symbol != batch.symbol
                     || v.period != batch.period
                     || v.adjustment != batch.adjustment
                     || v.source != batch.provenance.source
