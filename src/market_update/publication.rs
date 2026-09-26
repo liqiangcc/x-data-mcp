@@ -254,7 +254,20 @@ impl<R: MarketRepository> Publisher<R> {
                 (plan, false)
             }
         };
-        let (segment, audit_payloads) = crate::sqlite_market::envelope::pack_batch(&json!(batch))?;
+        let (segment, audit_payloads) = if no_change {
+            // No-change reuses the base version: its range bars are exactly the
+            // base's, so the audit references them instead of storing a second
+            // payload copy (#259 P0-B). Shared evidence blocks keep the normal
+            // content-addressed refs — they dedup against the base's payloads.
+            let mut segment = serde_json::to_value(batch)
+                .map_err(|e| Error::Integrity(format!("audit segment serialization: {e}")))?;
+            segment["bars"] = json!({"$ref": "base"});
+            let mut payloads = Vec::new();
+            crate::sqlite_market::envelope::pack_shared(&mut segment, &mut payloads)?;
+            (segment, payloads)
+        } else {
+            crate::sqlite_market::envelope::pack_batch(&json!(batch))?
+        };
         let audit = json!({
             "algorithm_version":"local-range-update-v1",
             "command":publication.command,
