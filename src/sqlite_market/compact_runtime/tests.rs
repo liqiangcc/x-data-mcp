@@ -579,7 +579,7 @@ fn coordinator_boundary_cost_probe() {
     let coord = WriteCoordinator::open_existing(
         path,
         lease,
-        crate::sqlite_market::compact_repo::schema19_identity(),
+        crate::sqlite_market::compact_repo::schema_compact_identity(),
         Duration::from_secs(5),
     )
     .unwrap();

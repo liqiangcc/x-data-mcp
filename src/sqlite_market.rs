@@ -153,7 +153,7 @@ fn base_record(c: &Connection, r: &CheckedRecord) -> Result<Option<CheckedRecord
         .map(|l| read_record(c, &l.base_daily_version_id, true, false).map_err(base_error))
         .transpose()
 }
-/// True when the database carries the schema-19 compact layout
+/// True when the database carries the compact layout
 /// (`publication_batches` is dropped by migration 19). Connection-level
 /// read helpers below dispatch on it so every caller works on either
 /// schema without an extra flag.

@@ -546,6 +546,7 @@ fn phase_measure(repo: &SqliteCompactMarket, report: &mut Report, db: &Path) {
         "data_versions",
         "effective_heads",
         "evidence_bundles",
+        "evidence_parts",
         "source_bindings",
         "market_update_results",
         "publication_results",
@@ -1468,7 +1469,7 @@ fn s5b_retained_capacity() {
 
     if !db.exists() {
         crate::sqlite_tasks::SqliteTasks::new(&db)
-            .initialize19()
+            .initialize_compact()
             .unwrap();
     }
     use std::os::unix::fs::PermissionsExt;

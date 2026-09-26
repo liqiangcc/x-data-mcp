@@ -161,7 +161,7 @@ impl SqliteCatalog {
     }
     /// Route catalog access through the task store's transaction surface:
     /// a legacy handle applies the schema gate itself, while a
-    /// coordinator-bound (schema-19) handle runs under the shared write
+    /// coordinator-bound (compact) handle runs under the shared write
     /// coordinator. An inner market error aborts the transaction via a
     /// sentinel task error; the real catalog error is returned unchanged.
     fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T, Error>) -> Result<T, Error> {

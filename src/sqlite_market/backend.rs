@@ -1,7 +1,7 @@
 //! Runtime-selected market repository backend.
 //!
 //! `MarketBackend` dispatches on the durable schema version: schema 18
-//! keeps the legacy `SqliteMarket`, schema 19 uses the compact
+//! keeps the legacy `SqliteMarket`, the compact schema uses
 //! `SqliteCompactMarket`. The dispatch happens once at assembly so every
 //! downstream contract stays generic over the trait surface.
 use rusqlite::Connection;
@@ -11,7 +11,7 @@ use crate::sqlite_tasks::SqliteTasks;
 
 use super::{SqliteMarket, compact_repo::SqliteCompactMarket};
 
-/// Schema-selected market backend (legacy v18 or compact v19).
+/// Schema-selected market backend (legacy v18 or compact).
 #[derive(Clone)]
 pub enum MarketBackend {
     Legacy(SqliteMarket),
@@ -22,7 +22,7 @@ impl MarketBackend {
     /// Opens the backend matching the durable schema version of `tasks`'s
     /// database file. An uninitialized or absent file keeps the legacy
     /// backend so a missing database fails closed per-operation instead of
-    /// at service startup; explicit `upgrade_compact` produces schema 19.
+    /// at service startup; explicit `upgrade_compact` produces the compact schema.
     pub fn open(tasks: &SqliteTasks) -> Result<Self, Error> {
         if !tasks.path().is_file() {
             return Ok(Self::Legacy(SqliteMarket::new(tasks.clone())));

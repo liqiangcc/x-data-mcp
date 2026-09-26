@@ -8,7 +8,7 @@
 #
 # Fresh schema-19 install semantics (#259 FRESH_REBUILD_REQUIRED): the
 # existing market database is NEVER upgraded in place and NEVER deleted —
-# it is renamed aside and `task_sqlite init19` creates a fresh compact
+# it is renamed aside and `task_sqlite init20` creates a fresh compact
 # database at the path the service unit already uses.
 #
 # Fail-closed:
@@ -207,7 +207,7 @@ DRY-RUN phase-g deploy $TAG
   acquire root:    $ACQ_ROOT
   sockets:         $SOCK_DATA  $SOCK_ACQ
   plan: fetch+verify tarball -> stage release dir -> archive existing db
-        aside (never migrated/deleted) -> task_sqlite init19 fresh db ->
+        aside (never migrated/deleted) -> task_sqlite init20 fresh db ->
         stop both services -> switch current -> start both -> socket +
         schema=19 + tools smoke -> report; failures after mutation restore
         previous release + archived db + old services
@@ -256,7 +256,7 @@ if [[ ! -d "$RELEASE_DIR" ]]; then
     INSTALLED_NEW=1
 fi
 
-# --- 3. mutation: archive old db, fresh init19, switch, start -----------------
+# --- 3. mutation: archive old db, fresh init20, switch, start -----------------
 step=schema19_fresh
 MUTATING=1
 systemctl stop "$ACQ_SERVICE" || fail "stop $ACQ_SERVICE"
@@ -267,10 +267,10 @@ if [[ -f "$DB" ]]; then
     rm -f "$DB-shm" "$DB-wal" || true
 fi
 # The data socket's owner marker binds the previous database inode; the
-# fresh init19 file is a new identity, so rebind deliberately.
+# fresh init20 file is a new identity, so rebind deliberately.
 rm -f "$SOCK_DATA.owner.json" || fail "clear stale endpoint owner"
-init_out=$("$RELEASE_DIR/bin/task_sqlite" init19 "$DB") || fail "task_sqlite init19"
-[[ "$init_out" == *"task schema 19 ready"* ]] || fail "init19 did not report schema 19"
+init_out=$("$RELEASE_DIR/bin/task_sqlite" init20 "$DB") || fail "task_sqlite init20"
+[[ "$init_out" == *"task schema 20 ready"* ]] || fail "init20 did not report schema 20"
 chmod 600 "$DB" || fail "chmod private market db"
 chown "$(id -u):$(id -g)" "$DB" || fail "chown market db"
 fresh_schema=$(python3 -c "import sqlite3; print(sqlite3.connect('file:$DB?mode=ro', uri=True).execute('PRAGMA user_version').fetchone()[0])")

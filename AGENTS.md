@@ -32,7 +32,7 @@ ECS 部署目标 `ecs-node`（OpenSSH 别名，key auth，`ssh ecs-node` 本机�
 
 生产事实（preview.26 @ e43da34，2026-09-26 验证）：
 
-- 部署管线：版本 bump + tag + `scripts/build_release.sh` + `scripts/smoke_release.py --bin-dir … --report …` + `gh release create --target <sha>` + `deploy_phase_g.sh <tag>`（在 git 仓库目录内运行，`GH_REPO` 需就绪；每次部署归档旧库并全新 init schema-19，非原地升级）。
+- 部署管线：版本 bump + tag + `scripts/build_release.sh` + `scripts/smoke_release.py --bin-dir … --report …` + `gh release create --target <sha>` + `deploy_phase_g.sh <tag>`（在 git 仓库目录内运行，`GH_REPO` 需就绪；每次部署归档旧库并全新 init 最新 compact schema（现 v20），非原地升级）。
 - 契约要点：`securities.catalog` 的 selection 为 `{"scope":"current_sh_sz_a"}`；已有 daily head 的实体禁止 `start_collection`（`market.daily` 返回 `existing daily head requires the update_data range path`），必须走 `update_data` 的 `explicit-range-task-v1` item（entity/base_version_id/start_date/end_date）；`market.yearly` 的 collection 被 worker 设计性拒绝，年线一律走 `update_data`（item 含 `base_daily_version_id`、`years`、`publication.expected_yearly_head`）。
 - 跨代日更：coverage reason 绑定新 manifest sha → typed ops 统一回退 envelope（#289 修复后可走通）；除权股 `.day` member 非前缀追加 → `NeedsVerification` fail-closed（#290 待裁决增量路径）。
 - 实测下限：同代无变化 `update_data` ≈ 195ms/item（release 二进制、生产 socket）；跨代 envelope ≈ 430ms/item；首采 5,227 entity ≈ 340s；年线全量 ≈ 895s。

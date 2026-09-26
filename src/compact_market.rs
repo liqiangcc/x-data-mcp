@@ -214,6 +214,11 @@ pub enum EvidenceKind {
     Continuity,
     Catalog,
     Yearly,
+    /// Storage-internal sub-document: a generation-common field of a larger
+    /// evidence document, stored once and referenced by `$evref` from the
+    /// parent's stored form (#259 P0-D). Never produced over the wire; a
+    /// shared row is only reachable through a parent bundle's marker.
+    Shared,
 }
 
 impl EvidenceKind {
@@ -225,6 +230,7 @@ impl EvidenceKind {
             Self::Continuity => "continuity",
             Self::Catalog => "catalog",
             Self::Yearly => "yearly",
+            Self::Shared => "shared",
         }
     }
 
@@ -232,6 +238,7 @@ impl EvidenceKind {
         match self {
             Self::Continuity => 4_096,
             Self::Version | Self::Yearly => 16_384,
+            Self::Shared => 65_536,
             Self::Generation | Self::Catalog => 262_144,
             Self::BatchSelection => 4_194_304,
         }

@@ -69,7 +69,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Uses the existing read-only schema check. Never creates/migrates a database,
     // and does not reconcile old tasks or substitute a new store on failure.
     // The backend is assembled once and shared across connections: on a
-    // schema-19 database the compact repository reuses this process's lease
+    // a compact database the repository reuses this process's lease
     // instead of acquiring a second flock.
     let tasks = SqliteTasks::new(&path);
     let backend =

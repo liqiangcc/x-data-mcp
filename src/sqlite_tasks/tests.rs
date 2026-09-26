@@ -832,8 +832,9 @@ fn head_transition_refreshes_a_stale_held_head() {
     assert!(db.item_execution_started(&tid, &item_id).unwrap());
 }
 
-const COMPACT_TABLES: [&str; 14] = [
+const COMPACT_TABLES: [&str; 15] = [
     "evidence_bundles",
+    "evidence_parts",
     "source_bindings",
     "bar_segments",
     "segment_bars",
@@ -929,11 +930,11 @@ fn assert_legacy_shape(path: &std::path::Path) {
 }
 
 #[test]
-fn initialize19_builds_compact_schema_and_refuses_legacy_ops() {
+fn initialize_compact_builds_compact_schema_and_refuses_legacy_ops() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("compact.db");
     let db = SqliteTasks::new(&path);
-    db.initialize19().unwrap();
+    db.initialize_compact().unwrap();
     assert_compact_shape(&path);
     let e = db.read(|_| Ok(())).unwrap_err().to_string();
     assert!(e.contains("unsupported/uninitialized schema"), "{e}");
