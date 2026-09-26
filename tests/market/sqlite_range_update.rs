@@ -2889,9 +2889,8 @@ fn shared_batch_evidence_is_content_addressed_in_envelope_and_audit() {
 /// complete requested history. A no-change result must bind the existing
 /// version/manifest digests; it must not copy that history into `payloads`.
 ///
-/// Ignored until the compact audit format replaces `segment.bars` payloads.
+/// The no-change segment carries a `base` reference rather than a bars payload.
 #[test]
-#[ignore = "#259 P0-B: no-change audit still persists the full batch bars payload"]
 fn production_shaped_no_change_audit_does_not_persist_history_payload() {
     let dir = tempfile::tempdir().unwrap();
     let db = SqliteMarket::new(SqliteTasks::new(dir.path().join("range.sqlite")));

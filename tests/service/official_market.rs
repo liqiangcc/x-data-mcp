@@ -1788,7 +1788,6 @@ fn service_env_install_update_data_no_change_and_fail_closed() {
 }
 
 #[test]
-#[ignore = "#259 S0: schema 18 no-change audit persists retained full history"]
 fn retained_production_shaped_no_change_does_not_add_bar_payload() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(snapshot) = retained_snapshot() else {

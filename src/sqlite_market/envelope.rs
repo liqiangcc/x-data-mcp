@@ -52,7 +52,7 @@ fn value_payload(v: &Value) -> Result<Payload, Error> {
 /// unit/currency, coverage and adjustment evidence are identical for every
 /// item resolved from one snapshot, so each block is stored once in
 /// `payloads` and replaced by a content-addressed `$ref` (#259 P0-D).
-fn pack_shared(batch: &mut Value, out: &mut Vec<Payload>) -> Result<(), Error> {
+pub(crate) fn pack_shared(batch: &mut Value, out: &mut Vec<Payload>) -> Result<(), Error> {
     for key in ["unit_currency", "coverage", "adjustment_evidence"] {
         let v = &batch[key];
         if v.is_null() || v.get(REF).is_some() {
@@ -292,7 +292,7 @@ pub(crate) fn require_refs(c: &Connection, v: &Value) -> Result<(), Error> {
             if let Some(r) = v.get(REF).and_then(Value::as_str) {
                 if r.starts_with("payload:") || r.starts_with("annual_bars:") {
                     fetch_payload(c, r.split_once(':').unwrap().1).map(|_| ())?;
-                } else if r != "records" && r != "segments" {
+                } else if r != "records" && r != "segments" && r != "base" {
                     return Err(integrity("unknown audit envelope reference"));
                 }
             }
