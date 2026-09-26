@@ -274,7 +274,7 @@ init_out=$("$RELEASE_DIR/bin/task_sqlite" init20 "$DB") || fail "task_sqlite ini
 chmod 600 "$DB" || fail "chmod private market db"
 chown "$(id -u):$(id -g)" "$DB" || fail "chown market db"
 fresh_schema=$(python3 -c "import sqlite3; print(sqlite3.connect('file:$DB?mode=ro', uri=True).execute('PRAGMA user_version').fetchone()[0])")
-[[ "$fresh_schema" == "19" ]] || fail "fresh db user_version=$fresh_schema != 20"
+[[ "$fresh_schema" == "20" ]] || fail "fresh db user_version=$fresh_schema != 20"
 
 step=switch
 ln -sfn "$RELEASE_DIR" "$DEPLOY_ROOT/current" || fail "switch current"
