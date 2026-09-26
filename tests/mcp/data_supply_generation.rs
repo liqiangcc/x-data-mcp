@@ -739,3 +739,248 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
         .unwrap();
     assert_eq!(bound, gen_b);
 }
+
+/// #290 regression: a corporate-action generation (qfq repricing rewrites
+/// the whole `.day` member, so no prefix proof is possible) must not leave
+/// the entity stuck at `NEEDS_VERIFICATION`. The update adopts the new
+/// member wholesale as a rewrite version: head advances, records equal the
+/// new full history, the parent link points at the old head, and the
+/// version rebinds to the new generation.
+#[test]
+fn explicit_daily_update_rewrites_history_on_compact() {
+    use x_data_mcp::market_storage::MarketRepository;
+    use x_data_mcp::market_update::tasks::{Operation, RangeContract};
+    use x_data_mcp::sqlite_market::backend::MarketBackend;
+
+    let today = today_u32();
+    let member_a = [
+        day_record(today - 3, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(today - 2, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(today - 1, [1131, 1135, 1130, 1134], 0.0, 120),
+    ]
+    .concat();
+    // Gen B: same dates but every historical price repriced (a dividend
+    // adjustment would do exactly this) plus one appended record — the
+    // member is NOT a byte-prefix extension of member_a.
+    let member_b = [
+        day_record(today - 3, [1028, 1030, 1025, 1029], 0.0, 100),
+        day_record(today - 2, [1029, 1032, 1028, 1031], 0.0, 110),
+        day_record(today - 1, [1031, 1035, 1030, 1034], 0.0, 120),
+        day_record(today, [1034, 1038, 1033, 1037], 0.0, 130),
+    ]
+    .concat();
+
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror_day(mirror.path(), 600006, &member_a);
+    let root = tempfile::tempdir().unwrap();
+    let service = AcquireService::open(root.path(), Source::Mirror(mirror.path().into())).unwrap();
+    let gen_a = activate_generation(&service, "req-gen-a", None);
+    let generation = GenerationSource::new(root.path());
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("market.db");
+    let tasks = SqliteTasks::new(&db);
+    tasks.initialize_compact().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let backend = MarketBackend::open(&tasks).unwrap();
+    let tasks = backend.tasks();
+    let supply = SqliteSupply {
+        market: backend.clone(),
+    };
+    let range = RangeContract {
+        operation: Operation::Update,
+        repository: backend.clone(),
+        today: x_data_mcp::calendar::shanghai_today,
+    };
+    let range_key = range.key();
+    let control = TaskControl::new(
+        tasks.clone(),
+        "run-rw".into(),
+        vec![
+            Box::new(Bound {
+                inner: Box::new(CollectionContract {
+                    dataset: Dataset::Daily,
+                    repository: supply.clone(),
+                }),
+                source: generation.clone(),
+            }) as Box<dyn Contract>,
+            Box::new(Bound {
+                inner: Box::new(range),
+                source: generation.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    control
+        .accept("req-daily", control_key(&supply), daily_payload("600006"))
+        .unwrap();
+    let done =
+        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
+            .unwrap()
+            .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+    let scope = Scope {
+        symbol: "sh.600006".into(),
+        period: Period::Day,
+    };
+    let base_id = backend.effective_head(&scope).unwrap().unwrap();
+
+    write_mirror_day(mirror.path(), 600006, &member_b);
+    let gen_b = activate_generation(&service, "req-gen-b", Some(&gen_a));
+    let day = x_data_mcp::calendar::shanghai_today();
+    control
+        .accept(
+            "req-update",
+            range_key,
+            json!({"items":[{"symbol":"sh.600006","base_version_id":base_id,"start_date":day,"end_date":day}]}),
+        )
+        .unwrap();
+    let done =
+        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
+            .unwrap()
+            .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+
+    // The rewrite advanced the head to a new immutable version whose
+    // records are the new member's full repriced history.
+    let new_id = backend.effective_head(&scope).unwrap().unwrap();
+    assert_ne!(new_id, base_id);
+    let head = backend.fixed(&new_id).unwrap();
+    assert_eq!(head.version().records.len(), 4);
+    assert_eq!(
+        head.version().records[0].open.to_string(),
+        "10.28",
+        "first bar must carry the repriced (not base) value"
+    );
+    let conn = rusqlite::Connection::open(dir.path().join("market.db")).unwrap();
+    let (bound, parent_key): (String, Option<i64>) = conn
+        .query_row(
+            "SELECT sb.generation_id, v.parent_version_key FROM data_versions v \
+             JOIN source_bindings sb ON sb.source_binding_digest = v.source_binding_digest \
+             WHERE v.version_id = ?1",
+            [new_id.clone()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(bound, gen_b);
+    // A full revision is a root checkpoint: the base→result chain lives in
+    // the update result row, not in a version parent pointer.
+    assert_eq!(parent_key, None, "rewrite must stage as a root checkpoint");
+    let (result_base, continuity): (String, i64) = conn
+        .query_row(
+            "SELECT bv.version_id, r.continuity_mode FROM market_update_results r \
+             JOIN data_versions bv ON bv.version_key = r.base_version_key \
+             JOIN data_versions rv ON rv.version_key = r.result_version_key \
+             WHERE rv.version_id = ?1",
+            [new_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(result_base, base_id, "update result links base→rewrite");
+    assert_eq!(continuity, 3, "continuity_mode=full");
+}
+
+/// #290 fail-closed: a rewrite candidate that silently drops a base record
+/// date must NOT commit — the staged full materialization is bound by
+/// `prepare_range` requiring every base date to survive repricing.
+#[test]
+fn explicit_daily_update_rewrite_dropping_base_date_fails_closed() {
+    use x_data_mcp::market_update::tasks::{Operation, RangeContract};
+    use x_data_mcp::sqlite_market::backend::MarketBackend;
+
+    let today = today_u32();
+    let member_a = [
+        day_record(today - 3, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(today - 2, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(today - 1, [1131, 1135, 1130, 1134], 0.0, 120),
+    ]
+    .concat();
+    // Gen B truncates the first base date (source dropped history).
+    let member_b = [
+        day_record(today - 2, [1029, 1032, 1028, 1031], 0.0, 110),
+        day_record(today - 1, [1031, 1035, 1030, 1034], 0.0, 120),
+        day_record(today, [1034, 1038, 1033, 1037], 0.0, 130),
+    ]
+    .concat();
+
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror_day(mirror.path(), 600006, &member_a);
+    let root = tempfile::tempdir().unwrap();
+    let service = AcquireService::open(root.path(), Source::Mirror(mirror.path().into())).unwrap();
+    let gen_a = activate_generation(&service, "req-gen-a", None);
+    let generation = GenerationSource::new(root.path());
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("market.db");
+    let tasks = SqliteTasks::new(&db);
+    tasks.initialize_compact().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let backend = MarketBackend::open(&tasks).unwrap();
+    let tasks = backend.tasks();
+    let supply = SqliteSupply {
+        market: backend.clone(),
+    };
+    let range = RangeContract {
+        operation: Operation::Update,
+        repository: backend.clone(),
+        today: x_data_mcp::calendar::shanghai_today,
+    };
+    let range_key = range.key();
+    let control = TaskControl::new(
+        tasks.clone(),
+        "run-tf".into(),
+        vec![
+            Box::new(Bound {
+                inner: Box::new(CollectionContract {
+                    dataset: Dataset::Daily,
+                    repository: supply.clone(),
+                }),
+                source: generation.clone(),
+            }) as Box<dyn Contract>,
+            Box::new(Bound {
+                inner: Box::new(range),
+                source: generation.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    control
+        .accept("req-daily", control_key(&supply), daily_payload("600006"))
+        .unwrap();
+    let done =
+        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
+            .unwrap()
+            .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+    let scope = Scope {
+        symbol: "sh.600006".into(),
+        period: Period::Day,
+    };
+    let base_id = backend.effective_head(&scope).unwrap().unwrap();
+
+    write_mirror_day(mirror.path(), 600006, &member_b);
+    let _gen_b = activate_generation(&service, "req-gen-b", Some(&gen_a));
+    let day = x_data_mcp::calendar::shanghai_today();
+    control
+        .accept(
+            "req-update",
+            range_key,
+            json!({"items":[{"symbol":"sh.600006","base_version_id":base_id,"start_date":day,"end_date":day}]}),
+        )
+        .unwrap();
+    let done =
+        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        done.task.status,
+        Status::Failed,
+        "truncated rewrite must fail closed: {done:?}"
+    );
+    // Head must not move.
+    assert_eq!(backend.effective_head(&scope).unwrap().unwrap(), base_id);
+}

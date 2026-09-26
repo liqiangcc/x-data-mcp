@@ -1483,10 +1483,11 @@ fn update_continuity_historical_revision_fails_closed() {
     let src = make_source(&snap);
     let session = src.materialize_session();
     let acquired = acquire(&update_provider(&session), &base);
-    // No prefix proof — the full path still materializes, and `prepare`
-    // sees the revised known value without a revision authorization.
+    // No prefix proof — the full path materializes a rewrite candidate
+    // (#290), but a range covering the revised base dates still sees the
+    // changed known value without a revision authorization.
     assert_eq!(acquired.evidence.continuity.as_ref().unwrap().mode, "full");
-    assert!(acquired.combined.is_none());
+    assert!(acquired.combined.is_some());
     let decision = x_data_mcp::market_update::prepare(
         &base,
         &acquired.batch,
@@ -1552,7 +1553,9 @@ fn update_continuity_event_change_fails_closed() {
     let session = src.materialize_session();
     let acquired = acquire(&update_provider(&session), &base);
     assert_eq!(acquired.evidence.continuity.as_ref().unwrap().mode, "full");
-    assert!(acquired.combined.is_none());
+    // The rewrite candidate exists (#290), but this range overlaps the
+    // repriced base dates — the in-range revision still fails closed.
+    assert!(acquired.combined.is_some());
     let decision = x_data_mcp::market_update::prepare(
         &base,
         &acquired.batch,

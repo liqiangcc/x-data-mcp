@@ -711,6 +711,7 @@ impl TdxRangeProvider<'_> {
         batch: &MarketDataBatch,
         segment: &MarketDataBatch,
         merged: Vec<Bar>,
+        full_revision: bool,
     ) -> Result<CombinedCandidate, SourceError> {
         let mut combined_batch = batch.clone();
         combined_batch.bars = merged;
@@ -729,7 +730,10 @@ impl TdxRangeProvider<'_> {
             Some(staged_compact_fields(
                 self.session.source(),
                 &combined_batch,
-                &base.version().version_id,
+                // A full revision stages as a root checkpoint: the base→result
+                // chain is carried by the update result's digest, not by a
+                // version parent (compact `ContinuityMode::Full` contract).
+                (!full_revision).then_some(base.version().version_id.as_str()),
             )?),
         )?;
         let segment_sha256 = crate::market_update::candidate_digest(segment)
@@ -1089,6 +1093,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                         &batch,
                         &segment,
                         base.version().records.clone(),
+                        false,
                     )?)
                 };
                 (segment, combined)
@@ -1133,21 +1138,37 @@ impl RangeProvider for TdxRangeProvider<'_> {
                     segment.coverage = base.batch.coverage.clone();
                     (segment, None)
                 } else {
-                    let combined = self.combined_candidate(&ctx, base, &batch, &segment, merged)?;
+                    let combined =
+                        self.combined_candidate(&ctx, base, &batch, &segment, merged, false)?;
                     (segment, Some(combined))
                 }
             }
             Continuity::Unverified => {
-                let mut batch = self.session.materialize_daily(&symbol)?;
-                batch
+                // Corporate-action rewrite (#290): the new member is the
+                // authoritative full history — qfq repricing rewrote prior
+                // bytes, so no prefix proof is possible. Adopt it wholesale
+                // as a combined rewrite candidate (evidence mode `full`);
+                // `prepare_range` binds it by requiring every acquired
+                // segment bar verbatim and every base date still present.
+                let full_batch = self.session.materialize_daily(&symbol)?;
+                let mut segment = full_batch.clone();
+                segment
                     .bars
                     .retain(|b| range.start <= b.date && b.date <= range.end);
-                if batch.bars.is_empty() {
+                if segment.bars.is_empty() {
                     return Err(SourceError::InvalidResponse(
                         "snapshot carries no bars inside the accepted range".into(),
                     ));
                 }
-                (batch, None)
+                let combined = self.combined_candidate(
+                    &ctx,
+                    base,
+                    &full_batch,
+                    &segment,
+                    full_batch.bars.clone(),
+                    true,
+                )?;
+                (segment, Some(combined))
             }
         };
         let gbbq_member_sha256 = self.session.decoded_gbbq()?.sha256.clone();
@@ -1239,7 +1260,7 @@ fn merge_segment_bars(
 fn staged_compact_fields(
     source: &TdxMarketSource,
     combined_batch: &MarketDataBatch,
-    parent_version_id: &str,
+    parent_version_id: Option<&str>,
 ) -> Result<Value, SourceError> {
     let inputs = combined_batch
         .provenance
@@ -1255,7 +1276,7 @@ fn staged_compact_fields(
                 SourceError::InvalidResponse(format!("snapshot binding lacks the {role} member"))
             })
     };
-    Ok(json!({
+    let mut fields = json!({
         "compact_source": {
             "generation_id": source.manifest_sha256(),
             "generation_manifest_sha256": source.manifest_sha256(),
@@ -1266,8 +1287,14 @@ fn staged_compact_fields(
                 "snapshot_inputs": inputs,
             },
         },
-        "compact_parent_version_id": parent_version_id,
-    }))
+    });
+    // `None` means a full-revision root checkpoint: no parent linkage in the
+    // version row — the base→result chain lives in the update result's
+    // `full_revision_digest` instead (compact `ContinuityMode::Full` model).
+    if let Some(parent) = parent_version_id {
+        fields["compact_parent_version_id"] = json!(parent);
+    }
+    Ok(fields)
 }
 
 fn combined_version_record(
@@ -1391,7 +1418,7 @@ fn acquire_merged_segment(
         Some(staged_compact_fields(
             source,
             &combined_batch,
-            &base.version().version_id,
+            Some(base.version().version_id.as_str()),
         )?),
     )?;
     let segment_sha256 = crate::market_update::candidate_digest(&segment)
