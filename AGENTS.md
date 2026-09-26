@@ -28,7 +28,11 @@
 Box（旧 Tailscale 节点 `grok-bot-vm-411252337`）已于 2026-09-25 回收下线：其上 `/home/box/retained-inputs/`、迁移协作 mailbox 与 agent 会话随之失效；Node.js 迁移（#271）已冻结，实现与证据保留在 `migration/*` 分支。dev/preview 场景的 `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（#213）仅限本地验收，生产禁用；客户端 `mcp_connect` 连接时同样需要该变量。
 
 ECS 部署目标 `ecs-node`（OpenSSH 别名，key auth，`ssh ecs-node` 本机直接可用）：x86_64，2 vCPU，约 2GiB RAM，40GB 根盘。它用于最终部署、真实 MCP 路径与最终 disk/WAL
-验收。
-截至 2026-09-21，100-item ECS 功能 smoke 已完成而 #259 容量 AC 未通过；当前 schema
-禁止在 ECS 上启动 5,221-symbol collection，须先修复 audit history payload 与
-canonical `bar_json` 布局。
+验收。注意：生产部署实际运行在本机 `/opt/x-data-mcp-preview/`（`x-data-mcp-data`/`x-data-mcp-acquire` systemd 单元 + `run/mcp.sock`/`run/acquire.sock` unix socket）；本机即承载生产实例，`ssh ecs-node` 别名当前未配置。
+
+生产事实（preview.26 @ e43da34，2026-09-26 验证）：
+
+- 部署管线：版本 bump + tag + `scripts/build_release.sh` + `scripts/smoke_release.py --bin-dir … --report …` + `gh release create --target <sha>` + `deploy_phase_g.sh <tag>`（在 git 仓库目录内运行，`GH_REPO` 需就绪；每次部署归档旧库并全新 init schema-19，非原地升级）。
+- 契约要点：`securities.catalog` 的 selection 为 `{"scope":"current_sh_sz_a"}`；已有 daily head 的实体禁止 `start_collection`（`market.daily` 返回 `existing daily head requires the update_data range path`），必须走 `update_data` 的 `explicit-range-task-v1` item（entity/base_version_id/start_date/end_date）；`market.yearly` 的 collection 被 worker 设计性拒绝，年线一律走 `update_data`（item 含 `base_daily_version_id`、`years`、`publication.expected_yearly_head`）。
+- 跨代日更：coverage reason 绑定新 manifest sha → typed ops 统一回退 envelope（#289 修复后可走通）；除权股 `.day` member 非前缀追加 → `NeedsVerification` fail-closed（#290 待裁决增量路径）。
+- 实测下限：同代无变化 `update_data` ≈ 195ms/item（release 二进制、生产 socket）；跨代 envelope ≈ 430ms/item；首采 5,227 entity ≈ 340s；年线全量 ≈ 895s。
