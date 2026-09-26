@@ -30,9 +30,9 @@ Box（旧 Tailscale 节点 `grok-bot-vm-411252337`）已于 2026-09-25 回收下
 ECS 部署目标 `ecs-node`（OpenSSH 别名，key auth，`ssh ecs-node` 本机直接可用）：x86_64，2 vCPU，约 2GiB RAM，40GB 根盘。它用于最终部署、真实 MCP 路径与最终 disk/WAL
 验收。注意：生产部署实际运行在本机 `/opt/x-data-mcp-preview/`（`x-data-mcp-data`/`x-data-mcp-acquire` systemd 单元 + `run/mcp.sock`/`run/acquire.sock` unix socket）；本机即承载生产实例，`ssh ecs-node` 别名当前未配置。
 
-生产事实（preview.26 @ e43da34，2026-09-26 验证）：
+生产事实（preview.28 @ b88612b，2026-09-26 验证）：
 
-- 部署管线：版本 bump + tag + `scripts/build_release.sh` + `scripts/smoke_release.py --bin-dir … --report …` + `gh release create --target <sha>` + `deploy_phase_g.sh <tag>`（在 git 仓库目录内运行，`GH_REPO` 需就绪；每次部署归档旧库并全新 init 最新 compact schema（现 v20），非原地升级）。
+- 部署管线：版本 bump + tag + `scripts/build_release.sh` + `scripts/smoke_release.py --bin-dir <解包目录>/bin --report <path>` + `gh release create --target <sha>`（tag 已存在时也必须传 `--target`，否则 `targetCommitish` 落成默认分支名，smoke 绑定校验失败）+ `deploy_phase_g.sh <tag>`（在 git 仓库目录内运行，`GH_REPO` 需就绪；release 资产名必须含 `<tarball>`、`<tarball>.sha256`、定名 `smoke-report.json`；每次部署归档旧库并全新 init 最新 compact schema（现 v20），非原地升级）。
 - 契约要点：`securities.catalog` 的 selection 为 `{"scope":"current_sh_sz_a"}`；已有 daily head 的实体禁止 `start_collection`（`market.daily` 返回 `existing daily head requires the update_data range path`），必须走 `update_data` 的 `explicit-range-task-v1` item（entity/base_version_id/start_date/end_date）；`market.yearly` 的 collection 被 worker 设计性拒绝，年线一律走 `update_data`（item 含 `base_daily_version_id`、`years`、`publication.expected_yearly_head`）。
-- 跨代日更：coverage reason 绑定新 manifest sha → typed ops 统一回退 envelope（#289 修复后可走通）；除权股 `.day` member 非前缀追加 → `NeedsVerification` fail-closed（#290 待裁决增量路径）。
-- 实测下限：同代无变化 `update_data` ≈ 195ms/item（release 二进制、生产 socket）；跨代 envelope ≈ 430ms/item；首采 5,227 entity ≈ 340s；年线全量 ≈ 895s。
+- 跨代日更：coverage reason 绑定新 manifest sha → typed ops 统一回退 envelope（#289）；除权股 `.day` member 非前缀追加 → 全量重写为根 checkpoint 版本（`continuity_mode=3`/`Full`，parent_version_key=NULL，亲缘链在 `market_update_results`），仅前向窗口可走；窗口覆盖被改写历史日仍 `RevisionUnverified` fail-closed（#290/#293）。
+- 实测下限：同代无变化 `update_data` 全量 5,222 项 ≈ 116ms/item 平均（冷启 ~226ms → 稳态 50-70ms，generation 缓存）；跨代 envelope ≈ 430ms/item；首采 5,227 entity ≈ 340s；年线全量 ≈ 900s。
