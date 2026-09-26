@@ -1,3 +1,4 @@
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use chrono::{DateTime, Datelike, Utc};
@@ -61,6 +62,14 @@ pub(crate) struct CompactVersionSummary {
     pub integrity_sha256: String,
 }
 
+/// Top-level fields of a `version` evidence document whose contents are
+/// identical for every version resolved from one generation (#259 P0-D).
+/// Each is stored once as a `shared` sub-bundle and replaced by an
+/// `$evref` marker in the parent's stored form; `read_evidence` re-inlines
+/// them so digests and canonical bytes are unchanged externally.
+const SHARED_VERSION_FIELDS: [&str; 2] = ["unit_currency", "adjustment_evidence"];
+const EVREF: &str = "$evref";
+
 pub(crate) fn put_evidence(
     c: &Connection,
     kind: EvidenceKind,
@@ -75,8 +84,9 @@ pub(crate) fn put_evidence(
         )
         .optional()
         .map_err(storage)?;
-    if let Some((kind_raw, canonical)) = existing {
+    if let Some((kind_raw, stored)) = existing {
         let stored_kind = parse_evidence_kind(&kind_raw)?;
+        let canonical = inflate_evidence(c, stored_kind, &stored)?;
         compact_market::verify_evidence(stored_kind, &canonical, bundle.digest)
             .map_err(integrity)?;
         if stored_kind != kind || canonical != bundle.canonical_json {
@@ -86,12 +96,126 @@ pub(crate) fn put_evidence(
         }
         return Ok(bundle.digest);
     }
+    let stored_form = decompose_evidence(c, kind, &bundle.canonical_json)?;
     c.execute(
         "INSERT INTO evidence_bundles(evidence_digest,evidence_kind,canonical_json) VALUES(?1,?2,?3)",
-        params![bundle.digest.as_slice(), kind.as_str(), bundle.canonical_json],
+        params![bundle.digest.as_slice(), kind.as_str(), stored_form],
     )
     .map_err(storage)?;
     Ok(bundle.digest)
+}
+
+/// Replace decomposable fields with `$evref` markers pointing at `shared`
+/// sub-bundle rows. Returns the stored form (full canonical unchanged for
+/// kinds without decomposable fields).
+fn decompose_evidence(
+    c: &Connection,
+    kind: EvidenceKind,
+    canonical: &str,
+) -> Result<String, Error> {
+    if kind != EvidenceKind::Version {
+        return Ok(canonical.to_string());
+    }
+    let mut doc: Value = serde_json::from_str(canonical).map_err(integrity)?;
+    let Some(map) = doc.as_object_mut() else {
+        return Err(integrity("version evidence is not an object"));
+    };
+    for field in SHARED_VERSION_FIELDS {
+        let Some(existing) = map.get(field) else {
+            continue;
+        };
+        if !existing.is_object() || existing.get(EVREF).is_some() {
+            continue;
+        }
+        let sub = compact_market::canonical_evidence(EvidenceKind::Shared, existing)
+            .map_err(integrity)?;
+        store_shared(c, &sub)?;
+        map.insert(
+            field.to_string(),
+            json!({EVREF: compact_market::digest_hex(&sub.digest)}),
+        );
+    }
+    serde_json::to_string(&doc).map_err(integrity)
+}
+
+/// Insert a `shared` sub-document row verbatim, or verify an identical row
+/// already stored under its digest. Part rows live in `evidence_parts` and
+/// are never decomposed, so marker expansion cannot recurse.
+fn store_shared(c: &Connection, bundle: &compact_market::EvidenceBundle) -> Result<(), Error> {
+    let existing = c
+        .query_row(
+            "SELECT canonical_json FROM evidence_parts WHERE part_digest=?1",
+            params![bundle.digest.as_slice()],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    if let Some(canonical) = existing {
+        compact_market::verify_evidence(EvidenceKind::Shared, &canonical, bundle.digest)
+            .map_err(integrity)?;
+        if canonical != bundle.canonical_json {
+            return Err(integrity(
+                "evidence digest collision with different content",
+            ));
+        }
+        return Ok(());
+    }
+    c.execute(
+        "INSERT INTO evidence_parts(part_digest,canonical_json) VALUES(?1,?2)",
+        params![bundle.digest.as_slice(), bundle.canonical_json],
+    )
+    .map_err(storage)?;
+    Ok(())
+}
+
+/// Re-inline `$evref` markers back into a stored evidence document and
+/// return its canonical form. Kinds without decomposable fields — and rows
+/// written before decomposition existed — pass through unchanged.
+fn inflate_evidence(c: &Connection, kind: EvidenceKind, stored: &str) -> Result<String, Error> {
+    if kind != EvidenceKind::Version {
+        return Ok(stored.to_string());
+    }
+    let mut doc: Value = serde_json::from_str(stored).map_err(integrity)?;
+    let Some(map) = doc.as_object_mut() else {
+        return Err(integrity("stored version evidence is not an object"));
+    };
+    for field in SHARED_VERSION_FIELDS {
+        let Some(marker) = map
+            .get(field)
+            .and_then(|v| v.get(EVREF))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let digest = digest_from_hex(marker)?;
+        let canonical: String = c
+            .query_row(
+                "SELECT canonical_json FROM evidence_parts WHERE part_digest=?1",
+                params![digest.as_slice()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage)?
+            .ok_or_else(|| integrity("shared evidence part missing"))?;
+        compact_market::verify_evidence(EvidenceKind::Shared, &canonical, digest)
+            .map_err(integrity)?;
+        map.insert(
+            field.to_string(),
+            serde_json::from_str(&canonical).map_err(integrity)?,
+        );
+    }
+    serde_json_canonicalizer::to_string(&doc).map_err(|_| integrity("evidence not canonicalizable"))
+}
+
+fn digest_from_hex(hex: &str) -> Result<Digest, Error> {
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+        .collect::<Result<Vec<u8>, _>>()
+        .map_err(|_| integrity("malformed shared evidence reference"))?;
+    bytes
+        .try_into()
+        .map_err(|_| integrity("malformed shared evidence reference"))
 }
 
 pub(crate) fn put_source_binding(c: &Connection, binding: &SourceBinding) -> Result<Digest, Error> {
@@ -1771,8 +1895,9 @@ pub(crate) fn read_evidence(
         .map_err(storage)?
         .ok_or_else(|| integrity("evidence bundle missing"))?;
     let kind = parse_evidence_kind(&row.0)?;
-    compact_market::verify_evidence(kind, &row.1, *digest).map_err(integrity)?;
-    Ok((kind, row.1))
+    let canonical = inflate_evidence(c, kind, &row.1)?;
+    compact_market::verify_evidence(kind, &canonical, *digest).map_err(integrity)?;
+    Ok((kind, canonical))
 }
 
 pub(crate) fn read_source_binding(c: &Connection, digest: &Digest) -> Result<SourceBinding, Error> {
@@ -1930,6 +2055,7 @@ fn parse_evidence_kind(raw: &str) -> Result<EvidenceKind, Error> {
         "continuity" => EvidenceKind::Continuity,
         "catalog" => EvidenceKind::Catalog,
         "yearly" => EvidenceKind::Yearly,
+        "shared" => EvidenceKind::Shared,
         _ => return Err(integrity("unknown evidence kind")),
     })
 }

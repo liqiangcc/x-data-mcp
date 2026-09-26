@@ -17,6 +17,10 @@ fn connection() -> Connection {
            evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('generation','batch_selection','version','continuity','catalog','yearly')),
            canonical_json TEXT NOT NULL
          ) STRICT, WITHOUT ROWID;
+         CREATE TABLE evidence_parts(
+           part_digest BLOB PRIMARY KEY CHECK(length(part_digest)=32),
+           canonical_json TEXT NOT NULL
+         ) STRICT, WITHOUT ROWID;
          CREATE TABLE source_bindings(
            source_binding_digest BLOB PRIMARY KEY CHECK(length(source_binding_digest)=32),
            generation_id TEXT NOT NULL,

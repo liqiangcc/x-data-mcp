@@ -60,16 +60,17 @@ pub struct SqliteCompactMarket {
     tasks: SqliteTasks,
 }
 
-/// Deterministic schema-19 identity (recomputes the schema_migrations digest
-/// without opening the database).
-pub(crate) fn schema19_identity() -> SchemaIdentity {
+/// Deterministic compact-schema identity (recomputes the schema_migrations
+/// digest without opening the database).
+pub(crate) fn schema_compact_identity() -> SchemaIdentity {
     const DOMAIN: &[u8] = b"x-data-schema-identity-v1\0";
+    const VERSION: u32 = crate::sqlite_tasks::COMPACT_SCHEMA_VERSION;
     let mut payload = DOMAIN.to_vec();
-    payload.extend_from_slice(&19u32.to_be_bytes());
-    payload.extend_from_slice(&19u32.to_be_bytes());
+    payload.extend_from_slice(&VERSION.to_be_bytes());
+    payload.extend_from_slice(&VERSION.to_be_bytes());
     for (index, sql) in crate::sqlite_tasks::MIGRATIONS
         .iter()
-        .chain(std::iter::once(&crate::sqlite_tasks::COMPACT_MIGRATION))
+        .chain(crate::sqlite_tasks::COMPACT_MIGRATIONS.iter())
         .enumerate()
     {
         payload.extend_from_slice(&(index as u32 + 1).to_be_bytes());
@@ -78,7 +79,7 @@ pub(crate) fn schema19_identity() -> SchemaIdentity {
         payload.extend_from_slice(checksum.as_bytes());
     }
     SchemaIdentity {
-        user_version: 19,
+        user_version: VERSION,
         digest: Sha256::digest(&payload).into(),
     }
 }
@@ -97,7 +98,7 @@ impl SqliteCompactMarket {
         let coordinator = Arc::new(WriteCoordinator::open_existing(
             path,
             lease,
-            schema19_identity(),
+            schema_compact_identity(),
             BUSY,
         )?);
         Ok(Self {

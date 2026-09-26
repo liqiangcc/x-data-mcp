@@ -648,7 +648,7 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("market.db");
     let tasks = SqliteTasks::new(&db);
-    tasks.initialize19().unwrap();
+    tasks.initialize_compact().unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
     let backend = MarketBackend::open(&tasks).unwrap();

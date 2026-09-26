@@ -10,6 +10,10 @@ fn connection() -> Connection {
            evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('generation','batch_selection','version','continuity','catalog','yearly')),
            canonical_json TEXT NOT NULL
          ) STRICT, WITHOUT ROWID;
+         CREATE TABLE evidence_parts(
+           part_digest BLOB PRIMARY KEY CHECK(length(part_digest)=32),
+           canonical_json TEXT NOT NULL
+         ) STRICT, WITHOUT ROWID;
          CREATE TABLE source_bindings(
            source_binding_digest BLOB PRIMARY KEY CHECK(length(source_binding_digest)=32),
            generation_id TEXT NOT NULL,
@@ -1138,4 +1142,76 @@ fn leaf_bars_in_range_matches_full_reconstruction() {
     }
     // inverted range is empty, not an error
     assert!(leaf_bars_in_range(&c, key, 9, 5).unwrap().is_empty());
+}
+
+/// #259 P0-D: generation-common fields of `version` evidence are stored
+/// once in `evidence_parts` and re-inlined on read — digests and canonical
+/// bytes are unchanged externally.
+#[test]
+fn version_evidence_shared_fields_dedup_and_recompose() {
+    let c = connection();
+    let mut a = version_evidence("official", true, true);
+    a["coverage_reason"] = serde_json::json!("entity-A window verified");
+    let mut b = version_evidence("official", true, true);
+    b["coverage_reason"] = serde_json::json!("entity-B window verified");
+    let digest_a = put_evidence(&c, EvidenceKind::Version, &a).unwrap();
+    let digest_b = put_evidence(&c, EvidenceKind::Version, &b).unwrap();
+    assert_ne!(digest_a, digest_b);
+    // Two parent rows; each shared field stored once for identical content.
+    let bundles: i64 = c
+        .query_row("SELECT count(*) FROM evidence_bundles", [], |r| r.get(0))
+        .unwrap();
+    let parts: i64 = c
+        .query_row("SELECT count(*) FROM evidence_parts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!((bundles, parts), (2, 2));
+    // Reads recompose to the byte-identical canonical document.
+    let (kind, canonical) = read_evidence(&c, &digest_a).unwrap();
+    assert_eq!(kind, EvidenceKind::Version);
+    assert_eq!(
+        canonical,
+        compact_market::canonical_evidence(EvidenceKind::Version, &a)
+            .unwrap()
+            .canonical_json
+    );
+    // Re-putting identical evidence is idempotent and stores nothing new.
+    assert_eq!(
+        put_evidence(&c, EvidenceKind::Version, &a).unwrap(),
+        digest_a
+    );
+    let parts_after: i64 = c
+        .query_row("SELECT count(*) FROM evidence_parts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(parts_after, 2);
+}
+
+#[test]
+fn version_evidence_part_tamper_or_loss_fails_closed() {
+    let c = connection();
+    let digest = put_version_evidence(&c);
+    c.execute("UPDATE evidence_parts SET canonical_json='{\"x\":1}'", [])
+        .unwrap();
+    integrity_failure(read_evidence(&c, &digest));
+
+    let c2 = connection();
+    let digest2 = put_version_evidence(&c2);
+    c2.execute("DELETE FROM evidence_parts", []).unwrap();
+    integrity_failure(read_evidence(&c2, &digest2));
+}
+
+/// Rows written before decomposition existed carry the full document and
+/// must still read back unchanged.
+#[test]
+fn version_evidence_undecomposed_row_still_reads() {
+    let c = connection();
+    let value = version_evidence("official", true, true);
+    let bundle = compact_market::canonical_evidence(EvidenceKind::Version, &value).unwrap();
+    c.execute(
+        "INSERT INTO evidence_bundles VALUES(?1,'version',?2)",
+        params![bundle.digest.as_slice(), bundle.canonical_json],
+    )
+    .unwrap();
+    let (kind, canonical) = read_evidence(&c, &bundle.digest).unwrap();
+    assert_eq!(kind, EvidenceKind::Version);
+    assert_eq!(canonical, bundle.canonical_json);
 }

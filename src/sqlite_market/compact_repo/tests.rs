@@ -23,7 +23,7 @@ fn repo(dir: &tempfile::TempDir) -> (PathBuf, SqliteCompactMarket) {
     use std::os::unix::fs::PermissionsExt;
     let path = dir.path().join("market.db");
     crate::sqlite_tasks::SqliteTasks::new(&path)
-        .initialize19()
+        .initialize_compact()
         .unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let repo = SqliteCompactMarket::open(&path).unwrap();
@@ -503,7 +503,7 @@ fn no_change_range_commit_writes_only_typed_result() {
 }
 
 #[test]
-fn legacy_adapters_reject_schema19() {
+fn legacy_adapters_reject_compact_schema() {
     let dir = tempdir();
     let (path, _) = repo(&dir);
     let legacy =
@@ -1350,6 +1350,7 @@ fn typed_collection_batch_is_byte_equal_to_envelope_path() {
         "version_checkpoint_clips",
         "source_bindings",
         "evidence_bundles",
+        "evidence_parts",
         "effective_heads",
     ] {
         let a = dump(&repo1, table);

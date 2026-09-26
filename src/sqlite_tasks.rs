@@ -30,11 +30,13 @@ pub(crate) const MIGRATIONS: [&str; 18] = [
     include_str!("../migrations/tasks/017_manifest_delta.sql"),
     include_str!("../migrations/tasks/018_shared_evidence.sql"),
 ];
-/// Compact market storage (#259) is an explicit opt-in target: schema-19 files
+/// Compact market storage (#259) is an explicit opt-in target: compact files
 /// are refused by `check_schema` above so legacy adapters stay fail-closed.
-pub const COMPACT_SCHEMA_VERSION: u32 = 19;
-pub(crate) const COMPACT_MIGRATION: &str =
-    include_str!("../migrations/tasks/019_compact_market.sql");
+pub const COMPACT_SCHEMA_VERSION: u32 = 20;
+pub(crate) const COMPACT_MIGRATIONS: [&str; 2] = [
+    include_str!("../migrations/tasks/019_compact_market.sql"),
+    include_str!("../migrations/tasks/020_evidence_parts.sql"),
+];
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.
 fn post_migration(c: &Connection, version: usize) -> Result<(), Error> {
@@ -61,7 +63,7 @@ impl SqliteTasks {
             coordinator: None,
         }
     }
-    /// Binds this handle to a schema-19 compact write coordinator sharing
+    /// Binds this handle to a compact write coordinator sharing
     /// the same database file. Once bound, `read`/`write` run through the
     /// coordinator — lease validation, schema-identity check and the single
     /// writer — instead of the legacy per-operation connection; `accept_tx`
@@ -113,7 +115,7 @@ impl SqliteTasks {
     pub fn initialize(&self) -> Result<(), Error> {
         self.initialize_target(false)
     }
-    pub fn initialize19(&self) -> Result<(), Error> {
+    pub fn initialize_compact(&self) -> Result<(), Error> {
         self.initialize_target(true)
     }
     fn initialize_target(&self, compact: bool) -> Result<(), Error> {
@@ -141,7 +143,9 @@ impl SqliteTasks {
             post_migration(&tx, index + 1)?;
         }
         if compact {
-            apply_migration(&tx, COMPACT_SCHEMA_VERSION as usize, COMPACT_MIGRATION)?;
+            for (offset, sql) in COMPACT_MIGRATIONS.iter().enumerate() {
+                apply_migration(&tx, 19 + offset, sql)?;
+            }
         }
         tx.commit()
             .map_err(|e| Error::OutcomeUnknown(e.to_string()))
@@ -174,7 +178,7 @@ impl SqliteTasks {
             .map_err(storage)?;
         Ok(())
     }
-    /// Explicit 18→19 compact storage upgrade. Every business table must be
+    /// Explicit 18→compact storage upgrade. Every business table must be
     /// empty; a populated schema-18 database can only be replaced by a fresh
     /// rebuild, never migrated in place.
     pub fn upgrade_compact(&self) -> Result<(), Error> {
@@ -191,7 +195,9 @@ impl SqliteTasks {
             )));
         }
         require_business_tables_empty(&tx)?;
-        apply_migration(&tx, COMPACT_SCHEMA_VERSION as usize, COMPACT_MIGRATION)?;
+        for (offset, sql) in COMPACT_MIGRATIONS.iter().enumerate() {
+            apply_migration(&tx, 19 + offset, sql)?;
+        }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(storage)?
@@ -331,8 +337,7 @@ fn require_business_tables_empty(c: &Connection) -> Result<(), Error> {
             .map_err(storage)?;
         if populated {
             return Err(Error::StorageUnavailable(
-                "FRESH_REBUILD_REQUIRED: schema 19 compact market storage requires a new database"
-                    .into(),
+                "FRESH_REBUILD_REQUIRED: compact market storage requires a new database".into(),
             ));
         }
     }
@@ -1124,7 +1129,7 @@ impl TaskRepository for SqliteTasks {
     }
 }
 
-/// Connection-level accept used by both `SqliteTasks` and the schema-19
+/// Connection-level accept used by both `SqliteTasks` and the compact
 /// compact repository; semantics are identical.
 pub(crate) fn accept_tx(
     c: &Connection,
