@@ -88,8 +88,8 @@ rollback() {
         if [[ -n "$current_before" ]]; then
             ln -sfn "$current_before" "$DEPLOY_ROOT/current" || true
         fi
-        # Restore the pre-deploy market DB: drop the fresh v19 file and put
-        # the archived schema-18 database back at the unit's path.
+        # Restore the pre-deploy market DB: drop the fresh file and put
+        # the archived database back at the unit's path.
         if [[ -n "$DB" && -n "$DB_ARCHIVED" && -f "$DB_ARCHIVED" ]]; then
             rm -f "$DB" "$DB-shm" "$DB-wal" || true
             mv "$DB_ARCHIVED" "$DB" || true
@@ -257,7 +257,7 @@ if [[ ! -d "$RELEASE_DIR" ]]; then
 fi
 
 # --- 3. mutation: archive old db, fresh init20, switch, start -----------------
-step=schema19_fresh
+step=schema20_fresh
 MUTATING=1
 systemctl stop "$ACQ_SERVICE" || fail "stop $ACQ_SERVICE"
 systemctl stop "$DATA_SERVICE" || fail "stop $DATA_SERVICE"
@@ -274,7 +274,7 @@ init_out=$("$RELEASE_DIR/bin/task_sqlite" init20 "$DB") || fail "task_sqlite ini
 chmod 600 "$DB" || fail "chmod private market db"
 chown "$(id -u):$(id -g)" "$DB" || fail "chown market db"
 fresh_schema=$(python3 -c "import sqlite3; print(sqlite3.connect('file:$DB?mode=ro', uri=True).execute('PRAGMA user_version').fetchone()[0])")
-[[ "$fresh_schema" == "19" ]] || fail "fresh db user_version=$fresh_schema != 19"
+[[ "$fresh_schema" == "19" ]] || fail "fresh db user_version=$fresh_schema != 20"
 
 step=switch
 ln -sfn "$RELEASE_DIR" "$DEPLOY_ROOT/current" || fail "switch current"
@@ -320,6 +320,6 @@ PY
 
 step=report
 report "DEPLOYED"
-echo "DEPLOYED $TAG ($SHA) phase-g topology; market db user_version=19 (fresh)"
+echo "DEPLOYED $TAG ($SHA) phase-g topology; market db user_version=20 (fresh)"
 [[ -z "$DB_ARCHIVED" ]] || echo "previous market db archived at $DB_ARCHIVED"
 echo "report: $REPORTS/${TAG_SHORT}-phaseg-deployment.json"
