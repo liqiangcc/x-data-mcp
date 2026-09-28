@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "permissions": {
+    "allow": [
+      "mcp__x-data-acquire__get_acquisition_capabilities",
+      "mcp__x-data-acquire__check_official_updates",
+      "mcp__x-data-acquire__acquire_generation",
+      "mcp__x-data-acquire__get_acquisition_task",
+      "mcp__x-data-acquire__get_acquisition_request",
+      "mcp__x-data-acquire__verify_generation",
+      "mcp__x-data-acquire__activate_generation",
+      "mcp__x-data-acquire__sync_status",
+      "mcp__x-data-mcp__get_data_capabilities",
+      "mcp__x-data-mcp__start_collection",
+      "mcp__x-data-mcp__update_data",
+      "mcp__x-data-mcp__get_task",
+      "mcp__x-data-mcp__get_request",
+      "mcp__x-data-mcp__get_task_progress",
+      "mcp__x-data-mcp__list_tasks",
+      "mcp__x-data-mcp__get_data_availability",
+      "mcp__x-data-mcp__query_data",
+      "mcp__x-data-mcp__list_data_versions",
+      "mcp__x-data-mcp__verify_publication_result",
+      "mcp__x-data-mcp__verify_stopped_writes"
+    ],
+    "deny": [
+      "read",
+      "edit",
+      "grep",
+      "glob",
+      "exec"
+    ]
+  }
+}

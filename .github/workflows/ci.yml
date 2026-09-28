@@ -17,6 +17,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: git diff --check
       - run: python3 scripts/check_current_facts.py
+      - run: python3 scripts/check_daily_sync_eval.py
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --locked
