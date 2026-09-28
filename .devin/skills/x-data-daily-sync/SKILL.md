@@ -49,7 +49,7 @@ allowed-tools:
   - `implementation.capability_revision` 必须等于 `x-data-acquire-v1`
   - `implementation.generation_contract_version` 必须等于 `official-generation-v1`
 - `mcp__x-data-mcp__get_data_capabilities`（`contract_version: "v1"`）：
-  - `capability_revision` 必须等于 `generic-data-v2`
+  - `capability_revision` 必须等于 `generic-data-v3`
 
 任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。记录 `schema_digest`、`active_generation_ref`、`runtime_readiness`、`blocking_reasons` 作为事实。
 
