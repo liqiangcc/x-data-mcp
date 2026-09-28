@@ -32,6 +32,13 @@ allowed-tools:
 
 参数一律按 `tools/list` 中该工具的 `inputSchema` 传：schema 声明 `contract_version` 时必须为 `"v1"`；schema 未声明的字段一律不传（输入对象 `deny_unknown_fields`，多余字段即拒绝）。`update_data`/`start_collection`/`acquire_generation`/`verify_generation`/`activate_generation` 各自使用独立且唯一的 `request_id`。
 
+每个 MCP server 首次使用前按客户端要求调用一次 `mcp_list_tools`。该结果只用于确认 server
+可发现；registry 很大导致输出截断时，**不得读取 overflow 文件、不得使用 shell/exec，
+也不要求枚举全部工具**。直接按本 Skill 已命名的工具和参数调用；若 named tool 不存在或
+调用层返回 unavailable，立即报告 `SKILL_CONTRACT_MISMATCH`。步骤 0 的固定调用为
+`get_acquisition_capabilities({"contract_version":"v1"})` 与
+`get_data_capabilities({})`，无需从 overflow 重读 schema。
+
 当前能力边界：data capability 的 `max_batch_entities=100` 是**每次调用**上限——
 单次 `start_collection`/`update_data` 超过 100 个证券或 item 会整体拒绝，服务端不会自动分页。
 全市场（约 5,200 实体）已通过生产实测：编排方必须自行把目标切成 ≤100 item 的调用，
