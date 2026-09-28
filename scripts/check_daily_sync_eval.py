@@ -75,6 +75,18 @@ def main() -> int:
         denied == EXPECTED_DENY,
         f"expected {sorted(EXPECTED_DENY)}, found {sorted(denied)}",
     )
+    check(
+        "eval config skips interactive setup",
+        config.get("shell", {}).get("setup_complete") is True,
+    )
+    skill_text = SKILL.read_text(encoding="utf-8")
+    for required in [
+        "不得读取 overflow 文件",
+        "也不要求枚举全部工具",
+        "get_acquisition_capabilities({\"contract_version\":\"v1\"})",
+        "get_data_capabilities({})",
+    ]:
+        check(f"Skill contains {required!r}", required in skill_text)
 
     if failures:
         for failure in failures:

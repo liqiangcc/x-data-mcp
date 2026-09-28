@@ -30,5 +30,8 @@
       "glob",
       "exec"
     ]
+  },
+  "shell": {
+    "setup_complete": true
   }
 }
