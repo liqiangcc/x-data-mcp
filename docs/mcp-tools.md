@@ -4,20 +4,24 @@
 
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
-2026-09-21 当前部署分为两个 MCP server：release smoke 对 acquisition socket
-验证 10 个工具，对 data socket 验证 20 个工具。工具数不是稳定业务契约；客户端必须以
+当前部署为 v0.2.0-preview.28（`b88612b`）双 MCP server：data socket 提供
+20 data tools，acquisition socket 提供 10 acquisition tools；fresh init 库使用
+compact schema 20。工具数不是稳定业务契约；客户端必须以
 运行实例的 `tools/list` 与 capability descriptor 为准。
 运行时 `tools/list` 与 `get_data_capabilities` 是机器契约入口；本文不复制完整 schema。
 
-下文“当前八工具”内容是提交 `b3fe2b3bae22d558c3f193e668773728a2e0df34` 的历史快照，
+下方八工具章节是提交 `b3fe2b3bae22d558c3f193e668773728a2e0df34` 的历史快照，
 对应 [旧输入 schema](contracts/mcp-tools-current.json)，不再代表当前部署。通用工具目标与现状差距见
 [通用工具设计](generic-data-tools.md)；跨两个 server 的每日同步边界、Skill 编排和当前禁止声明见
 [每日同步说明](daily-sync.md)与 [Issue #260](https://github.com/liqiangcc/x-data-mcp/issues/260)。
 
-#260 的 immutable generation、验证后激活、generation-bound update 和 capability
-主体已实现，并在 ECS 完成 100-item 功能 smoke；全市场、容量和独立 Skill 会话 DoD
-仍未完成。文档、Skill 或示例不能替代 generation consistency、runtime readiness，
-也不能把 100-item 结果外推为 5,221-symbol PASS。
+immutable generation、验证后激活、generation-bound update 和 capability 已实现，
+全市场 collection/update 已经分批 MCP 编排取得真实 generation 证据
+（preview.26–28 连续验收：catalog 5,227 实体、daily 首采约 340s、yearly 约
+900s、同代 no-change `update_data` 5,222 items 约 616s）。剩余缺口为
+#259/#262/#294 性能 gate 裁决（no-change 日增约 18.5MB > 16MiB、同代
+no-change `update_data` 全量扫描约 10min、跨代 envelope 约 37min）与独立新会话
+Skill 验收。文档、Skill 或示例不能替代 generation consistency、runtime readiness。
 
 ## 协议、权限和通用约定
 

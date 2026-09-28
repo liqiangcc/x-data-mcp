@@ -4,7 +4,7 @@
 //! resolved by Final Gate rulings (#54, #131, #71); published records carry
 //! the DECLARED_SCOPE note in their evidence reasons — the #71 acceptance is
 //! scoped to owner personal research, local-only, no external exposure, and
-//! overall production certification (#225) is not implied.
+//! external distribution is not authorized by that scoped acceptance.
 //!
 //! Verified domain only: `.day` member raw OHLC plus `category == 1` GBBQ
 //! records through `qfq::forward_adjust`. Other GBBQ categories are never
@@ -44,8 +44,8 @@ use std::{collections::BTreeMap, io::Read, path::PathBuf, str::FromStr};
 pub const SOURCE_NAME: &str = "tdx-official-file-snapshot";
 pub const ADAPTER_VERSION: &str = "tdx-market-source-v1";
 pub const DECLARED_SCOPE: &str = "DECLARED_SCOPE: owner personal research, \
-    local-only, no external exposure (#71 comment-5749934485); overall \
-    production certification pending #225";
+    local-only, no external exposure (#71 comment-5749934485); external \
+    distribution is not authorized";
 const GBBQ_MEMBER: &str = "gbbq";
 /// Snapshot-binding role for the per-security decoded event set: digests
 /// the category-1 events actually applied plus the excluded count, so an

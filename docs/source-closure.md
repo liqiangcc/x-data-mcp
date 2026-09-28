@@ -2,9 +2,15 @@
 
 当前摘要：#54 QFQ、#131 固定文件集合一致性和 #71 限定个人研究范围已分别裁定；这些结论只适用于明确证据与声明范围。新 generation 仍需新 manifest 和独立一致性决定。
 当前 acquisition 已实现 immutable generation、验证后条件激活和 generation-bound
-routine update，见[每日同步说明](daily-sync.md)与 #262 Phase G 证据。已验证范围仅为
-100-item 功能 smoke；全市场容量/性能与独立 Skill 会话尚未验收，因此 overall
-`production_ready=false`，且不能宣称全市场每日纯 MCP 生产闭环。
+routine update（见[每日同步说明](daily-sync.md)）；preview.28 双 MCP 拓扑已在本机
+部署运行——data socket 提供 20 data tools、acquire socket 提供 10 acquisition
+tools、fresh init 库使用 compact schema 20，generation 生命周期与全市场分批
+collection/update 均有真实证据（preview.26–28 连续验收：catalog 5,227 实体、
+daily 首采约 340s、同代 no-change `update_data` 5,222 items 约 616s）。尚未收口：
+#259/#262/#294 性能 gate（no-change 日增约 18.5MB、同代 no-change `update_data`
+全量扫描约 10min、跨代 envelope 约 37min）、独立新会话 Skill
+验收与外部分发授权。declared scope 仍为 owner 个人研究/本地使用、不对外暴露，
+external distribution is not authorized，overall `production_ready=false`。
 
 ## 已发生的验收
 

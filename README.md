@@ -33,15 +33,40 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 
 ## 当前状态
 
-**NOT_PRODUCTION_READY — production source convergence stage 1（可执行工程闭环）。**
+**OWNER-ONLY OPERATIONAL PREVIEW — external distribution not authorized.**
 
-2026-09-16 Final Gate 裁定（[#3](https://github.com/liqiangcc/x-data-mcp/issues/3#issuecomment-5695684698)）：bounded explicit `market.daily/v1` 官方快照路径与 fixed-base derived `market.yearly/v1` 治理路径均 PASS（三证券真实发布、receipt/lineage/no-change 复用与 fail-closed 留痕完整）；#46/#54 已完成关闭。yearly 的 `LOCAL_PIPELINE_NOT_IMPLEMENTED` 具体描述退休。
+本机 `/opt/x-data-mcp-preview/` 以 systemd 运行已部署的
+[v0.2.0-preview.28](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.28)
+（代码 `b88612b`），双 MCP server 拓扑：`x-data-mcp-data`（`run/mcp.sock`，
+20 data tools）与 `x-data-mcp-acquire`（`run/acquire.sock`，10 acquisition tools）。
+显式 `task_sqlite init` 的新库使用 fresh compact schema 20；工具数量不是稳定契约，
+客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
 
-2026-09-17 Final Gate 裁定（[#187](https://github.com/liqiangcc/x-data-mcp/issues/187#issuecomment-5710110532)）：bounded explicit `update_data`（#186 证据）与 `verify_data_gap`+default `backfill_data`（#192 证据）官方源执行验收均 PASS；`LOCAL_PIPELINE_NOT_IMPLEMENTED` 整条 blocker 退休，四条 bounded 链（daily/yearly/update/verify-backfill）均有真实源验收证据。#3 保持 OPEN、#187 已关闭——#6 缺名成员处置已按产品裁定 5710586446 落地（受治理 `reject_candidate` 排除 + verbatim 留痕，具名成员照常发布），全目录真实快照验收 #194 v2 PASS（5224 成员发布 + 六排除 verbatim，FG 裁定 `CATALOG_PUBLISH_NOT_VERIFIED` 退休，default selector 解除目录前置阻塞）；部署/消费侧最终验收 NOT_RUN；overall `NOT_PRODUCTION_READY` 与其余 blocker 不变。
+已实现并在真实 generation 上执行过：immutable generation 生命周期
+（acquire → byte verify → consistency verify → 条件 activate）、
+generation-bound daily/yearly update，catalog/daily/yearly/query/verification
+数据路径均在本机生产实例运行（编排边界见[每日同步说明](docs/daily-sync.md)）。
 
-已有 Rust 核心、任务受理/取消/重试、发布校验、目录核心和 stdio MCP 原型。
-生产来源决策见 [Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)，
-完整边界见[官方文件架构](docs/production-source.md)。
+全市场实测（preview.26–28 生产路径证据）：`securities.catalog` 目录
+5,227 实体；daily 首次全市场采集约 340s；yearly 全量约 900s；库体积约 831MB；
+同代 no-change `update_data` 全量 5,222 items 约 616s（约 10min）；跨代
+update envelope 约 37min。
+
+性能/容量 gate 现状（[#259](https://github.com/liqiangcc/x-data-mcp/issues/259)/
+[#262](https://github.com/liqiangcc/x-data-mcp/issues/262)/
+[#294](https://github.com/liqiangcc/x-data-mcp/issues/294)）：
+PASS —— 首采 DB ≤2.5GiB、部署体积 ≤4GiB、首次全市场采集 ≤20min；
+FAIL / 待裁决 —— no-change 日增约 18.5MB > 16MiB、同代 no-change
+`update_data` 全量扫描约 10min > 5min 目标、跨代 envelope 约 37min。
+未通过项在对应 Issue 裁决前不得宣称达标。
+
+`production_ready=false` 表达的是 declared scope（owner 个人研究、本地使用、
+不对外暴露，#71 comment-5749934485）：服务正在运行并经过有界验收，但
+external distribution is not authorized；它不是“服务未运行”的同义词。
+
+schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
+（既有库显式 upgrade 的来源版本），`COMPACT_SCHEMA_VERSION=20` 是 fresh 部署的
+compact schema。Issue/Epic 中的“v15”是交付规划标签，不是 schema 编号。
 
 唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →
 从同一已发布 QFQ daily version 本地聚合 yearly。不存在多源生产 fallback。
@@ -50,27 +75,11 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 - TdxQuant/TdxAiData/tqserver、东财匿名 datacenter/gzfx 不接入生产。
 - Python bridge/eltdx 在线装配已移除，源码与旧测试保留在 `archive/online-tdx/`。
 - 源端直接年线不再是生产契约；MCP `year` 表示本地派生输出。
-- 既有 `evidence/` 和历史文档原样保留；历史结论不等于当前生产状态。
+- 既有 `evidence/`、历史文档与 Final Gate 裁定原样保留；历史结论不外推为当前生产状态。
+- 每个新 generation 必须重新建立字节与跨文件一致性证据，不能继承旧代 PASS。
 
-固定 snapshot 的 GBBQ/QFQ 语义（#54）、base/day/GBBQ 一致性（#131）和文件使用边界（#71）
-已分别经 Final Gate 裁定；#71 仅适用于 owner 个人研究、本地使用、不对外暴露，#131 仅适用于已钉死并审计的文件集合。
-`PRODUCTION_BLOCKERS` 当前为空，但 overall `production_ready` 仍为 false；未来每个新 generation 必须重新建立字节与跨文件一致性证据，不能继承旧代 PASS。
-
-[.day 原始解析器](docs/day-file.md)、GBBQ 解码/QFQ 仿射链和本地[年线聚合](docs/yearly.md)已实现并有界验收。
-保守 DBF 容器解析和目录语义见 [#46 实施记录](docs/tasks/issue-46.md)；[本地输入清单核验](docs/snapshot-input.md)
-只证明 manifest 字节绑定，不单独证明跨文件兼容或授权。通用 `OfficialFilePipeline` stub 继续 fail closed；部署服务只能通过已检查的 snapshot/generation provider 执行。
-
-截至 2026-09-21，immutable generation、#131 验证后激活、generation-bound
-daily/yearly update、truthful capability 和仓库 Skill 已实现；ECS 上已完成 100-item
-MCP 功能 smoke。该结果不等于全市场或生产验收：单任务仍有 100 个证券上限，
-#259 的首次全市场容量与每日增长 AC 尚未通过，overall `production_ready=false`。
-当前 schema 禁止在 ECS 上直接启动 5,221-symbol collection；权威容量状态见
-[#259 的物理审计](https://github.com/liqiangcc/x-data-mcp/issues/259#issuecomment-5756919342)
-与 [#262 的 Epic 更正](https://github.com/liqiangcc/x-data-mcp/issues/262#issuecomment-5756920960)。
-
-Issue 标题中的“v15”是交付/规划标签，不是 SQLite schema 编号；当前
-`SCHEMA_VERSION=18`。文档提到 v16/v17/v18 时若指 migration/schema，必须明确写
-“schema”，不能据此推断产品版本或容量 AC 已完成。
+生产来源决策见 [Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)，
+完整边界见[官方文件架构](docs/production-source.md)。
 
 ## 本地入口
 
@@ -120,14 +129,15 @@ git diff --check
 `./scripts/verify` 尚未实现，不调用不存在的命令。
 
 开发迭代（#272）：编辑循环用 `cargo check --all-targets`（本机约 2.7s）而非 `cargo build`（约 4.4s）；
-`cargo test --no-run` 会重链 43 个测试二进制（约 8–10s），迭代期用 `cargo test --test <名称>` 按需编译；
+`cargo test --no-run` 会重链 8 个域测试 target，迭代期用 `cargo test --test <名称>` 按需编译；
+当前 `cargo test --locked` 基线为 722 tests：712 passed、10 ignored（ignored 未执行）。
 完整 `cargo test --locked` 仍是提交前与 CI 门禁，check 不替代测试。dev profile 使用
 `split-debuginfo = "unpacked"` 将调试信息拆为 .dwo；本机对 mold/lld 链接器无显著收益，未固化。
-数字为 2026-09-25 本机 WSL2（8 核 / 15GiB，cargo 1.96.0）实测，详情与基线见
+计时数字为 2026-09-25 本机 WSL2（8 核 / 15GiB，cargo 1.96.0）实测，详情与基线见
 [#272](https://github.com/liqiangcc/x-data-mcp/issues/272)。
 
 测试覆盖核心、发布门禁及真实 stdio 二进制的离线拒绝行为；Fake 不证明真实 parser/QFQ/yearly。
-归档在线测试不进入 Cargo，真实官方来源验证为 NOT_RUN；全市场覆盖和性能为 NOT_VERIFIED。
+归档在线测试不进入 Cargo；官方来源与全市场的当前验收状态见上文“当前状态”。
 预览包本机离线部署检查已 PASS；用户于2026-09-12报告 ChatGPT 当时会话能调用 13 工具，普通库没有已发布数据。
 这不证明真实采集/发布闭环完成，见[闭环门禁与实施顺序](docs/source-closure.md)。
 行情发布已改为[batch与version单点提交](docs/publish-storage.md)；[任务受理](docs/task-storage.md)也以单一快照提交绑定、执行状态和范围占用；当前仍要求单写者运行。

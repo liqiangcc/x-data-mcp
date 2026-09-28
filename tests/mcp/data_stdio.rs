@@ -146,6 +146,17 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
             .iter()
             .all(|r| r["code"].is_string() && r["detail"].is_string())
     );
+    assert!(reasons.iter().any(|r| {
+        r["code"] == "declared_scope_non_production"
+            && r["detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("external distribution is not authorized"))
+    }));
+    assert!(
+        reasons
+            .iter()
+            .all(|r| !r["detail"].as_str().unwrap_or_default().contains("#225"))
+    );
     assert_eq!(republish["capability_revision"], "generic-data-v2");
     let schema =
         |name: &str, field: &str| tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();

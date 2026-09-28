@@ -57,19 +57,20 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 
 | 能力 | 基线事实 | 目标 / 依赖 |
 |---|---|---|
-| MCP | stdio 原型，八个工具，#68 查询已合并 | 全部业务入口、稳定契约及真实客户端验收 |
-| 任务 | 受理/取消/重试、JSON 单快照、显式 worker | SQLite 事务、后台独立生命周期、核实与请求级终态 |
-| 行情 | JSON 单点发布、摘要与历史读取 | SQLite 逐行行情、原子 head 与结果关联 |
-| 原始 .day | 32 字节结构解析已实现 | 单位和来源语义、目录与事件快照组合校验 |
-| QFQ / GBBQ | 生产处理仍拒绝 | #54 数值与事件契约，不容差放行 |
-| 年线 | 纯聚合核心；查询可核对固定 daily 聚合 | 接入真实发布流程并保留逐年血缘 |
-| 目录 | 核心规则存在 | 官方目录与研究行业二级映射证据 |
-| 服务 | 单进程同步 stdio；无持续 worker 交付证据 | 守护进程、访问控制、客户端断开与重启验收 |
-| 性能 / 全市场 | 未验证 | 固定规模、环境、提交后实测 |
+| MCP | 双 server：data socket 20 data tools、acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC | 稳定契约与真实客户端验收 |
+| 任务 | SQLite 持久受理/取消/重试/核实、后台独立 worker 生命周期 | 无已知功能缺口 |
+| 行情 | SQLite fresh compact schema 20、逐行行情、原子 head 与结果关联 | 性能 gate 裁决 |
+| 原始 .day | 解析、单位/币种证据与官方快照绑定已验收 | 每代重新建立证据 |
+| QFQ / GBBQ | #54 契约实现并经 Final Gate 验收 | 新 generation 重审计 |
+| 年线 | 固定 daily 基线聚合 + 逐年 lineage，全市场已执行 | — |
+| 目录 | 官方目录全市场 5,227 实体已发布 | — |
+| 服务 | 双 systemd 单元 + 本机私有 socket 长期运行 | 外部分发/远程访问授权 |
+| 性能 / 全市场 | 全市场实测已有（preview.26–28）：DB 约 831MB、首采约 340s、同代 no-change `update_data` 5,222 items 约 616s | 16MiB 日增 / 同代 no-change update 全量 ≤5min / 跨代时长 gate 未达标 |
+| 编排 | 项目 Skill 覆盖 generation 与全市场分批编排 | 独立新会话仅 Skill 验收 |
 
-当前缺少执行记录时 get_task 可显示 pending；retry_task 复用响应固定 pending；
-Running 被读接口统一映射为 needs_verification。这些是现状差距，不是目标业务契约。
-必须在后台运行或 SQLite 切换前补齐回归，不能把显示转换当作已实现重启核实。
+剩余差距集中在：#259/#262/#294 性能门禁裁决、#294 admission、#295 server-side
+screening、fresh-session Skill 验收，以及 external distribution 授权；scope 仍为
+owner-only（#71），immutable generation 语义不变。
 
 ## 架构与依赖方向
 
