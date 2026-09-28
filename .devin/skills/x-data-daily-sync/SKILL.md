@@ -39,7 +39,14 @@ allowed-tools:
 占 scope）。跨代日更全量约 30-40 分钟、同代无变更扫描约 10 分钟、年线全量约 15 分钟、
 首次全市场 collection 约 6 分钟——这些是预期时长，不是挂起信号；轮询预算按此校准。
 
-无变更日更的正确做法仍是先 `check_official_updates` 探测：全部 `unchanged` 时不建任何任务。
+本 Skill 的默认意图是“日行情同步”，不是“只要任一官方文件变化就获取 generation”：
+
+- 只有 `day` role 明确为 `changed`，才允许创建 acquisition task。
+- `base_industry` / `gbbq` 变化但 `day` 未变化时，只报告 pending source changes 并结束；
+  不下载、不验证、不激活 generation，也不创建数据任务。
+- 部署后空库重建是独立、必须由用户明确提出的操作；不得从 `data_versions=0` 自动推断
+  重建授权，也不得借“每日同步”隐式执行。用户明确要求空库重建时，必须报告拟使用的
+  verified active generation、其数据截止日与远端 role 状态，再按单独确认的重建范围执行。
 
 ## 0. Revision 握手（每次执行第一步，不可跳过）
 
@@ -48,10 +55,21 @@ allowed-tools:
 - `mcp__x-data-acquire__get_acquisition_capabilities`：
   - `implementation.capability_revision` 必须等于 `x-data-acquire-v1`
   - `implementation.generation_contract_version` 必须等于 `official-generation-v1`
-- `mcp__x-data-mcp__get_data_capabilities`（`contract_version: "v1"`）：
+- `mcp__x-data-mcp__get_data_capabilities`（按当前 schema 传 `{}`，不得附加
+  `contract_version`）：
   - `capability_revision` 必须等于 `generic-data-v3`
 
 任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。记录 `schema_digest`、`active_generation_ref`、`runtime_readiness`、`blocking_reasons` 作为事实。
+
+握手后先调用 `sync_status`。若存在 inflight acquisition：
+
+- 本次会话先前在 `day=changed` 证据下创建的 task，可用原 `task_id` / `request_id`
+  恢复轮询；
+- 其他 task（包括缺少同次 `day=changed` 证据、用户已撤回意图或仅由非 day role
+  变化触发的 task）只报告并停止；不得新建第二个 acquisition task，终态后也不得由本
+  Skill 验证或激活；
+- acquisition contract 当前没有 cancel 工具；禁止通过停服务、删文件或新 request_id
+  模拟取消。
 
 acquisition server 在全新环境可因 `no_active_generation` 报告 blocked；该原因不阻止
 `check_official_updates` / `acquire_generation` / `verify_generation` / 首次
@@ -59,15 +77,25 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 激活 generation 后重新读取 capability；目标工具若仍非 ready，则停止并原样转述
 `blocking_reasons`。
 
-## 1. 远端探测（无变化不建任务）
+## 1. 远端探测（以 day role 为日更门禁）
 
 调用 `mcp__x-data-acquire__check_official_updates`：
 
 - 任一 role 为 `unknown` → 停止并报告（unknown 是停止信号，不是行动提示）。
-- 全部 `unchanged` → 报告 active generation ref 与检查时间，结束。**不调用 acquire_generation，不创建任何任务。**
-- 存在 `changed` → 继续步骤 2。
+- `day=unchanged` → 报告 active generation ref、检查时间及全部 changed roles，结束。
+  即使 `base_industry` 或 `gbbq` 为 changed，也**不调用 `acquire_generation`，不创建
+  generation/data task**。
+- `day=changed` → 记录 day 的 ETag / Last-Modified / Content-Length 与 checked_at；
+  只有该结构化证据存在时才继续步骤 2。
+
+不得用当前日期、市场是否已经收盘、GBBQ 时间、旧数据最新日期或自由文本推测
+`day=changed`。远端 probe 没有明确给出 changed 就必须停止。
 
 ## 2. 获取并激活新 generation
+
+进入本节前必须同时满足：本次会话存在步骤 1 的 `day=changed` 结构化证据，且
+`sync_status.inflight_tasks` 为空。否则报告 `DAY_UPDATE_NOT_CONFIRMED` 或
+`ACQUISITION_ALREADY_INFLIGHT` 并停止。
 
 1. `mcp__x-data-acquire__acquire_generation`，`request_id` 取本次唯一值（如 `daily-<YYYYMMDD>-<短随机>`）。返回 `task_id` / `generation_id`。
 2. 有界轮询 `get_acquisition_task(task_id)`：约 60s 一轮，总预算约 45 分钟（官方快照约 570MB，
@@ -90,6 +118,11 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 4. 已有 head 的实体**不得**改用 `start_collection`（会返回 `existing daily head requires the update_data range path`）。
 
 ### 3b. 全新数据库（无 daily head）→ `start_collection`
+
+本路径只在步骤 1 已确认 `day=changed`、步骤 2 的新 generation 已 verified+active，
+且机器事实确认没有 published daily head 时自动进入。若 `day` 未变化，则 daily-sync
+停止并报告 `FRESH_DB_REBUILD_REQUIRES_EXPLICIT_REQUEST`，不得仅因空库复用旧 active
+generation 开始首采。
 
 1. `{"dataset":"securities.catalog","contract_version":"v1","request_id":<唯一>,"selection":{"scope":"current_sh_sz_a"}}` → 轮询终态 → `list_data_versions`（`dataset:"securities.catalog"`）取 catalog `version_id`。
 2. `query_data` 对该 catalog `version_id` 分页取全部成员（exchange+code）。
@@ -121,4 +154,8 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 
 ## 6. 全局停止条件（任一命中即停止并报告 refs）
 
-`unknown` 观测、`not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝、大面积同类 per-item 失败、轮询预算耗尽、工具不可用。per-item `needs_verification` 不属全局停止（见 3 节：聚合上报为 fail-closed 集合）。停止时旧 heads 与旧 active generation 保持不变；报告已完成的步骤、最后结构化状态和恢复用 refs。
+`unknown` 观测、`day` 未明确 changed、缺少同次 day-change 证据的 inflight acquisition、
+`not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝、
+大面积同类 per-item 失败、轮询预算耗尽、工具不可用。per-item
+`needs_verification` 不属全局停止（见 3 节：聚合上报为 fail-closed 集合）。停止时旧
+heads 与旧 active generation 保持不变；报告已完成的步骤、最后结构化状态和恢复用 refs。
