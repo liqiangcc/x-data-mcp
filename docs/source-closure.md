@@ -6,11 +6,14 @@ routine update（见[每日同步说明](daily-sync.md)）；preview.28 双 MCP 
 部署运行——data socket 提供 20 data tools、acquire socket 提供 10 acquisition
 tools、fresh init 库使用 compact schema 20，generation 生命周期与全市场分批
 collection/update 均有真实证据（preview.26–28 连续验收：catalog 5,227 实体、
-daily 首采约 340s、同代 no-change `update_data` 5,222 items 约 616s）。尚未收口：
-#259/#262/#294 性能 gate（no-change 日增约 18.5MB、同代 no-change `update_data`
-全量扫描约 10min、跨代 envelope 约 37min）、独立新会话 Skill
-验收与外部分发授权。declared scope 仍为 owner 个人研究/本地使用、不对外暴露，
-external distribution is not authorized，overall `production_ready=false`。
+daily 首采约 340s、同代 no-change `update_data` 5,222 items 约 616s）。#259 已在
+2026-09-28 owner re-baseline 后关闭：同代 no-change `update_data` 现行合同为
+≤15min / ≤4KiB/item / `data_versions +0`，preview.27/schema20 实测
+5,222 items / 616s / +18.5MB / 0 new versions PASS。尚未收口：cross-generation
+envelope 约 37min 仅 measured baseline、真实 append/rewrite 待独立证据、
+独立新会话 Skill 验收与外部分发授权；#294 为独立 admission 协议问题。
+declared scope 仍为 owner 个人研究/本地使用、不对外暴露，external
+distribution is not authorized，overall `production_ready=false`。
 
 ## 已发生的验收
 

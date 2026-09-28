@@ -18,10 +18,13 @@ compact schema 20。工具数不是稳定业务契约；客户端必须以
 immutable generation、验证后激活、generation-bound update 和 capability 已实现，
 全市场 collection/update 已经分批 MCP 编排取得真实 generation 证据
 （preview.26–28 连续验收：catalog 5,227 实体、daily 首采约 340s、yearly 约
-900s、同代 no-change `update_data` 5,222 items 约 616s）。剩余缺口为
-#259/#262/#294 性能 gate 裁决（no-change 日增约 18.5MB > 16MiB、同代
-no-change `update_data` 全量扫描约 10min、跨代 envelope 约 37min）与独立新会话
-Skill 验收。文档、Skill 或示例不能替代 generation consistency、runtime readiness。
+900s、同代 no-change `update_data` 5,222 items 约 616s）。#259 已在
+2026-09-28 owner re-baseline 后关闭：同代 no-change `update_data` 现行合同为
+≤15min / ≤4KiB/item / `data_versions +0`，preview.27/schema20 实测
+5,222 items / 616s / +18.5MB / 0 new versions PASS。剩余缺口：cross-generation
+envelope 约 37min 仅为 measured baseline、真实 append/rewrite 待独立证据、
+独立新会话 Skill 未验收；#294 为独立 admission 协议问题。文档、Skill 或示例不能
+替代 generation consistency、runtime readiness。
 
 ## 协议、权限和通用约定
 

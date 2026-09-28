@@ -1,5 +1,15 @@
 # Issue #262 性能分析
 
+## 当前裁定（2026-09-28）
+
+本文 preview.23/24 的统一门禁分析为历史记录，下文实测数字保持原样。owner 已用
+class-specific 合同取代旧统一门禁：同代 no-change full-market `update_data`
+hard ≤15min、checkpoint 后 net growth hard ≤4KiB/item（baseline ≈3.6KiB/item，
+5,222 items 对应 hard ≈20.4MiB）、必须 `data_versions +0`；
+preview.27/schema20 实测 5,222 items / 616s / +18.5MB / 0 new versions，PASS。
+cross-generation envelope 约 37min 仅为 measured baseline，尚无批准 hard SLO；
+真实 append/rewrite 与其余场景各自独立计量。
+
 > 最新提交交接与验证边界见 [本机优化交接](issue-262-local-performance-handoff.md)。前半部分保留分析过程，后续实测与修正优先。
 
 ## 范围与结论

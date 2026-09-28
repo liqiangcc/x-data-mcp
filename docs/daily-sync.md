@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**OPERATIONAL OWNER-ONLY PREVIEW / PERFORMANCE-GATE DECISION REQUIRED**
+**OPERATIONAL OWNER-ONLY PREVIEW / CLASS-SPECIFIC SLOS**
 
 当前运行时包含两个 MCP server（v0.2.0-preview.28，代码 `b88612b`，本机
 `/opt/x-data-mcp-preview/` systemd 部署）：
@@ -21,13 +21,18 @@ immutable generation、每代 #131 验证后条件激活、任务受理时冻结
   DB 约 831MB；同代 no-change `update_data` 全量 5,222 items 约 616s（约 10min）。
 - 单任务 batch 上限为 100 个实体，这是受理分批边界；全市场 collection/update
   已通过分批 MCP 编排完成，不再因该上限而不可运行。
-- 性能 gate 实测（#259/#262/#294）：首采 DB ≤2.5GiB PASS、部署 ≤4GiB PASS、
-  首次全市场采集 ≤20min PASS；no-change 日增约 18.5MB > 16MiB、同代
-  no-change `update_data` 全量扫描约 10min > 5min、跨代 envelope 约
-  37min——未通过或待裁决，不得宣称达标。
+- class-specific SLO（2026-09-28 owner 批准，#259 re-baseline 后关闭）：同代
+  no-change full-market `update_data` hard ≤15min、checkpoint 后 net growth
+  baseline ≈3.6KiB/attempted item、hard ≤4KiB/item（5,222 items 对应 hard
+  ≈20.4MiB）、必须 `data_versions +0`；preview.27/schema20 实测 5,222 items /
+  616s / +18.5MB / 0 new versions——PASS。首采 DB ≤2.5GiB、部署 ≤4GiB、
+  首采 ≤20min 亦 PASS。
+- acquisition、initial collection、yearly、cross-generation envelope 与真实
+  append/rewrite 分开计量：cross-generation 约 37min 仅为 measured baseline、
+  尚无批准 hard SLO；真实 append/rewrite 待独立证据，均不得宣称 PASS。
 
-`production_ready=false` 表达 declared owner/local scope 与未收口的性能门禁；
-external distribution is not authorized。运行时 `tools/list`、capability 与结构化
+`production_ready=false` 表达 declared owner/local scope；external distribution
+is not authorized。运行时 `tools/list`、capability 与结构化
 readiness 仍是机器事实入口；本文不替代 runtime readiness。
 
 ## 关注点分离
@@ -229,7 +234,8 @@ SHA 当作 #131 PASS。
 | generation-bound yearly update | 有 | 全市场真实 generation | PASS |
 | 全市场 collection/update | 有 | 分批 MCP 编排：catalog 5,227、daily 约 340s、no-change update 5,222 items 约 616s | PASS（batched） |
 | 首采 DB ≤2.5GiB、部署 ≤4GiB、首采 ≤20min | 有 | DB 约 831MB、preview.28 部署包、首采约 340s | PASS |
-| 日增 ≤8/16MiB、同代 no-change `update_data` 全量扫描 ≤5min、跨代时长 | 有实测 | 日增约 18.5MB、no-change update 5,222 items 约 616s（约 10min）、跨代 envelope 约 37min | FAIL / 待裁决 |
+| 同代 no-change `update_data`（≤15min、≤4KiB/item、`data_versions +0`） | 有 | preview.27/schema20：5,222 items / 616s / +18.5MB / 0 new versions | PASS |
+| 跨代 envelope / 真实 append·rewrite | 有实测 | cross-gen 约 37min（measured baseline，无批准 hard SLO）；append/rewrite 无独立实测 | measured / 不外推 |
 | 新 Devin 会话仅 Skill+MCP | Skill 文件存在 | 无独立会话证据 | 未验收 |
 | 双 MCP 可复现部署 | release 双 binary + `deploy_phase_g.sh` | preview.28 双 systemd 服务在运行 | PASS |
 | overall production readiness | capability 恒实报告 false | owner-only declared scope 可观测 | owner-only operational；external distribution not authorized |
@@ -248,17 +254,18 @@ SHA 当作 #131 PASS。
 8. ECS 2 vCPU/约 2 GiB 环境的本地日更新目标不超过 3 分钟、硬上限 5 分钟；网络下载单独计量。
 
 截至 preview.26–28 实测：第 4 项已由分批 MCP 编排完成（全市场证据见上文当前状态与
-验收矩阵）；第 8 项本地日更目标未达成（同代 no-change `update_data` 全量扫描约
-10min、跨代 envelope 约 37min），阈值与处置待 #259/#294 裁决；第 6 项独立新会话
-仅 Skill 验收仍未执行。
+验收矩阵）；第 8 项的旧统一日更目标已被 2026-09-28 owner re-baseline supersede——
+同代 no-change `update_data` 按新合同（≤15min / ≤4KiB/item / `data_versions +0`）
+实测 PASS，cross-generation 约 37min 仅为 measured baseline、不构成通过；第 6 项
+独立新会话仅 Skill 验收仍未执行。
 
 ## 当前禁止声明
 
-在性能门禁裁决、Skill 独立会话验收和外部分发授权收口前，禁止声明：
+在 Skill 独立会话验收、外部分发授权和其余类别 SLO 收口前，禁止声明：
 
-- “no-change 日增已满足 ≤16MiB”或“同代 no-change update 全量扫描已满足 ≤5min”
-  （实测约 18.5MB / 5,222 items 约 616s）；
-- “跨代 update 时长已达标”（实测 envelope 约 37min）；
+- “cross-generation、真实 append/rewrite 已有批准的 hard SLO 或已 PASS”
+  （cross-gen 约 37min 仅为 measured baseline）；
+- “旧统一 5min/16MiB 门禁仍是现行合同”（已由 owner re-baseline supersede）；
 - “acquire 下载成功即可 update”；
 - “tools readiness=ready 即 generation 可用”；
 - “Skill 已通过独立新会话的全市场验收”；

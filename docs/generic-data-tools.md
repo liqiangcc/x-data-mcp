@@ -8,13 +8,16 @@
 10 acquisition tools，fresh init 库为 compact schema 20；通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场
 collection/update 已通过分批 MCP 编排取得真实 generation 证据
-（preview.26–28 连续验收）；剩余 DoD 缺口为
-[#259](https://github.com/liqiangcc/x-data-mcp/issues/259) /
-[#262](https://github.com/liqiangcc/x-data-mcp/issues/262) /
-[#294](https://github.com/liqiangcc/x-data-mcp/issues/294)
-性能 gate 裁决（no-change 日增约 18.5MB > 16MiB、同代 no-change
-`update_data` 全量扫描约 10min、跨代 envelope 约 37min）与独立新会话
-Skill 验收。
+（preview.26–28 连续验收）；
+[#259](https://github.com/liqiangcc/x-data-mcp/issues/259) 已在 2026-09-28
+owner re-baseline 后关闭——同代 no-change `update_data` 现行合同为 ≤15min /
+≤4KiB/item / `data_versions +0`，preview.27/schema20 实测 5,222 items / 616s /
++18.5MB / 0 new versions PASS。剩余 DoD 缺口：cross-generation envelope 约
+37min 仅为 measured baseline、真实 append/rewrite 待独立证据、独立新会话
+Skill 验收；
+[#294](https://github.com/liqiangcc/x-data-mcp/issues/294) 为独立 admission
+协议问题（[#262](https://github.com/liqiangcc/x-data-mcp/issues/262) 残余项
+同列）。
 
 本文取代 `mcp-tools.md` 中“新数据类别通常新增采集/查询工具”的旧目标方案，但不作为运行时
 readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capabilities` 读取；跨 server 编排见

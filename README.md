@@ -52,13 +52,18 @@ generation-bound daily/yearly update，catalog/daily/yearly/query/verification
 同代 no-change `update_data` 全量 5,222 items 约 616s（约 10min）；跨代
 update envelope 约 37min。
 
-性能/容量 gate 现状（[#259](https://github.com/liqiangcc/x-data-mcp/issues/259)/
-[#262](https://github.com/liqiangcc/x-data-mcp/issues/262)/
-[#294](https://github.com/liqiangcc/x-data-mcp/issues/294)）：
-PASS —— 首采 DB ≤2.5GiB、部署体积 ≤4GiB、首次全市场采集 ≤20min；
-FAIL / 待裁决 —— no-change 日增约 18.5MB > 16MiB、同代 no-change
-`update_data` 全量扫描约 10min > 5min 目标、跨代 envelope 约 37min。
-未通过项在对应 Issue 裁决前不得宣称达标。
+性能/容量 gate 现状：PASS —— 首采 DB ≤2.5GiB、部署体积 ≤4GiB、首次全市场
+采集 ≤20min。原统一的 5min/16MiB 日更门禁已由 2026-09-28 owner decision
+supersede，[#259](https://github.com/liqiangcc/x-data-mcp/issues/259) 在
+re-baseline 后关闭；现行同代 no-change full-market `update_data` 合同为
+hard ≤15min、checkpoint 后 net growth baseline ≈3.6KiB/attempted item、
+hard ≤4KiB/item（5,222 items 对应 hard ≈20.4MiB）、且必须 `data_versions +0`；
+preview.27/schema20 实测 5,222 items / 616s / +18.5MB / 0 new versions，PASS。
+acquisition、initial collection、yearly、cross-generation envelope 与真实
+append/rewrite 分开计量：cross-generation ≈37min 仅为 measured baseline、无批准
+hard SLO，真实 append/rewrite 尚无独立实测，均不得宣称 PASS。
+[#294](https://github.com/liqiangcc/x-data-mcp/issues/294) 为独立 admission 协议
+问题。
 
 `production_ready=false` 表达的是 declared scope（owner 个人研究、本地使用、
 不对外暴露，#71 comment-5749934485）：服务正在运行并经过有界验收，但

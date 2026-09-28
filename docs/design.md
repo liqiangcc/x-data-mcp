@@ -65,12 +65,13 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 | 年线 | 固定 daily 基线聚合 + 逐年 lineage，全市场已执行 | — |
 | 目录 | 官方目录全市场 5,227 实体已发布 | — |
 | 服务 | 双 systemd 单元 + 本机私有 socket 长期运行 | 外部分发/远程访问授权 |
-| 性能 / 全市场 | 全市场实测已有（preview.26–28）：DB 约 831MB、首采约 340s、同代 no-change `update_data` 5,222 items 约 616s | 16MiB 日增 / 同代 no-change update 全量 ≤5min / 跨代时长 gate 未达标 |
+| 性能 / 全市场 | class-specific 合同：同代 no-change `update_data` ≤15min / ≤4KiB/item / `data_versions +0`，preview.27/schema20 实测 5,222 items / 616s / +18.5MB / 0 new versions PASS | 跨代 envelope 约 37min 仅 measured baseline；真实 append/rewrite 待独立证据 |
 | 编排 | 项目 Skill 覆盖 generation 与全市场分批编排 | 独立新会话仅 Skill 验收 |
 
-剩余差距集中在：#259/#262/#294 性能门禁裁决、#294 admission、#295 server-side
-screening、fresh-session Skill 验收，以及 external distribution 授权；scope 仍为
-owner-only（#71），immutable generation 语义不变。
+剩余差距集中在：#262 残余项、#294 admission 协议缺陷（独立问题，不为旧统一门禁
+重构 audit）、#295 server-side screening、fresh-session Skill 验收，以及
+external distribution 授权；scope 仍为 owner-only（#71），immutable generation
+语义不变。
 
 ## 架构与依赖方向
 
