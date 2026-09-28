@@ -11,6 +11,7 @@ EXPECTED_LEGACY_SCHEMA = 18
 EXPECTED_COMPACT_SCHEMA = 20
 EXPECTED_DATA_TOOLS = 20
 EXPECTED_ACQUIRE_TOOLS = 10
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v3"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",
@@ -139,6 +140,41 @@ def main() -> int:
         "DECLARED_SCOPE cites no retired #225 gate",
         "#225" not in scope,
         f"scope is {scope!r}",
+    )
+
+    data_mcp = (ROOT / "src/data_supply/mcp.rs").read_text(encoding="utf-8")
+    check(
+        "data capability revision",
+        f'"{EXPECTED_DATA_CAPABILITY_REVISION}"' in data_mcp,
+        f"expected {EXPECTED_DATA_CAPABILITY_REVISION}",
+    )
+
+    daily_skill = (
+        ROOT / ".devin/skills/x-data-daily-sync/SKILL.md"
+    ).read_text(encoding="utf-8")
+    status_skill = (
+        ROOT / ".devin/skills/x-data-status/SKILL.md"
+    ).read_text(encoding="utf-8")
+    for label, fact in [
+        ("daily Skill capability revision", EXPECTED_DATA_CAPABILITY_REVISION),
+        ("daily Skill day changed gate", "只有 `day` role 明确为 `changed`"),
+        ("daily Skill day unchanged stop", "`day=unchanged`"),
+        (
+            "daily Skill explicit fresh rebuild gate",
+            "FRESH_DB_REBUILD_REQUIRES_EXPLICIT_REQUEST",
+        ),
+        ("daily Skill inflight gate", "`sync_status.inflight_tasks`"),
+    ]:
+        check(label, fact in daily_skill, f"missing {fact!r}")
+    check(
+        "status Skill capability revision",
+        EXPECTED_DATA_CAPABILITY_REVISION in status_skill,
+        f"missing {EXPECTED_DATA_CAPABILITY_REVISION!r}",
+    )
+    check(
+        "data capability calls carry no contract_version",
+        '`get_data_capabilities`（`contract_version' not in daily_skill
+        and '`get_data_capabilities`（`contract_version' not in status_skill,
     )
 
     for rel, heading in CURRENT_DOCS.items():
