@@ -317,6 +317,10 @@ explicit map 必须与所选对象精确对应，无缺项、重复或额外项�
 首个请求在同一个存储读快照中解析各对象版本，返回固定 version_manifest：
 每对象版本引用、元数据或明确不可用状态及原因。
 该快照保证“选中了哪些版本”的一致读取，不证明所有来源在同一市场时点发布。
+version_manifest 的 `metadata.adjustment` 对 market daily/yearly 明确返回持久化的
+price_adjustment evidence：当前官方发布为 confirmed `qfq`，OHLC 为 QFQ 值，
+volume/amount 为未复权原值；catalog 的 adjustment 明确为 null。原始未复权 daily
+仍不是公开 dataset；该字段不能据此宣称 historical_accurate。
 
 输出记录按规范业务对象键、dataset 内记录键升序排列：
 行情为 exchange/code/date 或 year；其他类别由契约声明稳定顺序。

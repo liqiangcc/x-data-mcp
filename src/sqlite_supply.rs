@@ -131,6 +131,7 @@ pub(crate) fn query(
                 coverage_status: "complete".into(),
                 coverage_reason: "validated fixture catalog snapshot".into(),
                 units: vec![],
+                adjustment: None,
                 lineage: None,
             }),
         });
@@ -464,6 +465,12 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
             .unwrap_or_default()
             .into(),
         units,
+        adjustment: Some(Evidence {
+            field: "price_adjustment".into(),
+            status: format!("{:?}", v.adjustment_evidence.status).to_lowercase(),
+            value: v.adjustment_evidence.value.clone(),
+            reason: v.adjustment_evidence.reason.clone(),
+        }),
         lineage: v.yearly_derivation.as_ref().map(|l| Lineage {
             base_daily_version_id: l.base_daily_version_id.clone(),
             algorithm_version: l.algorithm_version.clone(),

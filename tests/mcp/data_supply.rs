@@ -93,6 +93,17 @@ fn real_batch_manifest_pages_pin_versions_and_reject_any_later_damage() {
     let first = q.query(a.clone(), &Access::local()).unwrap();
     assert_eq!(first.records.len(), 1);
     assert_eq!(first.version_manifest[1].status, ManifestStatus::Absent);
+    let adjustment = first.version_manifest[0]
+        .metadata
+        .as_ref()
+        .unwrap()
+        .adjustment
+        .as_ref()
+        .unwrap();
+    assert_eq!(adjustment.field, "price_adjustment");
+    assert_eq!(adjustment.status, "confirmed");
+    assert_eq!(adjustment.value.as_deref(), Some("qfq"));
+    assert!(!adjustment.reason.is_empty());
     let plan = market::prepare(
         &store,
         &market::revised(&raw, "new"),
@@ -386,6 +397,13 @@ fn catalog_filter_and_selector_freeze_version_without_inventing_industry() {
     let a = json!({"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"catalog","industry_code":"I","name_query":"股票"},"version":{"kind":"catalog_version","version_id":"catalog-1"}});
     let p = api.call("query_data", a).unwrap();
     assert_eq!(p["records"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        p["version_manifest"][0]["metadata"]
+            .as_object()
+            .unwrap()
+            .get("adjustment"),
+        Some(&json!(null))
+    );
     let accepted=api.call("start_collection",json!({"dataset":"market.daily","contract_version":"v1","request_id":"selector","selection":{"kind":"catalog","version_id":p["version_manifest"][0]["version_ref"]["version_id"],"industry_code":"I"}})).unwrap();
     assert_eq!(accepted["item_ids"].as_array().unwrap().len(), 1);
 }

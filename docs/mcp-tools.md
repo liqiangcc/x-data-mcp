@@ -65,6 +65,11 @@ SOURCE_NOT_VERIFIED 可能位于任务单项 error 字符串，而非顶层 API 
 实际 wire 编码由当前 Cargo 配置和 Serde 决定，发布契约快照时须用真实二进制锁定，
 不能只凭 Rust 类型断言所有客户端都正确处理。单位/币种证据不自动换算。
 
+query_data 的 `version_manifest.metadata.adjustment` 对 market daily/yearly 明确返回
+持久化的 price_adjustment evidence：当前官方发布为 confirmed `qfq`，OHLC 是 QFQ
+值，volume/amount 是未复权原值；catalog 的 adjustment 明确为 null。原始未复权
+daily 仍不是公开 dataset；不能据此宣称 historical_accurate。
+
 只读工具不采集、不重试、不修复、不升级 schema；分页缓存允许内存变化。
 写请求的 request_id 使用持久命名空间并包含操作类型/规范化参数语义；
 不得拿 JSON-RPC id 代替业务 request_id。

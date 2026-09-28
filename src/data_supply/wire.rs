@@ -240,6 +240,7 @@ pub struct Metadata {
     pub coverage_status: String,
     pub coverage_reason: String,
     pub units: Vec<Evidence>,
+    pub adjustment: Option<Evidence>,
     pub lineage: Option<Lineage>,
 }
 
