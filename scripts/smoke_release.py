@@ -47,6 +47,7 @@ def runtime_smoke(binaries):
             tools = rpc("tools/list", {})["tools"]
             cap = call("get_data_capabilities", {})
             assert len(tools) == 20 and not cap["production_ready"]
+            assert cap["capability_revision"] == "generic-data-v3"
             # Keep the same actual proxy stdin open beyond the default 30s
             # read budget. This caught the preview.5 deployment regression.
             time.sleep(32)
@@ -171,18 +172,26 @@ def main():
             assert request("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
             tools = request("tools/list", {})["tools"]
             assert len(tools) == 20
-            assert call("get_data_capabilities", {})["production_ready"] is False
-            checks.append("initialize_discovery_20_tools")
+            capabilities = call("get_data_capabilities", {})
+            assert capabilities["production_ready"] is False
+            assert capabilities["capability_revision"] == "generic-data-v3"
+            checks.append("initialize_discovery_20_tools_generic_data_v3")
             catalog = call("query_data", dict(dataset="securities.catalog", contract_version="v1", selection=dict(kind="catalog", scope="current_sh_sz_a"), filter=dict(kind="catalog"), version=dict(kind="latest_per_entity")))
             entity = catalog["records"][0]["entity"]
             assert catalog["records"][0]["industry"]["status"] == "missing"
+            assert catalog["version_manifest"][0]["metadata"]["adjustment"] is None
             query = dict(dataset="market.yearly", contract_version="v1", selection=dict(kind="single", entity=entity), filter=dict(kind="yearly", start_year=2020, end_year=2023), version=dict(kind="latest_per_entity"), page_size=2)
             first = call("query_data", query)
+            adjustment = first["version_manifest"][0]["metadata"]["adjustment"]
+            assert adjustment["field"] == "price_adjustment"
+            assert adjustment["status"] == "confirmed"
+            assert adjustment["value"] == "qfq"
+            assert adjustment["reason"]
             query["cursor"] = first["next_cursor"]
             second = call("query_data", query)
             assert first["version_manifest"] == second["version_manifest"] and second["page_complete"]
             assert len(first["records"]) + len(second["records"]) == 4
-            checks.append("catalog_to_fixed_yearly_paging")
+            checks.append("catalog_null_and_yearly_confirmed_qfq_fixed_paging")
             computation = dict(contract_version="v1", execution="inline", inputs=[dict(input_id="prices", version_ref=fixture["version_ref"])], range=dict(start_year=2020, end_year=2023), metrics=[dict(metric_id="down", name="consecutive_direction", algorithm_version="local-consecutive-direction-v1", input_ids=["prices"], parameters=dict(direction="down", min_periods=3))])
             computed = call("compute_metrics", computation)
             assert computed["result"]["cumulative_change"] == "-0.300000000000"
