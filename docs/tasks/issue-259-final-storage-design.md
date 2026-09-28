@@ -1,5 +1,17 @@
 # #259 最终紧凑存储设计冻结候选
 
+## 当前裁定（2026-09-28）
+
+本文原 5min / 8/16MiB 统一门禁为历史设计，不代表现行合同。owner 已批准
+class-specific 合同并据此关闭 #259：同代 no-change full-market `update_data`
+hard ≤15min、checkpoint 后 net growth baseline ≈3.6KiB/attempted item、
+hard ≤4KiB/item（5,222 items 对应 hard ≈20.4MiB）、必须 `data_versions +0`；
+preview.27/schema20 实测 5,222 items / 616s / +18.5MB / 0 new versions，PASS。
+acquisition、initial collection、yearly、cross-generation envelope 与真实
+append/rewrite 分开计量；cross-generation 约 37min 仅为 measured baseline，
+无批准 hard SLO，不得外推或宣称 PASS。
+下文“状态与目的”及阶段门禁均保留为设计冻结时的历史记录。
+
 ## 状态与目的
 
 状态：**DESIGN FROZEN / S0-S4 PROTOTYPE PASS / S5-S6 NOT STARTED**
