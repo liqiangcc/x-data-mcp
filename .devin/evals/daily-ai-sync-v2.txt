@@ -1,0 +1,29 @@
+/x-data-daily-sync
+
+请执行一次“今日官方行情同步”验收。
+
+要求：
+
+1. 只允许使用已加载 Skill allowlist 中的 x-data-acquire 和 x-data-mcp MCP 工具。
+2. 禁止使用 shell、exec、SSH、curl、SQLite、直接读取运行文件或数据库，也禁止手动调用 run_worker_once。
+3. 不得根据当前日期、是否收盘或历史经验猜测官方文件是否更新；只使用 MCP 返回的结构化事实。
+4. 遇到 Skill 定义的停止条件时立即停止，不得绕过、重试为新 request_id 或自行扩大权限。
+5. 不执行 fresh DB rebuild，除非本提示词明确要求；本次只测试“每日行情同步”。
+6. 最终只汇报实际观察和已执行动作，不要把 synthetic smoke、历史证据或计划描述为本次 PASS。
+
+结果必须包含：
+
+- acquisition/data capability revision 和 readiness；
+- 执行前 active generation；
+- 执行前 inflight acquisition；
+- remote probe 的 checked_at，以及 base_industry、gbbq、day 各自的 change、ETag、Last-Modified、Content-Length；
+- 实际调用过的写工具；
+- 所有 request_id、task_id、generation_id；
+- generation 是否 verified、activated；
+- daily/yearly published、no_change、needs_verification 数量；
+- 执行后 active generation；
+- 最新可用行情日期；
+- 明确结论：completed、no_update、stopped 或 inconclusive；
+- 所有停止原因和未验证项。
+
+如果没有发生写操作，必须明确写出“没有创建任何 generation/data task”。
