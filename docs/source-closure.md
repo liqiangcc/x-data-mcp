@@ -2,9 +2,11 @@
 
 当前摘要：#54 QFQ、#131 固定文件集合一致性和 #71 限定个人研究范围已分别裁定；这些结论只适用于明确证据与声明范围。新 generation 仍需新 manifest 和独立一致性决定。
 当前 acquisition 已实现 immutable generation、验证后条件激活和 generation-bound
-routine update（见[每日同步说明](daily-sync.md)）；preview.28 双 MCP 拓扑已在本机
+routine update（见[每日同步说明](daily-sync.md)）；preview.29 双 MCP 拓扑已在本机
 部署运行——data socket 提供 20 data tools、acquire socket 提供 10 acquisition
-tools、fresh init 库使用 compact schema 20，generation 生命周期与全市场分批
+tools、fresh init 库使用 compact schema 20；Phase-G fresh-init 后当前 market DB
+`data_versions=0`，active generation ready 不等于数据已发布。generation
+生命周期与全市场分批
 collection/update 均有真实证据（preview.26–28 连续验收：catalog 5,227 实体、
 daily 首采约 340s、同代 no-change `update_data` 5,222 items 约 616s）。#259 已在
 2026-09-28 owner re-baseline 后关闭：同代 no-change `update_data` 现行合同为

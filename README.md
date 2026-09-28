@@ -36,8 +36,8 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 **OWNER-ONLY OPERATIONAL PREVIEW — external distribution not authorized.**
 
 本机 `/opt/x-data-mcp-preview/` 以 systemd 运行已部署的
-[v0.2.0-preview.28](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.28)
-（代码 `b88612b`），双 MCP server 拓扑：`x-data-mcp-data`（`run/mcp.sock`，
+[v0.2.0-preview.29](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.29)
+（代码 `4493d45`），双 MCP server 拓扑：`x-data-mcp-data`（`run/mcp.sock`，
 20 data tools）与 `x-data-mcp-acquire`（`run/acquire.sock`，10 acquisition tools）。
 显式 `task_sqlite init` 的新库使用 fresh compact schema 20；工具数量不是稳定契约，
 客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
