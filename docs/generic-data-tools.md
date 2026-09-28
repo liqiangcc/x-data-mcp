@@ -3,9 +3,11 @@
 ## 决策与适用范围
 
 2026-09-12 用户要求现在考虑扩展，并授权按“工具按业务动作稳定、数据类别通过类型化参数扩展”
-开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。当前部署 preview.28
-（`b88612b`）：data socket 注册 20 data tools，acquire socket 注册
-10 acquisition tools，fresh init 库为 compact schema 20；通用查询、任务、
+开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。当前部署 preview.29
+（`4493d45`）：data socket 注册 20 data tools，acquire socket 注册
+10 acquisition tools，fresh init 库为 compact schema 20；Phase-G fresh-init 后
+当前 market DB `data_versions=0`，generic-data-v3 live discovery PASS，
+adjustment live-data readback 待重新发布；通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场
 collection/update 已通过分批 MCP 编排取得真实 generation 证据
 （preview.26–28 连续验收）；

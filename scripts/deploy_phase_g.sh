@@ -6,7 +6,7 @@
 #   x-data-mcp-data.service     data_service <db> <mcp.sock>
 #   x-data-mcp-acquire.service  acquire_service <generation-root> <acquire.sock>
 #
-# Fresh schema-19 install semantics (#259 FRESH_REBUILD_REQUIRED): the
+# Fresh schema-20 install semantics (#259 FRESH_REBUILD_REQUIRED): the
 # existing market database is NEVER upgraded in place and NEVER deleted —
 # it is renamed aside and `task_sqlite init20` creates a fresh compact
 # database at the path the service unit already uses.
@@ -209,7 +209,7 @@ DRY-RUN phase-g deploy $TAG
   plan: fetch+verify tarball -> stage release dir -> archive existing db
         aside (never migrated/deleted) -> task_sqlite init20 fresh db ->
         stop both services -> switch current -> start both -> socket +
-        schema=19 + tools smoke -> report; failures after mutation restore
+        schema=20 + tools smoke -> report; failures after mutation restore
         previous release + archived db + old services
 EOF
     exit 0

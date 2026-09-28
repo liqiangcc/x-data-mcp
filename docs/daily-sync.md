@@ -4,7 +4,7 @@
 
 **OPERATIONAL OWNER-ONLY PREVIEW / CLASS-SPECIFIC SLOS**
 
-当前运行时包含两个 MCP server（v0.2.0-preview.28，代码 `b88612b`，本机
+当前运行时包含两个 MCP server（v0.2.0-preview.29，代码 `4493d45`，本机
 `/opt/x-data-mcp-preview/` systemd 部署）：
 
 - `x-data-acquire`：远端文件探测、下载和本地安装，10 acquisition tools。
@@ -30,6 +30,11 @@ immutable generation、每代 #131 验证后条件激活、任务受理时冻结
 - acquisition、initial collection、yearly、cross-generation envelope 与真实
   append/rewrite 分开计量：cross-generation 约 37min 仅为 measured baseline、
   尚无批准 hard SLO；真实 append/rewrite 待独立证据，均不得宣称 PASS。
+
+preview.29 Phase-G 部署为 fresh-init schema 20：旧 801MB DB 已归档至
+`/opt/x-data-mcp-preview/state/preview.sqlite.v20-archived-20260928T053759Z`，
+当前 market DB `data_versions=0`；live QFQ manifest 与 x 消费验收待重新发布，
+package smoke（synthetic fixture、live source NOT_RUN）不能替代。
 
 `production_ready=false` 表达 declared owner/local scope；external distribution
 is not authorized。运行时 `tools/list`、capability 与结构化
@@ -237,7 +242,7 @@ SHA 当作 #131 PASS。
 | 同代 no-change `update_data`（≤15min、≤4KiB/item、`data_versions +0`） | 有 | preview.27/schema20：5,222 items / 616s / +18.5MB / 0 new versions | PASS |
 | 跨代 envelope / 真实 append·rewrite | 有实测 | cross-gen 约 37min（measured baseline，无批准 hard SLO）；append/rewrite 无独立实测 | measured / 不外推 |
 | 新 Devin 会话仅 Skill+MCP | Skill 文件存在 | 无独立会话证据 | 未验收 |
-| 双 MCP 可复现部署 | release 双 binary + `deploy_phase_g.sh` | preview.28 双 systemd 服务在运行 | PASS |
+| 双 MCP 可复现部署 | release 双 binary + `deploy_phase_g.sh` | preview.29 双 systemd 服务在运行 | PASS |
 | overall production readiness | capability 恒实报告 false | owner-only declared scope 可观测 | owner-only operational；external distribution not authorized |
 
 ## 验收
