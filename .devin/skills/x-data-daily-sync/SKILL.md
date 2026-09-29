@@ -89,7 +89,9 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 调用 `mcp__x-data-acquire__check_official_updates`：
 
 - 任一 role 为 `unknown` → 停止并报告（unknown 是停止信号，不是行动提示）。
-- `day=unchanged` → 报告 active generation ref、检查时间及全部 changed roles，结束。
+- `day=unchanged` → 报告 active generation ref、检查时间及全部 changed roles，立即结束；
+  不得再做 catalog/market 只读探测。固定报告的“最新可用行情日期”在本分支填
+  `not_queried_by_no_update_branch`，除非此前步骤已获得结构化 `last_record`。
   即使 `base_industry` 或 `gbbq` 为 changed，也**不调用 `acquire_generation`，不创建
   generation/data task**。
 - `day=changed` → 记录 day 的 ETag / Last-Modified / Content-Length 与 checked_at；
@@ -116,9 +118,10 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 ## 3. 数据更新
 
 `market.daily` / `market.yearly` 的 `query_data`、`list_data_versions` 与
-`get_data_availability` **不接受** `selection:{"kind":"catalog"}`；catalog selection 只能用于
-`dataset:"securities.catalog"`。全市场编排必须先从 catalog dataset 枚举实体，再按 ≤100
-实体切成 `batch` selection。
+`get_data_availability` **只接受** `selection:{"kind":"single"}` 或
+`selection:{"kind":"batch","entities":[…]}`；不接受 `catalog` 或 `default` selection。
+`catalog` selection 只能用于 `dataset:"securities.catalog"`。全市场编排必须先从
+catalog dataset 枚举实体，再按 ≤100 实体切成 `batch` selection。
 
 ### 3.0 实体枚举与 daily head 分类
 
