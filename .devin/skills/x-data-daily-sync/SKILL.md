@@ -115,25 +115,45 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 
 ## 3. 数据更新
 
+`market.daily` / `market.yearly` 的 `query_data`、`list_data_versions` 与
+`get_data_availability` **不接受** `selection:{"kind":"catalog"}`；catalog selection 只能用于
+`dataset:"securities.catalog"`。全市场编排必须先从 catalog dataset 枚举实体，再按 ≤100
+实体切成 `batch` selection。
+
+### 3.0 实体枚举与 daily head 分类
+
+1. `list_data_versions`（`{"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"}}`）取当前 catalog `version_id`。
+   - 无 catalog version → 进入 3b；不得猜测成员列表。
+2. `query_data`（`{"dataset":"securities.catalog","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"catalog"},"version":{"kind":"catalog_version","version_id":<catalog version_id>}}`）分页枚举全部成员 `exchange`/`code`。
+3. 对 market.daily 按 ≤100 实体分批调用 `get_data_availability`：
+   `{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"batch","entities":[…]},"filter":{"kind":"daily","start_date":"1990-01-01","end_date":<今日>},"version":{"kind":"latest_per_entity"}}`。
+4. 按返回结果分类：
+   - `version_ref` 存在 → 已有 head，进入 3a update；
+   - `availability="absent"` / `version_ref=null` → 无 head，进入 3b explicit start_collection；
+   - integrity/不可用/冲突结果 → fail-closed 上报，不自动修复。
+
 ### 3a. 已有 published daily heads → `update_data`（常规日更路径）
 
-全市场时必须用**显式 items**；`selection:{"kind":"default"}` 只在解析结果 ≤100 实体时可用：
+1. 对 3.0 中已有 head 的实体构造 item：
+   `{"entity":{"exchange","code"},"base_version_id":<head version_id>,"start_date":<last_record+1 日>,"end_date":<目标交易日>}`。
+   `end_date` 取本次 generation 快照的实际最后交易日；取不到时用当前日期——窗口内无源 bar 只会该 item fail-closed，不影响其他 item。
+2. items 按 ≤100 分 chunk，逐 chunk 调 `update_data`（`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"items":[…]}`），串行：一个任务终态后再提下一个。
+3. 已有 head 的实体**不得**改用 `start_collection`（会返回 `existing daily head requires the update_data range path`）。
+4. `selection:{"kind":"default"}` 只在解析结果 ≤100 实体时可用；全市场默认使用显式 items。
 
-1. `get_data_availability`（`{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"daily","start_date":"1990-01-01","end_date":<今日>},"version":{"kind":"latest_per_entity"}}`）分页拉全量——每实体取 `entity`、`version_ref.version_id`、`last_record`。
-2. 构造 item：`{"entity":{"exchange","code"},"base_version_id":<head version_id>,"start_date":<last_record+1 日>,"end_date":<目标交易日>}`。`end_date` 取本次 generation 快照的实际最后交易日；取不到时用当前日期——窗口内无源 bar 只会该 item fail-closed，不影响其他 item。
-3. items 按 ≤100 分 chunk，逐 chunk 调 `update_data`（`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"items":[…]}`），串行：一个任务终态后再提下一个。
-4. 已有 head 的实体**不得**改用 `start_collection`（会返回 `existing daily head requires the update_data range path`）。
-
-### 3b. 全新数据库（无 daily head）→ `start_collection`
+### 3b. 无 published daily head → `start_collection` 显式 securities
 
 本路径只在步骤 1 已确认 `day=changed`、步骤 2 的新 generation 已 verified+active，
-且机器事实确认没有 published daily head 时自动进入。若 `day` 未变化，则 daily-sync
-停止并报告 `FRESH_DB_REBUILD_REQUIRES_EXPLICIT_REQUEST`，不得仅因空库复用旧 active
-generation 开始首采。
+且 3.0 的机器事实确认目标实体没有 published daily head 时进入。若 `day` 未变化，
+daily-sync 停止并报告 `FRESH_DB_REBUILD_REQUIRES_EXPLICIT_REQUEST`，不得仅因空库复用旧
+active generation 开始首采。
 
-1. `{"dataset":"securities.catalog","contract_version":"v1","request_id":<唯一>,"selection":{"scope":"current_sh_sz_a"}}` → 轮询终态 → `list_data_versions`（`dataset:"securities.catalog"`）取 catalog `version_id`。
-2. `query_data` 对该 catalog `version_id` 分页取全部成员（exchange+code）。
-3. 成员按 ≤100 分 chunk，逐 chunk `start_collection`：`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"selection":{"kind":"explicit","securities":[{exchange,code},…]}}`，串行至终态。
+1. 若 catalog version 尚不存在，先 `start_collection`：
+   `{"dataset":"securities.catalog","contract_version":"v1","request_id":<唯一>,"selection":{"scope":"current_sh_sz_a"}}` → 轮询终态 → `list_data_versions` 取 catalog `version_id`。
+2. `query_data` 对该 catalog `version_id` 分页取全部成员（exchange+code），再按 3.0 的
+   market.daily `batch` availability 复核；只对 `version_ref=null` 的实体建立首采。
+3. 无 head 实体按 ≤100 分 chunk，逐 chunk `start_collection`：
+   `{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"selection":{"kind":"explicit","securities":[{exchange,code},…]}}`，串行至终态。
 - `start_collection` 不接受 `{"kind":"default"}`；`selection` 顶层为 `{"scope":"current_sh_sz_a"}`（catalog）或 `{"kind":"explicit","securities":[…]}`（daily）。
 
 轮询 `get_task_progress(task_id)`：每 ~10-15s 一轮；100-item 任务实测 8-120s（采集约 6-8s、跨代更新约 40-120s、同代无变更约 6-12s）。单任务预算 10 分钟，耗尽 → 停止并返回 refs。
@@ -146,11 +166,12 @@ generation 开始首采。
 
 ## 4. 验证与汇报
 
-- `get_data_availability`：`{"dataset":"market.daily","contract_version":"v1","selection":{"kind":"catalog","scope":"current_sh_sz_a"},"filter":{"kind":"daily","start_date":"1990-01-01","end_date":<今日>},"version":{"kind":"latest_per_entity"}}`，分页确认 coverage/freshness/gap 事实。
+- 复用 3.0 的 catalog `version_id` 与实体枚举；对 market.daily 继续按 ≤100 实体分批调用
+  `get_data_availability`（`selection:{"kind":"batch","entities":[…]}`），确认 coverage/freshness/gap 事实。
 - `query_data` 抽样若干实体最新交易日数据（`selection:{"kind":"single"|"batch"}`，`filter:{"kind":"daily",...}`，`version:{"kind":"latest_per_entity"}`）。
 - 汇报：active generation、published/no_change 计数、最新数据日期、全部 request/task refs。
 
-可选：派生 `market.yearly` — yearly 只接受显式 items（无 default selection，collection 亦被 worker 设计性拒绝）：先经 `get_data_availability`/`list_data_versions` 取得每个实体的当前 daily head `version_id` 与当前 yearly head，再按 ≤100 分 chunk 调 `update_data` `dataset:"market.yearly"`，每项 `{entity, base_daily_version_id:<daily head>, years:[<当前年>], publication:{"mode":"current_head","expected_yearly_head":<当前 yearly head version_id 或 null>}}`；串行轮询与 fail-closed 判定同上。`selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
+可选：派生 `market.yearly` — yearly 只接受显式 items（无 default selection，collection 亦被 worker 设计性拒绝）：先用同一批 catalog 实体对 market.daily / market.yearly 分别按 ≤100 batch 调 `get_data_availability` 或 `list_data_versions`，取得当前 daily head `version_id` 与当前 yearly head；再按 ≤100 分 chunk 调 `update_data` `dataset:"market.yearly"`，每项 `{entity, base_daily_version_id:<daily head>, years:[<当前年>], publication:{"mode":"current_head","expected_yearly_head":<当前 yearly head version_id 或 null>}}`；串行轮询与 fail-closed 判定同上。`selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
 
 ## 5. 超时与结果不明的恢复（绝不盲发新 ID）
 
