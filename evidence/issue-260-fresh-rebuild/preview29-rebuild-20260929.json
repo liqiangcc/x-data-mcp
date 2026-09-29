@@ -1,0 +1,123 @@
+{
+  "evidence": "issue-260-preview29-fresh-rebuild",
+  "generated_at": "2026-09-29T06:07:37.657422+00:00",
+  "authorization": "explicit user selection: 授权 fresh rebuild",
+  "runtime": {
+    "release": "v0.2.0-preview.29",
+    "code_sha": "4493d45",
+    "data_capability_revision": "generic-data-v3",
+    "acquire_capability_revision": "x-data-acquire-v1",
+    "schema_version": 20,
+    "active_generation_id": "c360967a283440e6e30875325bfd0dd7e8e4be106c061bb8a3cb0f17dc3bbf27"
+  },
+  "catalog": {
+    "request_id": "fresh-rebuild-20260929-0530-catalog",
+    "task_id": "task-9a2026d790daffaf5a894ff1bdf39018",
+    "status": "succeeded",
+    "version_id": "catalog-1790660536962300201",
+    "records": 5227
+  },
+  "daily": {
+    "request_id_prefix": "fresh-rebuild-20260929-0530-daily-",
+    "chunks": 53,
+    "entities_submitted": 5227,
+    "versions_published": 5222,
+    "tasks": [
+      {"index": 1, "request_id": "fresh-rebuild-20260929-0530-daily-001", "task_id": "task-744ee97057a134af02f45b1c00560243", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 2, "request_id": "fresh-rebuild-20260929-0530-daily-002", "task_id": "task-0d78d2e2827e26d46f38ade097e57a0b", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 3, "request_id": "fresh-rebuild-20260929-0530-daily-003", "task_id": "task-6236a05ccba72472f457623a6be4451a", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 4, "request_id": "fresh-rebuild-20260929-0530-daily-004", "task_id": "task-73581c87c66925f4fec5df70136e9a40", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 5, "request_id": "fresh-rebuild-20260929-0530-daily-005", "task_id": "task-19023921ee2ef4746983823ef8fcaafd", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 6, "request_id": "fresh-rebuild-20260929-0530-daily-006", "task_id": "task-5a510460d916bccbd97216ebe2970756", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 7, "request_id": "fresh-rebuild-20260929-0530-daily-007", "task_id": "task-daa7413e044c4fe849129c2ef7fcc36f", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 8, "request_id": "fresh-rebuild-20260929-0530-daily-008", "task_id": "task-3f0d4110c8e03970d1b23851d318bdb7", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 9, "request_id": "fresh-rebuild-20260929-0530-daily-009", "task_id": "task-30ea91cec3da97d9a1242eb04b9379f8", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 10, "request_id": "fresh-rebuild-20260929-0530-daily-010", "task_id": "task-8b9098323d8ce4832cb189cd31c9c4fe", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 11, "request_id": "fresh-rebuild-20260929-0530-daily-011", "task_id": "task-293e89f559dad35d0d13f96458abc57e", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 12, "request_id": "fresh-rebuild-20260929-0530-daily-012", "task_id": "task-0c1a5af79ccbdfa4012ba974290f5ac2", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 13, "request_id": "fresh-rebuild-20260929-0530-daily-013", "task_id": "task-ac681fc9115d237e7f7e380ba0a5e4df", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 14, "request_id": "fresh-rebuild-20260929-0530-daily-014", "task_id": "task-fbf711fb76cde750537dc0db93aa3894", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 15, "request_id": "fresh-rebuild-20260929-0530-daily-015", "task_id": "task-3a616a4555695d277e7a35515a34b879", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 16, "request_id": "fresh-rebuild-20260929-0530-daily-016", "task_id": "task-04fa2cf64e9cb8058cc18377df774964", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 17, "request_id": "fresh-rebuild-20260929-0530-daily-017", "task_id": "task-b2bb17264d7ba48d3a159ec7abdcf35a", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 18, "request_id": "fresh-rebuild-20260929-0530-daily-018", "task_id": "task-4b8eb78a1462570f7a18c9b053ba34ec", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 19, "request_id": "fresh-rebuild-20260929-0530-daily-019", "task_id": "task-08036d9884f37b26bb8c65fd4a247960", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 20, "request_id": "fresh-rebuild-20260929-0530-daily-020", "task_id": "task-67da1377faf516cf97964e37eb864f9d", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 21, "request_id": "fresh-rebuild-20260929-0530-daily-021", "task_id": "task-d72619d1d26060410dd6c41395cf91ea", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 22, "request_id": "fresh-rebuild-20260929-0530-daily-022", "task_id": "task-20a12d36363ac71bb23cd547d8fee08d", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 23, "request_id": "fresh-rebuild-20260929-0530-daily-023", "task_id": "task-e05844924138eb8be51f13c38072753f", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 24, "request_id": "fresh-rebuild-20260929-0530-daily-024", "task_id": "task-ab44bf4a469bce7ad62397d2ed4472f3", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 25, "request_id": "fresh-rebuild-20260929-0530-daily-025", "task_id": "task-d738d9bb45854356a2c4a0283e57fc65", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 26, "request_id": "fresh-rebuild-20260929-0530-daily-026", "task_id": "task-412ad84817e189c6ec15cbaf44a60e35", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 27, "request_id": "fresh-rebuild-20260929-0530-daily-027", "task_id": "task-a33dc1dbd9c13390f6931cdce4a15c4c", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 28, "request_id": "fresh-rebuild-20260929-0530-daily-028", "task_id": "task-69cea90c21bdbc3bfd52abe9d43ac133", "status": "partially_failed", "succeeded": 99, "failed": 1},
+      {"index": 29, "request_id": "fresh-rebuild-20260929-0530-daily-029", "task_id": "task-f4f4d00b0c6b45ac65079f7131401b1e", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 30, "request_id": "fresh-rebuild-20260929-0530-daily-030", "task_id": "task-1e0b583cf50c19373afd78d8bd7e16a0", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 31, "request_id": "fresh-rebuild-20260929-0530-daily-031", "task_id": "task-305a6de9ac7d69d37723da120105a7a5", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 32, "request_id": "fresh-rebuild-20260929-0530-daily-032", "task_id": "task-0c599272897fb921f4be20b1e7e6fd3f", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 33, "request_id": "fresh-rebuild-20260929-0530-daily-033", "task_id": "task-078674dcc32075b8ee3cba93e2355ca5", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 34, "request_id": "fresh-rebuild-20260929-0530-daily-034", "task_id": "task-b18e9743b1a8cb81a1600061147be832", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 35, "request_id": "fresh-rebuild-20260929-0530-daily-035", "task_id": "task-7b9213b717763494d4793745ab569cc7", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 36, "request_id": "fresh-rebuild-20260929-0530-daily-036", "task_id": "task-f7f3e55f5a275b87b4d02e3c51cd7c82", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 37, "request_id": "fresh-rebuild-20260929-0530-daily-037", "task_id": "task-6e4321225e5187b650d5dc49c93fdae9", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 38, "request_id": "fresh-rebuild-20260929-0530-daily-038", "task_id": "task-40fb4bd35c51c2085827294ff49ba8f3", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 39, "request_id": "fresh-rebuild-20260929-0530-daily-039", "task_id": "task-3ccf62e1d302c6ac55c8d8165a5bf698", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 40, "request_id": "fresh-rebuild-20260929-0530-daily-040", "task_id": "task-8bb334a846e980cf2dc162005a84b53f", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 41, "request_id": "fresh-rebuild-20260929-0530-daily-041", "task_id": "task-f47d9ce889f1d92c0b92c631dbef1024", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 42, "request_id": "fresh-rebuild-20260929-0530-daily-042", "task_id": "task-aabc7a7247abdcdbb9d57f008e4e015b", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 43, "request_id": "fresh-rebuild-20260929-0530-daily-043", "task_id": "task-78bc5dba0a9319c59ec41703952db60c", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 44, "request_id": "fresh-rebuild-20260929-0530-daily-044", "task_id": "task-5a4e02dd1db43ccb89294936466f9b34", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 45, "request_id": "fresh-rebuild-20260929-0530-daily-045", "task_id": "task-ad4e6d986377417858533a15cc38fb35", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 46, "request_id": "fresh-rebuild-20260929-0530-daily-046", "task_id": "task-89e646dd8ddc1007749676659a2413ab", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 47, "request_id": "fresh-rebuild-20260929-0530-daily-047", "task_id": "task-3a18f1f4de4b76bcbbf143602f2769d5", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 48, "request_id": "fresh-rebuild-20260929-0530-daily-048", "task_id": "task-67dec921315cbaed5869bd280196311c", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 49, "request_id": "fresh-rebuild-20260929-0530-daily-049", "task_id": "task-89cc211f7dd627bc2d5f66c1a0f84ec3", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 50, "request_id": "fresh-rebuild-20260929-0530-daily-050", "task_id": "task-8326b86792ddc64187bfc0afe30578c4", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 51, "request_id": "fresh-rebuild-20260929-0530-daily-051", "task_id": "task-3375a0d61e80431658ee5804b2e210b0", "status": "succeeded", "succeeded": 100, "failed": 0},
+      {"index": 52, "request_id": "fresh-rebuild-20260929-0530-daily-052", "task_id": "task-c8e7ab7d3f23b5b7b3b7309e10579452", "status": "partially_failed", "succeeded": 99, "failed": 1},
+      {"index": 53, "request_id": "fresh-rebuild-20260929-0530-daily-053", "task_id": "task-fc50ad2a526484ba3633c4dee1c39238", "status": "partially_failed", "succeeded": 24, "failed": 3}
+    ],
+    "failed_items": [
+      {"chunk": 28, "item_id": "[\"market\",\"sz.001246\",\"day\"]", "entity": {"code": "001246", "exchange": "sz"}, "stage": "finished", "success": false, "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\lday\\sz001246.day\", \"sz/lday/sz001246.day\"], found 0"},
+      {"chunk": 52, "item_id": "[\"market\",\"sz.301569\",\"day\"]", "entity": {"code": "301569", "exchange": "sz"}, "stage": "finished", "success": false, "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\lday\\sz301569.day\", \"sz/lday/sz301569.day\"], found 0"},
+      {"chunk": 53, "item_id": "[\"market\",\"sz.301660\",\"day\"]", "entity": {"code": "301660", "exchange": "sz"}, "stage": "finished", "success": false, "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\lday\\sz301660.day\", \"sz/lday/sz301660.day\"], found 0"},
+      {"chunk": 53, "item_id": "[\"market\",\"sz.301716\",\"day\"]", "entity": {"code": "301716", "exchange": "sz"}, "stage": "finished", "success": false, "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\lday\\sz301716.day\", \"sz/lday/sz301716.day\"], found 0"},
+      {"chunk": 53, "item_id": "[\"market\",\"sz.301718\",\"day\"]", "entity": {"code": "301718", "exchange": "sz"}, "stage": "finished", "success": false, "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\lday\\sz301718.day\", \"sz/lday/sz301718.day\"], found 0"}
+    ]
+  },
+  "verification": {
+    "availability_counts": {"unknown": 5222, "absent": 5},
+    "integrity_counts": {"verified": 5222, "not_applicable": 5},
+    "entities_with_version": 5222,
+    "missing_version_entities": [
+      {"code": "001246", "exchange": "sz"},
+      {"code": "301569", "exchange": "sz"},
+      {"code": "301660", "exchange": "sz"},
+      {"code": "301716", "exchange": "sz"},
+      {"code": "301718", "exchange": "sz"}
+    ],
+    "last_record_counts": [
+      ["2026-09-28", 5210],
+      [null, 5],
+      ["2026-09-14", 3],
+      ["2026-09-11", 2],
+      ["2026-09-10", 1],
+      ["2026-09-03", 1],
+      ["2026-08-31", 1],
+      ["2026-09-21", 1],
+      ["2026-09-18", 1],
+      ["2026-09-24", 1],
+      ["2026-08-28", 1]
+    ],
+    "sample_query": "market.daily sh.600000 2026-09-21..2026-09-28 returned 5 records; latest record 2026-09-28; adjustment=qfq; units CNY/share"
+  },
+  "storage": {
+    "preview_sqlite_bytes": 776974336,
+    "preview_sqlite_wal_bytes": 16777216
+  },
+  "notes": [
+    "availability=unknown for the broad 1990-01-01..2026-09-29 probe because pre-listing/undecidable ranges remain unresolved; entities_with_version and integrity=verified are the publication facts.",
+    "5 source-missing entities returned partial task failures and remain absent; this is not a full-market complete coverage claim.",
+    "production_ready remains false / owner-only local preview; external distribution is not authorized."
+  ]
+}

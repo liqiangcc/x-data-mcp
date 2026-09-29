@@ -4,9 +4,10 @@
 当前 acquisition 已实现 immutable generation、验证后条件激活和 generation-bound
 routine update（见[每日同步说明](daily-sync.md)）；preview.29 双 MCP 拓扑已在本机
 部署运行——data socket 提供 20 data tools、acquire socket 提供 10 acquisition
-tools、fresh init 库使用 compact schema 20；Phase-G fresh-init 后当前 market DB
-`data_versions=0`，active generation ready 不等于数据已发布。generation
-生命周期与全市场分批
+tools、fresh init 库使用 compact schema 20。2026-09-29 explicit fresh rebuild
+已发布 catalog `catalog-1790660536962300201`（5,227 records）与 5,222 个
+`market.daily` published versions；5 个官方 `hsjday` 成员缺失保持 absent。
+generation 生命周期与全市场分批
 collection/update 均有真实证据（preview.26–28 连续验收：catalog 5,227 实体、
 daily 首采约 340s、同代 no-change `update_data` 5,222 items 约 616s）。#259 已在
 2026-09-28 owner re-baseline 后关闭：同代 no-change `update_data` 现行合同为
