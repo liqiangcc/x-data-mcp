@@ -85,17 +85,19 @@ def main() -> int:
         "也不要求枚举全部工具",
         "get_acquisition_capabilities({\"contract_version\":\"v1\"})",
         "get_data_capabilities({})",
-        "catalog selection 只能用于\n`dataset:\"securities.catalog\"`",
+        "`catalog` selection 只能用于 `dataset:\"securities.catalog\"`",
+        "不接受 `catalog` 或 `default` selection",
+        "not_queried_by_no_update_branch",
         "按 ≤100 实体分批调用 `get_data_availability`",
         "selection:{\"kind\":\"batch\",\"entities\":[…]}",
     ]:
         check(f"Skill contains {required!r}", required in skill_text)
     for lineno, line in enumerate(skill_text.splitlines(), start=1):
         check(
-            f"Skill line {lineno} does not apply catalog selection to market data",
+            f"Skill line {lineno} does not apply catalog/default selection to market data",
             not (
                 '"dataset":"market.' in line
-                and '"kind":"catalog"' in line
+                and ('"kind":"catalog"' in line or '"kind":"default"' in line)
             ),
             line.strip(),
         )
