@@ -38,8 +38,12 @@ preview.29 Phase-G 部署为 fresh-init schema 20：旧 801MB DB 已归档至
 published versions 和 5,222 个 `market.yearly` derived versions；5 个官方
 `hsjday` 成员缺失保持 absent（`sz.001246`、`sz.301569`、`sz.301660`、
 `sz.301716`、`sz.301718`）。daily/yearly 样本 QFQ manifest/readback 已验证，
-当前 DB 约 809MB；x 消费验收仍待重新发布，package smoke
-（synthetic fixture、live source NOT_RUN）不能替代。
+当前 DB 约 809MB；x 消费侧 bounded `KlineReader` live readback 已通过
+（`liqiangcc/x` PR #150，证据见
+`evidence/issue-298-x-consumer/preview29-x-consumer-20260929.json`），但 Security
+Master、历史 universe、交易日历、pool/情绪、raw/point-in-time 价格与完整
+simulator 会话仍未纳入该 slice；package smoke（synthetic fixture、live source
+NOT_RUN）不能替代。
 
 `production_ready=false` 表达 declared owner/local scope；external distribution
 is not authorized。运行时 `tools/list`、capability 与结构化
