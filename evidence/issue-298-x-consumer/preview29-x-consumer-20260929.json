@@ -1,0 +1,207 @@
+{
+  "schema_version": "x-consumer-acceptance-v1",
+  "created_at": "2026-09-29T08:44:53Z",
+  "issue": "https://github.com/liqiangcc/x-data-mcp/issues/298",
+  "consumer": {
+    "repo": "liqiangcc/x",
+    "pr": "https://github.com/liqiangcc/x/pull/150",
+    "head_commit": "f466128d65a5c3c7635ec6474c3593c3162c1602",
+    "merge_commit": "1c42c0a1",
+    "entry": "src/adapters/mcp/stdio_entry.js",
+    "switch": "X_DATA_MCP_SOCKET=/opt/x-data-mcp-preview/run/mcp.sock"
+  },
+  "producer": {
+    "socket": "/opt/x-data-mcp-preview/run/mcp.sock",
+    "release": "v0.2.0-preview.29",
+    "capability_revision": "generic-data-v3",
+    "active_generation": "c360967a283440e6e30875325bfd0dd7e8e4be106c061bb8a3cb0f17dc3bbf27"
+  },
+  "session": {
+    "transport": "x stdio MCP server -> x-data-mcp owner-only unix socket",
+    "tools_listed": [
+      "analytics_get_bollinger",
+      "analytics_get_drawdowns",
+      "analytics_get_recovery_periods",
+      "market_get_kline",
+      "market_get_security",
+      "market_get_summary",
+      "simulation_run_drawdown_buying",
+      "strategy_explain_signal",
+      "strategy_get_candidates",
+      "strategy_list"
+    ]
+  },
+  "checks": {
+    "daily_kline": {
+      "tool": "market_get_kline",
+      "arguments": {
+        "code": "600000",
+        "market": 1,
+        "startDate": "2026-09-21",
+        "endDate": "2026-09-28",
+        "period": "daily",
+        "limit": 5,
+        "adjustment": "ledger_default"
+      },
+      "result": {
+        "security": { "code": "600000", "market": 1 },
+        "period": "daily",
+        "barCount": 5,
+        "first": {
+          "date": "2026-09-21",
+          "open": 9.04,
+          "high": 9.06,
+          "low": 8.91,
+          "close": 9.01,
+          "volume": 65906232,
+          "amount": 593492224
+        },
+        "last": {
+          "date": "2026-09-28",
+          "open": 9.03,
+          "high": 9.18,
+          "low": 9.0,
+          "close": 9.16,
+          "volume": 118485298,
+          "amount": 1080846720
+        },
+        "dataMode": "legacy_approximate",
+        "priceView": "legacy_forward_adjusted",
+        "qualityIssues": [
+          "legacy_approximate",
+          "current_generation_qfq_not_point_in_time",
+          "raw_execution_price_unavailable"
+        ],
+        "source": {
+          "kind": "x_data_mcp",
+          "dataset": "market.daily",
+          "versionId": "collection-version-016165ce9e632d7a6e5c98b475deeaa9fb22a30dfe92184a9597258b06878514",
+          "integritySha256": "688d7205597668639464313f35655913995ea4b04d446d88a51d6bb19c35e724",
+          "snapshotId": "2233973-1790671493564435758-2",
+          "queryTime": "2026-09-29T08:44:53.634247124Z"
+        }
+      }
+    },
+    "yearly_kline": {
+      "tool": "market_get_kline",
+      "arguments": {
+        "code": "600000",
+        "market": 1,
+        "startDate": "2025-01-01",
+        "endDate": "2026-12-31",
+        "period": "yearly",
+        "limit": 2,
+        "adjustment": "ledger_default"
+      },
+      "result": {
+        "period": "yearly",
+        "barCount": 2,
+        "first": {
+          "date": "2025-12-31",
+          "open": 9.47,
+          "high": 13.97,
+          "low": 8.63,
+          "close": 12.02,
+          "volume": 18133498968,
+          "amount": 220535547584
+        },
+        "last": {
+          "date": "2026-09-28",
+          "open": 12.05,
+          "high": 12.06,
+          "low": 8.07,
+          "close": 9.16,
+          "volume": 14305499753,
+          "amount": 137753349888
+        },
+        "source": {
+          "kind": "x_data_mcp",
+          "dataset": "market.yearly",
+          "versionId": "yearly-version-db597d652a74a5fc673f62388f9b6c30a4d3bfe338a9f582d86c09d373f30145",
+          "integritySha256": "1ae9c0035281ed13a4cefa70e27132cf5085d2927c7f29f93044802ef57970bd",
+          "snapshotId": "2233973-1790671493564435758-4",
+          "queryTime": "2026-09-29T08:44:53.753065764Z"
+        }
+      }
+    },
+    "market_summary": {
+      "tool": "market_get_summary",
+      "result": {
+        "latest": { "date": "2026-09-28", "close": 9.16 },
+        "coverage": {
+          "requestedStartDate": "2026-09-21",
+          "requestedEndDate": "2026-09-28",
+          "observedStartDate": "2026-09-21",
+          "observedEndDate": "2026-09-28",
+          "barCount": 5
+        },
+        "versionId": "collection-version-016165ce9e632d7a6e5c98b475deeaa9fb22a30dfe92184a9597258b06878514"
+      }
+    },
+    "bollinger": {
+      "tool": "analytics_get_bollinger",
+      "result": {
+        "latest": {
+          "date": "2026-09-28",
+          "price": 9.16,
+          "lower": 8.923701658596254,
+          "middle": 9.191999999999998,
+          "stddev": 0.13414917070187196,
+          "upper": 9.460298341403742
+        },
+        "coverage": {
+          "inputBars": 40,
+          "returnedPoints": 3,
+          "validPoints": 3,
+          "warmupComplete": true
+        },
+        "versionId": "collection-version-016165ce9e632d7a6e5c98b475deeaa9fb22a30dfe92184a9597258b06878514"
+      }
+    },
+    "absent_entity": {
+      "tool": "market_get_kline",
+      "arguments": {
+        "code": "301718",
+        "market": 0,
+        "startDate": "2026-09-21",
+        "endDate": "2026-09-28",
+        "period": "daily"
+      },
+      "result": {
+        "barCount": 0,
+        "qualityIssues": ["missing_daily_kline"],
+        "versionId": null
+      }
+    }
+  },
+  "verification": {
+    "x_repo_checks": [
+      "npm run check: PASS (587 JavaScript files)",
+      "node --test tests/x-data-mcp-client.test.js tests/x-data-mcp-kline-reader.test.js: PASS (7 tests)",
+      "npm test: PASS (985 tests)",
+      "PR #150 CI checks: SUCCESS x2"
+    ],
+    "live_session": "PASS"
+  },
+  "scope": {
+    "implemented": [
+      "read-only x-data-mcp KlineReader for market.daily and market.yearly",
+      "per-entity published version pinning via list_data_versions",
+      "explicit_version_map query_data reads",
+      "confirmed qfq manifest gate",
+      "missing published version -> missing_*_kline quality issue"
+    ],
+    "not_covered": [
+      "Security Master / market_get_security remote mapping",
+      "historical universe or survivorship-bias correction",
+      "trading calendar dataset",
+      "Eastmoney pool sentiment snapshots",
+      "raw execution prices",
+      "point-in-time QFQ factors",
+      "securities.status_history / ST-*ST facts",
+      "external distribution"
+    ],
+    "production_ready": false,
+    "external_distribution_authorized": false
+  }
+}
