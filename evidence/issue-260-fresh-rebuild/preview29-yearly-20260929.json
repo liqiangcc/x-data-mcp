@@ -1,0 +1,121 @@
+{
+  "evidence": "issue-260-preview29-fresh-rebuild-yearly",
+  "generated_at": "2026-09-29T07:22:56.097781+00:00",
+  "authorization": "explicit user selection: 授权 fresh rebuild",
+  "runtime": {
+    "release": "v0.2.0-preview.29",
+    "code_sha": "4493d45",
+    "data_capability_revision": "generic-data-v3",
+    "active_generation_id": "c360967a283440e6e30875325bfd0dd7e8e4be106c061bb8a3cb0f17dc3bbf27",
+    "catalog_version_id": "catalog-1790660536962300201"
+  },
+  "yearly": {
+    "request_id_prefix": "fresh-rebuild-20260929-0530-yearly-",
+    "resolved_year_request_suffix": "-resolved-years",
+    "chunks": 53,
+    "entities_submitted": 5222,
+    "versions_published": 5222,
+    "failed_items": 0,
+    "skipped_absent_daily": [
+      "sz.001246",
+      "sz.301569",
+      "sz.301660",
+      "sz.301716",
+      "sz.301718"
+    ],
+    "task_ids": [
+      "task-d176a9ba321cc5c8226632bbca001372",
+      "task-4267d551b64a07c3d32e776c4614a6c6",
+      "task-1f8028cbab88c3639675a0005e125bb4",
+      "task-f5fd992bd478773af92edd8b3738d5f8",
+      "task-6e25feafd4f0b4ffac5491e9cf9327eb",
+      "task-03b3c14a750e1e11df751acc0e8a823b",
+      "task-7dd3e90990a254a294c5d50ce3797938",
+      "task-beaa90255cc5b57afff0302f97ee0548",
+      "task-b45717e8b9f7a6ab19ffa5f3f2676113",
+      "task-59ec57ee4ebf6e5df86bcc644497ce45",
+      "task-537b19f7e5db58d8fd2ad4091da7f0c9",
+      "task-625e78a25cbc2bc398c79ebc0209c505",
+      "task-c5b2b1314dda0599af6a916fd2976eec",
+      "task-0f7fbe28030583d6903115d1c0919a47",
+      "task-d0decd617b95cbee52bfa312b9201347",
+      "task-483e21bdb925c6276f191a1b19e35af8",
+      "task-f58ae0a9488089107a359808afe6b5e8",
+      "task-672c982bc9735179e0c7c763c3af1357",
+      "task-42966e030206ef566433f032aa73232e",
+      "task-7b90966ba626f9b4aafdb26691ee1137",
+      "task-3ccff04c5fcf1ce598c27edf184f644e",
+      "task-84cbff2bb622f4386b06bbed5d9a9aaa",
+      "task-72f9eac29869a78b9a12e4bb46c7bd24",
+      "task-0654d758db3ec32ce032a5ff7a37a8e3",
+      "task-14ecd7daeb9da481fed58beae579359d",
+      "task-0d46aa910c545ddfe1c74dfcc8d12087",
+      "task-d50df1aa16c91a903128ba6735b10900",
+      "task-bddfe93bf04874d7bab39d91185d32d3",
+      "task-92a60ed0c8b4b7cb8a07a900c97d8637",
+      "task-5095a0036996371b6789bfb5bbfe725e",
+      "task-dc2c7e6dadac2889c02d892104eb8ba9",
+      "task-0520985e494ff4047b1081e59861473c",
+      "task-7598a910c98691632268de20947dd06d",
+      "task-1eea233f4236f63610e835c36d53e10a",
+      "task-a8db6fefeb9132a0a40f7c3b7e21d444",
+      "task-155a475252fb154a85a86c00dfd39972",
+      "task-10e12eb810f3f99c069750a658b8e082",
+      "task-2ad340463b0ed573b898c467171782f7",
+      "task-a2bd9e1b4321159d80713dadf2b50196",
+      "task-f2ed8a80adf403c55c6b91455121136f",
+      "task-10497cbb15778629c8faf4b2f862862b",
+      "task-385c8515407b8376f96f22cab9dbb418",
+      "task-a7d3d854f2a985262c293a7496e3df9c",
+      "task-d367e3eab0c058b087ff9382a797b92d",
+      "task-62a83cea7527df043a56cb8ebc8279c7",
+      "task-6097119369c53fc8bc5e08c70978c5a0",
+      "task-0dca6b6f0b536bd8078cd1f8177bdab1",
+      "task-1b794f6b54cdace048796b0bc6a4ab7c",
+      "task-f0e7eb8fb78ddd6dce443db193d10319",
+      "task-f93dafbd634dd53ad013a798c2175251",
+      "task-0014327efaebe3077dbb4e3dc4400128",
+      "task-197f307783c3dd442d1f55a36b24d96d",
+      "task-34f967a524cd193b001f08561e729890"
+    ]
+  },
+  "verification": {
+    "method": "MCP list_data_versions for all 5,227 catalog entities plus query_data samples; full-market get_data_availability(market.yearly) was not used as the completion gate because it re-aggregates each selected version",
+    "catalog_records": 5227,
+    "catalog_entities": 5227,
+    "yearly_entities": 5222,
+    "yearly_version_refs": 5222,
+    "missing_yearly_entities": [
+      "sz.001246",
+      "sz.301569",
+      "sz.301660",
+      "sz.301716",
+      "sz.301718"
+    ],
+    "sample_600000": {
+      "version_id": "yearly-version-db597d652a74a5fc673f62388f9b6c30a4d3bfe338a9f582d86c09d373f30145",
+      "base_daily_version_id": "collection-version-016165ce9e632d7a6e5c98b475deeaa9fb22a30dfe92184a9597258b06878514",
+      "records": [
+        {"date": "2025-12-31", "first_trading_date": "2025-01-02", "last_trading_date": "2025-12-31", "year_unfinished": false},
+        {"date": "2026-09-28", "first_trading_date": "2026-01-05", "last_trading_date": "2026-09-28", "year_unfinished": true}
+      ]
+    },
+    "sample_000001": {
+      "version_id": "yearly-version-368c3b210b04bd16cffeb162689a61e4d7157f9937a37b5a4e2cef8e543d4ef2",
+      "records_queried": "2025..2026",
+      "latest_record": "2026-09-28",
+      "year_2026_unfinished": true
+    }
+  },
+  "storage": {
+    "preview_sqlite_bytes": 809332736,
+    "preview_sqlite_wal_bytes": 16777216,
+    "preview_sqlite_shm_bytes": 98304
+  },
+  "notes": [
+    "Yearly update_data items were explicit and bound to each entity's verified daily head; publication mode was current_head with expected_yearly_head=null for first publication.",
+    "For chunks whose acceptance reported selected-year-absent, record-bearing natural years were resolved via market.daily get_data_availability before retrying with a fresh request id; no item failed execution.",
+    "The five entities without an official .day member have no daily head and therefore no yearly version; absence is preserved rather than synthesized.",
+    "production_ready remains false / owner-only local preview; external distribution is not authorized."
+  ]
+}

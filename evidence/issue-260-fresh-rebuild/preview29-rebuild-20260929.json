@@ -85,6 +85,22 @@
       {"chunk": 53, "item_id": "[\"market\",\"sz.301718\",\"day\"]", "entity": {"code": "301718", "exchange": "sz"}, "stage": "finished", "success": false, "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\lday\\sz301718.day\", \"sz/lday/sz301718.day\"], found 0"}
     ]
   },
+  "yearly_derived": {
+    "evidence_file": "evidence/issue-260-fresh-rebuild/preview29-yearly-20260929.json",
+    "request_id_prefix": "fresh-rebuild-20260929-0530-yearly-",
+    "chunks": 53,
+    "entities_submitted": 5222,
+    "versions_published": 5222,
+    "failed_items": 0,
+    "skipped_absent_daily": [
+      "sz.001246",
+      "sz.301569",
+      "sz.301660",
+      "sz.301716",
+      "sz.301718"
+    ],
+    "sample_query": "market.yearly sh.600000 2025..2026 returned 2 records; 2026 year_unfinished=true; base daily lineage bound to collection-version-016165ce9e632d7a6e5c98b475deeaa9fb22a30dfe92184a9597258b06878514"
+  },
   "verification": {
     "availability_counts": {"unknown": 5222, "absent": 5},
     "integrity_counts": {"verified": 5222, "not_applicable": 5},
@@ -112,7 +128,7 @@
     "sample_query": "market.daily sh.600000 2026-09-21..2026-09-28 returned 5 records; latest record 2026-09-28; adjustment=qfq; units CNY/share"
   },
   "storage": {
-    "preview_sqlite_bytes": 776974336,
+    "preview_sqlite_bytes": 809332736,
     "preview_sqlite_wal_bytes": 16777216
   },
   "notes": [
