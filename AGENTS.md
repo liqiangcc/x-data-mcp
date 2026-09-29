@@ -30,10 +30,10 @@ Box（旧 Tailscale 节点 `grok-bot-vm-411252337`）已于 2026-09-25 回收下
 ECS 部署目标 `ecs-node`（OpenSSH 别名，key auth，`ssh ecs-node` 本机直接可用）：x86_64，2 vCPU，约 2GiB RAM，40GB 根盘。它用于最终部署、真实 MCP 路径与最终 disk/WAL
 验收。注意：生产部署实际运行在本机 `/opt/x-data-mcp-preview/`（`x-data-mcp-data`/`x-data-mcp-acquire` systemd 单元 + `run/mcp.sock`/`run/acquire.sock` unix socket）；本机即承载生产实例，`ssh ecs-node` 别名当前未配置。
 
-生产运行事实（preview.29 @ 4493d45，2026-09-28 验证）：
+生产运行事实（preview.29 @ 4493d45，2026-09-29 验证）：
 
 - 部署管线：版本 bump + tag + `scripts/build_release.sh` + `scripts/smoke_release.py --bin-dir <解包目录>/bin --report <path>` + `gh release create --target <sha>`（tag 已存在时也必须传 `--target`，否则 `targetCommitish` 落成默认分支名，smoke 绑定校验失败）+ `deploy_phase_g.sh <tag>`（在 git 仓库目录内运行，`GH_REPO` 需就绪；release 资产名必须含 `<tarball>`、`<tarball>.sha256`、定名 `smoke-report.json`；每次部署归档旧库并全新 init 最新 compact schema（现 v20），非原地升级）。
 - 契约要点：`securities.catalog` 的 selection 为 `{"scope":"current_sh_sz_a"}`；已有 daily head 的实体禁止 `start_collection`（`market.daily` 返回 `existing daily head requires the update_data range path`），必须走 `update_data` 的 `explicit-range-task-v1` item（entity/base_version_id/start_date/end_date）；`market.yearly` 的 collection 被 worker 设计性拒绝，年线一律走 `update_data`（item 含 `base_daily_version_id`、`years`、`publication.expected_yearly_head`）。
 - 跨代日更：coverage reason 绑定新 manifest sha → typed ops 统一回退 envelope（#289）；除权股 `.day` member 非前缀追加 → 全量重写为根 checkpoint 版本（`continuity_mode=3`/`Full`，parent_version_key=NULL，亲缘链在 `market_update_results`），仅前向窗口可走；窗口覆盖被改写历史日仍 `RevisionUnverified` fail-closed（#290/#293）。
-- preview.29 runtime：capability revision `generic-data-v3`；Phase-G fresh init 新库为 compact schema 20、market DB `data_versions=0`；旧 801MB DB 归档于 `/opt/x-data-mcp-preview/state/preview.sqlite.v20-archived-20260928T053759Z`；`x-data-mcp-data`/`x-data-mcp-acquire` 双 systemd 服务 active；live 数据验收待重新发布。
+- preview.29 runtime：capability revision `generic-data-v3`；Phase-G fresh init 新库为 compact schema 20；旧 801MB DB 归档于 `/opt/x-data-mcp-preview/state/preview.sqlite.v20-archived-20260928T053759Z`。2026-09-29 explicit fresh rebuild 已发布 catalog `catalog-1790660536962300201`（5,227 records）与 5,222 个 `market.daily` published versions；5 个官方 `hsjday` 成员缺失保持 absent（`sz.001246`、`sz.301569`、`sz.301660`、`sz.301716`、`sz.301718`）；`x-data-mcp-data`/`x-data-mcp-acquire` 双 systemd 服务 active；production_ready 仍为 false。
 - preview.26–28 历史验收实测下限：同代无变化 `update_data` 全量 5,222 项 ≈ 116ms/item 平均（冷启 ~226ms → 稳态 50-70ms，generation 缓存）；跨代 envelope ≈ 430ms/item；首采 5,227 entity ≈ 340s；年线全量 ≈ 900s。

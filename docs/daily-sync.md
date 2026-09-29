@@ -32,9 +32,12 @@ immutable generation、每代 #131 验证后条件激活、任务受理时冻结
   尚无批准 hard SLO；真实 append/rewrite 待独立证据，均不得宣称 PASS。
 
 preview.29 Phase-G 部署为 fresh-init schema 20：旧 801MB DB 已归档至
-`/opt/x-data-mcp-preview/state/preview.sqlite.v20-archived-20260928T053759Z`，
-当前 market DB `data_versions=0`；live QFQ manifest 与 x 消费验收待重新发布，
-package smoke（synthetic fixture、live source NOT_RUN）不能替代。
+`/opt/x-data-mcp-preview/state/preview.sqlite.v20-archived-20260928T053759Z`。
+2026-09-29 explicit fresh rebuild 已发布 catalog
+`catalog-1790660536962300201`（5,227 records）与 5,222 个 `market.daily`
+published versions；5 个官方 `hsjday` 成员缺失保持 absent。样本 QFQ
+manifest/readback 已验证；x 消费验收仍待重新发布，package smoke
+（synthetic fixture、live source NOT_RUN）不能替代。
 
 `production_ready=false` 表达 declared owner/local scope；external distribution
 is not authorized。运行时 `tools/list`、capability 与结构化
