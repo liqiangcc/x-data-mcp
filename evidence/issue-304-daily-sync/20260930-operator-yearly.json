@@ -1,0 +1,1268 @@
+{
+  "catalog": {
+    "entity_count": 5227,
+    "version_id": "catalog-1790660536962300201"
+  },
+  "daily_absent": [
+    {
+      "code": "001246",
+      "exchange": "sz"
+    },
+    {
+      "code": "301569",
+      "exchange": "sz"
+    },
+    {
+      "code": "301660",
+      "exchange": "sz"
+    },
+    {
+      "code": "301718",
+      "exchange": "sz"
+    }
+  ],
+  "daily_heads": 5223,
+  "error": "task failed task-b90c780916de0d1f39e938104bdab844",
+  "request_id_prefix": "operator-update-20260930-yearly",
+  "sample_readbacks": [],
+  "tasks": [
+    {
+      "failed": 100,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-001",
+      "running": 0,
+      "status": "failed",
+      "succeeded": 0,
+      "task_id": "task-b90c780916de0d1f39e938104bdab844",
+      "total": 100,
+      "unfinished": [
+        {
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600000\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600004",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600004\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600006",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600006\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600007",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600007\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600008",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600008\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600009",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600009\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600010",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600010\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600011",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600011\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600012",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600012\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600015",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600015\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600016",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600016\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600017",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600017\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600018",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600018\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600019",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600019\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600020",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600020\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600021",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600021\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600022",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600022\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600023",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600023\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600025",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600025\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600026",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600026\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600027",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600027\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600028",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600028\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600029",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600029\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600030",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600030\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600031",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600031\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600032",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600032\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600033",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600033\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600035",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600035\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600036",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600036\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600037",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600037\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600038",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600038\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600039",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600039\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600048",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600048\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600050",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600050\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600051",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600051\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600052",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600052\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600053",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600053\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600054",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600054\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600055",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600055\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600056",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600056\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600057",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600057\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600058",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600058\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600059",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600059\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600060",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600060\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600061",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600061\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600062",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600062\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600063",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600063\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600064",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600064\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600066",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600066\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600067",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600067\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600071",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600071\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600072",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600072\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600073",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600073\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600075",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600075\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600076",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600076\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600078",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600078\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600079",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600079\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600080",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600080\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600081",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600081\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600082",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600082\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600084",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600084\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600085",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600085\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600088",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600088\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600089",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600089\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600094",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600094\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600095",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600095\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600096",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600096\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600097",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600097\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600098",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600098\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600099",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600099\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600100",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600100\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600101",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600101\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600103",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600103\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600104",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600104\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600105",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600105\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600106",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600106\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600107",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600107\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600108",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600108\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600109",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600109\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600110",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600110\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600111",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600111\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600113",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600113\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600114",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600114\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600115",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600115\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600116",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600116\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600117",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600117\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600118",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600118\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600119",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600119\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600120",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600120\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600121",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600121\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600123",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600123\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600125",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600125\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600126",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600126\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600127",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600127\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600128",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600128\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600129",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600129\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600130",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600130\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600131",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600131\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600132",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600132\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        },
+        {
+          "entity": {
+            "code": "600133",
+            "exchange": "sh"
+          },
+          "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+          "item_id": "[\"market\",\"sh.600133\",\"year\"]",
+          "period": "year",
+          "progress_unit": "security_period",
+          "stage": "finished",
+          "success": false
+        }
+      ]
+    }
+  ],
+  "year": 2026,
+  "yearly_absent_before": [
+    {
+      "code": "001246",
+      "exchange": "sz"
+    },
+    {
+      "code": "301569",
+      "exchange": "sz"
+    },
+    {
+      "code": "301660",
+      "exchange": "sz"
+    },
+    {
+      "code": "301716",
+      "exchange": "sz"
+    },
+    {
+      "code": "301718",
+      "exchange": "sz"
+    }
+  ],
+  "yearly_heads_before": 5222,
+  "yearly_update_item_count": 5223
+}

@@ -6,9 +6,12 @@
 开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。当前部署 preview.29
 （`4493d45`）：data socket 注册 20 data tools，acquire socket 注册
 10 acquisition tools，fresh init 库为 compact schema 20。2026-09-29 explicit
-fresh rebuild 已发布 catalog `catalog-1790660536962300201`（5,227 records）、
-5,222 个 `market.daily` published versions 和 5,222 个 `market.yearly`
-derived versions；5 个官方 `hsjday` 成员缺失保持 absent。
+fresh rebuild 后，2026-09-30 operator-path 已激活 generation
+`2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，
+并发布 catalog `catalog-1790660536962300201`（5,227 records）、
+5,223 个 `market.daily` published versions 和 5,223 个 `market.yearly`
+derived versions；最新集中行情日为 2026-09-29（5,211 entities）；4 个官方
+`hsjday` 成员缺失保持 absent。
 generic-data-v3 live discovery PASS，daily/yearly 样本 QFQ readback PASS；通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场
 collection/update 已通过分批 MCP 编排取得真实 generation 证据

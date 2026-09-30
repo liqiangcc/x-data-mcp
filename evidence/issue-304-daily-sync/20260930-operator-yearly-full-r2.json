@@ -1,0 +1,988 @@
+{
+  "catalog": {
+    "entity_count": 5227,
+    "version_id": "catalog-1790660536962300201"
+  },
+  "daily_absent": [
+    {
+      "code": "001246",
+      "exchange": "sz"
+    },
+    {
+      "code": "301569",
+      "exchange": "sz"
+    },
+    {
+      "code": "301660",
+      "exchange": "sz"
+    },
+    {
+      "code": "301718",
+      "exchange": "sz"
+    }
+  ],
+  "daily_heads": 5223,
+  "error": null,
+  "missing_year_facts": [],
+  "prior_year_facts": 5222,
+  "request_id_prefix": "operator-update-20260930-yearly-full-r2",
+  "sample_readbacks": [
+    {
+      "entity": "sh.600000",
+      "records": [
+        {
+          "amount": "220535547584",
+          "close": "12.02",
+          "date": "2025-12-31",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_trading_date": "2025-01-02",
+          "high": "13.97",
+          "kind": "market",
+          "last_trading_date": "2025-12-31",
+          "low": "8.63",
+          "open": "9.47",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "7756ac1487da7168a3b2b99aec0c70598081debede88b21877048f68f091a341",
+            "version_id": "yearly-version-a0ae261481eb1770b1fa5cd5135fa4dad3ae5eec2ce7a34472dc10b98a61f204"
+          },
+          "volume": "18133498968",
+          "year_unfinished": false
+        },
+        {
+          "amount": "138493090880",
+          "close": "9.18",
+          "date": "2026-09-29",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_trading_date": "2026-01-05",
+          "high": "12.06",
+          "kind": "market",
+          "last_trading_date": "2026-09-29",
+          "low": "8.07",
+          "open": "12.05",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "7756ac1487da7168a3b2b99aec0c70598081debede88b21877048f68f091a341",
+            "version_id": "yearly-version-a0ae261481eb1770b1fa5cd5135fa4dad3ae5eec2ce7a34472dc10b98a61f204"
+          },
+          "volume": "14386009492",
+          "year_unfinished": true
+        }
+      ],
+      "version_manifest": [
+        {
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "metadata": {
+            "adjustment": {
+              "field": "price_adjustment",
+              "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (27 events, 61 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+              "status": "confirmed",
+              "value": "qfq"
+            },
+            "coverage_reason": "selected years verified by re-aggregating fixed daily range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b against bound generation 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8 as of 2026-09-30; not a listing-history claim",
+            "coverage_status": "complete",
+            "lineage": {
+              "algorithm_version": "local-natural-year-v1",
+              "base_daily_version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b",
+              "first_trading_date": "1999-11-10",
+              "last_trading_date": "2026-09-29"
+            },
+            "published_at": "2026-09-30T04:07:49.384322611Z",
+            "source": "tdx-official-file-snapshot",
+            "units": [
+              {
+                "field": "price_currency",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "price_unit",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "yuan"
+              },
+              {
+                "field": "volume_unit",
+                "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "share"
+              },
+              {
+                "field": "amount_currency",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "amount_unit",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "yuan"
+              }
+            ]
+          },
+          "status": "present",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "7756ac1487da7168a3b2b99aec0c70598081debede88b21877048f68f091a341",
+            "version_id": "yearly-version-a0ae261481eb1770b1fa5cd5135fa4dad3ae5eec2ce7a34472dc10b98a61f204"
+          }
+        }
+      ]
+    },
+    {
+      "entity": "sz.301716",
+      "records": [
+        {
+          "amount": "6231355392",
+          "close": "578.88",
+          "date": "2026-09-29",
+          "entity": {
+            "code": "301716",
+            "exchange": "sz"
+          },
+          "first_trading_date": "2026-09-29",
+          "high": "630.01",
+          "kind": "market",
+          "last_trading_date": "2026-09-29",
+          "low": "558.58",
+          "open": "600.00",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "301716",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "08516d23a07a5143adb8f29ee17523dd59a696a95ffd287db4e09f8a8d71b427",
+            "version_id": "yearly-version-5b417f9f4a664142eb62eda9a6f57d75062f38a34cd2977f82e88104497c2146"
+          },
+          "volume": "10528330",
+          "year_unfinished": true
+        }
+      ],
+      "version_manifest": [
+        {
+          "entity": {
+            "code": "301716",
+            "exchange": "sz"
+          },
+          "metadata": {
+            "adjustment": {
+              "field": "price_adjustment",
+              "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (0 events, 1 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+              "status": "confirmed",
+              "value": "qfq"
+            },
+            "coverage_reason": "selected years verified by re-aggregating fixed daily collection-version-b781e87a3bf57975312eb0841133a902a4f3249976413671661716921c511ca1 against bound generation 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8 as of 2026-09-30; not a listing-history claim",
+            "coverage_status": "complete",
+            "lineage": {
+              "algorithm_version": "local-natural-year-v1",
+              "base_daily_version_id": "collection-version-b781e87a3bf57975312eb0841133a902a4f3249976413671661716921c511ca1",
+              "first_trading_date": "2026-09-29",
+              "last_trading_date": "2026-09-29"
+            },
+            "published_at": "2026-09-30T04:42:21.904770039Z",
+            "source": "tdx-official-file-snapshot",
+            "units": [
+              {
+                "field": "price_currency",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "price_unit",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "yuan"
+              },
+              {
+                "field": "volume_unit",
+                "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "share"
+              },
+              {
+                "field": "amount_currency",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "amount_unit",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "yuan"
+              }
+            ]
+          },
+          "status": "present",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "301716",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "08516d23a07a5143adb8f29ee17523dd59a696a95ffd287db4e09f8a8d71b427",
+            "version_id": "yearly-version-5b417f9f4a664142eb62eda9a6f57d75062f38a34cd2977f82e88104497c2146"
+          }
+        }
+      ]
+    },
+    {
+      "entity": "sz.000001",
+      "records": [
+        {
+          "amount": "315956233088",
+          "close": "10.80",
+          "date": "2025-12-31",
+          "entity": {
+            "code": "000001",
+            "exchange": "sz"
+          },
+          "first_trading_date": "2025-01-02",
+          "high": "12.49",
+          "kind": "market",
+          "last_trading_date": "2025-12-31",
+          "low": "9.27",
+          "open": "10.52",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "a6e08e79971da87d0b65261b796d72fff33f2ccf942fa1a60085d69d7140b9d7",
+            "version_id": "yearly-version-22d9f56197afa80455e462f670fe3db4eed868f9108c20043b6e8f26adb9f7f6"
+          },
+          "volume": "26921912287",
+          "year_unfinished": false
+        },
+        {
+          "amount": "196810393568",
+          "close": "11.35",
+          "date": "2026-09-29",
+          "entity": {
+            "code": "000001",
+            "exchange": "sz"
+          },
+          "first_trading_date": "2026-01-05",
+          "high": "11.83",
+          "kind": "market",
+          "last_trading_date": "2026-09-29",
+          "low": "9.74",
+          "open": "10.81",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "a6e08e79971da87d0b65261b796d72fff33f2ccf942fa1a60085d69d7140b9d7",
+            "version_id": "yearly-version-22d9f56197afa80455e462f670fe3db4eed868f9108c20043b6e8f26adb9f7f6"
+          },
+          "volume": "17720916598",
+          "year_unfinished": true
+        }
+      ],
+      "version_manifest": [
+        {
+          "entity": {
+            "code": "000001",
+            "exchange": "sz"
+          },
+          "metadata": {
+            "adjustment": {
+              "field": "price_adjustment",
+              "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (33 events, 48 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+              "status": "confirmed",
+              "value": "qfq"
+            },
+            "coverage_reason": "selected years verified by re-aggregating fixed daily range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832 against bound generation 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8 as of 2026-09-30; not a listing-history claim",
+            "coverage_status": "complete",
+            "lineage": {
+              "algorithm_version": "local-natural-year-v1",
+              "base_daily_version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832",
+              "first_trading_date": "1991-04-03",
+              "last_trading_date": "2026-09-29"
+            },
+            "published_at": "2026-09-30T04:32:56.248933743Z",
+            "source": "tdx-official-file-snapshot",
+            "units": [
+              {
+                "field": "price_currency",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "price_unit",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "yuan"
+              },
+              {
+                "field": "volume_unit",
+                "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "share"
+              },
+              {
+                "field": "amount_currency",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "amount_unit",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "yuan"
+              }
+            ]
+          },
+          "status": "present",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "a6e08e79971da87d0b65261b796d72fff33f2ccf942fa1a60085d69d7140b9d7",
+            "version_id": "yearly-version-22d9f56197afa80455e462f670fe3db4eed868f9108c20043b6e8f26adb9f7f6"
+          }
+        }
+      ]
+    }
+  ],
+  "start_item": 700,
+  "tasks": [
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-001",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-68cf4baf553a5b99b8584c0f929b385b",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-002",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-11d3fa39fe4087385f61f7b723fea3b3",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-003",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-1c259df8b6e5f963c2d228b25f566399",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-004",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-c295b8252b566f842d4091eea31b0863",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-005",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-61b1dcd6f87e190beebdfa496b1ae3ff",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-006",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-c1415e30c557176a9e688d5feb45de26",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-007",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-b0c8a69915f4d2c877e0c515a0273eb8",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-008",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-395f7149655a4cfd7d7dc4630c1a69a1",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-009",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-4ac2de1cd48a020de78eb98dcfac4d9c",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-010",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-e56bfb9bf83c6b2a995e1f2ef3701f6a",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-011",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-11deaaef1d16840c61eb370f874fc738",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-012",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-8fe06f46b1376dc21b42ca1c0918aa4b",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-013",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-0914cc435300b370f7f235558fd5dd83",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-014",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-0f1f47913180a0c36fc0ee7f19ef67ab",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-015",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-2c684af1a4a952a0a6b6b6e48df15ac3",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-016",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-29515cf911c837a89772163ba7a04c1d",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-017",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-cde8b318713fc2ed80f65438611c53fc",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-018",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-c7455d433544030c394dd7db1a6f4026",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-019",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-a0183583eee1bb992f4f3faa1b7099b8",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-020",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-aabc92aba83898712b07c45b2a3a0daa",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-021",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-5099429b54168f795452a557d63ce3be",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-022",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-09e3a73f46e32b3346a62cef9fdf3238",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-023",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-0e5b3bd20307a36ff91d722e6d1610fa",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-024",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-25ec42b5858411d2e1bb5896586445ad",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-025",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-6c62867d191f5f880ee59c63d3258446",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-026",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-a38ed49f6d030fd73bad61b2f81db9ee",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-027",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-f9391c9612b50aecb7058d514ef0ed95",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-028",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-030510a8c728531fc307aa094d03969b",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-029",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-dc0d1c4095672b74e7f41c3690d93d7e",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-030",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-388c5a40d1318826d7959586f0b11391",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-031",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-b46f7defe262f83dfae7fc9b06b1eaa4",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-032",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-28c8ebc2b6d688f32650a7694c76cf0d",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-033",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-4352bd3604daa6d6c6e1aabfddac9b12",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-034",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-6a29a81b6f1999dbe63b2ac867c2ccf7",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-035",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-e0a084b0e5879cc382429b09cf866a2f",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-036",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-f2482a577483a74cb381243938c6af19",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-037",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-4c8e6efdf8c7c3af726d54f5ccff52fe",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-038",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-1dcc12e348988efc055d0b1d5441b1a8",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-039",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-387800243658a370afd04c53082f1965",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-040",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-fad7f47f2938f3583412662f56270e39",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-041",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-ec29c6971846533f45996e0f5bf24125",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-042",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-dbd4c1583db8502faeddbc97fd4a733a",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-043",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-e84ab615e59b03ede35d21bf9eeed794",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-044",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-f72b0584d8004731dd8c2a0019d3ac66",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-045",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-29d960ccab9c7818ee98d8ffada7769c",
+      "total": 100,
+      "unfinished": []
+    },
+    {
+      "failed": 0,
+      "finished": 23,
+      "pending": 0,
+      "request_id": "operator-update-20260930-yearly-full-r2-046",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 23,
+      "task_id": "task-fd5278520584666c0d954be355e37752",
+      "total": 23,
+      "unfinished": []
+    }
+  ],
+  "year": 2026,
+  "yearly_absent_after": [
+    {
+      "code": "001246",
+      "exchange": "sz"
+    },
+    {
+      "code": "301569",
+      "exchange": "sz"
+    },
+    {
+      "code": "301660",
+      "exchange": "sz"
+    },
+    {
+      "code": "301718",
+      "exchange": "sz"
+    }
+  ],
+  "yearly_absent_before": [
+    {
+      "code": "001246",
+      "exchange": "sz"
+    },
+    {
+      "code": "301569",
+      "exchange": "sz"
+    },
+    {
+      "code": "301660",
+      "exchange": "sz"
+    },
+    {
+      "code": "301716",
+      "exchange": "sz"
+    },
+    {
+      "code": "301718",
+      "exchange": "sz"
+    }
+  ],
+  "yearly_heads_after": 5223,
+  "yearly_heads_before": 5222,
+  "yearly_update_item_count": 5223,
+  "yearly_update_remaining_count": 4523
+}

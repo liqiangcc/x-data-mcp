@@ -1,0 +1,56 @@
+{
+  "catalog": {
+    "entity_count": 5227,
+    "version_id": "catalog-1790660536962300201"
+  },
+  "daily_absent": [
+    {
+      "code": "001246",
+      "exchange": "sz"
+    },
+    {
+      "code": "301569",
+      "exchange": "sz"
+    },
+    {
+      "code": "301660",
+      "exchange": "sz"
+    },
+    {
+      "code": "301718",
+      "exchange": "sz"
+    }
+  ],
+  "daily_heads": 5223,
+  "error": "{'content': [{'text': '{\"code\":\"request_conflict\",\"message\":\"REQUEST_CONFLICT\",\"outcome_certainty\":\"not_committed\"}', 'type': 'text'}], 'isError': True, 'structuredContent': {'code': 'request_conflict', 'message': 'REQUEST_CONFLICT', 'outcome_certainty': 'not_committed'}}",
+  "missing_year_facts": [],
+  "prior_year_facts": 5222,
+  "request_id_prefix": "operator-update-20260930-yearly-full",
+  "sample_readbacks": [],
+  "tasks": [],
+  "year": 2026,
+  "yearly_absent_before": [
+    {
+      "code": "001246",
+      "exchange": "sz"
+    },
+    {
+      "code": "301569",
+      "exchange": "sz"
+    },
+    {
+      "code": "301660",
+      "exchange": "sz"
+    },
+    {
+      "code": "301716",
+      "exchange": "sz"
+    },
+    {
+      "code": "301718",
+      "exchange": "sz"
+    }
+  ],
+  "yearly_heads_before": 5222,
+  "yearly_update_item_count": 5223
+}
