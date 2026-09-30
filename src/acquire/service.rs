@@ -163,6 +163,46 @@ const ROLES: [Role; 3] = [
     },
 ];
 
+fn active_change(
+    head: Option<&fetch::Head>,
+    active_manifest_present: bool,
+    active: Option<&FileInput>,
+) -> wire::Change {
+    let Some(head) = head else {
+        return wire::Change::Unknown;
+    };
+    if !active_manifest_present {
+        return wire::Change::Changed;
+    }
+    let Some(active) = active else {
+        return wire::Change::Unknown;
+    };
+    if let (Some(active_etag), Some(head_etag)) = (&active.etag, &head.etag) {
+        return if active_etag == head_etag {
+            wire::Change::Unchanged
+        } else {
+            wire::Change::Changed
+        };
+    }
+    if active.etag.is_some() || head.etag.is_some() {
+        return wire::Change::Unknown;
+    }
+    match (
+        &active.last_modified,
+        &head.last_modified,
+        active.bytes,
+        head.content_length,
+    ) {
+        (Some(active_modified), Some(head_modified), active_bytes, Some(head_bytes))
+            if active_modified == head_modified && active_bytes == head_bytes =>
+        {
+            wire::Change::Unchanged
+        }
+        (Some(_), Some(_), _, Some(_)) => wire::Change::Changed,
+        _ => wire::Change::Unknown,
+    }
+}
+
 impl AcquireService {
     /// Open (and initialize) the durable store under `root`, then reconcile
     /// every crash-reachable fact: orphaned installs are adopted, stale
@@ -273,10 +313,25 @@ impl AcquireService {
 
     /// Read-only remote probe. Per role, `seen` facts are compared; ETag
     /// is the only reliable validator — without it the result is never
-    /// reported `unchanged` (AC-A03). Fresh observations are recorded.
+    /// reported `unchanged` (AC-A03). Fresh observations are recorded. The
+    /// operational pending baseline is the active generation manifest, so a
+    /// changed probe that did not lead to activation remains pending.
     pub fn check_updates(&self) -> Result<wire::UpdateCheck, Error> {
+        let active_pointer = self.store.active()?;
+        let active_manifest = match &active_pointer {
+            Some(pointer) => Some(self.store.installed_manifest(&pointer.generation_id)?),
+            None => None,
+        };
+        let active_files = active_manifest.as_ref().map(|manifest| {
+            manifest
+                .files
+                .iter()
+                .map(|file| (file.role, file))
+                .collect::<BTreeMap<_, _>>()
+        });
         let mut files = vec![];
         let mut changed = vec![];
+        let mut pending_roles = vec![];
         let mut unknown = vec![];
         for role in ROLES {
             let previous = self.db.seen(role.key)?;
@@ -308,8 +363,17 @@ impl AcquireService {
                     }
                 }
             };
+            let active_file = active_files
+                .as_ref()
+                .and_then(|files| files.get(&role.role))
+                .copied();
+            let active_change =
+                active_change(head.as_ref(), active_manifest.is_some(), active_file);
             if change == wire::Change::Changed {
                 changed.push(role.key.to_string());
+            }
+            if active_change == wire::Change::Changed {
+                pending_roles.push(role.key.to_string());
             }
             if change == wire::Change::Unknown {
                 unknown.push(role.key.to_string());
@@ -331,12 +395,21 @@ impl AcquireService {
                 last_modified: head.as_ref().and_then(|h| h.last_modified.clone()),
                 content_length: head.as_ref().and_then(|h| h.content_length),
                 change,
+                active: active_file.map(|file| wire::ActiveFile {
+                    etag: file.etag.clone(),
+                    last_modified: file.last_modified.clone(),
+                    content_length: Some(file.bytes),
+                    sha256: file.sha256.clone(),
+                }),
+                active_change,
             });
         }
         Ok(wire::UpdateCheck {
             checked_at: Utc::now().to_rfc3339(),
+            active_generation_id: active_pointer.map(|p| p.generation_id),
             files,
             changed,
+            pending_roles,
             unknown,
         })
     }

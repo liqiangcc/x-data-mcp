@@ -110,7 +110,7 @@ Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。#259
 | Tool | 单一职责 |
 |---|---|
 | `get_acquisition_capabilities` | 返回 revision、schema、readiness、blocker 和 active generation 事实 |
-| `check_official_updates` | 只读观测远端文件事实；结果区分 changed、unchanged、unknown |
+| `check_official_updates` | 只读观测远端文件事实；`changed` 是相对上次 persisted `seen` 的 drift，`pending_roles`/`active_change` 是相对 active generation manifest 的待采集差异，unknown 仍是停止信号 |
 | `acquire_generation` | 以持久 request identity 异步下载并 byte-verify 一个 candidate generation；不激活 |
 | `get_acquisition_task` | 读取下载、校验、持久化阶段和稳定 refs |
 | `get_acquisition_request` | 在响应丢失或超时后按 request identity 恢复事实 |

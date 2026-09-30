@@ -157,8 +157,8 @@ def main() -> int:
     ).read_text(encoding="utf-8")
     for label, fact in [
         ("daily Skill capability revision", EXPECTED_DATA_CAPABILITY_REVISION),
-        ("daily Skill day changed gate", "只有 `day` role 明确为 `changed`"),
-        ("daily Skill day unchanged stop", "`day=unchanged`"),
+        ("daily Skill day pending gate", "`pending_roles` 包含 `day`"),
+        ("daily Skill day pending stop", "`day` 不在 `pending_roles`"),
         (
             "daily Skill explicit fresh rebuild gate",
             "FRESH_DB_REBUILD_REQUIRES_EXPLICIT_REQUEST",

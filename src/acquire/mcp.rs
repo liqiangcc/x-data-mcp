@@ -22,7 +22,7 @@ fn schema<T: schemars::JsonSchema>() -> Value {
 const ENTRIES: &[Entry] = &[
     Entry {
         name: "check_official_updates",
-        description: "Read-only remote probe of the declared official files. Reports per-role change state (changed/unchanged/unknown) from persisted observations; unknown is a stop signal, never a prompt to act.",
+        description: "Read-only remote probe of the declared official files. `changed` reports remote drift since the previous persisted observation; `pending_roles` compares remote heads with the active generation manifest. Unknown is a stop signal, never a prompt to act.",
         input: schema::<CheckOfficialUpdates>,
     },
     Entry {

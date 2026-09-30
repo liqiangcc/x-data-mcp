@@ -323,6 +323,24 @@ impl Store {
         })
     }
 
+    /// Read the manifest for an installed generation without re-hashing its
+    /// artifacts. The manifest digest still binds the generation identity.
+    pub fn installed_manifest(
+        &self,
+        generation_id: &str,
+    ) -> Result<snapshot::SnapshotManifest, Error> {
+        let path = self.generation_dir(generation_id).join(MANIFEST_NAME);
+        let bytes =
+            fs::read(&path).map_err(|e| Error::Corrupt(generation_id.into(), e.to_string()))?;
+        if crate::hash::sha256(&bytes) != generation_id {
+            return Err(Error::Corrupt(
+                generation_id.into(),
+                "manifest digest does not match directory identity".into(),
+            ));
+        }
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
     /// Installed generation identities present on disk, whether or not the
     /// durable store knows them (crash recovery adopts orphans).
     pub fn installed_ids(&self) -> Result<Vec<String>, Error> {
