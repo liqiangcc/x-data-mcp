@@ -29,6 +29,19 @@ const TASK_ITEMS: usize = 100; // production-shaped task bound (#259 gate)
 const RETAINED: &str = "/home/box/retained-inputs";
 const RUN: &str = "capacity-run";
 
+fn input_dir() -> PathBuf {
+    PathBuf::from(std::env::var("X_CAPACITY_INPUT_DIR").unwrap_or_else(|_| RETAINED.into()))
+}
+
+fn input_path(dir: &Path, canonical: &str, legacy: &str) -> PathBuf {
+    let canonical = dir.join(canonical);
+    if canonical.exists() {
+        canonical
+    } else {
+        dir.join(legacy)
+    }
+}
+
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
@@ -60,7 +73,7 @@ fn db_bytes(db: &Path) -> u64 {
 }
 
 fn symbols(limit: u64) -> Vec<String> {
-    let zip = Path::new(RETAINED).join("official-hsjday.zip");
+    let zip = input_path(&input_dir(), "hsjday.zip", "official-hsjday.zip");
     let file = std::fs::File::open(&zip).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
     let mut out = Vec::new();
@@ -82,6 +95,16 @@ fn symbols(limit: u64) -> Vec<String> {
     }
     out.sort();
     out.dedup();
+    if let Ok(path) = std::env::var("X_CAPACITY_SYMBOLS_FILE") {
+        let wanted: BTreeSet<String> = std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        out.retain(|s| wanted.contains(s));
+    }
     if limit > 0 {
         out.truncate(limit as usize);
     }
@@ -91,21 +114,22 @@ fn symbols(limit: u64) -> Vec<String> {
 fn snapshot_root(dir: &Path) -> (PathBuf, Vec<u8>) {
     let root = dir.join("snapshot");
     std::fs::create_dir_all(&root).unwrap();
+    let input = input_dir();
     let inputs = [
         (
-            "official-base.zip",
+            input_path(&input, "base.zip", "official-base.zip"),
             "base.zip",
             "base_industry",
             "http://www.tdx.com.cn/products/data/data/dbf/base.zip",
         ),
         (
-            "official-hsjday.zip",
+            input_path(&input, "hsjday.zip", "official-hsjday.zip"),
             "hsjday.zip",
             "day",
             "https://data.tdx.com.cn/vipdoc/hsjday.zip",
         ),
         (
-            "official-gbbq.zip",
+            input_path(&input, "gbbq.zip", "official-gbbq.zip"),
             "gbbq.zip",
             "gbbq",
             "http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
@@ -115,7 +139,7 @@ fn snapshot_root(dir: &Path) -> (PathBuf, Vec<u8>) {
     for (src, name, role, url) in inputs {
         let path = root.join(name);
         if !path.exists() {
-            std::fs::hard_link(Path::new(RETAINED).join(src), &path).unwrap();
+            std::fs::hard_link(&src, &path).unwrap();
         }
         let bytes = std::fs::read(&path).unwrap();
         files.push(json!({
@@ -652,13 +676,22 @@ fn phase_nochange(repo: &SqliteCompactMarket, symbols: &[String], db: &Path) -> 
 fn accept_update_phase_task(
     repo: &SqliteCompactMarket,
     request: &str,
-    items: &[(String, String, String, crate::market_update::DateRange)],
+    items: &[(
+        String,
+        String,
+        String,
+        String,
+        crate::market_update::DateRange,
+    )],
 ) -> String {
-    let scopes: BTreeSet<String> = items.iter().map(|(_, scope, _, _)| scope.clone()).collect();
+    let scopes: BTreeSet<String> = items
+        .iter()
+        .map(|(_, scope, _, _, _)| scope.clone())
+        .collect();
     let work = FrozenWork {
         items: items
             .iter()
-            .map(|(item_id, scope, base_id, range)| ItemSpec {
+            .map(|(item_id, scope, base_id, base_digest, range)| ItemSpec {
                 item_id: item_id.clone(),
                 target: json!({
                     "symbol": item_id.strip_prefix("item-").unwrap_or_default(),
@@ -667,6 +700,7 @@ fn accept_update_phase_task(
                 progress_unit: "security_period".into(),
                 frozen_inputs: json!({
                     "base_version_id": base_id,
+                    "base_integrity_sha256": base_digest,
                     "range": {"start": range.start, "end": range.end},
                 }),
                 scope_keys: BTreeSet::from([scope.clone()]),
@@ -710,7 +744,14 @@ fn phase_typed(
     let mut commit_ns = 0u128;
     let mut accept_ns = 0u128;
     let mut committed = 0usize;
+    let mut append_items = 0usize;
+    let mut nochange_items = 0usize;
+    let mut metadata_items = 0usize;
     let mut fallback_ran = 0usize;
+    let mut fallback_published = 0usize;
+    let mut fallback_not_published = 0usize;
+    let mut fallback_errors = 0usize;
+    let mut fallback_ns = 0u128;
     let mut failed_items = 0usize;
     let mut fallback_reasons: Vec<String> = Vec::new();
     let mut tasks = 0usize;
@@ -727,11 +768,13 @@ fn phase_typed(
     };
     let real = crate::official_market::TdxRangeProvider {
         session,
+        generation_id: session.source().manifest_sha256().to_string(),
         published_at: Utc::now(),
     };
     let fabricated = crate::official_market::FabricatedAppendProvider {
         inner: crate::official_market::TdxRangeProvider {
             session,
+            generation_id: session.source().manifest_sha256().to_string(),
             published_at: Utc::now(),
         },
         acquire_ns: std::cell::Cell::new(0),
@@ -745,14 +788,14 @@ fn phase_typed(
         let mut specs = Vec::with_capacity(batch.len());
         for symbol in batch {
             let head_id = head_version_id(repo, symbol).unwrap();
-            let last_day: i64 = repo
+            let (last_day, base_digest): (i64, String) = repo
                 .read(|c| {
                     c.query_row(
-                        "SELECT v.last_day FROM effective_heads h \
+                        "SELECT v.last_day, lower(hex(v.integrity_digest)) FROM effective_heads h \
                          JOIN data_versions v ON v.version_key=h.version_key \
                          WHERE h.entity=?1 AND h.period=1 AND h.adjustment=1",
                         params![symbol],
-                        |r| r.get(0),
+                        |r| Ok((r.get(0)?, r.get(1)?)),
                     )
                     .map_err(storage)
                 })
@@ -762,6 +805,7 @@ fn phase_typed(
                 format!("item-{symbol}"),
                 task_control::legacy::scope_id(symbol, "day"),
                 head_id,
+                base_digest,
                 crate::market_update::DateRange {
                     start: last - chrono::Duration::days(30),
                     end: last + chrono::Duration::days(30),
@@ -781,7 +825,18 @@ fn phase_typed(
         let mut fallbacks = Vec::new();
         for item_id in &item_ids {
             match runner.update_candidate(&task_id, item_id, provider) {
-                Ok(Some((item, _))) => prepared.push(item),
+                Ok(Some((item, _))) => {
+                    match &item.prepared {
+                        crate::market_update::UpdateBatchPrepared::NoChange { .. } => {
+                            nochange_items += 1;
+                        }
+                        crate::market_update::UpdateBatchPrepared::Append { metadata, .. } => {
+                            append_items += 1;
+                            metadata_items += usize::from(metadata.is_some());
+                        }
+                    }
+                    prepared.push(item);
+                }
                 Ok(None) => {
                     if fallback_reasons.len() < 8 {
                         fallback_reasons.push(format!("{item_id}: typed-contract declined"));
@@ -812,7 +867,22 @@ fn phase_typed(
             }
         }
         for item_id in fallbacks {
-            runner.run_item(&task_id, &item_id, provider).ok();
+            let t = Instant::now();
+            match runner.run_item(&task_id, &item_id, provider) {
+                Ok(crate::market_update::runner::ItemExecution::Published(_)) => {
+                    fallback_published += 1;
+                }
+                Ok(crate::market_update::runner::ItemExecution::NotPublished(_)) => {
+                    fallback_not_published += 1;
+                }
+                Err(error) => {
+                    fallback_errors += 1;
+                    if fallback_reasons.len() < 8 {
+                        fallback_reasons.push(format!("{item_id}: fallback failed: {error}"));
+                    }
+                }
+            }
+            fallback_ns += t.elapsed().as_nanos();
             fallback_ran += 1;
         }
         tasks += 1;
@@ -823,7 +893,14 @@ fn phase_typed(
         "mode": mode,
         "items_committed": committed,
         "items_failed_in_batch": failed_items,
+        "typed_nochange_items": nochange_items,
+        "typed_append_items": append_items,
+        "typed_metadata_items": metadata_items,
         "fallback_items": fallback_ran,
+        "fallback_published_items": fallback_published,
+        "fallback_not_published_items": fallback_not_published,
+        "fallback_error_items": fallback_errors,
+        "fallback_ms": fallback_ns as f64 / 1e6,
         "fallback_reasons": fallback_reasons,
         "symbols_active": active.len(),
         "tasks": tasks,
@@ -1488,6 +1565,7 @@ fn s5b_retained_capacity() {
         json!({
             "symbols": symbols.len(),
             "soak_days": soak_days,
+            "input_dir": input_dir().display().to_string(),
             "sqlite": rusqlite::version(),
             "profile": if cfg!(debug_assertions) {"debug"} else {"release"},
             "git": std::env::var("GIT_SHA").unwrap_or_else(|_| "working-tree".into()),
@@ -1573,20 +1651,24 @@ fn s5b_retained_capacity() {
             report.complete("soak", &dir);
         }
     }
-    if all("typed") {
+    if all("typed") || all("typed_unchanged") || all("typed_append") {
         // S5G-7: unchanged first (no-change commits), then append —
-        // the fabricated tails move the heads one fabricated day.
-        if !report.done("typed_unchanged") {
+        // the fabricated tails move the heads one fabricated day. Individual
+        // phase names allow a retained generation-A DB to be measured against
+        // a later generation-B snapshot without rerunning the fabricated day.
+        if (all("typed") || all("typed_unchanged")) && !report.done("typed_unchanged") {
             let out = phase_typed(&repo, &session, &symbols, &db, "unchanged");
             report.set("typed_unchanged", out);
             report.complete("typed_unchanged", &dir);
         }
-        if !report.done("typed_append") {
+        if (all("typed") || all("typed_append")) && !report.done("typed_append") {
             let out = phase_typed(&repo, &session, &symbols, &db, "append");
             report.set("typed_append", out);
             report.complete("typed_append", &dir);
         }
-        report.complete("typed", &dir);
+        if all("typed") {
+            report.complete("typed", &dir);
+        }
     }
     if all("verify") && !report.done("verify") {
         drop(repo);

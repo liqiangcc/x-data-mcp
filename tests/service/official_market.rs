@@ -1202,6 +1202,7 @@ fn range_provider_delivers_segment_with_snapshot_basis() {
     let provider_session = src.materialize_session();
     let provider = x_data_mcp::official_market::TdxRangeProvider {
         session: &provider_session,
+        generation_id: src.manifest_sha256().to_string(),
         published_at: now(),
     };
 
@@ -1276,7 +1277,39 @@ fn update_provider<'a>(
 ) -> x_data_mcp::official_market::TdxRangeProvider<'a> {
     x_data_mcp::official_market::TdxRangeProvider {
         session,
+        generation_id: session.source().manifest_sha256().to_string(),
         published_at: now(),
+    }
+}
+
+fn typed_facts(
+    base: &compat::CheckedRecord,
+    src: &TdxMarketSource,
+) -> x_data_mcp::market_update::UpdateBaseFacts {
+    let base_batch = src.materialize_daily(&base.version().symbol).unwrap();
+    let inputs = base_batch.provenance.snapshot_inputs.as_deref().unwrap();
+    let member_sha = |role: &str| {
+        inputs
+            .iter()
+            .find(|input| input.role == role)
+            .unwrap()
+            .member_sha256
+            .clone()
+    };
+    x_data_mcp::market_update::UpdateBaseFacts {
+        version_id: base.version().version_id.clone(),
+        symbol: base.version().symbol.clone(),
+        record_count: base.version().records.len() as u32,
+        first_day: base.version().records.first().unwrap().date,
+        last_day: base.version().records.last().unwrap().date,
+        integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().to_string(),
+        coverage: base_batch.coverage.clone(),
+        unit_currency: base_batch.unit_currency.clone(),
+        source: base_batch.provenance.source.clone(),
+        generation_id: src.manifest_sha256().to_string(),
+        generation_manifest_sha256: src.manifest_sha256().to_string(),
+        day_member_sha256: member_sha("day"),
+        security_event_sha256: member_sha("gbbq-security-events"),
     }
 }
 
@@ -1463,6 +1496,230 @@ fn update_continuity_append_narrow_range_stays_no_change() {
         decision,
         x_data_mcp::market_update::Decision::NoChange { .. }
     ));
+}
+
+#[test]
+fn typed_append_metadata_keeps_base_coverage_when_tail_partially_in_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    let base_src = make_source(&snap);
+    let facts = typed_facts(&base, &base_src);
+
+    // Generation B adds two tail bars; the accepted range contains only the
+    // last one. The envelope contract therefore keeps the base coverage
+    // claim while rebinding the new generation/member digests (#320).
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+        day_record(20250721, [1139, 1145, 1138, 1144], 0.0, 140),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let provider = update_provider(&session);
+    let range = x_data_mcp::market_update::DateRange {
+        start: NaiveDate::from_ymd_opt(2025, 7, 21).unwrap(),
+        end: NaiveDate::from_ymd_opt(2025, 7, 21).unwrap(),
+    };
+    let typed = x_data_mcp::market_update::runner::RangeProvider::acquire_typed(
+        &provider,
+        &facts,
+        &[],
+        &range,
+    )
+    .unwrap()
+    .expect("typed append must serve checked metadata");
+    let x_data_mcp::market_update::runner::TypedDecision::Append { upserts, metadata } =
+        typed.decision
+    else {
+        panic!("expected typed append");
+    };
+    assert_eq!(upserts.len(), 1);
+    assert_eq!(upserts[0].date, range.start);
+    let metadata = metadata.expect("cross-generation append must rebind the source");
+    assert_eq!(metadata.coverage, facts.coverage);
+    assert_ne!(
+        metadata.generation_manifest_sha256,
+        facts.generation_manifest_sha256
+    );
+    assert_ne!(metadata.day_member_sha256, facts.day_member_sha256);
+    assert_eq!(metadata.security_event_sha256, facts.security_event_sha256);
+
+    // Envelope parity for the same narrow update: the combined record keeps
+    // the base coverage claim but carries generation B's source binding.
+    let envelope = x_data_mcp::market_update::runner::RangeProvider::acquire(
+        &provider,
+        &base,
+        &range,
+        "cand-partial-tail",
+    )
+    .unwrap();
+    let combined = envelope.combined.expect("partial append must publish");
+    let expected_binding = json!({
+        "generation_id": metadata.generation_id.clone(),
+        "generation_manifest_sha256": metadata.generation_manifest_sha256.clone(),
+        "day_member_sha256": metadata.day_member_sha256.clone(),
+        "security_event_sha256": metadata.security_event_sha256.clone(),
+        "generation_evidence": metadata.generation_evidence.clone(),
+    });
+    assert_eq!(combined.record["compact_source"], expected_binding);
+    assert_eq!(
+        combined.record["batch"]["coverage"],
+        serde_json::to_value(&metadata.coverage).unwrap()
+    );
+    assert_eq!(
+        combined.record["batch"]["unit_currency"],
+        serde_json::to_value(&metadata.unit_currency).unwrap()
+    );
+    assert_eq!(
+        combined.record["batch"]["adjustment_evidence"],
+        serde_json::to_value(&metadata.adjustment_evidence).unwrap()
+    );
+    assert_eq!(combined.record["source"], json!(metadata.source.clone()));
+}
+
+#[test]
+fn typed_append_unsupported_metadata_falls_back_or_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    let base_src = make_source(&snap);
+    let facts = typed_facts(&base, &base_src);
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let provider = update_provider(&session);
+
+    let mut unit_drift = facts.clone();
+    unit_drift.unit_currency.price_unit =
+        x_data_mcp::market_data::EvidenceValue::confirmed("fen", "drift");
+    assert!(
+        x_data_mcp::market_update::runner::RangeProvider::acquire_typed(
+            &provider,
+            &unit_drift,
+            &base.version().records,
+            &whole_range(),
+        )
+        .unwrap()
+        .is_none(),
+        "unit drift must leave the typed path"
+    );
+
+    let mut incomplete = facts.clone();
+    incomplete.coverage =
+        x_data_mcp::market_data::CoverageEvidence::incomplete("not a complete base");
+    assert!(
+        x_data_mcp::market_update::runner::RangeProvider::acquire_typed(
+            &provider,
+            &incomplete,
+            &base.version().records,
+            &whole_range(),
+        )
+        .unwrap()
+        .is_none(),
+        "non-complete coverage must leave the typed path"
+    );
+
+    let narrow = x_data_mcp::market_update::DateRange {
+        start: NaiveDate::from_ymd_opt(2025, 7, 17).unwrap(),
+        end: NaiveDate::from_ymd_opt(2025, 7, 17).unwrap(),
+    };
+    assert!(
+        x_data_mcp::market_update::runner::RangeProvider::acquire_typed(
+            &provider,
+            &facts,
+            &base.version().records[2..3],
+            &narrow,
+        )
+        .unwrap()
+        .is_none(),
+        "single-day tail outside the accepted range must leave the typed path"
+    );
+}
+
+#[test]
+fn typed_append_non_prefix_or_event_drift_falls_back_to_envelope() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    let base_src = make_source(&snap);
+    let facts = typed_facts(&base, &base_src);
+
+    let rewritten: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 999),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+    ]
+    .concat();
+    reday(
+        &mut snap,
+        &[("sh\\lday\\sh600006.day", rewritten.as_slice())],
+    );
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let provider = update_provider(&session);
+    assert!(
+        x_data_mcp::market_update::runner::RangeProvider::acquire_typed(
+            &provider,
+            &facts,
+            &base.version().records,
+            &whole_range(),
+        )
+        .unwrap()
+        .is_none(),
+        "non-prefix member must fall back"
+    );
+    let envelope = acquire(&provider, &base);
+    assert_eq!(envelope.evidence.continuity.as_ref().unwrap().mode, "full");
+    assert!(envelope.combined.is_some());
+
+    let original: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+    ]
+    .concat();
+    reday(
+        &mut snap,
+        &[("sh\\lday\\sh600006.day", original.as_slice())],
+    );
+    let changed_events = gbbq_member(&[
+        gbbq_record(1, "600006", 20250716, 1, [0.0, 0.0, 0.0, 5.0]),
+        gbbq_record(1, "600006", 20250718, 1, [0.0, 0.0, 0.0, 2.0]),
+    ]);
+    regbbq(&mut snap, &[("gbbq", changed_events.as_slice())]);
+    let src = make_source(&snap);
+    let session = src.materialize_session();
+    let provider = update_provider(&session);
+    assert!(
+        x_data_mcp::market_update::runner::RangeProvider::acquire_typed(
+            &provider,
+            &facts,
+            &base.version().records,
+            &whole_range(),
+        )
+        .unwrap()
+        .is_none(),
+        "event digest drift must fall back"
+    );
+    let envelope = acquire(&provider, &base);
+    assert_eq!(envelope.evidence.continuity.as_ref().unwrap().mode, "full");
+    assert!(envelope.combined.is_some());
 }
 
 #[test]

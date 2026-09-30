@@ -615,11 +615,9 @@ fn bound_session_cache_verifies_once_and_keeps_per_open_pins() {
 }
 
 /// #288 regression: a daily `update_data` append across a generation
-/// boundary must commit on the compact backend. The typed ops path cannot
-/// carry the new coverage claim (the reason text binds the new manifest
-/// sha) nor rebind `source_bindings`, so the envelope fallback is the
-/// designed carrier — and before the fix it staged a record with no
-/// `compact_source`, which `stage_tx` rejects fail-closed.
+/// boundary must commit on the compact backend. #320 carries the new
+/// coverage/source-binding metadata on the typed delta path instead of
+/// materializing the whole merged envelope.
 #[test]
 fn explicit_daily_update_appends_across_generations_on_compact() {
     use x_data_mcp::market_storage::MarketRepository;
@@ -714,6 +712,51 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
         snapshot.items[0].spec.frozen_inputs[SOURCE_GENERATION_KEY],
         json!(gen_b)
     );
+
+    // #320: the typed provider carries the generation-B metadata needed to
+    // keep this append on the O(ops) path instead of falling back to the
+    // whole-history envelope only to update coverage/source bindings.
+    let bound = generation.open_bound(&gen_b, "test:typed-append").unwrap();
+    let session = bound.source.materialize_session();
+    let provider = x_data_mcp::official_market::TdxRangeProvider {
+        session: &session,
+        generation_id: gen_b.clone(),
+        published_at: chrono::Utc::now(),
+    };
+    let facts = x_data_mcp::market_update::publication::RangeRepository::update_base_facts(
+        &backend, &base_id,
+    )
+    .unwrap()
+    .unwrap();
+    let window = x_data_mcp::market_update::publication::RangeRepository::base_bars_in_range(
+        &backend, &base_id, day, day,
+    )
+    .unwrap()
+    .unwrap();
+    let typed = x_data_mcp::market_update::runner::RangeProvider::acquire_typed(
+        &provider,
+        &facts,
+        &window,
+        &x_data_mcp::market_update::DateRange {
+            start: day,
+            end: day,
+        },
+    )
+    .unwrap()
+    .expect("cross-generation append stays on the typed path");
+    let x_data_mcp::market_update::runner::TypedDecision::Append { upserts, metadata } =
+        typed.decision
+    else {
+        panic!("expected typed append")
+    };
+    assert_eq!(upserts.len(), 1);
+    let metadata = metadata.expect("cross-generation metadata");
+    assert_eq!(metadata.generation_id, gen_b);
+    assert_eq!(
+        metadata.generation_manifest_sha256,
+        bound.source.manifest_sha256()
+    );
+
     let done =
         x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
             .unwrap()

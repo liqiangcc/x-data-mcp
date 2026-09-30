@@ -84,9 +84,11 @@ pub trait RangeRepository: MarketRepository {
     }
     /// Typed ops commit (#259 S5G): stages the delta and verifies the
     /// staged ops by read-back comparison — O(ops), no expected leaf
-    /// bars required. `continuity_evidence` is the probe's proof record,
-    /// stored verbatim alongside the commit. `Ok(None)` means
-    /// unsupported.
+    /// bars required. `metadata` carries the checked cross-generation
+    /// version/source-binding update for append commits that need it.
+    /// `continuity_evidence` is the probe's proof record, stored verbatim
+    /// alongside the commit. `Ok(None)` means unsupported.
+    #[allow(clippy::too_many_arguments)]
     fn commit_range_ops_typed(
         &self,
         _command: &Publication,
@@ -94,6 +96,7 @@ pub trait RangeRepository: MarketRepository {
         _base_version_id: &str,
         _upserts: &[crate::market_data::Bar],
         _removes: &[chrono::NaiveDate],
+        _metadata: Option<&crate::market_update::TypedVersionMetadata>,
         _continuity_evidence: Option<&serde_json::Value>,
     ) -> Result<Option<Receipt>, Error> {
         Ok(None)

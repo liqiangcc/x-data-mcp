@@ -51,6 +51,113 @@ const SEGMENT_ROWS: usize = 512;
 const UPDATE_ALGORITHM: &str = "local-range-update-v1";
 const COLLECTION_ALGORITHM: &str = "local-collection-v1";
 
+/// Resolve the version-row facts for an ops-delta draft (#259/#320).
+/// `None` keeps the base source binding/evidence verbatim; metadata from
+/// a proven cross-generation append is checked against the stored base
+/// before it may rebind generation/member/coverage facts.
+fn ops_delta_draft_fields(
+    c: &Connection,
+    base_source_binding_digest: &Digest,
+    base_coverage_status: i64,
+    base_evidence_digest: Vec<u8>,
+    metadata: Option<&crate::market_update::TypedVersionMetadata>,
+) -> Result<(Digest, CoverageStatus, Digest), Error> {
+    let base_coverage_status = match base_coverage_status {
+        1 => CoverageStatus::Complete,
+        2 => CoverageStatus::Incomplete,
+        _ => CoverageStatus::Unknown,
+    };
+    let base_evidence_digest: Digest = base_evidence_digest
+        .try_into()
+        .map_err(|_| integrity("stored evidence digest is malformed"))?;
+    let Some(metadata) = metadata else {
+        return Ok((
+            *base_source_binding_digest,
+            base_coverage_status,
+            base_evidence_digest,
+        ));
+    };
+    let base_binding = compact_versions::read_source_binding(c, base_source_binding_digest)?;
+    let (kind, evidence_json) = compact_versions::read_evidence(c, &base_evidence_digest)?;
+    if kind != EvidenceKind::Version {
+        return Err(integrity("base version evidence kind mismatch"));
+    }
+    let base_evidence: VersionEvidence = serde_json::from_str(&evidence_json)
+        .map_err(|e| integrity(format!("base version evidence malformed: {e}")))?;
+    if metadata.coverage.status != CoverageStatus::Complete
+        || base_coverage_status != CoverageStatus::Complete
+        || metadata.coverage.reason.trim().is_empty()
+        || metadata.source != base_evidence.source
+        || crate::market_update::unit_drift(&base_evidence.unit_currency, &metadata.unit_currency)
+        || metadata.adjustment_evidence.status != base_evidence.adjustment_evidence.status
+        || metadata.adjustment_evidence.value != base_evidence.adjustment_evidence.value
+        || metadata.generation_id.is_empty()
+    {
+        return Err(invalid(
+            "typed append metadata drift exceeds the ops contract",
+        ));
+    }
+    let generation_manifest_sha256 = hex_digest(&metadata.generation_manifest_sha256)?;
+    let day_member_sha256 = hex_digest(&metadata.day_member_sha256)?;
+    let security_event_sha256 = hex_digest(&metadata.security_event_sha256)?;
+    if metadata.generation_id == base_binding.generation_id
+        || generation_manifest_sha256 == base_binding.generation_manifest_sha256
+        || day_member_sha256 == base_binding.day_member_sha256
+        || security_event_sha256 != base_binding.security_event_sha256
+    {
+        return Err(invalid(
+            "typed append metadata does not match the proven member continuity",
+        ));
+    }
+    if metadata.generation_evidence["manifest_sha256"]
+        != Value::String(metadata.generation_manifest_sha256.clone())
+    {
+        return Err(invalid("typed generation evidence manifest mismatch"));
+    }
+    let inputs = metadata.generation_evidence["snapshot_inputs"]
+        .as_array()
+        .ok_or_else(|| invalid("typed generation evidence lacks snapshot inputs"))?;
+    let binds_day = inputs.iter().any(|input| {
+        input["role"] == Value::String("day".into())
+            && input["member_sha256"] == Value::String(metadata.day_member_sha256.clone())
+    });
+    let binds_events = inputs.iter().any(|input| {
+        input["role"] == Value::String(crate::official_market::SECURITY_EVENTS_ROLE.into())
+            && input["member_sha256"] == Value::String(metadata.security_event_sha256.clone())
+    });
+    if !binds_day || !binds_events {
+        return Err(invalid(
+            "typed generation evidence does not bind the probed members",
+        ));
+    }
+    let generation_evidence =
+        compact_versions::put_evidence(c, EvidenceKind::Generation, &metadata.generation_evidence)?;
+    let source_binding_digest = compact_versions::put_source_binding(
+        c,
+        &SourceBinding {
+            generation_id: metadata.generation_id.clone(),
+            generation_manifest_sha256,
+            day_member_sha256,
+            security_event_sha256,
+            evidence_digest: generation_evidence,
+        },
+    )?;
+    let version_evidence = serde_json::to_value(VersionEvidence {
+        source: metadata.source.clone(),
+        coverage_reason: metadata.coverage.reason.clone(),
+        unit_currency: metadata.unit_currency.clone(),
+        adjustment_evidence: metadata.adjustment_evidence.clone(),
+    })
+    .map_err(|e| invalid(format!("typed version evidence cannot serialize: {e}")))?;
+    let evidence_digest =
+        compact_versions::put_evidence(c, EvidenceKind::Version, &version_evidence)?;
+    Ok((
+        source_binding_digest,
+        metadata.coverage.status,
+        evidence_digest,
+    ))
+}
+
 /// Schema-19 repository: `TaskRepository` + `MarketRepository` +
 /// `RangeRepository` over the compact tables, fronted by the
 /// `WriteCoordinator`'s lease/schema checks and WAL bounds.
@@ -154,7 +261,42 @@ impl SqliteCompactMarket {
         removes: &[NaiveDate],
     ) -> Result<i64, Error> {
         self.tx(|c| {
-            Self::stage_ops_delta_tx(c, entity, base_version_id, version_id, upserts, removes)
+            Self::stage_ops_delta_tx(
+                c,
+                entity,
+                base_version_id,
+                version_id,
+                upserts,
+                removes,
+                None,
+            )
+        })
+    }
+
+    /// Metadata-carrying append stage (#320): a proven cross-generation
+    /// append can publish a delta bound to the new generation without
+    /// materializing the merged envelope. `None` is the same-generation
+    /// behavior above.
+    #[allow(clippy::too_many_arguments)]
+    fn stage_ops_delta_metadata(
+        &self,
+        entity: &str,
+        base_version_id: &str,
+        version_id: &str,
+        upserts: &[Bar],
+        removes: &[NaiveDate],
+        metadata: Option<&crate::market_update::TypedVersionMetadata>,
+    ) -> Result<i64, Error> {
+        self.tx(|c| {
+            Self::stage_ops_delta_tx(
+                c,
+                entity,
+                base_version_id,
+                version_id,
+                upserts,
+                removes,
+                metadata,
+            )
         })
     }
 
@@ -168,6 +310,7 @@ impl SqliteCompactMarket {
         version_id: &str,
         upserts: &[Bar],
         removes: &[NaiveDate],
+        metadata: Option<&crate::market_update::TypedVersionMetadata>,
     ) -> Result<i64, Error> {
         {
             let base_key = version_key(c, base_version_id)?;
@@ -178,7 +321,16 @@ impl SqliteCompactMarket {
             if base_facts.entity != entity || base_facts.period != Period::Day {
                 return Err(integrity("ops-delta base entity/period mismatch"));
             }
-            let (cov, evd): (i64, Vec<u8>) = c
+            if metadata.is_some()
+                && (!removes.is_empty()
+                    || upserts.is_empty()
+                    || upserts
+                        .iter()
+                        .any(|bar| compact_market::epoch_day(bar.date) <= base_facts.last_day))
+            {
+                return Err(invalid("typed generation metadata is append-only"));
+            }
+            let (base_coverage_status, base_evidence_digest): (i64, Vec<u8>) = c
                 .query_row(
                     "SELECT coverage_status, evidence_digest FROM data_versions \
                      WHERE version_key=?1",
@@ -186,11 +338,13 @@ impl SqliteCompactMarket {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map_err(storage)?;
-            let coverage_status = match cov {
-                1 => CoverageStatus::Complete,
-                2 => CoverageStatus::Incomplete,
-                _ => CoverageStatus::Unknown,
-            };
+            let (source_binding_digest, coverage_status, evidence_digest) = ops_delta_draft_fields(
+                c,
+                &base_facts.source_binding_digest,
+                base_coverage_status,
+                base_evidence_digest,
+                metadata,
+            )?;
             let mut bars: Vec<CompactBar> = upserts
                 .iter()
                 .map(|b| CompactBar::from_bar(b, Period::Day).map_err(integrity))
@@ -229,11 +383,9 @@ impl SqliteCompactMarket {
                 version_id: version_id.into(),
                 entity: entity.into(),
                 period: Period::Day,
-                source_binding_digest: base_facts.source_binding_digest,
+                source_binding_digest,
                 coverage_status,
-                evidence_digest: evd
-                    .try_into()
-                    .map_err(|_| integrity("stored evidence digest is malformed"))?,
+                evidence_digest,
                 created_at: Utc::now().to_rfc3339(),
                 yearly_lineage: None,
             };
@@ -1933,6 +2085,7 @@ impl RangeRepository for SqliteCompactMarket {
         base_version_id: &str,
         upserts: &[Bar],
         removes: &[NaiveDate],
+        metadata: Option<&crate::market_update::TypedVersionMetadata>,
         continuity_evidence: Option<&Value>,
     ) -> Result<Option<Receipt>, Error> {
         if command.intent
@@ -1957,12 +2110,13 @@ impl RangeRepository for SqliteCompactMarket {
             .map_err(storage)
         })?;
         if !exists {
-            self.stage_ops_delta(
+            self.stage_ops_delta_metadata(
                 &scope.symbol,
                 base_version_id,
                 &version_id,
                 upserts,
                 removes,
+                metadata,
             )?;
         }
         self.tx(|c| {
@@ -1981,6 +2135,26 @@ impl RangeRepository for SqliteCompactMarket {
                     .parent_version_key
                     .expect("delta parent checked above"),
             )?;
+            let (expected_binding, expected_coverage, expected_evidence) = ops_delta_draft_fields(
+                c,
+                &base.source_binding_digest,
+                base.coverage_status,
+                base.evidence_digest.to_vec(),
+                metadata,
+            )?;
+            let expected_coverage_status = match expected_coverage {
+                CoverageStatus::Complete => 1,
+                CoverageStatus::Incomplete => 2,
+                CoverageStatus::Unknown => 3,
+            };
+            if facts.source_binding_digest != expected_binding
+                || facts.coverage_status != expected_coverage_status
+                || facts.evidence_digest != expected_evidence
+            {
+                return Err(Error::Integrity(
+                    "staged ops metadata differs from the requested typed update".into(),
+                ));
+            }
             let (staged, _, _) = compact_v19::read_delta(c, key, base.projection_digest)?;
             let mut bars: Vec<CompactBar> = upserts
                 .iter()
@@ -2796,6 +2970,7 @@ fn update_batch_item(
                 base_version_id,
                 result_version_id,
                 upserts,
+                metadata,
                 continuity,
             } => SqliteCompactMarket::stage_ops_delta_tx(
                 c,
@@ -2804,6 +2979,7 @@ fn update_batch_item(
                 result_version_id,
                 upserts,
                 &[],
+                metadata.as_deref(),
             )
             .and_then(|_| {
                 compact_versions::mark_validated_delta(c, version_key(c, result_version_id)?)?;

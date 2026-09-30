@@ -2,7 +2,8 @@
 //! Evidence references are trusted application inputs, never user-controlled approval flags.
 use crate::{
     market_data::{
-        Bar, CoverageStatus, EvidenceValue, MarketDataBatch, Period, UnitCurrencyEvidence,
+        AdjustmentEvidence, Bar, CoverageEvidence, CoverageStatus, EvidenceValue, MarketDataBatch,
+        Period, UnitCurrencyEvidence,
     },
     market_storage::{Error, compat::CheckedRecord},
 };
@@ -110,6 +111,23 @@ pub struct UpdateBaseFacts {
     pub day_member_sha256: String,
     pub security_event_sha256: String,
 }
+/// Version metadata a typed append can carry without materializing the
+/// merged envelope (#320): the new source binding plus the version-level
+/// evidence the compact draft must store. The repository still re-checks
+/// it against the base — complete coverage only, no unit/adjustment
+/// semantic drift, matching snapshot-input digests.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedVersionMetadata {
+    pub generation_id: String,
+    pub generation_manifest_sha256: String,
+    pub day_member_sha256: String,
+    pub security_event_sha256: String,
+    pub generation_evidence: serde_json::Value,
+    pub source: String,
+    pub coverage: CoverageEvidence,
+    pub unit_currency: UnitCurrencyEvidence,
+    pub adjustment_evidence: AdjustmentEvidence,
+}
 /// One prepared item for `RangeRepository::commit_update_batch`
 /// (#259 S5G-6): acquisition and continuity probing already ran outside
 /// the transaction, so the batch writer only replays, transitions, stages
@@ -135,11 +153,13 @@ pub enum UpdateBatchPrepared {
         continuity: serde_json::Value,
     },
     /// Continuity-proven append: stage `upserts` as a delta on the base
-    /// version, then commit.
+    /// version, then commit. `metadata` carries the cross-generation
+    /// coverage/source-binding update the original ops path could not.
     Append {
         base_version_id: String,
         result_version_id: String,
         upserts: Vec<crate::market_data::Bar>,
+        metadata: Option<Box<TypedVersionMetadata>>,
         continuity: serde_json::Value,
     },
 }

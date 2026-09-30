@@ -18,8 +18,8 @@
 use crate::{
     day_file, gbbq,
     market_data::{
-        Adjustment, AdjustmentEvidence, Bar, CoverageEvidence, EvidenceValue, MarketDataBatch,
-        MarketDataPipeline, Period, Provenance, SnapshotInputBinding, SourceError,
+        Adjustment, AdjustmentEvidence, Bar, CoverageEvidence, CoverageStatus, EvidenceValue,
+        MarketDataBatch, MarketDataPipeline, Period, Provenance, SnapshotInputBinding, SourceError,
         UnitCurrencyEvidence,
     },
     market_storage::{
@@ -51,7 +51,7 @@ const GBBQ_MEMBER: &str = "gbbq";
 /// the category-1 events actually applied plus the excluded count, so an
 /// update can prove event continuity for one symbol even when other
 /// securities' records changed the gbbq member as a whole.
-const SECURITY_EVENTS_ROLE: &str = "gbbq-security-events";
+pub(crate) const SECURITY_EVENTS_ROLE: &str = "gbbq-security-events";
 /// Largest manifest byte count the installer will read; the pinned snapshot
 /// schema carries exactly three file entries and stays far below this.
 const MANIFEST_LIMIT: u64 = 1 << 20;
@@ -562,6 +562,9 @@ pub struct TdxRangeProvider<'a> {
     /// Shared decode/index channel; a single-item caller builds one fresh
     /// session and pays the one-time decode itself.
     pub session: &'a MaterializeSession<'a>,
+    /// Acquisition generation bound to this source view. In inspected-env
+    /// mode the manifest digest is the only stable generation identity.
+    pub generation_id: String,
     /// Commit clock for a changed publication's combined record.
     pub published_at: DateTime<Utc>,
 }
@@ -729,6 +732,7 @@ impl TdxRangeProvider<'_> {
             self.published_at,
             Some(staged_compact_fields(
                 self.session.source(),
+                &self.generation_id,
                 &combined_batch,
                 // A full revision stages as a root checkpoint: the base→result
                 // chain is carried by the update result's digest, not by a
@@ -759,14 +763,76 @@ impl TdxRangeProvider<'_> {
         })
     }
 
+    /// Cross-generation append metadata the typed delta can carry (#320):
+    /// same complete-coverage class and no unit semantics drift, but a
+    /// new manifest-pinned source binding plus the coverage claim the
+    /// envelope merge would publish. Anything
+    /// stronger (status drift or unit conflict/enrichment) still returns
+    /// `None` so the envelope path reproduces its full decision.
+    fn typed_append_metadata(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        segment: &MarketDataBatch,
+        result_coverage: &CoverageEvidence,
+        day_member_sha256: &str,
+        events_sha256: &str,
+    ) -> Result<Option<crate::market_update::TypedVersionMetadata>, SourceError> {
+        if result_coverage.status != CoverageStatus::Complete
+            || facts.coverage.status != CoverageStatus::Complete
+            || crate::market_update::unit_drift(&facts.unit_currency, &segment.unit_currency)
+        {
+            return Ok(None);
+        }
+        let inputs = segment
+            .provenance
+            .snapshot_inputs
+            .as_deref()
+            .ok_or_else(|| {
+                SourceError::InvalidResponse("snapshot-bound segment lacks snapshot inputs".into())
+            })?;
+        let member = |role: &str| {
+            inputs
+                .iter()
+                .find(|input| input.role == role)
+                .map(|input| input.member_sha256.clone())
+                .ok_or_else(|| {
+                    SourceError::InvalidResponse(format!(
+                        "snapshot binding lacks the {role} member"
+                    ))
+                })
+        };
+        let bound_day = member("day")?;
+        let bound_events = member(SECURITY_EVENTS_ROLE)?;
+        if bound_day != day_member_sha256 || bound_events != events_sha256 {
+            return Err(SourceError::InvalidResponse(
+                "typed metadata snapshot inputs do not match the continuity probe".into(),
+            ));
+        }
+        let manifest = self.session.source().manifest_sha256().to_string();
+        Ok(Some(crate::market_update::TypedVersionMetadata {
+            generation_id: self.generation_id.clone(),
+            generation_manifest_sha256: manifest.clone(),
+            day_member_sha256: bound_day,
+            security_event_sha256: bound_events,
+            generation_evidence: json!({
+                "manifest_sha256": manifest,
+                "snapshot_inputs": inputs,
+            }),
+            source: segment.provenance.source.clone(),
+            coverage: result_coverage.clone(),
+            unit_currency: segment.unit_currency.clone(),
+            adjustment_evidence: segment.adjustment_evidence.clone(),
+        }))
+    }
+
     /// Typed ops-first acquisition (#259 S5G): probe continuity against
     /// compact base facts, parse only the proven-new tail records, and
     /// return exactly what the typed commit needs — no `fixed(base)`
     /// materialization and no combined JSON envelope. `Ok(None)` means
     /// the ops path cannot carry this update (absent continuity proof or
-    /// coverage/unit metadata drift) and the caller falls back to
-    /// `acquire`, which reproduces the envelope semantics for the rare
-    /// cases that still need it.
+    /// unsupported coverage/unit metadata drift) and the caller falls
+    /// back to `acquire`, which reproduces the envelope semantics for
+    /// the rare cases that still need it.
     ///
     /// `base_window` is the caller's `base_bars_in_range` read — the
     /// base's leaf bars inside the accepted range only — used for the
@@ -864,8 +930,12 @@ impl TdxRangeProvider<'_> {
                 }))
             }
             Continuity::Append { tail, .. } => {
+                let tail_bars = MaterializeSession::qfq_bars(&tail, events)?;
+                let all_tail_in_range = tail_bars
+                    .iter()
+                    .all(|bar| range.start <= bar.date && bar.date <= range.end);
                 let mut segment_bars = base_window.to_vec();
-                segment_bars.extend(MaterializeSession::qfq_bars(&tail, events)?);
+                segment_bars.extend(tail_bars);
                 segment_bars.retain(|b| range.start <= b.date && b.date <= range.end);
                 if segment_bars.is_empty() {
                     return Err(SourceError::InvalidResponse(
@@ -882,13 +952,19 @@ impl TdxRangeProvider<'_> {
                     events,
                     excluded,
                 )?;
-                // A coverage or unit drift means the merged result carries
-                // new metadata — the ops path has no channel for it; the
-                // envelope path handles it (and its NEEDS_VERIFICATION
-                // outcome for genuinely conflicting units). Units use
-                // `prepare`'s conflict/enrichment gates: reason text is
-                // not drift.
-                if segment.coverage != facts.coverage
+                // Unit conflicts/enrichment and non-complete coverage
+                // still need the envelope path (and its NEEDS_VERIFICATION
+                // outcome where applicable). The published coverage is the
+                // envelope merge's result: the new claim only when every
+                // appended source record is inside the accepted range;
+                // otherwise the base claim stays pinned (#320).
+                let result_coverage = if all_tail_in_range {
+                    segment.coverage.clone()
+                } else {
+                    facts.coverage.clone()
+                };
+                if segment.coverage.status != CoverageStatus::Complete
+                    || result_coverage.status != CoverageStatus::Complete
                     || crate::market_update::unit_drift(
                         &facts.unit_currency,
                         &segment.unit_currency,
@@ -912,11 +988,30 @@ impl TdxRangeProvider<'_> {
                     .filter(|b| b.date > facts.last_day)
                     .cloned()
                     .collect();
+                let metadata = if upserts.is_empty() {
+                    None
+                } else {
+                    self.typed_append_metadata(
+                        facts,
+                        &segment,
+                        &result_coverage,
+                        &day_member_sha256,
+                        &events_sha256,
+                    )?
+                };
+                if (!upserts.is_empty() && metadata.is_none())
+                    || (upserts.is_empty() && !all_tail_in_range)
+                {
+                    return Ok(None);
+                }
                 Ok(Some(crate::market_update::runner::TypedAcquisition {
                     decision: if upserts.is_empty() {
                         crate::market_update::runner::TypedDecision::Unchanged
                     } else {
-                        crate::market_update::runner::TypedDecision::Append { upserts }
+                        crate::market_update::runner::TypedDecision::Append {
+                            upserts,
+                            metadata: metadata.map(Box::new),
+                        }
                     },
                     evidence: make_evidence(
                         crate::market_update::candidate_digest(&segment)
@@ -979,6 +1074,7 @@ impl RangeProvider for FabricatedAppendProvider<'_> {
         };
         acquired.decision = crate::market_update::runner::TypedDecision::Append {
             upserts: vec![upsert.clone()],
+            metadata: None,
         };
         if let Some(continuity) = acquired.evidence.continuity.as_mut() {
             continuity.mode = "append".into();
@@ -1259,6 +1355,7 @@ fn merge_segment_bars(
 /// the staged record stays self-consistent on either backend.
 fn staged_compact_fields(
     source: &TdxMarketSource,
+    generation_id: &str,
     combined_batch: &MarketDataBatch,
     parent_version_id: Option<&str>,
 ) -> Result<Value, SourceError> {
@@ -1278,7 +1375,7 @@ fn staged_compact_fields(
     };
     let mut fields = json!({
         "compact_source": {
-            "generation_id": source.manifest_sha256(),
+            "generation_id": generation_id,
             "generation_manifest_sha256": source.manifest_sha256(),
             "day_member_sha256": member("day")?,
             "security_event_sha256": member(SECURITY_EVENTS_ROLE)?,
@@ -1417,6 +1514,7 @@ fn acquire_merged_segment(
         published_at,
         Some(staged_compact_fields(
             source,
+            source.manifest_sha256(),
             &combined_batch,
             Some(base.version().version_id.as_str()),
         )?),

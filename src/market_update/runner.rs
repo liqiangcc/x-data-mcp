@@ -35,7 +35,12 @@ pub enum TypedDecision {
     Unchanged,
     /// The base's member bytes are a proven prefix of the current member;
     /// `upserts` are the qfq-adjusted in-range tail bars — pure appends.
-    Append { upserts: Vec<Bar> },
+    /// `metadata` carries the new generation/source-binding update when a
+    /// cross-generation append must publish fresh version metadata (#320).
+    Append {
+        upserts: Vec<Bar>,
+        metadata: Option<Box<crate::market_update::TypedVersionMetadata>>,
+    },
 }
 /// Synchronous and read-only with respect to publication/task storage. Return
 /// only after acquisition has stopped. Trusted fixture/verifier port, not MCP.
@@ -48,8 +53,8 @@ pub trait RangeProvider {
     ) -> Result<Acquisition, SourceError>;
     /// Typed ops-first acquisition (#259 S5G). `Ok(None)` means the
     /// provider cannot serve the typed contract (or the update carries
-    /// metadata the ops path cannot); the caller falls back to
-    /// `acquire`.
+    /// metadata outside the checked ops contract); the caller falls back
+    /// to `acquire`.
     fn acquire_typed(
         &self,
         _facts: &super::UpdateBaseFacts,
@@ -425,11 +430,12 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 range_end_day: crate::compact_market::epoch_day(range.end),
                 continuity,
             },
-            TypedDecision::Append { upserts } => {
+            TypedDecision::Append { upserts, metadata } => {
                 crate::market_update::UpdateBatchPrepared::Append {
                     base_version_id: base_id,
                     result_version_id: format!("range-version-{id}"),
                     upserts,
+                    metadata,
                     continuity,
                 }
             }
@@ -777,7 +783,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 range,
                 continuity_evidence.as_ref(),
             ),
-            TypedDecision::Append { upserts } => {
+            TypedDecision::Append { upserts, metadata } => {
                 let scope = Scope {
                     symbol: facts.symbol.clone(),
                     period: crate::market_data::Period::Day,
@@ -788,6 +794,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                     base_id,
                     upserts,
                     &[],
+                    metadata.as_deref(),
                     continuity_evidence.as_ref(),
                 )
             }
