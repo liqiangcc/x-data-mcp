@@ -63,10 +63,10 @@ acquisition、initial collection、yearly、cross-generation envelope 与真实
 append/rewrite 分开计量：cross-generation ≈37min 仅为 preview.29 measured
 baseline、无批准 hard SLO。#320 的 proven prefix append typed metadata 已有本地
 retained-generation release harness 实测（c360967a→2e918330、5,222 items、
-107.0s、5,165 typed metadata appends、45 envelope attempts：21 published、24
+96.4s、5,165 typed metadata appends、45 envelope attempts：21 published、24
 fail-closed，integrity check PASS）；该数值是离线 harness 结果，不等于 preview.29
-或生产 SLO。真实
-append/rewrite、deployed runtime timing 与 unsupported-metadata fallback 仍按
+或生产 SLO。真实 append/rewrite、deployed runtime timing 与
+unsupported-metadata fallback 仍按
 各自证据验收，未部署实例不得宣称已按新路径运行。
 [#294](https://github.com/liqiangcc/x-data-mcp/issues/294) 为独立 admission 协议
 问题。

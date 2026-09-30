@@ -1,0 +1,144 @@
+{
+  "issue": 320,
+  "recorded_at": "2026-09-30T12:37:04Z",
+  "branch": "perf/320-typed-crossgen-append",
+  "implementation_commit": "6f9f0a4c73b2f1cc987d1c6e6aeb4a1535bf8acd",
+  "base_commit": "b875c2d345e4b670a87718fe94ee9191fc0371e6",
+  "scope": "cross-generation proven .day prefix append carries checked generation/source/version metadata through the typed O(ops) path",
+  "environment": {
+    "host": "Linux ecs-node x86_64",
+    "cpu": "2 vCPU",
+    "memory": "1.9GiB RAM, 4.0GiB swap",
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+    "sqlite": "3.53.2",
+    "profile": "release",
+    "concurrency": "cargo test -j1; sequential <=100-item tasks"
+  },
+  "inputs": {
+    "base_generation": "c360967a283440e6e30875325bfd0dd7e8e4be106c061bb8a3cb0f17dc3bbf27",
+    "update_generation": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+    "input_dir": "/opt/x-data-mcp-preview/generations/generations/2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+    "symbols_filter": "X_CAPACITY_SYMBOLS_FILE contained 5,227 preview catalog symbols; c360 initial committed 5,222 .day members; 2e918 exposes 5,223 .day members and the update ran on the 5,222 existing daily heads"
+  },
+  "generation_identity": {
+    "decision": "TypedVersionMetadata.generation_id is the task/session-bound generation identifier exposed by TdxRangeProvider.generation_id; generation_manifest_sha256 remains the inspected source manifest digest.",
+    "compact_repo_check": "stage_ops_delta_metadata validates generation/member/event drift against the frozen base binding but does not assert generation_id == generation_manifest_sha256. Equality is not an invariant."
+  },
+  "measurement": {
+    "artifact": "evidence/issue-320-typed-crossgen-append/capacity-20260930-crossgen.json",
+    "initial_collection": {
+      "symbols_committed": 5222,
+      "bars_total": 16676083,
+      "wall_s": 151.509150256,
+      "peak_rss_bytes": 563433472,
+      "db_bytes_after_checkpoint": 769441792
+    },
+    "cross_generation_daily_update": {
+      "symbols_active": 5222,
+      "tasks": 53,
+      "items_committed_by_typed_batch": 5177,
+      "typed_metadata_append_items": 5165,
+      "typed_nochange_items": 12,
+      "fallback_items": 45,
+      "fallback_published_items": 21,
+      "fallback_not_published_items": 24,
+      "fallback_error_items": 0,
+      "fallback_reason": "24 envelope fallbacks ended NEEDS_VERIFICATION: RevisionUnverified over historical days; the other 21 published through the envelope path",
+      "prepare_ms": 18036.759894,
+      "accept_ms": 23927.567956,
+      "commit_ms": 37400.021134,
+      "fallback_ms": 16012.293077,
+      "wall_s": 96.355893404,
+      "per_item_ms": 18.451914154538493,
+      "fallback_per_item_ms": 355.82873504444444,
+      "peak_rss_bytes": 558161920,
+      "db_growth_bytes": 29061120,
+      "integrity_check": "ok",
+      "sampled_fixed_reads": 50
+    },
+    "comparison": {
+      "historical_initial_acquisition_s": 340,
+      "measured_same_input_initial_s": 151.509150256,
+      "historical_cross_generation_envelope_ms_per_item": 441,
+      "measured_overall_ms_per_item": 18.451914154538493,
+      "measured_fallback_ms_per_item": 355.82873504444444,
+      "acceptance_real_cross_generation_under_initial": true
+    }
+  },
+  "regressions": [
+    {
+      "test": "sqlite_market::compact_repo::tests::typed_append_rebinds_generation_metadata_and_rejects_drift",
+      "profile": "release",
+      "coverage": [
+        "valid generation metadata commits as an append delta bound to generation B",
+        "event digest drift is rejected",
+        "unit semantic drift is rejected"
+      ]
+    },
+    {
+      "test": "sqlite_market::compact_repo::tests::typed_append_base_coverage_parity_with_envelope_bytes",
+      "profile": "release",
+      "coverage": [
+        "all_tail_in_range=false keeps coverage pinned to the base",
+        "typed metadata staging and envelope merge produce byte-identical candidate envelopes"
+      ]
+    },
+    {
+      "test": "official_market::typed_append_metadata_keeps_base_coverage_when_tail_partially_in_range",
+      "profile": "release",
+      "coverage": [
+        "typed append remains available when the accepted range includes only part of the tail",
+        "metadata keeps the base coverage claim while rebinding generation B",
+        "envelope acquisition produces the same coverage/source-binding fields"
+      ]
+    },
+    {
+      "test": "official_market::typed_append_unsupported_metadata_falls_back_or_fails_closed",
+      "profile": "release",
+      "coverage": [
+        "unit drift leaves the typed path",
+        "non-Complete coverage leaves the typed path",
+        "single-day tail outside the accepted range leaves the typed path and never reaches metadata override"
+      ]
+    },
+    {
+      "test": "official_market::typed_append_non_prefix_or_event_drift_falls_back_to_envelope",
+      "profile": "release",
+      "coverage": [
+        "non-prefix .day member falls back and envelope reports full continuity",
+        "security-event digest drift falls back and envelope reports full continuity"
+      ]
+    },
+    {
+      "test": "data_supply_generation::explicit_daily_update_appends_across_generations_on_compact",
+      "profile": "release",
+      "coverage": [
+        "real TdxRangeProvider typed acquisition returns metadata for a proven append",
+        "update worker publishes a delta head bound to generation B",
+        "query readback returns the appended bar"
+      ]
+    },
+    {
+      "test": "sqlite_range_update::two_fifty_day_append_growth_stays_bounded",
+      "profile": "release",
+      "elapsed_seconds": 222.11,
+      "coverage": ["250-day append growth remains bounded"]
+    }
+  ],
+  "suite": {
+    "cargo_test_j1_release_locked": "718 passed, 10 ignored, 0 failed across all targets",
+    "cargo_check_release_all_targets_locked": "PASS",
+    "cargo_clippy_release_all_targets_all_features_locked_D_warnings": "PASS",
+    "cargo_fmt_check": "PASS",
+    "current_facts": "PASS",
+    "daily_sync_eval": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "limits": [
+    "This is retained-generation offline harness evidence, not a deployed preview.29 or production timing",
+    "preview.29 runtime 4493d45 does not contain #320; no preview deployment, database reset, or runtime-instance modification was performed",
+    "fallback statistics include real retained fallback cases; 24 fail-closed results are expected RevisionUnverified boundaries, not successful metadata overrides",
+    "ops_delta_draft_fields still reads the base binding/evidence per item as required by review; it was measured but not optimized",
+    "no production readiness or external-distribution claim is made"
+  ]
+}

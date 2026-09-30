@@ -31,7 +31,7 @@ immutable generation、每代 #131 验证后条件激活、任务受理时冻结
   append/rewrite 分开计量：cross-generation 约 37min 仅为 preview.29 measured
   baseline、尚无批准 hard SLO；真实 append/rewrite 待独立证据。#320 的本地
   retained-generation release harness（c360967a→2e918330、5,222 items）测得
-  107.0s、5,165 typed metadata appends、45 envelope attempts（21 published、24
+  96.4s、5,165 typed metadata appends、45 envelope attempts（21 published、24
   fail-closed）、integrity check PASS；这是离线证据，不等于 preview.29/生产
   SLO，也不能替代 deployed runtime 验收。
 

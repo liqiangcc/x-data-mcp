@@ -1,0 +1,75 @@
+{
+  "environment": {
+    "git": "6f9f0a4c73b2f1cc987d1c6e6aeb4a1535bf8acd",
+    "input_dir": "/opt/x-data-mcp-preview/generations/generations/2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+    "profile": "release",
+    "soak_days": 250,
+    "sqlite": "3.53.2",
+    "symbols": 5223
+  },
+  "initial": {
+    "bars_total": 16676083,
+    "checkpoint": "CheckpointMetrics { mode: Truncate, busy: 0, log_frames: 0, checkpointed_frames: 0, wal_bytes_before: 16777216, wal_bytes_after: 0 }",
+    "db_bytes_after_checkpoint": 769441792,
+    "db_bytes_before_checkpoint": 769441792,
+    "rss_peak_bytes": 563433472,
+    "symbols_committed": 5222,
+    "symbols_failed": [],
+    "wal_after_checkpoint": 0,
+    "wal_before_checkpoint": 0,
+    "wall_s": 151.509150256
+  },
+  "initial_progress": {
+    "bars": 16528679,
+    "committed": 5000,
+    "db_bytes": 761913344,
+    "elapsed_s": 144,
+    "rss_peak": 563433472,
+    "wal_bytes": 16777216
+  },
+  "phases_completed": [
+    "initial",
+    "typed_unchanged",
+    "verify"
+  ],
+  "typed_unchanged": {
+    "accept_ms": 23927.567956,
+    "checkpoint": "CheckpointMetrics { mode: Truncate, busy: 0, log_frames: 0, checkpointed_frames: 0, wal_bytes_before: 9492512, wal_bytes_after: 0 }",
+    "commit_ms": 37400.021134,
+    "db_growth_bytes": 29061120,
+    "fallback_error_items": 0,
+    "fallback_items": 45,
+    "fallback_ms": 16012.293077,
+    "fallback_not_published_items": 24,
+    "fallback_published_items": 21,
+    "fallback_reasons": [
+      "item-sh.600105: typed-contract declined",
+      "item-sh.600125: typed-contract declined",
+      "item-sh.600323: typed-contract declined",
+      "item-sh.600609: typed-contract declined",
+      "item-sh.600933: typed-contract declined",
+      "item-sh.601019: typed-contract declined",
+      "item-sh.601233: typed-contract declined",
+      "item-sh.603228: typed-contract declined"
+    ],
+    "items_committed": 5177,
+    "items_failed_in_batch": 0,
+    "mode": "unchanged",
+    "peak_rss_bytes": 558161920,
+    "per_item_ms": 18.451914154538493,
+    "prepare_ms": 18036.759894,
+    "provider_acquire_ms": 0.0,
+    "symbols_active": 5222,
+    "tasks": 53,
+    "typed_append_items": 5165,
+    "typed_metadata_items": 5165,
+    "typed_nochange_items": 12,
+    "wal_after_checkpoint": 0,
+    "wal_peak_bytes": 9492512,
+    "wall_s": 96.355893404
+  },
+  "verify": {
+    "integrity_check": "ok",
+    "sampled_fixed_reads": 50
+  }
+}
