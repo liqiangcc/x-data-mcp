@@ -156,6 +156,8 @@ fn acquire_verify_activate_full_lifecycle() {
             .all(|f| f.change == wire::Change::Unchanged),
         "mirror ETags must compare unchanged: {second:?}"
     );
+    assert_eq!(second.pending_roles.len(), 3);
+    assert!(second.active_generation_id.is_none());
 
     let acceptance = install(&service, "req-lifecycle");
     let task = service.task(&acceptance.task_id).unwrap();
@@ -177,6 +179,57 @@ fn acquire_verify_activate_full_lifecycle() {
     assert_eq!(status.active.as_ref().unwrap().generation_id, generation_id);
     assert_eq!(status.generations.len(), 1);
     assert_eq!(status.generations[0].state, "active");
+    let active_probe = service.check_updates().unwrap();
+    assert_eq!(
+        active_probe.active_generation_id.as_deref(),
+        Some(generation_id.as_str())
+    );
+    assert!(active_probe.pending_roles.is_empty());
+    assert!(
+        active_probe
+            .files
+            .iter()
+            .all(|f| f.active_change == wire::Change::Unchanged)
+    );
+}
+
+#[test]
+fn repeated_probe_keeps_remote_diff_pending_until_activation() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = open(root.path(), mirror.path());
+    let generation_id = generation_of(&service, &install(&service, "req-active-pending").task_id);
+    verify(&service, &generation_id);
+    activate(&service, &generation_id, None);
+    let baseline = service.check_updates().unwrap();
+    assert!(baseline.pending_roles.is_empty());
+
+    write_zip(
+        &mirror.path().join("hsjday.zip"),
+        &[
+            (
+                "sh\\lday\\sh600006.day",
+                day_member(&[today_u32(), today_u32() + 1]).as_slice(),
+            ),
+            (
+                "sz\\lday\\sz000001.day",
+                day_member(&[today_u32(), today_u32() + 1]).as_slice(),
+            ),
+        ],
+    );
+
+    let first = service.check_updates().unwrap();
+    assert_eq!(first.changed, vec!["day"]);
+    assert_eq!(first.pending_roles, vec!["day"]);
+
+    let second = service.check_updates().unwrap();
+    assert!(second.changed.is_empty());
+    assert_eq!(second.pending_roles, vec!["day"]);
+    let day = second.files.iter().find(|file| file.role == "day").unwrap();
+    assert_eq!(day.change, wire::Change::Unchanged);
+    assert_eq!(day.active_change, wire::Change::Changed);
+    assert!(day.active.is_some());
 }
 
 #[test]
@@ -535,6 +588,12 @@ fn mcp_tools_dispatch_and_capability_facts() {
     };
     let check = api.call("check_official_updates", v1(json!({}))).unwrap();
     assert_eq!(check["files"].as_array().unwrap().len(), 3);
+    assert_eq!(check["pending_roles"].as_array().unwrap().len(), 3);
+    assert!(
+        check["files"].as_array().unwrap()[0]
+            .get("active_change")
+            .is_some()
+    );
 
     let accepted = api
         .call("acquire_generation", v1(json!({"request_id": "mcp-req"})))

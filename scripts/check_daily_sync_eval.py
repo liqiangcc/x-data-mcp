@@ -88,6 +88,9 @@ def main() -> int:
         "`catalog` selection 只能用于 `dataset:\"securities.catalog\"`",
         "不接受 `catalog` 或 `default` selection",
         "not_queried_by_no_update_branch",
+        "`pending_roles` 才是相对当前 active generation",
+        "`files[].active_change`",
+        "不得用当前日期、市场是否已经收盘、GBBQ 时间、旧数据最新日期、上次 probe 的",
         "按 ≤100 实体分批调用 `get_data_availability`",
         "selection:{\"kind\":\"batch\",\"entities\":[…]}",
     ]:

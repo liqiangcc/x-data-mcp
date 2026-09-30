@@ -48,8 +48,8 @@ allowed-tools:
 
 本 Skill 的默认意图是“日行情同步”，不是“只要任一官方文件变化就获取 generation”：
 
-- 只有 `day` role 明确为 `changed`，才允许创建 acquisition task。
-- `base_industry` / `gbbq` 变化但 `day` 未变化时，只报告 pending source changes 并结束；
+- 只有远端 `day` role 明确不同于当前 active generation（`pending_roles` 包含 `day`），才允许创建 acquisition task。
+- `base_industry` / `gbbq` pending 但 `day` 未 pending 时，只报告 pending source changes 并结束；
   不下载、不验证、不激活 generation，也不创建数据任务。
 - 部署后空库重建是独立、必须由用户明确提出的操作；不得从 `data_versions=0` 自动推断
   重建授权，也不得借“每日同步”隐式执行。用户明确要求空库重建时，必须报告拟使用的
@@ -70,9 +70,9 @@ allowed-tools:
 
 握手后先调用 `sync_status`。若存在 inflight acquisition：
 
-- 本次会话先前在 `day=changed` 证据下创建的 task，可用原 `task_id` / `request_id`
+- 本次会话先前在 `day` pending 证据下创建的 task，可用原 `task_id` / `request_id`
   恢复轮询；
-- 其他 task（包括缺少同次 `day=changed` 证据、用户已撤回意图或仅由非 day role
+- 其他 task（包括缺少同次 `day` pending 证据、用户已撤回意图或仅由非 day role
   变化触发的 task）只报告并停止；不得新建第二个 acquisition task，终态后也不得由本
   Skill 验证或激活；
 - acquisition contract 当前没有 cancel 工具；禁止通过停服务、删文件或新 request_id
@@ -84,25 +84,30 @@ acquisition server 在全新环境可因 `no_active_generation` 报告 blocked�
 激活 generation 后重新读取 capability；目标工具若仍非 ready，则停止并原样转述
 `blocking_reasons`。
 
-## 1. 远端探测（以 day role 为日更门禁）
+## 1. 远端探测（以 day role 是否 pending 为日更门禁）
 
-调用 `mcp__x-data-acquire__check_official_updates`：
+调用 `mcp__x-data-acquire__check_official_updates`。响应中的 `changed` 是相对上一次
+persisted `seen` 的远端 drift；`pending_roles` 才是相对当前 active generation
+manifest 的待采集差异，二者不能混用。若 `pending_roles`/`files[].active_change`
+字段缺失 → `SKILL_CONTRACT_MISMATCH`。
 
 - 任一 role 为 `unknown` → 停止并报告（unknown 是停止信号，不是行动提示）。
-- `day=unchanged` → 报告 active generation ref、检查时间及全部 changed roles，立即结束；
-  不得再做 catalog/market 只读探测。固定报告的“最新可用行情日期”在本分支填
-  `not_queried_by_no_update_branch`，除非此前步骤已获得结构化 `last_record`。
-  即使 `base_industry` 或 `gbbq` 为 changed，也**不调用 `acquire_generation`，不创建
-  generation/data task**。
-- `day=changed` → 记录 day 的 ETag / Last-Modified / Content-Length 与 checked_at；
-  只有该结构化证据存在时才继续步骤 2。
+- `day` 不在 `pending_roles` → 报告 active generation ref、检查时间、全部 `changed`
+  roles 与 `pending_roles`，立即结束；不得再做 catalog/market 只读探测。固定报告的
+  “最新可用行情日期”在本分支填 `not_queried_by_no_update_branch`，除非此前步骤已获得
+  结构化 `last_record`。即使 `base_industry` 或 `gbbq` pending，也**不调用
+  `acquire_generation`，不创建 generation/data task**。
+- `day` 在 `pending_roles` → 记录 day 的 remote ETag / Last-Modified /
+  Content-Length、active manifest 对照值、checked_at、seen `changed` 结果与全部
+  `pending_roles`；只有该结构化证据存在时才继续步骤 2。
 
-不得用当前日期、市场是否已经收盘、GBBQ 时间、旧数据最新日期或自由文本推测
-`day=changed`。远端 probe 没有明确给出 changed 就必须停止。
+不得用当前日期、市场是否已经收盘、GBBQ 时间、旧数据最新日期、上次 probe 的
+`changed` 记忆或自由文本推测 `day` pending。远端 probe 没有明确给出 `day`
+pending 就必须停止。
 
 ## 2. 获取并激活新 generation
 
-进入本节前必须同时满足：本次会话存在步骤 1 的 `day=changed` 结构化证据，且
+进入本节前必须同时满足：本次会话存在步骤 1 的 `day` pending 结构化证据，且
 `sync_status.inflight_tasks` 为空。否则报告 `DAY_UPDATE_NOT_CONFIRMED` 或
 `ACQUISITION_ALREADY_INFLIGHT` 并停止。
 
@@ -146,8 +151,8 @@ catalog dataset 枚举实体，再按 ≤100 实体切成 `batch` selection。
 
 ### 3b. 无 published daily head → `start_collection` 显式 securities
 
-本路径只在步骤 1 已确认 `day=changed`、步骤 2 的新 generation 已 verified+active，
-且 3.0 的机器事实确认目标实体没有 published daily head 时进入。若 `day` 未变化，
+本路径只在步骤 1 已确认 `day` pending、步骤 2 的新 generation 已 verified+active，
+且 3.0 的机器事实确认目标实体没有 published daily head 时进入。若 `day` 未 pending，
 daily-sync 停止并报告 `FRESH_DB_REBUILD_REQUIRES_EXPLICIT_REQUEST`，不得仅因空库复用旧
 active generation 开始首采。
 
@@ -185,7 +190,7 @@ active generation 开始首采。
 
 ## 6. 全局停止条件（任一命中即停止并报告 refs）
 
-`unknown` 观测、`day` 未明确 changed、缺少同次 day-change 证据的 inflight acquisition、
+`unknown` 观测、`day` 未明确 pending、缺少同次 day-pending 证据的 inflight acquisition、
 `not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝、
 大面积同类 per-item 失败、轮询预算耗尽、工具不可用。per-item
 `needs_verification` 不属全局停止（见 3 节：聚合上报为 fail-closed 集合）。停止时旧

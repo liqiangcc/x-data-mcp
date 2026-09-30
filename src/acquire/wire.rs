@@ -75,6 +75,14 @@ pub enum Change {
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ActiveFile {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_length: Option<u64>,
+    pub sha256: String,
+}
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RemoteFile {
     pub role: String,
     pub url: String,
@@ -82,14 +90,23 @@ pub struct RemoteFile {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub content_length: Option<u64>,
+    /// Remote head compared with the last persisted observation.
     pub change: Change,
+    /// Active manifest file facts used as the operational pending baseline.
+    pub active: Option<ActiveFile>,
+    /// Remote head compared with the active generation manifest.
+    pub active_change: Change,
 }
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateCheck {
     pub checked_at: String,
+    pub active_generation_id: Option<String>,
     pub files: Vec<RemoteFile>,
+    /// Roles whose remote head changed since the previous probe.
     pub changed: Vec<String>,
+    /// Roles whose remote head differs from the active generation manifest.
+    pub pending_roles: Vec<String>,
     pub unknown: Vec<String>,
 }
 
