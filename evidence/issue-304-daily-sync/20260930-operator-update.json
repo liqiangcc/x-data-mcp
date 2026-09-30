@@ -1,0 +1,1176 @@
+{
+  "absent_after": [
+    {
+      "entity": {
+        "code": "001246",
+        "exchange": "sz"
+      },
+      "reason": null
+    },
+    {
+      "entity": {
+        "code": "301569",
+        "exchange": "sz"
+      },
+      "reason": null
+    },
+    {
+      "entity": {
+        "code": "301660",
+        "exchange": "sz"
+      },
+      "reason": null
+    },
+    {
+      "entity": {
+        "code": "301718",
+        "exchange": "sz"
+      },
+      "reason": null
+    }
+  ],
+  "absent_entities": [
+    {
+      "entity": {
+        "code": "001246",
+        "exchange": "sz"
+      },
+      "reason": null
+    },
+    {
+      "entity": {
+        "code": "301569",
+        "exchange": "sz"
+      },
+      "reason": null
+    },
+    {
+      "entity": {
+        "code": "301660",
+        "exchange": "sz"
+      },
+      "reason": null
+    },
+    {
+      "entity": {
+        "code": "301716",
+        "exchange": "sz"
+      },
+      "reason": null
+    },
+    {
+      "entity": {
+        "code": "301718",
+        "exchange": "sz"
+      },
+      "reason": null
+    }
+  ],
+  "availability_after": {
+    "absent": 4,
+    "heads": 5223,
+    "latest_counts": {
+      "2026-08-28": 1,
+      "2026-08-31": 1,
+      "2026-09-03": 1,
+      "2026-09-10": 1,
+      "2026-09-14": 3,
+      "2026-09-18": 1,
+      "2026-09-21": 1,
+      "2026-09-28": 3,
+      "2026-09-29": 5211
+    }
+  },
+  "availability_before": {
+    "absent": 5,
+    "heads": 5222,
+    "items": 5227,
+    "latest_counts": {
+      "2026-08-28": 1,
+      "2026-08-31": 1,
+      "2026-09-03": 1,
+      "2026-09-10": 1,
+      "2026-09-11": 2,
+      "2026-09-14": 3,
+      "2026-09-18": 1,
+      "2026-09-21": 1,
+      "2026-09-24": 1,
+      "2026-09-28": 5210
+    }
+  },
+  "capabilities": {
+    "blocking_reasons": null,
+    "capability_revision": null,
+    "runtime_readiness": null
+  },
+  "catalog": {
+    "entity_count": 5227,
+    "version_ref": {
+      "contract_version": "v1",
+      "dataset": "securities.catalog",
+      "entity": null,
+      "integrity_sha256": "b5dfaf9083b24d3dc045c579c7b080e7b63c53727f13c75667934efcd26d406d",
+      "version_id": "catalog-1790660536962300201"
+    }
+  },
+  "collection_attempt": {
+    "failed": 4,
+    "request_id": "operator-update-20260930-daily-absent-collection",
+    "status": "partially_failed",
+    "succeeded": 1,
+    "task_id": "task-f77232431d4734996bd2e492d37812a9",
+    "total": 5
+  },
+  "daily_update_item_count": 5222,
+  "end_date": "2026-09-30",
+  "request_id_prefix": "operator-update-20260930-daily",
+  "sample_readbacks": [
+    {
+      "entity": "sh.600000",
+      "record_count": 6,
+      "records": [
+        {
+          "amount": "475964896",
+          "close": "9.00",
+          "date": "2026-09-24",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_trading_date": null,
+          "high": "9.05",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "8.97",
+          "open": "8.99",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+            "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+          },
+          "volume": "52836397",
+          "year_unfinished": null
+        },
+        {
+          "amount": "1080846720",
+          "close": "9.16",
+          "date": "2026-09-28",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_trading_date": null,
+          "high": "9.18",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "9.00",
+          "open": "9.03",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+            "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+          },
+          "volume": "118485298",
+          "year_unfinished": null
+        },
+        {
+          "amount": "739740992",
+          "close": "9.18",
+          "date": "2026-09-29",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_trading_date": null,
+          "high": "9.25",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "9.09",
+          "open": "9.15",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+            "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+          },
+          "volume": "80509739",
+          "year_unfinished": null
+        }
+      ],
+      "version_manifest": [
+        {
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "metadata": {
+            "adjustment": {
+              "field": "price_adjustment",
+              "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (27 events, 61 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+              "status": "confirmed",
+              "value": "qfq"
+            },
+            "coverage_reason": "complete .day member history from inspected snapshot manifest 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8; DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+            "coverage_status": "complete",
+            "lineage": null,
+            "published_at": "2026-09-30T02:29:43.010526634Z",
+            "source": "tdx-official-file-snapshot",
+            "units": [
+              {
+                "field": "price_currency",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "price_unit",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "yuan"
+              },
+              {
+                "field": "volume_unit",
+                "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "share"
+              },
+              {
+                "field": "amount_currency",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "amount_unit",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "yuan"
+              }
+            ]
+          },
+          "status": "present",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+            "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+          }
+        }
+      ]
+    },
+    {
+      "entity": "sz.000001",
+      "record_count": 6,
+      "records": [
+        {
+          "amount": "1186736896",
+          "close": "11.30",
+          "date": "2026-09-24",
+          "entity": {
+            "code": "000001",
+            "exchange": "sz"
+          },
+          "first_trading_date": null,
+          "high": "11.47",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "11.29",
+          "open": "11.35",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "c43dbab1d0cc22adfe188ffb40178bc503c7eabe2bdd9c34dd55c4bc7e100e5d",
+            "version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832"
+          },
+          "volume": "104381872",
+          "year_unfinished": null
+        },
+        {
+          "amount": "810575808",
+          "close": "11.30",
+          "date": "2026-09-28",
+          "entity": {
+            "code": "000001",
+            "exchange": "sz"
+          },
+          "first_trading_date": null,
+          "high": "11.41",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "11.27",
+          "open": "11.28",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "c43dbab1d0cc22adfe188ffb40178bc503c7eabe2bdd9c34dd55c4bc7e100e5d",
+            "version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832"
+          },
+          "volume": "71534143",
+          "year_unfinished": null
+        },
+        {
+          "amount": "784632832",
+          "close": "11.35",
+          "date": "2026-09-29",
+          "entity": {
+            "code": "000001",
+            "exchange": "sz"
+          },
+          "first_trading_date": null,
+          "high": "11.41",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "11.28",
+          "open": "11.30",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "c43dbab1d0cc22adfe188ffb40178bc503c7eabe2bdd9c34dd55c4bc7e100e5d",
+            "version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832"
+          },
+          "volume": "69097909",
+          "year_unfinished": null
+        }
+      ],
+      "version_manifest": [
+        {
+          "entity": {
+            "code": "000001",
+            "exchange": "sz"
+          },
+          "metadata": {
+            "adjustment": {
+              "field": "price_adjustment",
+              "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (33 events, 48 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+              "status": "confirmed",
+              "value": "qfq"
+            },
+            "coverage_reason": "complete .day member history from inspected snapshot manifest 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8; DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+            "coverage_status": "complete",
+            "lineage": null,
+            "published_at": "2026-09-30T02:58:40.420196559Z",
+            "source": "tdx-official-file-snapshot",
+            "units": [
+              {
+                "field": "price_currency",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "price_unit",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "yuan"
+              },
+              {
+                "field": "volume_unit",
+                "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "share"
+              },
+              {
+                "field": "amount_currency",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "amount_unit",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "yuan"
+              }
+            ]
+          },
+          "status": "present",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "integrity_sha256": "c43dbab1d0cc22adfe188ffb40178bc503c7eabe2bdd9c34dd55c4bc7e100e5d",
+            "version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832"
+          }
+        }
+      ]
+    }
+  ],
+  "stopped": null,
+  "tasks": [
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-001",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-b570c3a70c0fc82490bd47a10be40ca1",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-002",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-de48ed9e65789632a68cb66d18feb50f",
+      "total": 100
+    },
+    {
+      "failed": 2,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 98
+      },
+      "request_id": "operator-update-20260930-daily-003",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 98,
+      "task_id": "task-6c2dea88a9e6793e1a17b57d18f29328",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-004",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-a05a18b0529ac4b93b90efedef27f59f",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-005",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-60f94e5308222db3099c7a56ae7697bf",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-006",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-699af96f2e4e53a59d34e0e3bd2dde84",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-007",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-7049a34536e83424a992af66e4312d5a",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-008",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-590f38d67c91e1918fb29b95a8b9bc25",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-009",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-f8b75010253f58bdf5792fd04ddf10f8",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-010",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-5eae1c26b23dcd70ab078b8e18186c89",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-011",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-037031b8613e9c224e22f239bdd213d3",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-012",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-60189f646b3877b6ef5eefecb79cc5db",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-013",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-8515924ff012013260948615437f24f1",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-014",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-c85cf09fea26c03d7596ebf6d4b3e379",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-015",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-26502092b107134001dec9ec2f8510c0",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-016",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-b072fb33dd9f3b21ba0eb3af6970cb9a",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-017",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-2f565e6e17c072b992969f486257f56a",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-018",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-7c5d55a74c4129e64a325adfbb6813d5",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-019",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-f1827b34b5e40d03f128f39ba6533062",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-020",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-b1e4b2653c8693fb4ce57ca1bf7347c4",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-021",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-b4916620c1e773defae8836dcb91eb9b",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-022",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-25260a2dc8e35cfe0bea20da365a9815",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-023",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-4a139736fef642f12a8b5dee7a834c08",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-024",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-9d3034b421cbef4f22f4b3c85b29ef65",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-025",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-574c3e1a89e083840889b0a6159111ca",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-026",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-73e3af9a0a22ad8e4febc948e9e2ab00",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-027",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-5f84ad7a3407b19700760a1b91fb18cf",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-028",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-bcc3a20e7ffa359d6998159d5150ebaf",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-029",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-1bd12cc6a0c4b8b994791a95e839d83f",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-030",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-8671b2fb0df00ef6e6121ac3c982650a",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-031",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-02647f50be233d239524b9b48c75ad64",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-032",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-bba1b218e50ebb70f43444a3b523087d",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-033",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-7f3ee5d2a52986657f6aced4a12900cb",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-034",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-7f6e13bb4a8f086503a2ce651ff5f9ff",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-035",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-22858ace7da4670c1ac0dcd19b0e8bb0",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-036",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-262fb74174107b70895dee6a83ef92fc",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-037",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-3db7bed854223801afcf90dda62176d8",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-038",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-1643c47d8f765acf17f4d17adeb554fc",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-039",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-f8891a442a025919857b934eeecde3d2",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-040",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-8aa1a63ddcf4b02bc1126b8ea9cee207",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-041",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-3f05e9a52ffc8e479b8311c3fe2fab69",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-042",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-fdaa94bd917a2cf82a704ea4841b87d8",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-043",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-20dbf28d63304b7249c315b2e536df6f",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-044",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-0a16b957aeaada7e6ce19f1014105f9c",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-045",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-2202437cf0b206d6fce949ba14f0c305",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-046",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-0096c2cccbd99f920eac839ff4bac1ea",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-047",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-2f7d146d04af4a87579584268a539331",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-048",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-f5da21bcb8a594b9ff5313e56ac84dea",
+      "total": 100
+    },
+    {
+      "failed": 1,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 99
+      },
+      "request_id": "operator-update-20260930-daily-049",
+      "running": 0,
+      "status": "partially_failed",
+      "succeeded": 99,
+      "task_id": "task-75a5cce7d7c077876863756b84fe319b",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-050",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-d4efa85cbcee53c1c27c4abc1af9ced7",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-051",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-ba799df0cdfeae325bb0f87e92f64994",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 100,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 100
+      },
+      "request_id": "operator-update-20260930-daily-052",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 100,
+      "task_id": "task-5ac9092b8d9fce876d6314dd94af4162",
+      "total": 100
+    },
+    {
+      "failed": 0,
+      "finished": 22,
+      "pending": 0,
+      "range_result_statuses": {
+        "unknown": 22
+      },
+      "request_id": "operator-update-20260930-daily-053",
+      "running": 0,
+      "status": "succeeded",
+      "succeeded": 22,
+      "task_id": "task-13dff621409ca8fdd9ffa5a72037b789",
+      "total": 22
+    }
+  ]
+}

@@ -5,9 +5,12 @@
 routine update（见[每日同步说明](daily-sync.md)）；preview.29 双 MCP 拓扑已在本机
 部署运行——data socket 提供 20 data tools、acquire socket 提供 10 acquisition
 tools、fresh init 库使用 compact schema 20。2026-09-29 explicit fresh rebuild
-已发布 catalog `catalog-1790660536962300201`（5,227 records）、5,222 个
-`market.daily` published versions 和 5,222 个 `market.yearly` derived versions；
-5 个官方 `hsjday` 成员缺失保持 absent。
+后，2026-09-30 operator-path 已激活 generation
+`2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，
+并发布 catalog `catalog-1790660536962300201`（5,227 records）、5,223 个
+`market.daily` published versions 和 5,223 个 `market.yearly` derived versions；
+最新集中行情日为 2026-09-29（5,211 entities）；4 个官方 `hsjday` 成员缺失保持
+absent。
 generation 生命周期与全市场分批
 collection/update 均有真实证据（preview.26–28 连续验收：catalog 5,227 实体、
 daily 首采约 340s、同代 no-change `update_data` 5,222 items 约 616s）。#259 已在

@@ -33,12 +33,14 @@ immutable generation、每代 #131 验证后条件激活、任务受理时冻结
 
 preview.29 Phase-G 部署为 fresh-init schema 20：旧 801MB DB 已归档至
 `/opt/x-data-mcp-preview/state/preview.sqlite.v20-archived-20260928T053759Z`。
-2026-09-29 explicit fresh rebuild 已发布 catalog
-`catalog-1790660536962300201`（5,227 records）、5,222 个 `market.daily`
-published versions 和 5,222 个 `market.yearly` derived versions；5 个官方
+2026-09-29 explicit fresh rebuild 后，2026-09-30 operator-path 已激活 generation
+`2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，
+并发布 catalog `catalog-1790660536962300201`（5,227 records）、5,223 个
+`market.daily` published versions 和 5,223 个 `market.yearly` derived
+versions；最新集中行情日为 2026-09-29（5,211 entities）；4 个官方
 `hsjday` 成员缺失保持 absent（`sz.001246`、`sz.301569`、`sz.301660`、
-`sz.301716`、`sz.301718`）。daily/yearly 样本 QFQ manifest/readback 已验证，
-当前 DB 约 809MB；x 消费侧 bounded `KlineReader` live readback 已通过
+`sz.301718`）。daily/yearly 样本 QFQ manifest/readback 已验证，
+当前 DB 约 881MB；x 消费侧 bounded `KlineReader` live readback 已通过
 （`liqiangcc/x` PR #150，证据见
 `evidence/issue-298-x-consumer/preview29-x-consumer-20260929.json`），但 Security
 Master、历史 universe、交易日历、pool/情绪、raw/point-in-time 价格与完整

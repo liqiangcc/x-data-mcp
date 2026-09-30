@@ -1,0 +1,4552 @@
+{
+  "acquisition": {
+    "activated_at": "2026-09-30T02:22:55.694967411+00:00",
+    "capabilities": {
+      "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+      "blocking_reasons": [],
+      "declared_scope": "official TDX base/gbbq/hsjday acquisition into immutable generations; no catalog scope claims",
+      "governance_readiness": "ready",
+      "implementation": {
+        "capability_revision": "x-data-acquire-v1",
+        "consistency_contract_version": "official-file-consistency-v1+official-generation-probe-v1",
+        "generation_contract_version": "official-generation-v1",
+        "server": "x-data-acquire",
+        "version": "0.2.0-preview.29"
+      },
+      "runtime_readiness": "ready",
+      "schema_digest": "f657a9ffc436cee7f077885e73b629f334f70f1656fe85171d3b30c6c0097996",
+      "tools": [
+        "check_official_updates",
+        "acquire_generation",
+        "get_acquisition_task",
+        "get_acquisition_request",
+        "verify_generation",
+        "activate_generation",
+        "retire_generation",
+        "sync_status",
+        "run_worker_once",
+        "get_acquisition_capabilities"
+      ]
+    },
+    "generation_id": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+    "manifest_sha256": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+    "previous_generation_id": "c360967a283440e6e30875325bfd0dd7e8e4be106c061bb8a3cb0f17dc3bbf27",
+    "request_id": "daily-20260930-0935-operator-pending",
+    "sync_status": {
+      "active": {
+        "activated_at": "2026-09-30T02:22:55.694967411Z",
+        "activation_request_id": "daily-20260930-0935-activate",
+        "generation_id": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "manifest_sha256": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "previous_generation_id": "c360967a283440e6e30875325bfd0dd7e8e4be106c061bb8a3cb0f17dc3bbf27",
+        "schema": "x-data-mcp.active-generation.v1"
+      },
+      "consistency_contract_version": "official-file-consistency-v1+official-generation-probe-v1",
+      "generation_contract_version": "official-generation-v1",
+      "generations": [
+        {
+          "acquisition_request_id": "gen-e2e-20260921T054021Z",
+          "consistency_reasons": [],
+          "consistency_status": "VERIFIED_COMPATIBLE",
+          "decision_sha256": "c5538ad2b9918c874f5f9549685263f80c8a5b7c5e063d497feb21a39d5cfe44",
+          "generation_id": "868f4fa1f1aba40ffa9a19ac9d0b2deed08c31ee801f59b2b5206a4096fd895d",
+          "installed_at": "2026-09-21T05:49:50.243683358+00:00",
+          "manifest_sha256": "868f4fa1f1aba40ffa9a19ac9d0b2deed08c31ee801f59b2b5206a4096fd895d",
+          "state": "superseded"
+        },
+        {
+          "acquisition_request_id": "daily-20260922-preview15",
+          "consistency_reasons": [],
+          "consistency_status": "VERIFIED_COMPATIBLE",
+          "decision_sha256": "17658843319392025f3769ff86d0749c32341f088c894bda428d38428a485b37",
+          "generation_id": "804c5a63b5283a4cc02ce582166dde25cbb76057e54a54a2910bc4bba8b07d0b",
+          "installed_at": "2026-09-22T06:49:49.668017813+00:00",
+          "manifest_sha256": "804c5a63b5283a4cc02ce582166dde25cbb76057e54a54a2910bc4bba8b07d0b",
+          "state": "superseded"
+        },
+        {
+          "acquisition_request_id": "deploy25-acq-1",
+          "consistency_reasons": [],
+          "consistency_status": "VERIFIED_COMPATIBLE",
+          "decision_sha256": "f28560a722ec7fffacba60a53d10b695ceca6fe00600b9a8ad19fbdf523e673a",
+          "generation_id": "04c28d88204a42686d8b62321005bbed74ce9892cefc3b8621df7d5ce9034835",
+          "installed_at": "2026-09-25T20:40:48.908644163+00:00",
+          "manifest_sha256": "04c28d88204a42686d8b62321005bbed74ce9892cefc3b8621df7d5ce9034835",
+          "state": "superseded"
+        },
+        {
+          "acquisition_request_id": "daily-20260928-preview29-0557",
+          "consistency_reasons": null,
+          "consistency_status": null,
+          "decision_sha256": null,
+          "generation_id": "84b3f15d8b01bb1bf0094f9c79c7e1576af698b1f73088da1900540743a2494c",
+          "installed_at": "2026-09-28T06:06:17.778248893+00:00",
+          "manifest_sha256": "84b3f15d8b01bb1bf0094f9c79c7e1576af698b1f73088da1900540743a2494c",
+          "state": "byte_verified"
+        },
+        {
+          "acquisition_request_id": "manual-update-20260929-01",
+          "consistency_reasons": [],
+          "consistency_status": "VERIFIED_COMPATIBLE",
+          "decision_sha256": "c1fa5e0ce6b55224752a3b85aed4968767b02c0c75ffb664df0f7ff7a154ac2d",
+          "generation_id": "c360967a283440e6e30875325bfd0dd7e8e4be106c061bb8a3cb0f17dc3bbf27",
+          "installed_at": "2026-09-29T01:58:19.330809852+00:00",
+          "manifest_sha256": "c360967a283440e6e30875325bfd0dd7e8e4be106c061bb8a3cb0f17dc3bbf27",
+          "state": "superseded"
+        },
+        {
+          "acquisition_request_id": "daily-20260930-0935-operator-pending",
+          "consistency_reasons": [],
+          "consistency_status": "VERIFIED_COMPATIBLE",
+          "decision_sha256": "fc5fb7029f4137158d8e2ad0ad91ed3f25ef4ca0dc5e2463466f3328fbaa4e4f",
+          "generation_id": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+          "installed_at": "2026-09-30T02:22:04.689064100+00:00",
+          "manifest_sha256": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+          "state": "active"
+        }
+      ],
+      "inflight_tasks": []
+    },
+    "task_id": "acq-27012921d4367bafb82cc987"
+  },
+  "daily_update": {
+    "absent_collection_attempt": {
+      "failed": 4,
+      "request_id": "operator-update-20260930-daily-absent-collection",
+      "status": "partially_failed",
+      "succeeded": 1,
+      "task_id": "task-f77232431d4734996bd2e492d37812a9",
+      "total": 5
+    },
+    "absent_collection_items": [
+      {
+        "entity": {
+          "code": "001246",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\\\lday\\\\sz001246.day\", \"sz/lday/sz001246.day\"], found 0",
+        "item_id": "[\"market\",\"sz.001246\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "301569",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\\\lday\\\\sz301569.day\", \"sz/lday/sz301569.day\"], found 0",
+        "item_id": "[\"market\",\"sz.301569\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "301660",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\\\lday\\\\sz301660.day\", \"sz/lday/sz301660.day\"], found 0",
+        "item_id": "[\"market\",\"sz.301660\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "301718",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: source invocation failed: member absent or ambiguous: expected exactly one of [\"sz\\\\lday\\\\sz301718.day\", \"sz/lday/sz301718.day\"], found 0",
+        "item_id": "[\"market\",\"sz.301718\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      }
+    ],
+    "availability_after": {
+      "absent": 4,
+      "heads": 5223,
+      "latest_counts": {
+        "2026-08-28": 1,
+        "2026-08-31": 1,
+        "2026-09-03": 1,
+        "2026-09-10": 1,
+        "2026-09-14": 3,
+        "2026-09-18": 1,
+        "2026-09-21": 1,
+        "2026-09-28": 3,
+        "2026-09-29": 5211
+      }
+    },
+    "availability_before": {
+      "absent": 5,
+      "heads": 5222,
+      "items": 5227,
+      "latest_counts": {
+        "2026-08-28": 1,
+        "2026-08-31": 1,
+        "2026-09-03": 1,
+        "2026-09-10": 1,
+        "2026-09-11": 2,
+        "2026-09-14": 3,
+        "2026-09-18": 1,
+        "2026-09-21": 1,
+        "2026-09-24": 1,
+        "2026-09-28": 5210
+      }
+    },
+    "catalog": {
+      "entity_count": 5227,
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "securities.catalog",
+        "entity": null,
+        "integrity_sha256": "b5dfaf9083b24d3dc045c579c7b080e7b63c53727f13c75667934efcd26d406d",
+        "version_id": "catalog-1790660536962300201"
+      }
+    },
+    "failed_items": [
+      {
+        "entity": {
+          "code": "600293",
+          "exchange": "sh"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sh.600293\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "600363",
+          "exchange": "sh"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sh.600363\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "601059",
+          "exchange": "sh"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sh.601059\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "601198",
+          "exchange": "sh"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sh.601198\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "603400",
+          "exchange": "sh"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sh.603400\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "688496",
+          "exchange": "sh"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sh.688496\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "000016",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sz.000016\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "002731",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sz.002731\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "002860",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sz.002860\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "300082",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sz.300082\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "300527",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sz.300527\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      },
+      {
+        "entity": {
+          "code": "301139",
+          "exchange": "sz"
+        },
+        "error": "INVALID_MARKET_COMMAND: invalid source response: snapshot carries no bars inside the accepted range",
+        "item_id": "[\"market\",\"sz.301139\",\"day\"]",
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false
+      }
+    ],
+    "item_totals": {
+      "failed": 12,
+      "succeeded": 5210,
+      "total": 5222
+    },
+    "request_id_prefix": "operator-update-20260930-daily",
+    "sample_readbacks": [
+      {
+        "entity": "sh.600000",
+        "record_count": 6,
+        "records": [
+          {
+            "amount": "475964896",
+            "close": "9.00",
+            "date": "2026-09-24",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "first_trading_date": null,
+            "high": "9.05",
+            "kind": "market",
+            "last_trading_date": null,
+            "low": "8.97",
+            "open": "8.99",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.daily",
+              "entity": {
+                "code": "600000",
+                "exchange": "sh"
+              },
+              "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+              "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+            },
+            "volume": "52836397",
+            "year_unfinished": null
+          },
+          {
+            "amount": "1080846720",
+            "close": "9.16",
+            "date": "2026-09-28",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "first_trading_date": null,
+            "high": "9.18",
+            "kind": "market",
+            "last_trading_date": null,
+            "low": "9.00",
+            "open": "9.03",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.daily",
+              "entity": {
+                "code": "600000",
+                "exchange": "sh"
+              },
+              "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+              "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+            },
+            "volume": "118485298",
+            "year_unfinished": null
+          },
+          {
+            "amount": "739740992",
+            "close": "9.18",
+            "date": "2026-09-29",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "first_trading_date": null,
+            "high": "9.25",
+            "kind": "market",
+            "last_trading_date": null,
+            "low": "9.09",
+            "open": "9.15",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.daily",
+              "entity": {
+                "code": "600000",
+                "exchange": "sh"
+              },
+              "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+              "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+            },
+            "volume": "80509739",
+            "year_unfinished": null
+          }
+        ],
+        "version_manifest": [
+          {
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "metadata": {
+              "adjustment": {
+                "field": "price_adjustment",
+                "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (27 events, 61 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+                "status": "confirmed",
+                "value": "qfq"
+              },
+              "coverage_reason": "complete .day member history from inspected snapshot manifest 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8; DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+              "coverage_status": "complete",
+              "lineage": null,
+              "published_at": "2026-09-30T02:29:43.010526634Z",
+              "source": "tdx-official-file-snapshot",
+              "units": [
+                {
+                  "field": "price_currency",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "price_unit",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "yuan"
+                },
+                {
+                  "field": "volume_unit",
+                  "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "share"
+                },
+                {
+                  "field": "amount_currency",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "amount_unit",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "yuan"
+                }
+              ]
+            },
+            "status": "present",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.daily",
+              "entity": {
+                "code": "600000",
+                "exchange": "sh"
+              },
+              "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+              "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+            }
+          }
+        ]
+      },
+      {
+        "entity": "sz.000001",
+        "record_count": 6,
+        "records": [
+          {
+            "amount": "1186736896",
+            "close": "11.30",
+            "date": "2026-09-24",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "first_trading_date": null,
+            "high": "11.47",
+            "kind": "market",
+            "last_trading_date": null,
+            "low": "11.29",
+            "open": "11.35",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.daily",
+              "entity": {
+                "code": "000001",
+                "exchange": "sz"
+              },
+              "integrity_sha256": "c43dbab1d0cc22adfe188ffb40178bc503c7eabe2bdd9c34dd55c4bc7e100e5d",
+              "version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832"
+            },
+            "volume": "104381872",
+            "year_unfinished": null
+          },
+          {
+            "amount": "810575808",
+            "close": "11.30",
+            "date": "2026-09-28",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "first_trading_date": null,
+            "high": "11.41",
+            "kind": "market",
+            "last_trading_date": null,
+            "low": "11.27",
+            "open": "11.28",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.daily",
+              "entity": {
+                "code": "000001",
+                "exchange": "sz"
+              },
+              "integrity_sha256": "c43dbab1d0cc22adfe188ffb40178bc503c7eabe2bdd9c34dd55c4bc7e100e5d",
+              "version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832"
+            },
+            "volume": "71534143",
+            "year_unfinished": null
+          },
+          {
+            "amount": "784632832",
+            "close": "11.35",
+            "date": "2026-09-29",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "first_trading_date": null,
+            "high": "11.41",
+            "kind": "market",
+            "last_trading_date": null,
+            "low": "11.28",
+            "open": "11.30",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.daily",
+              "entity": {
+                "code": "000001",
+                "exchange": "sz"
+              },
+              "integrity_sha256": "c43dbab1d0cc22adfe188ffb40178bc503c7eabe2bdd9c34dd55c4bc7e100e5d",
+              "version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832"
+            },
+            "volume": "69097909",
+            "year_unfinished": null
+          }
+        ],
+        "version_manifest": [
+          {
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "metadata": {
+              "adjustment": {
+                "field": "price_adjustment",
+                "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (33 events, 48 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+                "status": "confirmed",
+                "value": "qfq"
+              },
+              "coverage_reason": "complete .day member history from inspected snapshot manifest 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8; DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+              "coverage_status": "complete",
+              "lineage": null,
+              "published_at": "2026-09-30T02:58:40.420196559Z",
+              "source": "tdx-official-file-snapshot",
+              "units": [
+                {
+                  "field": "price_currency",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "price_unit",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "yuan"
+                },
+                {
+                  "field": "volume_unit",
+                  "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "share"
+                },
+                {
+                  "field": "amount_currency",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "amount_unit",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "yuan"
+                }
+              ]
+            },
+            "status": "present",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.daily",
+              "entity": {
+                "code": "000001",
+                "exchange": "sz"
+              },
+              "integrity_sha256": "c43dbab1d0cc22adfe188ffb40178bc503c7eabe2bdd9c34dd55c4bc7e100e5d",
+              "version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832"
+            }
+          }
+        ]
+      }
+    ],
+    "task_records": [
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:29:34.697923234Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:31:28.123439300Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-001",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-b570c3a70c0fc82490bd47a10be40ca1"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:32:15.901323521Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:33:44.950867056Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-002",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-de48ed9e65789632a68cb66d18feb50f"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:34:32.958279124Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:36:13.155629596Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-003",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-6c2dea88a9e6793e1a17b57d18f29328"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:36:55.722678352Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:38:16.544665509Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-004",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-a05a18b0529ac4b93b90efedef27f59f"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:39:04.090998984Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:41:03.429463707Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-005",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-60f94e5308222db3099c7a56ae7697bf"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:41:42.637615794Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:43:21.786120059Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-006",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-699af96f2e4e53a59d34e0e3bd2dde84"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:43:56.856352197Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:45:36.666640670Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-007",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-7049a34536e83424a992af66e4312d5a"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:46:14.281001858Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:47:07.413862880Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-008",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-590f38d67c91e1918fb29b95a8b9bc25"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:47:21.613995177Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:48:12.263468187Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-009",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-f8b75010253f58bdf5792fd04ddf10f8"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:48:36.283061155Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:49:20.733800980Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-010",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-5eae1c26b23dcd70ab078b8e18186c89"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:49:43.439227063Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:50:15.606798560Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-011",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-037031b8613e9c224e22f239bdd213d3"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:50:33.524444182Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:50:59.959837613Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-012",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-60189f646b3877b6ef5eefecb79cc5db"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:51:18.236061952Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:51:44.032350454Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-013",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-8515924ff012013260948615437f24f1"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:52:03.068216653Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:52:31.983781973Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-014",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-c85cf09fea26c03d7596ebf6d4b3e379"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:52:51.040902568Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:53:34.340570551Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-015",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-26502092b107134001dec9ec2f8510c0"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:53:43.262808992Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:54:17.581979251Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-016",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-b072fb33dd9f3b21ba0eb3af6970cb9a"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:54:29.649304574Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:54:50.945366072Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-017",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-2f565e6e17c072b992969f486257f56a"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:54:57.083899023Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:55:23.525199373Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-018",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-7c5d55a74c4129e64a325adfbb6813d5"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:55:43.174364723Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:56:03.739155231Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-019",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-f1827b34b5e40d03f128f39ba6533062"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:56:10.202051324Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:56:30.709079920Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-020",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-b1e4b2653c8693fb4ce57ca1bf7347c4"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:56:38.203496635Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:57:01.968430879Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-021",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-b4916620c1e773defae8836dcb91eb9b"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:57:21.751758592Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:57:45.734597606Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-022",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-25260a2dc8e35cfe0bea20da365a9815"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:58:04.353686157Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T02:58:24.972202489Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-023",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-4a139736fef642f12a8b5dee7a834c08"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T02:58:30.833470941Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:00:39.922932424Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-024",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-9d3034b421cbef4f22f4b3c85b29ef65"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:01:22.740870908Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:03:44.028666623Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-025",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-574c3e1a89e083840889b0a6159111ca"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:04:11.700761655Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:05:57.184759290Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-026",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-73e3af9a0a22ad8e4febc948e9e2ab00"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:07:06.346554134Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:09:10.304127442Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-027",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-5f84ad7a3407b19700760a1b91fb18cf"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:10:10.783844624Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:10:59.668552497Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-028",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-bcc3a20e7ffa359d6998159d5150ebaf"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:11:14.990511860Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:11:59.078167896Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-029",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-1bd12cc6a0c4b8b994791a95e839d83f"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:12:25.203506782Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:13:43.680489196Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-030",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-8671b2fb0df00ef6e6121ac3c982650a"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:14:18.125216372Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:15:22.515992754Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-031",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-02647f50be233d239524b9b48c75ad64"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:15:52.303243560Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:17:01.529181067Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-032",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-bba1b218e50ebb70f43444a3b523087d"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:17:28.125904389Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:18:26.589677113Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-033",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-7f3ee5d2a52986657f6aced4a12900cb"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:19:04.292069038Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:19:52.159652963Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-034",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-7f6e13bb4a8f086503a2ce651ff5f9ff"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:20:17.310955890Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:21:03.879753610Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-035",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-22858ace7da4670c1ac0dcd19b0e8bb0"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:21:30.212762615Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:22:07.473310688Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-036",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-262fb74174107b70895dee6a83ef92fc"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:22:17.852114227Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:22:53.976553791Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-037",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-3db7bed854223801afcf90dda62176d8"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:23:02.930404164Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:23:28.151711837Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-038",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-1643c47d8f765acf17f4d17adeb554fc"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:23:46.942322640Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:24:50.457278206Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-039",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-f8891a442a025919857b934eeecde3d2"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:25:12.663618512Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:26:24.314419976Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-040",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-8aa1a63ddcf4b02bc1126b8ea9cee207"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:26:44.725206664Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:27:46.886508547Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-041",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-3f05e9a52ffc8e479b8311c3fe2fab69"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:28:14.558049833Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:29:04.405656645Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-042",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-fdaa94bd917a2cf82a704ea4841b87d8"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:29:24.888284577Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:30:09.549342348Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-043",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-20dbf28d63304b7249c315b2e536df6f"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:30:30.627477281Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:31:11.354793025Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-044",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-0a16b957aeaada7e6ce19f1014105f9c"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:31:34.235151405Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:32:09.737580182Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-045",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-2202437cf0b206d6fce949ba14f0c305"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:32:20.587711082Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:32:48.773836318Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-046",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-0096c2cccbd99f920eac839ff4bac1ea"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:33:05.634014881Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:33:34.894465219Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-047",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-2f7d146d04af4a87579584268a539331"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:33:49.189648235Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:34:20.476826461Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-048",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-f5da21bcb8a594b9ff5313e56ac84dea"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:34:30.481671508Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:34:56.238689180Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-049",
+        "state_revision": 201,
+        "status": "partially_failed",
+        "task_id": "task-75a5cce7d7c077876863756b84fe319b"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:35:11.478000892Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:35:34.033370070Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-050",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-d4efa85cbcee53c1c27c4abc1af9ced7"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:35:52.298500420Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:36:12.715529906Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-051",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-ba799df0cdfeae325bb0f87e92f64994"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:36:18.428289525Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:36:32.247582656Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-052",
+        "state_revision": 201,
+        "status": "succeeded",
+        "task_id": "task-5ac9092b8d9fce876d6314dd94af4162"
+      },
+      {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-09-30T03:36:43.504056593Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:36:45.354539326Z",
+        "operation": "update_data",
+        "request_id": "operator-update-20260930-daily-053",
+        "state_revision": 45,
+        "status": "succeeded",
+        "task_id": "task-13dff621409ca8fdd9ffa5a72037b789"
+      },
+      {
+        "contract_version": "v1",
+        "created_at": "2026-09-30T03:36:54.136261829Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-09-30T03:36:54.383247682Z",
+        "operation": "start_collection",
+        "request_id": "operator-update-20260930-daily-absent-collection",
+        "state_revision": 12,
+        "status": "partially_failed",
+        "task_id": "task-f77232431d4734996bd2e492d37812a9"
+      }
+    ],
+    "task_status_counts": {
+      "partially_failed": 11,
+      "succeeded": 42
+    },
+    "tasks": [
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-001",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-b570c3a70c0fc82490bd47a10be40ca1",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-002",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-de48ed9e65789632a68cb66d18feb50f",
+        "total": 100
+      },
+      {
+        "failed": 2,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 98
+        },
+        "request_id": "operator-update-20260930-daily-003",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 98,
+        "task_id": "task-6c2dea88a9e6793e1a17b57d18f29328",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-004",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-a05a18b0529ac4b93b90efedef27f59f",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-005",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-60f94e5308222db3099c7a56ae7697bf",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-006",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-699af96f2e4e53a59d34e0e3bd2dde84",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-007",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-7049a34536e83424a992af66e4312d5a",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-008",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-590f38d67c91e1918fb29b95a8b9bc25",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-009",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-f8b75010253f58bdf5792fd04ddf10f8",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-010",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-5eae1c26b23dcd70ab078b8e18186c89",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-011",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-037031b8613e9c224e22f239bdd213d3",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-012",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-60189f646b3877b6ef5eefecb79cc5db",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-013",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-8515924ff012013260948615437f24f1",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-014",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-c85cf09fea26c03d7596ebf6d4b3e379",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-015",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-26502092b107134001dec9ec2f8510c0",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-016",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-b072fb33dd9f3b21ba0eb3af6970cb9a",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-017",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-2f565e6e17c072b992969f486257f56a",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-018",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-7c5d55a74c4129e64a325adfbb6813d5",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-019",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-f1827b34b5e40d03f128f39ba6533062",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-020",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-b1e4b2653c8693fb4ce57ca1bf7347c4",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-021",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-b4916620c1e773defae8836dcb91eb9b",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-022",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-25260a2dc8e35cfe0bea20da365a9815",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-023",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-4a139736fef642f12a8b5dee7a834c08",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-024",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-9d3034b421cbef4f22f4b3c85b29ef65",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-025",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-574c3e1a89e083840889b0a6159111ca",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-026",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-73e3af9a0a22ad8e4febc948e9e2ab00",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-027",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-5f84ad7a3407b19700760a1b91fb18cf",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-028",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-bcc3a20e7ffa359d6998159d5150ebaf",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-029",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-1bd12cc6a0c4b8b994791a95e839d83f",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-030",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-8671b2fb0df00ef6e6121ac3c982650a",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-031",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-02647f50be233d239524b9b48c75ad64",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-032",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-bba1b218e50ebb70f43444a3b523087d",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-033",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-7f3ee5d2a52986657f6aced4a12900cb",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-034",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-7f6e13bb4a8f086503a2ce651ff5f9ff",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-035",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-22858ace7da4670c1ac0dcd19b0e8bb0",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-036",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-262fb74174107b70895dee6a83ef92fc",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-037",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-3db7bed854223801afcf90dda62176d8",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-038",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-1643c47d8f765acf17f4d17adeb554fc",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-039",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-f8891a442a025919857b934eeecde3d2",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-040",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-8aa1a63ddcf4b02bc1126b8ea9cee207",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-041",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-3f05e9a52ffc8e479b8311c3fe2fab69",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-042",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-fdaa94bd917a2cf82a704ea4841b87d8",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-043",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-20dbf28d63304b7249c315b2e536df6f",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-044",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-0a16b957aeaada7e6ce19f1014105f9c",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-045",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-2202437cf0b206d6fce949ba14f0c305",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-046",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-0096c2cccbd99f920eac839ff4bac1ea",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-047",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-2f7d146d04af4a87579584268a539331",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-048",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-f5da21bcb8a594b9ff5313e56ac84dea",
+        "total": 100
+      },
+      {
+        "failed": 1,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 99
+        },
+        "request_id": "operator-update-20260930-daily-049",
+        "running": 0,
+        "status": "partially_failed",
+        "succeeded": 99,
+        "task_id": "task-75a5cce7d7c077876863756b84fe319b",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-050",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-d4efa85cbcee53c1c27c4abc1af9ced7",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-051",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-ba799df0cdfeae325bb0f87e92f64994",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 100,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 100
+        },
+        "request_id": "operator-update-20260930-daily-052",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 100,
+        "task_id": "task-5ac9092b8d9fce876d6314dd94af4162",
+        "total": 100
+      },
+      {
+        "failed": 0,
+        "finished": 22,
+        "pending": 0,
+        "range_result_statuses": {
+          "unknown": 22
+        },
+        "request_id": "operator-update-20260930-daily-053",
+        "running": 0,
+        "status": "succeeded",
+        "succeeded": 22,
+        "task_id": "task-13dff621409ca8fdd9ffa5a72037b789",
+        "total": 22
+      }
+    ]
+  },
+  "data_capabilities": {
+    "capability_revision": "generic-data-v3",
+    "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+    "items": [
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Owner-only bounded management of an abnormal verification task, not a recursive asynchronous task. Each reliably persisted result, including insufficient evidence, consumes request_id; the same ID replays its historical result without re-inspecting. A new ID is needed for fresh evidence. Checks registered local execution exclusion and durable finish separately; may close only the verification task, never the original business task or its claims. Missing/unregistered runtime proof retains protection. No force/evidence flags, waiting, implicit retry or production source approval.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": true,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "d42ecd52f699c9a4dec507a0e7470297fbd957f6f6eb58cb448a583af4a1ac6b",
+        "tool_name": "inspect_verification_task"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Explicit asynchronous inspection of durable publication evidence for an unresolved market task. Reads fixed SQLite publication versions, receipts and projections; missing receipt is insufficient evidence, not proof of failure. The separate check never publishes, changes heads or releases the original task claims. A prior all-recorded conclusion can bind a new request without a new inspection. Inspect publication_check via get_task_progress. Corrupt evidence and interrupted inspections retain protection; no caller approval or force flags. This ready interface does not make the official data source production-ready.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "97686b60839109726d0da4d2938c9c4c40e96f6d1f357fb63c1077a88eab9ed6",
+        "tool_name": "verify_publication_result"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Explicit asynchronous stopping-evidence inspection of a task awaiting verification. Admission preserves original claims. The installed verifier can prove an audited revision-zero task never started using verified SQLite facts and conditional exclusion of a later claim. Started or unsupported executions remain STOP_EVIDENCE_NOT_VERIFIED; no caller assertion, PID absence or old run identity can unlock a task. Inspect the separate check conclusion via get_task_progress.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "c2d45943cfaf5a15fc7c54727715e866e4313dca9028c1ca4c4ef867a1abfa7f",
+        "tool_name": "verify_stopped_writes"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Explicit asynchronous verification of a proven local coverage gap in one published QFQ daily version. The caller names only symbol/day/[start,end]; the subject head is frozen at acceptance and re-checked at decision commit. Decisions come only from the installed trusted source-gap verifier; source limitation or unavailability never produces a proven gap, and a decision never triggers update/backfill by itself. Proving a gap requires the verified active generation (or the installed inspected snapshot in legacy mode); without one runtime readiness is blocked and no gap can be proven.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "d708b534754b5edc42510e410a57176bfe53887d81324b53360c637527c61304",
+        "tool_name": "verify_data_gap"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Routine daily refresh. market.daily accepts explicit items each bound to a published base version, or selection {\"kind\":\"default\"} resolved and frozen from the acceptance snapshot (catalog + started securities + published heads + open proven gaps). market.yearly items publish explicit natural-year sets bound to published daily versions with an explicit frozen publication mode; historical mode never advances head. Daily items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); unchanged inputs are proven by member/event digests and land no_change, appended tails commit as new versions, and historical revisions fail closed without advancing heads. Per-item outcomes are published / no_change / needs_verification. Automatic gap discovery and catalog updates are not implemented.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "850be5b38312967b2af7a50af726b06f1697ed643c1577cb8b70aa4ba6b604c7",
+        "tool_name": "update_data"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.yearly",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Routine daily refresh. market.daily accepts explicit items each bound to a published base version, or selection {\"kind\":\"default\"} resolved and frozen from the acceptance snapshot (catalog + started securities + published heads + open proven gaps). market.yearly items publish explicit natural-year sets bound to published daily versions with an explicit frozen publication mode; historical mode never advances head. Daily items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); unchanged inputs are proven by member/event digests and land no_change, appended tails commit as new versions, and historical revisions fail closed without advancing heads. Per-item outcomes are published / no_change / needs_verification. Automatic gap discovery and catalog updates are not implemented.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "850be5b38312967b2af7a50af726b06f1697ed643c1577cb8b70aa4ba6b604c7",
+        "tool_name": "update_data"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Bounded backfill, not the routine update path. market.daily explicit items fill a named range on top of a published base version; selection {\"kind\":\"default\"} resolves to frozen proven gaps only — never a full-market refresh. market.yearly items publish explicit natural-year sets bound to published daily versions with an explicit frozen publication mode. Daily items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); revisions fail closed without advancing heads.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "850be5b38312967b2af7a50af726b06f1697ed643c1577cb8b70aa4ba6b604c7",
+        "tool_name": "backfill_data"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.yearly",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Bounded backfill, not the routine update path. market.daily explicit items fill a named range on top of a published base version; selection {\"kind\":\"default\"} resolves to frozen proven gaps only — never a full-market refresh. market.yearly items publish explicit natural-year sets bound to published daily versions with an explicit frozen publication mode. Daily items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); revisions fail closed without advancing heads.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "850be5b38312967b2af7a50af726b06f1697ed643c1577cb8b70aa4ba6b604c7",
+        "tool_name": "backfill_data"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Local-owner explicit market.daily republish (#247): republishes a fixed base version as a new version through the same verified pipeline, authorized by this command itself — not by frozen proven gaps. Only pure enrichment (filling previously unpromoted optional fields such as volume/amount/r7_raw) or new dates may differ from the base; any revised or lost known value fails closed at both the provider merge and market_update::prepare. The republished version advances the daily head; the base stays queryable verbatim. market.daily only; explicit items only — no selection and no other dataset.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "6984d9cc475f893b926f1718e2e0c3bc26c86e8c18bea6164042db5bf32c1803",
+        "tool_name": "republish_data"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Operator/debug single-step execution of at most one locally owned pending task. The data_service background worker executes pending tasks automatically, so routine synchronization flows must not invoke this tool; while the service worker is busy it fails with worker_busy and never runs a second execution. It never downloads market data, never approves sources, and never unlocks or repairs tasks.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": true,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "b03a10a6bc1b3e9370d51bc05f9150636fa52790dde60767c48ecbe63d483ef4",
+        "tool_name": "run_worker_once"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Run a named bounded metric algorithm over explicit published version inputs and return the computation or a structured not_computable outcome. Read-only.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "a78998fb744c7ca405c4f24c91bba02b230bd8b7d871d267438fb0fe9ac4bd5f",
+        "tool_name": "compute_metrics"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "securities.catalog",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "First establishment only: creates the initial publication for entities with no published head — explicit entity list, catalog version, or the snapshot-resolved default selection, frozen at acceptance. Daily and catalog items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); yearly items derive from published daily bases. This is not the routine update path; entities with published heads update through their own write tasks. Replaying the same request_id returns the original acceptance.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "188215a87fc1548ce10ed18956ed099e5a2589db2f0a5e434bf9b4dfabca062a",
+        "tool_name": "start_collection"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "First establishment only: creates the initial publication for entities with no published head — explicit entity list, catalog version, or the snapshot-resolved default selection, frozen at acceptance. Daily and catalog items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); yearly items derive from published daily bases. This is not the routine update path; entities with published heads update through their own write tasks. Replaying the same request_id returns the original acceptance.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "188215a87fc1548ce10ed18956ed099e5a2589db2f0a5e434bf9b4dfabca062a",
+        "tool_name": "start_collection"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.yearly",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "First establishment only: creates the initial publication for entities with no published head — explicit entity list, catalog version, or the snapshot-resolved default selection, frozen at acceptance. Daily and catalog items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); yearly items derive from published daily bases. This is not the routine update path; entities with published heads update through their own write tasks. Replaying the same request_id returns the original acceptance.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "188215a87fc1548ce10ed18956ed099e5a2589db2f0a5e434bf9b4dfabca062a",
+        "tool_name": "start_collection"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Re-accept explicitly selected unfinished items of an existing task as a new linked task. Item ids only; outcomes and finished items cannot be silently re-run.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "39163c3045ec275d8e511677ce8e7a5fe63255a8b9db1484779346fe3a9703d0",
+        "tool_name": "retry_task"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Read one task's status, frozen scope and per-item results.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "f7004efc610b5df3f16fa287c11abbe904230fec0b617663f6133183bba8a2ff",
+        "tool_name": "get_task"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Read the durable request_id binding and its bound task or terminal result without accepting work.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "95bd8f7ab7910323ecedc879a6f14e1a1ffa77a21670a172b7e2bd8cdd39fdf4",
+        "tool_name": "get_request"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Request cancellation of a task under an expected_revision precondition; returns the post-request visible status and state revision.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "bb8edf0d17d5317167f332c42ef5ef518fe19a9d54a0db6d59bc61029ddc584c",
+        "tool_name": "cancel_task"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "securities.catalog",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Read integrity-checked published rows for one dataset/selection with an explicit filter and version choice. Paged and snapshot-scoped; never triggers collection, repair or source access.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "1aa0a441cdfb0adce44ed168714e66f46971147c770ccd24ea0157e91ead56f0",
+        "tool_name": "query_data"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Read integrity-checked published rows for one dataset/selection with an explicit filter and version choice. Paged and snapshot-scoped; never triggers collection, repair or source access.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "1aa0a441cdfb0adce44ed168714e66f46971147c770ccd24ea0157e91ead56f0",
+        "tool_name": "query_data"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.yearly",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Read integrity-checked published rows for one dataset/selection with an explicit filter and version choice. Paged and snapshot-scoped; never triggers collection, repair or source access.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "1aa0a441cdfb0adce44ed168714e66f46971147c770ccd24ea0157e91ead56f0",
+        "tool_name": "query_data"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "securities.catalog",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "List published version references for one dataset/selection. Paged; read-only.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "80c38d28b6b97ababb94328698470c7000ba0a287c0c5a42104e1e2a5c50a7a2",
+        "tool_name": "list_data_versions"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "List published version references for one dataset/selection. Paged; read-only.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "80c38d28b6b97ababb94328698470c7000ba0a287c0c5a42104e1e2a5c50a7a2",
+        "tool_name": "list_data_versions"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.yearly",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "List published version references for one dataset/selection. Paged; read-only.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "80c38d28b6b97ababb94328698470c7000ba0a287c0c5a42104e1e2a5c50a7a2",
+        "tool_name": "list_data_versions"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "securities.catalog",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Report published coverage, freshness, confirmed gaps and unresolved ranges per entity, with related task references. Paged; read-only.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "613f4014ad1271ba3731e14807520a358a9992662522e2c56fff8ff70380d404",
+        "tool_name": "get_data_availability"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Report published coverage, freshness, confirmed gaps and unresolved ranges per entity, with related task references. Paged; read-only.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "613f4014ad1271ba3731e14807520a358a9992662522e2c56fff8ff70380d404",
+        "tool_name": "get_data_availability"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": "market.yearly",
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Report published coverage, freshness, confirmed gaps and unresolved ranges per entity, with related task references. Paged; read-only.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "613f4014ad1271ba3731e14807520a358a9992662522e2c56fff8ff70380d404",
+        "tool_name": "get_data_availability"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Page task summaries filtered by dataset, operation, status and creation range. Read-only.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "5d5487b25bee15d6d3739160b58f116650d43939e0a7f628d1e3e5ff8d4be66c",
+        "tool_name": "list_tasks"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Page one task's item progress, execution results, publication versions and verification receipts. Read-only.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "9c8edbb3c8aa65e0d1ddb6372fe21e2c6221742701537685b8a8cd686bc33c3c",
+        "tool_name": "get_task_progress"
+      },
+      {
+        "active_generation_ref": "2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",
+        "blocking_reasons": [],
+        "contract_version": "v1",
+        "dataset": null,
+        "declared_scope": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+        "description": "Report this server's capability matrix: implemented tools, per-dataset schemas, runtime and governance readiness, structured blocking reasons and production gate facts. Facts only — no workflow ordering or cross-server instructions.",
+        "example": null,
+        "governance_readiness": "ready",
+        "implemented": true,
+        "input_schema": null,
+        "operator_only": false,
+        "output_schema": null,
+        "runtime_readiness": "ready",
+        "schema_digest": "f79f1ec1c56f4a962a5bcd08d539e4f2528bac8dabee32a67c67ed50e6cc73b1",
+        "tool_name": "get_data_capabilities"
+      }
+    ],
+    "max_batch_entities": 100,
+    "max_page_size": 1000,
+    "max_snapshot_bytes": 16777216,
+    "max_snapshot_rows": 100000,
+    "production_blocking_reasons": [
+      {
+        "code": "declared_scope_non_production",
+        "detail": "DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized"
+      }
+    ],
+    "production_ready": false,
+    "snapshots_per_category": 32
+  },
+  "external_distribution_authorized": false,
+  "generated_at": "2026-09-30T05:03:55.274752+00:00",
+  "path": "operator-path; does not count as issue #304 Skill-only acceptance",
+  "production_ready": false,
+  "readback": {
+    "remaining_absent_daily_availability": {
+      "items": [
+        {
+          "availability": "absent",
+          "confirmed_gaps": [],
+          "coverage_evidence": "no published version",
+          "entity": {
+            "code": "001246",
+            "exchange": "sz"
+          },
+          "first_record": null,
+          "freshness": "unknown",
+          "integrity": "not_applicable",
+          "last_record": null,
+          "limitations": [
+            "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair"
+          ],
+          "record_count": 0,
+          "related_tasks": [
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-30T03:36:54.136261829Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-30T03:36:54.383247682Z",
+              "operation": "start_collection",
+              "request_id": "operator-update-20260930-daily-absent-collection",
+              "state_revision": 12,
+              "status": "partially_failed",
+              "task_id": "task-f77232431d4734996bd2e492d37812a9"
+            },
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-29T05:52:36.683994729Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-29T05:52:38.835256422Z",
+              "operation": "start_collection",
+              "request_id": "fresh-rebuild-20260929-0530-daily-028",
+              "state_revision": 202,
+              "status": "partially_failed",
+              "task_id": "task-69cea90c21bdbc3bfd52abe9d43ac133"
+            }
+          ],
+          "unresolved_ranges": [],
+          "version_ref": null
+        },
+        {
+          "availability": "absent",
+          "confirmed_gaps": [],
+          "coverage_evidence": "no published version",
+          "entity": {
+            "code": "301569",
+            "exchange": "sz"
+          },
+          "first_record": null,
+          "freshness": "unknown",
+          "integrity": "not_applicable",
+          "last_record": null,
+          "limitations": [
+            "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair"
+          ],
+          "record_count": 0,
+          "related_tasks": [
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-30T03:36:54.136261829Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-30T03:36:54.383247682Z",
+              "operation": "start_collection",
+              "request_id": "operator-update-20260930-daily-absent-collection",
+              "state_revision": 12,
+              "status": "partially_failed",
+              "task_id": "task-f77232431d4734996bd2e492d37812a9"
+            },
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-29T06:04:28.217766555Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-29T06:04:29.198066736Z",
+              "operation": "start_collection",
+              "request_id": "fresh-rebuild-20260929-0530-daily-052",
+              "state_revision": 202,
+              "status": "partially_failed",
+              "task_id": "task-c8e7ab7d3f23b5b7b3b7309e10579452"
+            }
+          ],
+          "unresolved_ranges": [],
+          "version_ref": null
+        },
+        {
+          "availability": "absent",
+          "confirmed_gaps": [],
+          "coverage_evidence": "no published version",
+          "entity": {
+            "code": "301660",
+            "exchange": "sz"
+          },
+          "first_record": null,
+          "freshness": "unknown",
+          "integrity": "not_applicable",
+          "last_record": null,
+          "limitations": [
+            "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair"
+          ],
+          "record_count": 0,
+          "related_tasks": [
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-30T03:36:54.136261829Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-30T03:36:54.383247682Z",
+              "operation": "start_collection",
+              "request_id": "operator-update-20260930-daily-absent-collection",
+              "state_revision": 12,
+              "status": "partially_failed",
+              "task_id": "task-f77232431d4734996bd2e492d37812a9"
+            },
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-29T06:04:38.594768303Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-29T06:04:38.928847446Z",
+              "operation": "start_collection",
+              "request_id": "fresh-rebuild-20260929-0530-daily-053",
+              "state_revision": 56,
+              "status": "partially_failed",
+              "task_id": "task-fc50ad2a526484ba3633c4dee1c39238"
+            }
+          ],
+          "unresolved_ranges": [],
+          "version_ref": null
+        },
+        {
+          "availability": "absent",
+          "confirmed_gaps": [],
+          "coverage_evidence": "no published version",
+          "entity": {
+            "code": "301718",
+            "exchange": "sz"
+          },
+          "first_record": null,
+          "freshness": "unknown",
+          "integrity": "not_applicable",
+          "last_record": null,
+          "limitations": [
+            "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair"
+          ],
+          "record_count": 0,
+          "related_tasks": [
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-30T03:36:54.136261829Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-30T03:36:54.383247682Z",
+              "operation": "start_collection",
+              "request_id": "operator-update-20260930-daily-absent-collection",
+              "state_revision": 12,
+              "status": "partially_failed",
+              "task_id": "task-f77232431d4734996bd2e492d37812a9"
+            },
+            {
+              "contract_version": "v1",
+              "created_at": "2026-09-29T06:04:38.594768303Z",
+              "dataset": "market.daily",
+              "last_progress_at": "2026-09-29T06:04:38.928847446Z",
+              "operation": "start_collection",
+              "request_id": "fresh-rebuild-20260929-0530-daily-053",
+              "state_revision": 56,
+              "status": "partially_failed",
+              "task_id": "task-fc50ad2a526484ba3633c4dee1c39238"
+            }
+          ],
+          "unresolved_ranges": [],
+          "version_ref": null
+        }
+      ],
+      "next_cursor": null,
+      "page_complete": true,
+      "snapshot_id": "obs-2233973-1790744484527400650-15",
+      "snapshot_time": "2026-09-30T05:03:55.273998200Z"
+    },
+    "sample_daily_600000": {
+      "contract_version": "v1",
+      "dataset": "market.daily",
+      "limitations": [
+        "fixed version selection is not a shared source acquisition time",
+        "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+      ],
+      "next_cursor": null,
+      "page_complete": true,
+      "query_time": "2026-09-30T05:03:54.006038173Z",
+      "records": [
+        {
+          "amount": "1080846720",
+          "close": "9.16",
+          "date": "2026-09-28",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_trading_date": null,
+          "high": "9.18",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "9.00",
+          "open": "9.03",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+            "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+          },
+          "volume": "118485298",
+          "year_unfinished": null
+        },
+        {
+          "amount": "739740992",
+          "close": "9.18",
+          "date": "2026-09-29",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_trading_date": null,
+          "high": "9.25",
+          "kind": "market",
+          "last_trading_date": null,
+          "low": "9.09",
+          "open": "9.15",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+            "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+          },
+          "volume": "80509739",
+          "year_unfinished": null
+        }
+      ],
+      "selection_complete": true,
+      "snapshot_id": "2233973-1790744484527394338-1",
+      "version_manifest": [
+        {
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "metadata": {
+            "adjustment": {
+              "field": "price_adjustment",
+              "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (27 events, 61 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+              "status": "confirmed",
+              "value": "qfq"
+            },
+            "coverage_reason": "complete .day member history from inspected snapshot manifest 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8; DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+            "coverage_status": "complete",
+            "lineage": null,
+            "published_at": "2026-09-30T02:29:43.010526634Z",
+            "source": "tdx-official-file-snapshot",
+            "units": [
+              {
+                "field": "price_currency",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "price_unit",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "yuan"
+              },
+              {
+                "field": "volume_unit",
+                "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "share"
+              },
+              {
+                "field": "amount_currency",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "amount_unit",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "yuan"
+              }
+            ]
+          },
+          "status": "present",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "a48094e57f0d9300edba65906a83fb4f8ac99fe14db7153dfcb83a860298be20",
+            "version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b"
+          }
+        }
+      ]
+    },
+    "sample_yearly_600000": {
+      "contract_version": "v1",
+      "dataset": "market.yearly",
+      "limitations": [
+        "fixed version selection is not a shared source acquisition time",
+        "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+      ],
+      "next_cursor": null,
+      "page_complete": true,
+      "query_time": "2026-09-30T05:03:54.072544381Z",
+      "records": [
+        {
+          "amount": "220535547584",
+          "close": "12.02",
+          "date": "2025-12-31",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_trading_date": "2025-01-02",
+          "high": "13.97",
+          "kind": "market",
+          "last_trading_date": "2025-12-31",
+          "low": "8.63",
+          "open": "9.47",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "7756ac1487da7168a3b2b99aec0c70598081debede88b21877048f68f091a341",
+            "version_id": "yearly-version-a0ae261481eb1770b1fa5cd5135fa4dad3ae5eec2ce7a34472dc10b98a61f204"
+          },
+          "volume": "18133498968",
+          "year_unfinished": false
+        },
+        {
+          "amount": "138493090880",
+          "close": "9.18",
+          "date": "2026-09-29",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "first_trading_date": "2026-01-05",
+          "high": "12.06",
+          "kind": "market",
+          "last_trading_date": "2026-09-29",
+          "low": "8.07",
+          "open": "12.05",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "7756ac1487da7168a3b2b99aec0c70598081debede88b21877048f68f091a341",
+            "version_id": "yearly-version-a0ae261481eb1770b1fa5cd5135fa4dad3ae5eec2ce7a34472dc10b98a61f204"
+          },
+          "volume": "14386009492",
+          "year_unfinished": true
+        }
+      ],
+      "selection_complete": true,
+      "snapshot_id": "2233973-1790744484527394338-2",
+      "version_manifest": [
+        {
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "metadata": {
+            "adjustment": {
+              "field": "price_adjustment",
+              "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (27 events, 61 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+              "status": "confirmed",
+              "value": "qfq"
+            },
+            "coverage_reason": "selected years verified by re-aggregating fixed daily range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b against bound generation 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8 as of 2026-09-30; not a listing-history claim",
+            "coverage_status": "complete",
+            "lineage": {
+              "algorithm_version": "local-natural-year-v1",
+              "base_daily_version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b",
+              "first_trading_date": "1999-11-10",
+              "last_trading_date": "2026-09-29"
+            },
+            "published_at": "2026-09-30T04:07:49.384322611Z",
+            "source": "tdx-official-file-snapshot",
+            "units": [
+              {
+                "field": "price_currency",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "price_unit",
+                "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                "status": "confirmed",
+                "value": "yuan"
+              },
+              {
+                "field": "volume_unit",
+                "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "share"
+              },
+              {
+                "field": "amount_currency",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "CNY"
+              },
+              {
+                "field": "amount_unit",
+                "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                "status": "confirmed",
+                "value": "yuan"
+              }
+            ]
+          },
+          "status": "present",
+          "version_ref": {
+            "contract_version": "v1",
+            "dataset": "market.yearly",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "integrity_sha256": "7756ac1487da7168a3b2b99aec0c70598081debede88b21877048f68f091a341",
+            "version_id": "yearly-version-a0ae261481eb1770b1fa5cd5135fa4dad3ae5eec2ce7a34472dc10b98a61f204"
+          }
+        }
+      ]
+    }
+  },
+  "runtime": {
+    "acquisition_capability_revision": "x-data-acquire-v1",
+    "code_sha": "4493d45",
+    "data_capability_revision": "generic-data-v3",
+    "generation_contract": "official-generation-v1",
+    "release": "v0.2.0-preview.29"
+  },
+  "storage": {
+    "preview_sqlite_bytes": 880971776,
+    "preview_sqlite_shm_bytes": 98304,
+    "preview_sqlite_wal_bytes": 16777216
+  },
+  "yearly_update": {
+    "failed_partial_year_attempt": {
+      "error": "PUBLISH_PRECONDITION: selected years cannot replace a head containing other years",
+      "request_id": "operator-update-20260930-yearly-001",
+      "task_id": "task-b90c780916de0d1f39e938104bdab844"
+    },
+    "first_phase": {
+      "request_id_prefix": "operator-update-20260930-yearly-full-",
+      "task_status_counts": {
+        "succeeded": 7
+      },
+      "tasks": [
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:07:48.519386439Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:07:59.569821289Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-001",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-eb9fc700a950ee8b9cfd789a40eadd1c"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:08:24.809289483Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:08:34.089244379Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-002",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-59e72dba8e936bce12a716e25d9823c6"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:08:44.741144768Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:08:53.543975794Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-003",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-b4849221403ffc4a054b462047db6b78"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:09:04.095389691Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:09:13.607634969Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-004",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-13f8715d411c906ecefd1e648b871a64"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:09:23.836339653Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:09:34.747182758Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-005",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-5990623375d21401055ea68a4207ea03"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:10:06.060810272Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:10:18.937799167Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-006",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-609ce3837f7113c56bf1be76bcb07084"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:10:47.364703948Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:10:58.485268185Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-007",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-aa373dfee858a325a06edbefe2a1d7bd"
+        }
+      ]
+    },
+    "resume_phase": {
+      "request_id_prefix": "operator-update-20260930-yearly-full-r2",
+      "start_item": 700,
+      "task_records": [
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:29:03.936064512Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:29:12.005143702Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-001",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-68cf4baf553a5b99b8584c0f929b385b"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:29:20.201514521Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:29:27.147937691Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-002",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-11d3fa39fe4087385f61f7b723fea3b3"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:29:36.188178160Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:29:42.619138133Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-003",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-1c259df8b6e5f963c2d228b25f566399"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:29:51.540743473Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:29:56.630249781Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-004",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-c295b8252b566f842d4091eea31b0863"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:30:05.546687676Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:30:10.696033158Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-005",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-61b1dcd6f87e190beebdfa496b1ae3ff"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:30:19.764205887Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:30:24.510842905Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-006",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-c1415e30c557176a9e688d5feb45de26"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:30:33.452949974Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:30:38.508769554Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-007",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-b0c8a69915f4d2c877e0c515a0273eb8"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:30:48.949249397Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:30:54.381084399Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-008",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-395f7149655a4cfd7d7dc4630c1a69a1"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:31:03.329246262Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:31:09.281516592Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-009",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-4ac2de1cd48a020de78eb98dcfac4d9c"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:31:18.431654350Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:31:23.028123879Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-010",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-e56bfb9bf83c6b2a995e1f2ef3701f6a"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:31:32.365760030Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:31:37.685957470Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-011",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-11deaaef1d16840c61eb370f874fc738"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:31:45.661642239Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:31:50.209017924Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-012",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-8fe06f46b1376dc21b42ca1c0918aa4b"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:32:00.294524501Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:32:05.195491664Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-013",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-0914cc435300b370f7f235558fd5dd83"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:32:14.147649222Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:32:18.238751530Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-014",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-0f1f47913180a0c36fc0ee7f19ef67ab"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:32:28.345320988Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:32:32.666388496Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-015",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-2c684af1a4a952a0a6b6b6e48df15ac3"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:32:41.555349484Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:32:45.251808822Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-016",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-29515cf911c837a89772163ba7a04c1d"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:32:55.160476083Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:33:05.568763495Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-017",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-cde8b318713fc2ed80f65438611c53fc"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:33:34.091353246Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:33:46.744570851Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-018",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-c7455d433544030c394dd7db1a6f4026"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:34:13.798618194Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:34:24.135068106Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-019",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-a0183583eee1bb992f4f3faa1b7099b8"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:34:53.405059006Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:35:04.141545030Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-020",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-aabc92aba83898712b07c45b2a3a0daa"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:35:31.575810126Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:35:37.583548057Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-021",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-5099429b54168f795452a557d63ce3be"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:35:47.454135007Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:35:53.773027146Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-022",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-09e3a73f46e32b3346a62cef9fdf3238"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:36:04.290867866Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:36:17.810991942Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-023",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-0e5b3bd20307a36ff91d722e6d1610fa"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:36:36.087029310Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:36:45.365388867Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-024",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-25ec42b5858411d2e1bb5896586445ad"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:36:53.982604006Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:37:02.618939383Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-025",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-6c62867d191f5f880ee59c63d3258446"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:37:11.140300909Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:37:19.266881373Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-026",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-a38ed49f6d030fd73bad61b2f81db9ee"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:37:28.084001880Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:37:37.756021482Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-027",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-f9391c9612b50aecb7058d514ef0ed95"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:37:48.597649899Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:37:56.141264731Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-028",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-030510a8c728531fc307aa094d03969b"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:38:05.927732651Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:38:12.617507860Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-029",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-dc0d1c4095672b74e7f41c3690d93d7e"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:38:22.502119308Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:38:28.644921324Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-030",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-388c5a40d1318826d7959586f0b11391"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:38:37.425182336Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:38:42.427488880Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-031",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-b46f7defe262f83dfae7fc9b06b1eaa4"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:38:51.563299849Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:38:58.387450775Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-032",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-28c8ebc2b6d688f32650a7694c76cf0d"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:39:09.327490299Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:39:17.259500631Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-033",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-4352bd3604daa6d6c6e1aabfddac9b12"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:39:26.871953316Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:39:34.403256108Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-034",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-6a29a81b6f1999dbe63b2ac867c2ccf7"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:39:44.177979334Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:39:50.945999990Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-035",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-e0a084b0e5879cc382429b09cf866a2f"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:40:01.285857947Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:40:08.226375211Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-036",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-f2482a577483a74cb381243938c6af19"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:40:16.571414741Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:40:22.031798170Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-037",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-4c8e6efdf8c7c3af726d54f5ccff52fe"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:40:31.830157872Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:40:37.351351104Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-038",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-1dcc12e348988efc055d0b1d5441b1a8"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:40:47.024855977Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:40:52.323064922Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-039",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-387800243658a370afd04c53082f1965"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:41:00.941848989Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:41:05.750816518Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-040",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-fad7f47f2938f3583412662f56270e39"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:41:14.512035217Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:41:19.378961508Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-041",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-ec29c6971846533f45996e0f5bf24125"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:41:27.742320001Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:41:32.225027992Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-042",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-dbd4c1583db8502faeddbc97fd4a733a"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:41:40.892546039Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:41:45.685017152Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-043",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-e84ab615e59b03ede35d21bf9eeed794"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:41:54.896534490Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:41:58.915620972Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-044",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-f72b0584d8004731dd8c2a0019d3ac66"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:42:08.875212428Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:42:12.722865735Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-045",
+          "state_revision": 201,
+          "status": "succeeded",
+          "task_id": "task-29d960ccab9c7818ee98d8ffada7769c"
+        },
+        {
+          "contract_version": "explicit-yearly-task-v1",
+          "created_at": "2026-09-30T04:42:20.879863680Z",
+          "dataset": "market.yearly",
+          "last_progress_at": "2026-09-30T04:42:21.949109330Z",
+          "operation": "update_data",
+          "request_id": "operator-update-20260930-yearly-full-r2-046",
+          "state_revision": 47,
+          "status": "succeeded",
+          "task_id": "task-fd5278520584666c0d954be355e37752"
+        }
+      ],
+      "task_status_counts": {
+        "succeeded": 46
+      },
+      "tasks": [
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-001",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-68cf4baf553a5b99b8584c0f929b385b",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-002",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-11d3fa39fe4087385f61f7b723fea3b3",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-003",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-1c259df8b6e5f963c2d228b25f566399",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-004",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-c295b8252b566f842d4091eea31b0863",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-005",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-61b1dcd6f87e190beebdfa496b1ae3ff",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-006",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-c1415e30c557176a9e688d5feb45de26",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-007",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-b0c8a69915f4d2c877e0c515a0273eb8",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-008",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-395f7149655a4cfd7d7dc4630c1a69a1",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-009",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-4ac2de1cd48a020de78eb98dcfac4d9c",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-010",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-e56bfb9bf83c6b2a995e1f2ef3701f6a",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-011",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-11deaaef1d16840c61eb370f874fc738",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-012",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-8fe06f46b1376dc21b42ca1c0918aa4b",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-013",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-0914cc435300b370f7f235558fd5dd83",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-014",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-0f1f47913180a0c36fc0ee7f19ef67ab",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-015",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-2c684af1a4a952a0a6b6b6e48df15ac3",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-016",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-29515cf911c837a89772163ba7a04c1d",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-017",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-cde8b318713fc2ed80f65438611c53fc",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-018",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-c7455d433544030c394dd7db1a6f4026",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-019",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-a0183583eee1bb992f4f3faa1b7099b8",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-020",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-aabc92aba83898712b07c45b2a3a0daa",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-021",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-5099429b54168f795452a557d63ce3be",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-022",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-09e3a73f46e32b3346a62cef9fdf3238",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-023",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-0e5b3bd20307a36ff91d722e6d1610fa",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-024",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-25ec42b5858411d2e1bb5896586445ad",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-025",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-6c62867d191f5f880ee59c63d3258446",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-026",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-a38ed49f6d030fd73bad61b2f81db9ee",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-027",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-f9391c9612b50aecb7058d514ef0ed95",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-028",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-030510a8c728531fc307aa094d03969b",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-029",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-dc0d1c4095672b74e7f41c3690d93d7e",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-030",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-388c5a40d1318826d7959586f0b11391",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-031",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-b46f7defe262f83dfae7fc9b06b1eaa4",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-032",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-28c8ebc2b6d688f32650a7694c76cf0d",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-033",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-4352bd3604daa6d6c6e1aabfddac9b12",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-034",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-6a29a81b6f1999dbe63b2ac867c2ccf7",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-035",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-e0a084b0e5879cc382429b09cf866a2f",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-036",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-f2482a577483a74cb381243938c6af19",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-037",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-4c8e6efdf8c7c3af726d54f5ccff52fe",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-038",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-1dcc12e348988efc055d0b1d5441b1a8",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-039",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-387800243658a370afd04c53082f1965",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-040",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-fad7f47f2938f3583412662f56270e39",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-041",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-ec29c6971846533f45996e0f5bf24125",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-042",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-dbd4c1583db8502faeddbc97fd4a733a",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-043",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-e84ab615e59b03ede35d21bf9eeed794",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-044",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-f72b0584d8004731dd8c2a0019d3ac66",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 100,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-045",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 100,
+          "task_id": "task-29d960ccab9c7818ee98d8ffada7769c",
+          "total": 100,
+          "unfinished": []
+        },
+        {
+          "failed": 0,
+          "finished": 23,
+          "pending": 0,
+          "request_id": "operator-update-20260930-yearly-full-r2-046",
+          "running": 0,
+          "status": "succeeded",
+          "succeeded": 23,
+          "task_id": "task-fd5278520584666c0d954be355e37752",
+          "total": 23,
+          "unfinished": []
+        }
+      ],
+      "yearly_update_item_count": 5223,
+      "yearly_update_remaining_count": 4523
+    },
+    "sample_readbacks": [
+      {
+        "entity": "sh.600000",
+        "records": [
+          {
+            "amount": "220535547584",
+            "close": "12.02",
+            "date": "2025-12-31",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "first_trading_date": "2025-01-02",
+            "high": "13.97",
+            "kind": "market",
+            "last_trading_date": "2025-12-31",
+            "low": "8.63",
+            "open": "9.47",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.yearly",
+              "entity": {
+                "code": "600000",
+                "exchange": "sh"
+              },
+              "integrity_sha256": "7756ac1487da7168a3b2b99aec0c70598081debede88b21877048f68f091a341",
+              "version_id": "yearly-version-a0ae261481eb1770b1fa5cd5135fa4dad3ae5eec2ce7a34472dc10b98a61f204"
+            },
+            "volume": "18133498968",
+            "year_unfinished": false
+          },
+          {
+            "amount": "138493090880",
+            "close": "9.18",
+            "date": "2026-09-29",
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "first_trading_date": "2026-01-05",
+            "high": "12.06",
+            "kind": "market",
+            "last_trading_date": "2026-09-29",
+            "low": "8.07",
+            "open": "12.05",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.yearly",
+              "entity": {
+                "code": "600000",
+                "exchange": "sh"
+              },
+              "integrity_sha256": "7756ac1487da7168a3b2b99aec0c70598081debede88b21877048f68f091a341",
+              "version_id": "yearly-version-a0ae261481eb1770b1fa5cd5135fa4dad3ae5eec2ce7a34472dc10b98a61f204"
+            },
+            "volume": "14386009492",
+            "year_unfinished": true
+          }
+        ],
+        "version_manifest": [
+          {
+            "entity": {
+              "code": "600000",
+              "exchange": "sh"
+            },
+            "metadata": {
+              "adjustment": {
+                "field": "price_adjustment",
+                "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (27 events, 61 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+                "status": "confirmed",
+                "value": "qfq"
+              },
+              "coverage_reason": "selected years verified by re-aggregating fixed daily range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b against bound generation 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8 as of 2026-09-30; not a listing-history claim",
+              "coverage_status": "complete",
+              "lineage": {
+                "algorithm_version": "local-natural-year-v1",
+                "base_daily_version_id": "range-version-140dac6a893ea7f7dcc3823b3d325ef446dd642ebf8af45c2b3036a3216fab3b",
+                "first_trading_date": "1999-11-10",
+                "last_trading_date": "2026-09-29"
+              },
+              "published_at": "2026-09-30T04:07:49.384322611Z",
+              "source": "tdx-official-file-snapshot",
+              "units": [
+                {
+                  "field": "price_currency",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "price_unit",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "yuan"
+                },
+                {
+                  "field": "volume_unit",
+                  "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "share"
+                },
+                {
+                  "field": "amount_currency",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "amount_unit",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "yuan"
+                }
+              ]
+            },
+            "status": "present",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.yearly",
+              "entity": {
+                "code": "600000",
+                "exchange": "sh"
+              },
+              "integrity_sha256": "7756ac1487da7168a3b2b99aec0c70598081debede88b21877048f68f091a341",
+              "version_id": "yearly-version-a0ae261481eb1770b1fa5cd5135fa4dad3ae5eec2ce7a34472dc10b98a61f204"
+            }
+          }
+        ]
+      },
+      {
+        "entity": "sz.301716",
+        "records": [
+          {
+            "amount": "6231355392",
+            "close": "578.88",
+            "date": "2026-09-29",
+            "entity": {
+              "code": "301716",
+              "exchange": "sz"
+            },
+            "first_trading_date": "2026-09-29",
+            "high": "630.01",
+            "kind": "market",
+            "last_trading_date": "2026-09-29",
+            "low": "558.58",
+            "open": "600.00",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.yearly",
+              "entity": {
+                "code": "301716",
+                "exchange": "sz"
+              },
+              "integrity_sha256": "08516d23a07a5143adb8f29ee17523dd59a696a95ffd287db4e09f8a8d71b427",
+              "version_id": "yearly-version-5b417f9f4a664142eb62eda9a6f57d75062f38a34cd2977f82e88104497c2146"
+            },
+            "volume": "10528330",
+            "year_unfinished": true
+          }
+        ],
+        "version_manifest": [
+          {
+            "entity": {
+              "code": "301716",
+              "exchange": "sz"
+            },
+            "metadata": {
+              "adjustment": {
+                "field": "price_adjustment",
+                "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (0 events, 1 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+                "status": "confirmed",
+                "value": "qfq"
+              },
+              "coverage_reason": "selected years verified by re-aggregating fixed daily collection-version-b781e87a3bf57975312eb0841133a902a4f3249976413671661716921c511ca1 against bound generation 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8 as of 2026-09-30; not a listing-history claim",
+              "coverage_status": "complete",
+              "lineage": {
+                "algorithm_version": "local-natural-year-v1",
+                "base_daily_version_id": "collection-version-b781e87a3bf57975312eb0841133a902a4f3249976413671661716921c511ca1",
+                "first_trading_date": "2026-09-29",
+                "last_trading_date": "2026-09-29"
+              },
+              "published_at": "2026-09-30T04:42:21.904770039Z",
+              "source": "tdx-official-file-snapshot",
+              "units": [
+                {
+                  "field": "price_currency",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "price_unit",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "yuan"
+                },
+                {
+                  "field": "volume_unit",
+                  "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "share"
+                },
+                {
+                  "field": "amount_currency",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "amount_unit",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "yuan"
+                }
+              ]
+            },
+            "status": "present",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.yearly",
+              "entity": {
+                "code": "301716",
+                "exchange": "sz"
+              },
+              "integrity_sha256": "08516d23a07a5143adb8f29ee17523dd59a696a95ffd287db4e09f8a8d71b427",
+              "version_id": "yearly-version-5b417f9f4a664142eb62eda9a6f57d75062f38a34cd2977f82e88104497c2146"
+            }
+          }
+        ]
+      },
+      {
+        "entity": "sz.000001",
+        "records": [
+          {
+            "amount": "315956233088",
+            "close": "10.80",
+            "date": "2025-12-31",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "first_trading_date": "2025-01-02",
+            "high": "12.49",
+            "kind": "market",
+            "last_trading_date": "2025-12-31",
+            "low": "9.27",
+            "open": "10.52",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.yearly",
+              "entity": {
+                "code": "000001",
+                "exchange": "sz"
+              },
+              "integrity_sha256": "a6e08e79971da87d0b65261b796d72fff33f2ccf942fa1a60085d69d7140b9d7",
+              "version_id": "yearly-version-22d9f56197afa80455e462f670fe3db4eed868f9108c20043b6e8f26adb9f7f6"
+            },
+            "volume": "26921912287",
+            "year_unfinished": false
+          },
+          {
+            "amount": "196810393568",
+            "close": "11.35",
+            "date": "2026-09-29",
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "first_trading_date": "2026-01-05",
+            "high": "11.83",
+            "kind": "market",
+            "last_trading_date": "2026-09-29",
+            "low": "9.74",
+            "open": "10.81",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.yearly",
+              "entity": {
+                "code": "000001",
+                "exchange": "sz"
+              },
+              "integrity_sha256": "a6e08e79971da87d0b65261b796d72fff33f2ccf942fa1a60085d69d7140b9d7",
+              "version_id": "yearly-version-22d9f56197afa80455e462f670fe3db4eed868f9108c20043b6e8f26adb9f7f6"
+            },
+            "volume": "17720916598",
+            "year_unfinished": true
+          }
+        ],
+        "version_manifest": [
+          {
+            "entity": {
+              "code": "000001",
+              "exchange": "sz"
+            },
+            "metadata": {
+              "adjustment": {
+                "field": "price_adjustment",
+                "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (33 events, 48 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+                "status": "confirmed",
+                "value": "qfq"
+              },
+              "coverage_reason": "selected years verified by re-aggregating fixed daily range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832 against bound generation 2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8 as of 2026-09-30; not a listing-history claim",
+              "coverage_status": "complete",
+              "lineage": {
+                "algorithm_version": "local-natural-year-v1",
+                "base_daily_version_id": "range-version-857c8df48564d9a1859d7215f7ece445dc8e187856fa86db6d20b94296cb3832",
+                "first_trading_date": "1991-04-03",
+                "last_trading_date": "2026-09-29"
+              },
+              "published_at": "2026-09-30T04:32:56.248933743Z",
+              "source": "tdx-official-file-snapshot",
+              "units": [
+                {
+                  "field": "price_currency",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "price_unit",
+                  "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+                  "status": "confirmed",
+                  "value": "yuan"
+                },
+                {
+                  "field": "volume_unit",
+                  "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "share"
+                },
+                {
+                  "field": "amount_currency",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "CNY"
+                },
+                {
+                  "field": "amount_unit",
+                  "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+                  "status": "confirmed",
+                  "value": "yuan"
+                }
+              ]
+            },
+            "status": "present",
+            "version_ref": {
+              "contract_version": "v1",
+              "dataset": "market.yearly",
+              "entity": {
+                "code": "000001",
+                "exchange": "sz"
+              },
+              "integrity_sha256": "a6e08e79971da87d0b65261b796d72fff33f2ccf942fa1a60085d69d7140b9d7",
+              "version_id": "yearly-version-22d9f56197afa80455e462f670fe3db4eed868f9108c20043b6e8f26adb9f7f6"
+            }
+          }
+        ]
+      }
+    ],
+    "yearly_absent_after": [
+      {
+        "code": "001246",
+        "exchange": "sz"
+      },
+      {
+        "code": "301569",
+        "exchange": "sz"
+      },
+      {
+        "code": "301660",
+        "exchange": "sz"
+      },
+      {
+        "code": "301718",
+        "exchange": "sz"
+      }
+    ],
+    "yearly_heads_after": 5223
+  }
+}

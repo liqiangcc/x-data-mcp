@@ -6,9 +6,12 @@
 [整体设计](design.md)维护架构与业务流程。
 当前部署为 v0.2.0-preview.29（`4493d45`）双 MCP server：data socket 提供
 20 data tools，acquisition socket 提供 10 acquisition tools；fresh init 库使用
-compact schema 20。2026-09-29 explicit fresh rebuild 已发布 catalog
-`catalog-1790660536962300201`（5,227 records）、5,222 个 `market.daily`
-published versions 和 5,222 个 `market.yearly` derived versions；5 个官方
+compact schema 20。2026-09-29 explicit fresh rebuild 后，2026-09-30
+operator-path 已激活 generation
+`2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，
+并发布 catalog `catalog-1790660536962300201`（5,227 records）、5,223 个
+`market.daily` published versions 和 5,223 个 `market.yearly` derived
+versions；最新集中行情日为 2026-09-29（5,211 entities）；4 个官方
 `hsjday` 成员缺失保持 absent。generic-data-v3
 live discovery PASS，daily/yearly 样本 QFQ readback PASS；工具数不是稳定业务契约；客户端必须以
 运行实例的 `tools/list` 与 capability descriptor 为准。
