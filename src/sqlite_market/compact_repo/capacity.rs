@@ -435,14 +435,29 @@ fn phase_initial(
     let mut rss_peak = rss_bytes();
     let chunk = TASK_ITEMS;
     let mut item_cursor = 0usize;
-    for batch in symbols.chunks(chunk) {
+    let mut materialize_ns = 0u128;
+    let mut accept_ns = 0u128;
+    let mut candidate_ns = 0u128;
+    let mut commit_ns = 0u128;
+    let mut inter_chunk_gap_ns = 0u128;
+    let mut prior_chunk_end: Option<Instant> = None;
+    let mut wal_peak = wal_bytes(db);
+    let mut chunks = Vec::new();
+    for (chunk_index, batch) in symbols.chunks(chunk).enumerate() {
+        let chunk_started = Instant::now();
+        let inter_chunk_gap_ms = prior_chunk_end
+            .map(|end| chunk_started.saturating_duration_since(end).as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        inter_chunk_gap_ns += (inter_chunk_gap_ms * 1e6) as u128;
         // Materialize first: a source/validation failure is an item-level
         // refusal in production shape — record it, never abort the run.
         let mut materialized: Vec<(String, MarketDataBatch)> = Vec::new();
+        let mut chunk_materialize_ns = 0u128;
         for symbol in batch {
             if done.contains(symbol) {
                 continue;
             }
+            let t = Instant::now();
             match session
                 .materialize_daily(symbol)
                 .map_err(|e| e.to_string())
@@ -454,59 +469,84 @@ fn phase_initial(
                 Ok(b) => materialized.push((symbol.clone(), b)),
                 Err(e) => failed.push(format!("{symbol}: {e}")),
             }
+            let elapsed = t.elapsed().as_nanos();
+            materialize_ns += elapsed;
+            chunk_materialize_ns += elapsed;
         }
-        if materialized.is_empty() {
-            continue;
-        }
-        let items: Vec<(String, String)> = materialized
-            .iter()
-            .map(|(s, _)| {
-                (
-                    format!("item-{}", s),
-                    task_control::legacy::scope_id(s, "day"),
-                )
-            })
-            .collect();
-        let task_id = accept_phase_task(repo, &format!("req-initial-{item_cursor}"), &items);
-        item_cursor += 1;
-        // S5F production shape: one write transaction commits the whole
-        // task — typed stage + publish + typed result + item finish.
-        let candidates: Vec<_> = materialized
-            .iter()
-            .zip(&items)
-            .map(|((symbol, batch_data), (item_id, _))| {
-                bars_total += batch_data.bars.len() as u64;
-                collection_candidate(
-                    batch_data,
-                    &format!("v1-{symbol}"),
-                    &format!("pub-initial-{symbol}"),
-                    &task_id,
-                    item_id,
-                    generation_id,
-                    manifest_sha256,
-                )
-            })
-            .collect();
-        for (candidate, result) in candidates
-            .iter()
-            .zip(repo.commit_collection_batch(&task_id, &candidates).unwrap())
-        {
-            match result {
-                Ok(_) => committed += 1,
-                Err(e) => failed.push(format!("{}: {e}", candidate.symbol)),
+        let mut chunk_accept_ns = 0u128;
+        let mut chunk_candidate_ns = 0u128;
+        let mut chunk_commit_ns = 0u128;
+        if !materialized.is_empty() {
+            let items: Vec<(String, String)> = materialized
+                .iter()
+                .map(|(s, _)| {
+                    (
+                        format!("item-{}", s),
+                        task_control::legacy::scope_id(s, "day"),
+                    )
+                })
+                .collect();
+            let t = Instant::now();
+            let task_id = accept_phase_task(repo, &format!("req-initial-{item_cursor}"), &items);
+            chunk_accept_ns = t.elapsed().as_nanos();
+            accept_ns += chunk_accept_ns;
+            item_cursor += 1;
+            // S5F production shape: one write transaction commits the whole
+            // task — typed stage + publish + typed result + item finish.
+            let t = Instant::now();
+            let candidates: Vec<_> = materialized
+                .iter()
+                .zip(&items)
+                .map(|((symbol, batch_data), (item_id, _))| {
+                    bars_total += batch_data.bars.len() as u64;
+                    collection_candidate(
+                        batch_data,
+                        &format!("v1-{symbol}"),
+                        &format!("pub-initial-{symbol}"),
+                        &task_id,
+                        item_id,
+                        generation_id,
+                        manifest_sha256,
+                    )
+                })
+                .collect();
+            chunk_candidate_ns = t.elapsed().as_nanos();
+            candidate_ns += chunk_candidate_ns;
+            let t = Instant::now();
+            let results = repo.commit_collection_batch(&task_id, &candidates).unwrap();
+            chunk_commit_ns = t.elapsed().as_nanos();
+            commit_ns += chunk_commit_ns;
+            for (candidate, result) in candidates.iter().zip(results) {
+                match result {
+                    Ok(_) => committed += 1,
+                    Err(e) => failed.push(format!("{}: {e}", candidate.symbol)),
+                }
+                rss_peak = rss_peak.max(rss_bytes());
+                if committed.is_multiple_of(500) {
+                    eprintln!(
+                        "[initial] {committed}/{} bars={bars_total} elapsed={:?} rss={}MiB",
+                        symbols.len(),
+                        started.elapsed(),
+                        rss_peak / (1024 * 1024)
+                    );
+                    report.set("initial_progress", json!({"committed": committed, "bars": bars_total, "elapsed_s": started.elapsed().as_secs(), "rss_peak": rss_peak, "db_bytes": db_bytes(db), "wal_bytes": wal_bytes(db)}));
+                    report.save(dir);
+                }
             }
-            rss_peak = rss_peak.max(rss_bytes());
-            if committed.is_multiple_of(500) {
-                eprintln!(
-                    "[initial] {committed}/{} bars={bars_total} elapsed={:?} rss={}MiB",
-                    symbols.len(),
-                    started.elapsed(),
-                    rss_peak / (1024 * 1024)
-                );
-                report.set("initial_progress", json!({"committed": committed, "bars": bars_total, "elapsed_s": started.elapsed().as_secs(), "rss_peak": rss_peak, "db_bytes": db_bytes(db), "wal_bytes": wal_bytes(db)}));
-                report.save(dir);
-            }
         }
+        wal_peak = wal_peak.max(wal_bytes(db));
+        chunks.push(json!({
+            "index": chunk_index,
+            "symbols": batch.len(),
+            "materialized": materialized.len(),
+            "wall_ms": chunk_started.elapsed().as_secs_f64() * 1000.0,
+            "materialize_ms": chunk_materialize_ns as f64 / 1e6,
+            "accept_ms": chunk_accept_ns as f64 / 1e6,
+            "candidate_ms": chunk_candidate_ns as f64 / 1e6,
+            "commit_ms": chunk_commit_ns as f64 / 1e6,
+            "inter_chunk_gap_ms": inter_chunk_gap_ms,
+        }));
+        prior_chunk_end = Some(Instant::now());
     }
     let metrics = repo.checkpoint_idle().unwrap();
     report.set(
@@ -516,9 +556,16 @@ fn phase_initial(
             "symbols_failed": failed,
             "bars_total": bars_total,
             "wall_s": started.elapsed().as_secs_f64(),
+            "materialize_ms": materialize_ns as f64 / 1e6,
+            "prepare_ms": candidate_ns as f64 / 1e6,
+            "accept_ms": accept_ns as f64 / 1e6,
+            "commit_ms": commit_ns as f64 / 1e6,
+            "inter_chunk_gap_ms": inter_chunk_gap_ns as f64 / 1e6,
+            "chunks": chunks,
             "rss_peak_bytes": rss_peak,
             "db_bytes_before_checkpoint": db_bytes(db),
             "wal_before_checkpoint": wal_bytes(db),
+            "wal_peak_bytes": wal_peak,
             "checkpoint": format!("{metrics:?}"),
             "db_bytes_after_checkpoint": db_bytes(db),
             "wal_after_checkpoint": wal_bytes(db),
@@ -724,6 +771,46 @@ fn accept_update_phase_task(
     }
 }
 
+/// Timing-only provider wrapper for the capacity/profile harness. The real
+/// provider still performs all acquisition work; this only splits provider
+/// wall time from repository/task preparation time.
+struct TimedRangeProvider<'a> {
+    inner: &'a dyn crate::market_update::runner::RangeProvider,
+    acquire_ns: std::cell::Cell<u128>,
+    typed_acquire_ns: std::cell::Cell<u128>,
+}
+
+impl crate::market_update::runner::RangeProvider for TimedRangeProvider<'_> {
+    fn acquire(
+        &self,
+        base: &crate::market_storage::compat::CheckedRecord,
+        range: &crate::market_update::DateRange,
+        candidate_id: &str,
+    ) -> Result<crate::market_update::runner::Acquisition, crate::market_data::SourceError> {
+        let started = Instant::now();
+        let acquired = self.inner.acquire(base, range, candidate_id);
+        self.acquire_ns
+            .set(self.acquire_ns.get() + started.elapsed().as_nanos());
+        acquired
+    }
+
+    fn acquire_typed(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &crate::market_update::DateRange,
+    ) -> Result<
+        Option<crate::market_update::runner::TypedAcquisition>,
+        crate::market_data::SourceError,
+    > {
+        let started = Instant::now();
+        let acquired = self.inner.acquire_typed(facts, base_window, range);
+        self.typed_acquire_ns
+            .set(self.typed_acquire_ns.get() + started.elapsed().as_nanos());
+        acquired
+    }
+}
+
 /// S5G-7 typed daily update through the production runner pieces:
 /// `update_candidate` (binding checks + typed acquire — member read,
 /// sha256, continuity probe, windowed base read) timed separately from
@@ -741,8 +828,11 @@ fn phase_typed(
     let db_before = db_bytes(db);
     let started = Instant::now();
     let mut prepare_ns = 0u128;
+    let mut spec_ns = 0u128;
+    let mut typed_acquire_ns = 0u128;
     let mut commit_ns = 0u128;
     let mut accept_ns = 0u128;
+    let mut inter_chunk_gap_ns = 0u128;
     let mut committed = 0usize;
     let mut append_items = 0usize;
     let mut nochange_items = 0usize;
@@ -752,10 +842,14 @@ fn phase_typed(
     let mut fallback_not_published = 0usize;
     let mut fallback_errors = 0usize;
     let mut fallback_ns = 0u128;
+    let mut fallback_typed_acquire_ns = 0u128;
+    let mut fallback_acquire_ns = 0u128;
     let mut failed_items = 0usize;
     let mut fallback_reasons: Vec<String> = Vec::new();
     let mut tasks = 0usize;
     let mut wal_peak = wal_bytes(db);
+    let mut chunks = Vec::new();
+    let mut prior_chunk_end: Option<Instant> = None;
     let published = published_entities(repo);
     let active: Vec<String> = symbols
         .iter()
@@ -779,13 +873,25 @@ fn phase_typed(
         },
         acquire_ns: std::cell::Cell::new(0),
     };
-    let provider: &dyn crate::market_update::runner::RangeProvider =
+    let provider_inner: &dyn crate::market_update::runner::RangeProvider =
         if mode == "append" { &fabricated } else { &real };
+    let timed_provider = TimedRangeProvider {
+        inner: provider_inner,
+        acquire_ns: std::cell::Cell::new(0),
+        typed_acquire_ns: std::cell::Cell::new(0),
+    };
+    let provider: &dyn crate::market_update::runner::RangeProvider = &timed_provider;
     // Request ids are idempotent: a rerun of this phase after a previous
     // (possibly all-fallback) execution must not replay the old tasks.
     let run_tag = std::env::var("X_CAPACITY_RUN_TAG").unwrap_or_else(|_| "1".into());
     for (chunk_index, batch) in active.chunks(TASK_ITEMS).enumerate() {
+        let chunk_started = Instant::now();
+        let inter_chunk_gap_ms = prior_chunk_end
+            .map(|end| chunk_started.saturating_duration_since(end).as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        inter_chunk_gap_ns += (inter_chunk_gap_ms * 1e6) as u128;
         let mut specs = Vec::with_capacity(batch.len());
+        let spec_started = Instant::now();
         for symbol in batch {
             let head_id = head_version_id(repo, symbol).unwrap();
             let (last_day, base_digest): (i64, String) = repo
@@ -812,19 +918,36 @@ fn phase_typed(
                 },
             ));
         }
+        let chunk_spec_ns = spec_started.elapsed().as_nanos();
+        spec_ns += chunk_spec_ns;
         let t = Instant::now();
         let task_id = accept_update_phase_task(
             repo,
             &format!("req-typed-{mode}-r{run_tag}-{chunk_index}"),
             &specs,
         );
-        accept_ns += t.elapsed().as_nanos();
+        let chunk_accept_ns = t.elapsed().as_nanos();
+        accept_ns += chunk_accept_ns;
         let item_ids: Vec<String> = specs.iter().map(|s| s.0.clone()).collect();
-        let t = Instant::now();
+        let mut chunk_prepare_ns = 0u128;
+        let mut chunk_typed_acquire_ns = 0u128;
         let mut prepared = Vec::with_capacity(item_ids.len());
         let mut fallbacks = Vec::new();
         for item_id in &item_ids {
-            match runner.update_candidate(&task_id, item_id, provider) {
+            let provider_before = timed_provider.typed_acquire_ns.get();
+            let t = Instant::now();
+            let candidate = runner.update_candidate(&task_id, item_id, provider);
+            let elapsed = t.elapsed().as_nanos();
+            let provider_elapsed = timed_provider
+                .typed_acquire_ns
+                .get()
+                .saturating_sub(provider_before);
+            typed_acquire_ns += provider_elapsed;
+            chunk_typed_acquire_ns += provider_elapsed;
+            let candidate_ns = elapsed.saturating_sub(provider_elapsed);
+            prepare_ns += candidate_ns;
+            chunk_prepare_ns += candidate_ns;
+            match candidate {
                 Ok(Some((item, _))) => {
                     match &item.prepared {
                         crate::market_update::UpdateBatchPrepared::NoChange { .. } => {
@@ -851,11 +974,12 @@ fn phase_typed(
                 }
             }
         }
-        prepare_ns += t.elapsed().as_nanos();
+        let mut chunk_commit_ns = 0u128;
         if !prepared.is_empty() {
             let t = Instant::now();
             let results = repo.commit_update_batch(&task_id, &prepared).unwrap();
-            commit_ns += t.elapsed().as_nanos();
+            chunk_commit_ns = t.elapsed().as_nanos();
+            commit_ns += chunk_commit_ns;
             for (item, result) in prepared.iter().zip(results) {
                 match result {
                     Ok(_) => committed += 1,
@@ -866,7 +990,13 @@ fn phase_typed(
                 }
             }
         }
+        let chunk_fallback_items = fallbacks.len();
+        let mut chunk_fallback_ns = 0u128;
+        let mut chunk_fallback_typed_acquire_ns = 0u128;
+        let mut chunk_fallback_acquire_ns = 0u128;
         for item_id in fallbacks {
+            let typed_before = timed_provider.typed_acquire_ns.get();
+            let acquire_before = timed_provider.acquire_ns.get();
             let t = Instant::now();
             match runner.run_item(&task_id, &item_id, provider) {
                 Ok(crate::market_update::runner::ItemExecution::Published(_)) => {
@@ -882,11 +1012,41 @@ fn phase_typed(
                     }
                 }
             }
-            fallback_ns += t.elapsed().as_nanos();
+            let elapsed = t.elapsed().as_nanos();
+            let typed_delta = timed_provider
+                .typed_acquire_ns
+                .get()
+                .saturating_sub(typed_before);
+            let acquire_delta = timed_provider
+                .acquire_ns
+                .get()
+                .saturating_sub(acquire_before);
+            fallback_ns += elapsed;
+            fallback_typed_acquire_ns += typed_delta;
+            fallback_acquire_ns += acquire_delta;
+            chunk_fallback_ns += elapsed;
+            chunk_fallback_typed_acquire_ns += typed_delta;
+            chunk_fallback_acquire_ns += acquire_delta;
             fallback_ran += 1;
         }
         tasks += 1;
         wal_peak = wal_peak.max(wal_bytes(db));
+        chunks.push(json!({
+            "index": chunk_index,
+            "items": batch.len(),
+            "wall_ms": chunk_started.elapsed().as_secs_f64() * 1000.0,
+            "spec_ms": chunk_spec_ns as f64 / 1e6,
+            "accept_ms": chunk_accept_ns as f64 / 1e6,
+            "prepare_ms": chunk_prepare_ns as f64 / 1e6,
+            "acquire_ms": chunk_typed_acquire_ns as f64 / 1e6,
+            "commit_ms": chunk_commit_ns as f64 / 1e6,
+            "fallback_items": chunk_fallback_items,
+            "fallback_ms": chunk_fallback_ns as f64 / 1e6,
+            "fallback_typed_acquire_ms": chunk_fallback_typed_acquire_ns as f64 / 1e6,
+            "fallback_envelope_acquire_ms": chunk_fallback_acquire_ns as f64 / 1e6,
+            "inter_chunk_gap_ms": inter_chunk_gap_ms,
+        }));
+        prior_chunk_end = Some(Instant::now());
     }
     let metrics = repo.checkpoint_idle().unwrap();
     json!({
@@ -901,14 +1061,20 @@ fn phase_typed(
         "fallback_not_published_items": fallback_not_published,
         "fallback_error_items": fallback_errors,
         "fallback_ms": fallback_ns as f64 / 1e6,
+        "fallback_typed_acquire_ms": fallback_typed_acquire_ns as f64 / 1e6,
+        "fallback_envelope_acquire_ms": fallback_acquire_ns as f64 / 1e6,
         "fallback_reasons": fallback_reasons,
         "symbols_active": active.len(),
         "tasks": tasks,
         "wall_s": started.elapsed().as_secs_f64(),
+        "spec_ms": spec_ns as f64 / 1e6,
         "accept_ms": accept_ns as f64 / 1e6,
         "prepare_ms": prepare_ns as f64 / 1e6,
+        "acquire_ms": typed_acquire_ns as f64 / 1e6,
         "provider_acquire_ms": fabricated.acquire_ns.get() as f64 / 1e6,
         "commit_ms": commit_ns as f64 / 1e6,
+        "inter_chunk_gap_ms": inter_chunk_gap_ns as f64 / 1e6,
+        "chunks": chunks,
         "per_item_ms": started.elapsed().as_secs_f64() * 1000.0 / active.len().max(1) as f64,
         "db_growth_bytes": db_bytes(db).saturating_sub(db_before),
         "wal_peak_bytes": wal_peak,
