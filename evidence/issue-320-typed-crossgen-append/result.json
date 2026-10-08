@@ -56,14 +56,7 @@
       "integrity_check": "ok",
       "sampled_fixed_reads": 50
     },
-    "comparison": {
-      "historical_initial_acquisition_s": 340,
-      "measured_same_input_initial_s": 151.509150256,
-      "historical_cross_generation_envelope_ms_per_item": 441,
-      "measured_overall_ms_per_item": 18.451914154538493,
-      "measured_fallback_ms_per_item": 355.82873504444444,
-      "acceptance_real_cross_generation_under_initial": true
-    }
+    "comparison_note": "Removed 2026-10-08 per x-data-perf REVIEW-XP-001: this file previously carried a 'comparison' object juxtaposing historical production measurements (340s initial / 441ms-per-item cross-generation envelope, measured on a different host, path and code revision) with this offline harness run, plus a self-computed 'acceptance_real_cross_generation_under_initial' flag. Cross-environment numbers must not be compared or self-accepted; the measured samples remain under measurement.initial_collection and measurement.cross_generation_daily_update."
   },
   "regressions": [
     {

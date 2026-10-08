@@ -1,4 +1,5 @@
 {
+  "phase_label_note": "Added 2026-10-08 per x-data-perf REVIEW-XP-001: the update phase below is recorded under the harness's legacy label 'typed_unchanged' (mode 'unchanged'), but its content is the cross-generation append run (typed_append_items=5165, typed_metadata_items=5165, fallback_items=45). Raw samples unchanged; the label predates the cross-generation scenario.",
   "environment": {
     "git": "6f9f0a4c73b2f1cc987d1c6e6aeb4a1535bf8acd",
     "input_dir": "/opt/x-data-mcp-preview/generations/generations/2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8",

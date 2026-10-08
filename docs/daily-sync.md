@@ -32,8 +32,10 @@ immutable generation、每代 #131 验证后条件激活、任务受理时冻结
   baseline、尚无批准 hard SLO；真实 append/rewrite 待独立证据。#320 的本地
   retained-generation release harness（c360967a→2e918330、5,222 items）测得
   96.4s、5,165 typed metadata appends、45 envelope attempts（21 published、24
-  fail-closed）、integrity check PASS；这是离线证据，不等于 preview.29/生产
-  SLO，也不能替代 deployed runtime 验收。
+  fail-closed）、integrity check PASS；测量环境 ecs-node x86_64、2 vCPU、
+  1.9GiB RAM+4GiB swap、rustc 1.97.1、release profile，代码 6f9f0a4，单进程
+  cargo test -j1 顺序 ≤100-item 任务，冷/热缓存状态未记录；这是离线证据，
+  不等于 preview.29/生产 SLO，也不能替代 deployed runtime 验收。
 
 preview.29 Phase-G 部署为 fresh-init schema 20：旧 801MB DB 已归档至
 `/opt/x-data-mcp-preview/state/preview.sqlite.v20-archived-20260928T053759Z`。

@@ -1468,12 +1468,18 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
     assert_eq!(bound_generation, gen_b);
 
     // The same API rejects metadata that would change the proven event set
-    // instead of treating it as an opaque override.
+    // instead of treating it as an opaque override. Generation, manifest
+    // and day member are all fresh so the ONLY drift is the security-event
+    // digest — otherwise the base-identity guards would reject first and
+    // the event guard would never be exercised.
     let task_id3 = accept_update("req-u3");
     let revision3 = start_item(&repo, &task_id3);
     let mut bad = metadata.clone();
-    bad.day_member_sha256 = "77".repeat(32);
+    bad.generation_id = "cf".repeat(32);
+    bad.generation_manifest_sha256 = "cf".repeat(32);
+    bad.day_member_sha256 = "13".repeat(32);
     bad.security_event_sha256 = "aa".repeat(32);
+    bad.generation_evidence["manifest_sha256"] = json!(bad.generation_manifest_sha256.clone());
     bad.generation_evidence["snapshot_inputs"][0]["member_sha256"] =
         json!(bad.day_member_sha256.clone());
     bad.generation_evidence["snapshot_inputs"][1]["member_sha256"] =
@@ -1489,8 +1495,8 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             expected_head: Some("v2".into()),
         },
     };
-    assert!(
-        repo.commit_range_ops_typed(
+    let err = repo
+        .commit_range_ops_typed(
             &bad_command,
             &scope,
             "v2",
@@ -1499,7 +1505,13 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             Some(&bad),
             None,
         )
-        .is_err()
+        .expect_err("event digest drift must be rejected");
+    assert!(
+        matches!(err, crate::market_storage::Error::Invalid(_))
+            && err
+                .to_string()
+                .contains("does not match the proven member continuity"),
+        "unexpected rejection: {err}"
     );
     let revision3 = repo
         .transition(
@@ -1541,8 +1553,8 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             expected_head: Some("v2".into()),
         },
     };
-    assert!(
-        repo.commit_range_ops_typed(
+    let err = repo
+        .commit_range_ops_typed(
             &bad_units_command,
             &scope,
             "v2",
@@ -1551,7 +1563,13 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             Some(&bad_units),
             None,
         )
-        .is_err()
+        .expect_err("unit drift must be rejected");
+    assert!(
+        matches!(err, crate::market_storage::Error::Invalid(_))
+            && err
+                .to_string()
+                .contains("metadata drift exceeds the ops contract"),
+        "unexpected rejection: {err}"
     );
     let revision4 = repo
         .transition(
@@ -1589,8 +1607,8 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             expected_head: Some("v2".into()),
         },
     };
-    assert!(
-        repo.commit_range_ops_typed(
+    let err = repo
+        .commit_range_ops_typed(
             &bad_coverage_command,
             &scope,
             "v2",
@@ -1599,7 +1617,13 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             Some(&bad_coverage),
             None,
         )
-        .is_err()
+        .expect_err("non-complete coverage must be rejected");
+    assert!(
+        matches!(err, crate::market_storage::Error::Invalid(_))
+            && err
+                .to_string()
+                .contains("metadata drift exceeds the ops contract"),
+        "unexpected rejection: {err}"
     );
     let revision_cov = repo
         .transition(
