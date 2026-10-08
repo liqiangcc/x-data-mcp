@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-EXPECTED_PACKAGE_VERSION = "0.2.0-preview.29"
+EXPECTED_PACKAGE_VERSION = "0.2.0-preview.30"
 EXPECTED_LEGACY_SCHEMA = 18
 EXPECTED_COMPACT_SCHEMA = 20
 EXPECTED_DATA_TOOLS = 20
