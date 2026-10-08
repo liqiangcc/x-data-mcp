@@ -146,7 +146,8 @@ git diff --check
 当前 `cargo test --locked` 基线为 722 tests：712 passed、10 ignored（ignored 未执行）。
 完整 `cargo test --locked` 仍是提交前与 CI 门禁，check 不替代测试。dev profile 使用
 `split-debuginfo = "unpacked"` 将调试信息拆为 .dwo；本机对 mold/lld 链接器无显著收益，未固化。
-计时数字为 2026-09-25 本机 WSL2（8 核 / 15GiB，cargo 1.96.0）实测，详情与基线见
+计时数字为 2026-09-25 实测；其当时环境标注（本机 WSL2、8 核 / 15GiB、cargo 1.96.0）
+未核实，可能与当前现场不同——当前现场见 [AGENTS.md](AGENTS.md)。详情与基线见
 [#272](https://github.com/liqiangcc/x-data-mcp/issues/272)。
 
 测试覆盖核心、发布门禁及真实 stdio 二进制的离线拒绝行为；Fake 不证明真实 parser/QFQ/yearly。

@@ -23,12 +23,12 @@
 
 实际开发暴露的规范歧义、冲突或不必要成本，按 `docs/conventions.md` 的反馈流程记录；不静默绕过，也不为了满足形式增加无价值抽象。
 
-开发与验收环境为本机 WSL2（`/root/x-data-mcp`，8 核 / 15GiB，cargo 1.96.0 rustup stable）：根文件系统非 overlayfs，runtime-guard 本地通过；`/dev/shm` 为 tmpfs。官方输入位于本机 `/opt/x-data-mcp-preview/official-inputs/`（见其中 snapshot-manifest.json），官方文件只下载一次入库复用，重复下载需说明理由；gen-1 retained 字节永久不可得，跨代一致性走已提交派生证据。
+开发与验收环境为本机 `ecs-node`（KVM 虚拟机，hostname 即 ecs-node；Ubuntu 24.04.4，kernel 6.8.0-106-generic，2 vCPU Intel Xeon Platinum 8336C，约 2GiB RAM + 4GiB swap，rustc/cargo 1.97.1 rustup stable，`/root/x-data-mcp` 为主检出）：根文件系统为 ext4（/dev/vda2）非 overlayfs，runtime-guard 本地通过；`/dev/shm` 为 tmpfs。官方输入位于本机 `/opt/x-data-mcp-preview/official-inputs/`（见其中 snapshot-manifest.json），官方文件只下载一次入库复用，重复下载需说明理由；gen-1 retained 字节永久不可得，跨代一致性走已提交派生证据。
 
 Box（旧 Tailscale 节点 `grok-bot-vm-411252337`）已于 2026-09-25 回收下线：其上 `/home/box/retained-inputs/`、迁移协作 mailbox 与 agent 会话随之失效；Node.js 迁移（#271）已冻结，实现与证据保留在 `migration/*` 分支。dev/preview 场景的 `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（#213）仅限本地验收，生产禁用；客户端 `mcp_connect` 连接时同样需要该变量。
 
-ECS 部署目标 `ecs-node`（OpenSSH 别名，key auth，`ssh ecs-node` 本机直接可用）：x86_64，2 vCPU，约 2GiB RAM，40GB 根盘。它用于最终部署、真实 MCP 路径与最终 disk/WAL
-验收。注意：生产部署实际运行在本机 `/opt/x-data-mcp-preview/`（`x-data-mcp-data`/`x-data-mcp-acquire` systemd 单元 + `run/mcp.sock`/`run/acquire.sock` unix socket）；本机即承载生产实例，`ssh ecs-node` 别名当前未配置。
+`ecs-node` 即本机 hostname，不是指向其它主机的别名：`~/.ssh/config` 无 `Host ecs-node` 块（`ssh -G ecs-node` 仅输出默认值），`getent hosts ecs-node` 解析到本机地址。它同时承担开发、最终部署、真实 MCP 路径与最终 disk/WAL
+验收。生产部署运行于本机 `/opt/x-data-mcp-preview/`（`x-data-mcp-data`/`x-data-mcp-acquire` systemd 单元 + `run/mcp.sock`/`run/acquire.sock` unix socket）；本机即承载生产实例。
 
 生产运行事实（preview.29 @ 4493d45，2026-09-29 验证）：
 
