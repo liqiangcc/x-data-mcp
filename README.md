@@ -60,8 +60,16 @@ hard ≤15min、checkpoint 后 net growth baseline ≈3.6KiB/attempted item、
 hard ≤4KiB/item（5,222 items 对应 hard ≈20.4MiB）、且必须 `data_versions +0`；
 preview.27/schema20 实测 5,222 items / 616s / +18.5MB / 0 new versions，PASS。
 acquisition、initial collection、yearly、cross-generation envelope 与真实
-append/rewrite 分开计量：cross-generation ≈37min 仅为 measured baseline、无批准
-hard SLO，真实 append/rewrite 尚无独立实测，均不得宣称 PASS。
+append/rewrite 分开计量：cross-generation ≈37min 仅为 preview.29 measured
+baseline、无批准 hard SLO。#320 的 proven prefix append typed metadata 已有本地
+retained-generation release harness 实测（c360967a→2e918330、5,222 items、
+96.4s、5,165 typed metadata appends、45 envelope attempts：21 published、24
+fail-closed，integrity check PASS；测量环境 ecs-node x86_64、2 vCPU、
+1.9GiB RAM+4GiB swap、rustc 1.97.1、release profile，代码 6f9f0a4，单进程
+cargo test -j1 顺序 ≤100-item 任务，冷/热缓存状态未记录）；该数值是离线
+harness 结果，不等于 preview.29 或生产 SLO。真实 append/rewrite、deployed runtime timing 与
+unsupported-metadata fallback 仍按
+各自证据验收，未部署实例不得宣称已按新路径运行。
 [#294](https://github.com/liqiangcc/x-data-mcp/issues/294) 为独立 admission 协议
 问题。
 
@@ -138,7 +146,8 @@ git diff --check
 当前 `cargo test --locked` 基线为 722 tests：712 passed、10 ignored（ignored 未执行）。
 完整 `cargo test --locked` 仍是提交前与 CI 门禁，check 不替代测试。dev profile 使用
 `split-debuginfo = "unpacked"` 将调试信息拆为 .dwo；本机对 mold/lld 链接器无显著收益，未固化。
-计时数字为 2026-09-25 本机 WSL2（8 核 / 15GiB，cargo 1.96.0）实测，详情与基线见
+计时数字为 2026-09-25 实测；其当时环境标注（本机 WSL2、8 核 / 15GiB、cargo 1.96.0）
+未核实，可能与当前现场不同——当前现场见 [AGENTS.md](AGENTS.md)。详情与基线见
 [#272](https://github.com/liqiangcc/x-data-mcp/issues/272)。
 
 测试覆盖核心、发布门禁及真实 stdio 二进制的离线拒绝行为；Fake 不证明真实 parser/QFQ/yearly。

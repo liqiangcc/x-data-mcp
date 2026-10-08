@@ -1,0 +1,44 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 6K of event 'task-clock:ppp'
+# Event count (approx.): 62656565030
+#
+# Overhead  Command          Shared Object                Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+# ........  ...............  ...........................  ...................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     5.85%  sqlite_market::  libc.so.6                    [.] malloc
+     4.56%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] _RNvNtNtCsjxwm7fNxvcL_4sha26sha2567x86_sha8compress
+     3.72%  sqlite_market::  libc.so.6                    [.] 0x00000000000abf50
+     3.14%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] _RNvNtNtCs5Algta8ineb_11miniz_oxide7inflate4core15decompress_fast
+     2.74%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] sqlite3VdbeExec
+     2.43%  sqlite_market::  libc.so.6                    [.] cfree
+     1.90%  sqlite_market::  libc.so.6                    [.] 0x00000000000ab3ed
+     1.85%  sqlite_market::  [kernel.kallsyms]            [k] rep_movs_alternative
+     1.42%  sqlite_market::  libc.so.6                    [.] 0x00000000000a9bc9
+     1.42%  sqlite_market::  libc.so.6                    [.] 0x00000000000ab8e6
+     1.39%  sqlite_market::  libc.so.6                    [.] 0x00000000000abf7b
+     1.35%  sqlite_market::  libc.so.6                    [.] 0x00000000000aba60
+     1.16%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] yy_reduce.isra.0
+     1.11%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] sqlite3RunParser
+     1.00%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] _RNvMs3_NtCs49WeJFGVRFD_10serde_json4readNtB5_9SliceRead14skip_to_escape
+     0.92%  sqlite_market::  libc.so.6                    [.] 0x00000000000a9ce6
+     0.85%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] _RINvXNvXNtNtCs49WeJFGVRFD_10serde_json5value2deNtB8_5ValueNtNtCsjTbRr97kMmB_10serde_core2de11Deserialize11deserializeNtB3_12ValueVisitorNtBW_7Visitor9visit_mapINtNtBa_2de9MapAccessNtNtBa_4read7StrReadEECs1yVdftqv2Uc_10x_data_mcp
+     0.81%  sqlite_market::  [kernel.kallsyms]            [k] _raw_spin_unlock_irqrestore
+     0.81%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] pcache1Fetch
+     0.77%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] _RNvXs8_NtCs49WeJFGVRFD_10serde_json4readNtB5_7StrReadNtB5_4Read9parse_str
+     0.76%  sqlite_market::  libc.so.6                    [.] pthread_mutex_lock
+     0.76%  sqlite_market::  libc.so.6                    [.] 0x00000000000a9be3
+     0.76%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] _RINvXNtNtCs49WeJFGVRFD_10serde_json5value2deNtB5_5ValueNtNtCsjTbRr97kMmB_10serde_core2de11Deserialize11deserializeQINtNtB7_2de12DeserializerNtNtB7_4read7StrReadEECs1yVdftqv2Uc_10x_data_mcp.llvm.16176673016365647284
+     0.73%  sqlite_market::  libc.so.6                    [.] realloc
+     0.73%  sqlite_market::  libc.so.6                    [.] 0x00000000000a9d41
+     0.68%  sqlite_market::  libc.so.6                    [.] 0x00000000000ab300
+     0.66%  sqlite_market::  libc.so.6                    [.] 0x00000000001986a5
+     0.60%  sqlite_market::  x_data_mcp-fe8076b42c3db8a5  [.] _RNvMsz_NtNtNtCscdodAO9FK5_5alloc11collections5btree3mapINtB5_8IntoIterNtNtBb_6string6StringNtNtCs49WeJFGVRFD_10serde_json5value5ValueE10dying_nextCs1yVdftqv2Uc_10x_data_mcp.llvm.13224996204958188257
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

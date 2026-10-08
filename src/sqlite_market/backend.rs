@@ -305,6 +305,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
         base_version_id: &str,
         upserts: &[crate::market_data::Bar],
         removes: &[chrono::NaiveDate],
+        metadata: Option<&crate::market_update::TypedVersionMetadata>,
         continuity_evidence: Option<&serde_json::Value>,
     ) -> Result<Option<Receipt>, Error> {
         match self {
@@ -316,6 +317,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
                     base_version_id,
                     upserts,
                     removes,
+                    metadata,
                     continuity_evidence,
                 )
             }
@@ -327,6 +329,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
                     base_version_id,
                     upserts,
                     removes,
+                    metadata,
                     continuity_evidence,
                 )
             }

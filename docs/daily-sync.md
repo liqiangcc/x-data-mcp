@@ -28,8 +28,14 @@ immutable generation、每代 #131 验证后条件激活、任务受理时冻结
   616s / +18.5MB / 0 new versions——PASS。首采 DB ≤2.5GiB、部署 ≤4GiB、
   首采 ≤20min 亦 PASS。
 - acquisition、initial collection、yearly、cross-generation envelope 与真实
-  append/rewrite 分开计量：cross-generation 约 37min 仅为 measured baseline、
-  尚无批准 hard SLO；真实 append/rewrite 待独立证据，均不得宣称 PASS。
+  append/rewrite 分开计量：cross-generation 约 37min 仅为 preview.29 measured
+  baseline、尚无批准 hard SLO；真实 append/rewrite 待独立证据。#320 的本地
+  retained-generation release harness（c360967a→2e918330、5,222 items）测得
+  96.4s、5,165 typed metadata appends、45 envelope attempts（21 published、24
+  fail-closed）、integrity check PASS；测量环境 ecs-node x86_64、2 vCPU、
+  1.9GiB RAM+4GiB swap、rustc 1.97.1、release profile，代码 6f9f0a4，单进程
+  cargo test -j1 顺序 ≤100-item 任务，冷/热缓存状态未记录；这是离线证据，
+  不等于 preview.29/生产 SLO，也不能替代 deployed runtime 验收。
 
 preview.29 Phase-G 部署为 fresh-init schema 20：旧 801MB DB 已归档至
 `/opt/x-data-mcp-preview/state/preview.sqlite.v20-archived-20260928T053759Z`。
@@ -251,7 +257,7 @@ SHA 当作 #131 PASS。
 | 全市场 collection/update | 有 | 分批 MCP 编排：catalog 5,227、daily 约 340s、no-change update 5,222 items 约 616s | PASS（batched） |
 | 首采 DB ≤2.5GiB、部署 ≤4GiB、首采 ≤20min | 有 | DB 约 831MB、preview.28 部署包、首采约 340s | PASS |
 | 同代 no-change `update_data`（≤15min、≤4KiB/item、`data_versions +0`） | 有 | preview.27/schema20：5,222 items / 616s / +18.5MB / 0 new versions | PASS |
-| 跨代 envelope / 真实 append·rewrite | 有实测 | cross-gen 约 37min（measured baseline，无批准 hard SLO）；append/rewrite 无独立实测 | measured / 不外推 |
+| 跨代 envelope / 真实 append·rewrite | 有实测 | cross-gen 约 37min（preview.29 measured baseline，无批准 hard SLO）；#320 后 proven append 可走 typed metadata path，rewrite/unsupported metadata 仍 envelope/fail-closed；typed 全市场生产 timing 待测 | measured / 不外推 |
 | 新 Devin 会话仅 Skill+MCP | Skill 文件存在 | 无独立会话证据 | 未验收 |
 | 双 MCP 可复现部署 | release 双 binary + `deploy_phase_g.sh` | preview.29 双 systemd 服务在运行 | PASS |
 | overall production readiness | capability 恒实报告 false | owner-only declared scope 可观测 | owner-only operational；external distribution not authorized |

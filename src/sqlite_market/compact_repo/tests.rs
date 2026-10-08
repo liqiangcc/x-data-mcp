@@ -502,6 +502,93 @@ fn no_change_range_commit_writes_only_typed_result() {
     assert!(path.exists());
 }
 
+/// #320 review: when the source tail has an out-of-range record, the
+/// published coverage stays at the base claim. Stage that metadata through
+/// the typed delta path and the envelope merge in two identical stores; the
+/// resulting candidate envelopes must be byte-identical.
+#[test]
+fn typed_append_base_coverage_parity_with_envelope_bytes() {
+    let publish_base = |repo: &SqliteCompactMarket| {
+        let task_id = accept_task(repo);
+        let revision = start_item(repo, &task_id);
+        let base = mk_version("v1", vec![bar(0, 100), bar(1, 110), bar(2, 120)]);
+        repo.stage(&envelope(&base, source("gen-1"), None)).unwrap();
+        let checked = repo.candidate("v1").unwrap();
+        repo.mark_validated(&checked).unwrap();
+        repo.commit(&PublishPlan {
+            command: collect_command(&task_id, "pub-base", "v1", revision),
+            record: checked.clone(),
+            required_heads: vec![(Scope::of(&checked.version), None)],
+            promote: None,
+            base_digest: None,
+        })
+        .unwrap();
+        checked
+    };
+
+    let typed_dir = tempdir();
+    let (_, typed_repo) = repo(&typed_dir);
+    let typed_base = publish_base(&typed_repo);
+    let source_b = json!({
+        "generation_id": "gen-b",
+        "generation_manifest_sha256": "bc".repeat(32),
+        "day_member_sha256": "de".repeat(32),
+        "security_event_sha256": "ef".repeat(32),
+        "generation_evidence": {
+            "manifest_sha256": "bc".repeat(32),
+            "snapshot_inputs": [
+                {"role": "day", "member": "sh/lday/sh600006.day",
+                 "archive_sha256": "12".repeat(32), "member_sha256": "de".repeat(32)},
+                {"role": "gbbq-security-events", "member": "gbbq#sh.600006",
+                 "archive_sha256": "34".repeat(32), "member_sha256": "ef".repeat(32)}
+            ]
+        }
+    });
+    let metadata = crate::market_update::TypedVersionMetadata {
+        generation_id: source_b["generation_id"].as_str().unwrap().into(),
+        generation_manifest_sha256: source_b["generation_manifest_sha256"]
+            .as_str()
+            .unwrap()
+            .into(),
+        day_member_sha256: source_b["day_member_sha256"].as_str().unwrap().into(),
+        security_event_sha256: source_b["security_event_sha256"].as_str().unwrap().into(),
+        generation_evidence: source_b["generation_evidence"].clone(),
+        source: "official".into(),
+        coverage: typed_base.batch.coverage.clone(),
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+    };
+    typed_repo
+        .stage_ops_delta_metadata(
+            "sh.600006",
+            "v1",
+            "v2",
+            &[bar(3, 130)],
+            &[],
+            Some(&metadata),
+        )
+        .unwrap();
+    let typed_candidate = typed_repo.candidate("v2").unwrap();
+
+    let envelope_dir = tempdir();
+    let (_, envelope_repo) = repo(&envelope_dir);
+    publish_base(&envelope_repo);
+    let mut combined = mk_version(
+        "v2",
+        vec![bar(0, 100), bar(1, 110), bar(2, 120), bar(3, 130)],
+    );
+    combined.published_at = typed_candidate.version().published_at;
+    envelope_repo
+        .stage(&envelope(&combined, source_b, Some("v1")))
+        .unwrap();
+    let envelope_candidate = envelope_repo.candidate("v2").unwrap();
+
+    assert_eq!(
+        serde_json::to_vec(typed_candidate.raw()).unwrap(),
+        serde_json::to_vec(envelope_candidate.raw()).unwrap()
+    );
+}
+
 #[test]
 fn legacy_adapters_reject_compact_schema() {
     let dir = tempdir();
@@ -1115,12 +1202,20 @@ fn typed_update_facts_window_ops_and_no_change() {
         ..command.clone()
     };
     assert!(
-        repo.commit_range_ops_typed(&bad_command, &scope, "v1", &[bar(3, 130)], &[], None)
+        repo.commit_range_ops_typed(&bad_command, &scope, "v1", &[bar(3, 130)], &[], None, None)
             .is_err()
     );
 
     let receipt = repo
-        .commit_range_ops_typed(&command, &scope, "v1", &[bar(3, 130)], &[], Some(&evidence))
+        .commit_range_ops_typed(
+            &command,
+            &scope,
+            "v1",
+            &[bar(3, 130)],
+            &[],
+            None,
+            Some(&evidence),
+        )
         .unwrap()
         .expect("typed ops commit supported");
     assert_eq!(receipt.version_id, "v2");
@@ -1141,7 +1236,7 @@ fn typed_update_facts_window_ops_and_no_change() {
 
     // Replay of the committed typed result returns the same receipt.
     let replay = repo
-        .commit_range_ops_typed(&command, &scope, "v1", &[bar(3, 130)], &[], None)
+        .commit_range_ops_typed(&command, &scope, "v1", &[bar(3, 130)], &[], None, None)
         .unwrap()
         .unwrap();
     assert_eq!(replay, receipt);
@@ -1242,6 +1337,380 @@ fn typed_update_facts_window_ops_and_no_change() {
         )
         .is_err()
     );
+}
+
+/// #320: a proven append may rebind the delta version to a new generation
+/// without materializing the merged envelope; metadata drift beyond the
+/// typed contract stays rejected instead of silently overriding the base.
+#[test]
+fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
+    use crate::market_update::publication::RangeRepository;
+
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+
+    let base = mk_version("v1", vec![bar(0, 100), bar(1, 110), bar(2, 120)]);
+    repo.stage(&envelope(&base, source("gen-1"), None)).unwrap();
+    let base_checked = repo.candidate("v1").unwrap();
+    repo.mark_validated(&base_checked).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: base_checked.clone(),
+        required_heads: vec![(Scope::of(&base_checked.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+    assert_eq!(
+        repo.task(&task_id).unwrap().task.status,
+        crate::task_control::Status::Succeeded
+    );
+
+    let gen_b = "be".repeat(32);
+    let day_b = "12".repeat(32);
+    let events = "ef".repeat(32);
+    let metadata = crate::market_update::TypedVersionMetadata {
+        generation_id: gen_b.clone(),
+        generation_manifest_sha256: gen_b.clone(),
+        day_member_sha256: day_b.clone(),
+        security_event_sha256: events.clone(),
+        generation_evidence: json!({
+            "manifest_sha256": gen_b.clone(),
+            "snapshot_inputs": [
+                {"role": "day", "member": "sh/lday/sh600006.day",
+                 "archive_sha256": "34".repeat(32), "member_sha256": day_b.clone()},
+                {"role": "gbbq-security-events", "member": "gbbq#sh.600006",
+                 "archive_sha256": "56".repeat(32), "member_sha256": events.clone()}
+            ],
+        }),
+        source: "official".into(),
+        coverage: CoverageEvidence::complete("complete .day history from generation B"),
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+    };
+
+    let accept_update = |req: &str| -> String {
+        let scope = task_control::legacy::scope_id("sh.600006", "day");
+        let work = FrozenWork {
+            items: vec![ItemSpec {
+                item_id: ITEM.into(),
+                target: json!({"symbol": "sh.600006", "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            }],
+            scopes: BTreeSet::from([scope]),
+            shared_evidence: None,
+        };
+        let command = Command {
+            key: CommandKey {
+                operation: "update_data".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        match repo
+            .accept(req, &command, &work, RUN, None)
+            .unwrap()
+            .record
+            .outcome
+        {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        }
+    };
+
+    let task_id2 = accept_update("req-u2");
+    let revision2 = start_item(&repo, &task_id2);
+    let scope = Scope::of(&base_checked.version);
+    let command = Publication {
+        publication_id: "upd-meta".into(),
+        version_id: "v2".into(),
+        task_id: task_id2.clone(),
+        item_id: ITEM.into(),
+        run_id: RUN.into(),
+        expected_revision: revision2,
+        intent: PublishIntent::Daily {
+            expected_head: Some("v1".into()),
+        },
+    };
+    let receipt = repo
+        .commit_range_ops_typed(
+            &command,
+            &scope,
+            "v1",
+            &[bar(3, 130)],
+            &[],
+            Some(&metadata),
+            None,
+        )
+        .unwrap()
+        .expect("typed metadata append supported");
+    assert_eq!(receipt.version_id, "v2");
+    let head = repo.fixed("v2").unwrap();
+    assert_eq!(head.version().records.len(), 4);
+    assert!(head.batch.coverage.reason.contains("generation B"));
+    let bound_generation: String = repo
+        .read(|c| {
+            c.query_row(
+                "SELECT sb.generation_id FROM data_versions v \
+                 JOIN source_bindings sb ON sb.source_binding_digest=v.source_binding_digest \
+                 WHERE v.version_id='v2'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(storage)
+        })
+        .unwrap();
+    assert_eq!(bound_generation, gen_b);
+
+    // The same API rejects metadata that would change the proven event set
+    // instead of treating it as an opaque override. Generation, manifest
+    // and day member are all fresh so the ONLY drift is the security-event
+    // digest — otherwise the base-identity guards would reject first and
+    // the event guard would never be exercised.
+    let task_id3 = accept_update("req-u3");
+    let revision3 = start_item(&repo, &task_id3);
+    let mut bad = metadata.clone();
+    bad.generation_id = "cf".repeat(32);
+    bad.generation_manifest_sha256 = "cf".repeat(32);
+    bad.day_member_sha256 = "13".repeat(32);
+    bad.security_event_sha256 = "aa".repeat(32);
+    bad.generation_evidence["manifest_sha256"] = json!(bad.generation_manifest_sha256.clone());
+    bad.generation_evidence["snapshot_inputs"][0]["member_sha256"] =
+        json!(bad.day_member_sha256.clone());
+    bad.generation_evidence["snapshot_inputs"][1]["member_sha256"] =
+        json!(bad.security_event_sha256.clone());
+    let bad_command = Publication {
+        publication_id: "upd-meta-bad".into(),
+        version_id: "v-bad".into(),
+        task_id: task_id3.clone(),
+        item_id: ITEM.into(),
+        run_id: RUN.into(),
+        expected_revision: revision3,
+        intent: PublishIntent::Daily {
+            expected_head: Some("v2".into()),
+        },
+    };
+    let err = repo
+        .commit_range_ops_typed(
+            &bad_command,
+            &scope,
+            "v2",
+            &[bar(4, 140)],
+            &[],
+            Some(&bad),
+            None,
+        )
+        .expect_err("event digest drift must be rejected");
+    assert!(
+        matches!(err, crate::market_storage::Error::Invalid(_))
+            && err
+                .to_string()
+                .contains("does not match the proven member continuity"),
+        "unexpected rejection: {err}"
+    );
+    let revision3 = repo
+        .transition(
+            &task_id3,
+            revision3,
+            RUN,
+            Change::FinishItem(
+                ITEM.into(),
+                crate::task_control::ItemOutcome {
+                    success: false,
+                    error: Some("typed metadata rejected".into()),
+                    evidence: None,
+                },
+            ),
+        )
+        .unwrap()
+        .task
+        .state_revision;
+    repo.transition(&task_id3, revision3, RUN, Change::FinishExecution)
+        .unwrap();
+
+    // Conflicting unit semantics likewise cannot be smuggled through the
+    // metadata channel.
+    let task_id4 = accept_update("req-u4");
+    let revision4 = start_item(&repo, &task_id4);
+    let mut bad_units = metadata.clone();
+    bad_units.day_member_sha256 = "78".repeat(32);
+    bad_units.generation_evidence["snapshot_inputs"][0]["member_sha256"] =
+        json!(bad_units.day_member_sha256.clone());
+    bad_units.unit_currency.price_unit = EvidenceValue::confirmed("fen", "drift");
+    let bad_units_command = Publication {
+        publication_id: "upd-meta-units".into(),
+        version_id: "v-bad-units".into(),
+        task_id: task_id4.clone(),
+        item_id: ITEM.into(),
+        run_id: RUN.into(),
+        expected_revision: revision4,
+        intent: PublishIntent::Daily {
+            expected_head: Some("v2".into()),
+        },
+    };
+    let err = repo
+        .commit_range_ops_typed(
+            &bad_units_command,
+            &scope,
+            "v2",
+            &[bar(4, 140)],
+            &[],
+            Some(&bad_units),
+            None,
+        )
+        .expect_err("unit drift must be rejected");
+    assert!(
+        matches!(err, crate::market_storage::Error::Invalid(_))
+            && err
+                .to_string()
+                .contains("metadata drift exceeds the ops contract"),
+        "unexpected rejection: {err}"
+    );
+    let revision4 = repo
+        .transition(
+            &task_id4,
+            revision4,
+            RUN,
+            Change::FinishItem(
+                ITEM.into(),
+                crate::task_control::ItemOutcome {
+                    success: false,
+                    error: Some("typed metadata rejected".into()),
+                    evidence: None,
+                },
+            ),
+        )
+        .unwrap()
+        .task
+        .state_revision;
+    repo.transition(&task_id4, revision4, RUN, Change::FinishExecution)
+        .unwrap();
+
+    let task_cov = accept_update("req-u-coverage");
+    let revision_cov = start_item(&repo, &task_cov);
+    let mut bad_coverage = metadata.clone();
+    bad_coverage.coverage =
+        crate::market_data::CoverageEvidence::incomplete("coverage evidence incomplete");
+    let bad_coverage_command = Publication {
+        publication_id: "upd-meta-coverage".into(),
+        version_id: "v-bad-coverage".into(),
+        task_id: task_cov.clone(),
+        item_id: ITEM.into(),
+        run_id: RUN.into(),
+        expected_revision: revision_cov,
+        intent: PublishIntent::Daily {
+            expected_head: Some("v2".into()),
+        },
+    };
+    let err = repo
+        .commit_range_ops_typed(
+            &bad_coverage_command,
+            &scope,
+            "v2",
+            &[bar(4, 140)],
+            &[],
+            Some(&bad_coverage),
+            None,
+        )
+        .expect_err("non-complete coverage must be rejected");
+    assert!(
+        matches!(err, crate::market_storage::Error::Invalid(_))
+            && err
+                .to_string()
+                .contains("metadata drift exceeds the ops contract"),
+        "unexpected rejection: {err}"
+    );
+    let revision_cov = repo
+        .transition(
+            &task_cov,
+            revision_cov,
+            RUN,
+            Change::FinishItem(
+                ITEM.into(),
+                crate::task_control::ItemOutcome {
+                    success: false,
+                    error: Some("typed metadata rejected".into()),
+                    evidence: None,
+                },
+            ),
+        )
+        .unwrap()
+        .task
+        .state_revision;
+    repo.transition(&task_cov, revision_cov, RUN, Change::FinishExecution)
+        .unwrap();
+
+    let task_id5 = accept_update("req-u5");
+    let revision5 = start_item(&repo, &task_id5);
+    let mut metadata_c = metadata.clone();
+    metadata_c.generation_id = "cf".repeat(32);
+    metadata_c.generation_manifest_sha256 = metadata_c.generation_id.clone();
+    metadata_c.day_member_sha256 = "13".repeat(32);
+    metadata_c.generation_evidence["manifest_sha256"] = json!(metadata_c.generation_id.clone());
+    metadata_c.generation_evidence["snapshot_inputs"][0]["member_sha256"] =
+        json!(metadata_c.day_member_sha256.clone());
+    repo.stage_ops_delta_metadata("sh.600006", "v2", "v3-staged", &[bar(4, 140)], &[], None)
+        .unwrap();
+    let staged_command = Publication {
+        publication_id: "upd-meta-staged".into(),
+        version_id: "v3-staged".into(),
+        task_id: task_id5.clone(),
+        item_id: ITEM.into(),
+        run_id: RUN.into(),
+        expected_revision: revision5,
+        intent: PublishIntent::Daily {
+            expected_head: Some("v2".into()),
+        },
+    };
+    assert!(
+        repo.commit_range_ops_typed(
+            &staged_command,
+            &scope,
+            "v2",
+            &[bar(4, 140)],
+            &[],
+            Some(&metadata_c),
+            None,
+        )
+        .is_err()
+    );
+    let revision5 = repo
+        .transition(
+            &task_id5,
+            revision5,
+            RUN,
+            Change::FinishItem(
+                ITEM.into(),
+                crate::task_control::ItemOutcome {
+                    success: false,
+                    error: Some("staged metadata rejected".into()),
+                    evidence: None,
+                },
+            ),
+        )
+        .unwrap()
+        .task
+        .state_revision;
+    repo.transition(&task_id5, revision5, RUN, Change::FinishExecution)
+        .unwrap();
+
+    // The successful result is still an append delta on the expected head.
+    let mode: i64 = repo
+        .read(|c| {
+            c.query_row(
+                "SELECT manifest_mode FROM data_versions WHERE version_id='v2'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(storage)
+        })
+        .unwrap();
+    assert_eq!(mode, 2);
 }
 
 fn collection_candidate_for(
@@ -1657,6 +2126,7 @@ fn update_batch_commit_mixed_isolation_and_rollback() {
                 base_version_id: "v1".into(),
                 result_version_id: "v2".into(),
                 upserts: vec![bar(3, 130)],
+                metadata: None,
                 continuity: continuity(),
             },
         },
@@ -1747,6 +2217,7 @@ fn update_batch_commit_mixed_isolation_and_rollback() {
                 base_version_id: "v2".into(),
                 result_version_id: "v3".into(),
                 upserts: vec![bar(4, 140), bar(4, 141)],
+                metadata: None,
                 continuity: continuity(),
             },
         },

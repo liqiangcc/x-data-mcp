@@ -173,6 +173,10 @@ pub fn run_once(
         .as_ref()
         .map(|session| crate::official_market::TdxRangeProvider {
             session,
+            generation_id: bound
+                .as_ref()
+                .map(|bound| bound.generation_id.clone())
+                .unwrap_or_else(|| session.source().manifest_sha256().to_string()),
             published_at: chrono::Utc::now(),
         });
     let backfill = session
