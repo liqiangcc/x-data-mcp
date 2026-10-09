@@ -1,0 +1,23 @@
+{
+ "captured_at_utc": "2026-10-09T08:07:45Z",
+ "schema": "perf-g8-xp009-env.v1",
+ "task": "XP-010",
+ "host": "aws-node (2 vCPU Xeon, 1905MB + 4095MB swap, ext4 /dev/root)",
+ "uname": "Linux ip-172-31-10-15 7.0.0-1006-aws #6-Ubuntu SMP PREEMPT Tue May 26 12:04:34 UTC 2026 x86_64 GNU/Linux",
+ "binary": "GH Actions preview-release artifact x-data-mcp-preview-299f6681216f1b579351e9e5deef71d9d3c772a2 (run 37893973274); tarball sha256sum -c OK; inner SHA256SUMS all OK; smoke-report PASS",
+ "binary_version": "x-data-mcp 0.2.0-preview.30 299f6681216f1b579351e9e5deef71d9d3c772a2 NOT_PRODUCTION_READY",
+ "binary_sha256": "98efd11b990a6a57b6cf6da924eea2615070a0009cccd6b48a2523c5646fe87d",
+ "binary_source": "branch perf/g8-daily-update-perf @299f668 (= PR #323 head; XP-009 slim read paths)",
+ "code_git_sha": "299f6681216f1b579351e9e5deef71d9d3c772a2",
+ "db": "svc/db/preview.sqlite (private; ~810MB; 16,162 tasks/items rows; daily+yearly heads at 2026-10-08; gen-B afb0ea16\u2026b4a active)",
+ "service": "data_service + acquire_service from dist-xp009 on svc/run/{mcp,acquire}.sock; acquire --mirror svc/mirror; X_DATA_MCP_GENERATION_ROOT=svc/gen; no X_DATA_MCP_UNSAFE_NONLOCAL_FS",
+ "driver_poll_s": 1.0,
+ "baseline_refs": [
+  "update-b.json (XP-007 real-append 284ms/item)",
+  "e2e-baseline.json",
+  "yearly-run.json (XP-008 67min)",
+  "yearly-prod-attribution.json"
+ ],
+ "load_notes": "production /opt data_service+acquire_service active during all measurements (not touched); aws-node also runs devin/tunnel agents. load avg sampled per run.",
+ "cache_state": "services restarted on dist-xp009 before measurement; idle progress samples measured first (cold-ish page cache); update_nc run followed idle probes (warm). Page cache not explicitly controlled \u2014 honest label: mixed/warm."
+}
