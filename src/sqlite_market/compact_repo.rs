@@ -1023,13 +1023,23 @@ pub(crate) fn materialize_checked(
 /// the result to code that consumes bars. `Ok(None)` when the row is absent
 /// or not published so callers keep `materialize_checked` as the exact
 /// fallback for missing/staged/validated states.
+///
+/// The slim envelope is emitted only after the same version passed the
+/// full `fixed` verification inside this transaction's verified-facts
+/// context (XP-011): the projection stays header-cheap, but its use is
+/// detection-equivalent to the verified path — corrupted segment bytes,
+/// broken clip linkage or lineage drift fail closed exactly like the full
+/// materialization, and repeated touches deduplicate within `ctx`.
 pub(crate) fn materialize_slim(
     c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     version_id: &str,
 ) -> Result<Option<CheckedRecord>, Error> {
-    compact_versions::materialize_header(c, version_id)?
-        .map(|m| synthesize(&m))
-        .transpose()
+    let Some(m) = compact_versions::materialize_header(c, version_id)? else {
+        return Ok(None);
+    };
+    ctx.verified_by_id(c, version_id)?;
+    synthesize(&m).map(Some)
 }
 
 /// `materialize_checked(.., staged=false)` for reference/metadata reads:
@@ -1038,9 +1048,10 @@ pub(crate) fn materialize_slim(
 /// is empty on the fast path — callers must not consume bars from it.
 pub(crate) fn materialize_published(
     c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     version_id: &str,
 ) -> Result<CheckedRecord, Error> {
-    match materialize_slim(c, version_id)? {
+    match materialize_slim(c, ctx, version_id)? {
         Some(record) => Ok(record),
         None => materialize_checked(c, version_id, false),
     }

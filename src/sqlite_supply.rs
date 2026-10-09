@@ -3,7 +3,10 @@ use crate::{
     data_supply::{Access, query::*, wire::*},
     market_storage::{Error, Scope},
     sqlite_catalog,
-    sqlite_market::{backend::MarketBackend, read_record, read_record_slim, slim_published},
+    sqlite_market::{
+        backend::MarketBackend, compact_versions::VerifyCtx, read_record, read_record_slim,
+        slim_published,
+    },
 };
 use rusqlite::{Connection, params};
 #[derive(Clone)]
@@ -42,11 +45,12 @@ fn catalog_ref(v: &crate::catalog::CatalogVersion) -> Result<VersionRef, Error> 
 /// bars from the record.
 fn slim_market(
     c: &Connection,
+    ctx: &mut VerifyCtx,
     dataset: Dataset,
     entity: &Security,
     id: &str,
 ) -> Result<Option<crate::market_storage::compat::CheckedRecord>, Error> {
-    let Some(r) = slim_published(c, id, true, true)? else {
+    let Some(r) = slim_published(c, ctx, id, true, true)? else {
         return Ok(None);
     };
     if r.version().symbol != entity.symbol() || Some(r.version().period) != dataset.period() {
@@ -56,11 +60,12 @@ fn slim_market(
 }
 fn read_market(
     c: &Connection,
+    ctx: &mut VerifyCtx,
     dataset: Dataset,
     entity: &Security,
     id: &str,
 ) -> Result<crate::market_storage::compat::CheckedRecord, Error> {
-    if let Some(r) = slim_market(c, dataset, entity, id)? {
+    if let Some(r) = slim_market(c, ctx, dataset, entity, id)? {
         return Ok(r);
     }
     let r = read_record(c, id, true, true)?;
@@ -71,10 +76,14 @@ fn read_market(
 }
 impl ReadRepository for SqliteSupply {
     fn query(&self, plan: &QueryPlan, access: &Access) -> Result<QuerySnapshot, Error> {
-        self.market.read(|c| query(c, plan, access))
+        self.market.read(|c| {
+            let mut ctx = VerifyCtx::default();
+            query(c, &mut ctx, plan, access)
+        })
     }
     fn verify(&self, refs: &[VersionRef]) -> Result<(), Error> {
         self.market.read(|c| {
+            let mut ctx = VerifyCtx::default();
             for r in unique_refs(refs) {
                 let actual = if r.dataset == Dataset::Catalog {
                     catalog_ref(&sqlite_catalog::read(c, &r.version_id)?)?
@@ -86,7 +95,7 @@ impl ReadRepository for SqliteSupply {
                     market_ref(
                         r.dataset,
                         entity,
-                        &read_market(c, r.dataset, entity, &r.version_id)?,
+                        &read_market(c, &mut ctx, r.dataset, entity, &r.version_id)?,
                     )
                 };
                 if actual != r {
@@ -99,6 +108,7 @@ impl ReadRepository for SqliteSupply {
     fn versions(&self, args: &VersionsQuery, access: &Access) -> Result<Vec<VersionInfo>, Error> {
         let entities = entities(args.dataset, &args.selection, access)?;
         self.market.read(|c|{
+            let mut ctx = VerifyCtx::default();
             let mut result=vec![];
             if args.dataset==Dataset::Catalog {
                 let mut s=c.prepare("SELECT version_id FROM catalog_versions ORDER BY published_at DESC,version_id ASC").map_err(storage)?;
@@ -111,7 +121,7 @@ impl ReadRepository for SqliteSupply {
                 for entity in entities {
                     let mut s=c.prepare(list_sql).map_err(storage)?;
                     let get_id=|r:&rusqlite::Row<'_>| r.get::<_,String>(0);let ids:Vec<String>=if compact{s.query_map(params![entity.symbol(),if args.dataset==Dataset::Daily{1}else{2}],get_id)}else{s.query_map(params![entity.symbol(),if args.dataset==Dataset::Daily{"day"}else{"year"}],get_id)}.map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
-                    for id in ids {let r=read_market(c,args.dataset,&entity,&id)?;result.push(VersionInfo{version_ref:market_ref(args.dataset,&entity,&r),published_at:r.version().published_at});}
+                    for id in ids {let r=read_market(c,&mut ctx,args.dataset,&entity,&id)?;result.push(VersionInfo{version_ref:market_ref(args.dataset,&entity,&r),published_at:r.version().published_at});}
                 }
             }
             result.sort_by(|a,b|b.published_at.cmp(&a.published_at).then(a.version_ref.version_id.cmp(&b.version_ref.version_id)));Ok(result)
@@ -120,6 +130,7 @@ impl ReadRepository for SqliteSupply {
 }
 pub(crate) fn query(
     c: &Connection,
+    ctx: &mut VerifyCtx,
     plan: &QueryPlan,
     access: &Access,
 ) -> Result<QuerySnapshot, Error> {
@@ -227,7 +238,7 @@ pub(crate) fn query(
                 });
                 continue;
             };
-            let r = read_market(c, plan.args.dataset, entity, &id)?;
+            let r = read_market(c, ctx, plan.args.dataset, entity, &id)?;
             let mut meta_scan = YearlyMetaScan::new();
             let reference = market_ref(plan.args.dataset, entity, &r);
             result.manifest.push(ManifestEntry {
@@ -305,13 +316,14 @@ type AvailabilityStats = (
 );
 fn availability_stats(
     c: &Connection,
+    ctx: &mut VerifyCtx,
     plan: &QueryPlan,
     entity: Option<&Security>,
     access: &Access,
 ) -> Result<AvailabilityStats, Error> {
     let Some(entity) = entity else {
         // Entity-less selections (catalog) reuse the generic projection.
-        let s = query(c, plan, access)?;
+        let s = query(c, ctx, plan, access)?;
         let dates = s
             .rows
             .iter()
@@ -358,7 +370,7 @@ fn availability_stats(
     // byte-identical, and the in-window stats come from the windowed leaf
     // read (chain linkage + clip digests still enforced) instead of the
     // materialized `records` list.
-    if let Some(r) = slim_market(c, plan.args.dataset, entity, &id)? {
+    if let Some(r) = slim_market(c, ctx, plan.args.dataset, entity, &id)? {
         let manifest = ManifestEntry {
             entity: Some(entity.clone()),
             version_ref: Some(market_ref(plan.args.dataset, entity, &r)),
@@ -393,7 +405,7 @@ fn availability_stats(
         }
         return Ok((Some(manifest), first, last, count));
     }
-    let r = read_market(c, plan.args.dataset, entity, &id)?;
+    let r = read_market(c, ctx, plan.args.dataset, entity, &id)?;
     let manifest = ManifestEntry {
         entity: Some(entity.clone()),
         version_ref: Some(market_ref(plan.args.dataset, entity, &r)),
@@ -618,6 +630,7 @@ use crate::data_supply::observe::{
 };
 fn task_facts(
     c: &Connection,
+    ctx: &mut VerifyCtx,
     id: &str,
     access: &Access,
     verify_outputs: bool,
@@ -666,7 +679,7 @@ fn task_facts(
     for id in ids {
         // Reference-only read: `market_ref` consumes identity + the stored
         // digest, never bars — the header projection skips materialization.
-        let r = read_record_slim(c, &id, true, true)?;
+        let r = read_record_slim(c, ctx, &id, true, true)?;
         let e = crate::data_supply::observe::entity(&r.version().symbol)
             .ok_or_else(|| Error::Integrity("published task symbol".into()))?;
         let dataset = if r.version().period == crate::market_data::Period::Day {
@@ -686,7 +699,7 @@ fn task_facts(
         .map_err(storage)?;
     let range_results = result_ids
         .iter()
-        .map(|id| range_result(c, id))
+        .map(|id| range_result(c, ctx, id))
         .collect::<Result<Vec<_>, _>>()?;
     let mut q = c
         .prepare(if crate::sqlite_market::is_compact_schema(c)? {
@@ -703,7 +716,7 @@ fn task_facts(
         .map_err(storage)?;
     let yearly_results = yearly_ids
         .iter()
-        .map(|id| yearly_result(c, id))
+        .map(|id| yearly_result(c, ctx, id))
         .collect::<Result<Vec<_>, _>>()?;
     if matches!(
         s.task.key.operation.as_str(),
@@ -741,10 +754,11 @@ fn task_facts(
     })
 }
 /// `task_facts(verify_outputs=false)` at summary depth: identical
-/// authorization and bound-request validation via `read_bound_task_light`,
-/// without per-item blob decode. `related_tasks`/task-list consumers read
-/// only summary fields, dataset keys and item targets — the placeholder
-/// item internals never reach the wire.
+/// authorization and bound-request validation via `read_bound_task`, but
+/// without the publications/range/yearly result reads. `related_tasks`/
+/// task-list consumers read only summary fields, dataset keys and item
+/// targets; item stage/outcome and scope-occupancy checks still run
+/// because skipping them weakened corruption detection (XP-011).
 fn task_facts_light(c: &Connection, id: &str, access: &Access) -> Result<TaskFacts, Error> {
     if *access != Access::local() {
         let private: bool = c.query_row(
@@ -755,7 +769,7 @@ fn task_facts_light(c: &Connection, id: &str, access: &Access) -> Result<TaskFac
             return Err(invalid("forbidden"));
         }
     }
-    let s = crate::sqlite_tasks::read_bound_task_light(c, id)?
+    let s = crate::sqlite_tasks::read_bound_task(c, id)?
         .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
     if !authorized(&s, access) {
         return Err(invalid("forbidden"));
@@ -829,7 +843,10 @@ impl ObservationRepository for SqliteSupply {
         self.market.read(|c| task_list(c, access))
     }
     fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
-        self.market.read(|c| task_facts(c, id, access, true))
+        self.market.read(|c| {
+            let mut ctx = VerifyCtx::default();
+            task_facts(c, &mut ctx, id, access, true)
+        })
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)
@@ -876,8 +893,9 @@ impl ObservationRepository for SqliteSupply {
             return Ok(());
         }
         self.market.read(|c| {
+            let mut ctx = VerifyCtx::default();
             for expected in results {
-                if yearly_result(c, &expected.result_id)? != *expected {
+                if yearly_result(c, &mut ctx, &expected.result_id)? != *expected {
                     return Err(Error::Integrity(
                         "yearly result changed since snapshot".into(),
                     ));
@@ -891,8 +909,9 @@ impl ObservationRepository for SqliteSupply {
             return Ok(());
         }
         self.market.read(|c| {
+            let mut ctx = VerifyCtx::default();
             for expected in results {
-                if range_result(c, &expected.result_id)? != *expected {
+                if range_result(c, &mut ctx, &expected.result_id)? != *expected {
                     return Err(Error::Integrity(
                         "range result changed since snapshot".into(),
                     ));
@@ -907,6 +926,7 @@ impl ObservationRepository for SqliteSupply {
         access: &Access,
     ) -> Result<Vec<AvailabilityFacts>, Error> {
         self.market.read(|c| {
+            let mut ctx = VerifyCtx::default();
             let tasks: Vec<std::rc::Rc<TaskFacts>> = task_list(c, access)?
                 .into_iter()
                 .map(std::rc::Rc::new)
@@ -956,7 +976,7 @@ impl ObservationRepository for SqliteSupply {
                     }
                     _ => vec![],
                 };
-                match availability_stats(c, plan, entity.as_ref(), access) {
+                match availability_stats(c, &mut ctx, plan, entity.as_ref(), access) {
                     Ok((manifest, first_record, last_record, record_count)) => {
                         out.push(AvailabilityFacts {
                             entity,
@@ -989,15 +1009,19 @@ impl ObservationRepository for SqliteSupply {
     }
 }
 
-fn range_result(c: &Connection, id: &str) -> Result<RangeExecutionResult, Error> {
-    let (audit, receipt) = crate::sqlite_market::update::read_result(c, id)?
+fn range_result(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    id: &str,
+) -> Result<RangeExecutionResult, Error> {
+    let (audit, receipt) = crate::sqlite_market::update::read_result_ctx(c, ctx, id)?
         .ok_or_else(|| Error::Integrity("range result missing".into()))?;
     let base_id = audit["evidence"]["base_version_id"]
         .as_str()
         .ok_or_else(|| Error::Integrity("range base reference missing".into()))?;
     // These reads share the task/receipt transaction; never query a latest head.
-    let base = read_record_slim(c, base_id, true, true)?;
-    let result = read_record_slim(c, &receipt.version_id, true, true)?;
+    let base = read_record_slim(c, ctx, base_id, true, true)?;
+    let result = read_record_slim(c, ctx, &receipt.version_id, true, true)?;
     if base.version().period != crate::market_data::Period::Day
         || result.version().period != crate::market_data::Period::Day
         || base.version().symbol != result.version().symbol
@@ -1017,14 +1041,18 @@ fn range_result(c: &Connection, id: &str) -> Result<RangeExecutionResult, Error>
     .map_err(|e| Error::Integrity(format!("range result projection: {e}")))
 }
 
-fn yearly_result(c: &Connection, id: &str) -> Result<YearlyExecutionResult, Error> {
-    let (audit, receipt) = crate::sqlite_market::yearly_results::read_result(c, id)?
+fn yearly_result(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    id: &str,
+) -> Result<YearlyExecutionResult, Error> {
+    let (audit, receipt) = crate::sqlite_market::yearly_results::read_result_ctx(c, ctx, id)?
         .ok_or_else(|| Error::Integrity("yearly result missing".into()))?;
     let base_id = audit["base_daily_version_id"]
         .as_str()
         .ok_or_else(|| Error::Integrity("yearly base missing".into()))?;
-    let base = read_record_slim(c, base_id, true, true)?;
-    let result = read_record_slim(c, &receipt.version_id, true, true)?;
+    let base = read_record_slim(c, ctx, base_id, true, true)?;
+    let result = read_record_slim(c, ctx, &receipt.version_id, true, true)?;
     if base.version().period != crate::market_data::Period::Day
         || result.version().period != crate::market_data::Period::Year
         || base.version().symbol != result.version().symbol

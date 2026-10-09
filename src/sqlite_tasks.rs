@@ -710,6 +710,10 @@ pub(crate) fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSna
 /// per-item `stage`/`outcome`/`frozen_inputs`/`scope_keys`. Those fields are
 /// placeholders in the returned snapshot; full-fidelity readers keep
 /// `read_bound_task`.
+/// Light bound-task projection retained for tests documenting the XP-009
+/// summary-surface equivalence; production reads use `read_bound_task`
+/// because skipping item/occupancy checks weakened corruption detection.
+#[cfg(test)]
 pub(crate) fn read_bound_task_light(
     c: &Connection,
     id: &str,

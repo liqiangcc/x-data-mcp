@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use chrono::{DateTime, Utc};
 use rusqlite::{ErrorCode, TransactionBehavior};
 
@@ -483,8 +485,18 @@ pub(crate) fn commit_publication_tx(
     })
 }
 
+/// `read_market_update` with a fresh per-call verified-facts context —
+/// the same single-use behavior non-deduplicated callers relied on.
 pub(crate) fn read_market_update(
     c: &Connection,
+    result_id: &str,
+) -> Result<StoredMarketUpdateResult, Error> {
+    read_market_update_ctx(c, &mut compact_versions::VerifyCtx::default(), result_id)
+}
+
+pub(crate) fn read_market_update_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     result_id: &str,
 ) -> Result<StoredMarketUpdateResult, Error> {
     let kind: Option<i64> = c
@@ -579,8 +591,8 @@ pub(crate) fn read_market_update(
     if continuity == ContinuityMode::Full && prefix_bytes.is_some() {
         return Err(integrity("full update result carries prefix_bytes"));
     }
-    let (base_facts, base_fixed) = require_published_facts(c, base_version_key)?;
-    let (result_facts, result_fixed) = require_published_facts(c, result_version_key)?;
+    let (base_facts, base_fixed) = require_published_facts(c, ctx, base_version_key)?;
+    let (result_facts, result_fixed) = require_published_facts(c, ctx, result_version_key)?;
     if base_projection_digest != base_facts.projection_digest
         || result_projection_digest != result_facts.projection_digest
     {
@@ -640,12 +652,12 @@ pub(crate) fn read_market_update(
                     }
                     let applied = compact_versions::apply_stored_delta(
                         c,
-                        &compact_bars(&base_fixed)?,
+                        &compact_bars(base_fixed.as_ref())?,
                         &ops,
                         &result_facts.entity,
                         result_facts.period,
                     )?;
-                    if applied != compact_bars(&result_fixed)? {
+                    if applied != compact_bars(result_fixed.as_ref())? {
                         return Err(integrity("checkpoint append does not match base plus ops"));
                     }
                 }
@@ -732,8 +744,22 @@ pub(crate) fn publication_identity_with_task(
     identity
 }
 
+/// `read_publication` with a fresh per-call verified-facts context —
+/// the same single-use behavior non-deduplicated callers relied on.
 pub(crate) fn read_publication(
     c: &Connection,
+    publication_id: &str,
+) -> Result<StoredPublicationResult, Error> {
+    read_publication_ctx(
+        c,
+        &mut compact_versions::VerifyCtx::default(),
+        publication_id,
+    )
+}
+
+pub(crate) fn read_publication_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     publication_id: &str,
 ) -> Result<StoredPublicationResult, Error> {
     let kind: Option<i64> = c
@@ -802,7 +828,7 @@ pub(crate) fn read_publication(
         (UpdateOutcome::Published, base) if base.is_none_or(|base| base != result_version_key) => {}
         _ => return Err(integrity("publication result combination invalid")),
     }
-    let (result_facts, _) = require_published_facts(c, result_version_key)?;
+    let (result_facts, _) = require_published_facts(c, ctx, result_version_key)?;
     match publication_kind {
         PublicationKind::Collection if result_facts.period != Period::Day => {
             return Err(integrity("collection publication result is not daily"));
@@ -829,7 +855,7 @@ pub(crate) fn read_publication(
     }
     let base_facts = match base_version_key {
         Some(key) => {
-            let (facts, _) = require_published_facts(c, key)?;
+            let (facts, _) = require_published_facts(c, ctx, key)?;
             if facts.entity != result_facts.entity || facts.period != result_facts.period {
                 return Err(integrity("publication base scope mismatch"));
             }
@@ -1287,14 +1313,16 @@ fn read_update_delta_clips(c: &Connection, result_key: i64) -> Result<Vec<Stored
 
 fn require_published_facts(
     c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     key: i64,
-) -> Result<(VersionResultFacts, compact_versions::VerifiedVersion), Error> {
-    let facts = compact_versions::result_facts(c, key)?;
-    if facts.state != CompactVersionState::Published {
-        return Err(integrity("referenced version is not published"));
-    }
-    let verified = compact_versions::fixed(c, &facts.version_id)?;
-    Ok((facts, verified))
+) -> Result<
+    (
+        Rc<VersionResultFacts>,
+        Rc<compact_versions::VerifiedVersion>,
+    ),
+    Error,
+> {
+    ctx.verified(c, key)
 }
 
 fn verify_task_publication(
@@ -1430,8 +1458,18 @@ mod tests;
 /// `RangeExecutionResult` consumers. The typed row is digest-verified by
 /// `read_market_update`; the synthesized JSON carries only the fields the
 /// wire projections consume.
+/// `read_update_audit` with a fresh per-call verified-facts context —
+/// the same single-use behavior non-deduplicated callers relied on.
 pub(crate) fn read_update_audit(
     c: &Connection,
+    result_id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
+    read_update_audit_ctx(c, &mut compact_versions::VerifyCtx::default(), result_id)
+}
+
+pub(crate) fn read_update_audit_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     result_id: &str,
 ) -> Result<Option<(Value, Receipt)>, Error> {
     let exists: bool = c
@@ -1444,13 +1482,13 @@ pub(crate) fn read_update_audit(
     if !exists {
         return Ok(None);
     }
-    let stored = read_market_update(c, result_id)?;
+    let stored = read_market_update_ctx(c, ctx, result_id)?;
     let id = &stored.identity;
     // Only the versions' stored integrity digests and `acquired_at` stamp
     // feed the audit projection — the header-only published read carries
     // both without materializing bars.
-    let base = compact_repo::materialize_published(c, &id.base_version_id)?;
-    let result = compact_repo::materialize_published(c, &id.result_version_id)?;
+    let base = compact_repo::materialize_published(c, ctx, &id.base_version_id)?;
+    let result = compact_repo::materialize_published(c, ctx, &id.result_version_id)?;
     let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
         .ok_or_else(|| integrity("range result task missing"))?;
     if binding.head.state_revision < id.task_revision
@@ -1499,8 +1537,18 @@ pub(crate) fn read_update_audit(
 
 /// Read-side audit projection of a stored compact yearly publication for
 /// `YearlyExecutionResult` consumers.
+/// `read_yearly_audit` with a fresh per-call verified-facts context —
+/// the same single-use behavior non-deduplicated callers relied on.
 pub(crate) fn read_yearly_audit(
     c: &Connection,
+    result_id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
+    read_yearly_audit_ctx(c, &mut compact_versions::VerifyCtx::default(), result_id)
+}
+
+pub(crate) fn read_yearly_audit_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     result_id: &str,
 ) -> Result<Option<(Value, Receipt)>, Error> {
     let exists: bool = c
@@ -1514,7 +1562,7 @@ pub(crate) fn read_yearly_audit(
     if !exists {
         return Ok(None);
     }
-    let stored = read_publication(c, result_id)?;
+    let stored = read_publication_ctx(c, ctx, result_id)?;
     let id = &stored.identity;
     // The daily base is the result version's stored lineage — for yearly
     // results `base_version_id` is the same-period head/result link, not
@@ -1525,10 +1573,12 @@ pub(crate) fn read_yearly_audit(
     )?
     .ok_or_else(|| integrity("yearly result lacks daily base"))?;
     // The base/result reads exist to prove both versions still resolve as
-    // published and to project their digests/stamps — the header-level
-    // materialization answers that without decoding bars.
-    let _base = compact_repo::materialize_published(c, &base_id)?;
-    let result = compact_repo::materialize_published(c, &id.result_version_id)?;
+    // published and to project their digests/stamps — the published rows
+    // additionally pass the full `fixed` verification once per transaction
+    // through the verified-facts context before their slim envelope is
+    // emitted.
+    let _base = compact_repo::materialize_published(c, ctx, &base_id)?;
+    let result = compact_repo::materialize_published(c, ctx, &id.result_version_id)?;
     let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
         .ok_or_else(|| integrity("yearly result task missing"))?;
     if binding.head.state_revision < id.task_revision

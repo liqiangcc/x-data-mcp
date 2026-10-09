@@ -3198,7 +3198,13 @@ fn yearly_real_data_probe() {
                     )
                     .unwrap();
                     let t = Instant::now();
-                    let _s = crate::sqlite_supply::query(c, &single, &access).unwrap();
+                    let _s = crate::sqlite_supply::query(
+                        c,
+                        &mut crate::sqlite_market::compact_versions::VerifyCtx::default(),
+                        &single,
+                        &access,
+                    )
+                    .unwrap();
                     query_ms += t.elapsed().as_secs_f64() * 1000.0;
                     let t = Instant::now();
                     let _g = crate::sqlite_market::gaps::read_open_gaps(
@@ -3784,10 +3790,11 @@ fn slim_published_read_matches_full_materialization() {
     repo.mark_validated(&candidate).unwrap();
     repo.read(|c| {
         // Validated (unpublished) rows never take the slim projection.
-        assert!(materialize_slim(c, "v1").unwrap().is_none());
-        assert!(materialize_slim(c, "absent").unwrap().is_none());
+        let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+        assert!(materialize_slim(c, &mut ctx, "v1").unwrap().is_none());
+        assert!(materialize_slim(c, &mut ctx, "absent").unwrap().is_none());
         assert!(matches!(
-            crate::sqlite_market::read_record_slim(c, "absent", true, true),
+            crate::sqlite_market::read_record_slim(c, &mut ctx, "absent", true, true),
             Err(Error::NotFound)
         ));
         Ok::<_, Error>(())
@@ -3855,9 +3862,10 @@ fn slim_published_read_matches_full_materialization() {
     .unwrap();
 
     repo.read(|c| {
+        let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
         for id in ["v1", "v2"] {
             let full = materialize_checked(c, id, false).unwrap();
-            let slim = materialize_slim(c, id).unwrap().unwrap();
+            let slim = materialize_slim(c, &mut ctx, id).unwrap().unwrap();
             // The published envelope is slim either way: byte-identical.
             assert_eq!(slim.raw(), full.raw(), "raw() differs for {id}");
             assert_eq!(slim.version().version_id, full.version().version_id);
@@ -3872,7 +3880,7 @@ fn slim_published_read_matches_full_materialization() {
             assert!(slim.version().records.is_empty());
             assert!(!full.version().records.is_empty());
             // materialize_published resolves to the same record either way.
-            let via = materialize_published(c, id).unwrap();
+            let via = materialize_published(c, &mut ctx, id).unwrap();
             assert_eq!(via.raw(), full.raw());
         }
         Ok::<_, Error>(())
@@ -4126,4 +4134,433 @@ fn compact_progress_and_availability_keep_reference_surface() {
 
     // verify_versions still passes on the slim-derived references.
     supply.verify(&[item.version_ref.clone().unwrap()]).unwrap();
+}
+
+/// XP-011 Phase-2 corruption regressions (Owner 6+1 matrix): every
+/// optimized read surface — slim envelopes plus the transaction-scoped
+/// verified-facts context — must expose the same public
+/// integrity-failure/unavailable classification as the full verified
+/// path on the identical corrupted fixture.
+mod xp011 {
+    use super::*;
+    use crate::data_supply::Access;
+    use crate::data_supply::observe::{ObservationRepository, Observer};
+    use crate::data_supply::wire::ProgressQuery;
+    use crate::market_update::{UpdateBatchItem, UpdateBatchPrepared};
+    use crate::sqlite_market::backend::MarketBackend;
+    use crate::sqlite_supply::SqliteSupply;
+
+    /// Public outcome classification used for optimized-vs-verified
+    /// comparison — the same surface an MCP caller sees.
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum ReadClass {
+        Ok,
+        Integrity,
+        TaskError,
+        NotFound,
+        Invalid,
+        Other,
+    }
+
+    fn read_class<T>(result: &Result<T, Error>) -> ReadClass {
+        match result {
+            Ok(_) => ReadClass::Ok,
+            Err(Error::Integrity(_)) => ReadClass::Integrity,
+            Err(Error::Task(_)) => ReadClass::TaskError,
+            Err(Error::NotFound) => ReadClass::NotFound,
+            Err(Error::Invalid(_)) => ReadClass::Invalid,
+            Err(_) => ReadClass::Other,
+        }
+    }
+
+    /// Published daily heads v1a/v1b for two entities plus a three-item
+    /// update task where only item-1 commits an append result v2a — the
+    /// two unfinished items make progress paging need a cursor.
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        path: PathBuf,
+        repo: SqliteCompactMarket,
+        task: String,
+        access: Access,
+    }
+
+    fn publish_head(
+        repo: &SqliteCompactMarket,
+        request: &str,
+        pub_id: &str,
+        symbol: &str,
+        version_id: &str,
+        bars: Vec<Bar>,
+    ) {
+        let scope = task_control::legacy::scope_id(symbol, "day");
+        let work = FrozenWork {
+            items: vec![ItemSpec {
+                item_id: ITEM.into(),
+                target: json!({"symbol": symbol, "period": "day"}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: BTreeSet::from([scope.clone()]),
+            }],
+            scopes: BTreeSet::from([scope]),
+            shared_evidence: None,
+        };
+        let command = Command {
+            key: CommandKey {
+                operation: "collect_data".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        let task_id = match repo
+            .accept(request, &command, &work, RUN, None)
+            .unwrap()
+            .record
+            .outcome
+        {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        };
+        let revision = start_item(repo, &task_id);
+        let mut version = mk_version(version_id, bars);
+        version.symbol = symbol.into();
+        repo.stage(&envelope(&version, source("gen-1"), None))
+            .unwrap();
+        let candidate = repo.candidate(version_id).unwrap();
+        repo.mark_validated(&candidate).unwrap();
+        repo.commit(&PublishPlan {
+            command: collect_command(&task_id, pub_id, version_id, revision),
+            record: candidate.clone(),
+            required_heads: vec![(Scope::of(&candidate.version), None)],
+            promote: None,
+            base_digest: None,
+        })
+        .unwrap();
+    }
+
+    fn fixture() -> Fixture {
+        let dir = tempdir();
+        let (path, repo) = repo(&dir);
+        let bars = vec![bar(0, 100), bar(1, 110), bar(2, 120)];
+        publish_head(&repo, "req-a", "pub-a", "sh.600006", "v1a", bars.clone());
+        publish_head(&repo, "req-b", "pub-b", "sh.600007", "v1b", bars);
+        let scope_a = task_control::legacy::scope_id("sh.600006", "day");
+        let scope_b = task_control::legacy::scope_id("sh.600007", "day");
+        let item = |item_id: &str, symbol: &str, scope: &str, base: &str| ItemSpec {
+            item_id: item_id.into(),
+            target: json!({"symbol": symbol, "period": "day"}),
+            progress_unit: "security_period".into(),
+            frozen_inputs: crate::market_update::tasks::frozen(
+                base,
+                "ab".repeat(32).as_str(),
+                &crate::market_update::DateRange {
+                    start: date(0),
+                    end: date(3),
+                },
+            ),
+            scope_keys: BTreeSet::from([scope.to_string()]),
+        };
+        let work = FrozenWork {
+            items: vec![
+                item("item-1", "sh.600006", &scope_a, "v1a"),
+                item("item-2", "sh.600007", &scope_b, "v1b"),
+                item("item-3", "sh.600006", &scope_a, "v1a"),
+            ],
+            scopes: BTreeSet::from([scope_a.clone(), scope_b]),
+            shared_evidence: None,
+        };
+        let command = Command {
+            key: CommandKey {
+                operation: "update_data".into(),
+                dataset: "market.daily".into(),
+                contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+            },
+            intent: json!({}),
+        };
+        let task = match repo
+            .accept("req-upd", &command, &work, RUN, None)
+            .unwrap()
+            .record
+            .outcome
+        {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        };
+        repo.commit_update_batch(
+            &task,
+            &[UpdateBatchItem {
+                task_id: task.clone(),
+                item_id: "item-1".into(),
+                publication_id: "upd-1".into(),
+                run_id: RUN.into(),
+                symbol: "sh.600006".into(),
+                occupancy_key: scope_a,
+                prepared: UpdateBatchPrepared::Append {
+                    base_version_id: "v1a".into(),
+                    result_version_id: "v2a".into(),
+                    upserts: vec![bar(3, 130)],
+                    metadata: None,
+                    continuity: json!({
+                        "continuity": {"mode": "append", "day_member_sha256": "cd".repeat(32)}
+                    }),
+                },
+            }],
+        )
+        .unwrap()
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+        Fixture {
+            _dir: dir,
+            path,
+            repo,
+            task,
+            access: Access::local(),
+        }
+    }
+
+    /// Mutate the fixture database directly — the corruption channel the
+    /// fail-closed reads must detect regardless of read surface.
+    fn tamper(path: &PathBuf, sql: &str) {
+        let c = rusqlite::Connection::open(path).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=OFF; PRAGMA ignore_check_constraints=ON")
+            .unwrap();
+        c.execute(sql, []).unwrap();
+    }
+
+    fn supply(repo: &SqliteCompactMarket) -> SqliteSupply {
+        SqliteSupply {
+            market: MarketBackend::Compact(repo.clone()),
+        }
+    }
+
+    /// Optimized public surface: `task_facts` with its slim envelopes and
+    /// verified-facts context.
+    fn optimized_task(f: &Fixture) -> Result<crate::data_supply::observe::TaskFacts, Error> {
+        supply(&f.repo).task(&f.task, &f.access)
+    }
+
+    /// Optimized public surface: fresh `Observer::progress` — runs
+    /// `task_facts` plus the fresh-response `verify_*` transactions.
+    fn optimized_progress(
+        f: &Fixture,
+        cursor: Option<String>,
+        page_size: usize,
+        access: &Access,
+    ) -> Result<crate::data_supply::wire::ProgressPage, Error> {
+        Observer::new(supply(&f.repo), RUN.into()).progress(
+            ProgressQuery {
+                task_id: f.task.clone(),
+                page_size,
+                cursor,
+            },
+            access,
+        )
+    }
+
+    /// Full verified path for a published version — unchanged by XP-011.
+    fn verified_version(f: &Fixture, id: &str) -> Result<(), Error> {
+        f.repo
+            .read(|c| materialize_checked(c, id, false).map(|_| ()))
+    }
+
+    /// Full bound-task validation — unchanged by XP-011.
+    fn verified_task(f: &Fixture) -> Result<(), Error> {
+        f.repo
+            .read(|c| Ok(crate::sqlite_tasks::read_bound_task(c, &f.task)?))
+            .map(|_| ())
+    }
+
+    /// (1) A mutated segment bar with the stored inventory digest left
+    /// untouched must fail closed on both read surfaces.
+    #[test]
+    fn segment_bar_tamper_fails_closed_both_paths() {
+        let f = fixture();
+        assert!(optimized_task(&f).is_ok());
+        tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
+        let opt = read_class(&optimized_task(&f));
+        let progress = read_class(&optimized_progress(&f, None, 100, &f.access));
+        let full = read_class(&verified_version(&f, "v2a"));
+        assert_eq!(opt, ReadClass::Integrity);
+        assert_eq!(progress, opt);
+        assert_eq!(full, opt);
+    }
+
+    /// (2) Missing/broken clip linkage or projection-digest drift on the
+    /// published result must fail closed on both read surfaces.
+    #[test]
+    fn clip_or_projection_tamper_fails_closed_both_paths() {
+        for sql in [
+            "DELETE FROM version_checkpoint_clips WHERE version_key=\
+             (SELECT version_key FROM data_versions WHERE version_id='v2a')",
+            "UPDATE data_versions SET projection_digest=\
+             x'0000000000000000000000000000000000000000000000000000000000000000' \
+             WHERE version_id='v2a'",
+        ] {
+            let f = fixture();
+            tamper(&f.path, sql);
+            let opt = read_class(&optimized_task(&f));
+            let full = read_class(&verified_version(&f, "v2a"));
+            assert_eq!(opt, ReadClass::Integrity);
+            assert_eq!(full, opt);
+        }
+    }
+
+    /// (3) Task item stage/outcome/counter state mutated while task and
+    /// request digests stay valid — the full bound-task checks must still
+    /// fire on the optimized surface (read_bound_task_light revert).
+    #[test]
+    fn task_item_tamper_fails_closed_both_paths() {
+        for sql in [
+            "UPDATE task_items SET stage='pending' WHERE item_id='item-1'",
+            "UPDATE tasks SET item_count=99",
+        ] {
+            let f = fixture();
+            tamper(&f.path, sql);
+            let opt = read_class(&optimized_task(&f));
+            let progress = read_class(&optimized_progress(&f, None, 100, &f.access));
+            let full = read_class(&verified_task(&f));
+            assert!(opt != ReadClass::Ok && full != ReadClass::Ok);
+            assert_eq!(opt, full);
+            assert_eq!(progress, full);
+        }
+    }
+
+    /// (4) Missing/mismatched task scopes or occupancy claims for the task
+    /// state must fail closed on both read surfaces.
+    #[test]
+    fn scope_occupancy_tamper_fails_closed_both_paths() {
+        for sql in ["DELETE FROM scope_occupancy", "DELETE FROM task_scopes"] {
+            let f = fixture();
+            tamper(&f.path, sql);
+            let opt = read_class(&optimized_task(&f));
+            let full = read_class(&verified_task(&f));
+            assert!(opt != ReadClass::Ok && full != ReadClass::Ok);
+            assert_eq!(opt, full);
+        }
+    }
+
+    /// (5) Corruption committed between two cursor pages must still be
+    /// detected — the resumed page re-verifies against current storage.
+    #[test]
+    fn corruption_between_cursor_pages_still_fails() {
+        let f = fixture();
+        let observer = Observer::new(supply(&f.repo), RUN.into());
+        let page1 = observer
+            .progress(
+                ProgressQuery {
+                    task_id: f.task.clone(),
+                    page_size: 1,
+                    cursor: None,
+                },
+                &f.access,
+            )
+            .unwrap();
+        assert_eq!(page1.unfinished.len(), 1);
+        let cursor = page1.next_cursor.clone().expect("second page");
+        tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
+        let page2 = observer.progress(
+            ProgressQuery {
+                task_id: f.task.clone(),
+                page_size: 1,
+                cursor: Some(cursor),
+            },
+            &f.access,
+        );
+        assert!(page2.is_err());
+        assert_eq!(
+            read_class(&page2),
+            read_class(&optimized_progress(&f, None, 100, &f.access))
+        );
+    }
+
+    /// (6) Unauthorized access stays denied with no private diagnostics
+    /// leaking through the optimized surface.
+    #[test]
+    fn unauthorized_access_denied_without_leak() {
+        let f = fixture();
+        let denied = Access {
+            principal: "reader".into(),
+            datasets: BTreeSet::new(),
+            securities: Some(BTreeSet::new()),
+        };
+        let task_result = supply(&f.repo).task(&f.task, &denied);
+        let progress_result = optimized_progress(&f, None, 100, &denied);
+        for result in [read_class(&task_result), read_class(&progress_result)] {
+            assert_eq!(result, ReadClass::Invalid);
+        }
+        match supply(&f.repo).task(&f.task, &denied) {
+            Err(Error::Invalid(message)) => assert_eq!(message, "forbidden"),
+            other => panic!("expected forbidden, got class {:?}", read_class(&other)),
+        }
+    }
+
+    /// (7) Legacy/unpublished/missing-version fallback behavior is
+    /// unchanged: the optimized surfaces classify identical to the full
+    /// readers on the same inputs.
+    #[test]
+    fn fallback_classifications_unchanged() {
+        let f = fixture();
+        // Missing version id.
+        let slim = read_class(&f.repo.read(|c| {
+            let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+            crate::sqlite_market::read_record_slim(c, &mut ctx, "absent", true, true)
+        }));
+        let full = read_class(
+            &f.repo
+                .read(|c| crate::sqlite_market::read_record(c, "absent", true, true)),
+        );
+        assert_eq!(slim, ReadClass::NotFound);
+        assert_eq!(slim, full);
+        // Validated-but-unpublished version.
+        let version = mk_version("v3a", vec![bar(0, 100)]);
+        f.repo
+            .stage(&envelope(&version, source("gen-1"), None))
+            .unwrap();
+        let candidate = f.repo.candidate("v3a").unwrap();
+        f.repo.mark_validated(&candidate).unwrap();
+        let slim = read_class(&f.repo.read(|c| {
+            let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+            materialize_published(c, &mut ctx, "v3a")
+        }));
+        let full = read_class(&f.repo.read(|c| materialize_checked(c, "v3a", false)));
+        assert!(slim != ReadClass::Ok);
+        assert_eq!(slim, full);
+        // Missing result row keeps the Ok(None) classification.
+        assert!(matches!(
+            f.repo
+                .read(|c| crate::sqlite_market::update::read_result(c, "absent")),
+            Ok(None)
+        ));
+        // Missing task keeps the task-level not-found classification.
+        assert_eq!(
+            read_class(&supply(&f.repo).task("absent", &f.access)),
+            ReadClass::TaskError
+        );
+        // A bound-task read of the same absent id stays the plain
+        // none-for-missing lookup — unchanged fallback semantics.
+        assert!(matches!(
+            f.repo
+                .read(|c| Ok(crate::sqlite_tasks::read_bound_task(c, "absent")?)),
+            Ok(None)
+        ));
+    }
+
+    /// Same-transaction dedup sanity: a NoChange-style double touch of one
+    /// version inside one verified-facts context must reuse the first
+    /// verification, not re-run it.
+    #[test]
+    fn verified_ctx_deduplicates_within_transaction() {
+        let f = fixture();
+        f.repo
+            .read(|c| {
+                let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                let (facts_a, verified_a) = ctx.verified_by_id(c, "v2a")?;
+                let (facts_b, verified_b) = ctx.verified_by_id(c, "v2a")?;
+                assert_eq!(facts_a.version_id, facts_b.version_id);
+                assert!(std::rc::Rc::ptr_eq(&verified_a, &verified_b));
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
 }

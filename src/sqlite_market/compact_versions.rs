@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 
 use chrono::{DateTime, Datelike, Utc};
 
@@ -2280,6 +2281,87 @@ pub(crate) fn apply_stored_delta(
     period: Period,
 ) -> Result<Vec<CompactBar>, Error> {
     apply_delta(c, base, ops, entity, period)
+}
+
+/// Upper bound of concurrently retained verified versions inside a
+/// [`VerifyCtx`]. One read item touches at most a base plus a result
+/// version, so four leaves room for the pair plus the audit/lineage
+/// lookups that follow it without keeping all of a task's histories.
+const VERIFIED_CTX_CAP: usize = 4;
+
+/// Transaction-scoped verified-facts context (GOAL-008 XP-011).
+///
+/// Created inside a single SQLite read transaction and dropped before the
+/// transaction commits — it is never a process-global cache trusted
+/// across requests. The first touch of an immutable version runs the full
+/// `fixed_by_key` reconstruction and verification; repeated touches of
+/// the same version inside the same snapshot reuse that verified result
+/// instead of re-verifying. A stored row digest never substitutes for
+/// verification: it is only the memo key after verification succeeded.
+///
+/// Verified versions are retained under a small LRU bound so bar data
+/// lives only while a single result's continuity checks need it; facts
+/// rows are small metadata bounded by the item count of one call.
+#[derive(Default)]
+pub(crate) struct VerifyCtx {
+    facts: HashMap<i64, Rc<VersionResultFacts>>,
+    verified: HashMap<i64, Rc<VerifiedVersion>>,
+    lru: VecDeque<i64>,
+}
+
+impl VerifyCtx {
+    /// `result_facts` memoized per version key for this transaction.
+    pub(crate) fn facts(
+        &mut self,
+        c: &Connection,
+        key: i64,
+    ) -> Result<Rc<VersionResultFacts>, Error> {
+        if let Some(facts) = self.facts.get(&key) {
+            return Ok(facts.clone());
+        }
+        let facts = Rc::new(result_facts(c, key)?);
+        self.facts.insert(key, facts.clone());
+        Ok(facts)
+    }
+
+    /// `require_published_facts` semantics with per-transaction reuse:
+    /// published-state enforcement precedes the (deduplicated) full
+    /// `fixed_by_key` verification of the immutable version.
+    pub(crate) fn verified(
+        &mut self,
+        c: &Connection,
+        key: i64,
+    ) -> Result<(Rc<VersionResultFacts>, Rc<VerifiedVersion>), Error> {
+        let facts = self.facts(c, key)?;
+        if facts.state != CompactVersionState::Published {
+            return Err(integrity("referenced version is not published"));
+        }
+        if let Some(verified) = self.verified.get(&key) {
+            let verified = verified.clone();
+            self.lru.retain(|k| *k != key);
+            self.lru.push_back(key);
+            return Ok((facts, verified));
+        }
+        let verified = Rc::new(fixed_by_key(c, key)?);
+        self.verified.insert(key, verified.clone());
+        self.lru.push_back(key);
+        if self.lru.len() > VERIFIED_CTX_CAP
+            && let Some(evicted) = self.lru.pop_front()
+        {
+            self.verified.remove(&evicted);
+        }
+        Ok((facts, verified))
+    }
+
+    /// `verified` resolved from a version id instead of a version key.
+    pub(crate) fn verified_by_id(
+        &mut self,
+        c: &Connection,
+        version_id: &str,
+    ) -> Result<(Rc<VersionResultFacts>, Rc<VerifiedVersion>), Error> {
+        let key = super::compact_repo::version_key(c, version_id)?;
+        self.verified(c, key)
+    }
 }
 
 #[cfg(test)]

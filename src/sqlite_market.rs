@@ -502,6 +502,7 @@ pub(crate) fn read_record(
 /// unpublished semantics. Never feed the result to bar-reading code.
 pub(crate) fn slim_published(
     c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     id: &str,
     published: bool,
     allow_yearly: bool,
@@ -509,7 +510,7 @@ pub(crate) fn slim_published(
     if !published || !is_compact_schema(c)? {
         return Ok(None);
     }
-    let Some(record) = compact_repo::materialize_slim(c, id)? else {
+    let Some(record) = compact_repo::materialize_slim(c, ctx, id)? else {
         return Ok(None);
     };
     if !allow_yearly && record.version().period != Period::Day {
@@ -521,11 +522,12 @@ pub(crate) fn slim_published(
 /// published compact version; identical arguments and fallback semantics.
 pub(crate) fn read_record_slim(
     c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     id: &str,
     published: bool,
     allow_yearly: bool,
 ) -> Result<CheckedRecord, Error> {
-    match slim_published(c, id, published, allow_yearly)? {
+    match slim_published(c, ctx, id, published, allow_yearly)? {
         Some(record) => Ok(record),
         None => read_record(c, id, published, allow_yearly),
     }

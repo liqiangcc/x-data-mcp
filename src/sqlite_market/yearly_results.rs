@@ -53,8 +53,18 @@ impl YearlyRepository for SqliteMarket {
     }
 }
 pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Receipt)>, Error> {
+    read_result_ctx(c, &mut super::compact_versions::VerifyCtx::default(), id)
+}
+
+/// `read_result` sharing the caller's transaction-scoped verified-facts
+/// context so repeated immutable-version verification deduplicates.
+pub(crate) fn read_result_ctx(
+    c: &Connection,
+    ctx: &mut super::compact_versions::VerifyCtx,
+    id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
     if super::is_compact_schema(c)? {
-        return super::compact_results::read_yearly_audit(c, id);
+        return super::compact_results::read_yearly_audit_ctx(c, ctx, id);
     }
     let mut stmt=c.prepare("SELECT task_id,item_id,base_daily_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM yearly_execution_results WHERE result_id=?1").map_err(storage)?;
     let mut rows = stmt.query([id]).map_err(storage)?;
