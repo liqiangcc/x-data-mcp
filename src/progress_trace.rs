@@ -144,9 +144,7 @@ impl Span {
     pub(crate) fn enter(stage: Stage) -> Self {
         let id = STATE.with(|state| {
             let mut state = state.borrow_mut();
-            let Some(state) = state.as_mut() else {
-                return None;
-            };
+            let state = state.as_mut()?;
             let Some(active) = state.active.checked_add(1) else {
                 state.valid = false;
                 return None;
