@@ -3,13 +3,13 @@
  "task": "XP-011 Phase 0: nested counts/timing of get_task_progress on completed 100-item tasks",
  "captured_at_utc": "2026-10-09T09:13Z",
  "environment": {
-  "host": "aws-node (2 vCPU Xeon 8336C, 1905MB RAM; swap_total 8191MB per free -m 2026-10-09 \u2014 capture-time line '4095MB' was a stale copy of the ecs-node spec, corrected)",
+  "host": "aws-node (2 vCPU Xeon 8336C, 1905MB RAM; swap_total 8191MB per free -m 2026-10-09 — capture-time line '4095MB' was a stale copy of the ecs-node spec, corrected)",
   "uname": "Linux 7.0.0-1006-aws x86_64",
   "binary": "/root/x-perf-g8/dist-xp009/x-data-mcp-0.2.0-preview.30-linux-x86_64/bin/data_service",
   "binary_sha256": "b2186c08d078a2ec8e2853611e09a527a9052260004819deb142a92f0a790fa9",
   "code_git_sha": "299f6681216f1b579351e9e5deef71d9d3c772a2 (perf/g8-daily-update-perf, PR #323 head; XP-009 slim paths)",
   "data_service_pid": 2497521,
-  "db": "/root/x-perf-g8/svc/db/preview.sqlite (884,461,568 B at capture; private instance). db_sha256 at capture: NOT_RECORDED \u2014 the value previously reported as such (b2186c08...) is actually the binary hash; current file sha256 b4b82c0df6c556e7... (2026-10-09, post-measurement housekeeping state, not the captured snapshot)",
+  "db": "/root/x-perf-g8/svc/db/preview.sqlite (884,461,568 B at capture; private instance). db_sha256 at capture: NOT_RECORDED — the value previously reported as such (b2186c08...) is actually the binary hash; current file sha256 b4b82c0df6c556e7... (2026-10-09, post-measurement housekeeping state, not the captured snapshot)",
   "socket": "svc/run/mcp.sock (private)",
   "concurrent_load": "data_service post-run housekeeping ~45-55% CPU during all windows (TID 2497524 ~10%); load avg 0.4-1.5; MemAvailable 540-620MB; no other drivers active",
   "cold_or_warm": "OS page cache warm for this DB (repeated probes same tasks)"
@@ -20,7 +20,7 @@
  },
  "methods": {
   "m1_uprobe_pairing": "perf record -e 'xp011:*' -p <pid>: tracefs uprobe_events entry+return probes on 20 named rust fns (probe-map.txt); paired per-thread (handler tid 2553807/2555449) with stack discipline; incl/excl ms per call",
-  "m2_perf_stat": "perf stat probes probe_data_service:sqlite3_step + syscalls:sys_enter_pread64 over a ~100s window during which 3 serial calls were issued via one_call.py (calls-append.txt); housekeeping baseline 25,803 steps + 77,958 pread64 per 60s subtracted. NOTE: window totals divided by 3 are per-call ESTIMATES, not exact per-call counts \u2014 the window does not prove all three calls completed inside it",
+  "m2_perf_stat": "perf stat probes probe_data_service:sqlite3_step + syscalls:sys_enter_pread64 over a ~100s window during which 3 serial calls were issued via one_call.py (calls-append.txt); housekeeping baseline 25,803 steps + 77,958 pread64 per 60s subtracted. NOTE: window totals divided by 3 are per-call ESTIMATES, not exact per-call counts — the window does not prove all three calls completed inside it",
   "m3_sampling": "perf record -g dwarf,8192 -F99 flat profile (leaf attribution; ancestors lost due to missing FPO/unwind limits)",
   "wire": "dec_progress_query/enc_progress_page uprobe pair bounds request decode and response serialization"
  },
@@ -685,8 +685,15 @@
  },
  "round2_reparse": {
   "when": "2026-10-09",
-  "reason": "analyze.py had one GLOBAL cur_call while frame stacks were per-thread \u2014 a return on another thread could be charged to the active handler's call, and a return could be silently paired with a non-top frame",
+  "reason": "analyze.py had one GLOBAL cur_call while frame stacks were per-thread — a return on another thread could be charged to the active handler's call, and a return could be silently paired with a non-top frame",
   "change": "tid-keyed current_calls map (progress enter assigns current_calls[tid]; every event resolves via current_calls.get(tid); progress return removes only that tid); returns must pair with the TOP frame or the affected call is marked NOT_MEASURED; unmatched/out-of-order/lost events counted in summary; see drivers/test_analyze.py (Owner's tid10/20/30 synthetic case with exact expected n/incl/excl + a dropped-return invalidation case)",
-  "result": "reparsing the SAME frozen traces (probe-xp011/{append,nc}.trace, not a profiling re-run) produced IDENTICAL per-call counts and timing to the original parse: 4 calls per trace, all valid, 0 unmatched/non_top/unterminated events \u2014 the defect did not corrupt this dataset; the fix prevents it silently corrupting future ones"
+  "result": "reparsing the SAME frozen traces (probe-xp011/{append,nc}.trace, not a profiling re-run) produced IDENTICAL per-call counts and timing to the original parse: 4 calls per trace, all valid, 0 unmatched/non_top/unterminated events — the defect did not corrupt this dataset; the fix prevents it silently corrupting future ones"
+ },
+ "round3_reparse": {
+  "when": "2026-10-09",
+  "reason": "analyze.py rev.2 ignored non-event loss diagnostics and did not check timestamp monotonicity (Owner OWNER-XP011-CI-FAILURES.md 'Completed Parser Review')",
+  "change": "recognize LOST / PERF_RECORD_LOST / PERF_RECORD_LOST_SAMPLES diagnostic lines (counted as lost_marker_lines); any capture containing a loss diagnostic invalidates ALL its calls including already-closed ones (capture_loss_invalidated); per-tid backward timestamps and inclusive/exclusive durations negative beyond timestamp rounding (EPS=1e-6) invalidate the affected call; sub-EPS negatives clamp to zero; raw trace untouched; new summary fields: lost_marker_lines, capture_loss_invalidated, backward_timestamps, negative_durations",
+  "synthetic_regressions": "drivers/test_analyze.py Case C: valid Owner trace + LOST marker (three marker spellings) -> calls_valid=0, all calls NOT_MEASURED; Case D: progress enter=2.0/return=1.0 -> backward_timestamps=1, negative_durations=1, call NOT_MEASURED",
+  "result": "reparsing the SAME frozen traces (probe-xp011/{append,nc}.trace -> result-{append,nc}-r3.json, not a profiling re-run) produced byte-identical per-call values to the rev.2 parse: append 135784 events / nc 132584 events, 4 calls each, all valid, 0 lost_marker_lines, 0 backward_timestamps, 0 negative_durations, 0 unmatched/non_top/unterminated"
  }
 }

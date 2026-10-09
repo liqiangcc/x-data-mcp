@@ -4653,6 +4653,84 @@ mod xp011 {
         }
     }
 
+    /// (6c) Same denial through the real MCP boundary: a `tools/call`
+    /// against a `DataApi`/`ToolHandler` built on the corrupted fixture
+    /// returns exactly `forbidden` over the wire — identical before and
+    /// after tampering, with no private diagnostics in code, message,
+    /// or details.
+    #[test]
+    fn unauthorized_on_corrupted_fixture_denied_at_mcp_boundary() {
+        use crate::mcp::ToolHandler;
+        let f = fixture();
+        let denied = Access {
+            principal: "reader".into(),
+            datasets: BTreeSet::new(),
+            securities: Some(BTreeSet::new()),
+        };
+        // Share the fixture's database lease/backend — a second
+        // SqliteCompactMarket::open on the same file would take a
+        // second flock.
+        let api = crate::data_supply::mcp::DataApi::new_with_backend(
+            f.repo.tasks(),
+            MarketBackend::Compact(f.repo.clone()),
+            RUN.into(),
+            denied,
+            None,
+        )
+        .unwrap();
+        let assert_denied = |label: &str| {
+            for (name, arguments) in [
+                (
+                    "get_task_progress",
+                    json!({"task_id": f.task, "page_size": 100}),
+                ),
+                ("get_task", json!({"task_id": f.task})),
+            ] {
+                let error = api.call(name, arguments).unwrap_err();
+                assert_eq!(error.code, "forbidden", "{label}: {name}");
+                assert!(error.details.is_none(), "{label}: {name}");
+                for needle in ["integrity", "digest", "segment", "corrupt"] {
+                    assert!(
+                        !error.message.to_lowercase().contains(needle),
+                        "{label}: {name} leaks diagnostic: {}",
+                        error.message
+                    );
+                }
+            }
+        };
+        assert_denied("healthy");
+        tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
+        assert_denied("corrupted");
+        // Full JSON-RPC round-trip: the serialized wire response must
+        // carry the same bare denial.
+        let response = crate::mcp::handle_json(
+            &api,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_task_progress",
+                    "arguments": {"task_id": f.task, "page_size": 100},
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let wire: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(wire["result"]["isError"], json!(true));
+        assert_eq!(
+            wire["result"]["structuredContent"]["code"],
+            json!("forbidden")
+        );
+        for needle in ["integrity", "digest", "segment", "corrupt"] {
+            assert!(
+                !response.to_lowercase().contains(needle),
+                "wire response leaks diagnostic: {response}"
+            );
+        }
+    }
+
     /// (7b) A real legacy-format fixture — a v18 database holding an
     /// actual legacy JSON envelope, not a compact missing/unpublished
     /// case — keeps identical classifications through the slim/ctx entry
