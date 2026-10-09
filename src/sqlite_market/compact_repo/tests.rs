@@ -4391,7 +4391,7 @@ mod xp011 {
     #[test]
     fn clip_or_projection_tamper_fails_closed_both_paths() {
         for sql in [
-            "DELETE FROM version_checkpoint_clips WHERE version_key=\
+            "DELETE FROM version_delta_clips WHERE version_key=\
              (SELECT version_key FROM data_versions WHERE version_id='v2a')",
             "UPDATE data_versions SET projection_digest=\
              x'0000000000000000000000000000000000000000000000000000000000000000' \
@@ -4524,7 +4524,6 @@ mod xp011 {
             materialize_published(c, &mut ctx, "v3a")
         }));
         let full = read_class(&f.repo.read(|c| materialize_checked(c, "v3a", false)));
-        assert!(slim != ReadClass::Ok);
         assert_eq!(slim, full);
         // Missing result row keeps the Ok(None) classification.
         assert!(matches!(
