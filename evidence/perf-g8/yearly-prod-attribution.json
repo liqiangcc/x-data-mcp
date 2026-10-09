@@ -1,0 +1,397 @@
+{
+ "schema": "perf-g8-yearly-prod-attribution.v1",
+ "source": "/tmp/aws-rebuild-yearly{-run,-run2,-run3}.log + .json (aws prod rebuild, NOT re-measured)",
+ "runs": "3 attempts: run(Oct8 09:56 crashed on sz.001246 missing daily bounds), run2(Oct8 10:48 crashed REQUEST_CONFLICT), run3(Oct9 00:43:34->01:23:56 = 2,422s succeeded 5,223/53chunks/5 skipped_absent_daily)",
+ "reconstruction": "per-chunk log-line windows; probe_s = probing-year-presence log -> resolved accept; task_window = accepted->terminal log lines (includes <=10s poll granularity slop); gap = prev terminal -> this accept (contains probe for probed chunks + first rejected update_data + 2 availability + get_request)",
+ "chunks": [
+  {
+   "chunk": 1,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 14.2,
+   "gap_incl_probe_s": null
+  },
+  {
+   "chunk": 2,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 11.2,
+   "gap_incl_probe_s": 77.1
+  },
+  {
+   "chunk": 3,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 11.0,
+   "gap_incl_probe_s": 68.1
+  },
+  {
+   "chunk": 4,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 11.4,
+   "gap_incl_probe_s": 65.5
+  },
+  {
+   "chunk": 5,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 11.7,
+   "gap_incl_probe_s": 93.2
+  },
+  {
+   "chunk": 6,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 12.4,
+   "gap_incl_probe_s": 93.9
+  },
+  {
+   "chunk": 7,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 11.8,
+   "gap_incl_probe_s": 90.4
+  },
+  {
+   "chunk": 8,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 9.6,
+   "gap_incl_probe_s": 28.2
+  },
+  {
+   "chunk": 9,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 6.5,
+   "gap_incl_probe_s": 23.5
+  },
+  {
+   "chunk": 10,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 8.8,
+   "gap_incl_probe_s": 21.7
+  },
+  {
+   "chunk": 11,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 4.3,
+   "gap_incl_probe_s": 10.4
+  },
+  {
+   "chunk": 12,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 4.2,
+   "gap_incl_probe_s": 8.8
+  },
+  {
+   "chunk": 13,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 4.4,
+   "gap_incl_probe_s": 10.1
+  },
+  {
+   "chunk": 14,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 7.2,
+   "gap_incl_probe_s": 12.2
+  },
+  {
+   "chunk": 15,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 5.2,
+   "gap_incl_probe_s": 12.9
+  },
+  {
+   "chunk": 16,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 5.2,
+   "gap_incl_probe_s": 12.4
+  },
+  {
+   "chunk": 17,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 3.7,
+   "gap_incl_probe_s": 6.3
+  },
+  {
+   "chunk": 18,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 5.6,
+   "gap_incl_probe_s": 6.9
+  },
+  {
+   "chunk": 19,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 3.7,
+   "gap_incl_probe_s": 6.2
+  },
+  {
+   "chunk": 20,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 3.6,
+   "gap_incl_probe_s": 5.7
+  },
+  {
+   "chunk": 21,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 3.8,
+   "gap_incl_probe_s": 5.4
+  },
+  {
+   "chunk": 22,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 3.6,
+   "gap_incl_probe_s": 5.6
+  },
+  {
+   "chunk": 23,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 3.3,
+   "gap_incl_probe_s": 4.7
+  },
+  {
+   "chunk": 24,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 12.1,
+   "gap_incl_probe_s": 80.1
+  },
+  {
+   "chunk": 25,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 15.4,
+   "gap_incl_probe_s": 99.5
+  },
+  {
+   "chunk": 26,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 14.5,
+   "gap_incl_probe_s": 87.2
+  },
+  {
+   "chunk": 27,
+   "replayed": true,
+   "probe_s": 0,
+   "task_window_s": 13.7,
+   "gap_incl_probe_s": 83.7
+  },
+  {
+   "chunk": 28,
+   "replayed": false,
+   "probe_s": 80.1,
+   "task_window_s": 32.8,
+   "gap_incl_probe_s": 83.9
+  },
+  {
+   "chunk": 29,
+   "replayed": false,
+   "probe_s": 104.8,
+   "task_window_s": 34.9,
+   "gap_incl_probe_s": 108.9
+  },
+  {
+   "chunk": 30,
+   "replayed": false,
+   "probe_s": 101.6,
+   "task_window_s": 47.9,
+   "gap_incl_probe_s": 109.5
+  },
+  {
+   "chunk": 31,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 38.5,
+   "gap_incl_probe_s": 7.7
+  },
+  {
+   "chunk": 32,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 38.9,
+   "gap_incl_probe_s": 5.9
+  },
+  {
+   "chunk": 33,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 36.5,
+   "gap_incl_probe_s": 5.2
+  },
+  {
+   "chunk": 34,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 36.3,
+   "gap_incl_probe_s": 5.2
+  },
+  {
+   "chunk": 35,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 35.7,
+   "gap_incl_probe_s": 5.1
+  },
+  {
+   "chunk": 36,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 16.8,
+   "gap_incl_probe_s": 4.3
+  },
+  {
+   "chunk": 37,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 16.3,
+   "gap_incl_probe_s": 3.5
+  },
+  {
+   "chunk": 38,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 15.1,
+   "gap_incl_probe_s": 3.0
+  },
+  {
+   "chunk": 39,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 37.0,
+   "gap_incl_probe_s": 5.2
+  },
+  {
+   "chunk": 40,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 38.6,
+   "gap_incl_probe_s": 5.6
+  },
+  {
+   "chunk": 41,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 36.2,
+   "gap_incl_probe_s": 5.3
+  },
+  {
+   "chunk": 42,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 34.7,
+   "gap_incl_probe_s": 4.8
+  },
+  {
+   "chunk": 43,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 33.5,
+   "gap_incl_probe_s": 5.3
+  },
+  {
+   "chunk": 44,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 15.8,
+   "gap_incl_probe_s": 3.8
+  },
+  {
+   "chunk": 45,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 31.7,
+   "gap_incl_probe_s": 3.7
+  },
+  {
+   "chunk": 46,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 15.4,
+   "gap_incl_probe_s": 3.1
+  },
+  {
+   "chunk": 47,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 16.1,
+   "gap_incl_probe_s": 2.7
+  },
+  {
+   "chunk": 48,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 14.5,
+   "gap_incl_probe_s": 2.6
+  },
+  {
+   "chunk": 49,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 17.1,
+   "gap_incl_probe_s": 3.5
+  },
+  {
+   "chunk": 50,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 17.1,
+   "gap_incl_probe_s": 4.2
+  },
+  {
+   "chunk": 51,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 15.7,
+   "gap_incl_probe_s": 3.9
+  },
+  {
+   "chunk": 52,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 14.4,
+   "gap_incl_probe_s": 3.2
+  },
+  {
+   "chunk": 53,
+   "replayed": false,
+   "probe_s": 0,
+   "task_window_s": 11.0,
+   "gap_incl_probe_s": 2.1
+  }
+ ],
+ "sums": {
+  "task_window_s": 921,
+  "gap_s": 1421,
+  "probe_s_within_gap": 286,
+  "gap_pure_orchestration_s": 1134,
+  "replayed_chunks": 27,
+  "probed_chunks": [
+   28,
+   29,
+   30
+  ],
+  "e2e_window_s": 2422,
+  "catalog_preface_s": 80
+ },
+ "reconciliation": "Σtask_window=921s incl ~10s-poll slop (~5s avg x 53 ≈ 265s) → implied server-side ≈ 650s, consistent with Lead Σ603s figure (poll granularity not separable from log alone)",
+ "shape": "chunks 1-27 replayed bound (fresh work still executed, windows 3-15s); 28-30 probed (80-105s each); 31-53 fresh accept (windows 15-48s); gap outliers 65-110s on chunks 2-7 & 24-30 (availability+probe calls slow on 800MB+ prod DB)",
+ "poll_interval_s": 10,
+ "driver": "/tmp/fresh_rebuild_yearly.py (prod mcp_connect + prod sock)"
+}
