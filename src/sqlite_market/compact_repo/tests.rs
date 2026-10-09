@@ -5061,6 +5061,103 @@ mod xp011 {
             }
         }
 
+        /// Case-2 fixture at the stated batch (XP-016B B1): one hundred
+        /// published bases plus one hundred committed append results —
+        /// 200 distinct version keys. Same real accept/commit shape as
+        /// `fixture_three`, scaled to 100 distinct entities.
+        fn fixture_hundred() -> Fixture {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let bars = vec![bar(0, 100), bar(1, 110), bar(2, 120)];
+            let mut items = Vec::new();
+            let mut scopes = BTreeSet::new();
+            let mut commits = Vec::new();
+            for i in 0..100u32 {
+                let symbol = format!("sh.{}", 800000 + i);
+                let base = format!("v1h{i}");
+                let result = format!("v2h{i}");
+                publish_head(
+                    &repo,
+                    &format!("req-h{i}"),
+                    &format!("pub-h{i}"),
+                    &symbol,
+                    &base,
+                    bars.clone(),
+                );
+                let scope = task_control::legacy::scope_id(&symbol, "day");
+                items.push(ItemSpec {
+                    item_id: format!("item-{i}"),
+                    target: json!({"symbol": symbol, "period": "day"}),
+                    progress_unit: "security_period".into(),
+                    frozen_inputs: crate::market_update::tasks::frozen(
+                        &base,
+                        "ab".repeat(32).as_str(),
+                        &crate::market_update::DateRange {
+                            start: date(0),
+                            end: date(3),
+                        },
+                    ),
+                    scope_keys: BTreeSet::from([scope.clone()]),
+                });
+                scopes.insert(scope.clone());
+                commits.push((i, symbol, scope, base, result));
+            }
+            let work = FrozenWork {
+                items,
+                scopes,
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: CommandKey {
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+                },
+                intent: json!({}),
+            };
+            let task = match repo
+                .accept("req-upd", &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+                _ => panic!("expected task outcome"),
+            };
+            let batch: Vec<UpdateBatchItem> = commits
+                .into_iter()
+                .map(|(i, symbol, scope, base, result)| UpdateBatchItem {
+                    task_id: task.clone(),
+                    item_id: format!("item-{i}"),
+                    publication_id: format!("upd-h{i}"),
+                    run_id: RUN.into(),
+                    symbol,
+                    occupancy_key: scope,
+                    prepared: UpdateBatchPrepared::Append {
+                        base_version_id: base,
+                        result_version_id: result,
+                        upserts: vec![bar(3, 130)],
+                        metadata: None,
+                        continuity: json!({
+                            "continuity": {"mode": "append", "day_member_sha256": "cd".repeat(32)}
+                        }),
+                    },
+                })
+                .collect();
+            repo.commit_update_batch(&task, &batch)
+                .unwrap()
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            Fixture {
+                _dir: dir,
+                path,
+                repo,
+                task,
+                access: Access::local(),
+            }
+        }
+
         /// Same update task shape as `fixture()` — three items, two
         /// published bases — but nothing committed: the interrupt
         /// receipt fixture drives the task to NeedsVerification while
@@ -5160,6 +5257,81 @@ mod xp011 {
             assert_eq!((fixed, facts, segments), (6, 6, 6));
         }
 
+        /// Case 2 at the stated batch (XP-016B B1): 100 distinct
+        /// published bases plus 100 distinct committed append results —
+        /// 200 version keys. A single fresh progress RPC verifies each
+        /// exactly once (fixed=200, facts=200); the WHOLE serialized
+        /// page matches the separate-phase `ForwardRepo` reference with
+        /// only `snapshot_id`/`snapshot_time` normalized; a second RPC
+        /// opens a fresh scope and verifies all 200 again. Segment
+        /// reads are recorded, not asserted — the 128-entry cache may
+        /// evict and re-read. No timing extrapolation.
+        #[test]
+        fn hundred_distinct_versions_whole_wire_matches_reference() {
+            use crate::sqlite_market::compact_versions::read_counts;
+            let f = fixture_hundred();
+            read_counts::reset();
+            let page = optimized_progress(&f, None, 100, &f.access).unwrap();
+            let (segments, fixed, facts) = read_counts::snapshot();
+            assert_eq!(
+                (fixed, facts),
+                (200, 200),
+                "fixed={fixed} facts={facts} segments={segments} (recorded only)"
+            );
+            assert_eq!(page.task.task_id, f.task);
+            assert_eq!(page.total, 100);
+            assert_eq!(page.finished, 100);
+            assert_eq!(page.succeeded, 100);
+            assert_eq!(page.failed, 0);
+            assert_eq!(page.publication_versions.len(), 100);
+            assert_eq!(page.range_results.len(), 100);
+            assert!(page.page_complete);
+            assert!(page.next_cursor.is_none());
+            // No cross-request reuse: the next RPC is a fresh scope and
+            // verifies all 200 versions again.
+            read_counts::reset();
+            let page2 = optimized_progress(&f, None, 100, &f.access).unwrap();
+            let (segments2, fixed2, facts2) = read_counts::snapshot();
+            assert_eq!(
+                (fixed2, facts2),
+                (200, 200),
+                "second RPC fixed={fixed2} facts={facts2} segments={segments2} (recorded only)"
+            );
+            assert!(page2.page_complete);
+            assert!(page2.next_cursor.is_none());
+            // Whole-wire equivalence with the pre-consolidation
+            // reference: `ForwardRepo` does not override
+            // `with_progress_read`, so the default adapter runs every
+            // verifier in its own separate read phase.
+            let reference = Observer::new(
+                ForwardRepo {
+                    inner: supply(&f.repo),
+                    calls: RefCell::new(vec![]),
+                },
+                RUN.into(),
+            )
+            .progress(
+                ProgressQuery {
+                    task_id: f.task.clone(),
+                    page_size: 100,
+                    cursor: None,
+                },
+                &f.access,
+            )
+            .unwrap();
+            assert!(reference.page_complete);
+            assert!(reference.next_cursor.is_none());
+            let normalized = |page: &crate::data_supply::wire::ProgressPage| {
+                let mut v = serde_json::to_value(page).unwrap();
+                v["snapshot_id"] = json!("<normalized>");
+                v["snapshot_time"] = json!("<normalized>");
+                v
+            };
+            let reference_json = normalized(&reference);
+            assert_eq!(normalized(&page), reference_json);
+            assert_eq!(normalized(&page2), reference_json);
+        }
+
         /// Case 3: >512 published keys — certificate FIFO eviction makes
         /// a revisit fully re-verify; a bounded facts hit never grants a
         /// certificate on its own.
@@ -5206,8 +5378,10 @@ mod xp011 {
         }
 
         /// Case 3 (fail-closed halves): a corrupt first touch fails and
-        /// leaves no certificate; a whole-bar read after whole-history
-        /// LRU eviction reconstructs bars identical to the uncached read
+        /// leaves no certificate — a second touch on the SAME ctx runs
+        /// real verification again and fails again (lower fixed-entry
+        /// counter == 2); a whole-bar read after whole-history LRU
+        /// eviction reconstructs bars identical to the uncached read
         /// even though a certificate remains.
         #[test]
         fn failed_first_touch_no_certificate_and_whole_bars_reconstruct() {
@@ -5238,10 +5412,19 @@ mod xp011 {
             );
             f.repo
                 .read(|c| {
+                    use crate::sqlite_market::compact_versions::read_counts;
                     let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                    // Same ctx, twice: a failed first touch leaves no
+                    // certificate, so the retry must run real
+                    // verification again — and fail again.
+                    read_counts::reset();
                     assert!(ctx.verified_facts_by_id(c, "vbad").is_err());
-                    // Failed verification records neither a retained
-                    // history nor a certificate.
+                    assert!(ctx.verified_facts_by_id(c, "vbad").is_err());
+                    // `ctx.fixed_runs` counts successful runs only; the
+                    // lower fixed-entry counter proves both touches
+                    // actually executed verification.
+                    let (_, fixed, _) = read_counts::snapshot();
+                    assert_eq!(fixed, 2);
                     assert_eq!(ctx.fixed_runs, 0);
                     Ok::<_, Error>(())
                 })
