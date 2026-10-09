@@ -1728,7 +1728,8 @@
  "post_run_notes": [
   "after driver exit (~02:05), private data_service kept ~60-85% CPU for ~15min: strace showed sequential full-DB pread64 scan pattern; DB-touching MCP calls (list_tasks/get_task_progress) queued/hung >20s while get_data_capabilities answered <1s; recovered ~02:26. Suspected cause: server-side handlers of killed probe queries kept scanning 810MB DB (not cancelled on disconnect), possibly compounding with a post-run scan. Not fully diagnosed.",
   "serve loop idle pattern: statx(db path)+statx(db fd)+geteuid+accept4(EAGAIN) every ~10ms; ~5-17% CPU idle burn on this box",
-  "sqlite3 PRAGMA integrity_check on private DB post-stop: ok (140.3s scan on 810MB DB)"
+  "sqlite3 PRAGMA integrity_check on private DB post-stop: ok (140.3s scan on 810MB DB)",
+  "follow-up: get_task_progress latency measured cold-idle at 15.8-45.2s/call => chunk tail(2.1-46.4s) ~= progress-query response time; srv_items(created->last_progress ~2.7s med) is the clean server-work window"
  ],
  "resources": {
   "pre_run": "01:37Z avail 755MB df54G load1.58",
@@ -1736,5 +1737,14 @@
   "mem_available_min_observed": "388MB during post-run grind",
   "df_min": "54G",
   "concurrent": "aws prod data/acquire services untouched; gui-agent idle"
+ },
+ "progress_query_latency": {
+  "method": "post-run private data_service restarted; 3x get_task_progress page_size=100 on a completed 100-item update task, zero concurrent load",
+  "samples_s": [
+   27.44,
+   45.22,
+   15.84
+  ],
+  "implication": "each driver progress poll costs ~8-45s server-side on this box; the per-chunk tail segment is dominated by progress-query latency, not necessarily post-item work"
  }
 }
