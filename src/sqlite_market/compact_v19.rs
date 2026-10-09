@@ -1,5 +1,7 @@
 use super::*;
 use crate::compact_market::{self, CompactBar, DeltaKind, DeltaOp, Digest, SegmentClip};
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredSegment {
@@ -94,6 +96,8 @@ pub(crate) fn insert_segment(
 }
 
 pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Error> {
+    #[cfg(test)]
+    super::compact_versions::read_counts::count_segment_read();
     let (digest_bytes, entity, period_code, first_day, last_day, row_count): (
         Vec<u8>,
         String,
@@ -186,6 +190,159 @@ pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Er
     })
 }
 
+/// Retained-segment bounds for a [`SegmentReadCtx`]: at most 128 verified
+/// segments AND 8 MiB of accounted payload, whichever binds first.
+const SEGMENT_CTX_CAP: usize = 128;
+const SEGMENT_CTX_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Read-transaction-scoped verified segment cache (GOAL-008 XP-011).
+///
+/// A `SegmentReadCtx` is bound to a single `Connection`/read transaction
+/// and dropped with it — it is never shared across requests, databases,
+/// commits or writes. A miss runs the unchanged full `read_segment`
+/// (row/bounds/decode/entity-period/digest checks); only a segment that
+/// passed every check is retained, and a hit reuses that verified
+/// `Rc<StoredSegment>` inside the same SQLite snapshot. Clip-level
+/// entity/period/range/count/projection checks still run at every use.
+///
+/// `reads`/`hits` count actual full reads and cache hits so tests assert
+/// measured counts instead of inferring reuse from `Rc::ptr_eq`.
+#[derive(Default)]
+pub(crate) struct SegmentReadCtx {
+    entries: HashMap<i64, Rc<StoredSegment>>,
+    lru: VecDeque<i64>,
+    retained_bytes: usize,
+    owner: usize,
+    #[cfg(test)]
+    reads: usize,
+    #[cfg(test)]
+    hits: usize,
+}
+
+impl SegmentReadCtx {
+    /// (full `read_segment` executions, cache hits, retained entries,
+    /// retained accounted bytes).
+    #[cfg(test)]
+    pub(crate) fn stats(&self) -> (usize, usize, usize, usize) {
+        (
+            self.reads,
+            self.hits,
+            self.entries.len(),
+            self.retained_bytes,
+        )
+    }
+
+    /// The cache is scoped to one `Connection`; a second connection means
+    /// the caller is reusing the context across databases or snapshots.
+    fn check_owner(&mut self, c: &Connection) -> Result<(), Error> {
+        let id = c as *const Connection as usize;
+        if self.owner == 0 {
+            self.owner = id;
+        } else if self.owner != id {
+            return Err(integrity("segment read context reused across connections"));
+        }
+        Ok(())
+    }
+
+    /// Retain a fully verified segment under the LRU/byte bounds. An
+    /// oversized or overflowing entry is silently skipped — capacity is
+    /// never a reason to fail a valid read.
+    fn retain(&mut self, segment: &Rc<StoredSegment>) {
+        let Some(bytes) = segment_footprint(segment) else {
+            return;
+        };
+        if bytes > SEGMENT_CTX_MAX_BYTES {
+            return;
+        }
+        while let Some(&evicted) = self.lru.front() {
+            if self.entries.len() < SEGMENT_CTX_CAP
+                && self.retained_bytes.saturating_add(bytes) <= SEGMENT_CTX_MAX_BYTES
+            {
+                break;
+            }
+            self.lru.pop_front();
+            if let Some(old) = self.entries.remove(&evicted)
+                && let Some(old_bytes) = segment_footprint(&old)
+            {
+                self.retained_bytes = self.retained_bytes.saturating_sub(old_bytes);
+            }
+        }
+        if self.entries.len() >= SEGMENT_CTX_CAP
+            || self.retained_bytes.saturating_add(bytes) > SEGMENT_CTX_MAX_BYTES
+        {
+            return;
+        }
+        self.retained_bytes = self.retained_bytes.saturating_add(bytes);
+        self.entries.insert(segment.key, segment.clone());
+        self.lru.push_back(segment.key);
+    }
+}
+
+/// Accounted retained payload of one cached segment: the `StoredSegment`
+/// struct, the entity string capacity, the bar-vector capacity and each
+/// amount string capacity. `None` on arithmetic overflow — the caller
+/// treats the entry as oversized and never retains it.
+fn segment_footprint(segment: &StoredSegment) -> Option<usize> {
+    let mut total = std::mem::size_of::<StoredSegment>()
+        .checked_add(segment.entity.capacity())?
+        .checked_add(
+            segment
+                .bars
+                .capacity()
+                .checked_mul(std::mem::size_of::<CompactBar>())?,
+        )?;
+    for bar in &segment.bars {
+        if let Some(amount) = &bar.amount {
+            total = total.checked_add(amount.capacity())?;
+        }
+    }
+    Some(total)
+}
+
+/// `read_segment` through a transaction-scoped verified cache. A miss
+/// runs the unchanged full read and retains the result only after every
+/// check passed; a hit reuses the already-verified segment of this
+/// snapshot. Capacity never fails a read: oversized or evicted entries
+/// are returned verified but unretained.
+pub(crate) fn read_segment_ctx(
+    c: &Connection,
+    key: i64,
+    ctx: &mut SegmentReadCtx,
+) -> Result<Rc<StoredSegment>, Error> {
+    ctx.check_owner(c)?;
+    if let Some(hit) = ctx.entries.get(&key) {
+        let segment = hit.clone();
+        #[cfg(test)]
+        {
+            ctx.hits += 1;
+        }
+        ctx.lru.retain(|k| *k != key);
+        ctx.lru.push_back(key);
+        return Ok(segment);
+    }
+    let segment = Rc::new(read_segment(c, key)?);
+    #[cfg(test)]
+    {
+        ctx.reads += 1;
+    }
+    ctx.retain(&segment);
+    Ok(segment)
+}
+
+/// `read_segment` under an optional segment context — the single read
+/// seam shared by the cached (`Some`) and uncached (`None`, write-path
+/// and reference-test) read variants.
+pub(crate) fn read_segment_scoped(
+    c: &Connection,
+    key: i64,
+    sctx: Option<&mut SegmentReadCtx>,
+) -> Result<Rc<StoredSegment>, Error> {
+    match sctx {
+        Some(ctx) => read_segment_ctx(c, key, ctx),
+        None => Ok(Rc::new(read_segment(c, key)?)),
+    }
+}
+
 pub(crate) fn write_checkpoint(
     c: &Connection,
     version_key: i64,
@@ -223,6 +380,29 @@ pub(crate) fn read_checkpoint(
     entity: &str,
     period: Period,
 ) -> Result<(Vec<StoredClip>, Digest), Error> {
+    read_checkpoint_scoped(c, version_key, entity, period, None)
+}
+
+/// `read_checkpoint` reusing verified segments through the caller's
+/// transaction-scoped context. Clip checks are unchanged — they run on
+/// every call against the (cached or freshly read) segment.
+pub(crate) fn read_checkpoint_ctx(
+    c: &Connection,
+    version_key: i64,
+    entity: &str,
+    period: Period,
+    sctx: &mut SegmentReadCtx,
+) -> Result<(Vec<StoredClip>, Digest), Error> {
+    read_checkpoint_scoped(c, version_key, entity, period, Some(sctx))
+}
+
+fn read_checkpoint_scoped(
+    c: &Connection,
+    version_key: i64,
+    entity: &str,
+    period: Period,
+    mut sctx: Option<&mut SegmentReadCtx>,
+) -> Result<(Vec<StoredClip>, Digest), Error> {
     let mut statement = c
         .prepare(
             "SELECT seq,segment_key,clip_start_day,clip_end_day,row_count FROM version_checkpoint_clips WHERE version_key=?1 ORDER BY seq",
@@ -255,7 +435,7 @@ pub(crate) fn read_checkpoint(
         if *row_count <= 0 || *row_count > u32::MAX as i64 {
             return Err(integrity("checkpoint clip row_count out of bounds"));
         }
-        let segment = read_segment(c, *segment_key)?;
+        let segment = read_segment_scoped(c, *segment_key, sctx.as_deref_mut())?;
         let clip = SegmentClip {
             segment_digest: segment.digest,
             clip_start_day: *clip_start_day,
@@ -345,6 +525,27 @@ pub(crate) fn read_delta(
     version_key: i64,
     parent_projection: Digest,
 ) -> Result<(Vec<StoredDelta>, Digest, Digest), Error> {
+    read_delta_scoped(c, version_key, parent_projection, None)
+}
+
+/// `read_delta` reusing verified segments through the caller's
+/// transaction-scoped context. Clip checks are unchanged — they run on
+/// every call against the (cached or freshly read) segment.
+pub(crate) fn read_delta_ctx(
+    c: &Connection,
+    version_key: i64,
+    parent_projection: Digest,
+    sctx: &mut SegmentReadCtx,
+) -> Result<(Vec<StoredDelta>, Digest, Digest), Error> {
+    read_delta_scoped(c, version_key, parent_projection, Some(sctx))
+}
+
+fn read_delta_scoped(
+    c: &Connection,
+    version_key: i64,
+    parent_projection: Digest,
+    mut sctx: Option<&mut SegmentReadCtx>,
+) -> Result<(Vec<StoredDelta>, Digest, Digest), Error> {
     let mut statement = c
         .prepare(
             "SELECT seq,delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM version_delta_clips WHERE version_key=?1 ORDER BY seq",
@@ -390,7 +591,7 @@ pub(crate) fn read_delta(
                 if *row_count <= 0 || *row_count > u32::MAX as i64 {
                     return Err(integrity("upsert delta row_count out of bounds"));
                 }
-                let segment = read_segment(c, segment_key)?;
+                let segment = read_segment_scoped(c, segment_key, sctx.as_deref_mut())?;
                 let clip = SegmentClip {
                     segment_digest: segment.digest,
                     clip_start_day: clip_start,
@@ -960,6 +1161,150 @@ mod tests {
         }];
         integrity_failure(write_delta(&c, 1, [0x11u8; 32], &ops).map(|_| ()));
         integrity_failure(read_delta(&c, 1, [0x11u8; 32]).map(|_| ()));
+    }
+
+    /// XP-011 round 2: the ctx path decodes and verifies each retained
+    /// segment once — checkpoint validation + flatten hit the same entry,
+    /// measured on the counters rather than inferred.
+    #[test]
+    fn segment_ctx_shares_verified_segment_between_readers() {
+        let c = connection();
+        version(&c, 1);
+        let segment = insert_segment(&c, "sh.600006", Period::Day, &bars()).unwrap();
+        let clips = vec![stored_clip(&segment, 0, 5, 3)];
+        write_checkpoint(&c, 1, "sh.600006", Period::Day, &clips).unwrap();
+        let mut ctx = SegmentReadCtx::default();
+        let (read, digest) =
+            read_checkpoint_ctx(&c, 1, "sh.600006", Period::Day, &mut ctx).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(ctx.stats().0, 1); // one full read_segment execution
+        let flattened = super::compact_versions::flatten_clips_ctx(
+            &c,
+            "sh.600006",
+            Period::Day,
+            &read,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(flattened.len(), 3);
+        let (reads, hits, entries, _) = ctx.stats();
+        assert_eq!(reads, 1);
+        assert_eq!(hits, 1);
+        assert_eq!(entries, 1);
+        let _ = digest;
+    }
+
+    /// Corruption fails identically through the ctx and uncached reads,
+    /// and a fresh context after the corruption still fails (retained
+    /// proof never crosses transactions).
+    #[test]
+    fn segment_ctx_corruption_matches_uncached_and_fresh_ctx_fails() {
+        let c = connection();
+        let stored = insert_segment(&c, "sh.600006", Period::Day, &bars()).unwrap();
+        let mut ctx = SegmentReadCtx::default();
+        read_segment_ctx(&c, stored.key, &mut ctx).unwrap();
+        c.execute(
+            "UPDATE segment_bars SET high_cents=high_cents+100 WHERE segment_key=?1 AND trade_day=1",
+            params![stored.key],
+        )
+        .unwrap();
+        // Same failure class as the uncached read.
+        integrity_failure(read_segment(&c, stored.key));
+        let mut fresh = SegmentReadCtx::default();
+        integrity_failure(read_segment_ctx(&c, stored.key, &mut fresh).map(|_| ()));
+        // Tampered stored digest also fails identically through the ctx.
+        c.execute(
+            "UPDATE bar_segments SET segment_digest=?1 WHERE segment_key=?2",
+            params![[0xabu8; 32].as_slice(), stored.key],
+        )
+        .unwrap();
+        integrity_failure(read_segment(&c, stored.key));
+        let mut fresh2 = SegmentReadCtx::default();
+        integrity_failure(read_segment_ctx(&c, stored.key, &mut fresh2).map(|_| ()));
+    }
+
+    /// Eviction past 128 entries and oversized payloads return identical
+    /// facts — capacity bounds retention, never read correctness.
+    #[test]
+    fn segment_ctx_eviction_and_oversized_return_identical_facts() {
+        let c = connection();
+        let mut keys = Vec::new();
+        for i in 0..130 {
+            let unique = vec![CompactBar {
+                trade_day: 100 + i,
+                open_cents: i,
+                high_cents: i + 10,
+                low_cents: i - 10,
+                close_cents: i,
+                volume: None,
+                amount: None,
+                r7_raw: None,
+            }];
+            keys.push(
+                insert_segment(&c, "sh.600006", Period::Day, &unique)
+                    .unwrap()
+                    .key,
+            );
+        }
+        let mut ctx = SegmentReadCtx::default();
+        for &key in &keys {
+            read_segment_ctx(&c, key, &mut ctx).unwrap();
+        }
+        let (reads, _, entries, _) = ctx.stats();
+        assert_eq!(reads, 130);
+        assert_eq!(entries, 128);
+        // The oldest entry was evicted: revisiting it re-reads and returns
+        // content identical to the uncached read.
+        let expected = read_segment(&c, keys[0]).unwrap();
+        let again = read_segment_ctx(&c, keys[0], &mut ctx).unwrap();
+        assert_eq!(*again, expected);
+        assert_eq!(ctx.stats().0, 131);
+        // The newest entry stayed retained — a hit, not a re-read.
+        read_segment_ctx(&c, keys[129], &mut ctx).unwrap();
+        assert_eq!(ctx.stats().0, 131);
+        // An oversized segment is returned verified but not retained.
+        let oversized = Rc::new(StoredSegment {
+            key: 9999,
+            digest: [0u8; 32],
+            entity: "sh.600006".into(),
+            period: Period::Day,
+            bars: Vec::with_capacity(200_000),
+        });
+        ctx.retain(&oversized);
+        let (_, _, entries, bytes) = ctx.stats();
+        assert!(bytes <= SEGMENT_CTX_MAX_BYTES);
+        assert!(!ctx.entries.contains_key(&9999) && entries <= 128);
+        // ...and a normal read afterwards still succeeds.
+        assert!(read_segment_ctx(&c, keys[0], &mut ctx).is_ok());
+    }
+
+    /// A context bound to one connection cannot serve another database:
+    /// reusing it on a different `Connection` fails closed, and a fresh
+    /// context on the second database verifies that database's own
+    /// content.
+    #[test]
+    fn segment_ctx_is_bound_to_one_connection() {
+        let c1 = connection();
+        let stored = insert_segment(&c1, "sh.600006", Period::Day, &bars()).unwrap();
+        let mut ctx = SegmentReadCtx::default();
+        read_segment_ctx(&c1, stored.key, &mut ctx).unwrap();
+        // Second database: same segment_key space, different content.
+        let c2 = connection();
+        let other = vec![CompactBar {
+            trade_day: 7,
+            open_cents: 1,
+            high_cents: 2,
+            low_cents: 1,
+            close_cents: 1,
+            volume: None,
+            amount: None,
+            r7_raw: None,
+        }];
+        let stored2 = insert_segment(&c2, "sh.600006", Period::Day, &other).unwrap();
+        integrity_failure(read_segment_ctx(&c2, stored2.key, &mut ctx).map(|_| ()));
+        let mut ctx2 = SegmentReadCtx::default();
+        let got = read_segment_ctx(&c2, stored2.key, &mut ctx2).unwrap();
+        assert_eq!(got.bars, other);
     }
 
     #[test]

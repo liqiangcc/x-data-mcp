@@ -4547,7 +4547,8 @@ mod xp011 {
 
     /// Same-transaction dedup sanity: a NoChange-style double touch of one
     /// version inside one verified-facts context must reuse the first
-    /// verification, not re-run it.
+    /// verification, not re-run it. Asserted on the measured
+    /// `fixed_runs` counter, not only `Rc::ptr_eq`.
     #[test]
     fn verified_ctx_deduplicates_within_transaction() {
         let f = fixture();
@@ -4558,8 +4559,303 @@ mod xp011 {
                 let (facts_b, verified_b) = ctx.verified_by_id(c, "v2a")?;
                 assert_eq!(facts_a.version_id, facts_b.version_id);
                 assert!(std::rc::Rc::ptr_eq(&verified_a, &verified_b));
+                assert_eq!(ctx.fixed_runs, 1);
                 Ok::<_, Error>(())
             })
             .unwrap();
+    }
+
+    /// (2-ext) A missing ancestor version row or a missing referenced
+    /// segment must fail closed on both read surfaces — the delta chain
+    /// and its clip resolution are part of the public integrity surface.
+    #[test]
+    fn missing_ancestor_or_segment_fails_closed_both_paths() {
+        for sql in [
+            // ancestor version row deleted: the v2a delta chain breaks
+            "DELETE FROM data_versions WHERE version_id='v1a'",
+            // the append result's own delta segment deleted
+            "DELETE FROM bar_segments WHERE segment_key IN \
+             (SELECT segment_key FROM version_delta_clips WHERE segment_key IS NOT NULL)",
+            // the shared checkpoint segment deleted
+            "DELETE FROM bar_segments WHERE segment_key IN \
+             (SELECT segment_key FROM version_checkpoint_clips)",
+        ] {
+            let f = fixture();
+            tamper(&f.path, sql);
+            let opt = read_class(&optimized_task(&f));
+            let progress = read_class(&optimized_progress(&f, None, 100, &f.access));
+            let full = read_class(&verified_version(&f, "v2a"));
+            assert_eq!(opt, ReadClass::Integrity, "sql: {sql}");
+            assert_eq!(progress, opt, "sql: {sql}");
+            assert_eq!(full, opt, "sql: {sql}");
+        }
+    }
+
+    /// (3b) An outcome-only mutation — task row and request digests left
+    /// valid — must still fail closed on both read surfaces.
+    #[test]
+    fn outcome_only_tamper_fails_closed_both_paths() {
+        for sql in [
+            // success flag kept but an error injected into the outcome
+            "UPDATE task_items SET outcome_json=\
+             json_set(outcome_json,'$.error','\"injected\"') WHERE item_id='item-1'",
+            // outcome erased from a finished item (stage/outcome pair)
+            "UPDATE task_items SET outcome_json=NULL WHERE item_id='item-1'",
+        ] {
+            let f = fixture();
+            tamper(&f.path, sql);
+            let opt = read_class(&optimized_task(&f));
+            let progress = read_class(&optimized_progress(&f, None, 100, &f.access));
+            let full = read_class(&verified_task(&f));
+            assert!(opt != ReadClass::Ok && full != ReadClass::Ok, "sql: {sql}");
+            assert_eq!(opt, full, "sql: {sql}");
+            assert_eq!(progress, full, "sql: {sql}");
+        }
+    }
+
+    /// (4b) Mismatched — not just missing — task scopes/occupancy claims
+    /// must fail closed on both read surfaces.
+    #[test]
+    fn scope_occupancy_mismatch_fails_closed_both_paths() {
+        for sql in [
+            "UPDATE task_scopes SET scope_key=scope_key||':tampered'",
+            "UPDATE scope_occupancy SET scope_key='scope:bogus'",
+        ] {
+            let f = fixture();
+            tamper(&f.path, sql);
+            let opt = read_class(&optimized_task(&f));
+            let full = read_class(&verified_task(&f));
+            assert!(opt != ReadClass::Ok && full != ReadClass::Ok, "sql: {sql}");
+            assert_eq!(opt, full, "sql: {sql}");
+        }
+    }
+
+    /// (6b) On a corrupted fixture, unauthorized access is still denied
+    /// and the denial carries no private diagnostics — the classification
+    /// is exactly "forbidden", not a corruption detail leak.
+    #[test]
+    fn unauthorized_on_corrupted_fixture_denied_without_leak() {
+        let f = fixture();
+        tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
+        let denied = Access {
+            principal: "reader".into(),
+            datasets: BTreeSet::new(),
+            securities: Some(BTreeSet::new()),
+        };
+        for result in [
+            supply(&f.repo).task(&f.task, &denied).map(|_| ()),
+            optimized_progress(&f, None, 100, &denied).map(|_| ()),
+        ] {
+            match result {
+                Err(Error::Invalid(message)) => assert_eq!(message, "forbidden"),
+                other => panic!("expected forbidden, got class {:?}", read_class(&other)),
+            }
+        }
+    }
+
+    /// (7b) A real legacy-format fixture — a v18 database holding an
+    /// actual legacy JSON envelope, not a compact missing/unpublished
+    /// case — keeps identical classifications through the slim/ctx entry
+    /// points, on a healthy row and after envelope tampering.
+    #[test]
+    fn legacy_fixture_classification_unchanged() {
+        let dir = tempdir();
+        let path = dir.path().join("legacy.db");
+        let tasks = crate::sqlite_tasks::SqliteTasks::new(path.clone());
+        tasks.initialize().unwrap();
+        let db = crate::sqlite_market::SqliteMarket::new(tasks);
+        let samples: Vec<Value> = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/issue79/legacy-records.json"
+        ))
+        .unwrap();
+        db.stage(&samples[0]["record"]).unwrap();
+        // Healthy staged legacy record: slim defers to the full legacy
+        // read; both surfaces agree.
+        let slim = read_class(&db.read(|c| {
+            let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+            crate::sqlite_market::read_record_slim(c, &mut ctx, "legacy-daily", false, true)
+        }));
+        let full = read_class(
+            &db.read(|c| crate::sqlite_market::read_record(c, "legacy-daily", false, true)),
+        );
+        assert_eq!(slim, ReadClass::Ok);
+        assert_eq!(slim, full);
+        // Published-only request on a staged row: same NotFound both ways.
+        let slim = read_class(&db.read(|c| {
+            let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+            crate::sqlite_market::read_record_slim(c, &mut ctx, "legacy-daily", true, true)
+        }));
+        let full = read_class(
+            &db.read(|c| crate::sqlite_market::read_record(c, "legacy-daily", true, true)),
+        );
+        assert_eq!(slim, full);
+        // Envelope tampering on the legacy store: both fail closed.
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute(
+                "UPDATE data_versions SET envelope_json=\
+                 json_set(envelope_json,'$.records[0].open','1.00') \
+                 WHERE version_id='legacy-daily'",
+                [],
+            )
+            .unwrap();
+        let slim = read_class(&db.read(|c| {
+            let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+            crate::sqlite_market::read_record_slim(c, &mut ctx, "legacy-daily", false, true)
+        }));
+        let full = read_class(
+            &db.read(|c| crate::sqlite_market::read_record(c, "legacy-daily", false, true)),
+        );
+        assert_eq!(slim, ReadClass::Integrity);
+        assert_eq!(slim, full);
+    }
+
+    /// Round-2 R1: the facts memo is bounded at 512 FIFO entries. Past
+    /// the bound the oldest entry is evicted and recomputed on revisit —
+    /// correctness is preserved and the returned facts equal the uncached
+    /// `result_facts` output for every key.
+    #[test]
+    fn facts_memo_bounded_fifo_revisit_and_equivalence() {
+        let f = fixture();
+        for i in 0..520 {
+            let v = mk_version(&format!("vx{i:04}"), vec![bar(0, 100)]);
+            f.repo.stage(&envelope(&v, source("gen-1"), None)).unwrap();
+        }
+        f.repo
+            .read(|c| {
+                let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                let mut keys = Vec::new();
+                for i in 0..520 {
+                    keys.push(version_key(c, &format!("vx{i:04}"))?);
+                }
+                for &key in &keys {
+                    let cached = ctx.facts(c, key)?;
+                    let uncached = crate::sqlite_market::compact_versions::result_facts(c, key)?;
+                    assert_eq!(*cached, uncached);
+                }
+                assert_eq!(ctx.facts_misses, 520);
+                // FIFO eviction: the first 8 keys are gone; the newest stay.
+                let _ = ctx.facts(c, keys[0])?;
+                assert_eq!(ctx.facts_misses, 521);
+                let _ = ctx.facts(c, keys[8])?;
+                assert_eq!(ctx.facts_misses, 522);
+                let _ = ctx.facts(c, keys[519])?;
+                assert_eq!(ctx.facts_misses, 522);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
+
+    /// Round-2 R2: the verified LRU admits an evicted version to be
+    /// rebuilt inside the same transaction — measured on `fixed_runs`,
+    /// so the "reuse" guarantee is retention-scoped, not
+    /// once-per-transaction.
+    #[test]
+    fn verified_lru_eviction_reverifies_in_same_transaction() {
+        let f = fixture();
+        publish_head(
+            &f.repo,
+            "req-c",
+            "pub-c",
+            "sh.600010",
+            "v1c",
+            vec![bar(0, 100)],
+        );
+        publish_head(
+            &f.repo,
+            "req-d",
+            "pub-d",
+            "sh.600011",
+            "v1d",
+            vec![bar(0, 100)],
+        );
+        f.repo
+            .read(|c| {
+                let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                let (_, first) = ctx.verified_by_id(c, "v1a")?;
+                for id in ["v1b", "v2a", "v1c", "v1d"] {
+                    let _ = ctx.verified_by_id(c, id)?;
+                }
+                assert_eq!(ctx.fixed_runs, 5);
+                // v1a was evicted (cap 4); revisiting re-verifies it.
+                let (_, again) = ctx.verified_by_id(c, "v1a")?;
+                assert_eq!(ctx.fixed_runs, 6);
+                assert!(!std::rc::Rc::ptr_eq(&first, &again));
+                assert_eq!(first.version, again.version);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
+
+    /// Round-2 R2/R6: measured counts for the complete audit read of one
+    /// committed Append item inside a single transaction — the base and
+    /// result versions share the verified checkpoint segment, so each
+    /// immutable segment is decoded and verified once while retained.
+    #[test]
+    fn append_read_shares_verified_segments_measured() {
+        let f = fixture();
+        f.repo
+            .read(|c| {
+                let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                let _ = crate::sqlite_market::compact_results::read_update_audit_ctx(
+                    c, &mut ctx, "upd-1",
+                )?;
+                // base v1a + result v2a verified once each.
+                assert_eq!(ctx.fixed_runs, 2);
+                assert_eq!(ctx.facts_misses, 2);
+                // The shared checkpoint segment (v1a) and the delta
+                // segment (v2a) were each fully read once; every later
+                // use — flatten, apply_delta, the persisted-ops
+                // comparison, the repeated audit read below — is a hit.
+                let (reads, hits, _, _) = ctx.segments().stats();
+                let distinct: i64 = c
+                    .query_row(
+                        "SELECT count(*) FROM (\
+                            SELECT segment_key FROM version_checkpoint_clips WHERE version_key IN \
+                                (SELECT version_key FROM data_versions WHERE version_id='v1a') \
+                            UNION \
+                            SELECT segment_key FROM version_delta_clips WHERE version_key IN \
+                                (SELECT version_key FROM data_versions WHERE version_id='v2a'))",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .map_err(storage)?;
+                assert_eq!(reads as i64, distinct);
+                assert!(hits >= distinct as usize);
+                // A second identical read inside the transaction is
+                // fully served from verified state: zero new fixed runs
+                // or segment reads.
+                let _ = crate::sqlite_market::compact_results::read_update_audit_ctx(
+                    c, &mut ctx, "upd-1",
+                )?;
+                assert_eq!(ctx.fixed_runs, 2);
+                assert_eq!(ctx.segments().stats().0, reads);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
+
+    /// Round-2 R2: measured lower-layer execution counts for one complete
+    /// public `get_task_progress` read (fresh page). The instrumentation
+    /// counts actual `read_segment`/`fixed`/`result_facts` executions
+    /// across the transactions the call creates — not `Rc::ptr_eq`
+    /// extrapolation. Expected values are derived from the fixture: two
+    /// verified versions (v1a, v2a) are re-verified once per read
+    /// transaction the observer opens.
+    #[test]
+    fn measured_counts_for_complete_public_read() {
+        use crate::sqlite_market::compact_versions::read_counts;
+        let f = fixture();
+        read_counts::reset();
+        optimized_progress(&f, None, 100, &f.access).unwrap();
+        let (segment_reads, fixed_runs, facts_reads) = read_counts::snapshot();
+        // tx boundaries: task_facts (v1a+v2a), verify_versions (v2a),
+        // verify_range_results (v1a+v2a). Each is a fresh transaction —
+        // verified state is not carried across snapshots.
+        assert_eq!(
+            (fixed_runs, facts_reads, segment_reads),
+            (5, 5, 6),
+            "measured counts: fixed={fixed_runs} facts={facts_reads} segments={segment_reads}"
+        );
     }
 }

@@ -612,7 +612,7 @@ pub(crate) fn read_market_update_ctx(
     {
         return Err(integrity("market update evidence kind mismatch"));
     }
-    let ops = read_update_delta_clips(c, result_key)?;
+    let ops = read_update_delta_clips(c, result_key, ctx.segments_mut())?;
     let delta_digest = match continuity {
         ContinuityMode::Unchanged => {
             if !ops.is_empty() {
@@ -635,8 +635,12 @@ pub(crate) fn read_market_update_ctx(
                     if result_facts.parent_version_key != Some(base_facts.key) {
                         return Err(integrity("append delta parent mismatch"));
                     }
-                    let (persisted, persisted_delta, projection) =
-                        compact_v19::read_delta(c, result_facts.key, base_facts.projection_digest)?;
+                    let (persisted, persisted_delta, projection) = compact_v19::read_delta_ctx(
+                        c,
+                        result_facts.key,
+                        base_facts.projection_digest,
+                        ctx.segments_mut(),
+                    )?;
                     if persisted != ops
                         || persisted_delta != ops_digest
                         || projection != result_facts.projection_digest
@@ -1264,7 +1268,11 @@ fn verify_task_item(
     Ok(())
 }
 
-fn read_update_delta_clips(c: &Connection, result_key: i64) -> Result<Vec<StoredDelta>, Error> {
+fn read_update_delta_clips(
+    c: &Connection,
+    result_key: i64,
+    sctx: &mut compact_v19::SegmentReadCtx,
+) -> Result<Vec<StoredDelta>, Error> {
     let mut statement = c
         .prepare(
             "SELECT seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM market_update_delta_clips WHERE result_key=?1 ORDER BY seq",
@@ -1293,7 +1301,7 @@ fn read_update_delta_clips(c: &Connection, result_key: i64) -> Result<Vec<Stored
         if seq != index as i64 || row_count <= 0 {
             return Err(integrity("update delta clip rows malformed"));
         }
-        let segment = compact_v19::read_segment(c, segment_key)?;
+        let segment = compact_v19::read_segment_ctx(c, segment_key, sctx)?;
         ops.push(StoredDelta {
             range_start_day: range_start,
             range_end_day: range_end,

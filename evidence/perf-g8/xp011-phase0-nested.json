@@ -3,13 +3,13 @@
  "task": "XP-011 Phase 0: nested counts/timing of get_task_progress on completed 100-item tasks",
  "captured_at_utc": "2026-10-09T09:13Z",
  "environment": {
-  "host": "aws-node (2 vCPU Xeon 8336C, 1905MB RAM + 4095MB swap, ext4)",
+  "host": "aws-node (2 vCPU Xeon 8336C, 1905MB RAM; swap_total 8191MB per free -m 2026-10-09 \u2014 capture-time line '4095MB' was a stale copy of the ecs-node spec, corrected)",
   "uname": "Linux 7.0.0-1006-aws x86_64",
   "binary": "/root/x-perf-g8/dist-xp009/x-data-mcp-0.2.0-preview.30-linux-x86_64/bin/data_service",
   "binary_sha256": "b2186c08d078a2ec8e2853611e09a527a9052260004819deb142a92f0a790fa9",
   "code_git_sha": "299f6681216f1b579351e9e5deef71d9d3c772a2 (perf/g8-daily-update-perf, PR #323 head; XP-009 slim paths)",
   "data_service_pid": 2497521,
-  "db": "/root/x-perf-g8/svc/db/preview.sqlite (884,461,568 B; daily+yearly heads; private instance)",
+  "db": "/root/x-perf-g8/svc/db/preview.sqlite (884,461,568 B at capture; private instance). db_sha256 at capture: NOT_RECORDED \u2014 the value previously reported as such (b2186c08...) is actually the binary hash; current file sha256 b4b82c0df6c556e7... (2026-10-09, post-measurement housekeeping state, not the captured snapshot)",
   "socket": "svc/run/mcp.sock (private)",
   "concurrent_load": "data_service post-run housekeeping ~45-55% CPU during all windows (TID 2497524 ~10%); load avg 0.4-1.5; MemAvailable 540-620MB; no other drivers active",
   "cold_or_warm": "OS page cache warm for this DB (repeated probes same tasks)"
@@ -20,7 +20,7 @@
  },
  "methods": {
   "m1_uprobe_pairing": "perf record -e 'xp011:*' -p <pid>: tracefs uprobe_events entry+return probes on 20 named rust fns (probe-map.txt); paired per-thread (handler tid 2553807/2555449) with stack discipline; incl/excl ms per call",
-  "m2_perf_stat": "perf stat probes probe_data_service:sqlite3_step + syscalls:sys_enter_pread64 over 100s window with exactly 3 calls; housekeeping baseline 25,803 steps + 77,958 pread64 per 60s subtracted",
+  "m2_perf_stat": "perf stat probes probe_data_service:sqlite3_step + syscalls:sys_enter_pread64 over a ~100s window during which 3 serial calls were issued via one_call.py (calls-append.txt); housekeeping baseline 25,803 steps + 77,958 pread64 per 60s subtracted. NOTE: window totals divided by 3 are per-call ESTIMATES, not exact per-call counts \u2014 the window does not prove all three calls completed inside it",
   "m3_sampling": "perf record -g dwarf,8192 -F99 flat profile (leaf attribution; ancestors lost due to missing FPO/unwind limits)",
   "wire": "dec_progress_query/enc_progress_page uprobe pair bounds request decode and response serialization"
  },
@@ -40,8 +40,8 @@
     ],
     "note": "perf_stat window inflates (probe hits + housekeeping); uprobe_window latencies under entry/ret event recording"
    },
-   "per_call_sqlite3_step_net": "(12,641,253 - ~43,000 housekeeping)/3 ~= 4,199,000",
-   "per_call_pread64_net": "(676,444 - ~130,000)/3 ~= 182,000",
+   "per_call_sqlite3_step_net": "ESTIMATE (window net / 3 calls): (12,641,253 - ~43,000 housekeeping)/3 ~= 4,199,000",
+   "per_call_pread64_net": "ESTIMATE (window net / 3 calls): (676,444 - ~130,000)/3 ~= 182,000",
    "nested": [
     {
      "tid": 2553807,
@@ -343,8 +343,8 @@
      12580
     ]
    },
-   "per_call_sqlite3_step_net": "(12,675,517 - ~43,000)/3 ~= 4,211,000",
-   "per_call_pread64_net": "(669,138 - ~130,000)/3 ~= 180,000",
+   "per_call_sqlite3_step_net": "ESTIMATE: (12,675,517 - ~43,000)/3 ~= 4,211,000",
+   "per_call_pread64_net": "ESTIMATE: (669,138 - ~130,000)/3 ~= 180,000",
    "nested": [
     {
      "tid": 2555449,
@@ -682,5 +682,11 @@
    "run_uprobe.sh",
    "analyze.py"
   ]
+ },
+ "round2_reparse": {
+  "when": "2026-10-09",
+  "reason": "analyze.py had one GLOBAL cur_call while frame stacks were per-thread \u2014 a return on another thread could be charged to the active handler's call, and a return could be silently paired with a non-top frame",
+  "change": "tid-keyed current_calls map (progress enter assigns current_calls[tid]; every event resolves via current_calls.get(tid); progress return removes only that tid); returns must pair with the TOP frame or the affected call is marked NOT_MEASURED; unmatched/out-of-order/lost events counted in summary; see drivers/test_analyze.py (Owner's tid10/20/30 synthetic case with exact expected n/incl/excl + a dropped-return invalidation case)",
+  "result": "reparsing the SAME frozen traces (probe-xp011/{append,nc}.trace, not a profiling re-run) produced IDENTICAL per-call counts and timing to the original parse: 4 calls per trace, all valid, 0 unmatched/non_top/unterminated events \u2014 the defect did not corrupt this dataset; the fix prevents it silently corrupting future ones"
  }
 }

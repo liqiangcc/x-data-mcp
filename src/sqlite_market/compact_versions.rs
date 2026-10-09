@@ -876,7 +876,30 @@ fn fixed_digest(raw: &[u8]) -> Result<Digest, Error> {
 }
 
 fn fixed_by_key(c: &Connection, key: i64) -> Result<VerifiedVersion, Error> {
-    let chain = reconstruct_version(c, key)?;
+    fixed_by_key_scoped(c, key, None)
+}
+
+/// `fixed_by_key` reusing verified segments through the caller's
+/// transaction-scoped context (GOAL-008 XP-011): an Append base/result
+/// pair shares immutable checkpoint segments, so checkpoint validation
+/// and `flatten_clips`/`apply_delta` decode and digest each segment once
+/// per transaction instead of once per use.
+fn fixed_by_key_ctx(
+    c: &Connection,
+    key: i64,
+    sctx: &mut compact_v19::SegmentReadCtx,
+) -> Result<VerifiedVersion, Error> {
+    fixed_by_key_scoped(c, key, Some(sctx))
+}
+
+fn fixed_by_key_scoped(
+    c: &Connection,
+    key: i64,
+    sctx: Option<&mut compact_v19::SegmentReadCtx>,
+) -> Result<VerifiedVersion, Error> {
+    #[cfg(test)]
+    read_counts::count_fixed_run();
+    let chain = reconstruct_version_scoped(c, key, sctx)?;
     let mut leaf_evidence = None;
     for (row, bars) in &chain {
         leaf_evidence = Some(verify_published_node(c, row, bars)?);
@@ -1076,6 +1099,14 @@ fn reconstruct_version(
     c: &Connection,
     leaf_key: i64,
 ) -> Result<Vec<(VersionRow, Vec<CompactBar>)>, Error> {
+    reconstruct_version_scoped(c, leaf_key, None)
+}
+
+fn reconstruct_version_scoped(
+    c: &Connection,
+    leaf_key: i64,
+    mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
+) -> Result<Vec<(VersionRow, Vec<CompactBar>)>, Error> {
     let mut chain = Vec::new();
     let mut visited = HashSet::new();
     let mut key = leaf_key;
@@ -1114,12 +1145,19 @@ fn reconstruct_version(
     let mut bars: Vec<CompactBar> = Vec::new();
     for (index, row) in chain.into_iter().enumerate() {
         if index == 0 {
-            let (clips, projection) =
-                compact_v19::read_checkpoint(c, row.key, &row.entity, row.period)?;
+            let (clips, projection) = match sctx.as_deref_mut() {
+                Some(s) => {
+                    compact_v19::read_checkpoint_ctx(c, row.key, &row.entity, row.period, s)?
+                }
+                None => compact_v19::read_checkpoint(c, row.key, &row.entity, row.period)?,
+            };
             if projection != row.projection_digest {
                 return Err(integrity("checkpoint projection digest mismatch"));
             }
-            bars = flatten_clips(c, &row.entity, row.period, &clips)?;
+            bars = match sctx.as_deref_mut() {
+                Some(s) => flatten_clips_ctx(c, &row.entity, row.period, &clips, s)?,
+                None => flatten_clips(c, &row.entity, row.period, &clips)?,
+            };
         } else {
             let (parent_row, _) = projections.last().unwrap();
             if row.parent_version_key != Some(parent_row.key)
@@ -1132,12 +1170,19 @@ fn reconstruct_version(
             if parent_row.state != 3 {
                 return Err(integrity("delta parent is not published"));
             }
-            let (ops, _, projection) =
-                compact_v19::read_delta(c, row.key, parent_row.projection_digest)?;
+            let (ops, _, projection) = match sctx.as_deref_mut() {
+                Some(s) => {
+                    compact_v19::read_delta_ctx(c, row.key, parent_row.projection_digest, s)?
+                }
+                None => compact_v19::read_delta(c, row.key, parent_row.projection_digest)?,
+            };
             if projection != row.projection_digest {
                 return Err(integrity("delta projection digest mismatch"));
             }
-            bars = apply_delta(c, &bars, &ops, &row.entity, row.period)?;
+            bars = match sctx.as_deref_mut() {
+                Some(s) => apply_delta_ctx(c, &bars, &ops, &row.entity, row.period, s)?,
+                None => apply_delta(c, &bars, &ops, &row.entity, row.period)?,
+            };
             if bars.is_empty() {
                 return Err(integrity("delta projection is empty"));
             }
@@ -2078,13 +2123,35 @@ fn flatten_clips(
     period: Period,
     clips: &[StoredClip],
 ) -> Result<Vec<CompactBar>, Error> {
+    flatten_clips_scoped(c, entity, period, clips, None)
+}
+
+/// `flatten_clips` reusing verified segments through the caller's
+/// transaction-scoped context; clip checks still run for every clip.
+pub(crate) fn flatten_clips_ctx(
+    c: &Connection,
+    entity: &str,
+    period: Period,
+    clips: &[StoredClip],
+    sctx: &mut compact_v19::SegmentReadCtx,
+) -> Result<Vec<CompactBar>, Error> {
+    flatten_clips_scoped(c, entity, period, clips, Some(sctx))
+}
+
+fn flatten_clips_scoped(
+    c: &Connection,
+    entity: &str,
+    period: Period,
+    clips: &[StoredClip],
+    mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
+) -> Result<Vec<CompactBar>, Error> {
     if clips.is_empty() {
         return Err(integrity("checkpoint requires at least one clip"));
     }
     let mut bars = Vec::new();
     let mut previous_end: Option<i64> = None;
     for stored in clips {
-        let segment = compact_v19::read_segment(c, stored.segment_key)?;
+        let segment = compact_v19::read_segment_scoped(c, stored.segment_key, sctx.as_deref_mut())?;
         check_stored_clip(&segment, &stored.clip, entity, period)?;
         if previous_end.is_some_and(|end| stored.clip.clip_start_day <= end) {
             return Err(integrity("checkpoint clips overlap or unordered"));
@@ -2127,6 +2194,30 @@ fn apply_delta(
     entity: &str,
     period: Period,
 ) -> Result<Vec<CompactBar>, Error> {
+    apply_delta_scoped(c, base, ops, entity, period, None)
+}
+
+/// `apply_delta` reusing verified segments through the caller's
+/// transaction-scoped context; clip checks still run for every op.
+pub(crate) fn apply_delta_ctx(
+    c: &Connection,
+    base: &[CompactBar],
+    ops: &[StoredDelta],
+    entity: &str,
+    period: Period,
+    sctx: &mut compact_v19::SegmentReadCtx,
+) -> Result<Vec<CompactBar>, Error> {
+    apply_delta_scoped(c, base, ops, entity, period, Some(sctx))
+}
+
+fn apply_delta_scoped(
+    c: &Connection,
+    base: &[CompactBar],
+    ops: &[StoredDelta],
+    entity: &str,
+    period: Period,
+    mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
+) -> Result<Vec<CompactBar>, Error> {
     let plain = delta_ops(ops);
     if !plain.is_empty() {
         compact_market::delta_digest(&plain).map_err(integrity)?;
@@ -2138,7 +2229,8 @@ fn apply_delta(
     for op in ops {
         match &op.kind {
             StoredDeltaKind::Upsert(stored) => {
-                let segment = compact_v19::read_segment(c, stored.segment_key)?;
+                let segment =
+                    compact_v19::read_segment_scoped(c, stored.segment_key, sctx.as_deref_mut())?;
                 check_stored_clip(&segment, &stored.clip, entity, period)?;
                 for bar in segment.bars.iter().filter(|bar| {
                     bar.trade_day >= stored.clip.clip_start_day
@@ -2211,6 +2303,8 @@ pub(crate) struct VersionResultFacts {
 }
 
 pub(crate) fn result_facts(c: &Connection, key: i64) -> Result<VersionResultFacts, Error> {
+    #[cfg(test)]
+    read_counts::count_facts_read();
     let row = read_version_row(c, key)?.ok_or_else(|| integrity("version row missing"))?;
     let state = match row.state {
         1 => CompactVersionState::Staged,
@@ -2289,28 +2383,91 @@ pub(crate) fn apply_stored_delta(
 /// lookups that follow it without keeping all of a task's histories.
 const VERIFIED_CTX_CAP: usize = 4;
 
+/// Bound on memoized `result_facts` inside a [`VerifyCtx`]: 512 entries
+/// with FIFO eviction. An evicted entry is simply recomputed on the next
+/// touch — the bound limits retained metadata, never read correctness.
+const FACTS_CTX_CAP: usize = 512;
+
+/// Measured lower-layer call counts for the complete public read
+/// (GOAL-008 XP-011 round 2). Incremented inside the uncached workhorses
+/// so a test can observe actual executions across whatever transaction
+/// contexts a read path creates — no `Rc::ptr_eq` extrapolation.
+#[cfg(test)]
+pub(crate) mod read_counts {
+    use std::cell::Cell;
+    thread_local! {
+        static SEGMENT_READS: Cell<usize> = const { Cell::new(0) };
+        static FIXED_RUNS: Cell<usize> = const { Cell::new(0) };
+        static FACTS_READS: Cell<usize> = const { Cell::new(0) };
+    }
+    pub(crate) fn count_segment_read() {
+        SEGMENT_READS.with(|n| n.set(n.get() + 1));
+    }
+    pub(crate) fn count_fixed_run() {
+        FIXED_RUNS.with(|n| n.set(n.get() + 1));
+    }
+    pub(crate) fn count_facts_read() {
+        FACTS_READS.with(|n| n.set(n.get() + 1));
+    }
+    /// (segment reads, fixed runs, facts reads) since the last `reset`.
+    pub(crate) fn reset() -> (usize, usize, usize) {
+        let snap = (
+            SEGMENT_READS.with(Cell::get),
+            FIXED_RUNS.with(Cell::get),
+            FACTS_READS.with(Cell::get),
+        );
+        SEGMENT_READS.with(|n| n.set(0));
+        FIXED_RUNS.with(|n| n.set(0));
+        FACTS_READS.with(|n| n.set(0));
+        snap
+    }
+    /// Current counters without resetting.
+    pub(crate) fn snapshot() -> (usize, usize, usize) {
+        (
+            SEGMENT_READS.with(Cell::get),
+            FIXED_RUNS.with(Cell::get),
+            FACTS_READS.with(Cell::get),
+        )
+    }
+}
+
 /// Transaction-scoped verified-facts context (GOAL-008 XP-011).
 ///
 /// Created inside a single SQLite read transaction and dropped before the
 /// transaction commits — it is never a process-global cache trusted
 /// across requests. The first touch of an immutable version runs the full
-/// `fixed_by_key` reconstruction and verification; repeated touches of
-/// the same version inside the same snapshot reuse that verified result
-/// instead of re-verifying. A stored row digest never substitutes for
-/// verification: it is only the memo key after verification succeeded.
+/// `fixed_by_key` reconstruction and verification; a repeated touch
+/// reuses that verified result *only while the entry stays retained*
+/// under the LRU bound below — an evicted version is reconstructed and
+/// verified again inside the same transaction. The guarantee is "return
+/// a verified result", not "verify once per transaction". A stored row
+/// digest never substitutes for verification: it is only the memo key
+/// after verification succeeded.
 ///
 /// Verified versions are retained under a small LRU bound so bar data
 /// lives only while a single result's continuity checks need it; facts
-/// rows are small metadata bounded by the item count of one call.
+/// rows are small metadata bounded at [`FACTS_CTX_CAP`] FIFO entries;
+/// verified segments are shared through `segments` under the
+/// [`compact_v19::SegmentReadCtx`] entry/byte bounds.
 #[derive(Default)]
 pub(crate) struct VerifyCtx {
     facts: HashMap<i64, Rc<VersionResultFacts>>,
+    facts_fifo: VecDeque<i64>,
     verified: HashMap<i64, Rc<VerifiedVersion>>,
     lru: VecDeque<i64>,
+    segments: compact_v19::SegmentReadCtx,
+    /// Actual `result_facts` executions (memo misses).
+    #[cfg(test)]
+    pub(crate) facts_misses: usize,
+    /// Actual full `fixed_by_key` verification runs on the ctx path.
+    #[cfg(test)]
+    pub(crate) fixed_runs: usize,
 }
 
 impl VerifyCtx {
     /// `result_facts` memoized per version key for this transaction.
+    /// Bounded at [`FACTS_CTX_CAP`] entries with FIFO eviction; an
+    /// evicted key is recomputed on its next touch.
     pub(crate) fn facts(
         &mut self,
         c: &Connection,
@@ -2320,13 +2477,24 @@ impl VerifyCtx {
             return Ok(facts.clone());
         }
         let facts = Rc::new(result_facts(c, key)?);
+        #[cfg(test)]
+        {
+            self.facts_misses += 1;
+        }
         self.facts.insert(key, facts.clone());
+        self.facts_fifo.push_back(key);
+        while self.facts_fifo.len() > FACTS_CTX_CAP
+            && let Some(evicted) = self.facts_fifo.pop_front()
+        {
+            self.facts.remove(&evicted);
+        }
         Ok(facts)
     }
 
     /// `require_published_facts` semantics with per-transaction reuse:
     /// published-state enforcement precedes the (deduplicated) full
-    /// `fixed_by_key` verification of the immutable version.
+    /// `fixed_by_key` verification of the immutable version. Reuse
+    /// applies only while the entry is retained under the LRU bound.
     pub(crate) fn verified(
         &mut self,
         c: &Connection,
@@ -2342,7 +2510,11 @@ impl VerifyCtx {
             self.lru.push_back(key);
             return Ok((facts, verified));
         }
-        let verified = Rc::new(fixed_by_key(c, key)?);
+        let verified = Rc::new(fixed_by_key_ctx(c, key, &mut self.segments)?);
+        #[cfg(test)]
+        {
+            self.fixed_runs += 1;
+        }
         self.verified.insert(key, verified.clone());
         self.lru.push_back(key);
         if self.lru.len() > VERIFIED_CTX_CAP
@@ -2351,6 +2523,19 @@ impl VerifyCtx {
             self.verified.remove(&evicted);
         }
         Ok((facts, verified))
+    }
+
+    /// The transaction-scoped verified segment cache backing `verified`.
+    #[cfg(test)]
+    pub(crate) fn segments(&self) -> &compact_v19::SegmentReadCtx {
+        &self.segments
+    }
+
+    /// Mutable access to the verified segment cache for ctx-aware read
+    /// helpers on this transaction's read path (e.g. persisted delta-clip
+    /// comparison inside `read_market_update_ctx`).
+    pub(crate) fn segments_mut(&mut self) -> &mut compact_v19::SegmentReadCtx {
+        &mut self.segments
     }
 
     /// `verified` resolved from a version id instead of a version key.
