@@ -49,15 +49,9 @@ impl CompactBar {
     }
 
     pub fn to_bar(&self, period: Period) -> Result<Bar, Error> {
-        self.check(period)?;
-        let amount = self
-            .amount
-            .as_deref()
-            .map(|text| text.parse::<Decimal>())
-            .transpose()
-            .map_err(|_| invalid("stored amount is not a decimal"))?;
+        let (date, amount) = self.decode_checked(period)?;
         Ok(Bar {
-            date: epoch_date(self.trade_day)?,
+            date,
             open: Decimal::new(self.open_cents, 2),
             high: Decimal::new(self.high_cents, 2),
             low: Decimal::new(self.low_cents, 2),
@@ -68,8 +62,13 @@ impl CompactBar {
         })
     }
 
-    fn check(&self, period: Period) -> Result<(), Error> {
-        epoch_date(self.trade_day)?;
+    /// Single-pass checked decode (XP-018): the exact `check` validations
+    /// in their current error order — epoch date, OHLC ordering, volume
+    /// sign, amount parse/sign/canonical lexical form, yearly-r7
+    /// rejection — returning the already-checked date and parsed amount
+    /// so callers consume them instead of re-parsing.
+    fn decode_checked(&self, period: Period) -> Result<(NaiveDate, Option<Decimal>), Error> {
+        let date = epoch_date(self.trade_day)?;
         if self.high_cents < self.open_cents
             || self.high_cents < self.close_cents
             || self.high_cents < self.low_cents
@@ -83,21 +82,29 @@ impl CompactBar {
         {
             return Err(invalid("negative volume"));
         }
-        if let Some(amount) = &self.amount {
-            let parsed = amount
-                .parse::<Decimal>()
-                .map_err(|_| invalid("stored amount is not a decimal"))?;
-            if parsed < Decimal::ZERO {
-                return Err(invalid("negative amount"));
+        let amount = match &self.amount {
+            Some(amount) => {
+                let parsed = amount
+                    .parse::<Decimal>()
+                    .map_err(|_| invalid("stored amount is not a decimal"))?;
+                if parsed < Decimal::ZERO {
+                    return Err(invalid("negative amount"));
+                }
+                if !canonical_decimal(amount) {
+                    return Err(invalid("stored amount is not canonical"));
+                }
+                Some(parsed)
             }
-            if !canonical_decimal(amount) {
-                return Err(invalid("stored amount is not canonical"));
-            }
-        }
+            None => None,
+        };
         if period == Period::Year && self.r7_raw.is_some() {
             return Err(invalid("yearly bar must not carry r7_raw"));
         }
-        Ok(())
+        Ok((date, amount))
+    }
+
+    fn check(&self, period: Period) -> Result<(), Error> {
+        self.decode_checked(period).map(|_| ())
     }
 }
 
@@ -1165,6 +1172,147 @@ mod tests {
             let d = Decimal::from_str(v).unwrap().normalize();
             let s = d.to_string();
             assert!(canonical_decimal(&s), "normalized {s:?} must be canonical");
+        }
+    }
+
+    /// XP-018 differential oracle: the ORIGINAL two-pass implementation —
+    /// `check` validations followed by a second amount parse and a
+    /// separate epoch-date conversion inside `to_bar` — copied verbatim.
+    /// `decode_checked` must produce identical `Bar`/`Error` outcomes.
+    fn reference_check(bar: &CompactBar, period: Period) -> Result<(), Error> {
+        epoch_date(bar.trade_day)?;
+        if bar.high_cents < bar.open_cents
+            || bar.high_cents < bar.close_cents
+            || bar.high_cents < bar.low_cents
+            || bar.low_cents > bar.open_cents
+            || bar.low_cents > bar.close_cents
+        {
+            return Err(invalid("OHLC ordering violated"));
+        }
+        if let Some(volume) = bar.volume
+            && volume < 0
+        {
+            return Err(invalid("negative volume"));
+        }
+        if let Some(amount) = &bar.amount {
+            let parsed = amount
+                .parse::<Decimal>()
+                .map_err(|_| invalid("stored amount is not a decimal"))?;
+            if parsed < Decimal::ZERO {
+                return Err(invalid("negative amount"));
+            }
+            if !canonical_decimal(amount) {
+                return Err(invalid("stored amount is not canonical"));
+            }
+        }
+        if period == Period::Year && bar.r7_raw.is_some() {
+            return Err(invalid("yearly bar must not carry r7_raw"));
+        }
+        Ok(())
+    }
+
+    fn reference_to_bar(bar: &CompactBar, period: Period) -> Result<Bar, Error> {
+        reference_check(bar, period)?;
+        let amount = bar
+            .amount
+            .as_deref()
+            .map(|text| text.parse::<Decimal>())
+            .transpose()
+            .map_err(|_| invalid("stored amount is not a decimal"))?;
+        Ok(Bar {
+            date: epoch_date(bar.trade_day)?,
+            open: Decimal::new(bar.open_cents, 2),
+            high: Decimal::new(bar.high_cents, 2),
+            low: Decimal::new(bar.low_cents, 2),
+            close: Decimal::new(bar.close_cents, 2),
+            volume: bar.volume.map(Decimal::from),
+            amount,
+            r7_raw: bar.r7_raw,
+        })
+    }
+
+    /// XP-018 codec equivalence: `check`/`to_bar` (delegating to
+    /// `decode_checked`) vs the verbatim two-pass oracle — same `Bar` on
+    /// success, identical `Error` on failure, across both periods and
+    /// malformed inputs including multi-defect bars that pin the
+    /// original error order.
+    #[test]
+    fn decode_checked_matches_original_two_pass_oracle() {
+        let mut variants = vec![bar1(), bar2()];
+        // None/Some volume/amount/r7 combinations and canonical amounts.
+        for (volume, amount, r7) in [
+            (None, None, None),
+            (Some(0), Some("0"), Some(0)),
+            (Some(5), Some("0.05"), None),
+            (Some(10), Some("12.34"), Some(7)),
+        ] {
+            let mut bar = bar2();
+            bar.volume = volume;
+            bar.amount = amount.map(str::to_string);
+            bar.r7_raw = r7;
+            variants.push(bar);
+        }
+        // Amount lexical rejections, kept in check() error order:
+        // parse failure, negative, non-canonical.
+        for amount in [
+            "-0",
+            "007",
+            "1.230",
+            "+1",
+            "1e3",
+            "",
+            "abc",
+            "-1",
+            "79228162514264337593543950336",
+        ] {
+            let mut bar = bar2();
+            bar.amount = Some(amount.into());
+            variants.push(bar);
+        }
+        // Invalid epoch day.
+        let mut bar = bar2();
+        bar.trade_day = i64::MAX;
+        variants.push(bar);
+        // OHLC inversion.
+        let mut bar = bar2();
+        bar.high_cents = 49;
+        variants.push(bar);
+        // Negative volume.
+        let mut bar = bar2();
+        bar.volume = Some(-1);
+        variants.push(bar);
+        // Yearly r7 rejection (valid under Period::Day).
+        let mut bar = bar2();
+        bar.r7_raw = Some(1);
+        variants.push(bar);
+        // Multi-defect bars pin the original error order: day first,
+        // then OHLC, then volume, then amount, then yearly r7.
+        let mut bar = bar2();
+        bar.trade_day = i64::MAX;
+        bar.high_cents = 49;
+        bar.volume = Some(-1);
+        bar.amount = Some("abc".into());
+        bar.r7_raw = Some(1);
+        variants.push(bar);
+        let mut bar = bar2();
+        bar.high_cents = 49;
+        bar.volume = Some(-1);
+        bar.amount = Some("-1".into());
+        bar.r7_raw = Some(1);
+        variants.push(bar);
+        for bar in &variants {
+            for period in [Period::Day, Period::Year] {
+                assert_eq!(
+                    bar.check(period),
+                    reference_check(bar, period),
+                    "check diverged for {bar:?} {period:?}"
+                );
+                assert_eq!(
+                    bar.to_bar(period),
+                    reference_to_bar(bar, period),
+                    "to_bar diverged for {bar:?} {period:?}"
+                );
+            }
         }
     }
 
