@@ -98,74 +98,61 @@ pub(crate) fn insert_segment(
 pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Error> {
     #[cfg(test)]
     super::compact_versions::read_counts::count_segment_read();
-    let (digest_bytes, entity, period_code, first_day, last_day, row_count): (
-        Vec<u8>,
-        String,
-        i64,
-        i64,
-        i64,
-        i64,
-    ) = c
-        .query_row(
+    let mut header = c
+        .prepare_cached(
             "SELECT segment_digest,entity,period,first_day,last_day,row_count FROM bar_segments WHERE segment_key=?1",
-            params![key],
-            |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                ))
-            },
         )
+        .map_err(storage)?;
+    let row = header
+        .query_row(params![key], |r| {
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+            ))
+        })
         .optional()
-        .map_err(storage)?
-        .ok_or_else(|| integrity("segment missing"))?;
+        .map_err(storage)?;
+    drop(header);
+    let (digest_bytes, entity, period_code, first_day, last_day, row_count) =
+        row.ok_or_else(|| integrity("segment missing"))?;
     let digest: Digest = digest_bytes
         .try_into()
         .map_err(|_| integrity("segment digest length mismatch"))?;
     let period = decode_period(period_code)?;
     let mut statement = c
-        .prepare(
+        .prepare_cached(
             "SELECT trade_day,open_cents,high_cents,low_cents,close_cents,volume,amount,r7_raw FROM segment_bars WHERE segment_key=?1 ORDER BY trade_day",
         )
         .map_err(storage)?;
-    let rows = statement
-        .query_map(params![key], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, i64>(4)?,
-                r.get::<_, Option<i64>>(5)?,
-                r.get::<_, Option<String>>(6)?,
-                r.get::<_, Option<i64>>(7)?,
-            ))
-        })
-        .map_err(storage)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(storage)?;
-    drop(statement);
-    let mut bars = Vec::with_capacity(rows.len());
-    for (trade_day, open_cents, high_cents, low_cents, close_cents, volume, amount, r7_raw) in rows
+    // Rows stream straight into the bar vector — no tuple staging; the
+    // declared row_count bounds only the reserve hint (never the check).
+    let mut bars =
+        Vec::with_capacity(row_count.clamp(0, compact_market::MAX_SEGMENT_BARS as i64) as usize);
     {
-        bars.push(CompactBar {
-            trade_day,
-            open_cents,
-            high_cents,
-            low_cents,
-            close_cents,
-            volume,
-            amount,
-            r7_raw: r7_raw
-                .map(u32::try_from)
-                .transpose()
-                .map_err(|_| integrity("r7_raw out of u32 range"))?,
-        });
+        let mut rows = statement.query(params![key]).map_err(storage)?;
+        while let Some(r) = rows.next().map_err(storage)? {
+            bars.push(CompactBar {
+                trade_day: r.get(0).map_err(storage)?,
+                open_cents: r.get(1).map_err(storage)?,
+                high_cents: r.get(2).map_err(storage)?,
+                low_cents: r.get(3).map_err(storage)?,
+                close_cents: r.get(4).map_err(storage)?,
+                volume: r.get(5).map_err(storage)?,
+                amount: r.get(6).map_err(storage)?,
+                r7_raw: r
+                    .get::<_, Option<i64>>(7)
+                    .map_err(storage)?
+                    .map(u32::try_from)
+                    .transpose()
+                    .map_err(|_| integrity("r7_raw out of u32 range"))?,
+            });
+        }
     }
+    drop(statement);
     if bars.len() as i64 != row_count {
         return Err(integrity("segment row_count mismatch"));
     }
@@ -174,9 +161,9 @@ pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Er
     {
         return Err(integrity("segment day bounds mismatch"));
     }
-    for bar in &bars {
-        bar.to_bar(period).map_err(integrity)?;
-    }
+    // No preliminary per-bar decode: `segment_digest` below runs every
+    // bar through the same checked decoder before its digest bytes feed
+    // the comparison — malformed bars fail closed there.
     let recomputed = compact_market::segment_digest(&entity, period, &bars).map_err(integrity)?;
     if recomputed != digest {
         return Err(integrity("segment digest mismatch"));
