@@ -765,9 +765,7 @@ pub(crate) fn read_bound_task_light(
     };
     let item_rows: Vec<(String, String)> = {
         let mut stmt = c
-            .prepare(
-                "SELECT item_id,target_json FROM task_items WHERE task_id=?1 ORDER BY item_id",
-            )
+            .prepare("SELECT item_id,target_json FROM task_items WHERE task_id=?1 ORDER BY item_id")
             .map_err(storage)?;
         stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(storage)?
@@ -815,9 +813,7 @@ pub(crate) fn read_bound_task_light(
     match (kind.as_str(), bound_task, terminal) {
         ("task", Some(_bound_task_id), None) => {
             #[cfg(target_os = "linux")]
-            crate::sqlite_verification_inspection::validate_task_request(
-                c, &request_id, &command,
-            )?;
+            crate::sqlite_verification_inspection::validate_task_request(c, &request_id, &command)?;
             let expected = if task.retry_of.is_some() {
                 CommandKey {
                     operation: "retry_task".into(),

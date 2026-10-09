@@ -3916,16 +3916,15 @@ fn light_bound_task_matches_full_projection() {
             observe::authorized(&light, &access),
             observe::authorized(&full, &access)
         );
-        assert_eq!(
-            light.visible_status("probe"),
-            full.visible_status("probe")
-        );
+        assert_eq!(light.visible_status("probe"), full.visible_status("probe"));
         // Placeholders stay unambiguous for misuse detection.
         assert!(light.claims.is_empty());
         assert!(light.items.iter().all(|i| i.outcome.is_none()));
-        assert!(crate::sqlite_tasks::read_bound_task_light(c, "absent")
-            .unwrap()
-            .is_none());
+        assert!(
+            crate::sqlite_tasks::read_bound_task_light(c, "absent")
+                .unwrap()
+                .is_none()
+        );
         Ok::<_, Error>(())
     })
     .unwrap();
@@ -3941,8 +3940,8 @@ fn compact_progress_and_availability_keep_reference_surface() {
         observe::{ObservationRepository, Observer},
         query::ReadRepository,
         wire::{
-            ContractVersion, Dataset, Exchange, Filter, ProgressQuery, Query, Security,
-            Selection, VersionChoice,
+            ContractVersion, Dataset, Exchange, Filter, ProgressQuery, Query, Security, Selection,
+            VersionChoice,
         },
     };
     use crate::market_update::{UpdateBatchItem, UpdateBatchPrepared};
@@ -4119,7 +4118,5 @@ fn compact_progress_and_availability_keep_reference_surface() {
     assert_eq!(page.items[0].last_record, Some(date(2)));
 
     // verify_versions still passes on the slim-derived references.
-    supply
-        .verify(&[item.version_ref.clone().unwrap()])
-        .unwrap();
+    supply.verify(&[item.version_ref.clone().unwrap()]).unwrap();
 }

@@ -559,9 +559,7 @@ impl YearlyMetaScan {
             .records
             .iter()
             .find(|rec| rec.bar.date == date)
-            .ok_or_else(|| {
-                Error::Integrity("yearly record missing from re-aggregation".into())
-            })?;
+            .ok_or_else(|| Error::Integrity("yearly record missing from re-aggregation".into()))?;
         Ok((
             Some(record.lineage.first_trading_date),
             Some(record.lineage.last_trading_date),

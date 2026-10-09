@@ -1703,10 +1703,8 @@ fn header_version(
         Some(l) => Some(YearlyDerivation {
             base_daily_version_id: l.base_daily_version_id,
             algorithm_version: l.algorithm_version,
-            first_trading_date: compact_market::epoch_date(l.first_trade_day)
-                .map_err(integrity)?,
-            last_trading_date: compact_market::epoch_date(l.last_trade_day)
-                .map_err(integrity)?,
+            first_trading_date: compact_market::epoch_date(l.first_trade_day).map_err(integrity)?,
+            last_trading_date: compact_market::epoch_date(l.last_trade_day).map_err(integrity)?,
         }),
         None => None,
     };
