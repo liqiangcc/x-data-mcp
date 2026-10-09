@@ -101,6 +101,26 @@ fn confirmed_gap(g: &crate::market_storage::ProvenGap) -> Result<ConfirmedGap, E
         .map_err(|e| Error::Integrity(format!("proven gap evidence: {e}")))?,
     })
 }
+/// The read surface one progress RPC needs: task facts plus every
+/// verification the response still owes. Implementations may place all
+/// six calls inside a single storage read transaction so verified work
+/// can be reused *within* that snapshot — never across requests, pages,
+/// commits or databases (XP-016). It is a transaction scope, not a
+/// trust cache: every verifier and comparison still runs.
+pub trait ProgressRead {
+    fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error>;
+    fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error>;
+    fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error>;
+    fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error>;
+    fn verify_publication_check(
+        &self,
+        receipt: &Option<crate::publication_verification::decision::Receipt>,
+    ) -> Result<(), Error>;
+    fn verify_stopped_check(
+        &self,
+        receipt: &Option<crate::task_verification::decision::Receipt>,
+    ) -> Result<(), Error>;
+}
 pub trait ObservationRepository {
     fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error>;
     fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error>;
@@ -120,6 +140,50 @@ pub trait ObservationRepository {
         &self,
         receipt: &Option<crate::task_verification::decision::Receipt>,
     ) -> Result<(), Error>;
+    /// One progress RPC scope. The default wraps `self` in a forwarding
+    /// `ProgressRead` adapter — behavior identical to calling the six
+    /// repository methods directly — so non-SQLite repositories keep
+    /// working unchanged. Backends may override to run the whole RPC
+    /// inside one read transaction.
+    fn with_progress_read<T>(
+        &self,
+        f: impl FnOnce(&dyn ProgressRead) -> Result<T, Error>,
+    ) -> Result<T, Error>
+    where
+        Self: Sized,
+    {
+        struct Forward<'a, R: ObservationRepository + ?Sized>(&'a R);
+        impl<R: ObservationRepository + ?Sized> ProgressRead for Forward<'_, R> {
+            fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
+                self.0.task(id, access)
+            }
+            fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
+                self.0.verify_versions(refs)
+            }
+            fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error> {
+                self.0.verify_range_results(results)
+            }
+            fn verify_yearly_results(
+                &self,
+                results: &[YearlyExecutionResult],
+            ) -> Result<(), Error> {
+                self.0.verify_yearly_results(results)
+            }
+            fn verify_publication_check(
+                &self,
+                receipt: &Option<crate::publication_verification::decision::Receipt>,
+            ) -> Result<(), Error> {
+                self.0.verify_publication_check(receipt)
+            }
+            fn verify_stopped_check(
+                &self,
+                receipt: &Option<crate::task_verification::decision::Receipt>,
+            ) -> Result<(), Error> {
+                self.0.verify_stopped_check(receipt)
+            }
+        }
+        f(&Forward(self))
+    }
 }
 pub fn entity(symbol: &str) -> Option<Security> {
     let (ex, code) = symbol.split_once('.')?;
@@ -325,10 +389,25 @@ impl<R: ObservationRepository> Observer<R> {
         page_size(args.page_size)?;
         let cursor = args.cursor.take();
         let key = format!("progress:{}", serde_json::to_string(&args).unwrap());
+        // One RPC (fresh or cursor page) = one read scope: backends may
+        // consolidate all storage reads below into a single transaction
+        // (XP-016). Cursor identity/authorization/expiry checks and the
+        // fresh-assembly policy are unchanged.
+        self.repository
+            .with_progress_read(|read| self.progress_in(read, key, cursor, args, access))
+    }
+    fn progress_in(
+        &self,
+        read: &dyn ProgressRead,
+        key: String,
+        cursor: Option<String>,
+        args: ProgressQuery,
+        access: &Access,
+    ) -> Result<ProgressPage, Error> {
         let mut s = if let Some(c) = cursor {
             self.resume(&c, &key, access)?
         } else {
-            let facts = self.repository.task(&args.task_id, access)?;
+            let facts = read.task(&args.task_id, access)?;
             let mut unfinished = vec![];
             let mut finished = 0;
             let mut succeeded = 0;
@@ -419,13 +498,11 @@ impl<R: ObservationRepository> Observer<R> {
         let Content::Progress(p) = &s.content else {
             return Err(invalid("cursor category"));
         };
-        self.repository.verify_versions(&p.publication_versions)?;
-        self.repository.verify_range_results(&p.range_results)?;
-        self.repository.verify_yearly_results(&p.yearly_results)?;
-        self.repository
-            .verify_stopped_check(&p.stopped_write_check)?;
-        self.repository
-            .verify_publication_check(&p.publication_check)?;
+        read.verify_versions(&p.publication_versions)?;
+        read.verify_range_results(&p.range_results)?;
+        read.verify_yearly_results(&p.yearly_results)?;
+        read.verify_stopped_check(&p.stopped_write_check)?;
+        read.verify_publication_check(&p.publication_check)?;
         let end = (s.offset + args.page_size).min(p.unfinished.len());
         let more = end < p.unfinished.len();
         let mut result = (**p).clone();

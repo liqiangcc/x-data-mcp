@@ -4919,27 +4919,892 @@ mod xp011 {
             .unwrap();
     }
 
-    /// Round-2 R2: measured lower-layer execution counts for one complete
-    /// public `get_task_progress` read (fresh page). The instrumentation
-    /// counts actual `read_segment`/`fixed`/`result_facts` executions
-    /// across the transactions the call creates — not `Rc::ptr_eq`
-    /// extrapolation. Expected values are derived from the fixture: two
-    /// verified versions (v1a, v2a) are re-verified once per read
-    /// transaction the observer opens.
+    /// Round-2 R2 / XP-016 case 1: measured lower-layer execution counts
+    /// for one complete public `get_task_progress` read (fresh page).
+    /// The instrumentation counts actual `read_segment`/`fixed`/
+    /// `result_facts` executions — not `Rc::ptr_eq` extrapolation.
+    /// XP-016 consolidates the whole RPC into ONE read transaction with
+    /// ONE `VerifyCtx`: v1a and v2a are verified once and their
+    /// certificates carry every later metadata touch (was 5/5/6 across
+    /// three transactions).
     #[test]
     fn measured_counts_for_complete_public_read() {
         use crate::sqlite_market::compact_versions::read_counts;
         let f = fixture();
         read_counts::reset();
-        optimized_progress(&f, None, 100, &f.access).unwrap();
+        let page = optimized_progress(&f, None, 100, &f.access).unwrap();
         let (segment_reads, fixed_runs, facts_reads) = read_counts::snapshot();
-        // tx boundaries: task_facts (v1a+v2a), verify_versions (v2a),
-        // verify_range_results (v1a+v2a). Each is a fresh transaction —
-        // verified state is not carried across snapshots.
+        // One transaction: task_facts (v1a+v2a verified once each),
+        // verify_versions and verify_range_results served by the same
+        // ctx — no re-verification across phases.
         assert_eq!(
             (fixed_runs, facts_reads, segment_reads),
-            (5, 5, 6),
+            (2, 2, 2),
             "measured counts: fixed={fixed_runs} facts={facts_reads} segments={segment_reads}"
         );
+        // Same full wire result as before consolidation.
+        assert_eq!(page.task.task_id, f.task);
+        assert_eq!(page.total, 3);
+        assert_eq!(page.finished, 1);
+        assert_eq!(page.succeeded, 1);
+        assert_eq!(page.failed, 0);
+        assert_eq!(page.publication_versions.len(), 1);
+        assert_eq!(page.range_results.len(), 1);
+        assert_eq!(page.unfinished.len(), 2);
+        assert!(page.page_complete);
+    }
+
+    /// XP-016 (GOAL-008): one storage read transaction + one `VerifyCtx`
+    /// per progress RPC; verified facts/certificates are
+    /// snapshot-scoped, never cross-request trust.
+    mod xp016 {
+        use super::*;
+        use crate::data_supply::observe::{AvailabilityFacts, ProgressRead, TaskFacts};
+        use crate::data_supply::wire::{RangeExecutionResult, VersionRef, YearlyExecutionResult};
+        use std::cell::{Cell, RefCell};
+
+        /// Case-2 fixture: three published bases plus three committed
+        /// append results — six distinct version keys, beyond the
+        /// whole-history LRU bound of 4.
+        fn fixture_three() -> Fixture {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let bars = vec![bar(0, 100), bar(1, 110), bar(2, 120)];
+            publish_head(&repo, "req-a", "pub-a", "sh.600006", "v1a", bars.clone());
+            publish_head(&repo, "req-b", "pub-b", "sh.600007", "v1b", bars.clone());
+            publish_head(&repo, "req-c", "pub-c", "sh.600010", "v1c", bars);
+            let scope_a = task_control::legacy::scope_id("sh.600006", "day");
+            let scope_b = task_control::legacy::scope_id("sh.600007", "day");
+            let scope_c = task_control::legacy::scope_id("sh.600010", "day");
+            let item = |item_id: &str, symbol: &str, scope: &str, base: &str| ItemSpec {
+                item_id: item_id.into(),
+                target: json!({"symbol": symbol, "period": "day"}),
+                progress_unit: "security_period".into(),
+                frozen_inputs: crate::market_update::tasks::frozen(
+                    base,
+                    "ab".repeat(32).as_str(),
+                    &crate::market_update::DateRange {
+                        start: date(0),
+                        end: date(3),
+                    },
+                ),
+                scope_keys: BTreeSet::from([scope.to_string()]),
+            };
+            let work = FrozenWork {
+                items: vec![
+                    item("item-1", "sh.600006", &scope_a, "v1a"),
+                    item("item-2", "sh.600007", &scope_b, "v1b"),
+                    item("item-3", "sh.600010", &scope_c, "v1c"),
+                ],
+                scopes: BTreeSet::from([scope_a.clone(), scope_b.clone(), scope_c.clone()]),
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: CommandKey {
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+                },
+                intent: json!({}),
+            };
+            let task = match repo
+                .accept("req-upd", &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+                _ => panic!("expected task outcome"),
+            };
+            let commit = |item_id: &str,
+                          publication_id: &str,
+                          symbol: &str,
+                          scope: &str,
+                          base: &str,
+                          result: &str| {
+                UpdateBatchItem {
+                    task_id: task.clone(),
+                    item_id: item_id.into(),
+                    publication_id: publication_id.into(),
+                    run_id: RUN.into(),
+                    symbol: symbol.into(),
+                    occupancy_key: scope.to_string(),
+                    prepared: UpdateBatchPrepared::Append {
+                        base_version_id: base.into(),
+                        result_version_id: result.into(),
+                        upserts: vec![bar(3, 130)],
+                        metadata: None,
+                        continuity: json!({
+                            "continuity": {"mode": "append", "day_member_sha256": "cd".repeat(32)}
+                        }),
+                    },
+                }
+            };
+            repo.commit_update_batch(
+                &task,
+                &[
+                    commit("item-1", "upd-1", "sh.600006", &scope_a, "v1a", "v2a"),
+                    commit("item-2", "upd-2", "sh.600007", &scope_b, "v1b", "v2b"),
+                    commit("item-3", "upd-3", "sh.600010", &scope_c, "v1c", "v2c"),
+                ],
+            )
+            .unwrap()
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+            Fixture {
+                _dir: dir,
+                path,
+                repo,
+                task,
+                access: Access::local(),
+            }
+        }
+
+        /// Case 2: six distinct version keys exceed the whole-history
+        /// LRU bound (4). Every phase of the single progress RPC reuses
+        /// certificates for metadata touches — a version whose retained
+        /// history was LRU-evicted does NOT re-run `fixed` — while the
+        /// very next RPC opens a fresh scope and verifies all six again.
+        #[test]
+        fn certificates_cover_metadata_after_lru_eviction_measured() {
+            use crate::sqlite_market::compact_versions::read_counts;
+            let f = fixture_three();
+            read_counts::reset();
+            let page = optimized_progress(&f, None, 100, &f.access).unwrap();
+            let (segments, fixed, facts) = read_counts::snapshot();
+            // v1a/v1b/v1c bases + v2a/v2b/v2c delta results: each
+            // verified exactly once; certificate hits serve all later
+            // metadata touches despite verified-LRU eviction.
+            assert_eq!(
+                (fixed, facts, segments),
+                (6, 6, 6),
+                "fixed={fixed} facts={facts} segments={segments}"
+            );
+            // Same classification/metadata as the uncached reference.
+            assert_eq!(page.task.task_id, f.task);
+            assert_eq!(page.total, 3);
+            assert_eq!(page.finished, 3);
+            assert_eq!(page.succeeded, 3);
+            assert_eq!(page.failed, 0);
+            assert_eq!(page.publication_versions.len(), 3);
+            assert_eq!(page.range_results.len(), 3);
+            assert!(page.page_complete);
+            // No cross-request reuse: the next RPC is a fresh scope and
+            // verifies all six versions again.
+            read_counts::reset();
+            optimized_progress(&f, None, 100, &f.access).unwrap();
+            let (segments, fixed, facts) = read_counts::snapshot();
+            assert_eq!((fixed, facts, segments), (6, 6, 6));
+        }
+
+        /// Case 3: >512 published keys — certificate FIFO eviction makes
+        /// a revisit fully re-verify; a bounded facts hit never grants a
+        /// certificate on its own.
+        #[test]
+        fn certificate_fifo_eviction_reverifies_and_facts_alone_not_certified() {
+            let f = fixture();
+            let mut ids = Vec::new();
+            for i in 0..520u32 {
+                let symbol = format!("sh.9{i:05}");
+                let version_id = format!("vx{i:04}");
+                publish_head(
+                    &f.repo,
+                    &format!("req-x{i}"),
+                    &format!("pub-x{i}"),
+                    &symbol,
+                    &version_id,
+                    vec![bar(0, 100)],
+                );
+                ids.push(version_id);
+            }
+            f.repo
+                .read(|c| {
+                    let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                    // Facts memo alone never grants a certificate.
+                    let key0 = version_key(c, &ids[0])?;
+                    let _ = ctx.facts(c, key0)?;
+                    let _ = ctx.verified_facts(c, key0)?;
+                    assert_eq!(ctx.fixed_runs, 1);
+                    // Verify all 520: certificates cap at 512 FIFO.
+                    for id in &ids[1..] {
+                        let _ = ctx.verified_facts_by_id(c, id)?;
+                    }
+                    assert_eq!(ctx.fixed_runs, 520);
+                    // The first certificate was evicted — the revisit
+                    // runs full verification again.
+                    let _ = ctx.verified_facts(c, key0)?;
+                    assert_eq!(ctx.fixed_runs, 521);
+                    // A still-retained certificate stays a metadata hit.
+                    let _ = ctx.verified_facts_by_id(c, &ids[519])?;
+                    assert_eq!(ctx.fixed_runs, 521);
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+        }
+
+        /// Case 3 (fail-closed halves): a corrupt first touch fails and
+        /// leaves no certificate; a whole-bar read after whole-history
+        /// LRU eviction reconstructs bars identical to the uncached read
+        /// even though a certificate remains.
+        #[test]
+        fn failed_first_touch_no_certificate_and_whole_bars_reconstruct() {
+            let f = fixture();
+            publish_head(
+                &f.repo,
+                "req-bad",
+                "pub-bad",
+                "sh.600020",
+                "vbad",
+                vec![bar(0, 100)],
+            );
+            for (req, sym, id) in [
+                ("req-1", "sh.600021", "w1"),
+                ("req-2", "sh.600022", "w2"),
+                ("req-3", "sh.600023", "w3"),
+                ("req-4", "sh.600024", "w4"),
+            ] {
+                publish_head(&f.repo, req, &format!("p-{id}"), sym, id, vec![bar(0, 100)]);
+            }
+            let clip_segment = "SELECT segment_key FROM version_checkpoint_clips \
+                 WHERE version_key=(SELECT version_key FROM data_versions WHERE version_id='vbad')";
+            tamper(
+                &f.path,
+                &format!(
+                    "UPDATE segment_bars SET close_cents=close_cents+1 WHERE segment_key IN ({clip_segment})"
+                ),
+            );
+            f.repo
+                .read(|c| {
+                    let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                    assert!(ctx.verified_facts_by_id(c, "vbad").is_err());
+                    // Failed verification records neither a retained
+                    // history nor a certificate.
+                    assert_eq!(ctx.fixed_runs, 0);
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+            // Repair — the next touch runs real verification again; a
+            // phantom certificate would have skipped it.
+            tamper(
+                &f.path,
+                &format!(
+                    "UPDATE segment_bars SET close_cents=close_cents-1 WHERE segment_key IN ({clip_segment})"
+                ),
+            );
+            f.repo
+                .read(|c| {
+                    let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                    assert!(ctx.verified_facts_by_id(c, "vbad").is_ok());
+                    assert_eq!(ctx.fixed_runs, 1);
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+            // Whole-bar read after whole-history LRU eviction: w1's
+            // certificate survives (cap 512) while its VerifiedVersion
+            // was evicted (cap 4) — the bars are reconstructed and equal
+            // the uncached read.
+            f.repo
+                .read(|c| {
+                    let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                    let _ = ctx.verified_by_id(c, "w1")?;
+                    for id in ["w2", "w3", "w4", "vbad"] {
+                        let _ = ctx.verified_by_id(c, id)?;
+                    }
+                    assert_eq!(ctx.fixed_runs, 5);
+                    let (_, rebuilt) = ctx.verified_by_id(c, "w1")?;
+                    assert_eq!(ctx.fixed_runs, 6);
+                    let uncached = crate::sqlite_market::compact_versions::fixed(c, "w1")?;
+                    assert_eq!(rebuilt.version, uncached.version);
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+        }
+
+        /// Case 4: a `VerifyCtx` binds to one `Connection` — reuse from
+        /// a second connection fails closed on facts hits, certificate
+        /// hits and fresh lookups alike. (Oversized/unretained segment
+        /// behavior is covered by the compact_v19 segment-ctx test.)
+        #[test]
+        fn verify_ctx_bound_to_one_connection() {
+            let f = fixture();
+            f.repo
+                .read(|c| {
+                    let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                    let key = version_key(c, "v2a")?;
+                    let _ = ctx.facts(c, key)?;
+                    let _ = ctx.verified_facts(c, key)?;
+                    let other = rusqlite::Connection::open(&f.path).unwrap();
+                    assert!(matches!(ctx.facts(&other, key), Err(Error::Integrity(_))));
+                    assert!(matches!(
+                        ctx.verified_facts(&other, key),
+                        Err(Error::Integrity(_))
+                    ));
+                    assert!(matches!(
+                        ctx.verified(&other, key),
+                        Err(Error::Integrity(_))
+                    ));
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+        }
+
+        /// Case 5: recording `ProgressRead` — fresh progress calls
+        /// `task` then every verifier; a cursor page calls every
+        /// verifier again inside a NEW `with_progress_read` scope; any
+        /// injected verifier error fails the RPC (no successful page).
+        struct RecordingRead<'a> {
+            inner: &'a dyn ProgressRead,
+            calls: &'a RefCell<Vec<String>>,
+            fail: &'a RefCell<Option<&'static str>>,
+            scope: usize,
+        }
+        impl RecordingRead<'_> {
+            fn hit<T>(&self, name: &'static str, r: Result<T, Error>) -> Result<T, Error> {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("s{}.{}", self.scope, name));
+                if self.fail.borrow().as_deref() == Some(name) {
+                    return Err(Error::Invalid(format!("injected {name} failure")));
+                }
+                r
+            }
+        }
+        impl ProgressRead for RecordingRead<'_> {
+            fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
+                self.hit("task", self.inner.task(id, access))
+            }
+            fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
+                self.hit("verify_versions", self.inner.verify_versions(refs))
+            }
+            fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error> {
+                self.hit(
+                    "verify_range_results",
+                    self.inner.verify_range_results(results),
+                )
+            }
+            fn verify_yearly_results(
+                &self,
+                results: &[YearlyExecutionResult],
+            ) -> Result<(), Error> {
+                self.hit(
+                    "verify_yearly_results",
+                    self.inner.verify_yearly_results(results),
+                )
+            }
+            fn verify_publication_check(
+                &self,
+                receipt: &Option<crate::publication_verification::decision::Receipt>,
+            ) -> Result<(), Error> {
+                self.hit(
+                    "verify_publication_check",
+                    self.inner.verify_publication_check(receipt),
+                )
+            }
+            fn verify_stopped_check(
+                &self,
+                receipt: &Option<crate::task_verification::decision::Receipt>,
+            ) -> Result<(), Error> {
+                self.hit(
+                    "verify_stopped_check",
+                    self.inner.verify_stopped_check(receipt),
+                )
+            }
+        }
+        struct RecordingRepo {
+            inner: SqliteSupply,
+            calls: RefCell<Vec<String>>,
+            scopes: Cell<usize>,
+            fail: RefCell<Option<&'static str>>,
+        }
+        impl ObservationRepository for RecordingRepo {
+            fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error> {
+                self.inner.tasks(access)
+            }
+            fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
+                self.inner.task(id, access)
+            }
+            fn availability(
+                &self,
+                plan: &crate::data_supply::query::QueryPlan,
+                access: &Access,
+            ) -> Result<Vec<AvailabilityFacts>, Error> {
+                self.inner.availability(plan, access)
+            }
+            fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
+                self.inner.verify_versions(refs)
+            }
+            fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error> {
+                self.inner.verify_range_results(results)
+            }
+            fn verify_yearly_results(
+                &self,
+                results: &[YearlyExecutionResult],
+            ) -> Result<(), Error> {
+                self.inner.verify_yearly_results(results)
+            }
+            fn verify_publication_check(
+                &self,
+                receipt: &Option<crate::publication_verification::decision::Receipt>,
+            ) -> Result<(), Error> {
+                self.inner.verify_publication_check(receipt)
+            }
+            fn verify_stopped_check(
+                &self,
+                receipt: &Option<crate::task_verification::decision::Receipt>,
+            ) -> Result<(), Error> {
+                self.inner.verify_stopped_check(receipt)
+            }
+            fn with_progress_read<T>(
+                &self,
+                f: impl FnOnce(&dyn ProgressRead) -> Result<T, Error>,
+            ) -> Result<T, Error> {
+                self.scopes.set(self.scopes.get() + 1);
+                let scope = self.scopes.get();
+                self.inner.with_progress_read(|inner| {
+                    f(&RecordingRead {
+                        inner,
+                        calls: &self.calls,
+                        fail: &self.fail,
+                        scope,
+                    })
+                })
+            }
+        }
+
+        const SIX: [&str; 6] = [
+            "task",
+            "verify_versions",
+            "verify_range_results",
+            "verify_yearly_results",
+            "verify_stopped_check",
+            "verify_publication_check",
+        ];
+
+        /// Case 5 fresh + cursor call-sequence recording.
+        #[test]
+        fn progress_calls_all_six_methods_per_scope() {
+            let f = fixture();
+            let repo = RecordingRepo {
+                inner: supply(&f.repo),
+                calls: RefCell::new(vec![]),
+                scopes: Cell::new(0),
+                fail: RefCell::new(None),
+            };
+            let observer = Observer::new(repo, RUN.into());
+            let query = |cursor: Option<String>| ProgressQuery {
+                task_id: f.task.clone(),
+                page_size: 1,
+                cursor,
+            };
+            let page1 = observer.progress(query(None), &f.access).unwrap();
+            let expected_fresh: Vec<String> = SIX.iter().map(|m| format!("s1.{m}")).collect();
+            assert_eq!(*observer.repository.calls.borrow(), expected_fresh);
+            let page2 = observer
+                .progress(query(page1.next_cursor.clone()), &f.access)
+                .unwrap();
+            assert!(page2.next_cursor.is_some() || page2.page_complete);
+            let expected_cursor: Vec<String> = SIX[1..].iter().map(|m| format!("s2.{m}")).collect();
+            let calls = observer.repository.calls.borrow().clone();
+            assert_eq!(calls[6..], expected_cursor[..]);
+            assert_eq!(observer.repository.scopes.get(), 2);
+        }
+
+        /// Case 5 error injection: every injected verifier failure —
+        /// including on cursor pages — fails the RPC outright.
+        #[test]
+        fn injected_verifier_error_fails_rpc_no_successful_page() {
+            for name in SIX {
+                let f = fixture();
+                let repo = RecordingRepo {
+                    inner: supply(&f.repo),
+                    calls: RefCell::new(vec![]),
+                    scopes: Cell::new(0),
+                    fail: RefCell::new(Some(name)),
+                };
+                let observer = Observer::new(repo, RUN.into());
+                let query = |cursor: Option<String>| ProgressQuery {
+                    task_id: f.task.clone(),
+                    page_size: 1,
+                    cursor,
+                };
+                assert!(
+                    observer.progress(query(None), &f.access).is_err(),
+                    "injected {name} must fail fresh progress"
+                );
+                // Cursor page with an injected verifier error fails too —
+                // no successful response is ever returned on error.
+                if name != "task" {
+                    let f2 = fixture();
+                    let repo2 = RecordingRepo {
+                        inner: supply(&f2.repo),
+                        calls: RefCell::new(vec![]),
+                        scopes: Cell::new(0),
+                        fail: RefCell::new(Some(name)),
+                    };
+                    let observer2 = Observer::new(repo2, RUN.into());
+                    let page1 = {
+                        *observer2.repository.fail.borrow_mut() = None;
+                        observer2
+                            .progress(
+                                ProgressQuery {
+                                    task_id: f2.task.clone(),
+                                    page_size: 1,
+                                    cursor: None,
+                                },
+                                &f2.access,
+                            )
+                            .unwrap()
+                    };
+                    *observer2.repository.fail.borrow_mut() = Some(name);
+                    assert!(
+                        observer2
+                            .progress(
+                                ProgressQuery {
+                                    task_id: f2.task.clone(),
+                                    page_size: 1,
+                                    cursor: page1.next_cursor.clone(),
+                                },
+                                &f2.access,
+                            )
+                            .is_err(),
+                        "injected {name} must fail cursor progress"
+                    );
+                }
+            }
+        }
+
+        /// Case 9 compat: the default `with_progress_read` forwarding
+        /// adapter calls all six repository methods — non-SQLite
+        /// repositories keep working without an override.
+        struct ForwardRepo {
+            inner: SqliteSupply,
+            calls: RefCell<Vec<String>>,
+        }
+        impl ObservationRepository for ForwardRepo {
+            fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error> {
+                self.inner.tasks(access)
+            }
+            fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
+                self.calls.borrow_mut().push("task".into());
+                self.inner.task(id, access)
+            }
+            fn availability(
+                &self,
+                plan: &crate::data_supply::query::QueryPlan,
+                access: &Access,
+            ) -> Result<Vec<AvailabilityFacts>, Error> {
+                self.inner.availability(plan, access)
+            }
+            fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
+                self.calls.borrow_mut().push("verify_versions".into());
+                self.inner.verify_versions(refs)
+            }
+            fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error> {
+                self.calls.borrow_mut().push("verify_range_results".into());
+                self.inner.verify_range_results(results)
+            }
+            fn verify_yearly_results(
+                &self,
+                results: &[YearlyExecutionResult],
+            ) -> Result<(), Error> {
+                self.calls.borrow_mut().push("verify_yearly_results".into());
+                self.inner.verify_yearly_results(results)
+            }
+            fn verify_publication_check(
+                &self,
+                receipt: &Option<crate::publication_verification::decision::Receipt>,
+            ) -> Result<(), Error> {
+                self.calls
+                    .borrow_mut()
+                    .push("verify_publication_check".into());
+                self.inner.verify_publication_check(receipt)
+            }
+            fn verify_stopped_check(
+                &self,
+                receipt: &Option<crate::task_verification::decision::Receipt>,
+            ) -> Result<(), Error> {
+                self.calls.borrow_mut().push("verify_stopped_check".into());
+                self.inner.verify_stopped_check(receipt)
+            }
+        }
+
+        #[test]
+        fn default_with_progress_read_forwards_all_six() {
+            let f = fixture();
+            let repo = ForwardRepo {
+                inner: supply(&f.repo),
+                calls: RefCell::new(vec![]),
+            };
+            let observer = Observer::new(repo, RUN.into());
+            observer
+                .progress(
+                    ProgressQuery {
+                        task_id: f.task.clone(),
+                        page_size: 100,
+                        cursor: None,
+                    },
+                    &f.access,
+                )
+                .unwrap();
+            assert_eq!(
+                *observer.repository.calls.borrow(),
+                SIX.iter().map(|m| m.to_string()).collect::<Vec<_>>()
+            );
+        }
+
+        /// Case 7: corruption committed between cursor pages fails the
+        /// next page's fresh read scope AND a brand-new fresh RPC —
+        /// nothing verified on page one survives into later snapshots.
+        #[test]
+        fn committed_corruption_fails_cursor_page_and_fresh_rpc() {
+            let f = fixture();
+            let observer = Observer::new(supply(&f.repo), RUN.into());
+            let query = |cursor: Option<String>| ProgressQuery {
+                task_id: f.task.clone(),
+                page_size: 1,
+                cursor,
+            };
+            let page1 = observer.progress(query(None), &f.access).unwrap();
+            let cursor = page1.next_cursor.clone().expect("second page");
+            tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
+            assert!(
+                observer.progress(query(Some(cursor)), &f.access).is_err(),
+                "cursor page must open a fresh scope and fail"
+            );
+            assert!(
+                observer.progress(query(None), &f.access).is_err(),
+                "fresh RPC after commit must fail too"
+            );
+        }
+
+        /// Case 8 (explicit MVCC linearization): inside one read
+        /// transaction every remaining check sees the same consistent
+        /// snapshot — a commit from a second connection mid-scope is
+        /// invisible — while the NEXT RPC (new snapshot) observes and
+        /// fails on the committed change. This also documents that a
+        /// commit during an active RPC need not be detected until the
+        /// next snapshot.
+        #[test]
+        fn mid_scope_commit_invisible_but_next_rpc_sees_it() {
+            let f = fixture();
+            f.repo
+                .read(|c| {
+                    let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                    // Establish the snapshot with a real verified read.
+                    let _ = ctx.verified_by_id(c, "v1a")?;
+                    // Second connection commits corruption on v2a.
+                    tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
+                    // A never-before-verified version read inside THIS
+                    // scope still sees the pre-commit snapshot.
+                    let _ = ctx.verified_by_id(c, "v2a")?;
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+            assert_eq!(
+                read_class(&optimized_progress(&f, None, 100, &f.access)),
+                ReadClass::Integrity
+            );
+        }
+
+        /// A `task.verification` check task bound to `target` through
+        /// the real accept/claim/start path — the same snapshots the
+        /// check pipelines produce.
+        fn check_task(
+            repo: &SqliteCompactMarket,
+            target_id: &str,
+            target_run: &str,
+            request: &str,
+            item_id: &str,
+            key: &CommandKey,
+            run: &str,
+        ) -> task_control::TaskSnapshot {
+            let scope = crate::task_verification::verification_scope(target_id);
+            let work = FrozenWork {
+                items: vec![ItemSpec {
+                    item_id: item_id.into(),
+                    target: json!({"task_id": target_id}),
+                    progress_unit: "evidence_check".into(),
+                    frozen_inputs: json!({
+                        "target_task_id": target_id,
+                        "accepted_run_id": target_run,
+                    }),
+                    scope_keys: BTreeSet::from([scope.clone()]),
+                }],
+                scopes: BTreeSet::from([scope]),
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: key.clone(),
+                intent: json!({"target_task_id": target_id}),
+            };
+            let task_id = match repo
+                .accept(request, &command, &work, run, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(s) => s.task.task_id.clone(),
+                _ => panic!("expected task outcome"),
+            };
+            let snap = repo.transition(&task_id, 0, run, Change::Claim).unwrap();
+            repo.transition(
+                &task_id,
+                snap.task.state_revision,
+                run,
+                Change::StartItem(item_id.into()),
+            )
+            .unwrap()
+        }
+
+        /// Case 9 (publication receipt): a committed `publication_check`
+        /// receipt is compared inside the shared read scope on fresh
+        /// progress — healthy passes; a tampered stored audit fails
+        /// closed with the same classification as before consolidation.
+        #[test]
+        fn publication_receipt_healthy_and_tampered_progress() {
+            let f = fixture();
+            let target = f
+                .repo
+                .read(|c| Ok(crate::sqlite_tasks::read_bound_task(c, &f.task)?))
+                .unwrap()
+                .unwrap();
+            let check = check_task(
+                &f.repo,
+                &f.task,
+                &target.task.accepted_run_id,
+                "req-pcheck",
+                "publication-results",
+                &crate::publication_verification::admission::command_key(),
+                RUN,
+            );
+            let check_id = check.task.task_id.clone();
+            let facts = f
+                .repo
+                .read(|c| crate::sqlite_market::verification::read_facts(c, &f.task))
+                .unwrap();
+            let plan = crate::publication_verification::decision::prepare(
+                check,
+                facts,
+                RUN,
+                "fixture-checker",
+                ts(),
+            )
+            .unwrap();
+            let receipt =
+                crate::publication_verification::decision::AuditStore::commit_check(&f.repo, &plan)
+                    .unwrap();
+            // Healthy: fresh progress compares the stored receipt inside
+            // the same read scope and returns it on the wire.
+            let observer = Observer::new(supply(&f.repo), RUN.into());
+            let query = |cursor: Option<String>| ProgressQuery {
+                task_id: check_id.clone(),
+                page_size: 1,
+                cursor,
+            };
+            let page = observer.progress(query(None), &f.access).unwrap();
+            assert_eq!(page.publication_check, Some(receipt));
+            // Tampered stored audit fails closed on the next fresh RPC.
+            tamper(
+                &f.path,
+                "UPDATE publication_checks SET audit_sha256='damaged'",
+            );
+            assert_eq!(
+                read_class(&observer.progress(query(None), &f.access)),
+                ReadClass::Integrity
+            );
+        }
+
+        /// Case 9 (stopped receipt, fresh + cursor): the interrupted
+        /// target task carries the committed `stopped_write_check`
+        /// receipt — every progress page re-verifies it inside a fresh
+        /// read scope; a tampered stored audit fails closed.
+        #[test]
+        fn stopped_receipt_healthy_and_tampered_fresh_and_cursor() {
+            struct Stopped;
+            impl crate::task_verification::decision::StopInspector for Stopped {
+                fn inspect(
+                    &self,
+                    s: &task_control::TaskSnapshot,
+                ) -> Result<crate::task_verification::decision::Observation, task_control::Error>
+                {
+                    Ok(crate::task_verification::decision::Observation::Stopped {
+                        snapshot_sha256: crate::task_verification::decision::snapshot_digest(s)?,
+                        evidence_ref: "fixture-writer-exit".into(),
+                    })
+                }
+            }
+            let f = fixture();
+            // Drive item-2 into a running state, then require
+            // verification — the honest NeedsVerification transition.
+            let rev = f.repo.task(&f.task).unwrap().task.state_revision;
+            let snap = f
+                .repo
+                .transition(&f.task, rev, RUN, Change::StartItem("item-2".into()))
+                .unwrap();
+            let snap = f
+                .repo
+                .transition(
+                    &f.task,
+                    snap.task.state_revision,
+                    RUN,
+                    Change::RequireVerification {
+                        item_id: "item-2".into(),
+                        reason: "fixture uncertain outcome".into(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(snap.task.status, task_control::Status::NeedsVerification);
+            let check = check_task(
+                &f.repo,
+                &f.task,
+                &snap.task.accepted_run_id,
+                "req-scheck",
+                "stopped-writes",
+                &crate::task_verification::command_key(),
+                RUN,
+            );
+            let target = f
+                .repo
+                .read(|c| Ok(crate::sqlite_tasks::read_bound_task(c, &f.task)?))
+                .unwrap()
+                .unwrap();
+            let plan = crate::task_verification::decision::prepare(
+                check,
+                target,
+                RUN,
+                "fixture-checker",
+                ts(),
+                &Stopped,
+            )
+            .unwrap();
+            let receipt = crate::task_verification::decision::StopRepository::commit_stop_check(
+                &crate::sqlite_tasks::SqliteTasks::new(&f.path),
+                &plan,
+            )
+            .unwrap();
+            // The target is now Interrupted and carries the receipt;
+            // two unfinished items make progress paginate.
+            let observer = Observer::new(supply(&f.repo), RUN.into());
+            let query = |cursor: Option<String>| ProgressQuery {
+                task_id: f.task.clone(),
+                page_size: 1,
+                cursor,
+            };
+            let page1 = observer.progress(query(None), &f.access).unwrap();
+            assert_eq!(page1.stopped_write_check, Some(receipt.clone()));
+            let page2 = observer
+                .progress(query(page1.next_cursor.clone()), &f.access)
+                .unwrap();
+            assert_eq!(page2.stopped_write_check, Some(receipt));
+            // Tampered stored audit fails the NEXT cursor page (fresh
+            // read scope) and a brand-new RPC identically.
+            tamper(&f.path, "DELETE FROM stopped_write_checks");
+            assert_eq!(
+                read_class(&observer.progress(query(page2.next_cursor.clone()), &f.access)),
+                read_class(&observer.progress(query(None), &f.access))
+            );
+            assert!(observer.progress(query(None), &f.access).is_err());
+        }
     }
 }

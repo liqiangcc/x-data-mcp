@@ -2388,6 +2388,13 @@ const VERIFIED_CTX_CAP: usize = 4;
 /// touch — the bound limits retained metadata, never read correctness.
 const FACTS_CTX_CAP: usize = 512;
 
+/// Bound on fully-verified version-key certificates inside a
+/// [`VerifyCtx`]: 512 FIFO entries carrying *no* histories or header
+/// JSON — only the fact that the key passed the full `fixed_by_key`
+/// verification inside this transaction. An evicted certificate means a
+/// later metadata touch fully verifies the version again (XP-016).
+const CERTS_CTX_CAP: usize = 512;
+
 /// Measured lower-layer call counts for the complete public read
 /// (GOAL-008 XP-011 round 2). Incremented inside the uncached workhorses
 /// so a test can observe actual executions across whatever transaction
@@ -2455,6 +2462,12 @@ pub(crate) struct VerifyCtx {
     facts_fifo: VecDeque<i64>,
     verified: HashMap<i64, Rc<VerifiedVersion>>,
     lru: VecDeque<i64>,
+    /// Keys that already passed full verification in this transaction —
+    /// bare keys, no histories or header JSON (XP-016 certificate set).
+    certificates: HashSet<i64>,
+    certs_fifo: VecDeque<i64>,
+    /// The single `Connection` this context is bound to (0 = unbound).
+    owner: usize,
     segments: compact_v19::SegmentReadCtx,
     /// Actual `result_facts` executions (memo misses).
     #[cfg(test)]
@@ -2465,6 +2478,33 @@ pub(crate) struct VerifyCtx {
 }
 
 impl VerifyCtx {
+    /// The context is scoped to one `Connection`/read transaction; a
+    /// second connection means the caller is reusing it across databases
+    /// or snapshots — fail closed on any facts/verified/certificate
+    /// access rather than serving facts from another snapshot.
+    fn check_owner(&mut self, c: &Connection) -> Result<(), Error> {
+        let id = c as *const Connection as usize;
+        if self.owner == 0 {
+            self.owner = id;
+        } else if self.owner != id {
+            return Err(integrity("verify context reused across connections"));
+        }
+        Ok(())
+    }
+
+    /// Record `key` as fully verified inside this transaction. Only
+    /// called after `verified` succeeded; FIFO eviction bounds the set.
+    fn certified(&mut self, key: i64) {
+        if self.certificates.insert(key) {
+            self.certs_fifo.push_back(key);
+            while self.certs_fifo.len() > CERTS_CTX_CAP
+                && let Some(evicted) = self.certs_fifo.pop_front()
+            {
+                self.certificates.remove(&evicted);
+            }
+        }
+    }
+
     /// `result_facts` memoized per version key for this transaction.
     /// Bounded at [`FACTS_CTX_CAP`] entries with FIFO eviction; an
     /// evicted key is recomputed on its next touch.
@@ -2473,6 +2513,7 @@ impl VerifyCtx {
         c: &Connection,
         key: i64,
     ) -> Result<Rc<VersionResultFacts>, Error> {
+        self.check_owner(c)?;
         if let Some(facts) = self.facts.get(&key) {
             return Ok(facts.clone());
         }
@@ -2495,11 +2536,14 @@ impl VerifyCtx {
     /// published-state enforcement precedes the (deduplicated) full
     /// `fixed_by_key` verification of the immutable version. Reuse
     /// applies only while the entry is retained under the LRU bound.
+    /// Every successful return — fresh run or retained-history hit —
+    /// records a verification certificate for `verified_facts`.
     pub(crate) fn verified(
         &mut self,
         c: &Connection,
         key: i64,
     ) -> Result<(Rc<VersionResultFacts>, Rc<VerifiedVersion>), Error> {
+        self.check_owner(c)?;
         let facts = self.facts(c, key)?;
         if facts.state != CompactVersionState::Published {
             return Err(integrity("referenced version is not published"));
@@ -2508,6 +2552,7 @@ impl VerifyCtx {
             let verified = verified.clone();
             self.lru.retain(|k| *k != key);
             self.lru.push_back(key);
+            self.certified(key);
             return Ok((facts, verified));
         }
         let verified = Rc::new(fixed_by_key_ctx(c, key, &mut self.segments)?);
@@ -2522,7 +2567,26 @@ impl VerifyCtx {
         {
             self.verified.remove(&evicted);
         }
+        self.certified(key);
         Ok((facts, verified))
+    }
+
+    /// Metadata-only verified assurance (XP-016): a certificate hit
+    /// returns the bounded memoized facts from this same snapshot
+    /// without re-materializing bars; a miss runs the unchanged full
+    /// `verified` — published state enforced there as today — and only
+    /// a success records a certificate. Certificate eviction means a
+    /// later touch fully verifies again.
+    pub(crate) fn verified_facts(
+        &mut self,
+        c: &Connection,
+        key: i64,
+    ) -> Result<Rc<VersionResultFacts>, Error> {
+        self.check_owner(c)?;
+        if !self.certificates.contains(&key) {
+            let _ = self.verified(c, key)?;
+        }
+        self.facts(c, key)
     }
 
     /// The transaction-scoped verified segment cache backing `verified`.
@@ -2546,6 +2610,16 @@ impl VerifyCtx {
     ) -> Result<(Rc<VersionResultFacts>, Rc<VerifiedVersion>), Error> {
         let key = super::compact_repo::version_key(c, version_id)?;
         self.verified(c, key)
+    }
+
+    /// `verified_facts` resolved from a version id instead of a key.
+    pub(crate) fn verified_facts_by_id(
+        &mut self,
+        c: &Connection,
+        version_id: &str,
+    ) -> Result<Rc<VersionResultFacts>, Error> {
+        let key = super::compact_repo::version_key(c, version_id)?;
+        self.verified_facts(c, key)
     }
 }
 

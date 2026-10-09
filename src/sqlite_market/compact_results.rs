@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use chrono::{DateTime, Utc};
 use rusqlite::{ErrorCode, TransactionBehavior};
 
@@ -591,8 +589,12 @@ pub(crate) fn read_market_update_ctx(
     if continuity == ContinuityMode::Full && prefix_bytes.is_some() {
         return Err(integrity("full update result carries prefix_bytes"));
     }
-    let (base_facts, base_fixed) = require_published_facts(c, ctx, base_version_key)?;
-    let (result_facts, result_fixed) = require_published_facts(c, ctx, result_version_key)?;
+    // Metadata-level verified assurance first (XP-016): ordinary Delta
+    // Append, Full and NoChange linkage checks consume version facts
+    // only; whole verified histories are materialized lazily below for
+    // the checkpoint Append rollover's base+ops == result comparison.
+    let base_facts = ctx.verified_facts(c, base_version_key)?;
+    let result_facts = ctx.verified_facts(c, result_version_key)?;
     if base_projection_digest != base_facts.projection_digest
         || result_projection_digest != result_facts.projection_digest
     {
@@ -654,6 +656,11 @@ pub(crate) fn read_market_update_ctx(
                             "append checkpoint rollover requires depth-256 base",
                         ));
                     }
+                    // The only consumer of whole verified histories in
+                    // this read: the persisted base+ops == result bars
+                    // comparison for a depth-rollover checkpoint append.
+                    let (_, base_fixed) = ctx.verified(c, base_version_key)?;
+                    let (_, result_fixed) = ctx.verified(c, result_version_key)?;
                     let applied = compact_versions::apply_stored_delta(
                         c,
                         &compact_bars(base_fixed.as_ref())?,
@@ -832,7 +839,7 @@ pub(crate) fn read_publication_ctx(
         (UpdateOutcome::Published, base) if base.is_none_or(|base| base != result_version_key) => {}
         _ => return Err(integrity("publication result combination invalid")),
     }
-    let (result_facts, _) = require_published_facts(c, ctx, result_version_key)?;
+    let result_facts = ctx.verified_facts(c, result_version_key)?;
     match publication_kind {
         PublicationKind::Collection if result_facts.period != Period::Day => {
             return Err(integrity("collection publication result is not daily"));
@@ -859,7 +866,7 @@ pub(crate) fn read_publication_ctx(
     }
     let base_facts = match base_version_key {
         Some(key) => {
-            let (facts, _) = require_published_facts(c, ctx, key)?;
+            let facts = ctx.verified_facts(c, key)?;
             if facts.entity != result_facts.entity || facts.period != result_facts.period {
                 return Err(integrity("publication base scope mismatch"));
             }
@@ -1317,20 +1324,6 @@ fn read_update_delta_clips(
         });
     }
     Ok(ops)
-}
-
-fn require_published_facts(
-    c: &Connection,
-    ctx: &mut compact_versions::VerifyCtx,
-    key: i64,
-) -> Result<
-    (
-        Rc<VersionResultFacts>,
-        Rc<compact_versions::VerifiedVersion>,
-    ),
-    Error,
-> {
-    ctx.verified(c, key)
 }
 
 fn verify_task_publication(

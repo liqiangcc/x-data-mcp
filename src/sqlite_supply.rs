@@ -84,25 +84,7 @@ impl ReadRepository for SqliteSupply {
     fn verify(&self, refs: &[VersionRef]) -> Result<(), Error> {
         self.market.read(|c| {
             let mut ctx = VerifyCtx::default();
-            for r in unique_refs(refs) {
-                let actual = if r.dataset == Dataset::Catalog {
-                    catalog_ref(&sqlite_catalog::read(c, &r.version_id)?)?
-                } else {
-                    let entity = r
-                        .entity
-                        .as_ref()
-                        .ok_or_else(|| invalid("missing version entity"))?;
-                    market_ref(
-                        r.dataset,
-                        entity,
-                        &read_market(c, &mut ctx, r.dataset, entity, &r.version_id)?,
-                    )
-                };
-                if actual != r {
-                    return Err(Error::Integrity("fixed version changed".into()));
-                }
-            }
-            Ok(())
+            verify_versions_conn(c, &mut ctx, refs)
         })
     }
     fn versions(&self, args: &VersionsQuery, access: &Access) -> Result<Vec<VersionInfo>, Error> {
@@ -838,7 +820,162 @@ pub(crate) fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts
     }
     Ok(result)
 }
+/// Connection-level version-identity comparison shared by
+/// `ReadRepository::verify` and `SqliteProgressRead::verify_versions`:
+/// the `unique_refs`/`market_ref`/`catalog_ref` loop, unchanged.
+fn verify_versions_conn(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    refs: &[VersionRef],
+) -> Result<(), Error> {
+    for r in unique_refs(refs) {
+        let actual = if r.dataset == Dataset::Catalog {
+            catalog_ref(&sqlite_catalog::read(c, &r.version_id)?)?
+        } else {
+            let entity = r
+                .entity
+                .as_ref()
+                .ok_or_else(|| invalid("missing version entity"))?;
+            market_ref(
+                r.dataset,
+                entity,
+                &read_market(c, ctx, r.dataset, entity, &r.version_id)?,
+            )
+        };
+        if actual != r {
+            return Err(Error::Integrity("fixed version changed".into()));
+        }
+    }
+    Ok(())
+}
+/// Connection-level expected == actual comparisons for range/yearly
+/// results — the same loops the repository methods ran in their own
+/// read transactions, now reusable inside a shared progress scope.
+fn verify_range_results_conn(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    results: &[RangeExecutionResult],
+) -> Result<(), Error> {
+    for expected in results {
+        if range_result(c, ctx, &expected.result_id)? != *expected {
+            return Err(Error::Integrity(
+                "range result changed since snapshot".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+fn verify_yearly_results_conn(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    results: &[YearlyExecutionResult],
+) -> Result<(), Error> {
+    for expected in results {
+        if yearly_result(c, ctx, &expected.result_id)? != *expected {
+            return Err(Error::Integrity(
+                "yearly result changed since snapshot".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+/// Receipt comparisons on an already-open connection — the same
+/// `(_, receipt)` mapping both backend `check_receipt` implementations
+/// apply to `publication_checks::read_receipt` /
+/// `sqlite_verification::read_receipt`.
+fn verify_publication_check_conn(
+    c: &Connection,
+    receipt: &Option<crate::publication_verification::decision::Receipt>,
+) -> Result<(), Error> {
+    if let Some(expected) = receipt {
+        let actual = crate::sqlite_market::publication_checks::read_receipt(
+            c,
+            &expected.verification_task_id,
+        )?
+        .map(|(_, receipt)| receipt);
+        if actual.as_ref() != Some(expected) {
+            return Err(Error::Integrity(
+                "publication check changed since snapshot".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+fn verify_stopped_check_conn(
+    c: &Connection,
+    receipt: &Option<crate::task_verification::decision::Receipt>,
+) -> Result<(), Error> {
+    if let Some(expected) = receipt {
+        let actual = crate::sqlite_verification::read_receipt(c, &expected.verification_task_id)?
+            .map(|(_, r)| r);
+        if actual.as_ref() != Some(expected) {
+            return Err(Error::Integrity(
+                "stopped check changed since snapshot".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `ProgressRead` bound to one SQLite read transaction: every method
+/// runs on `c` through the existing connection-level helpers and shares
+/// `ctx`, so verified work is reused *inside this snapshot only* — the
+/// reader, its `VerifyCtx` and its certificates die with the
+/// `market.read` scope (XP-016). No globals, no TLS, no nested
+/// `market.read` inside the six methods.
+struct SqliteProgressRead<'a> {
+    c: &'a Connection,
+    ctx: std::cell::RefCell<VerifyCtx>,
+}
+impl crate::data_supply::observe::ProgressRead for SqliteProgressRead<'_> {
+    fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
+        task_facts(self.c, &mut self.ctx.borrow_mut(), id, access, true)
+    }
+    fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
+        verify_versions_conn(self.c, &mut self.ctx.borrow_mut(), refs)
+    }
+    fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error> {
+        if results.is_empty() {
+            return Ok(());
+        }
+        verify_range_results_conn(self.c, &mut self.ctx.borrow_mut(), results)
+    }
+    fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error> {
+        if results.is_empty() {
+            return Ok(());
+        }
+        verify_yearly_results_conn(self.c, &mut self.ctx.borrow_mut(), results)
+    }
+    fn verify_publication_check(
+        &self,
+        receipt: &Option<crate::publication_verification::decision::Receipt>,
+    ) -> Result<(), Error> {
+        verify_publication_check_conn(self.c, receipt)
+    }
+    fn verify_stopped_check(
+        &self,
+        receipt: &Option<crate::task_verification::decision::Receipt>,
+    ) -> Result<(), Error> {
+        verify_stopped_check_conn(self.c, receipt)
+    }
+}
+
 impl ObservationRepository for SqliteSupply {
+    /// One progress RPC = one `market.read` transaction + one
+    /// `VerifyCtx`: `task` and all `verify_*` phases execute inside the
+    /// same SQLite snapshot, reusing verified work across phases.
+    fn with_progress_read<T>(
+        &self,
+        f: impl FnOnce(&dyn crate::data_supply::observe::ProgressRead) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        self.market.read(|c| {
+            let reader = SqliteProgressRead {
+                c,
+                ctx: std::cell::RefCell::new(VerifyCtx::default()),
+            };
+            f(&reader)
+        })
+    }
     fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error> {
         self.market.read(|c| task_list(c, access))
     }
@@ -855,38 +992,20 @@ impl ObservationRepository for SqliteSupply {
         &self,
         receipt: &Option<crate::publication_verification::decision::Receipt>,
     ) -> Result<(), Error> {
-        use crate::publication_verification::decision::AuditStore;
-        if let Some(expected) = receipt
-            && self
-                .market
-                .check_receipt(&expected.verification_task_id)?
-                .as_ref()
-                != Some(expected)
-        {
-            return Err(Error::Integrity(
-                "publication check changed since snapshot".into(),
-            ));
+        if receipt.is_none() {
+            return Ok(());
         }
-        Ok(())
+        self.market
+            .read(|c| verify_publication_check_conn(c, receipt))
     }
     fn verify_stopped_check(
         &self,
         receipt: &Option<crate::task_verification::decision::Receipt>,
     ) -> Result<(), Error> {
-        if let Some(expected) = receipt {
-            self.market.read(|c| {
-                let actual =
-                    crate::sqlite_verification::read_receipt(c, &expected.verification_task_id)?
-                        .map(|(_, r)| r);
-                if actual.as_ref() != Some(expected) {
-                    return Err(Error::Integrity(
-                        "stopped check changed since snapshot".into(),
-                    ));
-                }
-                Ok(())
-            })?;
+        if receipt.is_none() {
+            return Ok(());
         }
-        Ok(())
+        self.market.read(|c| verify_stopped_check_conn(c, receipt))
     }
     fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error> {
         if results.is_empty() {
@@ -894,14 +1013,7 @@ impl ObservationRepository for SqliteSupply {
         }
         self.market.read(|c| {
             let mut ctx = VerifyCtx::default();
-            for expected in results {
-                if yearly_result(c, &mut ctx, &expected.result_id)? != *expected {
-                    return Err(Error::Integrity(
-                        "yearly result changed since snapshot".into(),
-                    ));
-                }
-            }
-            Ok(())
+            verify_yearly_results_conn(c, &mut ctx, results)
         })
     }
     fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error> {
@@ -910,14 +1022,7 @@ impl ObservationRepository for SqliteSupply {
         }
         self.market.read(|c| {
             let mut ctx = VerifyCtx::default();
-            for expected in results {
-                if range_result(c, &mut ctx, &expected.result_id)? != *expected {
-                    return Err(Error::Integrity(
-                        "range result changed since snapshot".into(),
-                    ));
-                }
-            }
-            Ok(())
+            verify_range_results_conn(c, &mut ctx, results)
         })
     }
     fn availability(

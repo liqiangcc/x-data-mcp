@@ -1030,6 +1030,8 @@ pub(crate) fn materialize_checked(
 /// detection-equivalent to the verified path — corrupted segment bytes,
 /// broken clip linkage or lineage drift fail closed exactly like the full
 /// materialization, and repeated touches deduplicate within `ctx`.
+/// `verified_facts_by_id` carries that assurance without retaining the
+/// whole history when only metadata is needed (XP-016 certificate path).
 pub(crate) fn materialize_slim(
     c: &Connection,
     ctx: &mut compact_versions::VerifyCtx,
@@ -1038,7 +1040,7 @@ pub(crate) fn materialize_slim(
     let Some(m) = compact_versions::materialize_header(c, version_id)? else {
         return Ok(None);
     };
-    ctx.verified_by_id(c, version_id)?;
+    ctx.verified_facts_by_id(c, version_id)?;
     synthesize(&m).map(Some)
 }
 
