@@ -1,5 +1,6 @@
 use super::*;
 use crate::compact_market::{self, CompactBar, DeltaKind, DeltaOp, Digest, SegmentClip};
+use crate::progress_trace::{Span, Stage};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
@@ -98,6 +99,7 @@ pub(crate) fn insert_segment(
 pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Error> {
     #[cfg(test)]
     super::compact_versions::read_counts::count_segment_read();
+    let sql_span = Span::enter(Stage::SegmentSql);
     let mut header = c
         .prepare_cached(
             "SELECT segment_digest,entity,period,first_day,last_day,row_count FROM bar_segments WHERE segment_key=?1",
@@ -153,6 +155,8 @@ pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Er
         }
     }
     drop(statement);
+    drop(sql_span);
+    crate::progress_trace::segment_rows(bars.len());
     if bars.len() as i64 != row_count {
         return Err(integrity("segment row_count mismatch"));
     }
@@ -164,7 +168,9 @@ pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Er
     // No preliminary per-bar decode: `segment_digest` below runs every
     // bar through the same checked decoder before its digest bytes feed
     // the comparison — malformed bars fail closed there.
+    let digest_span = Span::enter(Stage::SegmentDigest);
     let recomputed = compact_market::segment_digest(&entity, period, &bars).map_err(integrity)?;
+    drop(digest_span);
     if recomputed != digest {
         return Err(integrity("segment digest mismatch"));
     }

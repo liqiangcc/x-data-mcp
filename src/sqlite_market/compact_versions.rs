@@ -11,6 +11,7 @@ use crate::compact_market::{
     SourceBinding, VersionEvidence, VersionIdentity, YearlyLineageIdentity,
 };
 use crate::market_data::{Adjustment, CoverageStatus, YearlyDerivation};
+use crate::progress_trace::{Span, Stage};
 use crate::publish::{EffectiveVersion, ValidationSummary};
 
 const DIGEST_FORMAT: &str = "compact-market-version-v1";
@@ -1162,6 +1163,7 @@ fn reconstruct_version_scoped(
     leaf_key: i64,
     mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
 ) -> Result<Vec<(VersionRow, Vec<CompactBar>)>, Error> {
+    let _span = Span::enter(Stage::Reconstruct);
     let mut chain = Vec::new();
     let mut visited = HashSet::new();
     let mut key = leaf_key;
@@ -1263,6 +1265,7 @@ fn verify_published_node(
     row: &VersionRow,
     bars: &[CompactBar],
 ) -> Result<VersionEvidence, Error> {
+    let _span = Span::enter(Stage::VerifyNode);
     verify_published_fields(c, row)?;
     verify_node_common(c, row, bars)
 }
@@ -1802,6 +1805,7 @@ fn header_version(
     row: &VersionRow,
     evidence: VersionEvidence,
 ) -> Result<EffectiveVersion, Error> {
+    let _span = Span::enter(Stage::VerifyHeader);
     let yearly_derivation = match verify_stored_lineage(c, row)? {
         Some(l) => Some(YearlyDerivation {
             base_daily_version_id: l.base_daily_version_id,

@@ -10,6 +10,7 @@ pub mod market_data;
 pub mod mcp;
 pub mod official_files;
 pub mod official_market;
+mod progress_trace;
 pub mod publish;
 pub mod qfq;
 pub mod storage;

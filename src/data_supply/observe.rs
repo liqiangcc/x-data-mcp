@@ -4,6 +4,7 @@ use super::{
     query::{MAX_BYTES, invalid, page_size},
     wire::*,
 };
+use crate::progress_trace::{Span, Stage, Trace};
 use crate::{market_storage::Error, task_control::TaskSnapshot};
 use chrono::{DateTime, Datelike, Utc};
 use std::{cell::RefCell, collections::VecDeque};
@@ -386,6 +387,7 @@ impl<R: ObservationRepository> Observer<R> {
         mut args: ProgressQuery,
         access: &Access,
     ) -> Result<ProgressPage, Error> {
+        let trace = Trace::begin();
         page_size(args.page_size)?;
         let cursor = args.cursor.take();
         let key = format!("progress:{}", serde_json::to_string(&args).unwrap());
@@ -393,8 +395,11 @@ impl<R: ObservationRepository> Observer<R> {
         // consolidate all storage reads below into a single transaction
         // (XP-016). Cursor identity/authorization/expiry checks and the
         // fresh-assembly policy are unchanged.
-        self.repository
-            .with_progress_read(|read| self.progress_in(read, key, cursor, args, access))
+        let result = self
+            .repository
+            .with_progress_read(|read| self.progress_in(read, key, cursor, args, access));
+        trace.finish(result.is_ok());
+        result
     }
     fn progress_in(
         &self,
@@ -407,7 +412,10 @@ impl<R: ObservationRepository> Observer<R> {
         let mut s = if let Some(c) = cursor {
             self.resume(&c, &key, access)?
         } else {
-            let facts = read.task(&args.task_id, access)?;
+            let facts = {
+                let _span = Span::enter(Stage::TaskAssembly);
+                read.task(&args.task_id, access)?
+            };
             let mut unfinished = vec![];
             let mut finished = 0;
             let mut succeeded = 0;
@@ -486,11 +494,13 @@ impl<R: ObservationRepository> Observer<R> {
                     .map_err(|e| Error::Integrity(format!("stopped check result: {e}")))?,
                 frozen_yearly_inputs: frozen_yearly_inputs(&facts.snapshot)?,
             };
-            if serde_json::to_vec(&p)
-                .map_err(|e| invalid(&e.to_string()))?
-                .len()
-                > MAX_BYTES
-            {
+            let wire_bytes = {
+                let _span = Span::enter(Stage::WireBudget);
+                serde_json::to_vec(&p)
+                    .map_err(|e| invalid(&e.to_string()))?
+                    .len()
+            };
+            if wire_bytes > MAX_BYTES {
                 return Err(invalid("progress snapshot byte budget exceeded"));
             }
             self.start(key, access, Content::Progress(Box::new(p)))
@@ -498,9 +508,18 @@ impl<R: ObservationRepository> Observer<R> {
         let Content::Progress(p) = &s.content else {
             return Err(invalid("cursor category"));
         };
-        read.verify_versions(&p.publication_versions)?;
-        read.verify_range_results(&p.range_results)?;
-        read.verify_yearly_results(&p.yearly_results)?;
+        {
+            let _span = Span::enter(Stage::VerifyVersions);
+            read.verify_versions(&p.publication_versions)?;
+        }
+        {
+            let _span = Span::enter(Stage::VerifyRanges);
+            read.verify_range_results(&p.range_results)?;
+        }
+        {
+            let _span = Span::enter(Stage::VerifyYearly);
+            read.verify_yearly_results(&p.yearly_results)?;
+        }
         read.verify_stopped_check(&p.stopped_write_check)?;
         read.verify_publication_check(&p.publication_check)?;
         let end = (s.offset + args.page_size).min(p.unfinished.len());
