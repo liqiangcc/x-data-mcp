@@ -4619,7 +4619,7 @@ mod xp011 {
     fn scope_occupancy_mismatch_fails_closed_both_paths() {
         for sql in [
             "UPDATE task_scopes SET scope_key=scope_key||':tampered'",
-            "UPDATE scope_occupancy SET scope_key='scope:bogus'",
+            "UPDATE scope_occupancy SET scope_key=scope_key||':tampered'",
         ] {
             let f = fixture();
             tamper(&f.path, sql);
@@ -4689,25 +4689,31 @@ mod xp011 {
             &db.read(|c| crate::sqlite_market::read_record(c, "legacy-daily", true, true)),
         );
         assert_eq!(slim, full);
-        // Envelope tampering on the legacy store: both fail closed.
-        rusqlite::Connection::open(&path)
-            .unwrap()
-            .execute(
-                "UPDATE data_versions SET envelope_json=\
-                 json_set(envelope_json,'$.records[0].open','1.00') \
-                 WHERE version_id='legacy-daily'",
-                [],
-            )
-            .unwrap();
-        let slim = read_class(&db.read(|c| {
-            let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
-            crate::sqlite_market::read_record_slim(c, &mut ctx, "legacy-daily", false, true)
-        }));
-        let full = read_class(
-            &db.read(|c| crate::sqlite_market::read_record(c, "legacy-daily", false, true)),
-        );
-        assert_eq!(slim, ReadClass::Integrity);
-        assert_eq!(slim, full);
+        // Stored-digest tampering on the legacy store: both fail closed.
+        for sql in [
+            "UPDATE data_versions SET content_digest='bogus' WHERE version_id='legacy-daily'",
+            "UPDATE data_versions SET envelope_json='{\"bogus\":' WHERE version_id='legacy-daily'",
+        ] {
+            let dir = tempdir();
+            let path = dir.path().join("legacy.db");
+            let tasks = crate::sqlite_tasks::SqliteTasks::new(path.clone());
+            tasks.initialize().unwrap();
+            let db = crate::sqlite_market::SqliteMarket::new(tasks);
+            db.stage(&samples[0]["record"]).unwrap();
+            rusqlite::Connection::open(&path)
+                .unwrap()
+                .execute(sql, [])
+                .unwrap();
+            let slim = read_class(&db.read(|c| {
+                let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                crate::sqlite_market::read_record_slim(c, &mut ctx, "legacy-daily", false, true)
+            }));
+            let full = read_class(
+                &db.read(|c| crate::sqlite_market::read_record(c, "legacy-daily", false, true)),
+            );
+            assert_eq!(slim, ReadClass::Integrity, "sql: {sql}");
+            assert_eq!(slim, full, "sql: {sql}");
+        }
     }
 
     /// Round-2 R1: the facts memo is bounded at 512 FIFO entries. Past
