@@ -2273,12 +2273,88 @@ fn apply_delta_scoped(
     ops: &[StoredDelta],
     entity: &str,
     period: Period,
-    mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
+    sctx: Option<&mut compact_v19::SegmentReadCtx>,
 ) -> Result<Vec<CompactBar>, Error> {
     let plain = delta_ops(ops);
     if !plain.is_empty() {
         compact_market::delta_digest(&plain).map_err(integrity)?;
     }
+    // Append-only fast path (XP-018): a strictly-increasing base, only
+    // Upsert ops, and every op range strictly after the base's last day
+    // mean no supplied day can collide with or remove an existing one —
+    // ordered `extend` is exactly the map semantics. Ordered,
+    // non-overlapping ranges and clip containment still come from the
+    // `delta_digest` validation above; every op's segment and clip is
+    // read and checked unchanged. Anything else takes the reference
+    // path.
+    if delta_is_append_only(base, ops) {
+        apply_delta_append(c, base, ops, entity, period, sctx)
+    } else {
+        apply_delta_map(c, base, ops, entity, period, sctx)
+    }
+}
+
+/// Append-only eligibility for [`apply_delta_scoped`] (XP-018): the base
+/// days are strictly increasing, every op is an Upsert, and every op
+/// range starts strictly after the base's last day (an empty base has
+/// no lower bound). Range ordering, non-overlap and clip containment
+/// come from the `delta_digest` validation upstream.
+fn delta_is_append_only(base: &[CompactBar], ops: &[StoredDelta]) -> bool {
+    base.windows(2).all(|w| w[1].trade_day > w[0].trade_day)
+        && ops
+            .iter()
+            .all(|op| matches!(op.kind, StoredDeltaKind::Upsert(_)))
+        && ops.iter().all(|op| {
+            base.last()
+                .is_none_or(|last| op.range_start_day > last.trade_day)
+        })
+}
+
+/// Append-only path for [`apply_delta_scoped`]: clone the base once and
+/// extend it with each op's verified clipped bars in order. Eligibility
+/// (strictly-increasing base, all Upserts, ranges strictly after the
+/// base tail) is decided by the caller after `delta_digest` validation;
+/// every other shape belongs to [`apply_delta_map`].
+fn apply_delta_append(
+    c: &Connection,
+    base: &[CompactBar],
+    ops: &[StoredDelta],
+    entity: &str,
+    period: Period,
+    mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
+) -> Result<Vec<CompactBar>, Error> {
+    let mut out = base.to_vec();
+    for op in ops {
+        let StoredDeltaKind::Upsert(stored) = &op.kind else {
+            return Err(integrity("append-only delta path received a non-upsert op"));
+        };
+        let segment = compact_v19::read_segment_scoped(c, stored.segment_key, sctx.as_deref_mut())?;
+        check_stored_clip(&segment, &stored.clip, entity, period)?;
+        out.extend(
+            segment
+                .bars
+                .iter()
+                .filter(|bar| {
+                    bar.trade_day >= stored.clip.clip_start_day
+                        && bar.trade_day <= stored.clip.clip_end_day
+                })
+                .cloned(),
+        );
+    }
+    Ok(out)
+}
+
+/// Reference map path for [`apply_delta_scoped`] — the original
+/// BTreeMap upsert/remove semantics, retained verbatim as the
+/// differential oracle for the append-only fast path.
+fn apply_delta_map(
+    c: &Connection,
+    base: &[CompactBar],
+    ops: &[StoredDelta],
+    entity: &str,
+    period: Period,
+    mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
+) -> Result<Vec<CompactBar>, Error> {
     let mut map: BTreeMap<i64, CompactBar> = base
         .iter()
         .map(|bar| (bar.trade_day, bar.clone()))

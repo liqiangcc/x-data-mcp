@@ -1215,3 +1215,344 @@ fn version_evidence_undecomposed_row_still_reads() {
     assert_eq!(kind, EvidenceKind::Version);
     assert_eq!(canonical, bundle.canonical_json);
 }
+
+// ======================= XP-018 =======================
+
+/// Metadata assurance certifies the whole verified chain: touching the
+/// delta RESULT first certifies its verified base ancestor — a later
+/// base-facts touch is a certificate hit (one full-chain run total).
+/// No legacy `Bar` records are projected for metadata assurance, and a
+/// certificate never substitutes a whole-history demand: `verified`
+/// still reconstructs real bars equal to the uncached `fixed` read.
+#[test]
+fn metadata_certificate_covers_verified_ancestors() {
+    let c = connection();
+    let (base_key, _) = publish_daily(&c, "v1", &[cb(0, 100), cb(1, 110)]);
+    let extra = segment(&c, "sh.600006", Period::Day, &[cb(2, 120)]);
+    let draft = mk_draft("v2", "sh.600006", Period::Day, &c);
+    let delta_key = stage_delta(&c, &draft, base_key, &[upsert(&extra, 2, 2)]).unwrap();
+    mark_validated(&c, delta_key).unwrap();
+    publish(&c, delta_key, ts()).unwrap();
+
+    let mut ctx = VerifyCtx::default();
+    read_counts::reset();
+    ctx.verified_facts(&c, delta_key).unwrap();
+    ctx.verified_facts(&c, base_key).unwrap();
+    let (_, fixed_count, _) = read_counts::snapshot();
+    assert_eq!(fixed_count, 1, "result chain run covered the base ancestor");
+    assert_eq!(ctx.fixed_runs, 1);
+    assert_eq!(
+        read_counts::snapshot_projections(),
+        0,
+        "metadata assurance built no legacy records"
+    );
+    // History demand still returns real fully-verified bars — the
+    // metadata certificate is not an empty-history substitute.
+    let (_, demand) = ctx.verified_by_id(&c, "v2").unwrap();
+    assert_eq!(read_counts::snapshot_projections(), 1);
+    let uncached = fixed(&c, "v2").unwrap();
+    assert_eq!(demand.version, uncached.version);
+    assert_eq!(demand.version.records.len(), 3);
+}
+
+/// A corrupt ancestor fails the RESULT's metadata verification and
+/// installs no certificate: a base touch afterwards is a real counted
+/// run that fails on the same corruption — never a phantom cert hit.
+#[test]
+fn corrupt_ancestor_blocks_result_and_leaves_no_certificate() {
+    let c = connection();
+    let (base_key, _) = publish_daily(&c, "v1", &[cb(0, 100), cb(1, 110)]);
+    let extra = segment(&c, "sh.600006", Period::Day, &[cb(2, 120)]);
+    let draft = mk_draft("v2", "sh.600006", Period::Day, &c);
+    let delta_key = stage_delta(&c, &draft, base_key, &[upsert(&extra, 2, 2)]).unwrap();
+    mark_validated(&c, delta_key).unwrap();
+    publish(&c, delta_key, ts()).unwrap();
+    lax(&c);
+    c.execute(
+        "UPDATE segment_bars SET close_cents=close_cents+1 WHERE segment_key IN \
+         (SELECT segment_key FROM version_checkpoint_clips WHERE version_key=?1)",
+        params![base_key],
+    )
+    .unwrap();
+
+    let mut ctx = VerifyCtx::default();
+    integrity_failure(ctx.verified_facts(&c, delta_key));
+    assert_eq!(ctx.fixed_runs, 0);
+    read_counts::reset();
+    integrity_failure(ctx.verified_facts(&c, base_key));
+    let (_, fixed, _) = read_counts::snapshot();
+    assert_eq!(fixed, 1, "base touch ran real verification again");
+    assert_eq!(ctx.fixed_runs, 0);
+}
+
+/// XP-018 streamed `read_segment`: a full 512-bar segment round-trips
+/// verified (digest covers every bar); typed, bounds, digest and
+/// missing corruption still fail closed; a second read through a
+/// segment ctx is a same-snapshot hit while a fresh read after
+/// corruption still fails.
+#[test]
+fn read_segment_streams_full_capacity_and_fails_closed() {
+    let c = connection();
+    let bars: Vec<CompactBar> = (0..512).map(|d| cb(d, 100 + d)).collect();
+    let seg = segment(&c, "sh.600006", Period::Day, &bars);
+    let stored = compact_v19::read_segment(&c, seg.key).unwrap();
+    assert_eq!(stored.bars, bars);
+    let mut sctx = compact_v19::SegmentReadCtx::default();
+    let again = compact_v19::read_segment_ctx(&c, seg.key, &mut sctx).unwrap();
+    assert_eq!(again.bars, bars);
+    assert_eq!(sctx.stats().0, 1);
+    let third = compact_v19::read_segment_ctx(&c, seg.key, &mut sctx).unwrap();
+    assert_eq!(third.bars, bars);
+    let fourth = compact_v19::read_segment_ctx(&c, seg.key, &mut sctx).unwrap();
+    assert_eq!(fourth.bars, bars);
+    assert_eq!(sctx.stats(), (1, 2, 1, sctx.stats().3));
+
+    // Corruption classes on fresh fixtures: typed (non-canonical
+    // amount), day bounds, stored digest, missing segment.
+    lax(&c);
+    c.execute(
+        "UPDATE segment_bars SET amount='007' WHERE segment_key=?1 AND trade_day=10",
+        params![seg.key],
+    )
+    .unwrap();
+    integrity_failure(compact_v19::read_segment(&c, seg.key));
+
+    let c = connection();
+    let seg = segment(&c, "sh.600006", Period::Day, &bars);
+    lax(&c);
+    c.execute(
+        "UPDATE bar_segments SET first_day=first_day+1 WHERE segment_key=?1",
+        params![seg.key],
+    )
+    .unwrap();
+    integrity_failure(compact_v19::read_segment(&c, seg.key));
+
+    let c = connection();
+    let seg = segment(&c, "sh.600006", Period::Day, &bars);
+    lax(&c);
+    c.execute(
+        "UPDATE bar_segments SET segment_digest=?1 WHERE segment_key=?2",
+        params![[0xabu8; 32].as_slice(), seg.key],
+    )
+    .unwrap();
+    integrity_failure(compact_v19::read_segment(&c, seg.key));
+
+    let c = connection();
+    let seg = segment(&c, "sh.600006", Period::Day, &bars);
+    lax(&c);
+    c.execute(
+        "DELETE FROM bar_segments WHERE segment_key=?1",
+        params![seg.key],
+    )
+    .unwrap();
+    integrity_failure(compact_v19::read_segment(&c, seg.key));
+}
+
+/// XP-018 delta differential: `apply_delta_scoped` (dispatcher) output
+/// equals the verbatim original digest-check + map path on every shape;
+/// the eligibility predicate is asserted per case so equality never
+/// silently degenerates to "same code twice".
+#[test]
+fn apply_delta_append_only_matches_map_reference() {
+    /// The ORIGINAL `apply_delta_scoped` body, verbatim: delta_digest
+    /// validation then the BTreeMap upsert/remove loop.
+    fn reference_apply(
+        c: &Connection,
+        base: &[CompactBar],
+        ops: &[StoredDelta],
+    ) -> Result<Vec<CompactBar>, Error> {
+        let plain = delta_ops(ops);
+        if !plain.is_empty() {
+            compact_market::delta_digest(&plain).map_err(integrity)?;
+        }
+        apply_delta_map(c, base, ops, "sh.600006", Period::Day, None)
+    }
+    let compare =
+        |c: &Connection, base: &[CompactBar], ops: &[StoredDelta], eligible: bool, label: &str| {
+            assert_eq!(
+                delta_is_append_only(base, ops),
+                eligible,
+                "eligibility: {label}"
+            );
+            let fast = apply_delta_scoped(c, base, ops, "sh.600006", Period::Day, None);
+            let oracle = reference_apply(c, base, ops);
+            match (&fast, &oracle) {
+                (Ok(a), Ok(b)) => assert_eq!(a, b, "output divergence: {label}"),
+                (Err(_), Err(_)) => {}
+                _ => panic!("path divergence {label}: fast={fast:?} oracle={oracle:?}"),
+            }
+            (fast, oracle)
+        };
+    let c = connection();
+
+    // Eligible shapes: empty / one-bar / 512-bar bases, tail-only
+    // upserts, multi-op gaps, and sparse clip contents.
+    let u = |c: &Connection, days: &[i64], start: i64, end: i64| {
+        let seg = segment(
+            c,
+            "sh.600006",
+            Period::Day,
+            &days.iter().map(|&d| cb(d, 100)).collect::<Vec<_>>(),
+        );
+        upsert(&seg, start, end)
+    };
+    let (fast, oracle) = compare(&c, &[], &[u(&c, &[3, 4, 5], 3, 5)], true, "empty base");
+    assert_eq!(
+        fast.unwrap()
+            .iter()
+            .map(|b| b.trade_day)
+            .collect::<Vec<_>>(),
+        vec![3, 4, 5]
+    );
+    let _ = oracle;
+    let _ = compare(
+        &c,
+        &[cb(0, 100)],
+        &[u(&c, &[1, 2], 1, 2)],
+        true,
+        "base-1 tail upsert",
+    );
+    let base512: Vec<CompactBar> = (0..512).map(|d| cb(d, 100)).collect();
+    let _ = compare(
+        &c,
+        &base512,
+        &[u(&c, &[512, 513, 514], 512, 514)],
+        true,
+        "base-512 tail upsert",
+    );
+    let _ = compare(
+        &c,
+        &[cb(0, 100), cb(1, 110), cb(2, 120)],
+        &[u(&c, &[10, 11], 10, 11), u(&c, &[20, 21], 20, 21)],
+        true,
+        "multi-op disjoint gaps",
+    );
+    // Missing supplied days inside the upsert range: only the supplied
+    // days are inserted — no filling, identical on both paths.
+    let sparse = segment(&c, "sh.600006", Period::Day, &[cb(5, 100), cb(8, 100)]);
+    let (fast, oracle) = compare(
+        &c,
+        &[cb(0, 100), cb(1, 110)],
+        &[upsert(&sparse, 5, 8)],
+        true,
+        "sparse clip inside range",
+    );
+    let fast = fast.unwrap();
+    assert_eq!(
+        fast.iter().map(|b| b.trade_day).collect::<Vec<_>>(),
+        vec![0, 1, 5, 8]
+    );
+    assert_eq!(fast, oracle.unwrap());
+
+    // Fallback shapes: overwrite overlap, exact-boundary, Remove, mixed
+    // ops, unsorted and duplicate bases.
+    let overwrite = segment(
+        &c,
+        "sh.600006",
+        Period::Day,
+        &[cb(1, 999), cb(2, 999), cb(3, 999)],
+    );
+    let (fast, oracle) = compare(
+        &c,
+        &[cb(0, 100), cb(1, 110), cb(2, 120)],
+        &[upsert(&overwrite, 1, 3)],
+        false,
+        "overwrite overlapping range",
+    );
+    let fast = fast.unwrap();
+    assert_eq!(
+        fast.iter()
+            .map(|b| (b.trade_day, b.close_cents))
+            .collect::<Vec<_>>(),
+        vec![(0, 100), (1, 999), (2, 999), (3, 999)]
+    );
+    assert_eq!(fast, oracle.unwrap());
+    let boundary = segment(&c, "sh.600006", Period::Day, &[cb(2, 999), cb(3, 130)]);
+    let _ = compare(
+        &c,
+        &[cb(0, 100), cb(1, 110), cb(2, 120)],
+        &[upsert(&boundary, 2, 3)],
+        false,
+        "exact boundary start == base last",
+    );
+    let _ = compare(
+        &c,
+        &[cb(0, 100), cb(1, 110), cb(2, 120)],
+        &[remove(1, 2)],
+        false,
+        "remove op",
+    );
+    let _ = compare(
+        &c,
+        &[cb(0, 100), cb(1, 110)],
+        &[u(&c, &[3, 4], 3, 4), remove(5, 6)],
+        false,
+        "mixed upsert+remove",
+    );
+    let _ = compare(
+        &c,
+        &[cb(0, 100), cb(2, 120), cb(1, 110)],
+        &[u(&c, &[3, 4], 3, 4)],
+        false,
+        "unsorted base",
+    );
+    let _ = compare(
+        &c,
+        &[cb(0, 100), cb(0, 100), cb(1, 110)],
+        &[u(&c, &[3, 4], 3, 4)],
+        false,
+        "duplicate base days",
+    );
+
+    // Tampered stored content rejects BOTH paths — the fast path never
+    // returns unverified appended data.
+    let c2 = connection();
+    let tampered = segment(&c2, "sh.600006", Period::Day, &[cb(3, 100), cb(4, 100)]);
+    let op = upsert(&tampered, 3, 4);
+    lax(&c2);
+    c2.execute(
+        "UPDATE segment_bars SET close_cents=close_cents+1 WHERE segment_key=?1",
+        params![tampered.key],
+    )
+    .unwrap();
+    let base = [cb(0, 100), cb(1, 110)];
+    assert!(delta_is_append_only(&base, std::slice::from_ref(&op)));
+    integrity_failure(apply_delta_scoped(
+        &c2,
+        &base,
+        std::slice::from_ref(&op),
+        "sh.600006",
+        Period::Day,
+        None,
+    ));
+    integrity_failure(reference_apply(&c2, &base, std::slice::from_ref(&op)));
+    integrity_failure(apply_delta_append(
+        &c2,
+        &base,
+        std::slice::from_ref(&op),
+        "sh.600006",
+        Period::Day,
+        None,
+    ));
+
+    // Clip row_count that contradicts the segment rejects both paths
+    // (clip-level check runs on every use, cache or not).
+    let c3 = connection();
+    let seg3 = segment(&c3, "sh.600006", Period::Day, &[cb(3, 100), cb(4, 100)]);
+    let bad_clip = StoredDelta {
+        range_start_day: 3,
+        range_end_day: 4,
+        kind: StoredDeltaKind::Upsert(clip(&seg3, 3, 4, 99)),
+    };
+    let base = [cb(0, 100)];
+    assert!(delta_is_append_only(&base, std::slice::from_ref(&bad_clip)));
+    integrity_failure(apply_delta_scoped(
+        &c3,
+        &base,
+        std::slice::from_ref(&bad_clip),
+        "sh.600006",
+        Period::Day,
+        None,
+    ));
+    integrity_failure(reference_apply(&c3, &base, std::slice::from_ref(&bad_clip)));
+}
