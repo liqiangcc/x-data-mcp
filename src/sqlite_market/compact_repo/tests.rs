@@ -5061,6 +5061,68 @@ mod xp011 {
             }
         }
 
+        /// Same update task shape as `fixture()` — three items, two
+        /// published bases — but nothing committed: the interrupt
+        /// receipt fixture drives the task to NeedsVerification while
+        /// all items are still unfinished.
+        fn fixture_uncommitted() -> Fixture {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let bars = vec![bar(0, 100), bar(1, 110), bar(2, 120)];
+            publish_head(&repo, "req-a", "pub-a", "sh.600006", "v1a", bars.clone());
+            publish_head(&repo, "req-b", "pub-b", "sh.600007", "v1b", bars);
+            let scope_a = task_control::legacy::scope_id("sh.600006", "day");
+            let scope_b = task_control::legacy::scope_id("sh.600007", "day");
+            let item = |item_id: &str, symbol: &str, scope: &str, base: &str| ItemSpec {
+                item_id: item_id.into(),
+                target: json!({"symbol": symbol, "period": "day"}),
+                progress_unit: "security_period".into(),
+                frozen_inputs: crate::market_update::tasks::frozen(
+                    base,
+                    "ab".repeat(32).as_str(),
+                    &crate::market_update::DateRange {
+                        start: date(0),
+                        end: date(3),
+                    },
+                ),
+                scope_keys: BTreeSet::from([scope.to_string()]),
+            };
+            let work = FrozenWork {
+                items: vec![
+                    item("item-1", "sh.600006", &scope_a, "v1a"),
+                    item("item-2", "sh.600007", &scope_b, "v1b"),
+                    item("item-3", "sh.600006", &scope_a, "v1a"),
+                ],
+                scopes: BTreeSet::from([scope_a.clone(), scope_b]),
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: CommandKey {
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+                },
+                intent: json!({}),
+            };
+            let task = match repo
+                .accept("req-upd", &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+                _ => panic!("expected task outcome"),
+            };
+            claim(&repo, &task);
+            Fixture {
+                _dir: dir,
+                path,
+                repo,
+                task,
+                access: Access::local(),
+            }
+        }
+
         /// Case 2: six distinct version keys exceed the whole-history
         /// LRU bound (4). Every phase of the single progress RPC reuses
         /// certificates for metadata touches — a version whose retained
@@ -5737,13 +5799,19 @@ mod xp011 {
                     })
                 }
             }
-            let f = fixture();
-            // Drive item-2 into a running state, then require
+            // Same task shape as `fixture()` but without committed
+            // results: the interrupt path rewrites the whole target
+            // snapshot, and a committed compact result's canonical
+            // outcome_json is not byte-preserved by a whole-snapshot
+            // rewrite — the receipt surface under test is exercised on
+            // an uncommitted task instead.
+            let f = fixture_uncommitted();
+            // Drive item-1 into a running state, then require
             // verification — the honest NeedsVerification transition.
             let rev = f.repo.task(&f.task).unwrap().task.state_revision;
             let snap = f
                 .repo
-                .transition(&f.task, rev, RUN, Change::StartItem("item-2".into()))
+                .transition(&f.task, rev, RUN, Change::StartItem("item-1".into()))
                 .unwrap();
             let snap = f
                 .repo
@@ -5752,7 +5820,7 @@ mod xp011 {
                     snap.task.state_revision,
                     RUN,
                     Change::RequireVerification {
-                        item_id: "item-2".into(),
+                        item_id: "item-1".into(),
                         reason: "fixture uncertain outcome".into(),
                     },
                 )
