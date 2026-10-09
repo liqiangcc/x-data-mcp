@@ -5704,14 +5704,17 @@ mod xp011 {
             };
             let page = observer.progress(query(None), &f.access).unwrap();
             assert_eq!(page.publication_check, Some(receipt));
-            // Tampered stored audit fails closed on the next fresh RPC.
+            // Tampered stored audit fails closed on the next fresh RPC:
+            // the bound-task link validation inside `task_facts` hits the
+            // corrupted audit first — NeedsVerification class, identical
+            // to the pre-consolidation surface.
             tamper(
                 &f.path,
                 "UPDATE publication_checks SET audit_sha256='damaged'",
             );
             assert_eq!(
                 read_class(&observer.progress(query(None), &f.access)),
-                ReadClass::Integrity
+                ReadClass::TaskError
             );
         }
 
@@ -5779,7 +5782,7 @@ mod xp011 {
             )
             .unwrap();
             let receipt = crate::task_verification::decision::StopRepository::commit_stop_check(
-                &crate::sqlite_tasks::SqliteTasks::new(&f.path),
+                &f.repo.tasks(),
                 &plan,
             )
             .unwrap();
@@ -5797,14 +5800,19 @@ mod xp011 {
                 .progress(query(page1.next_cursor.clone()), &f.access)
                 .unwrap();
             assert_eq!(page2.stopped_write_check, Some(receipt));
-            // Tampered stored audit fails the NEXT cursor page (fresh
-            // read scope) and a brand-new RPC identically.
+            // Deleted stored audit fails the NEXT cursor page (fresh
+            // read scope) and a brand-new RPC identically — the
+            // interrupted target's bound-task link validation reports
+            // the missing audit as NeedsVerification on both paths.
             tamper(&f.path, "DELETE FROM stopped_write_checks");
             assert_eq!(
                 read_class(&observer.progress(query(page2.next_cursor.clone()), &f.access)),
-                read_class(&observer.progress(query(None), &f.access))
+                ReadClass::TaskError
             );
-            assert!(observer.progress(query(None), &f.access).is_err());
+            assert_eq!(
+                read_class(&observer.progress(query(None), &f.access)),
+                ReadClass::TaskError
+            );
         }
     }
 }
