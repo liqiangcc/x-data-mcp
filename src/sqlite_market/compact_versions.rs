@@ -892,27 +892,82 @@ fn fixed_by_key_ctx(
     fixed_by_key_scoped(c, key, Some(sctx))
 }
 
+/// One chain node that passed the full published-node verification:
+/// its row, reconstructed projection and the evidence returned by
+/// `verify_published_node` (XP-018) — retained so consumers reuse it
+/// instead of re-reading.
+struct VerifiedNode {
+    row: VersionRow,
+    bars: Vec<CompactBar>,
+    evidence: VersionEvidence,
+}
+
+/// Common full-chain published verification (XP-018): reconstructs every
+/// projection and runs `verify_published_node` on EVERY node, retaining
+/// each returned evidence in its node. One counted full entry per call —
+/// the same unit `read_counts` measures — whether the caller consumes
+/// whole histories or only metadata assurance.
+fn verified_chain_scoped(
+    c: &Connection,
+    key: i64,
+    sctx: Option<&mut compact_v19::SegmentReadCtx>,
+) -> Result<Vec<VerifiedNode>, Error> {
+    #[cfg(test)]
+    read_counts::count_fixed_run();
+    let chain = reconstruct_version_scoped(c, key, sctx)?;
+    let mut nodes = Vec::with_capacity(chain.len());
+    for (row, bars) in chain {
+        let evidence = verify_published_node(c, &row, &bars)?;
+        nodes.push(VerifiedNode {
+            row,
+            bars,
+            evidence,
+        });
+    }
+    Ok(nodes)
+}
+
 fn fixed_by_key_scoped(
     c: &Connection,
     key: i64,
     sctx: Option<&mut compact_v19::SegmentReadCtx>,
 ) -> Result<VerifiedVersion, Error> {
-    #[cfg(test)]
-    read_counts::count_fixed_run();
-    let chain = reconstruct_version_scoped(c, key, sctx)?;
-    let mut leaf_evidence = None;
-    for (row, bars) in &chain {
-        leaf_evidence = Some(verify_published_node(c, row, bars)?);
-    }
-    let (leaf, bars) = chain.last().unwrap();
-    let version = to_effective_version(c, leaf, bars, leaf_evidence.unwrap())?;
+    let chain = verified_chain_scoped(c, key, sctx)?;
+    let leaf = chain.into_iter().next_back().unwrap();
+    let version = to_effective_version(c, &leaf.row, &leaf.bars, leaf.evidence)?;
     Ok(VerifiedVersion {
-        key: leaf.key,
+        key: leaf.row.key,
         integrity_digest: leaf
+            .row
             .integrity_digest
             .ok_or_else(|| integrity("published version lacks integrity digest"))?,
         version,
     })
+}
+
+/// Metadata-only published assurance (XP-018): the same
+/// `verified_chain_scoped` full verification, then `header_version` and
+/// integrity-digest presence checks for EVERY node using that node's
+/// verified evidence. Bars are dropped and no legacy `EffectiveVersion`
+/// records are built. Only after ALL node/header/digest checks succeed
+/// are the returned keys (root-to-leaf) eligible for same-transaction
+/// certificates — ancestor keys are safe to certify because each passed
+/// the same full node checks, not merely because its child exists.
+fn verify_metadata_by_key_ctx(
+    c: &Connection,
+    key: i64,
+    sctx: &mut compact_v19::SegmentReadCtx,
+) -> Result<Vec<i64>, Error> {
+    let chain = verified_chain_scoped(c, key, Some(sctx))?;
+    let mut keys = Vec::with_capacity(chain.len());
+    for node in &chain {
+        header_version(c, &node.row, node.evidence.clone())?;
+        if node.row.integrity_digest.is_none() {
+            return Err(integrity("published version lacks integrity digest"));
+        }
+        keys.push(node.row.key);
+    }
+    Ok(keys)
 }
 
 fn reconstruct_leaf(c: &Connection, key: i64) -> Result<(VersionRow, Vec<CompactBar>), Error> {
@@ -1523,6 +1578,8 @@ fn to_effective_version(
     bars: &[CompactBar],
     evidence: VersionEvidence,
 ) -> Result<EffectiveVersion, Error> {
+    #[cfg(test)]
+    read_counts::count_projection_run();
     let records = bars
         .iter()
         .map(|bar| bar.to_bar(row.period))
@@ -2406,6 +2463,7 @@ pub(crate) mod read_counts {
         static SEGMENT_READS: Cell<usize> = const { Cell::new(0) };
         static FIXED_RUNS: Cell<usize> = const { Cell::new(0) };
         static FACTS_READS: Cell<usize> = const { Cell::new(0) };
+        static PROJECTION_RUNS: Cell<usize> = const { Cell::new(0) };
     }
     pub(crate) fn count_segment_read() {
         SEGMENT_READS.with(|n| n.set(n.get() + 1));
@@ -2415,6 +2473,12 @@ pub(crate) mod read_counts {
     }
     pub(crate) fn count_facts_read() {
         FACTS_READS.with(|n| n.set(n.get() + 1));
+    }
+    /// `to_effective_version` executions — legacy `Bar` record
+    /// projection (XP-018). A metadata-only assurance path must never
+    /// increment this.
+    pub(crate) fn count_projection_run() {
+        PROJECTION_RUNS.with(|n| n.set(n.get() + 1));
     }
     /// (segment reads, fixed runs, facts reads) since the last `reset`.
     pub(crate) fn reset() -> (usize, usize, usize) {
@@ -2426,6 +2490,7 @@ pub(crate) mod read_counts {
         SEGMENT_READS.with(|n| n.set(0));
         FIXED_RUNS.with(|n| n.set(0));
         FACTS_READS.with(|n| n.set(0));
+        PROJECTION_RUNS.with(|n| n.set(0));
         snap
     }
     /// Current counters without resetting.
@@ -2435,6 +2500,10 @@ pub(crate) mod read_counts {
             FIXED_RUNS.with(Cell::get),
             FACTS_READS.with(Cell::get),
         )
+    }
+    /// `to_effective_version` runs since the last `reset` (XP-018).
+    pub(crate) fn snapshot_projections() -> usize {
+        PROJECTION_RUNS.with(Cell::get)
     }
 }
 
@@ -2472,7 +2541,9 @@ pub(crate) struct VerifyCtx {
     /// Actual `result_facts` executions (memo misses).
     #[cfg(test)]
     pub(crate) facts_misses: usize,
-    /// Actual full `fixed_by_key` verification runs on the ctx path.
+    /// Actual successful full-chain verification runs on the ctx path —
+    /// whole-history `verified` calls and metadata-only `verified_facts`
+    /// misses alike (XP-018).
     #[cfg(test)]
     pub(crate) fixed_runs: usize,
 }
@@ -2571,12 +2642,16 @@ impl VerifyCtx {
         Ok((facts, verified))
     }
 
-    /// Metadata-only verified assurance (XP-016): a certificate hit
-    /// returns the bounded memoized facts from this same snapshot
-    /// without re-materializing bars; a miss runs the unchanged full
-    /// `verified` — published state enforced there as today — and only
-    /// a success records a certificate. Certificate eviction means a
-    /// later touch fully verifies again.
+    /// Metadata-only verified assurance (XP-016, deepened by XP-018): a
+    /// certificate hit returns the bounded memoized facts from this same
+    /// snapshot without re-materializing bars; a miss runs
+    /// `verify_metadata_by_key_ctx` — the unchanged full-chain node and
+    /// header verification, published state enforced first — and only a
+    /// success records certificates for every returned key in
+    /// root-to-leaf order, so a later base/ancestor touch is a
+    /// certificate hit rather than a second full pass. No whole-history
+    /// entry is retained for this metadata-only run. Certificate
+    /// eviction means a later touch fully verifies again.
     pub(crate) fn verified_facts(
         &mut self,
         c: &Connection,
@@ -2584,7 +2659,18 @@ impl VerifyCtx {
     ) -> Result<Rc<VersionResultFacts>, Error> {
         self.check_owner(c)?;
         if !self.certificates.contains(&key) {
-            let _ = self.verified(c, key)?;
+            let facts = self.facts(c, key)?;
+            if facts.state != CompactVersionState::Published {
+                return Err(integrity("referenced version is not published"));
+            }
+            let keys = verify_metadata_by_key_ctx(c, key, &mut self.segments)?;
+            #[cfg(test)]
+            {
+                self.fixed_runs += 1;
+            }
+            for key in keys {
+                self.certified(key);
+            }
         }
         self.facts(c, key)
     }

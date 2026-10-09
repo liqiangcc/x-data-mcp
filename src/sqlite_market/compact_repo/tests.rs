@@ -4934,12 +4934,14 @@ mod xp011 {
         read_counts::reset();
         let page = optimized_progress(&f, None, 100, &f.access).unwrap();
         let (segment_reads, fixed_runs, facts_reads) = read_counts::snapshot();
-        // One transaction: task_facts (v1a+v2a verified once each),
-        // verify_versions and verify_range_results served by the same
-        // ctx — no re-verification across phases.
+        // One transaction: task_facts touches the result version first
+        // (publications before range results), so ONE chain verification
+        // covers v1a+v2a and both certificates carry every later
+        // metadata touch — verify_versions and verify_range_results hit
+        // them; no re-verification across phases (XP-018).
         assert_eq!(
             (fixed_runs, facts_reads, segment_reads),
-            (2, 2, 2),
+            (1, 2, 2),
             "measured counts: fixed={fixed_runs} facts={facts_reads} segments={segment_reads}"
         );
         // Same full wire result as before consolidation.
@@ -5232,12 +5234,13 @@ mod xp011 {
             read_counts::reset();
             let page = optimized_progress(&f, None, 100, &f.access).unwrap();
             let (segments, fixed, facts) = read_counts::snapshot();
-            // v1a/v1b/v1c bases + v2a/v2b/v2c delta results: each
-            // verified exactly once; certificate hits serve all later
-            // metadata touches despite verified-LRU eviction.
+            // XP-018: each result's chain verification covers its base —
+            // three full runs (one per [v1x,v2x] chain) certify all six
+            // keys; certificate hits serve every later metadata touch
+            // despite verified-LRU eviction.
             assert_eq!(
                 (fixed, facts, segments),
-                (6, 6, 6),
+                (3, 6, 6),
                 "fixed={fixed} facts={facts} segments={segments}"
             );
             // Same classification/metadata as the uncached reference.
@@ -5254,18 +5257,21 @@ mod xp011 {
             read_counts::reset();
             optimized_progress(&f, None, 100, &f.access).unwrap();
             let (segments, fixed, facts) = read_counts::snapshot();
-            assert_eq!((fixed, facts, segments), (6, 6, 6));
+            assert_eq!((fixed, facts, segments), (3, 6, 6));
         }
 
-        /// Case 2 at the stated batch (XP-016B B1): 100 distinct
-        /// published bases plus 100 distinct committed append results —
-        /// 200 version keys. A single fresh progress RPC verifies each
-        /// exactly once (fixed=200, facts=200); the WHOLE serialized
+        /// Case 2 at the stated batch (XP-016B B1, XP-018 counts): 100
+        /// distinct published bases plus 100 distinct committed append
+        /// results — 200 version keys. A single fresh progress RPC runs
+        /// one full-chain verification per result (each certifying its
+        /// base ancestor): fixed=100, facts=200; the WHOLE serialized
         /// page matches the separate-phase `ForwardRepo` reference with
         /// only `snapshot_id`/`snapshot_time` normalized; a second RPC
-        /// opens a fresh scope and verifies all 200 again. Segment
-        /// reads are recorded, not asserted — the 128-entry cache may
-        /// evict and re-read. No timing extrapolation.
+        /// opens a fresh scope and verifies all 200 again. No legacy
+        /// `to_effective_version` record projection runs at all on this
+        /// metadata-only surface. Segment reads are recorded, not
+        /// asserted — the 128-entry cache may evict and re-read. No
+        /// timing extrapolation.
         #[test]
         fn hundred_distinct_versions_whole_wire_matches_reference() {
             use crate::sqlite_market::compact_versions::read_counts;
@@ -5275,9 +5281,11 @@ mod xp011 {
             let (segments, fixed, facts) = read_counts::snapshot();
             assert_eq!(
                 (fixed, facts),
-                (200, 200),
+                (100, 200),
                 "fixed={fixed} facts={facts} segments={segments} (recorded only)"
             );
+            // Metadata assurance never builds legacy Bar records.
+            assert_eq!(read_counts::snapshot_projections(), 0);
             assert_eq!(page.task.task_id, f.task);
             assert_eq!(page.total, 100);
             assert_eq!(page.finished, 100);
@@ -5294,7 +5302,7 @@ mod xp011 {
             let (segments2, fixed2, facts2) = read_counts::snapshot();
             assert_eq!(
                 (fixed2, facts2),
-                (200, 200),
+                (100, 200),
                 "second RPC fixed={fixed2} facts={facts2} segments={segments2} (recorded only)"
             );
             assert!(page2.page_complete);
