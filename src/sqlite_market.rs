@@ -494,6 +494,42 @@ pub(crate) fn read_record(
     validate_base(&record, base.as_ref())?;
     Ok(record)
 }
+/// Header-only compact read for `read_record` callers: `Some` only for a
+/// published compact row when `published` is requested, whose slim envelope
+/// `raw()` and header `version()` fields are byte-identical to the full
+/// materialization while `version().records`/`batch.bars` stay empty.
+/// `None` sends callers back to `read_record` for identical legacy/missing/
+/// unpublished semantics. Never feed the result to bar-reading code.
+pub(crate) fn slim_published(
+    c: &Connection,
+    id: &str,
+    published: bool,
+    allow_yearly: bool,
+) -> Result<Option<CheckedRecord>, Error> {
+    if !published || !is_compact_schema(c)? {
+        return Ok(None);
+    }
+    let Some(record) = compact_repo::materialize_slim(c, id)? else {
+        return Ok(None);
+    };
+    if !allow_yearly && record.version().period != Period::Day {
+        return Err(Error::Integrity("yearly record in daily context".into()));
+    }
+    Ok(Some(record))
+}
+/// `read_record` resolved through the header projection when the row is a
+/// published compact version; identical arguments and fallback semantics.
+pub(crate) fn read_record_slim(
+    c: &Connection,
+    id: &str,
+    published: bool,
+    allow_yearly: bool,
+) -> Result<CheckedRecord, Error> {
+    match slim_published(c, id, published, allow_yearly)? {
+        Some(record) => Ok(record),
+        None => read_record(c, id, published, allow_yearly),
+    }
+}
 fn read_projection(
     c: &Connection,
     id: &str,

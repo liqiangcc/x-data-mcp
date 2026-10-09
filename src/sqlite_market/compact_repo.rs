@@ -1016,6 +1016,36 @@ pub(crate) fn materialize_checked(
     synthesize(&m)
 }
 
+/// Header-only `materialize_checked` for published rows: `synthesize` emits
+/// the identical slim envelope, so `raw()`/header `version()` fields match
+/// the full materialization byte-for-byte while `version().records` and
+/// `batch.bars` stay empty. For reference/metadata reads only — never hand
+/// the result to code that consumes bars. `Ok(None)` when the row is absent
+/// or not published so callers keep `materialize_checked` as the exact
+/// fallback for missing/staged/validated states.
+pub(crate) fn materialize_slim(
+    c: &Connection,
+    version_id: &str,
+) -> Result<Option<CheckedRecord>, Error> {
+    compact_versions::materialize_header(c, version_id)?
+        .map(|m| synthesize(&m))
+        .transpose()
+}
+
+/// `materialize_checked(.., staged=false)` for reference/metadata reads:
+/// published rows come back through the header projection, everything else
+/// falls through to the full verified materialization. `version().records`
+/// is empty on the fast path — callers must not consume bars from it.
+pub(crate) fn materialize_published(
+    c: &Connection,
+    version_id: &str,
+) -> Result<CheckedRecord, Error> {
+    match materialize_slim(c, version_id)? {
+        Some(record) => Ok(record),
+        None => materialize_checked(c, version_id, false),
+    }
+}
+
 fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
     let record = compat::check(raw)?;
     let version_evidence = VersionEvidence {

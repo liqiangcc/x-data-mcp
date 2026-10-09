@@ -3,7 +3,7 @@ use crate::{
     data_supply::{Access, query::*, wire::*},
     market_storage::{Error, Scope},
     sqlite_catalog,
-    sqlite_market::{backend::MarketBackend, read_record},
+    sqlite_market::{backend::MarketBackend, read_record, read_record_slim, slim_published},
 };
 use rusqlite::{Connection, params};
 #[derive(Clone)]
@@ -35,12 +35,34 @@ fn catalog_ref(v: &crate::catalog::CatalogVersion) -> Result<VersionRef, Error> 
         integrity_sha256: sqlite_catalog::digest(v)?,
     })
 }
+/// `read_market` backed by the header-only compact projection when the row
+/// is a published version — identical `raw()`/identity surface with
+/// `version().records` empty. `None` (non-compact, missing, or unpublished
+/// row) falls back to the unchanged full path; `Some` callers must not read
+/// bars from the record.
+fn slim_market(
+    c: &Connection,
+    dataset: Dataset,
+    entity: &Security,
+    id: &str,
+) -> Result<Option<crate::market_storage::compat::CheckedRecord>, Error> {
+    let Some(r) = slim_published(c, id, true, true)? else {
+        return Ok(None);
+    };
+    if r.version().symbol != entity.symbol() || Some(r.version().period) != dataset.period() {
+        return Err(Error::Integrity("version entity/dataset mismatch".into()));
+    }
+    Ok(Some(r))
+}
 fn read_market(
     c: &Connection,
     dataset: Dataset,
     entity: &Security,
     id: &str,
 ) -> Result<crate::market_storage::compat::CheckedRecord, Error> {
+    if let Some(r) = slim_market(c, dataset, entity, id)? {
+        return Ok(r);
+    }
     let r = read_record(c, id, true, true)?;
     if r.version().symbol != entity.symbol() || Some(r.version().period) != dataset.period() {
         return Err(Error::Integrity("version entity/dataset mismatch".into()));
@@ -206,6 +228,7 @@ pub(crate) fn query(
                 continue;
             };
             let r = read_market(c, plan.args.dataset, entity, &id)?;
+            let mut meta_scan = YearlyMetaScan::new();
             let reference = market_ref(plan.args.dataset, entity, &r);
             result.manifest.push(ManifestEntry {
                 entity: Some(entity.clone()),
@@ -241,7 +264,7 @@ pub(crate) fn query(
             )? {
                 let (first_trading_date, last_trading_date, year_unfinished) =
                     if plan.args.dataset == Dataset::Yearly {
-                        yearly_row_meta(c, &r, &b)?
+                        meta_scan.meta(c, &r, b.date)?
                     } else {
                         (None, None, None)
                     };
@@ -330,6 +353,46 @@ fn availability_stats(
             0,
         ));
     };
+    // Published compact heads answer the same facts without a full record
+    // materialization: the slim projection's manifest/metadata are
+    // byte-identical, and the in-window stats come from the windowed leaf
+    // read (chain linkage + clip digests still enforced) instead of the
+    // materialized `records` list.
+    if let Some(r) = slim_market(c, plan.args.dataset, entity, &id)? {
+        let manifest = ManifestEntry {
+            entity: Some(entity.clone()),
+            version_ref: Some(market_ref(plan.args.dataset, entity, &r)),
+            status: ManifestStatus::Present,
+            metadata: Some(metadata(&r)),
+        };
+        let (start, end) = market_range(plan)?;
+        let key = crate::sqlite_market::compact_repo::version_key(c, &id)?;
+        let mut count = 0usize;
+        let mut first = None;
+        let mut last = None;
+        let mut meta_scan = YearlyMetaScan::new();
+        for b in crate::sqlite_market::compact_versions::leaf_bars_in_range(
+            c,
+            key,
+            crate::compact_market::epoch_day(start),
+            crate::compact_market::epoch_day(end),
+        )? {
+            let date = crate::compact_market::epoch_date(b.trade_day)
+                .map_err(|e| Error::Integrity(e.to_string()))?;
+            if plan.args.dataset == Dataset::Yearly {
+                meta_scan.meta(c, &r, date)?;
+            }
+            count += 1;
+            if count > MAX_ROWS {
+                return Err(invalid("snapshot row budget exceeded"));
+            }
+            if first.is_none() {
+                first = Some(date);
+            }
+            last = Some(date);
+        }
+        return Ok((Some(manifest), first, last, count));
+    }
     let r = read_market(c, plan.args.dataset, entity, &id)?;
     let manifest = ManifestEntry {
         entity: Some(entity.clone()),
@@ -337,23 +400,11 @@ fn availability_stats(
         status: ManifestStatus::Present,
         metadata: Some(metadata(&r)),
     };
-    let (start, end) = match plan.args.filter {
-        Filter::Daily {
-            start_date,
-            end_date,
-        } => (start_date, end_date),
-        Filter::Yearly {
-            start_year,
-            end_year,
-        } => (
-            chrono::NaiveDate::from_ymd_opt(start_year, 1, 1).unwrap(),
-            chrono::NaiveDate::from_ymd_opt(end_year, 12, 31).unwrap(),
-        ),
-        _ => return Err(invalid("market filter")),
-    };
+    let (start, end) = market_range(plan)?;
     let mut count = 0usize;
     let mut first = None;
     let mut last = None;
+    let mut meta_scan = YearlyMetaScan::new();
     for b in r
         .version()
         .records
@@ -361,7 +412,7 @@ fn availability_stats(
         .filter(|b| b.date >= start && b.date <= end)
     {
         if plan.args.dataset == Dataset::Yearly {
-            yearly_row_meta(c, &r, b)?;
+            meta_scan.meta(c, &r, b.date)?;
         }
         count += 1;
         if count > MAX_ROWS {
@@ -373,6 +424,23 @@ fn availability_stats(
         last = Some(b.date);
     }
     Ok((Some(manifest), first, last, count))
+}
+
+fn market_range(plan: &QueryPlan) -> Result<(chrono::NaiveDate, chrono::NaiveDate), Error> {
+    match plan.args.filter {
+        Filter::Daily {
+            start_date,
+            end_date,
+        } => Ok((start_date, end_date)),
+        Filter::Yearly {
+            start_year,
+            end_year,
+        } => Ok((
+            chrono::NaiveDate::from_ymd_opt(start_year, 1, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(end_year, 12, 31).unwrap(),
+        )),
+        _ => Err(invalid("market filter")),
+    }
 }
 
 /// Per-year row metadata. v18 reads the stored `yearly_bars` row; compact
@@ -388,14 +456,14 @@ pub(crate) type YearlyRowMeta = (
 pub(crate) fn yearly_row_meta(
     c: &Connection,
     r: &crate::market_storage::compat::CheckedRecord,
-    bar: &crate::market_data::Bar,
+    date: chrono::NaiveDate,
 ) -> Result<YearlyRowMeta, Error> {
     if !crate::sqlite_market::is_compact_schema(c)? {
         let (first, last, finished): (String, String, bool) = c
             .query_row(
                 "SELECT first_trade_date,last_trade_date,is_finished FROM yearly_bars \
                  WHERE version_id=?1 AND trade_date=?2",
-                params![r.version().version_id, bar.date.to_string()],
+                params![r.version().version_id, date.to_string()],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .map_err(storage)?;
@@ -405,6 +473,25 @@ pub(crate) fn yearly_row_meta(
             Some(!finished),
         ));
     }
+    let (lineage, as_of) = yearly_lineage_as_of(c, r)?;
+    let base = read_record(c, &lineage.base_daily_version_id, true, false)?;
+    let annual = crate::yearly::aggregate(&base.version, None, as_of)
+        .map_err(|e| Error::Integrity(format!("yearly re-aggregation: {e}")))?;
+    let record = annual
+        .records
+        .iter()
+        .find(|rec| rec.bar.date == date)
+        .ok_or_else(|| Error::Integrity("yearly record missing from re-aggregation".into()))?;
+    Ok((
+        Some(record.lineage.first_trading_date),
+        Some(record.lineage.last_trading_date),
+        Some(record.year_unfinished),
+    ))
+}
+fn yearly_lineage_as_of<'a>(
+    c: &Connection,
+    r: &'a crate::market_storage::compat::CheckedRecord,
+) -> Result<(&'a crate::market_data::YearlyDerivation, chrono::NaiveDate), Error> {
     let lineage = r
         .version()
         .yearly_derivation
@@ -420,19 +507,67 @@ pub(crate) fn yearly_row_meta(
         .map_err(storage)?;
     let as_of = crate::compact_market::epoch_date(as_of_day)
         .map_err(|e| Error::Integrity(format!("stored yearly as_of: {e}")))?;
-    let base = read_record(c, &lineage.base_daily_version_id, true, false)?;
-    let annual = crate::yearly::aggregate(&base.version, None, as_of)
-        .map_err(|e| Error::Integrity(format!("yearly re-aggregation: {e}")))?;
-    let record = annual
-        .records
-        .iter()
-        .find(|rec| rec.bar.date == bar.date)
-        .ok_or_else(|| Error::Integrity("yearly record missing from re-aggregation".into()))?;
-    Ok((
-        Some(record.lineage.first_trading_date),
-        Some(record.lineage.last_trading_date),
-        Some(record.year_unfinished),
-    ))
+    Ok((lineage, as_of))
+}
+/// Per-version memo for the compact `yearly_row_meta` check: the base daily
+/// read + re-aggregation are pure functions of the checked version's stored
+/// lineage, so a scan of N yearly rows shares one computation instead of
+/// re-materializing the base per row. Keyed by (version_id, as_of_day) —
+/// a different record simply recomputes, keeping per-row error order.
+pub(crate) struct YearlyMetaScan {
+    annual: Option<(String, i64, std::rc::Rc<crate::yearly::AnnualSeries>)>,
+}
+impl Default for YearlyMetaScan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl YearlyMetaScan {
+    pub(crate) fn new() -> Self {
+        Self { annual: None }
+    }
+    pub(crate) fn meta(
+        &mut self,
+        c: &Connection,
+        r: &crate::market_storage::compat::CheckedRecord,
+        date: chrono::NaiveDate,
+    ) -> Result<YearlyRowMeta, Error> {
+        if !crate::sqlite_market::is_compact_schema(c)? {
+            return yearly_row_meta(c, r, date);
+        }
+        let (lineage, as_of) = yearly_lineage_as_of(c, r)?;
+        let as_of_day = crate::compact_market::epoch_day(as_of);
+        let hit = self
+            .annual
+            .as_ref()
+            .is_some_and(|(id, day, _)| id == &r.version().version_id && *day == as_of_day);
+        if !hit {
+            let base = read_record(c, &lineage.base_daily_version_id, true, false)?;
+            let annual = crate::yearly::aggregate(&base.version, None, as_of)
+                .map_err(|e| Error::Integrity(format!("yearly re-aggregation: {e}")))?;
+            self.annual = Some((
+                r.version().version_id.clone(),
+                as_of_day,
+                std::rc::Rc::new(annual),
+            ));
+        }
+        let record = self
+            .annual
+            .as_ref()
+            .unwrap()
+            .2
+            .records
+            .iter()
+            .find(|rec| rec.bar.date == date)
+            .ok_or_else(|| {
+                Error::Integrity("yearly record missing from re-aggregation".into())
+            })?;
+        Ok((
+            Some(record.lineage.first_trading_date),
+            Some(record.lineage.last_trading_date),
+            Some(record.year_unfinished),
+        ))
+    }
 }
 
 fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
@@ -531,7 +666,9 @@ fn task_facts(
         .map_err(storage)?;
     let mut publications = vec![];
     for id in ids {
-        let r = read_record(c, &id, true, true)?;
+        // Reference-only read: `market_ref` consumes identity + the stored
+        // digest, never bars — the header projection skips materialization.
+        let r = read_record_slim(c, &id, true, true)?;
         let e = crate::data_supply::observe::entity(&r.version().symbol)
             .ok_or_else(|| Error::Integrity("published task symbol".into()))?;
         let dataset = if r.version().period == crate::market_data::Period::Day {
@@ -605,6 +742,41 @@ fn task_facts(
         publications,
     })
 }
+/// `task_facts(verify_outputs=false)` at summary depth: identical
+/// authorization and bound-request validation via `read_bound_task_light`,
+/// without per-item blob decode. `related_tasks`/task-list consumers read
+/// only summary fields, dataset keys and item targets — the placeholder
+/// item internals never reach the wire.
+fn task_facts_light(c: &Connection, id: &str, access: &Access) -> Result<TaskFacts, Error> {
+    if *access != Access::local() {
+        let private: bool = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE task_id=?1 AND json_extract(command_key_json,'$.dataset')='task.verification')",
+            [id], |r| r.get(0),
+        ).map_err(storage)?;
+        if private {
+            return Err(invalid("forbidden"));
+        }
+    }
+    let s = crate::sqlite_tasks::read_bound_task_light(c, id)?
+        .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
+    if !authorized(&s, access) {
+        return Err(invalid("forbidden"));
+    }
+    let request = c
+        .query_row(
+            "SELECT request_id FROM requests WHERE task_id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    Ok(TaskFacts {
+        request_id: request,
+        snapshot: s,
+        publications: vec![],
+        range_results: vec![],
+        yearly_results: vec![],
+    })
+}
 pub(crate) fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts>, Error> {
     let mut q=c.prepare("SELECT task_id,command_key_json,frozen_work_json FROM tasks ORDER BY created_at DESC,task_id ASC").map_err(storage)?;
     let rows = q
@@ -643,7 +815,7 @@ pub(crate) fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts
         }) {
             continue;
         }
-        match task_facts(c, &id, access, false) {
+        match task_facts_light(c, &id, access) {
             Ok(f) => result.push(f),
             Err(Error::Invalid(s)) if s == "forbidden" => continue,
             Err(e) => return Err(e),
@@ -826,8 +998,8 @@ fn range_result(c: &Connection, id: &str) -> Result<RangeExecutionResult, Error>
         .as_str()
         .ok_or_else(|| Error::Integrity("range base reference missing".into()))?;
     // These reads share the task/receipt transaction; never query a latest head.
-    let base = read_record(c, base_id, true, true)?;
-    let result = read_record(c, &receipt.version_id, true, true)?;
+    let base = read_record_slim(c, base_id, true, true)?;
+    let result = read_record_slim(c, &receipt.version_id, true, true)?;
     if base.version().period != crate::market_data::Period::Day
         || result.version().period != crate::market_data::Period::Day
         || base.version().symbol != result.version().symbol
@@ -853,8 +1025,8 @@ fn yearly_result(c: &Connection, id: &str) -> Result<YearlyExecutionResult, Erro
     let base_id = audit["base_daily_version_id"]
         .as_str()
         .ok_or_else(|| Error::Integrity("yearly base missing".into()))?;
-    let base = read_record(c, base_id, true, true)?;
-    let result = read_record(c, &receipt.version_id, true, true)?;
+    let base = read_record_slim(c, base_id, true, true)?;
+    let result = read_record_slim(c, &receipt.version_id, true, true)?;
     if base.version().period != crate::market_data::Period::Day
         || result.version().period != crate::market_data::Period::Year
         || base.version().symbol != result.version().symbol

@@ -702,6 +702,142 @@ pub(crate) fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSna
         _ => Err(inconsistent("task binding/execution missing")),
     }
 }
+/// `read_bound_task` at summary depth for list/related-task surfaces: the
+/// same task-row decodes, shared-evidence digest check and bound-request
+/// validation (digest, outcome shape, task contract), but item rows project
+/// only `item_id`/`target` and the `scope_occupancy` claim read is skipped —
+/// summary/authorization/related-task consumers never read `claims` or
+/// per-item `stage`/`outcome`/`frozen_inputs`/`scope_keys`. Those fields are
+/// placeholders in the returned snapshot; full-fidelity readers keep
+/// `read_bound_task`.
+pub(crate) fn read_bound_task_light(
+    c: &Connection,
+    id: &str,
+) -> Result<Option<TaskSnapshot>, Error> {
+    let task = {
+        let mut stmt = c.prepare("SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,evidence_digest FROM tasks WHERE task_id=?1").map_err(storage)?;
+        let mut rows = stmt.query([id]).map_err(storage)?;
+        let Some(r) = rows.next().map_err(storage)? else {
+            let binding: Option<String> = c
+                .query_row(
+                    "SELECT request_id FROM requests WHERE task_id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage)?;
+            return match binding {
+                None => Ok(None),
+                Some(_) => Err(inconsistent("task binding/execution missing")),
+            };
+        };
+        let status: String = r.get(1).map_err(storage)?;
+        let task = TaskRecord {
+            task_id: id.into(),
+            key: decode(r.get(0).map_err(storage)?)?,
+            status: decode(format!("\"{status}\""))?,
+            state_revision: read_revision(r, 2).map_err(storage)?,
+            accepted_run_id: r.get(3).map_err(storage)?,
+            owner_run_id: r.get(4).map_err(storage)?,
+            created_at: r
+                .get::<_, String>(5)
+                .map_err(storage)?
+                .parse()
+                .map_err(storage)?,
+            last_progress_at: r
+                .get::<_, String>(6)
+                .map_err(storage)?
+                .parse()
+                .map_err(storage)?,
+            work: decode(r.get(7).map_err(storage)?)?,
+            result: r
+                .get::<_, Option<String>>(8)
+                .map_err(storage)?
+                .map(decode)
+                .transpose()?,
+            retry_of: r.get(9).map_err(storage)?,
+        };
+        let column_digest: Option<String> = r.get(10).map_err(storage)?;
+        if column_digest.as_deref() != task.work.evidence_digest() {
+            return Err(inconsistent("task evidence digest column/blob mismatch"));
+        }
+        task
+    };
+    let item_rows: Vec<(String, String)> = {
+        let mut stmt = c
+            .prepare(
+                "SELECT item_id,target_json FROM task_items WHERE task_id=?1 ORDER BY item_id",
+            )
+            .map_err(storage)?;
+        stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?
+    };
+    let mut items = Vec::with_capacity(item_rows.len());
+    for (item_id, target) in item_rows {
+        items.push(TaskItem {
+            spec: ItemSpec {
+                item_id,
+                target: decode(target)?,
+                progress_unit: String::new(),
+                frozen_inputs: Value::Null,
+                scope_keys: BTreeSet::new(),
+            },
+            stage: Stage::Pending,
+            outcome: None,
+        });
+    }
+    let binding = c
+        .query_row(
+            "SELECT request_id,command_json,command_digest,outcome_kind,task_id,terminal_json FROM requests WHERE task_id=?1",
+            [id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage)?;
+    let Some((request_id, raw, digest, kind, bound_task, terminal)) = binding else {
+        return Err(inconsistent("task binding/execution missing"));
+    };
+    if crate::hash::sha256(raw.as_bytes()) != digest {
+        return Err(inconsistent("command digest mismatch"));
+    }
+    let command: Command = decode(raw)?;
+    match (kind.as_str(), bound_task, terminal) {
+        ("task", Some(_bound_task_id), None) => {
+            #[cfg(target_os = "linux")]
+            crate::sqlite_verification_inspection::validate_task_request(
+                c, &request_id, &command,
+            )?;
+            let expected = if task.retry_of.is_some() {
+                CommandKey {
+                    operation: "retry_task".into(),
+                    ..task.key.clone()
+                }
+            } else {
+                task.key.clone()
+            };
+            if command.key != expected {
+                return Err(inconsistent("request/task contract mismatch"));
+            }
+        }
+        _ => return Err(inconsistent("request outcome incomplete")),
+    }
+    Ok(Some(TaskSnapshot {
+        task,
+        items,
+        claims: vec![],
+    }))
+}
 /// O(1) task-row projection: every field the runner/commit guards need,
 /// with no frozen-work or item-list decode.
 pub(crate) fn read_task_head(c: &Connection, id: &str) -> Result<Option<TaskHead>, Error> {

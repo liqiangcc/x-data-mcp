@@ -1446,8 +1446,11 @@ pub(crate) fn read_update_audit(
     }
     let stored = read_market_update(c, result_id)?;
     let id = &stored.identity;
-    let base = compact_repo::materialize_checked(c, &id.base_version_id, false)?;
-    let result = compact_repo::materialize_checked(c, &id.result_version_id, false)?;
+    // Only the versions' stored integrity digests and `acquired_at` stamp
+    // feed the audit projection — the header-only published read carries
+    // both without materializing bars.
+    let base = compact_repo::materialize_published(c, &id.base_version_id)?;
+    let result = compact_repo::materialize_published(c, &id.result_version_id)?;
     let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
         .ok_or_else(|| integrity("range result task missing"))?;
     if binding.head.state_revision < id.task_revision
@@ -1521,8 +1524,11 @@ pub(crate) fn read_yearly_audit(
         compact_repo::version_key(c, &id.result_version_id)?,
     )?
     .ok_or_else(|| integrity("yearly result lacks daily base"))?;
-    let _base = compact_repo::materialize_checked(c, &base_id, false)?;
-    let result = compact_repo::materialize_checked(c, &id.result_version_id, false)?;
+    // The base/result reads exist to prove both versions still resolve as
+    // published and to project their digests/stamps — the header-level
+    // materialization answers that without decoding bars.
+    let _base = compact_repo::materialize_published(c, &base_id)?;
+    let result = compact_repo::materialize_published(c, &id.result_version_id)?;
     let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
         .ok_or_else(|| integrity("yearly result task missing"))?;
     if binding.head.state_revision < id.task_revision

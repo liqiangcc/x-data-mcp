@@ -1631,6 +1631,115 @@ pub(crate) fn materialize(c: &Connection, version_id: &str) -> Result<Materializ
     })
 }
 
+/// Header-only materialization of a published version: the same
+/// `MaterializedVersion` fields `materialize` produces — identity digest
+/// verification, version header, evidence, source binding, generation
+/// evidence, parent link, lineage — with `version.records` left empty and
+/// `validation` counts taken from the stored row (the same values the
+/// verified projection would contain). Chain reconstruction and per-clip
+/// bar decoding are skipped: for a published row the stored
+/// `integrity_digest` is the authoritative content binding
+/// (`verify_published_fields` still recomputes it here), and `synthesize`
+/// already emits the slim envelope without bars, so the resulting
+/// `CheckedRecord.raw()` is byte-identical to the full path's.
+/// `Ok(None)` when the row is absent or not published, letting callers keep
+/// the `materialize` fallback for exact state/error semantics.
+pub(crate) fn materialize_header(
+    c: &Connection,
+    version_id: &str,
+) -> Result<Option<MaterializedVersion>, Error> {
+    let Some(row) = read_version_row_by_id(c, version_id)? else {
+        return Ok(None);
+    };
+    if row.state != 3 {
+        return Ok(None);
+    }
+    let evidence = verify_version_evidence(c, &row.evidence_digest)?;
+    verify_published_fields(c, &row)?;
+    let version = header_version(c, &row, evidence.clone())?;
+    let source_binding = read_source_binding(c, &row.source_binding_digest)?;
+    let (kind, canonical) = read_evidence(c, &source_binding.evidence_digest)?;
+    if kind != EvidenceKind::Generation {
+        return Err(integrity("source binding evidence is not generation"));
+    }
+    let generation_evidence: Value = serde_json::from_str(&canonical).map_err(integrity)?;
+    let parent_version_id = match row.parent_version_key {
+        Some(parent) => Some(
+            read_version_row(c, parent)?
+                .ok_or_else(|| integrity("parent version missing"))?
+                .version_id,
+        ),
+        None => None,
+    };
+    Ok(Some(MaterializedVersion {
+        key: row.key,
+        state: CompactVersionState::Published,
+        version,
+        coverage_status: match row.coverage_status {
+            1 => CoverageStatus::Complete,
+            2 => CoverageStatus::Incomplete,
+            3 => CoverageStatus::Unknown,
+            _ => return Err(integrity("unknown coverage_status")),
+        },
+        coverage_reason: evidence.coverage_reason,
+        source_binding,
+        generation_evidence,
+        parent_version_id,
+        yearly_as_of_day: stored_lineage(c, row.key)?.map(|l| l.as_of_day),
+        projection_digest: row.projection_digest,
+        integrity_digest: row.integrity_digest,
+    }))
+}
+
+/// `to_effective_version` without the record list: identical header fields
+/// (identity, lineage, published stamp, evidence) for a published row, with
+/// `records` empty and `validation` populated from the stored counts.
+fn header_version(
+    c: &Connection,
+    row: &VersionRow,
+    evidence: VersionEvidence,
+) -> Result<EffectiveVersion, Error> {
+    let yearly_derivation = match verify_stored_lineage(c, row)? {
+        Some(l) => Some(YearlyDerivation {
+            base_daily_version_id: l.base_daily_version_id,
+            algorithm_version: l.algorithm_version,
+            first_trading_date: compact_market::epoch_date(l.first_trade_day)
+                .map_err(integrity)?,
+            last_trading_date: compact_market::epoch_date(l.last_trade_day)
+                .map_err(integrity)?,
+        }),
+        None => None,
+    };
+    let published_at = DateTime::parse_from_rfc3339(
+        row.published_at
+            .as_deref()
+            .ok_or_else(|| integrity("published version lacks published_at"))?,
+    )
+    .map_err(integrity)?
+    .with_timezone(&Utc);
+    let record_count: usize = row
+        .record_count
+        .try_into()
+        .map_err(|_| integrity("record_count out of usize range"))?;
+    Ok(EffectiveVersion {
+        version_id: row.version_id.clone(),
+        symbol: row.entity.clone(),
+        period: row.period,
+        adjustment: Adjustment::Forward,
+        source: evidence.source,
+        records: vec![],
+        published_at,
+        validation: ValidationSummary {
+            record_count,
+            unique_record_count: record_count,
+            duplicate_count: 0,
+        },
+        unit_currency: evidence.unit_currency,
+        adjustment_evidence: evidence.adjustment_evidence,
+        yearly_derivation,
+    })
+}
+
 /// Windowed published-version materialization (#262 yearly read path):
 /// identical header/binding/lineage reads as `materialize`, but the leaf
 /// bars come from `leaf_bars_in_range`, decoding only segments that overlap

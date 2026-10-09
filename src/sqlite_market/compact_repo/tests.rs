@@ -3764,3 +3764,362 @@ fn yearly_no_change_reuses_version_on_compact_schema() {
     );
     assert_ne!(third.version_id, first.version_id);
 }
+
+/// XP-009 read-path equivalence: the header-only slim projection must expose
+/// a byte-identical `raw()` envelope and identical header `version()` fields
+/// to the full verified materialization, for checkpoint and delta leaves
+/// alike; non-published and missing rows must fall back exactly.
+#[test]
+fn slim_published_read_matches_full_materialization() {
+    use crate::market_update::{UpdateBatchItem, UpdateBatchPrepared};
+
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+    let version = mk_version("v1", vec![bar(0, 100), bar(1, 110), bar(2, 120)]);
+    repo.stage(&envelope(&version, source("gen-1"), None))
+        .unwrap();
+    let candidate = repo.candidate("v1").unwrap();
+    repo.mark_validated(&candidate).unwrap();
+    repo.read(|c| {
+        // Validated (unpublished) rows never take the slim projection.
+        assert!(materialize_slim(c, "v1").unwrap().is_none());
+        assert!(materialize_slim(c, "absent").unwrap().is_none());
+        assert!(matches!(
+            crate::sqlite_market::read_record_slim(c, "absent", true, true),
+            Err(Error::NotFound)
+        ));
+        Ok::<_, Error>(())
+    })
+    .unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: candidate.clone(),
+        required_heads: vec![(Scope::of(&candidate.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    // A second, delta-linked version (`commit_update_batch` Append).
+    let scope = task_control::legacy::scope_id("sh.600006", "day");
+    let work = FrozenWork {
+        items: vec![ItemSpec {
+            item_id: ITEM.into(),
+            target: json!({"symbol": "sh.600006", "period": "day"}),
+            progress_unit: "bars".into(),
+            frozen_inputs: json!({}),
+            scope_keys: BTreeSet::from([scope.clone()]),
+        }],
+        scopes: BTreeSet::from([scope.clone()]),
+        shared_evidence: None,
+    };
+    let command = Command {
+        key: CommandKey {
+            operation: "update_data".into(),
+            dataset: "market.daily".into(),
+            contract_version: "v1".into(),
+        },
+        intent: json!({}),
+    };
+    let update_task = match repo
+        .accept("req-upd", &command, &work, RUN, None)
+        .unwrap()
+        .record
+        .outcome
+    {
+        task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+        _ => panic!("expected task outcome"),
+    };
+    repo.commit_update_batch(
+        &update_task,
+        &[UpdateBatchItem {
+            task_id: update_task.clone(),
+            item_id: ITEM.into(),
+            publication_id: "upd-1".into(),
+            run_id: RUN.into(),
+            symbol: "sh.600006".into(),
+            occupancy_key: scope,
+            prepared: UpdateBatchPrepared::Append {
+                base_version_id: "v1".into(),
+                result_version_id: "v2".into(),
+                upserts: vec![bar(3, 130)],
+                metadata: None,
+                continuity: json!({
+                    "continuity": {"mode": "append", "day_member_sha256": "cd".repeat(32)}
+                }),
+            },
+        }],
+    )
+    .unwrap();
+
+    repo.read(|c| {
+        for id in ["v1", "v2"] {
+            let full = materialize_checked(c, id, false).unwrap();
+            let slim = materialize_slim(c, id).unwrap().unwrap();
+            // The published envelope is slim either way: byte-identical.
+            assert_eq!(slim.raw(), full.raw(), "raw() differs for {id}");
+            assert_eq!(slim.version().version_id, full.version().version_id);
+            assert_eq!(slim.version().symbol, full.version().symbol);
+            assert_eq!(slim.version().period, full.version().period);
+            assert_eq!(slim.version().source, full.version().source);
+            assert_eq!(slim.version().published_at, full.version().published_at);
+            assert_eq!(
+                slim.version().validation.record_count,
+                full.version().validation.record_count
+            );
+            assert!(slim.version().records.is_empty());
+            assert!(!full.version().records.is_empty());
+            // materialize_published resolves to the same record either way.
+            let via = materialize_published(c, id).unwrap();
+            assert_eq!(via.raw(), full.raw());
+        }
+        Ok::<_, Error>(())
+    })
+    .unwrap();
+}
+
+/// XP-009: `read_bound_task_light` must project the same summary/authorized/
+/// symbol surface as `read_bound_task` on the same bound task.
+#[test]
+fn light_bound_task_matches_full_projection() {
+    use crate::data_supply::{Access, observe};
+
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    let task_id = accept_task(&repo);
+    repo.read(|c| {
+        let full = crate::sqlite_tasks::read_bound_task(c, &task_id)
+            .unwrap()
+            .unwrap();
+        let light = crate::sqlite_tasks::read_bound_task_light(c, &task_id)
+            .unwrap()
+            .unwrap();
+        // Everything the related-task/summary surface consumes is identical.
+        assert_eq!(light.task, full.task);
+        let symbols = |s: &crate::task_control::TaskSnapshot| {
+            s.items
+                .iter()
+                .map(|i| {
+                    (
+                        i.spec.item_id.clone(),
+                        i.spec.target["symbol"].as_str().map(str::to_owned),
+                        i.spec.target["period"].as_str().map(str::to_owned),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(symbols(&light), symbols(&full));
+        let access = Access::local();
+        assert_eq!(
+            observe::authorized(&light, &access),
+            observe::authorized(&full, &access)
+        );
+        assert_eq!(
+            light.visible_status("probe"),
+            full.visible_status("probe")
+        );
+        // Placeholders stay unambiguous for misuse detection.
+        assert!(light.claims.is_empty());
+        assert!(light.items.iter().all(|i| i.outcome.is_none()));
+        assert!(crate::sqlite_tasks::read_bound_task_light(c, "absent")
+            .unwrap()
+            .is_none());
+        Ok::<_, Error>(())
+    })
+    .unwrap();
+}
+
+/// XP-009 end-to-end on compact storage: progress facts and availability
+/// answers over published + update-result rows keep the exact reference and
+/// count/date surface while read paths no longer materialize records.
+#[test]
+fn compact_progress_and_availability_keep_reference_surface() {
+    use crate::data_supply::{
+        Access,
+        observe::{ObservationRepository, Observer},
+        query::ReadRepository,
+        wire::{
+            ContractVersion, Dataset, Exchange, Filter, ProgressQuery, Query, Security,
+            Selection, VersionChoice,
+        },
+    };
+    use crate::market_update::{UpdateBatchItem, UpdateBatchPrepared};
+    use crate::sqlite_market::backend::MarketBackend;
+    use crate::sqlite_supply::SqliteSupply;
+
+    let dir = tempdir();
+    let (_, repo) = repo(&dir);
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+    let version = mk_version("v1", vec![bar(0, 100), bar(1, 110), bar(2, 120)]);
+    repo.stage(&envelope(&version, source("gen-1"), None))
+        .unwrap();
+    let candidate = repo.candidate("v1").unwrap();
+    repo.mark_validated(&candidate).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: candidate.clone(),
+        required_heads: vec![(Scope::of(&candidate.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    let scope = task_control::legacy::scope_id("sh.600006", "day");
+    let work = FrozenWork {
+        items: vec![ItemSpec {
+            item_id: ITEM.into(),
+            target: json!({"symbol": "sh.600006", "period": "day"}),
+            progress_unit: "bars".into(),
+            frozen_inputs: json!({}),
+            scope_keys: BTreeSet::from([scope.clone()]),
+        }],
+        scopes: BTreeSet::from([scope.clone()]),
+        shared_evidence: None,
+    };
+    let command = Command {
+        key: CommandKey {
+            operation: "update_data".into(),
+            dataset: "market.daily".into(),
+            contract_version: "v1".into(),
+        },
+        intent: json!({}),
+    };
+    let update_task = match repo
+        .accept("req-upd", &command, &work, RUN, None)
+        .unwrap()
+        .record
+        .outcome
+    {
+        task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+        _ => panic!("expected task outcome"),
+    };
+    repo.commit_update_batch(
+        &update_task,
+        &[UpdateBatchItem {
+            task_id: update_task.clone(),
+            item_id: ITEM.into(),
+            publication_id: "upd-1".into(),
+            run_id: RUN.into(),
+            symbol: "sh.600006".into(),
+            occupancy_key: scope,
+            prepared: UpdateBatchPrepared::Append {
+                base_version_id: "v1".into(),
+                result_version_id: "v2".into(),
+                upserts: vec![bar(3, 130)],
+                metadata: None,
+                continuity: json!({
+                    "continuity": {"mode": "append", "day_member_sha256": "cd".repeat(32)}
+                }),
+            },
+        }],
+    )
+    .unwrap();
+
+    let supply = SqliteSupply {
+        market: MarketBackend::Compact(repo.clone()),
+    };
+    let access = Access::local();
+    let entity = Security {
+        exchange: Exchange::Sh,
+        code: "600006".into(),
+    };
+
+    // Progress facts resolve real references (not placeholder digests).
+    let facts = supply.task(&update_task, &access).unwrap();
+    assert_eq!(facts.request_id, "req-upd");
+    assert_eq!(facts.range_results.len(), 1);
+    let digest_of = |id: &str| {
+        repo.read(|c| {
+            Ok::<_, Error>(
+                materialize_checked(c, id, false).unwrap().raw()["integrity_sha256"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            )
+        })
+        .unwrap()
+    };
+    let v1_digest = digest_of("v1");
+    let v2_digest = digest_of("v2");
+    let rr = &facts.range_results[0];
+    assert_eq!(rr.base_version.version_id, "v1");
+    assert_eq!(rr.base_version.integrity_sha256, v1_digest);
+    assert_eq!(rr.result_version.version_id, "v2");
+    assert_eq!(rr.result_version.integrity_sha256, v2_digest);
+    assert_eq!(rr.item_id, ITEM);
+    let publications = &facts.publications;
+    assert_eq!(publications.len(), 1);
+    assert_eq!(publications[0].version_id, "v2");
+
+    // The observer page round-trips the same facts and verifies them.
+    let observer = Observer::new(supply.clone(), "probe-run".into());
+    let page = observer
+        .progress(
+            ProgressQuery {
+                task_id: update_task.clone(),
+                page_size: 100,
+                cursor: None,
+            },
+            &access,
+        )
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.succeeded, 1);
+    assert_eq!(page.range_results.len(), 1);
+    assert_eq!(page.publication_versions[0].version_id, "v2");
+
+    // Availability over a partial window counts only in-range bars.
+    let availability = |start: NaiveDate, end: NaiveDate| {
+        observer
+            .availability(
+                Query {
+                    dataset: Dataset::Daily,
+                    contract_version: ContractVersion::V1,
+                    selection: Selection::Single {
+                        entity: entity.clone(),
+                    },
+                    filter: Filter::Daily {
+                        start_date: start,
+                        end_date: end,
+                    },
+                    version: VersionChoice::LatestPerEntity,
+                    page_size: 10,
+                    cursor: None,
+                },
+                &access,
+            )
+            .unwrap()
+    };
+    let page = availability(date(0), date(3));
+    assert_eq!(page.items.len(), 1);
+    let item = &page.items[0];
+    assert_eq!(item.record_count, 4);
+    assert_eq!(item.first_record, Some(date(0)));
+    assert_eq!(item.last_record, Some(date(3)));
+    assert_eq!(item.version_ref.as_ref().unwrap().version_id, "v2");
+    assert_eq!(
+        item.version_ref.as_ref().unwrap().integrity_sha256,
+        v2_digest
+    );
+    // Both tasks relate to the symbol; summaries carry real fields.
+    let related: Vec<String> = item
+        .related_tasks
+        .iter()
+        .map(|t| t.task_id.clone())
+        .collect();
+    assert!(related.contains(&update_task) && related.contains(&task_id));
+    assert!(item.related_tasks.iter().all(|t| !t.request_id.is_empty()));
+
+    let page = availability(date(1), date(2));
+    assert_eq!(page.items[0].record_count, 2);
+    assert_eq!(page.items[0].first_record, Some(date(1)));
+    assert_eq!(page.items[0].last_record, Some(date(2)));
+
+    // verify_versions still passes on the slim-derived references.
+    supply
+        .verify(&[item.version_ref.clone().unwrap()])
+        .unwrap();
+}
