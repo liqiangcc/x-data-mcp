@@ -3971,8 +3971,15 @@ fn compact_progress_and_availability_keep_reference_surface() {
         items: vec![ItemSpec {
             item_id: ITEM.into(),
             target: json!({"symbol": "sh.600006", "period": "day"}),
-            progress_unit: "bars".into(),
-            frozen_inputs: json!({}),
+            progress_unit: "security_period".into(),
+            frozen_inputs: crate::market_update::tasks::frozen(
+                "v1",
+                "ab".repeat(32).as_str(),
+                &crate::market_update::DateRange {
+                    start: date(0),
+                    end: date(3),
+                },
+            ),
             scope_keys: BTreeSet::from([scope.clone()]),
         }],
         scopes: BTreeSet::from([scope.clone()]),
@@ -3982,7 +3989,7 @@ fn compact_progress_and_availability_keep_reference_surface() {
         key: CommandKey {
             operation: "update_data".into(),
             dataset: "market.daily".into(),
-            contract_version: "v1".into(),
+            contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
         },
         intent: json!({}),
     };
