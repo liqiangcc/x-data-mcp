@@ -6331,8 +6331,8 @@ mod xp011 {
                 "UPDATE version_delta_clips SET clip_end_day=clip_end_day+100",
                 // task_publications linkage
                 "DELETE FROM task_publications",
-                "UPDATE task_publications SET result_id='ghost-result'",
-                "UPDATE task_publications SET task_id='ghost-task'",
+                "UPDATE task_publications SET result_id='ghost-result' WHERE result_id='upd-1'",
+                "UPDATE task_publications SET task_id='ghost-task' WHERE result_id='upd-1'",
                 // task_items outcome / task revision
                 "UPDATE task_items SET outcome_json=NULL WHERE item_id='item-1'",
                 "UPDATE task_items SET stage='pending' WHERE item_id='item-1'",
