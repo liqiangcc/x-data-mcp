@@ -1297,7 +1297,8 @@ fn related_tasks_for(
     type Candidate = (std::cmp::Reverse<String>, String, bool);
     let mut key_symbol: HashMap<String, &String> = HashMap::new();
     for symbol in symbols {
-        for period in ["day", "year"] {
+        // "daily" is the period gap-verification tasks put in their scope key.
+        for period in ["day", "daily", "year"] {
             key_symbol.insert(
                 crate::task_control::legacy::scope_id(symbol, period),
                 symbol,

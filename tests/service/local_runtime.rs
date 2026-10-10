@@ -602,10 +602,10 @@ fn compact_corrupt_history_is_rejected_by_check_and_startup() {
 /// marker) straight into the tasks tables; each touches `symbol`/day.
 /// `created_at` carries six fractional digits ending in 1 so the stored
 /// text equals chrono's canonical rendering (keyset cursors compare text).
-fn seed_history(db: &Path, symbol: &str, first: usize, n: usize) {
+fn seed_history(db: &Path, symbol: &str, period: &str, first: usize, n: usize) {
     let mut c = rusqlite::Connection::open(db).unwrap();
     let tx = c.transaction().unwrap();
-    let scope = x_data_mcp::task_control::legacy::scope_id(symbol, "day");
+    let scope = x_data_mcp::task_control::legacy::scope_id(symbol, period);
     let key =
         r#"{"operation":"start_collection","dataset":"market.daily","contract_version":"v1"}"#;
     let command = format!(r#"{{"key":{key},"intent":{{}}}}"#);
@@ -617,7 +617,7 @@ fn seed_history(db: &Path, symbol: &str, first: usize, n: usize) {
     })
     .to_string();
     for i in first..first + n {
-        let id = format!("task-seed-{symbol}-{i}");
+        let id = format!("task-seed-{symbol}-{period}-{i}");
         let created = format!("2026-01-01T00:00:00.{:06}+00:00", i * 10 + 1);
         tx.execute(
             "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded) \
@@ -634,7 +634,7 @@ fn seed_history(db: &Path, symbol: &str, first: usize, n: usize) {
             "INSERT INTO task_items VALUES(?1,'i',?2,'u','{}',?3,'finished','{\"success\":true}')",
             rusqlite::params![
                 id,
-                format!(r#"{{"symbol":"{symbol}","period":"day"}}"#),
+                format!(r#"{{"symbol":"{symbol}","period":"{period}"}}"#),
                 format!(r#"["{}"]"#, scope.replace('"', "\\\""))
             ],
         )
@@ -660,9 +660,12 @@ fn seed_history(db: &Path, symbol: &str, first: usize, n: usize) {
 fn compact_availability_and_list_tasks_survive_more_than_ten_thousand_tasks() {
     let dir = tempfile::tempdir().unwrap();
     let db = compact_database(dir.path());
-    // 10,050 tasks for unrelated symbols, 40 for the queried one.
-    seed_history(&db, "sz.000001", 0, 10_050);
-    seed_history(&db, "sh.600006", 20_000, 40);
+    // 10,050 tasks for unrelated symbols, 41 for the queried one.
+    seed_history(&db, "sz.000001", "day", 0, 10_050);
+    seed_history(&db, "sh.600006", "day", 20_000, 40);
+    // Gap-verification tasks key their scope with period "daily" (not "day");
+    // the newest one must still be related to the entity (regression).
+    seed_history(&db, "sh.600006", "daily", 30_000, 1);
     let socket = dir.path().join("mcp.sock");
     let mut service = Service::start(&db, &socket, 100);
     let mut session = Session::new(&socket);
@@ -707,15 +710,30 @@ fn compact_availability_and_list_tasks_survive_more_than_ten_thousand_tasks() {
                "version":{"kind":"latest_per_entity"}}),
         false,
     );
-    let related = availability["items"][0]["related_tasks"]
-        .as_array()
-        .unwrap();
-    assert_eq!(related.len(), 40, "{availability}");
+    let item = &availability["items"][0];
+    let related = item["related_tasks"].as_array().unwrap();
+    // generic-data-v5: nothing is in flight here, so only the newest 5
+    // finished tasks are listed; total/truncated say what was cut.
+    assert_eq!(related.len(), 5, "{availability}");
+    assert_eq!(item["related_tasks_total"], 41, "{availability}");
+    assert_eq!(item["related_tasks_truncated"], true, "{availability}");
     assert!(
         related
             .iter()
             .all(|t| t["task_id"].as_str().unwrap().contains("sh.600006")),
         "unrelated symbols must not leak in"
+    );
+    let created: Vec<&str> = related
+        .iter()
+        .map(|t| t["created_at"].as_str().unwrap())
+        .collect();
+    assert!(created.windows(2).all(|w| w[0] > w[1]), "newest first");
+    assert!(
+        related[0]["task_id"]
+            .as_str()
+            .unwrap()
+            .ends_with("-daily-30000"),
+        "the 'daily'-scoped (gap verification) task is related: {availability}"
     );
     service.stop();
 }
