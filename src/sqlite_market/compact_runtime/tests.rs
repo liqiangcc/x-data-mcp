@@ -607,3 +607,65 @@ fn coordinator_boundary_cost_probe() {
     }
     report("coordinator.tx(empty)", ms);
 }
+
+fn pragma_values(conn: &Connection) -> (i64, i64, i64) {
+    let get = |name: &str| -> i64 { conn.pragma_query_value(None, name, |r| r.get(0)).unwrap() };
+    (get("mmap_size"), get("cache_size"), get("temp_store"))
+}
+
+#[test]
+fn default_build_adds_no_performance_pragma() {
+    #[cfg(not(any(feature = "pragma-v2", feature = "pragma-v3", feature = "pragma-v4")))]
+    assert_eq!(TUNING, TUNING_V0);
+    assert_eq!(TUNING_V0.mmap_size, None);
+    assert_eq!(TUNING_V0.cache_size, None);
+    assert_eq!(TUNING_V0.temp_store, None);
+}
+
+#[test]
+fn compiled_tuning_reaches_pooled_reader_and_writer() {
+    let dir = tempdir();
+    let path = dir.path().join("market.db");
+    create_db(&path);
+    let plain = pragma_values(&Connection::open(&path).unwrap());
+    let expected = (
+        TUNING.mmap_size.unwrap_or(plain.0),
+        TUNING.cache_size.unwrap_or(plain.1),
+        TUNING.temp_store.unwrap_or(plain.2),
+    );
+    let coordinator = coordinator(&path);
+    let writer = coordinator.write(|conn| Ok(pragma_values(conn))).unwrap();
+    let reader = coordinator.read(|conn| Ok(pragma_values(conn))).unwrap();
+    assert_eq!(writer, expected, "writer connection pragmas");
+    assert_eq!(reader, expected, "reader connection pragmas");
+}
+
+#[test]
+fn every_variant_applies_and_reads_back_on_both_connection_kinds() {
+    let dir = tempdir();
+    let path = dir.path().join("market.db");
+    create_db(&path);
+    for (name, tuning) in [("v2", TUNING_V2), ("v3", TUNING_V3), ("v4", TUNING_V4)] {
+        let rw = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        let ro = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        for (kind, conn) in [("writer", &rw), ("reader", &ro)] {
+            apply_tuning(conn, &tuning).unwrap();
+            let (mmap, cache, temp) = pragma_values(conn);
+            assert_eq!(Some(mmap), tuning.mmap_size, "{name} {kind} mmap_size");
+            if let Some(cache_size) = tuning.cache_size {
+                assert_eq!(cache, cache_size, "{name} {kind} cache_size");
+            }
+            if let Some(temp_store) = tuning.temp_store {
+                assert_eq!(temp, temp_store, "{name} {kind} temp_store");
+            }
+        }
+    }
+}
