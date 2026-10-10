@@ -1556,3 +1556,100 @@ fn apply_delta_append_only_matches_map_reference() {
     ));
     integrity_failure(reference_apply(&c3, &base, std::slice::from_ref(&bad_clip)));
 }
+
+// ---- XP-025 G1: streamed chain rebuild equals the per-node-clone reference ----
+
+fn chain_keys(c: &Connection, depth: i64, full_every: i64) -> Vec<i64> {
+    let (root, _) = publish_daily(c, "v0", &[cb(0, 100)]);
+    let mut keys = vec![root];
+    for i in 1..=depth {
+        let bar = if full_every > 0 && i % full_every == 0 {
+            cb_full(i, 100 + i, i, "5")
+        } else {
+            cb(i, 100 + i)
+        };
+        let seg = segment(c, "sh.600006", Period::Day, &[bar]);
+        let draft = mk_draft(&format!("v{i}"), "sh.600006", Period::Day, c);
+        let key = stage_delta(c, &draft, *keys.last().unwrap(), &[upsert(&seg, i, i)]).unwrap();
+        mark_validated(c, key).unwrap();
+        publish(c, key, ts()).unwrap();
+        keys.push(key);
+    }
+    keys
+}
+
+/// Streamed verification must reproduce, node by node, exactly what the
+/// per-node-clone reference reconstructs and verifies.
+fn assert_stream_matches_reference(c: &Connection, key: i64) {
+    let reference = reconstruct_version_reference(c, key).unwrap();
+    let mut index = 0;
+    let (leaf_row, leaf_bars) = walk_chain_scoped(c, key, None, |row, bars, summary| {
+        let (ref_row, ref_bars) = &reference[index];
+        assert_eq!(row.key, ref_row.key, "node {index} row");
+        assert_eq!(bars, ref_bars.as_slice(), "node {index} bars");
+        assert_eq!(*summary, BarsSummary::of(bars), "node {index} summary");
+        index += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(index, reference.len());
+    let (ref_leaf, ref_leaf_bars) = reference.last().unwrap();
+    assert_eq!(leaf_row.key, ref_leaf.key);
+    assert_eq!(&leaf_bars, ref_leaf_bars);
+    let verified = verified_chain_scoped(c, key, None).unwrap();
+    assert_eq!(verified.leaf_bars, *ref_leaf_bars);
+    assert_eq!(verified.nodes.len(), reference.len());
+    for ((row, evidence), (ref_row, ref_bars)) in verified.nodes.iter().zip(&reference) {
+        assert_eq!(row.key, ref_row.key);
+        assert_eq!(
+            *evidence,
+            verify_published_node(c, ref_row, ref_bars).unwrap(),
+            "node evidence"
+        );
+    }
+}
+
+#[test]
+fn streamed_chain_matches_reference_at_depths_0_1_64_256_and_copies_stay_linear() {
+    let c = connection();
+    let keys = chain_keys(&c, 256, 7);
+    for depth in [0usize, 1, 64, 256] {
+        assert_stream_matches_reference(&c, keys[depth]);
+        BAR_COPIES.with(|n| n.set(0));
+        let verified = verified_chain_scoped(&c, keys[depth], None).unwrap();
+        let copies = BAR_COPIES.with(|n| n.get());
+        // Root (1 bar) + one appended bar per delta == final bar count: no
+        // per-node copy of the growing projection (the old path copied
+        // O(bars x depth), ~depth^2/2 here).
+        assert_eq!(verified.leaf_bars.len(), depth + 1);
+        assert_eq!(copies, depth + 1, "bar copies at depth {depth}");
+    }
+}
+
+#[test]
+fn streamed_chain_matches_reference_for_overwrite_and_remove_deltas() {
+    let c = connection();
+    let (mut parent, _) =
+        publish_daily(&c, "v0", &[cb(0, 100), cb(1, 101), cb(2, 102), cb(3, 103)]);
+    // Overwrite an existing day, remove a day, then append: the first two
+    // are not append-only (map path), the last returns to the fast path.
+    let overwrite = segment(&c, "sh.600006", Period::Day, &[cb_full(2, 999, 5, "7")]);
+    let append = segment(&c, "sh.600006", Period::Day, &[cb(10, 110)]);
+    let steps: Vec<(&str, Vec<StoredDelta>)> = vec![
+        ("v1", vec![upsert(&overwrite, 2, 2)]),
+        ("v2", vec![remove(1, 1)]),
+        ("v3", vec![upsert(&append, 10, 10)]),
+    ];
+    let mut keys = vec![parent];
+    for (id, ops) in steps {
+        let draft = mk_draft(id, "sh.600006", Period::Day, &c);
+        let key = stage_delta(&c, &draft, parent, &ops).unwrap();
+        mark_validated(&c, key).unwrap();
+        publish(&c, key, ts()).unwrap();
+        parent = key;
+        keys.push(key);
+    }
+    for key in keys {
+        assert_stream_matches_reference(&c, key);
+    }
+}

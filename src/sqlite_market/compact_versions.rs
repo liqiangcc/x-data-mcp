@@ -753,6 +753,7 @@ pub(crate) fn list(c: &Connection, scope: &Scope) -> Result<Vec<CompactVersionSu
     Ok(summaries)
 }
 
+#[derive(Clone)]
 struct VersionRow {
     key: i64,
     version_id: String,
@@ -893,39 +894,32 @@ fn fixed_by_key_ctx(
     fixed_by_key_scoped(c, key, Some(sctx))
 }
 
-/// One chain node that passed the full published-node verification:
-/// its row, reconstructed projection and the evidence returned by
-/// `verify_published_node` (XP-018) — retained so consumers reuse it
-/// instead of re-reading.
-struct VerifiedNode {
-    row: VersionRow,
-    bars: Vec<CompactBar>,
-    evidence: VersionEvidence,
+/// Result of a streamed full-chain verification (XP-018/XP-025 G1): every
+/// node passed `verify_published_node_with`; only the leaf projection is
+/// retained, intermediate nodes keep just their row and evidence.
+struct VerifiedChain {
+    nodes: Vec<(VersionRow, VersionEvidence)>,
+    leaf_bars: Vec<CompactBar>,
 }
 
-/// Common full-chain published verification (XP-018): reconstructs every
-/// projection and runs `verify_published_node` on EVERY node, retaining
-/// each returned evidence in its node. One counted full entry per call —
-/// the same unit `read_counts` measures — whether the caller consumes
-/// whole histories or only metadata assurance.
+/// Common full-chain published verification: streams the chain over one
+/// projection buffer and runs the full published-node verification on EVERY
+/// node, retaining each returned evidence. One counted full entry per call —
+/// the same unit `read_counts` measures.
 fn verified_chain_scoped(
     c: &Connection,
     key: i64,
     sctx: Option<&mut compact_v19::SegmentReadCtx>,
-) -> Result<Vec<VerifiedNode>, Error> {
+) -> Result<VerifiedChain, Error> {
     #[cfg(test)]
     read_counts::count_fixed_run();
-    let chain = reconstruct_version_scoped(c, key, sctx)?;
-    let mut nodes = Vec::with_capacity(chain.len());
-    for (row, bars) in chain {
-        let evidence = verify_published_node(c, &row, &bars)?;
-        nodes.push(VerifiedNode {
-            row,
-            bars,
-            evidence,
-        });
-    }
-    Ok(nodes)
+    let mut nodes = Vec::new();
+    let (_leaf, leaf_bars) = walk_chain_scoped(c, key, sctx, |row, bars, summary| {
+        let evidence = verify_published_node_with(c, row, summary, bars)?;
+        nodes.push((row.clone(), evidence));
+        Ok(())
+    })?;
+    Ok(VerifiedChain { nodes, leaf_bars })
 }
 
 fn fixed_by_key_scoped(
@@ -933,13 +927,12 @@ fn fixed_by_key_scoped(
     key: i64,
     sctx: Option<&mut compact_v19::SegmentReadCtx>,
 ) -> Result<VerifiedVersion, Error> {
-    let chain = verified_chain_scoped(c, key, sctx)?;
-    let leaf = chain.into_iter().next_back().unwrap();
-    let version = to_effective_version(c, &leaf.row, &leaf.bars, leaf.evidence)?;
+    let VerifiedChain { nodes, leaf_bars } = verified_chain_scoped(c, key, sctx)?;
+    let (leaf_row, leaf_evidence) = nodes.into_iter().next_back().unwrap();
+    let version = to_effective_version(c, &leaf_row, &leaf_bars, leaf_evidence)?;
     Ok(VerifiedVersion {
-        key: leaf.row.key,
-        integrity_digest: leaf
-            .row
+        key: leaf_row.key,
+        integrity_digest: leaf_row
             .integrity_digest
             .ok_or_else(|| integrity("published version lacks integrity digest"))?,
         version,
@@ -960,21 +953,19 @@ fn verify_metadata_by_key_ctx(
     sctx: &mut compact_v19::SegmentReadCtx,
 ) -> Result<Vec<i64>, Error> {
     let chain = verified_chain_scoped(c, key, Some(sctx))?;
-    let mut keys = Vec::with_capacity(chain.len());
-    for node in &chain {
-        header_version(c, &node.row, node.evidence.clone())?;
-        if node.row.integrity_digest.is_none() {
+    let mut keys = Vec::with_capacity(chain.nodes.len());
+    for (row, evidence) in &chain.nodes {
+        header_version(c, row, evidence.clone())?;
+        if row.integrity_digest.is_none() {
             return Err(integrity("published version lacks integrity digest"));
         }
-        keys.push(node.row.key);
+        keys.push(row.key);
     }
     Ok(keys)
 }
 
 fn reconstruct_leaf(c: &Connection, key: i64) -> Result<(VersionRow, Vec<CompactBar>), Error> {
-    let mut chain = reconstruct_version(c, key)?;
-    let (row, bars) = chain.pop().unwrap();
-    Ok((row, bars))
+    walk_chain_scoped(c, key, None, |_, _, _| Ok(()))
 }
 
 /// Clip-level verified read of a leaf version: reconstructs the
@@ -1151,14 +1142,221 @@ pub(crate) fn leaf_bars_in_range(
     Ok(map.into_values().collect())
 }
 
-fn reconstruct_version(
+/// Running facts about the reconstructed projection, maintained
+/// incrementally so per-node verification never rescans the bars.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct BarsSummary {
+    len: usize,
+    first_day: Option<i64>,
+    last_day: Option<i64>,
+    any_volume: bool,
+    any_amount: bool,
+    strictly_increasing: bool,
+}
+
+impl BarsSummary {
+    fn of(bars: &[CompactBar]) -> Self {
+        Self {
+            len: bars.len(),
+            first_day: bars.first().map(|b| b.trade_day),
+            last_day: bars.last().map(|b| b.trade_day),
+            any_volume: bars.iter().any(|b| b.volume.is_some()),
+            any_amount: bars.iter().any(|b| b.amount.is_some()),
+            strictly_increasing: bars.windows(2).all(|w| w[1].trade_day > w[0].trade_day),
+        }
+    }
+}
+
+// Test-only count of bars copied into the reconstruction buffer, to prove
+// chain rebuilds copy O(bars + chain depth x delta), not O(bars x depth).
+#[cfg(test)]
+thread_local! {
+    static BAR_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+fn count_bar_copies(n: usize) {
+    BAR_COPIES.with(|c| c.set(c.get() + n));
+}
+#[cfg(not(test))]
+fn count_bar_copies(_n: usize) {}
+
+/// Applies one delta to the single projection buffer. The append-only fast
+/// path (strictly-increasing buffer, Upserts only, every range after the
+/// tail) extends in place and updates `summary` by the appended bars only;
+/// any other shape takes the reference map path and re-summarizes. Delta
+/// digest validation and per-op clip checks are unchanged.
+fn apply_delta_in_place(
+    c: &Connection,
+    bars: &mut Vec<CompactBar>,
+    summary: &mut BarsSummary,
+    ops: &[StoredDelta],
+    entity: &str,
+    period: Period,
+    mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
+) -> Result<(), Error> {
+    let plain = delta_ops(ops);
+    if !plain.is_empty() {
+        compact_market::delta_digest(&plain).map_err(integrity)?;
+    }
+    let append_only = summary.strictly_increasing
+        && ops
+            .iter()
+            .all(|op| matches!(op.kind, StoredDeltaKind::Upsert(_)))
+        && ops.iter().all(|op| {
+            summary
+                .last_day
+                .is_none_or(|last| op.range_start_day > last)
+        });
+    if !append_only {
+        let rebuilt = apply_delta_map(c, bars, ops, entity, period, sctx)?;
+        count_bar_copies(rebuilt.len());
+        *summary = BarsSummary::of(&rebuilt);
+        *bars = rebuilt;
+        return Ok(());
+    }
+    for op in ops {
+        let StoredDeltaKind::Upsert(stored) = &op.kind else {
+            return Err(integrity("append-only delta path received a non-upsert op"));
+        };
+        let segment = compact_v19::read_segment_scoped(c, stored.segment_key, sctx.as_deref_mut())?;
+        check_stored_clip(&segment, &stored.clip, entity, period)?;
+        for bar in segment.bars.iter().filter(|bar| {
+            bar.trade_day >= stored.clip.clip_start_day && bar.trade_day <= stored.clip.clip_end_day
+        }) {
+            if summary.last_day.is_some_and(|last| bar.trade_day <= last) {
+                summary.strictly_increasing = false;
+            }
+            summary.any_volume |= bar.volume.is_some();
+            summary.any_amount |= bar.amount.is_some();
+            summary.first_day.get_or_insert(bar.trade_day);
+            summary.last_day = Some(bar.trade_day);
+            summary.len += 1;
+            count_bar_copies(1);
+            bars.push(bar.clone());
+        }
+    }
+    Ok(())
+}
+
+/// Streams a version chain root -> leaf over ONE projection buffer: each
+/// node is checked (linkage, published parent, delta/projection digests)
+/// exactly as before, `visit` sees the node's projection and incremental
+/// summary, and nothing is cloned per node. Returns the leaf row and bars.
+fn walk_chain_scoped(
+    c: &Connection,
+    leaf_key: i64,
+    mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
+    mut visit: impl FnMut(&VersionRow, &[CompactBar], &BarsSummary) -> Result<(), Error>,
+) -> Result<(VersionRow, Vec<CompactBar>), Error> {
+    let _span = Span::enter(Stage::Reconstruct);
+    let mut chain = Vec::new();
+    let mut visited = HashSet::new();
+    let mut key = leaf_key;
+    loop {
+        if !visited.insert(key) {
+            return Err(integrity("version chain contains a cycle"));
+        }
+        let row =
+            read_version_row(c, key)?.ok_or_else(|| integrity("version chain node missing"))?;
+        match row.manifest_mode {
+            1 => {
+                if row.parent_version_key.is_some() || row.delta_depth != 0 {
+                    return Err(integrity("checkpoint version carries parent/depth"));
+                }
+                chain.push(row);
+                break;
+            }
+            2 => {
+                if row.delta_depth < 1 || row.delta_depth > MAX_DELTA_DEPTH {
+                    return Err(integrity("delta depth out of bounds"));
+                }
+                let parent = row
+                    .parent_version_key
+                    .ok_or_else(|| integrity("delta version lacks parent"))?;
+                chain.push(row);
+                key = parent;
+            }
+            _ => return Err(integrity("unknown manifest_mode")),
+        }
+        if chain.len() > MAX_CHAIN_NODES {
+            return Err(integrity("version chain exceeds depth bound"));
+        }
+    }
+    chain.reverse();
+    let _chain_span = crate::stage_trace::span("chain.reconstruct");
+    crate::stage_trace::note("chain.depth", &[("nodes", chain.len() as u64)]);
+    let mut bars: Vec<CompactBar> = Vec::new();
+    let mut summary = BarsSummary::default();
+    let mut previous: Option<VersionRow> = None;
+    for (index, row) in chain.into_iter().enumerate() {
+        if index == 0 {
+            let (clips, projection) = match sctx.as_deref_mut() {
+                Some(s) => {
+                    compact_v19::read_checkpoint_ctx(c, row.key, &row.entity, row.period, s)?
+                }
+                None => compact_v19::read_checkpoint(c, row.key, &row.entity, row.period)?,
+            };
+            if projection != row.projection_digest {
+                return Err(integrity("checkpoint projection digest mismatch"));
+            }
+            bars = match sctx.as_deref_mut() {
+                Some(s) => flatten_clips_ctx(c, &row.entity, row.period, &clips, s)?,
+                None => flatten_clips(c, &row.entity, row.period, &clips)?,
+            };
+            count_bar_copies(bars.len());
+            summary = BarsSummary::of(&bars);
+        } else {
+            let parent_row = previous.as_ref().unwrap();
+            if row.parent_version_key != Some(parent_row.key)
+                || row.delta_depth != parent_row.delta_depth + 1
+                || row.entity != parent_row.entity
+                || row.period != parent_row.period
+            {
+                return Err(integrity("version chain linkage mismatch"));
+            }
+            if parent_row.state != 3 {
+                return Err(integrity("delta parent is not published"));
+            }
+            let (ops, _, projection) = match sctx.as_deref_mut() {
+                Some(s) => {
+                    compact_v19::read_delta_ctx(c, row.key, parent_row.projection_digest, s)?
+                }
+                None => compact_v19::read_delta(c, row.key, parent_row.projection_digest)?,
+            };
+            if projection != row.projection_digest {
+                return Err(integrity("delta projection digest mismatch"));
+            }
+            apply_delta_in_place(
+                c,
+                &mut bars,
+                &mut summary,
+                &ops,
+                &row.entity,
+                row.period,
+                sctx.as_deref_mut(),
+            )?;
+            if bars.is_empty() {
+                return Err(integrity("delta projection is empty"));
+            }
+        }
+        visit(&row, &bars, &summary)?;
+        previous = Some(row);
+    }
+    crate::stage_trace::note("chain.bars", &[("bars", bars.len() as u64)]);
+    let leaf = previous.ok_or_else(|| integrity("version chain is empty"))?;
+    Ok((leaf, bars))
+}
+
+#[cfg(test)]
+fn reconstruct_version_reference(
     c: &Connection,
     leaf_key: i64,
 ) -> Result<Vec<(VersionRow, Vec<CompactBar>)>, Error> {
-    reconstruct_version_scoped(c, leaf_key, None)
+    reconstruct_version_reference_scoped(c, leaf_key, None)
 }
 
-fn reconstruct_version_scoped(
+#[cfg(test)]
+fn reconstruct_version_reference_scoped(
     c: &Connection,
     leaf_key: i64,
     mut sctx: Option<&mut compact_v19::SegmentReadCtx>,
@@ -1198,8 +1396,6 @@ fn reconstruct_version_scoped(
         }
     }
     chain.reverse();
-    let _chain_span = crate::stage_trace::span("chain.reconstruct");
-    crate::stage_trace::note("chain.depth", &[("nodes", chain.len() as u64)]);
     let mut projections: Vec<(VersionRow, Vec<CompactBar>)> = Vec::with_capacity(chain.len());
     let mut bars: Vec<CompactBar> = Vec::new();
     for (index, row) in chain.into_iter().enumerate() {
@@ -1248,24 +1444,17 @@ fn reconstruct_version_scoped(
         }
         projections.push((row, bars.clone()));
     }
-    crate::stage_trace::note(
-        "chain.bars",
-        &[
-            ("bars", bars.len() as u64),
-            ("nodes", projections.len() as u64),
-        ],
-    );
     Ok(projections)
 }
 
 fn verify_staged(c: &Connection, leaf: &VersionRow) -> Result<(), Error> {
-    let chain = reconstruct_version(c, leaf.key)?;
-    for (index, (row, bars)) in chain.iter().enumerate() {
-        verify_node_common(c, row, bars)?;
-        if index + 1 < chain.len() {
+    walk_chain_scoped(c, leaf.key, None, |row, bars, summary| {
+        verify_node_common_with(c, row, summary, bars)?;
+        if row.key != leaf.key {
             verify_published_fields(c, row)?;
         }
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -1274,9 +1463,18 @@ fn verify_published_node(
     row: &VersionRow,
     bars: &[CompactBar],
 ) -> Result<VersionEvidence, Error> {
+    verify_published_node_with(c, row, &BarsSummary::of(bars), bars)
+}
+
+fn verify_published_node_with(
+    c: &Connection,
+    row: &VersionRow,
+    summary: &BarsSummary,
+    bars: &[CompactBar],
+) -> Result<VersionEvidence, Error> {
     let _span = Span::enter(Stage::VerifyNode);
     verify_published_fields(c, row)?;
-    verify_node_common(c, row, bars)
+    verify_node_common_with(c, row, summary, bars)
 }
 
 fn verify_published_fields(c: &Connection, row: &VersionRow) -> Result<(), Error> {
@@ -1302,13 +1500,24 @@ fn verify_node_common(
     row: &VersionRow,
     bars: &[CompactBar],
 ) -> Result<VersionEvidence, Error> {
+    verify_node_common_with(c, row, &BarsSummary::of(bars), bars)
+}
+
+/// Node checks driven by an incrementally maintained summary; `bars` is
+/// only read for the yearly lineage check (which needs the projection).
+fn verify_node_common_with(
+    c: &Connection,
+    row: &VersionRow,
+    summary: &BarsSummary,
+    bars: &[CompactBar],
+) -> Result<VersionEvidence, Error> {
     let evidence = verify_version_evidence(c, &row.evidence_digest)?;
     let _ = read_source_binding(c, &row.source_binding_digest)?;
-    check_bars_units(&evidence, bars)?;
-    if bars.is_empty()
-        || bars.len() as i64 != row.record_count
-        || bars.first().unwrap().trade_day != row.first_day
-        || bars.last().unwrap().trade_day != row.last_day
+    check_units_summary(&evidence, summary)?;
+    if summary.len == 0
+        || summary.len as i64 != row.record_count
+        || summary.first_day != Some(row.first_day)
+        || summary.last_day != Some(row.last_day)
     {
         return Err(integrity("version metadata does not match projection"));
     }
@@ -1980,14 +2189,18 @@ fn check_draft_evidence(
 }
 
 fn check_bars_units(evidence: &VersionEvidence, bars: &[CompactBar]) -> Result<(), Error> {
+    check_units_summary(evidence, &BarsSummary::of(bars))
+}
+
+fn check_units_summary(evidence: &VersionEvidence, summary: &BarsSummary) -> Result<(), Error> {
     let unit = &evidence.unit_currency;
     if !unit.price_currency.is_confirmed() || !unit.price_unit.is_confirmed() {
         return Err(integrity("price unit/currency evidence is not confirmed"));
     }
-    if bars.iter().any(|bar| bar.volume.is_some()) && !unit.volume_unit.is_confirmed() {
+    if summary.any_volume && !unit.volume_unit.is_confirmed() {
         return Err(integrity("volume unit evidence missing for volume bars"));
     }
-    if bars.iter().any(|bar| bar.amount.is_some())
+    if summary.any_amount
         && !(unit.amount_currency.is_confirmed() && unit.amount_unit.is_confirmed())
     {
         return Err(integrity("amount unit evidence missing for amount bars"));
