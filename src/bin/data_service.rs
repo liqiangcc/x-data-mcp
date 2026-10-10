@@ -77,7 +77,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     backend.tasks().candidates(&run_id)?;
     // The accept path only checks in-flight tasks; terminal history is
     // verified here, once per start. Any finding refuses to start.
-    let findings = tasks.registry_sweep()?;
+    let findings = backend.tasks().registry_sweep()?;
     if !findings.is_empty() {
         for finding in &findings {
             eprintln!(

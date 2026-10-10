@@ -516,3 +516,84 @@ fn startup_sweep_and_task_sqlite_check_reject_corrupt_history() {
     );
     assert!(!socket.exists());
 }
+
+fn compact_database(dir: &Path) -> PathBuf {
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = dir.join("compact.sqlite");
+    let init = Command::new(env!("CARGO_BIN_EXE_task_sqlite"))
+        .args(["init20"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    path
+}
+fn task_check(db: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_task_sqlite"))
+        .arg("check")
+        .arg(db)
+        .output()
+        .unwrap()
+}
+/// XP-025 A on the production schema (compact v20): healthy database starts
+/// and `task_sqlite check` runs read-only while the service holds the lease.
+#[test]
+fn compact_startup_sweep_passes_and_check_runs_beside_a_live_service() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = compact_database(dir.path());
+    assert!(
+        task_check(&db).status.success(),
+        "healthy check before start"
+    );
+    let socket = dir.path().join("mcp.sock");
+    let mut service = Service::start(&db, &socket, 100);
+    let checked = task_check(&db);
+    assert!(
+        checked.status.success(),
+        "check beside live service: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    assert!(
+        service.child.try_wait().unwrap().is_none(),
+        "check must not disturb the service"
+    );
+    assert!(x_data_mcp::local_runtime::connect(&socket).is_ok());
+    service.stop();
+}
+#[test]
+fn compact_corrupt_history_is_rejected_by_check_and_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = compact_database(dir.path());
+    let c = rusqlite::Connection::open(&db).unwrap();
+    c.execute(
+        "INSERT INTO tasks VALUES('hist-0','{}','succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','{}','{}',NULL,0,0,0,0,0)",
+        [],
+    )
+    .unwrap();
+    drop(c);
+    let checked = task_check(&db);
+    assert!(!checked.status.success());
+    assert!(
+        String::from_utf8_lossy(&checked.stderr).contains("unbound execution record"),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let socket = dir.path().join("mcp.sock");
+    let started = Command::new(env!("CARGO_BIN_EXE_data_service"))
+        .arg(&db)
+        .arg(&socket)
+        .output()
+        .unwrap();
+    assert!(!started.status.success());
+    assert!(
+        String::from_utf8_lossy(&started.stderr).contains("registry check failed"),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    assert!(!socket.exists());
+}
