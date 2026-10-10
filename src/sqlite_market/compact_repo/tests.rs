@@ -4371,19 +4371,56 @@ mod xp011 {
             .map(|_| ())
     }
 
-    /// (1) A mutated segment bar with the stored inventory digest left
-    /// untouched must fail closed on both read surfaces.
+    /// (1) XP-020 committed-state tier — HONEST tier documentation:
+    /// a mutated segment bar is committed CONTENT corruption that the
+    /// progress/metadata read is permitted NOT to detect. The tier
+    /// contract splits detection by surface, asserted as two explicit
+    /// facts: (a) `fixed()`/`range()` and the full-verification task
+    /// read still consume/verify content and MUST fail closed;
+    /// (b) the committed-tier progress response may succeed — content
+    /// is bound by committed digests and re-verified at content reads,
+    /// not at status polling. No assertion may pretend progress still
+    /// catches bar-level tampering.
     #[test]
-    fn segment_bar_tamper_fails_closed_both_paths() {
+    fn segment_bar_tamper_content_reads_fail_committed_progress_passes() {
         let f = fixture();
         assert!(optimized_task(&f).is_ok());
+        optimized_progress(&f, None, 100, &f.access).unwrap();
         tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
-        let opt = read_class(&optimized_task(&f));
-        let progress = read_class(&optimized_progress(&f, None, 100, &f.access));
-        let full = read_class(&verified_version(&f, "v2a"));
-        assert_eq!(opt, ReadClass::Integrity);
-        assert_eq!(progress, opt);
-        assert_eq!(full, opt);
+        // (a) Content-consumption boundary keeps full verification:
+        // fixed(), range() and the full task read MUST fail closed.
+        assert_eq!(
+            read_class(&f.repo.fixed("v2a").map(|_| ())),
+            ReadClass::Integrity
+        );
+        assert_eq!(
+            read_class(
+                &f.repo
+                    .range(
+                        &Scope {
+                            symbol: "sh.600006".into(),
+                            period: Period::Day,
+                        },
+                        Some("v2a"),
+                        &Range {
+                            start: date(0),
+                            end: date(10),
+                            after: None,
+                            limit: 10,
+                        },
+                    )
+                    .map(|_| ())
+            ),
+            ReadClass::Integrity
+        );
+        assert_eq!(read_class(&optimized_task(&f)), ReadClass::Integrity);
+        assert_eq!(
+            read_class(&verified_version(&f, "v2a")),
+            ReadClass::Integrity
+        );
+        // (b) The committed-tier progress read verifies row integrity
+        // only — the same bar corruption is permitted to pass here.
+        optimized_progress(&f, None, 100, &f.access).unwrap();
     }
 
     /// (2) Missing/broken clip linkage or projection-digest drift on the
@@ -4441,7 +4478,12 @@ mod xp011 {
     }
 
     /// (5) Corruption committed between two cursor pages must still be
-    /// detected — the resumed page re-verifies against current storage.
+    /// detected — the resumed page opens a fresh transaction and
+    /// re-runs every committed-tier row check against current storage.
+    /// The tamper targets row state the committed tier verifies (a
+    /// `data_versions` field bound by `integrity_digest`); bar-content
+    /// tampering is detection-deferred to content reads by tier design
+    /// (see the honest tier test above).
     #[test]
     fn corruption_between_cursor_pages_still_fails() {
         let f = fixture();
@@ -4458,7 +4500,10 @@ mod xp011 {
             .unwrap();
         assert_eq!(page1.unfinished.len(), 1);
         let cursor = page1.next_cursor.clone().expect("second page");
-        tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
+        tamper(
+            &f.path,
+            "UPDATE data_versions SET record_count=record_count+1 WHERE version_id='v2a'",
+        );
         let page2 = observer.progress(
             ProgressQuery {
                 task_id: f.task.clone(),
@@ -4566,19 +4611,32 @@ mod xp011 {
     }
 
     /// (2-ext) A missing ancestor version row or a missing referenced
-    /// segment must fail closed on both read surfaces — the delta chain
-    /// and its clip resolution are part of the public integrity surface.
+    /// segment must fail closed. Row-level absence the committed tier
+    /// verifies (deleted ancestor row, deleted segment HEADER row of a
+    /// referenced delta clip) still fails progress; the checkpoint
+    /// segment body is committed content whose absence is detected at
+    /// the content-consumption boundary, not at status polling (XP-020
+    /// honest tier split).
     #[test]
     fn missing_ancestor_or_segment_fails_closed_both_paths() {
-        for sql in [
-            // ancestor version row deleted: the v2a delta chain breaks
-            "DELETE FROM data_versions WHERE version_id='v1a'",
-            // the append result's own delta segment deleted
-            "DELETE FROM bar_segments WHERE segment_key IN \
-             (SELECT segment_key FROM version_delta_clips WHERE segment_key IS NOT NULL)",
-            // the shared checkpoint segment deleted
-            "DELETE FROM bar_segments WHERE segment_key IN \
-             (SELECT segment_key FROM version_checkpoint_clips)",
+        for (sql, progress_catches) in [
+            // ancestor version row deleted: the v2a delta chain breaks —
+            // `build_identity`'s parent read fails the committed row check
+            ("DELETE FROM data_versions WHERE version_id='v1a'", true),
+            // the append result's own delta segment deleted — the
+            // header-only clip read reports it missing at row level
+            (
+                "DELETE FROM bar_segments WHERE segment_key IN \
+                 (SELECT segment_key FROM version_delta_clips WHERE segment_key IS NOT NULL)",
+                true,
+            ),
+            // the shared checkpoint segment deleted — committed CONTENT
+            // the metadata tier is permitted not to re-verify
+            (
+                "DELETE FROM bar_segments WHERE segment_key IN \
+                 (SELECT segment_key FROM version_checkpoint_clips)",
+                false,
+            ),
         ] {
             let f = fixture();
             tamper(&f.path, sql);
@@ -4586,8 +4644,16 @@ mod xp011 {
             let progress = read_class(&optimized_progress(&f, None, 100, &f.access));
             let full = read_class(&verified_version(&f, "v2a"));
             assert_eq!(opt, ReadClass::Integrity, "sql: {sql}");
-            assert_eq!(progress, opt, "sql: {sql}");
             assert_eq!(full, opt, "sql: {sql}");
+            assert_eq!(
+                progress,
+                if progress_catches {
+                    ReadClass::Integrity
+                } else {
+                    ReadClass::Ok
+                },
+                "sql: {sql}"
+            );
         }
     }
 
@@ -4919,14 +4985,16 @@ mod xp011 {
             .unwrap();
     }
 
-    /// Round-2 R2 / XP-016 case 1: measured lower-layer execution counts
-    /// for one complete public `get_task_progress` read (fresh page).
-    /// The instrumentation counts actual `read_segment`/`fixed`/
-    /// `result_facts` executions — not `Rc::ptr_eq` extrapolation.
-    /// XP-016 consolidates the whole RPC into ONE read transaction with
-    /// ONE `VerifyCtx`: v1a and v2a are verified once and their
-    /// certificates carry every later metadata touch (was 5/5/6 across
-    /// three transactions).
+    /// Round-2 R2 / XP-016 case 1, restated at the XP-020 committed
+    /// tier: measured lower-layer execution counts for one complete
+    /// public `get_task_progress` read (fresh page). The progress
+    /// scope verifies COMMITTED STATE only — row + recomputed
+    /// `integrity_digest` per touched `data_versions` row — so a
+    /// metadata-only read MUST show zero full-chain verifications, zero
+    /// `result_facts` executions, zero `read_segment` bar reads and
+    /// zero legacy record projections; `committed_facts` memo misses
+    /// count exactly the two distinct touched versions (v1a base + v2a
+    /// result), deduplicated across the audit/verify phases.
     #[test]
     fn measured_counts_for_complete_public_read() {
         use crate::sqlite_market::compact_versions::read_counts;
@@ -4934,16 +5002,17 @@ mod xp011 {
         read_counts::reset();
         let page = optimized_progress(&f, None, 100, &f.access).unwrap();
         let (segment_reads, fixed_runs, facts_reads) = read_counts::snapshot();
-        // One transaction: task_facts touches the result version first
-        // (publications before range results), so ONE chain verification
-        // covers v1a+v2a and both certificates carry every later
-        // metadata touch — verify_versions and verify_range_results hit
-        // them; no re-verification across phases (XP-018).
         assert_eq!(
             (fixed_runs, facts_reads, segment_reads),
-            (1, 2, 2),
+            (0, 0, 0),
             "measured counts: fixed={fixed_runs} facts={facts_reads} segments={segment_reads}"
         );
+        assert_eq!(
+            read_counts::snapshot_committed(),
+            2,
+            "committed misses = distinct touched versions (v1a + v2a)"
+        );
+        assert_eq!(read_counts::snapshot_projections(), 0);
         // Same full wire result as before consolidation.
         assert_eq!(page.task.task_id, f.task);
         assert_eq!(page.total, 3);
@@ -5222,26 +5291,29 @@ mod xp011 {
             }
         }
 
-        /// Case 2: six distinct version keys exceed the whole-history
-        /// LRU bound (4). Every phase of the single progress RPC reuses
-        /// certificates for metadata touches — a version whose retained
-        /// history was LRU-evicted does NOT re-run `fixed` — while the
-        /// very next RPC opens a fresh scope and verifies all six again.
+        /// Case 2 (XP-020 committed tier): six distinct version keys —
+        /// the committed-facts memo deduplicates every later metadata
+        /// touch inside the single progress transaction (audit pass +
+        /// verify pass), while the very next RPC opens a fresh scope
+        /// and re-verifies all six rows again. No full-chain
+        /// verification, no segment reads, no facts reads and no
+        /// projections run on this surface at all.
         #[test]
-        fn certificates_cover_metadata_after_lru_eviction_measured() {
+        fn committed_facts_dedup_and_fresh_rpc_reverify_measured() {
             use crate::sqlite_market::compact_versions::read_counts;
             let f = fixture_three();
             read_counts::reset();
             let page = optimized_progress(&f, None, 100, &f.access).unwrap();
             let (segments, fixed, facts) = read_counts::snapshot();
-            // XP-018: each result's chain verification covers its base —
-            // three full runs (one per [v1x,v2x] chain) certify all six
-            // keys; certificate hits serve every later metadata touch
-            // despite verified-LRU eviction.
             assert_eq!(
                 (fixed, facts, segments),
-                (3, 6, 6),
+                (0, 0, 0),
                 "fixed={fixed} facts={facts} segments={segments}"
+            );
+            assert_eq!(
+                read_counts::snapshot_committed(),
+                6,
+                "committed misses = six distinct touched versions"
             );
             // Same classification/metadata as the uncached reference.
             assert_eq!(page.task.task_id, f.task);
@@ -5257,21 +5329,23 @@ mod xp011 {
             read_counts::reset();
             optimized_progress(&f, None, 100, &f.access).unwrap();
             let (segments, fixed, facts) = read_counts::snapshot();
-            assert_eq!((fixed, facts, segments), (3, 6, 6));
+            assert_eq!((fixed, facts, segments), (0, 0, 0));
+            assert_eq!(read_counts::snapshot_committed(), 6);
         }
 
-        /// Case 2 at the stated batch (XP-016B B1, XP-018 counts): 100
-        /// distinct published bases plus 100 distinct committed append
-        /// results — 200 version keys. A single fresh progress RPC runs
-        /// one full-chain verification per result (each certifying its
-        /// base ancestor): fixed=100, facts=200; the WHOLE serialized
-        /// page matches the separate-phase `ForwardRepo` reference with
-        /// only `snapshot_id`/`snapshot_time` normalized; a second RPC
-        /// opens a fresh scope and verifies all 200 again. No legacy
-        /// `to_effective_version` record projection runs at all on this
-        /// metadata-only surface. Segment reads are recorded, not
-        /// asserted — the 128-entry cache may evict and re-read. No
-        /// timing extrapolation.
+        /// Case 2 at the stated batch (XP-016B B1, XP-020 committed
+        /// tier): 100 distinct published bases plus 100 distinct
+        /// committed append results — 200 version keys. A single fresh
+        /// progress RPC verifies COMMITTED STATE only: zero full-chain
+        /// verifications, zero `result_facts` executions, zero
+        /// `read_segment` bar reads, zero legacy record projections;
+        /// `committed_facts` memo misses count exactly the 200 distinct
+        /// touched versions, deduplicated across the audit and verify
+        /// phases. The WHOLE serialized page matches the
+        /// separate-phase `ForwardRepo` reference (full-verification
+        /// path) with only `snapshot_id`/`snapshot_time` normalized; a
+        /// second RPC opens a fresh scope and re-verifies all 200 rows
+        /// again. No timing extrapolation.
         #[test]
         fn hundred_distinct_versions_whole_wire_matches_reference() {
             use crate::sqlite_market::compact_versions::read_counts;
@@ -5280,10 +5354,13 @@ mod xp011 {
             let page = optimized_progress(&f, None, 100, &f.access).unwrap();
             let (segments, fixed, facts) = read_counts::snapshot();
             assert_eq!(
-                (fixed, facts),
-                (100, 200),
-                "fixed={fixed} facts={facts} segments={segments} (recorded only)"
+                (fixed, facts, segments),
+                (0, 0, 0),
+                "fixed={fixed} facts={facts} segments={segments}"
             );
+            // Committed tier: every touched version row verified once,
+            // deduped across audit/verify passes.
+            assert_eq!(read_counts::snapshot_committed(), 200);
             // Metadata assurance never builds legacy Bar records.
             assert_eq!(read_counts::snapshot_projections(), 0);
             assert_eq!(page.task.task_id, f.task);
@@ -5296,15 +5373,16 @@ mod xp011 {
             assert!(page.page_complete);
             assert!(page.next_cursor.is_none());
             // No cross-request reuse: the next RPC is a fresh scope and
-            // verifies all 200 versions again.
+            // re-verifies all 200 rows again.
             read_counts::reset();
             let page2 = optimized_progress(&f, None, 100, &f.access).unwrap();
             let (segments2, fixed2, facts2) = read_counts::snapshot();
             assert_eq!(
-                (fixed2, facts2),
-                (100, 200),
-                "second RPC fixed={fixed2} facts={facts2} segments={segments2} (recorded only)"
+                (fixed2, facts2, segments2),
+                (0, 0, 0),
+                "second RPC fixed={fixed2} facts={facts2} segments={segments2}"
             );
+            assert_eq!(read_counts::snapshot_committed(), 200);
             assert!(page2.page_complete);
             assert!(page2.next_cursor.is_none());
             // Whole-wire equivalence with the pre-consolidation
@@ -5729,10 +5807,12 @@ mod xp011 {
 
         /// Case 9 compat: the default `with_progress_read` forwarding
         /// adapter calls all six repository methods — non-SQLite
-        /// repositories keep working without an override.
-        struct ForwardRepo {
-            inner: SqliteSupply,
-            calls: RefCell<Vec<String>>,
+        /// repositories keep working without an override. `pub(super)`
+        /// so the XP-020 wire-equality tests reuse it as the
+        /// full-verification reference path.
+        pub(super) struct ForwardRepo {
+            pub(super) inner: SqliteSupply,
+            pub(super) calls: RefCell<Vec<String>>,
         }
         impl ObservationRepository for ForwardRepo {
             fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error> {
@@ -5820,7 +5900,12 @@ mod xp011 {
             };
             let page1 = observer.progress(query(None), &f.access).unwrap();
             let cursor = page1.next_cursor.clone().expect("second page");
-            tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
+            // Row-level corruption the committed tier verifies — a
+            // field bound by `integrity_digest` (XP-020).
+            tamper(
+                &f.path,
+                "UPDATE data_versions SET record_count=record_count+1 WHERE version_id='v2a'",
+            );
             assert!(
                 observer.progress(query(Some(cursor)), &f.access).is_err(),
                 "cursor page must open a fresh scope and fail"
@@ -5846,8 +5931,12 @@ mod xp011 {
                     let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
                     // Establish the snapshot with a real verified read.
                     let _ = ctx.verified_by_id(c, "v1a")?;
-                    // Second connection commits corruption on v2a.
-                    tamper(&f.path, "UPDATE segment_bars SET close_cents=close_cents+1");
+                    // Second connection commits row-level corruption on
+                    // v2a — a field bound by `integrity_digest` (XP-020).
+                    tamper(
+                        &f.path,
+                        "UPDATE data_versions SET record_count=record_count+1 WHERE version_id='v2a'",
+                    );
                     // A never-before-verified version read inside THIS
                     // scope still sees the pre-commit snapshot.
                     let _ = ctx.verified_by_id(c, "v2a")?;
@@ -6072,6 +6161,388 @@ mod xp011 {
                 read_class(&observer.progress(query(None), &f.access)),
                 ReadClass::TaskError
             );
+        }
+    }
+
+    /// XP-020 committed-state verification tier: the progress/metadata
+    /// read scope verifies committed rows only (published state +
+    /// recomputed `integrity_digest`, delta clips at `bar_segments`
+    /// header level, all binding/digest checks unchanged) while
+    /// content reads keep full verification.
+    mod xp020 {
+        use super::xp016::ForwardRepo;
+        use super::*;
+        use crate::sqlite_market::compact_versions::read_counts;
+        use std::cell::RefCell;
+
+        /// Whole serialized page minus the fields that legitimately
+        /// differ per snapshot.
+        fn normalized(page: &crate::data_supply::wire::ProgressPage) -> Value {
+            let mut v = serde_json::to_value(page).unwrap();
+            v["snapshot_id"] = json!("<normalized>");
+            v["snapshot_time"] = json!("<normalized>");
+            v
+        }
+
+        /// The full-verification reference: `ForwardRepo` does not
+        /// override `with_progress_read`, so the default adapter runs
+        /// every phase through the unchanged full-tier repository
+        /// methods.
+        fn reference_page(f: &Fixture) -> Value {
+            let reference = Observer::new(
+                ForwardRepo {
+                    inner: supply(&f.repo),
+                    calls: RefCell::new(vec![]),
+                },
+                RUN.into(),
+            )
+            .progress(
+                ProgressQuery {
+                    task_id: f.task.clone(),
+                    page_size: 100,
+                    cursor: None,
+                },
+                &f.access,
+            )
+            .unwrap();
+            normalized(&reference)
+        }
+
+        /// A NoChange update result on the published base — the second
+        /// wire shape the committed tier must reproduce exactly.
+        fn fixture_nochange() -> Fixture {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let bars = vec![bar(0, 100), bar(1, 110), bar(2, 120)];
+            publish_head(&repo, "req-n", "pub-n", "sh.600006", "v1n", bars);
+            let scope = task_control::legacy::scope_id("sh.600006", "day");
+            let work = FrozenWork {
+                items: vec![ItemSpec {
+                    item_id: "item-1".into(),
+                    target: json!({"symbol": "sh.600006", "period": "day"}),
+                    progress_unit: "security_period".into(),
+                    frozen_inputs: crate::market_update::tasks::frozen(
+                        "v1n",
+                        "ab".repeat(32).as_str(),
+                        &crate::market_update::DateRange {
+                            start: date(0),
+                            end: date(3),
+                        },
+                    ),
+                    scope_keys: BTreeSet::from([scope.clone()]),
+                }],
+                scopes: BTreeSet::from([scope.clone()]),
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: CommandKey {
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+                },
+                intent: json!({}),
+            };
+            let task = match repo
+                .accept("req-nc", &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+                _ => panic!("expected task outcome"),
+            };
+            repo.commit_update_batch(
+                &task,
+                &[UpdateBatchItem {
+                    task_id: task.clone(),
+                    item_id: "item-1".into(),
+                    publication_id: "upd-nc".into(),
+                    run_id: RUN.into(),
+                    symbol: "sh.600006".into(),
+                    occupancy_key: scope,
+                    prepared: UpdateBatchPrepared::NoChange {
+                        base_version_id: "v1n".into(),
+                        range_start_day: 0,
+                        range_end_day: 3,
+                        continuity: json!({
+                            "continuity": {"mode": "append", "day_member_sha256": "cd".repeat(32)}
+                        }),
+                    },
+                }],
+            )
+            .unwrap()
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+            Fixture {
+                _dir: dir,
+                path,
+                repo,
+                task,
+                access: Access::local(),
+            }
+        }
+
+        /// Regression 1 (NoChange half): the committed-tier progress
+        /// page for a NoChange update result is wire-identical to the
+        /// full-verification reference. base == result shares one
+        /// version key: committed misses = 1.
+        #[test]
+        fn nochange_progress_wire_matches_full_reference() {
+            let f = fixture_nochange();
+            read_counts::reset();
+            let page = optimized_progress(&f, None, 100, &f.access).unwrap();
+            let (segments, fixed, facts) = read_counts::snapshot();
+            assert_eq!(
+                (fixed, facts, segments),
+                (0, 0, 0),
+                "fixed={fixed} facts={facts} segments={segments}"
+            );
+            assert_eq!(read_counts::snapshot_committed(), 1);
+            assert_eq!(read_counts::snapshot_projections(), 0);
+            assert_eq!(page.range_results.len(), 1);
+            assert_eq!(normalized(&page), reference_page(&f));
+        }
+
+        /// Regression 2: every row/metadata corruption class the
+        /// committed tier is contracted to catch still fails the
+        /// progress request closed.
+        #[test]
+        fn committed_tier_row_corruption_fails_progress() {
+            for sql in [
+                // data_versions field bound by integrity_digest
+                "UPDATE data_versions SET record_count=record_count+1 WHERE version_id='v2a'",
+                "UPDATE data_versions SET projection_digest=x'0000000000000000000000000000000000000000000000000000000000000000' WHERE version_id='v2a'",
+                "UPDATE data_versions SET source_binding_digest=x'0000000000000000000000000000000000000000000000000000000000000000' WHERE version_id='v2a'",
+                "UPDATE data_versions SET evidence_digest=x'0000000000000000000000000000000000000000000000000000000000000000' WHERE version_id='v2a'",
+                "UPDATE data_versions SET published_at='1970-01-01T00:00:00Z' WHERE version_id='v2a'",
+                // market_update_results identity / digest fields
+                "UPDATE market_update_results SET result_digest=x'0000000000000000000000000000000000000000000000000000000000000000'",
+                "UPDATE market_update_results SET range_end_day=range_end_day+1",
+                "UPDATE market_update_results SET task_revision=task_revision+1",
+                "UPDATE market_update_results SET outcome=3",
+                // delta clip rows (seq/row_count/range/bounds)
+                "UPDATE market_update_delta_clips SET seq=seq+1",
+                "UPDATE market_update_delta_clips SET row_count=row_count+1",
+                "UPDATE market_update_delta_clips SET range_start_day=range_start_day-1",
+                "UPDATE market_update_delta_clips SET clip_start_day=clip_start_day-1",
+                "DELETE FROM version_delta_clips",
+                "UPDATE version_delta_clips SET seq=seq+1",
+                "UPDATE version_delta_clips SET clip_end_day=clip_end_day+100",
+                // task_publications linkage
+                "DELETE FROM task_publications",
+                "UPDATE task_publications SET version_key=(SELECT version_key FROM data_versions WHERE version_id='v1a')",
+                // task_items outcome / task revision
+                "UPDATE task_items SET outcome_json=NULL WHERE item_id='item-1'",
+                "UPDATE task_items SET stage='pending' WHERE item_id='item-1'",
+                "UPDATE tasks SET state_revision=0",
+                // bar_segments HEADER rows referenced by clips
+                "UPDATE bar_segments SET segment_digest=x'0000000000000000000000000000000000000000000000000000000000000000' WHERE segment_key IN (SELECT segment_key FROM version_delta_clips WHERE segment_key IS NOT NULL)",
+                "UPDATE bar_segments SET row_count=0 WHERE segment_key IN (SELECT segment_key FROM version_delta_clips WHERE segment_key IS NOT NULL)",
+                "UPDATE bar_segments SET first_day=first_day+100 WHERE segment_key IN (SELECT segment_key FROM version_delta_clips WHERE segment_key IS NOT NULL)",
+                "UPDATE bar_segments SET last_day=last_day-100 WHERE segment_key IN (SELECT segment_key FROM market_update_delta_clips)",
+                // source_binding / evidence referenced rows
+                "UPDATE source_bindings SET generation_id='tampered'",
+                "UPDATE evidence_bundles SET canonical_json='tampered'",
+            ] {
+                let f = fixture();
+                tamper(&f.path, sql);
+                let progress = optimized_progress(&f, None, 100, &f.access);
+                assert!(
+                    progress.is_err(),
+                    "committed-tier progress must fail closed: {sql}"
+                );
+            }
+        }
+
+        /// Regression 6: a failed first touch installs nothing —
+        /// corruption fails the committed-tier read, and after the row
+        /// is repaired the NEXT RPC re-checks cleanly (no residue from
+        /// the failed touch).
+        #[test]
+        fn corrupt_then_repair_progress_recovers() {
+            let f = fixture();
+            tamper(
+                &f.path,
+                "UPDATE data_versions SET record_count=record_count+1 WHERE version_id='v2a'",
+            );
+            assert!(optimized_progress(&f, None, 100, &f.access).is_err());
+            tamper(
+                &f.path,
+                "UPDATE data_versions SET record_count=record_count-1 WHERE version_id='v2a'",
+            );
+            optimized_progress(&f, None, 100, &f.access).unwrap();
+            // Same fact at ctx granularity: a failed committed_facts
+            // touch memoizes nothing — a later touch re-runs the row
+            // check instead of replaying the failure.
+            f.repo
+                .read(|c| {
+                    let mut ctx = crate::sqlite_market::compact_versions::VerifyCtx::default();
+                    assert!(ctx.committed_facts_by_id(c, "v2a").is_ok());
+                    assert!(ctx.committed_facts_by_id(c, "v2a").is_ok());
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+        }
+
+        /// Regression 5: a second RPC re-runs every committed-tier row
+        /// check — corruption committed between calls is caught at row
+        /// level on the next call (no cross-RPC certificate).
+        #[test]
+        fn second_rpc_recorrupts_committed_rows() {
+            let f = fixture();
+            optimized_progress(&f, None, 100, &f.access).unwrap();
+            tamper(
+                &f.path,
+                "UPDATE market_update_results SET range_end_day=range_end_day+1",
+            );
+            assert_eq!(
+                read_class(&optimized_progress(&f, None, 100, &f.access)),
+                ReadClass::Integrity
+            );
+        }
+
+        /// Regression 7 (yearly half): a yearly publication task whose
+        /// progress page carries `yearly_results` gets the same
+        /// committed-tier treatment — wire-identical to the
+        /// full-verification reference.
+        fn fixture_yearly() -> Fixture {
+            use crate::market_update::tasks::Operation;
+            use crate::task_control::{Contract, RequestOutcome};
+            use crate::yearly_publication::{
+                DerivationEvidence,
+                runner::{YearlyExecution, YearlyRunner, YearlyVerifier},
+                tasks::YearlyContract,
+            };
+
+            struct Stub;
+            impl YearlyVerifier for Stub {
+                fn verify(
+                    &self,
+                    base: &crate::market_storage::compat::CheckedRecord,
+                    years: &BTreeSet<i32>,
+                    _annual: &crate::yearly::AnnualSeries,
+                    derived_at: DateTime<Utc>,
+                ) -> Result<DerivationEvidence, crate::market_data::SourceError> {
+                    Ok(DerivationEvidence {
+                        base_integrity_sha256: base.raw()["integrity_sha256"]
+                            .as_str()
+                            .unwrap()
+                            .into(),
+                        years: years.clone(),
+                        as_of: derived_at
+                            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                            .date_naive(),
+                        coverage: CoverageEvidence::complete("stub re-aggregation verified"),
+                    })
+                }
+            }
+
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let days = [
+                NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 6, 30).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 9, 18).unwrap(),
+            ]
+            .into_iter()
+            .map(crate::compact_market::epoch_day);
+            publish_head(
+                &repo,
+                "req-yb",
+                "pub-yb",
+                "sh.600006",
+                "v1",
+                days.enumerate()
+                    .map(|(i, d)| bar(d, 100 + i as i64))
+                    .collect(),
+            );
+            let contract = YearlyContract {
+                operation: Operation::Update,
+                repository: repo.clone(),
+                today: || NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+            };
+            let work = contract
+                .resolve(&json!({"items":[{
+                    "symbol":"sh.600006",
+                    "base_daily_version_id":"v1",
+                    "years":[2025,2026],
+                    "intent":{"CurrentHead":{"expected_daily_head":"v1","expected_yearly_head":null}},
+                    "comparison_version_id":null
+                }]}))
+                .unwrap();
+            let command = Command {
+                key: contract.key(),
+                intent: json!({}),
+            };
+            let acceptance = repo
+                .accept("req-yearly", &command, &work, RUN, None)
+                .unwrap();
+            let RequestOutcome::Task(snapshot) = acceptance.record.outcome else {
+                panic!("expected task outcome")
+            };
+            let yearly_task = snapshot.task.task_id.clone();
+            let item_id = snapshot.items[0].spec.item_id.clone();
+            let runner = YearlyRunner {
+                repository: repo.clone(),
+                run_id: RUN.into(),
+                derived_at: ts(),
+            };
+            let outcome = runner.run_item(&yearly_task, &item_id, &Stub).unwrap();
+            let YearlyExecution::Published(_) = outcome else {
+                panic!("yearly item did not publish")
+            };
+            Fixture {
+                _dir: dir,
+                path,
+                repo,
+                task: yearly_task,
+                access: Access::local(),
+            }
+        }
+
+        #[test]
+        fn yearly_progress_committed_tier_wire_and_counts() {
+            let f = fixture_yearly();
+            read_counts::reset();
+            let page = optimized_progress(&f, None, 100, &f.access).unwrap();
+            let (segments, fixed, facts) = read_counts::snapshot();
+            assert_eq!(
+                (fixed, facts, segments),
+                (0, 0, 0),
+                "fixed={fixed} facts={facts} segments={segments}"
+            );
+            // Distinct touched versions: the published yearly result
+            // plus its daily base — deduped across audit/verify passes.
+            assert_eq!(read_counts::snapshot_committed(), 2);
+            assert_eq!(read_counts::snapshot_projections(), 0);
+            assert_eq!(page.yearly_results.len(), 1);
+            assert_eq!(normalized(&page), reference_page(&f));
+        }
+
+        /// Yearly committed-tier corruption regressions: row/metadata
+        /// corruption on the yearly result's own rows fails progress
+        /// closed.
+        #[test]
+        fn yearly_committed_tier_row_corruption_fails_progress() {
+            for sql in [
+                "UPDATE publication_results SET result_digest=x'0000000000000000000000000000000000000000000000000000000000000000'",
+                "UPDATE publication_results SET task_revision=task_revision+1",
+                "UPDATE yearly_lineage SET as_of_day=as_of_day-1",
+                "DELETE FROM yearly_lineage",
+                "DELETE FROM task_publications",
+                "UPDATE task_items SET outcome_json=NULL",
+                "UPDATE data_versions SET record_count=record_count+1 WHERE period=2",
+            ] {
+                let f = fixture_yearly();
+                tamper(&f.path, sql);
+                let progress = optimized_progress(&f, None, 100, &f.access);
+                assert!(
+                    progress.is_err(),
+                    "yearly committed-tier progress must fail closed: {sql}"
+                );
+            }
         }
     }
 }

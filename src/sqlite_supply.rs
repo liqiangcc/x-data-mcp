@@ -29,6 +29,27 @@ fn market_ref(
         integrity_sha256: r.raw()["integrity_sha256"].as_str().unwrap().into(),
     }
 }
+/// `market_ref` built from committed-tier row facts (XP-020): the
+/// envelope `integrity_sha256` of a published row IS the stored
+/// `integrity_digest` hex — the same value `synthesize` emits. A
+/// missing digest is committed-state corruption and fails closed.
+fn market_ref_facts(
+    dataset: Dataset,
+    entity: &Security,
+    facts: &crate::sqlite_market::compact_versions::VersionResultFacts,
+) -> Result<VersionRef, Error> {
+    Ok(VersionRef {
+        dataset,
+        contract_version: ContractVersion::V1,
+        entity: Some(entity.clone()),
+        version_id: facts.version_id.clone(),
+        integrity_sha256: crate::compact_market::digest_hex(
+            &facts.integrity_digest.ok_or_else(|| {
+                Error::Integrity("committed version lacks integrity digest".into())
+            })?,
+        ),
+    })
+}
 fn catalog_ref(v: &crate::catalog::CatalogVersion) -> Result<VersionRef, Error> {
     Ok(VersionRef {
         dataset: Dataset::Catalog,
@@ -610,13 +631,13 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
 use crate::data_supply::observe::{
     AvailabilityFacts, ObservationRepository, TaskFacts, authorized,
 };
-fn task_facts(
+/// The shared task_facts head: owner-only evidence gate, bound-task
+/// authorization and request id. Identical for every task_facts variant.
+fn task_facts_head(
     c: &Connection,
-    ctx: &mut VerifyCtx,
     id: &str,
     access: &Access,
-    verify_outputs: bool,
-) -> Result<TaskFacts, Error> {
+) -> Result<(String, crate::task_control::TaskSnapshot), Error> {
     // Owner-only check evidence must not leak integrity diagnostics to a reader.
     // This early check can only deny; verified authorization below still applies.
     if *access != Access::local() {
@@ -640,6 +661,52 @@ fn task_facts(
             |r| r.get(0),
         )
         .map_err(storage)?;
+    Ok((request, s))
+}
+/// The successful==evidenced binding every output-producing task_facts
+/// variant enforces, unchanged across tiers.
+fn task_facts_check_evidenced(
+    s: &crate::task_control::TaskSnapshot,
+    range_results: &[RangeExecutionResult],
+    yearly_results: &[YearlyExecutionResult],
+) -> Result<(), Error> {
+    if matches!(
+        s.task.key.operation.as_str(),
+        "update_data" | "backfill_data" | "republish_data"
+    ) {
+        let successful = s
+            .items
+            .iter()
+            .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+            .map(|i| i.spec.item_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let evidenced = if s.task.key.dataset == "market.yearly" {
+            yearly_results
+                .iter()
+                .map(|r| r.item_id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+        } else {
+            range_results
+                .iter()
+                .map(|r| r.item_id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        if successful != evidenced {
+            return Err(Error::Integrity(
+                "successful range task lacks matching result evidence".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+fn task_facts(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    id: &str,
+    access: &Access,
+    verify_outputs: bool,
+) -> Result<TaskFacts, Error> {
+    let (request, s) = task_facts_head(c, id, access)?;
     if !verify_outputs {
         return Ok(TaskFacts {
             request_id: request,
@@ -700,33 +767,84 @@ fn task_facts(
         .iter()
         .map(|id| yearly_result(c, ctx, id))
         .collect::<Result<Vec<_>, _>>()?;
-    if matches!(
-        s.task.key.operation.as_str(),
-        "update_data" | "backfill_data" | "republish_data"
-    ) {
-        let successful = s
-            .items
-            .iter()
-            .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
-            .map(|i| i.spec.item_id.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        let evidenced = if s.task.key.dataset == "market.yearly" {
-            yearly_results
-                .iter()
-                .map(|r| r.item_id.clone())
-                .collect::<std::collections::BTreeSet<_>>()
-        } else {
-            range_results
-                .iter()
-                .map(|r| r.item_id.clone())
-                .collect::<std::collections::BTreeSet<_>>()
-        };
-        if successful != evidenced {
-            return Err(Error::Integrity(
-                "successful range task lacks matching result evidence".into(),
-            ));
-        }
+    task_facts_check_evidenced(&s, &range_results, &yearly_results)?;
+    Ok(TaskFacts {
+        yearly_results,
+        range_results,
+        request_id: request,
+        snapshot: s,
+        publications,
+    })
+}
+/// `task_facts(verify_outputs=true)` at the committed-state verification
+/// tier (XP-020) — progress read scope only. The authorization head,
+/// every publications/range/yearly enumeration query, the
+/// successful==evidenced binding and the produced `TaskFacts` are
+/// identical; version facts come from `VerifyCtx::committed_facts` (row
+/// + recomputed `integrity_digest`) and result rows from the
+/// `*_meta_ctx` audit readers instead of full-chain verification — no
+/// bar rows are read. Non-compact databases keep the unchanged full
+/// read (`task_facts` is delegated to verbatim).
+fn task_facts_committed(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    id: &str,
+    access: &Access,
+) -> Result<TaskFacts, Error> {
+    if !crate::sqlite_market::is_compact_schema(c)? {
+        return task_facts(c, ctx, id, access, true);
     }
+    let (request, s) = task_facts_head(c, id, access)?;
+    let mut q = c
+        .prepare("SELECT v.version_id FROM task_publications tp JOIN data_versions v ON v.version_key=tp.version_key WHERE tp.task_id=?1 ORDER BY v.version_id")
+        .map_err(storage)?;
+    let ids = q
+        .query_map([id], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let mut publications = vec![];
+    for id in ids {
+        // Committed tier: the reference consumes identity + stored
+        // integrity digest from row facts — no envelope at all.
+        let facts = ctx.committed_facts_by_id(c, &id)?;
+        let e = crate::data_supply::observe::entity(&facts.entity)
+            .ok_or_else(|| Error::Integrity("published task symbol".into()))?;
+        let dataset = if facts.period == crate::market_data::Period::Day {
+            Dataset::Daily
+        } else {
+            Dataset::Yearly
+        };
+        publications.push(market_ref_facts(dataset, &e, &facts)?);
+    }
+    let mut q = c
+        .prepare("SELECT result_id FROM market_update_results WHERE task_id=?1 ORDER BY result_id")
+        .map_err(storage)?;
+    let result_ids = q
+        .query_map([id], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let range_results = result_ids
+        .iter()
+        .map(|id| range_result_meta(c, ctx, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut q = c
+        .prepare(
+            "SELECT publication_id FROM publication_results \
+             WHERE task_id=?1 AND publication_kind=2 ORDER BY publication_id",
+        )
+        .map_err(storage)?;
+    let yearly_ids = q
+        .query_map([id], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let yearly_results = yearly_ids
+        .iter()
+        .map(|id| yearly_result_meta(c, ctx, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    task_facts_check_evidenced(&s, &range_results, &yearly_results)?;
     Ok(TaskFacts {
         yearly_results,
         range_results,
@@ -742,27 +860,7 @@ fn task_facts(
 /// targets; item stage/outcome and scope-occupancy checks still run
 /// because skipping them weakened corruption detection (XP-011).
 fn task_facts_light(c: &Connection, id: &str, access: &Access) -> Result<TaskFacts, Error> {
-    if *access != Access::local() {
-        let private: bool = c.query_row(
-            "SELECT EXISTS(SELECT 1 FROM tasks WHERE task_id=?1 AND json_extract(command_key_json,'$.dataset')='task.verification')",
-            [id], |r| r.get(0),
-        ).map_err(storage)?;
-        if private {
-            return Err(invalid("forbidden"));
-        }
-    }
-    let s = crate::sqlite_tasks::read_bound_task(c, id)?
-        .ok_or(Error::Task(crate::task_control::Error::TaskNotFound))?;
-    if !authorized(&s, access) {
-        return Err(invalid("forbidden"));
-    }
-    let request = c
-        .query_row(
-            "SELECT request_id FROM requests WHERE task_id=?1",
-            [id],
-            |r| r.get(0),
-        )
-        .map_err(storage)?;
+    let (request, s) = task_facts_head(c, id, access)?;
     Ok(TaskFacts {
         request_id: request,
         snapshot: s,
@@ -879,6 +977,81 @@ fn verify_yearly_results_conn(
     }
     Ok(())
 }
+/// `verify_versions_conn` at the committed-state tier (XP-020) —
+/// progress read scope only. The same `unique_refs` loop and the same
+/// expected == actual `VersionRef` comparison; market refs are built
+/// from `committed_facts` (entity/period match enforced) instead of
+/// full-verification record reads. Catalog refs are unchanged.
+/// Non-compact databases delegate to `verify_versions_conn` verbatim.
+fn verify_versions_meta_conn(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    refs: &[VersionRef],
+) -> Result<(), Error> {
+    if !crate::sqlite_market::is_compact_schema(c)? {
+        return verify_versions_conn(c, ctx, refs);
+    }
+    for r in unique_refs(refs) {
+        let actual = if r.dataset == Dataset::Catalog {
+            catalog_ref(&sqlite_catalog::read(c, &r.version_id)?)?
+        } else {
+            let entity = r
+                .entity
+                .as_ref()
+                .ok_or_else(|| invalid("missing version entity"))?;
+            let facts = ctx.committed_facts_by_id(c, &r.version_id)?;
+            if facts.entity != entity.symbol() || Some(facts.period) != r.dataset.period() {
+                return Err(Error::Integrity("version entity/dataset mismatch".into()));
+            }
+            market_ref_facts(r.dataset, entity, &facts)?
+        };
+        if actual != r {
+            return Err(Error::Integrity("fixed version changed".into()));
+        }
+    }
+    Ok(())
+}
+/// `verify_range_results_conn` at the committed-state tier (XP-020):
+/// the same re-derive-and-compare loop over the committed-tier
+/// `range_result_meta`. Committed-facts memoization inside `ctx` makes
+/// the second pass per-version O(1); the comparison itself still runs.
+/// Non-compact databases delegate to `verify_range_results_conn`.
+fn verify_range_results_meta_conn(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    results: &[RangeExecutionResult],
+) -> Result<(), Error> {
+    if !crate::sqlite_market::is_compact_schema(c)? {
+        return verify_range_results_conn(c, ctx, results);
+    }
+    for expected in results {
+        if range_result_meta(c, ctx, &expected.result_id)? != *expected {
+            return Err(Error::Integrity(
+                "range result changed since snapshot".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+/// `verify_yearly_results_conn` at the committed-state tier (XP-020):
+/// same contract as `verify_range_results_meta_conn`.
+fn verify_yearly_results_meta_conn(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    results: &[YearlyExecutionResult],
+) -> Result<(), Error> {
+    if !crate::sqlite_market::is_compact_schema(c)? {
+        return verify_yearly_results_conn(c, ctx, results);
+    }
+    for expected in results {
+        if yearly_result_meta(c, ctx, &expected.result_id)? != *expected {
+            return Err(Error::Integrity(
+                "yearly result changed since snapshot".into(),
+            ));
+        }
+    }
+    Ok(())
+}
 /// Receipt comparisons on an already-open connection — the same
 /// `(_, receipt)` mapping both backend `check_receipt` implementations
 /// apply to `publication_checks::read_receipt` /
@@ -928,23 +1101,33 @@ struct SqliteProgressRead<'a> {
     ctx: std::cell::RefCell<VerifyCtx>,
 }
 impl crate::data_supply::observe::ProgressRead for SqliteProgressRead<'_> {
+    /// Progress/metadata reads run at the committed-state verification
+    /// tier (XP-020): every touched `data_versions` row is re-verified
+    /// by `committed_facts` (published state + recomputed
+    /// `integrity_digest`, including the parent/lineage reads
+    /// `build_identity` requires), every result row is digest-checked
+    /// and delta clips are checked at `bar_segments` header level — no
+    /// bar rows, no chain reconstruction. All binding, authorization,
+    /// cursor and comparison checks are unchanged. The full
+    /// verification tier still backs `fixed`/`range`/history reads and
+    /// every non-progress caller of the original helpers.
     fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
-        task_facts(self.c, &mut self.ctx.borrow_mut(), id, access, true)
+        task_facts_committed(self.c, &mut self.ctx.borrow_mut(), id, access)
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
-        verify_versions_conn(self.c, &mut self.ctx.borrow_mut(), refs)
+        verify_versions_meta_conn(self.c, &mut self.ctx.borrow_mut(), refs)
     }
     fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error> {
         if results.is_empty() {
             return Ok(());
         }
-        verify_range_results_conn(self.c, &mut self.ctx.borrow_mut(), results)
+        verify_range_results_meta_conn(self.c, &mut self.ctx.borrow_mut(), results)
     }
     fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error> {
         if results.is_empty() {
             return Ok(());
         }
-        verify_yearly_results_conn(self.c, &mut self.ctx.borrow_mut(), results)
+        verify_yearly_results_meta_conn(self.c, &mut self.ctx.borrow_mut(), results)
     }
     fn verify_publication_check(
         &self,
@@ -1167,4 +1350,77 @@ fn yearly_result(
     let entity = crate::data_supply::observe::entity(&base.version().symbol)
         .ok_or_else(|| Error::Integrity("yearly result entity".into()))?;
     serde_json::from_value(serde_json::json!({"result_id":id,"item_id":audit["command"]["item_id"],"base_daily_version":market_ref(Dataset::Daily,&entity,&base),"result_version":market_ref(Dataset::Yearly,&entity,&result),"no_change":audit["no_change"],"derived_at":audit["candidate"]["batch"]["provenance"]["acquired_at"]})).map_err(|e|Error::Integrity(e.to_string()))
+}
+
+/// `range_result` at the committed-state verification tier (XP-020) —
+/// progress read scope only. The audit comes from
+/// `update::read_result_meta_ctx`; base/result identity, period and
+/// entity checks run on committed facts and the `VersionRef`s are
+/// built from the same stored digests — producing a
+/// `RangeExecutionResult` identical to `range_result`. Non-compact
+/// databases delegate to `range_result` verbatim.
+fn range_result_meta(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    id: &str,
+) -> Result<RangeExecutionResult, Error> {
+    if !crate::sqlite_market::is_compact_schema(c)? {
+        return range_result(c, ctx, id);
+    }
+    let (audit, receipt) = crate::sqlite_market::update::read_result_meta_ctx(c, ctx, id)?
+        .ok_or_else(|| Error::Integrity("range result missing".into()))?;
+    let base_id = audit["evidence"]["base_version_id"]
+        .as_str()
+        .ok_or_else(|| Error::Integrity("range base reference missing".into()))?;
+    // These reads share the task/receipt transaction; never query a latest head.
+    let base = ctx.committed_facts_by_id(c, base_id)?;
+    let result = ctx.committed_facts_by_id(c, &receipt.version_id)?;
+    if base.period != crate::market_data::Period::Day
+        || result.period != crate::market_data::Period::Day
+        || base.entity != result.entity
+    {
+        return Err(Error::Integrity(
+            "range result version identity/period mismatch".into(),
+        ));
+    }
+    let entity = crate::data_supply::observe::entity(&base.entity)
+        .ok_or_else(|| Error::Integrity("range result entity missing".into()))?;
+    let base_ref = market_ref_facts(Dataset::Daily, &entity, &base)?;
+    let result_ref = market_ref_facts(Dataset::Daily, &entity, &result)?;
+    serde_json::from_value(serde_json::json!({
+        "result_id":id,"item_id":audit["command"]["item_id"],
+        "base_version":base_ref,"result_version":result_ref,
+        "no_change":audit["no_change"],"acquired_at":audit["segment"]["provenance"]["acquired_at"]
+    }))
+    .map_err(|e| Error::Integrity(format!("range result projection: {e}")))
+}
+
+/// `yearly_result` at the committed-state verification tier (XP-020) —
+/// progress read scope only; same contract as `range_result_meta`.
+fn yearly_result_meta(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    id: &str,
+) -> Result<YearlyExecutionResult, Error> {
+    if !crate::sqlite_market::is_compact_schema(c)? {
+        return yearly_result(c, ctx, id);
+    }
+    let (audit, receipt) = crate::sqlite_market::yearly_results::read_result_meta_ctx(c, ctx, id)?
+        .ok_or_else(|| Error::Integrity("yearly result missing".into()))?;
+    let base_id = audit["base_daily_version_id"]
+        .as_str()
+        .ok_or_else(|| Error::Integrity("yearly base missing".into()))?;
+    let base = ctx.committed_facts_by_id(c, base_id)?;
+    let result = ctx.committed_facts_by_id(c, &receipt.version_id)?;
+    if base.period != crate::market_data::Period::Day
+        || result.period != crate::market_data::Period::Year
+        || base.entity != result.entity
+    {
+        return Err(Error::Integrity("yearly result identity/period".into()));
+    }
+    let entity = crate::data_supply::observe::entity(&base.entity)
+        .ok_or_else(|| Error::Integrity("yearly result entity".into()))?;
+    let base_ref = market_ref_facts(Dataset::Daily, &entity, &base)?;
+    let result_ref = market_ref_facts(Dataset::Yearly, &entity, &result)?;
+    serde_json::from_value(serde_json::json!({"result_id":id,"item_id":audit["command"]["item_id"],"base_daily_version":base_ref,"result_version":result_ref,"no_change":audit["no_change"],"derived_at":audit["candidate"]["batch"]["provenance"]["acquired_at"]})).map_err(|e|Error::Integrity(e.to_string()))
 }

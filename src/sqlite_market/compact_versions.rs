@@ -2437,12 +2437,22 @@ pub(crate) struct VersionResultFacts {
     pub coverage_status: i64,
     pub evidence_digest: Digest,
     pub integrity_digest: Option<Digest>,
+    /// Stored publication stamp — the committed-tier audit/response
+    /// `acquired_at` source (XP-020); `None` before publish.
+    pub published_at: Option<String>,
 }
 
 pub(crate) fn result_facts(c: &Connection, key: i64) -> Result<VersionResultFacts, Error> {
     #[cfg(test)]
     read_counts::count_facts_read();
     let row = read_version_row(c, key)?.ok_or_else(|| integrity("version row missing"))?;
+    row_facts(&row)
+}
+
+/// `VersionResultFacts` decode from an already-read row — the shared
+/// tail of `result_facts` and the committed-tier `committed_facts`
+/// (XP-020); identical checks, only the row acquisition differs.
+fn row_facts(row: &VersionRow) -> Result<VersionResultFacts, Error> {
     let state = match row.state {
         1 => CompactVersionState::Staged,
         2 => CompactVersionState::Validated,
@@ -2472,8 +2482,8 @@ pub(crate) fn result_facts(c: &Connection, key: i64) -> Result<VersionResultFact
     }
     Ok(VersionResultFacts {
         key: row.key,
-        version_id: row.version_id,
-        entity: row.entity,
+        version_id: row.version_id.clone(),
+        entity: row.entity.clone(),
         period: row.period,
         state,
         source_binding_digest: row.source_binding_digest,
@@ -2487,6 +2497,7 @@ pub(crate) fn result_facts(c: &Connection, key: i64) -> Result<VersionResultFact
         coverage_status: row.coverage_status,
         evidence_digest: row.evidence_digest,
         integrity_digest: row.integrity_digest,
+        published_at: row.published_at.clone(),
     })
 }
 
@@ -2532,6 +2543,12 @@ const FACTS_CTX_CAP: usize = 512;
 /// later metadata touch fully verifies the version again (XP-016).
 const CERTS_CTX_CAP: usize = 512;
 
+/// Bound on memoized committed-tier facts inside a [`VerifyCtx`]
+/// (XP-020): 512 entries with FIFO eviction. An evicted entry is simply
+/// re-verified at row level on the next touch — the bound limits
+/// retained metadata, never read correctness.
+const COMMITTED_CTX_CAP: usize = 512;
+
 /// Measured lower-layer call counts for the complete public read
 /// (GOAL-008 XP-011 round 2). Incremented inside the uncached workhorses
 /// so a test can observe actual executions across whatever transaction
@@ -2544,6 +2561,7 @@ pub(crate) mod read_counts {
         static FIXED_RUNS: Cell<usize> = const { Cell::new(0) };
         static FACTS_READS: Cell<usize> = const { Cell::new(0) };
         static PROJECTION_RUNS: Cell<usize> = const { Cell::new(0) };
+        static COMMITTED_READS: Cell<usize> = const { Cell::new(0) };
     }
     pub(crate) fn count_segment_read() {
         SEGMENT_READS.with(|n| n.set(n.get() + 1));
@@ -2560,6 +2578,12 @@ pub(crate) mod read_counts {
     pub(crate) fn count_projection_run() {
         PROJECTION_RUNS.with(|n| n.set(n.get() + 1));
     }
+    /// `VerifyCtx::committed_facts` memo misses (XP-020) — row-level
+    /// committed-state verifications, counted in the same measured style
+    /// so tests observe actual executions across transaction contexts.
+    pub(crate) fn count_committed_read() {
+        COMMITTED_READS.with(|n| n.set(n.get() + 1));
+    }
     /// (segment reads, fixed runs, facts reads) since the last `reset`.
     pub(crate) fn reset() -> (usize, usize, usize) {
         let snap = (
@@ -2571,6 +2595,7 @@ pub(crate) mod read_counts {
         FIXED_RUNS.with(|n| n.set(0));
         FACTS_READS.with(|n| n.set(0));
         PROJECTION_RUNS.with(|n| n.set(0));
+        COMMITTED_READS.with(|n| n.set(0));
         snap
     }
     /// Current counters without resetting.
@@ -2584,6 +2609,10 @@ pub(crate) mod read_counts {
     /// `to_effective_version` runs since the last `reset` (XP-018).
     pub(crate) fn snapshot_projections() -> usize {
         PROJECTION_RUNS.with(Cell::get)
+    }
+    /// `committed_facts` memo misses since the last `reset` (XP-020).
+    pub(crate) fn snapshot_committed() -> usize {
+        COMMITTED_READS.with(Cell::get)
     }
 }
 
@@ -2615,6 +2644,13 @@ pub(crate) struct VerifyCtx {
     /// bare keys, no histories or header JSON (XP-016 certificate set).
     certificates: HashSet<i64>,
     certs_fifo: VecDeque<i64>,
+    /// Committed-state facts verified at the row/integrity-digest tier
+    /// (XP-020): populated only by `committed_facts`, used only by the
+    /// progress/metadata `*_meta_ctx` readers. Kept strictly separate
+    /// from `facts`/`certificates` — a committed-tier entry must never
+    /// stand in for a full-chain verification.
+    committed: HashMap<i64, Rc<VersionResultFacts>>,
+    committed_fifo: VecDeque<i64>,
     /// The single `Connection` this context is bound to (0 = unbound).
     owner: usize,
     segments: compact_v19::SegmentReadCtx,
@@ -2753,6 +2789,59 @@ impl VerifyCtx {
             }
         }
         self.facts(c, key)
+    }
+
+    /// Committed-state verification tier (XP-020) for progress/metadata
+    /// reads: the stored `data_versions` row plus `verify_published_fields`
+    /// — published state enforced and `integrity_digest` recomputed over
+    /// the stored identity, including the parent-row/lineage reads that
+    /// `build_identity` requires — with NO chain reconstruction, no
+    /// bar-row reads and no segment content re-verification. Committed
+    /// content is trusted exactly as `verify_delta_append` (#259 S5G-8)
+    /// trusts committed ancestors on the write path; row-level
+    /// corruption still fails closed. Memoized per key inside this
+    /// transaction only (same-snapshot reuse, FIFO-bounded; the ctx
+    /// dies with the transaction so there is no cross-request reuse).
+    /// A committed entry never satisfies `verified`/`verified_facts`.
+    pub(crate) fn committed_facts(
+        &mut self,
+        c: &Connection,
+        key: i64,
+    ) -> Result<Rc<VersionResultFacts>, Error> {
+        self.check_owner(c)?;
+        if let Some(facts) = self.committed.get(&key) {
+            return Ok(facts.clone());
+        }
+        let row = read_version_row(c, key)?.ok_or_else(|| integrity("version row missing"))?;
+        verify_published_fields(c, &row)?;
+        let facts = Rc::new(row_facts(&row)?);
+        #[cfg(test)]
+        read_counts::count_committed_read();
+        self.committed.insert(key, facts.clone());
+        self.committed_fifo.push_back(key);
+        while self.committed_fifo.len() > COMMITTED_CTX_CAP
+            && let Some(evicted) = self.committed_fifo.pop_front()
+        {
+            self.committed.remove(&evicted);
+        }
+        Ok(facts)
+    }
+
+    /// `committed_facts` resolved from a version id instead of a key.
+    /// A referenced committed version that does not resolve is
+    /// committed-state corruption (integrity), matching the full
+    /// tier's classification for a missing published row.
+    pub(crate) fn committed_facts_by_id(
+        &mut self,
+        c: &Connection,
+        version_id: &str,
+    ) -> Result<Rc<VersionResultFacts>, Error> {
+        let key = match super::compact_repo::version_key(c, version_id) {
+            Ok(key) => key,
+            Err(Error::NotFound) => return Err(integrity("committed version missing")),
+            Err(other) => return Err(other),
+        };
+        self.committed_facts(c, key)
     }
 
     /// The transaction-scoped verified segment cache backing `verified`.
