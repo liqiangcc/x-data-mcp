@@ -37,13 +37,20 @@ STALE_DAYS = 14
 
 VERIFIED_DATE = re.compile(
     r"(?:最后核实|last\s+verified|verified)[^\n]{0,30}?"
-    r"(20\d\d[-/.](?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12]\d|3[01]))",
+    r"\b(\d{4}-\d{2}-\d{2})\b",
     re.IGNORECASE,
 )
 # Any version-looking token after a deployment label is a candidate; each
 # candidate must match VERSION_OK. Labels may chain ("deployment version:").
 VERSION_FIELD = re.compile(
     r"(?:(?:version|版本|deployment|部署)\s*)+[:：=]?\s*`?(\S+)",
+    re.IGNORECASE,
+)
+# Markdown-table form: the label sits in one cell, the value in the next
+# ("| 部署版本 | v0.2.0-preview.30 @ `sha` |"). Capture the value cell's
+# first token only.
+VERSION_CELL = re.compile(
+    r"\|\s*(?:(?:deployment|deployed|version|版本|部署版本|部署)\s*)+\|\s*`?([^\s|`]+)",
     re.IGNORECASE,
 )
 VERSION_OK = re.compile(r"^(v?\d+\.\d+\.\d+-preview\.\d+|preview\.\d+)$")
@@ -100,7 +107,11 @@ def check_status_md(
                 )
             if age < 0:
                 errors.append("docs/STATUS.md last-verified date is in the future")
-    candidates = [m.group(1).strip("` ") for m in VERSION_FIELD.finditer(text)]
+    candidates = [
+        m.group(1).strip("` ")
+        for pattern in (VERSION_FIELD, VERSION_CELL)
+        for m in pattern.finditer(text)
+    ]
     versions = [v for v in candidates if re.search(r"preview|\d+\.\d+", v)]
     if not versions:
         errors.append("docs/STATUS.md declares no deployment version")
