@@ -8,8 +8,7 @@ if [[ -e "$stage" ]]; then
   echo "release staging directory already exists: $stage" >&2
   exit 1
 fi
-# XP-021: optional cargo features (e.g. pragma-v3); empty = unchanged build.
-cargo build --release --locked --bins ${X_DATA_MCP_BUILD_FEATURES:+--features "$X_DATA_MCP_BUILD_FEATURES"}
+cargo build --release --locked --bins
 mkdir -p "$stage/bin"
 for binary in data_service acquire_service mcp_connect mcp_data mcp_server mcp_sqlite_dev task_sqlite inspect_day inspect_snapshot create_demo consistency_check; do
   cp "target/release/$binary" "$stage/bin/"
@@ -21,11 +20,10 @@ cp README.md "$stage/README.md"
 cp fixtures/demo/README.md "$stage/DEMO_DATA.md"
 cp scripts/smoke_release.py "$stage/check.py"
 cp scripts/test_runtime_peer.py "$stage/check_peer.py"
-python3 - "$stage" "$version" "$revision" "${X_DATA_MCP_BUILD_VARIANT:-}" <<'PY'
+python3 - "$stage" "$version" "$revision" <<'PY'
 import json,pathlib,subprocess,sys
-stage,version,revision,variant=sys.argv[1:]
+stage,version,revision=sys.argv[1:]
 manifest=dict(version=version,git_sha=revision,target="x86_64-unknown-linux-gnu",build_platform="ubuntu-24.04",minimum_glibc="2.39",rustc=subprocess.check_output(["rustc","--version"],text=True).strip(),production="NOT_PRODUCTION_READY",services=["data_service: market data MCP over owner-only unix socket","acquire_service: official-source generation lifecycle MCP over owner-only unix socket"],source_gates=["#54","#6/#46","#71","official file snapshot consistency"],default_backend="explicit SQLite stdio; no implicit initialization",fixture_tool="create_demo: explicit new synthetic database only")
-if variant: manifest["build_variant"]=variant
 pathlib.Path(stage,"manifest.json").write_text(json.dumps(manifest,indent=2)+"\n")
 PY
 "$stage/bin/mcp_data" --version | python3 -c 'import sys; assert sys.argv[1] in sys.stdin.read(), "binary build SHA does not match package"' "$revision"

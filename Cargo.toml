@@ -32,20 +32,6 @@ jsonschema = { version = "0.33", default-features = false }
 # Reuse the already locked libc for fd-based local-filesystem verification.
 libc = "=0.2.189"
 
-[features]
-# XP-021 SQLite connection tuning variants (default = V0: no extra pragmas).
-# Highest enabled wins: pragma-v4 > pragma-v3 > pragma-v2.
-pragma-v2 = []
-pragma-v3 = []
-pragma-v4 = []
-
-[profile.release]
-# XP-021: fat LTO + single codegen unit. `panic` must stay "unwind": the
-# runtime detects session/worker panics via `thread.join().is_err()` for an
-# orderly shutdown (src/local_runtime/server.rs).
-lto = "fat"
-codegen-units = 1
-
 [profile.dev]
 # Keep .debug_* sections out of linked binaries (separate .dwo files on Linux):
 # less link I/O and a smaller target dir for the edit-build loop.

@@ -1,12 +1,6 @@
 name: Preview package
 on:
   workflow_dispatch:
-    inputs:
-      variant:
-        description: 'XP-021 build variant (v0|v1|v2|v3|v4); empty = unchanged default build'
-        required: false
-        default: ''
-        type: string
   pull_request:
     paths:
       - '.github/workflows/preview-release.yml'
@@ -38,19 +32,7 @@ jobs:
         with:
           key: preview-release
       - name: Build labelled release package
-        env:
-          VARIANT: ${{ inputs.variant }}
-        run: |
-          case "$VARIANT" in
-            "") ;;
-            v0) # pre-XP-021 profile: Cargo.toml lto/codegen-units overridden back to defaults
-              export CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 ;;
-            v1) ;;
-            v2|v3|v4) export X_DATA_MCP_BUILD_FEATURES="pragma-$VARIANT" ;;
-            *) echo "unknown variant: $VARIANT" >&2; exit 1 ;;
-          esac
-          [ -z "$VARIANT" ] || export X_DATA_MCP_BUILD_VARIANT="$VARIANT"
-          scripts/build_release.sh
+        run: scripts/build_release.sh
       - name: Exercise packaged binaries using an isolated synthetic database
         run: |
           package_dir=$(find dist -maxdepth 1 -type d -name 'x-data-mcp-*' -print -quit)
@@ -62,7 +44,7 @@ jobs:
           sudo -n python3 "$package_dir/check_peer.py" --bin-dir "$PWD/$package_dir/bin"
       - uses: actions/upload-artifact@v4
         with:
-          name: x-data-mcp-preview-${{ github.sha }}${{ inputs.variant && format('-{0}', inputs.variant) || '' }}
+          name: x-data-mcp-preview-${{ github.sha }}
           path: |
             dist/*.tar.gz
             dist/*.sha256

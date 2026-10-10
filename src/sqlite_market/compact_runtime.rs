@@ -13,47 +13,6 @@ const MAX_READERS: usize = 16;
 const JOURNAL_SIZE_LIMIT: i64 = 16_777_216;
 const WRITER_CACHE: usize = 128;
 const READER_CACHE: usize = 32;
-
-/// Optional connection performance pragmas (XP-021). `None` leaves SQLite's
-/// default untouched, so the default build (V0) issues no extra pragma.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Tuning {
-    pub mmap_size: Option<i64>,
-    pub cache_size: Option<i64>,
-    pub temp_store: Option<i64>,
-}
-
-const MIB: i64 = 1024 * 1024;
-pub(crate) const TUNING_V0: Tuning = Tuning {
-    mmap_size: None,
-    cache_size: None,
-    temp_store: None,
-};
-pub(crate) const TUNING_V2: Tuning = Tuning {
-    mmap_size: Some(256 * MIB),
-    ..TUNING_V0
-};
-pub(crate) const TUNING_V3: Tuning = Tuning {
-    mmap_size: Some(1024 * MIB),
-    ..TUNING_V0
-};
-/// cache_size is negative = KiB (8 MiB); temp_store 2 = MEMORY.
-pub(crate) const TUNING_V4: Tuning = Tuning {
-    mmap_size: Some(1024 * MIB),
-    cache_size: Some(-8192),
-    temp_store: Some(2),
-};
-/// Variant compiled into this build, selected by cargo feature.
-pub(crate) const TUNING: Tuning = if cfg!(feature = "pragma-v4") {
-    TUNING_V4
-} else if cfg!(feature = "pragma-v3") {
-    TUNING_V3
-} else if cfg!(feature = "pragma-v2") {
-    TUNING_V2
-} else {
-    TUNING_V0
-};
-
 const IDENTITY_DOMAIN: &[u8] = b"x-data-schema-identity-v1\0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,7 +233,6 @@ impl WriteCoordinator {
         conn.busy_timeout(self.busy).map_err(storage)?;
         set_pragma(&conn, "foreign_keys", 1)?;
         set_pragma(&conn, "query_only", 1)?;
-        apply_tuning(&conn, &TUNING)?;
         conn.set_prepared_statement_cache_capacity(READER_CACHE);
         verify_wal(&conn)?;
         Ok(conn)
@@ -484,21 +442,6 @@ fn set_pragma(conn: &Connection, name: &str, value: i64) -> Result<(), Error> {
     Ok(())
 }
 
-/// Applies the performance pragmas, each verified by read-back like the
-/// correctness pragmas. Used on both reader and writer connections.
-pub(crate) fn apply_tuning(conn: &Connection, tuning: &Tuning) -> Result<(), Error> {
-    if let Some(value) = tuning.mmap_size {
-        set_pragma(conn, "mmap_size", value)?;
-    }
-    if let Some(value) = tuning.cache_size {
-        set_pragma(conn, "cache_size", value)?;
-    }
-    if let Some(value) = tuning.temp_store {
-        set_pragma(conn, "temp_store", value)?;
-    }
-    Ok(())
-}
-
 fn open_writer(path: &Path, busy: Duration) -> Result<Connection, Error> {
     let conn = Connection::open_with_flags(
         path,
@@ -511,7 +454,6 @@ fn open_writer(path: &Path, busy: Duration) -> Result<Connection, Error> {
     set_pragma(&conn, "synchronous", 2)?;
     set_pragma(&conn, "wal_autocheckpoint", 1000)?;
     set_pragma(&conn, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
-    apply_tuning(&conn, &TUNING)?;
     conn.set_prepared_statement_cache_capacity(WRITER_CACHE);
     if !conn.is_autocommit() {
         return Err(integrity("writer connection is not in autocommit"));
