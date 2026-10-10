@@ -317,7 +317,7 @@ fn seed_entities(
             let task_id = snapshot.task.task_id;
             let items: Vec<UpdateBatchItem> = chunk
                 .iter()
-                .map(|e| append_item(*e, &task_id, run_id))
+                .map(|e| append_item(e, &task_id, run_id))
                 .collect();
             let results = RangeRepository::commit_update_batch(backend, &task_id, &items)?
                 .ok_or_else(|| {
@@ -329,7 +329,7 @@ fn seed_entities(
             for (e, result) in chunk.iter_mut().zip(results) {
                 let receipt = result.map_err(|e| e.to_string())?;
                 e.head_version_id = receipt.version_id;
-                refresh_head(backend, *e)?;
+                refresh_head(backend, e)?;
             }
         }
     }
