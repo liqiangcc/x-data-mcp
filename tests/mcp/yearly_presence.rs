@@ -102,7 +102,13 @@ fn sparse_and_bounded_years_resolve_exactly() {
 #[test]
 fn empty_history_resolves_empty_while_missing_and_unpublished_are_unavailable() {
     let (_d, store) = store();
-    market::published_fixture(&store, &daily_with_dates("v-empty", "sh.600006", &[]));
+    // A truly zero-record daily cannot be staged ("batch has no records");
+    // the contract's legal empty is the in-window empty set: the pinned
+    // version's verified records hold no bar inside [start_year, end_year].
+    market::published_fixture(
+        &store,
+        &daily_with_dates("v-empty", "sh.600006", &["2025-03-04"]),
+    );
     market::published_fixture(
         &store,
         &daily_with_dates("v-real", "sh.600007", &["2025-06-30"]),
@@ -113,7 +119,7 @@ fn empty_history_resolves_empty_while_missing_and_unpublished_are_unavailable() 
     let reply = call(
         &api,
         json!([
-            {"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"v-empty"},
+            {"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"v-empty","start_year":2026,"end_year":2026},
             {"entity":{"exchange":"sh","code":"600007"},"base_daily_version_id":"v-missing"},
             {"entity":{"exchange":"sh","code":"600008"},"base_daily_version_id":"v-staged"},
             {"entity":{"exchange":"sh","code":"600009"},"base_daily_version_id":"v-real"},
@@ -146,10 +152,9 @@ fn empty_history_resolves_empty_while_missing_and_unpublished_are_unavailable() 
 fn period_mismatch_and_corrupt_base_fail_as_integrity_failure() {
     use x_data_mcp::market_storage::MarketRepository;
     let (d, store) = store();
-    market::published_fixture(
-        &store,
-        &daily_with_dates("v-daily", "sh.600006", &["2025-01-02"]),
-    );
+    // The yearly record derives from base "legacy-daily" — it must be
+    // published before the yearly record can stage.
+    market::published_fixture(&store, &market::samples()[0]["record"].clone());
     let yearly = market::samples()[2]["record"].clone();
     let plan = market::prepare(&store, &yearly, PublishIntent::HistoricalFixedBase);
     store.commit(&plan).unwrap();
@@ -167,7 +172,7 @@ fn period_mismatch_and_corrupt_base_fail_as_integrity_failure() {
             [],
         )
         .unwrap();
-    let reply = presence(&api, e, "v-daily", json!({})).unwrap();
+    let reply = presence(&api, e, "legacy-daily", json!({})).unwrap();
     assert_eq!(reply["items"][0]["status"], "unavailable");
     assert_eq!(reply["items"][0]["reason_code"], "integrity_failure");
 }
