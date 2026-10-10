@@ -7,6 +7,7 @@
 import json, os, socket, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 SOCK = sys.argv[3] if len(sys.argv) > 3 else "/root/x-perf-g8/svc/run/mcp.sock"
 RUN_ID = os.environ.get("G8_RUN_ID", "g8-y")  # new run = new request_ids + fresh pins
@@ -73,11 +74,14 @@ def resolve_years(client, daily_items):
     entities whose in-window set is [] (recorded, never submitted);
     unavailable lists per-item failures that block an unqualified PASS.
     Future-dated years in the response are reported as anomalies, never
-    silently dropped."""
-    cur_year = datetime.now(timezone.utc).year
+    silently dropped: the request carries no start_year/end_year (server
+    default 1..9999), so future years reach the client; "future" means
+    greater than the current Asia/Shanghai year (same basis as the server's
+    future-date rejection). The anomaly is recorded first (it blocks an
+    unqualified PASS); the in-window intersection is taken afterwards."""
+    cur_year = datetime.now(ZoneInfo("Asia/Shanghai")).year
     req = [{"entity": {"exchange": k[0], "code": k[1]},
-            "base_daily_version_id": i["version_ref"]["version_id"],
-            "end_year": cur_year} for k, i in daily_items.items()]
+            "base_daily_version_id": i["version_ref"]["version_id"]} for k, i in daily_items.items()]
     r = client.call("get_yearly_base_years", {"contract_version": "v1", "items": req})
     resolved, empty, unavailable = {}, [], []
     for it in r.get("items") or []:
@@ -96,7 +100,6 @@ def resolve_years(client, daily_items):
         future = sorted(y for y in present if y > cur_year)
         if future:
             unavailable.append({"entity": k, "reason_code": "future_years_in_response", "years": future})
-            continue
         years = sorted(set(present) & set(years_for(daily_items[k])))
         if years:
             resolved[k] = years

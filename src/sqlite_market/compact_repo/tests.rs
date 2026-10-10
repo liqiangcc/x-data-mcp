@@ -6669,6 +6669,61 @@ mod xp011 {
             ));
         }
 
+        /// Frozen case "batch-concurrent commit stays single snapshot": a
+        /// base published through another connection while the batch is
+        /// mid-flight (after item 0, before item 1) stays invisible to the
+        /// later item of the SAME request; a fresh request then sees it.
+        #[test]
+        fn compact_concurrent_commit_mid_batch_is_invisible_to_same_request() {
+            let dir = tempdir();
+            let (_path, repo) = repo(&dir);
+            publish_head(
+                &repo,
+                "req-a",
+                "pub-a",
+                "sh.600006",
+                "v-first",
+                vec![bar(day(2024, 1, 5), 100)],
+            );
+            let supply = supply(&repo);
+            // Plan order is by entity: 600006 first, 600007 second.
+            let p = mk_plan(vec![
+                ("sh", "600006", "v-first", 1, 9999),
+                ("sh", "600007", "v-late", 1, 9999),
+            ]);
+            let mut committed = false;
+            let out = supply
+                .year_presence_hooked(&p, |i| {
+                    if i == 0 {
+                        publish_head(
+                            &repo,
+                            "req-b",
+                            "pub-b",
+                            "sh.600007",
+                            "v-late",
+                            vec![bar(day(2025, 2, 3), 100)],
+                        );
+                        committed = true;
+                    }
+                })
+                .unwrap();
+            assert!(committed, "hook must have committed mid-batch");
+            assert!(matches!(out[0], PresenceOutcome::Resolved { .. }));
+            assert!(
+                matches!(
+                    out[1],
+                    PresenceOutcome::Unavailable(YearPresenceReason::BaseUnavailable)
+                ),
+                "later item must still reflect the pre-commit snapshot"
+            );
+            // Control: a new request after the commit sees the new base.
+            let out = supply.year_presence(&p, &Access::local()).unwrap();
+            let PresenceOutcome::Resolved { years, .. } = &out[1] else {
+                panic!("committed base must resolve in a fresh request")
+            };
+            assert_eq!(years, &[2025]);
+        }
+
         /// Corrupt projection rows and broken ancestor clip linkage on the
         /// verified chain classify integrity_failure — never resolved,
         /// never absent, never satisfied by stored digests.

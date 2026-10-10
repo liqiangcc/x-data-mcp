@@ -193,6 +193,32 @@ fn presence_item(
     }
 }
 
+impl SqliteSupply {
+    /// Shared body of `year_presence`; `after_item` runs inside the read
+    /// transaction after each item resolves (index in plan order). Production
+    /// passes a no-op; tests use it to commit from another connection
+    /// mid-batch and prove the batch stays on one snapshot.
+    pub(crate) fn year_presence_hooked(
+        &self,
+        plan: &crate::data_supply::presence::PresencePlan,
+        mut after_item: impl FnMut(usize),
+    ) -> Result<Vec<crate::data_supply::presence::PresenceOutcome>, Error> {
+        self.market.read(|c| {
+            let compact = crate::sqlite_market::is_compact_schema(c)?;
+            let mut ctx = VerifyCtx::default();
+            plan.items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    let outcome = presence_item(c, &mut ctx, compact, item);
+                    after_item(i);
+                    outcome
+                })
+                .collect()
+        })
+    }
+}
+
 impl crate::data_supply::presence::PresenceRepository for SqliteSupply {
     /// The whole batch resolves inside ONE `market.read` transaction — a
     /// concurrent commit mid-batch cannot split the snapshot — and shares
@@ -204,14 +230,7 @@ impl crate::data_supply::presence::PresenceRepository for SqliteSupply {
         plan: &crate::data_supply::presence::PresencePlan,
         _access: &Access,
     ) -> Result<Vec<crate::data_supply::presence::PresenceOutcome>, Error> {
-        self.market.read(|c| {
-            let compact = crate::sqlite_market::is_compact_schema(c)?;
-            let mut ctx = VerifyCtx::default();
-            plan.items
-                .iter()
-                .map(|item| presence_item(c, &mut ctx, compact, item))
-                .collect()
-        })
+        self.year_presence_hooked(plan, |_| {})
     }
 }
 
