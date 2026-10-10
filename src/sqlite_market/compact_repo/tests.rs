@@ -6848,4 +6848,167 @@ mod xp011 {
             ));
         }
     }
+
+    /// XP-025 H4: batched daily preparation must prepare/decline exactly the
+    /// items the per-item `update_candidate` loop does, in ~2 read
+    /// transactions instead of 5 per item.
+    mod xp025 {
+        use super::*;
+        use crate::market_update::UpdateBatchItem;
+        use crate::market_update::runner::{
+            RangeProvider, RangeRunner, TypedAcquisition, TypedDecision,
+        };
+
+        struct Unchanged;
+        impl RangeProvider for Unchanged {
+            fn acquire(
+                &self,
+                _: &crate::market_storage::compat::CheckedRecord,
+                _: &crate::market_update::DateRange,
+                _: &str,
+            ) -> Result<crate::market_update::runner::Acquisition, crate::market_data::SourceError>
+            {
+                Err(crate::market_data::SourceError::NotVerified(
+                    "unused".into(),
+                ))
+            }
+            fn acquire_typed(
+                &self,
+                facts: &crate::market_update::UpdateBaseFacts,
+                _: &[Bar],
+                range: &crate::market_update::DateRange,
+            ) -> Result<Option<TypedAcquisition>, crate::market_data::SourceError> {
+                Ok(Some(TypedAcquisition {
+                    decision: TypedDecision::Unchanged,
+                    evidence: crate::market_update::Evidence {
+                        base_version_id: facts.version_id.clone(),
+                        base_integrity_sha256: facts.integrity_sha256.clone(),
+                        candidate_sha256: "cd".repeat(32),
+                        range: range.clone(),
+                        same_qfq_basis_ref: "qfq".into(),
+                        revision_ref: None,
+                        continuity: None,
+                    },
+                }))
+            }
+        }
+
+        fn item_spec(item_id: &str, symbol: &str, base: &str) -> ItemSpec {
+            ItemSpec {
+                item_id: item_id.into(),
+                target: json!({"symbol": symbol, "period": "day"}),
+                progress_unit: "security_period".into(),
+                frozen_inputs: crate::market_update::tasks::frozen(
+                    base,
+                    "ab".repeat(32).as_str(),
+                    &crate::market_update::DateRange {
+                        start: date(0),
+                        end: date(3),
+                    },
+                ),
+                scope_keys: BTreeSet::from([task_control::legacy::scope_id(symbol, "day")]),
+            }
+        }
+
+        #[test]
+        fn batched_prepare_matches_per_item_loop_with_far_fewer_reads() {
+            let dir = tempdir();
+            let (_path, repo) = repo(&dir);
+            let bars = vec![bar(0, 100), bar(1, 110), bar(2, 120)];
+            publish_head(&repo, "req-a", "pub-a", "sh.600006", "v1a", bars.clone());
+            publish_head(&repo, "req-b", "pub-b", "sh.600007", "v1b", bars.clone());
+            publish_head(&repo, "req-c", "pub-c", "sh.600008", "v1c", bars);
+            let specs = vec![
+                item_spec("item-1", "sh.600006", "v1a"),
+                item_spec("item-2", "sh.600007", "v1b"),
+                item_spec("item-3", "sh.600008", "v1c"),
+                // Missing base: both paths must decline it.
+                item_spec("item-4", "sh.600009", "v-missing"),
+            ];
+            let scopes: BTreeSet<String> = specs
+                .iter()
+                .flat_map(|s| s.scope_keys.iter().cloned())
+                .collect();
+            let work = FrozenWork {
+                items: specs,
+                scopes,
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: CommandKey {
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+                },
+                intent: json!({}),
+            };
+            let task = match repo
+                .accept("req-h4", &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(s) => s.task.task_id.clone(),
+                _ => panic!("expected task"),
+            };
+            // item-1 already has a committed receipt: both paths decline it.
+            repo.commit_update_batch(
+                &task,
+                &[UpdateBatchItem {
+                    task_id: task.clone(),
+                    item_id: "item-1".into(),
+                    publication_id: "upd-1".into(),
+                    run_id: RUN.into(),
+                    symbol: "sh.600006".into(),
+                    occupancy_key: task_control::legacy::scope_id("sh.600006", "day"),
+                    prepared: UpdateBatchPrepared::NoChange {
+                        base_version_id: "v1a".into(),
+                        range_start_day: 2,
+                        range_end_day: 2,
+                        continuity: json!({"continuity": {"mode": "unchanged"}}),
+                    },
+                }],
+            )
+            .unwrap()
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+            let runner = RangeRunner {
+                repository: repo.clone(),
+                run_id: RUN.into(),
+            };
+            let ids: Vec<String> = ["item-1", "item-2", "item-3", "item-4", "item-nope"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            let reads = || crate::sqlite_market::compact_runtime::READ_TXS.with(|n| n.get());
+            let before = reads();
+            let (batch, mut batch_fallback) = runner.prepare_batch(&task, &ids, &Unchanged);
+            let batch_reads = reads() - before;
+
+            let before = reads();
+            let mut per_item = Vec::new();
+            let mut per_item_fallback = Vec::new();
+            for id in &ids {
+                match runner.update_candidate(&task, id, &Unchanged) {
+                    Ok(Some(candidate)) => per_item.push(candidate),
+                    Ok(None) | Err(_) => per_item_fallback.push(id.clone()),
+                }
+            }
+            let per_item_reads = reads() - before;
+
+            batch_fallback.sort();
+            per_item_fallback.sort();
+            assert_eq!(batch_fallback, per_item_fallback);
+            assert_eq!(batch_fallback, ["item-1", "item-4", "item-nope"]);
+            assert_eq!(format!("{batch:?}"), format!("{per_item:?}"));
+            assert_eq!(batch.len(), 2);
+            assert_eq!(batch_reads, 2, "states + base reads, one tx each");
+            assert!(
+                per_item_reads >= 5 * 2,
+                "per-item path pays several read txs per item: {per_item_reads}"
+            );
+        }
+    }
 }

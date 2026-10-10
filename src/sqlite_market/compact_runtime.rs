@@ -9,6 +9,12 @@ use super::*;
 use crate::compact_market::Digest;
 use crate::local_runtime::DatabaseLease;
 
+// Test-only count of coordinator read transactions on this thread.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static READ_TXS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 const MAX_READERS: usize = 16;
 const JOURNAL_SIZE_LIMIT: i64 = 16_777_216;
 const WRITER_CACHE: usize = 128;
@@ -253,6 +259,8 @@ impl WriteCoordinator {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        #[cfg(test)]
+        READ_TXS.with(|n| n.set(n.get() + 1));
         let _slot = ReaderSlot::acquire(&self.reader_count, &self.reader_idle)?;
         let _lifecycle = self
             .lifecycle

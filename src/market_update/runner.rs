@@ -88,6 +88,11 @@ pub struct RangeRunner<R> {
     pub repository: R,
     pub run_id: String,
 }
+struct PlannedItem {
+    base_id: String,
+    range: DateRange,
+    default_contract: bool,
+}
 impl<R: RangeRepository + Clone> RangeRunner<R> {
     pub fn run_item(
         &self,
@@ -263,20 +268,15 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
     ) -> Result<Option<()>, Error> {
         let _total = crate::stage_trace::span("daily.run_items.total");
         let mut items = Vec::new();
-        let mut fallback = Vec::new();
         // Frozen inputs of prepared default-contract items: their gap
         // coverings append after the batch commit, per receipt.
         let mut coverings: Vec<(String, Value)> = Vec::new();
-        for item_id in item_ids {
-            match self.update_candidate(task_id, item_id, provider) {
-                Ok(Some((item, frozen))) => {
-                    if let Some(frozen) = frozen {
-                        coverings.push((item.item_id.clone(), frozen));
-                    }
-                    items.push(item);
-                }
-                Ok(None) | Err(_) => fallback.push(item_id.clone()),
+        let (prepared, mut fallback) = self.prepare_batch(task_id, item_ids, provider);
+        for (item, frozen) in prepared {
+            if let Some(frozen) = frozen {
+                coverings.push((item.item_id.clone(), frozen));
             }
+            items.push(item);
         }
         if !items.is_empty() {
             let commit_span = crate::stage_trace::span("daily.commit_batch");
@@ -343,6 +343,144 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             }
         };
         drop(binding_span);
+        let receipt_span = crate::stage_trace::span("daily.prepare.item_receipt");
+        let has_receipt = self.repository.item_receipt(task_id, item_id)?.is_some();
+        drop(receipt_span);
+        let Some(planned) = self.plan_candidate(&binding, has_receipt)? else {
+            return Ok(None);
+        };
+        let facts_span = crate::stage_trace::span("daily.prepare.base_facts");
+        let facts = self.repository.update_base_facts(&planned.base_id)?;
+        drop(facts_span);
+        let Some(facts) = facts else {
+            return Ok(None);
+        };
+        let bars_span = crate::stage_trace::span("daily.prepare.base_bars");
+        let base_window = self.repository.base_bars_in_range(
+            &planned.base_id,
+            planned.range.start,
+            planned.range.end,
+        )?;
+        drop(bars_span);
+        let Some(base_window) = base_window else {
+            return Ok(None);
+        };
+        self.finish_candidate(
+            task_id,
+            item_id,
+            &binding,
+            planned,
+            &facts,
+            &base_window,
+            provider,
+        )
+    }
+    /// Batch preparation (XP-025 H4): item states and base reads for the
+    /// whole task come from one read transaction each instead of five per
+    /// item. Returns the prepared items plus the ids that must take the
+    /// per-item path. A transaction-level read failure degrades to the
+    /// original per-item `update_candidate` loop.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn prepare_batch(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+        provider: &dyn RangeProvider,
+    ) -> (
+        Vec<(crate::market_update::UpdateBatchItem, Option<Value>)>,
+        Vec<String>,
+    ) {
+        let per_item = |ids: &[String]| {
+            let mut prepared = Vec::new();
+            let mut fallback = Vec::new();
+            for item_id in ids {
+                match self.update_candidate(task_id, item_id, provider) {
+                    Ok(Some(candidate)) => prepared.push(candidate),
+                    Ok(None) | Err(_) => fallback.push(item_id.clone()),
+                }
+            }
+            (prepared, fallback)
+        };
+        let states_span = crate::stage_trace::span("daily.prepare_batch.states");
+        let states = self.repository.range_item_states(task_id, item_ids);
+        drop(states_span);
+        let Ok(states) = states else {
+            return per_item(item_ids);
+        };
+        if states.len() != item_ids.len() {
+            return per_item(item_ids);
+        }
+        let mut fallback = Vec::new();
+        let mut planned = Vec::new();
+        for (item_id, state) in item_ids.iter().zip(states) {
+            match state {
+                Ok(crate::market_update::publication::RangeItemState {
+                    binding: Some(binding),
+                    has_receipt,
+                }) => match self.plan_candidate(&binding, has_receipt) {
+                    Ok(Some(plan)) => planned.push((item_id.clone(), binding, plan)),
+                    Ok(None) | Err(_) => fallback.push(item_id.clone()),
+                },
+                Ok(_) | Err(_) => fallback.push(item_id.clone()),
+            }
+        }
+        let wants: Vec<_> = planned
+            .iter()
+            .map(|(_, _, plan)| crate::market_update::publication::BaseWant {
+                base_version_id: plan.base_id.clone(),
+                start: plan.range.start,
+                end: plan.range.end,
+            })
+            .collect();
+        let reads_span = crate::stage_trace::span("daily.prepare_batch.base_reads");
+        let reads = if wants.is_empty() {
+            Ok(Vec::new())
+        } else {
+            self.repository.range_base_reads(&wants)
+        };
+        drop(reads_span);
+        let reads = match reads {
+            Ok(reads) if reads.len() == planned.len() => reads,
+            _ => {
+                let ids: Vec<String> = planned.iter().map(|(id, _, _)| id.clone()).collect();
+                let (prepared, more) = per_item(&ids);
+                fallback.extend(more);
+                return (prepared, fallback);
+            }
+        };
+        let mut prepared = Vec::new();
+        for ((item_id, binding, plan), read) in planned.into_iter().zip(reads) {
+            match read {
+                Ok(Some(read)) => {
+                    let acquire_span = crate::stage_trace::span("daily.prepare.item");
+                    let candidate = self.finish_candidate(
+                        task_id,
+                        &item_id,
+                        &binding,
+                        plan,
+                        &read.facts,
+                        &read.bars,
+                        provider,
+                    );
+                    drop(acquire_span);
+                    match candidate {
+                        Ok(Some(candidate)) => prepared.push(candidate),
+                        Ok(None) | Err(_) => fallback.push(item_id),
+                    }
+                }
+                Ok(None) | Err(_) => fallback.push(item_id),
+            }
+        }
+        (prepared, fallback)
+    }
+    /// Pure pre-acquisition checks of one update item (everything
+    /// `update_candidate` decides before reading the base). `Ok(None)`
+    /// defers the item to the per-item path.
+    fn plan_candidate(
+        &self,
+        binding: &crate::task_control::ItemBinding,
+        has_receipt: bool,
+    ) -> Result<Option<PlannedItem>, Error> {
         let default_contract =
             binding.head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
         let republish_contract =
@@ -359,9 +497,6 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 "unsupported range execution contract".into(),
             ));
         }
-        let receipt_span = crate::stage_trace::span("daily.prepare.item_receipt");
-        let has_receipt = self.repository.item_receipt(task_id, item_id)?.is_some();
-        drop(receipt_span);
         if has_receipt
             || binding.head.visible_status(&self.run_id) == Status::NeedsVerification
             || binding.item.stage != Stage::Pending
@@ -400,23 +535,33 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             };
             (base_id, range)
         };
-        let facts_span = crate::stage_trace::span("daily.prepare.base_facts");
-        let facts = self.repository.update_base_facts(&base_id)?;
-        drop(facts_span);
-        let Some(facts) = facts else {
-            return Ok(None);
-        };
-        let bars_span = crate::stage_trace::span("daily.prepare.base_bars");
-        let base_window = self
-            .repository
-            .base_bars_in_range(&base_id, range.start, range.end)?;
-        drop(bars_span);
-        let Some(base_window) = base_window else {
-            return Ok(None);
-        };
+        Ok(Some(PlannedItem {
+            base_id,
+            range,
+            default_contract,
+        }))
+    }
+    /// Acquisition and typed-item assembly once the base facts and window
+    /// are known (the part of `update_candidate` after the base reads).
+    #[allow(clippy::too_many_arguments)]
+    fn finish_candidate(
+        &self,
+        task_id: &str,
+        item_id: &str,
+        binding: &crate::task_control::ItemBinding,
+        planned: PlannedItem,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[crate::market_data::Bar],
+        provider: &dyn RangeProvider,
+    ) -> Result<Option<(crate::market_update::UpdateBatchItem, Option<Value>)>, Error> {
+        let PlannedItem {
+            base_id,
+            range,
+            default_contract,
+        } = planned;
         let acquire_span = crate::stage_trace::span("daily.prepare.acquire_typed");
         let acquired = provider
-            .acquire_typed(&facts, &base_window, &range)
+            .acquire_typed(facts, base_window, &range)
             .map_err(|e| Error::Invalid(e.to_string()))?;
         drop(acquire_span);
         let Some(acquired) = acquired else {

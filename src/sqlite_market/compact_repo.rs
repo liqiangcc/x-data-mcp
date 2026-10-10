@@ -758,50 +758,7 @@ impl SqliteCompactMarket {
         &self,
         base_version_id: &str,
     ) -> Result<crate::market_update::UpdateBaseFacts, Error> {
-        self.read(|c| {
-            let key = version_key(c, base_version_id)?;
-            let facts = compact_versions::result_facts(c, key)?;
-            if facts.state != CompactVersionState::Published {
-                return Err(integrity("ops base version is not published"));
-            }
-            if facts.period != Period::Day {
-                return Err(integrity("ops base is not a daily version"));
-            }
-            let binding = compact_versions::read_source_binding(c, &facts.source_binding_digest)?;
-            let (kind, evidence_json) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
-            if kind != EvidenceKind::Version {
-                return Err(integrity("base version evidence kind mismatch"));
-            }
-            let evidence: compact_market::VersionEvidence = serde_json::from_str(&evidence_json)
-                .map_err(|e| integrity(format!("version evidence malformed: {e}")))?;
-            let integrity_digest = facts
-                .integrity_digest
-                .ok_or_else(|| integrity("published base lacks integrity digest"))?;
-            let coverage_status = match facts.coverage_status {
-                1 => CoverageStatus::Complete,
-                2 => CoverageStatus::Incomplete,
-                _ => CoverageStatus::Unknown,
-            };
-            Ok(crate::market_update::UpdateBaseFacts {
-                version_id: facts.version_id,
-                symbol: facts.entity,
-                record_count: u32::try_from(facts.record_count)
-                    .map_err(|_| integrity("base record_count out of range"))?,
-                first_day: compact_market::epoch_date(facts.first_day).map_err(integrity)?,
-                last_day: compact_market::epoch_date(facts.last_day).map_err(integrity)?,
-                integrity_sha256: hex_bytes(&integrity_digest),
-                coverage: crate::market_data::CoverageEvidence {
-                    status: coverage_status,
-                    reason: evidence.coverage_reason,
-                },
-                unit_currency: evidence.unit_currency,
-                source: evidence.source,
-                generation_id: binding.generation_id,
-                generation_manifest_sha256: hex_bytes(&binding.generation_manifest_sha256),
-                day_member_sha256: hex_bytes(&binding.day_member_sha256),
-                security_event_sha256: hex_bytes(&binding.security_event_sha256),
-            })
-        })
+        self.read(|c| update_base_facts_on(c, base_version_id))
     }
 
     /// Windowed base bars for the ops-diff path (#259 S5G).
@@ -811,19 +768,106 @@ impl SqliteCompactMarket {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<Bar>, Error> {
-        self.read(|c| {
-            let key = version_key(c, base_version_id)?;
-            let bars = compact_versions::leaf_bars_in_range(
-                c,
-                key,
-                compact_market::epoch_day(start),
-                compact_market::epoch_day(end),
-            )?;
-            bars.iter()
-                .map(|bar| bar.to_bar(Period::Day).map_err(integrity))
-                .collect()
-        })
+        self.read(|c| base_bars_in_range_on(c, base_version_id, start, end))
     }
+}
+
+fn base_bars_in_range_on(
+    c: &Connection,
+    base_version_id: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Vec<Bar>, Error> {
+    let key = version_key(c, base_version_id)?;
+    let bars = compact_versions::leaf_bars_in_range(
+        c,
+        key,
+        compact_market::epoch_day(start),
+        compact_market::epoch_day(end),
+    )?;
+    bars.iter()
+        .map(|bar| bar.to_bar(Period::Day).map_err(integrity))
+        .collect()
+}
+
+fn item_receipt_on(c: &Connection, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
+    let id: Option<String> = c
+        .query_row(
+            "SELECT result_id FROM market_update_results WHERE task_id=?1 AND item_id=?2",
+            params![task, item],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    let Some(id) = id else { return Ok(None) };
+    let stored = compact_results::read_market_update(c, &id)?;
+    Ok(Some(Receipt {
+        publication_id: stored.identity.result_id.clone(),
+        version_id: stored.identity.result_version_id.clone(),
+        task_id: stored.identity.task_id.clone(),
+        task_revision: stored.identity.task_revision,
+    }))
+}
+
+/// A base published before snapshot bindings existed cannot drive the
+/// continuity probe (the caller falls back to the envelope path).
+fn source_bound_on(c: &Connection, base_version_id: &str) -> Result<bool, Error> {
+    let key = version_key(c, base_version_id)?;
+    let facts = compact_versions::result_facts(c, key)?;
+    c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_bindings WHERE source_binding_digest=?1)",
+        params![facts.source_binding_digest.as_slice()],
+        |r| r.get::<_, bool>(0),
+    )
+    .map_err(storage)
+}
+
+fn update_base_facts_on(
+    c: &Connection,
+    base_version_id: &str,
+) -> Result<crate::market_update::UpdateBaseFacts, Error> {
+    let key = version_key(c, base_version_id)?;
+    let facts = compact_versions::result_facts(c, key)?;
+    if facts.state != CompactVersionState::Published {
+        return Err(integrity("ops base version is not published"));
+    }
+    if facts.period != Period::Day {
+        return Err(integrity("ops base is not a daily version"));
+    }
+    let binding = compact_versions::read_source_binding(c, &facts.source_binding_digest)?;
+    let (kind, evidence_json) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
+    if kind != EvidenceKind::Version {
+        return Err(integrity("base version evidence kind mismatch"));
+    }
+    let evidence: compact_market::VersionEvidence = serde_json::from_str(&evidence_json)
+        .map_err(|e| integrity(format!("version evidence malformed: {e}")))?;
+    let integrity_digest = facts
+        .integrity_digest
+        .ok_or_else(|| integrity("published base lacks integrity digest"))?;
+    let coverage_status = match facts.coverage_status {
+        1 => CoverageStatus::Complete,
+        2 => CoverageStatus::Incomplete,
+        _ => CoverageStatus::Unknown,
+    };
+    Ok(crate::market_update::UpdateBaseFacts {
+        version_id: facts.version_id,
+        symbol: facts.entity,
+        record_count: u32::try_from(facts.record_count)
+            .map_err(|_| integrity("base record_count out of range"))?,
+        first_day: compact_market::epoch_date(facts.first_day).map_err(integrity)?,
+        last_day: compact_market::epoch_date(facts.last_day).map_err(integrity)?,
+        integrity_sha256: hex_bytes(&integrity_digest),
+        coverage: crate::market_data::CoverageEvidence {
+            status: coverage_status,
+            reason: evidence.coverage_reason,
+        },
+        unit_currency: evidence.unit_currency,
+        source: evidence.source,
+        generation_id: binding.generation_id,
+        generation_manifest_sha256: hex_bytes(&binding.generation_manifest_sha256),
+        day_member_sha256: hex_bytes(&binding.day_member_sha256),
+        security_event_sha256: hex_bytes(&binding.security_event_sha256),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -2004,6 +2048,53 @@ impl MarketRepository for SqliteCompactMarket {
 }
 
 impl RangeRepository for SqliteCompactMarket {
+    /// XP-025 H4: bindings + receipts for a whole task in ONE read
+    /// transaction (per-item failures stay per item).
+    fn range_item_states(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+    ) -> Result<Vec<Result<crate::market_update::publication::RangeItemState, Error>>, Error> {
+        self.read(|c| {
+            Ok(item_ids
+                .iter()
+                .map(|item_id| {
+                    let binding = crate::sqlite_tasks::read_item_binding(c, task_id, item_id)
+                        .map_err(Error::Task)?;
+                    let has_receipt = item_receipt_on(c, task_id, item_id)?.is_some();
+                    Ok(crate::market_update::publication::RangeItemState {
+                        binding,
+                        has_receipt,
+                    })
+                })
+                .collect())
+        })
+    }
+    /// XP-025 H4: base facts + windowed bars for many items in ONE read
+    /// transaction; `Ok(None)` per item keeps the unbound-base fallback.
+    fn range_base_reads(
+        &self,
+        wants: &[crate::market_update::publication::BaseWant],
+    ) -> Result<Vec<Result<Option<crate::market_update::publication::BaseRead>, Error>>, Error>
+    {
+        self.read(|c| {
+            Ok(wants
+                .iter()
+                .map(|want| {
+                    if !source_bound_on(c, &want.base_version_id)? {
+                        return Ok(None);
+                    }
+                    let facts = update_base_facts_on(c, &want.base_version_id)?;
+                    let bars =
+                        base_bars_in_range_on(c, &want.base_version_id, want.start, want.end)?;
+                    Ok(Some(crate::market_update::publication::BaseRead {
+                        facts,
+                        bars,
+                    }))
+                })
+                .collect())
+        })
+    }
     fn commit_range(&self, plan: &RangePlan) -> Result<Receipt, Error> {
         self.write(|c| commit_range_tx(c, plan))
     }
@@ -2093,16 +2184,7 @@ impl RangeRepository for SqliteCompactMarket {
         // A base published before snapshot bindings existed cannot drive
         // the continuity probe — the caller falls back to the envelope
         // path, whose `Unverified` continuity still covers it.
-        let bound = self.read(|c| {
-            let key = version_key(c, base_version_id)?;
-            let facts = compact_versions::result_facts(c, key)?;
-            c.query_row(
-                "SELECT EXISTS(SELECT 1 FROM source_bindings WHERE source_binding_digest=?1)",
-                params![facts.source_binding_digest.as_slice()],
-                |r| r.get::<_, bool>(0),
-            )
-            .map_err(storage)
-        })?;
+        let bound = self.read(|c| source_bound_on(c, base_version_id))?;
         if !bound {
             return Ok(None);
         }
@@ -2328,24 +2410,7 @@ impl RangeRepository for SqliteCompactMarket {
         })
     }
     fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
-        self.read(|c| {
-            let id: Option<String> = c
-                .query_row(
-                    "SELECT result_id FROM market_update_results WHERE task_id=?1 AND item_id=?2",
-                    params![task, item],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(storage)?;
-            let Some(id) = id else { return Ok(None) };
-            let stored = compact_results::read_market_update(c, &id)?;
-            Ok(Some(Receipt {
-                publication_id: stored.identity.result_id.clone(),
-                version_id: stored.identity.result_version_id.clone(),
-                task_id: stored.identity.task_id.clone(),
-                task_revision: stored.identity.task_revision,
-            }))
-        })
+        self.read(|c| item_receipt_on(c, task, item))
     }
     fn transition_task(
         &self,

@@ -254,6 +254,38 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
             }
         }
     }
+    fn range_item_states(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+    ) -> Result<Vec<Result<crate::market_update::publication::RangeItemState, Error>>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::range_item_states(
+                    m, task_id, item_ids,
+                )
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::range_item_states(
+                    m, task_id, item_ids,
+                )
+            }
+        }
+    }
+    fn range_base_reads(
+        &self,
+        wants: &[crate::market_update::publication::BaseWant],
+    ) -> Result<Vec<Result<Option<crate::market_update::publication::BaseRead>, Error>>, Error>
+    {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::range_base_reads(m, wants)
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::range_base_reads(m, wants)
+            }
+        }
+    }
     fn update_base_facts(
         &self,
         base_version_id: &str,
