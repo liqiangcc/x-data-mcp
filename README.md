@@ -33,6 +33,10 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 
 ## 当前状态
 
+> 部署与运行事实以 [docs/STATUS.md](docs/STATUS.md) 为准，性能与容量目标以 [docs/SLO.md](docs/SLO.md) 为准。
+> 2026-10-09 已迁移至 aws-node 并运行 preview.30；2026-10-10 起同代、跨代日线与年线统一为 write-loop <600s hard。
+> 本节下文中关于主机、版本、generation 和 15min 门禁的表述均已被取代，仅作历史记录。
+
 **OWNER-ONLY OPERATIONAL PREVIEW — external distribution not authorized.**
 
 本机 `/opt/x-data-mcp-preview/` 以 systemd 运行已部署的

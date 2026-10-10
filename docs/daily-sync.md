@@ -2,6 +2,9 @@
 
 ## 当前状态
 
+> 部署与运行事实以 [STATUS](STATUS.md) 为准，性能与容量目标以 [SLO](SLO.md) 为准。
+> 本节下文中关于主机、版本、generation 和 15min 门禁的表述已被取代，仅作历史记录。
+
 **OPERATIONAL OWNER-ONLY PREVIEW / CLASS-SPECIFIC SLOS**
 
 当前运行时包含两个 MCP server（v0.2.0-preview.29，代码 `4493d45`，本机
