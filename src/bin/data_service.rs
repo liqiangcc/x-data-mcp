@@ -75,6 +75,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let backend =
         x_data_mcp::sqlite_market::backend::MarketBackend::open_shared(&tasks, lease.clone())?;
     backend.tasks().candidates(&run_id)?;
+    // The accept path only checks in-flight tasks; terminal history is
+    // verified here, once per start. Any finding refuses to start.
+    let findings = tasks.registry_sweep()?;
+    if !findings.is_empty() {
+        for finding in &findings {
+            eprintln!(
+                "registry check failed: {}: {}",
+                finding.check, finding.reason
+            );
+        }
+        return Err("task registry history is inconsistent; refusing to start".into());
+    }
     let endpoint = Endpoint::bind(std::path::Path::new(&args[1]), &lease)?;
     let gate = Arc::new(WorkerGate::default());
     let stopping = Arc::new(AtomicBool::new(false));

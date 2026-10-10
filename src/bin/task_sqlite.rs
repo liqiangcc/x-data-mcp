@@ -11,9 +11,21 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 2 {
-        return Err("usage: task_sqlite <init|init20|upgrade> <database-path>".into());
+        return Err("usage: task_sqlite <init|init20|upgrade|check> <database-path>".into());
     }
     let store = x_data_mcp::sqlite_tasks::SqliteTasks::new(&args[1]);
+    if args[0].to_str() == Some("check") {
+        // Read-only full registry sweep: safe while the service is running.
+        let findings = store.registry_sweep_readonly()?;
+        if findings.is_empty() {
+            println!("task registry check passed");
+            return Ok(());
+        }
+        for finding in &findings {
+            eprintln!("{}: {}", finding.check, finding.reason);
+        }
+        return Err(format!("task registry check failed: {} finding(s)", findings.len()).into());
+    }
     let schema = match args[0].to_str() {
         Some("init") => {
             store.initialize()?;
@@ -27,7 +39,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.upgrade()?;
             x_data_mcp::sqlite_tasks::SCHEMA_VERSION
         }
-        _ => return Err("expected init, init20 or upgrade".into()),
+        _ => return Err("expected init, init20, upgrade or check".into()),
     };
     println!("task schema {schema} ready");
     Ok(())

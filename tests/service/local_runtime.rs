@@ -471,3 +471,48 @@ fn real_proxy_exits_on_service_eof_even_when_client_stdin_stays_open() {
     }
     assert!(proxy.stdin.is_some());
 }
+
+/// XP-025 A: terminal-history corruption no longer blocks accept; it is
+/// caught by the startup sweep (service refuses to start) and by the
+/// read-only `task_sqlite check`.
+#[test]
+fn startup_sweep_and_task_sqlite_check_reject_corrupt_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(dir.path());
+    let check = |db: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_task_sqlite"))
+            .arg("check")
+            .arg(db)
+            .output()
+            .unwrap()
+    };
+    assert!(check(&db).status.success(), "clean database passes check");
+    // A terminal task with no request: an "unbound execution record".
+    let c = rusqlite::Connection::open(&db).unwrap();
+    c.execute(
+        "INSERT INTO tasks VALUES('hist-0','{}','succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','{}','{}',NULL,0,0,0,0,0)",
+        [],
+    )
+    .unwrap();
+    drop(c);
+    let checked = check(&db);
+    assert!(!checked.status.success());
+    assert!(
+        String::from_utf8_lossy(&checked.stderr).contains("unbound execution record"),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let socket = dir.path().join("mcp.sock");
+    let started = Command::new(env!("CARGO_BIN_EXE_data_service"))
+        .arg(&db)
+        .arg(&socket)
+        .output()
+        .unwrap();
+    assert!(!started.status.success());
+    assert!(
+        String::from_utf8_lossy(&started.stderr).contains("registry check failed"),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    assert!(!socket.exists());
+}
