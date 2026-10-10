@@ -1902,7 +1902,10 @@ mod xp025_tests {
 
     fn plan(c: &Connection, sql: &str) -> Vec<String> {
         let mut q = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-        q.query_map([], |r| r.get::<_, String>(3))
+        // The statements under test take bound parameters; plans do not
+        // depend on their values, so bind NULLs.
+        let nulls = vec![rusqlite::types::Null; q.parameter_count()];
+        q.query_map(rusqlite::params_from_iter(nulls), |r| r.get::<_, String>(3))
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap()
