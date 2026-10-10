@@ -270,6 +270,17 @@ impl<R: ReadRepository> Queries<R> {
         Ok(result)
     }
 }
+impl<R: ReadRepository + crate::data_supply::presence::PresenceRepository> Queries<R> {
+    /// `get_yearly_base_years` (generic-data-v4): exact in-window year sets
+    /// for pinned published daily versions under one bounded snapshot.
+    pub fn year_presence(
+        &self,
+        args: YearPresenceQuery,
+        access: &Access,
+    ) -> Result<YearPresenceReply, Error> {
+        crate::data_supply::presence::year_presence(&self.repository, self.id(), args, access)
+    }
+}
 /// Deduplicates verification work without changing query selection semantics.
 pub fn unique_refs(refs: &[VersionRef]) -> Vec<VersionRef> {
     let mut seen = BTreeSet::new();

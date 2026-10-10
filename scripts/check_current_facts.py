@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parent.parent
 EXPECTED_PACKAGE_VERSION = "0.2.0-preview.30"
 EXPECTED_LEGACY_SCHEMA = 18
 EXPECTED_COMPACT_SCHEMA = 20
-EXPECTED_DATA_TOOLS = 20
+EXPECTED_DATA_TOOLS = 21
 EXPECTED_ACQUIRE_TOOLS = 10
-EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v3"
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v4"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",
@@ -23,7 +23,7 @@ CURRENT_DOCS = {
 
 REQUIRED_FACTS = [
     ("schema 20", re.compile(r"schema[\s:=v]*20(?!\d)", re.IGNORECASE)),
-    ("20 data tools", re.compile(r"\b20\s+data\s+tools?\b", re.IGNORECASE)),
+    ("21 data tools", re.compile(r"\b21\s+data\s+tools?\b", re.IGNORECASE)),
     ("10 acquisition tools", re.compile(r"\b10\s+acquisition\s+tools?\b", re.IGNORECASE)),
 ]
 

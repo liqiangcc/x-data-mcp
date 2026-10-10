@@ -31,6 +31,7 @@ impl Access {
     }
 }
 
+pub mod presence;
 pub mod query;
 
 pub mod observe;

@@ -15,6 +15,9 @@ versions；最新集中行情日为 2026-09-29（5,211 entities）；4 个官方
 `hsjday` 成员缺失保持 absent。generic-data-v3
 live discovery PASS，daily/yearly 样本 QFQ readback PASS；工具数不是稳定业务契约；客户端必须以
 运行实例的 `tools/list` 与 capability descriptor 为准。
+当前开发分支（XP-014，未部署）注册 21 data tools（新增 `get_yearly_base_years`）
+并宣告 `generic-data-v4`；preview.29 部署实例仍为 20 data tools /
+`generic-data-v3`，旧 strict Skill 会话遇 revision 不匹配即停止而非静默适配。
 运行时 `tools/list` 与 `get_data_capabilities` 是机器契约入口；本文不复制完整 schema。
 
 下方八工具章节是提交 `b3fe2b3bae22d558c3f193e668773728a2e0df34` 的历史快照，

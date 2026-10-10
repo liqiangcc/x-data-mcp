@@ -11,6 +11,7 @@ allowed-tools:
   - mcp__x-data-mcp__get_task_progress
   - mcp__x-data-mcp__list_tasks
   - mcp__x-data-mcp__get_data_availability
+  - mcp__x-data-mcp__get_yearly_base_years
   - mcp__x-data-mcp__query_data
   - mcp__x-data-mcp__list_data_versions
 ---
@@ -21,7 +22,7 @@ allowed-tools:
 
 1. `get_acquisition_capabilities` 使用 `contract_version:"v1"`；
    `get_data_capabilities` 按当前 schema 使用空对象 `{}`。期望
-   `x-data-acquire-v1` / `official-generation-v1` / `generic-data-v3`；不匹配 →
+   `x-data-acquire-v1` / `official-generation-v1` / `generic-data-v4`；不匹配 →
    停止并报告 `SKILL_CONTRACT_MISMATCH`。
 2. `sync_status`：报告 active generation、各 generation 生命周期状态、inflight acquisition。
 3. `get_data_availability`：报告 market.daily（可选 market.yearly）coverage/freshness/gap 事实。

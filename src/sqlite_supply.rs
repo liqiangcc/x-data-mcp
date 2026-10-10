@@ -8,6 +8,7 @@ use crate::{
         slim_published,
     },
 };
+use chrono::Datelike;
 use rusqlite::{Connection, params};
 #[derive(Clone)]
 pub struct SqliteSupply {
@@ -95,6 +96,125 @@ fn read_market(
     }
     Ok(r)
 }
+/// `get_yearly_base_years` per-item resolution (XP-014): the pinned daily
+/// version is fully verified inside this read transaction and the in-window
+/// year set is derived from the verified records — never inferred from
+/// first/last/count and never satisfied by stored digests. Missing or
+/// unpublished bases report `base_unavailable`; identity/period/content/
+/// lineage failures report `integrity_failure`; storage failures abort the
+/// whole request. Non-compact schemas delegate to `read_record` verbatim.
+fn presence_item(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    compact: bool,
+    item: &YearPresenceItem,
+) -> Result<crate::data_supply::presence::PresenceOutcome, Error> {
+    use crate::data_supply::presence::PresenceOutcome as Outcome;
+    let first = chrono::NaiveDate::from_ymd_opt(item.start_year, 1, 1)
+        .ok_or_else(|| invalid("invalid start_year"))?;
+    let last = chrono::NaiveDate::from_ymd_opt(item.end_year, 12, 31)
+        .ok_or_else(|| invalid("invalid end_year"))?;
+    let resolved = |integrity_sha256: String, version: &crate::publish::EffectiveVersion| {
+        let years = version
+            .records
+            .iter()
+            .filter(|b| b.date >= first && b.date <= last)
+            .map(|b| b.date.year())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        Outcome::Resolved {
+            version_ref: VersionRef {
+                dataset: Dataset::Daily,
+                contract_version: ContractVersion::V1,
+                entity: Some(item.entity.clone()),
+                version_id: item.base_daily_version_id.clone(),
+                integrity_sha256,
+            },
+            years,
+        }
+    };
+    if compact {
+        let key =
+            match crate::sqlite_market::compact_repo::version_key(c, &item.base_daily_version_id) {
+                Ok(key) => key,
+                Err(Error::NotFound) => {
+                    return Ok(Outcome::Unavailable(YearPresenceReason::BaseUnavailable));
+                }
+                Err(error) => return Err(error),
+            };
+        let facts = match ctx.facts(c, key) {
+            Ok(facts) => facts,
+            Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
+                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
+            }
+            Err(error) => return Err(error),
+        };
+        if facts.state != crate::sqlite_market::compact_versions::CompactVersionState::Published {
+            return Ok(Outcome::Unavailable(YearPresenceReason::BaseUnavailable));
+        }
+        let (_, verified) = match ctx.verified(c, key) {
+            Ok(verified) => verified,
+            Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
+                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
+            }
+            Err(error) => return Err(error),
+        };
+        if verified.version.symbol != item.entity.symbol()
+            || verified.version.period != crate::market_data::Period::Day
+        {
+            return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
+        }
+        Ok(resolved(
+            crate::compact_market::digest_hex(&verified.integrity_digest),
+            &verified.version,
+        ))
+    } else {
+        let record = match read_record(c, &item.base_daily_version_id, true, false) {
+            Ok(record) => record,
+            Err(Error::NotFound) => {
+                return Ok(Outcome::Unavailable(YearPresenceReason::BaseUnavailable));
+            }
+            Err(Error::Integrity(_) | Error::Base(_)) => {
+                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
+            }
+            Err(error) => return Err(error),
+        };
+        if record.version().symbol != item.entity.symbol() {
+            return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
+        }
+        Ok(resolved(
+            record.raw()["integrity_sha256"]
+                .as_str()
+                .ok_or_else(|| Error::Integrity("published record lacks integrity digest".into()))?
+                .to_owned(),
+            record.version(),
+        ))
+    }
+}
+
+impl crate::data_supply::presence::PresenceRepository for SqliteSupply {
+    /// The whole batch resolves inside ONE `market.read` transaction — a
+    /// concurrent commit mid-batch cannot split the snapshot — and shares
+    /// this transaction's verified-facts/segment context (XP-011) so
+    /// sibling versions reusing immutable ancestors verify once. Items are
+    /// processed one at a time; no batch-sized full-history cache.
+    fn year_presence(
+        &self,
+        plan: &crate::data_supply::presence::PresencePlan,
+        _access: &Access,
+    ) -> Result<Vec<crate::data_supply::presence::PresenceOutcome>, Error> {
+        self.market.read(|c| {
+            let compact = crate::sqlite_market::is_compact_schema(c)?;
+            let mut ctx = VerifyCtx::default();
+            plan.items
+                .iter()
+                .map(|item| presence_item(c, &mut ctx, compact, item))
+                .collect()
+        })
+    }
+}
+
 impl ReadRepository for SqliteSupply {
     fn query(&self, plan: &QueryPlan, access: &Access) -> Result<QuerySnapshot, Error> {
         self.market.read(|c| {

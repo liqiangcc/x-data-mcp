@@ -11,3 +11,4 @@ mod query;
 mod support_market;
 #[path = "../support/metrics.rs"]
 mod support_metrics;
+mod yearly_presence;

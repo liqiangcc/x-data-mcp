@@ -12,7 +12,10 @@ fresh rebuild 后，2026-09-30 operator-path 已激活 generation
 5,223 个 `market.daily` published versions 和 5,223 个 `market.yearly`
 derived versions；最新集中行情日为 2026-09-29（5,211 entities）；4 个官方
 `hsjday` 成员缺失保持 absent。
-generic-data-v3 live discovery PASS，daily/yearly 样本 QFQ readback PASS；通用查询、任务、
+generic-data-v3 live discovery PASS，daily/yearly 样本 QFQ readback PASS；
+当前开发分支（XP-014，未部署）注册 21 data tools（新增 `get_yearly_base_years`）
+并宣告 `generic-data-v4`；preview.29 部署实例仍为 20 data tools /
+`generic-data-v3`。通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场
 collection/update 已通过分批 MCP 编排取得真实 generation 证据
 （preview.26–28 连续验收）；

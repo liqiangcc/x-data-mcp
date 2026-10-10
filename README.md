@@ -41,6 +41,9 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 20 data tools）与 `x-data-mcp-acquire`（`run/acquire.sock`，10 acquisition tools）。
 显式 `task_sqlite init` 的新库使用 fresh compact schema 20；工具数量不是稳定契约，
 客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
+当前开发分支（XP-014，未部署）注册 21 data tools（新增只读
+`get_yearly_base_years`）并宣告 `generic-data-v4`；preview.29 部署实例仍为
+20 data tools / `generic-data-v3`。
 
 已实现并在真实 generation 上执行过：immutable generation 生命周期
 （acquire → byte verify → consistency verify → 条件 activate）、

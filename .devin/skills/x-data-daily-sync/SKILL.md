@@ -20,6 +20,7 @@ allowed-tools:
   - mcp__x-data-mcp__get_task_progress
   - mcp__x-data-mcp__list_tasks
   - mcp__x-data-mcp__get_data_availability
+  - mcp__x-data-mcp__get_yearly_base_years
   - mcp__x-data-mcp__query_data
   - mcp__x-data-mcp__list_data_versions
   - mcp__x-data-mcp__verify_publication_result
@@ -64,7 +65,7 @@ allowed-tools:
   - `implementation.generation_contract_version` 必须等于 `official-generation-v1`
 - `mcp__x-data-mcp__get_data_capabilities`（按当前 schema 传 `{}`，不得附加
   `contract_version`）：
-  - `capability_revision` 必须等于 `generic-data-v3`
+  - `capability_revision` 必须等于 `generic-data-v4`
 
 任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。记录 `schema_digest`、`active_generation_ref`、`runtime_readiness`、`blocking_reasons` 作为事实。
 
@@ -179,7 +180,7 @@ active generation 开始首采。
 - `query_data` 抽样若干实体最新交易日数据（`selection:{"kind":"single"|"batch"}`，`filter:{"kind":"daily",...}`，`version:{"kind":"latest_per_entity"}`）。
 - 汇报：active generation、published/no_change 计数、最新数据日期、全部 request/task refs。
 
-可选：派生 `market.yearly` — yearly 只接受显式 items（无 default selection，collection 亦被 worker 设计性拒绝）：先用同一批 catalog 实体对 market.daily / market.yearly 分别按 ≤100 batch 调 `get_data_availability` 或 `list_data_versions`，取得当前 daily head `version_id` 与当前 yearly head；再按 ≤100 分 chunk 调 `update_data` `dataset:"market.yearly"`，每项 `{entity, base_daily_version_id:<daily head>, years:[<当前年>], publication:{"mode":"current_head","expected_yearly_head":<当前 yearly head version_id 或 null>}}`；串行轮询与 fail-closed 判定同上。`selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
+可选：派生 `market.yearly` — yearly 只接受显式 items（无 default selection，collection 亦被 worker 设计性拒绝）：先用同一批 catalog 实体对 market.daily / market.yearly 分别按 ≤100 batch 调 `get_data_availability` 或 `list_data_versions`，取得当前 daily head `version_id` 与当前 yearly head；每 ≤100 实体 chunk 再调一次 `get_yearly_base_years`（`{"contract_version":"v1","items":[{entity, base_daily_version_id:<daily head>, "end_year":<当前年>}]}`）取 `present_years`——`resolved` 实体的 `years = present_years ∩ 目标窗口`（只交当前年时即 `[<当前年>] ∩ present_years`），交集为空 → 该实体不提交 item、记 empty；`unavailable` 逐项入报告且本次结果不得算无条件 PASS；响应含未来年 → 记异常上报，不静默丢弃。随后按 ≤100 分 chunk 调 `update_data` `dataset:"market.yearly"`，每项 `{entity, base_daily_version_id:<daily head>, years:[<解析后年份>], publication:{"mode":"current_head","expected_yearly_head":<当前 yearly head version_id 或 null>}}`；串行轮询与 fail-closed 判定同上。`selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
 
 ## 5. 超时与结果不明的恢复（绝不盲发新 ID）
 

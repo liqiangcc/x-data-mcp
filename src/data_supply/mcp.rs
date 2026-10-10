@@ -340,7 +340,7 @@ impl DataApi {
             production_blocking_reasons.push(self.source_block());
         }
         encode(Capabilities {
-            capability_revision: "generic-data-v3".into(),
+            capability_revision: "generic-data-v4".into(),
             items,
             max_batch_entities: 100,
             max_page_size: 1000,
@@ -801,6 +801,11 @@ impl DataApi {
                     .progress(decode::<ProgressQuery>(input)?, &self.access)
                     .map_err(mapped)?,
             ),
+            Handler::YearPresence => encode(
+                self.queries
+                    .year_presence(decode::<YearPresenceQuery>(input)?, &self.access)
+                    .map_err(mapped)?,
+            ),
             Handler::Capabilities => self.capabilities(decode(input)?),
         }
     }
@@ -839,6 +844,7 @@ impl ToolHandler for DataApi {
                 "query_data"
                     | "list_data_versions"
                     | "get_data_availability"
+                    | "get_yearly_base_years"
                     | "list_tasks"
                     | "get_task_progress"
                     | "get_data_capabilities"

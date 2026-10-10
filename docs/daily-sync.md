@@ -10,6 +10,10 @@
 - `x-data-acquire`：远端文件探测、下载和本地安装，10 acquisition tools。
 - `x-data-mcp`：任务、版本、发布、查询、核实和计算，20 data tools。
 
+当前开发分支（XP-014，未部署）为 data server 注册 21 data tools（新增
+`get_yearly_base_years`）并宣告 `generic-data-v4`；preview.29 部署实例仍报告
+20 data tools / `generic-data-v3`，strict Skill 会话遇 revision 不匹配即停止。
+
 显式 init 的新库使用 fresh compact schema 20；`SCHEMA_VERSION=18` 仅为 legacy
 upgrade source schema（既有库升级来源），不是当前部署 schema。
 

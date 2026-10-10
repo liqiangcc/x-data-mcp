@@ -6546,4 +6546,251 @@ mod xp011 {
             }
         }
     }
+
+    /// get_yearly_base_years compact path (XP-014): per-item resolution
+    /// runs the full verified chain inside ONE read transaction and
+    /// derives years from verified records.
+    mod xp014 {
+        use super::*;
+        use crate::data_supply::presence::{PresenceOutcome, PresencePlan, PresenceRepository};
+        use crate::data_supply::wire::{
+            ContractVersion, Exchange, Security, YearPresenceItem, YearPresenceQuery,
+            YearPresenceReason,
+        };
+        use crate::sqlite_market::backend::MarketBackend;
+        use crate::sqlite_supply::SqliteSupply;
+
+        fn day(y: i32, m: u32, d: u32) -> i64 {
+            crate::compact_market::epoch_day(chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap())
+        }
+        fn supply(repo: &SqliteCompactMarket) -> SqliteSupply {
+            SqliteSupply {
+                market: MarketBackend::Compact(repo.clone()),
+            }
+        }
+        fn mk_plan(items: Vec<(&str, &str, &str, i32, i32)>) -> PresencePlan {
+            PresencePlan::new(
+                YearPresenceQuery {
+                    contract_version: ContractVersion::V1,
+                    items: items
+                        .into_iter()
+                        .map(|(exchange, code, version_id, start_year, end_year)| {
+                            YearPresenceItem {
+                                entity: Security {
+                                    exchange: match exchange {
+                                        "sh" => Exchange::Sh,
+                                        _ => Exchange::Sz,
+                                    },
+                                    code: code.into(),
+                                },
+                                base_daily_version_id: version_id.into(),
+                                start_year,
+                                end_year,
+                            }
+                        })
+                        .collect(),
+                },
+                &Access::local(),
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn compact_sparse_bounds_and_unavailable_classification() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            publish_head(
+                &repo,
+                "req-a",
+                "pub-a",
+                "sh.600006",
+                "v-sparse",
+                vec![bar(day(2024, 1, 5), 100), bar(day(2026, 3, 4), 110)],
+            );
+            let mut version = mk_version("v-staged", vec![bar(day(2025, 1, 2), 100)]);
+            version.symbol = "sh.600008".into();
+            repo.stage(&envelope(&version, source("gen-1"), None))
+                .unwrap();
+            let supply = supply(&repo);
+            let access = Access::local();
+            let p = mk_plan(vec![
+                ("sh", "600006", "v-sparse", 1, 9999),
+                ("sh", "600007", "v-missing", 1, 9999),
+                ("sh", "600008", "v-staged", 1, 9999),
+            ]);
+            let out = supply.year_presence(&p, &access).unwrap();
+            let PresenceOutcome::Resolved { version_ref, years } = &out[0] else {
+                panic!("sparse base must resolve")
+            };
+            assert_eq!(years, &[2024, 2026]);
+            assert_eq!(version_ref.version_id, "v-sparse");
+            assert_eq!(version_ref.integrity_sha256.len(), 64);
+            assert!(
+                matches!(
+                    out[1],
+                    PresenceOutcome::Unavailable(YearPresenceReason::BaseUnavailable)
+                ),
+                "missing base"
+            );
+            assert!(
+                matches!(
+                    out[2],
+                    PresenceOutcome::Unavailable(YearPresenceReason::BaseUnavailable)
+                ),
+                "unpublished base"
+            );
+            // Bounded window and legal in-window empty.
+            let p = mk_plan(vec![("sh", "600006", "v-sparse", 2025, 9999)]);
+            let out = supply.year_presence(&p, &access).unwrap();
+            let PresenceOutcome::Resolved { years, .. } = &out[0] else {
+                panic!()
+            };
+            assert_eq!(years, &[2026]);
+            let p = mk_plan(vec![("sh", "600006", "v-sparse", 2025, 2025)]);
+            let out = supply.year_presence(&p, &access).unwrap();
+            let PresenceOutcome::Resolved { years, .. } = &out[0] else {
+                panic!()
+            };
+            assert!(years.is_empty(), "in-window empty resolves []");
+            // Entity/version mismatch is integrity_failure, not absent.
+            let p = mk_plan(vec![("sh", "600007", "v-sparse", 1, 9999)]);
+            let out = supply.year_presence(&p, &access).unwrap();
+            assert!(matches!(
+                out[0],
+                PresenceOutcome::Unavailable(YearPresenceReason::IntegrityFailure)
+            ));
+            // Corrupt bars fail closed as integrity_failure.
+            tamper(&path, "UPDATE segment_bars SET close_cents=close_cents+1");
+            let p = mk_plan(vec![("sh", "600006", "v-sparse", 1, 9999)]);
+            let out = supply.year_presence(&p, &access).unwrap();
+            assert!(matches!(
+                out[0],
+                PresenceOutcome::Unavailable(YearPresenceReason::IntegrityFailure)
+            ));
+        }
+
+        /// Corrupt projection rows and broken ancestor clip linkage on the
+        /// verified chain classify integrity_failure — never resolved,
+        /// never absent, never satisfied by stored digests.
+        #[test]
+        fn compact_corrupt_projection_and_ancestor_fail_closed() {
+            let access = Access::local();
+            // Projection-digest drift on the published base.
+            {
+                let dir = tempdir();
+                let (path, repo) = repo(&dir);
+                publish_head(
+                    &repo,
+                    "req-a",
+                    "pub-a",
+                    "sh.600006",
+                    "v-proj",
+                    vec![bar(day(2024, 1, 5), 100)],
+                );
+                tamper(
+                    &path,
+                    "UPDATE data_versions SET projection_digest=\
+                     x'0000000000000000000000000000000000000000000000000000000000000000' \
+                     WHERE version_id='v-proj'",
+                );
+                let out = supply(&repo)
+                    .year_presence(&mk_plan(vec![("sh", "600006", "v-proj", 1, 9999)]), &access)
+                    .unwrap();
+                assert!(matches!(
+                    out[0],
+                    PresenceOutcome::Unavailable(YearPresenceReason::IntegrityFailure)
+                ));
+            }
+
+            // A published delta resolves across its ancestor; deleting the
+            // delta clip linkage must fail the pinned read closed.
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            publish_head(
+                &repo,
+                "req-a",
+                "pub-a",
+                "sh.600006",
+                "v1",
+                vec![bar(day(2024, 1, 5), 100)],
+            );
+            let task_id = {
+                let scope = task_control::legacy::scope_id("sh.600006", "day");
+                let work = FrozenWork {
+                    items: vec![ItemSpec {
+                        item_id: ITEM.into(),
+                        target: json!({"symbol": "sh.600006", "period": "day"}),
+                        progress_unit: "bars".into(),
+                        frozen_inputs: json!({}),
+                        scope_keys: BTreeSet::from([scope.clone()]),
+                    }],
+                    scopes: BTreeSet::from([scope]),
+                    shared_evidence: None,
+                };
+                let command = Command {
+                    key: CommandKey {
+                        operation: "update_data".into(),
+                        dataset: "market.daily".into(),
+                        contract_version: "v1".into(),
+                    },
+                    intent: json!({}),
+                };
+                match repo
+                    .accept("req-2", &command, &work, RUN, None)
+                    .unwrap()
+                    .record
+                    .outcome
+                {
+                    task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+                    _ => panic!("expected task outcome"),
+                }
+            };
+            let revision = start_item(&repo, &task_id);
+            let updated = mk_version(
+                "v2",
+                vec![bar(day(2024, 1, 5), 100), bar(day(2025, 2, 3), 110)],
+            );
+            repo.stage(&envelope(&updated, source("gen-2"), Some("v1")))
+                .unwrap();
+            let checked = repo.candidate("v2").unwrap();
+            repo.mark_validated(&checked).unwrap();
+            repo.commit(&PublishPlan {
+                command: Publication {
+                    publication_id: "upd-1".into(),
+                    version_id: "v2".into(),
+                    task_id: task_id.clone(),
+                    item_id: ITEM.into(),
+                    run_id: RUN.into(),
+                    expected_revision: revision,
+                    intent: PublishIntent::Daily {
+                        expected_head: Some("v1".into()),
+                    },
+                },
+                record: checked.clone(),
+                required_heads: vec![(Scope::of(&checked.version), Some("v1".into()))],
+                promote: None,
+                base_digest: None,
+            })
+            .unwrap();
+            let out = supply(&repo)
+                .year_presence(&mk_plan(vec![("sh", "600006", "v2", 1, 9999)]), &access)
+                .unwrap();
+            let PresenceOutcome::Resolved { years, .. } = &out[0] else {
+                panic!("published delta must resolve through its ancestor")
+            };
+            assert_eq!(years, &[2024, 2025]);
+            tamper(
+                &path,
+                "DELETE FROM version_delta_clips WHERE version_key=\
+                 (SELECT version_key FROM data_versions WHERE version_id='v2')",
+            );
+            let out = supply(&repo)
+                .year_presence(&mk_plan(vec![("sh", "600006", "v2", 1, 9999)]), &access)
+                .unwrap();
+            assert!(matches!(
+                out[0],
+                PresenceOutcome::Unavailable(YearPresenceReason::IntegrityFailure)
+            ));
+        }
+    }
 }

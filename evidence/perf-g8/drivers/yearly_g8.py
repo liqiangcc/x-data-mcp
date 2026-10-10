@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 # Adapted from /tmp/fresh_rebuild_yearly.py for XP-008 private yearly rerun.
 # Raw unix socket; poll 1s; per-call latency log + per-chunk timing capture.
+# XP-014: resolve_years' ~35-37 per-year get_data_availability probes per
+# chunk are replaced by ONE get_yearly_base_years call per <=100-entity
+# chunk (exact present years on the pinned base, single snapshot).
 import json, socket, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 
-SOCK = "/root/x-perf-g8/svc/run/mcp.sock"
+SOCK = sys.argv[3] if len(sys.argv) > 3 else "/root/x-perf-g8/svc/run/mcp.sock"
 RUN_ID = "g8-y"
 POLL_S = 1.0
-SUMMARY = Path("/root/x-perf-g8/yearly-run.json")
-LOG = Path("/root/x-perf-g8/yearly-run.log")
+SUMMARY = Path(sys.argv[1] if len(sys.argv) > 1 else "/root/x-perf-g8/yearly-run.json")
+LOG = Path(sys.argv[1] + ".log" if len(sys.argv) > 1 else "/root/x-perf-g8/yearly-run.log")
+MAX_CHUNKS = int(sys.argv[2]) if len(sys.argv) > 2 else 0  # 0 = all chunks (smoke bound)
 CALLS = []  # every mcp call: {name, ms, t}
 
 def log(msg):
@@ -62,17 +66,43 @@ def years_for(item):
     return list(range(int(item["first_record"][:4]), int(item["last_record"][:4])+1))
 
 def resolve_years(client, daily_items):
-    present={k:set() for k in daily_items}
-    ys=[int(i["first_record"][:4]) for i in daily_items.values()]+[int(i["last_record"][:4]) for i in daily_items.values()]
-    for year in range(min(ys),max(ys)+1):
-        r=client.call("get_data_availability",{"dataset":"market.daily","contract_version":"v1",
-            "selection":{"kind":"batch","entities":[{"exchange":k[0],"code":k[1]} for k in daily_items]},
-            "filter":{"kind":"daily","start_date":f"{year:04d}-01-01","end_date":f"{year:04d}-12-31"},
-            "version":{"kind":"latest_per_entity"},"page_size":100})
-        for it in r.get("items") or []:
-            e=it.get("entity") or {}; k=(e.get("exchange"),e.get("code"))
-            if k in present and (it.get("record_count") or 0)>0: present[k].add(year)
-    return {k:sorted(v) for k,v in present.items()}
+    """One get_yearly_base_years call per <=100-entity chunk (XP-014):
+    present_years of each pinned base daily version, resolved inside a
+    single bounded snapshot. Returns (resolved, empty, unavailable):
+    resolved maps entity-key -> exact in-window year set; empty lists
+    entities whose in-window set is [] (recorded, never submitted);
+    unavailable lists per-item failures that block an unqualified PASS.
+    Future-dated years in the response are reported as anomalies, never
+    silently dropped."""
+    cur_year = datetime.now(timezone.utc).year
+    req = [{"entity": {"exchange": k[0], "code": k[1]},
+            "base_daily_version_id": i["version_ref"]["version_id"],
+            "end_year": cur_year} for k, i in daily_items.items()]
+    r = client.call("get_yearly_base_years", {"contract_version": "v1", "items": req})
+    resolved, empty, unavailable = {}, [], []
+    for it in r.get("items") or []:
+        e = it.get("entity") or {}
+        k = (e.get("exchange"), e.get("code"))
+        if k not in daily_items:
+            unavailable.append({"entity": k, "reason_code": "unrequested_item"})
+            continue
+        if it.get("status") != "resolved":
+            unavailable.append({"entity": k, "reason_code": it.get("reason_code")})
+            continue
+        present = it.get("present_years")
+        if not isinstance(present, list):
+            unavailable.append({"entity": k, "reason_code": "missing_present_years"})
+            continue
+        future = sorted(y for y in present if y > cur_year)
+        if future:
+            unavailable.append({"entity": k, "reason_code": "future_years_in_response", "years": future})
+            continue
+        years = sorted(set(present) & set(years_for(daily_items[k])))
+        if years:
+            resolved[k] = years
+        else:
+            empty.append({"entity": k, "reason_code": "empty_present_years"})
+    return resolved, empty, unavailable
 
 mcp=Mcp(SOCK)
 result={"run_id":RUN_ID,"started_at":datetime.now(timezone.utc).isoformat(),
@@ -102,6 +132,7 @@ try:
     log(f"entities={len(entities)}")
 
     chunks=[entities[i:i+100] for i in range(0,len(entities),100)]
+    if MAX_CHUNKS: chunks=chunks[:MAX_CHUNKS]
     for idx,chunk in enumerate(chunks,1):
         crec={"index":idx}
         t_chunk=time.time()
@@ -126,39 +157,39 @@ try:
             if not it.get("version_ref") or not it.get("first_record") or not it.get("last_record"):
                 continue
             ditems[k]=it
+        # XP-014: exact per-chunk presence resolution BEFORE accept — one
+        # get_yearly_base_years call replaces the per-year probe loop.
+        if not ditems:
+            crec["status"]="skipped"; result["chunks"].append(crec); continue
+        tp=time.time()
+        present,empty,unavailable=resolve_years(mcp,ditems)
+        crec["presence_ms"]=round((time.time()-tp)*1000,1)
+        if empty: crec["empty"]=empty
+        if unavailable:
+            crec["unavailable"]=unavailable
+            result["unqualified"]=True  # any unavailable blocks unqualified PASS
         items=[{"entity":{"exchange":k[0],"code":k[1]},"base_daily_version_id":i["version_ref"]["version_id"],
-                "years":years_for(i),"publication":{"mode":"current_head","expected_yearly_head":yheads.get(k)}}
-               for k,i in ditems.items()]
+                "years":present[k],"publication":{"mode":"current_head","expected_yearly_head":yheads.get(k)}}
+               for k,i in ditems.items() if k in present]
         rid=f"{RUN_ID}-{idx:03d}"
         crec["items"]=len(items)
-        if not items:
-            crec["status"]="skipped"; result["chunks"].append(crec); continue
-        t0=time.time()
-        existing=mcp.call("get_request",{"request_id":rid,"contract_version":"v1"})
-        crec["get_request_ms"]=round((time.time()-t0)*1000,1)
-        if existing.get("bound"):
-            task_id=existing["task"]["task_id"]; crec["replayed"]=True
-        else:
+        # Resume checks BOTH binding kinds: the normal request_id and any
+        # resolved-year request_id a previous run bound — the bound payload
+        # replays verbatim; a fresh run may use a fresh request_id+pin.
+        task_id=None
+        for cand in (rid, rid+"-resolved-years"):
             t0=time.time()
-            try:
-                acc=mcp.call("update_data",{"dataset":"market.yearly","contract_version":"v1",
-                     "request_id":rid,"items":items})
-                crec["first_accept_ms"]=round((time.time()-t0)*1000,1)
-            except Exception as e:
-                if "selected year absent from fixed daily" not in str(e): raise
-                crec["first_reject_ms"]=round((time.time()-t0)*1000,1)
-                tp=time.time()
-                ry=resolve_years(mcp,ditems)
-                crec["probe_s"]=round(time.time()-tp,2)
-                items=[{"entity":{"exchange":k[0],"code":k[1]},"base_daily_version_id":i["version_ref"]["version_id"],
-                        "years":ry[k],"publication":{"mode":"current_head","expected_yearly_head":yheads.get(k)}}
-                       for k,i in ditems.items()]
-                rid=f"{RUN_ID}-{idx:03d}-resolved-years"
-                t0=time.time()
-                acc=mcp.call("update_data",{"dataset":"market.yearly","contract_version":"v1",
-                     "request_id":rid,"items":items})
-                crec["resolved_accept_ms"]=round((time.time()-t0)*1000,1)
+            existing=mcp.call("get_request",{"request_id":cand,"contract_version":"v1"})
+            crec.setdefault("get_request_ms",round((time.time()-t0)*1000,1))
+            if existing.get("bound"):
+                task_id=existing["task"]["task_id"]; crec["replayed"]=cand; break
+        if task_id is None and items:
+            t0=time.time()
+            acc=mcp.call("update_data",{"dataset":"market.yearly","contract_version":"v1",
+                 "request_id":rid,"items":items})
             task_id=acc["task_id"]; crec["accept_total_ms"]=round((time.time()-t0)*1000,1)
+        elif task_id is None:
+            crec["status"]="empty"; result["chunks"].append(crec); continue
         crec["request_id"]=rid; crec["task_id"]=task_id
         prog,meta=wait_task(mcp,task_id)
         task=prog["task"]
@@ -169,7 +200,7 @@ try:
             if "selected year absent from fixed daily" not in str(it.get("error")):
                 crec.setdefault("unexpected",[]).append(it)
         result["chunks"].append(crec)
-        log(f"chunk {idx}/{len(chunks)} {task['status']} succ={prog.get('succeeded')} wall={crec['wall_s']}s probe={crec.get('probe_s')}")
+        log(f"chunk {idx}/{len(chunks)} {task['status']} succ={prog.get('succeeded')} wall={crec['wall_s']}s presence_ms={crec.get('presence_ms')}")
     result["finished_at"]=datetime.now(timezone.utc).isoformat()
     SUMMARY.write_text(json.dumps(result,ensure_ascii=False,indent=1))
     log("complete")
