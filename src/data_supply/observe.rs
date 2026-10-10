@@ -657,24 +657,31 @@ impl<R: ObservationRepository> Observer<R> {
         let mut s = if let Some(c) = cursor {
             self.resume(&c, &key, access)?
         } else {
-            let items = self
-                .repository
-                .availability(&plan, access)?
-                .into_iter()
-                .map(|f| availability_item(f, plan.args.dataset, &self.run_id, &plan.args.filter))
-                .collect::<Result<Vec<_>, _>>()?;
-            budget(&items)?;
+            let facts = crate::stage_trace::timed("availability.repository", || {
+                self.repository.availability(&plan, access)
+            })?;
+            let items = crate::stage_trace::timed("availability.items", || {
+                facts
+                    .into_iter()
+                    .map(|f| {
+                        availability_item(f, plan.args.dataset, &self.run_id, &plan.args.filter)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })?;
+            crate::stage_trace::timed("availability.budget", || budget(&items))?;
             self.start(key, access, Content::Availability(items))
         };
         let Content::Availability(items) = &s.content else {
             return Err(invalid("cursor category"));
         };
-        self.repository.verify_versions(
-            &items
-                .iter()
-                .filter_map(|i| i.version_ref.clone())
-                .collect::<Vec<_>>(),
-        )?;
+        crate::stage_trace::timed("availability.verify_versions", || {
+            self.repository.verify_versions(
+                &items
+                    .iter()
+                    .filter_map(|i| i.version_ref.clone())
+                    .collect::<Vec<_>>(),
+            )
+        })?;
         let end = (s.offset + plan.args.page_size).min(items.len());
         let more = end < items.len();
         let result = items[s.offset..end].to_vec();

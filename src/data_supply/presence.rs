@@ -71,7 +71,9 @@ pub fn year_presence<R: PresenceRepository>(
     access: &Access,
 ) -> Result<YearPresenceReply, Error> {
     let plan = PresencePlan::new(args, access)?;
-    let outcomes = repository.year_presence(&plan, access)?;
+    let outcomes = crate::stage_trace::timed("presence.repository", || {
+        repository.year_presence(&plan, access)
+    })?;
     if outcomes.len() != plan.items.len() {
         return Err(Error::Integrity(
             "presence resolution count mismatch".into(),
@@ -109,11 +111,11 @@ pub fn year_presence<R: PresenceRepository>(
         items,
         page_complete: true,
     };
-    if serde_json::to_vec(&reply)
-        .map_err(|e| Error::Storage(e.to_string()))?
-        .len()
-        > MAX_BYTES
-    {
+    let wire_len = crate::stage_trace::timed("presence.budget", || {
+        serde_json::to_vec(&reply).map_err(|e| Error::Storage(e.to_string()))
+    })?
+    .len();
+    if wire_len > MAX_BYTES {
         return Err(invalid("snapshot budget exceeded"));
     }
     Ok(reply)

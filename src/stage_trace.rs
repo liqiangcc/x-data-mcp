@@ -3,6 +3,7 @@
 //! stderr line `XP025_STAGE {json}`; durations are inclusive wall time, so
 //! nested stages overlap. Disabled cost: one `OnceLock` load per span.
 
+use std::borrow::Cow;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -12,24 +13,44 @@ pub(crate) fn enabled() -> bool {
 }
 
 pub(crate) struct Span {
-    stage: &'static str,
+    stage: Cow<'static, str>,
     started: Option<Instant>,
 }
 
 /// Starts a timed stage; the line is written when the guard drops.
 pub(crate) fn span(stage: &'static str) -> Span {
     Span {
-        stage,
+        stage: Cow::Borrowed(stage),
         started: enabled().then(Instant::now),
+    }
+}
+
+/// `span` whose name is `prefix` + `name`; the string is only built when
+/// tracing is enabled.
+pub(crate) fn span_named(prefix: &'static str, name: &str) -> Span {
+    let started = enabled().then(Instant::now);
+    Span {
+        stage: if started.is_some() {
+            Cow::Owned(format!("{prefix}{name}"))
+        } else {
+            Cow::Borrowed("")
+        },
+        started,
     }
 }
 
 impl Drop for Span {
     fn drop(&mut self) {
         if let Some(started) = self.started {
-            emit(self.stage, Some(started.elapsed().as_nanos()), &[]);
+            emit(&self.stage, Some(started.elapsed().as_nanos()), &[]);
         }
     }
+}
+
+/// Runs `f` inside a stage span (convenience for expression-position steps).
+pub(crate) fn timed<T>(stage: &'static str, f: impl FnOnce() -> T) -> T {
+    let _span = span(stage);
+    f()
 }
 
 /// Records a counter event (e.g. chain depth, bar counts) for a stage.

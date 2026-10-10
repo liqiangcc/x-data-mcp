@@ -479,12 +479,15 @@ impl<R: MarketRepository> Publisher<R> {
                     &owned_facts
                 }
             };
-            match base_meta {
-                Some((_, meta)) => {
-                    validate_base_facts_meta(&plan.record, &self.repository, facts, meta)?
-                }
-                None => validate_base_facts(&plan.record, &self.repository, facts)?,
-            }
+            crate::stage_trace::timed(
+                "yearly.plan_record.validate_base_facts",
+                || match base_meta {
+                    Some((_, meta)) => {
+                        validate_base_facts_meta(&plan.record, &self.repository, facts, meta)
+                    }
+                    None => validate_base_facts(&plan.record, &self.repository, facts),
+                },
+            )?;
             plan.base_digest = Some(facts.integrity_sha256.clone());
         }
         let owned_binding;

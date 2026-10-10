@@ -173,8 +173,13 @@ impl<R: ReadRepository> Queries<R> {
         let mut saved = if let Some(cursor) = cursor {
             self.resume(&cursor, &key, access)?
         } else {
-            let data = self.repository.query(&plan, access)?;
-            if data.rows.len() > MAX_ROWS || serde_json::to_vec(&data).unwrap().len() > MAX_BYTES {
+            let data = crate::stage_trace::timed("query.repository", || {
+                self.repository.query(&plan, access)
+            })?;
+            let over_budget = crate::stage_trace::timed("query.budget", || {
+                data.rows.len() > MAX_ROWS || serde_json::to_vec(&data).unwrap().len() > MAX_BYTES
+            });
+            if over_budget {
                 return Err(invalid("snapshot budget exceeded"));
             }
             Saved {
@@ -195,7 +200,7 @@ impl<R: ReadRepository> Queries<R> {
             .iter()
             .filter_map(|m| m.version_ref.clone())
             .collect::<Vec<_>>();
-        self.repository.verify(&refs)?;
+        crate::stage_trace::timed("query.verify", || self.repository.verify(&refs))?;
         let end = (saved.offset + plan.args.page_size).min(data.rows.len());
         let records = data.rows[saved.offset..end].to_vec();
         let manifest = data.manifest.clone();

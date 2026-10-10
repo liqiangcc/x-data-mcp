@@ -684,17 +684,19 @@ impl DataApi {
                         "write controls require local owner access",
                     ));
                 }
-                let command: RangeWrite = decode(input)?;
+                let command: RangeWrite =
+                    crate::stage_trace::timed("rpc.range.decode", || decode(input))?;
+                let payload = crate::stage_trace::timed("rpc.range.payload", || {
+                    command.payload().map_err(task_error)
+                })?;
                 let accepted = self
                     .legacy
                     .control
-                    .accept(
-                        command.request_id(),
-                        command.key(operation),
-                        command.payload().map_err(task_error)?,
-                    )
+                    .accept(command.request_id(), command.key(operation), payload)
                     .map_err(task_error)?;
-                self.acceptance(command.request_id(), accepted)
+                crate::stage_trace::timed("rpc.range.acceptance", || {
+                    self.acceptance(command.request_id(), accepted)
+                })
             }
             Handler::Republish => {
                 if self.access != Access::local() {
@@ -776,21 +778,25 @@ impl DataApi {
             | Handler::Task
             | Handler::Request
             | Handler::Cancel => self.control_call(name, input),
-            Handler::Query => encode(
-                self.queries
+            Handler::Query => {
+                let reply = self
+                    .queries
                     .query(decode::<Query>(input)?, &self.access)
-                    .map_err(mapped)?,
-            ),
+                    .map_err(mapped)?;
+                crate::stage_trace::timed("rpc.query.encode", || encode(reply))
+            }
             Handler::Versions => encode(
                 self.queries
                     .versions(decode::<VersionsQuery>(input)?, &self.access)
                     .map_err(mapped)?,
             ),
-            Handler::Availability => encode(
-                self.observer
+            Handler::Availability => {
+                let page = self
+                    .observer
                     .availability(decode::<Query>(input)?, &self.access)
-                    .map_err(mapped)?,
-            ),
+                    .map_err(mapped)?;
+                crate::stage_trace::timed("rpc.availability.encode", || encode(page))
+            }
             Handler::Tasks => encode(
                 self.observer
                     .tasks(decode::<TasksQuery>(input)?, &self.access)
@@ -801,11 +807,13 @@ impl DataApi {
                     .progress(decode::<ProgressQuery>(input)?, &self.access)
                     .map_err(mapped)?,
             ),
-            Handler::YearPresence => encode(
-                self.queries
+            Handler::YearPresence => {
+                let reply = self
+                    .queries
                     .year_presence(decode::<YearPresenceQuery>(input)?, &self.access)
-                    .map_err(mapped)?,
-            ),
+                    .map_err(mapped)?;
+                crate::stage_trace::timed("rpc.year_presence.encode", || encode(reply))
+            }
             Handler::Capabilities => self.capabilities(decode(input)?),
         }
     }
@@ -856,6 +864,7 @@ impl ToolHandler for DataApi {
                     | "backfill_data"
                     | "republish_data"
             );
+        let _rpc = crate::stage_trace::span_named("rpc.", name);
         self.dispatch(name, input).map_err(|mut e| {
             if generic {
                 e.outcome_certainty = Some(
