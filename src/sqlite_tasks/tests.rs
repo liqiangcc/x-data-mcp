@@ -1043,7 +1043,7 @@ fn seed_terminal(db: &SqliteTasks, n: usize) {
         let spec = serde_json::json!({"item_id":"i","target":{},"progress_unit":"u","frozen_inputs":{},"scope_keys":["s"]});
         let work = serde_json::json!({"items":[spec],"scopes":["s"]}).to_string();
         tx.execute(
-            "INSERT INTO tasks VALUES(?1,?2,'succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',?3,'{}',NULL,1,0,0,1,1)",
+            "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded) VALUES(?1,?2,'succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',?3,'{}',NULL,1,0,0,1,1)",
             params![id, key, work],
         )
         .unwrap();
@@ -1078,7 +1078,7 @@ fn accept_new(db: &SqliteTasks, request: &str) -> Result<Acceptance, Error> {
     .accept(
         request,
         LegacyCollection.key(),
-        serde_json::json!({"symbols":[request],"periods":["day"]}),
+        serde_json::json!({"symbols":[request.replace('-', "")],"periods":["day"]}),
     )
 }
 #[test]

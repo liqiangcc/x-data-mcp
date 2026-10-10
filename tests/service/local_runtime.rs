@@ -490,7 +490,7 @@ fn startup_sweep_and_task_sqlite_check_reject_corrupt_history() {
     // A terminal task with no request: an "unbound execution record".
     let c = rusqlite::Connection::open(&db).unwrap();
     c.execute(
-        "INSERT INTO tasks VALUES('hist-0','{}','succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','{}','{}',NULL,0,0,0,0,0)",
+        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded) VALUES('hist-0','{}','succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','{}','{}',NULL,0,0,0,0,0)",
         [],
     )
     .unwrap();
@@ -571,7 +571,7 @@ fn compact_corrupt_history_is_rejected_by_check_and_startup() {
     let db = compact_database(dir.path());
     let c = rusqlite::Connection::open(&db).unwrap();
     c.execute(
-        "INSERT INTO tasks VALUES('hist-0','{}','succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','{}','{}',NULL,0,0,0,0,0)",
+        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded) VALUES('hist-0','{}','succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','{}','{}',NULL,0,0,0,0,0)",
         [],
     )
     .unwrap();
