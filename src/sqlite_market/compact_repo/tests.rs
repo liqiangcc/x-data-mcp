@@ -6080,11 +6080,8 @@ mod xp011 {
                 }
             }
             // Same task shape as `fixture()` but without committed
-            // results: the interrupt path rewrites the whole target
-            // snapshot, and a committed compact result's canonical
-            // outcome_json is not byte-preserved by a whole-snapshot
-            // rewrite — the receipt surface under test is exercised on
-            // an uncommitted task instead.
+            // results; the committed-result interrupt case is covered
+            // by `stopped_receipt_preserves_committed_result_linkage`.
             let f = fixture_uncommitted();
             // Drive item-1 into a running state, then require
             // verification — the honest NeedsVerification transition.
@@ -6160,6 +6157,110 @@ mod xp011 {
             assert_eq!(
                 read_class(&observer.progress(query(None), &f.access)),
                 ReadClass::TaskError
+            );
+        }
+
+        /// #324 regression: a committed compact result's canonical
+        /// `outcome_json` must survive the whole-snapshot writes an
+        /// interruption performs — the running-item start, the
+        /// RequireVerification transition and the `commit_stop_check`
+        /// target rewrite. Pre-fix, `write_items_delta` byte-compared
+        /// the persisted canonical outcome against `ItemOutcome`
+        /// declaration order and rewrote it, so `verify_task_item`
+        /// rejected the committed result ("task item outcome
+        /// mismatch") on every progress read.
+        #[test]
+        fn stopped_receipt_preserves_committed_result_linkage() {
+            struct Stopped;
+            impl crate::task_verification::decision::StopInspector for Stopped {
+                fn inspect(
+                    &self,
+                    s: &task_control::TaskSnapshot,
+                ) -> Result<crate::task_verification::decision::Observation, task_control::Error>
+                {
+                    Ok(crate::task_verification::decision::Observation::Stopped {
+                        snapshot_sha256: crate::task_verification::decision::snapshot_digest(s)?,
+                        evidence_ref: "fixture-writer-exit".into(),
+                    })
+                }
+            }
+            // Three-item update task with item-1's append result
+            // committed — the canonical outcome bytes on that row are
+            // what every whole-snapshot write must leave untouched.
+            let f = fixture();
+            let rev = f.repo.task(&f.task).unwrap().task.state_revision;
+            let snap = f
+                .repo
+                .transition(&f.task, rev, RUN, Change::StartItem("item-2".into()))
+                .unwrap();
+            let snap = f
+                .repo
+                .transition(
+                    &f.task,
+                    snap.task.state_revision,
+                    RUN,
+                    Change::RequireVerification {
+                        item_id: "item-2".into(),
+                        reason: "fixture uncertain outcome".into(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(snap.task.status, task_control::Status::NeedsVerification);
+            let check = check_task(
+                &f.repo,
+                &f.task,
+                &snap.task.accepted_run_id,
+                "req-scheck-committed",
+                "stopped-writes",
+                &crate::task_verification::command_key(),
+                RUN,
+            );
+            let target = f
+                .repo
+                .read(|c| Ok(crate::sqlite_tasks::read_bound_task(c, &f.task)?))
+                .unwrap()
+                .unwrap();
+            let plan = crate::task_verification::decision::prepare(
+                check,
+                target,
+                RUN,
+                "fixture-checker",
+                ts(),
+                &Stopped,
+            )
+            .unwrap();
+            let receipt = crate::task_verification::decision::StopRepository::commit_stop_check(
+                &f.repo.tasks(),
+                &plan,
+            )
+            .unwrap();
+            // Fresh and cursor progress on the interrupted target both
+            // expose the committed result and the stopped-check
+            // receipt: each page re-verifies upd-1's canonical
+            // outcome binding inside its read scope.
+            let observer = Observer::new(supply(&f.repo), RUN.into());
+            let query = |cursor: Option<String>| ProgressQuery {
+                task_id: f.task.clone(),
+                page_size: 1,
+                cursor,
+            };
+            let page1 = observer.progress(query(None), &f.access).unwrap();
+            assert_eq!(page1.stopped_write_check, Some(receipt.clone()));
+            assert_eq!(page1.range_results.len(), 1);
+            assert_eq!(page1.range_results[0].result_id, "upd-1");
+            assert_eq!(page1.range_results[0].item_id, "item-1");
+            let page2 = observer
+                .progress(query(page1.next_cursor.clone()), &f.access)
+                .unwrap();
+            assert_eq!(page2.stopped_write_check, Some(receipt));
+            // A tampered committed outcome still fails closed.
+            tamper(
+                &f.path,
+                "UPDATE task_items SET outcome_json='{\"success\":true}' WHERE item_id='item-1'",
+            );
+            assert_ne!(
+                read_class(&observer.progress(query(None), &f.access)),
+                ReadClass::Ok
             );
         }
     }

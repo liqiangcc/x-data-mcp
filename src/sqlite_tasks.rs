@@ -1061,15 +1061,42 @@ fn write_items_delta(c: &Connection, s: &TaskSnapshot, changed: Option<&str>) ->
                 .collect::<Result<std::collections::HashMap<String, _>, _>>()
                 .map_err(storage)?;
             for item in &s.items {
-                let outcome = item.outcome.as_ref().map(encode).transpose()?;
-                match persisted.get(&item.spec.item_id) {
-                    Some((stage, old)) if *stage == tag(&item.stage) && *old == outcome => {}
-                    _ => write_item_row(c, &s.task.task_id, item)?,
+                let unchanged = match persisted.get(&item.spec.item_id) {
+                    Some((stage, old)) => {
+                        *stage == tag(&item.stage)
+                            && outcome_unchanged(old.as_deref(), &item.outcome)?
+                    }
+                    None => false,
+                };
+                if !unchanged {
+                    write_item_row(c, &s.task.task_id, item)?;
                 }
             }
         }
     }
     Ok(())
+}
+/// Whole-snapshot outcome equality. Byte equality against the encoder
+/// form decides most rows; on a byte mismatch the persisted outcome is
+/// decoded and compared semantically. Compact result rows store the
+/// canonicalized bytes produced by `result_outcome_json`, whose key
+/// order never equals `encode`'s declaration order — counting that
+/// difference as a change rewrote the row and severed the canonical
+/// `verify_task_item` binding (#324). Semantically equal stored bytes
+/// are never rewritten: whatever is persisted remains subject to the
+/// read-side integrity checks, and undecodable bytes fail closed
+/// instead of being silently repaired.
+fn outcome_unchanged(
+    persisted: Option<&str>,
+    outcome: &Option<ItemOutcome>,
+) -> Result<bool, Error> {
+    match (persisted, outcome) {
+        (None, None) => Ok(true),
+        (Some(raw), Some(o)) => {
+            Ok(raw == encode(o)?.as_str() || decode::<ItemOutcome>(raw.to_owned())? == *o)
+        }
+        _ => Ok(false),
+    }
 }
 fn write_item_row(c: &Connection, task_id: &str, item: &TaskItem) -> Result<(), Error> {
     #[cfg(test)]
