@@ -7205,4 +7205,66 @@ mod xp011 {
             );
         }
     }
+
+    /// XP-025 B: explicit-yearly accept reads in one snapshot, same answers
+    /// as the per-want reads.
+    mod xp025_b {
+        use super::*;
+        use crate::market_storage::{MarketRepository, YearlyAcceptWant};
+
+        fn want(base: &str, first: i64, last: i64, cmp: Option<&str>) -> YearlyAcceptWant {
+            YearlyAcceptWant {
+                base_version_id: base.into(),
+                first: date(first),
+                last: date(last),
+                comparison_version_id: cmp.map(str::to_string),
+            }
+        }
+
+        #[test]
+        fn batched_accept_reads_equal_per_want_reads_in_one_read_tx() {
+            let dir = tempdir();
+            let (_path, repo) = repo(&dir);
+            let bars = vec![bar(0, 100), bar(1, 110), bar(400, 120)];
+            publish_head(&repo, "req-a", "pub-a", "sh.600006", "v1a", bars.clone());
+            publish_head(&repo, "req-b", "pub-b", "sh.600007", "v1b", bars);
+            let wants = vec![
+                want("v1a", 0, 366, None),
+                want("v1b", 0, 800, Some("v1a")),
+                want("v-missing", 0, 366, None),
+                want("v1a", 0, 366, Some("v-missing-cmp")),
+            ];
+            let reads = || crate::sqlite_market::compact_runtime::READ_TXS.with(|n| n.get());
+            let before = reads();
+            let batch = repo.yearly_accept_reads(&wants).unwrap();
+            assert_eq!(reads() - before, 1, "one read snapshot for the batch");
+            assert_eq!(batch.len(), wants.len());
+            for (want, got) in wants.iter().zip(batch) {
+                let per_base = repo.fixed_facts(&want.base_version_id);
+                let per_years =
+                    repo.fixed_window_years(&want.base_version_id, want.first, want.last);
+                let per_cmp = want
+                    .comparison_version_id
+                    .as_ref()
+                    .map(|id| repo.fixed_facts(id))
+                    .transpose();
+                match (per_base, per_years, per_cmp, got) {
+                    (Ok(base), Ok(years), Ok(cmp), Ok(read)) => {
+                        assert_eq!(format!("{base:?}"), format!("{:?}", read.base));
+                        assert_eq!(years, read.years);
+                        assert_eq!(format!("{cmp:?}"), format!("{:?}", read.comparison));
+                    }
+                    (Err(_), _, _, Err(_)) | (_, Err(_), _, Err(_)) | (_, _, Err(_), Err(_)) => {}
+                    _ => panic!("batched and per-want reads disagree"),
+                }
+            }
+            // The years present are derived from stored days, not declared:
+            // day 400 is in 1971, so a 0..=366 window sees only 1970.
+            let one = repo
+                .yearly_accept_reads(&[want("v1a", 0, 366, None), want("v1a", 0, 800, None)])
+                .unwrap();
+            assert_eq!(one[0].as_ref().unwrap().years, BTreeSet::from([1970]));
+            assert_eq!(one[1].as_ref().unwrap().years, BTreeSet::from([1970, 1971]));
+        }
+    }
 }
