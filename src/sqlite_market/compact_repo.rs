@@ -790,6 +790,27 @@ fn base_bars_in_range_on(
         .collect()
 }
 
+fn fixed_facts_on(c: &Connection, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+    let key = version_key(c, id)?;
+    let facts = compact_versions::result_facts(c, key)?;
+    if facts.state != CompactVersionState::Published {
+        return Err(Error::NotFound);
+    }
+    let integrity_digest = facts
+        .integrity_digest
+        .ok_or_else(|| integrity("published version lacks integrity digest"))?;
+    Ok(crate::market_storage::FixedFacts {
+        version_id: facts.version_id,
+        symbol: facts.entity,
+        period: facts.period,
+        integrity_sha256: hex_bytes(&integrity_digest),
+        first_day: compact_market::epoch_date(facts.first_day)
+            .map_err(|e| integrity(e.to_string()))?,
+        last_day: compact_market::epoch_date(facts.last_day)
+            .map_err(|e| integrity(e.to_string()))?,
+    })
+}
+
 fn item_receipt_on(c: &Connection, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
     let id: Option<String> = c
         .query_row(
@@ -1916,25 +1937,33 @@ impl MarketRepository for SqliteCompactMarket {
         })
     }
     fn fixed_facts(&self, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+        self.read(|c| fixed_facts_on(c, id))
+    }
+    fn yearly_accept_reads(
+        &self,
+        wants: &[crate::market_storage::YearlyAcceptWant],
+    ) -> Result<Vec<Result<crate::market_storage::YearlyAcceptRead, Error>>, Error> {
+        // ONE read snapshot for the whole batch (XP-025 B).
         self.read(|c| {
-            let key = version_key(c, id)?;
-            let facts = compact_versions::result_facts(c, key)?;
-            if facts.state != CompactVersionState::Published {
-                return Err(Error::NotFound);
-            }
-            let integrity_digest = facts
-                .integrity_digest
-                .ok_or_else(|| integrity("published version lacks integrity digest"))?;
-            Ok(crate::market_storage::FixedFacts {
-                version_id: facts.version_id,
-                symbol: facts.entity,
-                period: facts.period,
-                integrity_sha256: hex_bytes(&integrity_digest),
-                first_day: compact_market::epoch_date(facts.first_day)
-                    .map_err(|e| integrity(e.to_string()))?,
-                last_day: compact_market::epoch_date(facts.last_day)
-                    .map_err(|e| integrity(e.to_string()))?,
-            })
+            Ok(wants
+                .iter()
+                .map(|want| {
+                    Ok(crate::market_storage::YearlyAcceptRead {
+                        base: fixed_facts_on(c, &want.base_version_id)?,
+                        years: compact_versions::window_years(
+                            c,
+                            &want.base_version_id,
+                            compact_market::epoch_day(want.first),
+                            compact_market::epoch_day(want.last),
+                        )?,
+                        comparison: want
+                            .comparison_version_id
+                            .as_ref()
+                            .map(|id| fixed_facts_on(c, id))
+                            .transpose()?,
+                    })
+                })
+                .collect())
         })
     }
     fn fixed_window(

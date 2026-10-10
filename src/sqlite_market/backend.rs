@@ -142,6 +142,19 @@ impl crate::market_storage::MarketRepository for MarketBackend {
             ),
         }
     }
+    fn yearly_accept_reads(
+        &self,
+        wants: &[crate::market_storage::YearlyAcceptWant],
+    ) -> Result<Vec<Result<crate::market_storage::YearlyAcceptRead, Error>>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_storage::MarketRepository::yearly_accept_reads(m, wants)
+            }
+            Self::Compact(m) => {
+                crate::market_storage::MarketRepository::yearly_accept_reads(m, wants)
+            }
+        }
+    }
     fn task(&self, id: &str) -> Result<crate::task_control::TaskSnapshot, Error> {
         match self {
             Self::Legacy(m) => m.task(id),

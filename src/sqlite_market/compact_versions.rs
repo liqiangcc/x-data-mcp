@@ -989,14 +989,15 @@ pub(crate) fn leaf_bars(c: &Connection, key: i64) -> Result<Vec<CompactBar>, Err
 /// base head without materializing it. Chain linkage, published-state
 /// and clip/segment digests are still enforced; malformed rows fail
 /// closed exactly like full reconstruction.
-pub(crate) fn leaf_bars_in_range(
+fn leaf_window_scoped<T>(
     c: &Connection,
     leaf_key: i64,
     start_day: i64,
     end_day: i64,
-) -> Result<Vec<CompactBar>, Error> {
+    project: impl Fn(&CompactBar) -> T,
+) -> Result<BTreeMap<i64, T>, Error> {
     if start_day > end_day {
-        return Ok(Vec::new());
+        return Ok(BTreeMap::new());
     }
     // Chain metadata walk, leaf -> root; no segment decode here.
     let mut nodes = Vec::new();
@@ -1034,7 +1035,7 @@ pub(crate) fn leaf_bars_in_range(
     }
     nodes.reverse();
     // Root checkpoint: decode only clips overlapping the window.
-    let mut map: BTreeMap<i64, CompactBar> = BTreeMap::new();
+    let mut map: BTreeMap<i64, T> = BTreeMap::new();
     {
         let root = &nodes[0];
         let mut statement = c
@@ -1073,7 +1074,7 @@ pub(crate) fn leaf_bars_in_range(
             for bar in segment.bars.iter().filter(|bar| {
                 bar.trade_day >= clip_start.max(start_day) && bar.trade_day <= clip_end.min(end_day)
             }) {
-                map.insert(bar.trade_day, bar.clone());
+                map.insert(bar.trade_day, project(bar));
             }
         }
     }
@@ -1127,7 +1128,7 @@ pub(crate) fn leaf_bars_in_range(
                         bar.trade_day >= clip_start.max(start_day)
                             && bar.trade_day <= clip_end.min(end_day)
                     }) {
-                        map.insert(bar.trade_day, bar.clone());
+                        map.insert(bar.trade_day, project(bar));
                     }
                 }
                 2 => {
@@ -1139,7 +1140,34 @@ pub(crate) fn leaf_bars_in_range(
             }
         }
     }
-    Ok(map.into_values().collect())
+    Ok(map)
+}
+
+pub(crate) fn leaf_bars_in_range(
+    c: &Connection,
+    leaf_key: i64,
+    start_day: i64,
+    end_day: i64,
+) -> Result<Vec<CompactBar>, Error> {
+    Ok(
+        leaf_window_scoped(c, leaf_key, start_day, end_day, |bar| bar.clone())?
+            .into_values()
+            .collect(),
+    )
+}
+
+/// Days present in `[start_day, end_day]` of a published leaf, with the same
+/// chain/clip verification as `leaf_bars_in_range` but without cloning a
+/// single bar (XP-025 B: year presence needs only the days).
+pub(crate) fn leaf_days_in_range(
+    c: &Connection,
+    leaf_key: i64,
+    start_day: i64,
+    end_day: i64,
+) -> Result<Vec<i64>, Error> {
+    Ok(leaf_window_scoped(c, leaf_key, start_day, end_day, |_| ())?
+        .into_keys()
+        .collect())
 }
 
 /// Running facts about the reconstructed projection, maintained
@@ -2138,10 +2166,10 @@ pub(crate) fn window_years(
         return Err(Error::NotFound);
     }
     verify_version_evidence(c, &row.evidence_digest)?;
-    leaf_bars_in_range(c, row.key, start_day, end_day)?
-        .iter()
-        .map(|bar| {
-            compact_market::epoch_date(bar.trade_day)
+    leaf_days_in_range(c, row.key, start_day, end_day)?
+        .into_iter()
+        .map(|day| {
+            compact_market::epoch_date(day)
                 .map(|date| date.year())
                 .map_err(integrity)
         })

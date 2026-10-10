@@ -136,6 +136,19 @@ pub struct FixedFacts {
     pub first_day: NaiveDate,
     pub last_day: NaiveDate,
 }
+/// One explicit-yearly accept read request.
+pub struct YearlyAcceptWant {
+    pub base_version_id: String,
+    pub first: NaiveDate,
+    pub last: NaiveDate,
+    pub comparison_version_id: Option<String>,
+}
+/// Result of one `YearlyAcceptWant`.
+pub struct YearlyAcceptRead {
+    pub base: FixedFacts,
+    pub years: BTreeSet<i32>,
+    pub comparison: Option<FixedFacts>,
+}
 pub trait MarketRepository {
     fn stage(&self, raw: &Value) -> Result<(), Error>;
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error>;
@@ -175,6 +188,31 @@ pub trait MarketRepository {
         first_day: NaiveDate,
         last_day: NaiveDate,
     ) -> Result<BTreeSet<i32>, Error>;
+    /// Accept-time reads for a whole explicit-yearly batch (XP-025 B): base
+    /// facts, the years present in the selected window, and the optional
+    /// comparison facts for every want. Backends able to serve them from
+    /// one snapshot override this; the default is the per-want reads the
+    /// resolver always did. A top-level `Err` is a storage/transaction
+    /// failure; per-want failures stay per want.
+    fn yearly_accept_reads(
+        &self,
+        wants: &[YearlyAcceptWant],
+    ) -> Result<Vec<Result<YearlyAcceptRead, Error>>, Error> {
+        Ok(wants
+            .iter()
+            .map(|want| {
+                Ok(YearlyAcceptRead {
+                    base: self.fixed_facts(&want.base_version_id)?,
+                    years: self.fixed_window_years(&want.base_version_id, want.first, want.last)?,
+                    comparison: want
+                        .comparison_version_id
+                        .as_ref()
+                        .map(|id| self.fixed_facts(id))
+                        .transpose()?,
+                })
+            })
+            .collect())
+    }
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error>;
     /// O(1) task-row projection for hot-loop guards; full snapshots are for
     /// explicit task/progress reads.
