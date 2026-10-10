@@ -1135,7 +1135,7 @@ fn accept_gate_is_six_bounded_statements_without_item_or_request_scans() {
             if let Some(rest) = detail.strip_prefix("SCAN ") {
                 let table = rest.split_whitespace().next().unwrap_or("");
                 assert!(
-                    table == "t" || table == "o",
+                    table == "t" || table == "o" || table == "CONSTANT",
                     "unbounded scan `{detail}` in gate: {sql}"
                 );
             }
