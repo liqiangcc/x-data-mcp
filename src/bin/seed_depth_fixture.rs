@@ -551,9 +551,14 @@ mod tests {
 
     #[test]
     fn seeded_chain_depth_verifies() {
-        let dir = tempfile::tempdir().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in("/dev/shm")
+            .unwrap();
         let db = dir.path().join("market.db");
         SqliteTasks::new(&db).initialize_compact().unwrap();
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
         let backend = MarketBackend::open(&SqliteTasks::new(&db)).unwrap();
         publish_head(
             &backend,
