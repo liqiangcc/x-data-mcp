@@ -1352,12 +1352,19 @@ impl ObservationRepository for SqliteSupply {
         plan: &QueryPlan,
         access: &Access,
     ) -> Result<Vec<AvailabilityFacts>, Error> {
+        let _total = crate::stage_trace::span("availability.total");
         self.market.read(|c| {
             let mut ctx = VerifyCtx::default();
+            let task_span = crate::stage_trace::span("availability.task_list");
             let tasks: Vec<std::rc::Rc<TaskFacts>> = task_list(c, access)?
                 .into_iter()
                 .map(std::rc::Rc::new)
                 .collect();
+            crate::stage_trace::note(
+                "availability.task_list_size",
+                &[("tasks", tasks.len() as u64)],
+            );
+            drop(task_span);
             // One pass over the task set instead of an entities x tasks x
             // items scan with a TaskSnapshot clone per hit: each task index
             // is registered under every distinct item symbol (catalog tasks

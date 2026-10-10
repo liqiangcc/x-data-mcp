@@ -1198,6 +1198,8 @@ fn reconstruct_version_scoped(
         }
     }
     chain.reverse();
+    let _chain_span = crate::stage_trace::span("chain.reconstruct");
+    crate::stage_trace::note("chain.depth", &[("nodes", chain.len() as u64)]);
     let mut projections: Vec<(VersionRow, Vec<CompactBar>)> = Vec::with_capacity(chain.len());
     let mut bars: Vec<CompactBar> = Vec::new();
     for (index, row) in chain.into_iter().enumerate() {
@@ -1246,6 +1248,13 @@ fn reconstruct_version_scoped(
         }
         projections.push((row, bars.clone()));
     }
+    crate::stage_trace::note(
+        "chain.bars",
+        &[
+            ("bars", bars.len() as u64),
+            ("nodes", projections.len() as u64),
+        ],
+    );
     Ok(projections)
 }
 

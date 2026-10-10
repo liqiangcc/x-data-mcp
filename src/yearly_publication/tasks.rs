@@ -94,6 +94,7 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
         serde_json::to_value(input).map_err(invalid)
     }
     fn resolve(&self, raw: &Value) -> Result<FrozenWork, Error> {
+        let _total = crate::stage_trace::span("yearly.resolve.total");
         let input: ExplicitYears = serde_json::from_value(raw.clone()).map_err(invalid)?;
         let today = (self.today)();
         let future: Vec<_> = input
@@ -123,18 +124,24 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
                 .ok_or_else(|| invalid("selected year out of range"))?;
             let last = NaiveDate::from_ymd_opt(*item.years.last().unwrap(), 12, 31)
                 .ok_or_else(|| invalid("selected year out of range"))?;
+            let facts_span = crate::stage_trace::span("yearly.resolve.fixed_facts");
             let base = self
                 .repository
                 .fixed_facts(&item.base_daily_version_id)
                 .map_err(repository_error)?;
+            drop(facts_span);
+            let window_span = crate::stage_trace::span("yearly.resolve.window_years");
             let available = self
                 .repository
                 .fixed_window_years(&item.base_daily_version_id, first, last)
                 .map_err(repository_error)?;
+            drop(window_span);
+            let comparison_span = crate::stage_trace::span("yearly.resolve.comparison_facts");
             let comparison = comparison_id
                 .map(|id| self.repository.fixed_facts(&id))
                 .transpose()
                 .map_err(repository_error)?;
+            drop(comparison_span);
             if comparison
                 .as_ref()
                 .is_some_and(|p| p.symbol != item.symbol || p.period != Period::Year)

@@ -13,6 +13,7 @@ pub mod official_market;
 mod progress_trace;
 pub mod publish;
 pub mod qfq;
+mod stage_trace;
 pub mod storage;
 pub mod task;
 pub mod worker;

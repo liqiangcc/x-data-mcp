@@ -1275,6 +1275,8 @@ pub(crate) fn accept_tx(
     run: &str,
     retry: Option<&RetryGuard>,
 ) -> Result<Acceptance, Error> {
+    let _total = crate::stage_trace::span("accept.total");
+    let read_request_span = crate::stage_trace::span("accept.read_request");
     if let Some(record) = read_request(c, id)? {
         if record.command != *command {
             return Err(Error::RequestConflict);
@@ -1284,7 +1286,9 @@ pub(crate) fn accept_tx(
             reused: true,
         });
     }
+    drop(read_request_span);
     // Corrupt accepted state is not permission to steal a missing claim.
+    let orphan_span = crate::stage_trace::span("accept.gate.orphan");
     let orphan: bool = c
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN requests r ON r.task_id=t.task_id WHERE r.request_id IS NULL)",
@@ -1292,6 +1296,7 @@ pub(crate) fn accept_tx(
             |r| r.get(0),
         )
         .map_err(storage)?;
+    drop(orphan_span);
     if orphan {
         return Err(inconsistent("unbound execution record"));
     }
@@ -1362,7 +1367,15 @@ pub(crate) fn accept_tx(
             "execution owner/stage missing or inconsistent",
         ),
     ] {
+        let gate_span = crate::stage_trace::span(match why {
+            "request bound to missing task" => "accept.gate.request_task",
+            "task item rows diverge from counters" => "accept.gate.item_counters",
+            "active occupancy missing/inconsistent" => "accept.gate.active_occupancy",
+            "terminal execution/claims inconsistent" => "accept.gate.terminal",
+            _ => "accept.gate.owner_stage",
+        });
         let bad: bool = c.query_row(&sql, [], |r| r.get(0)).map_err(storage)?;
+        drop(gate_span);
         if bad {
             return Err(inconsistent(why));
         }
@@ -1370,6 +1383,7 @@ pub(crate) fn accept_tx(
     // Digest gate: a corrupted stored command fails the accept closed.
     // Hashing each stored command_json is O(rows × bytes); bound task
     // snapshots are not decoded here.
+    let digest_span = crate::stage_trace::span("accept.gate.digest");
     let mut stmt = c
         .prepare("SELECT command_json,command_digest FROM requests")
         .map_err(storage)?;
@@ -1379,11 +1393,17 @@ pub(crate) fn accept_tx(
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;
     drop(stmt);
+    crate::stage_trace::note(
+        "accept.gate.digest_rows",
+        &[("requests", rows.len() as u64)],
+    );
     for (raw, digest) in rows {
         if crate::hash::sha256(raw.as_bytes()) != digest {
             return Err(inconsistent("command digest mismatch"));
         }
     }
+    drop(digest_span);
+    let _rest = crate::stage_trace::span("accept.conflict_and_insert");
     let execution_key = if let Some(guard) = retry {
         let old = read_bound_task(c, &guard.original_task_id)?.ok_or(Error::TaskNotFound)?;
         if old.task.state_revision != guard.expected_revision {

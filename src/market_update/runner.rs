@@ -261,6 +261,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         item_ids: &[String],
         provider: &dyn RangeProvider,
     ) -> Result<Option<()>, Error> {
+        let _total = crate::stage_trace::span("daily.run_items.total");
         let mut items = Vec::new();
         let mut fallback = Vec::new();
         // Frozen inputs of prepared default-contract items: their gap
@@ -278,7 +279,10 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             }
         }
         if !items.is_empty() {
-            let results = match self.repository.commit_update_batch(task_id, &items) {
+            let commit_span = crate::stage_trace::span("daily.commit_batch");
+            let committed = self.repository.commit_update_batch(task_id, &items);
+            drop(commit_span);
+            let results = match committed {
                 Ok(Some(results)) => Some(results),
                 Ok(None) => return Ok(None),
                 Err(_) => {
@@ -327,6 +331,8 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         item_id: &str,
         provider: &dyn RangeProvider,
     ) -> Result<Option<(crate::market_update::UpdateBatchItem, Option<Value>)>, Error> {
+        let _total = crate::stage_trace::span("daily.prepare.item");
+        let binding_span = crate::stage_trace::span("daily.prepare.binding");
         let binding = match self.repository.task_item_binding(task_id, item_id)? {
             Some(binding) => binding,
             None => {
@@ -336,6 +342,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 ));
             }
         };
+        drop(binding_span);
         let default_contract =
             binding.head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
         let republish_contract =
@@ -352,7 +359,10 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 "unsupported range execution contract".into(),
             ));
         }
-        if self.repository.item_receipt(task_id, item_id)?.is_some()
+        let receipt_span = crate::stage_trace::span("daily.prepare.item_receipt");
+        let has_receipt = self.repository.item_receipt(task_id, item_id)?.is_some();
+        drop(receipt_span);
+        if has_receipt
             || binding.head.visible_status(&self.run_id) == Status::NeedsVerification
             || binding.item.stage != Stage::Pending
             || binding.head.status.terminal()
@@ -390,19 +400,26 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             };
             (base_id, range)
         };
-        let Some(facts) = self.repository.update_base_facts(&base_id)? else {
+        let facts_span = crate::stage_trace::span("daily.prepare.base_facts");
+        let facts = self.repository.update_base_facts(&base_id)?;
+        drop(facts_span);
+        let Some(facts) = facts else {
             return Ok(None);
         };
-        let Some(base_window) =
-            self.repository
-                .base_bars_in_range(&base_id, range.start, range.end)?
-        else {
+        let bars_span = crate::stage_trace::span("daily.prepare.base_bars");
+        let base_window = self
+            .repository
+            .base_bars_in_range(&base_id, range.start, range.end)?;
+        drop(bars_span);
+        let Some(base_window) = base_window else {
             return Ok(None);
         };
-        let Some(acquired) = provider
+        let acquire_span = crate::stage_trace::span("daily.prepare.acquire_typed");
+        let acquired = provider
             .acquire_typed(&facts, &base_window, &range)
-            .map_err(|e| Error::Invalid(e.to_string()))?
-        else {
+            .map_err(|e| Error::Invalid(e.to_string()))?;
+        drop(acquire_span);
+        let Some(acquired) = acquired else {
             return Ok(None);
         };
         // The batch transaction's revision CAS subsumes the per-item
