@@ -611,7 +611,7 @@ fn seed_history(db: &Path, symbol: &str, period: &str, first: usize, n: usize) {
     let command = format!(r#"{{"key":{key},"intent":{{}}}}"#);
     let digest = x_data_mcp::hash::sha256(command.as_bytes());
     let work = serde_json::json!({
-        "items":[{"item_id":"i","target":{"symbol":symbol,"period":"day"},"progress_unit":"u",
+        "items":[{"item_id":"i","target":{"symbol":symbol,"period":period},"progress_unit":"u",
                   "frozen_inputs":{},"scope_keys":[scope]}],
         "scopes":[scope]
     })
