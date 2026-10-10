@@ -10,7 +10,7 @@ if [[ -e "$stage" ]]; then
 fi
 cargo build --release --locked --bins
 mkdir -p "$stage/bin"
-for binary in data_service acquire_service mcp_connect mcp_data mcp_server mcp_sqlite_dev task_sqlite inspect_day inspect_snapshot create_demo consistency_check; do
+for binary in data_service acquire_service mcp_connect mcp_data mcp_server mcp_sqlite_dev task_sqlite inspect_day inspect_snapshot create_demo consistency_check seed_depth_fixture; do
   cp "target/release/$binary" "$stage/bin/"
 done
 cp -r migrations "$stage/migrations"
