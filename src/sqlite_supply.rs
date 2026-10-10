@@ -780,11 +780,11 @@ fn task_facts(
 /// tier (XP-020) — progress read scope only. The authorization head,
 /// every publications/range/yearly enumeration query, the
 /// successful==evidenced binding and the produced `TaskFacts` are
-/// identical; version facts come from `VerifyCtx::committed_facts` (row
-/// + recomputed `integrity_digest`) and result rows from the
-/// `*_meta_ctx` audit readers instead of full-chain verification — no
-/// bar rows are read. Non-compact databases keep the unchanged full
-/// read (`task_facts` is delegated to verbatim).
+/// identical; version facts come from `VerifyCtx::committed_facts` —
+/// the row plus its recomputed `integrity_digest` — and result rows
+/// from the `*_meta_ctx` audit readers instead of full-chain
+/// verification, so no bar rows are read. Non-compact databases keep
+/// the unchanged full read (`task_facts` is delegated to verbatim).
 fn task_facts_committed(
     c: &Connection,
     ctx: &mut VerifyCtx,
