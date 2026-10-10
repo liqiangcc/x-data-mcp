@@ -63,26 +63,8 @@ def wait_task(client, task_id, timeout_s=1800):
         time.sleep(POLL_S)
     raise RuntimeError(f"task {task_id} timeout")
 
-def head_versions(client, dataset, chunk):
-    """XP-025 D0: latest published version id per entity via list_data_versions
-    (replaces get_data_availability, which scans all tasks per call). Items
-    arrive ordered by published_at DESC, so the first occurrence per entity
-    is its latest published version. Returns {(exchange, code): version_id}.
-    Note: list_data_versions returns EVERY published version of each entity
-    (paged), so its cost grows with version-chain depth."""
-    heads, cursor = {}, None
-    while True:
-        args = {"dataset": dataset, "contract_version": "v1",
-                "selection": {"kind": "batch", "entities": chunk}, "page_size": 1000}
-        if cursor: args["cursor"] = cursor
-        page = client.call("list_data_versions", args)
-        for it in page.get("items") or []:
-            ref = it.get("version_ref") or {}
-            e = ref.get("entity") or {}
-            heads.setdefault((e.get("exchange"), e.get("code")), ref.get("version_id"))
-        cursor = page.get("next_cursor")
-        if not cursor: break
-    return heads
+def years_for(item):
+    return list(range(int(item["first_record"][:4]), int(item["last_record"][:4])+1))
 
 def resolve_years(client, daily_items):
     """One get_yearly_base_years call per <=100-entity chunk (XP-014):
@@ -118,9 +100,7 @@ def resolve_years(client, daily_items):
         future = sorted(y for y in present if y > cur_year)
         if future:
             unavailable.append({"entity": k, "reason_code": "future_years_in_response", "years": future})
-        # In-window = every stored year up to the current Asia/Shanghai year
-        # (future years were reported above); no dependence on first/last_record.
-        years = sorted(y for y in present if y <= cur_year)
+        years = sorted(set(present) & set(years_for(daily_items[k])))
         if years:
             resolved[k] = years
         else:
@@ -160,12 +140,26 @@ try:
         crec={"index":idx}
         t_chunk=time.time()
         t0=time.time()
-        dheads=head_versions(mcp,"market.daily",chunk)
-        crec["heads_daily_ms"]=round((time.time()-t0)*1000,1)
+        daily=mcp.call("get_data_availability",{"dataset":"market.daily","contract_version":"v1",
+            "selection":{"kind":"batch","entities":chunk},
+            "filter":{"kind":"daily","start_date":"1990-01-01","end_date":"2026-12-31"},
+            "version":{"kind":"latest_per_entity"},"page_size":100})
+        crec["avail_daily_ms"]=round((time.time()-t0)*1000,1)
         t0=time.time()
-        yheads=head_versions(mcp,"market.yearly",chunk)
-        crec["heads_yearly_ms"]=round((time.time()-t0)*1000,1)
-        ditems={k:{"version_ref":{"version_id":v}} for k,v in dheads.items() if v}
+        yearly=mcp.call("get_data_availability",{"dataset":"market.yearly","contract_version":"v1",
+            "selection":{"kind":"batch","entities":chunk},
+            "filter":{"kind":"yearly","start_year":1900,"end_year":2026},
+            "version":{"kind":"latest_per_entity"},"page_size":100})
+        crec["avail_yearly_ms"]=round((time.time()-t0)*1000,1)
+        yheads={}
+        for it in yearly.get("items") or []:
+            e=it.get("entity") or {}; yheads[(e.get("exchange"),e.get("code"))]=(it.get("version_ref") or {}).get("version_id")
+        ditems={}
+        for it in daily.get("items") or []:
+            e=it.get("entity") or {}; k=(e.get("exchange"),e.get("code"))
+            if not it.get("version_ref") or not it.get("first_record") or not it.get("last_record"):
+                continue
+            ditems[k]=it
         # XP-014: exact per-chunk presence resolution BEFORE accept — one
         # get_yearly_base_years call replaces the per-year probe loop.
         if not ditems:
