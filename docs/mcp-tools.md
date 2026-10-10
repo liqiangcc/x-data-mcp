@@ -20,6 +20,19 @@ live discovery PASS，daily/yearly 样本 QFQ readback PASS；工具数不是稳
 `generic-data-v3`，旧 strict Skill 会话遇 revision 不匹配即停止而非静默适配。
 运行时 `tools/list` 与 `get_data_capabilities` 是机器契约入口；本文不复制完整 schema。
 
+读路径有界化说明（XP-025 D，开发分支）：
+- `list_tasks` 改为 SQL keyset 分页：不再物化全表快照，也不再有"超过 10000 个任务即失败"的硬上限。
+  快照时间仍作为上界（首次调用之后创建的任务不会出现在后续页），排序（`created_at` 降序、`task_id` 升序）、
+  `page_complete`、游标与授权绑定不变。**状态口径变化：** 过滤在首次调用时对全表求值的旧语义改为按
+  每页读取时的任务状态逐页求值（页内展示与过滤依据一致，但跨页之间任务状态可能已变化）。
+- `get_data_availability` 的 `related_tasks` 改为按 `task_scopes.scope_key`（`["market",symbol,"day"|"year"]`）
+  关联所请求实体的任务，不再扫描、解析全部任务。此前按任务条目 `target.symbol` 关联；市场类任务两者一致。
+  仅有 `target.task_id`、无 symbol 的任务（如 `task.verification` 的 `verify_stopped_writes`）此前也不会
+  出现在实体的 `related_tasks` 中，现在同样不会。带 symbol 的其他核查类任务是否使用 `market` 形态的
+  scope_key 未逐类核实。
+- 单个实体的每日统计在查询范围覆盖整个已发布版本时直接取自版本行（committed tier：仍校验该行的已发布字段），
+  不再遍历版本链或解码 bar；子范围过滤与年线仍走完整校验。
+
 下方八工具章节是提交 `b3fe2b3bae22d558c3f193e668773728a2e0df34` 的历史快照，
 对应 [旧输入 schema](contracts/mcp-tools-current.json)，不再代表当前部署。通用工具目标与现状差距见
 [通用工具设计](generic-data-tools.md)；跨两个 server 的每日同步边界、Skill 编排和当前禁止声明见

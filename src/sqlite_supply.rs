@@ -456,6 +456,90 @@ type AvailabilityStats = (
     Option<chrono::NaiveDate>,
     usize,
 );
+// Test-only switch: force the full-verification stats path so tests can
+// compare it field by field with the committed-tier fast path.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FORCE_FULL_STATS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Committed-tier daily stats (XP-025 D, approved): when the query range
+/// covers the whole published version, the manifest, metadata and
+/// first/last/count come from the version row (its published fields are
+/// still verified by `committed_facts`) and its version-evidence row — no
+/// chain walk, no node verification, no bar decoding. Sub-range filters,
+/// unpublished versions and non-compact stores return `None` and keep the
+/// fully verified path.
+fn committed_daily_stats(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    plan: &QueryPlan,
+    entity: &Security,
+    id: &str,
+) -> Result<Option<AvailabilityStats>, Error> {
+    use crate::sqlite_market::compact_versions::{self, CompactVersionState};
+    let key = match crate::sqlite_market::compact_repo::version_key(c, id) {
+        Ok(key) => key,
+        Err(Error::NotFound) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let facts = ctx.committed_facts(c, key)?;
+    if facts.state != CompactVersionState::Published {
+        return Ok(None);
+    }
+    if facts.entity != entity.symbol() || facts.period != crate::market_data::Period::Day {
+        return Err(Error::Integrity("version entity/dataset mismatch".into()));
+    }
+    let (start, end) = market_range(plan)?;
+    if !(crate::compact_market::epoch_day(start) <= facts.first_day
+        && facts.last_day <= crate::compact_market::epoch_day(end))
+    {
+        return Ok(None);
+    }
+    let count = usize::try_from(facts.record_count)
+        .map_err(|_| Error::Integrity("committed record_count out of range".into()))?;
+    if count > MAX_ROWS {
+        return Err(invalid("snapshot row budget exceeded"));
+    }
+    let (kind, canonical) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
+    if kind != crate::compact_market::EvidenceKind::Version {
+        return Err(Error::Integrity("version evidence kind mismatch".into()));
+    }
+    let evidence: crate::compact_market::VersionEvidence =
+        serde_json::from_str(&canonical).map_err(|e| Error::Integrity(e.to_string()))?;
+    let published_at = facts
+        .published_at
+        .as_deref()
+        .ok_or_else(|| Error::Integrity("published version lacks published_at".into()))?
+        .parse()
+        .map_err(|e: chrono::ParseError| Error::Integrity(e.to_string()))?;
+    let day =
+        |d: i64| crate::compact_market::epoch_date(d).map_err(|e| Error::Integrity(e.to_string()));
+    let manifest = ManifestEntry {
+        entity: Some(entity.clone()),
+        version_ref: Some(market_ref_facts(Dataset::Daily, entity, &facts)?),
+        status: ManifestStatus::Present,
+        metadata: Some(Metadata {
+            source: evidence.source,
+            published_at,
+            coverage_status: match facts.coverage_status {
+                1 => "complete",
+                2 => "incomplete",
+                _ => "unknown",
+            }
+            .into(),
+            coverage_reason: evidence.coverage_reason,
+            units: unit_evidence(&evidence.unit_currency),
+            adjustment: Some(adjustment_evidence(&evidence.adjustment_evidence)),
+            lineage: None,
+        }),
+    };
+    Ok(Some((
+        Some(manifest),
+        Some(day(facts.first_day)?),
+        Some(day(facts.last_day)?),
+        count,
+    )))
+}
 fn availability_stats(
     c: &Connection,
     ctx: &mut VerifyCtx,
@@ -507,6 +591,17 @@ fn availability_stats(
             0,
         ));
     };
+    #[cfg(test)]
+    let force_full = FORCE_FULL_STATS.with(|f| f.get());
+    #[cfg(not(test))]
+    let force_full = false;
+    if plan.args.dataset == Dataset::Daily
+        && !force_full
+        && crate::sqlite_market::is_compact_schema(c)?
+        && let Some(stats) = committed_daily_stats(c, ctx, plan, entity, &id)?
+    {
+        return Ok(stats);
+    }
     // Published compact heads answer the same facts without a full record
     // materialization: the slim projection's manifest/metadata are
     // byte-identical, and the in-window stats come from the windowed leaf
@@ -521,32 +616,6 @@ fn availability_stats(
         };
         let (start, end) = market_range(plan)?;
         let key = crate::sqlite_market::compact_repo::version_key(c, &id)?;
-        // Committed tier (XP-025 D, approved): a query range covering the
-        // whole version is answered from the version row's own
-        // first/last/count; bars are decoded only for sub-range filters and
-        // for yearly meta scans.
-        if plan.args.dataset == Dataset::Daily {
-            let row = crate::sqlite_market::compact_versions::result_facts(c, key)?;
-            if crate::compact_market::epoch_day(start) <= row.first_day
-                && row.last_day <= crate::compact_market::epoch_day(end)
-            {
-                let count = usize::try_from(row.record_count)
-                    .map_err(|_| Error::Integrity("committed record_count out of range".into()))?;
-                if count > MAX_ROWS {
-                    return Err(invalid("snapshot row budget exceeded"));
-                }
-                let day = |d: i64| {
-                    crate::compact_market::epoch_date(d)
-                        .map_err(|e| Error::Integrity(e.to_string()))
-                };
-                return Ok((
-                    Some(manifest),
-                    Some(day(row.first_day)?),
-                    Some(day(row.last_day)?),
-                    count,
-                ));
-            }
-        }
         let mut count = 0usize;
         let mut first = None;
         let mut last = None;
@@ -748,10 +817,8 @@ impl YearlyMetaScan {
     }
 }
 
-fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
-    let v = r.version();
-    let u = &v.unit_currency;
-    let units = [
+fn unit_evidence(u: &crate::market_data::UnitCurrencyEvidence) -> Vec<Evidence> {
+    [
         ("price_currency", &u.price_currency),
         ("price_unit", &u.price_unit),
         ("volume_unit", &u.volume_unit),
@@ -765,7 +832,18 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
         value: e.value.clone(),
         reason: e.reason.clone(),
     })
-    .collect();
+    .collect()
+}
+fn adjustment_evidence(a: &crate::market_data::AdjustmentEvidence) -> Evidence {
+    Evidence {
+        field: "price_adjustment".into(),
+        status: format!("{:?}", a.status).to_lowercase(),
+        value: a.value.clone(),
+        reason: a.reason.clone(),
+    }
+}
+fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
+    let v = r.version();
     Metadata {
         source: v.source.clone(),
         published_at: v.published_at,
@@ -777,13 +855,8 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
             .as_str()
             .unwrap_or_default()
             .into(),
-        units,
-        adjustment: Some(Evidence {
-            field: "price_adjustment".into(),
-            status: format!("{:?}", v.adjustment_evidence.status).to_lowercase(),
-            value: v.adjustment_evidence.value.clone(),
-            reason: v.adjustment_evidence.reason.clone(),
-        }),
+        units: unit_evidence(&v.unit_currency),
+        adjustment: Some(adjustment_evidence(&v.adjustment_evidence)),
         lineage: v.yearly_derivation.as_ref().map(|l| Lineage {
             base_daily_version_id: l.base_daily_version_id.clone(),
             algorithm_version: l.algorithm_version.clone(),
