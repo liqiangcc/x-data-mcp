@@ -340,7 +340,7 @@ impl DataApi {
             production_blocking_reasons.push(self.source_block());
         }
         encode(Capabilities {
-            capability_revision: "generic-data-v4".into(),
+            capability_revision: "generic-data-v5".into(),
             items,
             max_batch_entities: 100,
             max_page_size: 1000,

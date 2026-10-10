@@ -16,7 +16,7 @@ versions；最新集中行情日为 2026-09-29（5,211 entities）；4 个官方
 live discovery PASS，daily/yearly 样本 QFQ readback PASS；工具数不是稳定业务契约；客户端必须以
 运行实例的 `tools/list` 与 capability descriptor 为准。
 当前开发分支（XP-014，未部署）注册 21 data tools（新增 `get_yearly_base_years`）
-并宣告 `generic-data-v4`；preview.29 部署实例仍为 20 data tools /
+并宣告 `generic-data-v5`；preview.29 部署实例仍为 20 data tools /
 `generic-data-v3`，旧 strict Skill 会话遇 revision 不匹配即停止而非静默适配。
 运行时 `tools/list` 与 `get_data_capabilities` 是机器契约入口；本文不复制完整 schema。
 
@@ -25,7 +25,7 @@ live discovery PASS，daily/yearly 样本 QFQ readback PASS；工具数不是稳
   快照时间仍作为上界（首次调用之后创建的任务不会出现在后续页），排序（`created_at` 降序、`task_id` 升序）、
   `page_complete`、游标与授权绑定不变。**状态口径变化：** 过滤在首次调用时对全表求值的旧语义改为按
   每页读取时的任务状态逐页求值（页内展示与过滤依据一致，但跨页之间任务状态可能已变化）。
-- `get_data_availability` 的 `related_tasks` 改为按 `task_scopes.scope_key`（`["market",symbol,"day"|"year"]`）
+- `get_data_availability` 的 `related_tasks`（generic-data-v5：在途 + 最近 5 个已结束，附 `related_tasks_total` / `related_tasks_truncated`）改为按 `task_scopes.scope_key`（`["market",symbol,"day"|"year"]`）
   关联所请求实体的任务，不再扫描、解析全部任务。此前按任务条目 `target.symbol` 关联；市场类任务两者一致。
   仅有 `target.task_id`、无 symbol 的任务（如 `task.verification` 的 `verify_stopped_writes`）此前也不会
   出现在实体的 `related_tasks` 中，现在同样不会。带 symbol 的其他核查类任务是否使用 `market` 形态的

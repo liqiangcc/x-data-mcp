@@ -1,4 +1,4 @@
-//! `get_yearly_base_years` application decisions (XP-014, generic-data-v4):
+//! `get_yearly_base_years` application decisions (XP-014, generic-data-v5):
 //! request-level validation completes before any version content is read;
 //! the repository resolves every item inside ONE read snapshot. MCP maps
 //! the wire contract only.

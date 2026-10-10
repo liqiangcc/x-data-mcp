@@ -65,7 +65,8 @@ allowed-tools:
   - `implementation.generation_contract_version` 必须等于 `official-generation-v1`
 - `mcp__x-data-mcp__get_data_capabilities`（按当前 schema 传 `{}`，不得附加
   `contract_version`）：
-  - `capability_revision` 必须等于 `generic-data-v4`
+  - `capability_revision` 必须等于 `generic-data-v5`
+    （v5 起 `get_data_availability` 的 `related_tasks` 只含在途任务与最近 5 个已结束任务，另有 `related_tasks_total` / `related_tasks_truncated`；绑定 v4 的旧 strict Skill 遇到 v5 即按下一条停止，不得静默适配。）
 
 任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。记录 `schema_digest`、`active_generation_ref`、`runtime_readiness`、`blocking_reasons` 作为事实。
 

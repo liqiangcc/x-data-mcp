@@ -27,6 +27,8 @@ pub struct AvailabilityFacts {
     /// Shared task facts: one availability call relates the same task set to
     /// every selected entity, so entries are shared rather than deep-cloned.
     pub related_tasks: Vec<std::rc::Rc<TaskFacts>>,
+    /// Related tasks before the in-flight + latest-N cut (XP-025 D-b).
+    pub related_tasks_total: usize,
 }
 /// Domain classification: storage reports facts, never decides availability policy.
 fn availability_item(
@@ -61,7 +63,7 @@ fn availability_item(
         .iter()
         .map(confirmed_gap)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),integrity:if unavailable{"failed"}else if availability==Availability::Absent{"not_applicable"}else{"verified"}.into(),confirmed_gaps,unresolved_ranges:if availability==Availability::Unknown{vec![range.clone()]}else{vec![]},availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks:f.related_tasks.iter().map(|f|summary(f,run)).collect(),limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]})
+    Ok(AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),integrity:if unavailable{"failed"}else if availability==Availability::Absent{"not_applicable"}else{"verified"}.into(),confirmed_gaps,unresolved_ranges:if availability==Availability::Unknown{vec![range.clone()]}else{vec![]},availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks_total:f.related_tasks_total,related_tasks_truncated:f.related_tasks_total>f.related_tasks.len(),related_tasks:f.related_tasks.iter().map(|f|summary(f,run)).collect(),limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]})
 }
 /// Canonical wire projection of a stored proven gap: the evidence string only
 /// references durable evidence identity (kind/id/sha256, fixed order) and never

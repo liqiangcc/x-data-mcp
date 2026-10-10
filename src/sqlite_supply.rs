@@ -1267,17 +1267,22 @@ fn scan_tasks(
 /// `task_scopes` (keys `scope_id(symbol, day|year)`, no JSON parsed) joined
 /// to `tasks` by primary key, then facts for only the matching tasks.
 /// Without a `scope_key` index the scan is O(task_scopes rows).
+/// Related tasks of one subject: the selected facts plus the total number of
+/// related (dataset-visible) tasks before the in-flight + latest-N cut.
+type RelatedSelection = (Vec<std::rc::Rc<TaskFacts>>, usize);
 type RelatedTasks = (
-    std::collections::HashMap<String, Vec<std::rc::Rc<TaskFacts>>>,
-    Vec<std::rc::Rc<TaskFacts>>,
+    std::collections::HashMap<String, RelatedSelection>,
+    RelatedSelection,
 );
+/// Finished tasks listed per entity besides all in-flight ones (XP-025 D-b).
+const RELATED_FINISHED_CAP: usize = 5;
 fn related_scopes_sql(keys: usize) -> String {
     let marks = (1..=keys)
         .map(|i| format!("?{i}"))
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "SELECT s.scope_key,t.created_at,t.task_id FROM task_scopes s \
+        "SELECT s.scope_key,t.created_at,t.task_id,t.status,json_extract(t.command_key_json,'$.dataset') FROM task_scopes s \
          CROSS JOIN tasks t ON t.task_id=s.task_id WHERE s.scope_key IN ({marks})"
     )
 }
@@ -1288,6 +1293,8 @@ fn related_tasks_for(
     access: &Access,
 ) -> Result<RelatedTasks, Error> {
     use std::collections::{BTreeSet, HashMap};
+    // (created_at DESC, task_id ASC, in_flight)
+    type Candidate = (std::cmp::Reverse<String>, String, bool);
     let mut key_symbol: HashMap<String, &String> = HashMap::new();
     for symbol in symbols {
         for period in ["day", "year"] {
@@ -1298,9 +1305,8 @@ fn related_tasks_for(
         }
     }
     let keys: Vec<&String> = key_symbol.keys().collect();
-    // symbol -> ordered set of (created_at, task_id)
-    let mut by_symbol: HashMap<&String, BTreeSet<(std::cmp::Reverse<String>, String)>> =
-        HashMap::new();
+    let in_flight = |status: &str| crate::sqlite_tasks::ACTIVE_STATUSES.contains(&status);
+    let mut by_symbol: HashMap<&String, BTreeSet<Candidate>> = HashMap::new();
     for chunk in keys.chunks(400) {
         let sql = related_scopes_sql(chunk.len());
         let mut q = c.prepare(&sql).map_err(storage)?;
@@ -1310,67 +1316,84 @@ fn related_tasks_for(
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
                 ))
             })
             .map_err(storage)?;
         for row in rows {
-            let (scope_key, created_at, task_id) = row.map_err(storage)?;
+            let (scope_key, created_at, task_id, status, dataset) = row.map_err(storage)?;
+            // Datasets the caller cannot see never count toward the total.
+            if !dataset
+                .as_deref()
+                .is_some_and(|d| dataset_visible(d, access))
+            {
+                continue;
+            }
             if let Some(symbol) = key_symbol.get(&scope_key) {
-                by_symbol
-                    .entry(symbol)
-                    .or_default()
-                    .insert((std::cmp::Reverse(created_at), task_id));
+                by_symbol.entry(symbol).or_default().insert((
+                    std::cmp::Reverse(created_at),
+                    task_id,
+                    in_flight(&status),
+                ));
             }
         }
     }
-    let mut catalog_ids: Vec<(std::cmp::Reverse<String>, String)> = vec![];
-    if catalog {
+    let mut catalog_ids: BTreeSet<Candidate> = BTreeSet::new();
+    if catalog && dataset_visible("securities.catalog", access) {
         let mut q = c
             .prepare(
-                "SELECT created_at,task_id FROM tasks \
-                 WHERE json_extract(command_key_json,'$.dataset')='securities.catalog' \
-                 ORDER BY created_at DESC,task_id ASC",
+                "SELECT created_at,task_id,status FROM tasks \
+                 WHERE json_extract(command_key_json,'$.dataset')='securities.catalog'",
             )
             .map_err(storage)?;
         let rows = q
             .query_map([], |r| {
                 Ok((
-                    std::cmp::Reverse(r.get::<_, String>(0)?),
+                    r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
                 ))
             })
             .map_err(storage)?;
         for row in rows {
-            catalog_ids.push(row.map_err(storage)?);
+            let (created_at, task_id, status) = row.map_err(storage)?;
+            catalog_ids.insert((std::cmp::Reverse(created_at), task_id, in_flight(&status)));
         }
     }
-    // Load each distinct task once.
+    // All in-flight tasks plus the newest RELATED_FINISHED_CAP finished ones,
+    // in list order; facts are loaded once per distinct task.
     let mut loaded: HashMap<String, Option<std::rc::Rc<TaskFacts>>> = HashMap::new();
-    let mut load = |id: &str| -> Result<Option<std::rc::Rc<TaskFacts>>, Error> {
-        if let Some(found) = loaded.get(id) {
-            return Ok(found.clone());
-        }
-        let facts = load_task_facts(c, id, access)?.map(std::rc::Rc::new);
-        loaded.insert(id.to_string(), facts.clone());
-        Ok(facts)
-    };
-    let mut related = HashMap::new();
-    for (symbol, ids) in by_symbol {
+    let mut select = |candidates: &BTreeSet<Candidate>| -> Result<RelatedSelection, Error> {
+        let mut finished = 0usize;
         let mut tasks = vec![];
-        for (_, id) in ids {
-            if let Some(f) = load(&id)? {
+        for (_, id, active) in candidates {
+            if !active {
+                if finished >= RELATED_FINISHED_CAP {
+                    continue;
+                }
+                finished += 1;
+            }
+            let facts = match loaded.get(id) {
+                Some(found) => found.clone(),
+                None => {
+                    let facts = load_task_facts(c, id, access)?.map(std::rc::Rc::new);
+                    loaded.insert(id.clone(), facts.clone());
+                    facts
+                }
+            };
+            if let Some(f) = facts {
                 tasks.push(f);
             }
         }
-        related.insert(symbol.clone(), tasks);
+        Ok((tasks, candidates.len()))
+    };
+    let mut related = HashMap::new();
+    for (symbol, candidates) in &by_symbol {
+        related.insert((*symbol).clone(), select(candidates)?);
     }
-    let mut catalog_tasks = vec![];
-    for (_, id) in catalog_ids {
-        if let Some(f) = load(&id)? {
-            catalog_tasks.push(f);
-        }
-    }
-    Ok((related, catalog_tasks))
+    let catalog_related = select(&catalog_ids)?;
+    Ok((related, catalog_related))
 }
 /// Connection-level version-identity comparison shared by
 /// `ReadRepository::verify` and `SqliteProgressRead::verify_versions`:
@@ -1686,22 +1709,22 @@ impl ObservationRepository for SqliteSupply {
             // one narrow task_scopes pass, facts for the matching tasks.
             let task_span = crate::stage_trace::span("availability.related_tasks");
             let symbols: Vec<String> = entities.iter().flatten().map(|e| e.symbol()).collect();
-            let (related, catalog_tasks) =
+            let (related, catalog_related) =
                 related_tasks_for(c, &symbols, entities.iter().any(Option::is_none), access)?;
             crate::stage_trace::note(
                 "availability.related_tasks_size",
                 &[(
                     "tasks",
-                    related.values().map(Vec::len).sum::<usize>() as u64
-                        + catalog_tasks.len() as u64,
+                    related.values().map(|(t, _)| t.len()).sum::<usize>() as u64
+                        + catalog_related.0.len() as u64,
                 )],
             );
             drop(task_span);
             let mut out = vec![];
             for entity in entities {
-                let related_tasks = match &entity {
+                let (related_tasks, related_tasks_total) = match &entity {
                     Some(e) => related.get(&e.symbol()).cloned().unwrap_or_default(),
-                    None => catalog_tasks.clone(),
+                    None => catalog_related.clone(),
                 };
                 let proven_gaps = match (&entity, plan.args.dataset.period()) {
                     (Some(e), Some(period)) => {
@@ -1720,6 +1743,7 @@ impl ObservationRepository for SqliteSupply {
                             integrity_failure: None,
                             proven_gaps,
                             related_tasks,
+                            related_tasks_total,
                         });
                     }
                     Err(Error::Integrity(reason) | Error::Base(reason)) => {
@@ -1732,6 +1756,7 @@ impl ObservationRepository for SqliteSupply {
                             integrity_failure: Some(reason),
                             proven_gaps,
                             related_tasks,
+                            related_tasks_total,
                         })
                     }
                     Err(e) => return Err(e),

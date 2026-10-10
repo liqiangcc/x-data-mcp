@@ -420,7 +420,11 @@ pub struct AvailabilityItem {
     pub last_record: Option<NaiveDate>,
     pub record_count: usize,
     pub freshness: String,
+    /// In-flight tasks plus the newest finished ones (generic-data-v5);
+    /// see `related_tasks_total` / `related_tasks_truncated`.
     pub related_tasks: Vec<TaskSummary>,
+    pub related_tasks_total: usize,
+    pub related_tasks_truncated: bool,
     pub limitations: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

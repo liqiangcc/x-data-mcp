@@ -157,7 +157,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
             .iter()
             .all(|r| !r["detail"].as_str().unwrap_or_default().contains("#225"))
     );
-    assert_eq!(republish["capability_revision"], "generic-data-v4");
+    assert_eq!(republish["capability_revision"], "generic-data-v5");
     let schema =
         |name: &str, field: &str| tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();
     for entry in x_data_mcp::data_supply::registry::entries() {
