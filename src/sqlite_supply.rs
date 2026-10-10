@@ -1656,6 +1656,13 @@ impl ObservationRepository for SqliteSupply {
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)
     }
+    fn verify_versions_committed(&self, refs: &[VersionRef]) -> Result<(), Error> {
+        if refs.is_empty() {
+            return Ok(());
+        }
+        self.market
+            .read(|c| verify_versions_meta_conn(c, &mut VerifyCtx::default(), refs))
+    }
     fn verify_publication_check(
         &self,
         receipt: &Option<crate::publication_verification::decision::Receipt>,

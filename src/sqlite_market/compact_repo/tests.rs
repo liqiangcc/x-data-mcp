@@ -7189,6 +7189,54 @@ mod xp011 {
             assert_eq!(sub[0].record_count, 2);
         }
 
+        /// XP-027 D-a3: availability's verify runs at the committed tier.
+        #[test]
+        fn availability_verify_uses_committed_tier_without_chain_rebuild() {
+            use crate::data_supply::observe::ObservationRepository;
+            let f = fixture();
+            let supply = SqliteSupply {
+                market: MarketBackend::Compact(f.repo.clone()),
+            };
+            let facts = run(&f, &plan(date(0), date(3)), false);
+            let refs: Vec<_> = facts
+                .iter()
+                .filter_map(|a| a.manifest.as_ref()?.version_ref.clone())
+                .collect();
+            assert_eq!(refs.len(), 1);
+            compact_versions::read_counts::reset();
+            supply.verify_versions_committed(&refs).unwrap();
+            let (_, committed_runs, _) = compact_versions::read_counts::reset();
+            assert_eq!(committed_runs, 0, "no full chain rebuild");
+            supply.verify_versions(&refs).unwrap();
+            let (_, full_runs, _) = compact_versions::read_counts::reset();
+            assert!(full_runs > 0, "control: full tier rebuilds the chain");
+            // Both tiers accept and reject the same references.
+            let mut wrong = refs.clone();
+            wrong[0].integrity_sha256 = "00".repeat(32);
+            assert!(supply.verify_versions_committed(&wrong).is_err());
+            assert!(supply.verify_versions(&wrong).is_err());
+        }
+
+        #[test]
+        fn tampered_committed_row_fails_committed_verify() {
+            use crate::data_supply::observe::ObservationRepository;
+            let f = fixture();
+            let supply = SqliteSupply {
+                market: MarketBackend::Compact(f.repo.clone()),
+            };
+            let refs: Vec<_> = run(&f, &plan(date(0), date(3)), false)
+                .iter()
+                .filter_map(|a| a.manifest.as_ref()?.version_ref.clone())
+                .collect();
+            tamper(
+                &f.path,
+                "UPDATE data_versions SET integrity_digest=\
+                 x'0000000000000000000000000000000000000000000000000000000000000000' \
+                 WHERE version_id='v2a'",
+            );
+            assert!(supply.verify_versions_committed(&refs).is_err());
+        }
+
         #[test]
         fn tampered_committed_row_still_reports_integrity_failure() {
             let f = fixture();

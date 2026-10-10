@@ -187,6 +187,13 @@ pub trait ObservationRepository {
         access: &Access,
     ) -> Result<Vec<AvailabilityFacts>, Error>;
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error>;
+    /// `verify_versions` at the committed-state tier (XP-027 D-a3), for
+    /// metadata-only observations (availability). Same expected == actual
+    /// `VersionRef` comparison; backends may skip chain reconstruction.
+    /// Content reads (`query_data`) keep the full tier.
+    fn verify_versions_committed(&self, refs: &[VersionRef]) -> Result<(), Error> {
+        self.verify_versions(refs)
+    }
     fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error>;
     fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error>;
     fn verify_publication_check(
@@ -675,7 +682,7 @@ impl<R: ObservationRepository> Observer<R> {
             return Err(invalid("cursor category"));
         };
         crate::stage_trace::timed("availability.verify_versions", || {
-            self.repository.verify_versions(
+            self.repository.verify_versions_committed(
                 &items
                     .iter()
                     .filter_map(|i| i.version_ref.clone())
