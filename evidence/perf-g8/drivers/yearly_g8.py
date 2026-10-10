@@ -4,12 +4,12 @@
 # XP-014: resolve_years' ~35-37 per-year get_data_availability probes per
 # chunk are replaced by ONE get_yearly_base_years call per <=100-entity
 # chunk (exact present years on the pinned base, single snapshot).
-import json, socket, sys, time
+import json, os, socket, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 
 SOCK = sys.argv[3] if len(sys.argv) > 3 else "/root/x-perf-g8/svc/run/mcp.sock"
-RUN_ID = "g8-y"
+RUN_ID = os.environ.get("G8_RUN_ID", "g8-y")  # new run = new request_ids + fresh pins
 POLL_S = 1.0
 SUMMARY = Path(sys.argv[1] if len(sys.argv) > 1 else "/root/x-perf-g8/yearly-run.json")
 LOG = Path(sys.argv[1] + ".log" if len(sys.argv) > 1 else "/root/x-perf-g8/yearly-run.log")
