@@ -22,6 +22,13 @@ const MAX_DELTA_DEPTH: i64 = 256;
 /// accept any parent depth in `[ROLLOVER_FLOOR, MAX_DELTA_DEPTH]` (XP-051).
 pub(crate) const ROLLOVER_FLOOR: u32 = 64;
 const ROLLOVER_SPREAD: u64 = 64;
+/// Fixture/test tooling only: when non-zero, every entity rolls over at this
+/// depth (0 = the per-entity staggered depth). Never set on a production path.
+static ROLLOVER_OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub(crate) fn set_rollover_override(depth: Option<u32>) {
+    ROLLOVER_OVERRIDE.store(depth.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
 
 /// Parent delta depth at which the next write for `entity` must be a rebuilt
 /// checkpoint (rollover) instead of a delta. Staggered per entity so the
@@ -29,6 +36,10 @@ const ROLLOVER_SPREAD: u64 = 64;
 /// processes: SHA-256 of the entity string, first 8 bytes big-endian.
 pub(crate) fn rollover_depth(entity: &str) -> u32 {
     use sha2::Digest as _;
+    let forced = ROLLOVER_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if forced != 0 {
+        return forced;
+    }
     let hash = sha2::Sha256::digest(entity.as_bytes());
     let mut head = [0u8; 8];
     head.copy_from_slice(&hash[..8]);

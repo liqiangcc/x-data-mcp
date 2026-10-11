@@ -398,9 +398,14 @@ impl SqliteCompactMarket {
             // like the envelope path in `stage_tx`. `stage_checkpoint` verifies
             // the published parent and that checkpoint == parent + ops.
             if base_facts.delta_depth >= compact_versions::rollover_depth(entity) {
-                let base_bars = compact_versions::leaf_bars(c, base_key)?;
-                let applied =
-                    compact_versions::apply_stored_delta(c, &base_bars, &ops, entity, Period::Day)?;
+                crate::stage_trace::note("rollover.count", &[("rollovers", 1)]);
+                let base_bars = crate::stage_trace::timed("rollover.base_bars", || {
+                    compact_versions::leaf_bars(c, base_key)
+                })?;
+                let applied = crate::stage_trace::timed("rollover.apply", || {
+                    compact_versions::apply_stored_delta(c, &base_bars, &ops, entity, Period::Day)
+                })?;
+                let clips_span = crate::stage_trace::span("rollover.clips");
                 let mut clips = Vec::new();
                 for chunk in applied.chunks(SEGMENT_ROWS) {
                     let segment = compact_v19::insert_segment(c, entity, Period::Day, chunk)?;
@@ -414,15 +419,18 @@ impl SqliteCompactMarket {
                         },
                     });
                 }
-                return compact_versions::stage_checkpoint(
-                    c,
-                    &draft,
-                    &clips,
-                    Some(&compact_versions::CheckpointBasis {
-                        parent_version_key: base_key,
-                        delta_ops: ops,
-                    }),
-                );
+                drop(clips_span);
+                return crate::stage_trace::timed("rollover.stage_checkpoint", || {
+                    compact_versions::stage_checkpoint(
+                        c,
+                        &draft,
+                        &clips,
+                        Some(&compact_versions::CheckpointBasis {
+                            parent_version_key: base_key,
+                            delta_ops: ops,
+                        }),
+                    )
+                });
             }
             let append_only = !bars.is_empty() && removes.is_empty() && {
                 let first = bars.first().unwrap().trade_day;
@@ -1413,6 +1421,7 @@ fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
                 if parent.delta_depth < compact_versions::rollover_depth(&entity) {
                     compact_versions::stage_delta(c, &draft, parent_key, &ops)?;
                 } else {
+                    crate::stage_trace::note("rollover.count", &[("rollovers", 1)]);
                     let clips = full_clips(c)?;
                     compact_versions::stage_checkpoint(
                         c,

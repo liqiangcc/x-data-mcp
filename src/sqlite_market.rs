@@ -1064,6 +1064,12 @@ pub(crate) mod compact_runtime;
 pub(crate) mod compact_v19;
 #[allow(dead_code)]
 pub(crate) mod compact_versions;
+
+/// Fixture / test tooling only (XP-051): force every entity to roll over at
+/// `depth` instead of its staggered depth; `None` restores the default.
+pub fn set_fixture_rollover_depth(depth: Option<u32>) {
+    compact_versions::set_rollover_override(depth);
+}
 pub(crate) mod envelope;
 pub(crate) mod gaps;
 pub(crate) mod manifest;
