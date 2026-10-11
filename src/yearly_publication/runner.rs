@@ -364,7 +364,8 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             as_of,
         );
         let aggregate_span = crate::stage_trace::span("yearly.exec.aggregate");
-        let annual = crate::yearly::aggregate_memoized(key, || {
+        let window_last = base.version().records.last().map(|bar| bar.date);
+        let annual = crate::yearly::aggregate_memoized(key, as_of, window_last, || {
             crate::yearly::aggregate(base.version(), Some(&years), as_of)
         })
         .map_err(|e| Error::Base(e.to_string()))?;

@@ -821,6 +821,46 @@ fn catalog_roundtrip_on_compact_schema_uses_bound_tasks() {
     );
 }
 
+/// XP-031 F1: staging is one transaction. A stage that fails after it already
+/// inserted new segments (here: a second candidate re-using a version id with
+/// different content) leaves no residue; before, each INSERT autocommitted.
+#[test]
+fn stage_failure_rolls_back_segments_and_rows() {
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    let counts = |path: &PathBuf| -> (i64, i64, i64) {
+        let c = rusqlite::Connection::open(path).unwrap();
+        let n = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        (
+            n("SELECT count(*) FROM bar_segments"),
+            n("SELECT count(*) FROM segment_bars"),
+            n("SELECT count(*) FROM data_versions"),
+        )
+    };
+    let first = mk_version("v1", vec![bar(0, 100), bar(1, 110), bar(2, 120)]);
+    repo.stage(&envelope(&first, source("gen-1"), None))
+        .unwrap();
+    let before = counts(&path);
+    assert_eq!(before.2, 1);
+    // Same version id, different bars: new segment rows are inserted first,
+    // then the version row insert / static draft check fails.
+    let clash = mk_version("v1", vec![bar(0, 999), bar(1, 998), bar(2, 997)]);
+    assert!(
+        repo.stage(&envelope(&clash, source("gen-1"), None))
+            .is_err()
+    );
+    assert_eq!(
+        counts(&path),
+        before,
+        "failed stage must leave no rows behind"
+    );
+    // The connection is back in autocommit and usable.
+    let second = mk_version("v3", vec![bar(0, 100), bar(1, 110)]);
+    repo.stage(&envelope(&second, source("gen-1"), None))
+        .unwrap();
+    assert_eq!(counts(&path).2, 2);
+}
+
 #[test]
 fn yearly_derive_commit_on_compact_schema() {
     use crate::market_update::tasks::Operation;
@@ -964,6 +1004,208 @@ fn yearly_derive_commit_on_compact_schema() {
         })
         .unwrap();
     assert_eq!(audit["base_daily_version_id"], json!("v1"));
+}
+
+/// XP-030 R2: yearly availability stats at the committed tier equal the
+/// fully verified path field by field (manifest incl. metadata + lineage,
+/// first/last/count) and fail closed on a tampered committed row.
+#[test]
+fn yearly_availability_committed_stats_equal_full_path() {
+    use crate::market_update::tasks::Operation;
+    use crate::task_control::{Contract, RequestOutcome};
+    use crate::yearly_publication::{
+        DerivationEvidence,
+        runner::{YearlyExecution, YearlyRunner, YearlyVerifier},
+        tasks::YearlyContract,
+    };
+
+    struct Stub;
+    impl YearlyVerifier for Stub {
+        fn verify(
+            &self,
+            base: &CheckedRecord,
+            years: &BTreeSet<i32>,
+            _annual: &crate::yearly::AnnualSeries,
+            derived_at: DateTime<Utc>,
+        ) -> Result<DerivationEvidence, crate::market_data::SourceError> {
+            Ok(DerivationEvidence {
+                base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
+                years: years.clone(),
+                as_of: derived_at
+                    .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                    .date_naive(),
+                coverage: CoverageEvidence::complete("stub re-aggregation verified"),
+            })
+        }
+    }
+
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    // Publish a daily base covering 2025 and 2026 through the real path.
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+    let days = [
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 6, 30).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 18).unwrap(),
+    ]
+    .into_iter()
+    .map(compact_market::epoch_day);
+    let version = mk_version(
+        "v1",
+        days.enumerate()
+            .map(|(i, d)| bar(d, 100 + i as i64))
+            .collect(),
+    );
+    repo.stage(&envelope(&version, source("gen-1"), None))
+        .unwrap();
+    let candidate = repo.candidate("v1").unwrap();
+    repo.mark_validated(&candidate).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: candidate.clone(),
+        required_heads: vec![(Scope::of(&candidate.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    // Accept the yearly task through the real contract, then run the item.
+    let contract = YearlyContract {
+        operation: Operation::Update,
+        repository: repo.clone(),
+        today: || NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+    };
+    let work = contract
+        .resolve(&json!({"items":[{
+            "symbol":"sh.600006",
+            "base_daily_version_id":"v1",
+            "years":[2025,2026],
+            "intent":{"CurrentHead":{"expected_daily_head":"v1","expected_yearly_head":null}},
+            "comparison_version_id":null
+        }]}))
+        .unwrap();
+    let command = Command {
+        key: contract.key(),
+        intent: json!({}),
+    };
+    let acceptance = repo
+        .accept("req-yearly", &command, &work, RUN, None)
+        .unwrap();
+    let RequestOutcome::Task(snapshot) = acceptance.record.outcome else {
+        panic!("expected task outcome")
+    };
+    let yearly_task = snapshot.task.task_id.clone();
+    let item_id = snapshot.items[0].spec.item_id.clone();
+
+    let runner = YearlyRunner {
+        repository: repo.clone(),
+        run_id: RUN.into(),
+        derived_at: ts(),
+    };
+    let outcome = runner.run_item(&yearly_task, &item_id, &Stub).unwrap();
+    let YearlyExecution::Published(receipt) = outcome else {
+        let snap = repo.task(&yearly_task).unwrap();
+        panic!("yearly item did not publish: {:?}", snap.items[0].outcome)
+    };
+
+    use crate::data_supply::Access;
+    use crate::data_supply::observe::ObservationRepository;
+    use crate::data_supply::query::QueryPlan;
+    use crate::data_supply::wire::{
+        ContractVersion, Dataset, Exchange, Filter, Query, Security, Selection, VersionChoice,
+    };
+    use crate::sqlite_market::backend::MarketBackend;
+    use crate::sqlite_supply::SqliteSupply;
+    let supply = SqliteSupply {
+        market: MarketBackend::Compact(repo.clone()),
+    };
+    let plan = |start_year: i32, end_year: i32| {
+        QueryPlan::new(
+            Query {
+                dataset: Dataset::Yearly,
+                contract_version: ContractVersion::V1,
+                selection: Selection::Single {
+                    entity: Security {
+                        exchange: Exchange::Sh,
+                        code: "600006".into(),
+                    },
+                },
+                filter: Filter::Yearly {
+                    start_year,
+                    end_year,
+                },
+                version: VersionChoice::LatestPerEntity,
+                page_size: 10,
+                cursor: None,
+            },
+            &Access::local(),
+        )
+        .unwrap()
+    };
+    let run = |plan: &QueryPlan, full: bool| {
+        crate::sqlite_supply::FORCE_FULL_STATS.with(|c| c.set(full));
+        let out = supply.availability(plan, &Access::local());
+        crate::sqlite_supply::FORCE_FULL_STATS.with(|c| c.set(false));
+        out.unwrap()
+    };
+    // Covering range: committed tier is eligible and must equal the full path.
+    compact_versions::read_counts::reset();
+    let fast = run(&plan(2000, 2100), false);
+    let (_, fast_runs, _) = compact_versions::read_counts::reset();
+    let full = run(&plan(2000, 2100), true);
+    let (_, full_runs, _) = compact_versions::read_counts::reset();
+    assert_eq!(
+        fast_runs, 0,
+        "committed yearly stats must not walk/verify the chain"
+    );
+    assert!(full_runs > 0, "control: full path verifies the chain");
+    assert_eq!((fast.len(), full.len()), (1, 1));
+    let (a, b) = (&fast[0], &full[0]);
+    assert!(a.integrity_failure.is_none() && b.integrity_failure.is_none());
+    assert_eq!(
+        a.manifest, b.manifest,
+        "manifest incl. metadata and lineage"
+    );
+    assert!(
+        a.manifest
+            .as_ref()
+            .unwrap()
+            .metadata
+            .as_ref()
+            .unwrap()
+            .lineage
+            .is_some()
+    );
+    assert_eq!(a.first_record, b.first_record);
+    assert_eq!(a.last_record, b.last_record);
+    assert_eq!(a.record_count, b.record_count);
+    assert_eq!(a.record_count, 2);
+    // Sub-range (only 2026): not eligible, still the full path, same answer shape.
+    compact_versions::read_counts::reset();
+    let sub = run(&plan(2026, 2026), false);
+    let (_, sub_runs, _) = compact_versions::read_counts::reset();
+    assert!(sub_runs > 0);
+    assert_eq!(sub[0].record_count, 1);
+    // Tampered committed row: the covering (fast) path still fails closed.
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=OFF; PRAGMA ignore_check_constraints=ON")
+            .unwrap();
+        c.execute(
+            "UPDATE data_versions SET integrity_digest=\
+             x'0000000000000000000000000000000000000000000000000000000000000000' \
+             WHERE version_id=?1",
+            [&receipt.version_id],
+        )
+        .unwrap();
+    }
+    let broken = run(&plan(2000, 2100), false);
+    assert!(
+        broken[0].integrity_failure.is_some(),
+        "committed row verification must fail closed"
+    );
 }
 
 #[test]
@@ -6947,6 +7189,283 @@ mod xp011 {
                 out[0],
                 PresenceOutcome::Unavailable(YearPresenceReason::IntegrityFailure)
             ));
+        }
+    }
+
+    /// XP-031 R3: `get_yearly_base_years` verifies the LEAF node completely
+    /// and ANCESTOR nodes at the committed tier (approved by the user
+    /// 2026-10-11).
+    mod xp031_r3 {
+        use super::*;
+        use crate::data_supply::presence::{PresenceOutcome, PresencePlan, PresenceRepository};
+        use crate::data_supply::wire::{
+            ContractVersion, Exchange, Security, YearPresenceItem, YearPresenceQuery,
+            YearPresenceReason,
+        };
+        use crate::sqlite_market::backend::MarketBackend;
+        use crate::sqlite_supply::SqliteSupply;
+        use chrono::Datelike;
+
+        fn day(y: i32, m: u32, d: u32) -> i64 {
+            crate::compact_market::epoch_day(chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap())
+        }
+        fn plan(version_id: &str) -> PresencePlan {
+            PresencePlan::new(
+                YearPresenceQuery {
+                    contract_version: ContractVersion::V1,
+                    items: vec![YearPresenceItem {
+                        entity: Security {
+                            exchange: Exchange::Sh,
+                            code: "600006".into(),
+                        },
+                        base_daily_version_id: version_id.into(),
+                        start_year: 1,
+                        end_year: 9999,
+                    }],
+                },
+                &Access::local(),
+            )
+            .unwrap()
+        }
+        fn supply(repo: &SqliteCompactMarket) -> SqliteSupply {
+            SqliteSupply {
+                market: MarketBackend::Compact(repo.clone()),
+            }
+        }
+        /// Publishes `new_id` as a delta over `parent` through the real path.
+        fn publish_delta(
+            repo: &SqliteCompactMarket,
+            n: u32,
+            parent: &str,
+            new_id: &str,
+            bars: Vec<Bar>,
+        ) {
+            let scope = task_control::legacy::scope_id("sh.600006", "day");
+            let work = FrozenWork {
+                items: vec![ItemSpec {
+                    item_id: ITEM.into(),
+                    target: json!({"symbol": "sh.600006", "period": "day"}),
+                    progress_unit: "bars".into(),
+                    frozen_inputs: json!({}),
+                    scope_keys: BTreeSet::from([scope.clone()]),
+                }],
+                scopes: BTreeSet::from([scope]),
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: CommandKey {
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: "v1".into(),
+                },
+                intent: json!({}),
+            };
+            let task_id = match repo
+                .accept(&format!("req-r3-{n}"), &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+                _ => panic!("expected task outcome"),
+            };
+            let revision = start_item(repo, &task_id);
+            let version = mk_version(new_id, bars);
+            repo.stage(&envelope(&version, source("gen-2"), Some(parent)))
+                .unwrap();
+            let checked = repo.candidate(new_id).unwrap();
+            repo.mark_validated(&checked).unwrap();
+            repo.commit(&PublishPlan {
+                command: Publication {
+                    publication_id: format!("upd-r3-{n}"),
+                    version_id: new_id.into(),
+                    task_id,
+                    item_id: ITEM.into(),
+                    run_id: RUN.into(),
+                    expected_revision: revision,
+                    intent: PublishIntent::Daily {
+                        expected_head: Some(parent.into()),
+                    },
+                },
+                record: checked.clone(),
+                required_heads: vec![(Scope::of(&checked.version), Some(parent.into()))],
+                promote: None,
+                base_digest: None,
+            })
+            .unwrap();
+        }
+        /// v1 (checkpoint, 2023-24) -> v2 (tail-only append delta: 2025 + 2026
+        /// bars) -> v3 (tail-only append delta: another 2026 bar). The Append
+        /// commit path rejects rewrites of existing bars, so overwrite/remove
+        /// deltas cannot be built through it.
+        fn chain(repo: &SqliteCompactMarket) {
+            publish_head(
+                repo,
+                "req-a",
+                "pub-a",
+                "sh.600006",
+                "v1",
+                vec![bar(day(2023, 12, 29), 100), bar(day(2024, 1, 5), 100)],
+            );
+            publish_delta(
+                repo,
+                1,
+                "v1",
+                "v2",
+                vec![
+                    bar(day(2023, 12, 29), 100),
+                    bar(day(2024, 1, 5), 100),
+                    bar(day(2025, 2, 3), 110),
+                    bar(day(2026, 1, 5), 120),
+                ],
+            );
+            publish_delta(
+                repo,
+                2,
+                "v2",
+                "v3",
+                vec![
+                    bar(day(2023, 12, 29), 100),
+                    bar(day(2024, 1, 5), 100),
+                    bar(day(2025, 2, 3), 110),
+                    bar(day(2026, 1, 5), 120),
+                    bar(day(2026, 3, 4), 130),
+                ],
+            );
+        }
+        fn years(out: &[PresenceOutcome]) -> Vec<i32> {
+            let PresenceOutcome::Resolved { years, .. } = &out[0] else {
+                panic!("expected a resolved presence")
+            };
+            years.clone()
+        }
+        fn failed(out: &[PresenceOutcome]) -> bool {
+            matches!(
+                out[0],
+                PresenceOutcome::Unavailable(YearPresenceReason::IntegrityFailure)
+            )
+        }
+
+        #[test]
+        fn years_equal_the_fully_verified_path_across_a_delta_chain() {
+            let dir = tempdir();
+            let (_path, repo) = repo(&dir);
+            chain(&repo);
+            for id in ["v1", "v2", "v3"] {
+                let out = supply(&repo)
+                    .year_presence(&plan(id), &Access::local())
+                    .unwrap();
+                let expected: BTreeSet<i32> = repo
+                    .fixed(id)
+                    .unwrap()
+                    .version
+                    .records
+                    .iter()
+                    .map(|b| b.date.year())
+                    .collect();
+                assert_eq!(
+                    years(&out),
+                    expected.into_iter().collect::<Vec<_>>(),
+                    "{id}"
+                );
+            }
+            let out = supply(&repo)
+                .year_presence(&plan("v3"), &Access::local())
+                .unwrap();
+            assert_eq!(years(&out), vec![2023, 2024, 2025, 2026]);
+            // The reference carries the same stored integrity digest.
+            let PresenceOutcome::Resolved { version_ref, .. } = &out[0] else {
+                panic!()
+            };
+            let fixed = repo.fixed("v3").unwrap();
+            assert_eq!(
+                Some(version_ref.integrity_sha256.as_str()),
+                fixed.raw()["integrity_sha256"].as_str()
+            );
+        }
+
+        #[test]
+        fn ancestors_are_not_fully_node_verified() {
+            let dir = tempdir();
+            let (_path, repo) = repo(&dir);
+            chain(&repo);
+            let supply = supply(&repo);
+            compact_versions::read_counts::reset();
+            supply.year_presence(&plan("v3"), &Access::local()).unwrap();
+            assert_eq!(
+                compact_versions::read_counts::node_verifies(),
+                1,
+                "only the leaf runs verify_published_node_with"
+            );
+            compact_versions::read_counts::reset();
+            repo.fixed("v3").unwrap();
+            assert_eq!(
+                compact_versions::read_counts::node_verifies(),
+                3,
+                "control: the full path verifies every node of the 3-node chain"
+            );
+        }
+
+        #[test]
+        fn tampered_leaf_row_fails_closed() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            chain(&repo);
+            tamper(
+                &path,
+                "UPDATE data_versions SET integrity_digest=\
+                 x'0000000000000000000000000000000000000000000000000000000000000000' \
+                 WHERE version_id='v3'",
+            );
+            let out = supply(&repo)
+                .year_presence(&plan("v3"), &Access::local())
+                .unwrap();
+            assert!(failed(&out));
+        }
+
+        #[test]
+        fn tampered_ancestor_row_digest_fails_closed() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            chain(&repo);
+            tamper(
+                &path,
+                "UPDATE data_versions SET integrity_digest=\
+                 x'0000000000000000000000000000000000000000000000000000000000000000' \
+                 WHERE version_id='v2'",
+            );
+            let out = supply(&repo)
+                .year_presence(&plan("v3"), &Access::local())
+                .unwrap();
+            assert!(failed(&out), "ancestor row-level digest is still verified");
+        }
+
+        /// APPROVED DIFFERENCE (user, 2026-10-11): ancestors are verified at
+        /// the committed tier — row-level digest, chain linkage, per-node
+        /// projection digests — NOT with the full `verify_node_common_with`
+        /// (evidence / source-binding / unit rows). This implementation keeps
+        /// the chain walk, which still decodes and digest-checks every
+        /// segment, so damaged ancestor segment BYTES are detected here too
+        /// (stricter than the approved minimum). The full path additionally
+        /// stays authoritative everywhere that consumes bars or certifies a
+        /// chain: `fixed`, publish commit, startup self-check, `task_sqlite
+        /// check`, `query_data`.
+        #[test]
+        fn tampered_ancestor_segment_bytes_are_still_detected_by_both_paths() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            chain(&repo);
+            // segment_bars is WITHOUT ROWID: target the oldest segment (v1's checkpoint).
+            tamper(
+                &path,
+                "UPDATE segment_bars SET close_cents=close_cents+1 \
+                 WHERE segment_key=(SELECT MIN(segment_key) FROM segment_bars)",
+            );
+            let out = supply(&repo)
+                .year_presence(&plan("v3"), &Access::local())
+                .unwrap();
+            assert!(failed(&out));
+            assert!(repo.fixed("v3").is_err());
         }
     }
 

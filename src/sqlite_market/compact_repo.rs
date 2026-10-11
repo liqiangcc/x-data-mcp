@@ -1125,16 +1125,22 @@ pub(crate) fn materialize_published(
     }
 }
 
-fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
-    let record = compat::check(raw)?;
+fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
+    let _total = crate::stage_trace::span("stage.total");
+    crate::stage_trace::note(
+        "stage.autocommit",
+        &[("autocommit", c.is_autocommit() as u64)],
+    );
+    let record = crate::stage_trace::timed("stage.compat_check", || compat::check(raw))?;
     let version_evidence = VersionEvidence {
         source: record.version.source.clone(),
         coverage_reason: record.batch.coverage.reason.clone(),
         unit_currency: record.batch.unit_currency.clone(),
         adjustment_evidence: record.batch.adjustment_evidence.clone(),
     };
-    let evidence_digest =
-        compact_versions::put_evidence(c, EvidenceKind::Version, &json!(version_evidence))?;
+    let evidence_digest = crate::stage_trace::timed("stage.put_evidence", || {
+        compact_versions::put_evidence(c, EvidenceKind::Version, &json!(version_evidence))
+    })?;
     let period = record.version.period;
     let entity = record.version.symbol.clone();
     let bars = record
@@ -1146,7 +1152,8 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
         .map_err(super::integrity)?;
     // Full-candidate clips are only materialized for checkpoint staging;
     // content-addressed segments let unchanged chunks reuse existing rows.
-    let full_clips = |c: &mut Connection| -> Result<Vec<StoredClip>, Error> {
+    let full_clips = |c: &Connection| -> Result<Vec<StoredClip>, Error> {
+        let _span = crate::stage_trace::span("stage.full_clips");
         let mut clips = Vec::new();
         for chunk in bars.chunks(SEGMENT_ROWS) {
             let segment = compact_v19::insert_segment(c, &entity, period, chunk)?;
@@ -1172,8 +1179,10 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                 .yearly_derivation
                 .clone()
                 .ok_or_else(|| invalid("yearly record lacks derivation"))?;
+            let lineage_span = crate::stage_trace::span("stage.yearly_base_facts");
             let base_key = version_key(c, &derivation.base_daily_version_id)?;
             let base = compact_versions::result_facts(c, base_key)?;
+            drop(lineage_span);
             if base.state != CompactVersionState::Published
                 || base.period != Period::Day
                 || base.entity != entity
@@ -1831,7 +1840,21 @@ fn base_count(c: &Connection, key: i64) -> Result<u64, Error> {
 
 impl MarketRepository for SqliteCompactMarket {
     fn stage(&self, raw: &Value) -> Result<(), Error> {
-        self.write(|c| stage_tx(c, raw))
+        // XP-031 F1: the whole staging (evidence, segments, version, lineage,
+        // clips) commits once. Before, every INSERT was its own autocommit
+        // transaction on a synchronous=FULL WAL connection; a mid-way failure
+        // also left committed partial staged rows. Now it rolls back whole.
+        self.write(|c| {
+            let tx = crate::stage_trace::timed("coord.tx.begin", || {
+                c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(storage)
+            })?;
+            crate::stage_trace::timed("stage.tx_body", || stage_tx(&tx, raw))?;
+            crate::stage_trace::timed("coord.tx.commit", || {
+                tx.commit()
+                    .map_err(|error| Error::OutcomeUnknown(error.to_string()))
+            })
+        })
     }
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
         let _span = crate::stage_trace::span("cand.candidate");
@@ -2620,8 +2643,10 @@ impl TaskRepository for SqliteCompactMarket {
             return Err(task_control::Error::InvalidCommand("empty identity".into()));
         }
         let _write = crate::stage_trace::span("repo.accept.coordinator_write");
+        // One transaction: a failure after the first INSERT rolls the
+        // whole acceptance back instead of committing each row alone.
         self.coordinator
-            .write(|c| {
+            .transaction(|c| {
                 crate::sqlite_tasks::accept_tx(c, id, command, work, run, retry)
                     .map_err(Error::Task)
             })
@@ -2637,8 +2662,9 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, task_control::Error> {
+        // task row + item/occupancy rows + execution-start marker: one commit.
         self.coordinator
-            .write(|c| {
+            .transaction(|c| {
                 crate::sqlite_tasks::transition_tx(c, id, revision, run, change)
                     .map_err(Error::Task)
             })
@@ -2653,8 +2679,9 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<(), task_control::Error> {
+        // task delta + item delta + execution-start marker: one commit.
         self.coordinator
-            .write(|c| {
+            .transaction(|c| {
                 crate::sqlite_tasks::transition_light_tx(c, s, run, change).map_err(Error::Task)
             })
             .map_err(|e| match e {

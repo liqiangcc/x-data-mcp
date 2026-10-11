@@ -143,7 +143,7 @@ fn presence_item(
                 }
                 Err(error) => return Err(error),
             };
-        let facts = match ctx.facts(c, key) {
+        let facts = match crate::stage_trace::timed("presence.item.facts", || ctx.facts(c, key)) {
             Ok(facts) => facts,
             Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
                 return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
@@ -153,22 +153,40 @@ fn presence_item(
         if facts.state != crate::sqlite_market::compact_versions::CompactVersionState::Published {
             return Ok(Outcome::Unavailable(YearPresenceReason::BaseUnavailable));
         }
-        let (_, verified) = match ctx.verified(c, key) {
-            Ok(verified) => verified,
+        // XP-031 R3: leaf = complete verification, ancestors = committed tier.
+        let history = match crate::stage_trace::timed("presence.item.verified", || {
+            ctx.presence_history(c, key)
+        }) {
+            Ok(h) => h,
             Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
                 return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
             }
             Err(error) => return Err(error),
         };
-        if verified.version.symbol != item.entity.symbol()
-            || verified.version.period != crate::market_data::Period::Day
+        if history.entity != item.entity.symbol()
+            || history.period != crate::market_data::Period::Day
         {
             return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
         }
-        Ok(resolved(
-            crate::compact_market::digest_hex(&verified.integrity_digest),
-            &verified.version,
-        ))
+        let mut years = std::collections::BTreeSet::new();
+        for day in &history.days {
+            let Ok(date) = crate::compact_market::epoch_date(*day) else {
+                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
+            };
+            if date >= first && date <= last {
+                years.insert(date.year());
+            }
+        }
+        Ok(Outcome::Resolved {
+            version_ref: VersionRef {
+                dataset: Dataset::Daily,
+                contract_version: ContractVersion::V1,
+                entity: Some(item.entity.clone()),
+                version_id: item.base_daily_version_id.clone(),
+                integrity_sha256: crate::compact_market::digest_hex(&history.integrity_digest),
+            },
+            years: years.into_iter().collect(),
+        })
     } else {
         let record = match read_record(c, &item.base_daily_version_id, true, false) {
             Ok(record) => record,
@@ -462,14 +480,18 @@ type AvailabilityStats = (
 thread_local! {
     pub(crate) static FORCE_FULL_STATS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
-/// Committed-tier daily stats (XP-025 D, approved): when the query range
-/// covers the whole published version, the manifest, metadata and
-/// first/last/count come from the version row (its published fields are
-/// still verified by `committed_facts`) and its version-evidence row — no
-/// chain walk, no node verification, no bar decoding. Sub-range filters,
-/// unpublished versions and non-compact stores return `None` and keep the
-/// fully verified path.
-fn committed_daily_stats(
+/// Committed-tier market stats (XP-025 D daily, XP-030 R2 yearly; H10
+/// approved "availability per-entity stats/verification at committed
+/// tier"): when the query range covers the whole published version, the
+/// manifest, metadata and first/last/count come from the version row (its
+/// published fields, including the yearly lineage binding, are still
+/// verified by `committed_facts`) and its version-evidence row — no chain
+/// walk, no node verification, no bar decoding. For yearly versions the
+/// lineage is the stored `yearly_lineage` row; the per-bar re-aggregation
+/// against the base (`YearlyMetaScan`) is not repeated at this tier.
+/// Sub-range filters, unpublished versions and non-compact stores return
+/// `None` and keep the fully verified path.
+fn committed_market_stats(
     c: &Connection,
     ctx: &mut VerifyCtx,
     plan: &QueryPlan,
@@ -486,7 +508,8 @@ fn committed_daily_stats(
     if facts.state != CompactVersionState::Published {
         return Ok(None);
     }
-    if facts.entity != entity.symbol() || facts.period != crate::market_data::Period::Day {
+    let dataset = plan.args.dataset;
+    if facts.entity != entity.symbol() || Some(facts.period) != dataset.period() {
         return Err(Error::Integrity("version entity/dataset mismatch".into()));
     }
     let (start, end) = market_range(plan)?;
@@ -514,9 +537,14 @@ fn committed_daily_stats(
         .map_err(|e: chrono::ParseError| Error::Integrity(e.to_string()))?;
     let day =
         |d: i64| crate::compact_market::epoch_date(d).map_err(|e| Error::Integrity(e.to_string()));
+    let lineage = if dataset == Dataset::Yearly {
+        Some(compact_versions::committed_yearly_lineage(c, key)?)
+    } else {
+        None
+    };
     let manifest = ManifestEntry {
         entity: Some(entity.clone()),
-        version_ref: Some(market_ref_facts(Dataset::Daily, entity, &facts)?),
+        version_ref: Some(market_ref_facts(dataset, entity, &facts)?),
         status: ManifestStatus::Present,
         metadata: Some(Metadata {
             source: evidence.source,
@@ -530,7 +558,16 @@ fn committed_daily_stats(
             coverage_reason: evidence.coverage_reason,
             units: unit_evidence(&evidence.unit_currency),
             adjustment: Some(adjustment_evidence(&evidence.adjustment_evidence)),
-            lineage: None,
+            lineage: lineage
+                .map(|l| {
+                    Ok::<_, Error>(Lineage {
+                        base_daily_version_id: l.base_daily_version_id,
+                        algorithm_version: l.algorithm_version,
+                        first_trading_date: day(l.first_trade_day)?,
+                        last_trading_date: day(l.last_trade_day)?,
+                    })
+                })
+                .transpose()?,
         }),
     };
     Ok(Some((
@@ -595,10 +632,10 @@ fn availability_stats(
     let force_full = FORCE_FULL_STATS.with(|f| f.get());
     #[cfg(not(test))]
     let force_full = false;
-    if plan.args.dataset == Dataset::Daily
+    if matches!(plan.args.dataset, Dataset::Daily | Dataset::Yearly)
         && !force_full
         && crate::sqlite_market::is_compact_schema(c)?
-        && let Some(stats) = committed_daily_stats(c, ctx, plan, entity, &id)?
+        && let Some(stats) = committed_market_stats(c, ctx, plan, entity, &id)?
     {
         return Ok(stats);
     }
@@ -607,7 +644,15 @@ fn availability_stats(
     // byte-identical, and the in-window stats come from the windowed leaf
     // read (chain linkage + clip digests still enforced) instead of the
     // materialized `records` list.
-    if let Some(r) = slim_market(c, ctx, plan.args.dataset, entity, &id)? {
+    let slim = crate::stage_trace::timed("avail.stats.slim_market", || {
+        slim_market(c, ctx, plan.args.dataset, entity, &id)
+    })?;
+    if let Some(r) = slim {
+        let _window = crate::stage_trace::span(if plan.args.dataset == Dataset::Yearly {
+            "avail.stats.yearly_window_and_meta"
+        } else {
+            "avail.stats.daily_window"
+        });
         let manifest = ManifestEntry {
             entity: Some(entity.clone()),
             version_ref: Some(market_ref(plan.args.dataset, entity, &r)),

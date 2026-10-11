@@ -281,12 +281,16 @@ pub(crate) fn stage_checkpoint(
     clips: &[StoredClip],
     basis: Option<&CheckpointBasis>,
 ) -> Result<i64, Error> {
-    check_draft_static(c, draft)?;
-    let bars = flatten_clips(c, &draft.entity, draft.period, clips)?;
+    let _total = crate::stage_trace::span("ckpt.total");
+    crate::stage_trace::timed("ckpt.check_draft_static", || check_draft_static(c, draft))?;
+    let bars = crate::stage_trace::timed("ckpt.flatten_clips", || {
+        flatten_clips(c, &draft.entity, draft.period, clips)
+    })?;
     let plain: Vec<SegmentClip> = clips.iter().map(|stored| stored.clip.clone()).collect();
-    let projection =
+    let projection = crate::stage_trace::timed("ckpt.projection_digest", || {
         compact_market::checkpoint_projection_digest(&draft.entity, draft.period, &plain)
-            .map_err(integrity)?;
+            .map_err(integrity)
+    })?;
     if let Some(basis) = basis {
         if basis.delta_ops.is_empty() {
             return Err(integrity("checkpoint basis requires at least one delta op"));
@@ -314,13 +318,23 @@ pub(crate) fn stage_checkpoint(
             ));
         }
     }
-    check_draft_lineage(c, draft, &bars)?;
-    check_draft_evidence(c, draft, &bars)?;
-    let key = insert_version_row(c, draft, None, 1, 0, &bars, projection)?;
+    crate::stage_trace::timed("ckpt.check_draft_lineage", || {
+        check_draft_lineage(c, draft, &bars)
+    })?;
+    crate::stage_trace::timed("ckpt.check_draft_evidence", || {
+        check_draft_evidence(c, draft, &bars)
+    })?;
+    let key = crate::stage_trace::timed("ckpt.insert_version_row", || {
+        insert_version_row(c, draft, None, 1, 0, &bars, projection)
+    })?;
     if let Some(lineage) = &draft.yearly_lineage {
-        insert_lineage_row(c, key, lineage)?;
+        crate::stage_trace::timed("ckpt.insert_lineage_row", || {
+            insert_lineage_row(c, key, lineage)
+        })?;
     }
-    let written = compact_v19::write_checkpoint(c, key, &draft.entity, draft.period, clips)?;
+    let written = crate::stage_trace::timed("ckpt.write_checkpoint", || {
+        compact_v19::write_checkpoint(c, key, &draft.entity, draft.period, clips)
+    })?;
     if written != projection {
         return Err(integrity("persisted checkpoint digest mismatch"));
     }
@@ -577,13 +591,17 @@ pub(crate) fn mark_validated(c: &Connection, version_key: i64) -> Result<(), Err
     if row.state != 1 {
         return Err(integrity("version is not staged"));
     }
-    verify_staged(c, &row)?;
-    let changed = c
-        .execute(
+    crate::stage_trace::timed("ver.mark_validated.verify_staged", || {
+        verify_staged(c, &row)
+    })?;
+    // Autocommit statement: its own WAL commit (+fsync under synchronous=FULL).
+    let changed = crate::stage_trace::timed("ver.mark_validated.update_autocommit", || {
+        c.execute(
             "UPDATE data_versions SET state=2 WHERE version_key=?1 AND state=1",
             params![version_key],
         )
-        .map_err(storage)?;
+        .map_err(storage)
+    })?;
     if changed != 1 {
         return Err(integrity("version state transition did not apply"));
     }
@@ -939,6 +957,62 @@ fn fixed_by_key_scoped(
     })
 }
 
+/// Year-presence history of a published daily leaf (XP-031 R3, user
+/// approved 2026-10-11): the LEAF node gets the complete published-node
+/// verification (`verify_published_node_with`), ANCESTOR nodes only the
+/// committed tier — chain linkage, `delta_depth` continuity, published
+/// state, per-node projection digests (all enforced by the chain walk) and
+/// the row-level `verify_published_fields` digest. Ancestors no longer
+/// re-read evidence / source-binding / unit rows or recompute node checks
+/// (`verify_node_common_with`).
+///
+/// KNOWN, APPROVED DIFFERENCE vs `fixed_by_key`: damage that only
+/// `verify_node_common_with` catches on an ancestor (e.g. an ancestor's
+/// evidence or source-binding rows) is not reported here; it is still
+/// reported by `fixed`/`verify_leaf_projection` (publish commit, startup
+/// self-check, `task_sqlite check`, `query_data`). Never feed this result
+/// to a caller that consumes bars or certifies the chain.
+pub(crate) struct PresenceHistory {
+    pub entity: String,
+    pub period: Period,
+    pub integrity_digest: Digest,
+    /// Trade days of the leaf projection, ascending.
+    pub days: Vec<i64>,
+}
+
+pub(crate) fn presence_history_ctx(
+    c: &Connection,
+    key: i64,
+    sctx: &mut compact_v19::SegmentReadCtx,
+) -> Result<PresenceHistory, Error> {
+    let tracing = crate::stage_trace::enabled();
+    let mut ancestor_nodes = 0u64;
+    let mut ancestor_us = 0u64;
+    let (leaf, bars) = walk_chain_scoped(c, key, Some(sctx), |row, bars, summary| {
+        if row.key == key {
+            verify_published_node_with(c, row, summary, bars)?;
+        } else {
+            let started = tracing.then(std::time::Instant::now);
+            verify_published_fields(c, row)?;
+            ancestor_nodes += 1;
+            ancestor_us += started.map_or(0, |t| t.elapsed().as_micros() as u64);
+        }
+        Ok(())
+    })?;
+    crate::stage_trace::note(
+        "presence.ancestors",
+        &[("nodes", ancestor_nodes), ("row_check_us", ancestor_us)],
+    );
+    Ok(PresenceHistory {
+        entity: leaf.entity.clone(),
+        period: leaf.period,
+        integrity_digest: leaf
+            .integrity_digest
+            .ok_or_else(|| integrity("published version lacks integrity digest"))?,
+        days: bars.iter().map(|bar| bar.trade_day).collect(),
+    })
+}
+
 /// Metadata-only published assurance (XP-018): the same
 /// `verified_chain_scoped` full verification, then `header_version` and
 /// integrity-digest presence checks for EVERY node using that node's
@@ -1266,6 +1340,58 @@ fn apply_delta_in_place(
     Ok(())
 }
 
+/// Cumulative per-chain timers for the stage trace (XP-028 E3-c): one
+/// summary note per reconstruction, no per-node span. Inert when disabled.
+struct ChainAcc {
+    on: bool,
+    walk_us: u64,
+    checkpoint_read_us: u64,
+    checkpoint_flatten_us: u64,
+    delta_read_us: u64,
+    delta_apply_us: u64,
+    visit_us: u64,
+    delta_nodes: u64,
+    delta_ops: u64,
+}
+impl ChainAcc {
+    fn new() -> Self {
+        Self {
+            on: crate::stage_trace::enabled(),
+            walk_us: 0,
+            checkpoint_read_us: 0,
+            checkpoint_flatten_us: 0,
+            delta_read_us: 0,
+            delta_apply_us: 0,
+            visit_us: 0,
+            delta_nodes: 0,
+            delta_ops: 0,
+        }
+    }
+    fn start(&self) -> Option<std::time::Instant> {
+        self.on.then(std::time::Instant::now)
+    }
+    fn since(&self, started: Option<std::time::Instant>) -> u64 {
+        started.map_or(0, |t| t.elapsed().as_micros() as u64)
+    }
+    fn emit(&self) {
+        if self.on {
+            crate::stage_trace::note(
+                "chain.parts",
+                &[
+                    ("walk_us", self.walk_us),
+                    ("checkpoint_read_us", self.checkpoint_read_us),
+                    ("checkpoint_flatten_us", self.checkpoint_flatten_us),
+                    ("delta_read_us", self.delta_read_us),
+                    ("delta_apply_us", self.delta_apply_us),
+                    ("visit_us", self.visit_us),
+                    ("delta_nodes", self.delta_nodes),
+                    ("delta_ops", self.delta_ops),
+                ],
+            );
+        }
+    }
+}
+
 /// Streams a version chain root -> leaf over ONE projection buffer: each
 /// node is checked (linkage, published parent, delta/projection digests)
 /// exactly as before, `visit` sees the node's projection and incremental
@@ -1277,6 +1403,8 @@ fn walk_chain_scoped(
     mut visit: impl FnMut(&VersionRow, &[CompactBar], &BarsSummary) -> Result<(), Error>,
 ) -> Result<(VersionRow, Vec<CompactBar>), Error> {
     let _span = Span::enter(Stage::Reconstruct);
+    let mut acc = ChainAcc::new();
+    let walk_started = acc.start();
     let mut chain = Vec::new();
     let mut visited = HashSet::new();
     let mut key = leaf_key;
@@ -1310,6 +1438,7 @@ fn walk_chain_scoped(
             return Err(integrity("version chain exceeds depth bound"));
         }
     }
+    acc.walk_us += acc.since(walk_started);
     chain.reverse();
     let _chain_span = crate::stage_trace::span("chain.reconstruct");
     crate::stage_trace::note(
@@ -1327,19 +1456,23 @@ fn walk_chain_scoped(
     let mut previous: Option<VersionRow> = None;
     for (index, row) in chain.into_iter().enumerate() {
         if index == 0 {
+            let t = acc.start();
             let (clips, projection) = match sctx.as_deref_mut() {
                 Some(s) => {
                     compact_v19::read_checkpoint_ctx(c, row.key, &row.entity, row.period, s)?
                 }
                 None => compact_v19::read_checkpoint(c, row.key, &row.entity, row.period)?,
             };
+            acc.checkpoint_read_us += acc.since(t);
             if projection != row.projection_digest {
                 return Err(integrity("checkpoint projection digest mismatch"));
             }
+            let t = acc.start();
             bars = match sctx.as_deref_mut() {
                 Some(s) => flatten_clips_ctx(c, &row.entity, row.period, &clips, s)?,
                 None => flatten_clips(c, &row.entity, row.period, &clips)?,
             };
+            acc.checkpoint_flatten_us += acc.since(t);
             count_bar_copies(bars.len());
             summary = BarsSummary::of(&bars);
         } else {
@@ -1354,12 +1487,17 @@ fn walk_chain_scoped(
             if parent_row.state != 3 {
                 return Err(integrity("delta parent is not published"));
             }
+            let t = acc.start();
             let (ops, _, projection) = match sctx.as_deref_mut() {
                 Some(s) => {
                     compact_v19::read_delta_ctx(c, row.key, parent_row.projection_digest, s)?
                 }
                 None => compact_v19::read_delta(c, row.key, parent_row.projection_digest)?,
             };
+            acc.delta_read_us += acc.since(t);
+            acc.delta_nodes += 1;
+            acc.delta_ops += ops.len() as u64;
+            let t = acc.start();
             if projection != row.projection_digest {
                 return Err(integrity("delta projection digest mismatch"));
             }
@@ -1372,13 +1510,17 @@ fn walk_chain_scoped(
                 row.period,
                 sctx.as_deref_mut(),
             )?;
+            acc.delta_apply_us += acc.since(t);
             if bars.is_empty() {
                 return Err(integrity("delta projection is empty"));
             }
         }
+        let t = acc.start();
         visit(&row, &bars, &summary)?;
+        acc.visit_us += acc.since(t);
         previous = Some(row);
     }
+    acc.emit();
     crate::stage_trace::note("chain.bars", &[("bars", bars.len() as u64)]);
     let leaf = previous.ok_or_else(|| integrity("version chain is empty"))?;
     Ok((leaf, bars))
@@ -1510,6 +1652,8 @@ fn verify_published_node_with(
     bars: &[CompactBar],
 ) -> Result<VersionEvidence, Error> {
     let _span = Span::enter(Stage::VerifyNode);
+    #[cfg(test)]
+    read_counts::count_node_verify();
     verify_published_fields(c, row)?;
     verify_node_common_with(c, row, summary, bars)
 }
@@ -1656,7 +1800,8 @@ fn verify_lineage(
     );
     crate::yearly::trace_key("memo.key.verify_lineage", &base_digest_hex, &years, as_of);
     let memo_span = crate::stage_trace::span("cand.lineage.aggregate_memoized");
-    let annual = crate::yearly::aggregate_memoized(key, || {
+    let window_last = compact_market::epoch_date(lineage.last_trade_day).ok();
+    let annual = crate::yearly::aggregate_memoized(key, as_of, window_last, || {
         let base_bars = crate::stage_trace::timed("cand.lineage.leaf_bars_in_range", || {
             leaf_bars_in_range(
                 c,
@@ -1709,6 +1854,19 @@ fn verify_lineage(
         last_trade_day: lineage.last_trade_day,
         as_of_day: lineage.as_of_day,
     })
+}
+
+/// Committed-tier lineage of a yearly version row (XP-030 R2): the stored
+/// `yearly_lineage` row plus the row-level checks `verify_stored_lineage`
+/// already performs (published same-entity daily base, algorithm version,
+/// bounds). No base window read and no re-aggregation. The row's
+/// `integrity_digest` (verified by `committed_facts`) binds this lineage.
+pub(crate) fn committed_yearly_lineage(
+    c: &Connection,
+    key: i64,
+) -> Result<YearlyLineageIdentity, Error> {
+    let row = read_version_row(c, key)?.ok_or_else(|| integrity("version row missing"))?;
+    verify_stored_lineage(c, &row)?.ok_or_else(|| integrity("yearly version lacks lineage"))
 }
 
 fn stored_lineage(c: &Connection, key: i64) -> Result<Option<YearlyLineageDraft>, Error> {
@@ -2856,6 +3014,15 @@ pub(crate) mod read_counts {
         static FACTS_READS: Cell<usize> = const { Cell::new(0) };
         static PROJECTION_RUNS: Cell<usize> = const { Cell::new(0) };
         static COMMITTED_READS: Cell<usize> = const { Cell::new(0) };
+        static NODE_VERIFIES: Cell<usize> = const { Cell::new(0) };
+    }
+    /// `verify_published_node_with` executions (XP-031 R3 asserts that the
+    /// presence path runs it for the leaf only).
+    pub(crate) fn count_node_verify() {
+        NODE_VERIFIES.with(|n| n.set(n.get() + 1));
+    }
+    pub(crate) fn node_verifies() -> usize {
+        NODE_VERIFIES.with(Cell::get)
     }
     pub(crate) fn count_segment_read() {
         SEGMENT_READS.with(|n| n.set(n.get() + 1));
@@ -2890,6 +3057,7 @@ pub(crate) mod read_counts {
         FACTS_READS.with(|n| n.set(0));
         PROJECTION_RUNS.with(|n| n.set(0));
         COMMITTED_READS.with(|n| n.set(0));
+        NODE_VERIFIES.with(|n| n.set(0));
         snap
     }
     /// Current counters without resetting.
@@ -3050,6 +3218,22 @@ impl VerifyCtx {
         }
         self.certified(key);
         Ok((facts, verified))
+    }
+
+    /// Year-presence history at the XP-031 R3 tier. Deliberately neither
+    /// memoized nor certified: it is weaker than `verified` and must not
+    /// satisfy a later full-verification touch in the same transaction.
+    pub(crate) fn presence_history(
+        &mut self,
+        c: &Connection,
+        key: i64,
+    ) -> Result<PresenceHistory, Error> {
+        self.check_owner(c)?;
+        let facts = self.facts(c, key)?;
+        if facts.state != CompactVersionState::Published {
+            return Err(integrity("referenced version is not published"));
+        }
+        presence_history_ctx(c, key, &mut self.segments)
     }
 
     /// Metadata-only verified assurance (XP-016, deepened by XP-018): a

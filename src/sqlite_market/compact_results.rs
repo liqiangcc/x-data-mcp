@@ -116,11 +116,13 @@ pub(crate) fn commit_market_update(
     c: &mut Connection,
     command: &MarketUpdateCommit,
 ) -> Result<StoredMarketUpdateResult, Error> {
-    let tx = c
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    let result = commit_market_update_tx(&tx, command)?;
-    tx.commit().map_err(storage)?;
+    let tx = crate::stage_trace::timed("results.begin", || {
+        c.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)
+    })?;
+    let result =
+        crate::stage_trace::timed("results.body", || commit_market_update_tx(&tx, command))?;
+    crate::stage_trace::timed("results.commit", || tx.commit().map_err(storage))?;
     Ok(result)
 }
 
@@ -308,11 +310,13 @@ pub(crate) fn commit_publication(
     c: &mut Connection,
     command: &PublicationCommit,
 ) -> Result<StoredPublicationResult, Error> {
-    let tx = c
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    let result = commit_publication_tx(&tx, command, true)?;
-    tx.commit().map_err(storage)?;
+    let tx = crate::stage_trace::timed("results.begin", || {
+        c.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)
+    })?;
+    let result =
+        crate::stage_trace::timed("results.body", || commit_publication_tx(&tx, command, true))?;
+    crate::stage_trace::timed("results.commit", || tx.commit().map_err(storage))?;
     Ok(result)
 }
 
