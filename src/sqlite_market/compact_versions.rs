@@ -1924,10 +1924,8 @@ mod chain_cache {
     pub(super) fn store_version_evidence(d: &Digest, v: &VersionEvidence) {
         CACHE.with(|c| {
             let mut c = c.borrow_mut();
-            if c.depth > 0 {
-                if c.evidence.len() < CAP {
-                    c.evidence.insert(*d, v.clone());
-                }
+            if c.depth > 0 && c.evidence.len() < CAP {
+                c.evidence.insert(*d, v.clone());
             }
         });
     }
@@ -1936,10 +1934,8 @@ mod chain_cache {
     pub(super) fn store_row(row: &VersionRow) {
         CACHE.with(|c| {
             let mut c = c.borrow_mut();
-            if c.depth > 0 {
-                if c.rows.len() < CAP {
-                    c.rows.insert(row.key, row.clone());
-                }
+            if c.depth > 0 && c.rows.len() < CAP {
+                c.rows.insert(row.key, row.clone());
             }
         });
     }
@@ -1966,10 +1962,8 @@ mod chain_cache {
     pub(super) fn store_source_binding(d: &Digest, v: &SourceBinding) {
         CACHE.with(|c| {
             let mut c = c.borrow_mut();
-            if c.depth > 0 {
-                if c.bindings.len() < CAP {
-                    c.bindings.insert(*d, v.clone());
-                }
+            if c.depth > 0 && c.bindings.len() < CAP {
+                c.bindings.insert(*d, v.clone());
             }
         });
     }
