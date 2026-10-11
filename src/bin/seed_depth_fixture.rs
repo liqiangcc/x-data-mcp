@@ -865,8 +865,8 @@ mod tests {
     }
 
     /// Temp compact DB with an `n`-bar real-date head (all days ≤
-    /// today), returned with the bars as committed.
-    fn rebase_fixture_db(n: i64) -> (tempfile::TempDir, MarketBackend) {
+    /// today), returned with its path.
+    fn rebase_fixture_db(n: i64) -> (tempfile::TempDir, PathBuf, MarketBackend) {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::Builder::new()
             .permissions(std::fs::Permissions::from_mode(0o700))
@@ -890,7 +890,7 @@ mod tests {
             })
             .collect();
         publish_head_bars(&backend, "sh.600006", bars);
-        (dir, backend)
+        (dir, db, backend)
     }
 
     fn day_head(backend: &MarketBackend) -> String {
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn rebase_real_keeps_real_dates_and_verifies() {
-        let (_dir, backend) = rebase_fixture_db(12);
+        let (_dir, _db, backend) = rebase_fixture_db(12);
         let old_head = day_head(&backend);
         let old_records = backend.fixed(&old_head).unwrap().version().records.clone();
         let report = seed_entities(
@@ -972,7 +972,7 @@ mod tests {
 
     #[test]
     fn rebase_real_changed_last_differs_only_in_last_close() {
-        let (_dir, backend) = rebase_fixture_db(12);
+        let (_dir, _db, backend) = rebase_fixture_db(12);
         let old_head = day_head(&backend);
         let old_records = backend.fixed(&old_head).unwrap().version().records.clone();
         let report = seed_entities(
@@ -1007,7 +1007,7 @@ mod tests {
 
     #[test]
     fn rebase_real_rejects_shallow_head() {
-        let (_dir, backend) = rebase_fixture_db(5);
+        let (_dir, _db, backend) = rebase_fixture_db(5);
         let err = seed_entities(
             &backend,
             RUN,
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn rebase_real_fails_closed_on_segment_tamper() {
-        let (_dir, backend) = rebase_fixture_db(12);
+        let (_dir, db, backend) = rebase_fixture_db(12);
         let report = seed_entities(
             &backend,
             RUN,
@@ -1041,24 +1041,23 @@ mod tests {
             .unwrap()
             .to_string();
         // Corrupt one bar row inside the new root checkpoint's first
-        // segment; the verified readback must fail closed.
-        backend
-            .read(|c| {
-                c.execute_batch(
-                    "UPDATE segment_bars SET close_cents=close_cents+1 \
-                     WHERE segment_key=(\
-                         SELECT segment_key FROM version_checkpoint_clips \
-                         WHERE version_key=(\
-                             SELECT version_key FROM data_versions \
-                             WHERE entity='sh.600006' AND parent_version_key IS NULL \
-                             ORDER BY version_key DESC LIMIT 1) \
-                         ORDER BY seq LIMIT 1) \
-                     AND trade_day=(\
-                         SELECT min(trade_day) FROM segment_bars t \
-                         WHERE t.segment_key=segment_bars.segment_key)",
-                )
-                .map_err(storage)
-            })
+        // segment through a raw connection (the repository's read pool
+        // is query-only); the verified readback must fail closed.
+        let tamper = rusqlite::Connection::open(&db).unwrap();
+        tamper
+            .execute_batch(
+                "UPDATE segment_bars SET close_cents=close_cents+1 \
+                 WHERE segment_key=(\
+                     SELECT segment_key FROM version_checkpoint_clips \
+                     WHERE version_key=(\
+                         SELECT version_key FROM data_versions \
+                         WHERE entity='sh.600006' AND parent_version_key IS NULL \
+                         ORDER BY version_key DESC LIMIT 1) \
+                     ORDER BY seq LIMIT 1) \
+                 AND trade_day=(\
+                     SELECT min(trade_day) FROM segment_bars t \
+                     WHERE t.segment_key=segment_bars.segment_key)",
+            )
             .unwrap();
         assert!(backend.fixed(&head).is_err());
     }
