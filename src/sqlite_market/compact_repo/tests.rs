@@ -7455,9 +7455,11 @@ mod xp011 {
             let dir = tempdir();
             let (path, repo) = repo(&dir);
             chain(&repo);
+            // segment_bars is WITHOUT ROWID: target the oldest segment (v1's checkpoint).
             tamper(
                 &path,
-                "UPDATE segment_bars SET close_cents=close_cents+1 WHERE rowid=1",
+                "UPDATE segment_bars SET close_cents=close_cents+1 \
+                 WHERE segment_key=(SELECT MIN(segment_key) FROM segment_bars)",
             );
             let out = supply(&repo)
                 .year_presence(&plan("v3"), &Access::local())
