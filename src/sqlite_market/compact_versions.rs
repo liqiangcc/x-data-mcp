@@ -815,37 +815,41 @@ struct VersionRow {
 }
 
 fn read_version_row(c: &Connection, key: i64) -> Result<Option<VersionRow>, Error> {
-    let row = c
-        .query_row(
+    // Cached statement (XP-036 F): the chain walks run this once per node;
+    // recompiling the SQL each time was a measurable part of the per-node cost.
+    let mut statement = c
+        .prepare_cached(
             "SELECT version_key,version_id,entity,period,state,source_binding_digest,parent_version_key,manifest_mode,delta_depth,record_count,first_day,last_day,coverage_status,evidence_digest,projection_digest,published_at,integrity_digest,adjustment,digest_format,created_at FROM data_versions WHERE version_key=?1",
-            params![key],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, i64>(3)?,
-                    r.get::<_, i64>(4)?,
-                    r.get::<_, Vec<u8>>(5)?,
-                    r.get::<_, Option<i64>>(6)?,
-                    r.get::<_, i64>(7)?,
-                    r.get::<_, i64>(8)?,
-                    r.get::<_, i64>(9)?,
-                    r.get::<_, i64>(10)?,
-                    r.get::<_, i64>(11)?,
-                    r.get::<_, i64>(12)?,
-                    r.get::<_, Vec<u8>>(13)?,
-                    r.get::<_, Vec<u8>>(14)?,
-                    r.get::<_, Option<String>>(15)?,
-                    r.get::<_, Option<Vec<u8>>>(16)?,
-                    r.get::<_, i64>(17)?,
-                    r.get::<_, String>(18)?,
-                    r.get::<_, String>(19)?,
-                ))
-            },
         )
+        .map_err(storage)?;
+    let row = statement
+        .query_row(params![key], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, Vec<u8>>(5)?,
+                r.get::<_, Option<i64>>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, i64>(8)?,
+                r.get::<_, i64>(9)?,
+                r.get::<_, i64>(10)?,
+                r.get::<_, i64>(11)?,
+                r.get::<_, i64>(12)?,
+                r.get::<_, Vec<u8>>(13)?,
+                r.get::<_, Vec<u8>>(14)?,
+                r.get::<_, Option<String>>(15)?,
+                r.get::<_, Option<Vec<u8>>>(16)?,
+                r.get::<_, i64>(17)?,
+                r.get::<_, String>(18)?,
+                r.get::<_, String>(19)?,
+            ))
+        })
         .optional()
         .map_err(storage)?;
+    drop(statement);
     let Some((
         key,
         version_id,
@@ -1186,7 +1190,7 @@ fn leaf_window_scoped<T>(
     {
         let root = &nodes[0];
         let mut statement = c
-            .prepare(
+            .prepare_cached(
                 "SELECT segment_key,clip_start_day,clip_end_day,row_count \
                  FROM version_checkpoint_clips \
                  WHERE version_key=?1 AND clip_start_day<=?2 AND clip_end_day>=?3 \
@@ -1229,7 +1233,7 @@ fn leaf_window_scoped<T>(
     // the window are metadata-only and never decode their segment.
     for row in nodes.iter().skip(1) {
         let mut statement = c
-            .prepare(
+            .prepare_cached(
                 "SELECT delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count \
                  FROM version_delta_clips \
                  WHERE version_key=?1 AND range_start_day<=?2 AND range_end_day>=?3 \
@@ -1488,6 +1492,7 @@ fn walk_chain_scoped(
         }
         let row =
             read_version_row(c, key)?.ok_or_else(|| integrity("version chain node missing"))?;
+        chain_cache::store_row(&row);
         match row.manifest_mode {
             1 => {
                 if row.parent_version_key.is_some() || row.delta_depth != 0 {
@@ -1847,7 +1852,7 @@ fn verify_version_evidence(c: &Connection, digest: &Digest) -> Result<VersionEvi
 /// Every DISTINCT digest is still read and verified in full; failures are
 /// never cached.
 mod chain_cache {
-    use super::{Digest, SourceBinding, VersionEvidence};
+    use super::{Digest, SourceBinding, VersionEvidence, VersionRow};
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -1856,6 +1861,7 @@ mod chain_cache {
         depth: usize,
         evidence: HashMap<Digest, VersionEvidence>,
         bindings: HashMap<Digest, SourceBinding>,
+        rows: HashMap<i64, VersionRow>,
     }
     thread_local! {
         static CACHE: RefCell<Cache> = RefCell::new(Cache::default());
@@ -1875,6 +1881,7 @@ mod chain_cache {
                 if c.depth == 0 {
                     c.evidence.clear();
                     c.bindings.clear();
+                    c.rows.clear();
                 }
             });
         }
@@ -1896,6 +1903,26 @@ mod chain_cache {
                 c.evidence.insert(*d, v.clone());
             }
         });
+    }
+    /// Rows the chain walk itself read (leaf -> root): `build_identity`
+    /// finds a node's parent among them instead of re-reading it.
+    pub(super) fn store_row(row: &VersionRow) {
+        CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.depth > 0 {
+                c.rows.insert(row.key, row.clone());
+            }
+        });
+    }
+    pub(super) fn row(key: i64) -> Option<VersionRow> {
+        CACHE.with(|c| {
+            let c = c.borrow();
+            if c.depth == 0 {
+                None
+            } else {
+                c.rows.get(&key).cloned()
+            }
+        })
     }
     pub(super) fn source_binding(d: &Digest) -> Option<SourceBinding> {
         CACHE.with(|c| {
@@ -2050,10 +2077,13 @@ pub(crate) fn committed_yearly_lineage(
 }
 
 fn stored_lineage(c: &Connection, key: i64) -> Result<Option<YearlyLineageDraft>, Error> {
-    c.query_row(
-        "SELECT base_daily_version_key,algorithm_version,first_trade_day,last_trade_day,as_of_day FROM yearly_lineage WHERE version_key=?1",
-        params![key],
-        |r| {
+    let mut statement = c
+        .prepare_cached(
+            "SELECT base_daily_version_key,algorithm_version,first_trade_day,last_trade_day,as_of_day FROM yearly_lineage WHERE version_key=?1",
+        )
+        .map_err(storage)?;
+    let lineage = statement
+        .query_row(params![key], |r| {
             Ok(YearlyLineageDraft {
                 base_daily_version_key: r.get(0)?,
                 algorithm_version: r.get(1)?,
@@ -2061,10 +2091,11 @@ fn stored_lineage(c: &Connection, key: i64) -> Result<Option<YearlyLineageDraft>
                 last_trade_day: r.get(3)?,
                 as_of_day: r.get(4)?,
             })
-        },
-    )
-    .optional()
-    .map_err(storage)
+        })
+        .optional()
+        .map_err(storage);
+    drop(statement);
+    lineage
 }
 
 /// The published daily base version_id of a yearly version's stored
@@ -2142,8 +2173,12 @@ fn build_identity(
 ) -> Result<VersionIdentity, Error> {
     let parent_version_id = match row.parent_version_key {
         Some(key) => {
-            let parent =
-                read_version_row(c, key)?.ok_or_else(|| integrity("parent version missing"))?;
+            let parent = match chain_cache::row(key) {
+                Some(parent) => parent,
+                None => {
+                    read_version_row(c, key)?.ok_or_else(|| integrity("parent version missing"))?
+                }
+            };
             if parent.state != 3
                 || parent.entity != row.entity
                 || parent.period != row.period
@@ -2756,15 +2791,19 @@ pub(crate) fn read_evidence(
     c: &Connection,
     digest: &Digest,
 ) -> Result<(EvidenceKind, String), Error> {
-    let row = c
-        .query_row(
+    let mut statement = c
+        .prepare_cached(
             "SELECT evidence_kind,canonical_json FROM evidence_bundles WHERE evidence_digest=?1",
-            params![digest.as_slice()],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
+        .map_err(storage)?;
+    let row = statement
+        .query_row(params![digest.as_slice()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
         .optional()
         .map_err(storage)?
         .ok_or_else(|| integrity("evidence bundle missing"))?;
+    drop(statement);
     let kind = parse_evidence_kind(&row.0)?;
     let canonical = inflate_evidence(c, kind, &row.1)?;
     compact_market::verify_evidence(kind, &canonical, *digest).map_err(integrity)?;
@@ -2783,23 +2822,25 @@ pub(crate) fn read_source_binding(c: &Connection, digest: &Digest) -> Result<Sou
 }
 
 fn read_source_binding_uncached(c: &Connection, digest: &Digest) -> Result<SourceBinding, Error> {
-    let row = c
-        .query_row(
+    let mut statement = c
+        .prepare_cached(
             "SELECT generation_id,generation_manifest_sha256,day_member_sha256,security_event_sha256,evidence_digest FROM source_bindings WHERE source_binding_digest=?1",
-            params![digest.as_slice()],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, Vec<u8>>(2)?,
-                    r.get::<_, Vec<u8>>(3)?,
-                    r.get::<_, Vec<u8>>(4)?,
-                ))
-            },
         )
+        .map_err(storage)?;
+    let row = statement
+        .query_row(params![digest.as_slice()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+                r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, Vec<u8>>(4)?,
+            ))
+        })
         .optional()
         .map_err(storage)?
         .ok_or_else(|| integrity("source binding missing"))?;
+    drop(statement);
     let binding = SourceBinding {
         generation_id: row.0,
         generation_manifest_sha256: fixed_digest(&row.1)?,

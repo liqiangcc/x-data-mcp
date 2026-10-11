@@ -698,7 +698,7 @@ fn read_delta_scoped(
     mut sctx: Option<&mut SegmentReadCtx>,
 ) -> Result<(Vec<StoredDelta>, Digest, Digest), Error> {
     let mut statement = c
-        .prepare(
+        .prepare_cached(
             "SELECT seq,delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM version_delta_clips WHERE version_key=?1 ORDER BY seq",
         )
         .map_err(storage)?;
@@ -801,7 +801,7 @@ pub(crate) fn read_delta_headers(
     sctx: &mut SegmentReadCtx,
 ) -> Result<(Vec<StoredDelta>, Digest, Digest), Error> {
     let mut statement = c
-        .prepare(
+        .prepare_cached(
             "SELECT seq,delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM version_delta_clips WHERE version_key=?1 ORDER BY seq",
         )
         .map_err(storage)?;
