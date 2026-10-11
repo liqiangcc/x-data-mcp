@@ -429,7 +429,7 @@ fn yearly_step(
                 "synthetic:true;seed_depth_fixture;selected years verified by re-aggregating the fixture daily base; generated fixture data only",
             ),
         };
-        let candidate = publisher.derive_yearly(&request, &evidence, &base, &annual)?;
+        let candidate = publisher.derive_yearly(&request, &evidence, base, &annual)?;
         let mut raw = candidate.raw().clone();
         if let Some(parent) = &e.yearly_head {
             raw["compact_parent_version_id"] = json!(parent);
