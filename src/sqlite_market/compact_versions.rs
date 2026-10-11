@@ -586,6 +586,27 @@ pub(crate) fn publish_delta(
     Ok(Some(publish_presumed(c, version_key, published_at)?))
 }
 
+/// `mark_validated` for a caller that ran `materialize` (which verifies the
+/// staged chain) on `c` in the same transaction snapshot: the state flip is
+/// guarded by `state=1`, the second `verify_staged` would re-read the same
+/// immutable rows.
+pub(crate) fn mark_validated_in_verified_snapshot(
+    c: &Connection,
+    version_key: i64,
+) -> Result<(), Error> {
+    let changed = crate::stage_trace::timed("ver.mark_validated.update", || {
+        c.execute(
+            "UPDATE data_versions SET state=2 WHERE version_key=?1 AND state=1",
+            params![version_key],
+        )
+        .map_err(storage)
+    })?;
+    if changed != 1 {
+        return Err(integrity("version state transition did not apply"));
+    }
+    Ok(())
+}
+
 pub(crate) fn mark_validated(c: &Connection, version_key: i64) -> Result<(), Error> {
     let row = read_version_row(c, version_key)?.ok_or_else(|| integrity("version row missing"))?;
     if row.state != 1 {

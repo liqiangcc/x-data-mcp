@@ -2102,19 +2102,34 @@ impl MarketRepository for SqliteCompactMarket {
         })
     }
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error> {
+        // XP-032 D: one IMMEDIATE transaction. `materialize` already runs
+        // `verify_staged` on the staged chain, so inside this single snapshot
+        // the state flip needs no second `verify_staged` (the commit
+        // transaction still re-verifies the validated candidate before it
+        // publishes).
         self.write(|c| {
-            let m = compact_versions::materialize(c, &record.version.version_id)?;
+            let tx = crate::stage_trace::timed("coord.tx.begin", || {
+                c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(storage)
+            })?;
+            let m = compact_versions::materialize(&tx, &record.version.version_id)?;
             let stored = synthesize(&m)?;
             if stored.raw != record.raw {
                 return Err(Error::Conflict("validated record differs".into()));
             }
             match m.state {
-                CompactVersionState::Staged => compact_versions::mark_validated(c, m.key),
-                CompactVersionState::Validated => Ok(()),
+                CompactVersionState::Staged => {
+                    compact_versions::mark_validated_in_verified_snapshot(&tx, m.key)?
+                }
+                CompactVersionState::Validated => {}
                 CompactVersionState::Published => {
-                    Err(Error::Conflict("candidate already published".into()))
+                    return Err(Error::Conflict("candidate already published".into()));
                 }
             }
+            crate::stage_trace::timed("coord.tx.commit", || {
+                tx.commit()
+                    .map_err(|error| Error::OutcomeUnknown(error.to_string()))
+            })
         })
     }
     fn receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
