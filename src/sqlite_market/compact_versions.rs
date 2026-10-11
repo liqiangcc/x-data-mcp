@@ -16,6 +16,11 @@ use crate::publish::{EffectiveVersion, ValidationSummary};
 
 const DIGEST_FORMAT: &str = "compact-market-version-v1";
 const MAX_DELTA_DEPTH: i64 = 256;
+/// Parent delta depth at which the next write must be a rebuilt checkpoint
+/// (rollover) instead of a delta. Equal to the validation bound today; kept
+/// separate so an earlier rollover can later be introduced without touching
+/// the validators (XP-038).
+pub(crate) const ROLLOVER_DEPTH: u32 = MAX_DELTA_DEPTH as u32;
 const MAX_CHAIN_NODES: usize = 257;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

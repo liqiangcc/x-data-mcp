@@ -393,6 +393,37 @@ impl SqliteCompactMarket {
             // (#259 S5G-8): no parent leaf reconstruction. Anything else
             // (removes, revisions, overlapping upserts) keeps the full
             // projection check.
+            // Rollover (XP-038): at the delta depth bound the next version is
+            // a rebuilt checkpoint carrying the delta as its basis, exactly
+            // like the envelope path in `stage_tx`. `stage_checkpoint` verifies
+            // the published parent and that checkpoint == parent + ops.
+            if base_facts.delta_depth >= compact_versions::ROLLOVER_DEPTH {
+                let base_bars = compact_versions::leaf_bars(c, base_key)?;
+                let applied =
+                    compact_versions::apply_stored_delta(c, &base_bars, &ops, entity, Period::Day)?;
+                let mut clips = Vec::new();
+                for chunk in applied.chunks(SEGMENT_ROWS) {
+                    let segment = compact_v19::insert_segment(c, entity, Period::Day, chunk)?;
+                    clips.push(StoredClip {
+                        segment_key: segment.key,
+                        clip: compact_market::SegmentClip {
+                            segment_digest: segment.digest,
+                            clip_start_day: chunk[0].trade_day,
+                            clip_end_day: chunk[chunk.len() - 1].trade_day,
+                            row_count: chunk.len() as u32,
+                        },
+                    });
+                }
+                return compact_versions::stage_checkpoint(
+                    c,
+                    &draft,
+                    &clips,
+                    Some(&compact_versions::CheckpointBasis {
+                        parent_version_key: base_key,
+                        delta_ops: ops,
+                    }),
+                );
+            }
             let append_only = !bars.is_empty() && removes.is_empty() && {
                 let first = bars.first().unwrap().trade_day;
                 let parent_last = base_facts.last_day;
@@ -539,7 +570,50 @@ impl SqliteCompactMarket {
                     )
                 }
                 ManifestMode::Checkpoint => {
-                    (MarketUpdateChange::Full, facts.first_day, facts.last_day)
+                    let base_depth = compact_versions::result_facts(c, base_key)?.delta_depth;
+                    if base_depth >= compact_versions::ROLLOVER_DEPTH {
+                        // Rollover checkpoint (XP-038): committed as an
+                        // Append whose ops are the tail beyond the base;
+                        // the commit verifies base + ops == result.
+                        let base_last = compact_versions::result_facts(c, base_key)?.last_day;
+                        let tail: Vec<CompactBar> = compact_versions::leaf_bars(c, result_key)?
+                            .into_iter()
+                            .filter(|b| b.trade_day > base_last)
+                            .collect();
+                        if tail.is_empty() {
+                            return Err(integrity("rollover checkpoint carries no new day"));
+                        }
+                        let mut ops = Vec::new();
+                        for chunk in tail.chunks(SEGMENT_ROWS) {
+                            let segment =
+                                compact_v19::insert_segment(c, &facts.entity, Period::Day, chunk)?;
+                            ops.push(StoredDelta {
+                                range_start_day: chunk[0].trade_day,
+                                range_end_day: chunk[chunk.len() - 1].trade_day,
+                                kind: StoredDeltaKind::Upsert(StoredClip {
+                                    segment_key: segment.key,
+                                    clip: compact_market::SegmentClip {
+                                        segment_digest: segment.digest,
+                                        clip_start_day: chunk[0].trade_day,
+                                        clip_end_day: chunk[chunk.len() - 1].trade_day,
+                                        row_count: chunk.len() as u32,
+                                    },
+                                }),
+                            });
+                        }
+                        let (first, last) =
+                            (ops[0].range_start_day, ops[ops.len() - 1].range_end_day);
+                        (
+                            MarketUpdateChange::Append {
+                                prefix_bytes: base_count(c, base_key)? * 32,
+                                ops,
+                            },
+                            first,
+                            last,
+                        )
+                    } else {
+                        (MarketUpdateChange::Full, facts.first_day, facts.last_day)
+                    }
                 }
             };
             let continuity = Self::ops_continuity_json(
@@ -1322,7 +1396,7 @@ fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
                         }),
                     });
                 }
-                if parent.delta_depth < 256 {
+                if parent.delta_depth < compact_versions::ROLLOVER_DEPTH {
                     compact_versions::stage_delta(c, &draft, parent_key, &ops)?;
                 } else {
                     let clips = full_clips(c)?;
