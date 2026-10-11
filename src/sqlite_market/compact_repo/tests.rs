@@ -7467,6 +7467,104 @@ mod xp011 {
             assert!(failed(&out));
             assert!(repo.fixed("v3").is_err());
         }
+
+        /// v1..v3 from `chain` plus tail-only appends up to `v{n}`.
+        fn long_chain(repo: &SqliteCompactMarket, n: u32) {
+            chain(repo);
+            let mut bars = vec![
+                bar(day(2023, 12, 29), 100),
+                bar(day(2024, 1, 5), 100),
+                bar(day(2025, 2, 3), 110),
+                bar(day(2026, 1, 5), 120),
+                bar(day(2026, 3, 4), 130),
+            ];
+            for i in 4..=n {
+                bars.push(bar(day(2026, 4, i - 3), 130 + i as i64));
+                publish_delta(
+                    repo,
+                    i,
+                    &format!("v{}", i - 1),
+                    &format!("v{i}"),
+                    bars.clone(),
+                );
+            }
+        }
+
+        fn distinct(path: &PathBuf, column: &str) -> usize {
+            let c = rusqlite::Connection::open(path).unwrap();
+            c.query_row(
+                &format!("SELECT COUNT(DISTINCT {column}) FROM data_versions"),
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap() as usize
+        }
+
+        /// XP-036 E: within one chain traversal each DISTINCT evidence /
+        /// source-binding digest is read and verified once, not once per
+        /// node; the result equals the pre-change full verification.
+        #[test]
+        fn chain_walk_verifies_each_distinct_digest_once() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            long_chain(&repo, 12);
+            let nodes = 12;
+            let evidence = distinct(&path, "evidence_digest");
+            let bindings = distinct(&path, "source_binding_digest");
+            assert!(
+                evidence < nodes && bindings < nodes,
+                "fixture must share rows"
+            );
+            compact_versions::read_counts::reset();
+            let verified = repo
+                .read(|c| compact_versions::fixed(c, "v12").map(|v| v.version))
+                .unwrap();
+            assert_eq!(compact_versions::read_counts::node_verifies(), nodes);
+            assert_eq!(compact_versions::read_counts::evidence_verifies(), evidence);
+            assert_eq!(compact_versions::read_counts::binding_reads(), bindings);
+            assert_eq!(verified.records.len(), 5 + (nodes - 3));
+            // A second traversal does not reuse the first one's cache.
+            compact_versions::read_counts::reset();
+            repo.read(|c| compact_versions::fixed(c, "v12").map(|_| ()))
+                .unwrap();
+            assert_eq!(compact_versions::read_counts::binding_reads(), bindings);
+        }
+
+        /// XP-036 E: a damaged source-binding row of a node whose digest is
+        /// DIFFERENT from the other nodes' (the root) is verified on its
+        /// own and fails the traversal, even after other digests were cached.
+        #[test]
+        fn damaged_distinct_binding_row_still_fails_closed() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            long_chain(&repo, 8);
+            tamper(
+                &path,
+                "UPDATE source_bindings SET generation_id='tampered' WHERE source_binding_digest=\
+                 (SELECT source_binding_digest FROM data_versions WHERE version_id='v1')",
+            );
+            assert_eq!(
+                read_class(&repo.fixed("v8").map(|_| ())),
+                ReadClass::Integrity
+            );
+        }
+
+        /// XP-036 E: a damaged evidence row shared by many nodes still fails.
+        #[test]
+        fn damaged_shared_evidence_row_still_fails_closed() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            long_chain(&repo, 8);
+            tamper(
+                &path,
+                "UPDATE evidence_bundles SET canonical_json=canonical_json||' ' WHERE evidence_digest=\
+                 (SELECT evidence_digest FROM data_versions WHERE version_id='v5')",
+            );
+            assert_eq!(
+                read_class(&repo.fixed("v8").map(|_| ())),
+                ReadClass::Integrity
+            );
+        }
     }
 
     /// XP-025 H4: batched daily preparation must prepare/decline exactly the

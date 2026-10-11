@@ -1476,6 +1476,7 @@ fn walk_chain_scoped(
     mut visit: impl FnMut(&VersionRow, &[CompactBar], &BarsSummary) -> Result<(), Error>,
 ) -> Result<(VersionRow, Vec<CompactBar>), Error> {
     let _span = Span::enter(Stage::Reconstruct);
+    let _chain_cache = chain_cache::Scope::enter();
     let mut acc = ChainAcc::new();
     let walk_started = acc.start();
     let mut chain = Vec::new();
@@ -1822,11 +1823,98 @@ fn verify_node_common_impl(
 }
 
 fn verify_version_evidence(c: &Connection, digest: &Digest) -> Result<VersionEvidence, Error> {
+    if let Some(hit) = chain_cache::version_evidence(digest) {
+        return Ok(hit);
+    }
+    #[cfg(test)]
+    read_counts::count_evidence_verify();
     let (kind, canonical) = read_evidence(c, digest)?;
     if kind != EvidenceKind::Version {
         return Err(integrity("version evidence kind mismatch"));
     }
-    serde_json::from_str(&canonical).map_err(integrity)
+    let evidence: VersionEvidence = serde_json::from_str(&canonical).map_err(integrity)?;
+    chain_cache::store_version_evidence(digest, &evidence);
+    Ok(evidence)
+}
+
+/// Digest-keyed memo of already fully verified evidence / source-binding
+/// rows, alive only for ONE chain traversal on this thread (XP-036 E;
+/// `walk_chain_scoped` opens a scope, nested walks share the outermost one;
+/// nothing survives past it, so nothing crosses a transaction or request —
+/// the XP-016 rule). A digest is a content address: the row behind it was
+/// completely verified (digest recomputed, kind checked) on its first
+/// read in the scope, so a repeat read of the same digest cannot differ.
+/// Every DISTINCT digest is still read and verified in full; failures are
+/// never cached.
+mod chain_cache {
+    use super::{Digest, SourceBinding, VersionEvidence};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct Cache {
+        depth: usize,
+        evidence: HashMap<Digest, VersionEvidence>,
+        bindings: HashMap<Digest, SourceBinding>,
+    }
+    thread_local! {
+        static CACHE: RefCell<Cache> = RefCell::new(Cache::default());
+    }
+    pub(super) struct Scope;
+    impl Scope {
+        pub(super) fn enter() -> Scope {
+            CACHE.with(|c| c.borrow_mut().depth += 1);
+            Scope
+        }
+    }
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            CACHE.with(|c| {
+                let mut c = c.borrow_mut();
+                c.depth -= 1;
+                if c.depth == 0 {
+                    c.evidence.clear();
+                    c.bindings.clear();
+                }
+            });
+        }
+    }
+    pub(super) fn version_evidence(d: &Digest) -> Option<VersionEvidence> {
+        CACHE.with(|c| {
+            let c = c.borrow();
+            if c.depth == 0 {
+                None
+            } else {
+                c.evidence.get(d).cloned()
+            }
+        })
+    }
+    pub(super) fn store_version_evidence(d: &Digest, v: &VersionEvidence) {
+        CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.depth > 0 {
+                c.evidence.insert(*d, v.clone());
+            }
+        });
+    }
+    pub(super) fn source_binding(d: &Digest) -> Option<SourceBinding> {
+        CACHE.with(|c| {
+            let c = c.borrow();
+            if c.depth == 0 {
+                None
+            } else {
+                c.bindings.get(d).cloned()
+            }
+        })
+    }
+    pub(super) fn store_source_binding(d: &Digest, v: &SourceBinding) {
+        CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.depth > 0 {
+                c.bindings.insert(*d, v.clone());
+            }
+        });
+    }
 }
 
 fn verify_lineage(
@@ -2684,6 +2772,17 @@ pub(crate) fn read_evidence(
 }
 
 pub(crate) fn read_source_binding(c: &Connection, digest: &Digest) -> Result<SourceBinding, Error> {
+    if let Some(hit) = chain_cache::source_binding(digest) {
+        return Ok(hit);
+    }
+    #[cfg(test)]
+    read_counts::count_binding_read();
+    let binding = read_source_binding_uncached(c, digest)?;
+    chain_cache::store_source_binding(digest, &binding);
+    Ok(binding)
+}
+
+fn read_source_binding_uncached(c: &Connection, digest: &Digest) -> Result<SourceBinding, Error> {
     let row = c
         .query_row(
             "SELECT generation_id,generation_manifest_sha256,day_member_sha256,security_event_sha256,evidence_digest FROM source_bindings WHERE source_binding_digest=?1",
@@ -3133,6 +3232,8 @@ pub(crate) mod read_counts {
         static COMMITTED_READS: Cell<usize> = const { Cell::new(0) };
         static NODE_VERIFIES: Cell<usize> = const { Cell::new(0) };
         static LINEAGE_VERIFIES: Cell<usize> = const { Cell::new(0) };
+        static EVIDENCE_VERIFIES: Cell<usize> = const { Cell::new(0) };
+        static BINDING_READS: Cell<usize> = const { Cell::new(0) };
         static LINEAGE_NODES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     }
     /// Version ids whose published-node verification recomputed the yearly
@@ -3142,6 +3243,20 @@ pub(crate) mod read_counts {
     }
     pub(crate) fn lineage_nodes() -> Vec<String> {
         LINEAGE_NODES.with(|n| n.borrow().clone())
+    }
+    /// Uncached `verify_version_evidence` / `read_source_binding` bodies
+    /// (XP-036 E asserts one per DISTINCT digest per traversal).
+    pub(crate) fn count_evidence_verify() {
+        EVIDENCE_VERIFIES.with(|n| n.set(n.get() + 1));
+    }
+    pub(crate) fn evidence_verifies() -> usize {
+        EVIDENCE_VERIFIES.with(Cell::get)
+    }
+    pub(crate) fn count_binding_read() {
+        BINDING_READS.with(|n| n.set(n.get() + 1));
+    }
+    pub(crate) fn binding_reads() -> usize {
+        BINDING_READS.with(Cell::get)
     }
     pub(crate) fn count_lineage_verify() {
         LINEAGE_VERIFIES.with(|n| n.set(n.get() + 1));
@@ -3194,6 +3309,8 @@ pub(crate) mod read_counts {
         COMMITTED_READS.with(|n| n.set(0));
         NODE_VERIFIES.with(|n| n.set(0));
         LINEAGE_VERIFIES.with(|n| n.set(0));
+        EVIDENCE_VERIFIES.with(|n| n.set(0));
+        BINDING_READS.with(|n| n.set(0));
         LINEAGE_NODES.with(|n| n.borrow_mut().clear());
         snap
     }
