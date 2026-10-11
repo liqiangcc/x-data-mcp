@@ -7294,8 +7294,10 @@ mod xp011 {
             })
             .unwrap();
         }
-        /// v1 (checkpoint, 2023-24) -> v2 (delta: overwrite + 2025 + 2026 bars)
-        /// -> v3 (delta: another 2026 bar and an overwrite).
+        /// v1 (checkpoint, 2023-24) -> v2 (tail-only append delta: 2025 + 2026
+        /// bars) -> v3 (tail-only append delta: another 2026 bar). The Append
+        /// commit path rejects rewrites of existing bars, so overwrite/remove
+        /// deltas cannot be built through it.
         fn chain(repo: &SqliteCompactMarket) {
             publish_head(
                 repo,
@@ -7312,7 +7314,7 @@ mod xp011 {
                 "v2",
                 vec![
                     bar(day(2023, 12, 29), 100),
-                    bar(day(2024, 1, 5), 105),
+                    bar(day(2024, 1, 5), 100),
                     bar(day(2025, 2, 3), 110),
                     bar(day(2026, 1, 5), 120),
                 ],
@@ -7324,7 +7326,7 @@ mod xp011 {
                 "v3",
                 vec![
                     bar(day(2023, 12, 29), 100),
-                    bar(day(2024, 1, 5), 106),
+                    bar(day(2024, 1, 5), 100),
                     bar(day(2025, 2, 3), 110),
                     bar(day(2026, 1, 5), 120),
                     bar(day(2026, 3, 4), 130),
