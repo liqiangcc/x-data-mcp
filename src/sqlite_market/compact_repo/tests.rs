@@ -7847,6 +7847,116 @@ mod xp011 {
                 bars.len() + 2
             );
         }
+
+        /// Two entities whose chains share one generation: A = v1..v6 on
+        /// sh.600006 (v1 on gen-1, deltas on gen-2), B = one checkpoint on
+        /// sh.600007 (gen-1). Returns the distinct source-binding / evidence
+        /// digest counts over the whole database.
+        fn shared_binding_entities(repo: &SqliteCompactMarket, path: &PathBuf) -> (usize, usize) {
+            long_chain(repo, 6);
+            publish_head(
+                repo,
+                "req-b",
+                "pub-b",
+                "sh.600007",
+                "b1",
+                vec![bar(day(2023, 12, 29), 100), bar(day(2024, 1, 5), 100)],
+            );
+            (
+                distinct(path, "source_binding_digest"),
+                distinct(path, "evidence_digest"),
+            )
+        }
+
+        /// XP-041: inside ONE read transaction every chain traversal shares
+        /// the verified digest rows - the binding / evidence SQL reads equal
+        /// the number of distinct digests, not entities x nodes.
+        #[test]
+        fn one_read_transaction_shares_digests_across_entities() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let (bindings, evidence) = shared_binding_entities(&repo, &path);
+            compact_versions::read_counts::reset();
+            let (a, b) = repo
+                .read(|c| {
+                    Ok((
+                        compact_versions::fixed(c, "v6")?.version,
+                        compact_versions::fixed(c, "b1")?.version,
+                    ))
+                })
+                .unwrap();
+            assert_eq!(compact_versions::read_counts::binding_reads(), bindings);
+            assert_eq!(compact_versions::read_counts::evidence_verifies(), evidence);
+            // Same results as independent transactions.
+            assert_eq!(a, repo.fixed("v6").unwrap().version);
+            assert_eq!(b, repo.fixed("b1").unwrap().version);
+        }
+
+        /// XP-041: two independent read transactions do not reuse each
+        /// other's memo.
+        #[test]
+        fn separate_read_transactions_do_not_share_digests() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let (bindings, _) = shared_binding_entities(&repo, &path);
+            compact_versions::read_counts::reset();
+            repo.read(|c| compact_versions::fixed(c, "v6").map(|_| ()))
+                .unwrap();
+            let first = compact_versions::read_counts::binding_reads();
+            repo.read(|c| compact_versions::fixed(c, "v6").map(|_| ()))
+                .unwrap();
+            assert_eq!(compact_versions::read_counts::binding_reads(), 2 * first);
+            assert!(first <= bindings);
+        }
+
+        /// XP-041: a write transaction never uses the memo, even when it is
+        /// entered while a read scope is open on the same thread.
+        #[test]
+        fn write_transaction_does_not_use_the_digest_memo() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            shared_binding_entities(&repo, &path);
+            compact_versions::read_counts::reset();
+            repo.read(|c| compact_versions::fixed(c, "v6").map(|_| ()))
+                .unwrap();
+            let once = compact_versions::read_counts::binding_reads();
+            compact_versions::read_counts::reset();
+            repo.write(|c| {
+                compact_versions::fixed(c, "v6")?;
+                compact_versions::fixed(c, "v6")?;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(compact_versions::read_counts::binding_reads(), 2 * once);
+            // Entered from inside an open read scope (nested, same thread).
+            compact_versions::read_counts::reset();
+            repo.read(|c| {
+                compact_versions::fixed(c, "v6")?;
+                repo.write(|w| compact_versions::fixed(w, "v6").map(|_| ()))
+            })
+            .unwrap();
+            assert_eq!(compact_versions::read_counts::binding_reads(), 2 * once);
+        }
+
+        /// XP-041: a damaged shared row still fails the whole request: the
+        /// memo holds only content that passed verification.
+        #[test]
+        fn damaged_shared_binding_fails_the_whole_read_transaction() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            shared_binding_entities(&repo, &path);
+            tamper(
+                &path,
+                "UPDATE source_bindings SET generation_id='tampered' WHERE source_binding_digest=\
+                 (SELECT source_binding_digest FROM data_versions WHERE version_id='b1')",
+            );
+            let out = repo.read(|c| {
+                compact_versions::fixed(c, "b1")?;
+                compact_versions::fixed(c, "v6")?;
+                Ok(())
+            });
+            assert_eq!(read_class(&out), ReadClass::Integrity);
+        }
     }
 
     /// XP-025 H4: batched daily preparation must prepare/decline exactly the

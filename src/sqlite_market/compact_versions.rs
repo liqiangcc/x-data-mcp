@@ -1861,8 +1861,12 @@ mod chain_cache {
     use std::cell::RefCell;
     use std::collections::HashMap;
 
+    /// Entry bound per map: a request spanning thousands of chains stops
+    /// memoizing instead of growing without limit (a miss only costs a read).
+    const CAP: usize = 32_768;
+
     #[derive(Default)]
-    struct Cache {
+    pub(super) struct Cache {
         depth: usize,
         evidence: HashMap<Digest, VersionEvidence>,
         bindings: HashMap<Digest, SourceBinding>,
@@ -1870,6 +1874,22 @@ mod chain_cache {
     }
     thread_local! {
         static CACHE: RefCell<Cache> = RefCell::new(Cache::default());
+    }
+    /// Parks the thread's cache (maps AND depth) for the lifetime of the
+    /// guard, so nothing inside — including per-walk scopes — can see or add
+    /// to an outer read scope's entries (used around write transactions).
+    pub(super) struct Suspend(Option<Cache>);
+    impl Suspend {
+        pub(super) fn new() -> Suspend {
+            Suspend(Some(CACHE.with(|c| std::mem::take(&mut *c.borrow_mut()))))
+        }
+    }
+    impl Drop for Suspend {
+        fn drop(&mut self) {
+            if let Some(parked) = self.0.take() {
+                CACHE.with(|c| *c.borrow_mut() = parked);
+            }
+        }
     }
     pub(super) struct Scope;
     impl Scope {
@@ -1905,7 +1925,9 @@ mod chain_cache {
         CACHE.with(|c| {
             let mut c = c.borrow_mut();
             if c.depth > 0 {
-                c.evidence.insert(*d, v.clone());
+                if c.evidence.len() < CAP {
+                    c.evidence.insert(*d, v.clone());
+                }
             }
         });
     }
@@ -1915,7 +1937,9 @@ mod chain_cache {
         CACHE.with(|c| {
             let mut c = c.borrow_mut();
             if c.depth > 0 {
-                c.rows.insert(row.key, row.clone());
+                if c.rows.len() < CAP {
+                    c.rows.insert(row.key, row.clone());
+                }
             }
         });
     }
@@ -1943,10 +1967,33 @@ mod chain_cache {
         CACHE.with(|c| {
             let mut c = c.borrow_mut();
             if c.depth > 0 {
-                c.bindings.insert(*d, v.clone());
+                if c.bindings.len() < CAP {
+                    c.bindings.insert(*d, v.clone());
+                }
             }
         });
     }
+}
+
+/// One READ transaction's digest memo (XP-041): opened by the coordinator's
+/// `read` around the whole closure, so every chain traversal of that one
+/// snapshot — e.g. the 100 entities of a presence / accept-reads / availability
+/// request — shares the verified evidence and source-binding rows. Dropped
+/// (and emptied) when the read transaction ends, including on errors;
+/// thread-local, never reused by another transaction, request or thread.
+pub(crate) struct ReadCacheScope(#[allow(dead_code)] chain_cache::Scope);
+
+pub(crate) fn read_cache_scope() -> ReadCacheScope {
+    ReadCacheScope(chain_cache::Scope::enter())
+}
+
+/// Guard that disables every digest memo on this thread while a WRITE
+/// transaction runs, so a write path keeps the pre-cache behaviour even if
+/// it is entered while a read scope is open.
+pub(crate) struct CacheSuspend(#[allow(dead_code)] chain_cache::Suspend);
+
+pub(crate) fn suspend_cache() -> CacheSuspend {
+    CacheSuspend(chain_cache::Suspend::new())
 }
 
 fn verify_lineage(
