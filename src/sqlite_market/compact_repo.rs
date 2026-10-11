@@ -1125,7 +1125,7 @@ pub(crate) fn materialize_published(
     }
 }
 
-fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
+fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
     let _total = crate::stage_trace::span("stage.total");
     crate::stage_trace::note(
         "stage.autocommit",
@@ -1152,7 +1152,7 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
         .map_err(super::integrity)?;
     // Full-candidate clips are only materialized for checkpoint staging;
     // content-addressed segments let unchanged chunks reuse existing rows.
-    let full_clips = |c: &mut Connection| -> Result<Vec<StoredClip>, Error> {
+    let full_clips = |c: &Connection| -> Result<Vec<StoredClip>, Error> {
         let _span = crate::stage_trace::span("stage.full_clips");
         let mut clips = Vec::new();
         for chunk in bars.chunks(SEGMENT_ROWS) {
@@ -1845,11 +1845,11 @@ impl MarketRepository for SqliteCompactMarket {
         // transaction on a synchronous=FULL WAL connection; a mid-way failure
         // also left committed partial staged rows. Now it rolls back whole.
         self.write(|c| {
-            let mut tx = crate::stage_trace::timed("coord.tx.begin", || {
+            let tx = crate::stage_trace::timed("coord.tx.begin", || {
                 c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                     .map_err(storage)
             })?;
-            crate::stage_trace::timed("stage.tx_body", || stage_tx(&mut tx, raw))?;
+            crate::stage_trace::timed("stage.tx_body", || stage_tx(&tx, raw))?;
             crate::stage_trace::timed("coord.tx.commit", || {
                 tx.commit()
                     .map_err(|error| Error::OutcomeUnknown(error.to_string()))
