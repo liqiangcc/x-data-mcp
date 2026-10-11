@@ -15,8 +15,15 @@
 //!   `basis_ref` in the result's continuity evidence.
 //!
 //! usage: seed_depth_fixture <database> --entities <ex.code[,ex.code...]>
-//!          --depth <1..=256> --target-is-a-copy [--run-id <id>]
-//!          [--request-prefix <p>]
+//!          (--depth <1..=256> | --append-days <N>) --target-is-a-copy
+//!          [--run-id <id>] [--request-prefix <p>]
+//!
+//! `--depth` grows chains to a target delta depth (rollover is pushed out to
+//! the 256 bound so the target is reachable). `--append-days N` appends N more
+//! synthetic days to every entity regardless of its current depth, with the
+//! production staggered rollover active: an entity at its own rollover depth
+//! rolls over into a checkpoint (XP-051). The report lists each entity's
+//! delta_depth / manifest_mode before and after.
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use x_data_mcp::{
@@ -108,6 +115,24 @@ struct EntityState {
     adjustment_evidence: AdjustmentEvidence,
     security_event_sha256: String,
     depth: i64,
+    start_depth: i64,
+    start_mode: i64,
+    steps: i64,
+    rollovers: i64,
+    by_days: bool,
+}
+
+fn head_depth_mode(backend: &MarketBackend, head: &str) -> Result<(i64, i64), String> {
+    backend
+        .read(|c| {
+            c.query_row(
+                "SELECT delta_depth,manifest_mode FROM data_versions WHERE version_id=?1",
+                [head],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(storage)
+        })
+        .map_err(|e| format!("head depth/mode read failed for {head}: {e}"))
 }
 
 fn entity_state(backend: &MarketBackend, symbol: &str) -> Result<EntityState, String> {
@@ -137,6 +162,7 @@ fn entity_state(backend: &MarketBackend, symbol: &str) -> Result<EntityState, St
     let version = backend
         .fixed(&head)
         .map_err(|e| format!("head materialization failed for {symbol}: {e}"))?;
+    let start_mode = head_depth_mode(backend, &head)?.1;
     Ok(EntityState {
         symbol: symbol.into(),
         head_version_id: head,
@@ -148,6 +174,11 @@ fn entity_state(backend: &MarketBackend, symbol: &str) -> Result<EntityState, St
         adjustment_evidence: version.version().adjustment_evidence.clone(),
         security_event_sha256: facts.security_event_sha256,
         depth,
+        start_depth: depth,
+        start_mode,
+        steps: 0,
+        rollovers: 0,
+        by_days: false,
     })
 }
 
@@ -159,16 +190,11 @@ fn refresh_head(backend: &MarketBackend, e: &mut EntityState) -> Result<(), Stri
     e.last_day = facts.last_day;
     e.record_count = facts.record_count;
     e.integrity_sha256 = facts.integrity_sha256;
-    e.depth = backend
-        .read(|c| {
-            c.query_row(
-                "SELECT delta_depth FROM data_versions WHERE version_id=?1",
-                [&e.head_version_id],
-                |r| r.get::<_, i64>(0),
-            )
-            .map_err(storage)
-        })
-        .map_err(|e| format!("delta depth re-read failed: {e}"))?;
+    e.depth = head_depth_mode(backend, &e.head_version_id)?.0;
+    e.steps += 1;
+    if e.depth == 0 {
+        e.rollovers += 1;
+    }
     Ok(())
 }
 
@@ -177,7 +203,13 @@ fn refresh_head(backend: &MarketBackend, e: &mut EntityState) -> Result<(), Stri
 /// the new version's generation evidence carries `synthetic: true`.
 fn append_item(e: &EntityState, task_id: &str, run_id: &str) -> UpdateBatchItem {
     let next = e.last_day + chrono::Duration::days(1);
-    let seq = e.depth + 1;
+    // Depth mode keeps the historical `depth+1` naming; the append-days mode
+    // restarts depth at rollover, so it names versions by the record count.
+    let seq = if e.by_days {
+        format!("d{}", e.record_count + 1)
+    } else {
+        (e.depth + 1).to_string()
+    };
     let member_sha =
         x_data_mcp::hash::sha256(format!("seed-depth-member:{}:{next}:{seq}", e.symbol).as_bytes());
     let manifest_sha = x_data_mcp::hash::sha256(
@@ -255,6 +287,14 @@ fn append_item(e: &EntityState, task_id: &str, run_id: &str) -> UpdateBatchItem 
     }
 }
 
+#[derive(Clone, Copy)]
+enum Goal {
+    /// Grow every chain to this delta depth.
+    Depth(i64),
+    /// Append this many synthetic days regardless of depth.
+    Days(i64),
+}
+
 /// Seed `symbols` to `target_depth` through the production update commit
 /// path. One task per step batches up to 100 entity items (the contract
 /// budget); each item is one synthetic typed append on that entity's
@@ -263,10 +303,12 @@ fn seed_entities(
     backend: &MarketBackend,
     run_id: &str,
     symbols: &[String],
-    target_depth: i64,
+    goal: Goal,
     request_prefix: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    if !(1..=256).contains(&target_depth) {
+    if let Goal::Depth(target_depth) = goal
+        && !(1..=256).contains(&target_depth)
+    {
         return Err("--depth must be within 1..=256 (the delta-depth bound)".into());
     }
     let ctl = TaskControl::new(
@@ -285,10 +327,16 @@ fn seed_entities(
         .iter()
         .map(|s| entity_state(backend, s))
         .collect::<Result<Vec<_>, _>>()?;
+    for e in &mut entities {
+        e.by_days = matches!(goal, Goal::Days(_));
+    }
     loop {
         let mut pending: Vec<&mut EntityState> = entities
             .iter_mut()
-            .filter(|e| e.depth < target_depth)
+            .filter(|e| match goal {
+                Goal::Depth(target) => e.depth < target,
+                Goal::Days(days) => e.steps < days,
+            })
             .collect();
         if pending.is_empty() {
             break;
@@ -352,9 +400,21 @@ fn seed_entities(
             "delta_depth": stored.0,
             "manifest_mode": stored.1,
             "verified": true,
+            "start_delta_depth": e.start_depth,
+            "start_manifest_mode": e.start_mode,
+            "appended_days": e.steps,
+            "rollovers": e.rollovers,
         }));
     }
-    Ok(json!({"entities": reports, "target_depth": target_depth, "synthetic": true}))
+    let goal_json = match goal {
+        Goal::Depth(target) => json!({"target_depth": target}),
+        Goal::Days(days) => json!({"append_days": days}),
+    };
+    let mut report = json!({"entities": reports, "goal": goal_json, "synthetic": true});
+    if let Goal::Depth(target) = goal {
+        report["target_depth"] = json!(target);
+    }
+    Ok(report)
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -374,10 +434,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if symbols.is_empty() {
         return Err("--entities requires at least one symbol".into());
     }
-    let depth: i64 = opt(&args, "--depth")
-        .ok_or_else(usage)?
-        .parse()
-        .map_err(|_| "--depth must be an integer")?;
+    let goal = match (opt(&args, "--depth"), opt(&args, "--append-days")) {
+        (Some(depth), None) => {
+            Goal::Depth(depth.parse().map_err(|_| "--depth must be an integer")?)
+        }
+        (None, Some(days)) => {
+            let days: i64 = days
+                .parse()
+                .map_err(|_| "--append-days must be an integer")?;
+            if days < 1 {
+                return Err("--append-days must be at least 1".into());
+            }
+            Goal::Days(days)
+        }
+        _ => return Err(usage()),
+    };
     let run_id = opt(&args, "--run-id")
         .unwrap_or_else(|| format!("seed-depth-{}", chrono::Utc::now().timestamp_millis()));
     let prefix = opt(&args, "--request-prefix").unwrap_or_else(|| "seed-depth".into());
@@ -385,7 +456,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !matches!(backend, MarketBackend::Compact(_)) {
         return Err("target database is not a compact-schema copy".into());
     }
-    let report = seed_entities(&backend, &run_id, &symbols, depth, &prefix)?;
+    // Depth mode must be able to reach the 256 bound, so the staggered
+    // rollover is pushed out; append-days runs the production thresholds.
+    if matches!(goal, Goal::Depth(_)) {
+        x_data_mcp::sqlite_market::set_fixture_rollover_depth(Some(256));
+    }
+    let report = seed_entities(&backend, &run_id, &symbols, goal, &prefix)?;
     println!("{report}");
     Ok(())
 }
@@ -549,6 +625,44 @@ mod tests {
         backend.commit(&plan).unwrap();
     }
 
+    /// XP-051: `--append-days` appends regardless of depth and, with the
+    /// rollover forced to the validator floor (64), rolls over exactly once
+    /// in 66 days, reporting before/after depth and mode.
+    #[test]
+    fn append_days_rolls_over_at_the_threshold() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in("/dev/shm")
+            .unwrap();
+        let db = dir.path().join("market.db");
+        SqliteTasks::new(&db).initialize_compact().unwrap();
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let backend = MarketBackend::open(&SqliteTasks::new(&db)).unwrap();
+        publish_head(
+            &backend,
+            "sh.600006",
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
+        );
+        x_data_mcp::sqlite_market::set_fixture_rollover_depth(Some(64));
+        let report = seed_entities(
+            &backend,
+            RUN,
+            &["sh.600006".into()],
+            Goal::Days(66),
+            "seed-days",
+        )
+        .unwrap();
+        x_data_mcp::sqlite_market::set_fixture_rollover_depth(None);
+        let entity = &report["entities"][0];
+        assert_eq!(entity["start_delta_depth"], json!(0));
+        assert_eq!(entity["start_manifest_mode"], json!(1));
+        assert_eq!(entity["appended_days"], json!(66));
+        assert_eq!(entity["rollovers"], json!(1));
+        assert_eq!(entity["delta_depth"], json!(1));
+        assert_eq!(entity["manifest_mode"], json!(2));
+    }
+
     #[test]
     fn seeded_chain_depth_verifies() {
         use std::os::unix::fs::PermissionsExt;
@@ -565,7 +679,14 @@ mod tests {
             "sh.600006",
             chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
         );
-        let report = seed_entities(&backend, RUN, &["sh.600006".into()], 4, "seed-depth").unwrap();
+        let report = seed_entities(
+            &backend,
+            RUN,
+            &["sh.600006".into()],
+            Goal::Depth(4),
+            "seed-depth",
+        )
+        .unwrap();
         let entity = &report["entities"][0];
         assert_eq!(entity["delta_depth"], json!(4));
         assert_eq!(entity["manifest_mode"], json!(2));
