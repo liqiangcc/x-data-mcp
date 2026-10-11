@@ -689,11 +689,14 @@ impl DataApi {
                 let payload = crate::stage_trace::timed("rpc.range.payload", || {
                     command.payload().map_err(task_error)
                 })?;
+                let key = command.key(operation);
+                let control_span = crate::stage_trace::span("rpc.range.control_accept");
                 let accepted = self
                     .legacy
                     .control
-                    .accept(command.request_id(), command.key(operation), payload)
+                    .accept(command.request_id(), key, payload)
                     .map_err(task_error)?;
+                drop(control_span);
                 crate::stage_trace::timed("rpc.range.acceptance", || {
                     self.acceptance(command.request_id(), accepted)
                 })

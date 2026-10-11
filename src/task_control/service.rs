@@ -62,14 +62,18 @@ impl<R: TaskRepository> TaskControl<R> {
         if id.trim().is_empty() {
             return Err(Error::InvalidCommand("empty request_id".into()));
         }
-        let existing = self.repository.read_request(id)?;
+        let existing = crate::stage_trace::timed("svc.accept.read_request", || {
+            self.repository.read_request(id)
+        })?;
         if existing.as_ref().is_some_and(|r| r.command.key != key) {
             return Err(Error::RequestConflict);
         }
         let contract = self.contract(&key)?;
         let command = Command {
             key,
-            intent: contract.normalize(payload)?,
+            intent: crate::stage_trace::timed("svc.accept.normalize", || {
+                contract.normalize(payload)
+            })?,
         };
         if let Some(record) = existing {
             self.known(&record)?;
@@ -81,8 +85,10 @@ impl<R: TaskRepository> TaskControl<R> {
                 reused: true,
             });
         }
-        let work = contract.resolve(&command.intent)?;
-        work.validate()?;
+        let work =
+            crate::stage_trace::timed("svc.accept.resolve", || contract.resolve(&command.intent))?;
+        crate::stage_trace::timed("svc.accept.validate", || work.validate())?;
+        let _repo = crate::stage_trace::span("svc.accept.repository");
         self.repository
             .accept(id, &command, &work, &self.run_id, None)
     }

@@ -2594,10 +2594,11 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         retry: Option<&RetryGuard>,
     ) -> Result<Acceptance, task_control::Error> {
-        work.validate()?;
+        crate::stage_trace::timed("repo.accept.validate", || work.validate())?;
         if id.trim().is_empty() || run.trim().is_empty() {
             return Err(task_control::Error::InvalidCommand("empty identity".into()));
         }
+        let _write = crate::stage_trace::span("repo.accept.coordinator_write");
         self.coordinator
             .write(|c| {
                 crate::sqlite_tasks::accept_tx(c, id, command, work, run, retry)
