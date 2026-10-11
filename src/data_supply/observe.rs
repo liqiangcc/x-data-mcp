@@ -27,6 +27,8 @@ pub struct AvailabilityFacts {
     /// Shared task facts: one availability call relates the same task set to
     /// every selected entity, so entries are shared rather than deep-cloned.
     pub related_tasks: Vec<std::rc::Rc<TaskFacts>>,
+    /// Related tasks before the in-flight + latest-N cut (XP-025 D-b).
+    pub related_tasks_total: usize,
 }
 /// Domain classification: storage reports facts, never decides availability policy.
 fn availability_item(
@@ -61,7 +63,7 @@ fn availability_item(
         .iter()
         .map(confirmed_gap)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),integrity:if unavailable{"failed"}else if availability==Availability::Absent{"not_applicable"}else{"verified"}.into(),confirmed_gaps,unresolved_ranges:if availability==Availability::Unknown{vec![range.clone()]}else{vec![]},availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks:f.related_tasks.iter().map(|f|summary(f,run)).collect(),limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]})
+    Ok(AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),integrity:if unavailable{"failed"}else if availability==Availability::Absent{"not_applicable"}else{"verified"}.into(),confirmed_gaps,unresolved_ranges:if availability==Availability::Unknown{vec![range.clone()]}else{vec![]},availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks_total:f.related_tasks_total,related_tasks_truncated:f.related_tasks_total>f.related_tasks.len(),related_tasks:f.related_tasks.iter().map(|f|summary(f,run)).collect(),limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]})
 }
 /// Canonical wire projection of a stored proven gap: the evidence string only
 /// references durable evidence identity (kind/id/sha256, fixed order) and never
@@ -122,8 +124,62 @@ pub trait ProgressRead {
         receipt: &Option<crate::task_verification::decision::Receipt>,
     ) -> Result<(), Error>;
 }
+/// One bounded slice of the task list in `(created_at DESC, task_id ASC)`
+/// order, resumed by keyset (`after` = text of `created_at` + `task_id`).
+/// Filters here are coarse (stored values); the observer applies the exact
+/// ones on the visible summary.
+#[derive(Clone, Debug, Default)]
+pub struct TaskScan {
+    pub dataset: Option<String>,
+    pub operation: Option<String>,
+    /// Stored statuses that can possibly match (`None` = any).
+    pub stored_statuses: Option<Vec<String>>,
+    pub created_from: Option<DateTime<Utc>>,
+    pub created_to: Option<DateTime<Utc>>,
+    /// Snapshot bound: tasks created after the first page are never listed.
+    pub upper: Option<DateTime<Utc>>,
+    pub after: Option<(String, String)>,
+    pub batch: usize,
+}
+pub struct TaskScanBatch {
+    pub facts: Vec<TaskFacts>,
+    /// Keyset to continue from; `None` once the scan is exhausted.
+    pub next_after: Option<(String, String)>,
+}
 pub trait ObservationRepository {
     fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error>;
+    /// Bounded task listing. The default pages the full `tasks()` list in
+    /// memory (test doubles); the SQLite repository pushes it into SQL.
+    fn tasks_scan(&self, scan: &TaskScan, access: &Access) -> Result<TaskScanBatch, Error> {
+        let mut all = self.tasks(access)?;
+        all.sort_by(|a, b| {
+            b.snapshot
+                .task
+                .created_at
+                .cmp(&a.snapshot.task.created_at)
+                .then(a.snapshot.task.task_id.cmp(&b.snapshot.task.task_id))
+        });
+        let key = |f: &TaskFacts| {
+            (
+                f.snapshot.task.created_at.to_rfc3339(),
+                f.snapshot.task.task_id.clone(),
+            )
+        };
+        let mut facts: Vec<TaskFacts> = all
+            .into_iter()
+            .filter(|f| {
+                scan.upper.is_none_or(|u| f.snapshot.task.created_at <= u)
+                    && scan.after.as_ref().is_none_or(|(at, id)| {
+                        let (c, t) = key(f);
+                        c.as_str() < at.as_str() || (c == *at && t.as_str() > id.as_str())
+                    })
+            })
+            .collect();
+        let more = facts.len() > scan.batch;
+        facts.truncate(scan.batch);
+        let next_after = more.then(|| facts.last().map(key)).flatten();
+        Ok(TaskScanBatch { facts, next_after })
+    }
     fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error>;
     fn availability(
         &self,
@@ -131,6 +187,13 @@ pub trait ObservationRepository {
         access: &Access,
     ) -> Result<Vec<AvailabilityFacts>, Error>;
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error>;
+    /// `verify_versions` at the committed-state tier (XP-027 D-a3), for
+    /// metadata-only observations (availability). Same expected == actual
+    /// `VersionRef` comparison; backends may skip chain reconstruction.
+    /// Content reads (`query_data`) keep the full tier.
+    fn verify_versions_committed(&self, refs: &[VersionRef]) -> Result<(), Error> {
+        self.verify_versions(refs)
+    }
     fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error>;
     fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error>;
     fn verify_publication_check(
@@ -248,7 +311,9 @@ pub fn summary(f: &TaskFacts, run: &str) -> TaskSummary {
 }
 #[derive(Clone)]
 enum Content {
-    Tasks(Vec<TaskSummary>),
+    /// Keyset position of a `list_tasks` snapshot (XP-025 D): the list
+    /// itself is never materialized.
+    TaskCursor(Option<(String, String)>),
     Progress(Box<ProgressPage>),
     Availability(Vec<AvailabilityItem>),
 }
@@ -339,45 +404,95 @@ impl<R: ObservationRepository> Observer<R> {
         let mut s = if let Some(c) = cursor {
             self.resume(&c, &key, access)?
         } else {
-            let mut items = self
-                .repository
-                .tasks(access)?
-                .iter()
-                .map(|f| summary(f, &self.run_id))
-                .filter(|s| {
-                    args.dataset
-                        .is_none_or(|d| serde_json::to_value(d).unwrap() == s.dataset)
-                        && args
-                            .operation
-                            .is_none_or(|op| serde_json::to_value(op).unwrap() == s.operation)
-                        && args.status.as_ref().is_none_or(|v| v.contains(&s.status))
-                        && args.created_from.is_none_or(|t| s.created_at >= t)
-                        && args.created_to.is_none_or(|t| s.created_at <= t)
-                })
-                .collect::<Vec<_>>();
-            items.sort_by(|a, b| {
-                b.created_at
-                    .cmp(&a.created_at)
-                    .then(a.task_id.cmp(&b.task_id))
-            });
-            budget(&items)?;
-            self.start(key, access, Content::Tasks(items))
+            self.start(key, access, Content::TaskCursor(None))
         };
-        let Content::Tasks(items) = &s.content else {
+        let Content::TaskCursor(after) = &s.content else {
             return Err(invalid("cursor category"));
         };
-        let end = (s.offset + args.page_size).min(items.len());
-        let output = items[s.offset..end].to_vec();
-        let more = end < items.len();
-        s.offset = end;
+        let mut after = after.clone();
+        let wire_string = |v: serde_json::Value| v.as_str().map(str::to_owned);
+        let scan = |after: Option<(String, String)>| TaskScan {
+            dataset: args
+                .dataset
+                .and_then(|d| wire_string(serde_json::to_value(d).unwrap())),
+            operation: args
+                .operation
+                .and_then(|o| wire_string(serde_json::to_value(o).unwrap())),
+            // The visible status can differ from the stored one (an old
+            // run's active task reads as needs_verification), so the SQL
+            // prefilter only drops terminal statuses that cannot match.
+            stored_statuses: args.status.as_ref().map(|wanted| {
+                let mut stored: Vec<String> = wanted
+                    .iter()
+                    .filter_map(|v| wire_string(serde_json::to_value(v).unwrap()))
+                    .collect();
+                for active in [
+                    "pending",
+                    "running",
+                    "cancel_requested",
+                    "needs_verification",
+                ] {
+                    if wanted.iter().any(|v| {
+                        matches!(
+                            v,
+                            TaskStatus::Pending
+                                | TaskStatus::Running
+                                | TaskStatus::CancelRequested
+                                | TaskStatus::NeedsVerification
+                        )
+                    }) && !stored.iter().any(|s| s == active)
+                    {
+                        stored.push(active.to_string());
+                    }
+                }
+                stored
+            }),
+            created_from: args.created_from,
+            created_to: args.created_to,
+            upper: Some(s.time),
+            after,
+            batch: (args.page_size + 1).max(64),
+        };
+        let mut matched: Vec<TaskSummary> = vec![];
+        'scan: loop {
+            let batch = self.repository.tasks_scan(&scan(after.clone()), access)?;
+            for f in &batch.facts {
+                let sm = summary(f, &self.run_id);
+                if args
+                    .dataset
+                    .is_none_or(|d| serde_json::to_value(d).unwrap() == sm.dataset)
+                    && args
+                        .operation
+                        .is_none_or(|op| serde_json::to_value(op).unwrap() == sm.operation)
+                    && args.status.as_ref().is_none_or(|v| v.contains(&sm.status))
+                    && args.created_from.is_none_or(|t| sm.created_at >= t)
+                    && args.created_to.is_none_or(|t| sm.created_at <= t)
+                {
+                    matched.push(sm);
+                    if matched.len() > args.page_size {
+                        break 'scan;
+                    }
+                }
+            }
+            match batch.next_after {
+                Some(next) => after = Some(next),
+                None => break,
+            }
+        }
+        let more = matched.len() > args.page_size;
+        matched.truncate(args.page_size);
+        budget(&matched)?;
         let mut p = TaskListPage {
             snapshot_id: s.id.clone(),
             snapshot_time: s.time,
-            items: output,
+            items: matched,
             next_cursor: None,
             page_complete: !more,
         };
         if more {
+            let last = p.items.last().expect("page_size >= 1");
+            s.content =
+                Content::TaskCursor(Some((last.created_at.to_rfc3339(), last.task_id.clone())));
             p.next_cursor = Some(self.save(s));
         }
         Ok(p)
@@ -549,24 +664,31 @@ impl<R: ObservationRepository> Observer<R> {
         let mut s = if let Some(c) = cursor {
             self.resume(&c, &key, access)?
         } else {
-            let items = self
-                .repository
-                .availability(&plan, access)?
-                .into_iter()
-                .map(|f| availability_item(f, plan.args.dataset, &self.run_id, &plan.args.filter))
-                .collect::<Result<Vec<_>, _>>()?;
-            budget(&items)?;
+            let facts = crate::stage_trace::timed("availability.repository", || {
+                self.repository.availability(&plan, access)
+            })?;
+            let items = crate::stage_trace::timed("availability.items", || {
+                facts
+                    .into_iter()
+                    .map(|f| {
+                        availability_item(f, plan.args.dataset, &self.run_id, &plan.args.filter)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })?;
+            crate::stage_trace::timed("availability.budget", || budget(&items))?;
             self.start(key, access, Content::Availability(items))
         };
         let Content::Availability(items) = &s.content else {
             return Err(invalid("cursor category"));
         };
-        self.repository.verify_versions(
-            &items
-                .iter()
-                .filter_map(|i| i.version_ref.clone())
-                .collect::<Vec<_>>(),
-        )?;
+        crate::stage_trace::timed("availability.verify_versions", || {
+            self.repository.verify_versions_committed(
+                &items
+                    .iter()
+                    .filter_map(|i| i.version_ref.clone())
+                    .collect::<Vec<_>>(),
+            )
+        })?;
         let end = (s.offset + plan.args.page_size).min(items.len());
         let more = end < items.len();
         let result = items[s.offset..end].to_vec();

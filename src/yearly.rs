@@ -181,13 +181,48 @@ pub fn aggregate_key(base_digest_hex: &str, years: &BTreeSet<i32>, as_of: NaiveD
     Sha256::digest(&payload).into()
 }
 
+/// Diagnostic: the key ingredients at one call site (stage trace only).
+pub fn trace_key(
+    site: &'static str,
+    base_digest_hex: &str,
+    years: &BTreeSet<i32>,
+    as_of: NaiveDate,
+) {
+    if !crate::stage_trace::enabled() {
+        return;
+    }
+    let key = aggregate_key(base_digest_hex, years, as_of);
+    let base8 = u64::from_str_radix(base_digest_hex.get(..16).unwrap_or("0"), 16).unwrap_or(0);
+    crate::stage_trace::note(
+        site,
+        &[
+            ("key8", u64::from_be_bytes(key[..8].try_into().unwrap())),
+            ("base8", base8),
+            ("n_years", years.len() as u64),
+            ("year_first", years.first().map_or(0, |y| *y as u64)),
+            ("year_last", years.last().map_or(0, |y| *y as u64)),
+            ("as_of_days", as_of.num_days_from_ce() as u64),
+        ],
+    );
+}
+
 /// Runs `compute` (a `aggregate` call and any reads it needs) only when
 /// the memo lacks `key`; otherwise returns the prior result.
 pub fn aggregate_memoized<E>(
     key: [u8; 32],
     compute: impl FnOnce() -> Result<AnnualSeries, E>,
 ) -> Result<Rc<AnnualSeries>, E> {
-    if let Some(hit) = AGGREGATE_MEMO.with(|memo| memo.borrow().get(&key).cloned()) {
+    let hit = AGGREGATE_MEMO.with(|memo| memo.borrow().get(&key).cloned());
+    if crate::stage_trace::enabled() {
+        crate::stage_trace::note(
+            "memo.lookup",
+            &[
+                ("hit", hit.is_some() as u64),
+                ("key8", u64::from_be_bytes(key[..8].try_into().unwrap())),
+            ],
+        );
+    }
+    if let Some(hit) = hit {
         return Ok(hit);
     }
     let series = Rc::new(compute()?);

@@ -137,6 +137,8 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         item_id: &str,
         provider: &dyn YearlyVerifier,
     ) -> Result<YearlyExecution, Error> {
+        let _total = crate::stage_trace::span("yearly.exec.item");
+        let binding_span = crate::stage_trace::span("yearly.exec.binding");
         let mut binding = match self.repository.task_item_binding(task_id, item_id)? {
             Some(binding) => binding,
             None => {
@@ -146,6 +148,7 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
                 ));
             }
         };
+        drop(binding_span);
         if !matches!(
             binding.head.key.operation.as_str(),
             "update_data" | "backfill_data"
@@ -156,7 +159,10 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
                 "unsupported yearly execution contract".into(),
             ));
         }
-        if let Some(receipt) = self.repository.yearly_item_receipt(task_id, item_id)? {
+        let receipt_span = crate::stage_trace::span("yearly.exec.item_receipt");
+        let receipt = self.repository.yearly_item_receipt(task_id, item_id)?;
+        drop(receipt_span);
+        if let Some(receipt) = receipt {
             return Ok(YearlyExecution::Published(receipt));
         }
         if binding.head.visible_status(&self.run_id) == Status::NeedsVerification {
@@ -194,12 +200,14 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
                 Change::Claim,
             )?;
         }
+        let start_span = crate::stage_trace::span("yearly.exec.start_item");
         self.repository.transition_task_head(
             &mut binding.head,
             Some(&mut binding.item),
             &self.run_id,
             Change::StartItem(item_id.into()),
         )?;
+        drop(start_span);
         let outcome = self.derive_and_commit(&mut binding, item_id, provider);
         match outcome {
             Ok(receipt) => Ok(YearlyExecution::Published(receipt)),
@@ -309,7 +317,13 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         // Windowed base read: the verifier and derivation only consume bars
         // inside the selected years. `raw()["integrity_sha256"]` still
         // carries the stored digest of the complete version.
+        let window_span = crate::stage_trace::span("yearly.exec.fixed_window");
         let base = self.repository.fixed_window(base_id, first_day, last_day)?;
+        crate::stage_trace::note(
+            "yearly.exec.fixed_window_bars",
+            &[("bars", base.version().records.len() as u64)],
+        );
+        drop(window_span);
         if base.raw()["integrity_sha256"] != frozen["base_integrity_sha256"] {
             return Err(Error::Integrity(
                 "fixed base differs from accepted digest".into(),
@@ -343,14 +357,26 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             &years,
             as_of,
         );
+        crate::yearly::trace_key(
+            "memo.key.runner",
+            base.raw()["integrity_sha256"].as_str().unwrap_or(""),
+            &years,
+            as_of,
+        );
+        let aggregate_span = crate::stage_trace::span("yearly.exec.aggregate");
         let annual = crate::yearly::aggregate_memoized(key, || {
             crate::yearly::aggregate(base.version(), Some(&years), as_of)
         })
         .map_err(|e| Error::Base(e.to_string()))?;
+        drop(aggregate_span);
+        let verify_span = crate::stage_trace::span("yearly.exec.verify");
         let evidence = verifier
             .verify(&base, &years, &annual, self.derived_at)
             .map_err(|e| Error::Base(e.to_string()))?;
+        drop(verify_span);
+        let head_span = crate::stage_trace::span("yearly.exec.task_head");
         let current = self.repository.task_head(&binding.head.task_id)?;
+        drop(head_span);
         if current.status != Status::Running
             || current.state_revision != binding.head.state_revision
         {
@@ -373,9 +399,12 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
         let publisher = Publisher {
             repository: self.repository.clone(),
         };
+        let derive_span = crate::stage_trace::span("yearly.exec.derive");
         let candidate = publisher.derive_yearly(&request, &evidence, &base, &annual)?;
+        drop(derive_span);
         // Pass the binding and base window this runner already loaded — the
         // prepare chain would otherwise re-read them several times per item.
+        let prepare_span = crate::stage_trace::span("yearly.exec.prepare");
         let plan = publisher.prepare_yearly_result_prefetched(
             Publication {
                 publication_id: format!("yearly-result-{id}"),
@@ -391,6 +420,8 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             Some(&*binding),
             Some(&base),
         )?;
+        drop(prepare_span);
+        let _commit = crate::stage_trace::span("yearly.exec.commit");
         self.repository.commit_yearly(&plan)
     }
 }

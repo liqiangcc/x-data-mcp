@@ -94,6 +94,7 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
         serde_json::to_value(input).map_err(invalid)
     }
     fn resolve(&self, raw: &Value) -> Result<FrozenWork, Error> {
+        let _total = crate::stage_trace::span("yearly.resolve.total");
         let input: ExplicitYears = serde_json::from_value(raw.clone()).map_err(invalid)?;
         let today = (self.today)();
         let future: Vec<_> = input
@@ -107,34 +108,47 @@ impl<R: MarketRepository> Contract for YearlyContract<R> {
         }
         let mut scopes = BTreeSet::new();
         let mut items = vec![];
-        for item in input.items.into_iter() {
-            let comparison_id = match &item.intent {
+        // One accept snapshot for the whole batch (XP-025 B): base facts,
+        // years present in each selected window and comparison facts are
+        // read together; the checks below are unchanged and still decided
+        // server side, item by item, in the original order.
+        let mut wants = Vec::with_capacity(input.items.len());
+        for item in &input.items {
+            let first = NaiveDate::from_ymd_opt(*item.years.first().unwrap(), 1, 1)
+                .ok_or_else(|| invalid("selected year out of range"))?;
+            let last = NaiveDate::from_ymd_opt(*item.years.last().unwrap(), 12, 31)
+                .ok_or_else(|| invalid("selected year out of range"))?;
+            let comparison_version_id = match &item.intent {
                 PublishIntent::CurrentHead {
                     expected_yearly_head,
                     ..
                 } => expected_yearly_head.clone(),
                 _ => item.comparison_version_id.clone(),
             };
-            // Identity/digest come from the O(1) facts row; year presence
-            // needs only the distinct stored years in the selected window —
-            // the compact backend decodes overlapping segments without
-            // materializing bars.
-            let first = NaiveDate::from_ymd_opt(*item.years.first().unwrap(), 1, 1)
-                .ok_or_else(|| invalid("selected year out of range"))?;
-            let last = NaiveDate::from_ymd_opt(*item.years.last().unwrap(), 12, 31)
-                .ok_or_else(|| invalid("selected year out of range"))?;
-            let base = self
-                .repository
-                .fixed_facts(&item.base_daily_version_id)
-                .map_err(repository_error)?;
-            let available = self
-                .repository
-                .fixed_window_years(&item.base_daily_version_id, first, last)
-                .map_err(repository_error)?;
-            let comparison = comparison_id
-                .map(|id| self.repository.fixed_facts(&id))
-                .transpose()
-                .map_err(repository_error)?;
+            wants.push(crate::market_storage::YearlyAcceptWant {
+                base_version_id: item.base_daily_version_id.clone(),
+                first,
+                last,
+                comparison_version_id,
+            });
+        }
+        let reads_span = crate::stage_trace::span("yearly.resolve.accept_reads");
+        let reads = self
+            .repository
+            .yearly_accept_reads(&wants)
+            .map_err(repository_error)?;
+        drop(reads_span);
+        if reads.len() != input.items.len() {
+            return Err(Error::StorageUnavailable(
+                "yearly accept read count mismatch".into(),
+            ));
+        }
+        for (item, read) in input.items.into_iter().zip(reads) {
+            let crate::market_storage::YearlyAcceptRead {
+                base,
+                years: available,
+                comparison,
+            } = read.map_err(repository_error)?;
             if comparison
                 .as_ref()
                 .is_some_and(|p| p.symbol != item.symbol || p.period != Period::Year)

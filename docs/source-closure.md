@@ -5,7 +5,7 @@
 routine update（见[每日同步说明](daily-sync.md)）；preview.29 双 MCP 拓扑已在本机
 部署运行——data socket 提供 20 data tools、acquire socket 提供 10 acquisition
 tools、fresh init 库使用 compact schema 20。当前开发分支（XP-014，未部署）
-注册 21 data tools（新增 `get_yearly_base_years`）并宣告 `generic-data-v4`；
+注册 21 data tools（新增 `get_yearly_base_years`）并宣告 `generic-data-v5`；
 preview.29 部署实例仍为 20 data tools / `generic-data-v3`。2026-09-29 explicit fresh rebuild
 后，2026-09-30 operator-path 已激活 generation
 `2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，

@@ -142,6 +142,19 @@ impl crate::market_storage::MarketRepository for MarketBackend {
             ),
         }
     }
+    fn yearly_accept_reads(
+        &self,
+        wants: &[crate::market_storage::YearlyAcceptWant],
+    ) -> Result<Vec<Result<crate::market_storage::YearlyAcceptRead, Error>>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_storage::MarketRepository::yearly_accept_reads(m, wants)
+            }
+            Self::Compact(m) => {
+                crate::market_storage::MarketRepository::yearly_accept_reads(m, wants)
+            }
+        }
+    }
     fn task(&self, id: &str) -> Result<crate::task_control::TaskSnapshot, Error> {
         match self {
             Self::Legacy(m) => m.task(id),
@@ -251,6 +264,38 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
                     removes,
                     expected,
                 )
+            }
+        }
+    }
+    fn range_item_states(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+    ) -> Result<Vec<Result<crate::market_update::publication::RangeItemState, Error>>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::range_item_states(
+                    m, task_id, item_ids,
+                )
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::range_item_states(
+                    m, task_id, item_ids,
+                )
+            }
+        }
+    }
+    fn range_base_reads(
+        &self,
+        wants: &[crate::market_update::publication::BaseWant],
+    ) -> Result<Vec<Result<Option<crate::market_update::publication::BaseRead>, Error>>, Error>
+    {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::range_base_reads(m, wants)
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::range_base_reads(m, wants)
             }
         }
     }

@@ -42,7 +42,7 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 显式 `task_sqlite init` 的新库使用 fresh compact schema 20；工具数量不是稳定契约，
 客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
 当前开发分支（XP-014，未部署）注册 21 data tools（新增只读
-`get_yearly_base_years`）并宣告 `generic-data-v4`；preview.29 部署实例仍为
+`get_yearly_base_years`）并宣告 `generic-data-v5`；preview.29 部署实例仍为
 20 data tools / `generic-data-v3`。
 
 已实现并在真实 generation 上执行过：immutable generation 生命周期
@@ -113,7 +113,7 @@ compact schema。Issue/Epic 中的“v15”是交付规划标签，不是 schema
 
 [PR #82](https://github.com/liqiangcc/x-data-mcp/pull/82) 已合并独立任务存储。
 显式初始化用 `cargo run --locked --bin task_sqlite -- init <新库路径>`；
-既有受支持 schema 的升级用 `task_sqlite upgrade <库路径>`。初始化不覆盖既有文件，普通读取不建库、不迁移、不回退 JSON。
+既有受支持 schema 的升级用 `task_sqlite upgrade <库路径>`。`task_sqlite check <库路径>` 只读、可在服务运行时执行，对整个任务登记表做全量体检（任务/请求/条目计数/占用/owner 与 stage/请求摘要的全部历史），发现问题时非零退出并逐条输出原因。受理事务内只校验在途任务与占用；终态历史的损坏改为在服务启动时（`data_service` 启动即做一次同样的全库体检，失败则拒绝启动）、`task_sqlite check` 或记录被读取时（`read_request`/`validate_snapshot`）检出，在途部分的保护不变。初始化不覆盖既有文件，普通读取不建库、不迁移、不回退 JSON。
 `cargo run --locked --bin mcp_sqlite_dev -- <已初始化库路径>` 是独立开发入口，仅提供六个旧任务控制工具；
 其同步 worker 只记录来源拒绝，不写行情。默认 `mcp_server` 的八工具及 JSON 装配保持。
 两种存储没有跨库原子发布保证，同库行情发布属于 #79。

@@ -758,50 +758,7 @@ impl SqliteCompactMarket {
         &self,
         base_version_id: &str,
     ) -> Result<crate::market_update::UpdateBaseFacts, Error> {
-        self.read(|c| {
-            let key = version_key(c, base_version_id)?;
-            let facts = compact_versions::result_facts(c, key)?;
-            if facts.state != CompactVersionState::Published {
-                return Err(integrity("ops base version is not published"));
-            }
-            if facts.period != Period::Day {
-                return Err(integrity("ops base is not a daily version"));
-            }
-            let binding = compact_versions::read_source_binding(c, &facts.source_binding_digest)?;
-            let (kind, evidence_json) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
-            if kind != EvidenceKind::Version {
-                return Err(integrity("base version evidence kind mismatch"));
-            }
-            let evidence: compact_market::VersionEvidence = serde_json::from_str(&evidence_json)
-                .map_err(|e| integrity(format!("version evidence malformed: {e}")))?;
-            let integrity_digest = facts
-                .integrity_digest
-                .ok_or_else(|| integrity("published base lacks integrity digest"))?;
-            let coverage_status = match facts.coverage_status {
-                1 => CoverageStatus::Complete,
-                2 => CoverageStatus::Incomplete,
-                _ => CoverageStatus::Unknown,
-            };
-            Ok(crate::market_update::UpdateBaseFacts {
-                version_id: facts.version_id,
-                symbol: facts.entity,
-                record_count: u32::try_from(facts.record_count)
-                    .map_err(|_| integrity("base record_count out of range"))?,
-                first_day: compact_market::epoch_date(facts.first_day).map_err(integrity)?,
-                last_day: compact_market::epoch_date(facts.last_day).map_err(integrity)?,
-                integrity_sha256: hex_bytes(&integrity_digest),
-                coverage: crate::market_data::CoverageEvidence {
-                    status: coverage_status,
-                    reason: evidence.coverage_reason,
-                },
-                unit_currency: evidence.unit_currency,
-                source: evidence.source,
-                generation_id: binding.generation_id,
-                generation_manifest_sha256: hex_bytes(&binding.generation_manifest_sha256),
-                day_member_sha256: hex_bytes(&binding.day_member_sha256),
-                security_event_sha256: hex_bytes(&binding.security_event_sha256),
-            })
-        })
+        self.read(|c| update_base_facts_on(c, base_version_id))
     }
 
     /// Windowed base bars for the ops-diff path (#259 S5G).
@@ -811,19 +768,127 @@ impl SqliteCompactMarket {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<Bar>, Error> {
-        self.read(|c| {
-            let key = version_key(c, base_version_id)?;
-            let bars = compact_versions::leaf_bars_in_range(
-                c,
-                key,
-                compact_market::epoch_day(start),
-                compact_market::epoch_day(end),
-            )?;
-            bars.iter()
-                .map(|bar| bar.to_bar(Period::Day).map_err(integrity))
-                .collect()
-        })
+        self.read(|c| base_bars_in_range_on(c, base_version_id, start, end))
     }
+}
+
+fn base_bars_in_range_on(
+    c: &Connection,
+    base_version_id: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Vec<Bar>, Error> {
+    let key = version_key(c, base_version_id)?;
+    let bars = compact_versions::leaf_bars_in_range(
+        c,
+        key,
+        compact_market::epoch_day(start),
+        compact_market::epoch_day(end),
+    )?;
+    bars.iter()
+        .map(|bar| bar.to_bar(Period::Day).map_err(integrity))
+        .collect()
+}
+
+fn fixed_facts_on(c: &Connection, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+    let key = version_key(c, id)?;
+    let facts = compact_versions::result_facts(c, key)?;
+    if facts.state != CompactVersionState::Published {
+        return Err(Error::NotFound);
+    }
+    let integrity_digest = facts
+        .integrity_digest
+        .ok_or_else(|| integrity("published version lacks integrity digest"))?;
+    Ok(crate::market_storage::FixedFacts {
+        version_id: facts.version_id,
+        symbol: facts.entity,
+        period: facts.period,
+        integrity_sha256: hex_bytes(&integrity_digest),
+        first_day: compact_market::epoch_date(facts.first_day)
+            .map_err(|e| integrity(e.to_string()))?,
+        last_day: compact_market::epoch_date(facts.last_day)
+            .map_err(|e| integrity(e.to_string()))?,
+    })
+}
+
+fn item_receipt_on(c: &Connection, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
+    let id: Option<String> = c
+        .query_row(
+            "SELECT result_id FROM market_update_results WHERE task_id=?1 AND item_id=?2",
+            params![task, item],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    let Some(id) = id else { return Ok(None) };
+    let stored = compact_results::read_market_update(c, &id)?;
+    Ok(Some(Receipt {
+        publication_id: stored.identity.result_id.clone(),
+        version_id: stored.identity.result_version_id.clone(),
+        task_id: stored.identity.task_id.clone(),
+        task_revision: stored.identity.task_revision,
+    }))
+}
+
+/// A base published before snapshot bindings existed cannot drive the
+/// continuity probe (the caller falls back to the envelope path).
+fn source_bound_on(c: &Connection, base_version_id: &str) -> Result<bool, Error> {
+    let key = version_key(c, base_version_id)?;
+    let facts = compact_versions::result_facts(c, key)?;
+    c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_bindings WHERE source_binding_digest=?1)",
+        params![facts.source_binding_digest.as_slice()],
+        |r| r.get::<_, bool>(0),
+    )
+    .map_err(storage)
+}
+
+fn update_base_facts_on(
+    c: &Connection,
+    base_version_id: &str,
+) -> Result<crate::market_update::UpdateBaseFacts, Error> {
+    let key = version_key(c, base_version_id)?;
+    let facts = compact_versions::result_facts(c, key)?;
+    if facts.state != CompactVersionState::Published {
+        return Err(integrity("ops base version is not published"));
+    }
+    if facts.period != Period::Day {
+        return Err(integrity("ops base is not a daily version"));
+    }
+    let binding = compact_versions::read_source_binding(c, &facts.source_binding_digest)?;
+    let (kind, evidence_json) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
+    if kind != EvidenceKind::Version {
+        return Err(integrity("base version evidence kind mismatch"));
+    }
+    let evidence: compact_market::VersionEvidence = serde_json::from_str(&evidence_json)
+        .map_err(|e| integrity(format!("version evidence malformed: {e}")))?;
+    let integrity_digest = facts
+        .integrity_digest
+        .ok_or_else(|| integrity("published base lacks integrity digest"))?;
+    let coverage_status = match facts.coverage_status {
+        1 => CoverageStatus::Complete,
+        2 => CoverageStatus::Incomplete,
+        _ => CoverageStatus::Unknown,
+    };
+    Ok(crate::market_update::UpdateBaseFacts {
+        version_id: facts.version_id,
+        symbol: facts.entity,
+        record_count: u32::try_from(facts.record_count)
+            .map_err(|_| integrity("base record_count out of range"))?,
+        first_day: compact_market::epoch_date(facts.first_day).map_err(integrity)?,
+        last_day: compact_market::epoch_date(facts.last_day).map_err(integrity)?,
+        integrity_sha256: hex_bytes(&integrity_digest),
+        coverage: crate::market_data::CoverageEvidence {
+            status: coverage_status,
+            reason: evidence.coverage_reason,
+        },
+        unit_currency: evidence.unit_currency,
+        source: evidence.source,
+        generation_id: binding.generation_id,
+        generation_manifest_sha256: hex_bytes(&binding.generation_manifest_sha256),
+        day_member_sha256: hex_bytes(&binding.day_member_sha256),
+        security_event_sha256: hex_bytes(&binding.security_event_sha256),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1004,6 +1069,7 @@ pub(crate) fn materialize_checked(
     version_id: &str,
     staged: bool,
 ) -> Result<CheckedRecord, Error> {
+    let _span = crate::stage_trace::span("cand.materialize_checked");
     let m = compact_versions::materialize(c, version_id)?;
     let allowed = match m.state {
         CompactVersionState::Published => !staged,
@@ -1013,7 +1079,7 @@ pub(crate) fn materialize_checked(
     if !allowed {
         return Err(Error::NotFound);
     }
-    synthesize(&m)
+    crate::stage_trace::timed("cand.synthesize", || synthesize(&m))
 }
 
 /// Header-only `materialize_checked` for published rows: `synthesize` emits
@@ -1120,7 +1186,13 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                     algorithm_version: derivation.algorithm_version.clone(),
                     first_trade_day: compact_market::epoch_day(derivation.first_trading_date),
                     last_trade_day: compact_market::epoch_day(derivation.last_trading_date),
-                    as_of_day: base.last_day,
+                    as_of_day: {
+                        crate::stage_trace::note(
+                            "stage.lineage_as_of",
+                            &[("as_of_epoch_day", base.last_day as u64)],
+                        );
+                        base.last_day
+                    },
                 }),
                 base.source_binding_digest,
             )
@@ -1161,8 +1233,17 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
         yearly_lineage,
     };
     if let Some(parent_id) = raw.get("compact_parent_version_id").and_then(Value::as_str) {
+        let parent_span = crate::stage_trace::span("stage.parent_facts");
         let parent_key = version_key(c, parent_id)?;
         let parent = compact_versions::result_facts(c, parent_key)?;
+        drop(parent_span);
+        crate::stage_trace::note(
+            "stage.parent",
+            &[
+                ("delta_depth", parent.delta_depth as u64),
+                ("period_year", (period == Period::Year) as u64),
+            ],
+        );
         if parent.state != CompactVersionState::Published
             || parent.entity != entity
             || parent.period != period
@@ -1171,6 +1252,7 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                 "compact parent is not a published same-scope version",
             ));
         }
+        let fixed_span = crate::stage_trace::span("stage.parent_fixed");
         let parent_bars = compact_versions::fixed(c, parent_id)?
             .version
             .records
@@ -1178,7 +1260,10 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
             .map(|bar| CompactBar::from_bar(bar, period))
             .collect::<Result<Vec<_>, _>>()
             .map_err(super::integrity)?;
-        match plan_delta(&parent_bars, &bars)? {
+        drop(fixed_span);
+        let plan =
+            crate::stage_trace::timed("stage.plan_delta", || plan_delta(&parent_bars, &bars))?;
+        match plan {
             DeltaPlan::Equal => {
                 return Err(Error::Conflict(
                     "candidate identical to declared parent; no-change must not stage".into(),
@@ -1749,6 +1834,7 @@ impl MarketRepository for SqliteCompactMarket {
         self.write(|c| stage_tx(c, raw))
     }
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
+        let _span = crate::stage_trace::span("cand.candidate");
         self.read(|c| materialize_checked(c, id, true))
     }
     fn staged_matches(&self, version_id: &str, whole: &Value) -> Result<bool, Error> {
@@ -1872,25 +1958,33 @@ impl MarketRepository for SqliteCompactMarket {
         })
     }
     fn fixed_facts(&self, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+        self.read(|c| fixed_facts_on(c, id))
+    }
+    fn yearly_accept_reads(
+        &self,
+        wants: &[crate::market_storage::YearlyAcceptWant],
+    ) -> Result<Vec<Result<crate::market_storage::YearlyAcceptRead, Error>>, Error> {
+        // ONE read snapshot for the whole batch (XP-025 B).
         self.read(|c| {
-            let key = version_key(c, id)?;
-            let facts = compact_versions::result_facts(c, key)?;
-            if facts.state != CompactVersionState::Published {
-                return Err(Error::NotFound);
-            }
-            let integrity_digest = facts
-                .integrity_digest
-                .ok_or_else(|| integrity("published version lacks integrity digest"))?;
-            Ok(crate::market_storage::FixedFacts {
-                version_id: facts.version_id,
-                symbol: facts.entity,
-                period: facts.period,
-                integrity_sha256: hex_bytes(&integrity_digest),
-                first_day: compact_market::epoch_date(facts.first_day)
-                    .map_err(|e| integrity(e.to_string()))?,
-                last_day: compact_market::epoch_date(facts.last_day)
-                    .map_err(|e| integrity(e.to_string()))?,
-            })
+            Ok(wants
+                .iter()
+                .map(|want| {
+                    Ok(crate::market_storage::YearlyAcceptRead {
+                        base: fixed_facts_on(c, &want.base_version_id)?,
+                        years: compact_versions::window_years(
+                            c,
+                            &want.base_version_id,
+                            compact_market::epoch_day(want.first),
+                            compact_market::epoch_day(want.last),
+                        )?,
+                        comparison: want
+                            .comparison_version_id
+                            .as_ref()
+                            .map(|id| fixed_facts_on(c, id))
+                            .transpose()?,
+                    })
+                })
+                .collect())
         })
     }
     fn fixed_window(
@@ -2004,6 +2098,53 @@ impl MarketRepository for SqliteCompactMarket {
 }
 
 impl RangeRepository for SqliteCompactMarket {
+    /// XP-025 H4: bindings + receipts for a whole task in ONE read
+    /// transaction (per-item failures stay per item).
+    fn range_item_states(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+    ) -> Result<Vec<Result<crate::market_update::publication::RangeItemState, Error>>, Error> {
+        self.read(|c| {
+            Ok(item_ids
+                .iter()
+                .map(|item_id| {
+                    let binding = crate::sqlite_tasks::read_item_binding(c, task_id, item_id)
+                        .map_err(Error::Task)?;
+                    let has_receipt = item_receipt_on(c, task_id, item_id)?.is_some();
+                    Ok(crate::market_update::publication::RangeItemState {
+                        binding,
+                        has_receipt,
+                    })
+                })
+                .collect())
+        })
+    }
+    /// XP-025 H4: base facts + windowed bars for many items in ONE read
+    /// transaction; `Ok(None)` per item keeps the unbound-base fallback.
+    fn range_base_reads(
+        &self,
+        wants: &[crate::market_update::publication::BaseWant],
+    ) -> Result<Vec<Result<Option<crate::market_update::publication::BaseRead>, Error>>, Error>
+    {
+        self.read(|c| {
+            Ok(wants
+                .iter()
+                .map(|want| {
+                    if !source_bound_on(c, &want.base_version_id)? {
+                        return Ok(None);
+                    }
+                    let facts = update_base_facts_on(c, &want.base_version_id)?;
+                    let bars =
+                        base_bars_in_range_on(c, &want.base_version_id, want.start, want.end)?;
+                    Ok(Some(crate::market_update::publication::BaseRead {
+                        facts,
+                        bars,
+                    }))
+                })
+                .collect())
+        })
+    }
     fn commit_range(&self, plan: &RangePlan) -> Result<Receipt, Error> {
         self.write(|c| commit_range_tx(c, plan))
     }
@@ -2093,16 +2234,7 @@ impl RangeRepository for SqliteCompactMarket {
         // A base published before snapshot bindings existed cannot drive
         // the continuity probe — the caller falls back to the envelope
         // path, whose `Unverified` continuity still covers it.
-        let bound = self.read(|c| {
-            let key = version_key(c, base_version_id)?;
-            let facts = compact_versions::result_facts(c, key)?;
-            c.query_row(
-                "SELECT EXISTS(SELECT 1 FROM source_bindings WHERE source_binding_digest=?1)",
-                params![facts.source_binding_digest.as_slice()],
-                |r| r.get::<_, bool>(0),
-            )
-            .map_err(storage)
-        })?;
+        let bound = self.read(|c| source_bound_on(c, base_version_id))?;
         if !bound {
             return Ok(None);
         }
@@ -2328,24 +2460,7 @@ impl RangeRepository for SqliteCompactMarket {
         })
     }
     fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
-        self.read(|c| {
-            let id: Option<String> = c
-                .query_row(
-                    "SELECT result_id FROM market_update_results WHERE task_id=?1 AND item_id=?2",
-                    params![task, item],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(storage)?;
-            let Some(id) = id else { return Ok(None) };
-            let stored = compact_results::read_market_update(c, &id)?;
-            Ok(Some(Receipt {
-                publication_id: stored.identity.result_id.clone(),
-                version_id: stored.identity.result_version_id.clone(),
-                task_id: stored.identity.task_id.clone(),
-                task_revision: stored.identity.task_revision,
-            }))
-        })
+        self.read(|c| item_receipt_on(c, task, item))
     }
     fn transition_task(
         &self,
@@ -2500,10 +2615,11 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         retry: Option<&RetryGuard>,
     ) -> Result<Acceptance, task_control::Error> {
-        work.validate()?;
+        crate::stage_trace::timed("repo.accept.validate", || work.validate())?;
         if id.trim().is_empty() || run.trim().is_empty() {
             return Err(task_control::Error::InvalidCommand("empty identity".into()));
         }
+        let _write = crate::stage_trace::span("repo.accept.coordinator_write");
         self.coordinator
             .write(|c| {
                 crate::sqlite_tasks::accept_tx(c, id, command, work, run, retry)

@@ -456,6 +456,90 @@ type AvailabilityStats = (
     Option<chrono::NaiveDate>,
     usize,
 );
+// Test-only switch: force the full-verification stats path so tests can
+// compare it field by field with the committed-tier fast path.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FORCE_FULL_STATS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Committed-tier daily stats (XP-025 D, approved): when the query range
+/// covers the whole published version, the manifest, metadata and
+/// first/last/count come from the version row (its published fields are
+/// still verified by `committed_facts`) and its version-evidence row — no
+/// chain walk, no node verification, no bar decoding. Sub-range filters,
+/// unpublished versions and non-compact stores return `None` and keep the
+/// fully verified path.
+fn committed_daily_stats(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    plan: &QueryPlan,
+    entity: &Security,
+    id: &str,
+) -> Result<Option<AvailabilityStats>, Error> {
+    use crate::sqlite_market::compact_versions::{self, CompactVersionState};
+    let key = match crate::sqlite_market::compact_repo::version_key(c, id) {
+        Ok(key) => key,
+        Err(Error::NotFound) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let facts = ctx.committed_facts(c, key)?;
+    if facts.state != CompactVersionState::Published {
+        return Ok(None);
+    }
+    if facts.entity != entity.symbol() || facts.period != crate::market_data::Period::Day {
+        return Err(Error::Integrity("version entity/dataset mismatch".into()));
+    }
+    let (start, end) = market_range(plan)?;
+    if !(crate::compact_market::epoch_day(start) <= facts.first_day
+        && facts.last_day <= crate::compact_market::epoch_day(end))
+    {
+        return Ok(None);
+    }
+    let count = usize::try_from(facts.record_count)
+        .map_err(|_| Error::Integrity("committed record_count out of range".into()))?;
+    if count > MAX_ROWS {
+        return Err(invalid("snapshot row budget exceeded"));
+    }
+    let (kind, canonical) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
+    if kind != crate::compact_market::EvidenceKind::Version {
+        return Err(Error::Integrity("version evidence kind mismatch".into()));
+    }
+    let evidence: crate::compact_market::VersionEvidence =
+        serde_json::from_str(&canonical).map_err(|e| Error::Integrity(e.to_string()))?;
+    let published_at = facts
+        .published_at
+        .as_deref()
+        .ok_or_else(|| Error::Integrity("published version lacks published_at".into()))?
+        .parse()
+        .map_err(|e: chrono::ParseError| Error::Integrity(e.to_string()))?;
+    let day =
+        |d: i64| crate::compact_market::epoch_date(d).map_err(|e| Error::Integrity(e.to_string()));
+    let manifest = ManifestEntry {
+        entity: Some(entity.clone()),
+        version_ref: Some(market_ref_facts(Dataset::Daily, entity, &facts)?),
+        status: ManifestStatus::Present,
+        metadata: Some(Metadata {
+            source: evidence.source,
+            published_at,
+            coverage_status: match facts.coverage_status {
+                1 => "complete",
+                2 => "incomplete",
+                _ => "unknown",
+            }
+            .into(),
+            coverage_reason: evidence.coverage_reason,
+            units: unit_evidence(&evidence.unit_currency),
+            adjustment: Some(adjustment_evidence(&evidence.adjustment_evidence)),
+            lineage: None,
+        }),
+    };
+    Ok(Some((
+        Some(manifest),
+        Some(day(facts.first_day)?),
+        Some(day(facts.last_day)?),
+        count,
+    )))
+}
 fn availability_stats(
     c: &Connection,
     ctx: &mut VerifyCtx,
@@ -507,6 +591,17 @@ fn availability_stats(
             0,
         ));
     };
+    #[cfg(test)]
+    let force_full = FORCE_FULL_STATS.with(|f| f.get());
+    #[cfg(not(test))]
+    let force_full = false;
+    if plan.args.dataset == Dataset::Daily
+        && !force_full
+        && crate::sqlite_market::is_compact_schema(c)?
+        && let Some(stats) = committed_daily_stats(c, ctx, plan, entity, &id)?
+    {
+        return Ok(stats);
+    }
     // Published compact heads answer the same facts without a full record
     // materialization: the slim projection's manifest/metadata are
     // byte-identical, and the in-window stats come from the windowed leaf
@@ -722,10 +817,8 @@ impl YearlyMetaScan {
     }
 }
 
-fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
-    let v = r.version();
-    let u = &v.unit_currency;
-    let units = [
+fn unit_evidence(u: &crate::market_data::UnitCurrencyEvidence) -> Vec<Evidence> {
+    [
         ("price_currency", &u.price_currency),
         ("price_unit", &u.price_unit),
         ("volume_unit", &u.volume_unit),
@@ -739,7 +832,18 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
         value: e.value.clone(),
         reason: e.reason.clone(),
     })
-    .collect();
+    .collect()
+}
+fn adjustment_evidence(a: &crate::market_data::AdjustmentEvidence) -> Evidence {
+    Evidence {
+        field: "price_adjustment".into(),
+        status: format!("{:?}", a.status).to_lowercase(),
+        value: a.value.clone(),
+        reason: a.reason.clone(),
+    }
+}
+fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
+    let v = r.version();
     Metadata {
         source: v.source.clone(),
         published_at: v.published_at,
@@ -751,13 +855,8 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
             .as_str()
             .unwrap_or_default()
             .into(),
-        units,
-        adjustment: Some(Evidence {
-            field: "price_adjustment".into(),
-            status: format!("{:?}", v.adjustment_evidence.status).to_lowercase(),
-            value: v.adjustment_evidence.value.clone(),
-            reason: v.adjustment_evidence.reason.clone(),
-        }),
+        units: unit_evidence(&v.unit_currency),
+        adjustment: Some(adjustment_evidence(&v.adjustment_evidence)),
         lineage: v.yearly_derivation.as_ref().map(|l| Lineage {
             base_daily_version_id: l.base_daily_version_id.clone(),
             algorithm_version: l.algorithm_version.clone(),
@@ -1008,54 +1107,294 @@ fn task_facts_light(c: &Connection, id: &str, access: &Access) -> Result<TaskFac
         yearly_results: vec![],
     })
 }
+/// Whether `access` may see tasks of `dataset` at all.
+fn dataset_visible(dataset: &str, access: &Access) -> bool {
+    match dataset {
+        "task.verification" => *access == Access::local(),
+        "market.daily" => access.allows(Dataset::Daily, None),
+        "market.yearly" => access.allows(Dataset::Yearly, None),
+        "securities.catalog" => access.allows(Dataset::Catalog, None),
+        "legacy_market_compound" => {
+            access.allows(Dataset::Daily, None) || access.allows(Dataset::Yearly, None)
+        }
+        _ => false,
+    }
+}
+/// Light facts of ONE task when the caller may see it (dataset allowed and
+/// every item symbol allowed); `None` = hidden from this caller. This is
+/// the per-row body the old full `task_list` ran for every task.
+fn load_task_facts(c: &Connection, id: &str, access: &Access) -> Result<Option<TaskFacts>, Error> {
+    let (key, work): (String, String) = c
+        .query_row(
+            "SELECT command_key_json,frozen_work_json FROM tasks WHERE task_id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(storage)?;
+    let key: crate::task_control::CommandKey = serde_json::from_str(&key).map_err(storage)?;
+    if !dataset_visible(&key.dataset, access) {
+        return Ok(None);
+    }
+    let work: crate::task_control::FrozenWork = serde_json::from_str(&work).map_err(storage)?;
+    if work.items.iter().any(|i| {
+        i.target["symbol"].as_str().is_some_and(|s| {
+            crate::data_supply::observe::entity(s)
+                .is_none_or(|e| access.securities.as_ref().is_some_and(|a| !a.contains(&e)))
+        })
+    }) {
+        return Ok(None);
+    }
+    match task_facts_light(c, id, access) {
+        Ok(f) => Ok(Some(f)),
+        Err(Error::Invalid(s)) if s == "forbidden" => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+/// Every visible task, newest first. Kept for the trait's full-list
+/// accessor; no hard task-count cap (XP-025 D) — bounded callers use
+/// `scan_tasks` / `related_tasks_for`.
 pub(crate) fn task_list(c: &Connection, access: &Access) -> Result<Vec<TaskFacts>, Error> {
-    let mut q=c.prepare("SELECT task_id,command_key_json,frozen_work_json FROM tasks ORDER BY created_at DESC,task_id ASC").map_err(storage)?;
+    let mut q = c
+        .prepare("SELECT task_id FROM tasks ORDER BY created_at DESC,task_id ASC")
+        .map_err(storage)?;
+    let ids = q
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    drop(q);
+    let mut result = vec![];
+    for id in ids {
+        if let Some(f) = load_task_facts(c, &id, access)? {
+            result.push(f);
+        }
+    }
+    Ok(result)
+}
+/// One keyset slice of the task list (XP-025 D): SQL does ordering, the
+/// snapshot bound and coarse filters; only the rows of this slice are
+/// loaded and authorized. `created_at` is stored as `Utc::now().to_rfc3339()`
+/// (always `+00:00`, fractional digits only where non-zero), whose
+/// lexicographic order is the chronological order.
+fn bind(args: &mut Vec<String>, sql: &mut String, clause: &str, value: String) {
+    args.push(value);
+    sql.push_str(&clause.replace('?', &format!("?{}", args.len())));
+}
+fn scan_tasks_sql(scan: &crate::data_supply::observe::TaskScan) -> (String, Vec<String>) {
+    let mut sql = String::from("SELECT task_id,created_at FROM tasks WHERE 1=1");
+    let mut args: Vec<String> = vec![];
+    if let Some(upper) = scan.upper {
+        bind(
+            &mut args,
+            &mut sql,
+            " AND created_at<=?",
+            upper.to_rfc3339(),
+        );
+    }
+    if let Some((at, id)) = &scan.after {
+        args.push(at.clone());
+        let a = args.len();
+        args.push(id.clone());
+        let t = args.len();
+        sql.push_str(&format!(
+            " AND (created_at<?{a} OR (created_at=?{a} AND task_id>?{t}))"
+        ));
+    }
+    if let Some(from) = scan.created_from {
+        bind(&mut args, &mut sql, " AND created_at>=?", from.to_rfc3339());
+    }
+    if let Some(to) = scan.created_to {
+        bind(&mut args, &mut sql, " AND created_at<=?", to.to_rfc3339());
+    }
+    if let Some(dataset) = &scan.dataset {
+        bind(
+            &mut args,
+            &mut sql,
+            " AND json_extract(command_key_json,'$.dataset')=?",
+            dataset.clone(),
+        );
+    }
+    if let Some(operation) = &scan.operation {
+        bind(
+            &mut args,
+            &mut sql,
+            " AND json_extract(command_key_json,'$.operation')=?",
+            operation.clone(),
+        );
+    }
+    if let Some(statuses) = &scan.stored_statuses {
+        let mut marks = vec![];
+        for status in statuses {
+            args.push(status.clone());
+            marks.push(format!("?{}", args.len()));
+        }
+        sql.push_str(&format!(" AND status IN ({})", marks.join(",")));
+    }
+    sql.push_str(&format!(
+        " ORDER BY created_at DESC,task_id ASC LIMIT {}",
+        scan.batch
+    ));
+    (sql, args)
+}
+fn scan_tasks(
+    c: &Connection,
+    scan: &crate::data_supply::observe::TaskScan,
+    access: &Access,
+) -> Result<crate::data_supply::observe::TaskScanBatch, Error> {
+    let (sql, args) = scan_tasks_sql(scan);
+    let mut q = c.prepare(&sql).map_err(storage)?;
     let rows = q
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
+        .query_map(rusqlite::params_from_iter(args.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;
-    let mut result = vec![];
-    for (id, key, work) in rows {
-        let key: crate::task_control::CommandKey = serde_json::from_str(&key).map_err(storage)?;
-        let allowed = match key.dataset.as_str() {
-            "task.verification" => *access == Access::local(),
-            "market.daily" => access.allows(Dataset::Daily, None),
-            "market.yearly" => access.allows(Dataset::Yearly, None),
-            "securities.catalog" => access.allows(Dataset::Catalog, None),
-            "legacy_market_compound" => {
-                access.allows(Dataset::Daily, None) || access.allows(Dataset::Yearly, None)
-            }
-            _ => false,
-        };
-        if !allowed {
-            continue;
-        }
-        let work: crate::task_control::FrozenWork = serde_json::from_str(&work).map_err(storage)?;
-        if work.items.iter().any(|i| {
-            i.target["symbol"].as_str().is_some_and(|s| {
-                crate::data_supply::observe::entity(s)
-                    .is_none_or(|e| access.securities.as_ref().is_some_and(|a| !a.contains(&e)))
-            })
-        }) {
-            continue;
-        }
-        match task_facts_light(c, &id, access) {
-            Ok(f) => result.push(f),
-            Err(Error::Invalid(s)) if s == "forbidden" => continue,
-            Err(e) => return Err(e),
-        }
-        if result.len() > 10000 {
-            return Err(invalid("task snapshot budget exceeded"));
+    drop(q);
+    let next_after = (rows.len() >= scan.batch)
+        .then(|| rows.last().map(|(id, at)| (at.clone(), id.clone())))
+        .flatten();
+    let mut facts = vec![];
+    for (id, _) in rows {
+        if let Some(f) = load_task_facts(c, &id, access)? {
+            facts.push(f);
         }
     }
-    Ok(result)
+    Ok(crate::data_supply::observe::TaskScanBatch { facts, next_after })
+}
+/// Tasks related to the requested entities (and, for a catalog selection,
+/// to the catalog) without scanning every task: ONE narrow-table pass over
+/// `task_scopes` (keys `scope_id(symbol, day|year)`, no JSON parsed) joined
+/// to `tasks` by primary key, then facts for only the matching tasks.
+/// Without a `scope_key` index the scan is O(task_scopes rows).
+/// Related tasks of one subject: the selected facts plus the total number of
+/// related (dataset-visible) tasks before the in-flight + latest-N cut.
+type RelatedSelection = (Vec<std::rc::Rc<TaskFacts>>, usize);
+type RelatedTasks = (
+    std::collections::HashMap<String, RelatedSelection>,
+    RelatedSelection,
+);
+/// Finished tasks listed per entity besides all in-flight ones (XP-025 D-b).
+const RELATED_FINISHED_CAP: usize = 5;
+fn related_scopes_sql(keys: usize) -> String {
+    let marks = (1..=keys)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "SELECT s.scope_key,t.created_at,t.task_id,t.status,json_extract(t.command_key_json,'$.dataset') FROM task_scopes s \
+         CROSS JOIN tasks t ON t.task_id=s.task_id WHERE s.scope_key IN ({marks})"
+    )
+}
+fn related_tasks_for(
+    c: &Connection,
+    symbols: &[String],
+    catalog: bool,
+    access: &Access,
+) -> Result<RelatedTasks, Error> {
+    use std::collections::{BTreeSet, HashMap};
+    // (created_at DESC, task_id ASC, in_flight)
+    type Candidate = (std::cmp::Reverse<String>, String, bool);
+    let mut key_symbol: HashMap<String, &String> = HashMap::new();
+    for symbol in symbols {
+        // "daily" is the period gap-verification tasks put in their scope key.
+        for period in ["day", "daily", "year"] {
+            key_symbol.insert(
+                crate::task_control::legacy::scope_id(symbol, period),
+                symbol,
+            );
+        }
+    }
+    let keys: Vec<&String> = key_symbol.keys().collect();
+    let in_flight = |status: &str| crate::sqlite_tasks::ACTIVE_STATUSES.contains(&status);
+    let mut by_symbol: HashMap<&String, BTreeSet<Candidate>> = HashMap::new();
+    for chunk in keys.chunks(400) {
+        let sql = related_scopes_sql(chunk.len());
+        let mut q = c.prepare(&sql).map_err(storage)?;
+        let rows = q
+            .query_map(rusqlite::params_from_iter(chunk.iter()), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map_err(storage)?;
+        for row in rows {
+            let (scope_key, created_at, task_id, status, dataset) = row.map_err(storage)?;
+            // Datasets the caller cannot see never count toward the total.
+            if !dataset
+                .as_deref()
+                .is_some_and(|d| dataset_visible(d, access))
+            {
+                continue;
+            }
+            if let Some(symbol) = key_symbol.get(&scope_key) {
+                by_symbol.entry(symbol).or_default().insert((
+                    std::cmp::Reverse(created_at),
+                    task_id,
+                    in_flight(&status),
+                ));
+            }
+        }
+    }
+    let mut catalog_ids: BTreeSet<Candidate> = BTreeSet::new();
+    if catalog && dataset_visible("securities.catalog", access) {
+        let mut q = c
+            .prepare(
+                "SELECT created_at,task_id,status FROM tasks \
+                 WHERE json_extract(command_key_json,'$.dataset')='securities.catalog'",
+            )
+            .map_err(storage)?;
+        let rows = q
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(storage)?;
+        for row in rows {
+            let (created_at, task_id, status) = row.map_err(storage)?;
+            catalog_ids.insert((std::cmp::Reverse(created_at), task_id, in_flight(&status)));
+        }
+    }
+    // All in-flight tasks plus the newest RELATED_FINISHED_CAP finished ones,
+    // in list order; facts are loaded once per distinct task.
+    let mut loaded: HashMap<String, Option<std::rc::Rc<TaskFacts>>> = HashMap::new();
+    let mut select = |candidates: &BTreeSet<Candidate>| -> Result<RelatedSelection, Error> {
+        let mut finished = 0usize;
+        let mut tasks = vec![];
+        for (_, id, active) in candidates {
+            if !active {
+                if finished >= RELATED_FINISHED_CAP {
+                    continue;
+                }
+                finished += 1;
+            }
+            let facts = match loaded.get(id) {
+                Some(found) => found.clone(),
+                None => {
+                    let facts = load_task_facts(c, id, access)?.map(std::rc::Rc::new);
+                    loaded.insert(id.clone(), facts.clone());
+                    facts
+                }
+            };
+            if let Some(f) = facts {
+                tasks.push(f);
+            }
+        }
+        Ok((tasks, candidates.len()))
+    };
+    let mut related = HashMap::new();
+    for (symbol, candidates) in &by_symbol {
+        related.insert((*symbol).clone(), select(candidates)?);
+    }
+    let catalog_related = select(&catalog_ids)?;
+    Ok((related, catalog_related))
 }
 /// Connection-level version-identity comparison shared by
 /// `ReadRepository::verify` and `SqliteProgressRead::verify_versions`:
@@ -1301,6 +1640,13 @@ impl ObservationRepository for SqliteSupply {
     fn tasks(&self, access: &Access) -> Result<Vec<TaskFacts>, Error> {
         self.market.read(|c| task_list(c, access))
     }
+    fn tasks_scan(
+        &self,
+        scan: &crate::data_supply::observe::TaskScan,
+        access: &Access,
+    ) -> Result<crate::data_supply::observe::TaskScanBatch, Error> {
+        self.market.read(|c| scan_tasks(c, scan, access))
+    }
     fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
         self.market.read(|c| {
             let mut ctx = VerifyCtx::default();
@@ -1309,6 +1655,13 @@ impl ObservationRepository for SqliteSupply {
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)
+    }
+    fn verify_versions_committed(&self, refs: &[VersionRef]) -> Result<(), Error> {
+        if refs.is_empty() {
+            return Ok(());
+        }
+        self.market
+            .read(|c| verify_versions_meta_conn(c, &mut VerifyCtx::default(), refs))
     }
     fn verify_publication_check(
         &self,
@@ -1352,51 +1705,35 @@ impl ObservationRepository for SqliteSupply {
         plan: &QueryPlan,
         access: &Access,
     ) -> Result<Vec<AvailabilityFacts>, Error> {
+        let _total = crate::stage_trace::span("availability.total");
         self.market.read(|c| {
             let mut ctx = VerifyCtx::default();
-            let tasks: Vec<std::rc::Rc<TaskFacts>> = task_list(c, access)?
-                .into_iter()
-                .map(std::rc::Rc::new)
-                .collect();
-            // One pass over the task set instead of an entities x tasks x
-            // items scan with a TaskSnapshot clone per hit: each task index
-            // is registered under every distinct item symbol (catalog tasks
-            // under the entity-less selection). Order follows `task_list`.
-            let mut catalog_tasks = vec![];
-            let mut by_symbol: std::collections::HashMap<String, Vec<usize>> = Default::default();
-            for (i, f) in tasks.iter().enumerate() {
-                if f.snapshot.task.key.dataset == "securities.catalog" {
-                    catalog_tasks.push(i);
-                }
-                let symbols: std::collections::BTreeSet<&str> = f
-                    .snapshot
-                    .items
-                    .iter()
-                    .filter_map(|i| i.spec.target["symbol"].as_str())
-                    .collect();
-                for symbol in symbols {
-                    by_symbol.entry(symbol.into()).or_default().push(i);
-                }
-            }
-            let mut out = vec![];
             let entities: Vec<Option<Security>> = if plan.args.dataset == Dataset::Catalog {
                 vec![None]
             } else {
                 plan.entities.iter().cloned().map(Some).collect()
             };
+            // Related tasks come from the requested entities only (XP-025 D):
+            // one narrow task_scopes pass, facts for the matching tasks.
+            let task_span = crate::stage_trace::span("availability.related_tasks");
+            let symbols: Vec<String> = entities.iter().flatten().map(|e| e.symbol()).collect();
+            let (related, catalog_related) =
+                related_tasks_for(c, &symbols, entities.iter().any(Option::is_none), access)?;
+            crate::stage_trace::note(
+                "availability.related_tasks_size",
+                &[(
+                    "tasks",
+                    related.values().map(|(t, _)| t.len()).sum::<usize>() as u64
+                        + catalog_related.0.len() as u64,
+                )],
+            );
+            drop(task_span);
+            let mut out = vec![];
             for entity in entities {
-                let related_tasks = match &entity {
-                    Some(e) => by_symbol
-                        .get(e.symbol().as_str())
-                        .into_iter()
-                        .flatten()
-                        .copied()
-                        .collect::<Vec<usize>>(),
-                    None => catalog_tasks.clone(),
-                }
-                .into_iter()
-                .map(|i| tasks[i].clone())
-                .collect();
+                let (related_tasks, related_tasks_total) = match &entity {
+                    Some(e) => related.get(&e.symbol()).cloned().unwrap_or_default(),
+                    None => catalog_related.clone(),
+                };
                 let proven_gaps = match (&entity, plan.args.dataset.period()) {
                     (Some(e), Some(period)) => {
                         crate::sqlite_market::gaps::read_open_gaps(c, &e.symbol(), period)?
@@ -1414,6 +1751,7 @@ impl ObservationRepository for SqliteSupply {
                             integrity_failure: None,
                             proven_gaps,
                             related_tasks,
+                            related_tasks_total,
                         });
                     }
                     Err(Error::Integrity(reason) | Error::Base(reason)) => {
@@ -1426,6 +1764,7 @@ impl ObservationRepository for SqliteSupply {
                             integrity_failure: Some(reason),
                             proven_gaps,
                             related_tasks,
+                            related_tasks_total,
                         })
                     }
                     Err(e) => return Err(e),
@@ -1562,4 +1901,69 @@ fn yearly_result_meta(
     let base_ref = market_ref_facts(Dataset::Daily, &entity, &base)?;
     let result_ref = market_ref_facts(Dataset::Yearly, &entity, &result)?;
     serde_json::from_value(serde_json::json!({"result_id":id,"item_id":audit["command"]["item_id"],"base_daily_version":base_ref,"result_version":result_ref,"no_change":audit["no_change"],"derived_at":audit["candidate"]["batch"]["provenance"]["acquired_at"]})).map_err(|e|Error::Integrity(e.to_string()))
+}
+
+#[cfg(test)]
+mod xp025_tests {
+    use super::*;
+
+    fn plan(c: &Connection, sql: &str) -> Vec<String> {
+        let mut q = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        // The statements under test take bound parameters; plans do not
+        // depend on their values, so bind NULLs.
+        let nulls = vec![rusqlite::types::Null; q.parameter_count()];
+        q.query_map(rusqlite::params_from_iter(nulls), |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+    fn db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = crate::sqlite_tasks::SqliteTasks::new(dir.path().join("t.sqlite"));
+        tasks.initialize().unwrap();
+        let c = Connection::open(tasks.path()).unwrap();
+        (dir, c)
+    }
+    /// Statement shapes, not timing: the list scan reads only `tasks`
+    /// (never items/requests/scopes) and the related lookup is one pass over
+    /// the narrow `task_scopes` table joined to `tasks` by primary key.
+    #[test]
+    fn task_listing_and_related_lookup_plans_are_bounded() {
+        let (_dir, c) = db();
+        let scan = crate::data_supply::observe::TaskScan {
+            dataset: Some("market.daily".into()),
+            operation: Some("start_collection".into()),
+            stored_statuses: Some(vec!["succeeded".into()]),
+            created_from: Some(chrono::Utc::now()),
+            created_to: Some(chrono::Utc::now()),
+            upper: Some(chrono::Utc::now()),
+            after: Some(("2026-01-01T00:00:00+00:00".into(), "task-x".into())),
+            batch: 50,
+        };
+        let (sql, _) = scan_tasks_sql(&scan);
+        assert!(sql.ends_with("LIMIT 50"), "{sql}");
+        for detail in plan(&c, &sql) {
+            if let Some(rest) = detail.strip_prefix("SCAN ") {
+                assert!(
+                    rest.starts_with("tasks"),
+                    "list scan may only scan tasks: {detail}"
+                );
+            }
+        }
+        let related = related_scopes_sql(3);
+        for detail in plan(&c, &related) {
+            if let Some(rest) = detail.strip_prefix("SCAN ") {
+                assert!(
+                    rest.starts_with("s ") || rest == "s",
+                    "related lookup may only scan task_scopes: {detail}"
+                );
+            }
+        }
+        assert!(
+            plan(&c, &related)
+                .iter()
+                .any(|d| d.contains("SEARCH t USING") && d.contains("task_id=?")),
+            "tasks must be reached by primary key"
+        );
+    }
 }

@@ -9,6 +9,12 @@ use super::*;
 use crate::compact_market::Digest;
 use crate::local_runtime::DatabaseLease;
 
+// Test-only count of coordinator read transactions on this thread.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static READ_TXS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 const MAX_READERS: usize = 16;
 const JOURNAL_SIZE_LIMIT: i64 = 16_777_216;
 const WRITER_CACHE: usize = 128;
@@ -167,6 +173,7 @@ impl WriteCoordinator {
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        let lock_span = crate::stage_trace::span("coord.write.lock_wait");
         let _lifecycle = self
             .lifecycle
             .read()
@@ -175,13 +182,15 @@ impl WriteCoordinator {
             .writer
             .lock()
             .map_err(|_| unavailable("writer lock poisoned"))?;
+        drop(lock_span);
         let Some(conn) = writer.as_mut() else {
             return Err(unavailable("coordinator is shut down"));
         };
-        self.verify_boundary(conn)?;
+        crate::stage_trace::timed("coord.write.boundary_pre", || self.verify_boundary(conn))?;
         if !conn.is_autocommit() {
             return Err(integrity("writer connection is not in autocommit"));
         }
+        let _held = crate::stage_trace::span("coord.write.held");
         match f(conn) {
             Err(error) => match recover_leak(conn) {
                 Ok(()) => Err(error),
@@ -192,7 +201,9 @@ impl WriteCoordinator {
                     recover_leak(conn)?;
                     return Err(integrity("write closure leaked a transaction"));
                 }
-                self.verify_boundary(conn)?;
+                crate::stage_trace::timed("coord.write.boundary_post", || {
+                    self.verify_boundary(conn)
+                })?;
                 Ok(value)
             }
         }
@@ -253,6 +264,9 @@ impl WriteCoordinator {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        #[cfg(test)]
+        READ_TXS.with(|n| n.set(n.get() + 1));
+        let wait_span = crate::stage_trace::span("coord.read.slot_wait");
         let _slot = ReaderSlot::acquire(&self.reader_count, &self.reader_idle)?;
         let _lifecycle = self
             .lifecycle
@@ -266,6 +280,7 @@ impl WriteCoordinator {
             return Err(unavailable("coordinator is shut down"));
         }
         drop(writer);
+        drop(wait_span);
         self.lease.validate().map_err(unavailable)?;
         let mut conn = self.take_reader()?;
         // The transaction owns the snapshot: a pooled connection sees the

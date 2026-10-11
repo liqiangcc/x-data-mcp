@@ -6949,4 +6949,370 @@ mod xp011 {
             ));
         }
     }
+
+    /// XP-025 H4: batched daily preparation must prepare/decline exactly the
+    /// items the per-item `update_candidate` loop does, in ~2 read
+    /// transactions instead of 5 per item.
+    mod xp025 {
+        use super::*;
+        use crate::market_update::UpdateBatchItem;
+        use crate::market_update::runner::{
+            RangeProvider, RangeRunner, TypedAcquisition, TypedDecision,
+        };
+
+        struct Unchanged;
+        impl RangeProvider for Unchanged {
+            fn acquire(
+                &self,
+                _: &crate::market_storage::compat::CheckedRecord,
+                _: &crate::market_update::DateRange,
+                _: &str,
+            ) -> Result<crate::market_update::runner::Acquisition, crate::market_data::SourceError>
+            {
+                Err(crate::market_data::SourceError::NotVerified(
+                    "unused".into(),
+                ))
+            }
+            fn acquire_typed(
+                &self,
+                facts: &crate::market_update::UpdateBaseFacts,
+                _: &[Bar],
+                range: &crate::market_update::DateRange,
+            ) -> Result<Option<TypedAcquisition>, crate::market_data::SourceError> {
+                Ok(Some(TypedAcquisition {
+                    decision: TypedDecision::Unchanged,
+                    evidence: crate::market_update::Evidence {
+                        base_version_id: facts.version_id.clone(),
+                        base_integrity_sha256: facts.integrity_sha256.clone(),
+                        candidate_sha256: "cd".repeat(32),
+                        range: range.clone(),
+                        same_qfq_basis_ref: "qfq".into(),
+                        revision_ref: None,
+                        continuity: None,
+                    },
+                }))
+            }
+        }
+
+        fn item_spec(item_id: &str, symbol: &str, base: &str) -> ItemSpec {
+            ItemSpec {
+                item_id: item_id.into(),
+                target: json!({"symbol": symbol, "period": "day"}),
+                progress_unit: "security_period".into(),
+                frozen_inputs: crate::market_update::tasks::frozen(
+                    base,
+                    "ab".repeat(32).as_str(),
+                    &crate::market_update::DateRange {
+                        start: date(0),
+                        end: date(3),
+                    },
+                ),
+                scope_keys: BTreeSet::from([task_control::legacy::scope_id(symbol, "day")]),
+            }
+        }
+
+        #[test]
+        fn batched_prepare_matches_per_item_loop_with_far_fewer_reads() {
+            let dir = tempdir();
+            let (_path, repo) = repo(&dir);
+            let bars = vec![bar(0, 100), bar(1, 110), bar(2, 120)];
+            publish_head(&repo, "req-a", "pub-a", "sh.600006", "v1a", bars.clone());
+            publish_head(&repo, "req-b", "pub-b", "sh.600007", "v1b", bars.clone());
+            publish_head(&repo, "req-c", "pub-c", "sh.600008", "v1c", bars);
+            let specs = vec![
+                item_spec("item-1", "sh.600006", "v1a"),
+                item_spec("item-2", "sh.600007", "v1b"),
+                item_spec("item-3", "sh.600008", "v1c"),
+                // Missing base: both paths must decline it.
+                item_spec("item-4", "sh.600009", "v-missing"),
+            ];
+            let scopes: BTreeSet<String> = specs
+                .iter()
+                .flat_map(|s| s.scope_keys.iter().cloned())
+                .collect();
+            let work = FrozenWork {
+                items: specs,
+                scopes,
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: CommandKey {
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+                },
+                intent: json!({}),
+            };
+            let task = match repo
+                .accept("req-h4", &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(s) => s.task.task_id.clone(),
+                _ => panic!("expected task"),
+            };
+            // item-1 already has a committed receipt: both paths decline it.
+            repo.commit_update_batch(
+                &task,
+                &[UpdateBatchItem {
+                    task_id: task.clone(),
+                    item_id: "item-1".into(),
+                    publication_id: "upd-1".into(),
+                    run_id: RUN.into(),
+                    symbol: "sh.600006".into(),
+                    occupancy_key: task_control::legacy::scope_id("sh.600006", "day"),
+                    prepared: UpdateBatchPrepared::NoChange {
+                        base_version_id: "v1a".into(),
+                        range_start_day: 2,
+                        range_end_day: 2,
+                        continuity: json!({"continuity": {"mode": "unchanged"}}),
+                    },
+                }],
+            )
+            .unwrap()
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+            let runner = RangeRunner {
+                repository: repo.clone(),
+                run_id: RUN.into(),
+            };
+            let ids: Vec<String> = ["item-1", "item-2", "item-3", "item-4", "item-nope"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            let reads = || crate::sqlite_market::compact_runtime::READ_TXS.with(|n| n.get());
+            let before = reads();
+            let (batch, mut batch_fallback) = runner.prepare_batch(&task, &ids, &Unchanged);
+            let batch_reads = reads() - before;
+
+            let before = reads();
+            let mut per_item = Vec::new();
+            let mut per_item_fallback = Vec::new();
+            for id in &ids {
+                match runner.update_candidate(&task, id, &Unchanged) {
+                    Ok(Some(candidate)) => per_item.push(candidate),
+                    Ok(None) | Err(_) => per_item_fallback.push(id.clone()),
+                }
+            }
+            let per_item_reads = reads() - before;
+
+            batch_fallback.sort();
+            per_item_fallback.sort();
+            assert_eq!(batch_fallback, per_item_fallback);
+            assert_eq!(batch_fallback, ["item-1", "item-4", "item-nope"]);
+            assert_eq!(format!("{batch:?}"), format!("{per_item:?}"));
+            assert_eq!(batch.len(), 2);
+            assert_eq!(batch_reads, 2, "states + base reads, one tx each");
+            assert!(
+                per_item_reads >= 5 * 2,
+                "per-item path pays several read txs per item: {per_item_reads}"
+            );
+        }
+    }
+
+    /// XP-025 D-a2: the committed-tier daily stats fast path.
+    mod xp025_stats {
+        use super::*;
+        use crate::data_supply::observe::AvailabilityFacts;
+        use crate::data_supply::query::QueryPlan;
+        use crate::data_supply::wire::{
+            ContractVersion, Dataset, Exchange, Filter, Query, Security, Selection, VersionChoice,
+        };
+
+        fn plan(start: NaiveDate, end: NaiveDate) -> QueryPlan {
+            QueryPlan::new(
+                Query {
+                    dataset: Dataset::Daily,
+                    contract_version: ContractVersion::V1,
+                    selection: Selection::Single {
+                        entity: Security {
+                            exchange: Exchange::Sh,
+                            code: "600006".into(),
+                        },
+                    },
+                    filter: Filter::Daily {
+                        start_date: start,
+                        end_date: end,
+                    },
+                    version: VersionChoice::LatestPerEntity,
+                    page_size: 10,
+                    cursor: None,
+                },
+                &Access::local(),
+            )
+            .unwrap()
+        }
+        fn run(f: &Fixture, plan: &QueryPlan, full: bool) -> Vec<AvailabilityFacts> {
+            crate::sqlite_supply::FORCE_FULL_STATS.with(|c| c.set(full));
+            let supply = SqliteSupply {
+                market: MarketBackend::Compact(f.repo.clone()),
+            };
+            let out = supply.availability(plan, &f.access).unwrap();
+            crate::sqlite_supply::FORCE_FULL_STATS.with(|c| c.set(false));
+            out
+        }
+
+        #[test]
+        fn committed_stats_equal_the_full_path_without_chain_verification() {
+            let f = fixture();
+            // v2a spans days 0..=3; this window covers the whole version.
+            let covering = plan(date(0), date(3));
+            compact_versions::read_counts::reset();
+            let fast = run(&f, &covering, false);
+            let (_, fast_chain_runs, _) = compact_versions::read_counts::reset();
+            let full = run(&f, &covering, true);
+            let (_, full_chain_runs, _) = compact_versions::read_counts::reset();
+            assert_eq!(
+                fast_chain_runs, 0,
+                "fast path must not walk/verify the chain"
+            );
+            assert!(full_chain_runs > 0, "control: full path verifies the chain");
+            assert_eq!(fast.len(), 1);
+            let (a, b) = (&fast[0], &full[0]);
+            assert!(a.integrity_failure.is_none() && b.integrity_failure.is_none());
+            assert_eq!(
+                a.manifest, b.manifest,
+                "manifest incl. metadata field by field"
+            );
+            assert_eq!(a.first_record, b.first_record);
+            assert_eq!(a.last_record, b.last_record);
+            assert_eq!(a.record_count, b.record_count);
+            assert_eq!(a.record_count, 4);
+            // A sub-range query is NOT eligible: it still uses the full path.
+            compact_versions::read_counts::reset();
+            let sub = run(&f, &plan(date(1), date(2)), false);
+            let (_, sub_chain_runs, _) = compact_versions::read_counts::reset();
+            assert!(sub_chain_runs > 0);
+            assert_eq!(sub[0].record_count, 2);
+        }
+
+        /// XP-027 D-a3: availability's verify runs at the committed tier.
+        #[test]
+        fn availability_verify_uses_committed_tier_without_chain_rebuild() {
+            use crate::data_supply::observe::ObservationRepository;
+            let f = fixture();
+            let supply = SqliteSupply {
+                market: MarketBackend::Compact(f.repo.clone()),
+            };
+            let facts = run(&f, &plan(date(0), date(3)), false);
+            let refs: Vec<_> = facts
+                .iter()
+                .filter_map(|a| a.manifest.as_ref()?.version_ref.clone())
+                .collect();
+            assert_eq!(refs.len(), 1);
+            compact_versions::read_counts::reset();
+            supply.verify_versions_committed(&refs).unwrap();
+            let (_, committed_runs, _) = compact_versions::read_counts::reset();
+            assert_eq!(committed_runs, 0, "no full chain rebuild");
+            supply.verify_versions(&refs).unwrap();
+            let (_, full_runs, _) = compact_versions::read_counts::reset();
+            assert!(full_runs > 0, "control: full tier rebuilds the chain");
+            // Both tiers accept and reject the same references.
+            let mut wrong = refs.clone();
+            wrong[0].integrity_sha256 = "00".repeat(32);
+            assert!(supply.verify_versions_committed(&wrong).is_err());
+            assert!(supply.verify_versions(&wrong).is_err());
+        }
+
+        #[test]
+        fn tampered_committed_row_fails_committed_verify() {
+            use crate::data_supply::observe::ObservationRepository;
+            let f = fixture();
+            let supply = SqliteSupply {
+                market: MarketBackend::Compact(f.repo.clone()),
+            };
+            let refs: Vec<_> = run(&f, &plan(date(0), date(3)), false)
+                .iter()
+                .filter_map(|a| a.manifest.as_ref()?.version_ref.clone())
+                .collect();
+            tamper(
+                &f.path,
+                "UPDATE data_versions SET integrity_digest=\
+                 x'0000000000000000000000000000000000000000000000000000000000000000' \
+                 WHERE version_id='v2a'",
+            );
+            assert!(supply.verify_versions_committed(&refs).is_err());
+        }
+
+        #[test]
+        fn tampered_committed_row_still_reports_integrity_failure() {
+            let f = fixture();
+            tamper(
+                &f.path,
+                "UPDATE data_versions SET integrity_digest=\
+                 x'0000000000000000000000000000000000000000000000000000000000000000' \
+                 WHERE version_id='v2a'",
+            );
+            let out = run(&f, &plan(date(0), date(3)), false);
+            assert!(
+                out[0].integrity_failure.is_some(),
+                "committed row verification must fail closed"
+            );
+        }
+    }
+
+    /// XP-025 B: explicit-yearly accept reads in one snapshot, same answers
+    /// as the per-want reads.
+    mod xp025_b {
+        use super::*;
+        use crate::market_storage::{MarketRepository, YearlyAcceptWant};
+
+        fn want(base: &str, first: i64, last: i64, cmp: Option<&str>) -> YearlyAcceptWant {
+            YearlyAcceptWant {
+                base_version_id: base.into(),
+                first: date(first),
+                last: date(last),
+                comparison_version_id: cmp.map(str::to_string),
+            }
+        }
+
+        #[test]
+        fn batched_accept_reads_equal_per_want_reads_in_one_read_tx() {
+            let dir = tempdir();
+            let (_path, repo) = repo(&dir);
+            let bars = vec![bar(0, 100), bar(1, 110), bar(400, 120)];
+            publish_head(&repo, "req-a", "pub-a", "sh.600006", "v1a", bars.clone());
+            publish_head(&repo, "req-b", "pub-b", "sh.600007", "v1b", bars);
+            let wants = vec![
+                want("v1a", 0, 366, None),
+                want("v1b", 0, 800, Some("v1a")),
+                want("v-missing", 0, 366, None),
+                want("v1a", 0, 366, Some("v-missing-cmp")),
+            ];
+            let reads = || crate::sqlite_market::compact_runtime::READ_TXS.with(|n| n.get());
+            let before = reads();
+            let batch = repo.yearly_accept_reads(&wants).unwrap();
+            assert_eq!(reads() - before, 1, "one read snapshot for the batch");
+            assert_eq!(batch.len(), wants.len());
+            for (want, got) in wants.iter().zip(batch) {
+                let per_base = repo.fixed_facts(&want.base_version_id);
+                let per_years =
+                    repo.fixed_window_years(&want.base_version_id, want.first, want.last);
+                let per_cmp = want
+                    .comparison_version_id
+                    .as_ref()
+                    .map(|id| repo.fixed_facts(id))
+                    .transpose();
+                match (per_base, per_years, per_cmp, got) {
+                    (Ok(base), Ok(years), Ok(cmp), Ok(read)) => {
+                        assert_eq!(format!("{base:?}"), format!("{:?}", read.base));
+                        assert_eq!(years, read.years);
+                        assert_eq!(format!("{cmp:?}"), format!("{:?}", read.comparison));
+                    }
+                    (Err(_), _, _, Err(_)) | (_, Err(_), _, Err(_)) | (_, _, Err(_), Err(_)) => {}
+                    _ => panic!("batched and per-want reads disagree"),
+                }
+            }
+            // The years present are derived from stored days, not declared:
+            // day 400 is in 1971, so a 0..=366 window sees only 1970.
+            let one = repo
+                .yearly_accept_reads(&[want("v1a", 0, 366, None), want("v1a", 0, 800, None)])
+                .unwrap();
+            assert_eq!(one[0].as_ref().unwrap().years, BTreeSet::from([1970]));
+            assert_eq!(one[1].as_ref().unwrap().years, BTreeSet::from([1970, 1971]));
+        }
+    }
 }

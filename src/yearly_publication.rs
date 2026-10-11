@@ -231,7 +231,10 @@ impl<R: MarketRepository> Publisher<R> {
             ..
         } = &command.intent
         {
-            let old = self.repository.fixed(id).map_err(base_error)?;
+            let old = crate::stage_trace::timed("yearly.prepare.derived.fixed_expected", || {
+                self.repository.fixed(id)
+            })
+            .map_err(base_error)?;
             let next = &candidate.checked;
             if old.version().symbol != next.version().symbol || old.version().period != Period::Year
             {
@@ -256,6 +259,7 @@ impl<R: MarketRepository> Publisher<R> {
         }
         // The materialized staged record serves both the content check here
         // and `plan_record`/`mark_validated` below — one read instead of two.
+        let staged_span = crate::stage_trace::span("yearly.prepare.derived.candidate");
         let staged = match self.repository.candidate(&command.version_id) {
             Ok(existing) if existing.raw() == candidate.raw() => existing,
             // Compact backends synthesize the staged raw from typed facts,
@@ -279,8 +283,13 @@ impl<R: MarketRepository> Publisher<R> {
             }
             Err(error) => return Err(error),
         };
-        let plan = self.plan_record_prefetched(command, staged, binding, base_view)?;
-        self.repository.mark_validated(&plan.record)?;
+        drop(staged_span);
+        let plan = crate::stage_trace::timed("yearly.prepare.derived.plan_record", || {
+            self.plan_record_prefetched(command, staged, binding, base_view)
+        })?;
+        crate::stage_trace::timed("yearly.prepare.derived.mark_validated", || {
+            self.repository.mark_validated(&plan.record)
+        })?;
         // `derive_yearly` already authenticated and parsed this immutable
         // candidate; reuse the checked record instead of repeating the full
         // JSON digest, deserialization and bar validation pass.

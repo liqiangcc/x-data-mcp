@@ -184,8 +184,11 @@ impl Contract for Bound {
         self.inner.normalize(payload)
     }
     fn resolve(&self, intent: &Value) -> Result<FrozenWork, Error> {
-        let mut work = self.inner.resolve(intent)?;
-        let binding = match self.source.active_verified_id() {
+        let mut work =
+            crate::stage_trace::timed("svc.bound.resolve_inner", || self.inner.resolve(intent))?;
+        let binding = match crate::stage_trace::timed("svc.bound.active_verified_id", || {
+            self.source.active_verified_id()
+        }) {
             Some(id) => Value::String(id),
             None => Value::Null,
         };

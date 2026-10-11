@@ -43,7 +43,63 @@ impl RangePlan {
         self.publication.publication()
     }
 }
+/// Execution state of one accepted range item (XP-025 H4).
+pub struct RangeItemState {
+    pub binding: Option<crate::task_control::ItemBinding>,
+    pub has_receipt: bool,
+}
+/// One base read request: version id and the bar window the diff needs.
+pub struct BaseWant {
+    pub base_version_id: String,
+    pub start: chrono::NaiveDate,
+    pub end: chrono::NaiveDate,
+}
+/// Base facts and windowed bars for one `BaseWant`.
+pub struct BaseRead {
+    pub facts: crate::market_update::UpdateBaseFacts,
+    pub bars: Vec<crate::market_data::Bar>,
+}
 pub trait RangeRepository: MarketRepository {
+    /// Bindings and receipts for `item_ids`; backends that can serve them
+    /// from one read transaction override this. The default is the
+    /// per-item reads the runner always did. A tx-level `Err` makes the
+    /// caller fall back to the per-item path.
+    fn range_item_states(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+    ) -> Result<Vec<Result<RangeItemState, Error>>, Error> {
+        Ok(item_ids
+            .iter()
+            .map(|item_id| {
+                Ok(RangeItemState {
+                    binding: self.task_item_binding(task_id, item_id)?,
+                    has_receipt: self.item_receipt(task_id, item_id)?.is_some(),
+                })
+            })
+            .collect())
+    }
+    /// Base facts and window bars for many items; `Ok(None)` = the backend
+    /// cannot serve typed facts/bars for that base (caller falls back).
+    fn range_base_reads(
+        &self,
+        wants: &[BaseWant],
+    ) -> Result<Vec<Result<Option<BaseRead>, Error>>, Error> {
+        Ok(wants
+            .iter()
+            .map(|want| {
+                let Some(facts) = self.update_base_facts(&want.base_version_id)? else {
+                    return Ok(None);
+                };
+                let Some(bars) =
+                    self.base_bars_in_range(&want.base_version_id, want.start, want.end)?
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(BaseRead { facts, bars }))
+            })
+            .collect())
+    }
     fn commit_range(&self, plan: &RangePlan) -> Result<Receipt, Error>;
     /// Ops-first daily commit for backends with parent-delta staging: the
     /// candidate is staged as a delta on `base_version_id` and the staged
