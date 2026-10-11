@@ -292,7 +292,6 @@ fn append_item(e: &EntityState, task_id: &str, run_id: &str) -> UpdateBatchItem 
 /// to be the current daily head, which is exactly true right after the
 /// daily commit — the same ordering production derives follow).
 fn yearly_step(
-    backend: &MarketBackend,
     ctl: &TaskControl<SqliteTasks>,
     runner: &YearlyRunner<MarketBackend>,
     key: &x_data_mcp::task_control::CommandKey,
@@ -485,15 +484,7 @@ fn seed_entities(
                 refresh_head(backend, e)?;
             }
             if let Some((yearly_ctl, runner, key)) = &yearly {
-                yearly_step(
-                    backend,
-                    yearly_ctl,
-                    runner,
-                    key,
-                    chunk,
-                    yearly_depth,
-                    request_prefix,
-                )?;
+                yearly_step(yearly_ctl, runner, key, chunk, yearly_depth, request_prefix)?;
             }
         }
     }
