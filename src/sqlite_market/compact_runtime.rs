@@ -191,7 +191,15 @@ impl WriteCoordinator {
             return Err(integrity("writer connection is not in autocommit"));
         }
         let _held = crate::stage_trace::span("coord.write.held");
-        match f(conn) {
+        let wal_before = crate::stage_trace::enabled().then(|| self.wal_bytes());
+        let outcome = f(conn);
+        if let Some(before) = wal_before {
+            crate::stage_trace::note(
+                "coord.write.wal_bytes",
+                &[("before", before), ("after", self.wal_bytes())],
+            );
+        }
+        match outcome {
             Err(error) => match recover_leak(conn) {
                 Ok(()) => Err(error),
                 Err(fatal) => Err(fatal),
@@ -214,12 +222,15 @@ impl WriteCoordinator {
         f: impl FnOnce(&Connection) -> Result<T, Error>,
     ) -> Result<T, Error> {
         self.write(|conn| {
-            let tx = conn
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(storage)?;
-            let value = f(&tx)?;
-            tx.commit()
-                .map_err(|error| Error::OutcomeUnknown(error.to_string()))?;
+            let tx = crate::stage_trace::timed("coord.tx.begin", || {
+                conn.transaction_with_behavior(TransactionBehavior::Immediate)
+                    .map_err(storage)
+            })?;
+            let value = crate::stage_trace::timed("coord.tx.closure", || f(&tx))?;
+            crate::stage_trace::timed("coord.tx.commit", || {
+                tx.commit()
+                    .map_err(|error| Error::OutcomeUnknown(error.to_string()))
+            })?;
             Ok(value)
         })
     }

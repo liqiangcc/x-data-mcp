@@ -38,7 +38,11 @@ pub(crate) fn insert_segment(
     period: Period,
     bars: &[CompactBar],
 ) -> Result<StoredSegment, Error> {
+    let tracing = crate::stage_trace::enabled();
+    let t0 = tracing.then(std::time::Instant::now);
     let digest = compact_market::segment_digest(entity, period, bars).map_err(integrity)?;
+    let digest_us = t0.map_or(0, |t| t.elapsed().as_micros() as u64);
+    let t1 = tracing.then(std::time::Instant::now);
     let existing: Option<i64> = c
         .query_row(
             "SELECT segment_key FROM bar_segments WHERE segment_digest=?1",
@@ -47,13 +51,31 @@ pub(crate) fn insert_segment(
         )
         .optional()
         .map_err(storage)?;
+    let existing_us = t1.map_or(0, |t| t.elapsed().as_micros() as u64);
     if let Some(key) = existing {
+        let t2 = tracing.then(std::time::Instant::now);
         let stored = read_segment(c, key)?;
         if stored.entity != entity || stored.period != period || stored.bars != bars {
             return Err(integrity("segment digest collision with different content"));
         }
+        crate::stage_trace::note(
+            "seg.insert",
+            &[
+                ("new", 0),
+                ("bars", bars.len() as u64),
+                ("digest_us", digest_us),
+                ("existing_us", existing_us),
+                (
+                    "reread_us",
+                    t2.map_or(0, |t| t.elapsed().as_micros() as u64),
+                ),
+            ],
+        );
         return Ok(stored);
     }
+    // Each execute below is an autocommit statement when the caller holds no
+    // transaction (stage_tx does not); `header_us`/`rows_us` expose that.
+    let t3 = tracing.then(std::time::Instant::now);
     c.execute(
         "INSERT INTO bar_segments(segment_digest,entity,period,first_day,last_day,row_count) VALUES(?1,?2,?3,?4,?5,?6)",
         params![
@@ -66,12 +88,14 @@ pub(crate) fn insert_segment(
         ],
     )
     .map_err(storage)?;
+    let header_us = t3.map_or(0, |t| t.elapsed().as_micros() as u64);
     let key = c.last_insert_rowid();
     let mut statement = c
         .prepare(
             "INSERT INTO segment_bars(segment_key,trade_day,open_cents,high_cents,low_cents,close_cents,volume,amount,r7_raw) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         )
         .map_err(storage)?;
+    let t4 = tracing.then(std::time::Instant::now);
     for bar in bars {
         statement
             .execute(params![
@@ -87,6 +111,18 @@ pub(crate) fn insert_segment(
             ])
             .map_err(storage)?;
     }
+    crate::stage_trace::note(
+        "seg.insert",
+        &[
+            ("new", 1),
+            ("bars", bars.len() as u64),
+            ("autocommit", c.is_autocommit() as u64),
+            ("digest_us", digest_us),
+            ("existing_us", existing_us),
+            ("header_us", header_us),
+            ("rows_us", t4.map_or(0, |t| t.elapsed().as_micros() as u64)),
+        ],
+    );
     Ok(StoredSegment {
         key,
         digest,

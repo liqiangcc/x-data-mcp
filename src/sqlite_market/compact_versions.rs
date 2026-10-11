@@ -281,12 +281,16 @@ pub(crate) fn stage_checkpoint(
     clips: &[StoredClip],
     basis: Option<&CheckpointBasis>,
 ) -> Result<i64, Error> {
-    check_draft_static(c, draft)?;
-    let bars = flatten_clips(c, &draft.entity, draft.period, clips)?;
+    let _total = crate::stage_trace::span("ckpt.total");
+    crate::stage_trace::timed("ckpt.check_draft_static", || check_draft_static(c, draft))?;
+    let bars = crate::stage_trace::timed("ckpt.flatten_clips", || {
+        flatten_clips(c, &draft.entity, draft.period, clips)
+    })?;
     let plain: Vec<SegmentClip> = clips.iter().map(|stored| stored.clip.clone()).collect();
-    let projection =
+    let projection = crate::stage_trace::timed("ckpt.projection_digest", || {
         compact_market::checkpoint_projection_digest(&draft.entity, draft.period, &plain)
-            .map_err(integrity)?;
+            .map_err(integrity)
+    })?;
     if let Some(basis) = basis {
         if basis.delta_ops.is_empty() {
             return Err(integrity("checkpoint basis requires at least one delta op"));
@@ -314,13 +318,23 @@ pub(crate) fn stage_checkpoint(
             ));
         }
     }
-    check_draft_lineage(c, draft, &bars)?;
-    check_draft_evidence(c, draft, &bars)?;
-    let key = insert_version_row(c, draft, None, 1, 0, &bars, projection)?;
+    crate::stage_trace::timed("ckpt.check_draft_lineage", || {
+        check_draft_lineage(c, draft, &bars)
+    })?;
+    crate::stage_trace::timed("ckpt.check_draft_evidence", || {
+        check_draft_evidence(c, draft, &bars)
+    })?;
+    let key = crate::stage_trace::timed("ckpt.insert_version_row", || {
+        insert_version_row(c, draft, None, 1, 0, &bars, projection)
+    })?;
     if let Some(lineage) = &draft.yearly_lineage {
-        insert_lineage_row(c, key, lineage)?;
+        crate::stage_trace::timed("ckpt.insert_lineage_row", || {
+            insert_lineage_row(c, key, lineage)
+        })?;
     }
-    let written = compact_v19::write_checkpoint(c, key, &draft.entity, draft.period, clips)?;
+    let written = crate::stage_trace::timed("ckpt.write_checkpoint", || {
+        compact_v19::write_checkpoint(c, key, &draft.entity, draft.period, clips)
+    })?;
     if written != projection {
         return Err(integrity("persisted checkpoint digest mismatch"));
     }
@@ -577,13 +591,17 @@ pub(crate) fn mark_validated(c: &Connection, version_key: i64) -> Result<(), Err
     if row.state != 1 {
         return Err(integrity("version is not staged"));
     }
-    verify_staged(c, &row)?;
-    let changed = c
-        .execute(
+    crate::stage_trace::timed("ver.mark_validated.verify_staged", || {
+        verify_staged(c, &row)
+    })?;
+    // Autocommit statement: its own WAL commit (+fsync under synchronous=FULL).
+    let changed = crate::stage_trace::timed("ver.mark_validated.update_autocommit", || {
+        c.execute(
             "UPDATE data_versions SET state=2 WHERE version_key=?1 AND state=1",
             params![version_key],
         )
-        .map_err(storage)?;
+        .map_err(storage)
+    })?;
     if changed != 1 {
         return Err(integrity("version state transition did not apply"));
     }

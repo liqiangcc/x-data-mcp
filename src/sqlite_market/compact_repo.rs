@@ -1126,15 +1126,21 @@ pub(crate) fn materialize_published(
 }
 
 fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
-    let record = compat::check(raw)?;
+    let _total = crate::stage_trace::span("stage.total");
+    crate::stage_trace::note(
+        "stage.autocommit",
+        &[("autocommit", c.is_autocommit() as u64)],
+    );
+    let record = crate::stage_trace::timed("stage.compat_check", || compat::check(raw))?;
     let version_evidence = VersionEvidence {
         source: record.version.source.clone(),
         coverage_reason: record.batch.coverage.reason.clone(),
         unit_currency: record.batch.unit_currency.clone(),
         adjustment_evidence: record.batch.adjustment_evidence.clone(),
     };
-    let evidence_digest =
-        compact_versions::put_evidence(c, EvidenceKind::Version, &json!(version_evidence))?;
+    let evidence_digest = crate::stage_trace::timed("stage.put_evidence", || {
+        compact_versions::put_evidence(c, EvidenceKind::Version, &json!(version_evidence))
+    })?;
     let period = record.version.period;
     let entity = record.version.symbol.clone();
     let bars = record
@@ -1147,6 +1153,7 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
     // Full-candidate clips are only materialized for checkpoint staging;
     // content-addressed segments let unchanged chunks reuse existing rows.
     let full_clips = |c: &mut Connection| -> Result<Vec<StoredClip>, Error> {
+        let _span = crate::stage_trace::span("stage.full_clips");
         let mut clips = Vec::new();
         for chunk in bars.chunks(SEGMENT_ROWS) {
             let segment = compact_v19::insert_segment(c, &entity, period, chunk)?;
@@ -1172,8 +1179,10 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                 .yearly_derivation
                 .clone()
                 .ok_or_else(|| invalid("yearly record lacks derivation"))?;
+            let lineage_span = crate::stage_trace::span("stage.yearly_base_facts");
             let base_key = version_key(c, &derivation.base_daily_version_id)?;
             let base = compact_versions::result_facts(c, base_key)?;
+            drop(lineage_span);
             if base.state != CompactVersionState::Published
                 || base.period != Period::Day
                 || base.entity != entity
