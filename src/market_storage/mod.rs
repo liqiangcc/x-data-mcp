@@ -683,17 +683,18 @@ pub(crate) fn validate_base_facts_meta<R: MarketRepository + ?Sized>(
         &years,
         as_of,
     );
-    let annual = crate::yearly::aggregate_memoized(key, || {
-        let window = repository
-            .fixed_window(
-                &base_id,
-                lineage.first_trading_date,
-                lineage.last_trading_date,
-            )
-            .map_err(base_error)?;
-        crate::yearly::aggregate(window.version(), Some(&years), as_of)
-            .map_err(|e| Error::Base(e.to_string()))
-    })?;
+    let annual =
+        crate::yearly::aggregate_memoized(key, as_of, Some(lineage.last_trading_date), || {
+            let window = repository
+                .fixed_window(
+                    &base_id,
+                    lineage.first_trading_date,
+                    lineage.last_trading_date,
+                )
+                .map_err(base_error)?;
+            crate::yearly::aggregate(window.version(), Some(&years), as_of)
+                .map_err(|e| Error::Base(e.to_string()))
+        })?;
     if annual
         .records
         .iter()

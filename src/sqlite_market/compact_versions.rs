@@ -1800,7 +1800,8 @@ fn verify_lineage(
     );
     crate::yearly::trace_key("memo.key.verify_lineage", &base_digest_hex, &years, as_of);
     let memo_span = crate::stage_trace::span("cand.lineage.aggregate_memoized");
-    let annual = crate::yearly::aggregate_memoized(key, || {
+    let window_last = compact_market::epoch_date(lineage.last_trade_day).ok();
+    let annual = crate::yearly::aggregate_memoized(key, as_of, window_last, || {
         let base_bars = crate::stage_trace::timed("cand.lineage.leaf_bars_in_range", || {
             leaf_bars_in_range(
                 c,
