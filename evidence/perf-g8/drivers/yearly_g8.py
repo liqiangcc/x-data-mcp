@@ -9,11 +9,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-SOCK = sys.argv[3] if len(sys.argv) > 3 else "/root/x-perf-g8/svc/run/mcp.sock"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from xp015_common import private_sock
+SOCK = private_sock()  # XP-015: env XP015_SOCKET only (argv[3] is ignored), under /root/x-perf-g8-xp015/
 RUN_ID = os.environ.get("G8_RUN_ID", "g8-y")  # new run = new request_ids + fresh pins
-POLL_S = 0.25  # driver polling granularity, not a server cost (XP-032 H; was 1.0)
-SUMMARY = Path(sys.argv[1] if len(sys.argv) > 1 else "/root/x-perf-g8/yearly-run.json")
-LOG = Path(sys.argv[1] + ".log" if len(sys.argv) > 1 else "/root/x-perf-g8/yearly-run.log")
+POLL_S = 0.25  # driver polling granularity, not a server cost (XP-032 H; was 1.0); same value as xp015_common.POLL_S
+if len(sys.argv) < 2 or not sys.argv[1].startswith("/root/x-perf-g8-xp015/"):
+    sys.exit("usage: yearly_g8.py <summary.json under /root/x-perf-g8-xp015/> [max_chunks]")
+SUMMARY = Path(sys.argv[1])
+LOG = Path(sys.argv[1] + ".log")
 MAX_CHUNKS = int(sys.argv[2]) if len(sys.argv) > 2 else 0  # 0 = all chunks (smoke bound)
 CALLS = []  # every mcp call: {name, ms, t}
 
@@ -136,9 +140,11 @@ try:
 
     chunks=[entities[i:i+100] for i in range(0,len(entities),100)]
     if MAX_CHUNKS: chunks=chunks[:MAX_CHUNKS]
+    loop_m0=time.monotonic(); loop_w0=datetime.now(timezone.utc).isoformat()
+    before_heads={}   # chunk index -> (entities, yearly head version ids before the task)
     for idx,chunk in enumerate(chunks,1):
         crec={"index":idx}
-        t_chunk=time.time()
+        t_chunk=time.time(); m_chunk=time.monotonic()
         t0=time.time()
         daily=mcp.call("get_data_availability",{"dataset":"market.daily","contract_version":"v1",
             "selection":{"kind":"batch","entities":chunk},
@@ -154,6 +160,7 @@ try:
         yheads={}
         for it in yearly.get("items") or []:
             e=it.get("entity") or {}; yheads[(e.get("exchange"),e.get("code"))]=(it.get("version_ref") or {}).get("version_id")
+        before_heads[idx]=(chunk,dict(yheads))
         ditems={}
         for it in daily.get("items") or []:
             e=it.get("entity") or {}; k=(e.get("exchange"),e.get("code"))
@@ -198,12 +205,43 @@ try:
         task=prog["task"]
         crec.update({"status":task["status"],"succeeded":prog.get("succeeded"),"failed":prog.get("failed"),
                      "server_created_at":task.get("created_at"),"server_last_progress_at":task.get("last_progress_at"),
-                     "polls":meta["polls"],"wall_s":round(time.time()-t_chunk,2)})
+                     "polls":meta["polls"],"wall_s":round(time.time()-t_chunk,2),
+                     "mono_wall_s":round(time.monotonic()-m_chunk,3),
+                     "mono_terminal_since_loop_start_s":round(time.monotonic()-loop_m0,3)})
         for it in prog.get("unfinished") or []:
             if "selected year absent from fixed daily" not in str(it.get("error")):
                 crec.setdefault("unexpected",[]).append(it)
         result["chunks"].append(crec)
         log(f"chunk {idx}/{len(chunks)} {task['status']} succ={prog.get('succeeded')} wall={crec['wall_s']}s presence_ms={crec.get('presence_ms')}")
+    result["write_loop_mono_s"]=round(time.monotonic()-loop_m0,3)
+    result["write_loop_wall_clock"]={"start":loop_w0,"end":datetime.now(timezone.utc).isoformat()}
+    # XP-015 readback (outside the write loop): classify yearly outcomes from head movement.
+    # published = head version id changed, no_change = unchanged, failed = task failure counters,
+    # unknown = anything not attributable (never counted as success).
+    t_rb=time.monotonic()
+    totals={"considered":0,"published":0,"no_change":0,"failed":0,"needs_verification":0,"unknown":0}
+    for crec in result["chunks"]:
+        idx=crec["index"]
+        if idx not in before_heads or "task_id" not in crec: continue
+        ents,before=before_heads[idx]
+        after={}
+        yearly=mcp.call("get_data_availability",{"dataset":"market.yearly","contract_version":"v1",
+            "selection":{"kind":"batch","entities":ents},
+            "filter":{"kind":"yearly","start_year":1900,"end_year":2026},
+            "version":{"kind":"latest_per_entity"},"page_size":100})
+        for it in yearly.get("items") or []:
+            e=it.get("entity") or {}; after[(e.get("exchange"),e.get("code"))]=(it.get("version_ref") or {}).get("version_id")
+        n=crec.get("items") or 0
+        failed=crec.get("failed") or 0
+        moved=sum(1 for k,v in after.items() if v and v!=before.get(k))
+        same=sum(1 for k,v in after.items() if v and v==before.get(k) and before.get(k))
+        nv=n if crec.get("status")=="needs_verification" else 0
+        out={"considered":n,"published":moved,"no_change":same,"failed":failed,"needs_verification":nv}
+        out["unknown"]=max(0,n-moved-same-failed-nv)
+        crec["outcomes"]=out
+        for k,v in out.items(): totals[k]+=v
+    result["outcome_totals"]=totals
+    result["readback_mono_s"]=round(time.monotonic()-t_rb,3)
     result["finished_at"]=datetime.now(timezone.utc).isoformat()
     SUMMARY.write_text(json.dumps(result,ensure_ascii=False,indent=1))
     log("complete")

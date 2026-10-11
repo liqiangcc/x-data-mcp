@@ -3,7 +3,10 @@
 # and a resolve_years-style per-year probe on one 100-entity chunk.
 import json, socket, sys, time
 from datetime import datetime, timezone
-SOCK = "/root/x-perf-g8/svc/run/mcp.sock"
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from xp015_common import private_sock
+SOCK = private_sock()  # XP-015: env XP015_SOCKET only, under /root/x-perf-g8-xp015/
 OUT = sys.argv[1]
 N_DAILY_CHUNKS = int(sys.argv[2]) if len(sys.argv) > 2 else 5
 PROBE_CHUNK = int(sys.argv[3]) if len(sys.argv) > 3 else 24   # 1-based; baseline probe chunk

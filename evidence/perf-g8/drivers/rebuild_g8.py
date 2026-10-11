@@ -2,15 +2,19 @@
 # Adapted from /tmp/fresh_rebuild_daily.py for XP-007 private-service baseline.
 # Raw unix-socket JSON-RPC (same frames mcp_connect bridges to stdio).
 # Adds: catalog start_collection first; per-chunk client+server timestamps.
-import json, socket, sys, time
+import json, socket, sys, time, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from xp015_common import private_sock, POLL_S
 from datetime import datetime, timezone
 from pathlib import Path
 
-SOCK = "/root/x-perf-g8/svc/run/mcp.sock"
-RUN_ID = "g8-rebuild-a"
-POLL_S = 1.0
-SUMMARY = Path("/root/x-perf-g8/rebuild-a.json")
-LOG = Path("/root/x-perf-g8/rebuild-a.log")
+SOCK = private_sock()  # XP-015: env XP015_SOCKET only, under /root/x-perf-g8-xp015/
+RUN_ID = os.environ.get("G8_RUN_ID", "g8-rebuild-a")
+_OUT = os.environ.get("XP015_OUT")  # required: never overwrite the historical /root/x-perf-g8/rebuild-a.* evidence
+if not _OUT or not _OUT.startswith("/root/x-perf-g8-xp015/"):
+    sys.exit("XP015_OUT (under /root/x-perf-g8-xp015/) is required")
+SUMMARY = Path(_OUT) / f"{RUN_ID}.json"
+LOG = Path(_OUT) / f"{RUN_ID}.log"
 
 def log(msg):
     line = f"{datetime.now(timezone.utc).isoformat()} {msg}"

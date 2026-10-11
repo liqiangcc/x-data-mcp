@@ -5,7 +5,10 @@ import json, socket, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 
-SOCK = "/root/x-perf-g8/svc/run/mcp.sock"
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from xp015_common import private_sock
+SOCK = private_sock()  # XP-015: env XP015_SOCKET only, under /root/x-perf-g8-xp015/
 RUN_ID = "g8-yx"
 POLL_S = 1.0
 SUMMARY = Path("/root/x-perf-g8/yearly-run-xp009.json")

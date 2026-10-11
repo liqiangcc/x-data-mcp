@@ -2,7 +2,10 @@ import json, socket, sys, time
 # XP-011/012 driver (rev.2, round-2 rework): perf_counter timing; any EOF,
 # JSON-RPC error or tool-level isError fails the run; a sample is recorded
 # only after the response validates as the pinned completed 100-item task.
-SOCK = "/root/x-perf-g8/svc/run/mcp.sock"
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from xp015_common import private_sock
+SOCK = private_sock()  # XP-015: env XP015_SOCKET only, under /root/x-perf-g8-xp015/
 
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.connect(SOCK)

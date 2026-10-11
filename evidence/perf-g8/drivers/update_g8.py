@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # Adapted from /tmp/xdata_daily_update_driver.py for XP-007.
 # Diffs: private SOCK; poll 1s (not 10s); per-chunk client+server timestamps.
-import json, socket, sys, time
+import json, socket, sys, time, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from xp015_common import private_sock, classify_range_results, POLL_S
 from datetime import date, timedelta, datetime, timezone
 from pathlib import Path
 
-SOCK = "/root/x-perf-g8/svc/run/mcp.sock"
+SOCK = private_sock()  # XP-015: env XP015_SOCKET only, under /root/x-perf-g8-xp015/
 OUT = Path(sys.argv[1])
 END_DATE = date.fromisoformat(sys.argv[2])
 REQ_PREFIX = sys.argv[3]
-POLL_S = 1.0
 
 class Mcp:
     def __init__(self, path):
@@ -91,14 +92,16 @@ try:
     result["daily_update_item_count"] = len(update_items)
     print(f"update_items={len(update_items)} absent={len(absent)}", flush=True)
 
+    result["outcome_totals"] = {"considered": 0, "published": 0, "no_change": 0, "failed": 0, "needs_verification": 0, "unknown": 0}
+    loop_m0 = time.monotonic(); loop_w0 = time.time()
     for index in range(0, len(update_items), 100):
         chunk_no = index // 100 + 1
         items = update_items[index:index+100]
         request_id = f"{REQ_PREFIX}-{chunk_no:03d}"
-        t_submit = time.time()
+        t_submit = time.time(); m_submit = time.monotonic()
         acceptance = mcp.call("update_data", {"dataset":"market.daily","contract_version":"v1",
             "request_id":request_id,"items":items,"selection":None})
-        t_accept = time.time()
+        t_accept = time.time(); m_accept = time.monotonic()
         task_id = acceptance["task_id"]
         polls = 0; first_seen = None
         while True:
@@ -113,7 +116,7 @@ try:
                 result["stopped"] = {"reason":"task_timeout","task_id":task_id,"status":status}
                 raise RuntimeError(f"timeout {task_id} {status}")
             time.sleep(POLL_S)
-        t_term = time.time()
+        t_term = time.time(); m_term = time.monotonic()
         task = progress["task"]
         summary = {"request_id":request_id,"task_id":task_id,"status":status,
             "total":progress.get("total"),"succeeded":progress.get("succeeded"),
@@ -127,6 +130,8 @@ try:
             "server_created_at":task.get("created_at"),
             "server_last_progress_at":task.get("last_progress_at"),
             "wall_s":t_term-t_submit,
+            "mono_wall_s":m_term-m_submit,"mono_accept_ms":(m_accept-m_submit)*1000,
+            "mono_terminal_since_loop_start_s":m_term-loop_m0,
             "server_window_s":None}
         try:
             ca = datetime.fromisoformat(task["created_at"]).timestamp()
@@ -136,12 +141,18 @@ try:
         for item in progress.get("range_results", []):
             st = item.get("status") or item.get("result") or item.get("state") or "unknown"
             summary["range_result_statuses"][st] = summary["range_result_statuses"].get(st,0)+1
+        outcome = classify_range_results(progress)
+        summary["outcomes"] = outcome
+        for k, v in outcome.items():
+            if k in result["outcome_totals"]: result["outcome_totals"][k] += v
         result["tasks"].append(summary)
         print(f"chunk {chunk_no} status={status} wall={summary['wall_s']:.1f}s accept={summary['accept_ms']:.0f}ms srv={summary['server_window_s']}", flush=True)
         if status == "failed":
             result["stopped"] = {"reason":"task_failed","task_id":task_id}
             raise RuntimeError(f"task failed {task_id}")
 
+    result["write_loop_mono_s"] = time.monotonic() - loop_m0
+    result["write_loop_wall_clock"] = {"start": iso(loop_w0), "end": iso(time.time())}
     if absent:
         request_id = f"{REQ_PREFIX}-absent-collection"
         try:

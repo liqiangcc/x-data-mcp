@@ -2,7 +2,10 @@
 # XP-010 A: idle get_task_progress latency samples on completed update tasks.
 import json, socket, sys, time
 from datetime import datetime, timezone
-SOCK = "/root/x-perf-g8/svc/run/mcp.sock"
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from xp015_common import private_sock
+SOCK = private_sock()  # XP-015: env XP015_SOCKET only, under /root/x-perf-g8-xp015/
 OUT = sys.argv[1]
 TASKS = sys.argv[2].split(",")          # comma-separated task_ids
 SAMPLES = int(sys.argv[3]) if len(sys.argv) > 3 else 12
