@@ -819,43 +819,82 @@ struct VersionRow {
     created_at: String,
 }
 
-fn read_version_row(c: &Connection, key: i64) -> Result<Option<VersionRow>, Error> {
-    // Cached statement (XP-036 F): the chain walks run this once per node;
-    // recompiling the SQL each time was a measurable part of the per-node cost.
-    let mut statement = c
-        .prepare_cached(
-            "SELECT version_key,version_id,entity,period,state,source_binding_digest,parent_version_key,manifest_mode,delta_depth,record_count,first_day,last_day,coverage_status,evidence_digest,projection_digest,published_at,integrity_digest,adjustment,digest_format,created_at FROM data_versions WHERE version_key=?1",
-        )
-        .map_err(storage)?;
-    let row = statement
-        .query_row(params![key], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, i64>(4)?,
-                r.get::<_, Vec<u8>>(5)?,
-                r.get::<_, Option<i64>>(6)?,
-                r.get::<_, i64>(7)?,
-                r.get::<_, i64>(8)?,
-                r.get::<_, i64>(9)?,
-                r.get::<_, i64>(10)?,
-                r.get::<_, i64>(11)?,
-                r.get::<_, i64>(12)?,
-                r.get::<_, Vec<u8>>(13)?,
-                r.get::<_, Vec<u8>>(14)?,
-                r.get::<_, Option<String>>(15)?,
-                r.get::<_, Option<Vec<u8>>>(16)?,
-                r.get::<_, i64>(17)?,
-                r.get::<_, String>(18)?,
-                r.get::<_, String>(19)?,
-            ))
-        })
-        .optional()
-        .map_err(storage)?;
-    drop(statement);
-    let Some((
+/// Column list of one `VersionRow` (kept in ONE place: the by-key read and
+/// the recursive chain read must select exactly the same columns).
+const VERSION_ROW_COLUMNS: [&str; 20] = [
+    "version_key",
+    "version_id",
+    "entity",
+    "period",
+    "state",
+    "source_binding_digest",
+    "parent_version_key",
+    "manifest_mode",
+    "delta_depth",
+    "record_count",
+    "first_day",
+    "last_day",
+    "coverage_status",
+    "evidence_digest",
+    "projection_digest",
+    "published_at",
+    "integrity_digest",
+    "adjustment",
+    "digest_format",
+    "created_at",
+];
+
+type VersionRowTuple = (
+    i64,
+    String,
+    String,
+    i64,
+    i64,
+    Vec<u8>,
+    Option<i64>,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    Vec<u8>,
+    Vec<u8>,
+    Option<String>,
+    Option<Vec<u8>>,
+    i64,
+    String,
+    String,
+);
+
+/// Reads the 20 `VERSION_ROW_COLUMNS` starting at column index `at`.
+fn version_row_tuple(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<VersionRowTuple> {
+    Ok((
+        r.get(at)?,
+        r.get(at + 1)?,
+        r.get(at + 2)?,
+        r.get(at + 3)?,
+        r.get(at + 4)?,
+        r.get(at + 5)?,
+        r.get(at + 6)?,
+        r.get(at + 7)?,
+        r.get(at + 8)?,
+        r.get(at + 9)?,
+        r.get(at + 10)?,
+        r.get(at + 11)?,
+        r.get(at + 12)?,
+        r.get(at + 13)?,
+        r.get(at + 14)?,
+        r.get(at + 15)?,
+        r.get(at + 16)?,
+        r.get(at + 17)?,
+        r.get(at + 18)?,
+        r.get(at + 19)?,
+    ))
+}
+
+fn finish_version_row(tuple: VersionRowTuple) -> Result<VersionRow, Error> {
+    let (
         key,
         version_id,
         entity,
@@ -876,14 +915,11 @@ fn read_version_row(c: &Connection, key: i64) -> Result<Option<VersionRow>, Erro
         adjustment,
         digest_format,
         created_at,
-    )) = row
-    else {
-        return Ok(None);
-    };
+    ) = tuple;
     if adjustment != 1 || digest_format != DIGEST_FORMAT {
         return Err(integrity("version adjustment/digest format mismatch"));
     }
-    Ok(Some(VersionRow {
+    Ok(VersionRow {
         key,
         version_id,
         entity,
@@ -902,7 +938,105 @@ fn read_version_row(c: &Connection, key: i64) -> Result<Option<VersionRow>, Erro
         integrity_digest: integrity_blob.map(|blob| fixed_digest(&blob)).transpose()?,
         published_at,
         created_at,
-    }))
+    })
+}
+
+fn read_version_row(c: &Connection, key: i64) -> Result<Option<VersionRow>, Error> {
+    #[cfg(test)]
+    read_counts::count_version_row_read();
+    // Cached statement (XP-036 F): recompiling the SQL each time was a
+    // measurable part of the per-node cost.
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let sql = SQL.get_or_init(|| {
+        format!(
+            "SELECT {} FROM data_versions WHERE version_key=?1",
+            VERSION_ROW_COLUMNS.join(",")
+        )
+    });
+    let mut statement = c.prepare_cached(sql).map_err(storage)?;
+    let row = statement
+        .query_row(params![key], |r| version_row_tuple(r, 0))
+        .optional()
+        .map_err(storage);
+    drop(statement);
+    row?.map(finish_version_row).transpose()
+}
+
+/// The whole parent chain of `leaf_key`, leaf FIRST, root (checkpoint) last, in
+/// ONE recursive query instead of one `read_version_row` per node (XP-046).
+/// The rows are the same rows, and the per-node structural checks are the
+/// ones the node-by-node walks applied, in the same order: cycle, manifest
+/// mode (checkpoint carries no parent / depth 0), delta depth bounds, parent
+/// presence, missing parent row, chain length bound. Fail closed (Integrity)
+/// exactly where the old walks did.
+fn read_chain_rows(c: &Connection, leaf_key: i64) -> Result<Vec<VersionRow>, Error> {
+    #[cfg(test)]
+    read_counts::count_chain_row_query();
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let sql = SQL.get_or_init(|| {
+        let cols = VERSION_ROW_COLUMNS.join(",");
+        let dcols = VERSION_ROW_COLUMNS
+            .iter()
+            .map(|name| format!("d.{name}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "WITH RECURSIVE chain(n,{cols}) AS (\
+               SELECT 0,{cols} FROM data_versions WHERE version_key=?1 \
+               UNION ALL \
+               SELECT chain.n+1,{dcols} FROM data_versions d \
+                 JOIN chain ON d.version_key=chain.parent_version_key \
+                 WHERE chain.manifest_mode=2 AND chain.n<?2) \
+             SELECT {cols} FROM chain ORDER BY n"
+        )
+    });
+    let mut statement = c.prepare_cached(sql).map_err(storage)?;
+    let fetched = statement
+        .query_map(params![leaf_key, MAX_CHAIN_NODES as i64], |r| {
+            version_row_tuple(r, 0)
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage);
+    drop(statement);
+    let mut fetched = fetched?.into_iter();
+    let mut rows: Vec<VersionRow> = Vec::new();
+    let mut visited = HashSet::new();
+    let mut expected = leaf_key;
+    loop {
+        let row = match fetched.next() {
+            Some(tuple) => finish_version_row(tuple)?,
+            None => return Err(integrity("version chain node missing")),
+        };
+        if row.key != expected {
+            return Err(integrity("version chain node missing"));
+        }
+        if !visited.insert(row.key) {
+            return Err(integrity("version chain contains a cycle"));
+        }
+        match row.manifest_mode {
+            1 => {
+                if row.parent_version_key.is_some() || row.delta_depth != 0 {
+                    return Err(integrity("checkpoint version carries parent/depth"));
+                }
+                rows.push(row);
+                return Ok(rows);
+            }
+            2 => {
+                if row.delta_depth < 1 || row.delta_depth > MAX_DELTA_DEPTH {
+                    return Err(integrity("delta depth out of bounds"));
+                }
+                expected = row
+                    .parent_version_key
+                    .ok_or_else(|| integrity("delta version lacks parent"))?;
+                rows.push(row);
+            }
+            _ => return Err(integrity("unknown manifest_mode")),
+        }
+        if rows.len() > MAX_CHAIN_NODES {
+            return Err(integrity("version chain exceeds depth bound"));
+        }
+    }
 }
 
 fn read_version_row_by_id(c: &Connection, id: &str) -> Result<Option<VersionRow>, Error> {
@@ -1155,40 +1289,8 @@ fn leaf_window_scoped<T>(
     if start_day > end_day {
         return Ok(BTreeMap::new());
     }
-    // Chain metadata walk, leaf -> root; no segment decode here.
-    let mut nodes = Vec::new();
-    let mut visited = HashSet::new();
-    let mut key = leaf_key;
-    loop {
-        if !visited.insert(key) {
-            return Err(integrity("version chain contains a cycle"));
-        }
-        let row =
-            read_version_row(c, key)?.ok_or_else(|| integrity("version chain node missing"))?;
-        match row.manifest_mode {
-            1 => {
-                if row.parent_version_key.is_some() || row.delta_depth != 0 {
-                    return Err(integrity("checkpoint version carries parent/depth"));
-                }
-                nodes.push(row);
-                break;
-            }
-            2 => {
-                if row.delta_depth < 1 || row.delta_depth > MAX_DELTA_DEPTH {
-                    return Err(integrity("delta depth out of bounds"));
-                }
-                let parent = row
-                    .parent_version_key
-                    .ok_or_else(|| integrity("delta version lacks parent"))?;
-                nodes.push(row);
-                key = parent;
-            }
-            _ => return Err(integrity("unknown manifest_mode")),
-        }
-        if nodes.len() > MAX_CHAIN_NODES {
-            return Err(integrity("version chain exceeds depth bound"));
-        }
-    }
+    // Chain metadata, leaf -> root in one recursive query; no segment decode here.
+    let mut nodes = read_chain_rows(c, leaf_key)?;
     nodes.reverse();
     // Root checkpoint: decode only clips overlapping the window.
     let mut map: BTreeMap<i64, T> = BTreeMap::new();
@@ -1236,31 +1338,51 @@ fn leaf_window_scoped<T>(
     }
     // Delta ops overlapping the window, applied root -> leaf. Ops outside
     // the window are metadata-only and never decode their segment.
-    for row in nodes.iter().skip(1) {
-        let mut statement = c
-            .prepare_cached(
-                "SELECT delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count \
-                 FROM version_delta_clips \
-                 WHERE version_key=?1 AND range_start_day<=?2 AND range_end_day>=?3 \
-                 ORDER BY seq",
-            )
-            .map_err(storage)?;
-        let rows = statement
-            .query_map(params![row.key, end_day, start_day], |r| {
+    // ONE query for the window's delta clips of every chain node (XP-046;
+    // was one query per node), grouped back per node below.
+    #[cfg(test)]
+    read_counts::count_window_clip_query();
+    type ClipTuple = (i64, i64, i64, Option<i64>, Option<i64>, Option<i64>, i64);
+    let mut clips_by_node: HashMap<i64, Vec<ClipTuple>> = HashMap::new();
+    if nodes.len() > 1 {
+        let placeholders = (0..nodes.len() - 1)
+            .map(|i| format!("?{}", i + 3))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT version_key,delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count \
+             FROM version_delta_clips \
+             WHERE version_key IN ({placeholders}) AND range_start_day<=?1 AND range_end_day>=?2 \
+             ORDER BY version_key,seq"
+        );
+        let mut statement = c.prepare_cached(&sql).map_err(storage)?;
+        let mut args: Vec<i64> = vec![end_day, start_day];
+        args.extend(nodes.iter().skip(1).map(|row| row.key));
+        let fetched = statement
+            .query_map(rusqlite::params_from_iter(args.iter()), |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<i64>>(3)?,
-                    r.get::<_, Option<i64>>(4)?,
-                    r.get::<_, Option<i64>>(5)?,
-                    r.get::<_, i64>(6)?,
+                    (
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, Option<i64>>(4)?,
+                        r.get::<_, Option<i64>>(5)?,
+                        r.get::<_, Option<i64>>(6)?,
+                        r.get::<_, i64>(7)?,
+                    ),
                 ))
             })
             .map_err(storage)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(storage)?;
+            .map_err(storage);
         drop(statement);
+        for (version_key, clip) in fetched? {
+            clips_by_node.entry(version_key).or_default().push(clip);
+        }
+    }
+    for row in nodes.iter().skip(1) {
+        let rows = clips_by_node.remove(&row.key).unwrap_or_default();
         for (kind, range_start, range_end, segment_key, clip_start, clip_end, row_count) in rows {
             match kind {
                 1 => {
@@ -1488,39 +1610,9 @@ fn walk_chain_scoped(
     let _chain_cache = chain_cache::Scope::enter();
     let mut acc = ChainAcc::new();
     let walk_started = acc.start();
-    let mut chain = Vec::new();
-    let mut visited = HashSet::new();
-    let mut key = leaf_key;
-    loop {
-        if !visited.insert(key) {
-            return Err(integrity("version chain contains a cycle"));
-        }
-        let row =
-            read_version_row(c, key)?.ok_or_else(|| integrity("version chain node missing"))?;
-        chain_cache::store_row(&row);
-        match row.manifest_mode {
-            1 => {
-                if row.parent_version_key.is_some() || row.delta_depth != 0 {
-                    return Err(integrity("checkpoint version carries parent/depth"));
-                }
-                chain.push(row);
-                break;
-            }
-            2 => {
-                if row.delta_depth < 1 || row.delta_depth > MAX_DELTA_DEPTH {
-                    return Err(integrity("delta depth out of bounds"));
-                }
-                let parent = row
-                    .parent_version_key
-                    .ok_or_else(|| integrity("delta version lacks parent"))?;
-                chain.push(row);
-                key = parent;
-            }
-            _ => return Err(integrity("unknown manifest_mode")),
-        }
-        if chain.len() > MAX_CHAIN_NODES {
-            return Err(integrity("version chain exceeds depth bound"));
-        }
+    let mut chain = read_chain_rows(c, leaf_key)?;
+    for row in &chain {
+        chain_cache::store_row(row);
     }
     acc.walk_us += acc.since(walk_started);
     chain.reverse();
@@ -3319,6 +3411,9 @@ pub(crate) mod read_counts {
         static COMMITTED_READS: Cell<usize> = const { Cell::new(0) };
         static NODE_VERIFIES: Cell<usize> = const { Cell::new(0) };
         static LINEAGE_VERIFIES: Cell<usize> = const { Cell::new(0) };
+        static VERSION_ROW_READS: Cell<usize> = const { Cell::new(0) };
+        static CHAIN_ROW_QUERIES: Cell<usize> = const { Cell::new(0) };
+        static WINDOW_CLIP_QUERIES: Cell<usize> = const { Cell::new(0) };
         static EVIDENCE_VERIFIES: Cell<usize> = const { Cell::new(0) };
         static BINDING_READS: Cell<usize> = const { Cell::new(0) };
         static LINEAGE_NODES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -3344,6 +3439,27 @@ pub(crate) mod read_counts {
     }
     pub(crate) fn binding_reads() -> usize {
         BINDING_READS.with(Cell::get)
+    }
+    /// Single-key `read_version_row` executions, recursive whole-chain row
+    /// queries and delta-clip window queries (XP-046 asserts that the last two
+    /// are O(1) per traversal and the first does not grow with the depth).
+    pub(crate) fn count_version_row_read() {
+        VERSION_ROW_READS.with(|n| n.set(n.get() + 1));
+    }
+    pub(crate) fn version_row_reads() -> usize {
+        VERSION_ROW_READS.with(Cell::get)
+    }
+    pub(crate) fn count_chain_row_query() {
+        CHAIN_ROW_QUERIES.with(|n| n.set(n.get() + 1));
+    }
+    pub(crate) fn chain_row_queries() -> usize {
+        CHAIN_ROW_QUERIES.with(Cell::get)
+    }
+    pub(crate) fn count_window_clip_query() {
+        WINDOW_CLIP_QUERIES.with(|n| n.set(n.get() + 1));
+    }
+    pub(crate) fn window_clip_queries() -> usize {
+        WINDOW_CLIP_QUERIES.with(Cell::get)
     }
     pub(crate) fn count_lineage_verify() {
         LINEAGE_VERIFIES.with(|n| n.set(n.get() + 1));
@@ -3396,6 +3512,9 @@ pub(crate) mod read_counts {
         COMMITTED_READS.with(|n| n.set(0));
         NODE_VERIFIES.with(|n| n.set(0));
         LINEAGE_VERIFIES.with(|n| n.set(0));
+        VERSION_ROW_READS.with(|n| n.set(0));
+        CHAIN_ROW_QUERIES.with(|n| n.set(0));
+        WINDOW_CLIP_QUERIES.with(|n| n.set(0));
         EVIDENCE_VERIFIES.with(|n| n.set(0));
         BINDING_READS.with(|n| n.set(0));
         LINEAGE_NODES.with(|n| n.borrow_mut().clear());
