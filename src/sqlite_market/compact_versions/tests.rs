@@ -824,6 +824,92 @@ fn checkpoint_basis_requires_depth_and_equality() {
     assert!(!exists);
 }
 
+/// Chain of `depth` delta appends, then a checkpoint with a one-op basis on
+/// the head. Returns the staging outcome.
+fn rollover_over_parent_depth(depth: i64) -> Result<i64, Error> {
+    let c = connection();
+    let (mut parent, _) = publish_daily(&c, "v0", &[cb(0, 100)]);
+    for i in 1..=depth {
+        let seg = segment(&c, "sh.600006", Period::Day, &[cb(i, 100 + i)]);
+        let draft = mk_draft(&format!("v{i}"), "sh.600006", Period::Day, &c);
+        let key = stage_delta(&c, &draft, parent, &[upsert(&seg, i, i)]).unwrap();
+        mark_validated(&c, key).unwrap();
+        publish(&c, key, ts()).unwrap();
+        parent = key;
+    }
+    let next_day = depth + 1;
+    let next = segment(
+        &c,
+        "sh.600006",
+        Period::Day,
+        &[cb(next_day, 100 + next_day)],
+    );
+    let mut statement = c
+        .prepare("SELECT segment_key FROM bar_segments ORDER BY segment_key")
+        .unwrap();
+    let keys = statement
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    drop(statement);
+    let mut clips = Vec::new();
+    for key in keys {
+        clips.push(full_clip(&compact_v19::read_segment(&c, key).unwrap()));
+    }
+    // `next` is the newest segment; it belongs to the basis op and the
+    // checkpoint alike (clips cover every stored segment).
+    let basis = CheckpointBasis {
+        parent_version_key: parent,
+        delta_ops: vec![upsert(&next, next_day, next_day)],
+    };
+    let draft = mk_draft("v-roll", "sh.600006", Period::Day, &c);
+    stage_checkpoint(&c, &draft, &clips, Some(&basis))
+}
+
+/// XP-051: a rollover checkpoint is accepted over any parent depth in
+/// ROLLOVER_FLOOR..=256 and rejected below the floor.
+#[test]
+fn checkpoint_basis_accepts_parent_depth_from_the_floor() {
+    integrity_failure(rollover_over_parent_depth(i64::from(ROLLOVER_FLOOR) - 1));
+    for depth in [i64::from(ROLLOVER_FLOOR), 100, 127, 256] {
+        rollover_over_parent_depth(depth)
+            .unwrap_or_else(|e| panic!("parent depth {depth} rejected: {e}"));
+    }
+}
+
+/// XP-051: the per-entity rollover depth is deterministic, within
+/// [64,127], and spreads evenly over the 64 buckets.
+#[test]
+fn rollover_depth_is_deterministic_bounded_and_even() {
+    assert_eq!(rollover_depth("sh.600006"), rollover_depth("sh.600006"));
+    // Pinned values guard cross-process / cross-version stability.
+    assert_eq!(
+        (rollover_depth("sh.600000"), rollover_depth("sz.000001")),
+        (119, 117)
+    );
+    let mut counts = [0u32; 64];
+    let mut n = 0u32;
+    for exchange in ["sh", "sz"] {
+        for code in 0..2500u32 {
+            let depth = rollover_depth(&format!("{exchange}.{code:06}"));
+            assert!((64..=127).contains(&depth));
+            counts[(depth - 64) as usize] += 1;
+            n += 1;
+        }
+    }
+    assert_eq!(n, 5000);
+    let mean = f64::from(n) / 64.0;
+    let sigma = (f64::from(n) * (1.0 / 64.0) * (63.0 / 64.0)).sqrt();
+    for (bucket, count) in counts.iter().enumerate() {
+        assert!(
+            (f64::from(*count) - mean).abs() <= 5.0 * sigma,
+            "bucket {bucket} holds {count} (mean {mean:.1}, sigma {sigma:.1})"
+        );
+    }
+    assert!(counts.iter().all(|c| *c > 0));
+}
+
 fn clips_parent(c: &Connection, version_id: &str) -> i64 {
     c.query_row(
         "SELECT version_key FROM data_versions WHERE version_id=?1",

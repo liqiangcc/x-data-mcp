@@ -7638,6 +7638,16 @@ mod xp011 {
         /// v1 (checkpoint) plus `depth` tail-only appends: head `v{depth+1}` at
         /// delta_depth == depth. Returns the head bars.
         fn chain_to_depth(repo: &SqliteCompactMarket, depth: u32) -> Vec<Bar> {
+            // The staggered rollover would end the chain at the entity's
+            // threshold; deep bases are built with rollover pushed out to 256.
+            struct Unforced;
+            impl Drop for Unforced {
+                fn drop(&mut self) {
+                    compact_versions::set_rollover_override(None);
+                }
+            }
+            compact_versions::set_rollover_override(Some(256));
+            let _unforced = Unforced;
             let first = day(2020, 1, 1);
             let mut bars = vec![bar(first, 100)];
             publish_head(repo, "req-a", "pub-a", "sh.600006", "v1", bars.clone());
@@ -7757,6 +7767,61 @@ mod xp011 {
                 .continuity_mode
         }
 
+        /// XP-051: the typed append rolls over exactly at the entity's own
+        /// threshold: depth threshold-1 appends a delta, depth == threshold
+        /// rolls over into a depth-0 checkpoint.
+        #[test]
+        fn typed_append_rolls_over_at_the_entity_threshold() {
+            let threshold = compact_versions::rollover_depth("sh.600006");
+            assert!((64..=127).contains(&threshold));
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let bars = chain_to_depth(&repo, threshold - 1);
+            let head = format!("v{threshold}");
+            assert_eq!(mode_depth(&path, &head), (2, i64::from(threshold - 1)));
+            let d1 = compact_market::epoch_day(bars.last().unwrap().date) + 1;
+            let next = format!("v{}", threshold + 1);
+            assert!(typed_append(&repo, 1, &head, &next, d1, 999)[0].is_ok());
+            // Below the threshold: an ordinary delta.
+            assert_eq!(mode_depth(&path, &next), (2, i64::from(threshold)));
+            let after = format!("v{}", threshold + 2);
+            let out = typed_append(&repo, 2, &next, &after, d1 + 1, 1000);
+            assert!(out[0].is_ok(), "{:?}", out[0]);
+            // At the threshold: rolled over into a checkpoint.
+            assert_eq!(mode_depth(&path, &after), (1, 0));
+            assert_eq!(
+                repo.fixed(&after).unwrap().version.records.len(),
+                bars.len() + 2
+            );
+            assert_eq!(
+                ledger_mode(&repo, "upd-t2"),
+                crate::compact_market::ContinuityMode::Append
+            );
+        }
+
+        /// XP-051: an envelope candidate over a parent at the threshold is
+        /// staged as a rebuilt checkpoint (validators accept parent depth
+        /// 64..=256, not only 256); below it stays a delta.
+        #[test]
+        fn envelope_candidate_rolls_over_at_the_entity_threshold() {
+            let threshold = compact_versions::rollover_depth("sh.600006");
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let mut bars = chain_to_depth(&repo, threshold - 1);
+            let first = compact_market::epoch_day(bars[0].date);
+            let head = format!("v{threshold}");
+            bars.push(bar(first + i64::from(threshold), 5000));
+            let next = format!("v{}", threshold + 1);
+            publish_delta(&repo, 9001, &head, &next, bars.clone());
+            assert_eq!(mode_depth(&path, &next), (2, i64::from(threshold)));
+            bars.push(bar(first + i64::from(threshold) + 1, 5001));
+            let after = format!("v{}", threshold + 2);
+            publish_delta(&repo, 9002, &next, &after, bars.clone());
+            assert_eq!(mode_depth(&path, &after), (1, 0));
+            assert_eq!(repo.fixed(&after).unwrap().version.records, bars);
+        }
+
+        /// XP-038: a typed update that OVERWRITES an existing day on a
         /// XP-038: a typed update that OVERWRITES an existing day on a
         /// depth-256 base stages a checkpoint with basis and commits in the
         /// Full shape (the prefix is not unchanged, so it is not an Append).
