@@ -363,7 +363,7 @@ fn rebase_entity(
     })?;
     let receipt = backend.commit(&plan)?;
     e.head_version_id = receipt.version_id;
-    refresh_head(backend, e).map_err(Into::into)?;
+    refresh_head(backend, e)?;
     Ok(())
 }
 
