@@ -115,6 +115,8 @@ try:
 
     # --- daily collection, 100-item chunks serial ---
     chunks = [entities[i:i+100] for i in range(0, len(entities), 100)]
+    _mc = int(os.environ.get("XP015_MAX_CHUNKS", "0"))  # rehearsal bound; 0 = all
+    if _mc: chunks = chunks[:_mc]
     result["daily"]["chunk_total"] = len(chunks)
     published = 0
     for idx, chunk in enumerate(chunks, 1):

@@ -91,6 +91,8 @@ try:
         last = h["last_record"]
         update_items.append({"entity": h["entity"], "base_version_id": h["version_ref"]["version_id"],
                              "start_date": last, "end_date": last})
+    _mc = int(os.environ.get("XP015_MAX_CHUNKS", "0"))  # rehearsal bound; 0 = all
+    if _mc: update_items = update_items[:_mc*100]
     result["daily_update_item_count"] = len(update_items)
     print(f"update_items={len(update_items)} absent={len(absent)}", flush=True)
 
