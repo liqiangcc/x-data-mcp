@@ -134,6 +134,8 @@ struct EntityState {
     versions: Vec<(String, chrono::NaiveDate)>,
     /// Current published yearly head, when the entity already has one.
     yearly_head: Option<String>,
+    /// Number of yearly nodes this fixture published on top of it.
+    yearly_done: i64,
 }
 
 fn entity_state(backend: &MarketBackend, symbol: &str) -> Result<EntityState, String> {
@@ -176,6 +178,7 @@ fn entity_state(backend: &MarketBackend, symbol: &str) -> Result<EntityState, St
         depth,
         versions: Vec::new(),
         yearly_head: None,
+        yearly_done: 0,
     })
 }
 
@@ -283,20 +286,140 @@ fn append_item(e: &EntityState, task_id: &str, run_id: &str) -> UpdateBatchItem 
     }
 }
 
+/// One yearly step for the entities that just appended a daily node:
+/// each pending entity derives year `bar_year` of its just-published head
+/// through the production yearly runner (`CurrentHead` requires the base
+/// to be the current daily head, which is exactly true right after the
+/// daily commit — the same ordering production derives follow).
+fn yearly_step(
+    backend: &MarketBackend,
+    ctl: &TaskControl<SqliteTasks>,
+    runner: &YearlyRunner<MarketBackend>,
+    key: &x_data_mcp::task_control::CommandKey,
+    entities: &mut [&mut EntityState],
+    yearly_depth: i64,
+    request_prefix: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pending: Vec<usize> = (0..entities.len())
+        .filter(|&i| entities[i].yearly_done < yearly_depth)
+        .collect();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let items: Vec<YearlyItem> = pending
+        .iter()
+        .map(|&i| {
+            let e = &*entities[i];
+            let (base_id, base_day) = e
+                .versions
+                .last()
+                .expect("yearly step runs after a daily append");
+            YearlyItem {
+                symbol: e.symbol.clone(),
+                base_daily_version_id: base_id.clone(),
+                years: BTreeSet::from([base_day.year()]),
+                intent: PublishIntent::CurrentHead {
+                    expected_daily_head: base_id.clone(),
+                    expected_yearly_head: e.yearly_head.clone(),
+                },
+                comparison_version_id: e.yearly_head.clone(),
+            }
+        })
+        .collect();
+    let payload = serde_json::to_value(ExplicitYears {
+        items: items.clone(),
+    })?;
+    let request_id = format!(
+        "{request_prefix}-yearly-{}",
+        &x_data_mcp::hash::sha256(payload.to_string().as_bytes())[..16]
+    );
+    let accepted = ctl.accept(&request_id, key.clone(), payload)?;
+    let RequestOutcome::Task(snapshot) = accepted.record.outcome else {
+        return Err("yearly acceptance carried no task".into());
+    };
+    let task_id = snapshot.task.task_id;
+    for (&i, item) in pending.iter().zip(items.iter()) {
+        let item_id = scope_id(&item.symbol, "year");
+        let e = &mut *entities[i];
+        match runner.run_item(&task_id, &item_id, &FixtureYearlyVerifier)? {
+            x_data_mcp::yearly_publication::runner::YearlyExecution::Published(receipt) => {
+                e.yearly_head = Some(receipt.version_id);
+                e.yearly_done += 1;
+            }
+            x_data_mcp::yearly_publication::runner::YearlyExecution::NotPublished(snapshot) => {
+                return Err(
+                    format!("{}: yearly item not published: {snapshot:?}", e.symbol).into(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Read the yearly delta depth of a version row.
+fn version_depth(backend: &MarketBackend, version_id: &str) -> Result<i64, String> {
+    backend
+        .read(|c| {
+            c.query_row(
+                "SELECT delta_depth FROM data_versions WHERE version_id=?1",
+                [version_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(storage)
+        })
+        .map_err(|e| format!("yearly delta depth read failed: {e}"))
+}
+
 /// Seed `symbols` to `target_depth` through the production update commit
 /// path. One task per step batches up to 100 entity items (the contract
 /// budget); each item is one synthetic typed append on that entity's
-/// current head, so `delta_depth` climbs by one per step.
+/// current head, so `delta_depth` climbs by one per step. When
+/// `yearly_depth > 0`, a yearly node is derived right after each daily
+/// append (while the new version is still the daily head, which the
+/// `CurrentHead` publish intent requires).
 fn seed_entities(
     backend: &MarketBackend,
     run_id: &str,
     symbols: &[String],
     target_depth: i64,
+    yearly_depth: i64,
     request_prefix: &str,
 ) -> Result<(Vec<EntityState>, Value), Box<dyn std::error::Error>> {
     if !(1..=256).contains(&target_depth) {
         return Err("--depth must be within 1..=256 (the delta-depth bound)".into());
     }
+    if !(0..=256).contains(&yearly_depth) {
+        return Err("--yearly-depth must be within 0..=256".into());
+    }
+    if yearly_depth > target_depth {
+        return Err(
+            "--yearly-depth cannot exceed --depth: every yearly node needs a seeded daily base"
+                .into(),
+        );
+    }
+    let yearly = if yearly_depth > 0 {
+        let contract = YearlyContract {
+            operation: Operation::Update,
+            repository: backend.clone(),
+            // Same rationale as the daily contract override: the fixture
+            // legitimately seeds past years on its private copy.
+            today: || chrono::NaiveDate::MAX,
+        };
+        let key = contract.key();
+        let ctl = TaskControl::new(
+            backend.tasks(),
+            run_id.to_string(),
+            vec![Box::new(contract)],
+        )?;
+        let runner = YearlyRunner {
+            repository: backend.clone(),
+            run_id: run_id.to_string(),
+            derived_at: chrono::Utc::now(),
+        };
+        Some((ctl, runner, key))
+    } else {
+        None
+    };
     let ctl = TaskControl::new(
         backend.tasks(),
         run_id.to_string(),
@@ -361,6 +484,17 @@ fn seed_entities(
                 e.head_version_id = receipt.version_id;
                 refresh_head(backend, e)?;
             }
+            if let Some((yearly_ctl, runner, key)) = &yearly {
+                yearly_step(
+                    backend,
+                    yearly_ctl,
+                    runner,
+                    key,
+                    chunk,
+                    yearly_depth,
+                    request_prefix,
+                )?;
+            }
         }
     }
     let mut reports = Vec::new();
@@ -376,17 +510,31 @@ fn seed_entities(
         // `fixed` runs the full verified chain materialization — the
         // integrity readback the fixture promises.
         backend.fixed(&e.head_version_id)?;
-        reports.push(json!({
+        let mut entry = json!({
             "symbol": e.symbol,
             "head_version_id": e.head_version_id,
             "delta_depth": stored.0,
             "manifest_mode": stored.1,
             "verified": true,
-        }));
+        });
+        if let Some(head) = &e.yearly_head {
+            // Same verified readback as the daily chain: the yearly
+            // materialization replays every node's lineage re-aggregation.
+            backend.fixed(head)?;
+            entry["yearly_head_version_id"] = json!(head);
+            entry["yearly_delta_depth"] = json!(version_depth(backend, head)?);
+            entry["yearly_verified"] = json!(true);
+        }
+        reports.push(entry);
     }
     Ok((
         entities,
-        json!({"entities": reports, "target_depth": target_depth, "synthetic": true}),
+        json!({
+            "entities": reports,
+            "target_depth": target_depth,
+            "yearly_depth": yearly_depth,
+            "synthetic": true,
+        }),
     ))
 }
 
@@ -430,162 +578,6 @@ impl YearlyVerifier for FixtureYearlyVerifier {
     }
 }
 
-/// Read the yearly delta depth of a version row.
-fn version_depth(backend: &MarketBackend, version_id: &str) -> Result<i64, String> {
-    backend
-        .read(|c| {
-            c.query_row(
-                "SELECT delta_depth FROM data_versions WHERE version_id=?1",
-                [version_id],
-                |r| r.get::<_, i64>(0),
-            )
-            .map_err(storage)
-        })
-        .map_err(|e| format!("yearly delta depth read failed: {e}"))
-}
-
-/// After the daily chain is seeded, publish `yearly_depth` yearly nodes
-/// per entity through the production yearly runner. Node j derives from
-/// the j-th of the last `yearly_depth` seeded daily versions; the prior
-/// yearly head becomes the comparison/parent, so `delta_depth` climbs by
-/// one per node exactly as production publishes do.
-fn seed_yearly(
-    backend: &MarketBackend,
-    run_id: &str,
-    entities: &mut [EntityState],
-    yearly_depth: i64,
-    request_prefix: &str,
-    mut report: Value,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    if !(0..=256).contains(&yearly_depth) {
-        return Err("--yearly-depth must be within 0..=256".into());
-    }
-    if yearly_depth == 0 {
-        return Ok(report);
-    }
-    for e in entities.iter() {
-        if (e.versions.len() as i64) < yearly_depth {
-            return Err(format!(
-                "{}: yearly depth {yearly_depth} exceeds the {} seeded daily nodes",
-                e.symbol,
-                e.versions.len()
-            )
-            .into());
-        }
-    }
-    let contract = YearlyContract {
-        operation: Operation::Update,
-        repository: backend.clone(),
-        // Same rationale as the daily contract override: the fixture
-        // legitimately seeds past years on its private copy.
-        today: || chrono::NaiveDate::MAX,
-    };
-    let key = contract.key();
-    let ctl = TaskControl::new(
-        backend.tasks(),
-        run_id.to_string(),
-        vec![Box::new(contract)],
-    )?;
-    let runner = YearlyRunner {
-        repository: backend.clone(),
-        run_id: run_id.to_string(),
-        derived_at: chrono::Utc::now(),
-    };
-    // Per-entity progress: seeded yearly node count and current head.
-    for e in entities.iter_mut() {
-        let scope = Scope {
-            symbol: e.symbol.clone(),
-            period: Period::Year,
-        };
-        e.yearly_head = backend
-            .effective_head(&scope)
-            .map_err(|e2| format!("yearly effective head read failed: {e2}"))?;
-    }
-    let mut done: Vec<i64> = vec![0; entities.len()];
-    loop {
-        let pending: Vec<usize> = (0..entities.len())
-            .filter(|&i| done[i] < yearly_depth)
-            .collect();
-        if pending.is_empty() {
-            break;
-        }
-        for chunk in pending.chunks(100) {
-            let items: Vec<YearlyItem> = chunk
-                .iter()
-                .map(|&i| {
-                    let e = &entities[i];
-                    let idx = e.versions.len() - yearly_depth as usize + done[i] as usize;
-                    let (base_id, base_day) = &e.versions[idx];
-                    YearlyItem {
-                        symbol: e.symbol.clone(),
-                        base_daily_version_id: base_id.clone(),
-                        years: BTreeSet::from([base_day.year()]),
-                        intent: PublishIntent::CurrentHead {
-                            expected_daily_head: base_id.clone(),
-                            expected_yearly_head: e.yearly_head.clone(),
-                        },
-                        comparison_version_id: e.yearly_head.clone(),
-                    }
-                })
-                .collect();
-            let payload = serde_json::to_value(ExplicitYears {
-                items: items.clone(),
-            })?;
-            let request_id = format!(
-                "{request_prefix}-yearly-{}",
-                &x_data_mcp::hash::sha256(payload.to_string().as_bytes())[..16]
-            );
-            let accepted = ctl.accept(&request_id, key.clone(), payload)?;
-            let RequestOutcome::Task(snapshot) = accepted.record.outcome else {
-                return Err("yearly acceptance carried no task".into());
-            };
-            let task_id = snapshot.task.task_id;
-            for (i, item) in chunk.iter().zip(items.iter()) {
-                let e = &mut entities[*i];
-                let item_id = scope_id(&item.symbol, "year");
-                match runner.run_item(&task_id, &item_id, &FixtureYearlyVerifier)? {
-                    x_data_mcp::yearly_publication::runner::YearlyExecution::Published(receipt) => {
-                        e.yearly_head = Some(receipt.version_id);
-                        done[*i] += 1;
-                    }
-                    x_data_mcp::yearly_publication::runner::YearlyExecution::NotPublished(
-                        snapshot,
-                    ) => {
-                        return Err(format!(
-                            "{}: yearly item not published: {snapshot:?}",
-                            e.symbol
-                        )
-                        .into());
-                    }
-                }
-            }
-        }
-    }
-    let mut yearly_reports = Vec::new();
-    for e in entities.iter() {
-        let head = e
-            .yearly_head
-            .as_ref()
-            .ok_or_else(|| format!("{}: yearly seeding produced no head", e.symbol))?;
-        let depth = version_depth(backend, head)?;
-        // Same verified readback as the daily chain: full materialization
-        // replays every yearly node and its lineage re-aggregation.
-        backend.fixed(head)?;
-        yearly_reports.push(json!({
-            "symbol": e.symbol,
-            "yearly_head_version_id": head,
-            "yearly_delta_depth": depth,
-            "verified": true,
-        }));
-    }
-    report["yearly"] = json!({
-        "entities": yearly_reports,
-        "target_depth": yearly_depth,
-        "synthetic": true,
-    });
-    Ok(report)
-}
-
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.is_empty() {
@@ -618,17 +610,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "0".into())
         .parse()
         .map_err(|_| "--yearly-depth must be an integer")?;
-    let (mut entities, mut report) = seed_entities(&backend, &run_id, &symbols, depth, &prefix)?;
-    if yearly_depth > 0 {
-        report = seed_yearly(
-            &backend,
-            &run_id,
-            &mut entities,
-            yearly_depth,
-            &prefix,
-            report,
-        )?;
-    }
+    let (_entities, report) =
+        seed_entities(&backend, &run_id, &symbols, depth, yearly_depth, &prefix)?;
     println!("{report}");
     Ok(())
 }
@@ -809,7 +792,7 @@ mod tests {
             chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
         );
         let (_entities, report) =
-            seed_entities(&backend, RUN, &["sh.600006".into()], 4, "seed-depth").unwrap();
+            seed_entities(&backend, RUN, &["sh.600006".into()], 4, 0, "seed-depth").unwrap();
         let entity = &report["entities"][0];
         assert_eq!(entity["delta_depth"], json!(4));
         assert_eq!(entity["manifest_mode"], json!(2));
@@ -863,10 +846,9 @@ mod tests {
             "sh.600006",
             chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
         );
-        let (mut entities, _) =
-            seed_entities(&backend, RUN, &["sh.600006".into()], 3, "seed-depth").unwrap();
-        let report = seed_yearly(&backend, RUN, &mut entities, 3, "seed-depth", json!({})).unwrap();
-        let yearly = &report["yearly"]["entities"][0];
+        let (_entities, report) =
+            seed_entities(&backend, RUN, &["sh.600006".into()], 3, 3, "seed-depth").unwrap();
+        let yearly = &report["entities"][0];
         assert_eq!(yearly["yearly_delta_depth"], json!(3));
         let head = yearly["yearly_head_version_id"].as_str().unwrap();
         backend.fixed(head).unwrap();
@@ -919,10 +901,14 @@ mod tests {
             "sh.600006",
             chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
         );
-        let (mut entities, report) =
-            seed_entities(&backend, RUN, &["sh.600006".into()], 2, "seed-depth").unwrap();
-        let report = seed_yearly(&backend, RUN, &mut entities, 0, "seed-depth", report).unwrap();
-        assert!(report["yearly"].is_null() || report.get("yearly").is_none());
+        let (_entities, report) =
+            seed_entities(&backend, RUN, &["sh.600006".into()], 2, 0, "seed-depth").unwrap();
+        assert!(
+            report["entities"][0]
+                .get("yearly_head_version_id")
+                .is_none()
+        );
+        assert_eq!(report["yearly_depth"], json!(0));
         let yearly_rows: i64 = backend
             .read(|c| {
                 c.query_row(
