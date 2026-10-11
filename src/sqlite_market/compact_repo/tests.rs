@@ -7557,7 +7557,7 @@ mod xp011 {
             long_chain(&repo, 8);
             tamper(
                 &path,
-                "UPDATE evidence_bundles SET canonical_json=canonical_json||' ' WHERE evidence_digest=\
+                "UPDATE evidence_bundles SET canonical_json='{}' WHERE evidence_digest=\
                  (SELECT evidence_digest FROM data_versions WHERE version_id='v5')",
             );
             assert_eq!(
