@@ -363,7 +363,7 @@ fn rebase_entity(
     })?;
     let receipt = backend.commit(&plan)?;
     e.head_version_id = receipt.version_id;
-    refresh_head(backend, e).map_err(|err| Box::<dyn std::error::Error>::from(err))?;
+    refresh_head(backend, e).map_err(Into::into)?;
     Ok(())
 }
 
@@ -988,7 +988,7 @@ mod tests {
         assert_eq!(entity["delta_depth"], json!(8));
         assert_eq!(entity["bars_equal_old_head"], json!(false));
         let head = entity["head_version_id"].as_str().unwrap();
-        let records = backend.fixed(head).unwrap().version().records;
+        let records = backend.fixed(head).unwrap().version().records.clone();
         let n = old_records.len();
         assert_eq!(records.len(), n);
         assert_eq!(records[..n - 1], old_records[..n - 1]);
