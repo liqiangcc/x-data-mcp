@@ -1,0 +1,25 @@
+{
+ "captured_at_utc": "2026-10-09T02:36:00Z",
+ "host": "aws-node",
+ "uname": "Linux aws-node 7.0.0-1006-aws #6-Ubuntu SMP PREEMPT x86_64",
+ "binary_source": "gh release download v0.2.0-preview.30 -R liqiangcc/x-data-mcp; sha256sum -c OK; SHA256SUMS OK; mcp_data --version='x-data-mcp 0.2.0-preview.30 4ff45d748caef5fffda7360c2c4bef070a7c3189 NOT_PRODUCTION_READY'; smoke-report.json status PASS",
+ "python": "python3 (stdlib only, system 3.14)",
+ "layout": {
+  "db": "/root/x-perf-g8/svc/db/preview.sqlite (task_sqlite init20, chmod 600)",
+  "sockets": "/root/x-perf-g8/svc/run/{mcp,acquire}.sock",
+  "genroot": "/root/x-perf-g8/svc/gen (X_DATA_MCP_GENERATION_ROOT)",
+  "mirror": "/root/x-perf-g8/svc/mirror (base/gbbq/hsjday.zip swapped genA->genB)"
+ },
+ "services": "private acquire_service pid 2277982 + data_service pid 2277983, nohup bg, SIGTERM clean exit ~02:26Z",
+ "no_cargo": "Owner directive: no local cargo on aws-node; zero cargo invocations this task",
+ "wall_windows_utc": {
+  "acquire_a": "01:25:39-01:25:57",
+  "catalog_collect": "01:29:44-01:29:52",
+  "daily_collect": "01:29:52-01:35:39",
+  "acquire_b": "01:36:5x-01:37:2x",
+  "update_e2e": "~01:40:00-02:10:0x (driver total incl. availability scans: 01:39:5x start -> 02:10 update-b.json written)",
+  "integrity_check": "02:26-02:29 (140.3s)"
+ },
+ "load": "uptime 1.1-1.9 during run; aws prod services resident but idle-ish; no fresh_rebuild_yearly (gate clear; earlier pgrep hit was own-cmdline self-match)",
+ "poll": "driver polls get_task_progress every 1s (vs ecs 10s)"
+}

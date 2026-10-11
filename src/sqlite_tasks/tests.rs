@@ -1023,3 +1023,216 @@ fn upgrade_stays_schema18_and_never_applies_compact_migration() {
     db.upgrade().unwrap();
     assert_legacy_shape(&path);
 }
+
+// ---- XP-025 A: bounded accept gate + full registry sweep ----
+
+fn fresh() -> (tempfile::TempDir, SqliteTasks) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = SqliteTasks::new(dir.path().join("task.sqlite"));
+    db.initialize().unwrap();
+    (dir, db)
+}
+/// Inserts `n` self-consistent terminal tasks (request, item, scope), the
+/// shape accept leaves behind for completed history.
+fn seed_terminal(db: &SqliteTasks, n: usize) {
+    let mut c = Connection::open(db.path()).unwrap();
+    let tx = c.transaction().unwrap();
+    for i in 0..n {
+        let id = format!("hist-{i}");
+        let key = r#"{"operation":"collect_data","dataset":"legacy_market_compound","contract_version":"v1"}"#;
+        let spec = serde_json::json!({"item_id":"i","target":{},"progress_unit":"u","frozen_inputs":{},"scope_keys":["s"]});
+        let work = serde_json::json!({"items":[spec],"scopes":["s"]}).to_string();
+        tx.execute(
+            "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,items_running,items_finished,items_succeeded) VALUES(?1,?2,'succeeded',3,'seed-run','seed-run','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',?3,'{}',NULL,1,0,0,1,1)",
+            params![id, key, work],
+        )
+        .unwrap();
+        let command = r#"{"key":{},"intent":{}}"#;
+        tx.execute(
+            "INSERT INTO requests VALUES(?1,?2,?3,'task',?4,NULL)",
+            params![
+                format!("req-{id}"),
+                command,
+                crate::hash::sha256(command.as_bytes()),
+                id
+            ],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO task_items VALUES(?1,'i','{}','u','{}','[\"s\"]','finished','{\"success\":true}')",
+            params![id],
+        )
+        .unwrap();
+        tx.execute("INSERT INTO task_scopes VALUES(?1,'s')", params![id])
+            .unwrap();
+    }
+    tx.commit().unwrap();
+}
+fn accept_new(db: &SqliteTasks, request: &str) -> Result<Acceptance, Error> {
+    TaskControl::new(
+        db.clone(),
+        "test-run".into(),
+        vec![Box::new(LegacyCollection)],
+    )
+    .unwrap()
+    .accept(
+        request,
+        LegacyCollection.key(),
+        serde_json::json!({"symbols":[request.replace('-', "")],"periods":["day"]}),
+    )
+}
+#[test]
+fn active_and_terminal_status_sets_partition_the_schema_enum() {
+    let (_dir, db) = fresh();
+    let c = Connection::open(db.path()).unwrap();
+    let ddl: String = c
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='tasks'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let start = ddl.find("status IN (").unwrap() + "status IN (".len();
+    let list = &ddl[start..start + ddl[start..].find(')').unwrap()];
+    let schema: std::collections::BTreeSet<String> = list
+        .split(',')
+        .map(|s| s.trim().trim_matches('\'').to_string())
+        .collect();
+    let active: std::collections::BTreeSet<String> =
+        ACTIVE_STATUSES.iter().map(|s| s.to_string()).collect();
+    let terminal: std::collections::BTreeSet<String> =
+        TERMINAL_STATUSES.iter().map(|s| s.to_string()).collect();
+    assert!(active.is_disjoint(&terminal));
+    assert_eq!(
+        active
+            .union(&terminal)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        schema
+    );
+}
+#[test]
+fn accept_gate_is_six_bounded_statements_without_item_or_request_scans() {
+    let (_dir, db) = fresh();
+    seed_terminal(&db, 50);
+    let c = Connection::open(db.path()).unwrap();
+    let gates = registry_gates(GateScope::Active);
+    assert_eq!(
+        gates.len(),
+        5,
+        "5 SQL gates + 1 digest select = 6 statements"
+    );
+    let mut sqls: Vec<String> = gates.into_iter().map(|g| g.sql).collect();
+    sqls.push(digest_sql(GateScope::Active));
+    for sql in sqls {
+        let mut q = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let plan: Vec<String> = q
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for detail in &plan {
+            if let Some(rest) = detail.strip_prefix("SCAN ") {
+                let table = rest.split_whitespace().next().unwrap_or("");
+                assert!(
+                    table == "t" || table == "o" || table == "CONSTANT",
+                    "unbounded scan `{detail}` in gate: {sql}"
+                );
+            }
+        }
+    }
+}
+#[test]
+fn accept_work_does_not_grow_with_terminal_history() {
+    let mut digests = vec![];
+    for history in [10usize, 500] {
+        let (_dir, db) = fresh();
+        seed_terminal(&db, history);
+        accept_new(&db, "live-1").unwrap();
+        DIGESTS_CHECKED.with(|n| n.set(0));
+        accept_new(&db, "live-2").unwrap();
+        digests.push(DIGESTS_CHECKED.with(|n| n.get()));
+    }
+    assert_eq!(
+        digests[0], digests[1],
+        "digest work must not depend on history"
+    );
+    assert_eq!(
+        digests[0], 1,
+        "only the one in-flight task's request is hashed"
+    );
+}
+#[test]
+fn historical_corruption_does_not_block_accept_but_sweep_reports_it() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "unbound terminal task",
+            "DELETE FROM requests WHERE task_id='hist-0'",
+            "accept.gate.orphan",
+        ),
+        (
+            "request bound to missing task",
+            "INSERT INTO requests VALUES('ghost','{}', 'x','task','missing-task',NULL)",
+            "sweep.request_task",
+        ),
+        (
+            "terminal counters diverge",
+            "UPDATE tasks SET items_pending=5 WHERE task_id='hist-0'",
+            "accept.gate.item_counters",
+        ),
+        (
+            "terminal without result",
+            "UPDATE tasks SET result_json=NULL WHERE task_id='hist-0'",
+            "sweep.terminal",
+        ),
+        (
+            "terminal owner/stage",
+            "UPDATE tasks SET owner_run_id=NULL WHERE task_id='hist-0'",
+            "accept.gate.owner_stage",
+        ),
+        (
+            "history digest",
+            "UPDATE requests SET command_digest='wrong' WHERE task_id='hist-0'",
+            "sweep.digest",
+        ),
+    ];
+    for (name, tamper, expected) in cases {
+        let (_dir, db) = fresh();
+        seed_terminal(&db, 3);
+        assert!(
+            db.registry_sweep().unwrap().is_empty(),
+            "{name}: clean before"
+        );
+        let c = Connection::open(db.path()).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        c.execute_batch(tamper).unwrap();
+        accept_new(&db, "live-1").unwrap_or_else(|e| panic!("{name}: accept blocked: {e:?}"));
+        let findings = db.registry_sweep().unwrap();
+        assert!(
+            findings.iter().any(|f| f.check == *expected),
+            "{name}: expected {expected}, got {findings:?}"
+        );
+        // The read-only CLI sweep reports the same findings.
+        assert_eq!(db.registry_sweep_readonly().unwrap(), findings, "{name}");
+    }
+}
+#[test]
+fn in_flight_corruption_still_rejects_accept() {
+    for tamper in [
+        "DELETE FROM scope_occupancy",
+        "DELETE FROM task_scopes",
+        "UPDATE tasks SET items_pending=items_pending+1 WHERE status='pending'",
+        "UPDATE tasks SET owner_run_id='x' WHERE status='pending'",
+        "UPDATE requests SET command_digest='wrong' WHERE task_id IN (SELECT task_id FROM tasks WHERE status='pending')",
+        "DELETE FROM requests",
+        "UPDATE tasks SET status='succeeded',result_json='{}'",
+    ] {
+        let (_dir, db) = fresh();
+        seed_terminal(&db, 2);
+        accept_new(&db, "live-1").unwrap();
+        let c = Connection::open(db.path()).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        c.execute_batch(tamper).unwrap();
+        assert!(accept_new(&db, "live-2").is_err(), "{tamper}");
+    }
+}

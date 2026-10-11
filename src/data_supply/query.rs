@@ -173,8 +173,13 @@ impl<R: ReadRepository> Queries<R> {
         let mut saved = if let Some(cursor) = cursor {
             self.resume(&cursor, &key, access)?
         } else {
-            let data = self.repository.query(&plan, access)?;
-            if data.rows.len() > MAX_ROWS || serde_json::to_vec(&data).unwrap().len() > MAX_BYTES {
+            let data = crate::stage_trace::timed("query.repository", || {
+                self.repository.query(&plan, access)
+            })?;
+            let over_budget = crate::stage_trace::timed("query.budget", || {
+                data.rows.len() > MAX_ROWS || serde_json::to_vec(&data).unwrap().len() > MAX_BYTES
+            });
+            if over_budget {
                 return Err(invalid("snapshot budget exceeded"));
             }
             Saved {
@@ -195,7 +200,7 @@ impl<R: ReadRepository> Queries<R> {
             .iter()
             .filter_map(|m| m.version_ref.clone())
             .collect::<Vec<_>>();
-        self.repository.verify(&refs)?;
+        crate::stage_trace::timed("query.verify", || self.repository.verify(&refs))?;
         let end = (saved.offset + plan.args.page_size).min(data.rows.len());
         let records = data.rows[saved.offset..end].to_vec();
         let manifest = data.manifest.clone();
@@ -268,6 +273,17 @@ impl<R: ReadRepository> Queries<R> {
             result.next_cursor = Some(self.save(saved));
         }
         Ok(result)
+    }
+}
+impl<R: ReadRepository + crate::data_supply::presence::PresenceRepository> Queries<R> {
+    /// `get_yearly_base_years` (generic-data-v4): exact in-window year sets
+    /// for pinned published daily versions under one bounded snapshot.
+    pub fn year_presence(
+        &self,
+        args: YearPresenceQuery,
+        access: &Access,
+    ) -> Result<YearPresenceReply, Error> {
+        crate::data_supply::presence::year_presence(&self.repository, self.id(), args, access)
     }
 }
 /// Deduplicates verification work without changing query selection semantics.

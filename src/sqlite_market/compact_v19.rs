@@ -1,5 +1,8 @@
 use super::*;
 use crate::compact_market::{self, CompactBar, DeltaKind, DeltaOp, Digest, SegmentClip};
+use crate::progress_trace::{Span, Stage};
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredSegment {
@@ -35,7 +38,11 @@ pub(crate) fn insert_segment(
     period: Period,
     bars: &[CompactBar],
 ) -> Result<StoredSegment, Error> {
+    let tracing = crate::stage_trace::enabled();
+    let t0 = tracing.then(std::time::Instant::now);
     let digest = compact_market::segment_digest(entity, period, bars).map_err(integrity)?;
+    let digest_us = t0.map_or(0, |t| t.elapsed().as_micros() as u64);
+    let t1 = tracing.then(std::time::Instant::now);
     let existing: Option<i64> = c
         .query_row(
             "SELECT segment_key FROM bar_segments WHERE segment_digest=?1",
@@ -44,13 +51,31 @@ pub(crate) fn insert_segment(
         )
         .optional()
         .map_err(storage)?;
+    let existing_us = t1.map_or(0, |t| t.elapsed().as_micros() as u64);
     if let Some(key) = existing {
+        let t2 = tracing.then(std::time::Instant::now);
         let stored = read_segment(c, key)?;
         if stored.entity != entity || stored.period != period || stored.bars != bars {
             return Err(integrity("segment digest collision with different content"));
         }
+        crate::stage_trace::note(
+            "seg.insert",
+            &[
+                ("new", 0),
+                ("bars", bars.len() as u64),
+                ("digest_us", digest_us),
+                ("existing_us", existing_us),
+                (
+                    "reread_us",
+                    t2.map_or(0, |t| t.elapsed().as_micros() as u64),
+                ),
+            ],
+        );
         return Ok(stored);
     }
+    // Each execute below is an autocommit statement when the caller holds no
+    // transaction (stage_tx does not); `header_us`/`rows_us` expose that.
+    let t3 = tracing.then(std::time::Instant::now);
     c.execute(
         "INSERT INTO bar_segments(segment_digest,entity,period,first_day,last_day,row_count) VALUES(?1,?2,?3,?4,?5,?6)",
         params![
@@ -63,12 +88,14 @@ pub(crate) fn insert_segment(
         ],
     )
     .map_err(storage)?;
+    let header_us = t3.map_or(0, |t| t.elapsed().as_micros() as u64);
     let key = c.last_insert_rowid();
     let mut statement = c
         .prepare(
             "INSERT INTO segment_bars(segment_key,trade_day,open_cents,high_cents,low_cents,close_cents,volume,amount,r7_raw) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         )
         .map_err(storage)?;
+    let t4 = tracing.then(std::time::Instant::now);
     for bar in bars {
         statement
             .execute(params![
@@ -84,6 +111,18 @@ pub(crate) fn insert_segment(
             ])
             .map_err(storage)?;
     }
+    crate::stage_trace::note(
+        "seg.insert",
+        &[
+            ("new", 1),
+            ("bars", bars.len() as u64),
+            ("autocommit", c.is_autocommit() as u64),
+            ("digest_us", digest_us),
+            ("existing_us", existing_us),
+            ("header_us", header_us),
+            ("rows_us", t4.map_or(0, |t| t.elapsed().as_micros() as u64)),
+        ],
+    );
     Ok(StoredSegment {
         key,
         digest,
@@ -94,74 +133,66 @@ pub(crate) fn insert_segment(
 }
 
 pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Error> {
-    let (digest_bytes, entity, period_code, first_day, last_day, row_count): (
-        Vec<u8>,
-        String,
-        i64,
-        i64,
-        i64,
-        i64,
-    ) = c
-        .query_row(
+    #[cfg(test)]
+    super::compact_versions::read_counts::count_segment_read();
+    let sql_span = Span::enter(Stage::SegmentSql);
+    let mut header = c
+        .prepare_cached(
             "SELECT segment_digest,entity,period,first_day,last_day,row_count FROM bar_segments WHERE segment_key=?1",
-            params![key],
-            |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                ))
-            },
         )
+        .map_err(storage)?;
+    let row = header
+        .query_row(params![key], |r| {
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+            ))
+        })
         .optional()
-        .map_err(storage)?
-        .ok_or_else(|| integrity("segment missing"))?;
+        .map_err(storage)?;
+    drop(header);
+    let (digest_bytes, entity, period_code, first_day, last_day, row_count) =
+        row.ok_or_else(|| integrity("segment missing"))?;
     let digest: Digest = digest_bytes
         .try_into()
         .map_err(|_| integrity("segment digest length mismatch"))?;
     let period = decode_period(period_code)?;
     let mut statement = c
-        .prepare(
+        .prepare_cached(
             "SELECT trade_day,open_cents,high_cents,low_cents,close_cents,volume,amount,r7_raw FROM segment_bars WHERE segment_key=?1 ORDER BY trade_day",
         )
         .map_err(storage)?;
-    let rows = statement
-        .query_map(params![key], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, i64>(4)?,
-                r.get::<_, Option<i64>>(5)?,
-                r.get::<_, Option<String>>(6)?,
-                r.get::<_, Option<i64>>(7)?,
-            ))
-        })
-        .map_err(storage)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(storage)?;
-    drop(statement);
-    let mut bars = Vec::with_capacity(rows.len());
-    for (trade_day, open_cents, high_cents, low_cents, close_cents, volume, amount, r7_raw) in rows
+    // Rows stream straight into the bar vector — no tuple staging; the
+    // declared row_count bounds only the reserve hint (never the check).
+    let mut bars =
+        Vec::with_capacity(row_count.clamp(0, compact_market::MAX_SEGMENT_BARS as i64) as usize);
     {
-        bars.push(CompactBar {
-            trade_day,
-            open_cents,
-            high_cents,
-            low_cents,
-            close_cents,
-            volume,
-            amount,
-            r7_raw: r7_raw
-                .map(u32::try_from)
-                .transpose()
-                .map_err(|_| integrity("r7_raw out of u32 range"))?,
-        });
+        let mut rows = statement.query(params![key]).map_err(storage)?;
+        while let Some(r) = rows.next().map_err(storage)? {
+            bars.push(CompactBar {
+                trade_day: r.get(0).map_err(storage)?,
+                open_cents: r.get(1).map_err(storage)?,
+                high_cents: r.get(2).map_err(storage)?,
+                low_cents: r.get(3).map_err(storage)?,
+                close_cents: r.get(4).map_err(storage)?,
+                volume: r.get(5).map_err(storage)?,
+                amount: r.get(6).map_err(storage)?,
+                r7_raw: r
+                    .get::<_, Option<i64>>(7)
+                    .map_err(storage)?
+                    .map(u32::try_from)
+                    .transpose()
+                    .map_err(|_| integrity("r7_raw out of u32 range"))?,
+            });
+        }
     }
+    drop(statement);
+    drop(sql_span);
+    crate::progress_trace::segment_rows(bars.len());
     if bars.len() as i64 != row_count {
         return Err(integrity("segment row_count mismatch"));
     }
@@ -170,10 +201,12 @@ pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Er
     {
         return Err(integrity("segment day bounds mismatch"));
     }
-    for bar in &bars {
-        bar.to_bar(period).map_err(integrity)?;
-    }
+    // No preliminary per-bar decode: `segment_digest` below runs every
+    // bar through the same checked decoder before its digest bytes feed
+    // the comparison — malformed bars fail closed there.
+    let digest_span = Span::enter(Stage::SegmentDigest);
     let recomputed = compact_market::segment_digest(&entity, period, &bars).map_err(integrity)?;
+    drop(digest_span);
     if recomputed != digest {
         return Err(integrity("segment digest mismatch"));
     }
@@ -184,6 +217,281 @@ pub(crate) fn read_segment(c: &Connection, key: i64) -> Result<StoredSegment, Er
         period,
         bars,
     })
+}
+
+/// Header-only `bar_segments` row facts (XP-020 committed tier):
+/// segment identity and bounds without a single `segment_bars` row.
+/// The stored `segment_digest` remains the authoritative content
+/// binding — clips carry it, so a header read supplies the same
+/// clip/digest checks at row granularity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredSegmentHeader {
+    pub key: i64,
+    pub digest: Digest,
+    pub entity: String,
+    pub period: Period,
+    pub first_day: i64,
+    pub last_day: i64,
+    pub row_count: i64,
+}
+
+/// `bar_segments` header row only — NO bar rows (XP-020). Malformed
+/// header fields (digest length, period code, inverted bounds,
+/// non-positive row_count) fail closed exactly like the full read.
+pub(crate) fn read_segment_header(c: &Connection, key: i64) -> Result<StoredSegmentHeader, Error> {
+    let (digest_bytes, entity, period_code, first_day, last_day, row_count) = c
+        .query_row(
+            "SELECT segment_digest,entity,period,first_day,last_day,row_count FROM bar_segments WHERE segment_key=?1",
+            params![key],
+            |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage)?
+        .ok_or_else(|| integrity("segment missing"))?;
+    let digest: Digest = digest_bytes
+        .try_into()
+        .map_err(|_| integrity("segment digest length mismatch"))?;
+    let period = decode_period(period_code)?;
+    if first_day > last_day || row_count <= 0 {
+        return Err(integrity("segment header bounds invalid"));
+    }
+    Ok(StoredSegmentHeader {
+        key,
+        digest,
+        entity,
+        period,
+        first_day,
+        last_day,
+        row_count,
+    })
+}
+
+/// Header-level clip check (XP-020 committed tier): the same
+/// digest/bounds/row_count clauses `check_clip_against_segment`
+/// enforces, evaluated against the `bar_segments` header row instead of
+/// decoded bars. `clip.row_count <= header.row_count` is the header
+/// necessary condition for the exact bar-count equality the full tier
+/// checks — a clip can never reference more rows than its segment
+/// holds, so a violation is corruption and fails closed.
+pub(crate) fn check_clip_against_header(
+    header: &StoredSegmentHeader,
+    clip: &SegmentClip,
+) -> Result<(), Error> {
+    if clip.segment_digest != header.digest {
+        return Err(integrity("clip segment digest mismatch"));
+    }
+    if clip.clip_start_day > clip.clip_end_day
+        || clip.clip_start_day < header.first_day
+        || clip.clip_end_day > header.last_day
+    {
+        return Err(integrity("clip bounds outside segment"));
+    }
+    if i64::from(clip.row_count) > header.row_count {
+        return Err(integrity("clip row_count exceeds segment rows"));
+    }
+    Ok(())
+}
+
+/// Retained-segment bounds for a [`SegmentReadCtx`]: at most 128 verified
+/// segments AND 8 MiB of accounted payload, whichever binds first.
+const SEGMENT_CTX_CAP: usize = 128;
+const SEGMENT_CTX_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Bound on memoized segment headers inside a [`SegmentReadCtx`]
+/// (XP-020): 512 FIFO entries of header rows only — a few dozen bytes
+/// each, so the bound limits memory, never read correctness (an evicted
+/// header is re-read on the next touch).
+const SEGMENT_HEADER_CTX_CAP: usize = 512;
+
+/// Read-transaction-scoped verified segment cache (GOAL-008 XP-011).
+///
+/// A `SegmentReadCtx` is bound to a single `Connection`/read transaction
+/// and dropped with it — it is never shared across requests, databases,
+/// commits or writes. A miss runs the unchanged full `read_segment`
+/// (row/bounds/decode/entity-period/digest checks); only a segment that
+/// passed every check is retained, and a hit reuses that verified
+/// `Rc<StoredSegment>` inside the same SQLite snapshot. Clip-level
+/// entity/period/range/count/projection checks still run at every use.
+///
+/// `reads`/`hits` count actual full reads and cache hits so tests assert
+/// measured counts instead of inferring reuse from `Rc::ptr_eq`.
+#[derive(Default)]
+pub(crate) struct SegmentReadCtx {
+    entries: HashMap<i64, Rc<StoredSegment>>,
+    lru: VecDeque<i64>,
+    retained_bytes: usize,
+    /// Committed-tier header memo (XP-020): header rows verified at row
+    /// granularity inside this transaction — never a substitute for a
+    /// verified `StoredSegment` entry.
+    headers: HashMap<i64, Rc<StoredSegmentHeader>>,
+    headers_fifo: VecDeque<i64>,
+    owner: usize,
+    #[cfg(test)]
+    reads: usize,
+    #[cfg(test)]
+    hits: usize,
+}
+
+impl SegmentReadCtx {
+    /// (full `read_segment` executions, cache hits, retained entries,
+    /// retained accounted bytes).
+    #[cfg(test)]
+    pub(crate) fn stats(&self) -> (usize, usize, usize, usize) {
+        (
+            self.reads,
+            self.hits,
+            self.entries.len(),
+            self.retained_bytes,
+        )
+    }
+
+    /// The cache is scoped to one `Connection`; a second connection means
+    /// the caller is reusing the context across databases or snapshots.
+    fn check_owner(&mut self, c: &Connection) -> Result<(), Error> {
+        let id = c as *const Connection as usize;
+        if self.owner == 0 {
+            self.owner = id;
+        } else if self.owner != id {
+            return Err(integrity("segment read context reused across connections"));
+        }
+        Ok(())
+    }
+
+    /// Retain a fully verified segment under the LRU/byte bounds. An
+    /// oversized or overflowing entry is silently skipped — capacity is
+    /// never a reason to fail a valid read.
+    fn retain(&mut self, segment: &Rc<StoredSegment>) {
+        let Some(bytes) = segment_footprint(segment) else {
+            return;
+        };
+        if bytes > SEGMENT_CTX_MAX_BYTES {
+            return;
+        }
+        while let Some(&evicted) = self.lru.front() {
+            if self.entries.len() < SEGMENT_CTX_CAP
+                && self.retained_bytes.saturating_add(bytes) <= SEGMENT_CTX_MAX_BYTES
+            {
+                break;
+            }
+            self.lru.pop_front();
+            if let Some(old) = self.entries.remove(&evicted)
+                && let Some(old_bytes) = segment_footprint(&old)
+            {
+                self.retained_bytes = self.retained_bytes.saturating_sub(old_bytes);
+            }
+        }
+        if self.entries.len() >= SEGMENT_CTX_CAP
+            || self.retained_bytes.saturating_add(bytes) > SEGMENT_CTX_MAX_BYTES
+        {
+            return;
+        }
+        self.retained_bytes = self.retained_bytes.saturating_add(bytes);
+        self.entries.insert(segment.key, segment.clone());
+        self.lru.push_back(segment.key);
+    }
+}
+
+/// Accounted retained payload of one cached segment: the `StoredSegment`
+/// struct, the entity string capacity, the bar-vector capacity and each
+/// amount string capacity. `None` on arithmetic overflow — the caller
+/// treats the entry as oversized and never retains it.
+fn segment_footprint(segment: &StoredSegment) -> Option<usize> {
+    let mut total = std::mem::size_of::<StoredSegment>()
+        .checked_add(segment.entity.capacity())?
+        .checked_add(
+            segment
+                .bars
+                .capacity()
+                .checked_mul(std::mem::size_of::<CompactBar>())?,
+        )?;
+    for bar in &segment.bars {
+        if let Some(amount) = &bar.amount {
+            total = total.checked_add(amount.capacity())?;
+        }
+    }
+    Some(total)
+}
+
+/// `read_segment` through a transaction-scoped verified cache. A miss
+/// runs the unchanged full read and retains the result only after every
+/// check passed; a hit reuses the already-verified segment of this
+/// snapshot. Capacity never fails a read: oversized or evicted entries
+/// are returned verified but unretained.
+pub(crate) fn read_segment_ctx(
+    c: &Connection,
+    key: i64,
+    ctx: &mut SegmentReadCtx,
+) -> Result<Rc<StoredSegment>, Error> {
+    ctx.check_owner(c)?;
+    if let Some(hit) = ctx.entries.get(&key) {
+        let segment = hit.clone();
+        #[cfg(test)]
+        {
+            ctx.hits += 1;
+        }
+        ctx.lru.retain(|k| *k != key);
+        ctx.lru.push_back(key);
+        return Ok(segment);
+    }
+    let segment = Rc::new(read_segment(c, key)?);
+    #[cfg(test)]
+    {
+        ctx.reads += 1;
+    }
+    ctx.retain(&segment);
+    Ok(segment)
+}
+
+/// `read_segment_header` memoized inside this transaction's
+/// [`SegmentReadCtx`] (XP-020): the committed-tier clip/delta readers
+/// touch the same segment headers many times per snapshot, so the
+/// header row is re-read only on a miss. A hit reuses the header of
+/// this same snapshot; eviction re-reads — capacity never fails a read.
+/// Header entries never satisfy the verified-segment cache.
+pub(crate) fn read_segment_header_ctx(
+    c: &Connection,
+    key: i64,
+    ctx: &mut SegmentReadCtx,
+) -> Result<Rc<StoredSegmentHeader>, Error> {
+    ctx.check_owner(c)?;
+    if let Some(hit) = ctx.headers.get(&key) {
+        let header = hit.clone();
+        ctx.headers_fifo.retain(|k| *k != key);
+        ctx.headers_fifo.push_back(key);
+        return Ok(header);
+    }
+    let header = Rc::new(read_segment_header(c, key)?);
+    ctx.headers.insert(key, header.clone());
+    ctx.headers_fifo.push_back(key);
+    while ctx.headers_fifo.len() > SEGMENT_HEADER_CTX_CAP
+        && let Some(evicted) = ctx.headers_fifo.pop_front()
+    {
+        ctx.headers.remove(&evicted);
+    }
+    Ok(header)
+}
+
+/// `read_segment` under an optional segment context — the single read
+/// seam shared by the cached (`Some`) and uncached (`None`, write-path
+/// and reference-test) read variants.
+pub(crate) fn read_segment_scoped(
+    c: &Connection,
+    key: i64,
+    sctx: Option<&mut SegmentReadCtx>,
+) -> Result<Rc<StoredSegment>, Error> {
+    match sctx {
+        Some(ctx) => read_segment_ctx(c, key, ctx),
+        None => Ok(Rc::new(read_segment(c, key)?)),
+    }
 }
 
 pub(crate) fn write_checkpoint(
@@ -223,6 +531,29 @@ pub(crate) fn read_checkpoint(
     entity: &str,
     period: Period,
 ) -> Result<(Vec<StoredClip>, Digest), Error> {
+    read_checkpoint_scoped(c, version_key, entity, period, None)
+}
+
+/// `read_checkpoint` reusing verified segments through the caller's
+/// transaction-scoped context. Clip checks are unchanged — they run on
+/// every call against the (cached or freshly read) segment.
+pub(crate) fn read_checkpoint_ctx(
+    c: &Connection,
+    version_key: i64,
+    entity: &str,
+    period: Period,
+    sctx: &mut SegmentReadCtx,
+) -> Result<(Vec<StoredClip>, Digest), Error> {
+    read_checkpoint_scoped(c, version_key, entity, period, Some(sctx))
+}
+
+fn read_checkpoint_scoped(
+    c: &Connection,
+    version_key: i64,
+    entity: &str,
+    period: Period,
+    mut sctx: Option<&mut SegmentReadCtx>,
+) -> Result<(Vec<StoredClip>, Digest), Error> {
     let mut statement = c
         .prepare(
             "SELECT seq,segment_key,clip_start_day,clip_end_day,row_count FROM version_checkpoint_clips WHERE version_key=?1 ORDER BY seq",
@@ -255,7 +586,7 @@ pub(crate) fn read_checkpoint(
         if *row_count <= 0 || *row_count > u32::MAX as i64 {
             return Err(integrity("checkpoint clip row_count out of bounds"));
         }
-        let segment = read_segment(c, *segment_key)?;
+        let segment = read_segment_scoped(c, *segment_key, sctx.as_deref_mut())?;
         let clip = SegmentClip {
             segment_digest: segment.digest,
             clip_start_day: *clip_start_day,
@@ -345,8 +676,29 @@ pub(crate) fn read_delta(
     version_key: i64,
     parent_projection: Digest,
 ) -> Result<(Vec<StoredDelta>, Digest, Digest), Error> {
+    read_delta_scoped(c, version_key, parent_projection, None)
+}
+
+/// `read_delta` reusing verified segments through the caller's
+/// transaction-scoped context. Clip checks are unchanged — they run on
+/// every call against the (cached or freshly read) segment.
+pub(crate) fn read_delta_ctx(
+    c: &Connection,
+    version_key: i64,
+    parent_projection: Digest,
+    sctx: &mut SegmentReadCtx,
+) -> Result<(Vec<StoredDelta>, Digest, Digest), Error> {
+    read_delta_scoped(c, version_key, parent_projection, Some(sctx))
+}
+
+fn read_delta_scoped(
+    c: &Connection,
+    version_key: i64,
+    parent_projection: Digest,
+    mut sctx: Option<&mut SegmentReadCtx>,
+) -> Result<(Vec<StoredDelta>, Digest, Digest), Error> {
     let mut statement = c
-        .prepare(
+        .prepare_cached(
             "SELECT seq,delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM version_delta_clips WHERE version_key=?1 ORDER BY seq",
         )
         .map_err(storage)?;
@@ -390,7 +742,7 @@ pub(crate) fn read_delta(
                 if *row_count <= 0 || *row_count > u32::MAX as i64 {
                     return Err(integrity("upsert delta row_count out of bounds"));
                 }
-                let segment = read_segment(c, segment_key)?;
+                let segment = read_segment_scoped(c, segment_key, sctx.as_deref_mut())?;
                 let clip = SegmentClip {
                     segment_digest: segment.digest,
                     clip_start_day: clip_start,
@@ -398,6 +750,109 @@ pub(crate) fn read_delta(
                     row_count: *row_count as u32,
                 };
                 check_clip_against_segment(&segment, &clip, &segment.entity, segment.period)?;
+                (
+                    StoredDeltaKind::Upsert(StoredClip {
+                        segment_key,
+                        clip: clip.clone(),
+                    }),
+                    DeltaKind::Upsert(clip),
+                )
+            }
+            2 => {
+                if segment_key.is_some()
+                    || clip_start.is_some()
+                    || clip_end.is_some()
+                    || *row_count != 0
+                {
+                    return Err(integrity("remove delta carries clip fields"));
+                }
+                (StoredDeltaKind::Remove, DeltaKind::Remove)
+            }
+            _ => return Err(integrity("unknown delta_kind")),
+        };
+        ops.push(StoredDelta {
+            range_start_day: *range_start,
+            range_end_day: *range_end,
+            kind: stored_kind,
+        });
+        plain.push(DeltaOp {
+            range_start_day: *range_start,
+            range_end_day: *range_end,
+            kind: plain_kind,
+        });
+    }
+    let (delta, projection) =
+        compact_market::delta_projection_digest(parent_projection, &plain).map_err(integrity)?;
+    Ok((ops, delta, projection))
+}
+
+/// `read_delta_ctx` at the committed-state tier (XP-020): the identical
+/// `version_delta_clips` row decode — seq contiguity, kind/ranges/clip
+/// fields, row_count bounds — and the identical persisted
+/// `delta_digest`/`delta_projection_digest` recomputation, with clip
+/// segment digests and clip-vs-segment bounds/row_count checks taken
+/// from `bar_segments` HEADER rows only (one header query per distinct
+/// segment, memoized in `sctx`; NO `segment_bars` rows). The same
+/// `(ops, delta, projection)` triple is returned as `read_delta_ctx`.
+pub(crate) fn read_delta_headers(
+    c: &Connection,
+    version_key: i64,
+    parent_projection: Digest,
+    sctx: &mut SegmentReadCtx,
+) -> Result<(Vec<StoredDelta>, Digest, Digest), Error> {
+    let mut statement = c
+        .prepare_cached(
+            "SELECT seq,delta_kind,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM version_delta_clips WHERE version_key=?1 ORDER BY seq",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(params![version_key], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+                r.get::<_, Option<i64>>(5)?,
+                r.get::<_, Option<i64>>(6)?,
+                r.get::<_, i64>(7)?,
+            ))
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    drop(statement);
+    if rows.is_empty() {
+        return Err(integrity("delta missing"));
+    }
+    let mut ops = Vec::with_capacity(rows.len());
+    let mut plain = Vec::with_capacity(rows.len());
+    for (
+        index,
+        (seq, kind, range_start, range_end, segment_key, clip_start, clip_end, row_count),
+    ) in rows.iter().enumerate()
+    {
+        if *seq != index as i64 {
+            return Err(integrity("delta seq not contiguous"));
+        }
+        let (stored_kind, plain_kind) = match kind {
+            1 => {
+                let (segment_key, clip_start, clip_end) = match (segment_key, clip_start, clip_end)
+                {
+                    (Some(key), Some(start), Some(end)) => (*key, *start, *end),
+                    _ => return Err(integrity("upsert delta missing clip fields")),
+                };
+                if *row_count <= 0 || *row_count > u32::MAX as i64 {
+                    return Err(integrity("upsert delta row_count out of bounds"));
+                }
+                let header = read_segment_header_ctx(c, segment_key, sctx)?;
+                let clip = SegmentClip {
+                    segment_digest: header.digest,
+                    clip_start_day: clip_start,
+                    clip_end_day: clip_end,
+                    row_count: *row_count as u32,
+                };
+                check_clip_against_header(&header, &clip)?;
                 (
                     StoredDeltaKind::Upsert(StoredClip {
                         segment_key,
@@ -960,6 +1415,150 @@ mod tests {
         }];
         integrity_failure(write_delta(&c, 1, [0x11u8; 32], &ops).map(|_| ()));
         integrity_failure(read_delta(&c, 1, [0x11u8; 32]).map(|_| ()));
+    }
+
+    /// XP-011 round 2: the ctx path decodes and verifies each retained
+    /// segment once — checkpoint validation + flatten hit the same entry,
+    /// measured on the counters rather than inferred.
+    #[test]
+    fn segment_ctx_shares_verified_segment_between_readers() {
+        let c = connection();
+        version(&c, 1);
+        let segment = insert_segment(&c, "sh.600006", Period::Day, &bars()).unwrap();
+        let clips = vec![stored_clip(&segment, 0, 5, 3)];
+        write_checkpoint(&c, 1, "sh.600006", Period::Day, &clips).unwrap();
+        let mut ctx = SegmentReadCtx::default();
+        let (read, digest) =
+            read_checkpoint_ctx(&c, 1, "sh.600006", Period::Day, &mut ctx).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(ctx.stats().0, 1); // one full read_segment execution
+        let flattened = super::compact_versions::flatten_clips_ctx(
+            &c,
+            "sh.600006",
+            Period::Day,
+            &read,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(flattened.len(), 3);
+        let (reads, hits, entries, _) = ctx.stats();
+        assert_eq!(reads, 1);
+        assert_eq!(hits, 1);
+        assert_eq!(entries, 1);
+        let _ = digest;
+    }
+
+    /// Corruption fails identically through the ctx and uncached reads,
+    /// and a fresh context after the corruption still fails (retained
+    /// proof never crosses transactions).
+    #[test]
+    fn segment_ctx_corruption_matches_uncached_and_fresh_ctx_fails() {
+        let c = connection();
+        let stored = insert_segment(&c, "sh.600006", Period::Day, &bars()).unwrap();
+        let mut ctx = SegmentReadCtx::default();
+        read_segment_ctx(&c, stored.key, &mut ctx).unwrap();
+        c.execute(
+            "UPDATE segment_bars SET high_cents=high_cents+100 WHERE segment_key=?1 AND trade_day=1",
+            params![stored.key],
+        )
+        .unwrap();
+        // Same failure class as the uncached read.
+        integrity_failure(read_segment(&c, stored.key));
+        let mut fresh = SegmentReadCtx::default();
+        integrity_failure(read_segment_ctx(&c, stored.key, &mut fresh).map(|_| ()));
+        // Tampered stored digest also fails identically through the ctx.
+        c.execute(
+            "UPDATE bar_segments SET segment_digest=?1 WHERE segment_key=?2",
+            params![[0xabu8; 32].as_slice(), stored.key],
+        )
+        .unwrap();
+        integrity_failure(read_segment(&c, stored.key));
+        let mut fresh2 = SegmentReadCtx::default();
+        integrity_failure(read_segment_ctx(&c, stored.key, &mut fresh2).map(|_| ()));
+    }
+
+    /// Eviction past 128 entries and oversized payloads return identical
+    /// facts — capacity bounds retention, never read correctness.
+    #[test]
+    fn segment_ctx_eviction_and_oversized_return_identical_facts() {
+        let c = connection();
+        let mut keys = Vec::new();
+        for i in 0..130 {
+            let unique = vec![CompactBar {
+                trade_day: 100 + i,
+                open_cents: i,
+                high_cents: i + 10,
+                low_cents: i - 10,
+                close_cents: i,
+                volume: None,
+                amount: None,
+                r7_raw: None,
+            }];
+            keys.push(
+                insert_segment(&c, "sh.600006", Period::Day, &unique)
+                    .unwrap()
+                    .key,
+            );
+        }
+        let mut ctx = SegmentReadCtx::default();
+        for &key in &keys {
+            read_segment_ctx(&c, key, &mut ctx).unwrap();
+        }
+        let (reads, _, entries, _) = ctx.stats();
+        assert_eq!(reads, 130);
+        assert_eq!(entries, 128);
+        // The oldest entry was evicted: revisiting it re-reads and returns
+        // content identical to the uncached read.
+        let expected = read_segment(&c, keys[0]).unwrap();
+        let again = read_segment_ctx(&c, keys[0], &mut ctx).unwrap();
+        assert_eq!(*again, expected);
+        assert_eq!(ctx.stats().0, 131);
+        // The newest entry stayed retained — a hit, not a re-read.
+        read_segment_ctx(&c, keys[129], &mut ctx).unwrap();
+        assert_eq!(ctx.stats().0, 131);
+        // An oversized segment is returned verified but not retained.
+        let oversized = Rc::new(StoredSegment {
+            key: 9999,
+            digest: [0u8; 32],
+            entity: "sh.600006".into(),
+            period: Period::Day,
+            bars: Vec::with_capacity(200_000),
+        });
+        ctx.retain(&oversized);
+        let (_, _, entries, bytes) = ctx.stats();
+        assert!(bytes <= SEGMENT_CTX_MAX_BYTES);
+        assert!(!ctx.entries.contains_key(&9999) && entries <= 128);
+        // ...and a normal read afterwards still succeeds.
+        assert!(read_segment_ctx(&c, keys[0], &mut ctx).is_ok());
+    }
+
+    /// A context bound to one connection cannot serve another database:
+    /// reusing it on a different `Connection` fails closed, and a fresh
+    /// context on the second database verifies that database's own
+    /// content.
+    #[test]
+    fn segment_ctx_is_bound_to_one_connection() {
+        let c1 = connection();
+        let stored = insert_segment(&c1, "sh.600006", Period::Day, &bars()).unwrap();
+        let mut ctx = SegmentReadCtx::default();
+        read_segment_ctx(&c1, stored.key, &mut ctx).unwrap();
+        // Second database: same segment_key space, different content.
+        let c2 = connection();
+        let other = vec![CompactBar {
+            trade_day: 7,
+            open_cents: 1,
+            high_cents: 2,
+            low_cents: 1,
+            close_cents: 1,
+            volume: None,
+            amount: None,
+            r7_raw: None,
+        }];
+        let stored2 = insert_segment(&c2, "sh.600006", Period::Day, &other).unwrap();
+        integrity_failure(read_segment_ctx(&c2, stored2.key, &mut ctx).map(|_| ()));
+        let mut ctx2 = SegmentReadCtx::default();
+        let got = read_segment_ctx(&c2, stored2.key, &mut ctx2).unwrap();
+        assert_eq!(got.bars, other);
     }
 
     #[test]

@@ -67,7 +67,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     assert!(s.request("initialize", json!({}))["result"]["serverInfo"].is_object());
     let listing = s.request("tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), if cfg!(target_os = "linux") { 20 } else { 19 });
+    assert_eq!(tools.len(), if cfg!(target_os = "linux") { 21 } else { 20 });
     let caps = s.call("get_data_capabilities", json!({}), false);
     let listed: std::collections::BTreeSet<_> =
         tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -157,7 +157,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
             .iter()
             .all(|r| !r["detail"].as_str().unwrap_or_default().contains("#225"))
     );
-    assert_eq!(republish["capability_revision"], "generic-data-v3");
+    assert_eq!(republish["capability_revision"], "generic-data-v5");
     let schema =
         |name: &str, field: &str| tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();
     for entry in x_data_mcp::data_supply::registry::entries() {

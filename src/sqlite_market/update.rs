@@ -122,9 +122,40 @@ impl RangeRepository for SqliteMarket {
     }
 }
 pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Receipt)>, Error> {
+    read_result_ctx(c, &mut super::compact_versions::VerifyCtx::default(), id)
+}
+
+/// `read_result` sharing the caller's transaction-scoped verified-facts
+/// context so repeated immutable-version verification deduplicates.
+pub(crate) fn read_result_ctx(
+    c: &Connection,
+    ctx: &mut super::compact_versions::VerifyCtx,
+    id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
     if super::is_compact_schema(c)? {
-        return super::compact_results::read_update_audit(c, id);
+        return super::compact_results::read_update_audit_ctx(c, ctx, id);
     }
+    read_result_legacy(c, id)
+}
+
+/// `read_result_ctx` at the committed-state verification tier (XP-020):
+/// the progress/metadata read scope routes through the committed-tier
+/// audit reader on compact storage; non-compact databases keep the
+/// unchanged legacy read below.
+pub(crate) fn read_result_meta_ctx(
+    c: &Connection,
+    ctx: &mut super::compact_versions::VerifyCtx,
+    id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
+    if super::is_compact_schema(c)? {
+        return super::compact_results::read_update_audit_meta_ctx(c, ctx, id);
+    }
+    read_result_legacy(c, id)
+}
+
+/// The legacy-envelope tail of `read_result_ctx` (pre-compact schema) —
+/// unchanged; extracted only so the committed-tier wrapper can share it.
+fn read_result_legacy(c: &Connection, id: &str) -> Result<Option<(Value, Receipt)>, Error> {
     let mut stmt = c.prepare(
         "SELECT task_id,item_id,base_version_id,result_version_id,no_change,audit_json,result_sha256,receipt_json FROM market_update_results WHERE result_id=?1",
     ).map_err(storage)?;

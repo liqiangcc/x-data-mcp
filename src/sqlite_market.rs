@@ -494,6 +494,44 @@ pub(crate) fn read_record(
     validate_base(&record, base.as_ref())?;
     Ok(record)
 }
+/// Header-only compact read for `read_record` callers: `Some` only for a
+/// published compact row when `published` is requested, whose slim envelope
+/// `raw()` and header `version()` fields are byte-identical to the full
+/// materialization while `version().records`/`batch.bars` stay empty.
+/// `None` sends callers back to `read_record` for identical legacy/missing/
+/// unpublished semantics. Never feed the result to bar-reading code.
+pub(crate) fn slim_published(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
+    id: &str,
+    published: bool,
+    allow_yearly: bool,
+) -> Result<Option<CheckedRecord>, Error> {
+    if !published || !is_compact_schema(c)? {
+        return Ok(None);
+    }
+    let Some(record) = compact_repo::materialize_slim(c, ctx, id)? else {
+        return Ok(None);
+    };
+    if !allow_yearly && record.version().period != Period::Day {
+        return Err(Error::Integrity("yearly record in daily context".into()));
+    }
+    Ok(Some(record))
+}
+/// `read_record` resolved through the header projection when the row is a
+/// published compact version; identical arguments and fallback semantics.
+pub(crate) fn read_record_slim(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
+    id: &str,
+    published: bool,
+    allow_yearly: bool,
+) -> Result<CheckedRecord, Error> {
+    match slim_published(c, ctx, id, published, allow_yearly)? {
+        Some(record) => Ok(record),
+        None => read_record(c, id, published, allow_yearly),
+    }
+}
 fn read_projection(
     c: &Connection,
     id: &str,
@@ -1026,6 +1064,12 @@ pub(crate) mod compact_runtime;
 pub(crate) mod compact_v19;
 #[allow(dead_code)]
 pub(crate) mod compact_versions;
+
+/// Fixture / test tooling only (XP-051): force every entity to roll over at
+/// `depth` instead of its staggered depth; `None` restores the default.
+pub fn set_fixture_rollover_depth(depth: Option<u32>) {
+    compact_versions::set_rollover_override(depth);
+}
 pub(crate) mod envelope;
 pub(crate) mod gaps;
 pub(crate) mod manifest;

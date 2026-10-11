@@ -12,7 +12,10 @@ fresh rebuild 后，2026-09-30 operator-path 已激活 generation
 5,223 个 `market.daily` published versions 和 5,223 个 `market.yearly`
 derived versions；最新集中行情日为 2026-09-29（5,211 entities）；4 个官方
 `hsjday` 成员缺失保持 absent。
-generic-data-v3 live discovery PASS，daily/yearly 样本 QFQ readback PASS；通用查询、任务、
+generic-data-v3 live discovery PASS，daily/yearly 样本 QFQ readback PASS；
+当前开发分支（XP-014，未部署）注册 21 data tools（新增 `get_yearly_base_years`）
+并宣告 `generic-data-v5`；preview.29 部署实例仍为 20 data tools /
+`generic-data-v3`。通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场
 collection/update 已通过分批 MCP 编排取得真实 generation 证据
 （preview.26–28 连续验收）；
@@ -281,7 +284,7 @@ yearly 为证券选择与自然年范围，catalog 为目录范围，不接受�
 | confirmed_gaps | 有证据的缺失范围，含原因与证据引用；不能从不连续日期推断 |
 | unresolved_ranges | 无法判断的范围，不能自动转成补采计划 |
 | published_at、freshness | 发布时间与业务新鲜度分别表达；未定义规则则 freshness=unknown |
-| related_tasks | 本快照中相关任务引用和已知占用，不能当作保证会补齐 |
+| related_tasks、related_tasks_total、related_tasks_truncated | generic-data-v5 起为所有在途相关任务 + 最近 5 个已结束相关任务；total 为过滤前相关任务总数，truncated 表示 total 大于返回数量；不能当作保证会补齐 |
 | limitations、reason_codes | 来源限制和结构化事实；不返回跨工具编排建议 |
 
 available/partial 必须有相应覆盖证据，不能仅凭有行数判定。absent 仅表示可靠读到

@@ -244,6 +244,60 @@ pub struct Metadata {
     pub lineage: Option<Lineage>,
 }
 
+fn presence_min_year() -> i32 {
+    1
+}
+fn presence_max_year() -> i32 {
+    9999
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct YearPresenceItem {
+    pub entity: Security,
+    pub base_daily_version_id: String,
+    #[serde(default = "presence_min_year")]
+    pub start_year: i32,
+    #[serde(default = "presence_max_year")]
+    pub end_year: i32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct YearPresenceQuery {
+    pub contract_version: ContractVersion,
+    #[schemars(length(min = 1, max = 100))]
+    pub items: Vec<YearPresenceItem>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum YearPresenceStatus {
+    Resolved,
+    Unavailable,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum YearPresenceReason {
+    BaseUnavailable,
+    IntegrityFailure,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct YearPresenceResult {
+    pub entity: Security,
+    pub base_daily_version_id: String,
+    pub status: YearPresenceStatus,
+    pub version_ref: Option<VersionRef>,
+    pub present_years: Option<Vec<i32>>,
+    pub reason_code: Option<YearPresenceReason>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct YearPresenceReply {
+    pub snapshot_id: String,
+    pub snapshot_time: DateTime<Utc>,
+    pub items: Vec<YearPresenceResult>,
+    pub page_complete: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TasksQuery {
@@ -366,7 +420,11 @@ pub struct AvailabilityItem {
     pub last_record: Option<NaiveDate>,
     pub record_count: usize,
     pub freshness: String,
+    /// In-flight tasks plus the newest finished ones (generic-data-v5);
+    /// see `related_tasks_total` / `related_tasks_truncated`.
     pub related_tasks: Vec<TaskSummary>,
+    pub related_tasks_total: usize,
+    pub related_tasks_truncated: bool,
     pub limitations: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

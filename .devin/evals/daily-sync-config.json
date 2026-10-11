@@ -18,6 +18,7 @@
       "mcp__x-data-mcp__get_task_progress",
       "mcp__x-data-mcp__list_tasks",
       "mcp__x-data-mcp__get_data_availability",
+      "mcp__x-data-mcp__get_yearly_base_years",
       "mcp__x-data-mcp__query_data",
       "mcp__x-data-mcp__list_data_versions",
       "mcp__x-data-mcp__verify_publication_result",

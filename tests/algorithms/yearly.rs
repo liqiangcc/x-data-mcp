@@ -216,3 +216,117 @@ fn aggregation_ab_timing() {
         old[10] / new[10]
     );
 }
+
+// ---- XP-031 R1: memo key normalizes `as_of` to its year -------------------
+fn years_2025_2026() -> BTreeSet<i32> {
+    [2025, 2026].into_iter().collect()
+}
+
+#[test]
+fn as_of_only_changes_the_echo_within_one_year() {
+    let daily = input();
+    let years = years_2025_2026();
+    let a = aggregate(&daily, Some(&years), date("2026-09-12")).unwrap();
+    let b = aggregate(&daily, Some(&years), date("2026-12-31")).unwrap();
+    assert_eq!(
+        a.records, b.records,
+        "same year, both >= last bar: identical records"
+    );
+    assert_ne!(a.as_of, b.as_of, "only the echoed as_of differs");
+    assert_eq!(
+        aggregate_key("ab", &years, date("2026-09-12")),
+        aggregate_key("ab", &years, date("2026-12-31"))
+    );
+}
+
+#[test]
+fn as_of_in_another_year_is_never_merged() {
+    let daily = input();
+    let years = years_2025_2026();
+    let a = aggregate(&daily, Some(&years), date("2026-09-12")).unwrap();
+    let b = aggregate(&daily, Some(&years), date("2027-01-02")).unwrap();
+    let flags = |s: &AnnualSeries| {
+        s.records
+            .iter()
+            .map(|r| r.year_unfinished)
+            .collect::<Vec<_>>()
+    };
+    assert_ne!(
+        flags(&a),
+        flags(&b),
+        "2026 is unfinished at 2026-09-12 but finished at 2027-01-02"
+    );
+    assert_ne!(
+        aggregate_key("ab", &years, date("2026-09-12")),
+        aggregate_key("ab", &years, date("2027-01-02"))
+    );
+}
+
+#[test]
+fn memo_reuses_across_as_of_in_one_year_and_rewrites_the_echo() {
+    let daily = input();
+    let years = years_2025_2026();
+    let last = daily.records.last().map(|b| b.date);
+    // A unique digest keeps this test independent of the thread-local memo's other users.
+    let digest = "r1-memo-reuse";
+    let mut runs = 0;
+    let first_as_of = date("2026-09-12");
+    let second_as_of = date("2026-11-30");
+    let first = aggregate_memoized(
+        aggregate_key(digest, &years, first_as_of),
+        first_as_of,
+        last,
+        || {
+            runs += 1;
+            aggregate(&daily, Some(&years), first_as_of)
+        },
+    )
+    .unwrap();
+    let second = aggregate_memoized(
+        aggregate_key(digest, &years, second_as_of),
+        second_as_of,
+        last,
+        || {
+            runs += 1;
+            aggregate(&daily, Some(&years), second_as_of)
+        },
+    )
+    .unwrap();
+    assert_eq!(runs, 1, "second caller reuses the memoized records");
+    assert_eq!(first.as_of, first_as_of);
+    assert_eq!(second.as_of, second_as_of, "echo is rewritten per caller");
+    assert_eq!(first.records, second.records);
+    // Equivalent to computing directly for the second caller.
+    assert_eq!(
+        *second,
+        aggregate(&daily, Some(&years), second_as_of).unwrap()
+    );
+}
+
+#[test]
+fn memo_hit_never_bypasses_the_bar_after_as_of_rejection() {
+    let daily = input();
+    let years = years_2025_2026();
+    let last = daily.records.last().map(|b| b.date); // 2026-01-05
+    let digest = "r1-memo-reject";
+    let ok_as_of = date("2026-09-12");
+    aggregate_memoized(
+        aggregate_key(digest, &years, ok_as_of),
+        ok_as_of,
+        last,
+        || aggregate(&daily, Some(&years), ok_as_of),
+    )
+    .unwrap();
+    // Same year but BEFORE the last bar: must not be served from the memo.
+    let early = date("2026-01-04");
+    let mut ran = false;
+    let result = aggregate_memoized(aggregate_key(digest, &years, early), early, last, || {
+        ran = true;
+        aggregate(&daily, Some(&years), early)
+    });
+    assert!(ran, "validation falls through to compute");
+    assert!(
+        result.is_err(),
+        "the original InvalidInput rejection is preserved"
+    );
+}

@@ -1,0 +1,21 @@
+update_read_result va=0x00000000001fe4d0 off=0x1fd4d0
+read_bound_task va=0x00000000001e4f50 off=0x1e3f50
+cv_fixed va=0x00000000004d64a0 off=0x4d54a0
+progress: SYMBOL NOT FOUND
+materialize_checked va=0x00000000003166e0 off=0x3156e0
+verify_stored_lineage va=0x00000000004d5010 off=0x4d4010
+materialize_header va=0x00000000004ccbf0 off=0x4cbbf0
+read_segment va=0x000000000030b5d0 off=0x30a5d0
+task_facts va=0x000000000039a0f0 off=0x3990f0
+read_item_binding va=0x00000000001e5f30 off=0x1e4f30
+read_publication va=0x00000000004b2040 off=0x4b1040
+read_update_audit va=0x00000000004b3d80 off=0x4b2d80
+yearly_read_result va=0x00000000001f9510 off=0x1f8510
+range_result va=0x000000000039c1e0 off=0x39b1e0
+read_market_update va=0x00000000004b7ec0 off=0x4b6ec0
+result_facts va=0x00000000004c42b0 off=0x4c32b0
+materialize_published va=0x00000000003198f0 off=0x3188f0
+enc_progress_page va=0x00000000003c17e0 off=0x3c07e0
+verify_lineage va=0x00000000004c6d80 off=0x4c5d80
+dec_progress_query va=0x00000000003bf6b0 off=0x3be6b0
+progress va=0x2a5e90 off=0x2a4e90

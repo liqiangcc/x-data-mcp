@@ -212,6 +212,27 @@ impl SqliteTasks {
             .map_err(storage)?;
         Ok(())
     }
+    /// Full registry sweep through this store's normal read path (a
+    /// coordinator-backed compact store or the legacy path). Used at service
+    /// startup: any finding means the history is not trustworthy.
+    pub fn registry_sweep(&self) -> Result<Vec<SweepFinding>, Error> {
+        self.read(registry_sweep)
+    }
+    /// Standalone read-only sweep for `task_sqlite check`: opens its own
+    /// read-only connection and accepts the legacy or the compact schema.
+    pub fn registry_sweep_readonly(&self) -> Result<Vec<SweepFinding>, Error> {
+        let mut c = self.connect(true)?;
+        let tx = c.transaction().map_err(storage)?;
+        let version: u32 = tx
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(storage)?;
+        if version != SCHEMA_VERSION && version != COMPACT_SCHEMA_VERSION {
+            return Err(Error::StorageUnavailable(format!(
+                "unsupported schema {version} for registry check"
+            )));
+        }
+        registry_sweep(&tx)
+    }
     pub(crate) fn connect(&self, readonly: bool) -> Result<Connection, Error> {
         let flag = if readonly {
             OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -702,6 +723,142 @@ pub(crate) fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSna
         _ => Err(inconsistent("task binding/execution missing")),
     }
 }
+/// `read_bound_task` at summary depth for list/related-task surfaces: the
+/// same task-row decodes, shared-evidence digest check and bound-request
+/// validation (digest, outcome shape, task contract), but item rows project
+/// only `item_id`/`target` and the `scope_occupancy` claim read is skipped —
+/// summary/authorization/related-task consumers never read `claims` or
+/// per-item `stage`/`outcome`/`frozen_inputs`/`scope_keys`. Those fields are
+/// placeholders in the returned snapshot; full-fidelity readers keep
+/// `read_bound_task`.
+/// Light bound-task projection retained for tests documenting the XP-009
+/// summary-surface equivalence; production reads use `read_bound_task`
+/// because skipping item/occupancy checks weakened corruption detection.
+#[cfg(test)]
+pub(crate) fn read_bound_task_light(
+    c: &Connection,
+    id: &str,
+) -> Result<Option<TaskSnapshot>, Error> {
+    let task = {
+        let mut stmt = c.prepare("SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,evidence_digest FROM tasks WHERE task_id=?1").map_err(storage)?;
+        let mut rows = stmt.query([id]).map_err(storage)?;
+        let Some(r) = rows.next().map_err(storage)? else {
+            let binding: Option<String> = c
+                .query_row(
+                    "SELECT request_id FROM requests WHERE task_id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage)?;
+            return match binding {
+                None => Ok(None),
+                Some(_) => Err(inconsistent("task binding/execution missing")),
+            };
+        };
+        let status: String = r.get(1).map_err(storage)?;
+        let task = TaskRecord {
+            task_id: id.into(),
+            key: decode(r.get(0).map_err(storage)?)?,
+            status: decode(format!("\"{status}\""))?,
+            state_revision: read_revision(r, 2).map_err(storage)?,
+            accepted_run_id: r.get(3).map_err(storage)?,
+            owner_run_id: r.get(4).map_err(storage)?,
+            created_at: r
+                .get::<_, String>(5)
+                .map_err(storage)?
+                .parse()
+                .map_err(storage)?,
+            last_progress_at: r
+                .get::<_, String>(6)
+                .map_err(storage)?
+                .parse()
+                .map_err(storage)?,
+            work: decode(r.get(7).map_err(storage)?)?,
+            result: r
+                .get::<_, Option<String>>(8)
+                .map_err(storage)?
+                .map(decode)
+                .transpose()?,
+            retry_of: r.get(9).map_err(storage)?,
+        };
+        let column_digest: Option<String> = r.get(10).map_err(storage)?;
+        if column_digest.as_deref() != task.work.evidence_digest() {
+            return Err(inconsistent("task evidence digest column/blob mismatch"));
+        }
+        task
+    };
+    let item_rows: Vec<(String, String)> = {
+        let mut stmt = c
+            .prepare("SELECT item_id,target_json FROM task_items WHERE task_id=?1 ORDER BY item_id")
+            .map_err(storage)?;
+        stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?
+    };
+    let mut items = Vec::with_capacity(item_rows.len());
+    for (item_id, target) in item_rows {
+        items.push(TaskItem {
+            spec: ItemSpec {
+                item_id,
+                target: decode(target)?,
+                progress_unit: String::new(),
+                frozen_inputs: Value::Null,
+                scope_keys: BTreeSet::new(),
+            },
+            stage: Stage::Pending,
+            outcome: None,
+        });
+    }
+    let binding = c
+        .query_row(
+            "SELECT request_id,command_json,command_digest,outcome_kind,task_id,terminal_json FROM requests WHERE task_id=?1",
+            [id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage)?;
+    let Some((request_id, raw, digest, kind, bound_task, terminal)) = binding else {
+        return Err(inconsistent("task binding/execution missing"));
+    };
+    if crate::hash::sha256(raw.as_bytes()) != digest {
+        return Err(inconsistent("command digest mismatch"));
+    }
+    let command: Command = decode(raw)?;
+    match (kind.as_str(), bound_task, terminal) {
+        ("task", Some(_bound_task_id), None) => {
+            #[cfg(target_os = "linux")]
+            crate::sqlite_verification_inspection::validate_task_request(c, &request_id, &command)?;
+            let expected = if task.retry_of.is_some() {
+                CommandKey {
+                    operation: "retry_task".into(),
+                    ..task.key.clone()
+                }
+            } else {
+                task.key.clone()
+            };
+            if command.key != expected {
+                return Err(inconsistent("request/task contract mismatch"));
+            }
+        }
+        _ => return Err(inconsistent("request outcome incomplete")),
+    }
+    Ok(Some(TaskSnapshot {
+        task,
+        items,
+        claims: vec![],
+    }))
+}
 /// O(1) task-row projection: every field the runner/commit guards need,
 /// with no frozen-work or item-list decode.
 pub(crate) fn read_task_head(c: &Connection, id: &str) -> Result<Option<TaskHead>, Error> {
@@ -925,15 +1082,42 @@ fn write_items_delta(c: &Connection, s: &TaskSnapshot, changed: Option<&str>) ->
                 .collect::<Result<std::collections::HashMap<String, _>, _>>()
                 .map_err(storage)?;
             for item in &s.items {
-                let outcome = item.outcome.as_ref().map(encode).transpose()?;
-                match persisted.get(&item.spec.item_id) {
-                    Some((stage, old)) if *stage == tag(&item.stage) && *old == outcome => {}
-                    _ => write_item_row(c, &s.task.task_id, item)?,
+                let unchanged = match persisted.get(&item.spec.item_id) {
+                    Some((stage, old)) => {
+                        *stage == tag(&item.stage)
+                            && outcome_unchanged(old.as_deref(), &item.outcome)?
+                    }
+                    None => false,
+                };
+                if !unchanged {
+                    write_item_row(c, &s.task.task_id, item)?;
                 }
             }
         }
     }
     Ok(())
+}
+/// Whole-snapshot outcome equality. Byte equality against the encoder
+/// form decides most rows; on a byte mismatch the persisted outcome is
+/// decoded and compared semantically. Compact result rows store the
+/// canonicalized bytes produced by `result_outcome_json`, whose key
+/// order never equals `encode`'s declaration order — counting that
+/// difference as a change rewrote the row and severed the canonical
+/// `verify_task_item` binding (#324). Semantically equal stored bytes
+/// are never rewritten: whatever is persisted remains subject to the
+/// read-side integrity checks, and undecodable bytes fail closed
+/// instead of being silently repaired.
+fn outcome_unchanged(
+    persisted: Option<&str>,
+    outcome: &Option<ItemOutcome>,
+) -> Result<bool, Error> {
+    match (persisted, outcome) {
+        (None, None) => Ok(true),
+        (Some(raw), Some(o)) => {
+            Ok(raw == encode(o)?.as_str() || decode::<ItemOutcome>(raw.to_owned())? == *o)
+        }
+        _ => Ok(false),
+    }
 }
 fn write_item_row(c: &Connection, task_id: &str, item: &TaskItem) -> Result<(), Error> {
     #[cfg(test)]
@@ -1131,6 +1315,225 @@ impl TaskRepository for SqliteTasks {
 
 /// Connection-level accept used by both `SqliteTasks` and the compact
 /// compact repository; semantics are identical.
+/// Task statuses that still hold claims (schema CHECK minus `TERMINAL_STATUSES`).
+pub(crate) const ACTIVE_STATUSES: [&str; 4] = [
+    "pending",
+    "running",
+    "cancel_requested",
+    "needs_verification",
+];
+pub(crate) const TERMINAL_STATUSES: [&str; 5] = [
+    "succeeded",
+    "partially_failed",
+    "failed",
+    "cancelled",
+    "interrupted",
+];
+fn quoted(list: &[&str]) -> String {
+    list.iter()
+        .map(|s| format!("'{s}'"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+/// `Active` is the bounded accept-time gate (in-flight tasks and claims
+/// only); `Full` is the registry-wide sweep over all history. Both are built
+/// from the same SQL templates below — one set of decisions.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GateScope {
+    Active,
+    Full,
+}
+pub(crate) struct Gate {
+    pub trace: &'static str,
+    pub why: &'static str,
+    pub sql: String,
+}
+pub(crate) fn registry_gates(scope: GateScope) -> Vec<Gate> {
+    let active = quoted(&ACTIVE_STATUSES);
+    let terminal = quoted(&TERMINAL_STATUSES);
+    let bounded = scope == GateScope::Active;
+    // Row filter on tasks `t` for gates that can be limited to in-flight tasks.
+    let only_active = if bounded {
+        format!("t.status IN ({active})")
+    } else {
+        "1".to_string()
+    };
+    let mut gates = vec![
+        // A task row must have its request (unbound execution record).
+        Gate {
+            trace: "accept.gate.orphan",
+            why: "unbound execution record",
+            sql: format!(
+                "SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN requests r ON r.task_id=t.task_id \
+                 WHERE {only_active} AND r.request_id IS NULL)"
+            ),
+        },
+        // Every claim names an existing in-flight task. This is the bounded
+        // reverse form of "terminal tasks hold no claims" and of "no claim
+        // points at a deleted task".
+        Gate {
+            trace: "accept.gate.claim_task",
+            why: "claim bound to missing or terminal task",
+            sql: format!(
+                "SELECT EXISTS(SELECT 1 FROM scope_occupancy o LEFT JOIN tasks t ON t.task_id=o.task_id \
+                 WHERE t.task_id IS NULL OR t.status NOT IN ({active}))"
+            ),
+        },
+        // Item rows must exist and match the stored counters.
+        Gate {
+            trace: "accept.gate.item_counters",
+            why: "task item rows diverge from counters",
+            sql: format!(
+                "SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN task_items i ON i.task_id=t.task_id \
+                 WHERE {only_active} GROUP BY t.task_id HAVING count(i.item_id)!=t.item_count \
+                 OR sum(i.stage='pending')!=t.items_pending \
+                 OR sum(i.stage='running')!=t.items_running \
+                 OR sum(i.stage='finished')!=t.items_finished)"
+            ),
+        },
+        // Non-terminal task: occupancy claims equal the declared scope set,
+        // in both directions. Only the key set is compared (read_task stamps
+        // claims with the live task revision).
+        Gate {
+            trace: "accept.gate.active_occupancy",
+            why: "active occupancy missing/inconsistent",
+            sql: format!(
+                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.status IN ({active}) \
+                 AND (EXISTS(SELECT 1 FROM task_scopes s WHERE s.task_id=t.task_id \
+                   AND NOT EXISTS(SELECT 1 FROM scope_occupancy o WHERE o.task_id=t.task_id \
+                     AND o.scope_key=s.scope_key)) \
+                  OR EXISTS(SELECT 1 FROM scope_occupancy o WHERE o.task_id=t.task_id \
+                   AND NOT EXISTS(SELECT 1 FROM task_scopes s WHERE s.task_id=t.task_id \
+                     AND s.scope_key=o.scope_key))))"
+            ),
+        },
+        // Owner/stage consistency: running needs an owner, pending forbids
+        // one, and no item may progress without an owner.
+        Gate {
+            trace: "accept.gate.owner_stage",
+            why: "execution owner/stage missing or inconsistent",
+            sql: format!(
+                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE {only_active} AND (\
+                 (t.status='running' AND t.owner_run_id IS NULL) \
+                 OR (t.status='pending' AND (t.owner_run_id IS NOT NULL \
+                   OR EXISTS(SELECT 1 FROM task_items i WHERE i.task_id=t.task_id AND i.stage!='pending'))) \
+                 OR (t.owner_run_id IS NULL \
+                   AND EXISTS(SELECT 1 FROM task_items i WHERE i.task_id=t.task_id AND i.stage!='pending'))))"
+            ),
+        },
+    ];
+    if !bounded {
+        // History-only checks (moved out of the accept path).
+        gates.push(Gate {
+            trace: "sweep.request_task",
+            why: "request bound to missing task",
+            sql: "SELECT EXISTS(SELECT 1 FROM requests r LEFT JOIN tasks t ON t.task_id=r.task_id \
+                  WHERE r.task_id IS NOT NULL AND t.task_id IS NULL)"
+                .to_string(),
+        });
+        gates.push(Gate {
+            trace: "sweep.terminal",
+            why: "terminal execution/claims inconsistent",
+            sql: format!(
+                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.status IN ({terminal}) \
+                 AND (t.result_json IS NULL \
+                  OR EXISTS(SELECT 1 FROM scope_occupancy o WHERE o.task_id=t.task_id) \
+                  OR EXISTS(SELECT 1 FROM task_items i WHERE i.task_id=t.task_id AND i.stage='running') \
+                  OR (t.status='succeeded' AND NOT(t.items_finished=t.item_count AND t.items_succeeded=t.item_count)) \
+                  OR (t.status='failed' AND NOT(t.items_finished=t.item_count AND t.items_succeeded=0)) \
+                  OR (t.status='partially_failed' AND NOT(t.items_finished=t.item_count AND t.items_succeeded>0 AND t.items_succeeded<t.item_count))))"
+            ),
+        });
+    }
+    gates
+}
+/// Request digests to re-verify: bound to in-flight tasks at accept time
+/// (task-first join so `command_json` overflow pages of other requests are
+/// never read), all requests in a full sweep.
+fn digest_sql(scope: GateScope) -> String {
+    match scope {
+        GateScope::Active => format!(
+            "SELECT r.request_id,r.command_json,r.command_digest FROM tasks t \
+             CROSS JOIN requests r ON r.task_id=t.task_id WHERE t.status IN ({})",
+            quoted(&ACTIVE_STATUSES)
+        ),
+        GateScope::Full => {
+            "SELECT request_id,command_json,command_digest FROM requests".to_string()
+        }
+    }
+}
+#[cfg(test)]
+thread_local! {
+    pub(crate) static DIGESTS_CHECKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+/// Returns the ids of requests whose stored command no longer matches its
+/// digest (stops at the first when `first_only`).
+fn bad_digests(c: &Connection, scope: GateScope, first_only: bool) -> Result<Vec<String>, Error> {
+    let _span = crate::stage_trace::span("accept.gate.digest");
+    let mut bad = vec![];
+    let mut stmt = c.prepare(&digest_sql(scope)).map_err(storage)?;
+    let mut rows = stmt.query([]).map_err(storage)?;
+    let mut checked = 0u64;
+    while let Some(row) = rows.next().map_err(storage)? {
+        let id: String = row.get(0).map_err(storage)?;
+        let raw: String = row.get(1).map_err(storage)?;
+        let digest: String = row.get(2).map_err(storage)?;
+        checked += 1;
+        #[cfg(test)]
+        DIGESTS_CHECKED.with(|n| n.set(n.get() + 1));
+        if crate::hash::sha256(raw.as_bytes()) != digest {
+            bad.push(id);
+            if first_only {
+                break;
+            }
+        }
+    }
+    crate::stage_trace::note("accept.gate.digest_rows", &[("requests", checked)]);
+    Ok(bad)
+}
+fn run_registry_gates(c: &Connection, scope: GateScope) -> Result<(), Error> {
+    for gate in registry_gates(scope) {
+        let span = crate::stage_trace::span(gate.trace);
+        let bad: bool = c.query_row(&gate.sql, [], |r| r.get(0)).map_err(storage)?;
+        drop(span);
+        if bad {
+            return Err(inconsistent(gate.why));
+        }
+    }
+    // A corrupted stored command fails the accept closed.
+    if !bad_digests(c, scope, true)?.is_empty() {
+        return Err(inconsistent("command digest mismatch"));
+    }
+    Ok(())
+}
+/// One finding of the full registry sweep.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SweepFinding {
+    pub check: &'static str,
+    pub reason: String,
+}
+/// Full registry sweep: every accept-time gate over ALL history plus the
+/// history-only checks, in the caller's read transaction. Returns every
+/// finding instead of stopping at the first.
+pub(crate) fn registry_sweep(c: &Connection) -> Result<Vec<SweepFinding>, Error> {
+    let mut findings = vec![];
+    for gate in registry_gates(GateScope::Full) {
+        let bad: bool = c.query_row(&gate.sql, [], |r| r.get(0)).map_err(storage)?;
+        if bad {
+            findings.push(SweepFinding {
+                check: gate.trace,
+                reason: gate.why.to_string(),
+            });
+        }
+    }
+    for id in bad_digests(c, GateScope::Full, false)? {
+        findings.push(SweepFinding {
+            check: "sweep.digest",
+            reason: format!("command digest mismatch for request {id}"),
+        });
+    }
+    Ok(findings)
+}
 pub(crate) fn accept_tx(
     c: &Connection,
     id: &str,
@@ -1139,6 +1542,8 @@ pub(crate) fn accept_tx(
     run: &str,
     retry: Option<&RetryGuard>,
 ) -> Result<Acceptance, Error> {
+    let _total = crate::stage_trace::span("accept.total");
+    let read_request_span = crate::stage_trace::span("accept.read_request");
     if let Some(record) = read_request(c, id)? {
         if record.command != *command {
             return Err(Error::RequestConflict);
@@ -1148,106 +1553,13 @@ pub(crate) fn accept_tx(
             reused: true,
         });
     }
+    drop(read_request_span);
     // Corrupt accepted state is not permission to steal a missing claim.
-    let orphan: bool = c
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN requests r ON r.task_id=t.task_id WHERE r.request_id IS NULL)",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(storage)?;
-    if orphan {
-        return Err(inconsistent("unbound execution record"));
-    }
-    // Registry-wide integrity gate (#259 S5G-8): O(rows) index scans with
-    // no snapshot decode, mirroring the structural invariants
-    // validate_snapshot enforces. Semantic revalidation stays with
-    // read_request on the consume/replay path, which every caller hits.
-    const TERMINAL: &str = "'succeeded','partially_failed','failed','cancelled','interrupted'";
-    for (sql, why) in [
-        // A request still bound to a deleted task row is corruption the
-        // digest gate below cannot see.
-        (
-            "SELECT EXISTS(SELECT 1 FROM requests r LEFT JOIN tasks t ON t.task_id=r.task_id \
-             WHERE r.task_id IS NOT NULL AND t.task_id IS NULL)"
-                .to_string(),
-            "request bound to missing task",
-        ),
-        // Item rows must exist and match the stored counters.
-        (
-            "SELECT EXISTS(SELECT 1 FROM tasks t LEFT JOIN task_items i ON i.task_id=t.task_id \
-             GROUP BY t.task_id HAVING count(i.item_id)!=t.item_count \
-             OR sum(i.stage='pending')!=t.items_pending \
-             OR sum(i.stage='running')!=t.items_running \
-             OR sum(i.stage='finished')!=t.items_finished)"
-                .to_string(),
-            "task item rows diverge from counters",
-        ),
-        // Non-terminal task: occupancy claims equal the declared scope
-        // set, in both directions. The stored occupancy revision is the
-        // accept-time one (read_task stamps claims with the live task
-        // revision), so only the key set is compared here.
-        (
-            format!(
-                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.status NOT IN ({TERMINAL}) \
-                 AND (EXISTS(SELECT 1 FROM task_scopes s WHERE s.task_id=t.task_id \
-                   AND NOT EXISTS(SELECT 1 FROM scope_occupancy o WHERE o.task_id=t.task_id \
-                     AND o.scope_key=s.scope_key)) \
-                  OR EXISTS(SELECT 1 FROM scope_occupancy o WHERE o.task_id=t.task_id \
-                   AND NOT EXISTS(SELECT 1 FROM task_scopes s WHERE s.task_id=t.task_id \
-                     AND s.scope_key=o.scope_key))))"
-            ),
-            "active occupancy missing/inconsistent",
-        ),
-        // Terminal task: no claims, result present, no running items,
-        // counters consistent with the terminal status.
-        (
-            format!(
-                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.status IN ({TERMINAL}) \
-                 AND (t.result_json IS NULL \
-                  OR EXISTS(SELECT 1 FROM scope_occupancy o WHERE o.task_id=t.task_id) \
-                  OR EXISTS(SELECT 1 FROM task_items i WHERE i.task_id=t.task_id AND i.stage='running') \
-                  OR (t.status='succeeded' AND NOT(t.items_finished=t.item_count AND t.items_succeeded=t.item_count)) \
-                  OR (t.status='failed' AND NOT(t.items_finished=t.item_count AND t.items_succeeded=0)) \
-                  OR (t.status='partially_failed' AND NOT(t.items_finished=t.item_count AND t.items_succeeded>0 AND t.items_succeeded<t.item_count))))"
-            ),
-            "terminal execution/claims inconsistent",
-        ),
-        // Owner/stage consistency: running needs an owner, pending
-        // forbids one, and no item may progress without an owner.
-        (
-            "SELECT EXISTS(SELECT 1 FROM tasks t WHERE \
-             (t.status='running' AND t.owner_run_id IS NULL) \
-             OR (t.status='pending' AND (t.owner_run_id IS NOT NULL \
-               OR EXISTS(SELECT 1 FROM task_items i WHERE i.task_id=t.task_id AND i.stage!='pending'))) \
-             OR (t.owner_run_id IS NULL \
-               AND EXISTS(SELECT 1 FROM task_items i WHERE i.task_id=t.task_id AND i.stage!='pending')))"
-                .to_string(),
-            "execution owner/stage missing or inconsistent",
-        ),
-    ] {
-        let bad: bool = c.query_row(&sql, [], |r| r.get(0)).map_err(storage)?;
-        if bad {
-            return Err(inconsistent(why));
-        }
-    }
-    // Digest gate: a corrupted stored command fails the accept closed.
-    // Hashing each stored command_json is O(rows × bytes); bound task
-    // snapshots are not decoded here.
-    let mut stmt = c
-        .prepare("SELECT command_json,command_digest FROM requests")
-        .map_err(storage)?;
-    let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-        .map_err(storage)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(storage)?;
-    drop(stmt);
-    for (raw, digest) in rows {
-        if crate::hash::sha256(raw.as_bytes()) != digest {
-            return Err(inconsistent("command digest mismatch"));
-        }
-    }
+    // Bounded gate (XP-025 A): only in-flight tasks and claims are checked
+    // here; terminal history is the startup sweep's / `task_sqlite check`'s
+    // job and is still rejected on read by `read_request`/`validate_snapshot`.
+    run_registry_gates(c, GateScope::Active)?;
+    let _rest = crate::stage_trace::span("accept.conflict_and_insert");
     let execution_key = if let Some(guard) = retry {
         let old = read_bound_task(c, &guard.original_task_id)?.ok_or(Error::TaskNotFound)?;
         if old.task.state_revision != guard.expected_revision {

@@ -1,0 +1,1702 @@
+{
+ "absent_after": [
+  {
+   "entity": {
+    "code": "001381",
+    "exchange": "sz"
+   },
+   "reason": null
+  },
+  {
+   "entity": {
+    "code": "301569",
+    "exchange": "sz"
+   },
+   "reason": null
+  },
+  {
+   "entity": {
+    "code": "301660",
+    "exchange": "sz"
+   },
+   "reason": null
+  },
+  {
+   "entity": {
+    "code": "301718",
+    "exchange": "sz"
+   },
+   "reason": null
+  }
+ ],
+ "absent_entities": [
+  {
+   "entity": {
+    "code": "001381",
+    "exchange": "sz"
+   },
+   "reason": null
+  },
+  {
+   "entity": {
+    "code": "301569",
+    "exchange": "sz"
+   },
+   "reason": null
+  },
+  {
+   "entity": {
+    "code": "301660",
+    "exchange": "sz"
+   },
+   "reason": null
+  },
+  {
+   "entity": {
+    "code": "301718",
+    "exchange": "sz"
+   },
+   "reason": null
+  }
+ ],
+ "availability_after": {
+  "absent": 4,
+  "heads": 5224,
+  "latest_counts": {
+   "2026-08-31": 1,
+   "2026-09-03": 1,
+   "2026-09-10": 1,
+   "2026-09-14": 2,
+   "2026-09-18": 1,
+   "2026-09-21": 1,
+   "2026-09-28": 1,
+   "2026-09-29": 3,
+   "2026-09-30": 4,
+   "2026-10-08": 5209
+  }
+ },
+ "availability_before": {
+  "absent": 4,
+  "heads": 5224,
+  "items": 5228,
+  "latest_counts": {
+   "2026-08-31": 1,
+   "2026-09-03": 1,
+   "2026-09-10": 1,
+   "2026-09-14": 2,
+   "2026-09-18": 1,
+   "2026-09-21": 1,
+   "2026-09-28": 1,
+   "2026-09-29": 3,
+   "2026-09-30": 4,
+   "2026-10-08": 5209
+  },
+  "scan_wall_s": 72.86025309562683
+ },
+ "capabilities": {
+  "blocking_reasons": null,
+  "capability_revision": null,
+  "runtime_readiness": null
+ },
+ "catalog": {
+  "entity_count": 5228,
+  "version_ref": {
+   "contract_version": "v1",
+   "dataset": "securities.catalog",
+   "entity": null,
+   "integrity_sha256": "2766475d3cc4be0674d51996e48ddfaedb9e5244075a46f93589d1af91b29020",
+   "version_id": "catalog-1791509391800038100"
+  }
+ },
+ "collection_attempt": {
+  "failed": 4,
+  "request_id": "g8-xp010-absent-collection",
+  "status": "failed",
+  "succeeded": 0,
+  "task_id": "task-cea428649b771340e61cfbd62b728f2c",
+  "total": 4
+ },
+ "daily_update_item_count": 5224,
+ "end_date": "2026-10-08",
+ "poll_s": 1.0,
+ "request_id_prefix": "g8-xp010",
+ "sample_readbacks": [
+  {
+   "entity": "sh.600000",
+   "record_count": 8,
+   "records": [
+    {
+     "amount": "739740992",
+     "close": "9.18",
+     "date": "2026-09-29",
+     "entity": {
+      "code": "600000",
+      "exchange": "sh"
+     },
+     "first_trading_date": null,
+     "high": "9.25",
+     "kind": "market",
+     "last_trading_date": null,
+     "low": "9.09",
+     "open": "9.15",
+     "version_ref": {
+      "contract_version": "v1",
+      "dataset": "market.daily",
+      "entity": {
+       "code": "600000",
+       "exchange": "sh"
+      },
+      "integrity_sha256": "88fc6f7acc7da4240d2904ec6acd2ba2048127345ab110c7248bdad243be27f0",
+      "version_id": "range-version-999d13bbd84691ddcc5cd63b90a3f788aa11778fade780866f77f24c6274f9bc"
+     },
+     "volume": "80509739",
+     "year_unfinished": null
+    },
+    {
+     "amount": "1386209920",
+     "close": "9.48",
+     "date": "2026-09-30",
+     "entity": {
+      "code": "600000",
+      "exchange": "sh"
+     },
+     "first_trading_date": null,
+     "high": "9.49",
+     "kind": "market",
+     "last_trading_date": null,
+     "low": "9.16",
+     "open": "9.22",
+     "version_ref": {
+      "contract_version": "v1",
+      "dataset": "market.daily",
+      "entity": {
+       "code": "600000",
+       "exchange": "sh"
+      },
+      "integrity_sha256": "88fc6f7acc7da4240d2904ec6acd2ba2048127345ab110c7248bdad243be27f0",
+      "version_id": "range-version-999d13bbd84691ddcc5cd63b90a3f788aa11778fade780866f77f24c6274f9bc"
+     },
+     "volume": "147484820",
+     "year_unfinished": null
+    },
+    {
+     "amount": "1106982144",
+     "close": "9.70",
+     "date": "2026-10-08",
+     "entity": {
+      "code": "600000",
+      "exchange": "sh"
+     },
+     "first_trading_date": null,
+     "high": "9.71",
+     "kind": "market",
+     "last_trading_date": null,
+     "low": "9.41",
+     "open": "9.45",
+     "version_ref": {
+      "contract_version": "v1",
+      "dataset": "market.daily",
+      "entity": {
+       "code": "600000",
+       "exchange": "sh"
+      },
+      "integrity_sha256": "88fc6f7acc7da4240d2904ec6acd2ba2048127345ab110c7248bdad243be27f0",
+      "version_id": "range-version-999d13bbd84691ddcc5cd63b90a3f788aa11778fade780866f77f24c6274f9bc"
+     },
+     "volume": "115026850",
+     "year_unfinished": null
+    }
+   ],
+   "version_manifest": [
+    {
+     "entity": {
+      "code": "600000",
+      "exchange": "sh"
+     },
+     "metadata": {
+      "adjustment": {
+       "field": "price_adjustment",
+       "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (27 events, 61 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+       "status": "confirmed",
+       "value": "qfq"
+      },
+      "coverage_reason": "complete .day member history from inspected snapshot manifest afb0ea160782fcc3e552011c60f0e7b705586ad978178cfc1982f49d4c847b4a; DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+      "coverage_status": "complete",
+      "lineage": null,
+      "published_at": "2026-10-09T01:40:49.759054736Z",
+      "source": "tdx-official-file-snapshot",
+      "units": [
+       {
+        "field": "price_currency",
+        "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+        "status": "confirmed",
+        "value": "CNY"
+       },
+       {
+        "field": "price_unit",
+        "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+        "status": "confirmed",
+        "value": "yuan"
+       },
+       {
+        "field": "volume_unit",
+        "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+        "status": "confirmed",
+        "value": "share"
+       },
+       {
+        "field": "amount_currency",
+        "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+        "status": "confirmed",
+        "value": "CNY"
+       },
+       {
+        "field": "amount_unit",
+        "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+        "status": "confirmed",
+        "value": "yuan"
+       }
+      ]
+     },
+     "status": "present",
+     "version_ref": {
+      "contract_version": "v1",
+      "dataset": "market.daily",
+      "entity": {
+       "code": "600000",
+       "exchange": "sh"
+      },
+      "integrity_sha256": "88fc6f7acc7da4240d2904ec6acd2ba2048127345ab110c7248bdad243be27f0",
+      "version_id": "range-version-999d13bbd84691ddcc5cd63b90a3f788aa11778fade780866f77f24c6274f9bc"
+     }
+    }
+   ]
+  },
+  {
+   "entity": "sz.000001",
+   "record_count": 8,
+   "records": [
+    {
+     "amount": "784632832",
+     "close": "11.35",
+     "date": "2026-09-29",
+     "entity": {
+      "code": "000001",
+      "exchange": "sz"
+     },
+     "first_trading_date": null,
+     "high": "11.41",
+     "kind": "market",
+     "last_trading_date": null,
+     "low": "11.28",
+     "open": "11.30",
+     "version_ref": {
+      "contract_version": "v1",
+      "dataset": "market.daily",
+      "entity": {
+       "code": "000001",
+       "exchange": "sz"
+      },
+      "integrity_sha256": "4b4dae5bf4630262dfd6995c9533d6e79975c60fc7a3e02cb14a97337c397e8c",
+      "version_id": "range-version-0b519c4e0c63ec3d42ff0d32b9e2fb3c9bc8929806ce56f35552835186eb8b89"
+     },
+     "volume": "69097909",
+     "year_unfinished": null
+    },
+    {
+     "amount": "1205814912",
+     "close": "11.57",
+     "date": "2026-09-30",
+     "entity": {
+      "code": "000001",
+      "exchange": "sz"
+     },
+     "first_trading_date": null,
+     "high": "11.65",
+     "kind": "market",
+     "last_trading_date": null,
+     "low": "11.33",
+     "open": "11.36",
+     "version_ref": {
+      "contract_version": "v1",
+      "dataset": "market.daily",
+      "entity": {
+       "code": "000001",
+       "exchange": "sz"
+      },
+      "integrity_sha256": "4b4dae5bf4630262dfd6995c9533d6e79975c60fc7a3e02cb14a97337c397e8c",
+      "version_id": "range-version-0b519c4e0c63ec3d42ff0d32b9e2fb3c9bc8929806ce56f35552835186eb8b89"
+     },
+     "volume": "104535745",
+     "year_unfinished": null
+    },
+    {
+     "amount": "1743402496",
+     "close": "11.78",
+     "date": "2026-10-08",
+     "entity": {
+      "code": "000001",
+      "exchange": "sz"
+     },
+     "first_trading_date": null,
+     "high": "11.87",
+     "kind": "market",
+     "last_trading_date": null,
+     "low": "11.54",
+     "open": "11.57",
+     "version_ref": {
+      "contract_version": "v1",
+      "dataset": "market.daily",
+      "entity": {
+       "code": "000001",
+       "exchange": "sz"
+      },
+      "integrity_sha256": "4b4dae5bf4630262dfd6995c9533d6e79975c60fc7a3e02cb14a97337c397e8c",
+      "version_id": "range-version-0b519c4e0c63ec3d42ff0d32b9e2fb3c9bc8929806ce56f35552835186eb8b89"
+     },
+     "volume": "148168594",
+     "year_unfinished": null
+    }
+   ],
+   "version_manifest": [
+    {
+     "entity": {
+      "code": "000001",
+      "exchange": "sz"
+     },
+     "metadata": {
+      "adjustment": {
+       "field": "price_adjustment",
+       "reason": "qfq::forward_adjust over category==1 GBBQ affine chain (33 events, 48 non-category-1 records excluded uninterpreted); DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+       "status": "confirmed",
+       "value": "qfq"
+      },
+      "coverage_reason": "complete .day member history from inspected snapshot manifest afb0ea160782fcc3e552011c60f0e7b705586ad978178cfc1982f49d4c847b4a; DECLARED_SCOPE: owner personal research, local-only, no external exposure (#71 comment-5749934485); external distribution is not authorized",
+      "coverage_status": "complete",
+      "lineage": null,
+      "published_at": "2026-10-09T01:50:13.749790959Z",
+      "source": "tdx-official-file-snapshot",
+      "units": [
+       {
+        "field": "price_currency",
+        "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+        "status": "confirmed",
+        "value": "CNY"
+       },
+       {
+        "field": "price_unit",
+        "reason": ".day raw OHLC are fen integers of yuan-denominated prices (#166/#167 anchored)",
+        "status": "confirmed",
+        "value": "yuan"
+       },
+       {
+        "field": "volume_unit",
+        "reason": ".day volume is u32 shares; anchored by #239 TdxQuant oracle (37,345-bar full-history match, PR #242); not adjustment-adjusted",
+        "status": "confirmed",
+        "value": "share"
+       },
+       {
+        "field": "amount_currency",
+        "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+        "status": "confirmed",
+        "value": "CNY"
+       },
+       {
+        "field": "amount_unit",
+        "reason": ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
+        "status": "confirmed",
+        "value": "yuan"
+       }
+      ]
+     },
+     "status": "present",
+     "version_ref": {
+      "contract_version": "v1",
+      "dataset": "market.daily",
+      "entity": {
+       "code": "000001",
+       "exchange": "sz"
+      },
+      "integrity_sha256": "4b4dae5bf4630262dfd6995c9533d6e79975c60fc7a3e02cb14a97337c397e8c",
+      "version_id": "range-version-0b519c4e0c63ec3d42ff0d32b9e2fb3c9bc8929806ce56f35552835186eb8b89"
+     }
+    }
+   ]
+  }
+ ],
+ "stopped": null,
+ "tasks": [
+  {
+   "accept_ms": 383.29529762268066,
+   "client_accept": "2026-10-09T07:55:11.469814+00:00",
+   "client_submit": "2026-10-09T07:55:11.086518+00:00",
+   "client_terminal": "2026-10-09T07:55:29.784204+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:55:11.469817+00:00",
+   "pending": 0,
+   "polls": 8,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-001",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:55:11.444493097Z",
+   "server_last_progress_at": "2026-10-09T07:55:18.484566592Z",
+   "server_window_s": 7.040072917938232,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-5e9087fd80b4e6623859d313b4b12ccb",
+   "total": 100,
+   "wall_s": 18.69768524169922
+  },
+  {
+   "accept_ms": 124.69363212585449,
+   "client_accept": "2026-10-09T07:55:29.920950+00:00",
+   "client_submit": "2026-10-09T07:55:29.796257+00:00",
+   "client_terminal": "2026-10-09T07:55:43.457745+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:55:29.920954+00:00",
+   "pending": 0,
+   "polls": 3,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-002",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:55:29.906387299Z",
+   "server_last_progress_at": "2026-10-09T07:55:31.985573719Z",
+   "server_window_s": 2.079185962677002,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-07d8033ebeb7e69e13df90ae76e2f818",
+   "total": 100,
+   "wall_s": 13.66148853302002
+  },
+  {
+   "accept_ms": 116.4250373840332,
+   "client_accept": "2026-10-09T07:55:43.574433+00:00",
+   "client_submit": "2026-10-09T07:55:43.458008+00:00",
+   "client_terminal": "2026-10-09T07:55:55.983016+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:55:43.574436+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-003",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:55:43.551352658Z",
+   "server_last_progress_at": "2026-10-09T07:55:45.069954803Z",
+   "server_window_s": 1.518601894378662,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-9bbe9d6ac75abccb6995e263aa536252",
+   "total": 100,
+   "wall_s": 12.525008201599121
+  },
+  {
+   "accept_ms": 103.04689407348633,
+   "client_accept": "2026-10-09T07:55:56.089181+00:00",
+   "client_submit": "2026-10-09T07:55:55.986135+00:00",
+   "client_terminal": "2026-10-09T07:56:09.365640+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:55:56.089184+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-004",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:55:56.076540933Z",
+   "server_last_progress_at": "2026-10-09T07:55:57.429475803Z",
+   "server_window_s": 1.3529350757598877,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-5f077f22014f8c95c813abc6b1280dcb",
+   "total": 100,
+   "wall_s": 13.379505157470703
+  },
+  {
+   "accept_ms": 97.13029861450195,
+   "client_accept": "2026-10-09T07:56:09.463149+00:00",
+   "client_submit": "2026-10-09T07:56:09.366019+00:00",
+   "client_terminal": "2026-10-09T07:56:22.996330+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:56:09.463152+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-005",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:56:09.446083066Z",
+   "server_last_progress_at": "2026-10-09T07:56:10.927380251Z",
+   "server_window_s": 1.4812970161437988,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-380c0107e10d12df3aa460e1c3ccb5d7",
+   "total": 100,
+   "wall_s": 13.630311250686646
+  },
+  {
+   "accept_ms": 118.47352981567383,
+   "client_accept": "2026-10-09T07:56:23.115009+00:00",
+   "client_submit": "2026-10-09T07:56:22.996535+00:00",
+   "client_terminal": "2026-10-09T07:56:37.839523+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:56:23.115012+00:00",
+   "pending": 0,
+   "polls": 3,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-006",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:56:23.098334494Z",
+   "server_last_progress_at": "2026-10-09T07:56:24.923747923Z",
+   "server_window_s": 1.8254129886627197,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-13b511f5169fbc99874495e47213ed12",
+   "total": 100,
+   "wall_s": 14.842987537384033
+  },
+  {
+   "accept_ms": 142.44866371154785,
+   "client_accept": "2026-10-09T07:56:37.982853+00:00",
+   "client_submit": "2026-10-09T07:56:37.840404+00:00",
+   "client_terminal": "2026-10-09T07:56:51.856194+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:56:37.982858+00:00",
+   "pending": 0,
+   "polls": 3,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-007",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:56:37.964733080Z",
+   "server_last_progress_at": "2026-10-09T07:56:39.855231785Z",
+   "server_window_s": 1.890498161315918,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-0a30fec706b584a2d808957475307904",
+   "total": 100,
+   "wall_s": 14.015789985656738
+  },
+  {
+   "accept_ms": 113.61527442932129,
+   "client_accept": "2026-10-09T07:56:51.980098+00:00",
+   "client_submit": "2026-10-09T07:56:51.866483+00:00",
+   "client_terminal": "2026-10-09T07:57:00.639133+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:56:51.980101+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-008",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:56:51.965149429Z",
+   "server_last_progress_at": "2026-10-09T07:56:53.437556149Z",
+   "server_window_s": 1.4724071025848389,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-4788a07d7aefa49b48edfab433c459eb",
+   "total": 100,
+   "wall_s": 8.772650003433228
+  },
+  {
+   "accept_ms": 166.83149337768555,
+   "client_accept": "2026-10-09T07:57:00.814405+00:00",
+   "client_submit": "2026-10-09T07:57:00.647574+00:00",
+   "client_terminal": "2026-10-09T07:57:10.717466+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:00.814409+00:00",
+   "pending": 0,
+   "polls": 4,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-009",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:00.794048786Z",
+   "server_last_progress_at": "2026-10-09T07:57:04.308146261Z",
+   "server_window_s": 3.5140979290008545,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-9aef53dd9ec71f8a4397cbff682dacc2",
+   "total": 100,
+   "wall_s": 10.069892406463623
+  },
+  {
+   "accept_ms": 111.7100715637207,
+   "client_accept": "2026-10-09T07:57:10.831831+00:00",
+   "client_submit": "2026-10-09T07:57:10.720121+00:00",
+   "client_terminal": "2026-10-09T07:57:18.187387+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:10.831835+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-010",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:10.817869179Z",
+   "server_last_progress_at": "2026-10-09T07:57:12.111671196Z",
+   "server_window_s": 1.29380202293396,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-c0e8943cbab573fbc53fb15f21012a7c",
+   "total": 100,
+   "wall_s": 7.467265367507935
+  },
+  {
+   "accept_ms": 103.29580307006836,
+   "client_accept": "2026-10-09T07:57:18.293961+00:00",
+   "client_submit": "2026-10-09T07:57:18.190665+00:00",
+   "client_terminal": "2026-10-09T07:57:23.677593+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:18.293963+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-011",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:18.278796663Z",
+   "server_last_progress_at": "2026-10-09T07:57:19.577500329Z",
+   "server_window_s": 1.2987041473388672,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-e98f31bc5185864878c2236715dd61a1",
+   "total": 100,
+   "wall_s": 5.48692774772644
+  },
+  {
+   "accept_ms": 110.13579368591309,
+   "client_accept": "2026-10-09T07:57:23.791400+00:00",
+   "client_submit": "2026-10-09T07:57:23.681264+00:00",
+   "client_terminal": "2026-10-09T07:57:28.962737+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:23.791403+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-012",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:23.776471913Z",
+   "server_last_progress_at": "2026-10-09T07:57:24.945802159Z",
+   "server_window_s": 1.1693310737609863,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-77b9b4fb44d31abc6f64d53b78e751f5",
+   "total": 100,
+   "wall_s": 5.28147292137146
+  },
+  {
+   "accept_ms": 112.50686645507812,
+   "client_accept": "2026-10-09T07:57:29.079420+00:00",
+   "client_submit": "2026-10-09T07:57:28.966913+00:00",
+   "client_terminal": "2026-10-09T07:57:34.447875+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:29.079423+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-013",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:29.060330460Z",
+   "server_last_progress_at": "2026-10-09T07:57:30.354517352Z",
+   "server_window_s": 1.294187068939209,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-c471a7b0ff41c9692436d56db8e56005",
+   "total": 100,
+   "wall_s": 5.480962038040161
+  },
+  {
+   "accept_ms": 106.3535213470459,
+   "client_accept": "2026-10-09T07:57:34.556456+00:00",
+   "client_submit": "2026-10-09T07:57:34.450102+00:00",
+   "client_terminal": "2026-10-09T07:57:40.468341+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:34.556459+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-014",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:34.543452089Z",
+   "server_last_progress_at": "2026-10-09T07:57:35.737829917Z",
+   "server_window_s": 1.1943769454956055,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-56cef6fce6de2a27d82aec67e008a813",
+   "total": 100,
+   "wall_s": 6.018238544464111
+  },
+  {
+   "accept_ms": 186.13171577453613,
+   "client_accept": "2026-10-09T07:57:40.656066+00:00",
+   "client_submit": "2026-10-09T07:57:40.469934+00:00",
+   "client_terminal": "2026-10-09T07:57:46.695550+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:40.656069+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-015",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:40.634130620Z",
+   "server_last_progress_at": "2026-10-09T07:57:41.866314357Z",
+   "server_window_s": 1.2321839332580566,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-3ffa94d39dbb3a5028211b13af37cedf",
+   "total": 100,
+   "wall_s": 6.225615978240967
+  },
+  {
+   "accept_ms": 116.62983894348145,
+   "client_accept": "2026-10-09T07:57:46.816657+00:00",
+   "client_submit": "2026-10-09T07:57:46.700027+00:00",
+   "client_terminal": "2026-10-09T07:57:52.806511+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:46.816661+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-016",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:46.796389475Z",
+   "server_last_progress_at": "2026-10-09T07:57:48.000338136Z",
+   "server_window_s": 1.203948974609375,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-1c2028a16535ea6cba44a487d8f3e213",
+   "total": 100,
+   "wall_s": 6.106483459472656
+  },
+  {
+   "accept_ms": 105.22103309631348,
+   "client_accept": "2026-10-09T07:57:52.915654+00:00",
+   "client_submit": "2026-10-09T07:57:52.810433+00:00",
+   "client_terminal": "2026-10-09T07:57:57.472892+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:52.915656+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-017",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:52.900046840Z",
+   "server_last_progress_at": "2026-10-09T07:57:54.148122041Z",
+   "server_window_s": 1.2480759620666504,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-97628e1c512b36eaa534017d29f6c303",
+   "total": 100,
+   "wall_s": 4.662459135055542
+  },
+  {
+   "accept_ms": 105.34358024597168,
+   "client_accept": "2026-10-09T07:57:57.578424+00:00",
+   "client_submit": "2026-10-09T07:57:57.473081+00:00",
+   "client_terminal": "2026-10-09T07:58:03.308302+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:57:57.578427+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-018",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:57:57.564554444Z",
+   "server_last_progress_at": "2026-10-09T07:57:58.785804404Z",
+   "server_window_s": 1.221250057220459,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-5e8ecd4a85ad3d716fee312c03231f80",
+   "total": 100,
+   "wall_s": 5.835221767425537
+  },
+  {
+   "accept_ms": 141.00980758666992,
+   "client_accept": "2026-10-09T07:58:03.450171+00:00",
+   "client_submit": "2026-10-09T07:58:03.309161+00:00",
+   "client_terminal": "2026-10-09T07:58:07.863799+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:58:03.450175+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-019",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:58:03.431414123Z",
+   "server_last_progress_at": "2026-10-09T07:58:04.666687687Z",
+   "server_window_s": 1.2352731227874756,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-2f2f1d76fd157aec8b43e774d14e4471",
+   "total": 100,
+   "wall_s": 4.55463719367981
+  },
+  {
+   "accept_ms": 125.1223087310791,
+   "client_accept": "2026-10-09T07:58:07.991527+00:00",
+   "client_submit": "2026-10-09T07:58:07.866404+00:00",
+   "client_terminal": "2026-10-09T07:58:12.416920+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:58:07.991529+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-020",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:58:07.978471660Z",
+   "server_last_progress_at": "2026-10-09T07:58:09.156307643Z",
+   "server_window_s": 1.1778359413146973,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-dca8e489c1bfb4ece934c76728b375f3",
+   "total": 100,
+   "wall_s": 4.550515413284302
+  },
+  {
+   "accept_ms": 111.35196685791016,
+   "client_accept": "2026-10-09T07:58:12.530554+00:00",
+   "client_submit": "2026-10-09T07:58:12.419202+00:00",
+   "client_terminal": "2026-10-09T07:58:16.739625+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:58:12.530557+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-021",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:58:12.514215475Z",
+   "server_last_progress_at": "2026-10-09T07:58:13.669351868Z",
+   "server_window_s": 1.1551361083984375,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-732569d6fb602c800e89311481496779",
+   "total": 100,
+   "wall_s": 4.320423126220703
+  },
+  {
+   "accept_ms": 108.74438285827637,
+   "client_accept": "2026-10-09T07:58:16.851691+00:00",
+   "client_submit": "2026-10-09T07:58:16.742947+00:00",
+   "client_terminal": "2026-10-09T07:58:21.055370+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:58:16.851695+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-022",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:58:16.840000674Z",
+   "server_last_progress_at": "2026-10-09T07:58:17.977368856Z",
+   "server_window_s": 1.1373682022094727,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-588b57e57ec2ce296d7b9ad0cbe692de",
+   "total": 100,
+   "wall_s": 4.312422513961792
+  },
+  {
+   "accept_ms": 114.7925853729248,
+   "client_accept": "2026-10-09T07:58:21.171621+00:00",
+   "client_submit": "2026-10-09T07:58:21.056828+00:00",
+   "client_terminal": "2026-10-09T07:58:24.903681+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:58:21.171624+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-023",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:58:21.157110592Z",
+   "server_last_progress_at": "2026-10-09T07:58:22.277355847Z",
+   "server_window_s": 1.1202449798583984,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-7ec6b31a7947f953bf488c57e45b2b18",
+   "total": 100,
+   "wall_s": 3.8468527793884277
+  },
+  {
+   "accept_ms": 126.44171714782715,
+   "client_accept": "2026-10-09T07:58:25.032164+00:00",
+   "client_submit": "2026-10-09T07:58:24.905722+00:00",
+   "client_terminal": "2026-10-09T07:58:36.443939+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:58:25.032166+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-024",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:58:25.017532047Z",
+   "server_last_progress_at": "2026-10-09T07:58:26.364996322Z",
+   "server_window_s": 1.347463846206665,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-ba3aeba96d47c98f6c237bc32f95af21",
+   "total": 100,
+   "wall_s": 11.538216590881348
+  },
+  {
+   "accept_ms": 112.48660087585449,
+   "client_accept": "2026-10-09T07:58:36.559269+00:00",
+   "client_submit": "2026-10-09T07:58:36.446782+00:00",
+   "client_terminal": "2026-10-09T07:58:50.581495+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:58:36.559272+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-025",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:58:36.543443828Z",
+   "server_last_progress_at": "2026-10-09T07:58:37.932896368Z",
+   "server_window_s": 1.3894529342651367,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-a8e17b2698d40e7b1a5528e34810a880",
+   "total": 100,
+   "wall_s": 14.13471245765686
+  },
+  {
+   "accept_ms": 110.24785041809082,
+   "client_accept": "2026-10-09T07:58:50.693865+00:00",
+   "client_submit": "2026-10-09T07:58:50.583617+00:00",
+   "client_terminal": "2026-10-09T07:59:05.606077+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:58:50.693868+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-026",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:58:50.682601735Z",
+   "server_last_progress_at": "2026-10-09T07:58:52.007808164Z",
+   "server_window_s": 1.325206995010376,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-8d9a306836bd71d5260720d915450d3c",
+   "total": 100,
+   "wall_s": 15.022459983825684
+  },
+  {
+   "accept_ms": 116.72711372375488,
+   "client_accept": "2026-10-09T07:59:05.726398+00:00",
+   "client_submit": "2026-10-09T07:59:05.609671+00:00",
+   "client_terminal": "2026-10-09T07:59:18.744016+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:59:05.726401+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-027",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:59:05.708292325Z",
+   "server_last_progress_at": "2026-10-09T07:59:07.175801990Z",
+   "server_window_s": 1.4675090312957764,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-1dbbae0399fd0c8e1229296f2ac4ff82",
+   "total": 100,
+   "wall_s": 13.134345531463623
+  },
+  {
+   "accept_ms": 129.72402572631836,
+   "client_accept": "2026-10-09T07:59:18.875304+00:00",
+   "client_submit": "2026-10-09T07:59:18.745580+00:00",
+   "client_terminal": "2026-10-09T07:59:25.288487+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:59:18.875307+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-028",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:59:18.849191883Z",
+   "server_last_progress_at": "2026-10-09T07:59:20.092645837Z",
+   "server_window_s": 1.2434539794921875,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-c7328c26720b234fbdb9f74067dc869c",
+   "total": 100,
+   "wall_s": 6.542906999588013
+  },
+  {
+   "accept_ms": 109.77339744567871,
+   "client_accept": "2026-10-09T07:59:25.399682+00:00",
+   "client_submit": "2026-10-09T07:59:25.289908+00:00",
+   "client_terminal": "2026-10-09T07:59:32.576910+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:59:25.399685+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-029",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:59:25.383970568Z",
+   "server_last_progress_at": "2026-10-09T07:59:26.566123038Z",
+   "server_window_s": 1.1821529865264893,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-d4bd2b7c363f0e6e3b02cd3617d2e87a",
+   "total": 100,
+   "wall_s": 7.287002086639404
+  },
+  {
+   "accept_ms": 109.42506790161133,
+   "client_accept": "2026-10-09T07:59:32.688003+00:00",
+   "client_submit": "2026-10-09T07:59:32.578578+00:00",
+   "client_terminal": "2026-10-09T07:59:42.581072+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:59:32.688006+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-030",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:59:32.673631753Z",
+   "server_last_progress_at": "2026-10-09T07:59:33.930821245Z",
+   "server_window_s": 1.2571899890899658,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-96921e849b0fb050c78ebc040d895965",
+   "total": 100,
+   "wall_s": 10.00249433517456
+  },
+  {
+   "accept_ms": 146.1648941040039,
+   "client_accept": "2026-10-09T07:59:42.728800+00:00",
+   "client_submit": "2026-10-09T07:59:42.582635+00:00",
+   "client_terminal": "2026-10-09T07:59:52.461671+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:59:42.728803+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-031",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:59:42.703304594Z",
+   "server_last_progress_at": "2026-10-09T07:59:44.078140700Z",
+   "server_window_s": 1.3748359680175781,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-a25e8b61db36a678956396aa41f1ce9b",
+   "total": 100,
+   "wall_s": 9.87903618812561
+  },
+  {
+   "accept_ms": 111.95111274719238,
+   "client_accept": "2026-10-09T07:59:52.574483+00:00",
+   "client_submit": "2026-10-09T07:59:52.462532+00:00",
+   "client_terminal": "2026-10-09T08:00:04.872530+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T07:59:52.574486+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-032",
+   "running": 0,
+   "server_created_at": "2026-10-09T07:59:52.559439585Z",
+   "server_last_progress_at": "2026-10-09T07:59:53.834581491Z",
+   "server_window_s": 1.275141954421997,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-b847ac39359d5a7cef4b2c694cd30582",
+   "total": 100,
+   "wall_s": 12.409998416900635
+  },
+  {
+   "accept_ms": 259.1216564178467,
+   "client_accept": "2026-10-09T08:00:05.132523+00:00",
+   "client_submit": "2026-10-09T08:00:04.873402+00:00",
+   "client_terminal": "2026-10-09T08:00:17.414262+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:00:05.132526+00:00",
+   "pending": 0,
+   "polls": 3,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-033",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:00:05.100925167Z",
+   "server_last_progress_at": "2026-10-09T08:00:08.795272268Z",
+   "server_window_s": 3.6943471431732178,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-5c883707e42bd06bdf06c4fd2e96232c",
+   "total": 100,
+   "wall_s": 12.540860414505005
+  },
+  {
+   "accept_ms": 112.13421821594238,
+   "client_accept": "2026-10-09T08:00:17.527253+00:00",
+   "client_submit": "2026-10-09T08:00:17.415119+00:00",
+   "client_terminal": "2026-10-09T08:00:25.885242+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:00:17.527257+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-034",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:00:17.511474716Z",
+   "server_last_progress_at": "2026-10-09T08:00:18.802404927Z",
+   "server_window_s": 1.2909300327301025,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-871d17568cec9f081ce7eaad0eb4a2ec",
+   "total": 100,
+   "wall_s": 8.470123052597046
+  },
+  {
+   "accept_ms": 113.84797096252441,
+   "client_accept": "2026-10-09T08:00:26.000020+00:00",
+   "client_submit": "2026-10-09T08:00:25.886172+00:00",
+   "client_terminal": "2026-10-09T08:00:34.211415+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:00:26.000023+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-035",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:00:25.982161472Z",
+   "server_last_progress_at": "2026-10-09T08:00:27.262871424Z",
+   "server_window_s": 1.280709981918335,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-bec8764c9dd6157383792c29955347fa",
+   "total": 100,
+   "wall_s": 8.3252432346344
+  },
+  {
+   "accept_ms": 114.16816711425781,
+   "client_accept": "2026-10-09T08:00:34.325723+00:00",
+   "client_submit": "2026-10-09T08:00:34.211555+00:00",
+   "client_terminal": "2026-10-09T08:00:41.360181+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:00:34.325726+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-036",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:00:34.311860368Z",
+   "server_last_progress_at": "2026-10-09T08:00:35.592967388Z",
+   "server_window_s": 1.281106948852539,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-a65044db0738c04f3b19b6ffeaeb2f6c",
+   "total": 100,
+   "wall_s": 7.148626327514648
+  },
+  {
+   "accept_ms": 116.08004570007324,
+   "client_accept": "2026-10-09T08:00:41.477212+00:00",
+   "client_submit": "2026-10-09T08:00:41.361132+00:00",
+   "client_terminal": "2026-10-09T08:00:47.782335+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:00:41.477216+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-037",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:00:41.460408104Z",
+   "server_last_progress_at": "2026-10-09T08:00:42.737999081Z",
+   "server_window_s": 1.2775909900665283,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-7bba767669f2a18e41930333923c452f",
+   "total": 100,
+   "wall_s": 6.4212024211883545
+  },
+  {
+   "accept_ms": 129.61912155151367,
+   "client_accept": "2026-10-09T08:00:47.913501+00:00",
+   "client_submit": "2026-10-09T08:00:47.783882+00:00",
+   "client_terminal": "2026-10-09T08:00:53.224629+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:00:47.913504+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-038",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:00:47.896864918Z",
+   "server_last_progress_at": "2026-10-09T08:00:49.104379551Z",
+   "server_window_s": 1.207515001296997,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-ff6ad3072e586aed30162dc164b7882e",
+   "total": 100,
+   "wall_s": 5.440747261047363
+  },
+  {
+   "accept_ms": 122.30777740478516,
+   "client_accept": "2026-10-09T08:00:53.347084+00:00",
+   "client_submit": "2026-10-09T08:00:53.224776+00:00",
+   "client_terminal": "2026-10-09T08:01:04.270188+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:00:53.347086+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-039",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:00:53.330200668Z",
+   "server_last_progress_at": "2026-10-09T08:00:54.687191899Z",
+   "server_window_s": 1.3569910526275635,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-51f0f7111a73d6975d4044334a806893",
+   "total": 100,
+   "wall_s": 11.045411586761475
+  },
+  {
+   "accept_ms": 134.68647003173828,
+   "client_accept": "2026-10-09T08:01:04.406477+00:00",
+   "client_submit": "2026-10-09T08:01:04.271791+00:00",
+   "client_terminal": "2026-10-09T08:01:12.879049+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:01:04.406480+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-040",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:01:04.392275631Z",
+   "server_last_progress_at": "2026-10-09T08:01:05.724664587Z",
+   "server_window_s": 1.3323888778686523,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-2288cd26fd5d6f9f7ab00963b4f48005",
+   "total": 100,
+   "wall_s": 8.607258796691895
+  },
+  {
+   "accept_ms": 118.91055107116699,
+   "client_accept": "2026-10-09T08:01:12.998104+00:00",
+   "client_submit": "2026-10-09T08:01:12.879194+00:00",
+   "client_terminal": "2026-10-09T08:01:21.724319+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:01:12.998107+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-041",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:01:12.982456236Z",
+   "server_last_progress_at": "2026-10-09T08:01:14.370355664Z",
+   "server_window_s": 1.3878989219665527,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-398f47ec84893de2f55a183c9fa85ac7",
+   "total": 100,
+   "wall_s": 8.845125436782837
+  },
+  {
+   "accept_ms": 144.69456672668457,
+   "client_accept": "2026-10-09T08:01:21.870045+00:00",
+   "client_submit": "2026-10-09T08:01:21.725350+00:00",
+   "client_terminal": "2026-10-09T08:01:29.961237+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:01:21.870048+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-042",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:01:21.849531942Z",
+   "server_last_progress_at": "2026-10-09T08:01:23.315185786Z",
+   "server_window_s": 1.4656541347503662,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-2d8b1c8ce9f70c4918b8f7002d2e2319",
+   "total": 100,
+   "wall_s": 8.235886812210083
+  },
+  {
+   "accept_ms": 228.255033493042,
+   "client_accept": "2026-10-09T08:01:30.190348+00:00",
+   "client_submit": "2026-10-09T08:01:29.962093+00:00",
+   "client_terminal": "2026-10-09T08:01:36.955362+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:01:30.190351+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-043",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:01:30.160421530Z",
+   "server_last_progress_at": "2026-10-09T08:01:31.607864724Z",
+   "server_window_s": 1.4474430084228516,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-14506ea6adb80613643bed539f5080d1",
+   "total": 100,
+   "wall_s": 6.993268728256226
+  },
+  {
+   "accept_ms": 121.9792366027832,
+   "client_accept": "2026-10-09T08:01:37.078751+00:00",
+   "client_submit": "2026-10-09T08:01:36.956771+00:00",
+   "client_terminal": "2026-10-09T08:01:43.293767+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:01:37.078753+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-044",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:01:37.065234605Z",
+   "server_last_progress_at": "2026-10-09T08:01:38.270725828Z",
+   "server_window_s": 1.205491065979004,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-e8a61d27649a9d0b837563f097e909d6",
+   "total": 100,
+   "wall_s": 6.336995363235474
+  },
+  {
+   "accept_ms": 137.15028762817383,
+   "client_accept": "2026-10-09T08:01:43.431139+00:00",
+   "client_submit": "2026-10-09T08:01:43.293989+00:00",
+   "client_terminal": "2026-10-09T08:01:49.341032+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:01:43.431142+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-045",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:01:43.411743241Z",
+   "server_last_progress_at": "2026-10-09T08:01:44.629152317Z",
+   "server_window_s": 1.2174091339111328,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-4a471f3263c28f152971eb07b07b7410",
+   "total": 100,
+   "wall_s": 6.0470428466796875
+  },
+  {
+   "accept_ms": 126.01852416992188,
+   "client_accept": "2026-10-09T08:01:49.468527+00:00",
+   "client_submit": "2026-10-09T08:01:49.342508+00:00",
+   "client_terminal": "2026-10-09T08:01:54.661299+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:01:49.468530+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-046",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:01:49.457313382Z",
+   "server_last_progress_at": "2026-10-09T08:01:50.614581546Z",
+   "server_window_s": 1.1572680473327637,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-e7b591f1dc6aa84b4d206bbaa9c73d9d",
+   "total": 100,
+   "wall_s": 5.318790674209595
+  },
+  {
+   "accept_ms": 131.89196586608887,
+   "client_accept": "2026-10-09T08:01:54.793399+00:00",
+   "client_submit": "2026-10-09T08:01:54.661507+00:00",
+   "client_terminal": "2026-10-09T08:01:59.525301+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:01:54.793402+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-047",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:01:54.773435775Z",
+   "server_last_progress_at": "2026-10-09T08:01:55.981712219Z",
+   "server_window_s": 1.2082769870758057,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-e3c31b1a8b9ab56334d60adc364850ce",
+   "total": 100,
+   "wall_s": 4.863793611526489
+  },
+  {
+   "accept_ms": 129.46391105651855,
+   "client_accept": "2026-10-09T08:01:59.654938+00:00",
+   "client_submit": "2026-10-09T08:01:59.525475+00:00",
+   "client_terminal": "2026-10-09T08:02:06.224627+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:01:59.654941+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-048",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:01:59.637632243Z",
+   "server_last_progress_at": "2026-10-09T08:02:01.327206074Z",
+   "server_window_s": 1.6895740032196045,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-46efdc69d601d37efe9371cee998cd1a",
+   "total": 100,
+   "wall_s": 6.699152708053589
+  },
+  {
+   "accept_ms": 124.76515769958496,
+   "client_accept": "2026-10-09T08:02:06.350587+00:00",
+   "client_submit": "2026-10-09T08:02:06.225822+00:00",
+   "client_terminal": "2026-10-09T08:02:10.846388+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:02:06.350591+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-049",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:02:06.334248775Z",
+   "server_last_progress_at": "2026-10-09T08:02:07.524648433Z",
+   "server_window_s": 1.1903998851776123,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-e5e9252b499b1a66a68079398a19f28f",
+   "total": 100,
+   "wall_s": 4.620566368103027
+  },
+  {
+   "accept_ms": 136.26980781555176,
+   "client_accept": "2026-10-09T08:02:10.982831+00:00",
+   "client_submit": "2026-10-09T08:02:10.846561+00:00",
+   "client_terminal": "2026-10-09T08:02:15.889052+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:02:10.982834+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-050",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:02:10.967499288Z",
+   "server_last_progress_at": "2026-10-09T08:02:12.428350941Z",
+   "server_window_s": 1.4608509540557861,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-31166eeeaaebda5e521f7f6206fd9e2b",
+   "total": 100,
+   "wall_s": 5.042490720748901
+  },
+  {
+   "accept_ms": 229.6738624572754,
+   "client_accept": "2026-10-09T08:02:16.118967+00:00",
+   "client_submit": "2026-10-09T08:02:15.889293+00:00",
+   "client_terminal": "2026-10-09T08:02:20.110324+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:02:16.118969+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-051",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:02:16.096868100Z",
+   "server_last_progress_at": "2026-10-09T08:02:17.382253554Z",
+   "server_window_s": 1.2853848934173584,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-78f5b10aa76cef095903c4fe5ffaf131",
+   "total": 100,
+   "wall_s": 4.221031427383423
+  },
+  {
+   "accept_ms": 131.24465942382812,
+   "client_accept": "2026-10-09T08:02:20.242347+00:00",
+   "client_submit": "2026-10-09T08:02:20.111102+00:00",
+   "client_terminal": "2026-10-09T08:02:23.418063+00:00",
+   "failed": 0,
+   "finished": 100,
+   "first_progress_seen": "2026-10-09T08:02:20.242349+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 100
+   },
+   "request_id": "g8-xp010-052",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:02:20.222751389Z",
+   "server_last_progress_at": "2026-10-09T08:02:21.348121107Z",
+   "server_window_s": 1.1253700256347656,
+   "status": "succeeded",
+   "succeeded": 100,
+   "task_id": "task-efd84cc9442ca26f135f1f54f1dc6004",
+   "total": 100,
+   "wall_s": 3.3069608211517334
+  },
+  {
+   "accept_ms": 99.20811653137207,
+   "client_accept": "2026-10-09T08:02:23.518125+00:00",
+   "client_submit": "2026-10-09T08:02:23.418917+00:00",
+   "client_terminal": "2026-10-09T08:02:24.891730+00:00",
+   "failed": 0,
+   "finished": 24,
+   "first_progress_seen": "2026-10-09T08:02:23.518127+00:00",
+   "pending": 0,
+   "polls": 2,
+   "range_result_statuses": {
+    "unknown": 24
+   },
+   "request_id": "g8-xp010-053",
+   "running": 0,
+   "server_created_at": "2026-10-09T08:02:23.506128952Z",
+   "server_last_progress_at": "2026-10-09T08:02:23.877571465Z",
+   "server_window_s": 0.3714430332183838,
+   "status": "succeeded",
+   "succeeded": 24,
+   "task_id": "task-0ec4b1b8b85be1abef21a223367309bc",
+   "total": 24,
+   "wall_s": 1.4728131294250488
+  }
+ ]
+}

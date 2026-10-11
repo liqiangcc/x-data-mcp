@@ -12,6 +12,7 @@ use crate::compact_market::{
 };
 
 const MAX_DEPTH: u32 = 256;
+const ROLLOVER_FLOOR: u32 = compact_versions::ROLLOVER_FLOOR;
 const OUTCOME_LIMIT: usize = 192;
 pub(crate) const REGISTRY_MARKET_UPDATE: i64 = 1;
 pub(crate) const REGISTRY_PUBLICATION: i64 = 2;
@@ -116,11 +117,13 @@ pub(crate) fn commit_market_update(
     c: &mut Connection,
     command: &MarketUpdateCommit,
 ) -> Result<StoredMarketUpdateResult, Error> {
-    let tx = c
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    let result = commit_market_update_tx(&tx, command)?;
-    tx.commit().map_err(storage)?;
+    let tx = crate::stage_trace::timed("results.begin", || {
+        c.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)
+    })?;
+    let result =
+        crate::stage_trace::timed("results.body", || commit_market_update_tx(&tx, command))?;
+    crate::stage_trace::timed("results.commit", || tx.commit().map_err(storage))?;
     Ok(result)
 }
 
@@ -308,11 +311,13 @@ pub(crate) fn commit_publication(
     c: &mut Connection,
     command: &PublicationCommit,
 ) -> Result<StoredPublicationResult, Error> {
-    let tx = c
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    let result = commit_publication_tx(&tx, command, true)?;
-    tx.commit().map_err(storage)?;
+    let tx = crate::stage_trace::timed("results.begin", || {
+        c.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)
+    })?;
+    let result =
+        crate::stage_trace::timed("results.body", || commit_publication_tx(&tx, command, true))?;
+    crate::stage_trace::timed("results.commit", || tx.commit().map_err(storage))?;
     Ok(result)
 }
 
@@ -364,7 +369,21 @@ pub(crate) fn commit_publication_tx(
             if facts.entity != result.entity || facts.period != result.period {
                 return Err(integrity("publication base scope mismatch"));
             }
-            compact_versions::fixed(c, &facts.version_id)?;
+            if command.publication_kind == PublicationKind::Yearly
+                && command.outcome == UpdateOutcome::Published
+                && matches!(command.head, HeadExpectation::Version(_))
+            {
+                // XP-032 P1b (user-approved layering difference, same as the
+                // prepare-time prior read): the yearly head being replaced
+                // was fully verified when it was published; here it is
+                // verified at the committed tier - no lineage re-aggregation
+                // from its older daily base. The new result version keeps
+                // its full verification below, and the head CAS
+                // (`head`/`required_heads`) is unchanged.
+                compact_versions::comparison_head_by_key(c, facts.key)?;
+            } else {
+                compact_versions::fixed(c, &facts.version_id)?;
+            }
             Some(facts)
         }
         None => None,
@@ -483,8 +502,18 @@ pub(crate) fn commit_publication_tx(
     })
 }
 
+/// `read_market_update` with a fresh per-call verified-facts context —
+/// the same single-use behavior non-deduplicated callers relied on.
 pub(crate) fn read_market_update(
     c: &Connection,
+    result_id: &str,
+) -> Result<StoredMarketUpdateResult, Error> {
+    read_market_update_ctx(c, &mut compact_versions::VerifyCtx::default(), result_id)
+}
+
+pub(crate) fn read_market_update_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     result_id: &str,
 ) -> Result<StoredMarketUpdateResult, Error> {
     let kind: Option<i64> = c
@@ -579,8 +608,12 @@ pub(crate) fn read_market_update(
     if continuity == ContinuityMode::Full && prefix_bytes.is_some() {
         return Err(integrity("full update result carries prefix_bytes"));
     }
-    let (base_facts, base_fixed) = require_published_facts(c, base_version_key)?;
-    let (result_facts, result_fixed) = require_published_facts(c, result_version_key)?;
+    // Metadata-level verified assurance first (XP-016): ordinary Delta
+    // Append, Full and NoChange linkage checks consume version facts
+    // only; whole verified histories are materialized lazily below for
+    // the checkpoint Append rollover's base+ops == result comparison.
+    let base_facts = ctx.verified_facts(c, base_version_key)?;
+    let result_facts = ctx.verified_facts(c, result_version_key)?;
     if base_projection_digest != base_facts.projection_digest
         || result_projection_digest != result_facts.projection_digest
     {
@@ -600,7 +633,7 @@ pub(crate) fn read_market_update(
     {
         return Err(integrity("market update evidence kind mismatch"));
     }
-    let ops = read_update_delta_clips(c, result_key)?;
+    let ops = read_update_delta_clips(c, result_key, ctx.segments_mut())?;
     let delta_digest = match continuity {
         ContinuityMode::Unchanged => {
             if !ops.is_empty() {
@@ -623,8 +656,12 @@ pub(crate) fn read_market_update(
                     if result_facts.parent_version_key != Some(base_facts.key) {
                         return Err(integrity("append delta parent mismatch"));
                     }
-                    let (persisted, persisted_delta, projection) =
-                        compact_v19::read_delta(c, result_facts.key, base_facts.projection_digest)?;
+                    let (persisted, persisted_delta, projection) = compact_v19::read_delta_ctx(
+                        c,
+                        result_facts.key,
+                        base_facts.projection_digest,
+                        ctx.segments_mut(),
+                    )?;
                     if persisted != ops
                         || persisted_delta != ops_digest
                         || projection != result_facts.projection_digest
@@ -633,19 +670,24 @@ pub(crate) fn read_market_update(
                     }
                 }
                 ManifestMode::Checkpoint => {
-                    if base_facts.delta_depth != MAX_DEPTH {
+                    if !(ROLLOVER_FLOOR..=MAX_DEPTH).contains(&base_facts.delta_depth) {
                         return Err(integrity(
-                            "append checkpoint rollover requires depth-256 base",
+                            "append checkpoint rollover requires a base at depth 64..=256",
                         ));
                     }
+                    // The only consumer of whole verified histories in
+                    // this read: the persisted base+ops == result bars
+                    // comparison for a depth-rollover checkpoint append.
+                    let (_, base_fixed) = ctx.verified(c, base_version_key)?;
+                    let (_, result_fixed) = ctx.verified(c, result_version_key)?;
                     let applied = compact_versions::apply_stored_delta(
                         c,
-                        &compact_bars(&base_fixed)?,
+                        &compact_bars(base_fixed.as_ref())?,
                         &ops,
                         &result_facts.entity,
                         result_facts.period,
                     )?;
-                    if applied != compact_bars(&result_fixed)? {
+                    if applied != compact_bars(result_fixed.as_ref())? {
                         return Err(integrity("checkpoint append does not match base plus ops"));
                     }
                 }
@@ -719,21 +761,267 @@ pub(crate) fn read_market_update(
     })
 }
 
-/// Rebind a stored publication identity to another task id so the S5F
-/// equivalence test can compare result digests across databases whose
-/// accepted task ids legitimately differ.
-#[cfg(test)]
-pub(crate) fn publication_identity_with_task(
-    stored: &StoredPublicationResult,
-    task_id: &str,
-) -> compact_market::PublicationResultIdentity {
-    let mut identity = stored.identity.clone();
-    identity.task_id = task_id.into();
-    identity
+/// `read_market_update_ctx` at the committed-state verification tier
+/// (XP-020) — progress/metadata reads only. Identical row decode and
+/// EVERY metadata/binding/digest check of `read_market_update_ctx`:
+/// published state, entity/period equality, projection-digest linkage,
+/// source-binding digest, evidence kind, delta ops seq/ranges/clip
+/// fields, `delta_digest`/`delta_projection_digest` recomputation,
+/// `result_digest` recomputation, `verify_task_publication` and
+/// `verify_task_item`. The ONLY drops are the `ctx.verified`/
+/// `verified_facts` full-chain verifications (replaced by
+/// `VerifyCtx::committed_facts` row + integrity-digest checks),
+/// bar-row reads (delta clips resolve segment digests from
+/// `bar_segments` header rows via `read_update_delta_clip_headers` and
+/// `compact_v19::read_delta_headers`), and the checkpoint-append
+/// base+ops == result bars comparison (content-level; the binding is
+/// already covered by the stored projection/result digest checks).
+pub(crate) fn read_market_update_meta_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
+    result_id: &str,
+) -> Result<StoredMarketUpdateResult, Error> {
+    let kind: Option<i64> = c
+        .query_row(
+            "SELECT result_kind FROM result_registry WHERE result_id=?1",
+            params![result_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    match kind {
+        None => return Err(Error::NotFound),
+        Some(REGISTRY_MARKET_UPDATE) => {}
+        Some(_) => return Err(integrity("registry kind mismatch")),
+    }
+    let row = c
+        .query_row(
+            "SELECT result_key,task_id,item_id,base_version_key,result_version_key,outcome,range_start_day,range_end_day,algorithm_version,source_binding_digest,continuity_mode,prefix_bytes,base_projection_digest,result_projection_digest,delta_digest,evidence_digest,task_revision,result_digest FROM market_update_results WHERE result_id=?1",
+            params![result_id],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, Vec<u8>>(9)?,
+                    r.get::<_, i64>(10)?,
+                    r.get::<_, Option<i64>>(11)?,
+                    r.get::<_, Vec<u8>>(12)?,
+                    r.get::<_, Vec<u8>>(13)?,
+                    r.get::<_, Option<Vec<u8>>>(14)?,
+                    r.get::<_, Vec<u8>>(15)?,
+                    r.get::<_, i64>(16)?,
+                    r.get::<_, Vec<u8>>(17)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage)?
+        .ok_or_else(|| integrity("market update result row missing"))?;
+    let (
+        result_key,
+        task_id,
+        item_id,
+        base_version_key,
+        result_version_key,
+        outcome_raw,
+        range_start_day,
+        range_end_day,
+        algorithm_version,
+        source_binding,
+        continuity_raw,
+        prefix_bytes,
+        base_projection,
+        result_projection,
+        delta_raw,
+        evidence_digest,
+        task_revision,
+        stored_digest,
+    ) = row;
+    let outcome = decode_outcome(outcome_raw)?;
+    let continuity = decode_continuity(continuity_raw)?;
+    let prefix_bytes = match prefix_bytes {
+        Some(prefix) if prefix >= 0 => Some(prefix as u64),
+        Some(_) => return Err(integrity("negative prefix_bytes")),
+        None => None,
+    };
+    let base_projection_digest = fixed_digest(&base_projection)?;
+    let result_projection_digest = fixed_digest(&result_projection)?;
+    let stored_delta = delta_raw.map(|raw| fixed_digest(&raw)).transpose()?;
+    if task_revision <= 0
+        || range_start_day > range_end_day
+        || compact_market::epoch_date(range_start_day).is_err()
+        || compact_market::epoch_date(range_end_day).is_err()
+    {
+        return Err(integrity("market update result metadata invalid"));
+    }
+    match (outcome, continuity) {
+        (UpdateOutcome::NoChange, ContinuityMode::Unchanged)
+            if base_version_key == result_version_key
+                && stored_delta.is_none()
+                && prefix_bytes.is_some() => {}
+        (UpdateOutcome::Published, ContinuityMode::Append | ContinuityMode::Full)
+            if base_version_key != result_version_key && stored_delta.is_some() => {}
+        _ => return Err(integrity("market update result combination invalid")),
+    }
+    if continuity == ContinuityMode::Full && prefix_bytes.is_some() {
+        return Err(integrity("full update result carries prefix_bytes"));
+    }
+    // Committed-state facts (XP-020): row + recomputed integrity digest
+    // instead of the full-chain `verified_facts` — every comparison the
+    // full tier ran still executes against these same-typed facts.
+    let base_facts = ctx.committed_facts(c, base_version_key)?;
+    let result_facts = ctx.committed_facts(c, result_version_key)?;
+    if base_projection_digest != base_facts.projection_digest
+        || result_projection_digest != result_facts.projection_digest
+    {
+        return Err(integrity("update result projection linkage mismatch"));
+    }
+    if base_facts.entity != result_facts.entity || base_facts.period != result_facts.period {
+        return Err(integrity("update result scope mismatch"));
+    }
+    compact_versions::verified_source_binding(c, &fixed_digest(&source_binding)?)?;
+    if outcome == UpdateOutcome::Published
+        && result_facts.source_binding_digest != fixed_digest(&source_binding)?
+    {
+        return Err(integrity("update result source binding mismatch"));
+    }
+    if compact_versions::verified_evidence_kind(c, &fixed_digest(&evidence_digest)?)?
+        != EvidenceKind::Continuity
+    {
+        return Err(integrity("market update evidence kind mismatch"));
+    }
+    let ops = read_update_delta_clip_headers(c, result_key, ctx.segments_mut())?;
+    let delta_digest = match continuity {
+        ContinuityMode::Unchanged => {
+            if !ops.is_empty() {
+                return Err(integrity("no-change update carries delta clips"));
+            }
+            None
+        }
+        ContinuityMode::Append => {
+            if ops.is_empty() {
+                return Err(integrity("append update lacks delta clips"));
+            }
+            for op in &ops {
+                if op.range_start_day <= base_facts.last_day {
+                    return Err(integrity("append update op is not tail-only"));
+                }
+            }
+            let ops_digest = compact_market::delta_digest(&codec_ops(&ops)).map_err(integrity)?;
+            match result_facts.manifest_mode {
+                ManifestMode::Delta => {
+                    if result_facts.parent_version_key != Some(base_facts.key) {
+                        return Err(integrity("append delta parent mismatch"));
+                    }
+                    let (persisted, persisted_delta, projection) = compact_v19::read_delta_headers(
+                        c,
+                        result_facts.key,
+                        base_facts.projection_digest,
+                        ctx.segments_mut(),
+                    )?;
+                    if persisted != ops
+                        || persisted_delta != ops_digest
+                        || projection != result_facts.projection_digest
+                    {
+                        return Err(integrity("append delta ops mismatch persisted"));
+                    }
+                }
+                ManifestMode::Checkpoint => {
+                    if !(ROLLOVER_FLOOR..=MAX_DEPTH).contains(&base_facts.delta_depth) {
+                        return Err(integrity(
+                            "append checkpoint rollover requires a base at depth 64..=256",
+                        ));
+                    }
+                    // Committed tier: the whole-history base+ops ==
+                    // result bars comparison is content-level and stays
+                    // with the full tier; the stored digests above
+                    // already bind this linkage.
+                }
+            }
+            Some(ops_digest)
+        }
+        ContinuityMode::Full => {
+            if !ops.is_empty() {
+                return Err(integrity("full update carries delta clips"));
+            }
+            if result_facts.manifest_mode != ManifestMode::Checkpoint
+                || result_facts.parent_version_key.is_some()
+                || result_facts.delta_depth != 0
+            {
+                return Err(integrity("full revision result is not a root checkpoint"));
+            }
+            Some(compact_market::full_revision_digest(
+                base_facts.projection_digest,
+                result_facts.projection_digest,
+            ))
+        }
+    };
+    if delta_digest != stored_delta {
+        return Err(integrity("update delta digest mismatch"));
+    }
+    let identity = MarketUpdateResultIdentity {
+        result_id: result_id.into(),
+        task_id: task_id.clone(),
+        item_id: item_id.clone(),
+        base_version_id: base_facts.version_id.clone(),
+        result_version_id: result_facts.version_id.clone(),
+        outcome,
+        range_start_day,
+        range_end_day,
+        algorithm_version,
+        source_binding_digest: fixed_digest(&source_binding)?,
+        continuity_mode: continuity,
+        prefix_bytes,
+        base_projection_digest,
+        result_projection_digest,
+        delta_digest,
+        evidence_digest: fixed_digest(&evidence_digest)?,
+        task_revision: task_revision as u64,
+    };
+    if compact_market::market_update_result_digest(&identity).map_err(integrity)?
+        != fixed_digest(&stored_digest)?
+    {
+        return Err(integrity("update result digest mismatch"));
+    }
+    verify_task_publication(
+        c,
+        &task_id,
+        result_facts.key,
+        result_id,
+        outcome == UpdateOutcome::Published,
+    )?;
+    verify_task_item(
+        c,
+        &task_id,
+        &item_id,
+        result_id,
+        "market_update",
+        task_revision,
+    )?;
+    Ok(StoredMarketUpdateResult {
+        result_key,
+        base_version_key,
+        result_version_key,
+        identity,
+        result_digest: fixed_digest(&stored_digest)?,
+    })
 }
 
-pub(crate) fn read_publication(
+/// `read_publication_ctx` at the committed-state verification tier
+/// (XP-020) — progress/metadata reads only. Identical row decode and
+/// every metadata/binding/digest check; `VerifyCtx::committed_facts`
+/// supplies version facts instead of the full-chain `verified_facts`.
+/// No bars are read and no content is re-verified.
+pub(crate) fn read_publication_meta_ctx(
     c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     publication_id: &str,
 ) -> Result<StoredPublicationResult, Error> {
     let kind: Option<i64> = c
@@ -802,7 +1090,7 @@ pub(crate) fn read_publication(
         (UpdateOutcome::Published, base) if base.is_none_or(|base| base != result_version_key) => {}
         _ => return Err(integrity("publication result combination invalid")),
     }
-    let (result_facts, _) = require_published_facts(c, result_version_key)?;
+    let result_facts = ctx.committed_facts(c, result_version_key)?;
     match publication_kind {
         PublicationKind::Collection if result_facts.period != Period::Day => {
             return Err(integrity("collection publication result is not daily"));
@@ -829,7 +1117,181 @@ pub(crate) fn read_publication(
     }
     let base_facts = match base_version_key {
         Some(key) => {
-            let (facts, _) = require_published_facts(c, key)?;
+            let facts = ctx.committed_facts(c, key)?;
+            if facts.entity != result_facts.entity || facts.period != result_facts.period {
+                return Err(integrity("publication base scope mismatch"));
+            }
+            Some(facts)
+        }
+        None => None,
+    };
+    let identity = PublicationResultIdentity {
+        publication_id: publication_id.into(),
+        task_id: task_id.clone(),
+        item_id: item_id.clone(),
+        publication_kind,
+        base_version_id: base_facts.as_ref().map(|facts| facts.version_id.clone()),
+        result_version_id: result_facts.version_id.clone(),
+        outcome,
+        algorithm_version,
+        source_binding_digest: fixed_digest(&source_binding)?,
+        evidence_digest: fixed_digest(&evidence_digest)?,
+        task_revision: task_revision as u64,
+    };
+    if compact_market::publication_result_digest(&identity).map_err(integrity)?
+        != fixed_digest(&stored_digest)?
+    {
+        return Err(integrity("publication result digest mismatch"));
+    }
+    verify_task_publication(
+        c,
+        &task_id,
+        result_facts.key,
+        publication_id,
+        outcome == UpdateOutcome::Published,
+    )?;
+    verify_task_item(
+        c,
+        &task_id,
+        &item_id,
+        publication_id,
+        "publication",
+        task_revision,
+    )?;
+    Ok(StoredPublicationResult {
+        result_key,
+        base_version_key,
+        result_version_key,
+        identity,
+        result_digest: fixed_digest(&stored_digest)?,
+    })
+}
+
+/// Rebind a stored publication identity to another task id so the S5F
+/// equivalence test can compare result digests across databases whose
+/// accepted task ids legitimately differ.
+#[cfg(test)]
+pub(crate) fn publication_identity_with_task(
+    stored: &StoredPublicationResult,
+    task_id: &str,
+) -> compact_market::PublicationResultIdentity {
+    let mut identity = stored.identity.clone();
+    identity.task_id = task_id.into();
+    identity
+}
+
+/// `read_publication` with a fresh per-call verified-facts context —
+/// the same single-use behavior non-deduplicated callers relied on.
+pub(crate) fn read_publication(
+    c: &Connection,
+    publication_id: &str,
+) -> Result<StoredPublicationResult, Error> {
+    read_publication_ctx(
+        c,
+        &mut compact_versions::VerifyCtx::default(),
+        publication_id,
+    )
+}
+
+pub(crate) fn read_publication_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
+    publication_id: &str,
+) -> Result<StoredPublicationResult, Error> {
+    let kind: Option<i64> = c
+        .query_row(
+            "SELECT result_kind FROM result_registry WHERE result_id=?1",
+            params![publication_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    match kind {
+        None => return Err(Error::NotFound),
+        Some(REGISTRY_PUBLICATION) => {}
+        Some(_) => return Err(integrity("registry kind mismatch")),
+    }
+    let row = c
+        .query_row(
+            "SELECT result_key,task_id,item_id,publication_kind,base_version_key,result_version_key,outcome,algorithm_version,source_binding_digest,evidence_digest,task_revision,result_digest FROM publication_results WHERE publication_id=?1",
+            params![publication_id],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, Vec<u8>>(8)?,
+                    r.get::<_, Vec<u8>>(9)?,
+                    r.get::<_, i64>(10)?,
+                    r.get::<_, Vec<u8>>(11)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage)?
+        .ok_or_else(|| integrity("publication result row missing"))?;
+    let (
+        result_key,
+        task_id,
+        item_id,
+        publication_kind_raw,
+        base_version_key,
+        result_version_key,
+        outcome_raw,
+        algorithm_version,
+        source_binding,
+        evidence_digest,
+        task_revision,
+        stored_digest,
+    ) = row;
+    let publication_kind = match publication_kind_raw {
+        1 => PublicationKind::Collection,
+        2 => PublicationKind::Yearly,
+        3 => PublicationKind::Republish,
+        _ => return Err(integrity("unknown publication_kind")),
+    };
+    let outcome = decode_outcome(outcome_raw)?;
+    if task_revision <= 0 {
+        return Err(integrity("publication task revision invalid"));
+    }
+    match (outcome, base_version_key) {
+        (UpdateOutcome::NoChange, Some(base)) if base == result_version_key => {}
+        (UpdateOutcome::Published, base) if base.is_none_or(|base| base != result_version_key) => {}
+        _ => return Err(integrity("publication result combination invalid")),
+    }
+    let result_facts = ctx.verified_facts(c, result_version_key)?;
+    match publication_kind {
+        PublicationKind::Collection if result_facts.period != Period::Day => {
+            return Err(integrity("collection publication result is not daily"));
+        }
+        PublicationKind::Yearly if result_facts.period != Period::Year => {
+            return Err(integrity("yearly publication result is not yearly"));
+        }
+        _ => {}
+    }
+    let expected_evidence = match publication_kind {
+        PublicationKind::Collection | PublicationKind::Republish => EvidenceKind::Version,
+        PublicationKind::Yearly => EvidenceKind::Yearly,
+    };
+    if compact_versions::verified_evidence_kind(c, &fixed_digest(&evidence_digest)?)?
+        != expected_evidence
+    {
+        return Err(integrity("publication evidence kind mismatch"));
+    }
+    compact_versions::verified_source_binding(c, &fixed_digest(&source_binding)?)?;
+    if outcome == UpdateOutcome::Published
+        && result_facts.source_binding_digest != fixed_digest(&source_binding)?
+    {
+        return Err(integrity("publication result source binding mismatch"));
+    }
+    let base_facts = match base_version_key {
+        Some(key) => {
+            let facts = ctx.verified_facts(c, key)?;
             if facts.entity != result_facts.entity || facts.period != result_facts.period {
                 return Err(integrity("publication base scope mismatch"));
             }
@@ -940,9 +1402,9 @@ fn plan_market_update(
                     }
                 }
                 ManifestMode::Checkpoint => {
-                    if base.delta_depth != MAX_DEPTH {
+                    if !(ROLLOVER_FLOOR..=MAX_DEPTH).contains(&base.delta_depth) {
                         return Err(integrity(
-                            "append checkpoint rollover requires depth-256 base",
+                            "append checkpoint rollover requires a base at depth 64..=256",
                         ));
                     }
                 }
@@ -1238,7 +1700,11 @@ fn verify_task_item(
     Ok(())
 }
 
-fn read_update_delta_clips(c: &Connection, result_key: i64) -> Result<Vec<StoredDelta>, Error> {
+fn read_update_delta_clips(
+    c: &Connection,
+    result_key: i64,
+    sctx: &mut compact_v19::SegmentReadCtx,
+) -> Result<Vec<StoredDelta>, Error> {
     let mut statement = c
         .prepare(
             "SELECT seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM market_update_delta_clips WHERE result_key=?1 ORDER BY seq",
@@ -1267,7 +1733,7 @@ fn read_update_delta_clips(c: &Connection, result_key: i64) -> Result<Vec<Stored
         if seq != index as i64 || row_count <= 0 {
             return Err(integrity("update delta clip rows malformed"));
         }
-        let segment = compact_v19::read_segment(c, segment_key)?;
+        let segment = compact_v19::read_segment_ctx(c, segment_key, sctx)?;
         ops.push(StoredDelta {
             range_start_day: range_start,
             range_end_day: range_end,
@@ -1285,16 +1751,63 @@ fn read_update_delta_clips(c: &Connection, result_key: i64) -> Result<Vec<Stored
     Ok(ops)
 }
 
-fn require_published_facts(
+/// `read_update_delta_clips` at the committed-state tier (XP-020): the
+/// identical `market_update_delta_clips` row decode and seq/row_count
+/// checks, with clip segment digests taken from `bar_segments` HEADER
+/// rows via `read_segment_header_ctx` — NO `segment_bars` rows. The
+/// full-tier read never checked clip-vs-segment bounds here (the
+/// persisted-delta equality and bars comparisons covered them); this
+/// tier preserves that assurance at header granularity by running the
+/// clip-vs-header bounds/row_count checks directly, so a corrupted
+/// header or clip row still fails closed.
+fn read_update_delta_clip_headers(
     c: &Connection,
-    key: i64,
-) -> Result<(VersionResultFacts, compact_versions::VerifiedVersion), Error> {
-    let facts = compact_versions::result_facts(c, key)?;
-    if facts.state != CompactVersionState::Published {
-        return Err(integrity("referenced version is not published"));
+    result_key: i64,
+    sctx: &mut compact_v19::SegmentReadCtx,
+) -> Result<Vec<StoredDelta>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT seq,range_start_day,range_end_day,segment_key,clip_start_day,clip_end_day,row_count FROM market_update_delta_clips WHERE result_key=?1 ORDER BY seq",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(params![result_key], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+            ))
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    drop(statement);
+    let mut ops = Vec::with_capacity(rows.len());
+    for (index, (seq, range_start, range_end, segment_key, clip_start, clip_end, row_count)) in
+        rows.into_iter().enumerate()
+    {
+        if seq != index as i64 || row_count <= 0 || row_count > u32::MAX as i64 {
+            return Err(integrity("update delta clip rows malformed"));
+        }
+        let header = compact_v19::read_segment_header_ctx(c, segment_key, sctx)?;
+        let clip = SegmentClip {
+            segment_digest: header.digest,
+            clip_start_day: clip_start,
+            clip_end_day: clip_end,
+            row_count: row_count as u32,
+        };
+        compact_v19::check_clip_against_header(&header, &clip)?;
+        ops.push(StoredDelta {
+            range_start_day: range_start,
+            range_end_day: range_end,
+            kind: StoredDeltaKind::Upsert(StoredClip { segment_key, clip }),
+        });
     }
-    let verified = compact_versions::fixed(c, &facts.version_id)?;
-    Ok((facts, verified))
+    Ok(ops)
 }
 
 fn verify_task_publication(
@@ -1430,8 +1943,18 @@ mod tests;
 /// `RangeExecutionResult` consumers. The typed row is digest-verified by
 /// `read_market_update`; the synthesized JSON carries only the fields the
 /// wire projections consume.
+/// `read_update_audit` with a fresh per-call verified-facts context —
+/// the same single-use behavior non-deduplicated callers relied on.
 pub(crate) fn read_update_audit(
     c: &Connection,
+    result_id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
+    read_update_audit_ctx(c, &mut compact_versions::VerifyCtx::default(), result_id)
+}
+
+pub(crate) fn read_update_audit_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     result_id: &str,
 ) -> Result<Option<(Value, Receipt)>, Error> {
     let exists: bool = c
@@ -1444,10 +1967,13 @@ pub(crate) fn read_update_audit(
     if !exists {
         return Ok(None);
     }
-    let stored = read_market_update(c, result_id)?;
+    let stored = read_market_update_ctx(c, ctx, result_id)?;
     let id = &stored.identity;
-    let base = compact_repo::materialize_checked(c, &id.base_version_id, false)?;
-    let result = compact_repo::materialize_checked(c, &id.result_version_id, false)?;
+    // Only the versions' stored integrity digests and `acquired_at` stamp
+    // feed the audit projection — the header-only published read carries
+    // both without materializing bars.
+    let base = compact_repo::materialize_published(c, ctx, &id.base_version_id)?;
+    let result = compact_repo::materialize_published(c, ctx, &id.result_version_id)?;
     let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
         .ok_or_else(|| integrity("range result task missing"))?;
     if binding.head.state_revision < id.task_revision
@@ -1496,8 +2022,18 @@ pub(crate) fn read_update_audit(
 
 /// Read-side audit projection of a stored compact yearly publication for
 /// `YearlyExecutionResult` consumers.
+/// `read_yearly_audit` with a fresh per-call verified-facts context —
+/// the same single-use behavior non-deduplicated callers relied on.
 pub(crate) fn read_yearly_audit(
     c: &Connection,
+    result_id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
+    read_yearly_audit_ctx(c, &mut compact_versions::VerifyCtx::default(), result_id)
+}
+
+pub(crate) fn read_yearly_audit_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
     result_id: &str,
 ) -> Result<Option<(Value, Receipt)>, Error> {
     let exists: bool = c
@@ -1511,7 +2047,7 @@ pub(crate) fn read_yearly_audit(
     if !exists {
         return Ok(None);
     }
-    let stored = read_publication(c, result_id)?;
+    let stored = read_publication_ctx(c, ctx, result_id)?;
     let id = &stored.identity;
     // The daily base is the result version's stored lineage — for yearly
     // results `base_version_id` is the same-period head/result link, not
@@ -1521,8 +2057,13 @@ pub(crate) fn read_yearly_audit(
         compact_repo::version_key(c, &id.result_version_id)?,
     )?
     .ok_or_else(|| integrity("yearly result lacks daily base"))?;
-    let _base = compact_repo::materialize_checked(c, &base_id, false)?;
-    let result = compact_repo::materialize_checked(c, &id.result_version_id, false)?;
+    // The base/result reads exist to prove both versions still resolve as
+    // published and to project their digests/stamps — the published rows
+    // additionally pass the full `fixed` verification once per transaction
+    // through the verified-facts context before their slim envelope is
+    // emitted.
+    let _base = compact_repo::materialize_published(c, ctx, &base_id)?;
+    let result = compact_repo::materialize_published(c, ctx, &id.result_version_id)?;
     let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
         .ok_or_else(|| integrity("yearly result task missing"))?;
     if binding.head.state_revision < id.task_revision
@@ -1559,4 +2100,187 @@ pub(crate) fn read_yearly_audit(
             task_revision: id.task_revision,
         },
     )))
+}
+
+/// `read_update_audit_ctx` at the committed-state verification tier
+/// (XP-020) — progress/metadata reads only. The SAME audit `Value` and
+/// `Receipt` shape, the same `read_item_binding`/revision/stage/
+/// outcome and `task_publications` linkage checks, and the same
+/// result-row assurance via `read_market_update_meta_ctx`. Base/result
+/// header fields are resolved from committed facts instead of
+/// `materialize_published`: `integrity_sha256` is the stored
+/// `integrity_digest` hex and `acquired_at` is the stored
+/// `published_at` — exactly the two fields the slim envelope copied
+/// from the same row. The evidence-bundle/source-binding/
+/// generation-evidence JSON reads `materialize_published` performs are
+/// not required at this tier: their content is bound by
+/// `evidence_digest`/`source_binding_digest` inside the recomputed
+/// `integrity_digest` (`verify_published_fields`, run per version by
+/// `committed_facts`).
+pub(crate) fn read_update_audit_meta_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
+    result_id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
+    let exists: bool = c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM market_update_results WHERE result_id=?1)",
+            [result_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if !exists {
+        return Ok(None);
+    }
+    let stored = read_market_update_meta_ctx(c, ctx, result_id)?;
+    let id = &stored.identity;
+    let base = ctx.committed_facts_by_id(c, &id.base_version_id)?;
+    let result = ctx.committed_facts_by_id(c, &id.result_version_id)?;
+    let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
+        .ok_or_else(|| integrity("range result task missing"))?;
+    if binding.head.state_revision < id.task_revision
+        || binding.item.stage != crate::task_control::Stage::Finished
+        || !binding.item.outcome.as_ref().is_some_and(|o| o.success)
+    {
+        return Err(integrity("range result lacks successful task item"));
+    }
+    let no_change = id.outcome == UpdateOutcome::NoChange;
+    if !no_change {
+        let linked: bool = c
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_publications WHERE result_id=?1)",
+                [result_id],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if !linked {
+            return Err(integrity("range publication missing"));
+        }
+    }
+    let acquired_at = committed_acquired_at(&result)?;
+    let base_integrity = committed_integrity_hex(&base)?;
+    let result_integrity = committed_integrity_hex(&result)?;
+    let audit = serde_json::json!({
+        "no_change": no_change,
+        "command": {
+            "publication_id": id.result_id,
+            "task_id": id.task_id,
+            "item_id": id.item_id,
+            "version_id": id.result_version_id,
+        },
+        "evidence": {"base_version_id": id.base_version_id},
+        "segment": {"provenance": {"acquired_at": acquired_at}},
+        "algorithm_version": id.algorithm_version,
+        "base_integrity_sha256": base_integrity,
+        "result_integrity_sha256": result_integrity,
+    });
+    Ok(Some((
+        audit,
+        Receipt {
+            publication_id: id.result_id.clone(),
+            version_id: id.result_version_id.clone(),
+            task_id: id.task_id.clone(),
+            task_revision: id.task_revision,
+        },
+    )))
+}
+
+/// `read_yearly_audit_ctx` at the committed-state verification tier
+/// (XP-020) — progress/metadata reads only. Same audit `Value`/`Receipt`
+/// shape and the same binding/linkage checks; publication assurance via
+/// `read_publication_meta_ctx`; base/result resolved by committed facts
+/// instead of `materialize_published`.
+pub(crate) fn read_yearly_audit_meta_ctx(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
+    result_id: &str,
+) -> Result<Option<(Value, Receipt)>, Error> {
+    let exists: bool = c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM publication_results \
+             WHERE publication_id=?1 AND publication_kind=2)",
+            [result_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if !exists {
+        return Ok(None);
+    }
+    let stored = read_publication_meta_ctx(c, ctx, result_id)?;
+    let id = &stored.identity;
+    let base_id = compact_versions::daily_base_version_id(
+        c,
+        compact_repo::version_key(c, &id.result_version_id)?,
+    )?
+    .ok_or_else(|| integrity("yearly result lacks daily base"))?;
+    // Committed tier: the base read proves the daily base still resolves
+    // as a published row whose integrity digest recomputes — the role
+    // `_base` played at the full tier.
+    let _base = ctx.committed_facts_by_id(c, &base_id)?;
+    let result = ctx.committed_facts_by_id(c, &id.result_version_id)?;
+    let binding = crate::sqlite_tasks::read_item_binding(c, &id.task_id, &id.item_id)?
+        .ok_or_else(|| integrity("yearly result task missing"))?;
+    if binding.head.state_revision < id.task_revision
+        || binding.item.stage != crate::task_control::Stage::Finished
+        || !binding.item.outcome.as_ref().is_some_and(|o| o.success)
+    {
+        return Err(integrity("yearly result lacks successful task item"));
+    }
+    let no_change = id.outcome == UpdateOutcome::NoChange;
+    if !no_change {
+        let linked: bool = c
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_publications WHERE result_id=?1)",
+                [result_id],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if !linked {
+            return Err(integrity("yearly publication missing"));
+        }
+    }
+    let acquired_at = committed_acquired_at(&result)?;
+    let audit = serde_json::json!({
+        "no_change": no_change,
+        "base_daily_version_id": base_id,
+        "command": {"item_id": id.item_id},
+        "candidate": {"batch": {"provenance": {"acquired_at": acquired_at}}},
+    });
+    Ok(Some((
+        audit,
+        Receipt {
+            publication_id: id.publication_id.clone(),
+            version_id: id.result_version_id.clone(),
+            task_id: id.task_id.clone(),
+            task_revision: id.task_revision,
+        },
+    )))
+}
+
+/// Stored `integrity_digest` of a committed-tier fact row as lowercase
+/// hex — identical to the published envelope `integrity_sha256`
+/// (`materialize_header` refuses a published row without one, so a
+/// `None` here is unreachable on verified facts but still fails
+/// closed).
+fn committed_integrity_hex(facts: &VersionResultFacts) -> Result<Value, Error> {
+    let digest = facts
+        .integrity_digest
+        .ok_or_else(|| integrity("committed version lacks integrity digest"))?;
+    Ok(Value::String(compact_market::digest_hex(&digest)))
+}
+
+/// Stored `published_at` re-encoded the way the slim envelope emitted
+/// `batch.provenance.acquired_at` (`Provenance.acquired_at` is a
+/// `DateTime<Utc>`): parse + re-serialize so the audit value is
+/// byte-identical to the full-tier output. An unparseable or absent
+/// stamp is committed-state corruption — fail closed.
+fn committed_acquired_at(facts: &VersionResultFacts) -> Result<Value, Error> {
+    let stamp = facts
+        .published_at
+        .as_deref()
+        .ok_or_else(|| integrity("committed version lacks published_at"))?;
+    let at = DateTime::parse_from_rfc3339(stamp)
+        .map_err(integrity)?
+        .with_timezone(&Utc);
+    serde_json::to_value(at).map_err(integrity)
 }

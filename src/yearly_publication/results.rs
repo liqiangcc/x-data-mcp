@@ -67,7 +67,9 @@ impl<R: MarketRepository> Publisher<R> {
             }
         };
         match binding {
-            Some(binding) => tasks::validate_binding(binding, &command, candidate)?,
+            Some(binding) => crate::stage_trace::timed("yearly.prepare.validate_binding", || {
+                tasks::validate_binding(binding, &command, candidate)
+            })?,
             None => {
                 let head = self.repository.task_head(&command.task_id)?;
                 if matches!(head.key.operation.as_str(), "update_data" | "backfill_data") {
@@ -90,9 +92,10 @@ impl<R: MarketRepository> Publisher<R> {
                 "reuse comparison must bind expected yearly head".into(),
             ));
         }
-        let base_facts = self
-            .repository
-            .fixed_facts(&candidate.base_daily_version_id)?;
+        let base_facts = crate::stage_trace::timed("yearly.prepare.fixed_facts_base", || {
+            self.repository
+                .fixed_facts(&candidate.base_daily_version_id)
+        })?;
         if base_facts.integrity_sha256 != candidate.base_integrity_sha256 {
             return Err(Error::Base("fixed base changed after derivation".into()));
         }
@@ -113,15 +116,25 @@ impl<R: MarketRepository> Publisher<R> {
                 base
             }
             _ => {
-                fetched_base = self.repository.fixed_window(
-                    &candidate.base_daily_version_id,
-                    base_facts.first_day,
-                    base_facts.first_day,
-                )?;
+                fetched_base = crate::stage_trace::timed("yearly.prepare.fixed_window_1d", || {
+                    self.repository.fixed_window(
+                        &candidate.base_daily_version_id,
+                        base_facts.first_day,
+                        base_facts.first_day,
+                    )
+                })?;
                 &fetched_base
             }
         };
-        let prior = prior_id.map(|id| self.repository.fixed(id)).transpose()?;
+        let prior = crate::stage_trace::timed("yearly.prepare.fixed_prior", || {
+            // Approved layering difference (XP-032 P1): the prior head was
+            // fully verified when it was published, so it is read at the
+            // committed tier. The candidate and the commit transaction keep
+            // full verification.
+            prior_id
+                .map(|id| self.repository.fixed_comparison(id))
+                .transpose()
+        })?;
         let binding = binding
             .ok_or_else(|| Error::Conflict("comparison item absent from accepted task".into()))?;
         if binding.head.key.contract_version == super::tasks::CONTRACT_VERSION {
@@ -135,33 +148,49 @@ impl<R: MarketRepository> Publisher<R> {
             }
         }
         let next = &candidate.checked;
-        crate::market_storage::validate_base_facts_meta(next, &self.repository, &base_facts, base)?;
+        crate::stage_trace::timed("yearly.prepare.validate_base_facts_meta", || {
+            crate::market_storage::validate_base_facts_meta(
+                next,
+                &self.repository,
+                &base_facts,
+                base,
+            )
+        })?;
         if prior.as_ref().is_some_and(|p| {
             p.version().symbol != next.version().symbol
                 || p.version().period != next.version().period
         }) {
             return Err(Error::Base("prior yearly identity/period".into()));
         }
-        let no_change = prior.as_ref().is_some_and(|p| equivalent(p, next));
+        let no_change = crate::stage_trace::timed("yearly.prepare.equivalent", || {
+            prior.as_ref().is_some_and(|p| equivalent(p, next))
+        });
         let publication = if no_change {
             let prior = prior.as_ref().unwrap();
             let mut command = command;
             command.version_id = prior.version().version_id.clone();
             // The prior's lineage may name a different base than the
             // candidate's — fetch facts/meta inside `plan_record` as before.
-            let mut plan =
-                self.plan_record_prefetched(command, prior.clone(), Some(binding), None)?;
+            let mut plan = crate::stage_trace::timed("yearly.prepare.plan_record", || {
+                self.plan_record_prefetched(command, prior.clone(), Some(binding), None)
+            })?;
             plan.promote = None;
             plan
         } else {
-            self.prepare_derived_yearly_prefetched(
-                command,
-                candidate,
-                Some(binding),
-                Some((&base_facts, base)),
-            )?
+            crate::stage_trace::timed("yearly.prepare.derived", || {
+                self.prepare_derived_yearly_prefetched(
+                    command,
+                    candidate,
+                    Some(binding),
+                    Some((&base_facts, base)),
+                    prior.as_ref(),
+                )
+            })?
         };
-        let (candidate_env, audit_payloads) = crate::sqlite_market::envelope::pack(&candidate.raw)?;
+        let (candidate_env, audit_payloads) =
+            crate::stage_trace::timed("yearly.prepare.envelope_pack", || {
+                crate::sqlite_market::envelope::pack(&candidate.raw)
+            })?;
         let audit = json!({
             "format":"local-yearly-result-v1", "command":publication.command,
             "candidate":candidate_env, "no_change":no_change,

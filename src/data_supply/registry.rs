@@ -10,6 +10,7 @@ pub enum Handler {
     Availability,
     Tasks,
     Progress,
+    YearPresence,
     Capabilities,
     Collection,
     Retry,
@@ -137,6 +138,7 @@ pub const AVAILABILITY_DESCRIPTION: &str = "Report published coverage, freshness
 pub const TASKS_DESCRIPTION: &str =
     "Page task summaries filtered by dataset, operation, status and creation range. Read-only.";
 pub const PROGRESS_DESCRIPTION: &str = "Page one task's item progress, execution results, publication versions and verification receipts. Read-only.";
+pub const PRESENCE_DESCRIPTION: &str = "Resolve the exact natural-year set present in each pinned published market.daily base version — the only input yearly orchestration needs for years subsets. 1..100 entity/base bindings per call; every item fully verified inside one bounded snapshot; resolved items carry the real integrity digest and sorted unique years (a valid empty history is []), missing or unpublished bases report base_unavailable, identity/content/lineage mismatches report integrity_failure. No cursor, no task creation, no head writes. Read-only.";
 pub const CAPABILITIES_DESCRIPTION: &str = "Report this server's capability matrix: implemented tools, per-dataset schemas, runtime and governance readiness, structured blocking reasons and production gate facts. Facts only — no workflow ordering or cross-server instructions.";
 pub const TASK_DESCRIPTION: &str = "Read one task's status, frozen scope and per-item results.";
 pub const REQUEST_DESCRIPTION: &str = "Read the durable request_id binding and its bound task or terminal result without accepting work.";
@@ -280,6 +282,12 @@ pub fn entries() -> Vec<Entry> {
             Handler::Availability,
             AVAILABILITY_DESCRIPTION,
             query,
+        ),
+        entry::<YearPresenceQuery, YearPresenceReply>(
+            "get_yearly_base_years",
+            Handler::YearPresence,
+            PRESENCE_DESCRIPTION,
+            json!({"contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"published-daily-id","start_year":2020,"end_year":2026}]}),
         ),
         entry::<TasksQuery, TaskListPage>(
             "list_tasks",

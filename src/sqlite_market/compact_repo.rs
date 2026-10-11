@@ -393,6 +393,45 @@ impl SqliteCompactMarket {
             // (#259 S5G-8): no parent leaf reconstruction. Anything else
             // (removes, revisions, overlapping upserts) keeps the full
             // projection check.
+            // Rollover (XP-038): at the delta depth bound the next version is
+            // a rebuilt checkpoint carrying the delta as its basis, exactly
+            // like the envelope path in `stage_tx`. `stage_checkpoint` verifies
+            // the published parent and that checkpoint == parent + ops.
+            if base_facts.delta_depth >= compact_versions::rollover_depth(entity) {
+                crate::stage_trace::note("rollover.count", &[("rollovers", 1)]);
+                let base_bars = crate::stage_trace::timed("rollover.base_bars", || {
+                    compact_versions::leaf_bars(c, base_key)
+                })?;
+                let applied = crate::stage_trace::timed("rollover.apply", || {
+                    compact_versions::apply_stored_delta(c, &base_bars, &ops, entity, Period::Day)
+                })?;
+                let clips_span = crate::stage_trace::span("rollover.clips");
+                let mut clips = Vec::new();
+                for chunk in applied.chunks(SEGMENT_ROWS) {
+                    let segment = compact_v19::insert_segment(c, entity, Period::Day, chunk)?;
+                    clips.push(StoredClip {
+                        segment_key: segment.key,
+                        clip: compact_market::SegmentClip {
+                            segment_digest: segment.digest,
+                            clip_start_day: chunk[0].trade_day,
+                            clip_end_day: chunk[chunk.len() - 1].trade_day,
+                            row_count: chunk.len() as u32,
+                        },
+                    });
+                }
+                drop(clips_span);
+                return crate::stage_trace::timed("rollover.stage_checkpoint", || {
+                    compact_versions::stage_checkpoint(
+                        c,
+                        &draft,
+                        &clips,
+                        Some(&compact_versions::CheckpointBasis {
+                            parent_version_key: base_key,
+                            delta_ops: ops,
+                        }),
+                    )
+                });
+            }
             let append_only = !bars.is_empty() && removes.is_empty() && {
                 let first = bars.first().unwrap().trade_day;
                 let parent_last = base_facts.last_day;
@@ -539,7 +578,64 @@ impl SqliteCompactMarket {
                     )
                 }
                 ManifestMode::Checkpoint => {
-                    (MarketUpdateChange::Full, facts.first_day, facts.last_day)
+                    // A checkpoint result is committed as an Append ONLY when it
+                    // is exactly a rollover: base at the rollover depth and the
+                    // result's bars are the base's bars (unchanged prefix)
+                    // followed by new bars. Every other checkpoint (full
+                    // revision, overwrite/remove) keeps the Full shape.
+                    let base_facts = compact_versions::result_facts(c, base_key)?;
+                    let rollover_tail = if base_facts.delta_depth
+                        >= compact_versions::rollover_depth(&facts.entity)
+                    {
+                        let base_bars = compact_versions::leaf_bars(c, base_key)?;
+                        let mut result_bars = compact_versions::leaf_bars(c, result_key)?;
+                        if result_bars.len() > base_bars.len()
+                            && result_bars[..base_bars.len()] == base_bars[..]
+                        {
+                            Some(result_bars.split_off(base_bars.len()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    match rollover_tail {
+                        Some(tail) => {
+                            let mut ops = Vec::new();
+                            for chunk in tail.chunks(SEGMENT_ROWS) {
+                                let segment = compact_v19::insert_segment(
+                                    c,
+                                    &facts.entity,
+                                    Period::Day,
+                                    chunk,
+                                )?;
+                                ops.push(StoredDelta {
+                                    range_start_day: chunk[0].trade_day,
+                                    range_end_day: chunk[chunk.len() - 1].trade_day,
+                                    kind: StoredDeltaKind::Upsert(StoredClip {
+                                        segment_key: segment.key,
+                                        clip: compact_market::SegmentClip {
+                                            segment_digest: segment.digest,
+                                            clip_start_day: chunk[0].trade_day,
+                                            clip_end_day: chunk[chunk.len() - 1].trade_day,
+                                            row_count: chunk.len() as u32,
+                                        },
+                                    }),
+                                });
+                            }
+                            let (first, last) =
+                                (ops[0].range_start_day, ops[ops.len() - 1].range_end_day);
+                            (
+                                MarketUpdateChange::Append {
+                                    prefix_bytes: base_count(c, base_key)? * 32,
+                                    ops,
+                                },
+                                first,
+                                last,
+                            )
+                        }
+                        None => (MarketUpdateChange::Full, facts.first_day, facts.last_day),
+                    }
                 }
             };
             let continuity = Self::ops_continuity_json(
@@ -758,50 +854,7 @@ impl SqliteCompactMarket {
         &self,
         base_version_id: &str,
     ) -> Result<crate::market_update::UpdateBaseFacts, Error> {
-        self.read(|c| {
-            let key = version_key(c, base_version_id)?;
-            let facts = compact_versions::result_facts(c, key)?;
-            if facts.state != CompactVersionState::Published {
-                return Err(integrity("ops base version is not published"));
-            }
-            if facts.period != Period::Day {
-                return Err(integrity("ops base is not a daily version"));
-            }
-            let binding = compact_versions::read_source_binding(c, &facts.source_binding_digest)?;
-            let (kind, evidence_json) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
-            if kind != EvidenceKind::Version {
-                return Err(integrity("base version evidence kind mismatch"));
-            }
-            let evidence: compact_market::VersionEvidence = serde_json::from_str(&evidence_json)
-                .map_err(|e| integrity(format!("version evidence malformed: {e}")))?;
-            let integrity_digest = facts
-                .integrity_digest
-                .ok_or_else(|| integrity("published base lacks integrity digest"))?;
-            let coverage_status = match facts.coverage_status {
-                1 => CoverageStatus::Complete,
-                2 => CoverageStatus::Incomplete,
-                _ => CoverageStatus::Unknown,
-            };
-            Ok(crate::market_update::UpdateBaseFacts {
-                version_id: facts.version_id,
-                symbol: facts.entity,
-                record_count: u32::try_from(facts.record_count)
-                    .map_err(|_| integrity("base record_count out of range"))?,
-                first_day: compact_market::epoch_date(facts.first_day).map_err(integrity)?,
-                last_day: compact_market::epoch_date(facts.last_day).map_err(integrity)?,
-                integrity_sha256: hex_bytes(&integrity_digest),
-                coverage: crate::market_data::CoverageEvidence {
-                    status: coverage_status,
-                    reason: evidence.coverage_reason,
-                },
-                unit_currency: evidence.unit_currency,
-                source: evidence.source,
-                generation_id: binding.generation_id,
-                generation_manifest_sha256: hex_bytes(&binding.generation_manifest_sha256),
-                day_member_sha256: hex_bytes(&binding.day_member_sha256),
-                security_event_sha256: hex_bytes(&binding.security_event_sha256),
-            })
-        })
+        self.read(|c| update_base_facts_on(c, base_version_id))
     }
 
     /// Windowed base bars for the ops-diff path (#259 S5G).
@@ -811,19 +864,127 @@ impl SqliteCompactMarket {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<Bar>, Error> {
-        self.read(|c| {
-            let key = version_key(c, base_version_id)?;
-            let bars = compact_versions::leaf_bars_in_range(
-                c,
-                key,
-                compact_market::epoch_day(start),
-                compact_market::epoch_day(end),
-            )?;
-            bars.iter()
-                .map(|bar| bar.to_bar(Period::Day).map_err(integrity))
-                .collect()
-        })
+        self.read(|c| base_bars_in_range_on(c, base_version_id, start, end))
     }
+}
+
+fn base_bars_in_range_on(
+    c: &Connection,
+    base_version_id: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Vec<Bar>, Error> {
+    let key = version_key(c, base_version_id)?;
+    let bars = compact_versions::leaf_bars_in_range(
+        c,
+        key,
+        compact_market::epoch_day(start),
+        compact_market::epoch_day(end),
+    )?;
+    bars.iter()
+        .map(|bar| bar.to_bar(Period::Day).map_err(integrity))
+        .collect()
+}
+
+fn fixed_facts_on(c: &Connection, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+    let key = version_key(c, id)?;
+    let facts = compact_versions::result_facts(c, key)?;
+    if facts.state != CompactVersionState::Published {
+        return Err(Error::NotFound);
+    }
+    let integrity_digest = facts
+        .integrity_digest
+        .ok_or_else(|| integrity("published version lacks integrity digest"))?;
+    Ok(crate::market_storage::FixedFacts {
+        version_id: facts.version_id,
+        symbol: facts.entity,
+        period: facts.period,
+        integrity_sha256: hex_bytes(&integrity_digest),
+        first_day: compact_market::epoch_date(facts.first_day)
+            .map_err(|e| integrity(e.to_string()))?,
+        last_day: compact_market::epoch_date(facts.last_day)
+            .map_err(|e| integrity(e.to_string()))?,
+    })
+}
+
+fn item_receipt_on(c: &Connection, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
+    let id: Option<String> = c
+        .query_row(
+            "SELECT result_id FROM market_update_results WHERE task_id=?1 AND item_id=?2",
+            params![task, item],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    let Some(id) = id else { return Ok(None) };
+    let stored = compact_results::read_market_update(c, &id)?;
+    Ok(Some(Receipt {
+        publication_id: stored.identity.result_id.clone(),
+        version_id: stored.identity.result_version_id.clone(),
+        task_id: stored.identity.task_id.clone(),
+        task_revision: stored.identity.task_revision,
+    }))
+}
+
+/// A base published before snapshot bindings existed cannot drive the
+/// continuity probe (the caller falls back to the envelope path).
+fn source_bound_on(c: &Connection, base_version_id: &str) -> Result<bool, Error> {
+    let key = version_key(c, base_version_id)?;
+    let facts = compact_versions::result_facts(c, key)?;
+    c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_bindings WHERE source_binding_digest=?1)",
+        params![facts.source_binding_digest.as_slice()],
+        |r| r.get::<_, bool>(0),
+    )
+    .map_err(storage)
+}
+
+fn update_base_facts_on(
+    c: &Connection,
+    base_version_id: &str,
+) -> Result<crate::market_update::UpdateBaseFacts, Error> {
+    let key = version_key(c, base_version_id)?;
+    let facts = compact_versions::result_facts(c, key)?;
+    if facts.state != CompactVersionState::Published {
+        return Err(integrity("ops base version is not published"));
+    }
+    if facts.period != Period::Day {
+        return Err(integrity("ops base is not a daily version"));
+    }
+    let binding = compact_versions::read_source_binding(c, &facts.source_binding_digest)?;
+    let (kind, evidence_json) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
+    if kind != EvidenceKind::Version {
+        return Err(integrity("base version evidence kind mismatch"));
+    }
+    let evidence: compact_market::VersionEvidence = serde_json::from_str(&evidence_json)
+        .map_err(|e| integrity(format!("version evidence malformed: {e}")))?;
+    let integrity_digest = facts
+        .integrity_digest
+        .ok_or_else(|| integrity("published base lacks integrity digest"))?;
+    let coverage_status = match facts.coverage_status {
+        1 => CoverageStatus::Complete,
+        2 => CoverageStatus::Incomplete,
+        _ => CoverageStatus::Unknown,
+    };
+    Ok(crate::market_update::UpdateBaseFacts {
+        version_id: facts.version_id,
+        symbol: facts.entity,
+        record_count: u32::try_from(facts.record_count)
+            .map_err(|_| integrity("base record_count out of range"))?,
+        first_day: compact_market::epoch_date(facts.first_day).map_err(integrity)?,
+        last_day: compact_market::epoch_date(facts.last_day).map_err(integrity)?,
+        integrity_sha256: hex_bytes(&integrity_digest),
+        coverage: crate::market_data::CoverageEvidence {
+            status: coverage_status,
+            reason: evidence.coverage_reason,
+        },
+        unit_currency: evidence.unit_currency,
+        source: evidence.source,
+        generation_id: binding.generation_id,
+        generation_manifest_sha256: hex_bytes(&binding.generation_manifest_sha256),
+        day_member_sha256: hex_bytes(&binding.day_member_sha256),
+        security_event_sha256: hex_bytes(&binding.security_event_sha256),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1004,7 +1165,31 @@ pub(crate) fn materialize_checked(
     version_id: &str,
     staged: bool,
 ) -> Result<CheckedRecord, Error> {
-    let m = compact_versions::materialize(c, version_id)?;
+    materialize_checked_tier(c, version_id, staged, false)
+}
+
+/// `materialize_checked(.., false)` for the yearly-prepare prior head at the
+/// committed tier (XP-032 P1, approved difference: no lineage re-aggregation;
+/// see `compact_versions::comparison_head_by_key`).
+pub(crate) fn materialize_comparison(
+    c: &Connection,
+    version_id: &str,
+) -> Result<CheckedRecord, Error> {
+    materialize_checked_tier(c, version_id, false, true)
+}
+
+fn materialize_checked_tier(
+    c: &Connection,
+    version_id: &str,
+    staged: bool,
+    comparison: bool,
+) -> Result<CheckedRecord, Error> {
+    let _span = crate::stage_trace::span("cand.materialize_checked");
+    let m = if comparison {
+        compact_versions::materialize_comparison(c, version_id)?
+    } else {
+        compact_versions::materialize(c, version_id)?
+    };
     let allowed = match m.state {
         CompactVersionState::Published => !staged,
         CompactVersionState::Validated => true,
@@ -1013,19 +1198,68 @@ pub(crate) fn materialize_checked(
     if !allowed {
         return Err(Error::NotFound);
     }
-    synthesize(&m)
+    crate::stage_trace::timed("cand.synthesize", || synthesize(&m))
 }
 
-fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
-    let record = compat::check(raw)?;
+/// Header-only `materialize_checked` for published rows: `synthesize` emits
+/// the identical slim envelope, so `raw()`/header `version()` fields match
+/// the full materialization byte-for-byte while `version().records` and
+/// `batch.bars` stay empty. For reference/metadata reads only — never hand
+/// the result to code that consumes bars. `Ok(None)` when the row is absent
+/// or not published so callers keep `materialize_checked` as the exact
+/// fallback for missing/staged/validated states.
+///
+/// The slim envelope is emitted only after the same version passed the
+/// full `fixed` verification inside this transaction's verified-facts
+/// context (XP-011): the projection stays header-cheap, but its use is
+/// detection-equivalent to the verified path — corrupted segment bytes,
+/// broken clip linkage or lineage drift fail closed exactly like the full
+/// materialization, and repeated touches deduplicate within `ctx`.
+/// `verified_facts_by_id` carries that assurance without retaining the
+/// whole history when only metadata is needed (XP-016 certificate path).
+pub(crate) fn materialize_slim(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
+    version_id: &str,
+) -> Result<Option<CheckedRecord>, Error> {
+    let Some(m) = compact_versions::materialize_header(c, version_id)? else {
+        return Ok(None);
+    };
+    ctx.verified_facts_by_id(c, version_id)?;
+    synthesize(&m).map(Some)
+}
+
+/// `materialize_checked(.., staged=false)` for reference/metadata reads:
+/// published rows come back through the header projection, everything else
+/// falls through to the full verified materialization. `version().records`
+/// is empty on the fast path — callers must not consume bars from it.
+pub(crate) fn materialize_published(
+    c: &Connection,
+    ctx: &mut compact_versions::VerifyCtx,
+    version_id: &str,
+) -> Result<CheckedRecord, Error> {
+    match materialize_slim(c, ctx, version_id)? {
+        Some(record) => Ok(record),
+        None => materialize_checked(c, version_id, false),
+    }
+}
+
+fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
+    let _total = crate::stage_trace::span("stage.total");
+    crate::stage_trace::note(
+        "stage.autocommit",
+        &[("autocommit", c.is_autocommit() as u64)],
+    );
+    let record = crate::stage_trace::timed("stage.compat_check", || compat::check(raw))?;
     let version_evidence = VersionEvidence {
         source: record.version.source.clone(),
         coverage_reason: record.batch.coverage.reason.clone(),
         unit_currency: record.batch.unit_currency.clone(),
         adjustment_evidence: record.batch.adjustment_evidence.clone(),
     };
-    let evidence_digest =
-        compact_versions::put_evidence(c, EvidenceKind::Version, &json!(version_evidence))?;
+    let evidence_digest = crate::stage_trace::timed("stage.put_evidence", || {
+        compact_versions::put_evidence(c, EvidenceKind::Version, &json!(version_evidence))
+    })?;
     let period = record.version.period;
     let entity = record.version.symbol.clone();
     let bars = record
@@ -1037,7 +1271,8 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
         .map_err(super::integrity)?;
     // Full-candidate clips are only materialized for checkpoint staging;
     // content-addressed segments let unchanged chunks reuse existing rows.
-    let full_clips = |c: &mut Connection| -> Result<Vec<StoredClip>, Error> {
+    let full_clips = |c: &Connection| -> Result<Vec<StoredClip>, Error> {
+        let _span = crate::stage_trace::span("stage.full_clips");
         let mut clips = Vec::new();
         for chunk in bars.chunks(SEGMENT_ROWS) {
             let segment = compact_v19::insert_segment(c, &entity, period, chunk)?;
@@ -1063,8 +1298,10 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                 .yearly_derivation
                 .clone()
                 .ok_or_else(|| invalid("yearly record lacks derivation"))?;
+            let lineage_span = crate::stage_trace::span("stage.yearly_base_facts");
             let base_key = version_key(c, &derivation.base_daily_version_id)?;
             let base = compact_versions::result_facts(c, base_key)?;
+            drop(lineage_span);
             if base.state != CompactVersionState::Published
                 || base.period != Period::Day
                 || base.entity != entity
@@ -1077,7 +1314,13 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                     algorithm_version: derivation.algorithm_version.clone(),
                     first_trade_day: compact_market::epoch_day(derivation.first_trading_date),
                     last_trade_day: compact_market::epoch_day(derivation.last_trading_date),
-                    as_of_day: base.last_day,
+                    as_of_day: {
+                        crate::stage_trace::note(
+                            "stage.lineage_as_of",
+                            &[("as_of_epoch_day", base.last_day as u64)],
+                        );
+                        base.last_day
+                    },
                 }),
                 base.source_binding_digest,
             )
@@ -1118,8 +1361,17 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
         yearly_lineage,
     };
     if let Some(parent_id) = raw.get("compact_parent_version_id").and_then(Value::as_str) {
+        let parent_span = crate::stage_trace::span("stage.parent_facts");
         let parent_key = version_key(c, parent_id)?;
         let parent = compact_versions::result_facts(c, parent_key)?;
+        drop(parent_span);
+        crate::stage_trace::note(
+            "stage.parent",
+            &[
+                ("delta_depth", parent.delta_depth as u64),
+                ("period_year", (period == Period::Year) as u64),
+            ],
+        );
         if parent.state != CompactVersionState::Published
             || parent.entity != entity
             || parent.period != period
@@ -1128,6 +1380,7 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                 "compact parent is not a published same-scope version",
             ));
         }
+        let fixed_span = crate::stage_trace::span("stage.parent_fixed");
         let parent_bars = compact_versions::fixed(c, parent_id)?
             .version
             .records
@@ -1135,7 +1388,10 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
             .map(|bar| CompactBar::from_bar(bar, period))
             .collect::<Result<Vec<_>, _>>()
             .map_err(super::integrity)?;
-        match plan_delta(&parent_bars, &bars)? {
+        drop(fixed_span);
+        let plan =
+            crate::stage_trace::timed("stage.plan_delta", || plan_delta(&parent_bars, &bars))?;
+        match plan {
             DeltaPlan::Equal => {
                 return Err(Error::Conflict(
                     "candidate identical to declared parent; no-change must not stage".into(),
@@ -1162,9 +1418,10 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                         }),
                     });
                 }
-                if parent.delta_depth < 256 {
+                if parent.delta_depth < compact_versions::rollover_depth(&entity) {
                     compact_versions::stage_delta(c, &draft, parent_key, &ops)?;
                 } else {
+                    crate::stage_trace::note("rollover.count", &[("rollovers", 1)]);
                     let clips = full_clips(c)?;
                     compact_versions::stage_checkpoint(
                         c,
@@ -1703,9 +1960,24 @@ fn base_count(c: &Connection, key: i64) -> Result<u64, Error> {
 
 impl MarketRepository for SqliteCompactMarket {
     fn stage(&self, raw: &Value) -> Result<(), Error> {
-        self.write(|c| stage_tx(c, raw))
+        // XP-031 F1: the whole staging (evidence, segments, version, lineage,
+        // clips) commits once. Before, every INSERT was its own autocommit
+        // transaction on a synchronous=FULL WAL connection; a mid-way failure
+        // also left committed partial staged rows. Now it rolls back whole.
+        self.write(|c| {
+            let tx = crate::stage_trace::timed("coord.tx.begin", || {
+                c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(storage)
+            })?;
+            crate::stage_trace::timed("stage.tx_body", || stage_tx(&tx, raw))?;
+            crate::stage_trace::timed("coord.tx.commit", || {
+                tx.commit()
+                    .map_err(|error| Error::OutcomeUnknown(error.to_string()))
+            })
+        })
     }
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
+        let _span = crate::stage_trace::span("cand.candidate");
         self.read(|c| materialize_checked(c, id, true))
     }
     fn staged_matches(&self, version_id: &str, whole: &Value) -> Result<bool, Error> {
@@ -1743,6 +2015,9 @@ impl MarketRepository for SqliteCompactMarket {
     }
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error> {
         self.read(|c| materialize_checked(c, id, false))
+    }
+    fn fixed_comparison(&self, id: &str) -> Result<CheckedRecord, Error> {
+        self.read(|c| materialize_comparison(c, id))
     }
     fn range(&self, scope: &Scope, id: Option<&str>, range: &Range) -> Result<ReadPage, Error> {
         range.validate()?;
@@ -1829,25 +2104,33 @@ impl MarketRepository for SqliteCompactMarket {
         })
     }
     fn fixed_facts(&self, id: &str) -> Result<crate::market_storage::FixedFacts, Error> {
+        self.read(|c| fixed_facts_on(c, id))
+    }
+    fn yearly_accept_reads(
+        &self,
+        wants: &[crate::market_storage::YearlyAcceptWant],
+    ) -> Result<Vec<Result<crate::market_storage::YearlyAcceptRead, Error>>, Error> {
+        // ONE read snapshot for the whole batch (XP-025 B).
         self.read(|c| {
-            let key = version_key(c, id)?;
-            let facts = compact_versions::result_facts(c, key)?;
-            if facts.state != CompactVersionState::Published {
-                return Err(Error::NotFound);
-            }
-            let integrity_digest = facts
-                .integrity_digest
-                .ok_or_else(|| integrity("published version lacks integrity digest"))?;
-            Ok(crate::market_storage::FixedFacts {
-                version_id: facts.version_id,
-                symbol: facts.entity,
-                period: facts.period,
-                integrity_sha256: hex_bytes(&integrity_digest),
-                first_day: compact_market::epoch_date(facts.first_day)
-                    .map_err(|e| integrity(e.to_string()))?,
-                last_day: compact_market::epoch_date(facts.last_day)
-                    .map_err(|e| integrity(e.to_string()))?,
-            })
+            Ok(wants
+                .iter()
+                .map(|want| {
+                    Ok(crate::market_storage::YearlyAcceptRead {
+                        base: fixed_facts_on(c, &want.base_version_id)?,
+                        years: compact_versions::window_years(
+                            c,
+                            &want.base_version_id,
+                            compact_market::epoch_day(want.first),
+                            compact_market::epoch_day(want.last),
+                        )?,
+                        comparison: want
+                            .comparison_version_id
+                            .as_ref()
+                            .map(|id| fixed_facts_on(c, id))
+                            .transpose()?,
+                    })
+                })
+                .collect())
         })
     }
     fn fixed_window(
@@ -1916,19 +2199,34 @@ impl MarketRepository for SqliteCompactMarket {
         })
     }
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error> {
+        // XP-032 D: one IMMEDIATE transaction. `materialize` already runs
+        // `verify_staged` on the staged chain, so inside this single snapshot
+        // the state flip needs no second `verify_staged` (the commit
+        // transaction still re-verifies the validated candidate before it
+        // publishes).
         self.write(|c| {
-            let m = compact_versions::materialize(c, &record.version.version_id)?;
+            let tx = crate::stage_trace::timed("coord.tx.begin", || {
+                c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(storage)
+            })?;
+            let m = compact_versions::materialize(&tx, &record.version.version_id)?;
             let stored = synthesize(&m)?;
             if stored.raw != record.raw {
                 return Err(Error::Conflict("validated record differs".into()));
             }
             match m.state {
-                CompactVersionState::Staged => compact_versions::mark_validated(c, m.key),
-                CompactVersionState::Validated => Ok(()),
+                CompactVersionState::Staged => {
+                    compact_versions::mark_validated_in_verified_snapshot(&tx, m.key)?
+                }
+                CompactVersionState::Validated => {}
                 CompactVersionState::Published => {
-                    Err(Error::Conflict("candidate already published".into()))
+                    return Err(Error::Conflict("candidate already published".into()));
                 }
             }
+            crate::stage_trace::timed("coord.tx.commit", || {
+                tx.commit()
+                    .map_err(|error| Error::OutcomeUnknown(error.to_string()))
+            })
         })
     }
     fn receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
@@ -1961,6 +2259,53 @@ impl MarketRepository for SqliteCompactMarket {
 }
 
 impl RangeRepository for SqliteCompactMarket {
+    /// XP-025 H4: bindings + receipts for a whole task in ONE read
+    /// transaction (per-item failures stay per item).
+    fn range_item_states(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+    ) -> Result<Vec<Result<crate::market_update::publication::RangeItemState, Error>>, Error> {
+        self.read(|c| {
+            Ok(item_ids
+                .iter()
+                .map(|item_id| {
+                    let binding = crate::sqlite_tasks::read_item_binding(c, task_id, item_id)
+                        .map_err(Error::Task)?;
+                    let has_receipt = item_receipt_on(c, task_id, item_id)?.is_some();
+                    Ok(crate::market_update::publication::RangeItemState {
+                        binding,
+                        has_receipt,
+                    })
+                })
+                .collect())
+        })
+    }
+    /// XP-025 H4: base facts + windowed bars for many items in ONE read
+    /// transaction; `Ok(None)` per item keeps the unbound-base fallback.
+    fn range_base_reads(
+        &self,
+        wants: &[crate::market_update::publication::BaseWant],
+    ) -> Result<Vec<Result<Option<crate::market_update::publication::BaseRead>, Error>>, Error>
+    {
+        self.read(|c| {
+            Ok(wants
+                .iter()
+                .map(|want| {
+                    if !source_bound_on(c, &want.base_version_id)? {
+                        return Ok(None);
+                    }
+                    let facts = update_base_facts_on(c, &want.base_version_id)?;
+                    let bars =
+                        base_bars_in_range_on(c, &want.base_version_id, want.start, want.end)?;
+                    Ok(Some(crate::market_update::publication::BaseRead {
+                        facts,
+                        bars,
+                    }))
+                })
+                .collect())
+        })
+    }
     fn commit_range(&self, plan: &RangePlan) -> Result<Receipt, Error> {
         self.write(|c| commit_range_tx(c, plan))
     }
@@ -2050,16 +2395,7 @@ impl RangeRepository for SqliteCompactMarket {
         // A base published before snapshot bindings existed cannot drive
         // the continuity probe — the caller falls back to the envelope
         // path, whose `Unverified` continuity still covers it.
-        let bound = self.read(|c| {
-            let key = version_key(c, base_version_id)?;
-            let facts = compact_versions::result_facts(c, key)?;
-            c.query_row(
-                "SELECT EXISTS(SELECT 1 FROM source_bindings WHERE source_binding_digest=?1)",
-                params![facts.source_binding_digest.as_slice()],
-                |r| r.get::<_, bool>(0),
-            )
-            .map_err(storage)
-        })?;
+        let bound = self.read(|c| source_bound_on(c, base_version_id))?;
         if !bound {
             return Ok(None);
         }
@@ -2285,24 +2621,7 @@ impl RangeRepository for SqliteCompactMarket {
         })
     }
     fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
-        self.read(|c| {
-            let id: Option<String> = c
-                .query_row(
-                    "SELECT result_id FROM market_update_results WHERE task_id=?1 AND item_id=?2",
-                    params![task, item],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(storage)?;
-            let Some(id) = id else { return Ok(None) };
-            let stored = compact_results::read_market_update(c, &id)?;
-            Ok(Some(Receipt {
-                publication_id: stored.identity.result_id.clone(),
-                version_id: stored.identity.result_version_id.clone(),
-                task_id: stored.identity.task_id.clone(),
-                task_revision: stored.identity.task_revision,
-            }))
-        })
+        self.read(|c| item_receipt_on(c, task, item))
     }
     fn transition_task(
         &self,
@@ -2457,12 +2776,15 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         retry: Option<&RetryGuard>,
     ) -> Result<Acceptance, task_control::Error> {
-        work.validate()?;
+        crate::stage_trace::timed("repo.accept.validate", || work.validate())?;
         if id.trim().is_empty() || run.trim().is_empty() {
             return Err(task_control::Error::InvalidCommand("empty identity".into()));
         }
+        let _write = crate::stage_trace::span("repo.accept.coordinator_write");
+        // One transaction: a failure after the first INSERT rolls the
+        // whole acceptance back instead of committing each row alone.
         self.coordinator
-            .write(|c| {
+            .transaction(|c| {
                 crate::sqlite_tasks::accept_tx(c, id, command, work, run, retry)
                     .map_err(Error::Task)
             })
@@ -2478,8 +2800,9 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, task_control::Error> {
+        // task row + item/occupancy rows + execution-start marker: one commit.
         self.coordinator
-            .write(|c| {
+            .transaction(|c| {
                 crate::sqlite_tasks::transition_tx(c, id, revision, run, change)
                     .map_err(Error::Task)
             })
@@ -2494,8 +2817,9 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<(), task_control::Error> {
+        // task delta + item delta + execution-start marker: one commit.
         self.coordinator
-            .write(|c| {
+            .transaction(|c| {
                 crate::sqlite_tasks::transition_light_tx(c, s, run, change).map_err(Error::Task)
             })
             .map_err(|e| match e {

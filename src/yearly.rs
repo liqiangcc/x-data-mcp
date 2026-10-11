@@ -158,10 +158,10 @@ thread_local! {
     /// Memoized aggregates. The key binds the published base version's
     /// stored `integrity_digest` — which itself covers bar content
     /// (projection), evidence, source binding, and identity — together
-    /// with the selected years and `as_of`, so identical keys always
-    /// yield identical series. Lets commit-time lineage verification
-    /// reuse the derivation's computation instead of re-decoding the
-    /// base window.
+    /// with the selected years and the `as_of` YEAR, so identical keys always
+    /// yield identical `records` (see `aggregate_key`). Lets commit-time
+    /// lineage verification reuse the derivation's computation instead of
+    /// re-decoding the base window.
     static AGGREGATE_MEMO: RefCell<HashMap<[u8; 32], Rc<AnnualSeries>>> =
         RefCell::new(HashMap::new());
 }
@@ -169,26 +169,92 @@ thread_local! {
 /// Memo key for `aggregate_memoized`. `base_digest_hex` is the stored
 /// `integrity_sha256`/`integrity_digest` of the authenticated base
 /// version the caller verified the `EffectiveVersion` against.
+///
+/// `as_of` enters the key only as its calendar YEAR (XP-031 R1). In
+/// `aggregate`, `as_of` has exactly three effects: (a) rejecting any bar
+/// dated after it, (b) `year_unfinished = (year == as_of.year())`, and
+/// (c) the echoed `AnnualSeries.as_of` field. For one base and one year set,
+/// every `as_of` that is not before the last bar and lies in the same year
+/// therefore yields byte-identical `records`; only the echo differs and
+/// `aggregate_memoized` rewrites it per caller. Different years never share a
+/// key because `year_unfinished` may differ.
 pub fn aggregate_key(base_digest_hex: &str, years: &BTreeSet<i32>, as_of: NaiveDate) -> [u8; 32] {
     let mut payload = Vec::with_capacity(128);
-    payload.extend_from_slice(b"x-data-aggregate-v1\0");
+    payload.extend_from_slice(b"x-data-aggregate-v2\0");
     payload.extend_from_slice(base_digest_hex.as_bytes());
     payload.push(0);
-    payload.extend_from_slice(&as_of.num_days_from_ce().to_be_bytes());
+    payload.extend_from_slice(&as_of.year().to_be_bytes());
     for year in years {
         payload.extend_from_slice(&year.to_be_bytes());
     }
     Sha256::digest(&payload).into()
 }
 
+/// Diagnostic: the key ingredients at one call site (stage trace only).
+pub fn trace_key(
+    site: &'static str,
+    base_digest_hex: &str,
+    years: &BTreeSet<i32>,
+    as_of: NaiveDate,
+) {
+    if !crate::stage_trace::enabled() {
+        return;
+    }
+    let key = aggregate_key(base_digest_hex, years, as_of);
+    let base8 = u64::from_str_radix(base_digest_hex.get(..16).unwrap_or("0"), 16).unwrap_or(0);
+    crate::stage_trace::note(
+        site,
+        &[
+            ("key8", u64::from_be_bytes(key[..8].try_into().unwrap())),
+            ("base8", base8),
+            ("n_years", years.len() as u64),
+            ("year_first", years.first().map_or(0, |y| *y as u64)),
+            ("year_last", years.last().map_or(0, |y| *y as u64)),
+            ("as_of_days", as_of.num_days_from_ce() as u64),
+        ],
+    );
+}
+
+/// Test hook: drops this thread's memoized series so a re-verification
+/// recomputes from the stored base.
+#[cfg(test)]
+pub(crate) fn clear_aggregate_memo() {
+    AGGREGATE_MEMO.with(|memo| memo.borrow_mut().clear());
+}
+
 /// Runs `compute` (a `aggregate` call and any reads it needs) only when
-/// the memo lacks `key`; otherwise returns the prior result.
+/// the memo lacks `key`; otherwise returns the prior result with its
+/// `as_of` echo set to the caller's `as_of`.
+///
+/// `window_last` is the date of the last bar of the window this caller
+/// would aggregate. A memoized series is reused only when
+/// `window_last <= as_of` — the very condition `aggregate` enforces by
+/// rejecting later bars — otherwise (or when unknown) the call falls
+/// through to `compute`, which keeps the original rejection and error.
 pub fn aggregate_memoized<E>(
     key: [u8; 32],
+    as_of: NaiveDate,
+    window_last: Option<NaiveDate>,
     compute: impl FnOnce() -> Result<AnnualSeries, E>,
 ) -> Result<Rc<AnnualSeries>, E> {
-    if let Some(hit) = AGGREGATE_MEMO.with(|memo| memo.borrow().get(&key).cloned()) {
-        return Ok(hit);
+    let hit = AGGREGATE_MEMO.with(|memo| memo.borrow().get(&key).cloned());
+    if crate::stage_trace::enabled() {
+        crate::stage_trace::note(
+            "memo.lookup",
+            &[
+                ("hit", hit.is_some() as u64),
+                ("key8", u64::from_be_bytes(key[..8].try_into().unwrap())),
+            ],
+        );
+    }
+    if let Some(hit) = hit.filter(|_| window_last.is_some_and(|last| last <= as_of)) {
+        if hit.as_of == as_of {
+            return Ok(hit);
+        }
+        return Ok(Rc::new(AnnualSeries {
+            as_of,
+            ..(*hit).clone()
+        }));
     }
     let series = Rc::new(compute()?);
     AGGREGATE_MEMO.with(|memo| {

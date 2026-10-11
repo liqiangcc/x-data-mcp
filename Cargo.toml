@@ -1,6 +1,6 @@
 [package]
 name = "x-data-mcp"
-version = "0.2.0-preview.30"
+version = "0.2.0-preview.31"
 edition = "2024"
 
 [dependencies]
@@ -32,7 +32,19 @@ jsonschema = { version = "0.33", default-features = false }
 # Reuse the already locked libc for fd-based local-filesystem verification.
 libc = "=0.2.189"
 
+[profile.dev.package."*"]
+# XP-024: optimize dependencies (bundled SQLite C code is otherwise -O0
+# in test builds).
+opt-level = 3
+
 [profile.dev]
 # Keep .debug_* sections out of linked binaries (separate .dwo files on Linux):
 # less link I/O and a smaller target dir for the edit-build loop.
 split-debuginfo = "unpacked"
+# XP-026 S6: this crate at -O1 in dev/test — the CI critical path
+# (two_fifty_day_append_growth_stays_bounded) is dominated by the crate's
+# own -O0 code. Assertions and overflow checks stay on; the test profile
+# inherits dev settings.
+opt-level = 1
+debug-assertions = true
+overflow-checks = true

@@ -1,0 +1,115 @@
+{
+ "socket": "/root/x-perf-g8/svc/run/mcp.sock",
+ "page_size": 100,
+ "samples": [
+  {
+   "i": 0,
+   "task_id": "task-d6086989cedf22a5b30ef53bec67f343",
+   "ms": 11979.7,
+   "status": "succeeded",
+   "total": 100,
+   "range_results": 100,
+   "publications": 100
+  },
+  {
+   "i": 1,
+   "task_id": "task-848acc7097bcee5e83358e265524e4b7",
+   "ms": 11420.4,
+   "status": "succeeded",
+   "total": 100,
+   "range_results": 100,
+   "publications": 100
+  },
+  {
+   "i": 2,
+   "task_id": "task-35333d6c9b716c92eda9fdeaf449f364",
+   "ms": 445.7,
+   "status": "succeeded",
+   "total": 24,
+   "range_results": 24,
+   "publications": 24
+  },
+  {
+   "i": 3,
+   "task_id": "task-d6086989cedf22a5b30ef53bec67f343",
+   "ms": 10242.5,
+   "status": "succeeded",
+   "total": 100,
+   "range_results": 100,
+   "publications": 100
+  },
+  {
+   "i": 4,
+   "task_id": "task-848acc7097bcee5e83358e265524e4b7",
+   "ms": 10175.5,
+   "status": "succeeded",
+   "total": 100,
+   "range_results": 100,
+   "publications": 100
+  },
+  {
+   "i": 5,
+   "task_id": "task-35333d6c9b716c92eda9fdeaf449f364",
+   "ms": 275.1,
+   "status": "succeeded",
+   "total": 24,
+   "range_results": 24,
+   "publications": 24
+  },
+  {
+   "i": 6,
+   "task_id": "task-d6086989cedf22a5b30ef53bec67f343",
+   "ms": 12918.4,
+   "status": "succeeded",
+   "total": 100,
+   "range_results": 100,
+   "publications": 100
+  },
+  {
+   "i": 7,
+   "task_id": "task-848acc7097bcee5e83358e265524e4b7",
+   "ms": 10911.2,
+   "status": "succeeded",
+   "total": 100,
+   "range_results": 100,
+   "publications": 100
+  },
+  {
+   "i": 8,
+   "task_id": "task-35333d6c9b716c92eda9fdeaf449f364",
+   "ms": 307.2,
+   "status": "succeeded",
+   "total": 24,
+   "range_results": 24,
+   "publications": 24
+  },
+  {
+   "i": 9,
+   "task_id": "task-d6086989cedf22a5b30ef53bec67f343",
+   "ms": 10200.1,
+   "status": "succeeded",
+   "total": 100,
+   "range_results": 100,
+   "publications": 100
+  },
+  {
+   "i": 10,
+   "task_id": "task-848acc7097bcee5e83358e265524e4b7",
+   "ms": 10457.4,
+   "status": "succeeded",
+   "total": 100,
+   "range_results": 100,
+   "publications": 100
+  },
+  {
+   "i": 11,
+   "task_id": "task-35333d6c9b716c92eda9fdeaf449f364",
+   "ms": 300.1,
+   "status": "succeeded",
+   "total": 24,
+   "range_results": 24,
+   "publications": 24
+  }
+ ],
+ "finished_at": "2026-10-09T07:42:43.291076+00:00"
+}

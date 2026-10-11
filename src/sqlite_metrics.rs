@@ -116,7 +116,8 @@ impl InputRepository for SqliteMetrics {
                 .iter()
                 .filter(|b| b.date.year() >= range.start_year && b.date.year() <= range.end_year)
             {
-                let (first, last, unfinished) = crate::sqlite_supply::yearly_row_meta(c, &r, b)?;
+                let (first, last, unfinished) =
+                    crate::sqlite_supply::yearly_row_meta(c, &r, b.date)?;
                 let (first, last, finished): (String, String, bool) = (
                     first.unwrap().to_string(),
                     last.unwrap().to_string(),

@@ -11,6 +11,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide whether Rust steps are needed
+        id: scope
+        run: |
+          python3 -B -m unittest discover -s scripts -p 'test_ci_changed_scope.py'
+          python3 scripts/ci_changed_scope.py --event "${{ github.event_name }}" \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -18,11 +27,47 @@ jobs:
       - run: git diff --check
       - run: python3 scripts/check_current_facts.py
       - run: python3 scripts/check_daily_sync_eval.py
+      - name: Deployment facts checks (STATUS.md freshness, version, host rules)
+        run: |
+          python3 scripts/check_deploy_facts.py
+          python3 -B -m unittest discover -s scripts -p 'test_deploy_facts.py'
+      - name: Switch-binary script dry-run checks (never executes; tempdir root)
+        run: |
+          python3 -B -m unittest discover -s scripts -p 'test_switch_binary.py'
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
-      - run: cargo test --locked
-      - run: cargo build --locked
+      - if: steps.scope.outputs.rust == 'true'
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - if: steps.scope.outputs.rust == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.146
+      - name: Test environment (XP-024 A0)
+        if: steps.scope.outputs.rust == 'true'
+        run: |
+          echo "nproc=$(nproc)"
+          df -h /dev/shm
+          echo "TMPDIR=$TMPDIR"
+        env:
+          TMPDIR: /dev/shm
+      - name: Test inventory per target
+        if: steps.scope.outputs.rust == 'true'
+        run: cargo nextest list --locked --message-format oneline | awk '{c[$1]++} END {for (k in c) print k, c[k]}' | sort
+        env:
+          TMPDIR: /dev/shm
+      - name: Tests (nextest)
+        if: steps.scope.outputs.rust == 'true'
+        run: cargo nextest run --locked --no-fail-fast
+        env:
+          TMPDIR: /dev/shm
+      - name: Doc tests (nextest does not run them)
+        if: steps.scope.outputs.rust == 'true'
+        run: cargo test --doc --locked
+        env:
+          TMPDIR: /dev/shm
+      - if: steps.scope.outputs.rust == 'true'
+        run: cargo build --locked
       - name: Runtime cross-UID boundary on an isolated fixture (not live source)
+        if: steps.scope.outputs.rust == 'true'
         run: sudo -n python3 scripts/test_runtime_peer.py --bin-dir "$PWD/target/debug"
       - name: Issue 54 offline diagnostic evidence (not live source validation)
         run: |

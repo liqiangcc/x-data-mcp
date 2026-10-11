@@ -1,0 +1,699 @@
+{
+ "schema": "perf-g8-xp011-phase0.v1",
+ "task": "XP-011 Phase 0: nested counts/timing of get_task_progress on completed 100-item tasks",
+ "captured_at_utc": "2026-10-09T09:13Z",
+ "environment": {
+  "host": "aws-node (2 vCPU Xeon 8336C, 1905MB RAM; swap_total 8191MB per free -m 2026-10-09 — capture-time line '4095MB' was a stale copy of the ecs-node spec, corrected)",
+  "uname": "Linux 7.0.0-1006-aws x86_64",
+  "binary": "/root/x-perf-g8/dist-xp009/x-data-mcp-0.2.0-preview.30-linux-x86_64/bin/data_service",
+  "binary_sha256": "b2186c08d078a2ec8e2853611e09a527a9052260004819deb142a92f0a790fa9",
+  "code_git_sha": "299f6681216f1b579351e9e5deef71d9d3c772a2 (perf/g8-daily-update-perf, PR #323 head; XP-009 slim paths)",
+  "data_service_pid": 2497521,
+  "db": "/root/x-perf-g8/svc/db/preview.sqlite (884,461,568 B at capture; private instance). db_sha256 at capture: NOT_RECORDED — the value previously reported as such (b2186c08...) is actually the binary hash; current file sha256 b4b82c0df6c556e7... (2026-10-09, post-measurement housekeeping state, not the captured snapshot)",
+  "socket": "svc/run/mcp.sock (private)",
+  "concurrent_load": "data_service post-run housekeeping ~45-55% CPU during all windows (TID 2497524 ~10%); load avg 0.4-1.5; MemAvailable 540-620MB; no other drivers active",
+  "cold_or_warm": "OS page cache warm for this DB (repeated probes same tasks)"
+ },
+ "tasks": {
+  "append": "task-d6086989cedf22a5b30ef53bec67f343 (update-b run, 100 items, all no_change=false, status=succeeded)",
+  "nochange": "task-5e9087fd80b4e6623859d313b4b12ccb (update-nc run, 100 items, all no_change=true, status=succeeded, publication_versions=0)"
+ },
+ "methods": {
+  "m1_uprobe_pairing": "perf record -e 'xp011:*' -p <pid>: tracefs uprobe_events entry+return probes on 20 named rust fns (probe-map.txt); paired per-thread (handler tid 2553807/2555449) with stack discipline; incl/excl ms per call",
+  "m2_perf_stat": "perf stat probes probe_data_service:sqlite3_step + syscalls:sys_enter_pread64 over a ~100s window during which 3 serial calls were issued via one_call.py (calls-append.txt); housekeeping baseline 25,803 steps + 77,958 pread64 per 60s subtracted. NOTE: window totals divided by 3 are per-call ESTIMATES, not exact per-call counts — the window does not prove all three calls completed inside it",
+  "m3_sampling": "perf record -g dwarf,8192 -F99 flat profile (leaf attribution; ancestors lost due to missing FPO/unwind limits)",
+  "wire": "dec_progress_query/enc_progress_page uprobe pair bounds request decode and response serialization"
+ },
+ "raw_samples": {
+  "append": {
+   "per_call_latency_ms": {
+    "perf_stat_window": [
+     39827,
+     41047,
+     23582
+    ],
+    "uprobe_window": [
+     15648,
+     11999,
+     11593,
+     11032
+    ],
+    "note": "perf_stat window inflates (probe hits + housekeeping); uprobe_window latencies under entry/ret event recording"
+   },
+   "per_call_sqlite3_step_net": "ESTIMATE (window net / 3 calls): (12,641,253 - ~43,000 housekeeping)/3 ~= 4,199,000",
+   "per_call_pread64_net": "ESTIMATE (window net / 3 calls): (676,444 - ~130,000)/3 ~= 182,000",
+   "nested": [
+    {
+     "tid": 2553807,
+     "span_s": 15.628,
+     "funcs": {
+      "read_bound_task": {
+       "n": 1,
+       "incl_ms": 4.1,
+       "excl_ms": 4.1
+      },
+      "verify_stored_lineage": {
+       "n": 3000,
+       "incl_ms": 108.4,
+       "excl_ms": 108.4
+      },
+      "materialize_header": {
+       "n": 1000,
+       "incl_ms": 601.5,
+       "excl_ms": 562.3
+      },
+      "result_facts": {
+       "n": 400,
+       "incl_ms": 32.9,
+       "excl_ms": 32.9
+      },
+      "read_segment": {
+       "n": 11168,
+       "incl_ms": 11436.8,
+       "excl_ms": 11436.8
+      },
+      "cv_fixed": {
+       "n": 400,
+       "incl_ms": 14597.9,
+       "excl_ms": 3117.5
+      },
+      "read_market_update": {
+       "n": 200,
+       "incl_ms": 14785.2,
+       "excl_ms": 128.9
+      },
+      "read_item_binding": {
+       "n": 200,
+       "incl_ms": 58.1,
+       "excl_ms": 58.1
+      },
+      "read_update_audit": {
+       "n": 200,
+       "incl_ms": 15167.6,
+       "excl_ms": 61.2
+      },
+      "update_read_result": {
+       "n": 200,
+       "incl_ms": 15179.6,
+       "excl_ms": 12.0
+      },
+      "range_result": {
+       "n": 200,
+       "incl_ms": 15487.9,
+       "excl_ms": 76.9
+      },
+      "task_facts": {
+       "n": 1,
+       "incl_ms": 6275.6,
+       "excl_ms": 13.9
+      },
+      "progress": {
+       "n": 1,
+       "incl_ms": 15627.7,
+       "excl_ms": 14.7
+      }
+     }
+    },
+    {
+     "tid": 2553807,
+     "span_s": 11.986,
+     "funcs": {
+      "read_bound_task": {
+       "n": 1,
+       "incl_ms": 4.6,
+       "excl_ms": 4.6
+      },
+      "verify_stored_lineage": {
+       "n": 3000,
+       "incl_ms": 82.7,
+       "excl_ms": 82.7
+      },
+      "materialize_header": {
+       "n": 1000,
+       "incl_ms": 550.9,
+       "excl_ms": 513.9
+      },
+      "result_facts": {
+       "n": 400,
+       "incl_ms": 24.3,
+       "excl_ms": 24.3
+      },
+      "read_segment": {
+       "n": 11168,
+       "incl_ms": 8710.9,
+       "excl_ms": 8710.9
+      },
+      "cv_fixed": {
+       "n": 400,
+       "incl_ms": 11092.0,
+       "excl_ms": 2355.7
+      },
+      "read_market_update": {
+       "n": 200,
+       "incl_ms": 11245.9,
+       "excl_ms": 109.3
+      },
+      "read_item_binding": {
+       "n": 200,
+       "incl_ms": 37.6,
+       "excl_ms": 37.6
+      },
+      "read_update_audit": {
+       "n": 200,
+       "incl_ms": 11555.2,
+       "excl_ms": 51.2
+      },
+      "update_read_result": {
+       "n": 200,
+       "incl_ms": 11565.0,
+       "excl_ms": 9.8
+      },
+      "range_result": {
+       "n": 200,
+       "incl_ms": 11827.2,
+       "excl_ms": 54.8
+      },
+      "task_facts": {
+       "n": 1,
+       "incl_ms": 6119.0,
+       "excl_ms": 14.3
+      },
+      "progress": {
+       "n": 1,
+       "incl_ms": 11985.7,
+       "excl_ms": 16.6
+      }
+     }
+    },
+    {
+     "tid": 2553807,
+     "span_s": 11.582,
+     "funcs": {
+      "read_bound_task": {
+       "n": 1,
+       "incl_ms": 3.5,
+       "excl_ms": 3.5
+      },
+      "verify_stored_lineage": {
+       "n": 3000,
+       "incl_ms": 72.5,
+       "excl_ms": 72.5
+      },
+      "materialize_header": {
+       "n": 1000,
+       "incl_ms": 492.3,
+       "excl_ms": 460.9
+      },
+      "result_facts": {
+       "n": 400,
+       "incl_ms": 23.2,
+       "excl_ms": 23.2
+      },
+      "read_segment": {
+       "n": 11168,
+       "incl_ms": 8506.1,
+       "excl_ms": 8506.1
+      },
+      "cv_fixed": {
+       "n": 400,
+       "incl_ms": 10768.4,
+       "excl_ms": 2244.1
+      },
+      "read_market_update": {
+       "n": 200,
+       "incl_ms": 10913.3,
+       "excl_ms": 98.7
+      },
+      "read_item_binding": {
+       "n": 200,
+       "incl_ms": 35.1,
+       "excl_ms": 35.1
+      },
+      "read_update_audit": {
+       "n": 200,
+       "incl_ms": 11198.9,
+       "excl_ms": 49.3
+      },
+      "update_read_result": {
+       "n": 200,
+       "incl_ms": 11208.7,
+       "excl_ms": 9.8
+      },
+      "range_result": {
+       "n": 200,
+       "incl_ms": 11459.0,
+       "excl_ms": 54.2
+      },
+      "task_facts": {
+       "n": 1,
+       "incl_ms": 5795.4,
+       "excl_ms": 13.1
+      },
+      "progress": {
+       "n": 1,
+       "incl_ms": 11582.1,
+       "excl_ms": 11.5
+      }
+     }
+    },
+    {
+     "tid": 2553807,
+     "span_s": 11.021,
+     "funcs": {
+      "read_bound_task": {
+       "n": 1,
+       "incl_ms": 2.9,
+       "excl_ms": 2.9
+      },
+      "verify_stored_lineage": {
+       "n": 3000,
+       "incl_ms": 70.2,
+       "excl_ms": 70.2
+      },
+      "materialize_header": {
+       "n": 1000,
+       "incl_ms": 494.1,
+       "excl_ms": 464.7
+      },
+      "result_facts": {
+       "n": 400,
+       "incl_ms": 25.2,
+       "excl_ms": 25.2
+      },
+      "read_segment": {
+       "n": 11168,
+       "incl_ms": 8059.4,
+       "excl_ms": 8059.4
+      },
+      "cv_fixed": {
+       "n": 400,
+       "incl_ms": 10218.0,
+       "excl_ms": 2136.1
+      },
+      "read_market_update": {
+       "n": 200,
+       "incl_ms": 10354.9,
+       "excl_ms": 93.3
+      },
+      "read_item_binding": {
+       "n": 200,
+       "incl_ms": 33.8,
+       "excl_ms": 33.8
+      },
+      "read_update_audit": {
+       "n": 200,
+       "incl_ms": 10630.1,
+       "excl_ms": 45.2
+      },
+      "update_read_result": {
+       "n": 200,
+       "incl_ms": 10640.1,
+       "excl_ms": 10.1
+      },
+      "range_result": {
+       "n": 200,
+       "incl_ms": 10873.3,
+       "excl_ms": 49.6
+      },
+      "task_facts": {
+       "n": 1,
+       "incl_ms": 5494.4,
+       "excl_ms": 10.9
+      },
+      "progress": {
+       "n": 1,
+       "incl_ms": 11021.0,
+       "excl_ms": 19.6
+      }
+     }
+    }
+   ]
+  },
+  "nochange": {
+   "per_call_latency_ms": {
+    "perf_stat_window": [
+     40487,
+     39062,
+     24470
+    ],
+    "uprobe_window": [
+     12883,
+     13198,
+     13313,
+     12580
+    ]
+   },
+   "per_call_sqlite3_step_net": "ESTIMATE: (12,675,517 - ~43,000)/3 ~= 4,211,000",
+   "per_call_pread64_net": "ESTIMATE: (669,138 - ~130,000)/3 ~= 180,000",
+   "nested": [
+    {
+     "tid": 2555449,
+     "span_s": 12.863,
+     "funcs": {
+      "read_bound_task": {
+       "n": 1,
+       "incl_ms": 5.6,
+       "excl_ms": 5.6
+      },
+      "result_facts": {
+       "n": 400,
+       "incl_ms": 26.5,
+       "excl_ms": 26.5
+      },
+      "read_segment": {
+       "n": 11168,
+       "incl_ms": 9104.2,
+       "excl_ms": 9104.2
+      },
+      "verify_stored_lineage": {
+       "n": 2800,
+       "incl_ms": 75.1,
+       "excl_ms": 75.1
+      },
+      "cv_fixed": {
+       "n": 400,
+       "incl_ms": 12121.7,
+       "excl_ms": 2966.9
+      },
+      "read_market_update": {
+       "n": 200,
+       "incl_ms": 12263.7,
+       "excl_ms": 115.5
+      },
+      "materialize_header": {
+       "n": 800,
+       "incl_ms": 441.8,
+       "excl_ms": 417.2
+      },
+      "read_item_binding": {
+       "n": 200,
+       "incl_ms": 38.7,
+       "excl_ms": 38.7
+      },
+      "read_update_audit": {
+       "n": 200,
+       "incl_ms": 12575.0,
+       "excl_ms": 45.1
+      },
+      "update_read_result": {
+       "n": 200,
+       "incl_ms": 12584.2,
+       "excl_ms": 9.2
+      },
+      "range_result": {
+       "n": 200,
+       "incl_ms": 12853.2,
+       "excl_ms": 54.7
+      },
+      "task_facts": {
+       "n": 1,
+       "incl_ms": 6769.3,
+       "excl_ms": 1.1
+      },
+      "progress": {
+       "n": 1,
+       "incl_ms": 12862.9,
+       "excl_ms": 3.0
+      }
+     }
+    },
+    {
+     "tid": 2555449,
+     "span_s": 13.184,
+     "funcs": {
+      "read_bound_task": {
+       "n": 1,
+       "incl_ms": 4.6,
+       "excl_ms": 4.6
+      },
+      "result_facts": {
+       "n": 400,
+       "incl_ms": 24.1,
+       "excl_ms": 24.1
+      },
+      "read_segment": {
+       "n": 11168,
+       "incl_ms": 9405.5,
+       "excl_ms": 9405.5
+      },
+      "verify_stored_lineage": {
+       "n": 2800,
+       "incl_ms": 75.2,
+       "excl_ms": 75.2
+      },
+      "cv_fixed": {
+       "n": 400,
+       "incl_ms": 12446.8,
+       "excl_ms": 2998.7
+      },
+      "read_market_update": {
+       "n": 200,
+       "incl_ms": 12562.3,
+       "excl_ms": 91.4
+      },
+      "materialize_header": {
+       "n": 800,
+       "incl_ms": 462.7,
+       "excl_ms": 430.1
+      },
+      "read_item_binding": {
+       "n": 200,
+       "incl_ms": 35.8,
+       "excl_ms": 35.8
+      },
+      "read_update_audit": {
+       "n": 200,
+       "incl_ms": 12877.0,
+       "excl_ms": 46.3
+      },
+      "update_read_result": {
+       "n": 200,
+       "incl_ms": 12886.9,
+       "excl_ms": 9.9
+      },
+      "range_result": {
+       "n": 200,
+       "incl_ms": 13174.5,
+       "excl_ms": 57.5
+      },
+      "task_facts": {
+       "n": 1,
+       "incl_ms": 6536.9,
+       "excl_ms": 1.1
+      },
+      "progress": {
+       "n": 1,
+       "incl_ms": 13183.6,
+       "excl_ms": 3.3
+      }
+     }
+    },
+    {
+     "tid": 2555449,
+     "span_s": 13.303,
+     "funcs": {
+      "read_bound_task": {
+       "n": 1,
+       "incl_ms": 4.3,
+       "excl_ms": 4.3
+      },
+      "result_facts": {
+       "n": 400,
+       "incl_ms": 25.6,
+       "excl_ms": 25.6
+      },
+      "read_segment": {
+       "n": 11168,
+       "incl_ms": 9402.5,
+       "excl_ms": 9402.5
+      },
+      "verify_stored_lineage": {
+       "n": 2800,
+       "incl_ms": 87.3,
+       "excl_ms": 87.3
+      },
+      "cv_fixed": {
+       "n": 400,
+       "incl_ms": 12554.5,
+       "excl_ms": 3098.4
+      },
+      "read_market_update": {
+       "n": 200,
+       "incl_ms": 12672.3,
+       "excl_ms": 92.2
+      },
+      "materialize_header": {
+       "n": 800,
+       "incl_ms": 472.3,
+       "excl_ms": 438.5
+      },
+      "read_item_binding": {
+       "n": 200,
+       "incl_ms": 35.9,
+       "excl_ms": 35.9
+      },
+      "read_update_audit": {
+       "n": 200,
+       "incl_ms": 12994.1,
+       "excl_ms": 44.9
+      },
+      "update_read_result": {
+       "n": 200,
+       "incl_ms": 13003.9,
+       "excl_ms": 9.8
+      },
+      "range_result": {
+       "n": 200,
+       "incl_ms": 13294.3,
+       "excl_ms": 59.2
+      },
+      "task_facts": {
+       "n": 1,
+       "incl_ms": 6636.2,
+       "excl_ms": 1.7
+      },
+      "progress": {
+       "n": 1,
+       "incl_ms": 13303.4,
+       "excl_ms": 3.1
+      }
+     }
+    },
+    {
+     "tid": 2555449,
+     "span_s": 12.572,
+     "funcs": {
+      "read_bound_task": {
+       "n": 1,
+       "incl_ms": 2.6,
+       "excl_ms": 2.6
+      },
+      "result_facts": {
+       "n": 400,
+       "incl_ms": 30.1,
+       "excl_ms": 30.1
+      },
+      "read_segment": {
+       "n": 11168,
+       "incl_ms": 8967.0,
+       "excl_ms": 8967.0
+      },
+      "verify_stored_lineage": {
+       "n": 2800,
+       "incl_ms": 74.4,
+       "excl_ms": 74.4
+      },
+      "cv_fixed": {
+       "n": 400,
+       "incl_ms": 11834.1,
+       "excl_ms": 2820.2
+      },
+      "read_market_update": {
+       "n": 200,
+       "incl_ms": 11954.6,
+       "excl_ms": 90.4
+      },
+      "materialize_header": {
+       "n": 800,
+       "incl_ms": 462.9,
+       "excl_ms": 435.3
+      },
+      "read_item_binding": {
+       "n": 200,
+       "incl_ms": 34.4,
+       "excl_ms": 34.4
+      },
+      "read_update_audit": {
+       "n": 200,
+       "incl_ms": 12280.3,
+       "excl_ms": 48.2
+      },
+      "update_read_result": {
+       "n": 200,
+       "incl_ms": 12290.0,
+       "excl_ms": 9.7
+      },
+      "range_result": {
+       "n": 200,
+       "incl_ms": 12565.0,
+       "excl_ms": 55.2
+      },
+      "task_facts": {
+       "n": 1,
+       "incl_ms": 6661.6,
+       "excl_ms": 0.9
+      },
+      "progress": {
+       "n": 1,
+       "incl_ms": 12571.6,
+       "excl_ms": 3.1
+      }
+     }
+    }
+   ]
+  }
+ },
+ "nested_summary": {
+  "structure": "Observer::progress = tx1 task_facts(read_bound_task + publications slim + range_result x100) -> tx2 verify_versions -> tx3 verify_range_results(range_result x100) -> verify_yearly/stopped/pubcheck -> enc",
+  "cv_fixed_per_call": 400,
+  "cv_fixed_decomposition": "200 read_market_update x 2 require_published_facts (base+result); read_market_update 200 = 100 items x 2 transactions (task_facts tx + verify_range_results tx)",
+  "read_segment_per_call": 11168,
+  "read_segment_per_fixed": "~27.9 (segment row reads+decode+hash inside fixed())",
+  "materialize_header": {
+   "append": 1000,
+   "nochange": 800
+  },
+  "wire_decode_us": 7,
+  "response_serialize_ms": "~0.7-1.2",
+  "dominant": "cv_fixed incl ~= 10.2-14.6s of 11.0-15.6s span (~93-95%); read_segment excl ~= 8.1-11.4s inside it"
+ },
+ "dedup_model": {
+  "nochange": "base==result per item; tx-scoped memo on version_key halves cv_fixed per tx: 400->200 total (model, not measured)",
+  "append": "all 200 versions distinct per tx; intra-tx dedup saves 0 (model)",
+  "cross_tx": "task_facts tx and verify_range_results tx are separate market.read calls; verified-facts ctx cannot span them per spec (no cross-request trust) - verify_* revalidation stays full",
+  "materialize_header_dedup": "same version header-read via publications + audit paths; bounded ctx could also memoize (~0.3-0.5s potential, minor)"
+ },
+ "not_measured": [
+  "queue/writer wait inside market.read (no probe on WriteCoordinator::read; bounded indirectly: progress excl ~3-17ms, single-threaded handler => read-tx wait is small but NOT_MEASURED precisely)",
+  "per-function sqlite3_step attribution (steps counted only at call granularity)",
+  "availability/task_list path (out of Phase-0 scope)",
+  "verify_versions tx2 isolated timing (inlined into progress; materialize_header counts include it)"
+ ],
+ "flat_profile_top": {
+  "sha2_compress": 20.59,
+  "sqlite3VdbeExec": 6.76,
+  "NaiveDate_add_days": 2.74,
+  "cfree": 2.43,
+  "canonical_decimal": 2.05,
+  "sqlite3_column_int64": 1.95,
+  "Decimal_from_str": 1.93,
+  "sqlite3_column_type": 1.78,
+  "CompactBar_to_bar": 1.47,
+  "segment_digest": 1.1,
+  "Statement_value_ref": 1.16,
+  "kernel_pread": 1.18
+ },
+ "raw_files_on_host": {
+  "probe_dir": "/root/x-perf-g8/probe-xp011/ (uprobe-{append,nc}.data perf captures; {append,nc}.trace text dumps; result-{append,nc}.json pairing output; stat-*.err perf stat; calls-*.txt latencies; probe-map.txt symbol->offset map)",
+  "drivers": [
+   "one_call.py",
+   "run_counts.sh",
+   "run_perf.sh",
+   "run_uprobe.sh",
+   "analyze.py"
+  ]
+ },
+ "round2_reparse": {
+  "when": "2026-10-09",
+  "reason": "analyze.py had one GLOBAL cur_call while frame stacks were per-thread — a return on another thread could be charged to the active handler's call, and a return could be silently paired with a non-top frame",
+  "change": "tid-keyed current_calls map (progress enter assigns current_calls[tid]; every event resolves via current_calls.get(tid); progress return removes only that tid); returns must pair with the TOP frame or the affected call is marked NOT_MEASURED; unmatched/out-of-order/lost events counted in summary; see drivers/test_analyze.py (Owner's tid10/20/30 synthetic case with exact expected n/incl/excl + a dropped-return invalidation case)",
+  "result": "reparsing the SAME frozen traces (probe-xp011/{append,nc}.trace, not a profiling re-run) produced IDENTICAL per-call counts and timing to the original parse: 4 calls per trace, all valid, 0 unmatched/non_top/unterminated events — the defect did not corrupt this dataset; the fix prevents it silently corrupting future ones"
+ },
+ "round3_reparse": {
+  "when": "2026-10-09",
+  "reason": "analyze.py rev.2 ignored non-event loss diagnostics and did not check timestamp monotonicity (Owner OWNER-XP011-CI-FAILURES.md 'Completed Parser Review')",
+  "change": "recognize LOST / PERF_RECORD_LOST / PERF_RECORD_LOST_SAMPLES diagnostic lines (counted as lost_marker_lines); any capture containing a loss diagnostic invalidates ALL its calls including already-closed ones (capture_loss_invalidated); per-tid backward timestamps and inclusive/exclusive durations negative beyond timestamp rounding (EPS=1e-6) invalidate the affected call; sub-EPS negatives clamp to zero; raw trace untouched; new summary fields: lost_marker_lines, capture_loss_invalidated, backward_timestamps, negative_durations",
+  "synthetic_regressions": "drivers/test_analyze.py Case C: valid Owner trace + LOST marker (three marker spellings) -> calls_valid=0, all calls NOT_MEASURED; Case D: progress enter=2.0/return=1.0 -> backward_timestamps=1, negative_durations=1, call NOT_MEASURED",
+  "result": "reparsing the SAME frozen traces (probe-xp011/{append,nc}.trace -> result-{append,nc}-r3.json, not a profiling re-run) produced byte-identical per-call values to the rev.2 parse: append 135784 events / nc 132584 events, 4 calls each, all valid, 0 lost_marker_lines, 0 backward_timestamps, 0 negative_durations, 0 unmatched/non_top/unterminated"
+ }
+}
