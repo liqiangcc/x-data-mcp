@@ -7675,7 +7675,7 @@ mod xp011 {
             let (path, repo) = repo(&dir);
             let bars = chain_to_depth(&repo, 256);
             assert_eq!(mode_depth(&path, "v257"), (2, 256));
-            let new_day = bars.last().unwrap().trade_day + 1;
+            let new_day = compact_market::epoch_day(bars.last().unwrap().date) + 1;
             let out = typed_append(&repo, 1, "v257", "v258", new_day, 999);
             assert_eq!(out.len(), 1);
             assert!(out[0].is_ok(), "rollover append failed: {:?}", out[0]);
@@ -7706,7 +7706,7 @@ mod xp011 {
             let dir = tempdir();
             let (path, repo) = repo(&dir);
             let bars = chain_to_depth(&repo, 256);
-            let d1 = bars.last().unwrap().trade_day + 1;
+            let d1 = compact_market::epoch_day(bars.last().unwrap().date) + 1;
             assert!(typed_append(&repo, 1, "v257", "v258", d1, 999)[0].is_ok());
             let out = typed_append(&repo, 2, "v258", "v259", d1 + 1, 1000);
             assert!(out[0].is_ok(), "{:?}", out[0]);
