@@ -136,6 +136,8 @@ struct EntityState {
     yearly_head: Option<String>,
     /// Number of yearly nodes this fixture published on top of it.
     yearly_done: i64,
+    /// Years the current yearly head's projection covers.
+    yearly_years: BTreeSet<i32>,
 }
 
 fn entity_state(backend: &MarketBackend, symbol: &str) -> Result<EntityState, String> {
@@ -179,6 +181,7 @@ fn entity_state(backend: &MarketBackend, symbol: &str) -> Result<EntityState, St
         versions: Vec::new(),
         yearly_head: None,
         yearly_done: 0,
+        yearly_years: BTreeSet::new(),
     })
 }
 
@@ -286,11 +289,47 @@ fn append_item(e: &EntityState, task_id: &str, run_id: &str) -> UpdateBatchItem 
     }
 }
 
+/// Years for the next yearly node: the prior head's set extended by the
+/// smallest complete year the base covers (a year whose last participating
+/// day is already final, so its bar stays byte-identical under later
+/// re-aggregation — `plan_delta` permits only additions/changes, a dropped
+/// parent bar forces a full checkpoint at depth 0), and — on the last
+/// node — the still-moving year of the appended days.
+fn next_yearly_years(
+    e: &EntityState,
+    base: &CheckedRecord,
+    last_node: bool,
+) -> Result<BTreeSet<i32>, Box<dyn std::error::Error>> {
+    let moving = e.last_day.year();
+    let base_years: BTreeSet<i32> = base
+        .version()
+        .records
+        .iter()
+        .map(|r| r.date.year())
+        .collect();
+    let mut years = e.yearly_years.clone();
+    if let Some(next) = base_years
+        .iter()
+        .find(|y| **y != moving && !years.contains(y))
+    {
+        years.insert(*next);
+    } else if last_node && base_years.contains(&moving) && !years.contains(&moving) {
+        years.insert(moving);
+    } else {
+        return Err(format!(
+            "{}: cannot extend the yearly chain — no uncovered complete year (covered {years:?})",
+            e.symbol
+        )
+        .into());
+    }
+    Ok(years)
+}
+
 /// One yearly step for the entities that just appended a daily node:
-/// each pending entity derives year `bar_year` of its just-published head
-/// through the production yearly runner (`CurrentHead` requires the base
-/// to be the current daily head, which is exactly true right after the
-/// daily commit — the same ordering production derives follow).
+/// each pending entity derives its next year set from the just-published
+/// head through the production yearly runner (`CurrentHead` requires the
+/// base to be the current daily head, which is exactly true right after
+/// the daily commit — the same ordering production derives follow).
 ///
 /// Production yearly publishes are always root checkpoints (`delta_depth`
 /// stays 0): `derive_yearly`'s staged candidate carries no
@@ -315,26 +354,32 @@ fn yearly_step(
     if pending.is_empty() {
         return Ok(());
     }
-    let items: Vec<YearlyItem> = pending
-        .iter()
-        .map(|&i| {
-            let e = &*entities[i];
-            let (base_id, base_day) = e
-                .versions
-                .last()
-                .expect("yearly step runs after a daily append");
+    let mut specs: Vec<(YearlyItem, CheckedRecord)> = Vec::with_capacity(pending.len());
+    for &i in &pending {
+        let e = &*entities[i];
+        let (base_id, _) = e
+            .versions
+            .last()
+            .expect("yearly step runs after a daily append");
+        let base = backend
+            .fixed(base_id)
+            .map_err(|e2| format!("{}: yearly base read failed: {e2}", e.symbol))?;
+        let years = next_yearly_years(e, &base, e.yearly_done + 1 == yearly_depth)?;
+        specs.push((
             YearlyItem {
                 symbol: e.symbol.clone(),
                 base_daily_version_id: base_id.clone(),
-                years: BTreeSet::from([base_day.year()]),
+                years,
                 intent: PublishIntent::CurrentHead {
                     expected_daily_head: base_id.clone(),
                     expected_yearly_head: e.yearly_head.clone(),
                 },
                 comparison_version_id: e.yearly_head.clone(),
-            }
-        })
-        .collect();
+            },
+            base,
+        ));
+    }
+    let items: Vec<YearlyItem> = specs.iter().map(|(item, _)| item.clone()).collect();
     let payload = serde_json::to_value(ExplicitYears {
         items: items.clone(),
     })?;
@@ -350,7 +395,7 @@ fn yearly_step(
     let publisher = x_data_mcp::market_storage::Publisher {
         repository: backend.clone(),
     };
-    for (&i, item) in pending.iter().zip(items.iter()) {
+    for (&i, (item, base)) in pending.iter().zip(specs.iter()) {
         let item_id = scope_id(&item.symbol, "year");
         let e = &mut *entities[i];
         // The deterministic version id `derive_and_commit` will use.
@@ -360,11 +405,6 @@ fn yearly_step(
         );
         // Stage the derived candidate with the chain parent bound, so
         // stage_tx stores a delta instead of a root checkpoint.
-        let first = chrono::NaiveDate::from_ymd_opt(*item.years.first().unwrap(), 1, 1)
-            .ok_or("selected year out of range")?;
-        let last = chrono::NaiveDate::from_ymd_opt(*item.years.last().unwrap(), 12, 31)
-            .ok_or("selected year out of range")?;
-        let base = backend.fixed_window(&item.base_daily_version_id, first, last)?;
         let as_of = runner
             .derived_at
             .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
@@ -400,6 +440,7 @@ fn yearly_step(
             x_data_mcp::yearly_publication::runner::YearlyExecution::Published(receipt) => {
                 e.yearly_head = Some(receipt.version_id);
                 e.yearly_done += 1;
+                e.yearly_years = item.years.clone();
             }
             x_data_mcp::yearly_publication::runner::YearlyExecution::NotPublished(snapshot) => {
                 return Err(
@@ -500,6 +541,16 @@ fn seed_entities(
             e.yearly_head = backend
                 .effective_head(&scope)
                 .map_err(|e2| format!("yearly effective head read failed: {e2}"))?;
+            if let Some(head) = &e.yearly_head {
+                e.yearly_years = backend
+                    .fixed(head)
+                    .map_err(|e2| format!("yearly head materialization failed: {e2}"))?
+                    .version()
+                    .records
+                    .iter()
+                    .map(|r| r.date.year())
+                    .collect();
+            }
         }
     }
     loop {
@@ -718,6 +769,12 @@ mod tests {
     /// Publish one checkpoint head for `symbol` through the same
     /// stage→validate→commit path the production collection commit uses.
     fn publish_head(backend: &MarketBackend, symbol: &str, day: chrono::NaiveDate) {
+        publish_head_bars(backend, symbol, vec![day]);
+    }
+
+    /// Same as `publish_head` but the base version carries one bar per
+    /// given day — used by the yearly test to seed a multi-year base.
+    fn publish_head_bars(backend: &MarketBackend, symbol: &str, days: Vec<chrono::NaiveDate>) {
         let tasks = backend.tasks();
         let scope = scope_id(symbol, "day");
         let work = FrozenWork {
@@ -763,16 +820,19 @@ mod tests {
             symbol: symbol.into(),
             period: Period::Day,
             adjustment: Adjustment::Forward,
-            bars: vec![Bar {
-                date: day,
-                open: rust_decimal::Decimal::new(10000, 2),
-                high: rust_decimal::Decimal::new(10010, 2),
-                low: rust_decimal::Decimal::new(9990, 2),
-                close: rust_decimal::Decimal::new(10000, 2),
-                volume: Some(rust_decimal::Decimal::new(100, 0)),
-                amount: Some(rust_decimal::Decimal::new(1000, 0)),
-                r7_raw: Some(7),
-            }],
+            bars: days
+                .iter()
+                .map(|day| Bar {
+                    date: *day,
+                    open: rust_decimal::Decimal::new(10000, 2),
+                    high: rust_decimal::Decimal::new(10010, 2),
+                    low: rust_decimal::Decimal::new(9990, 2),
+                    close: rust_decimal::Decimal::new(10000, 2),
+                    volume: Some(rust_decimal::Decimal::new(100, 0)),
+                    amount: Some(rust_decimal::Decimal::new(1000, 0)),
+                    r7_raw: Some(7),
+                })
+                .collect(),
             provenance: Provenance {
                 source: "fixture:seed-depth".into(),
                 source_period: "day".into(),
@@ -908,10 +968,15 @@ mod tests {
         SqliteTasks::new(&db).initialize_compact().unwrap();
         std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
         let backend = MarketBackend::open(&SqliteTasks::new(&db)).unwrap();
-        publish_head(
+        // Multi-year base: one bar each of 2024..2027, the appended days
+        // staying inside the moving year 2027.
+        publish_head_bars(
             &backend,
             "sh.600006",
-            chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
+            [2024, 2025, 2026, 2027]
+                .iter()
+                .map(|y| chrono::NaiveDate::from_ymd_opt(*y, 6, 29).unwrap())
+                .collect(),
         );
         // First node is the yearly root checkpoint (depth 0, promoted as
         // the effective head), matching an entity that already has a
