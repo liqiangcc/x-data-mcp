@@ -957,6 +957,62 @@ fn fixed_by_key_scoped(
     })
 }
 
+/// Year-presence history of a published daily leaf (XP-031 R3, user
+/// approved 2026-10-11): the LEAF node gets the complete published-node
+/// verification (`verify_published_node_with`), ANCESTOR nodes only the
+/// committed tier — chain linkage, `delta_depth` continuity, published
+/// state, per-node projection digests (all enforced by the chain walk) and
+/// the row-level `verify_published_fields` digest. Ancestors no longer
+/// re-read evidence / source-binding / unit rows or recompute node checks
+/// (`verify_node_common_with`).
+///
+/// KNOWN, APPROVED DIFFERENCE vs `fixed_by_key`: damage that only
+/// `verify_node_common_with` catches on an ancestor (e.g. an ancestor's
+/// evidence or source-binding rows) is not reported here; it is still
+/// reported by `fixed`/`verify_leaf_projection` (publish commit, startup
+/// self-check, `task_sqlite check`, `query_data`). Never feed this result
+/// to a caller that consumes bars or certifies the chain.
+pub(crate) struct PresenceHistory {
+    pub entity: String,
+    pub period: Period,
+    pub integrity_digest: Digest,
+    /// Trade days of the leaf projection, ascending.
+    pub days: Vec<i64>,
+}
+
+pub(crate) fn presence_history_ctx(
+    c: &Connection,
+    key: i64,
+    sctx: &mut compact_v19::SegmentReadCtx,
+) -> Result<PresenceHistory, Error> {
+    let tracing = crate::stage_trace::enabled();
+    let mut ancestor_nodes = 0u64;
+    let mut ancestor_us = 0u64;
+    let (leaf, bars) = walk_chain_scoped(c, key, Some(sctx), |row, bars, summary| {
+        if row.key == key {
+            verify_published_node_with(c, row, summary, bars)?;
+        } else {
+            let started = tracing.then(std::time::Instant::now);
+            verify_published_fields(c, row)?;
+            ancestor_nodes += 1;
+            ancestor_us += started.map_or(0, |t| t.elapsed().as_micros() as u64);
+        }
+        Ok(())
+    })?;
+    crate::stage_trace::note(
+        "presence.ancestors",
+        &[("nodes", ancestor_nodes), ("row_check_us", ancestor_us)],
+    );
+    Ok(PresenceHistory {
+        entity: leaf.entity.clone(),
+        period: leaf.period,
+        integrity_digest: leaf
+            .integrity_digest
+            .ok_or_else(|| integrity("published version lacks integrity digest"))?,
+        days: bars.iter().map(|bar| bar.trade_day).collect(),
+    })
+}
+
 /// Metadata-only published assurance (XP-018): the same
 /// `verified_chain_scoped` full verification, then `header_version` and
 /// integrity-digest presence checks for EVERY node using that node's
@@ -1596,6 +1652,8 @@ fn verify_published_node_with(
     bars: &[CompactBar],
 ) -> Result<VersionEvidence, Error> {
     let _span = Span::enter(Stage::VerifyNode);
+    #[cfg(test)]
+    read_counts::count_node_verify();
     verify_published_fields(c, row)?;
     verify_node_common_with(c, row, summary, bars)
 }
@@ -2955,6 +3013,15 @@ pub(crate) mod read_counts {
         static FACTS_READS: Cell<usize> = const { Cell::new(0) };
         static PROJECTION_RUNS: Cell<usize> = const { Cell::new(0) };
         static COMMITTED_READS: Cell<usize> = const { Cell::new(0) };
+        static NODE_VERIFIES: Cell<usize> = const { Cell::new(0) };
+    }
+    /// `verify_published_node_with` executions (XP-031 R3 asserts that the
+    /// presence path runs it for the leaf only).
+    pub(crate) fn count_node_verify() {
+        NODE_VERIFIES.with(|n| n.set(n.get() + 1));
+    }
+    pub(crate) fn node_verifies() -> usize {
+        NODE_VERIFIES.with(Cell::get)
     }
     pub(crate) fn count_segment_read() {
         SEGMENT_READS.with(|n| n.set(n.get() + 1));
@@ -2989,6 +3056,7 @@ pub(crate) mod read_counts {
         FACTS_READS.with(|n| n.set(0));
         PROJECTION_RUNS.with(|n| n.set(0));
         COMMITTED_READS.with(|n| n.set(0));
+        NODE_VERIFIES.with(|n| n.set(0));
         snap
     }
     /// Current counters without resetting.
@@ -3149,6 +3217,22 @@ impl VerifyCtx {
         }
         self.certified(key);
         Ok((facts, verified))
+    }
+
+    /// Year-presence history at the XP-031 R3 tier. Deliberately neither
+    /// memoized nor certified: it is weaker than `verified` and must not
+    /// satisfy a later full-verification touch in the same transaction.
+    pub(crate) fn presence_history(
+        &mut self,
+        c: &Connection,
+        key: i64,
+    ) -> Result<PresenceHistory, Error> {
+        self.check_owner(c)?;
+        let facts = self.facts(c, key)?;
+        if facts.state != CompactVersionState::Published {
+            return Err(integrity("referenced version is not published"));
+        }
+        presence_history_ctx(c, key, &mut self.segments)
     }
 
     /// Metadata-only verified assurance (XP-016, deepened by XP-018): a

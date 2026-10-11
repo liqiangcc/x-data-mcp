@@ -153,23 +153,40 @@ fn presence_item(
         if facts.state != crate::sqlite_market::compact_versions::CompactVersionState::Published {
             return Ok(Outcome::Unavailable(YearPresenceReason::BaseUnavailable));
         }
-        let (_, verified) =
-            match crate::stage_trace::timed("presence.item.verified", || ctx.verified(c, key)) {
-                Ok(verified) => verified,
-                Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
-                    return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
-                }
-                Err(error) => return Err(error),
-            };
-        if verified.version.symbol != item.entity.symbol()
-            || verified.version.period != crate::market_data::Period::Day
+        // XP-031 R3: leaf = complete verification, ancestors = committed tier.
+        let history = match crate::stage_trace::timed("presence.item.verified", || {
+            ctx.presence_history(c, key)
+        }) {
+            Ok(h) => h,
+            Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
+                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
+            }
+            Err(error) => return Err(error),
+        };
+        if history.entity != item.entity.symbol()
+            || history.period != crate::market_data::Period::Day
         {
             return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
         }
-        Ok(resolved(
-            crate::compact_market::digest_hex(&verified.integrity_digest),
-            &verified.version,
-        ))
+        let mut years = std::collections::BTreeSet::new();
+        for day in &history.days {
+            let Ok(date) = crate::compact_market::epoch_date(*day) else {
+                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
+            };
+            if date >= first && date <= last {
+                years.insert(date.year());
+            }
+        }
+        Ok(Outcome::Resolved {
+            version_ref: VersionRef {
+                dataset: Dataset::Daily,
+                contract_version: ContractVersion::V1,
+                entity: Some(item.entity.clone()),
+                version_id: item.base_daily_version_id.clone(),
+                integrity_sha256: crate::compact_market::digest_hex(&history.integrity_digest),
+            },
+            years: years.into_iter().collect(),
+        })
     } else {
         let record = match read_record(c, &item.base_daily_version_id, true, false) {
             Ok(record) => record,
