@@ -291,7 +291,17 @@ fn append_item(e: &EntityState, task_id: &str, run_id: &str) -> UpdateBatchItem 
 /// through the production yearly runner (`CurrentHead` requires the base
 /// to be the current daily head, which is exactly true right after the
 /// daily commit — the same ordering production derives follow).
+///
+/// Production yearly publishes are always root checkpoints (`delta_depth`
+/// stays 0): `derive_yearly`'s staged candidate carries no
+/// `compact_parent_version_id`. To grow the yearly chain the fixture
+/// stages the same `derive_yearly` candidate itself, adding
+/// `compact_parent_version_id = prior yearly head`, *before* `run_item`.
+/// `prepare_derived_yearly` then finds the typed staged candidate by
+/// version identity (the compact-source match arm) and commits it as a
+/// delta through `mark_validated` → `commit_tx` unchanged.
 fn yearly_step(
+    backend: &MarketBackend,
     ctl: &TaskControl<SqliteTasks>,
     runner: &YearlyRunner<MarketBackend>,
     key: &x_data_mcp::task_control::CommandKey,
@@ -337,9 +347,55 @@ fn yearly_step(
         return Err("yearly acceptance carried no task".into());
     };
     let task_id = snapshot.task.task_id;
+    let publisher = x_data_mcp::market_storage::Publisher {
+        repository: backend.clone(),
+    };
     for (&i, item) in pending.iter().zip(items.iter()) {
         let item_id = scope_id(&item.symbol, "year");
         let e = &mut *entities[i];
+        // The deterministic version id `derive_and_commit` will use.
+        let version_id = format!(
+            "yearly-version-{}",
+            x_data_mcp::hash::sha256(serde_json::json!([task_id, item_id]).to_string().as_bytes())
+        );
+        // Stage the derived candidate with the chain parent bound, so
+        // stage_tx stores a delta instead of a root checkpoint.
+        let first = chrono::NaiveDate::from_ymd_opt(*item.years.first().unwrap(), 1, 1)
+            .ok_or("selected year out of range")?;
+        let last = chrono::NaiveDate::from_ymd_opt(*item.years.last().unwrap(), 12, 31)
+            .ok_or("selected year out of range")?;
+        let base = backend.fixed_window(&item.base_daily_version_id, first, last)?;
+        let as_of = runner
+            .derived_at
+            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+            .date_naive();
+        let annual = x_data_mcp::yearly::aggregate(base.version(), Some(&item.years), as_of)
+            .map_err(|e| format!("{}: yearly aggregation failed: {e}", item.symbol))?;
+        let request = x_data_mcp::yearly_publication::Derivation {
+            symbol: item.symbol.clone(),
+            base_daily_version_id: item.base_daily_version_id.clone(),
+            version_id,
+            years: item.years.clone(),
+            derived_at: runner.derived_at,
+        };
+        let evidence = DerivationEvidence {
+            base_integrity_sha256: base.raw()["integrity_sha256"]
+                .as_str()
+                .ok_or("fixed base carries no integrity digest")?
+                .into(),
+            years: item.years.clone(),
+            as_of,
+            coverage: CoverageEvidence::complete(
+                "synthetic:true;seed_depth_fixture;selected years verified by re-aggregating the fixture daily base; generated fixture data only",
+            ),
+        };
+        let candidate = publisher.derive_yearly(&request, &evidence, &base, &annual)?;
+        let mut raw = candidate.raw().clone();
+        if let Some(parent) = &e.yearly_head {
+            raw["compact_parent_version_id"] = json!(parent);
+        }
+        raw["integrity_sha256"] = json!(x_data_mcp::market_storage::compat::legacy_digest(&raw)?);
+        backend.stage(&raw)?;
         match runner.run_item(&task_id, &item_id, &FixtureYearlyVerifier)? {
             x_data_mcp::yearly_publication::runner::YearlyExecution::Published(receipt) => {
                 e.yearly_head = Some(receipt.version_id);
@@ -435,6 +491,17 @@ fn seed_entities(
         .iter()
         .map(|s| entity_state(backend, s))
         .collect::<Result<Vec<_>, _>>()?;
+    if yearly.is_some() {
+        for e in &mut entities {
+            let scope = Scope {
+                symbol: e.symbol.clone(),
+                period: Period::Year,
+            };
+            e.yearly_head = backend
+                .effective_head(&scope)
+                .map_err(|e2| format!("yearly effective head read failed: {e2}"))?;
+        }
+    }
     loop {
         let mut pending: Vec<&mut EntityState> = entities
             .iter_mut()
@@ -484,7 +551,15 @@ fn seed_entities(
                 refresh_head(backend, e)?;
             }
             if let Some((yearly_ctl, runner, key)) = &yearly {
-                yearly_step(yearly_ctl, runner, key, chunk, yearly_depth, request_prefix)?;
+                yearly_step(
+                    backend,
+                    yearly_ctl,
+                    runner,
+                    key,
+                    chunk,
+                    yearly_depth,
+                    request_prefix,
+                )?;
             }
         }
     }
@@ -817,10 +892,11 @@ mod tests {
         assert_eq!(marked, 4);
     }
 
-    /// depth 3 + yearly-depth 3: the yearly head sits at delta depth 3,
-    /// `fixed` replays the whole lineage-verified chain, tampering an
-    /// ancestor yearly node's projection fails closed, and the yearly
-    /// coverage evidence carries the synthetic marker.
+    /// depth 4 + yearly-depth 3 after a seeded yearly root: the yearly
+    /// head sits at delta depth 3, `fixed` replays the whole
+    /// lineage-verified chain, tampering an ancestor yearly node's
+    /// projection fails closed, and the yearly coverage evidence carries
+    /// the synthetic marker.
     #[test]
     fn seeded_yearly_chain_verifies() {
         use std::os::unix::fs::PermissionsExt;
@@ -837,8 +913,12 @@ mod tests {
             "sh.600006",
             chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
         );
+        // First node is the yearly root checkpoint (depth 0, promoted as
+        // the effective head), matching an entity that already has a
+        // yearly head on a real copy.
+        seed_entities(&backend, RUN, &["sh.600006".into()], 1, 1, "seed-depth").unwrap();
         let (_entities, report) =
-            seed_entities(&backend, RUN, &["sh.600006".into()], 3, 3, "seed-depth").unwrap();
+            seed_entities(&backend, RUN, &["sh.600006".into()], 4, 3, "seed-depth").unwrap();
         let yearly = &report["entities"][0];
         assert_eq!(yearly["yearly_delta_depth"], json!(3));
         let head = yearly["yearly_head_version_id"].as_str().unwrap();
@@ -858,7 +938,7 @@ mod tests {
                 .map_err(storage)
             })
             .unwrap();
-        assert_eq!(marked, 3);
+        assert_eq!(marked, 4);
         // Tamper the earliest yearly projection bar; the verified chain
         // read must fail closed.
         let raw = rusqlite::Connection::open(&db).unwrap();
