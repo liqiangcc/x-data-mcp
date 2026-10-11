@@ -29,8 +29,9 @@ live discovery PASS，daily/yearly 样本 QFQ readback PASS；工具数不是稳
   关联所请求实体的任务，不再扫描、解析全部任务。此前按任务条目 `target.symbol` 关联；市场类任务两者一致。
   仅有 `target.task_id`、无 symbol 的任务（如 `task.verification` 的 `verify_stopped_writes`）此前也不会
   出现在实体的 `related_tasks` 中，现在同样不会。缺口核查任务（`daily`）仍会出现；publication / task verification 本来就没有 symbol 目标。
-- 单个实体的每日统计在查询范围覆盖整个已发布版本时直接取自版本行（committed tier：仍校验该行的已发布字段），
-  不再遍历版本链或解码 bar；子范围过滤与年线仍走完整校验。
+- 单个实体的每日与年线统计在查询范围覆盖整个已发布版本时直接取自版本行（committed tier：仍校验该行的已发布字段，
+  年线的 lineage 取自 `yearly_lineage` 行并经行级绑定校验），不再遍历版本链、解码 bar，年线也不再逐 bar 重新聚合基础日线；
+  子范围过滤仍走完整校验。该 tier 下不重复"年线 bar 与基础日线重新聚合一致"这一内容级检查（读取行情内容的 `query_data` 不受影响）。
 
 下方八工具章节是提交 `b3fe2b3bae22d558c3f193e668773728a2e0df34` 的历史快照，
 对应 [旧输入 schema](contracts/mcp-tools-current.json)，不再代表当前部署。通用工具目标与现状差距见

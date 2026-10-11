@@ -966,6 +966,208 @@ fn yearly_derive_commit_on_compact_schema() {
     assert_eq!(audit["base_daily_version_id"], json!("v1"));
 }
 
+/// XP-030 R2: yearly availability stats at the committed tier equal the
+/// fully verified path field by field (manifest incl. metadata + lineage,
+/// first/last/count) and fail closed on a tampered committed row.
+#[test]
+fn yearly_availability_committed_stats_equal_full_path() {
+    use crate::market_update::tasks::Operation;
+    use crate::task_control::{Contract, RequestOutcome};
+    use crate::yearly_publication::{
+        DerivationEvidence,
+        runner::{YearlyExecution, YearlyRunner, YearlyVerifier},
+        tasks::YearlyContract,
+    };
+
+    struct Stub;
+    impl YearlyVerifier for Stub {
+        fn verify(
+            &self,
+            base: &CheckedRecord,
+            years: &BTreeSet<i32>,
+            _annual: &crate::yearly::AnnualSeries,
+            derived_at: DateTime<Utc>,
+        ) -> Result<DerivationEvidence, crate::market_data::SourceError> {
+            Ok(DerivationEvidence {
+                base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
+                years: years.clone(),
+                as_of: derived_at
+                    .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                    .date_naive(),
+                coverage: CoverageEvidence::complete("stub re-aggregation verified"),
+            })
+        }
+    }
+
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    // Publish a daily base covering 2025 and 2026 through the real path.
+    let task_id = accept_task(&repo);
+    let revision = start_item(&repo, &task_id);
+    let days = [
+        NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 6, 30).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 18).unwrap(),
+    ]
+    .into_iter()
+    .map(compact_market::epoch_day);
+    let version = mk_version(
+        "v1",
+        days.enumerate()
+            .map(|(i, d)| bar(d, 100 + i as i64))
+            .collect(),
+    );
+    repo.stage(&envelope(&version, source("gen-1"), None))
+        .unwrap();
+    let candidate = repo.candidate("v1").unwrap();
+    repo.mark_validated(&candidate).unwrap();
+    repo.commit(&PublishPlan {
+        command: collect_command(&task_id, "pub-1", "v1", revision),
+        record: candidate.clone(),
+        required_heads: vec![(Scope::of(&candidate.version), None)],
+        promote: None,
+        base_digest: None,
+    })
+    .unwrap();
+
+    // Accept the yearly task through the real contract, then run the item.
+    let contract = YearlyContract {
+        operation: Operation::Update,
+        repository: repo.clone(),
+        today: || NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+    };
+    let work = contract
+        .resolve(&json!({"items":[{
+            "symbol":"sh.600006",
+            "base_daily_version_id":"v1",
+            "years":[2025,2026],
+            "intent":{"CurrentHead":{"expected_daily_head":"v1","expected_yearly_head":null}},
+            "comparison_version_id":null
+        }]}))
+        .unwrap();
+    let command = Command {
+        key: contract.key(),
+        intent: json!({}),
+    };
+    let acceptance = repo
+        .accept("req-yearly", &command, &work, RUN, None)
+        .unwrap();
+    let RequestOutcome::Task(snapshot) = acceptance.record.outcome else {
+        panic!("expected task outcome")
+    };
+    let yearly_task = snapshot.task.task_id.clone();
+    let item_id = snapshot.items[0].spec.item_id.clone();
+
+    let runner = YearlyRunner {
+        repository: repo.clone(),
+        run_id: RUN.into(),
+        derived_at: ts(),
+    };
+    let outcome = runner.run_item(&yearly_task, &item_id, &Stub).unwrap();
+    let YearlyExecution::Published(receipt) = outcome else {
+        let snap = repo.task(&yearly_task).unwrap();
+        panic!("yearly item did not publish: {:?}", snap.items[0].outcome)
+    };
+
+    use crate::data_supply::Access;
+    use crate::data_supply::observe::ObservationRepository;
+    use crate::data_supply::query::QueryPlan;
+    use crate::data_supply::wire::{
+        ContractVersion, Dataset, Exchange, Filter, Query, Security, Selection, VersionChoice,
+    };
+    use crate::sqlite_market::backend::MarketBackend;
+    use crate::sqlite_supply::SqliteSupply;
+    let supply = SqliteSupply {
+        market: MarketBackend::Compact(repo.clone()),
+    };
+    let plan = |start_year: i32, end_year: i32| {
+        QueryPlan::new(
+            Query {
+                dataset: Dataset::Yearly,
+                contract_version: ContractVersion::V1,
+                selection: Selection::Single {
+                    entity: Security {
+                        exchange: Exchange::Sh,
+                        code: "600006".into(),
+                    },
+                },
+                filter: Filter::Yearly {
+                    start_year,
+                    end_year,
+                },
+                version: VersionChoice::LatestPerEntity,
+                page_size: 10,
+                cursor: None,
+            },
+            &Access::local(),
+        )
+        .unwrap()
+    };
+    let run = |plan: &QueryPlan, full: bool| {
+        crate::sqlite_supply::FORCE_FULL_STATS.with(|c| c.set(full));
+        let out = supply.availability(plan, &Access::local());
+        crate::sqlite_supply::FORCE_FULL_STATS.with(|c| c.set(false));
+        out.unwrap()
+    };
+    // Covering range: committed tier is eligible and must equal the full path.
+    compact_versions::read_counts::reset();
+    let fast = run(&plan(2000, 2100), false);
+    let (_, fast_runs, _) = compact_versions::read_counts::reset();
+    let full = run(&plan(2000, 2100), true);
+    let (_, full_runs, _) = compact_versions::read_counts::reset();
+    assert_eq!(
+        fast_runs, 0,
+        "committed yearly stats must not walk/verify the chain"
+    );
+    assert!(full_runs > 0, "control: full path verifies the chain");
+    assert_eq!((fast.len(), full.len()), (1, 1));
+    let (a, b) = (&fast[0], &full[0]);
+    assert!(a.integrity_failure.is_none() && b.integrity_failure.is_none());
+    assert_eq!(
+        a.manifest, b.manifest,
+        "manifest incl. metadata and lineage"
+    );
+    assert!(
+        a.manifest
+            .as_ref()
+            .unwrap()
+            .metadata
+            .as_ref()
+            .unwrap()
+            .lineage
+            .is_some()
+    );
+    assert_eq!(a.first_record, b.first_record);
+    assert_eq!(a.last_record, b.last_record);
+    assert_eq!(a.record_count, b.record_count);
+    assert_eq!(a.record_count, 2);
+    // Sub-range (only 2026): not eligible, still the full path, same answer shape.
+    compact_versions::read_counts::reset();
+    let sub = run(&plan(2026, 2026), false);
+    let (_, sub_runs, _) = compact_versions::read_counts::reset();
+    assert!(sub_runs > 0);
+    assert_eq!(sub[0].record_count, 1);
+    // Tampered committed row: the covering (fast) path still fails closed.
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=OFF; PRAGMA ignore_check_constraints=ON")
+            .unwrap();
+        c.execute(
+            "UPDATE data_versions SET integrity_digest=\
+             x'0000000000000000000000000000000000000000000000000000000000000000' \
+             WHERE version_id=?1",
+            [&receipt.version_id],
+        )
+        .unwrap();
+    }
+    let broken = run(&plan(2000, 2100), false);
+    assert!(
+        broken[0].integrity_failure.is_some(),
+        "committed row verification must fail closed"
+    );
+}
+
 #[test]
 fn ops_range_commit_stages_delta_binds_leaf_and_replays() {
     use crate::market_update::publication::RangeRepository;

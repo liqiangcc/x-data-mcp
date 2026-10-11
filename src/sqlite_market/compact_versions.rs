@@ -1797,6 +1797,19 @@ fn verify_lineage(
     })
 }
 
+/// Committed-tier lineage of a yearly version row (XP-030 R2): the stored
+/// `yearly_lineage` row plus the row-level checks `verify_stored_lineage`
+/// already performs (published same-entity daily base, algorithm version,
+/// bounds). No base window read and no re-aggregation. The row's
+/// `integrity_digest` (verified by `committed_facts`) binds this lineage.
+pub(crate) fn committed_yearly_lineage(
+    c: &Connection,
+    key: i64,
+) -> Result<YearlyLineageIdentity, Error> {
+    let row = read_version_row(c, key)?.ok_or_else(|| integrity("version row missing"))?;
+    verify_stored_lineage(c, &row)?.ok_or_else(|| integrity("yearly version lacks lineage"))
+}
+
 fn stored_lineage(c: &Connection, key: i64) -> Result<Option<YearlyLineageDraft>, Error> {
     c.query_row(
         "SELECT base_daily_version_key,algorithm_version,first_trade_day,last_trade_day,as_of_day FROM yearly_lineage WHERE version_key=?1",
