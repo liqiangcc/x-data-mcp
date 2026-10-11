@@ -7699,6 +7699,137 @@ mod xp011 {
             assert_eq!(stored.identity.result_version_id, "v258");
         }
 
+        /// Accepts an update task for `base`, claims it and starts `item-1`;
+        /// returns (task id, item revision) for the direct ops commit path.
+        fn started_update_task(repo: &SqliteCompactMarket, n: u32, base: &str) -> (String, u64) {
+            let scope = task_control::legacy::scope_id("sh.600006", "day");
+            let work = FrozenWork {
+                items: vec![ItemSpec {
+                    item_id: "item-1".into(),
+                    target: json!({"symbol": "sh.600006", "period": "day"}),
+                    progress_unit: "security_period".into(),
+                    frozen_inputs: crate::market_update::tasks::frozen(
+                        base,
+                        "ab".repeat(32).as_str(),
+                        &crate::market_update::DateRange {
+                            start: date(0),
+                            end: date(0),
+                        },
+                    ),
+                    scope_keys: BTreeSet::from([scope.clone()]),
+                }],
+                scopes: BTreeSet::from([scope]),
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: CommandKey {
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+                },
+                intent: json!({}),
+            };
+            let task = match repo
+                .accept(&format!("req-s{n}"), &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+                _ => panic!("expected task outcome"),
+            };
+            let revision = claim(repo, &task);
+            let revision = repo
+                .transition(&task, revision, RUN, Change::StartItem("item-1".into()))
+                .unwrap()
+                .task
+                .state_revision;
+            (task, revision)
+        }
+
+        fn ledger_mode(
+            repo: &SqliteCompactMarket,
+            id: &str,
+        ) -> crate::compact_market::ContinuityMode {
+            repo.read(|c| compact_results::read_market_update(c, id))
+                .unwrap()
+                .identity
+                .continuity_mode
+        }
+
+        /// XP-038: a typed update that OVERWRITES an existing day on a
+        /// depth-256 base stages a checkpoint with basis and commits in the
+        /// Full shape (the prefix is not unchanged, so it is not an Append).
+        #[test]
+        fn typed_overwrite_on_a_depth_256_base_commits_as_full() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let bars = chain_to_depth(&repo, 256);
+            let first = compact_market::epoch_day(bars[0].date);
+            repo.stage_ops_delta("sh.600006", "v257", "v258", &[bar(first, 777)], &[])
+                .unwrap();
+            repo.validate_staged("v258").unwrap();
+            let (task, revision) = started_update_task(&repo, 1, "v257");
+            repo.commit_ops_update(
+                "upd-s1",
+                &task,
+                "item-1",
+                "v257",
+                "v258",
+                revision,
+                RUN,
+                &task_control::legacy::scope_id("sh.600006", "day"),
+                None,
+            )
+            .unwrap();
+            assert_eq!(mode_depth(&path, "v258"), (1, 0));
+            assert_eq!(
+                ledger_mode(&repo, "upd-s1"),
+                crate::compact_market::ContinuityMode::Full
+            );
+            let head = repo.fixed("v258").unwrap().version.records;
+            assert_eq!(head.len(), bars.len());
+            assert_eq!(head[0].close, bar(first, 777).close);
+        }
+
+        /// XP-038: a full revision checkpoint (root checkpoint with changed
+        /// history) on a depth-256 base still commits as Full.
+        #[test]
+        fn full_revision_on_a_depth_256_base_commits_as_full() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let bars = chain_to_depth(&repo, 256);
+            let rewritten: Vec<Bar> = bars
+                .iter()
+                .enumerate()
+                .map(|(i, b)| bar(compact_market::epoch_day(b.date), 5000 + i as i64))
+                .collect();
+            let version = mk_version("v258", rewritten.clone());
+            repo.stage(&envelope(&version, source("gen-2"), None))
+                .unwrap();
+            let checked = repo.candidate("v258").unwrap();
+            repo.mark_validated(&checked).unwrap();
+            let (task, revision) = started_update_task(&repo, 1, "v257");
+            repo.commit_ops_update(
+                "upd-s1",
+                &task,
+                "item-1",
+                "v257",
+                "v258",
+                revision,
+                RUN,
+                &task_control::legacy::scope_id("sh.600006", "day"),
+                None,
+            )
+            .unwrap();
+            assert_eq!(mode_depth(&path, "v258"), (1, 0));
+            assert_eq!(
+                ledger_mode(&repo, "upd-s1"),
+                crate::compact_market::ContinuityMode::Full
+            );
+            assert_eq!(repo.fixed("v258").unwrap().version.records, rewritten);
+        }
+
         /// XP-038: after the rollover the next typed append is an ordinary
         /// delta at depth 1 on the new checkpoint.
         #[test]

@@ -570,49 +570,62 @@ impl SqliteCompactMarket {
                     )
                 }
                 ManifestMode::Checkpoint => {
-                    let base_depth = compact_versions::result_facts(c, base_key)?.delta_depth;
-                    if base_depth >= compact_versions::ROLLOVER_DEPTH {
-                        // Rollover checkpoint (XP-038): committed as an
-                        // Append whose ops are the tail beyond the base;
-                        // the commit verifies base + ops == result.
-                        let base_last = compact_versions::result_facts(c, base_key)?.last_day;
-                        let tail: Vec<CompactBar> = compact_versions::leaf_bars(c, result_key)?
-                            .into_iter()
-                            .filter(|b| b.trade_day > base_last)
-                            .collect();
-                        if tail.is_empty() {
-                            return Err(integrity("rollover checkpoint carries no new day"));
+                    // A checkpoint result is committed as an Append ONLY when it
+                    // is exactly a rollover: base at the rollover depth and the
+                    // result's bars are the base's bars (unchanged prefix)
+                    // followed by new bars. Every other checkpoint (full
+                    // revision, overwrite/remove) keeps the Full shape.
+                    let base_facts = compact_versions::result_facts(c, base_key)?;
+                    let rollover_tail =
+                        if base_facts.delta_depth >= compact_versions::ROLLOVER_DEPTH {
+                            let base_bars = compact_versions::leaf_bars(c, base_key)?;
+                            let mut result_bars = compact_versions::leaf_bars(c, result_key)?;
+                            if result_bars.len() > base_bars.len()
+                                && result_bars[..base_bars.len()] == base_bars[..]
+                            {
+                                Some(result_bars.split_off(base_bars.len()))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                    match rollover_tail {
+                        Some(tail) => {
+                            let mut ops = Vec::new();
+                            for chunk in tail.chunks(SEGMENT_ROWS) {
+                                let segment = compact_v19::insert_segment(
+                                    c,
+                                    &facts.entity,
+                                    Period::Day,
+                                    chunk,
+                                )?;
+                                ops.push(StoredDelta {
+                                    range_start_day: chunk[0].trade_day,
+                                    range_end_day: chunk[chunk.len() - 1].trade_day,
+                                    kind: StoredDeltaKind::Upsert(StoredClip {
+                                        segment_key: segment.key,
+                                        clip: compact_market::SegmentClip {
+                                            segment_digest: segment.digest,
+                                            clip_start_day: chunk[0].trade_day,
+                                            clip_end_day: chunk[chunk.len() - 1].trade_day,
+                                            row_count: chunk.len() as u32,
+                                        },
+                                    }),
+                                });
+                            }
+                            let (first, last) =
+                                (ops[0].range_start_day, ops[ops.len() - 1].range_end_day);
+                            (
+                                MarketUpdateChange::Append {
+                                    prefix_bytes: base_count(c, base_key)? * 32,
+                                    ops,
+                                },
+                                first,
+                                last,
+                            )
                         }
-                        let mut ops = Vec::new();
-                        for chunk in tail.chunks(SEGMENT_ROWS) {
-                            let segment =
-                                compact_v19::insert_segment(c, &facts.entity, Period::Day, chunk)?;
-                            ops.push(StoredDelta {
-                                range_start_day: chunk[0].trade_day,
-                                range_end_day: chunk[chunk.len() - 1].trade_day,
-                                kind: StoredDeltaKind::Upsert(StoredClip {
-                                    segment_key: segment.key,
-                                    clip: compact_market::SegmentClip {
-                                        segment_digest: segment.digest,
-                                        clip_start_day: chunk[0].trade_day,
-                                        clip_end_day: chunk[chunk.len() - 1].trade_day,
-                                        row_count: chunk.len() as u32,
-                                    },
-                                }),
-                            });
-                        }
-                        let (first, last) =
-                            (ops[0].range_start_day, ops[ops.len() - 1].range_end_day);
-                        (
-                            MarketUpdateChange::Append {
-                                prefix_bytes: base_count(c, base_key)? * 32,
-                                ops,
-                            },
-                            first,
-                            last,
-                        )
-                    } else {
-                        (MarketUpdateChange::Full, facts.first_day, facts.last_day)
+                        None => (MarketUpdateChange::Full, facts.first_day, facts.last_day),
                     }
                 }
             };
