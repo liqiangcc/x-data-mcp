@@ -7565,6 +7565,157 @@ mod xp011 {
                 ReadClass::Integrity
             );
         }
+
+        /// XP-038: `commit_update_batch` with a typed Append of one day on `base`.
+        fn typed_append(
+            repo: &SqliteCompactMarket,
+            n: u32,
+            base: &str,
+            result: &str,
+            new_day: i64,
+            cents: i64,
+        ) -> Vec<Result<Receipt, Error>> {
+            use crate::market_update::{UpdateBatchItem, UpdateBatchPrepared};
+            let scope = task_control::legacy::scope_id("sh.600006", "day");
+            let work = FrozenWork {
+                items: vec![ItemSpec {
+                    item_id: "item-1".into(),
+                    target: json!({"symbol": "sh.600006", "period": "day"}),
+                    progress_unit: "security_period".into(),
+                    frozen_inputs: crate::market_update::tasks::frozen(
+                        base,
+                        "ab".repeat(32).as_str(),
+                        &crate::market_update::DateRange {
+                            start: date(new_day),
+                            end: date(new_day),
+                        },
+                    ),
+                    scope_keys: BTreeSet::from([scope.clone()]),
+                }],
+                scopes: BTreeSet::from([scope.clone()]),
+                shared_evidence: None,
+            };
+            let command = Command {
+                key: CommandKey {
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+                },
+                intent: json!({}),
+            };
+            let task = match repo
+                .accept(&format!("req-t{n}"), &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            {
+                task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+                _ => panic!("expected task outcome"),
+            };
+            repo.commit_update_batch(
+                &task,
+                &[UpdateBatchItem {
+                    task_id: task.clone(),
+                    item_id: "item-1".into(),
+                    publication_id: format!("upd-t{n}"),
+                    run_id: RUN.into(),
+                    symbol: "sh.600006".into(),
+                    occupancy_key: scope,
+                    prepared: UpdateBatchPrepared::Append {
+                        base_version_id: base.into(),
+                        result_version_id: result.into(),
+                        upserts: vec![bar(new_day, cents)],
+                        metadata: None,
+                        continuity: json!({
+                            "continuity": {"mode": "append", "day_member_sha256": "cd".repeat(32)}
+                        }),
+                    },
+                }],
+            )
+            .unwrap()
+        }
+
+        /// v1 (checkpoint) plus `depth` tail-only appends: head `v{depth+1}` at
+        /// delta_depth == depth. Returns the head bars.
+        fn chain_to_depth(repo: &SqliteCompactMarket, depth: u32) -> Vec<Bar> {
+            let first = day(2020, 1, 1);
+            let mut bars = vec![bar(first, 100)];
+            publish_head(repo, "req-a", "pub-a", "sh.600006", "v1", bars.clone());
+            for i in 1..=depth {
+                bars.push(bar(first + i as i64, 100 + i as i64));
+                publish_delta(
+                    repo,
+                    i,
+                    &format!("v{i}"),
+                    &format!("v{}", i + 1),
+                    bars.clone(),
+                );
+            }
+            bars
+        }
+
+        fn mode_depth(path: &PathBuf, version_id: &str) -> (i64, i64) {
+            let c = rusqlite::Connection::open(path).unwrap();
+            c.query_row(
+                "SELECT manifest_mode,delta_depth FROM data_versions WHERE version_id=?1",
+                [version_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        }
+
+        /// XP-038 reproduction: the typed Append path on a base at
+        /// delta_depth == 256 must roll over into a checkpoint (the commit
+        /// side already validates Append + Checkpoint at base depth 256).
+        /// Before the fix `stage_ops_delta_tx` fails with "delta depth bound
+        /// reached".
+        #[test]
+        fn typed_append_on_a_depth_256_base_rolls_over_into_a_checkpoint() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let bars = chain_to_depth(&repo, 256);
+            assert_eq!(mode_depth(&path, "v257"), (2, 256));
+            let new_day = bars.last().unwrap().trade_day + 1;
+            let out = typed_append(&repo, 1, "v257", "v258", new_day, 999);
+            assert_eq!(out.len(), 1);
+            assert!(out[0].is_ok(), "rollover append failed: {:?}", out[0]);
+            // New head: a checkpoint at depth 0 holding old bars + the new day.
+            assert_eq!(mode_depth(&path, "v258"), (1, 0));
+            let head = repo.fixed("v258").unwrap().version.records;
+            assert_eq!(head.len(), bars.len() + 1);
+            assert_eq!(
+                &head[..bars.len()],
+                &repo.fixed("v257").unwrap().version.records[..]
+            );
+            assert_eq!(head.last().unwrap().date, date(new_day));
+            // The ledger row is an Append whose result is a checkpoint.
+            let stored = repo
+                .read(|c| compact_results::read_market_update(c, "upd-t1"))
+                .unwrap();
+            assert_eq!(
+                stored.identity.continuity_mode,
+                crate::compact_market::ContinuityMode::Append
+            );
+            assert_eq!(stored.identity.result_version_id, "v258");
+        }
+
+        /// XP-038: after the rollover the next typed append is an ordinary
+        /// delta at depth 1 on the new checkpoint.
+        #[test]
+        fn append_after_rollover_is_a_depth_one_delta() {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let bars = chain_to_depth(&repo, 256);
+            let d1 = bars.last().unwrap().trade_day + 1;
+            assert!(typed_append(&repo, 1, "v257", "v258", d1, 999)[0].is_ok());
+            let out = typed_append(&repo, 2, "v258", "v259", d1 + 1, 1000);
+            assert!(out[0].is_ok(), "{:?}", out[0]);
+            assert_eq!(mode_depth(&path, "v259"), (2, 1));
+            assert_eq!(
+                repo.fixed("v259").unwrap().version.records.len(),
+                bars.len() + 2
+            );
+        }
     }
 
     /// XP-025 H4: batched daily preparation must prepare/decline exactly the
