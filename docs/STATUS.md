@@ -6,7 +6,7 @@
 
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
-最后核实：2026-10-10。标注「来源」的数值来自所列报告或命令，本次未重新读取 live 服务。
+最后核实：2026-10-11。标注「来源」的数值来自所列报告或命令，本次未重新读取 live 服务。
 
 ## 部署
 
@@ -14,9 +14,10 @@
 |---|---|---|
 | 主机 | aws-node（hostname `ip-172-31-10-15`） | `hostname` |
 | 系统 | Ubuntu 26.04 LTS，kernel 7.0.0-1014-aws | `/etc/os-release`、`uname -r` |
-| 资源 | 2 vCPU（1 个物理核加 2 个超线程，没有 SHA-NI），1.9GiB RAM + 8GiB swap，根盘 77G（已用 34%） | `lscpu`、`/proc/cpuinfo`、`free -h`、`df -h` |
+| 资源 | EC2 t3.small（可突发）：2 vCPU（1 个物理核加 2 个超线程，没有 SHA-NI），1.9GiB RAM + 8GiB swap，根盘 77G；`/tmp` 是 953MB 的 tmpfs（占内存） | `lscpu`、`/proc/cpuinfo`、`free -h`、`df -h` |
 | 本机工具链 | rustc / cargo 1.99.0 | `rustc --version` |
 | 部署版本 | v0.2.0-preview.30 @ `4ff45d748caef5fffda7360c2c4bef070a7c3189` | `/opt/x-data-mcp-preview/current/manifest.json` |
+| 最新发布（未部署） | v0.2.0-preview.31（GOAL-008 性能与正确性改动；capability `generic-data-v5`，21 个 data 工具）。**未部署**：部署继续采用「归档旧库 + 全新初始化」 | GitHub Release `v0.2.0-preview.31`、PR #323 |
 | 构建 | rustc 1.99.0，ubuntu-24.04，最低 glibc 2.39 | 同上 |
 | 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/4ff45d7…` | `ls -l` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
@@ -49,25 +50,28 @@
 
 ## 进行中
 
-- **GOAL-008 性能**：分支 `perf/g8-daily-update-perf`，PR #323，**未合并**。
-  - 进度查询小门已通过：已完成 100 条任务的 `get_task_progress` 中位 0.108s / 0.091s。
-  - 新只读工具 `get_yearly_base_years`（capability `generic-data-v4`）的实现提交 `ef7ea71` CI 已通过，待审查。
-  - 排期：构建与 SQLite 调优 → 受理体检有界化 → 年线服务端提速 → 全市场验收。门禁见 [SLO](SLO.md)。
+- **GOAL-008 性能**：PR #323 已于 2026-10-11 squash 合并（`8a446b1`），随后发布 v0.2.0-preview.31（只发布，未部署）。
+  - 全市场验收（XP-015，perf `3b11231`，aws 私有栈，浅链，53 批，trace-OFF，每负载单次）：年线首次 310.6s、日线跨代 Append 104.2s（合成截断夹具）、年线重聚合 328.3s、日线同代 NoChange 78.0s，write-loop 均 <600s，读回全部 PASS（见 [SLO](SLO.md)）。第三类「保留的真实 mixed Append/Full/fail-closed」**未运行**（retained gen-1 字节永久不可得）；`AGENTS.md` 记载的离线 harness 结果仅作旁证，不作替代。
+  - **最坏链深未做全量实测**：错开的提前全量重写（每实体阈值 64–127）后最坏链深 ≤127，年线批中位 10.3s，按 53 批外推约 548–588s，余量约 2–9%；日线在深链上的有效实测缺失。
+  - 校验分层变化（均经 owner 批准，2026-10-10 / 11）：accept 只检查在途；`get_data_availability` 统计与校验走已提交层（含年线）；`get_yearly_base_years` 叶节点完整校验、祖先已提交层；年线发布的先验年线 head 读取降到已提交层；rollover 校验由「父深度必须正好 256」放宽为 64..=256。全链完整校验仍在发布提交、服务启动 sweep、`task_sqlite check`、`query_data`。
   - 生产 preview.30 **不包含**上述改动。
-- **#324**：stopped-write 核实会重写 `outcome_json`，破坏 compact result 的完整性链接。合并 #323 之前必须解决。
 - **#304**：连续 10 个交易日仅用 Skill 完成同步的验收。已记录的 PASS 运行（Run 3、Run 5、2026-10-08）全部是 `day=unchanged`，有更新那天的路径尚未覆盖。有效计数以 #304 的评论为准；2026-10-08 那次使用的是提示词 `daily-ai-sync-v2`。
 
 ## 已知问题
 
 | 问题 | 影响 | 来源 |
 |---|---|---|
-| #324 | 写路径的数据一致性缺陷 | Issue |
-| 受理体检每次扫描全部历史 task、item、request，还会重算所有历史请求的 SHA-256（`src/sqlite_tasks.rs` 中的 `accept_tx`） | 受理耗时随历史线性增长；目前每次部署都全新 init 库，把增长掩盖了 | 源码；私有栈实测受理从 0.05s 增长到 1.8s/chunk |
+| 只换二进制（不再每次全新 init）的部署：启动 registry sweep 的耗时随历史任务线性增长，约运行 70 天后超过 `x-data-mcp-tunnel` 的 10 秒等待（`wait-data-service.py`）；缓解（只 sweep 最近 N 天、先开 socket 后台 sweep）会改变「sweep 失败即拒绝启动」的语义，需另行批准 | 目前每次部署全新 init，未触发 | XP-043 |
+| 任务簿记（`frozen_work_json`、`requests.command_json`、`shared_evidence`）每年约增长 10–16GB（每天约 106 个任务） | 只换二进制的长期运行会逼近「部署体积 ≤4GiB」；降低需要改存储格式并定留存策略 | S7 |
+| rollover 校验放宽后，回滚到旧二进制时，其对早 rollover 结果行的完整校验会报「requires depth-256 base」；已有 >127 深的链升级后首日会集中 rollover 一次 | 只影响长期运行的库 | XP-051 |
+| 年线最坏链深余量薄（约 2–9%），宿主为 t3.small，噪声约 ±10%，冷缓存首批明显偏慢 | 个别批次可能离群 | XP-045b/047/048/052 |
 | aws `acquire.sqlite` 中有 4 个没有字节的 generation，normalized-retire 待处理 | 采集台账有残留 | 迁移报告 |
 | `/opt/x-data-mcp-preview/mcp.json` 的 `x-data-mcp-demo` 指向一个不存在的 sqlite | 配置过时 | `ls` |
 | `src/acquire/fetch.rs` 在未设置 `X_DATA_MCP_TDX_FETCH` 时，回退到编译期的 `CARGO_MANIFEST_DIR` | 不带该变量启动的实例无法下载 | 源码 |
-| 生产服务、私有性能栈和多个 agent 会话共用 1 个物理核和 1.9GiB 内存 | 2026-10-10 约 04:34Z 过载重启；测量结果有噪声 | 运维观察 |
+| 生产服务、私有性能栈和多个 agent 会话共用 1 个物理核和 1.9GiB 内存；`/tmp` 是内存盘 | 2026-10-10 约 04:34Z 过载重启；测量结果有噪声 | 运维观察 |
 | AGENTS.md 的环境段、README「当前状态」、`docs/daily-sync.md`「当前状态」仍写 ecs-node / preview.29 / generation `2e9183…` | 读取这些文档的 agent 会被误导 | 本次核对；这三处已加指向本文件的说明 |
+
+已关闭：#324（stopped-write 重写 `outcome_json`，随 PR #323 修复）；受理体检扫描全部历史（随 PR #323 修复，**生产 preview.30 仍有**，待部署）。
 
 ## 维护规则
 
