@@ -968,12 +968,13 @@ mod tests {
         SqliteTasks::new(&db).initialize_compact().unwrap();
         std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
         let backend = MarketBackend::open(&SqliteTasks::new(&db)).unwrap();
-        // Multi-year base: one bar each of 2024..2027, the appended days
-        // staying inside the moving year 2027.
+        // Multi-year base: one bar each of 2023..2026, the appended days
+        // staying inside the moving year 2026 (all before the run date,
+        // since yearly aggregation rejects bars past as_of).
         publish_head_bars(
             &backend,
             "sh.600006",
-            [2024, 2025, 2026, 2027]
+            [2023, 2024, 2025, 2026]
                 .iter()
                 .map(|y| chrono::NaiveDate::from_ymd_opt(*y, 6, 29).unwrap())
                 .collect(),
