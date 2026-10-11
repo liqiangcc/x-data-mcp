@@ -143,7 +143,7 @@ fn presence_item(
                 }
                 Err(error) => return Err(error),
             };
-        let facts = match ctx.facts(c, key) {
+        let facts = match crate::stage_trace::timed("presence.item.facts", || ctx.facts(c, key)) {
             Ok(facts) => facts,
             Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
                 return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
@@ -153,13 +153,14 @@ fn presence_item(
         if facts.state != crate::sqlite_market::compact_versions::CompactVersionState::Published {
             return Ok(Outcome::Unavailable(YearPresenceReason::BaseUnavailable));
         }
-        let (_, verified) = match ctx.verified(c, key) {
-            Ok(verified) => verified,
-            Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
-                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
-            }
-            Err(error) => return Err(error),
-        };
+        let (_, verified) =
+            match crate::stage_trace::timed("presence.item.verified", || ctx.verified(c, key)) {
+                Ok(verified) => verified,
+                Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
+                    return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
+                }
+                Err(error) => return Err(error),
+            };
         if verified.version.symbol != item.entity.symbol()
             || verified.version.period != crate::market_data::Period::Day
         {
@@ -607,7 +608,15 @@ fn availability_stats(
     // byte-identical, and the in-window stats come from the windowed leaf
     // read (chain linkage + clip digests still enforced) instead of the
     // materialized `records` list.
-    if let Some(r) = slim_market(c, ctx, plan.args.dataset, entity, &id)? {
+    let slim = crate::stage_trace::timed("avail.stats.slim_market", || {
+        slim_market(c, ctx, plan.args.dataset, entity, &id)
+    })?;
+    if let Some(r) = slim {
+        let _window = crate::stage_trace::span(if plan.args.dataset == Dataset::Yearly {
+            "avail.stats.yearly_window_and_meta"
+        } else {
+            "avail.stats.daily_window"
+        });
         let manifest = ManifestEntry {
             entity: Some(entity.clone()),
             version_ref: Some(market_ref(plan.args.dataset, entity, &r)),

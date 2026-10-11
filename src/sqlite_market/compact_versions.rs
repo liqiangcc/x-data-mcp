@@ -1266,6 +1266,58 @@ fn apply_delta_in_place(
     Ok(())
 }
 
+/// Cumulative per-chain timers for the stage trace (XP-028 E3-c): one
+/// summary note per reconstruction, no per-node span. Inert when disabled.
+struct ChainAcc {
+    on: bool,
+    walk_us: u64,
+    checkpoint_read_us: u64,
+    checkpoint_flatten_us: u64,
+    delta_read_us: u64,
+    delta_apply_us: u64,
+    visit_us: u64,
+    delta_nodes: u64,
+    delta_ops: u64,
+}
+impl ChainAcc {
+    fn new() -> Self {
+        Self {
+            on: crate::stage_trace::enabled(),
+            walk_us: 0,
+            checkpoint_read_us: 0,
+            checkpoint_flatten_us: 0,
+            delta_read_us: 0,
+            delta_apply_us: 0,
+            visit_us: 0,
+            delta_nodes: 0,
+            delta_ops: 0,
+        }
+    }
+    fn start(&self) -> Option<std::time::Instant> {
+        self.on.then(std::time::Instant::now)
+    }
+    fn since(&self, started: Option<std::time::Instant>) -> u64 {
+        started.map_or(0, |t| t.elapsed().as_micros() as u64)
+    }
+    fn emit(&self) {
+        if self.on {
+            crate::stage_trace::note(
+                "chain.parts",
+                &[
+                    ("walk_us", self.walk_us),
+                    ("checkpoint_read_us", self.checkpoint_read_us),
+                    ("checkpoint_flatten_us", self.checkpoint_flatten_us),
+                    ("delta_read_us", self.delta_read_us),
+                    ("delta_apply_us", self.delta_apply_us),
+                    ("visit_us", self.visit_us),
+                    ("delta_nodes", self.delta_nodes),
+                    ("delta_ops", self.delta_ops),
+                ],
+            );
+        }
+    }
+}
+
 /// Streams a version chain root -> leaf over ONE projection buffer: each
 /// node is checked (linkage, published parent, delta/projection digests)
 /// exactly as before, `visit` sees the node's projection and incremental
@@ -1277,6 +1329,8 @@ fn walk_chain_scoped(
     mut visit: impl FnMut(&VersionRow, &[CompactBar], &BarsSummary) -> Result<(), Error>,
 ) -> Result<(VersionRow, Vec<CompactBar>), Error> {
     let _span = Span::enter(Stage::Reconstruct);
+    let mut acc = ChainAcc::new();
+    let walk_started = acc.start();
     let mut chain = Vec::new();
     let mut visited = HashSet::new();
     let mut key = leaf_key;
@@ -1310,6 +1364,7 @@ fn walk_chain_scoped(
             return Err(integrity("version chain exceeds depth bound"));
         }
     }
+    acc.walk_us += acc.since(walk_started);
     chain.reverse();
     let _chain_span = crate::stage_trace::span("chain.reconstruct");
     crate::stage_trace::note(
@@ -1327,19 +1382,23 @@ fn walk_chain_scoped(
     let mut previous: Option<VersionRow> = None;
     for (index, row) in chain.into_iter().enumerate() {
         if index == 0 {
+            let t = acc.start();
             let (clips, projection) = match sctx.as_deref_mut() {
                 Some(s) => {
                     compact_v19::read_checkpoint_ctx(c, row.key, &row.entity, row.period, s)?
                 }
                 None => compact_v19::read_checkpoint(c, row.key, &row.entity, row.period)?,
             };
+            acc.checkpoint_read_us += acc.since(t);
             if projection != row.projection_digest {
                 return Err(integrity("checkpoint projection digest mismatch"));
             }
+            let t = acc.start();
             bars = match sctx.as_deref_mut() {
                 Some(s) => flatten_clips_ctx(c, &row.entity, row.period, &clips, s)?,
                 None => flatten_clips(c, &row.entity, row.period, &clips)?,
             };
+            acc.checkpoint_flatten_us += acc.since(t);
             count_bar_copies(bars.len());
             summary = BarsSummary::of(&bars);
         } else {
@@ -1354,12 +1413,17 @@ fn walk_chain_scoped(
             if parent_row.state != 3 {
                 return Err(integrity("delta parent is not published"));
             }
+            let t = acc.start();
             let (ops, _, projection) = match sctx.as_deref_mut() {
                 Some(s) => {
                     compact_v19::read_delta_ctx(c, row.key, parent_row.projection_digest, s)?
                 }
                 None => compact_v19::read_delta(c, row.key, parent_row.projection_digest)?,
             };
+            acc.delta_read_us += acc.since(t);
+            acc.delta_nodes += 1;
+            acc.delta_ops += ops.len() as u64;
+            let t = acc.start();
             if projection != row.projection_digest {
                 return Err(integrity("delta projection digest mismatch"));
             }
@@ -1372,13 +1436,17 @@ fn walk_chain_scoped(
                 row.period,
                 sctx.as_deref_mut(),
             )?;
+            acc.delta_apply_us += acc.since(t);
             if bars.is_empty() {
                 return Err(integrity("delta projection is empty"));
             }
         }
+        let t = acc.start();
         visit(&row, &bars, &summary)?;
+        acc.visit_us += acc.since(t);
         previous = Some(row);
     }
+    acc.emit();
     crate::stage_trace::note("chain.bars", &[("bars", bars.len() as u64)]);
     let leaf = previous.ok_or_else(|| integrity("version chain is empty"))?;
     Ok((leaf, bars))
