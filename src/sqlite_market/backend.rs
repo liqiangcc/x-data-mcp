@@ -100,6 +100,12 @@ impl crate::market_storage::MarketRepository for MarketBackend {
             Self::Compact(m) => m.fixed(id),
         }
     }
+    fn fixed_comparison(&self, id: &str) -> Result<CheckedRecord, Error> {
+        match self {
+            Self::Legacy(m) => m.fixed(id),
+            Self::Compact(m) => crate::market_storage::MarketRepository::fixed_comparison(m, id),
+        }
+    }
     fn fixed_many(&self, ids: &[String]) -> Result<Vec<CheckedRecord>, Error> {
         match self {
             Self::Legacy(m) => m.fixed_many(ids),

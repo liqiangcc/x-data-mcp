@@ -957,6 +957,58 @@ fn fixed_by_key_scoped(
     })
 }
 
+/// Comparison head of a yearly publish (XP-032 P1, user approved
+/// 2026-10-11: "批准，先验版本只验已提交层"): the version being replaced was
+/// completely verified when it was published, so the yearly prepare reads it
+/// at the COMMITTED tier — chain walk (linkage, published state, per-node
+/// segment/clip and projection digests), `verify_published_fields`
+/// (integrity digest recomputed over the row, which includes the stored
+/// lineage metadata), evidence / source-binding / unit rows and the
+/// projection checks of `verify_node_common_impl`.
+///
+/// APPROVED DIFFERENCE vs `fixed_by_key`: the yearly lineage is NOT
+/// re-aggregated from the version's own (older) daily base
+/// (`verify_lineage`). Damage visible only there — a base whose window no
+/// longer reproduces the stored annual bars — is not reported here; it
+/// remains reported by `fixed`, `query_data`, the publish commit and the
+/// startup self-check. Used only for the prior head in yearly prepare; the
+/// new candidate and the commit transaction keep full verification.
+pub(crate) fn comparison_head_by_key(c: &Connection, key: i64) -> Result<VerifiedVersion, Error> {
+    let mut nodes = Vec::new();
+    let (leaf, bars) = walk_chain_scoped(c, key, None, |row, bars, summary| {
+        verify_published_fields(c, row)?;
+        let evidence = verify_node_common_impl(c, row, summary, bars, false)?;
+        nodes.push(evidence);
+        Ok(())
+    })?;
+    let evidence = nodes
+        .pop()
+        .ok_or_else(|| integrity("empty version chain"))?;
+    let version = to_effective_version(c, &leaf, &bars, evidence)?;
+    Ok(VerifiedVersion {
+        key: leaf.key,
+        integrity_digest: leaf
+            .integrity_digest
+            .ok_or_else(|| integrity("published version lacks integrity digest"))?,
+        version,
+    })
+}
+
+/// `comparison_head_by_key` by version id; `Ok(None)` when the row is
+/// absent or not published (callers fall back to the full path).
+pub(crate) fn comparison_head(
+    c: &Connection,
+    version_id: &str,
+) -> Result<Option<VerifiedVersion>, Error> {
+    let Some(row) = read_version_row_by_id(c, version_id)? else {
+        return Ok(None);
+    };
+    if row.state != 3 {
+        return Ok(None);
+    }
+    comparison_head_by_key(c, row.key).map(Some)
+}
+
 /// Year-presence history of a published daily leaf (XP-031 R3, user
 /// approved 2026-10-11): the LEAF node gets the complete published-node
 /// verification (`verify_published_node_with`), ANCESTOR nodes only the
@@ -1692,6 +1744,19 @@ fn verify_node_common_with(
     summary: &BarsSummary,
     bars: &[CompactBar],
 ) -> Result<VersionEvidence, Error> {
+    verify_node_common_impl(c, row, summary, bars, true)
+}
+
+/// `verify_node_common_with`; `recompute_lineage = false` is the XP-032 P1
+/// comparison-head tier: a yearly node still must carry its lineage row, but
+/// that lineage is not re-aggregated from its (older) daily base.
+fn verify_node_common_impl(
+    c: &Connection,
+    row: &VersionRow,
+    summary: &BarsSummary,
+    bars: &[CompactBar],
+    recompute_lineage: bool,
+) -> Result<VersionEvidence, Error> {
     let _node = crate::stage_trace::span("cand.node_common");
     let evidence = crate::stage_trace::timed("cand.node.evidence", || {
         verify_version_evidence(c, &row.evidence_digest)
@@ -1716,16 +1781,18 @@ fn verify_node_common_with(
         Period::Year => {
             let lineage = stored_lineage(c, row.key)?
                 .ok_or_else(|| integrity("yearly version lacks lineage"))?;
-            crate::stage_trace::timed("cand.node.verify_lineage", || {
-                verify_lineage(
-                    c,
-                    &row.entity,
-                    row.period,
-                    &row.source_binding_digest,
-                    bars,
-                    &lineage,
-                )
-            })?;
+            if recompute_lineage {
+                crate::stage_trace::timed("cand.node.verify_lineage", || {
+                    verify_lineage(
+                        c,
+                        &row.entity,
+                        row.period,
+                        &row.source_binding_digest,
+                        bars,
+                        &lineage,
+                    )
+                })?;
+            }
         }
     }
     Ok(evidence)
@@ -1747,6 +1814,8 @@ fn verify_lineage(
     bars: &[CompactBar],
     lineage: &YearlyLineageDraft,
 ) -> Result<YearlyLineageIdentity, Error> {
+    #[cfg(test)]
+    read_counts::count_lineage_verify();
     let base = read_version_row(c, lineage.base_daily_version_key)?
         .ok_or_else(|| integrity("yearly base version missing"))?;
     if base.state != 3 {
@@ -2124,6 +2193,24 @@ pub(crate) struct MaterializedVersion {
 }
 
 pub(crate) fn materialize(c: &Connection, version_id: &str) -> Result<MaterializedVersion, Error> {
+    materialize_tier(c, version_id, false)
+}
+
+/// `materialize` for the yearly-prepare comparison head (XP-032 P1):
+/// published rows are read through `comparison_head_by_key`, everything else
+/// takes the unchanged `materialize` path.
+pub(crate) fn materialize_comparison(
+    c: &Connection,
+    version_id: &str,
+) -> Result<MaterializedVersion, Error> {
+    materialize_tier(c, version_id, true)
+}
+
+fn materialize_tier(
+    c: &Connection,
+    version_id: &str,
+    comparison: bool,
+) -> Result<MaterializedVersion, Error> {
     let _mat = crate::stage_trace::span("cand.materialize");
     let row = crate::stage_trace::timed("cand.mat.row", || read_version_row_by_id(c, version_id))?
         .ok_or(Error::NotFound)?;
@@ -2138,7 +2225,14 @@ pub(crate) fn materialize(c: &Connection, version_id: &str) -> Result<Materializ
     })?;
     let version = match state {
         CompactVersionState::Published => {
-            crate::stage_trace::timed("cand.mat.fixed_by_key", || fixed_by_key(c, row.key))?.version
+            crate::stage_trace::timed("cand.mat.fixed_by_key", || {
+                if comparison {
+                    comparison_head_by_key(c, row.key)
+                } else {
+                    fixed_by_key(c, row.key)
+                }
+            })?
+            .version
         }
         _ => {
             crate::stage_trace::timed("cand.mat.verify_staged", || verify_staged(c, &row))?;
@@ -3015,6 +3109,15 @@ pub(crate) mod read_counts {
         static PROJECTION_RUNS: Cell<usize> = const { Cell::new(0) };
         static COMMITTED_READS: Cell<usize> = const { Cell::new(0) };
         static NODE_VERIFIES: Cell<usize> = const { Cell::new(0) };
+        static LINEAGE_VERIFIES: Cell<usize> = const { Cell::new(0) };
+    }
+    pub(crate) fn count_lineage_verify() {
+        LINEAGE_VERIFIES.with(|n| n.set(n.get() + 1));
+    }
+    /// `verify_lineage` executions (XP-032 P1 asserts the comparison head
+    /// never recomputes its lineage).
+    pub(crate) fn lineage_verifies() -> usize {
+        LINEAGE_VERIFIES.with(Cell::get)
     }
     /// `verify_published_node_with` executions (XP-031 R3 asserts that the
     /// presence path runs it for the leaf only).
@@ -3058,6 +3161,7 @@ pub(crate) mod read_counts {
         PROJECTION_RUNS.with(|n| n.set(0));
         COMMITTED_READS.with(|n| n.set(0));
         NODE_VERIFIES.with(|n| n.set(0));
+        LINEAGE_VERIFIES.with(|n| n.set(0));
         snap
     }
     /// Current counters without resetting.

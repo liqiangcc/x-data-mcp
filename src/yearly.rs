@@ -215,6 +215,13 @@ pub fn trace_key(
     );
 }
 
+/// Test hook: drops this thread's memoized series so a re-verification
+/// recomputes from the stored base.
+#[cfg(test)]
+pub(crate) fn clear_aggregate_memo() {
+    AGGREGATE_MEMO.with(|memo| memo.borrow_mut().clear());
+}
+
 /// Runs `compute` (a `aggregate` call and any reads it needs) only when
 /// the memo lacks `key`; otherwise returns the prior result with its
 /// `as_of` echo set to the caller's `as_of`.

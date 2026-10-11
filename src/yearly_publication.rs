@@ -173,7 +173,7 @@ impl<R: MarketRepository> Publisher<R> {
         command: Publication,
         candidate: &YearlyCandidate,
     ) -> Result<PublishPlan, Error> {
-        self.prepare_derived_yearly_prefetched(command, candidate, None, None)
+        self.prepare_derived_yearly_prefetched(command, candidate, None, None, None)
     }
     /// `prepare_derived_yearly` with the caller's already-loaded binding and
     /// base facts/meta window — identical checks in the same order, minus
@@ -187,6 +187,7 @@ impl<R: MarketRepository> Publisher<R> {
             &crate::market_storage::FixedFacts,
             &crate::market_storage::compat::CheckedRecord,
         )>,
+        expected_head: Option<&crate::market_storage::compat::CheckedRecord>,
     ) -> Result<PublishPlan, Error> {
         if candidate.raw["version_id"].as_str() != Some(command.version_id.as_str()) {
             return Err(Error::Invalid("yearly candidate/version binding".into()));
@@ -231,10 +232,21 @@ impl<R: MarketRepository> Publisher<R> {
             ..
         } = &command.intent
         {
-            let old = crate::stage_trace::timed("yearly.prepare.derived.fixed_expected", || {
-                self.repository.fixed(id)
-            })
-            .map_err(base_error)?;
+            // `prepare_yearly_result` already read this very head as the prior
+            // (XP-032 P1: one committed-tier read serves both); a caller
+            // without it reads the fully verified `fixed`.
+            let fetched_old;
+            let old = match expected_head {
+                Some(head) if head.version().version_id == *id => head,
+                _ => {
+                    fetched_old =
+                        crate::stage_trace::timed("yearly.prepare.derived.fixed_expected", || {
+                            self.repository.fixed(id)
+                        })
+                        .map_err(base_error)?;
+                    &fetched_old
+                }
+            };
             let next = &candidate.checked;
             if old.version().symbol != next.version().symbol || old.version().period != Period::Year
             {

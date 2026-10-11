@@ -7834,4 +7834,235 @@ mod xp011 {
             assert_eq!(one[1].as_ref().unwrap().years, BTreeSet::from([1970, 1971]));
         }
     }
+    /// XP-032 P1: the prior yearly head read by yearly prepare is verified at
+    /// the committed tier (user approved 2026-10-11: "批准，先验版本只验已提交层").
+    mod xp032_p1 {
+        use super::*;
+        use crate::market_update::tasks::Operation;
+        use crate::task_control::{Contract, RequestOutcome};
+        use crate::yearly_publication::{
+            DerivationEvidence,
+            runner::{YearlyExecution, YearlyRunner, YearlyVerifier},
+            tasks::YearlyContract,
+        };
+
+        struct Stub;
+        impl YearlyVerifier for Stub {
+            fn verify(
+                &self,
+                base: &CheckedRecord,
+                years: &BTreeSet<i32>,
+                _annual: &crate::yearly::AnnualSeries,
+                derived_at: DateTime<Utc>,
+            ) -> Result<DerivationEvidence, crate::market_data::SourceError> {
+                Ok(DerivationEvidence {
+                    base_integrity_sha256: base.raw()["integrity_sha256"].as_str().unwrap().into(),
+                    years: years.clone(),
+                    as_of: derived_at
+                        .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                        .date_naive(),
+                    coverage: CoverageEvidence::complete("stub re-aggregation verified"),
+                })
+            }
+        }
+
+        struct Yearly {
+            _dir: tempfile::TempDir,
+            path: PathBuf,
+            repo: SqliteCompactMarket,
+            yearly_id: String,
+        }
+
+        /// Daily base `v1` (2025 + 2026) and its published yearly version,
+        /// through the real accept → run_item → commit path.
+        fn yearly() -> Yearly {
+            let dir = tempdir();
+            let (path, repo) = repo(&dir);
+            let task_id = accept_task(&repo);
+            let revision = start_item(&repo, &task_id);
+            let days = [
+                NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 6, 30).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 9, 18).unwrap(),
+            ]
+            .into_iter()
+            .map(compact_market::epoch_day);
+            let version = mk_version(
+                "v1",
+                days.enumerate()
+                    .map(|(i, d)| bar(d, 100 + i as i64))
+                    .collect(),
+            );
+            repo.stage(&envelope(&version, source("gen-1"), None))
+                .unwrap();
+            let candidate = repo.candidate("v1").unwrap();
+            repo.mark_validated(&candidate).unwrap();
+            repo.commit(&PublishPlan {
+                command: collect_command(&task_id, "pub-1", "v1", revision),
+                record: candidate.clone(),
+                required_heads: vec![(Scope::of(&candidate.version), None)],
+                promote: None,
+                base_digest: None,
+            })
+            .unwrap();
+            let contract = YearlyContract {
+                operation: Operation::Update,
+                repository: repo.clone(),
+                today: || NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+            };
+            let work = contract
+                .resolve(&json!({"items":[{
+                    "symbol":"sh.600006",
+                    "base_daily_version_id":"v1",
+                    "years":[2025,2026],
+                    "intent":{"CurrentHead":{"expected_daily_head":"v1","expected_yearly_head":null}},
+                    "comparison_version_id":null
+                }]}))
+                .unwrap();
+            let command = Command {
+                key: contract.key(),
+                intent: json!({}),
+            };
+            let RequestOutcome::Task(snapshot) = repo
+                .accept("req-yearly", &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            else {
+                panic!("expected task outcome")
+            };
+            let yearly_task = snapshot.task.task_id.clone();
+            let item_id = snapshot.items[0].spec.item_id.clone();
+            let runner = YearlyRunner {
+                repository: repo.clone(),
+                run_id: RUN.into(),
+                derived_at: ts(),
+            };
+            let YearlyExecution::Published(receipt) =
+                runner.run_item(&yearly_task, &item_id, &Stub).unwrap()
+            else {
+                panic!("yearly item did not publish")
+            };
+            Yearly {
+                _dir: dir,
+                path,
+                repo,
+                yearly_id: receipt.version_id,
+            }
+        }
+
+        fn tamper(path: &PathBuf, sql: &str) {
+            let c = rusqlite::Connection::open(path).unwrap();
+            c.execute_batch("PRAGMA foreign_keys=OFF; PRAGMA ignore_check_constraints=ON")
+                .unwrap();
+            assert!(c.execute(sql, []).unwrap() > 0, "tamper hit no rows: {sql}");
+        }
+
+        fn own_segments_sql(version_id: &str, set: &str) -> String {
+            format!(
+                "UPDATE segment_bars SET {set} WHERE segment_key IN \
+                 (SELECT segment_key FROM version_checkpoint_clips WHERE version_key=\
+                  (SELECT version_key FROM data_versions WHERE version_id='{version_id}'))"
+            )
+        }
+
+        /// (1) On legal data the committed-tier read returns exactly what
+        /// `fixed` returns, and it recomputes no lineage.
+        #[test]
+        fn comparison_read_equals_fixed_and_skips_lineage() {
+            let f = yearly();
+            crate::yearly::clear_aggregate_memo();
+            compact_versions::read_counts::reset();
+            let full = f.repo.fixed(&f.yearly_id).unwrap();
+            assert!(compact_versions::read_counts::lineage_verifies() >= 1);
+            compact_versions::read_counts::reset();
+            let cmp = f.repo.fixed_comparison(&f.yearly_id).unwrap();
+            assert_eq!(
+                compact_versions::read_counts::lineage_verifies(),
+                0,
+                "the comparison head must not recompute its lineage"
+            );
+            assert_eq!(cmp.raw(), full.raw());
+            assert_eq!(cmp.version(), full.version());
+            assert_eq!(
+                cmp.raw()["integrity_sha256"],
+                full.raw()["integrity_sha256"]
+            );
+            assert!(equivalent_pair(&cmp, &full));
+        }
+
+        fn equivalent_pair(a: &CheckedRecord, b: &CheckedRecord) -> bool {
+            crate::yearly_publication::results::equivalent(a, b)
+        }
+
+        /// (2) A tampered integrity digest still fails closed.
+        #[test]
+        fn comparison_read_fails_closed_on_row_digest_tamper() {
+            let f = yearly();
+            tamper(
+                &f.path,
+                &format!(
+                    "UPDATE data_versions SET integrity_digest=\
+                     x'0000000000000000000000000000000000000000000000000000000000000000' \
+                     WHERE version_id='{}'",
+                    f.yearly_id
+                ),
+            );
+            assert_eq!(
+                read_class(&f.repo.fixed_comparison(&f.yearly_id).map(|_| ())),
+                ReadClass::Integrity
+            );
+            assert_eq!(
+                read_class(&f.repo.fixed(&f.yearly_id).map(|_| ())),
+                ReadClass::Integrity
+            );
+        }
+
+        /// (3) Tampered bytes of the version's OWN segments still fail closed.
+        #[test]
+        fn comparison_read_fails_closed_on_own_segment_tamper() {
+            let f = yearly();
+            tamper(
+                &f.path,
+                &own_segments_sql(&f.yearly_id, "close_cents=close_cents+1"),
+            );
+            assert_eq!(
+                read_class(&f.repo.fixed_comparison(&f.yearly_id).map(|_| ())),
+                ReadClass::Integrity
+            );
+            assert_eq!(
+                read_class(&f.repo.fixed(&f.yearly_id).map(|_| ())),
+                ReadClass::Integrity
+            );
+        }
+
+        /// (4) APPROVED DIFFERENCE (XP-032 P1, user 2026-10-11): damage that
+        /// only the lineage re-aggregation against the version's older daily
+        /// base can see — here the base's own bars changed after the yearly
+        /// version was published — is reported by `fixed` and NOT by the
+        /// committed-tier comparison read. (A lineage row cannot be
+        /// re-pointed instead: the lineage is part of the row integrity
+        /// digest, which the comparison read still recomputes.)
+        #[test]
+        fn comparison_read_does_not_recompute_lineage_against_its_base() {
+            let f = yearly();
+            tamper(
+                &f.path,
+                &own_segments_sql("v1", "close_cents=close_cents+1"),
+            );
+            crate::yearly::clear_aggregate_memo();
+            assert_eq!(
+                read_class(&f.repo.fixed(&f.yearly_id).map(|_| ())),
+                ReadClass::Integrity,
+                "full verification re-aggregates the base and must notice"
+            );
+            crate::yearly::clear_aggregate_memo();
+            let cmp = f.repo.fixed_comparison(&f.yearly_id);
+            assert!(
+                cmp.is_ok(),
+                "the committed-tier prior read must not read the base: {cmp:?}"
+            );
+        }
+    }
 }

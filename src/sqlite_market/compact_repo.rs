@@ -1069,8 +1069,31 @@ pub(crate) fn materialize_checked(
     version_id: &str,
     staged: bool,
 ) -> Result<CheckedRecord, Error> {
+    materialize_checked_tier(c, version_id, staged, false)
+}
+
+/// `materialize_checked(.., false)` for the yearly-prepare prior head at the
+/// committed tier (XP-032 P1, approved difference: no lineage re-aggregation;
+/// see `compact_versions::comparison_head_by_key`).
+pub(crate) fn materialize_comparison(
+    c: &Connection,
+    version_id: &str,
+) -> Result<CheckedRecord, Error> {
+    materialize_checked_tier(c, version_id, false, true)
+}
+
+fn materialize_checked_tier(
+    c: &Connection,
+    version_id: &str,
+    staged: bool,
+    comparison: bool,
+) -> Result<CheckedRecord, Error> {
     let _span = crate::stage_trace::span("cand.materialize_checked");
-    let m = compact_versions::materialize(c, version_id)?;
+    let m = if comparison {
+        compact_versions::materialize_comparison(c, version_id)?
+    } else {
+        compact_versions::materialize(c, version_id)?
+    };
     let allowed = match m.state {
         CompactVersionState::Published => !staged,
         CompactVersionState::Validated => true,
@@ -1895,6 +1918,9 @@ impl MarketRepository for SqliteCompactMarket {
     }
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error> {
         self.read(|c| materialize_checked(c, id, false))
+    }
+    fn fixed_comparison(&self, id: &str) -> Result<CheckedRecord, Error> {
+        self.read(|c| materialize_comparison(c, id))
     }
     fn range(&self, scope: &Scope, id: Option<&str>, range: &Range) -> Result<ReadPage, Error> {
         range.validate()?;

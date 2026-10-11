@@ -161,6 +161,16 @@ pub trait MarketRepository {
     fn staged_matches(&self, version_id: &str, whole: &Value) -> Result<bool, Error>;
     fn mark_validated(&self, record: &CheckedRecord) -> Result<(), Error>;
     fn fixed(&self, id: &str) -> Result<CheckedRecord, Error>;
+    /// `fixed` for the PRIOR yearly head read by yearly prepare (XP-032 P1,
+    /// user-approved verification layering difference): that head was fully
+    /// verified when it was published, so backends may verify it at the
+    /// committed tier — row integrity digest plus its own segment/clip
+    /// checks — without re-aggregating its lineage from its older daily
+    /// base. Never use it for anything but that comparison; the default is
+    /// the full `fixed`.
+    fn fixed_comparison(&self, id: &str) -> Result<CheckedRecord, Error> {
+        self.fixed(id)
+    }
     fn fixed_many(&self, ids: &[String]) -> Result<Vec<CheckedRecord>, Error>;
     /// O(1) header read for digest/identity checks on a published version.
     fn fixed_facts(&self, id: &str) -> Result<FixedFacts, Error>;

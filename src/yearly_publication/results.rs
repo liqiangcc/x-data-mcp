@@ -127,7 +127,13 @@ impl<R: MarketRepository> Publisher<R> {
             }
         };
         let prior = crate::stage_trace::timed("yearly.prepare.fixed_prior", || {
-            prior_id.map(|id| self.repository.fixed(id)).transpose()
+            // Approved layering difference (XP-032 P1): the prior head was
+            // fully verified when it was published, so it is read at the
+            // committed tier. The candidate and the commit transaction keep
+            // full verification.
+            prior_id
+                .map(|id| self.repository.fixed_comparison(id))
+                .transpose()
         })?;
         let binding = binding
             .ok_or_else(|| Error::Conflict("comparison item absent from accepted task".into()))?;
@@ -177,6 +183,7 @@ impl<R: MarketRepository> Publisher<R> {
                     candidate,
                     Some(binding),
                     Some((&base_facts, base)),
+                    prior.as_ref(),
                 )
             })?
         };
