@@ -1840,7 +1840,21 @@ fn base_count(c: &Connection, key: i64) -> Result<u64, Error> {
 
 impl MarketRepository for SqliteCompactMarket {
     fn stage(&self, raw: &Value) -> Result<(), Error> {
-        self.write(|c| stage_tx(c, raw))
+        // XP-031 F1: the whole staging (evidence, segments, version, lineage,
+        // clips) commits once. Before, every INSERT was its own autocommit
+        // transaction on a synchronous=FULL WAL connection; a mid-way failure
+        // also left committed partial staged rows. Now it rolls back whole.
+        self.write(|c| {
+            let mut tx = crate::stage_trace::timed("coord.tx.begin", || {
+                c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(storage)
+            })?;
+            crate::stage_trace::timed("stage.tx_body", || stage_tx(&mut tx, raw))?;
+            crate::stage_trace::timed("coord.tx.commit", || {
+                tx.commit()
+                    .map_err(|error| Error::OutcomeUnknown(error.to_string()))
+            })
+        })
     }
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
         let _span = crate::stage_trace::span("cand.candidate");
@@ -2629,8 +2643,10 @@ impl TaskRepository for SqliteCompactMarket {
             return Err(task_control::Error::InvalidCommand("empty identity".into()));
         }
         let _write = crate::stage_trace::span("repo.accept.coordinator_write");
+        // One transaction: a failure after the first INSERT rolls the
+        // whole acceptance back instead of committing each row alone.
         self.coordinator
-            .write(|c| {
+            .transaction(|c| {
                 crate::sqlite_tasks::accept_tx(c, id, command, work, run, retry)
                     .map_err(Error::Task)
             })
@@ -2646,8 +2662,9 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, task_control::Error> {
+        // task row + item/occupancy rows + execution-start marker: one commit.
         self.coordinator
-            .write(|c| {
+            .transaction(|c| {
                 crate::sqlite_tasks::transition_tx(c, id, revision, run, change)
                     .map_err(Error::Task)
             })
@@ -2662,8 +2679,9 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<(), task_control::Error> {
+        // task delta + item delta + execution-start marker: one commit.
         self.coordinator
-            .write(|c| {
+            .transaction(|c| {
                 crate::sqlite_tasks::transition_light_tx(c, s, run, change).map_err(Error::Task)
             })
             .map_err(|e| match e {

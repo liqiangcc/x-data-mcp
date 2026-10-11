@@ -821,6 +821,46 @@ fn catalog_roundtrip_on_compact_schema_uses_bound_tasks() {
     );
 }
 
+/// XP-031 F1: staging is one transaction. A stage that fails after it already
+/// inserted new segments (here: a second candidate re-using a version id with
+/// different content) leaves no residue; before, each INSERT autocommitted.
+#[test]
+fn stage_failure_rolls_back_segments_and_rows() {
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    let counts = |path: &PathBuf| -> (i64, i64, i64) {
+        let c = rusqlite::Connection::open(path).unwrap();
+        let n = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        (
+            n("SELECT count(*) FROM bar_segments"),
+            n("SELECT count(*) FROM segment_bars"),
+            n("SELECT count(*) FROM data_versions"),
+        )
+    };
+    let first = mk_version("v1", vec![bar(0, 100), bar(1, 110), bar(2, 120)]);
+    repo.stage(&envelope(&first, source("gen-1"), None))
+        .unwrap();
+    let before = counts(&path);
+    assert_eq!(before.2, 1);
+    // Same version id, different bars: new segment rows are inserted first,
+    // then the version row insert / static draft check fails.
+    let clash = mk_version("v1", vec![bar(0, 999), bar(1, 998), bar(2, 997)]);
+    assert!(
+        repo.stage(&envelope(&clash, source("gen-1"), None))
+            .is_err()
+    );
+    assert_eq!(
+        counts(&path),
+        before,
+        "failed stage must leave no rows behind"
+    );
+    // The connection is back in autocommit and usable.
+    let second = mk_version("v3", vec![bar(0, 100), bar(1, 110)]);
+    repo.stage(&envelope(&second, source("gen-1"), None))
+        .unwrap();
+    assert_eq!(counts(&path).2, 2);
+}
+
 #[test]
 fn yearly_derive_commit_on_compact_schema() {
     use crate::market_update::tasks::Operation;
