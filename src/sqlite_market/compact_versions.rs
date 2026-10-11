@@ -16,11 +16,24 @@ use crate::publish::{EffectiveVersion, ValidationSummary};
 
 const DIGEST_FORMAT: &str = "compact-market-version-v1";
 const MAX_DELTA_DEPTH: i64 = 256;
-/// Parent delta depth at which the next write must be a rebuilt checkpoint
-/// (rollover) instead of a delta. Equal to the validation bound today; kept
-/// separate so an earlier rollover can later be introduced without touching
-/// the validators (XP-038).
-pub(crate) const ROLLOVER_DEPTH: u32 = MAX_DELTA_DEPTH as u32;
+/// Lowest parent delta depth at which a rollover checkpoint is accepted by the
+/// validators. Writers roll over at a per-entity depth in
+/// `[ROLLOVER_FLOOR, ROLLOVER_FLOOR * 2)` (see `rollover_depth`); validators
+/// accept any parent depth in `[ROLLOVER_FLOOR, MAX_DELTA_DEPTH]` (XP-051).
+pub(crate) const ROLLOVER_FLOOR: u32 = 64;
+const ROLLOVER_SPREAD: u64 = 64;
+
+/// Parent delta depth at which the next write for `entity` must be a rebuilt
+/// checkpoint (rollover) instead of a delta. Staggered per entity so the
+/// whole market does not roll over on the same day. Deterministic across
+/// processes: SHA-256 of the entity string, first 8 bytes big-endian.
+pub(crate) fn rollover_depth(entity: &str) -> u32 {
+    use sha2::Digest as _;
+    let hash = sha2::Sha256::digest(entity.as_bytes());
+    let mut head = [0u8; 8];
+    head.copy_from_slice(&hash[..8]);
+    ROLLOVER_FLOOR + (u64::from_be_bytes(head) % ROLLOVER_SPREAD) as u32
+}
 const MAX_CHAIN_NODES: usize = 257;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,9 +318,9 @@ pub(crate) fn stage_checkpoint(
         if parent.entity != draft.entity || parent.period != draft.period {
             return Err(integrity("checkpoint basis parent entity/period mismatch"));
         }
-        if parent.delta_depth != MAX_DELTA_DEPTH {
+        if parent.delta_depth < i64::from(ROLLOVER_FLOOR) || parent.delta_depth > MAX_DELTA_DEPTH {
             return Err(integrity(
-                "checkpoint basis parent is not at delta depth bound",
+                "checkpoint basis parent is outside the rollover depth range",
             ));
         }
         let applied = apply_delta(

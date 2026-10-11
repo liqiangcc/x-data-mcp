@@ -12,6 +12,7 @@ use crate::compact_market::{
 };
 
 const MAX_DEPTH: u32 = 256;
+const ROLLOVER_FLOOR: u32 = compact_versions::ROLLOVER_FLOOR;
 const OUTCOME_LIMIT: usize = 192;
 pub(crate) const REGISTRY_MARKET_UPDATE: i64 = 1;
 pub(crate) const REGISTRY_PUBLICATION: i64 = 2;
@@ -669,9 +670,9 @@ pub(crate) fn read_market_update_ctx(
                     }
                 }
                 ManifestMode::Checkpoint => {
-                    if base_facts.delta_depth != MAX_DEPTH {
+                    if !(ROLLOVER_FLOOR..=MAX_DEPTH).contains(&base_facts.delta_depth) {
                         return Err(integrity(
-                            "append checkpoint rollover requires depth-256 base",
+                            "append checkpoint rollover requires a base at depth 64..=256",
                         ));
                     }
                     // The only consumer of whole verified histories in
@@ -933,9 +934,9 @@ pub(crate) fn read_market_update_meta_ctx(
                     }
                 }
                 ManifestMode::Checkpoint => {
-                    if base_facts.delta_depth != MAX_DEPTH {
+                    if !(ROLLOVER_FLOOR..=MAX_DEPTH).contains(&base_facts.delta_depth) {
                         return Err(integrity(
-                            "append checkpoint rollover requires depth-256 base",
+                            "append checkpoint rollover requires a base at depth 64..=256",
                         ));
                     }
                     // Committed tier: the whole-history base+ops ==
@@ -1401,9 +1402,9 @@ fn plan_market_update(
                     }
                 }
                 ManifestMode::Checkpoint => {
-                    if base.delta_depth != MAX_DEPTH {
+                    if !(ROLLOVER_FLOOR..=MAX_DEPTH).contains(&base.delta_depth) {
                         return Err(integrity(
-                            "append checkpoint rollover requires depth-256 base",
+                            "append checkpoint rollover requires a base at depth 64..=256",
                         ));
                     }
                 }

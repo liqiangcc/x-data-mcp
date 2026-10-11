@@ -397,7 +397,7 @@ impl SqliteCompactMarket {
             // a rebuilt checkpoint carrying the delta as its basis, exactly
             // like the envelope path in `stage_tx`. `stage_checkpoint` verifies
             // the published parent and that checkpoint == parent + ops.
-            if base_facts.delta_depth >= compact_versions::ROLLOVER_DEPTH {
+            if base_facts.delta_depth >= compact_versions::rollover_depth(entity) {
                 let base_bars = compact_versions::leaf_bars(c, base_key)?;
                 let applied =
                     compact_versions::apply_stored_delta(c, &base_bars, &ops, entity, Period::Day)?;
@@ -576,20 +576,21 @@ impl SqliteCompactMarket {
                     // followed by new bars. Every other checkpoint (full
                     // revision, overwrite/remove) keeps the Full shape.
                     let base_facts = compact_versions::result_facts(c, base_key)?;
-                    let rollover_tail =
-                        if base_facts.delta_depth >= compact_versions::ROLLOVER_DEPTH {
-                            let base_bars = compact_versions::leaf_bars(c, base_key)?;
-                            let mut result_bars = compact_versions::leaf_bars(c, result_key)?;
-                            if result_bars.len() > base_bars.len()
-                                && result_bars[..base_bars.len()] == base_bars[..]
-                            {
-                                Some(result_bars.split_off(base_bars.len()))
-                            } else {
-                                None
-                            }
+                    let rollover_tail = if base_facts.delta_depth
+                        >= compact_versions::rollover_depth(&facts.entity)
+                    {
+                        let base_bars = compact_versions::leaf_bars(c, base_key)?;
+                        let mut result_bars = compact_versions::leaf_bars(c, result_key)?;
+                        if result_bars.len() > base_bars.len()
+                            && result_bars[..base_bars.len()] == base_bars[..]
+                        {
+                            Some(result_bars.split_off(base_bars.len()))
                         } else {
                             None
-                        };
+                        }
+                    } else {
+                        None
+                    };
                     match rollover_tail {
                         Some(tail) => {
                             let mut ops = Vec::new();
@@ -1409,7 +1410,7 @@ fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
                         }),
                     });
                 }
-                if parent.delta_depth < compact_versions::ROLLOVER_DEPTH {
+                if parent.delta_depth < compact_versions::rollover_depth(&entity) {
                     compact_versions::stage_delta(c, &draft, parent_key, &ops)?;
                 } else {
                     let clips = full_clips(c)?;
