@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 SOCK = sys.argv[3] if len(sys.argv) > 3 else "/root/x-perf-g8/svc/run/mcp.sock"
 RUN_ID = os.environ.get("G8_RUN_ID", "g8-y")  # new run = new request_ids + fresh pins
-POLL_S = 1.0
+POLL_S = 0.25  # driver polling granularity, not a server cost (XP-032 H; was 1.0)
 SUMMARY = Path(sys.argv[1] if len(sys.argv) > 1 else "/root/x-perf-g8/yearly-run.json")
 LOG = Path(sys.argv[1] + ".log" if len(sys.argv) > 1 else "/root/x-perf-g8/yearly-run.log")
 MAX_CHUNKS = int(sys.argv[2]) if len(sys.argv) > 2 else 0  # 0 = all chunks (smoke bound)
