@@ -368,7 +368,21 @@ pub(crate) fn commit_publication_tx(
             if facts.entity != result.entity || facts.period != result.period {
                 return Err(integrity("publication base scope mismatch"));
             }
-            compact_versions::fixed(c, &facts.version_id)?;
+            if command.publication_kind == PublicationKind::Yearly
+                && command.outcome == UpdateOutcome::Published
+                && matches!(command.head, HeadExpectation::Version(_))
+            {
+                // XP-032 P1b (user-approved layering difference, same as the
+                // prepare-time prior read): the yearly head being replaced
+                // was fully verified when it was published; here it is
+                // verified at the committed tier - no lineage re-aggregation
+                // from its older daily base. The new result version keeps
+                // its full verification below, and the head CAS
+                // (`head`/`required_heads`) is unchanged.
+                compact_versions::comparison_head_by_key(c, facts.key)?;
+            } else {
+                compact_versions::fixed(c, &facts.version_id)?;
+            }
             Some(facts)
         }
         None => None,

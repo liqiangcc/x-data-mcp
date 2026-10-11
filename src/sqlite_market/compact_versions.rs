@@ -1782,6 +1782,8 @@ fn verify_node_common_impl(
             let lineage = stored_lineage(c, row.key)?
                 .ok_or_else(|| integrity("yearly version lacks lineage"))?;
             if recompute_lineage {
+                #[cfg(test)]
+                read_counts::note_lineage_node(&row.version_id);
                 crate::stage_trace::timed("cand.node.verify_lineage", || {
                     verify_lineage(
                         c,
@@ -3110,6 +3112,15 @@ pub(crate) mod read_counts {
         static COMMITTED_READS: Cell<usize> = const { Cell::new(0) };
         static NODE_VERIFIES: Cell<usize> = const { Cell::new(0) };
         static LINEAGE_VERIFIES: Cell<usize> = const { Cell::new(0) };
+        static LINEAGE_NODES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    /// Version ids whose published-node verification recomputed the yearly
+    /// lineage (XP-032 P1b asserts the prior head is never among them).
+    pub(crate) fn note_lineage_node(version_id: &str) {
+        LINEAGE_NODES.with(|n| n.borrow_mut().push(version_id.to_owned()));
+    }
+    pub(crate) fn lineage_nodes() -> Vec<String> {
+        LINEAGE_NODES.with(|n| n.borrow().clone())
     }
     pub(crate) fn count_lineage_verify() {
         LINEAGE_VERIFIES.with(|n| n.set(n.get() + 1));
@@ -3162,6 +3173,7 @@ pub(crate) mod read_counts {
         COMMITTED_READS.with(|n| n.set(0));
         NODE_VERIFIES.with(|n| n.set(0));
         LINEAGE_VERIFIES.with(|n| n.set(0));
+        LINEAGE_NODES.with(|n| n.borrow_mut().clear());
         snap
     }
     /// Current counters without resetting.

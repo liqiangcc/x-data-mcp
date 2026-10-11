@@ -7967,6 +7967,124 @@ mod xp011 {
             )
         }
 
+        /// Accepts a second yearly task replacing `f.yearly_id` (same base,
+        /// as_of in a later year so the candidate is not equivalent) and
+        /// returns a runner derived in 2027 plus the task/item ids.
+        fn replacement_task(f: &Yearly) -> (YearlyRunner<SqliteCompactMarket>, String, String) {
+            let contract = YearlyContract {
+                operation: Operation::Update,
+                repository: f.repo.clone(),
+                today: || NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+            };
+            let work = contract
+                .resolve(&json!({"items":[{
+                    "symbol":"sh.600006",
+                    "base_daily_version_id":"v1",
+                    "years":[2025,2026],
+                    "intent":{"CurrentHead":{
+                        "expected_daily_head":"v1",
+                        "expected_yearly_head":f.yearly_id
+                    }},
+                    "comparison_version_id":f.yearly_id
+                }]}))
+                .unwrap();
+            let command = Command {
+                key: contract.key(),
+                intent: json!({}),
+            };
+            let RequestOutcome::Task(snapshot) = f
+                .repo
+                .accept("req-yearly-2", &command, &work, RUN, None)
+                .unwrap()
+                .record
+                .outcome
+            else {
+                panic!("expected task outcome")
+            };
+            let runner = YearlyRunner {
+                repository: f.repo.clone(),
+                run_id: RUN.into(),
+                derived_at: DateTime::parse_from_rfc3339("2027-03-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            };
+            (
+                runner,
+                snapshot.task.task_id.clone(),
+                snapshot.items[0].spec.item_id.clone(),
+            )
+        }
+
+        /// (5) P1b: a yearly commit replacing a head verifies the PRIOR head
+        /// at the committed tier (no lineage recompute) and the new result
+        /// version completely (lineage recomputed for it).
+        #[test]
+        fn replacing_commit_does_not_recompute_the_prior_lineage() {
+            let f = yearly();
+            let (runner, task, item) = replacement_task(&f);
+            compact_versions::read_counts::reset();
+            let YearlyExecution::Published(receipt) = runner.run_item(&task, &item, &Stub).unwrap()
+            else {
+                panic!("replacement did not publish")
+            };
+            assert_ne!(receipt.version_id, f.yearly_id);
+            let nodes = compact_versions::read_counts::lineage_nodes();
+            assert!(
+                !nodes.contains(&f.yearly_id),
+                "prior head lineage was recomputed: {nodes:?}"
+            );
+            assert!(
+                nodes.contains(&receipt.version_id),
+                "new result version must keep full verification: {nodes:?}"
+            );
+            let head = f
+                .repo
+                .versions(&Scope {
+                    symbol: "sh.600006".into(),
+                    period: Period::Year,
+                })
+                .unwrap();
+            assert_eq!(head[0].version_id, receipt.version_id);
+        }
+
+        /// (6) P1b: damaged prior-head rows/segments still fail the replacing
+        /// publish closed; the head is left unchanged.
+        #[test]
+        fn replacing_commit_fails_closed_on_damaged_prior() {
+            for kind in ["digest", "segment"] {
+                let f = yearly();
+                let (runner, task, item) = replacement_task(&f);
+                let sql = match kind {
+                    "digest" => format!(
+                        "UPDATE data_versions SET integrity_digest=\
+                         x'0000000000000000000000000000000000000000000000000000000000000000' \
+                         WHERE version_id='{}'",
+                        f.yearly_id
+                    ),
+                    _ => own_segments_sql(&f.yearly_id, "close_cents=close_cents+1"),
+                };
+                tamper(&f.path, &sql);
+                let outcome = runner.run_item(&task, &item, &Stub);
+                assert!(
+                    !matches!(outcome, Ok(YearlyExecution::Published(_))),
+                    "{kind}: damaged prior must not be replaced"
+                );
+                let head = f
+                    .repo
+                    .read(|c| {
+                        head_id(
+                            c,
+                            &Scope {
+                                symbol: "sh.600006".into(),
+                                period: Period::Year,
+                            },
+                        )
+                    })
+                    .unwrap();
+                assert_eq!(head.as_deref(), Some(f.yearly_id.as_str()), "{kind}");
+            }
+        }
+
         /// (1) On legal data the committed-tier read returns exactly what
         /// `fixed` returns, and it recomputes no lineage.
         #[test]
