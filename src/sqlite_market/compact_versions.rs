@@ -1312,7 +1312,16 @@ fn walk_chain_scoped(
     }
     chain.reverse();
     let _chain_span = crate::stage_trace::span("chain.reconstruct");
-    crate::stage_trace::note("chain.depth", &[("nodes", chain.len() as u64)]);
+    crate::stage_trace::note(
+        "chain.depth",
+        &[
+            ("nodes", chain.len() as u64),
+            (
+                "period_year",
+                chain.last().is_some_and(|r| r.period == Period::Year) as u64,
+            ),
+        ],
+    );
     let mut bars: Vec<CompactBar> = Vec::new();
     let mut summary = BarsSummary::default();
     let mut previous: Option<VersionRow> = None;
@@ -1539,8 +1548,13 @@ fn verify_node_common_with(
     summary: &BarsSummary,
     bars: &[CompactBar],
 ) -> Result<VersionEvidence, Error> {
-    let evidence = verify_version_evidence(c, &row.evidence_digest)?;
-    let _ = read_source_binding(c, &row.source_binding_digest)?;
+    let _node = crate::stage_trace::span("cand.node_common");
+    let evidence = crate::stage_trace::timed("cand.node.evidence", || {
+        verify_version_evidence(c, &row.evidence_digest)
+    })?;
+    let _ = crate::stage_trace::timed("cand.node.source_binding", || {
+        read_source_binding(c, &row.source_binding_digest)
+    })?;
     check_units_summary(&evidence, summary)?;
     if summary.len == 0
         || summary.len as i64 != row.record_count
@@ -1558,14 +1572,16 @@ fn verify_node_common_with(
         Period::Year => {
             let lineage = stored_lineage(c, row.key)?
                 .ok_or_else(|| integrity("yearly version lacks lineage"))?;
-            verify_lineage(
-                c,
-                &row.entity,
-                row.period,
-                &row.source_binding_digest,
-                bars,
-                &lineage,
-            )?;
+            crate::stage_trace::timed("cand.node.verify_lineage", || {
+                verify_lineage(
+                    c,
+                    &row.entity,
+                    row.period,
+                    &row.source_binding_digest,
+                    bars,
+                    &lineage,
+                )
+            })?;
         }
     }
     Ok(evidence)
@@ -1612,11 +1628,12 @@ fn verify_lineage(
     if stored_lineage(c, base.key)?.is_some() {
         return Err(integrity("yearly base carries a lineage row"));
     }
-    let records = bars
-        .iter()
-        .map(|bar| bar.to_bar(period))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(integrity)?;
+    let records = crate::stage_trace::timed("cand.lineage.records", || {
+        bars.iter()
+            .map(|bar| bar.to_bar(period))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(integrity)
+    })?;
     let years: BTreeSet<i32> = records.iter().map(|bar| bar.date.year()).collect();
     // The windowed base re-aggregation is a pure function of the published
     // base content — bound by its stored integrity digest — plus years and
@@ -1633,18 +1650,34 @@ fn verify_lineage(
             .ok_or_else(|| integrity("published base lacks integrity digest"))?,
     );
     let key = crate::yearly::aggregate_key(&base_digest_hex, &years, as_of);
+    crate::stage_trace::note(
+        "cand.lineage.call",
+        &[("as_of_epoch_day", lineage.as_of_day as u64)],
+    );
+    crate::yearly::trace_key("memo.key.verify_lineage", &base_digest_hex, &years, as_of);
+    let memo_span = crate::stage_trace::span("cand.lineage.aggregate_memoized");
     let annual = crate::yearly::aggregate_memoized(key, || {
-        let base_bars = leaf_bars_in_range(
-            c,
-            lineage.base_daily_version_key,
-            lineage.first_trade_day,
-            lineage.last_trade_day,
-        )?;
-        let base_evidence = verify_version_evidence(c, &base.evidence_digest)?;
-        let base_version = to_effective_version(c, &base, &base_bars, base_evidence)?;
-        crate::yearly::aggregate(&base_version, Some(&years), as_of)
-            .map_err(|e| integrity(format!("yearly aggregation failed: {e}")))
+        let base_bars = crate::stage_trace::timed("cand.lineage.leaf_bars_in_range", || {
+            leaf_bars_in_range(
+                c,
+                lineage.base_daily_version_key,
+                lineage.first_trade_day,
+                lineage.last_trade_day,
+            )
+        })?;
+        let base_evidence = crate::stage_trace::timed("cand.lineage.base_evidence", || {
+            verify_version_evidence(c, &base.evidence_digest)
+        })?;
+        let base_version = crate::stage_trace::timed("cand.lineage.to_effective_version", || {
+            to_effective_version(c, &base, &base_bars, base_evidence)
+        })?;
+        crate::stage_trace::timed("cand.lineage.aggregate", || {
+            crate::yearly::aggregate(&base_version, Some(&years), as_of)
+                .map_err(|e| integrity(format!("yearly aggregation failed: {e}")))
+        })
     })?;
+    drop(memo_span);
+    let _compare = crate::stage_trace::span("cand.lineage.compare");
     if annual
         .records
         .iter()
@@ -1933,22 +1966,33 @@ pub(crate) struct MaterializedVersion {
 }
 
 pub(crate) fn materialize(c: &Connection, version_id: &str) -> Result<MaterializedVersion, Error> {
-    let row = read_version_row_by_id(c, version_id)?.ok_or(Error::NotFound)?;
+    let _mat = crate::stage_trace::span("cand.materialize");
+    let row = crate::stage_trace::timed("cand.mat.row", || read_version_row_by_id(c, version_id))?
+        .ok_or(Error::NotFound)?;
     let state = match row.state {
         1 => CompactVersionState::Staged,
         2 => CompactVersionState::Validated,
         3 => CompactVersionState::Published,
         _ => return Err(integrity("malformed version state")),
     };
-    let evidence = verify_version_evidence(c, &row.evidence_digest)?;
+    let evidence = crate::stage_trace::timed("cand.mat.evidence", || {
+        verify_version_evidence(c, &row.evidence_digest)
+    })?;
     let version = match state {
-        CompactVersionState::Published => fixed_by_key(c, row.key)?.version,
+        CompactVersionState::Published => {
+            crate::stage_trace::timed("cand.mat.fixed_by_key", || fixed_by_key(c, row.key))?.version
+        }
         _ => {
-            verify_staged(c, &row)?;
-            let (leaf, bars) = reconstruct_leaf(c, row.key)?;
-            unpublished_version(c, &leaf, &bars, evidence.clone())?
+            crate::stage_trace::timed("cand.mat.verify_staged", || verify_staged(c, &row))?;
+            let (leaf, bars) = crate::stage_trace::timed("cand.mat.reconstruct_leaf", || {
+                reconstruct_leaf(c, row.key)
+            })?;
+            crate::stage_trace::timed("cand.mat.unpublished_version", || {
+                unpublished_version(c, &leaf, &bars, evidence.clone())
+            })?
         }
     };
+    let _tail = crate::stage_trace::span("cand.mat.tail");
     let source_binding = read_source_binding(c, &row.source_binding_digest)?;
     let (kind, canonical) = read_evidence(c, &source_binding.evidence_digest)?;
     if kind != EvidenceKind::Generation {

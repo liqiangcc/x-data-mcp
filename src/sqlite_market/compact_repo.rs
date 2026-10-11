@@ -1069,6 +1069,7 @@ pub(crate) fn materialize_checked(
     version_id: &str,
     staged: bool,
 ) -> Result<CheckedRecord, Error> {
+    let _span = crate::stage_trace::span("cand.materialize_checked");
     let m = compact_versions::materialize(c, version_id)?;
     let allowed = match m.state {
         CompactVersionState::Published => !staged,
@@ -1078,7 +1079,7 @@ pub(crate) fn materialize_checked(
     if !allowed {
         return Err(Error::NotFound);
     }
-    synthesize(&m)
+    crate::stage_trace::timed("cand.synthesize", || synthesize(&m))
 }
 
 /// Header-only `materialize_checked` for published rows: `synthesize` emits
@@ -1185,7 +1186,13 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                     algorithm_version: derivation.algorithm_version.clone(),
                     first_trade_day: compact_market::epoch_day(derivation.first_trading_date),
                     last_trade_day: compact_market::epoch_day(derivation.last_trading_date),
-                    as_of_day: base.last_day,
+                    as_of_day: {
+                        crate::stage_trace::note(
+                            "stage.lineage_as_of",
+                            &[("as_of_epoch_day", base.last_day as u64)],
+                        );
+                        base.last_day
+                    },
                 }),
                 base.source_binding_digest,
             )
@@ -1226,8 +1233,17 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
         yearly_lineage,
     };
     if let Some(parent_id) = raw.get("compact_parent_version_id").and_then(Value::as_str) {
+        let parent_span = crate::stage_trace::span("stage.parent_facts");
         let parent_key = version_key(c, parent_id)?;
         let parent = compact_versions::result_facts(c, parent_key)?;
+        drop(parent_span);
+        crate::stage_trace::note(
+            "stage.parent",
+            &[
+                ("delta_depth", parent.delta_depth as u64),
+                ("period_year", (period == Period::Year) as u64),
+            ],
+        );
         if parent.state != CompactVersionState::Published
             || parent.entity != entity
             || parent.period != period
@@ -1236,6 +1252,7 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
                 "compact parent is not a published same-scope version",
             ));
         }
+        let fixed_span = crate::stage_trace::span("stage.parent_fixed");
         let parent_bars = compact_versions::fixed(c, parent_id)?
             .version
             .records
@@ -1243,7 +1260,10 @@ fn stage_tx(c: &mut Connection, raw: &Value) -> Result<(), Error> {
             .map(|bar| CompactBar::from_bar(bar, period))
             .collect::<Result<Vec<_>, _>>()
             .map_err(super::integrity)?;
-        match plan_delta(&parent_bars, &bars)? {
+        drop(fixed_span);
+        let plan =
+            crate::stage_trace::timed("stage.plan_delta", || plan_delta(&parent_bars, &bars))?;
+        match plan {
             DeltaPlan::Equal => {
                 return Err(Error::Conflict(
                     "candidate identical to declared parent; no-change must not stage".into(),
@@ -1814,6 +1834,7 @@ impl MarketRepository for SqliteCompactMarket {
         self.write(|c| stage_tx(c, raw))
     }
     fn candidate(&self, id: &str) -> Result<CheckedRecord, Error> {
+        let _span = crate::stage_trace::span("cand.candidate");
         self.read(|c| materialize_checked(c, id, true))
     }
     fn staged_matches(&self, version_id: &str, whole: &Value) -> Result<bool, Error> {

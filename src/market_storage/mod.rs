@@ -677,6 +677,12 @@ pub(crate) fn validate_base_facts_meta<R: MarketRepository + ?Sized>(
         .date_naive();
     let key = crate::yearly::aggregate_key(&facts.integrity_sha256, &years, as_of);
     let base_id = facts.version_id.clone();
+    crate::yearly::trace_key(
+        "memo.key.validate_base_facts",
+        &facts.integrity_sha256,
+        &years,
+        as_of,
+    );
     let annual = crate::yearly::aggregate_memoized(key, || {
         let window = repository
             .fixed_window(

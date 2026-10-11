@@ -357,6 +357,12 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             &years,
             as_of,
         );
+        crate::yearly::trace_key(
+            "memo.key.runner",
+            base.raw()["integrity_sha256"].as_str().unwrap_or(""),
+            &years,
+            as_of,
+        );
         let aggregate_span = crate::stage_trace::span("yearly.exec.aggregate");
         let annual = crate::yearly::aggregate_memoized(key, || {
             crate::yearly::aggregate(base.version(), Some(&years), as_of)
