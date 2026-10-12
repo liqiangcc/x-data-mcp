@@ -37,6 +37,7 @@ const BUSY: Duration = Duration::from_secs(5);
 /// Latest-only series/event store (schema 21). Same handle shape the v19
 /// backend had: one writer behind the coordinator, task store sharing the
 /// database file.
+#[derive(Clone)]
 pub struct SqliteCompactMarket {
     coordinator: Arc<WriteCoordinator>,
     tasks: SqliteTasks,
@@ -403,7 +404,8 @@ impl MarketRepository for SqliteCompactMarket {
     }
     fn task(&self, id: &str) -> Result<TaskSnapshot, Error> {
         self.read(|c| {
-            crate::sqlite_tasks::read_task(c, id)?
+            crate::sqlite_tasks::read_bound_task(c, id)
+                .map_err(Error::Task)?
                 .ok_or(Error::Task(task_control::Error::TaskNotFound))
         })
     }
@@ -1212,13 +1214,101 @@ impl RangeRepository for SqliteCompactMarket {
         Ok(self.tasks.transition(task, revision, run, change)?)
     }
     fn cover_gap(&self, covering: &crate::market_storage::GapCovering) -> Result<bool, Error> {
-        self.tx(|c| super::gaps::record_covering_tx(c, covering, true))
+        covering.validate()?;
+        self.write(|c| {
+            let tx = c
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(storage)?;
+            let gap: Option<(String, i64)> = tx
+                .query_row(
+                    "SELECT symbol,period FROM proven_gaps WHERE gap_id=?1",
+                    [&covering.gap_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(storage)?;
+            let Some((gap_symbol, gap_period)) = gap else {
+                return Err(Error::Invalid("covering references unknown gap".into()));
+            };
+            // A covering binds a published version only — on v21 that is a
+            // `market_series` row (the single current series per scope).
+            let scope: Option<(String, i64)> = tx
+                .query_row(
+                    "SELECT entity,period FROM market_series WHERE version_id=?1",
+                    [&covering.version_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(storage)?;
+            let Some((entity, code)) = scope else {
+                return Err(Error::Invalid(
+                    "covering references unknown or unpublished version".into(),
+                ));
+            };
+            if entity != gap_symbol || code != gap_period {
+                return Err(Error::Invalid("covering version scope mismatch".into()));
+            }
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT covered_at FROM gap_coverings WHERE gap_id=?1 AND version_id=?2",
+                    params![covering.gap_id, covering.version_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage)?;
+            let out = match existing {
+                Some(at) if at == covering.covered_at.to_rfc3339() => Ok(false),
+                Some(_) => Err(integrity("gap covering identity conflict")),
+                None => tx
+                    .execute(
+                        "INSERT INTO gap_coverings VALUES(?1,?2,?3)",
+                        params![
+                            covering.gap_id,
+                            covering.version_id,
+                            covering.covered_at.to_rfc3339()
+                        ],
+                    )
+                    .map_err(storage)
+                    .map(|_| true),
+            }?;
+            tx.commit()
+                .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
+            Ok(out)
+        })
     }
     fn gap_coverings(
         &self,
         gap_id: &str,
     ) -> Result<Vec<crate::market_storage::GapCovering>, Error> {
-        self.read(|c| super::gaps::read_coverings(c, gap_id))
+        self.read(|c| {
+            let mut stmt = c
+                .prepare(
+                    "SELECT gap_id,version_id,covered_at FROM gap_coverings WHERE gap_id=?1 ORDER BY covered_at,version_id",
+                )
+                .map_err(storage)?;
+            let rows = stmt
+                .query_map([gap_id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(storage)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(storage)?;
+            let mut out = Vec::with_capacity(rows.len());
+            for (gap_id, version_id, covered_at) in rows {
+                out.push(crate::market_storage::GapCovering {
+                    gap_id,
+                    version_id,
+                    covered_at: covered_at.parse().map_err(|_| {
+                        Error::Integrity("gap_coverings covered_at is not a timestamp".into())
+                    })?,
+                });
+            }
+            Ok(out)
+        })
     }
 }
 
@@ -1329,10 +1419,6 @@ fn update_batch_item(
                     .ok_or(Error::NotFound)?;
                 let window_bars =
                     series::bars_in_range(c, head.series_key, *range_start_day, *range_end_day)?;
-                let scope = Scope {
-                    symbol: item.symbol.clone(),
-                    period: Period::Day,
-                };
                 let evidence = series_commit::put_continuity_evidence(
                     c,
                     &ops_continuity_json(
@@ -1391,10 +1477,6 @@ fn update_batch_item(
                         Some(continuity),
                     ),
                 )?;
-                let scope = Scope {
-                    symbol: item.symbol.clone(),
-                    period: Period::Day,
-                };
                 series_commit::commit_series_tx(
                     c,
                     &series_commit::Commit {
@@ -1752,13 +1834,15 @@ impl crate::publication_verification::decision::AuditStore for SqliteCompactMark
         &self,
         plan: &crate::publication_verification::decision::Plan,
     ) -> Result<crate::publication_verification::decision::Receipt, Error> {
-        self.tx(|c| plan.record(c))
+        self.write(|c| super::publication_checks::commit_check_tx(c, plan))
     }
     fn check_receipt(
         &self,
         id: &str,
     ) -> Result<Option<crate::publication_verification::decision::Receipt>, Error> {
-        self.read(|c| crate::publication_verification::decision::read_receipt(c, id))
+        self.read(|c| {
+            super::publication_checks::read_receipt(c, id).map(|r| r.map(|(_, receipt)| receipt))
+        })
     }
 }
 

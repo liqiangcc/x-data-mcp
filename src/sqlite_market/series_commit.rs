@@ -11,7 +11,7 @@ use sha2::Digest as _;
 
 use super::compact_repo::period_code;
 use super::{evidence_store, integrity, series, storage};
-use crate::compact_market::{CompactBar, Digest, EvidenceKind, SourceBinding};
+use crate::compact_market::{self, CompactBar, Digest, EvidenceKind, SourceBinding};
 use crate::market_data::{Bar, CoverageStatus, Period};
 use crate::market_storage::{Error, Receipt};
 use crate::task_control;
@@ -491,8 +491,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                     created_at: created.clone(),
                     updated_at: created,
                 },
-            )
-            .map_err(conflict_or_storage)?;
+            )?;
             series::insert_bars(c, key, *bars)?;
         }
         Change::Append { upserts } => {

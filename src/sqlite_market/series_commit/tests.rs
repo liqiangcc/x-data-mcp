@@ -6,17 +6,17 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::compact_market::{EvidenceKind, SourceBinding, VersionEvidence};
+use crate::compact_market::{Digest, EvidenceKind, SourceBinding, VersionEvidence};
 use crate::market_data::Provenance;
 use crate::market_data::{
     Adjustment, AdjustmentEvidence, Bar, CoverageEvidence, EvidenceValue, MarketDataBatch,
     UnitCurrencyEvidence,
 };
 use crate::market_storage::{MarketRepository, Scope};
-use crate::market_storage::{Publication, PublishIntent, PublishPlan, Range, compat};
+use crate::market_storage::{Publication, PublishIntent, PublishPlan, compat};
 use crate::market_update::publication::RangeRepository;
 use crate::publish::{EffectiveVersion, ValidationSummary};
-use crate::sqlite_market::{integrity, series, storage};
+use crate::sqlite_market::{series, storage};
 use crate::task_control::{self, CommandKey, ItemSpec};
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::Connection;
@@ -47,11 +47,11 @@ fn ts() -> DateTime<Utc> {
 }
 
 fn date(day: i64) -> NaiveDate {
-    compact_market::epoch_date(day).unwrap()
+    crate::compact_market::epoch_date(day).unwrap()
 }
 
 fn bar(day: i64, cents: i64) -> Bar {
-    CompactBar {
+    crate::compact_market::CompactBar {
         trade_day: day,
         open_cents: cents,
         high_cents: cents + 10,
@@ -413,7 +413,7 @@ fn running_task_multi(
         task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
         _ => panic!("expected task outcome"),
     };
-    let revision = repo.task(task_id).unwrap().task.state_revision;
+    let revision = repo.task(&task_id).unwrap().task.state_revision;
     let revision = repo
         .transition(&task_id, revision, RUN, task_control::Change::Claim)
         .unwrap()
@@ -446,7 +446,7 @@ fn append_duplicate_day_fails_closed() {
     // the PK backstop + tail-only gate both apply.
     let dir = tempdir();
     let (_path, repo) = repo(&dir);
-    let (task_id, revision) = running_task_multi(&repo, 2);
+    let (task_id, _revision) = running_task_multi(&repo, 2);
     let rev1 = start_item_id(&repo, &task_id, "item-1");
     let first = publish_bars(
         &repo,
@@ -556,7 +556,7 @@ fn stale_base_version_fails_closed() {
     // §8.2-14 shaped as the repo-level CAS: commit against a superseded
     // head must Stale-conflict, never silently rebase.
     let dir = tempdir();
-    let (path, repo) = repo(&dir);
+    let (_path, repo) = repo(&dir);
     let (task_id, _r) = running_task_multi(&repo, 3);
     let rev1 = start_item_id(&repo, &task_id, "item-1");
     let first = publish_bars(&repo, &task_id, rev1, "pub-1", "v1", vec![bar(0, 100)]);
@@ -604,7 +604,7 @@ fn replace_rollback_keeps_series_consistent() {
     // §8.2-12: abort inside the commit transaction rolls everything back —
     // the series still points at the old digest and a retry succeeds.
     let dir = tempdir();
-    let (path, repo) = repo(&dir);
+    let (_path, repo) = repo(&dir);
     let (task_id, _r) = running_task_multi(&repo, 3);
     let rev1 = start_item_id(&repo, &task_id, "item-1");
     let first = publish_bars(&repo, &task_id, rev1, "pub-1", "v1", vec![bar(0, 100)]);

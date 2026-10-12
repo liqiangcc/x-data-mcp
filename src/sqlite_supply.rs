@@ -29,6 +29,51 @@ fn market_ref(
         integrity_sha256: r.raw()["integrity_sha256"].as_str().unwrap().into(),
     }
 }
+fn catalog_ref(v: &crate::catalog::CatalogVersion) -> Result<VersionRef, Error> {
+    Ok(VersionRef {
+        dataset: Dataset::Catalog,
+        contract_version: ContractVersion::V1,
+        entity: None,
+        version_id: v.version_id.clone(),
+        integrity_sha256: sqlite_catalog::digest(v)?,
+    })
+}
+/// `read_market` backed by the header-only compact projection when the row
+/// is a published version — identical `raw()`/identity surface with
+/// `version().records` empty. `None` (non-compact, missing, or unpublished
+/// row) falls back to the unchanged full path; `Some` callers must not read
+/// bars from the record.
+fn slim_market(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    dataset: Dataset,
+    entity: &Security,
+    id: &str,
+) -> Result<Option<crate::market_storage::compat::CheckedRecord>, Error> {
+    let Some(r) = slim_published(c, ctx, id, true, true)? else {
+        return Ok(None);
+    };
+    if r.version().symbol != entity.symbol() || Some(r.version().period) != dataset.period() {
+        return Err(Error::Integrity("version entity/dataset mismatch".into()));
+    }
+    Ok(Some(r))
+}
+fn read_market(
+    c: &Connection,
+    ctx: &mut VerifyCtx,
+    dataset: Dataset,
+    entity: &Security,
+    id: &str,
+) -> Result<crate::market_storage::compat::CheckedRecord, Error> {
+    if let Some(r) = slim_market(c, ctx, dataset, entity, id)? {
+        return Ok(r);
+    }
+    let r = read_record(c, id, true, true)?;
+    if r.version().symbol != entity.symbol() || Some(r.version().period) != dataset.period() {
+        return Err(Error::Integrity("version entity/dataset mismatch".into()));
+    }
+    Ok(r)
+}
 fn presence_item(
     c: &Connection,
     _ctx: &mut VerifyCtx,
