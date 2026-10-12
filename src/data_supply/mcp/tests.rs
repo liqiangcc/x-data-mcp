@@ -490,7 +490,10 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
         &daily_task,
         "item-1",
         SYMBOL,
-        vec![bar(0, 100), bar(1, 110)],
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+        ],
         None,
     );
 
@@ -522,7 +525,11 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
         &daily_task,
         "item-2",
         SYMBOL,
-        vec![bar(0, 100), bar(1, 110), bar(2, 120)],
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+            bar(day_epoch(2020, 3, 5), 120),
+        ],
         Some(&daily.version_id),
     );
     assert_ne!(appended.version_id, daily.version_id);
@@ -578,7 +585,10 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &daily_task,
         "item-1",
         SYMBOL,
-        vec![bar(0, 100), bar(1, 110)],
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+        ],
         None,
     );
     let yearly_task = task(&f, SYMBOL, 2, "year", "req-y2");
@@ -598,7 +608,10 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &daily_task,
         "item-2",
         SYMBOL,
-        vec![bar(9, 300), bar(10, 310)],
+        vec![
+            bar(day_epoch(2020, 4, 2), 300),
+            bar(day_epoch(2020, 6, 8), 310),
+        ],
         Some(&daily.version_id),
     );
 
@@ -703,7 +716,10 @@ fn yearly_batch_availability_reports_one_invalid_row_among_fresh() {
             &daily_task,
             &format!("item-{}", i + 1),
             s,
-            vec![bar(0, 100), bar(1, 110)],
+            vec![
+                bar(day_epoch(2020, 1, 6), 100),
+                bar(day_epoch(2020, 2, 4), 110),
+            ],
             None,
         );
     }
@@ -730,7 +746,10 @@ fn yearly_batch_availability_reports_one_invalid_row_among_fresh() {
         &victim_task,
         "item-1",
         victim,
-        vec![bar(9, 300)],
+        vec![
+            bar(day_epoch(2020, 4, 2), 300),
+            bar(day_epoch(2020, 6, 8), 310),
+        ],
         Some(&victim_head),
     );
 
@@ -776,7 +795,14 @@ fn progress_through_handler_on_compact_schema() {
     // the item success/failure split intact.
     let f = fixture();
     let task_id = task(&f, SYMBOL, 1, "day", "req-p");
-    publish_daily(&f, &task_id, "item-1", SYMBOL, vec![bar(0, 100)], None);
+    publish_daily(
+        &f,
+        &task_id,
+        "item-1",
+        SYMBOL,
+        vec![bar(day_epoch(2020, 1, 6), 100)],
+        None,
+    );
     let progress = f
         .api
         .call(

@@ -2050,6 +2050,8 @@ fn daily_checked(r: &Repo) -> compat::CheckedRecord {
 }
 
 /// Commit the yearly candidate through the REAL `commit_yearly` plan path.
+/// `replay` resubmits the exact recorded identity (publication id + item
+/// id) without starting a fresh item — the receipt must come straight back.
 fn commit_yearly_plan(
     r: &Repo,
     task: &mut TaskHandle,
@@ -2057,8 +2059,12 @@ fn commit_yearly_plan(
     base: &compat::CheckedRecord,
     prior: Option<compat::CheckedRecord>,
     result_id: Option<&str>,
+    replay_item: Option<&str>,
 ) -> Result<crate::market_storage::Receipt, crate::market_storage::Error> {
-    let (item, pub_id, rev) = task.item(&r.repo);
+    let (item, pub_id, rev) = match replay_item {
+        Some(item) => (item.to_string(), String::new(), 0),
+        None => task.item(&r.repo),
+    };
     let publication_id = result_id.map(str::to_string).unwrap_or(pub_id);
     let command = Publication {
         publication_id,
@@ -2123,6 +2129,7 @@ fn yearly_rederive_rewrites_only_affected_years() {
         &base,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -2148,6 +2155,7 @@ fn yearly_rederive_rewrites_only_affected_years() {
         ),
         &base,
         Some(checked(&prior)),
+        None,
         None,
     )
     .unwrap();
@@ -2203,6 +2211,7 @@ fn yearly_no_change_advances_lineage_base() {
         &base,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -2246,6 +2255,7 @@ fn yearly_no_change_advances_lineage_base() {
         ),
         &base2,
         Some(checked(&prior)),
+        None,
         None,
     )
     .unwrap();
@@ -2308,6 +2318,7 @@ fn yearly_commit_stale_daily_base_fails_closed() {
         &stale_base,
         None,
         None,
+        None,
     )
     .expect_err("stale daily base must be rejected");
     assert!(
@@ -2321,6 +2332,7 @@ fn yearly_commit_stale_daily_base_fails_closed() {
         &mut yearly_task,
         mk_year_version("y-v2", vec![year_bar(2020, 100)], &moved.version_id),
         &fresh_base,
+        None,
         None,
         None,
     )
@@ -2360,6 +2372,7 @@ fn yearly_rederive_replays_result_id() {
         &base,
         None,
         Some("y-result-1"),
+        None,
     )
     .unwrap();
 
@@ -2381,6 +2394,7 @@ fn yearly_rederive_replays_result_id() {
         &base,
         Some(checked(&prior)),
         Some("y-result-1"),
+        Some("item-1"),
     )
     .unwrap();
     assert_eq!(replayed.publication_id, "y-result-1");
@@ -2425,6 +2439,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
         &mut yearly_task,
         mk_year_version("y-v1", vec![year_bar(2020, 100)], &daily.version_id),
         &base,
+        None,
         None,
         None,
     )

@@ -1855,7 +1855,12 @@ fn task_facts_series(
     let mut publications = Vec::new();
     let mut range_results = Vec::new();
     let mut yearly_results = Vec::new();
+    // Every durable event is the item's result evidence: first_publish has
+    // no base version to express as a RangeExecutionResult, but the event
+    // itself still evidences the item, so the evidenced set is item-level.
+    let mut evidenced_items: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (entity, period, kind, outcome, item_id, result_id, old, new, base, created) in events {
+        evidenced_items.insert(item_id.clone());
         let e = crate::data_supply::observe::entity(&entity)
             .ok_or_else(|| Error::Integrity("event entity is not a security".into()))?;
         let new_id = digest_hex(&new)?;
@@ -1922,7 +1927,21 @@ fn task_facts_series(
             });
         }
     }
-    task_facts_check_evidenced(&s, &range_results, &yearly_results)?;
+    let successful: std::collections::BTreeSet<String> = s
+        .items
+        .iter()
+        .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+        .map(|i| i.spec.item_id.clone())
+        .collect();
+    if matches!(
+        s.task.key.operation.as_str(),
+        "update_data" | "backfill_data" | "republish_data"
+    ) && successful != evidenced_items
+    {
+        return Err(Error::Integrity(
+            "successful range task lacks matching result evidence".into(),
+        ));
+    }
     Ok(TaskFacts {
         request_id: request,
         snapshot: s,
