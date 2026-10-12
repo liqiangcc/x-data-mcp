@@ -773,7 +773,7 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
     let conn = rusqlite::Connection::open(dir.path().join("market.db")).unwrap();
     let bound: String = conn
         .query_row(
-            "SELECT sb.generation_id FROM data_versions v \
+            "SELECT sb.generation_id FROM market_series v \
              JOIN source_bindings sb ON sb.source_binding_digest = v.source_binding_digest \
              WHERE v.version_id = ?1",
             [new_id],
@@ -898,30 +898,21 @@ fn explicit_daily_update_rewrites_history_on_compact() {
         "first bar must carry the repriced (not base) value"
     );
     let conn = rusqlite::Connection::open(dir.path().join("market.db")).unwrap();
-    let (bound, parent_key): (String, Option<i64>) = conn
+    let (bound, base_digest, continuity): (String, String, i64) = conn
         .query_row(
-            "SELECT sb.generation_id, v.parent_version_key FROM data_versions v \
+            "SELECT sb.generation_id, hex(e.old_content_digest), e.continuity_mode \
+             FROM market_series v \
              JOIN source_bindings sb ON sb.source_binding_digest = v.source_binding_digest \
+             JOIN market_events e ON e.new_content_digest = v.content_digest \
              WHERE v.version_id = ?1",
             [new_id.clone()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap();
     assert_eq!(bound, gen_b);
-    // A full revision is a root checkpoint: the base→result chain lives in
-    // the update result row, not in a version parent pointer.
-    assert_eq!(parent_key, None, "rewrite must stage as a root checkpoint");
-    let (result_base, continuity): (String, i64) = conn
-        .query_row(
-            "SELECT bv.version_id, r.continuity_mode FROM market_update_results r \
-             JOIN data_versions bv ON bv.version_key = r.base_version_key \
-             JOIN data_versions rv ON rv.version_key = r.result_version_key \
-             WHERE rv.version_id = ?1",
-            [new_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(result_base, base_id, "update result links base→rewrite");
+    // A full revision is a replace: the event row carries the base→result
+    // digest link (no version parent pointer on v21).
+    assert_eq!(base_digest, base_id, "replace event links old digest→new");
     assert_eq!(continuity, 3, "continuity_mode=full");
 }
 

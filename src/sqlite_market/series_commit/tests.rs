@@ -442,10 +442,10 @@ fn start_item_id(
 
 #[test]
 fn append_duplicate_day_fails_closed() {
-    // §8.1-5: an upsert onto an existing trade_day must fail the commit —
-    // the PK backstop + tail-only gate both apply.
+    // §8.1-5: a raw INSERT duplicating an existing (series_key, trade_day)
+    // violates the PK — and the typed ops path refuses a non-append diff.
     let dir = tempdir();
-    let (_path, repo) = repo(&dir);
+    let (path, repo) = repo(&dir);
     let (task_id, _revision) = running_task_multi(&repo, 2);
     let rev1 = start_item_id(&repo, &task_id, "item-1");
     let first = publish_bars(
@@ -457,24 +457,37 @@ fn append_duplicate_day_fails_closed() {
         vec![bar(0, 100), bar(1, 110)],
     );
 
+    // Raw duplicate-day INSERT on the live series fails on the PK.
+    let c = Connection::open(&path).unwrap();
+    let key = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap()
+        .series_key;
+    let dup = bar(1, 999);
+    let err = series::insert_bars(&c, key, &[dup]).unwrap_err();
+    assert!(
+        matches!(err, Error::Integrity(_) | Error::Storage(_)),
+        "{err:?}"
+    );
+
+    // Typed ops path: a non-tail upsert must fail closed (never rewrite).
     let rev2 = start_item_id(&repo, &task_id, "item-2");
     let err = repo
-        .commit_range_ops(
+        .commit_range_ops_typed(
             &command_at(&task_id, "pub-2", rev2, "item-2"),
             &scope(),
             &first.version_id,
-            &[bar(1, 999)], // existing day — mid-sequence upsert
+            &[bar(1, 999)], // collides with an existing day
             &[],
-            &[bar(0, 100), bar(1, 999)],
+            None,
+            None,
         )
         .unwrap_err();
     assert!(
-        matches!(
-            err,
-            Error::Integrity(_) | Error::Conflict(_) | Error::Stale(_)
-        ),
+        matches!(err, Error::Conflict(_) | Error::Stale(_)),
         "{err:?}"
     );
+
     // Series unchanged.
     repo.read(|c| {
         let row = series::read_series(c, SYMBOL, Period::Day)
