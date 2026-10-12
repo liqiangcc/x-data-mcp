@@ -749,8 +749,8 @@ fn commit_plan(
         if event.task_id != command.task_id || event.item_id != command.item_id {
             return Err(Error::Conflict("result identity conflict".into()));
         }
-        return Ok(receipt_for(c, &command.publication_id)?
-            .ok_or_else(|| integrity("receipt event lacks result payload"))?);
+        return receipt_for(c, &command.publication_id)?
+            .ok_or_else(|| integrity("receipt event lacks result payload"));
     }
     // The sealed plan's record must equal the staged candidate.
     let staged = read_staged(c, &command.version_id)?;
