@@ -1,5 +1,7 @@
 # #259 最终紧凑存储设计冻结候选
 
+> 历史文档：描述 schema 20 版本链模型，被 [docs/latest-only-storage.md](../latest-only-storage.md) 取代（待合并）。
+
 ## 当前裁定（2026-09-28）
 
 本文原 5min / 8/16MiB 统一门禁为历史设计，不代表现行合同。owner 已批准
