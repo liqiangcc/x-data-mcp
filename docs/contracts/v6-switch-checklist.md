@@ -28,18 +28,26 @@ preview.31 / schema 20 / `generic-data-v5`（[STATUS](../STATUS.md)），
      `SKILL_CONTRACT_MISMATCH` 并停止」这一预期 fail-closed 窗口；
      headless 日更读取的是哪份 SKILL.md 未核实，部署日前需向
      Owner 确认其分发路径。
+   - `scripts/deploy_phase_g.sh` 的 schema-20 断言与
+     `task_sqlite init20` 的命名/打印（OWNER-RULING-PAR-1A R4：
+     **必须进 S4 与 bump 同一提交**，`init20` 保留别名、输出 21，
+     并由 CI 的 switch-binary/deploy facts 检查覆盖——否则部署日
+     脚本自断言必炸）。§1 仅为核对备查。
    - registry 中 `verify_publication_result`、`republish_data` 等
      description 的 v6 措辞（S4 范围，本文不列句）。
-2. **本清单§1–§4（部署日）**：部署脚本断言、facts 常量、文档
-   「当前状态」区域、STATUS 更新。文档区改法与
-   `check_current_facts.py` 的 `REQUIRED_FACTS` 正则必须在同一
-   提交翻转（docs 写 "schema 21" ⇄ 正则期望 21），否则 facts 门
-   必挂。
+2. **本清单§2–§4（部署日）**：facts 常量、文档「当前状态」区域、
+   STATUS 更新。文档区改法与 `check_current_facts.py` 的
+   `REQUIRED_FACTS` 正则必须在同一提交翻转（docs 写 "schema 21"
+   ⇄ 正则期望 21），否则 facts 门必挂。
 3. **release 版本号**：`scripts/check_current_facts.py` 常量
    `EXPECTED_PACKAGE_VERSION` 随部署 tag 一并 bump（惯例，本次
    未核实目标 tag）。
 
-## 1. 脚本断言（部署日改）
+## 1. 脚本断言（S4 同提交改，部署日核对）
+
+OWNER-RULING-PAR-1A R4：本节改动**必须在 S4 与 capability bump
+同一提交合入**（部署日再改已来不及）。`task_sqlite init20` 保留
+子命令别名、输出 21。
 
 ### `scripts/deploy_phase_g.sh`
 | 锚点 | 旧 | 新 |
@@ -49,9 +57,6 @@ preview.31 / schema 20 / `generic-data-v5`（[STATUS](../STATUS.md)），
 | `step=schema20_fresh` | step 名含 `schema20` | `step=schema21_fresh`（日志标签，可同步改） |
 | `[[ "$init_out" == *"task schema 20 ready"* ]]` | 期望 `task schema 20 ready` | 期望 `task schema 21 ready`——`task_sqlite init20` 在 v21 代码上打印 `task schema 21 ready`（`src/bin/task_sqlite.rs` init20 分支打印 `COMPACT_SCHEMA_VERSION`，现为 21）；不改则部署脚本自断言失败 |
 | `[[ "$fresh_schema" == "20" ]]` | `"20"` | `"21"` |
-
-注：`init20` 子命令名是否改为 `init21` 由 S4/Owner 决定；脚本命令
-名与断言文案须与二进制实际输出一致。
 
 ### `scripts/check_current_facts.py`
 | 锚点 | 旧 | 新 |
@@ -121,16 +126,18 @@ preview.31 / 21 tools / v5——部署日时若该 PR 已合入，「旧句」�
 - 紧随其后括号注「（v5 起 `get_data_availability` 的 `related_tasks`
   只含在途任务与最近 5 个已结束任务…不得静默适配。）」→ 替换为
   v6 说明，建议：「（v6 起 market 数据为单版本序列：`version_id`
-  为内容 hex，`list_data_versions` 每实体至多一项；被取代的 pin
-  报 `stale_version`，须重取当前 head 重试，不得静默适配；v5 的
-  `related_tasks` 口径沿用。）」——stale 行级字段名以 S3 定稿为
-  准，TODO(S3)。
+  为内容 hex，`list_data_versions` 每实体至多一项；显式 pin 读取
+  被取代时报 `stale_version`，写路径 stale base 为 item 级
+  `needs_verification`，均须重取当前 head 重试，不得静默适配；
+  v5 的 `related_tasks` 口径沿用。）」——stale 行级字段名以 S3
+  定稿为准，TODO(S3)。
 - 锚点句「不得从 `data_versions=0` 自动推断重建授权」→ v6 无
   `data_versions` 表，建议改为「不得从 `list_data_versions` 返回
   空列表自动推断重建授权」。
 - `base_version_id:<head version_id>` 语义不变（v6 下即当前 head
-  的内容 hex）；可在该句补「被取代的 base 报 `stale_version`/受理
-  拒绝，重取 head 后重提」——措辞待 S3/S4。
+  的内容 hex）；可在该句补「被取代的 base 受理为 item 级
+  `needs_verification`（`STALE_BASE:` 前缀），重取 head 后重提」
+  （OWNER-RULING-PAR-1A R1 已定该档）。
 - 年线编排段（「可选：派生 `market.yearly`」段）：
   `get_yearly_base_years`/`expected_yearly_head` 用法字段名不变；
   stale 标记（behind/invalid）的判读句子待 S3 出参定稿后补，
