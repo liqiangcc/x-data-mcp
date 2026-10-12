@@ -114,15 +114,17 @@ fn presence_item(
         ) {
             Ok(Some(row)) => row,
             Ok(None) => {
-                // SPEC §6.1: a superseded (committed-then-replaced) digest is
-                // fail-closed integrity, not merely an absent base.
+                // R2' (OWNER-RULING-PAR-1A): a superseded
+                // (committed-then-replaced) pin is ordinary expiry —
+                // base_superseded, not corruption; a never-committed id
+                // stays base_unavailable.
                 let stale =
                     crate::sqlite_market::series::decode_version_id(&item.base_daily_version_id)
                         .is_some_and(|d| {
                             crate::sqlite_market::series::digest_seen(c, &d).unwrap_or(false)
                         });
                 return Ok(Outcome::Unavailable(if stale {
-                    YearPresenceReason::IntegrityFailure
+                    YearPresenceReason::BaseSuperseded
                 } else {
                     YearPresenceReason::BaseUnavailable
                 }));
