@@ -24,7 +24,13 @@ use rusqlite::{Connection, params};
 const ENTITY: &str = "sh.600006";
 
 fn db() -> (tempfile::TempDir, SqliteTasks, Connection) {
-    let dir = tempfile::tempdir().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    // DatabaseLease requires a private, UID-owned, non-symlink runtime path —
+    // same constraint compact_repo::tests::tempdir satisfies via /dev/shm.
+    let dir = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in("/dev/shm")
+        .unwrap();
     let tasks = SqliteTasks::new(dir.path().join("m.sqlite"));
     tasks.initialize_compact().unwrap();
     let c = tasks.connect(false).unwrap();
@@ -812,7 +818,11 @@ fn supply_reads_on_schema21() {
 #[test]
 #[ignore = "1M-event startup timing fixture; run manually, not on CI"]
 fn startup_check_1m_events() {
-    let dir = tempfile::tempdir().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in("/dev/shm")
+        .unwrap();
     let tasks = SqliteTasks::new(dir.path().join("m.sqlite"));
     tasks.initialize_compact().unwrap();
     let c = Connection::open(tasks.path()).unwrap();
