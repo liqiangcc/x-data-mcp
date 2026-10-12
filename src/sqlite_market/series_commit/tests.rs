@@ -937,6 +937,7 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
         err.to_string().contains("drifts units"),
         "unexpected rejection: {err}"
     );
+    fail_item(&repo, &task_id, "item-5");
 
     // Non-complete coverage.
     let mut bad_cov = metadata.clone();
@@ -1463,6 +1464,7 @@ fn typed_append_base_coverage_parity_with_envelope_bytes() {
     assert_eq!(cov, 1, "coverage must stay complete (code 1)");
     let ev: Value = serde_json::from_str(&evidence_json).unwrap();
     assert_eq!(ev["coverage_reason"], "full history verified");
+    assert_eq!(ev["unit_currency"]["price_unit"]["status"], "confirmed");
     assert_eq!(ev["unit_currency"]["price_unit"]["value"], "share");
 }
 
