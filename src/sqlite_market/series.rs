@@ -426,7 +426,7 @@ pub(crate) struct EventRow {
     pub semantics_changed: i64,
 }
 
-const EVENT_COLUMNS: &str = "seq,entity,period,kind,outcome,metadata_changed,continuity_mode,prefix_bytes,old_content_digest,new_content_digest,range_start_day,range_end_day,window_digest,base_content_digest,algorithm_version,source_binding_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at";
+const EVENT_COLUMNS: &str = "seq,entity,period,kind,outcome,metadata_changed,continuity_mode,prefix_bytes,old_content_digest,new_content_digest,range_start_day,range_end_day,window_digest,base_content_digest,algorithm_version,source_binding_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at,semantics_changed";
 
 type RawEvent = (
     i64,
