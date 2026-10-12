@@ -898,22 +898,38 @@ fn explicit_daily_update_rewrites_history_on_compact() {
         "first bar must carry the repriced (not base) value"
     );
     let conn = rusqlite::Connection::open(dir.path().join("market.db")).unwrap();
-    let (bound, base_digest, continuity): (String, String, i64) = conn
+    let bound: String = conn
         .query_row(
-            "SELECT sb.generation_id, hex(e.old_content_digest), e.continuity_mode \
-             FROM market_series v \
+            "SELECT sb.generation_id FROM market_series v \
              JOIN source_bindings sb ON sb.source_binding_digest = v.source_binding_digest \
-             JOIN market_events e ON e.new_content_digest = v.content_digest \
-             WHERE v.version_id = ?1 AND e.kind = 'replace' AND e.outcome = 2",
+             WHERE v.version_id = ?1",
             [new_id.clone()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| r.get(0),
         )
         .unwrap();
     assert_eq!(bound, gen_b);
-    // A full revision is a replace: the event row carries the base→result
-    // digest link (no version parent pointer on v21).
-    assert_eq!(base_digest, base_id, "replace event links old digest→new");
-    assert_eq!(continuity, 3, "continuity_mode=full");
+    // A full revision commits as a `replace` event: the event that FIRST
+    // produced the current content digest must carry continuity_mode=3 and
+    // old_digest pointing at the head it replaced.
+    let (kind, continuity, base_digest, seqs): (String, i64, String, String) = conn
+        .query_row(
+            "SELECT e.kind, e.continuity_mode, hex(e.old_content_digest), \
+                    (SELECT group_concat(seq||':'||kind,',') FROM market_events \
+                     WHERE entity = e.entity AND period = e.period) \
+             FROM market_series v \
+             JOIN market_events e ON e.new_content_digest = v.content_digest \
+             WHERE v.version_id = ?1 \
+             ORDER BY e.seq ASC LIMIT 1",
+            [new_id.clone()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(&kind, "replace", "events: {seqs}");
+    assert_eq!(continuity, 3, "continuity_mode=full; events: {seqs}");
+    assert_eq!(
+        base_digest, base_id,
+        "replace event links old digest→new; events: {seqs}"
+    );
 }
 
 /// #290 fail-closed: a rewrite candidate that silently drops a base record
