@@ -473,6 +473,7 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
         &f,
         &daily_task,
         "item-1",
+        SYMBOL,
         vec![bar(0, 100), bar(1, 110)],
         None,
     );
@@ -560,6 +561,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &f,
         &daily_task,
         "item-1",
+        SYMBOL,
         vec![bar(0, 100), bar(1, 110)],
         None,
     );
