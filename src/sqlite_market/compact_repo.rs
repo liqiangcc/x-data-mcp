@@ -1877,9 +1877,10 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 if event.task_id != command.task_id || event.item_id != command.item_id {
                     return Err(Error::Conflict("result identity conflict".into()));
                 }
+                let receipt = receipt_for(&tx, &command.publication_id)?
+                    .ok_or_else(|| integrity("receipt event lacks result payload"))?;
                 tx.commit().map_err(storage)?;
-                return Ok(receipt_for(&tx, &command.publication_id)?
-                    .ok_or_else(|| integrity("receipt event lacks result payload"))?);
+                return Ok(receipt);
             }
             let v = plan.publication.record.version();
             let scope = Scope {
