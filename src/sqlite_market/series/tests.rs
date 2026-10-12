@@ -146,6 +146,7 @@ fn event(
         result_id: format!("result-{tag}"),
         result_digest: [0x0A; 32],
         created_at: "2026-01-01T00:00:00Z".into(),
+        semantics_changed: 0,
     }
 }
 
@@ -617,7 +618,10 @@ fn yearly_state_classification() {
     ));
     // replace → invalid.
     apply_replace(&c, ENTITY, &[bar(day(2025, 2, 3), 2000)], ev, binding, "r1");
-    assert_eq!(yearly_state(&c, &y).unwrap(), YearlyState::Invalid);
+    assert_eq!(
+        yearly_state(&c, &y).unwrap(),
+        YearlyState::Invalid(YearlyInvalidReason::DailyReplaced)
+    );
     // forged base digest → integrity error.
     let mut forged = y.clone();
     forged.series_key = -1;

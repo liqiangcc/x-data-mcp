@@ -69,6 +69,10 @@ CREATE TABLE market_events(
     ('first_publish','append','replace','no_change','metadata','yearly_rederive')),
   outcome INTEGER NOT NULL CHECK(outcome IN (1,2)),
   metadata_changed INTEGER NOT NULL CHECK(metadata_changed IN (0,1)),
+  -- C3: 1 when the commit's version evidence differs from the head's in
+  -- {source, unit_currency, adjustment_evidence} — the fields yearly
+  -- aggregation depends on. 0 for no_change/metadata-without-evidence.
+  semantics_changed INTEGER NOT NULL DEFAULT 0 CHECK(semantics_changed IN (0,1)),
   continuity_mode INTEGER CHECK(continuity_mode IN (1,2,3)),
   -- Nominal value only (record_count*32 at append), NOT real prefix byte
   -- count; audit display only, never feed bar math with it.

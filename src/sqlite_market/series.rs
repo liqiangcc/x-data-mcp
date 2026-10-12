@@ -265,7 +265,6 @@ pub(crate) fn read_series_by_version_id(
     )
 }
 
-#[allow(dead_code)] // series_key-keyed reads arrive with yearly lineage (S3)
 pub(crate) fn read_series_by_key(
     c: &Connection,
     series_key: i64,
@@ -422,6 +421,9 @@ pub(crate) struct EventRow {
     pub result_id: String,
     pub result_digest: Digest,
     pub created_at: String,
+    /// C3: 1 when the commit replaced the head's version-evidence
+    /// semantics ({source, unit_currency, adjustment_evidence}).
+    pub semantics_changed: i64,
 }
 
 const EVENT_COLUMNS: &str = "seq,entity,period,kind,outcome,metadata_changed,continuity_mode,prefix_bytes,old_content_digest,new_content_digest,range_start_day,range_end_day,window_digest,base_content_digest,algorithm_version,source_binding_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at";
@@ -450,6 +452,7 @@ type RawEvent = (
     String,
     Vec<u8>,
     String,
+    i64,
 );
 
 fn event_row(r: &rusqlite::Row<'_>) -> Result<RawEvent, rusqlite::Error> {
@@ -477,6 +480,7 @@ fn event_row(r: &rusqlite::Row<'_>) -> Result<RawEvent, rusqlite::Error> {
         r.get(20)?,
         r.get(21)?,
         r.get(22)?,
+        r.get(23)?,
     ))
 }
 
@@ -505,6 +509,7 @@ fn event(raw: RawEvent) -> Result<EventRow, Error> {
         result_id: raw.20,
         result_digest: digest32(raw.21)?,
         created_at: raw.22,
+        semantics_changed: raw.23,
     })
 }
 
@@ -658,9 +663,28 @@ pub(crate) enum YearlyState {
     /// Only `append`/`no_change`/`metadata` events landed since derivation:
     /// the stored yearly rows remain correct for `as_of_day` — serve them.
     Behind { as_of_day: i64 },
-    /// A `replace` event landed after the recorded base: the stored yearly
-    /// content is pre-adjustment data and must not be served.
-    Invalid,
+    /// A `replace` or a semantics-changing commit landed after the
+    /// recorded base: the stored yearly content is derived from data the
+    /// current daily no longer agrees with — row-level absent, not served.
+    Invalid(YearlyInvalidReason),
+}
+
+/// Why a yearly row is `YearlyState::Invalid` — the wire `reason` enum
+/// values are `reason.code()` (fixed strings per the contract ruling).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum YearlyInvalidReason {
+    /// A daily `replace` event landed after the recorded base.
+    DailyReplaced,
+    /// A daily commit changed {source, unit_currency, adjustment_evidence}.
+    SemanticsChanged,
+}
+impl YearlyInvalidReason {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::DailyReplaced => "daily_replaced_since_derivation",
+            Self::SemanticsChanged => "value_semantics_changed",
+        }
+    }
 }
 
 /// Classify `series` (must be period=Year) against its daily counterpart.
@@ -697,11 +721,43 @@ pub(crate) fn yearly_state(c: &Connection, series: &SeriesRow) -> Result<YearlyS
         return Err(integrity("yearly lineage trails unrecorded daily state"));
     }
     if tail.iter().any(|e| e.kind == "replace") {
-        return Ok(YearlyState::Invalid);
+        return Ok(YearlyState::Invalid(YearlyInvalidReason::DailyReplaced));
+    }
+    if tail.iter().any(|e| e.semantics_changed != 0) {
+        return Ok(YearlyState::Invalid(YearlyInvalidReason::SemanticsChanged));
     }
     Ok(YearlyState::Behind {
         as_of_day: lineage.as_of_day,
     })
+}
+
+/// UPSERT the yearly derivation lineage (write path S3): the base digest
+/// and event seq move forward even on no_change commits so a yearly row
+/// stays `Fresh` instead of permanently `Behind`.
+pub(crate) fn put_lineage(
+    c: &Connection,
+    series_key: i64,
+    base_daily_digest: &Digest,
+    base_event_seq: i64,
+    algorithm_version: &str,
+    first_trade_day: i64,
+    last_trade_day: i64,
+    as_of_day: i64,
+) -> Result<(), Error> {
+    c.execute(
+        "INSERT OR REPLACE INTO yearly_series_lineage(series_key,base_daily_digest,base_event_seq,algorithm_version,first_trade_day,last_trade_day,as_of_day) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        params![
+            series_key,
+            base_daily_digest.as_slice(),
+            base_event_seq,
+            algorithm_version,
+            first_trade_day,
+            last_trade_day,
+            as_of_day,
+        ],
+    )
+    .map_err(storage)?;
+    Ok(())
 }
 
 fn digest_seen_for(
@@ -1152,6 +1208,52 @@ pub fn deep_check(c: &Connection) -> Result<Vec<String>, Error> {
             }
         }
     }
+    // Yearly reconciliation: lineage rows name the derived-from daily base;
+    // the first/last trade days must match the stored yearly bars, the
+    // lineage must classify (forged bases fail closed), and the daily
+    // counterpart must exist.
+    let yearly_rows = c
+        .prepare(
+            "SELECT l.series_key,l.first_trade_day,l.last_trade_day FROM yearly_series_lineage l",
+        )
+        .map_err(storage)?
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    for (key, first_trade, last_trade) in yearly_rows {
+        let label = format!("yearly lineage {key}");
+        let Some(series) = read_series_by_key(c, key)? else {
+            findings.push(format!("{label}: orphan lineage row"));
+            continue;
+        };
+        if series.period != Period::Year {
+            findings.push(format!("{label}: attached to non-yearly series"));
+        }
+        let bars = match all_bars(c, key) {
+            Ok(bars) => bars,
+            Err(e) => {
+                findings.push(format!("{label}: bar read failed: {e}"));
+                continue;
+            }
+        };
+        if bars.first().is_some_and(|b| b.trade_day != first_trade)
+            || bars.last().is_some_and(|b| b.trade_day != last_trade)
+        {
+            findings.push(format!(
+                "{label}: first/last_trade_day disagrees with stored bars"
+            ));
+        }
+        if let Err(e) = yearly_state(c, &series) {
+            findings.push(format!("{label}: {e}"));
+        }
+    }
     Ok(findings)
 }
 
@@ -1253,11 +1355,12 @@ pub(crate) struct NewEvent {
     pub result_id: String,
     pub result_digest: Digest,
     pub created_at: String,
+    pub semantics_changed: i64,
 }
 
 pub(crate) fn insert_event(c: &Connection, seq: i64, e: &NewEvent) -> Result<(), Error> {
     c.execute(
-        "INSERT INTO market_events(seq,entity,period,kind,outcome,metadata_changed,continuity_mode,prefix_bytes,old_content_digest,new_content_digest,range_start_day,range_end_day,window_digest,base_content_digest,algorithm_version,source_binding_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
+        "INSERT INTO market_events(seq,entity,period,kind,outcome,metadata_changed,continuity_mode,prefix_bytes,old_content_digest,new_content_digest,range_start_day,range_end_day,window_digest,base_content_digest,algorithm_version,source_binding_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at,semantics_changed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
         params![
             seq,
             e.entity,
@@ -1282,6 +1385,7 @@ pub(crate) fn insert_event(c: &Connection, seq: i64, e: &NewEvent) -> Result<(),
             e.result_id,
             e.result_digest.as_slice(),
             e.created_at,
+            e.semantics_changed,
         ],
     )
     .map_err(storage)?;

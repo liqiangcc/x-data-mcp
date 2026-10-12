@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -739,7 +739,7 @@ fn commit_plan(
     let v = record.version();
     let scope = Scope::of(v);
     if v.period == Period::Year {
-        return Err(invalid("yearly write path arrives with S3"));
+        return Err(invalid("yearly commits go through commit_yearly"));
     }
     // Replay first: the result-id anchor outranks every commit-time gate —
     // a repeated command must return the original receipt, not conflict on
@@ -1837,7 +1837,7 @@ fn collection_item_commit(c: &Connection, item: &CollectionCandidate) -> Result<
 }
 
 // ---------------------------------------------------------------------------
-// YearlyRepository — S3 stub (write path arrives with yearly rework)
+// YearlyRepository — schema-21 yearly commits (S3)
 // ---------------------------------------------------------------------------
 
 impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarket {
@@ -1854,9 +1854,92 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
     }
     fn commit_yearly(
         &self,
-        _plan: &crate::yearly_publication::results::YearlyResultPlan,
+        plan: &crate::yearly_publication::results::YearlyResultPlan,
     ) -> Result<Receipt, Error> {
-        Err(invalid("yearly write path arrives with S3"))
+        self.write(|c| {
+            let tx = c
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(storage)?;
+            let command = plan.command();
+            // Replay first — the result-id anchor outranks every gate; a
+            // repeated command returns its recorded receipt.
+            if let Some(receipt) = receipt_for(&tx, &command.publication_id)? {
+                tx.commit().map_err(storage)?;
+                return Ok(receipt);
+            }
+            let v = plan.record.version();
+            let scope = Scope {
+                symbol: v.symbol.clone(),
+                period: Period::Year,
+            };
+            let lineage = v
+                .yearly_derivation
+                .as_ref()
+                .ok_or_else(|| integrity("yearly candidate lacks derivation lineage"))?;
+            let bars: Vec<CompactBar> = v
+                .records
+                .iter()
+                .map(|r| CompactBar::from_bar(r, Period::Year))
+                .collect::<Result<_, _>>()
+                .map_err(integrity)?;
+            let daily_base = series_commit::hex_digest(&plan.base.version().version_id)?;
+            let version_evidence = evidence_store::put_evidence(
+                &tx,
+                EvidenceKind::Version,
+                &json!(crate::compact_market::VersionEvidence {
+                    source: v.source.clone(),
+                    coverage_reason: plan.record.batch.coverage.reason.clone(),
+                    unit_currency: plan.record.batch.unit_currency.clone(),
+                    adjustment_evidence: plan.record.batch.adjustment_evidence.clone(),
+                }),
+            )?;
+            let event_evidence = evidence_store::put_evidence(
+                &tx,
+                EvidenceKind::Yearly,
+                &json!({
+                    "base_daily_version_id": plan.base.version().version_id,
+                    "algorithm_version": lineage.algorithm_version,
+                    "years": v.records.iter().map(|r| r.date.year()).collect::<Vec<_>>(),
+                }),
+            )?;
+            let as_of = v
+                .published_at
+                .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                .date_naive();
+            let occupancy = scope.occupancy_key();
+            let w = series_commit::Commit {
+                result_id: &command.publication_id,
+                task_id: &command.task_id,
+                item_id: &command.item_id,
+                run_id: &command.run_id,
+                occupancy_key: &occupancy,
+                expected_task_revision: command.expected_revision,
+                entity: &v.symbol,
+                period: Period::Year,
+                base_version_id: plan.prior.as_ref().map(|p| p.version().version_id.as_str()),
+                change: series_commit::SeriesChange::Yearly {
+                    upserts: &bars,
+                    daily_base_digest: daily_base,
+                    algorithm_version: &lineage.algorithm_version,
+                    as_of_day: compact_market::epoch_day(as_of),
+                },
+                range_start_day: 0,
+                range_end_day: 0,
+                algorithm_version: &lineage.algorithm_version,
+                window_digest: None,
+                // Yearly rows inherit the daily head's source binding —
+                // the commit derives it from the daily series inside the tx.
+                source_binding_digest: None,
+                evidence_digest: Some(version_evidence),
+                coverage_status: Some(plan.record.batch.coverage.status),
+                metadata_changed: false,
+                event_evidence_digest: event_evidence,
+                published_at: Some(v.published_at),
+            };
+            let receipt = series_commit::commit_series_tx(&tx, &w)?;
+            tx.commit().map_err(storage)?;
+            Ok(receipt)
+        })
     }
     fn yearly_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
         self.read(|c| receipt_for(c, id))

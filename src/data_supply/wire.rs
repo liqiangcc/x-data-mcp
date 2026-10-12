@@ -136,6 +136,24 @@ pub struct ManifestEntry {
     pub version_ref: Option<VersionRef>,
     pub status: ManifestStatus,
     pub metadata: Option<Metadata>,
+    /// Set on present entries whose stored content trails the live source:
+    /// `"behind"` — the row serves data derived from an older daily base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<String>,
+    /// Companion to `stale`: the daily base day the row is correct as of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of_day: Option<NaiveDate>,
+    /// Set on absent entries rejected for a classified reason (yearly rows
+    /// whose daily base was superseded or whose value semantics moved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<AbsentReason>,
+}
+/// Fixed `reason` enum for absent manifest entries (SPEC/RULINGS A1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AbsentReason {
+    DailyReplacedSinceDerivation,
+    ValueSemanticsChanged,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

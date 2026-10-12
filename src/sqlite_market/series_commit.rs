@@ -4,7 +4,7 @@
 //! durable result record; `UNIQUE(task_id, item_id)` keeps one result per
 //! task item; `market_series.last_event_seq` is the CAS field compared on
 //! every state-mutating commit.
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use sha2::Digest as _;
@@ -57,6 +57,20 @@ pub(crate) enum SeriesChange<'a> {
     /// bookkeeping only; the state row's `last_event_seq` still advances
     /// so the event log stays closed (A2).
     NoChange,
+    /// Yearly derivation commit (S3): `upserts` carries the candidate's
+    /// affected-year bars; the merge/fold happens inside the commit.
+    /// `daily_base_digest` is the daily `content_digest` the derivation
+    /// was verified against — the commit re-checks it against the current
+    /// daily head inside the same transaction and fails `Stale`.
+    Yearly {
+        upserts: &'a [CompactBar],
+        daily_base_digest: Digest,
+        /// `local-natural-year-v1` provenance string stored on the lineage
+        /// row and the event.
+        algorithm_version: &'a str,
+        /// Derivation as-of day (+8 calendar day) for the lineage row.
+        as_of_day: i64,
+    },
 }
 
 /// One item commit on the latest-only store.
@@ -304,6 +318,32 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         (Some(_), Some(_)) => {}
     }
 
+    // Yearly commits own their kind/merge logic; the shared gates above
+    // (replay, item binding, owner/state, head CAS) still apply.
+    if matches!(w.change, SeriesChange::Yearly { .. }) && w.period != Period::Year {
+        return Err(integrity("SeriesChange::Yearly requires period=year"));
+    }
+    if let SeriesChange::Yearly {
+        upserts,
+        daily_base_digest,
+        algorithm_version,
+        as_of_day,
+    } = &w.change
+    {
+        return commit_yearly_inner(
+            c,
+            w,
+            head.as_ref(),
+            upserts,
+            daily_base_digest,
+            algorithm_version,
+            *as_of_day,
+        );
+    }
+    if w.period == Period::Year {
+        return Err(integrity("yearly series require SeriesChange::Yearly"));
+    }
+
     // Resolve the kind/effect and the new state fields.
     let (kind, outcome, continuity, prefix_bytes, old_digest, new_digest): (
         &'static str,
@@ -394,6 +434,27 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         return Err(integrity("metadata commit carries no metadata change"));
     }
 
+    // C3: a commit carrying new version evidence whose semantic fields
+    // ({source, unit_currency, adjustment_evidence}) differ from the
+    // head's is flagged on the event — yearly rows derived before it are
+    // classified Invalid rather than merely Behind.
+    let semantics_changed: i64 = if matches!(
+        w.change,
+        SeriesChange::Append { .. } | SeriesChange::Metadata | SeriesChange::Replace { .. }
+    ) && w.evidence_digest.is_some()
+        && head.is_some()
+        && w.evidence_digest != head.as_ref().map(|h| h.evidence_digest)
+    {
+        let same = same_version_semantics(
+            c,
+            &head.as_ref().unwrap().evidence_digest,
+            &w.evidence_digest.unwrap(),
+        )?;
+        (!same) as i64
+    } else {
+        0
+    };
+
     let new_version_id = series::version_id(&new_digest);
     let task_revision = w
         .expected_task_revision
@@ -466,6 +527,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
             result_id: w.result_id.into(),
             result_digest,
             created_at: now.clone(),
+            semantics_changed,
         },
     )?;
 
@@ -641,6 +703,250 @@ pub(crate) fn put_generation_binding(
 /// probe's proof verbatim; envelope commits carry the audit projection).
 pub(crate) fn put_continuity_evidence(c: &Connection, value: &Value) -> Result<Digest, Error> {
     evidence_store::put_evidence(c, EvidenceKind::Continuity, value)
+}
+
+/// C3 semantic comparison: the three fields yearly aggregation depends
+/// on. Both digests must name version evidence — anything else is a
+/// binding bug, not a semantic difference.
+fn same_version_semantics(c: &Connection, a: &Digest, b: &Digest) -> Result<bool, Error> {
+    let (kind_a, json_a) = evidence_store::read_evidence(c, a)?;
+    let (kind_b, json_b) = evidence_store::read_evidence(c, b)?;
+    if kind_a != EvidenceKind::Version || kind_b != EvidenceKind::Version {
+        return Err(integrity("semantics comparison requires version evidence"));
+    }
+    let va: Value = serde_json::from_str(&json_a).map_err(integrity)?;
+    let vb: Value = serde_json::from_str(&json_b).map_err(integrity)?;
+    Ok(va["source"] == vb["source"]
+        && va["unit_currency"] == vb["unit_currency"]
+        && va["adjustment_evidence"] == vb["adjustment_evidence"])
+}
+
+fn year_of_day(trade_day: i64) -> Result<i32, Error> {
+    Ok(compact_market::epoch_date(trade_day)
+        .map_err(integrity)?
+        .year())
+}
+
+/// The schema-21 yearly commit (S3 §5): runs inside `commit_series_tx`
+/// after the shared gates. Re-checks the derivation's daily base against
+/// the *current* daily head inside the transaction, merges the affected
+/// years into the stored yearly rows, logs the event, advances lineage —
+/// `no_change` still moves the lineage base so the row stays Fresh.
+fn commit_yearly_inner(
+    c: &Connection,
+    w: &Commit<'_>,
+    head: Option<&series::SeriesRow>,
+    upserts: &[CompactBar],
+    daily_base_digest: &Digest,
+    algorithm_version: &str,
+    as_of_day: i64,
+) -> Result<Receipt, Error> {
+    let daily = series::read_series(c, w.entity, Period::Day)?
+        .ok_or_else(|| integrity("yearly commit without daily series"))?;
+    if &daily.content_digest != daily_base_digest {
+        return Err(Error::Stale(format!(
+            "daily base changed since derivation: expected {}, found {}",
+            series::version_id(daily_base_digest),
+            daily.version_id
+        )));
+    }
+    if upserts.is_empty() {
+        return Err(integrity("yearly commit carries no bars"));
+    }
+    // Merge the candidate's affected-year bars over the stored rows.
+    let mut merged = match head {
+        Some(row) => series::all_bars(c, row.series_key)?,
+        None => Vec::new(),
+    };
+    let affected: std::collections::BTreeSet<i32> = upserts
+        .iter()
+        .map(|b| year_of_day(b.trade_day))
+        .collect::<Result<_, _>>()?;
+    merged.retain(|b| {
+        year_of_day(b.trade_day)
+            .map(|y| !affected.contains(&y))
+            .unwrap_or(false)
+    });
+    merged.extend_from_slice(upserts);
+    merged.sort_by_key(|b| b.trade_day);
+    check_bars(&merged)?;
+    let new_digest = series::fold_bars(w.entity, w.period, &merged)?;
+
+    let task_revision = w
+        .expected_task_revision
+        .checked_add(1)
+        .ok_or_else(|| integrity("task revision overflow"))?;
+    let task_revision_i64 =
+        i64::try_from(task_revision).map_err(|_| integrity("task revision out of range"))?;
+    let seq = series::next_event_seq(c)?;
+    let now = Utc::now().to_rfc3339();
+    let (kind, outcome, continuity) = match head {
+        None => ("first_publish", 2, None),
+        Some(row) if row.content_digest == new_digest => ("no_change", 1, Some(1)),
+        Some(_) => ("yearly_rederive", 2, Some(3)),
+    };
+    let new_version_id = series::version_id(&new_digest);
+    let result_digest = event_result_digest(
+        w.result_id,
+        w.task_id,
+        w.item_id,
+        kind,
+        w.entity,
+        w.period,
+        &new_version_id,
+        task_revision_i64,
+    )?;
+    let source_binding = daily.source_binding_digest;
+    let evidence_digest = w
+        .evidence_digest
+        .or(head.as_ref().map(|h| h.evidence_digest))
+        .ok_or_else(|| integrity("commit lacks version evidence"))?;
+    let coverage_status = w
+        .coverage_status
+        .or(head.as_ref().map(|h| h.coverage_status))
+        .unwrap_or(CoverageStatus::Unknown);
+    let (evidence_kind, _) = evidence_store::read_evidence(c, &w.event_evidence_digest)?;
+    if evidence_kind != EvidenceKind::Yearly {
+        return Err(integrity("yearly event evidence kind mismatch"));
+    }
+    series::insert_event(
+        c,
+        seq,
+        &series::NewEvent {
+            entity: w.entity.into(),
+            period: w.period,
+            kind,
+            outcome,
+            metadata_changed: false,
+            continuity_mode: continuity,
+            prefix_bytes: None,
+            old_content_digest: head.as_ref().map(|h| h.content_digest),
+            new_content_digest: new_digest,
+            range_start_day: Some(merged[0].trade_day),
+            range_end_day: Some(merged[merged.len() - 1].trade_day),
+            window_digest: None,
+            base_content_digest: Some(*daily_base_digest),
+            algorithm_version: Some(algorithm_version.into()),
+            source_binding_digest: Some(source_binding),
+            evidence_digest: w.event_evidence_digest,
+            task_id: w.task_id.into(),
+            item_id: w.item_id.into(),
+            task_revision: task_revision_i64,
+            result_id: w.result_id.into(),
+            result_digest,
+            created_at: now.clone(),
+            semantics_changed: 0,
+        },
+    )?;
+
+    // State-row mutation with the A2 CAS on last_event_seq.
+    let series_key = match head {
+        None => {
+            let created = w
+                .published_at
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_else(|| now.clone());
+            let key = series::insert_series(
+                c,
+                &series::NewSeries {
+                    entity: w.entity.into(),
+                    period: w.period,
+                    content_digest: new_digest,
+                    record_count: merged.len() as i64,
+                    first_day: merged[0].trade_day,
+                    last_day: merged[merged.len() - 1].trade_day,
+                    coverage_status,
+                    source_binding_digest: source_binding,
+                    evidence_digest,
+                    last_event_seq: seq,
+                    created_at: created.clone(),
+                    updated_at: created,
+                },
+            )?;
+            series::insert_bars(c, key, &merged)?;
+            key
+        }
+        Some(row) => {
+            let changed = if kind == "no_change" {
+                c.execute(
+                    "UPDATE market_series SET coverage_status=?1,source_binding_digest=?2,evidence_digest=?3,last_event_seq=?4 WHERE series_key=?5 AND last_event_seq=?6",
+                    params![
+                        coverage_code(coverage_status),
+                        source_binding.as_slice(),
+                        evidence_digest.as_slice(),
+                        seq,
+                        row.series_key,
+                        row.last_event_seq,
+                    ],
+                )
+                .map_err(storage)?
+            } else {
+                c.execute(
+                    "UPDATE market_series SET content_digest=?1,version_id=?2,record_count=?3,first_day=?4,last_day=?5,coverage_status=?6,source_binding_digest=?7,evidence_digest=?8,updated_at=?9,last_event_seq=?10 WHERE series_key=?11 AND last_event_seq=?12",
+                    params![
+                        new_digest.as_slice(),
+                        new_version_id,
+                        merged.len() as i64,
+                        merged[0].trade_day,
+                        merged[merged.len() - 1].trade_day,
+                        coverage_code(coverage_status),
+                        source_binding.as_slice(),
+                        evidence_digest.as_slice(),
+                        now,
+                        seq,
+                        row.series_key,
+                        row.last_event_seq,
+                    ],
+                )
+                .map_err(storage)?
+            };
+            if changed != 1 {
+                return Err(Error::Conflict("effective head changed".into()));
+            }
+            if kind == "yearly_rederive" {
+                // Affected years: drop that year's stored rows, insert the
+                // candidate's. Unaffected years are untouched (§8.1-8).
+                for year in &affected {
+                    let (first, last) = match (
+                        chrono::NaiveDate::from_ymd_opt(*year, 1, 1),
+                        chrono::NaiveDate::from_ymd_opt(*year, 12, 31),
+                    ) {
+                        (Some(first), Some(last)) => (
+                            compact_market::epoch_day(first),
+                            compact_market::epoch_day(last),
+                        ),
+                        _ => return Err(integrity("affected year out of range")),
+                    };
+                    c.execute(
+                        "DELETE FROM series_bars WHERE series_key=?1 AND trade_day>=?2 AND trade_day<=?3",
+                        params![row.series_key, first, last],
+                    )
+                    .map_err(storage)?;
+                }
+                series::insert_bars(c, row.series_key, upserts)?;
+            }
+            row.series_key
+        }
+    };
+    // Lineage always advances to the commit-time daily base — otherwise a
+    // no_change commit would leave the row permanently Behind.
+    series::put_lineage(
+        c,
+        series_key,
+        daily_base_digest,
+        daily.last_event_seq,
+        algorithm_version,
+        merged[0].trade_day,
+        merged[merged.len() - 1].trade_day,
+        as_of_day,
+    )?;
+    finish_item_and_task(c, w, task_revision_i64)?;
+    Ok(Receipt {
+        publication_id: w.result_id.into(),
+        version_id: new_version_id,
+        task_id: w.task_id.into(),
+        task_revision,
+    })
 }
 
 #[cfg(test)]
