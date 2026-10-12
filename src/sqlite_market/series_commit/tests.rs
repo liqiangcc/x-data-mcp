@@ -2422,7 +2422,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
     // Invalid(value_semantics_changed); a metadata-only event carrying the
     // SAME semantics leaves it Behind.
     let r = Repo::new();
-    let mut daily_task = r.task(3, "day", "req-d12");
+    let mut daily_task = r.task(4, "day", "req-d12");
     let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
     let daily = publish_bars(
         &r.repo,
@@ -2433,7 +2433,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
         vec![bar(0, 100), bar(1, 110)],
     );
     let base = daily_checked(&r);
-    let mut yearly_task = r.task(1, "year", "req-y12");
+    let mut yearly_task = r.task(2, "year", "req-y12");
     commit_yearly_plan(
         &r,
         &mut yearly_task,
