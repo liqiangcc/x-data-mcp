@@ -743,9 +743,14 @@ fn commit_plan(
     }
     // Replay first: the result-id anchor outranks every commit-time gate —
     // a repeated command must return the original receipt, not conflict on
-    // the already-advanced head.
-    if let Some(receipt) = receipt_for(c, &command.publication_id)? {
-        return Ok(receipt);
+    // the already-advanced head. A result id bound to a different
+    // task/item is an identity conflict, not a replay.
+    if let Some(event) = series::event_by_result(c, &command.publication_id)? {
+        if event.task_id != command.task_id || event.item_id != command.item_id {
+            return Err(Error::Conflict("result identity conflict".into()));
+        }
+        return Ok(receipt_for(c, &command.publication_id)?
+            .ok_or_else(|| integrity("receipt event lacks result payload"))?);
     }
     // The sealed plan's record must equal the staged candidate.
     let staged = read_staged(c, &command.version_id)?;
@@ -1865,10 +1870,16 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 .map_err(storage)?;
             let command = plan.command();
             // Replay first — the result-id anchor outranks every gate; a
-            // repeated command returns its recorded receipt.
-            if let Some(receipt) = receipt_for(&tx, &command.publication_id)? {
+            // repeated command returns its recorded receipt. A result id
+            // bound to a different task/item is an identity conflict, not a
+            // replay.
+            if let Some(event) = series::event_by_result(&tx, &command.publication_id)? {
+                if event.task_id != command.task_id || event.item_id != command.item_id {
+                    return Err(Error::Conflict("result identity conflict".into()));
+                }
                 tx.commit().map_err(storage)?;
-                return Ok(receipt);
+                return Ok(receipt_for(&tx, &command.publication_id)?
+                    .ok_or_else(|| integrity("receipt event lacks result payload"))?);
             }
             let v = plan.publication.record.version();
             let scope = Scope {

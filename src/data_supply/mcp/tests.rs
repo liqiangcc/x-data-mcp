@@ -343,7 +343,7 @@ fn publish_daily(
     fixture.backend.stage(&raw).unwrap();
     let candidate = fixture.backend.candidate(&version_label).unwrap();
     fixture.backend.mark_validated(&candidate).unwrap();
-    let mut cmd = command(task_id, &format!("pub-{item}"), rev, item);
+    let mut cmd = command(task_id, &format!("pub-{task_id}-{item}"), rev, item);
     cmd.version_id = version_label;
     let scope = Scope {
         symbol: symbol.into(),
@@ -399,7 +399,7 @@ fn commit_yearly_plan(
     let base = base_checked(fixture, symbol);
     let plan = YearlyResultPlan {
         publication: PublishPlan {
-            command: command(task_id, &format!("pub-{item}"), rev, item),
+            command: command(task_id, &format!("pub-{task_id}-{item}"), rev, item),
             record: checked_of(&version),
             required_heads: vec![],
             promote: None,
@@ -513,8 +513,8 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
             query_yearly(json!({"kind": "latest_per_entity"})),
         )
         .unwrap();
-    assert_eq!(page["manifest"][0]["status"], "present");
-    assert!(page["manifest"][0]["stale"].is_null());
+    assert_eq!(page["version_manifest"][0]["status"], "present");
+    assert!(page["version_manifest"][0]["stale"].is_null());
 
     // Daily append -> the yearly row trails the live base (behind mark).
     let appended = publish_daily(
@@ -533,9 +533,9 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
             query_yearly(json!({"kind": "latest_per_entity"})),
         )
         .unwrap();
-    assert_eq!(page["manifest"][0]["status"], "present");
-    assert_eq!(page["manifest"][0]["stale"], "behind");
-    assert!(page["manifest"][0]["as_of_day"].is_string());
+    assert_eq!(page["version_manifest"][0]["status"], "present");
+    assert_eq!(page["version_manifest"][0]["stale"], "behind");
+    assert!(page["version_manifest"][0]["as_of_day"].is_string());
     let availability = f
         .api
         .call(
@@ -630,7 +630,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
             }),
         )
         .unwrap();
-    let invalid = batch["manifest"]
+    let invalid = batch["version_manifest"]
         .as_array()
         .unwrap()
         .iter()
@@ -639,7 +639,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
     assert_eq!(invalid["status"], "absent");
     assert_eq!(invalid["reason"], "daily_replaced_since_derivation");
     // The second entity never existed -> plain absent.
-    let other = batch["manifest"]
+    let other = batch["version_manifest"]
         .as_array()
         .unwrap()
         .iter()
@@ -686,8 +686,8 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
             query_yearly(json!({"kind": "latest_per_entity"})),
         )
         .unwrap();
-    assert_eq!(page["manifest"][0]["status"], "present");
-    assert!(page["manifest"][0]["stale"].is_null());
+    assert_eq!(page["version_manifest"][0]["status"], "present");
+    assert!(page["version_manifest"][0]["stale"].is_null());
 }
 
 #[test]
