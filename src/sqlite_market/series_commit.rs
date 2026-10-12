@@ -440,21 +440,18 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
     // ({source, unit_currency, adjustment_evidence}) differ from the
     // head's is flagged on the event — yearly rows derived before it are
     // classified Invalid rather than merely Behind.
-    let semantics_changed: i64 = if matches!(
+    let semantics_changed: i64 = if !matches!(
         w.change,
         SeriesChange::Append { .. } | SeriesChange::Metadata | SeriesChange::Replace { .. }
-    ) && w.evidence_digest.is_some()
-        && head.is_some()
-        && w.evidence_digest != head.as_ref().map(|h| h.evidence_digest)
-    {
-        let same = same_version_semantics(
-            c,
-            &head.as_ref().unwrap().evidence_digest,
-            &w.evidence_digest.unwrap(),
-        )?;
-        (!same) as i64
-    } else {
+    ) {
         0
+    } else {
+        match (head.as_ref(), w.evidence_digest) {
+            (Some(row), Some(digest)) if digest != row.evidence_digest => {
+                (!same_version_semantics(c, &row.evidence_digest, &digest)?) as i64
+            }
+            _ => 0,
+        }
     };
 
     let new_version_id = series::version_id(&new_digest);
@@ -937,12 +934,14 @@ fn commit_yearly_inner(
     series::put_lineage(
         c,
         series_key,
-        daily_base_digest,
-        daily.last_event_seq,
-        algorithm_version,
-        merged[0].trade_day,
-        merged[merged.len() - 1].trade_day,
-        as_of_day,
+        &series::LineageWrite {
+            base_daily_digest: *daily_base_digest,
+            base_event_seq: daily.last_event_seq,
+            algorithm_version,
+            first_trade_day: merged[0].trade_day,
+            last_trade_day: merged[merged.len() - 1].trade_day,
+            as_of_day,
+        },
     )?;
     finish_item_and_task(c, w, task_revision_i64)?;
     Ok(Receipt {

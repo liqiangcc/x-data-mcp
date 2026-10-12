@@ -731,29 +731,34 @@ pub(crate) fn yearly_state(c: &Connection, series: &SeriesRow) -> Result<YearlyS
     })
 }
 
+/// Lineage fields written by the yearly commit (kept to clippy's arg cap).
+pub(crate) struct LineageWrite<'a> {
+    pub base_daily_digest: Digest,
+    pub base_event_seq: i64,
+    pub algorithm_version: &'a str,
+    pub first_trade_day: i64,
+    pub last_trade_day: i64,
+    pub as_of_day: i64,
+}
+
 /// UPSERT the yearly derivation lineage (write path S3): the base digest
 /// and event seq move forward even on no_change commits so a yearly row
 /// stays `Fresh` instead of permanently `Behind`.
 pub(crate) fn put_lineage(
     c: &Connection,
     series_key: i64,
-    base_daily_digest: &Digest,
-    base_event_seq: i64,
-    algorithm_version: &str,
-    first_trade_day: i64,
-    last_trade_day: i64,
-    as_of_day: i64,
+    w: &LineageWrite<'_>,
 ) -> Result<(), Error> {
     c.execute(
         "INSERT OR REPLACE INTO yearly_series_lineage(series_key,base_daily_digest,base_event_seq,algorithm_version,first_trade_day,last_trade_day,as_of_day) VALUES(?1,?2,?3,?4,?5,?6,?7)",
         params![
             series_key,
-            base_daily_digest.as_slice(),
-            base_event_seq,
-            algorithm_version,
-            first_trade_day,
-            last_trade_day,
-            as_of_day,
+            w.base_daily_digest.as_slice(),
+            w.base_event_seq,
+            w.algorithm_version,
+            w.first_trade_day,
+            w.last_trade_day,
+            w.as_of_day,
         ],
     )
     .map_err(storage)?;

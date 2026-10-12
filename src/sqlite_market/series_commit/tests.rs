@@ -1728,3 +1728,217 @@ fn hex_digest_rejects_malformed_input() {
     assert!(hex_digest(&"0".repeat(64)).is_ok());
     assert!(hex_digest(&"Ab".repeat(32)).is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// S3 harness + yearly tests. `TaskHandle::item()` enforces the
+// one-running-item rule: it finishes a still-running previous item before
+// starting the next.
+// ---------------------------------------------------------------------------
+
+struct Repo {
+    path: std::path::PathBuf,
+    repo: super::super::compact_repo::SqliteCompactMarket,
+    _dir: tempfile::TempDir,
+}
+
+impl Repo {
+    fn new() -> Self {
+        let dir = tempdir();
+        let (path, repo) = repo(&dir);
+        Repo {
+            path,
+            repo,
+            _dir: dir,
+        }
+    }
+
+    /// `count` pending items on the given scope/period; the task is claimed
+    /// but no item is started — `item()` owns the StartItem lifecycle.
+    fn task(&self, count: usize, period: &str, req: &str) -> TaskHandle {
+        let scope = task_control::legacy::scope_id(SYMBOL, period);
+        let items: Vec<ItemSpec> = (1..=count)
+            .map(|index| ItemSpec {
+                item_id: format!("item-{index}"),
+                target: json!({"symbol": SYMBOL, "period": period}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: std::collections::BTreeSet::from([scope.clone()]),
+            })
+            .collect();
+        let command = task_control::Command {
+            key: CommandKey {
+                operation: "update_data".into(),
+                dataset: if period == "year" {
+                    "market.yearly".into()
+                } else {
+                    "market.daily".into()
+                },
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        let work = task_control::FrozenWork {
+            items,
+            scopes: std::collections::BTreeSet::from([scope]),
+            shared_evidence: None,
+        };
+        let acceptance = self.repo.accept(req, &command, &work, RUN, None).unwrap();
+        let task_id = match acceptance.record.outcome {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        };
+        let revision = self.repo.task(&task_id).unwrap().task.state_revision;
+        self.repo
+            .transition(&task_id, revision, RUN, task_control::Change::Claim)
+            .unwrap();
+        TaskHandle {
+            task_id,
+            next_item: 0,
+            running: None,
+        }
+    }
+}
+
+struct TaskHandle {
+    task_id: String,
+    next_item: usize,
+    running: Option<String>,
+}
+
+impl TaskHandle {
+    /// Start the next item, finishing the previous one if a rejected commit
+    /// left it running. Returns (item_id, publication_id, revision).
+    fn item(
+        &mut self,
+        repo: &super::super::compact_repo::SqliteCompactMarket,
+    ) -> (String, String, u64) {
+        if let Some(prev) = self.running.take() {
+            let still_running = repo
+                .task(&self.task_id)
+                .unwrap()
+                .items
+                .iter()
+                .any(|i| i.spec.item_id == prev && i.stage == task_control::Stage::Running);
+            if still_running {
+                fail_item(repo, &self.task_id, &prev);
+            }
+        }
+        self.next_item += 1;
+        let item = format!("item-{}", self.next_item);
+        let pub_id = format!("pub-{}", self.next_item);
+        let rev = start_item_id(repo, &self.task_id, &item);
+        self.running = Some(item.clone());
+        (item, pub_id, rev)
+    }
+}
+
+/// Epoch day for a calendar date — yearly bar `trade_day` is the last
+/// trading day of its year.
+fn day(y: i32, m: u32, d: u32) -> i64 {
+    compact_market::epoch_day(NaiveDate::from_ymd_opt(y, m, d).unwrap())
+}
+
+fn ybar(y: i32, close: i64) -> CompactBar {
+    CompactBar {
+        trade_day: day(y, 12, 31),
+        open_cents: close,
+        high_cents: close + 10,
+        low_cents: close - 10,
+        close_cents: close,
+        volume: 1,
+        amount_cents: None,
+        r7_raw: None,
+    }
+}
+
+#[test]
+fn yearly_first_publish_creates_series_lineage_and_event() {
+    // Tracer bullet (S3): the real commit gate writes the yearly series,
+    // affected bars, lineage and the first_publish event in one tx.
+    let r = Repo::new();
+    let mut daily_task = r.task(1, "day", "req-d");
+    let (_i1, pub1, rev1) = daily_task.item(&r.repo);
+    let first = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev1,
+        &pub1,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+
+    let mut yearly_task = r.task(1, "year", "req-y");
+    let (y_item, y_pub, y_rev) = yearly_task.item(&r.repo);
+    let occupancy = task_control::legacy::scope_id(SYMBOL, "year");
+    let as_of = day(2026, 10, 12);
+    let c0 = Connection::open(&r.path).unwrap();
+    let daily = series::read_series(&c0, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    r.repo
+        .write(|c| {
+            let evidence =
+                evidence_store::put_evidence(c, EvidenceKind::Version, &version_evidence())?;
+            let y_evidence = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Yearly,
+                &json!({"base_daily_version_id": daily.version_id}),
+            )?;
+            commit_series_tx(
+                c,
+                &Commit {
+                    result_id: &y_pub,
+                    task_id: &yearly_task.task_id,
+                    item_id: &y_item,
+                    run_id: RUN,
+                    occupancy_key: &occupancy,
+                    expected_task_revision: y_rev,
+                    entity: SYMBOL,
+                    period: Period::Year,
+                    base_version_id: None,
+                    change: SeriesChange::Yearly {
+                        upserts: &[ybar(2020, 100)],
+                        daily_base_digest: daily.content_digest,
+                        algorithm_version: "local-natural-year-v1",
+                        as_of_day: as_of,
+                    },
+                    range_start_day: 0,
+                    range_end_day: 0,
+                    algorithm_version: "local-natural-year-v1",
+                    window_digest: None,
+                    source_binding_digest: None,
+                    evidence_digest: Some(evidence),
+                    coverage_status: Some(crate::market_data::CoverageStatus::Complete),
+                    metadata_changed: false,
+                    event_evidence_digest: y_evidence,
+                    published_at: None,
+                },
+            )
+        })
+        .unwrap();
+
+    let c = Connection::open(&r.path).unwrap();
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .expect("yearly series must exist");
+    let bars = series::all_bars(&c, yearly.series_key).unwrap();
+    assert_eq!(bars.len(), 1);
+    assert_eq!(bars[0].trade_day, day(2020, 12, 31));
+    // first_publish event on the yearly series.
+    let kind: String = c
+        .query_row(
+            "SELECT kind FROM market_events WHERE entity=?1 AND period=2 ORDER BY seq DESC LIMIT 1",
+            [SYMBOL],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "first_publish");
+    // lineage names the daily base the derivation read.
+    let lineage = series::yearly_lineage(&c, yearly.series_key)
+        .unwrap()
+        .expect("lineage must exist");
+    assert_eq!(lineage.base_daily_digest, daily.content_digest);
+    assert_eq!(lineage.base_event_seq, daily.last_event_seq);
+    assert_eq!(lineage.as_of_day, as_of);
+    assert_eq!(first.version_id, daily.version_id);
+}
