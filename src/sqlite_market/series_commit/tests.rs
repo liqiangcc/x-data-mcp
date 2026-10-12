@@ -1794,6 +1794,7 @@ impl Repo {
             .unwrap();
         TaskHandle {
             task_id,
+            prefix: format!("{period}-{req}"),
             next_item: 0,
             running: None,
         }
@@ -1802,6 +1803,7 @@ impl Repo {
 
 struct TaskHandle {
     task_id: String,
+    prefix: String,
     next_item: usize,
     running: Option<String>,
 }
@@ -1809,6 +1811,8 @@ struct TaskHandle {
 impl TaskHandle {
     /// Start the next item, finishing the previous one if a rejected commit
     /// left it running. Returns (item_id, publication_id, revision).
+    /// Publication ids carry the task's req prefix — `result_id` is
+    /// globally unique.
     fn item(
         &mut self,
         repo: &super::super::compact_repo::SqliteCompactMarket,
@@ -1826,7 +1830,7 @@ impl TaskHandle {
         }
         self.next_item += 1;
         let item = format!("item-{}", self.next_item);
-        let pub_id = format!("pub-{}", self.next_item);
+        let pub_id = format!("{}-pub-{}", self.prefix, self.next_item);
         let rev = start_item_id(repo, &self.task_id, &item);
         self.running = Some(item.clone());
         (item, pub_id, rev)
@@ -1989,7 +1993,7 @@ fn mk_batch(version: &EffectiveVersion) -> MarketDataBatch {
         bars: version.records.clone(),
         provenance: Provenance {
             source: version.source.clone(),
-            source_period: "year".into(),
+            source_period: "day".into(),
             source_adjustment: "qfq".into(),
             symbol: version.symbol.clone(),
             acquired_at: version.published_at,
@@ -2647,8 +2651,42 @@ fn rejected_item_leaves_head_and_task_state_untouched() {
     );
 
     // Foreign item rejected by the binding gate.
-    let (other_task, _o) = running_task_multi_req(&repo, 1, "req-other");
+    let mut other_task_items: Vec<ItemSpec> = Vec::new();
+    let other_scope = task_control::legacy::scope_id(SYMBOL, "year");
+    other_task_items.push(ItemSpec {
+        item_id: "item-1".into(),
+        target: json!({"symbol": SYMBOL, "period": "year"}),
+        progress_unit: "bars".into(),
+        frozen_inputs: json!({}),
+        scope_keys: std::collections::BTreeSet::from([other_scope.clone()]),
+    });
+    let other_command = task_control::Command {
+        key: CommandKey {
+            operation: "update_data".into(),
+            dataset: "market.yearly".into(),
+            contract_version: "v1".into(),
+        },
+        intent: json!({}),
+    };
+    let other_work = task_control::FrozenWork {
+        items: other_task_items,
+        scopes: std::collections::BTreeSet::from([other_scope]),
+        shared_evidence: None,
+    };
+    let other_task = match repo
+        .accept("req-other", &other_command, &other_work, RUN, None)
+        .unwrap()
+        .record
+        .outcome
+    {
+        task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+        _ => panic!("expected task outcome"),
+    };
+    let other_rev = repo.task(&other_task).unwrap().task.state_revision;
+    repo.transition(&other_task, other_rev, RUN, task_control::Change::Claim)
+        .unwrap();
     let rev_other = start_item_id(&repo, &other_task, "item-1");
+    let _ = rev_other;
     let c = Connection::open(dir.path().join("market.db")).unwrap();
     let head_before = series::read_series(&c, SYMBOL, Period::Day)
         .unwrap()
