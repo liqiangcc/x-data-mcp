@@ -760,6 +760,7 @@ pub(crate) fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSna
 /// summary-surface equivalence; production reads use `read_bound_task`
 /// because skipping item/occupancy checks weakened corruption detection.
 #[cfg(test)]
+#[allow(dead_code)] // light binding read; kept for task-side call sites
 pub(crate) fn read_bound_task_light(
     c: &Connection,
     id: &str,
