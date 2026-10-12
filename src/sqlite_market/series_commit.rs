@@ -781,10 +781,12 @@ fn commit_yearly_inner(
         i64::try_from(task_revision).map_err(|_| integrity("task revision out of range"))?;
     let seq = series::next_event_seq(c)?;
     let now = Utc::now().to_rfc3339();
-    let (kind, outcome, continuity) = match head {
-        None => ("first_publish", 2, None),
-        Some(row) if row.content_digest == new_digest => ("no_change", 1, Some(1)),
-        Some(_) => ("yearly_rederive", 2, Some(3)),
+    let (kind, outcome, continuity, prefix_bytes) = match head {
+        None => ("first_publish", 2, None, None),
+        Some(row) if row.content_digest == new_digest => {
+            ("no_change", 1, Some(1), Some(merged.len() as u64 * 32))
+        }
+        Some(_) => ("yearly_rederive", 2, Some(3), None),
     };
     let new_version_id = series::version_id(&new_digest);
     let result_digest = event_result_digest(
@@ -820,7 +822,7 @@ fn commit_yearly_inner(
             outcome,
             metadata_changed: false,
             continuity_mode: continuity,
-            prefix_bytes: None,
+            prefix_bytes,
             old_content_digest: head.as_ref().map(|h| h.content_digest),
             new_content_digest: new_digest,
             range_start_day: Some(merged[0].trade_day),

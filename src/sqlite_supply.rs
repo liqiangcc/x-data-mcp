@@ -840,7 +840,11 @@ fn task_facts(
         publications.push(market_ref(dataset, &e, &r));
     }
     let mut q = c
-        .prepare("SELECT result_id FROM market_update_results WHERE task_id=?1 ORDER BY result_id")
+        .prepare(if crate::sqlite_market::is_latest_only_schema(c)? {
+            "SELECT result_id FROM market_events WHERE task_id=?1 AND period=1 ORDER BY result_id"
+        } else {
+            "SELECT result_id FROM market_update_results WHERE task_id=?1 ORDER BY result_id"
+        })
         .map_err(storage)?;
     let result_ids = q
         .query_map([id], |r| r.get::<_, String>(0))
@@ -852,9 +856,11 @@ fn task_facts(
         .map(|id| range_result(c, ctx, id))
         .collect::<Result<Vec<_>, _>>()?;
     let mut q = c
-        .prepare(
-            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id",
-        )
+        .prepare(if crate::sqlite_market::is_latest_only_schema(c)? {
+            "SELECT result_id FROM market_events WHERE task_id=?1 AND period=2 ORDER BY result_id"
+        } else {
+            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id"
+        })
         .map_err(storage)?;
     let yearly_ids = q
         .query_map([id], |r| r.get::<_, String>(0))
