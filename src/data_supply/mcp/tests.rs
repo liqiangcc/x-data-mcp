@@ -95,21 +95,6 @@ fn bar(day: i64, cents: i64) -> Bar {
     .unwrap()
 }
 
-fn year_bar(trade_day: i64, close: i64) -> Bar {
-    crate::compact_market::CompactBar {
-        trade_day,
-        open_cents: close,
-        high_cents: close + 10,
-        low_cents: close - 10,
-        close_cents: close,
-        volume: Some(100),
-        amount: Some("1000".into()),
-        r7_raw: None,
-    }
-    .to_bar(Period::Year)
-    .unwrap()
-}
-
 fn day_epoch(y: i32, m: u32, d: u32) -> i64 {
     crate::compact_market::epoch_day(NaiveDate::from_ymd_opt(y, m, d).unwrap())
 }
@@ -388,22 +373,82 @@ fn publish_daily(
 }
 
 /// Commit the yearly candidate through the real `commit_yearly` plan path.
+/// The candidate is DERIVED from the current daily head via
+/// `crate::yearly::aggregate` — yearly bar dates are the base's per-year
+/// last trading days, never hand-written.
 fn commit_yearly_plan(
     fixture: &Fixture,
     task_id: &str,
     item: &str,
     symbol: &str,
-    years: &[(i64, i64)],
+    years: Option<&std::collections::BTreeSet<i32>>,
     base_id: &str,
     prior: Option<String>,
 ) -> Receipt {
     let rev = start_item(fixture, task_id, item);
     let base = base_checked(fixture, symbol);
-    let base_bars = &base.version().records;
-    let (first, last) = (base_bars[0].date, base_bars[base_bars.len() - 1].date);
-    let bars: Vec<Bar> = years.iter().map(|(d, c)| year_bar(*d, *c)).collect();
+    let daily = base.version().clone();
+    let as_of = daily.records[daily.records.len() - 1].date;
+    let first = daily.records[0].date;
+    let annual = crate::yearly::aggregate(&daily, years, as_of).unwrap();
     let version = EffectiveVersion {
         version_id: format!("y-{item}"),
+        symbol: symbol.into(),
+        period: Period::Year,
+        adjustment: Adjustment::Forward,
+        source: "official".into(),
+        records: annual.records.into_iter().map(|r| r.bar).collect(),
+        published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
+        validation: ValidationSummary {
+            record_count: 0,
+            unique_record_count: 0,
+            duplicate_count: 0,
+        },
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        yearly_derivation: Some(crate::market_data::YearlyDerivation {
+            base_daily_version_id: base_id.into(),
+            algorithm_version: "local-natural-year-v1".into(),
+            first_trading_date: first,
+            last_trading_date: as_of,
+        }),
+    };
+    let plan = YearlyResultPlan {
+        publication: PublishPlan {
+            command: command(task_id, &format!("pub-{task_id}-{item}"), rev, item),
+            record: checked_of(&version),
+            required_heads: vec![],
+            promote: None,
+            base_digest: None,
+        },
+        base,
+        prior: prior.map(|id| checked_of(&stored_year_version(fixture, symbol, &id))),
+        no_change: false,
+        audit: json!({}),
+        audit_payloads: vec![],
+    };
+    fixture.backend.commit_yearly(&plan).unwrap()
+}
+
+/// Rebuild the stored yearly head (bars + lineage) as a candidate-shaped
+/// record — the CAS prior must reflect storage, not a hand-written bar.
+fn stored_year_version(fixture: &Fixture, symbol: &str, id: &str) -> EffectiveVersion {
+    let c = Connection::open(fixture.tasks.path()).unwrap();
+    let row = series::read_series(&c, symbol, Period::Year)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.version_id, id,
+        "stored yearly head must match the prior id"
+    );
+    let lineage = series::yearly_lineage(&c, row.series_key).unwrap().unwrap();
+    let bars = series::all_bars(&c, row.series_key)
+        .unwrap()
+        .into_iter()
+        .map(|b| b.to_bar(Period::Year).unwrap())
+        .collect();
+    EffectiveVersion {
+        version_id: id.into(),
         symbol: symbol.into(),
         period: Period::Year,
         adjustment: Adjustment::Forward,
@@ -418,50 +463,12 @@ fn commit_yearly_plan(
         unit_currency: units(),
         adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
         yearly_derivation: Some(crate::market_data::YearlyDerivation {
-            base_daily_version_id: base_id.into(),
-            algorithm_version: "local-natural-year-v1".into(),
-            first_trading_date: first,
-            last_trading_date: last,
-        }),
-    };
-    let plan = YearlyResultPlan {
-        publication: PublishPlan {
-            command: command(task_id, &format!("pub-{task_id}-{item}"), rev, item),
-            record: checked_of(&version),
-            required_heads: vec![],
-            promote: None,
-            base_digest: None,
-        },
-        base,
-        prior: prior.map(|id| checked_of(&year_version(&id, base_id))),
-        no_change: false,
-        audit: json!({}),
-        audit_payloads: vec![],
-    };
-    fixture.backend.commit_yearly(&plan).unwrap()
-}
-
-fn year_version(id: &str, base_id: &str) -> EffectiveVersion {
-    EffectiveVersion {
-        version_id: id.into(),
-        symbol: SYMBOL.into(),
-        period: Period::Year,
-        adjustment: Adjustment::Forward,
-        source: "official".into(),
-        records: vec![year_bar(day_epoch(2020, 2, 4), 100)],
-        published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
-        validation: ValidationSummary {
-            record_count: 0,
-            unique_record_count: 0,
-            duplicate_count: 0,
-        },
-        unit_currency: units(),
-        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
-        yearly_derivation: Some(crate::market_data::YearlyDerivation {
-            base_daily_version_id: base_id.into(),
-            algorithm_version: "local-natural-year-v1".into(),
-            first_trading_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
-            last_trading_date: NaiveDate::from_ymd_opt(2020, 12, 31).unwrap(),
+            base_daily_version_id: crate::sqlite_market::compact_repo::hex_bytes(
+                &lineage.base_daily_digest,
+            ),
+            algorithm_version: lineage.algorithm_version,
+            first_trading_date: crate::compact_market::epoch_date(lineage.first_trade_day),
+            last_trading_date: crate::compact_market::epoch_date(lineage.last_trade_day),
         }),
     }
 }
@@ -530,7 +537,7 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
         &yearly_task,
         "item-1",
         SYMBOL,
-        &[(day_epoch(2020, 2, 4), 100)],
+        Some(&std::collections::BTreeSet::from([2020])),
         &daily.version_id,
         None,
     );
@@ -624,7 +631,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &yearly_task,
         "item-1",
         SYMBOL,
-        &[(day_epoch(2020, 2, 4), 100)],
+        Some(&std::collections::BTreeSet::from([2020])),
         &daily.version_id,
         None,
     );
@@ -715,7 +722,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &yearly_task,
         "item-2",
         SYMBOL,
-        &[(day_epoch(2020, 6, 8), 100)],
+        Some(&std::collections::BTreeSet::from([2020])),
         &base.version().version_id,
         Some(head.version_id),
     );
@@ -758,7 +765,7 @@ fn yearly_batch_availability_reports_one_invalid_row_among_fresh() {
             &yearly_task,
             &format!("item-{}", i + 1),
             s,
-            &[(day_epoch(2020, 2, 4), 100)],
+            Some(&std::collections::BTreeSet::from([2020])),
             &base.version().version_id,
             None,
         );
