@@ -908,7 +908,7 @@ pub(crate) fn yearly_row_meta(
     c: &Connection,
     r: &CheckedRecord,
     date: NaiveDate,
-) -> Result<(Option<NaiveDate>, Option<NaiveDate>, Option<bool>), Error> {
+) -> Result<crate::sqlite_supply::YearlyRowMeta, Error> {
     if r.version().yearly_derivation.is_none() {
         return Err(integrity("yearly record lacks derivation"));
     }

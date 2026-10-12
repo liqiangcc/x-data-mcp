@@ -641,7 +641,7 @@ fn supply_reads_on_schema21() {
     seed_yearly(
         &c,
         ENTITY,
-        &[yearly_bar.clone()],
+        std::slice::from_ref(&yearly_bar),
         ev,
         binding,
         &v1,
