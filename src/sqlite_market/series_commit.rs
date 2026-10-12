@@ -113,7 +113,7 @@ pub(crate) struct Commit<'a> {
 /// Canonical result identity digest stored on the event row — replay and
 /// audit compare this, never the caller's declared candidate label.
 #[allow(clippy::too_many_arguments)]
-fn event_result_digest(
+pub(crate) fn event_result_digest(
     result_id: &str,
     task_id: &str,
     item_id: &str,

@@ -840,3 +840,412 @@ fn progress_through_handler_on_compact_schema() {
     assert_eq!(progress["total"], 1);
     assert_eq!(progress["finished"], 1);
 }
+
+// ---------------------------------------------------------------------------
+// S4a (TASK-LATEST-ONLY-S4.md): `verify_publication_result` per SPEC §6.6 —
+// committed-fact semantics through the real admission + runner path on the
+// compact schema, plus handler-level success/failure coverage for the other
+// verification/read handlers.
+// ---------------------------------------------------------------------------
+
+/// One update task whose last item stays Running and marked
+/// NeedsVerification — the shape `verify_publication_result` admits.
+fn unverified_target(fixture: &Fixture, items: usize, req: &str) -> String {
+    let task_id = task(fixture, SYMBOL, items, "day", req);
+    publish_daily(
+        fixture,
+        &task_id,
+        "item-1",
+        SYMBOL,
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+        ],
+        None,
+    );
+    let last = format!("item-{items}");
+    let rev = start_item(fixture, &task_id, &last);
+    fixture
+        .tasks
+        .transition(
+            &task_id,
+            rev,
+            RUN,
+            task_control::Change::RequireVerification {
+                item_id: last,
+                reason: "owner suspected a crashed write".into(),
+            },
+        )
+        .unwrap();
+    task_id
+}
+
+fn run_publication_check(
+    fixture: &Fixture,
+    verify_id: &str,
+) -> Result<crate::publication_verification::runner::Outcome, crate::market_storage::Error> {
+    crate::publication_verification::runner::Runner {
+        tasks: fixture.tasks.clone(),
+        evidence: fixture.backend.clone(),
+        run_id: RUN.into(),
+        actor: "local-owner".into(),
+    }
+    .run(verify_id)
+}
+
+fn accept_publication_check(fixture: &Fixture, req: &str, target: &str) -> String {
+    let reply = fixture
+        .api
+        .call(
+            "verify_publication_result",
+            json!({
+                "contract_version": "v1",
+                "request_id": req,
+                "target_task_id": target,
+            }),
+        )
+        .unwrap();
+    reply["task_id"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn verify_publication_result_inspects_committed_and_missing_items() {
+    // §6.6 ①: item-1's event is the current tip — `new_content_digest ==
+    // series.content_digest` and its evidence bundle replays — while the
+    // running item has no receipt → InsufficientEvidence, protection kept.
+    let f = fixture();
+    let target = unverified_target(&f, 2, "req-tv1");
+    let verify_id = accept_publication_check(&f, "req-vp1", &target);
+    let crate::publication_verification::runner::Outcome::Completed(receipt) =
+        run_publication_check(&f, &verify_id).unwrap()
+    else {
+        panic!("inspection must complete");
+    };
+    assert_eq!(
+        receipt.conclusion,
+        crate::publication_verification::decision::Conclusion::InsufficientEvidence
+    );
+    assert_eq!(receipt.missing_receipt_item_ids, vec!["item-2".to_string()]);
+}
+
+#[test]
+fn verify_publication_result_overwritten_event_still_binds_by_chain_closure() {
+    // §6.6: item-1's event was overwritten by item-2's commit — its digest is
+    // no longer the head, so the check verifies the event chain closes to the
+    // current series digest instead of declaring the evidence missing.
+    let f = fixture();
+    let task_id = task(&f, SYMBOL, 3, "day", "req-tv2");
+    let head = publish_daily(
+        &f,
+        &task_id,
+        "item-1",
+        SYMBOL,
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+        ],
+        None,
+    );
+    publish_daily(
+        &f,
+        &task_id,
+        "item-2",
+        SYMBOL,
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+            bar(day_epoch(2020, 3, 5), 115),
+        ],
+        Some(&head.version_id),
+    );
+    let rev = start_item(&f, &task_id, "item-3");
+    f.tasks
+        .transition(
+            &task_id,
+            rev,
+            RUN,
+            task_control::Change::RequireVerification {
+                item_id: "item-3".into(),
+                reason: "owner suspected a crashed write".into(),
+            },
+        )
+        .unwrap();
+    let verify_id = accept_publication_check(&f, "req-vp2", &task_id);
+    let crate::publication_verification::runner::Outcome::Completed(receipt) =
+        run_publication_check(&f, &verify_id).unwrap()
+    else {
+        panic!("inspection must complete");
+    };
+    assert_eq!(
+        receipt.conclusion,
+        crate::publication_verification::decision::Conclusion::InsufficientEvidence
+    );
+    assert_eq!(receipt.missing_receipt_item_ids, vec!["item-3".to_string()]);
+}
+
+#[test]
+fn verify_publication_result_forged_chain_fails_closed() {
+    // §6.6: a tampered event link (old_content_digest on the second event)
+    // breaks the closure — facts read returns Integrity and the inspection
+    // preserves the unresolved task instead of emitting a conclusion.
+    let f = fixture();
+    let task_id = task(&f, SYMBOL, 3, "day", "req-tv3");
+    let head = publish_daily(
+        &f,
+        &task_id,
+        "item-1",
+        SYMBOL,
+        vec![bar(day_epoch(2020, 1, 6), 100)],
+        None,
+    );
+    publish_daily(
+        &f,
+        &task_id,
+        "item-2",
+        SYMBOL,
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+        ],
+        Some(&head.version_id),
+    );
+    let rev = start_item(&f, &task_id, "item-3");
+    f.tasks
+        .transition(
+            &task_id,
+            rev,
+            RUN,
+            task_control::Change::RequireVerification {
+                item_id: "item-3".into(),
+                reason: "owner suspected a crashed write".into(),
+            },
+        )
+        .unwrap();
+    let c = Connection::open(f.tasks.path()).unwrap();
+    c.execute(
+        "UPDATE market_events SET old_content_digest=randomblob(32) WHERE seq=(SELECT MAX(seq) FROM market_events)",
+        [],
+    )
+    .unwrap();
+    let verify_id = accept_publication_check(&f, "req-vp3", &task_id);
+    let error = run_publication_check(&f, &verify_id).unwrap_err();
+    assert!(
+        matches!(error, crate::market_storage::Error::Integrity(_)),
+        "forged event chain must fail closed: {error:?}"
+    );
+    // The verification task is preserved unresolved — protection kept.
+    let check = f.tasks.read_task(&verify_id).unwrap().unwrap();
+    assert_ne!(check.task.status, task_control::Status::Succeeded);
+}
+
+#[test]
+fn verify_publication_result_forge_and_applicability_errors() {
+    let f = fixture();
+    let err = f
+        .api
+        .call(
+            "verify_publication_result",
+            json!({
+                "contract_version": "v1",
+                "request_id": "req-vp4",
+                "target_task_id": "no-such-task",
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "task_not_found");
+    // A succeeded task is not an unresolved execution → not applicable.
+    let task_id = task(&f, SYMBOL, 1, "day", "req-tv4");
+    publish_daily(
+        &f,
+        &task_id,
+        "item-1",
+        SYMBOL,
+        vec![bar(day_epoch(2020, 1, 6), 100)],
+        None,
+    );
+    let err = f
+        .api
+        .call(
+            "verify_publication_result",
+            json!({
+                "contract_version": "v1",
+                "request_id": "req-vp5",
+                "target_task_id": task_id,
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "invalid_arguments");
+}
+
+#[test]
+fn task_read_handlers_answer_success_and_not_found_on_compact_schema() {
+    let f = fixture();
+    let task_id = task(&f, SYMBOL, 1, "day", "req-tr");
+    publish_daily(
+        &f,
+        &task_id,
+        "item-1",
+        SYMBOL,
+        vec![bar(day_epoch(2020, 1, 6), 100)],
+        None,
+    );
+    let summary = f
+        .api
+        .call(
+            "get_task",
+            json!({"contract_version": "v1", "task_id": task_id}),
+        )
+        .unwrap();
+    assert_eq!(summary["task_id"], task_id);
+    let page = f
+        .api
+        .call("list_tasks", json!({"dataset": "market.daily"}))
+        .unwrap();
+    assert!(
+        page["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["task_id"] == task_id)
+    );
+    let progress = f
+        .api
+        .call("get_task_progress", json!({"task_id": task_id}))
+        .unwrap();
+    assert_eq!(progress["total"], 1);
+    for name in ["get_task", "get_task_progress"] {
+        let err = f
+            .api
+            .call(
+                name,
+                if name == "get_task" {
+                    json!({"contract_version": "v1", "task_id": "no-such"})
+                } else {
+                    json!({"task_id": "no-such"})
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "task_not_found", "{name}");
+    }
+}
+
+#[test]
+fn verify_stopped_writes_admits_and_rejects_on_compact_schema() {
+    let f = fixture();
+    let target = unverified_target(&f, 2, "req-tsv");
+    let reply = f
+        .api
+        .call(
+            "verify_stopped_writes",
+            json!({
+                "contract_version": "v1",
+                "request_id": "req-vs1",
+                "target_task_id": target,
+            }),
+        )
+        .unwrap();
+    assert!(reply["task_id"].as_str().is_some());
+    let err = f
+        .api
+        .call(
+            "verify_stopped_writes",
+            json!({
+                "contract_version": "v1",
+                "request_id": "req-vs2",
+                "target_task_id": "no-such-task",
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "task_not_found");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn inspect_verification_task_binds_and_rejects_on_compact_schema() {
+    let f = fixture();
+    let target = unverified_target(&f, 2, "req-tiv");
+    let verify_id = accept_publication_check(&f, "req-vpi", &target);
+    let reply = f
+        .api
+        .call(
+            "inspect_verification_task",
+            json!({
+                "contract_version": "v1",
+                "request_id": "req-iv1",
+                "target_task_id": verify_id,
+            }),
+        )
+        .unwrap();
+    assert_eq!(reply["bound"], true);
+    let err = f
+        .api
+        .call(
+            "inspect_verification_task",
+            json!({
+                "contract_version": "v1",
+                "request_id": "req-iv2",
+                "target_task_id": "no-such-task",
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "task_not_found");
+}
+
+#[test]
+fn verify_data_gap_accepts_frozen_subject_and_rejects_bad_target() {
+    let f = fixture();
+    let task_id = task(&f, SYMBOL, 1, "day", "req-tg");
+    publish_daily(
+        &f,
+        &task_id,
+        "item-1",
+        SYMBOL,
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+        ],
+        None,
+    );
+    let reply = f
+        .api
+        .call(
+            "verify_data_gap",
+            json!({
+                "contract_version": "v1",
+                "request_id": "req-g1",
+                "target": {
+                    "symbol": SYMBOL,
+                    "period": "day",
+                    "start_date": "2020-01-06",
+                    "end_date": "2020-02-04",
+                },
+            }),
+        )
+        .unwrap();
+    assert!(reply["task_id"].as_str().is_some());
+    // An unpublished symbol has no subject head to freeze → fail closed.
+    let err = f
+        .api
+        .call(
+            "verify_data_gap",
+            json!({
+                "contract_version": "v1",
+                "request_id": "req-g2",
+                "target": {
+                    "symbol": "sz.999999",
+                    "period": "day",
+                    "start_date": "2020-01-06",
+                    "end_date": "2020-02-04",
+                },
+            }),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            err.code.as_str(),
+            "invalid_arguments" | "version_not_found" | "storage_error"
+        ),
+        "unpublished subject must fail: {}",
+        err.code
+    );
+}

@@ -187,55 +187,157 @@ fn read_facts_series(
             "legacy contract facts cannot exist on latest-only storage",
         ));
     }
-    let mut stmt = c
+    type Row = (
+        String,
+        i64,
+        String,
+        i64,
+        String,
+        i64,
+        i64,
+        String,
+        Vec<u8>,
+        Option<Vec<u8>>,
+        Vec<u8>,
+        Vec<u8>,
+    );
+    let rows: Vec<Row> = c
         .prepare(
-            "SELECT period,item_id,outcome,task_revision,result_id,result_digest,new_content_digest FROM market_events WHERE task_id=?1",
+            "SELECT entity,period,kind,seq,item_id,outcome,task_revision,result_id,result_digest,old_content_digest,new_content_digest,evidence_digest FROM market_events WHERE task_id=?1",
         )
-        .map_err(storage)?;
-    let rows = stmt
+        .map_err(storage)?
         .query_map([&task_id], |r| {
             Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
                 r.get::<_, i64>(3)?,
                 r.get::<_, String>(4)?,
-                r.get::<_, Vec<u8>>(5)?,
-                r.get::<_, Vec<u8>>(6)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, Vec<u8>>(8)?,
+                r.get::<_, Option<Vec<u8>>>(9)?,
+                r.get::<_, Vec<u8>>(10)?,
+                r.get::<_, Vec<u8>>(11)?,
             ))
         })
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;
+    // §6.6 per-entity state for the current/overwritten checks: the series
+    // row plus that entity's whole event chain, loaded once.
+    struct EntityEvents {
+        chain_tip: Option<series::SeriesRow>,
+        events: Vec<series::EventRow>,
+    }
+    let mut entities: std::collections::BTreeMap<(String, i64), EntityEvents> =
+        std::collections::BTreeMap::new();
     let mut found = std::collections::BTreeMap::new();
-    for (period, item, outcome, revision, id, digest, new_digest) in rows {
-        if (period == 1) != daily
+    for (
+        entity,
+        period,
+        kind,
+        seq,
+        item,
+        outcome,
+        revision,
+        id,
+        digest,
+        old_digest,
+        new_digest,
+        evidence_digest,
+    ) in &rows
+    {
+        if (period == &1) != daily
             || !task.items.iter().any(|i| i.spec.item_id == item)
-            || found.contains_key(&item)
+            || found.contains_key(item.as_str())
         {
             return Err(integrity(
                 "publication result contract/item association differs",
             ));
         }
         let digest: [u8; 32] = digest
+            .as_slice()
             .try_into()
             .map_err(|_| integrity("stored result digest is malformed"))?;
         let new_digest: [u8; 32] = new_digest
+            .as_slice()
             .try_into()
             .map_err(|_| integrity("stored content digest is malformed"))?;
-        let revision =
-            u64::try_from(revision).map_err(|_| integrity("stored task revision overflows"))?;
-        found.insert(
+        let revision_u64 =
+            u64::try_from(*revision).map_err(|_| integrity("stored task revision overflows"))?;
+        // §6.6 ①: the recorded result identity must replay — recompute the
+        // canonical result digest from the event's own fields.
+        let period_enum = if *period == 1 {
+            crate::market_data::Period::Day
+        } else {
+            crate::market_data::Period::Year
+        };
+        let recomputed = series_commit::event_result_digest(
+            id,
+            &task_id,
             item,
+            kind,
+            entity,
+            period_enum,
+            &super::compact_repo::hex_bytes(&new_digest),
+            *revision,
+        )?;
+        if recomputed != digest {
+            return Err(integrity("market event result digest mismatched"));
+        }
+        let group = entities
+            .entry((entity.clone(), *period))
+            .or_insert_with(|| EntityEvents {
+                chain_tip: None,
+                events: vec![],
+            });
+        if group.chain_tip.is_none() {
+            group.chain_tip = Some(
+                series::read_series(c, entity, period_enum)?
+                    .ok_or_else(|| integrity("publication event without a series row"))?,
+            );
+            group.events = series::events_after(c, entity, period_enum, 0)?;
+        }
+        let series_row = group.chain_tip.as_ref().unwrap();
+        // §6.6: current event → new_content_digest == series.content_digest
+        // AND the evidence bundle replays; overwritten → the event's digest
+        // chain closes to the current series digest.
+        if new_digest == series_row.content_digest {
+            let ev_digest: crate::compact_market::Digest = evidence_digest
+                .as_slice()
+                .try_into()
+                .map_err(|_| integrity("stored evidence digest is malformed"))?;
+            evidence_store::read_evidence(c, &ev_digest)?;
+        } else {
+            let position = group
+                .events
+                .iter()
+                .position(|e| e.seq == *seq)
+                .ok_or_else(|| integrity("publication event missing from entity chain"))?;
+            let tail = &group.events[position..];
+            let closes = tail
+                .windows(2)
+                .all(|w| w[1].old_content_digest == Some(w[0].new_content_digest))
+                && tail.last().map(|e| e.new_content_digest) == Some(series_row.content_digest);
+            if !closes {
+                return Err(integrity(
+                    "publication event chain does not close to current",
+                ));
+            }
+        }
+        found.insert(
+            item.clone(),
             Evidence::Committed {
                 evidence_sha256: super::compact_repo::hex_bytes(&digest),
                 receipt: crate::market_storage::Receipt {
-                    publication_id: id,
+                    publication_id: id.clone(),
                     version_id: super::compact_repo::hex_bytes(&new_digest),
                     task_id: task_id.clone(),
-                    task_revision: revision,
+                    task_revision: revision_u64,
                 },
-                reused_version: outcome == 1,
+                reused_version: *outcome == 1,
             },
         );
     }
