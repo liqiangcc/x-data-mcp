@@ -10,11 +10,11 @@ use x_data_mcp::acquire::wire;
 use x_data_mcp::acquire::{AcquireApi, AcquireService, Source};
 use x_data_mcp::mcp::ToolHandler;
 
-fn sha(bytes: &[u8]) -> String {
+pub(crate) fn sha(bytes: &[u8]) -> String {
     x_data_mcp::hash::sha256(bytes)
 }
 
-fn today_u32() -> u32 {
+pub(crate) fn today_u32() -> u32 {
     x_data_mcp::calendar::shanghai_date(chrono::Utc::now())
         .format("%Y%m%d")
         .to_string()
@@ -22,16 +22,16 @@ fn today_u32() -> u32 {
         .unwrap()
 }
 
-fn day_record(date: u32) -> [u8; 32] {
+pub(crate) fn day_record(date: u32) -> [u8; 32] {
     let mut r = [0u8; 32];
     r[0..4].copy_from_slice(&date.to_le_bytes());
     r[24..28].copy_from_slice(&100u32.to_le_bytes());
     r
 }
-fn day_member(dates: &[u32]) -> Vec<u8> {
+pub(crate) fn day_member(dates: &[u32]) -> Vec<u8> {
     dates.iter().flat_map(|d| day_record(*d)).collect()
 }
-fn gbbq_record(market: u8, code: &str, date_raw: u32, category: u8) -> [u8; 29] {
+pub(crate) fn gbbq_record(market: u8, code: &str, date_raw: u32, category: u8) -> [u8; 29] {
     let mut clear = [0u8; 29];
     clear[0] = market;
     clear[1..1 + code.len()].copy_from_slice(code.as_bytes());
@@ -39,14 +39,14 @@ fn gbbq_record(market: u8, code: &str, date_raw: u32, category: u8) -> [u8; 29] 
     clear[12] = category;
     x_data_mcp::gbbq::encrypt_record(&clear)
 }
-fn gbbq_member(records: &[[u8; 29]]) -> Vec<u8> {
+pub(crate) fn gbbq_member(records: &[[u8; 29]]) -> Vec<u8> {
     let mut bytes = (records.len() as u32).to_le_bytes().to_vec();
     for r in records {
         bytes.extend_from_slice(r);
     }
     bytes
 }
-fn write_zip(path: &Path, members: &[(&str, &[u8])]) {
+pub(crate) fn write_zip(path: &Path, members: &[(&str, &[u8])]) {
     let file = std::fs::File::create(path).unwrap();
     let mut w = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
@@ -59,7 +59,7 @@ fn write_zip(path: &Path, members: &[(&str, &[u8])]) {
 /// A mirror directory the `Mirror` fetcher serves: base/gbbq/hsjday zips
 /// whose members satisfy the whole D1 probe suite for scoped members
 /// sh.600006 and sz.000001.
-fn write_mirror(dir: &Path, last_bar: u32) {
+pub(crate) fn write_mirror(dir: &Path, last_bar: u32) {
     std::fs::create_dir_all(dir).unwrap();
     let tdxhy = b"1|600006|T090302|||X6102\r\n0|000001|T1001|||X500102\r\n";
     let ex = b"600006|name-one|kw\r\n000001|name-two|kw\r\n".as_slice();
@@ -84,7 +84,7 @@ fn write_mirror(dir: &Path, last_bar: u32) {
     );
 }
 /// Point the mirror at a different scoped member (fresh generation bytes).
-fn remirror(dir: &Path, code: u32, last_bar: u32) {
+pub(crate) fn remirror(dir: &Path, code: u32, last_bar: u32) {
     let tdxhy = format!("1|{code}|T090302|||X6102\r\n").into_bytes();
     let ex = format!("{code}|name|kw\r\n").into_bytes();
     write_zip(
@@ -100,30 +100,30 @@ fn remirror(dir: &Path, code: u32, last_bar: u32) {
         &[(name.as_str(), day_member(&[last_bar]).as_slice())],
     );
 }
-fn open(root: &Path, mirror: &Path) -> AcquireService {
+pub(crate) fn open(root: &Path, mirror: &Path) -> AcquireService {
     AcquireService::open(root, Source::Mirror(mirror.into())).unwrap()
 }
-fn drive(service: &AcquireService) {
+pub(crate) fn drive(service: &AcquireService) {
     for _ in 0..16 {
         if service.worker_once().unwrap().is_none() {
             break;
         }
     }
 }
-fn install(service: &AcquireService, request: &str) -> wire::AcquisitionAcceptance {
+pub(crate) fn install(service: &AcquireService, request: &str) -> wire::AcquisitionAcceptance {
     let acceptance = service.acquire_generation(request).unwrap();
     drive(service);
     acceptance
 }
-fn generation_of(service: &AcquireService, task_id: &str) -> String {
+pub(crate) fn generation_of(service: &AcquireService, task_id: &str) -> String {
     service.task(task_id).unwrap().generation_id.unwrap()
 }
-fn verify(service: &AcquireService, generation_id: &str) -> wire::VerifyReply {
+pub(crate) fn verify(service: &AcquireService, generation_id: &str) -> wire::VerifyReply {
     service
         .verify_generation(&format!("verify-{:.16}", generation_id), generation_id)
         .unwrap()
 }
-fn activate(
+pub(crate) fn activate(
     service: &AcquireService,
     generation_id: &str,
     expected: Option<&str>,
