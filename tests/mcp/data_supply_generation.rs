@@ -913,7 +913,7 @@ fn explicit_daily_update_rewrites_history_on_compact() {
     // old_digest pointing at the head it replaced.
     let (kind, continuity, base_digest, seqs): (String, i64, String, String) = conn
         .query_row(
-            "SELECT e.kind, e.continuity_mode, hex(e.old_content_digest), \
+            "SELECT e.kind, e.continuity_mode, lower(hex(e.old_content_digest)), \
                     (SELECT group_concat(seq||':'||kind,',') FROM market_events \
                      WHERE entity = e.entity AND period = e.period) \
              FROM market_series v \
