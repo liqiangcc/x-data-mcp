@@ -1917,10 +1917,11 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                     "years": v.records.iter().map(|r| r.date.year()).collect::<Vec<_>>(),
                 }),
             )?;
-            let as_of = v
-                .published_at
-                .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
-                .date_naive();
+            // `as_of_day` is the daily-content cutoff the derivation consumed
+            // (`last_trading_date`), not the publish wall-clock — reads clip
+            // the daily re-aggregation at it so a same-year append leaves the
+            // row merely Behind rather than unclassifiable.
+            let as_of = lineage.last_trading_date;
             let occupancy = scope.occupancy_key();
             let w = series_commit::Commit {
                 result_id: &command.publication_id,

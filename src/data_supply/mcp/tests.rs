@@ -95,9 +95,9 @@ fn bar(day: i64, cents: i64) -> Bar {
     .unwrap()
 }
 
-fn year_bar(y: i32, close: i64) -> Bar {
+fn year_bar(trade_day: i64, close: i64) -> Bar {
     crate::compact_market::CompactBar {
-        trade_day: day_epoch(y, 12, 31),
+        trade_day,
         open_cents: close,
         high_cents: close + 10,
         low_cents: close - 10,
@@ -116,6 +116,32 @@ fn day_epoch(y: i32, m: u32, d: u32) -> i64 {
 
 /// Accepted-and-claimed task with `count` pending items on one scope —
 /// mirrors the in-crate TaskHandle fixture without depending on it.
+/// Frozen inputs the progress observer replays: daily range items carry
+/// base+range, yearly items carry the daily base pin + years + intent.
+fn frozen_inputs(period: &str) -> Value {
+    if period == "year" {
+        json!({
+            "base_daily_version_id": "v1",
+            "base_integrity_sha256": "ab".repeat(32),
+            "years": [2020],
+            "intent": {"expected_daily_head": "v1", "expected_yearly_head": null},
+            "comparison": null,
+        })
+    } else {
+        json!({
+            "base_version_id": "v1",
+            "base_integrity_sha256": "ab".repeat(32),
+            "range": {"start": "2020-01-06", "end": "2020-02-04"},
+        })
+    }
+}
+fn contract_version(period: &str) -> &'static str {
+    if period == "year" {
+        crate::yearly_publication::tasks::CONTRACT_VERSION
+    } else {
+        crate::market_update::tasks::CONTRACT_VERSION
+    }
+}
 fn task(fixture: &Fixture, symbol: &str, count: usize, period: &str, req: &str) -> String {
     let scope = task_control::legacy::scope_id(symbol, period);
     let items: Vec<ItemSpec> = (1..=count)
@@ -123,7 +149,7 @@ fn task(fixture: &Fixture, symbol: &str, count: usize, period: &str, req: &str) 
             item_id: format!("item-{index}"),
             target: json!({"symbol": symbol, "period": period}),
             progress_unit: "bars".into(),
-            frozen_inputs: json!({}),
+            frozen_inputs: frozen_inputs(period),
             scope_keys: BTreeSet::from([scope.clone()]),
         })
         .collect();
@@ -135,7 +161,7 @@ fn task(fixture: &Fixture, symbol: &str, count: usize, period: &str, req: &str) 
             } else {
                 "market.daily".into()
             },
-            contract_version: "v1".into(),
+            contract_version: contract_version(period).into(),
         },
         intent: json!({}),
     };
@@ -180,7 +206,7 @@ fn task_many(fixture: &Fixture, symbols: &[String], period: &str, req: &str) -> 
             item_id: format!("item-{}", i + 1),
             target: json!({"symbol": s, "period": period}),
             progress_unit: "bars".into(),
-            frozen_inputs: json!({}),
+            frozen_inputs: frozen_inputs(period),
             scope_keys: BTreeSet::from([task_control::legacy::scope_id(s, period)]),
         })
         .collect();
@@ -192,7 +218,7 @@ fn task_many(fixture: &Fixture, symbols: &[String], period: &str, req: &str) -> 
             } else {
                 "market.daily".into()
             },
-            contract_version: "v1".into(),
+            contract_version: contract_version(period).into(),
         },
         intent: json!({}),
     };
@@ -367,13 +393,15 @@ fn commit_yearly_plan(
     task_id: &str,
     item: &str,
     symbol: &str,
-    years: &[(i32, i64)],
+    years: &[(i64, i64)],
     base_id: &str,
     prior: Option<String>,
 ) -> Receipt {
     let rev = start_item(fixture, task_id, item);
-    let bars: Vec<Bar> = years.iter().map(|(y, c)| year_bar(*y, *c)).collect();
-    let (first, last) = (bars[0].date, bars[bars.len() - 1].date);
+    let base = base_checked(fixture, symbol);
+    let base_bars = &base.version().records;
+    let (first, last) = (base_bars[0].date, base_bars[base_bars.len() - 1].date);
+    let bars: Vec<Bar> = years.iter().map(|(d, c)| year_bar(*d, *c)).collect();
     let version = EffectiveVersion {
         version_id: format!("y-{item}"),
         symbol: symbol.into(),
@@ -396,7 +424,6 @@ fn commit_yearly_plan(
             last_trading_date: last,
         }),
     };
-    let base = base_checked(fixture, symbol);
     let plan = YearlyResultPlan {
         publication: PublishPlan {
             command: command(task_id, &format!("pub-{task_id}-{item}"), rev, item),
@@ -421,7 +448,7 @@ fn year_version(id: &str, base_id: &str) -> EffectiveVersion {
         period: Period::Year,
         adjustment: Adjustment::Forward,
         source: "official".into(),
-        records: vec![year_bar(2020, 100)],
+        records: vec![year_bar(day_epoch(2020, 2, 4), 100)],
         published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
         validation: ValidationSummary {
             record_count: 0,
@@ -503,7 +530,7 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
         &yearly_task,
         "item-1",
         SYMBOL,
-        &[(2020, 100)],
+        &[(day_epoch(2020, 2, 4), 100)],
         &daily.version_id,
         None,
     );
@@ -597,7 +624,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &yearly_task,
         "item-1",
         SYMBOL,
-        &[(2020, 100)],
+        &[(day_epoch(2020, 2, 4), 100)],
         &daily.version_id,
         None,
     );
@@ -688,7 +715,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &yearly_task,
         "item-2",
         SYMBOL,
-        &[(2020, 100)],
+        &[(day_epoch(2020, 2, 4), 100)],
         &base.version().version_id,
         Some(head.version_id),
     );
@@ -731,7 +758,7 @@ fn yearly_batch_availability_reports_one_invalid_row_among_fresh() {
             &yearly_task,
             &format!("item-{}", i + 1),
             s,
-            &[(2020, 100)],
+            &[(day_epoch(2020, 2, 4), 100)],
             &base.version().version_id,
             None,
         );
