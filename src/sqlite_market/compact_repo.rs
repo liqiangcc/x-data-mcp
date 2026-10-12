@@ -688,7 +688,7 @@ fn classify_envelope<'a>(
     period: Period,
     head: Option<&'a series::SeriesRow>,
     new_bars: &'a [CompactBar],
-) -> Result<series_commit::Change<'a>, Error> {
+) -> Result<series_commit::SeriesChange<'a>, Error> {
     match head {
         None => Ok(series_commit::SeriesChange::FirstPublish { bars: new_bars }),
         Some(row) => {
@@ -1217,7 +1217,9 @@ impl RangeRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
-        self.tasks.transition(task, revision, run, change)
+        self.tasks
+            .transition(task, revision, run, change)
+            .map_err(Error::Task)
     }
     fn cover_gap(&self, covering: &crate::market_storage::GapCovering) -> Result<bool, Error> {
         covering.validate()?;
@@ -1630,7 +1632,9 @@ impl crate::official_market::DailyCollectionRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
-        self.tasks.transition(task, revision, run, change)
+        self.tasks
+            .transition(task, revision, run, change)
+            .map_err(Error::Task)
     }
     fn commit_collection_batch(
         &self,
@@ -1814,7 +1818,9 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
-        self.tasks.transition(task, revision, run, change)
+        self.tasks
+            .transition(task, revision, run, change)
+            .map_err(Error::Task)
     }
     fn commit_yearly(
         &self,
@@ -1893,7 +1899,9 @@ impl crate::gap_verification::runner::GapTaskStore for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
-        self.tasks.transition(task, revision, run, change)
+        self.tasks
+            .transition(task, revision, run, change)
+            .map_err(Error::Task)
     }
 }
 
