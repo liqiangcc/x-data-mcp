@@ -126,6 +126,7 @@ pub(crate) struct SeriesRow {
     pub source_binding_digest: Digest,
     pub evidence_digest: Digest,
     pub last_event_seq: i64,
+    #[allow(dead_code)] // creation timestamp retained for audit surfaces
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1279,6 +1280,7 @@ pub(crate) struct NewSeries {
     pub source_binding_digest: Digest,
     pub evidence_digest: Digest,
     pub last_event_seq: i64,
+    #[allow(dead_code)] // creation timestamp retained for audit surfaces
     pub created_at: String,
     pub updated_at: String,
 }
