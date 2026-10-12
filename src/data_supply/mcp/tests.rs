@@ -12,8 +12,8 @@ use tempfile::TempDir;
 use super::DataApi;
 use crate::data_supply::Access;
 use crate::market_data::{
-    Adjustment, AdjustmentEvidence, Bar, CoverageEvidence, CoverageStatus, MarketDataBatch, Period,
-    Provenance, UnitCurrencyEvidence,
+    Adjustment, AdjustmentEvidence, Bar, CoverageEvidence, MarketDataBatch, Period, Provenance,
+    UnitCurrencyEvidence,
 };
 use crate::market_storage::{
     MarketRepository, Publication, PublishIntent, PublishPlan, Receipt, Scope, compat,
@@ -149,7 +149,70 @@ fn task(fixture: &Fixture, symbol: &str, count: usize, period: &str, req: &str) 
         task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
         _ => panic!("expected task outcome"),
     };
-    let revision = fixture.tasks.task(&task_id).unwrap().task.state_revision;
+    let revision = fixture
+        .tasks
+        .read_task(&task_id)
+        .unwrap()
+        .unwrap()
+        .task
+        .state_revision;
+    fixture
+        .tasks
+        .transition(&task_id, revision, RUN, task_control::Change::Claim)
+        .unwrap();
+    task_id
+}
+
+/// One task with `count` pending items spread across `symbols` — the
+/// same shape the batch availability test needs (100 entities).
+fn task_many(fixture: &Fixture, symbols: &[String], period: &str, req: &str) -> String {
+    let scopes: BTreeSet<String> = symbols
+        .iter()
+        .map(|s| task_control::legacy::scope_id(s, period))
+        .collect();
+    let items: Vec<ItemSpec> = symbols
+        .iter()
+        .enumerate()
+        .map(|(i, s)| ItemSpec {
+            item_id: format!("item-{}", i + 1),
+            target: json!({"symbol": s, "period": period}),
+            progress_unit: "bars".into(),
+            frozen_inputs: json!({}),
+            scope_keys: BTreeSet::from([task_control::legacy::scope_id(s, period)]),
+        })
+        .collect();
+    let command = task_control::Command {
+        key: CommandKey {
+            operation: "update_data".into(),
+            dataset: if period == "year" {
+                "market.yearly".into()
+            } else {
+                "market.daily".into()
+            },
+            contract_version: "v1".into(),
+        },
+        intent: json!({}),
+    };
+    let work = task_control::FrozenWork {
+        items,
+        scopes,
+        shared_evidence: None,
+    };
+    let acceptance = fixture
+        .tasks
+        .accept(req, &command, &work, RUN, None)
+        .unwrap();
+    let task_id = match acceptance.record.outcome {
+        task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+        _ => panic!("expected task outcome"),
+    };
+    let revision = fixture
+        .tasks
+        .read_task(&task_id)
+        .unwrap()
+        .unwrap()
+        .task
+        .state_revision;
     fixture
         .tasks
         .transition(&task_id, revision, RUN, task_control::Change::Claim)
@@ -158,7 +221,13 @@ fn task(fixture: &Fixture, symbol: &str, count: usize, period: &str, req: &str) 
 }
 
 fn start_item(fixture: &Fixture, task_id: &str, item: &str) -> u64 {
-    let revision = fixture.tasks.task(task_id).unwrap().task.state_revision;
+    let revision = fixture
+        .tasks
+        .read_task(task_id)
+        .unwrap()
+        .unwrap()
+        .task
+        .state_revision;
     fixture
         .tasks
         .transition(
@@ -222,6 +291,7 @@ fn publish_daily(
     fixture: &Fixture,
     task_id: &str,
     item: &str,
+    symbol: &str,
     bars: Vec<Bar>,
     base: Option<&str>,
 ) -> Receipt {
@@ -229,7 +299,7 @@ fn publish_daily(
     let version_label = format!("v-{item}");
     let version = EffectiveVersion {
         version_id: version_label.clone(),
-        symbol: SYMBOL.into(),
+        symbol: symbol.into(),
         period: Period::Day,
         adjustment: Adjustment::Forward,
         source: "official".into(),
@@ -260,7 +330,7 @@ fn publish_daily(
     let mut cmd = command(task_id, &format!("pub-{item}"), rev, item);
     cmd.version_id = version_label;
     let scope = Scope {
-        symbol: SYMBOL.into(),
+        symbol: symbol.into(),
         period: Period::Day,
     };
     fixture
@@ -280,6 +350,7 @@ fn commit_yearly_plan(
     fixture: &Fixture,
     task_id: &str,
     item: &str,
+    symbol: &str,
     years: &[(i32, i64)],
     base_id: &str,
     prior: Option<String>,
@@ -289,7 +360,7 @@ fn commit_yearly_plan(
     let (first, last) = (bars[0].date, bars[bars.len() - 1].date);
     let version = EffectiveVersion {
         version_id: format!("y-{item}"),
-        symbol: SYMBOL.into(),
+        symbol: symbol.into(),
         period: Period::Year,
         adjustment: Adjustment::Forward,
         source: "official".into(),
@@ -309,7 +380,7 @@ fn commit_yearly_plan(
             last_trading_date: last,
         }),
     };
-    let base = base_checked(fixture);
+    let base = base_checked(fixture, symbol);
     let plan = YearlyResultPlan {
         publication: PublishPlan {
             command: command(task_id, &format!("pub-{item}"), rev, item),
@@ -352,9 +423,9 @@ fn year_version(id: &str, base_id: &str) -> EffectiveVersion {
     }
 }
 
-fn base_checked(fixture: &Fixture) -> compat::CheckedRecord {
+fn base_checked(fixture: &Fixture, symbol: &str) -> compat::CheckedRecord {
     let c = Connection::open(fixture.tasks.path()).unwrap();
-    let daily = series::read_series(&c, SYMBOL, Period::Day)
+    let daily = series::read_series(&c, symbol, Period::Day)
         .unwrap()
         .unwrap();
     let bars = series::all_bars(&c, daily.series_key)
@@ -365,7 +436,7 @@ fn base_checked(fixture: &Fixture) -> compat::CheckedRecord {
         .unwrap();
     let version = EffectiveVersion {
         version_id: daily.version_id.clone(),
-        symbol: SYMBOL.into(),
+        symbol: symbol.into(),
         period: Period::Day,
         adjustment: Adjustment::Forward,
         source: "official".into(),
@@ -407,10 +478,11 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
     );
 
     let yearly_task = task(&f, SYMBOL, 2, "year", "req-y");
-    let yearly = commit_yearly_plan(
+    let _yearly = commit_yearly_plan(
         &f,
         &yearly_task,
         "item-1",
+        SYMBOL,
         &[(2020, 100)],
         &daily.version_id,
         None,
@@ -432,6 +504,7 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
         &f,
         &daily_task,
         "item-2",
+        SYMBOL,
         vec![bar(0, 100), bar(1, 110), bar(2, 120)],
         Some(&daily.version_id),
     );
@@ -495,6 +568,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &f,
         &yearly_task,
         "item-1",
+        SYMBOL,
         &[(2020, 100)],
         &daily.version_id,
         None,
@@ -505,6 +579,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &f,
         &daily_task,
         "item-2",
+        SYMBOL,
         vec![bar(9, 300), bar(10, 310)],
         Some(&daily.version_id),
     );
@@ -570,7 +645,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
     );
 
     // A rederived yearly clears the invalid state.
-    let base = base_checked(&f);
+    let base = base_checked(&f, SYMBOL);
     let head = {
         let c = Connection::open(f.tasks.path()).unwrap();
         series::read_series(&c, SYMBOL, Period::Year)
@@ -581,6 +656,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &f,
         &yearly_task,
         "item-2",
+        SYMBOL,
         &[(2020, 100)],
         &base.version().version_id,
         Some(head.version_id),
@@ -594,4 +670,102 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         .unwrap();
     assert_eq!(page["manifest"][0]["status"], "present");
     assert!(page["manifest"][0]["stale"].is_null());
+}
+
+#[test]
+fn yearly_batch_availability_reports_one_invalid_row_among_fresh() {
+    // §6.2 batch degrade: 100 entities — the one whose daily was replaced
+    // degrades to absent-with-reason; the other 99 stay available.
+    let f = fixture();
+    let symbols: Vec<String> = (0..100).map(|i| format!("sh.{:06}", 600000 + i)).collect();
+    let daily_task = task_many(&f, &symbols, "day", "req-dm");
+    for (i, s) in symbols.iter().enumerate() {
+        publish_daily(
+            &f,
+            &daily_task,
+            &format!("item-{}", i + 1),
+            s,
+            vec![bar(0, 100), bar(1, 110)],
+            None,
+        );
+    }
+    let yearly_task = task_many(&f, &symbols, "year", "req-ym");
+    for (i, s) in symbols.iter().enumerate() {
+        let base = base_checked(&f, s);
+        commit_yearly_plan(
+            &f,
+            &yearly_task,
+            &format!("item-{}", i + 1),
+            s,
+            &[(2020, 100)],
+            &base.version().version_id,
+            None,
+        );
+    }
+
+    // Replace entity 42's daily — its yearly row is now Invalid.
+    let victim = &symbols[42];
+    let victim_task = task(&f, victim, 1, "day", "req-dm2");
+    let victim_head = base_checked(&f, victim).version().version_id.clone();
+    publish_daily(
+        &f,
+        &victim_task,
+        "item-1",
+        victim,
+        vec![bar(9, 300)],
+        Some(&victim_head),
+    );
+
+    let entities: Vec<Value> = symbols
+        .iter()
+        .map(|s| json!({"exchange": "sh", "code": &s[3..]}))
+        .collect();
+    let availability = f
+        .api
+        .call(
+            "get_data_availability",
+            json!({
+                "dataset": "market.yearly",
+                "contract_version": "v1",
+                "selection": {"kind": "batch", "entities": entities},
+                "filter": {"kind": "yearly", "start_year": 2019, "end_year": 2030},
+                "version": {"kind": "latest_per_entity"},
+                "page_size": 100,
+            }),
+        )
+        .unwrap();
+    let items = availability["items"].as_array().unwrap();
+    assert_eq!(items.len(), 100);
+    let absent: Vec<_> = items
+        .iter()
+        .filter(|i| i["availability"] == "absent")
+        .collect();
+    assert_eq!(
+        absent.len(),
+        1,
+        "exactly the replaced entity must be absent"
+    );
+    assert_eq!(
+        absent[0]["reason"], "daily_replaced_since_derivation",
+        "invalid yearly must carry the classified reason"
+    );
+    assert_eq!(absent[0]["entity"]["code"], &victim[3..]);
+}
+
+#[test]
+fn progress_through_handler_on_compact_schema() {
+    // N3 progress: a compact task reports through the real handler with
+    // the item success/failure split intact.
+    let f = fixture();
+    let task_id = task(&f, SYMBOL, 1, "day", "req-p");
+    publish_daily(&f, &task_id, "item-1", SYMBOL, vec![bar(0, 100)], None);
+    let progress = f
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id": task_id, "page_size": 10}),
+        )
+        .unwrap();
+    assert_eq!(progress["total"], 1);
+    assert_eq!(progress["finished"], 1);
 }

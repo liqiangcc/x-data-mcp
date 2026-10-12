@@ -259,3 +259,63 @@ fn update_coverage_change_needs_version_but_acquisition_time_alone_does_not() {
         vec![2024, 2025]
     );
 }
+
+#[test]
+fn update_without_or_with_mismatched_basis_proof_refuses_the_item() {
+    // N2: "proven member continuity" on schema 21 is the basis proof the
+    // update runner carries — `prepare` refuses to approve the item when
+    // the proof is absent or any bound field mismatches, so the stored
+    // head cannot advance on an unproven candidate.
+    let (base, mut batch, range) = inputs();
+    batch.bars[0].close = "10.06".parse().unwrap();
+
+    // Missing proof entirely.
+    assert_eq!(
+        market_update::prepare(&base, &batch, &range, None).unwrap(),
+        Decision::NeedsVerification(Reason::BasisUnknown),
+        "an update item without a basis proof must not approve"
+    );
+
+    // Mismatched bound fields — each alone refuses approval.
+    let corrupt = [
+        {
+            let mut e = proof(&base, &batch, &range);
+            e.base_version_id = "a".repeat(64);
+            e
+        },
+        {
+            let mut e = proof(&base, &batch, &range);
+            e.base_integrity_sha256 = "b".repeat(64);
+            e
+        },
+        {
+            let mut e = proof(&base, &batch, &range);
+            e.candidate_sha256 = "c".repeat(64);
+            e
+        },
+        {
+            let mut e = proof(&base, &batch, &range);
+            e.range.end = "2026-12-31".parse().unwrap();
+            e
+        },
+        {
+            let mut e = proof(&base, &batch, &range);
+            e.same_qfq_basis_ref.clear();
+            e
+        },
+    ];
+    for evidence in corrupt {
+        assert_eq!(
+            market_update::prepare(&base, &batch, &range, Some(&evidence)).unwrap(),
+            Decision::NeedsVerification(Reason::BasisUnknown),
+            "mismatched proof field must refuse approval: {evidence:?}"
+        );
+    }
+
+    // Sanity: the intact proof still approves — the gate binds the proof
+    // to base version, integrity, candidate digest, range and basis.
+    assert!(matches!(
+        market_update::prepare(&base, &batch, &range, Some(&proof(&base, &batch, &range))).unwrap(),
+        Decision::Candidate(_)
+    ));
+}

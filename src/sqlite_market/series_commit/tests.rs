@@ -2627,3 +2627,99 @@ fn catalog_roundtrip_on_compact_schema_uses_bound_tasks() {
     );
     assert!(accepted.is_ok());
 }
+
+#[test]
+fn rejected_item_leaves_head_and_task_state_untouched() {
+    // N2 storage side: a commit that fails the binding gate leaves the
+    // series head and records the item's failure — the item cannot leak
+    // a partial write, and the task revision reflects only the rejection.
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let (task_id, _r) = running_task_multi(&repo, 3);
+    let rev1 = start_item_id(&repo, &task_id, "item-1");
+    let first = publish_bars(
+        &repo,
+        &task_id,
+        rev1,
+        "pub-1",
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+
+    // Foreign item rejected by the binding gate.
+    let (other_task, _o) = running_task_multi_req(&repo, 1, "req-other");
+    let rev_other = start_item_id(&repo, &other_task, "item-1");
+    let c = Connection::open(dir.path().join("market.db")).unwrap();
+    let head_before = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let upserts = to_compact_bars(&[bar(2, 120)], Period::Day).unwrap();
+    let err = repo
+        .write(|c| {
+            let evidence =
+                evidence_store::put_evidence(c, EvidenceKind::Version, &version_evidence())?;
+            let continuity = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Continuity,
+                &json!({"mode": "prefix", "proven": true}),
+            )?;
+            commit_series_tx(
+                c,
+                &Commit {
+                    result_id: "pub-cross",
+                    task_id: &task_id,
+                    item_id: "item-1",
+                    run_id: RUN,
+                    occupancy_key: &scope().occupancy_key(),
+                    expected_task_revision: rev_other,
+                    entity: SYMBOL,
+                    period: Period::Day,
+                    base_version_id: Some(&first.version_id),
+                    change: SeriesChange::Append { upserts: &upserts },
+                    range_start_day: 2,
+                    range_end_day: 2,
+                    algorithm_version: "test",
+                    window_digest: None,
+                    source_binding_digest: None,
+                    evidence_digest: Some(evidence),
+                    coverage_status: None,
+                    metadata_changed: false,
+                    event_evidence_digest: continuity,
+                    published_at: None,
+                },
+            )
+        })
+        .expect_err("cross-task item must be rejected");
+    assert!(matches!(err, Error::Conflict(_) | Error::Integrity(_)));
+
+    let c = Connection::open(dir.path().join("market.db")).unwrap();
+    let head_after = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        head_after.version_id, head_before.version_id,
+        "rejected item must not advance the head"
+    );
+    assert_eq!(head_after.last_event_seq, head_before.last_event_seq);
+    let events: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM market_events WHERE result_id='pub-cross'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(events, 0, "rejected commit leaves no event row");
+
+    // The bound item itself stays usable: a correct commit still lands.
+    let rev2 = start_item_id(&repo, &task_id, "item-2");
+    repo.commit_range_ops(
+        &command_at(&task_id, "pub-2", rev2, "item-2"),
+        &scope(),
+        &first.version_id,
+        &[bar(2, 120)],
+        &[],
+        &[bar(0, 100), bar(1, 110), bar(2, 120)],
+    )
+    .unwrap()
+    .unwrap();
+}
