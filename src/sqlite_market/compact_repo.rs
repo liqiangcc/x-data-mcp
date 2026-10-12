@@ -766,27 +766,25 @@ fn commit_plan(
             adjustment_evidence: record.batch.adjustment_evidence.clone(),
         }),
     )?;
-    let binding_digest = match head.as_ref().map(|h| h.source_binding_digest) {
-        Some(d) => d,
-        None => {
-            let source: CompactSource = serde_json::from_value(
-                record
-                    .raw()
-                    .get("compact_source")
-                    .cloned()
-                    .ok_or_else(|| invalid("compact_source required"))?,
-            )
-            .map_err(invalid)?;
-            series_commit::put_generation_binding(
-                c,
-                &source.generation_id,
-                &source.generation_manifest_sha256,
-                &source.day_member_sha256,
-                &source.security_event_sha256,
-                &source.generation_evidence,
-            )?
-        }
-    };
+    // The binding always derives from the CANDIDATE's compact_source —
+    // cross-generation commits (append or rewrite) must rebind to the
+    // new generation, never silently inherit the head's.
+    let source: CompactSource = serde_json::from_value(
+        record
+            .raw()
+            .get("compact_source")
+            .cloned()
+            .ok_or_else(|| invalid("compact_source required"))?,
+    )
+    .map_err(invalid)?;
+    let binding_digest = series_commit::put_generation_binding(
+        c,
+        &source.generation_id,
+        &source.generation_manifest_sha256,
+        &source.day_member_sha256,
+        &source.security_event_sha256,
+        &source.generation_evidence,
+    )?;
     let metadata_changed = head.as_ref().is_some_and(|h| {
         h.source_binding_digest != binding_digest
             || h.evidence_digest != evidence_digest
