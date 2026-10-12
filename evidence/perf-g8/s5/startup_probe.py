@@ -117,6 +117,7 @@ def main() -> int:
                         "out": args.out})
     work = Path(safe["work_dir"])
     work.mkdir(parents=True, exist_ok=True)
+    os.chmod(work, 0o700)  # the service refuses a non-private runtime/socket directory
     db_copy = str(work / "probe.sqlite")
 
     out = {"started_at": utc_now(), "source_db": safe["db"],
@@ -124,6 +125,9 @@ def main() -> int:
     log_path = work / "probe-service.log"
     for i in range(args.runs):
         t0 = time.monotonic()
+        for ext in ("", "-wal", "-shm"):
+            if os.path.exists(db_copy + ext):
+                os.remove(db_copy + ext)
         shutil.copy2(safe["db"], db_copy)
         os.chmod(db_copy, 0o600)
         copy_s = time.monotonic() - t0

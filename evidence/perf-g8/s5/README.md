@@ -87,3 +87,15 @@
 - 禁区新增 `/root/x-data-mcp-owner`。
 - 仍未对 live server 验证：schema 21 构建下 data 工具的 wire（availability /
   `update_data` / `get_yearly_base_years` 沿用 XP-015 形状）；演练（`--max-chunks 3`）负责确认。
+
+### 演练后补记（c-worker1，包 60cc166，`--max-chunks 3`）
+
+- 整条链（init21→gen-A→collect→yearly1→gen-B→append→nochange→yearly2）跑通；
+  `task_sqlite` 在 schema-21 构建上的子命令为 `init21`（`init20` 为别名），默认值已改。
+- 读回快照流程：停服务 → 复制 db → `PRAGMA wal_checkpoint(TRUNCATE)` 后删 `-wal/-shm`
+  （`immutable=1` 的 integrity_check 看不到 WAL）→ 在快照上起一个临时 data_service 供
+  query → 跑 `s5_readback.py`。
+- readback 的末 3 根 bar 原先取了「最旧页」，已改为以 `--end-date` 结尾的 40 天窗口。
+- collect / yearly 任务没有 `range_results`，outcome 分类全是 `unknown`；这两类阶段看
+  `progress_totals`（total/succeeded/failed）。
+- startup_probe：工作目录需 0700（服务拒绝非私有路径），已修。

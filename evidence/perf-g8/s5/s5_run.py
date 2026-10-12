@@ -19,7 +19,7 @@ asserted outside those roots at startup (s5_common.guard_paths).
 usage:
   s5_run.py --stack-root DIR --pkg-bin DIR --gen-root DIR \
             --input-old DIR --input-new DIR --out DIR \
-            [--init-subcommand init20] [--end-date YYYY-MM-DD] \
+            [--init-subcommand init21] [--end-date YYYY-MM-DD] \
             [--phases collect,yearly1,append,nochange,yearly2] \
             [--max-chunks N] [--no-service-mgmt] [--request-prefix s5]
 """
@@ -46,6 +46,7 @@ from s5_common import (
     guard_paths,
     iso,
     merge_outcome_totals,
+    sum_progress,
     server_window,
     utc_now,
     wait_task,
@@ -296,6 +297,7 @@ def phase_collect(mcp: Mcp, prefix: str, max_chunks: int) -> dict:
             break
     out.update(ph.finish())
     out["outcome_totals"] = merge_outcome_totals(out["chunks"])
+    out["progress_totals"] = sum_progress(out["chunks"])
     return out
 
 
@@ -347,6 +349,7 @@ def phase_daily_update(mcp: Mcp, prefix: str, name: str, entities,
             break
     out.update(ph.finish())
     out["outcome_totals"] = merge_outcome_totals(out["tasks"])
+    out["progress_totals"] = sum_progress(out["tasks"])
     return out
 
 
@@ -453,6 +456,7 @@ def phase_yearly(mcp: Mcp, prefix: str, name: str, entities, max_chunks: int) ->
             break
     out.update(ph.finish())
     out["outcome_totals"] = merge_outcome_totals(out["tasks"])
+    out["progress_totals"] = sum_progress(out["tasks"])
     return out
 
 
@@ -466,7 +470,7 @@ def main() -> int:
     ap.add_argument("--input-old", required=True, help="gen-A input file dir (goes to mirror first)")
     ap.add_argument("--input-new", required=True, help="gen-B input file dir")
     ap.add_argument("--out", required=True, help="output dir for phase JSONs")
-    ap.add_argument("--init-subcommand", default="init20",
+    ap.add_argument("--init-subcommand", default="init21",
                     help="task_sqlite init subcommand (init20 prints 'task schema 21 ready' on v21 builds)")
     ap.add_argument("--end-date", default=None,
                     help="update window end date; default = input-new snapshot's latest trade day (operator supplies)")
@@ -505,7 +509,8 @@ def main() -> int:
             run["startup"] = stack.wait_sockets()
         mcp = Mcp(stack.mcp_sock)
         acq = Mcp(stack.acq_sock)
-        run["capabilities"] = mcp.call("get_data_capabilities", {}).get("implementation", {})
+        caps = mcp.call("get_data_capabilities", {})
+        run["capabilities"] = {k: caps.get(k) for k in ("capability_revision", "implementation") if k in caps}
         if "collect" in phases:
             if not args.no_service_mgmt:
                 installed = mirror_inputs(stack.mirror, safe["input_old"])

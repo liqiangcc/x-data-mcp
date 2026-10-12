@@ -191,3 +191,14 @@ def merge_outcome_totals(per_task: list) -> dict:
         for k in totals:
             totals[k] += int(out.get(k) or 0)
     return totals
+
+
+def sum_progress(per_task: list) -> dict:
+    """Sum the per-task progress counters (total/succeeded/failed). Collection
+    and yearly tasks carry no range_results, so their outcome classes read
+    `unknown`; these counters are the success evidence for those phases."""
+    out = {"total": 0, "succeeded": 0, "failed": 0}
+    for t in per_task:
+        for k in out:
+            out[k] += int(t.get(k) or 0)
+    return out

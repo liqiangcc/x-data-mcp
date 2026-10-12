@@ -22,6 +22,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from s5_common import Mcp, guard_paths, utc_now, write_json
@@ -98,7 +99,7 @@ def main() -> int:
     ap.add_argument("--sample-list", default=None,
                     help="JSON file: frozen [{exchange,code}, ...] (preferred over derived)")
     ap.add_argument("--end-date", default="2026-12-31",
-                    help="daily readback window end (default far-future)")
+                    help="daily readback window end; pass the gen-B last trade day")
     args = ap.parse_args()
 
     safe = guard_paths({"sock": args.sock, "db": args.db,
@@ -127,14 +128,17 @@ def main() -> int:
         out["sample_source"] = "derived_first5_last5_absent_even10"
     out["sample_entities"] = sample
 
+    # last bars: a 40-day window ending at --end-date (an unbounded query returns
+    # the oldest page first, not the newest bars)
+    tail_start = (date.fromisoformat(args.end_date) - timedelta(days=40)).isoformat()
     for e in sample:
         rec = {"entity": e}
         d = mcp.call("query_data", {
             "dataset": "market.daily", "contract_version": "v1",
             "selection": {"kind": "single", "entity": e},
-            "filter": {"kind": "daily", "start_date": "1990-12-19",
+            "filter": {"kind": "daily", "start_date": tail_start,
                        "end_date": args.end_date},
-            "version": {"kind": "latest_per_entity"}, "page_size": 5})
+            "version": {"kind": "latest_per_entity"}, "page_size": 50})
         rows = d.get("records") or []
         rec["daily"] = {"record_count_seen": len(rows),
                         "last_bars": rows[-3:],
