@@ -116,7 +116,7 @@ fn crash_between_pointer_swap_and_row_realign() {
     // Repeated open is idempotent: nothing flips back or advances.
     let service = open(root.path(), mirror.path());
     let again = service.sync_status().unwrap();
-    assert_eq!(again.active.unwrap().generation_id, gen_b);
+    assert_eq!(again.active.as_ref().unwrap().generation_id, gen_b);
     let state_of = |id: &str| {
         again
             .generations
@@ -724,7 +724,7 @@ fn crash_with_two_active_rows_collapses_to_pointer() {
 
     let service = open(root.path(), mirror.path());
     let status = service.sync_status().unwrap();
-    assert_eq!(status.active.unwrap().generation_id, gen_b);
+    assert_eq!(status.active.as_ref().unwrap().generation_id, gen_b);
     assert_eq!(generation_state(&status, &gen_b).as_deref(), Some("active"));
     assert_eq!(
         generation_state(&status, &gen_a).as_deref(),
@@ -798,7 +798,7 @@ fn crash_between_evidence_write_and_decision_blocks_verify_deterministically() {
     );
     // The previous active generation is byte-identical and still active.
     let status = service.sync_status().unwrap();
-    assert_eq!(status.active.unwrap().generation_id, gen_a);
+    assert_eq!(status.active.as_ref().unwrap().generation_id, gen_a);
     assert_eq!(dir_digest(&generation_dir(root.path(), &gen_a)), before_a);
 }
 
@@ -869,7 +869,7 @@ fn crash_between_decision_write_and_row_update_heals_at_activate() {
     assert_eq!(activate(&service, &gen_x, None).state, "active");
     let status = service.sync_status().unwrap();
     assert_eq!(generation_state(&status, &gen_x).as_deref(), Some("active"));
-    assert_eq!(status.active.unwrap().generation_id, gen_x);
+    assert_eq!(status.active.as_ref().unwrap().generation_id, gen_x);
 }
 
 /// P17: crash between `retire_bytes` and `upsert(evidence_only)`
@@ -1031,7 +1031,7 @@ fn crash_pointer_to_unrecorded_generation_diverges_row_but_stays_fail_closed() {
     let service = open(root.path(), mirror.path());
     let status = service.sync_status().unwrap();
     // The pointer is the read-path source of truth for `active`…
-    assert_eq!(status.active.unwrap().generation_id, gen_x);
+    assert_eq!(status.active.as_ref().unwrap().generation_id, gen_x);
     // …but the adopted row was inserted as byte_verified and the
     // pointer-realign loop does not cover that state: the divergence is
     // durable and deterministic.
@@ -1050,7 +1050,7 @@ fn crash_pointer_to_unrecorded_generation_diverges_row_but_stays_fail_closed() {
     // And nothing changes on reopen.
     let service = open(root.path(), mirror.path());
     let status = service.sync_status().unwrap();
-    assert_eq!(status.active.unwrap().generation_id, gen_x);
+    assert_eq!(status.active.as_ref().unwrap().generation_id, gen_x);
     assert_eq!(
         generation_state(&status, &gen_x).as_deref(),
         Some("byte_verified")
