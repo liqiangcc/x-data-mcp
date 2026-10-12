@@ -264,6 +264,7 @@ pub(crate) fn read_series_by_version_id(
     )
 }
 
+#[allow(dead_code)] // series_key-keyed reads arrive with yearly lineage (S3)
 pub(crate) fn read_series_by_key(
     c: &Connection,
     series_key: i64,
@@ -394,6 +395,7 @@ pub(crate) fn window_stats(
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // event fields projected selectively per reader
 pub(crate) struct EventRow {
     pub seq: i64,
     pub entity: String,
@@ -517,6 +519,7 @@ fn read_event_row(
         .transpose()
 }
 
+#[allow(dead_code)]
 pub(crate) fn event_by_seq(c: &Connection, seq: i64) -> Result<Option<EventRow>, Error> {
     read_event_row(
         c,
@@ -527,6 +530,7 @@ pub(crate) fn event_by_seq(c: &Connection, seq: i64) -> Result<Option<EventRow>,
 
 /// The newest event of one (entity, period) — one probe against the
 /// `(entity, period, seq DESC)` index.
+#[allow(dead_code)]
 pub(crate) fn latest_event(
     c: &Connection,
     entity: &str,
@@ -599,6 +603,7 @@ pub(crate) fn digest_seen(c: &Connection, digest: &Digest) -> Result<bool, Error
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // fields read by yearly tasks (S3)
 pub(crate) struct SeriesLineage {
     pub series_key: i64,
     pub base_daily_digest: Digest,
@@ -1130,6 +1135,7 @@ pub fn deep_check(c: &Connection) -> Result<Vec<String>, Error> {
 /// Per-entity event-chain closure (SPEC §3.4, item 4): every event's
 /// `old_content_digest` must equal the previous event's `new_content_digest`.
 /// O(events of this pair) — used by verification paths, never at startup.
+#[allow(dead_code)]
 pub(crate) fn check_entity_chain(
     c: &Connection,
     entity: &str,
@@ -1330,6 +1336,7 @@ pub(crate) fn insert_bars(
     Ok(())
 }
 
+#[allow(dead_code)] // yearly lineage writes land with S3
 pub(crate) fn insert_lineage(c: &Connection, l: &SeriesLineage) -> Result<(), Error> {
     c.execute(
         "INSERT INTO yearly_series_lineage(series_key,base_daily_digest,base_event_seq,algorithm_version,first_trade_day,last_trade_day,as_of_day) VALUES(?1,?2,?3,?4,?5,?6,?7)",

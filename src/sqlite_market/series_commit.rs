@@ -41,7 +41,7 @@ fn conflict_or_storage(error: rusqlite::Error) -> Error {
 
 /// What the commit does to the series' bar content.
 #[derive(Debug)]
-pub(crate) enum Change<'a> {
+pub(crate) enum SeriesChange<'a> {
     /// No series row may exist; inserts the row and every bar.
     FirstPublish { bars: &'a [CompactBar] },
     /// Pure tail extension: every upsert must sort strictly after the
@@ -74,7 +74,7 @@ pub(crate) struct Commit<'a> {
     /// `NoChange` still uses `Some(base)` so a concurrent replacement is
     /// detected instead of logging a no-change against a moved head.
     pub base_version_id: Option<&'a str>,
-    pub change: Change<'a>,
+    pub change: SeriesChange<'a>,
     pub range_start_day: i64,
     pub range_end_day: i64,
     pub algorithm_version: &'a str,
@@ -98,6 +98,7 @@ pub(crate) struct Commit<'a> {
 
 /// Canonical result identity digest stored on the event row — replay and
 /// audit compare this, never the caller's declared candidate label.
+#[allow(clippy::too_many_arguments)]
 fn event_result_digest(
     result_id: &str,
     task_id: &str,
@@ -291,7 +292,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
     match (w.base_version_id, &head) {
         (None, Some(_)) => return Err(Error::Conflict("effective head already exists".into())),
         (None, None) => {}
-        (Some(expected), None) => {
+        (Some(_), None) => {
             return Err(Error::NotFound);
         }
         (Some(expected), Some(row)) if row.version_id != expected => {
@@ -312,7 +313,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         Option<Digest>,
         Digest,
     ) = match (&w.change, &head) {
-        (Change::FirstPublish { bars }, None) => {
+        (SeriesChange::FirstPublish { bars }, None) => {
             check_bars(bars)?;
             (
                 "first_publish",
@@ -320,15 +321,15 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                 None,
                 None,
                 None,
-                series::fold_bars(w.entity, w.period, *bars)?,
+                series::fold_bars(w.entity, w.period, bars)?,
             )
         }
-        (Change::FirstPublish { .. }, Some(_)) => {
+        (SeriesChange::FirstPublish { .. }, Some(_)) => {
             return Err(Error::Conflict(
                 "first publish on an existing series".into(),
             ));
         }
-        (Change::Append { upserts }, Some(row)) => {
+        (SeriesChange::Append { upserts }, Some(row)) => {
             if upserts.is_empty() {
                 return Err(integrity("append requires upserts"));
             }
@@ -344,13 +345,13 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                 Some(2),
                 Some(row.record_count * 32),
                 Some(row.content_digest),
-                series::fold_more(row.content_digest, *upserts)?,
+                series::fold_more(row.content_digest, upserts)?,
             )
         }
-        (Change::Append { .. }, None) => {
+        (SeriesChange::Append { .. }, None) => {
             return Err(Error::NotFound);
         }
-        (Change::Replace { bars }, Some(row)) => {
+        (SeriesChange::Replace { bars }, Some(row)) => {
             check_bars(bars)?;
             (
                 "replace",
@@ -358,13 +359,13 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                 Some(3),
                 None,
                 Some(row.content_digest),
-                series::fold_bars(w.entity, w.period, *bars)?,
+                series::fold_bars(w.entity, w.period, bars)?,
             )
         }
-        (Change::Replace { .. }, None) => {
+        (SeriesChange::Replace { .. }, None) => {
             return Err(Error::NotFound);
         }
-        (Change::Metadata, Some(row)) => (
+        (SeriesChange::Metadata, Some(row)) => (
             "metadata",
             2,
             None,
@@ -372,8 +373,8 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
             Some(row.content_digest),
             row.content_digest,
         ),
-        (Change::Metadata, None) => return Err(Error::NotFound),
-        (Change::NoChange, Some(row)) => (
+        (SeriesChange::Metadata, None) => return Err(Error::NotFound),
+        (SeriesChange::NoChange, Some(row)) => (
             "no_change",
             1,
             Some(1),
@@ -381,7 +382,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
             Some(row.content_digest),
             row.content_digest,
         ),
-        (Change::NoChange, None) => return Err(Error::NotFound),
+        (SeriesChange::NoChange, None) => return Err(Error::NotFound),
     };
     let metadata_changed = w.metadata_changed
         || w.source_binding_digest.is_some()
@@ -389,7 +390,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         || w.coverage_status.is_some();
     // A5: `metadata` kind must actually change metadata; content-changing
     // kinds may carry metadata_changed=1 alongside.
-    if matches!(w.change, Change::Metadata) && !metadata_changed {
+    if matches!(w.change, SeriesChange::Metadata) && !metadata_changed {
         return Err(integrity("metadata commit carries no metadata change"));
     }
 
@@ -470,7 +471,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
 
     // State-row mutation with the A2 CAS on last_event_seq.
     match &w.change {
-        Change::FirstPublish { bars } => {
+        SeriesChange::FirstPublish { bars } => {
             let created = w
                 .published_at
                 .map(|t| t.to_rfc3339())
@@ -492,9 +493,9 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                     updated_at: created,
                 },
             )?;
-            series::insert_bars(c, key, *bars)?;
+            series::insert_bars(c, key, bars)?;
         }
-        Change::Append { upserts } => {
+        SeriesChange::Append { upserts } => {
             let row = head.as_ref().unwrap();
             let changed = c
                 .execute(
@@ -517,9 +518,9 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
             if changed != 1 {
                 return Err(Error::Conflict("effective head changed".into()));
             }
-            series::insert_bars(c, row.series_key, *upserts)?;
+            series::insert_bars(c, row.series_key, upserts)?;
         }
-        Change::Replace { bars } => {
+        SeriesChange::Replace { bars } => {
             let row = head.as_ref().unwrap();
             let changed = c
                 .execute(
@@ -548,9 +549,9 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                 params![row.series_key],
             )
             .map_err(storage)?;
-            series::insert_bars(c, row.series_key, *bars)?;
+            series::insert_bars(c, row.series_key, bars)?;
         }
-        Change::Metadata | Change::NoChange => {
+        SeriesChange::Metadata | SeriesChange::NoChange => {
             let row = head.as_ref().unwrap();
             let changed = c
                 .execute(

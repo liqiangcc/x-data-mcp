@@ -192,7 +192,7 @@ impl SqliteSupply {
         mut after_item: impl FnMut(usize),
     ) -> Result<Vec<crate::data_supply::presence::PresenceOutcome>, Error> {
         self.market.read(|c| {
-            let mut ctx = VerifyCtx::default();
+            let mut ctx = VerifyCtx;
             plan.items
                 .iter()
                 .enumerate()
@@ -222,20 +222,20 @@ impl crate::data_supply::presence::PresenceRepository for SqliteSupply {
 impl ReadRepository for SqliteSupply {
     fn query(&self, plan: &QueryPlan, access: &Access) -> Result<QuerySnapshot, Error> {
         self.market.read(|c| {
-            let mut ctx = VerifyCtx::default();
+            let mut ctx = VerifyCtx;
             query(c, &mut ctx, plan, access)
         })
     }
     fn verify(&self, refs: &[VersionRef]) -> Result<(), Error> {
         self.market.read(|c| {
-            let mut ctx = VerifyCtx::default();
+            let mut ctx = VerifyCtx;
             verify_versions_conn(c, &mut ctx, refs)
         })
     }
     fn versions(&self, args: &VersionsQuery, access: &Access) -> Result<Vec<VersionInfo>, Error> {
         let entities = entities(args.dataset, &args.selection, access)?;
         self.market.read(|c|{
-            let mut ctx = VerifyCtx::default();
+            let mut ctx = VerifyCtx;
             let mut result=vec![];
             if args.dataset==Dataset::Catalog {
                 let mut s=c.prepare("SELECT version_id FROM catalog_versions ORDER BY published_at DESC,version_id ASC").map_err(storage)?;
@@ -1392,7 +1392,7 @@ impl ObservationRepository for SqliteSupply {
         self.market.read(|c| {
             let reader = SqliteProgressRead {
                 c,
-                ctx: std::cell::RefCell::new(VerifyCtx::default()),
+                ctx: std::cell::RefCell::new(VerifyCtx),
             };
             f(&reader)
         })
@@ -1409,7 +1409,7 @@ impl ObservationRepository for SqliteSupply {
     }
     fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error> {
         self.market.read(|c| {
-            let mut ctx = VerifyCtx::default();
+            let mut ctx = VerifyCtx;
             task_facts(c, &mut ctx, id, access, true)
         })
     }
@@ -1421,7 +1421,7 @@ impl ObservationRepository for SqliteSupply {
             return Ok(());
         }
         self.market
-            .read(|c| verify_versions_meta_conn(c, &mut VerifyCtx::default(), refs))
+            .read(|c| verify_versions_meta_conn(c, &mut VerifyCtx, refs))
     }
     fn verify_publication_check(
         &self,
@@ -1447,7 +1447,7 @@ impl ObservationRepository for SqliteSupply {
             return Ok(());
         }
         self.market.read(|c| {
-            let mut ctx = VerifyCtx::default();
+            let mut ctx = VerifyCtx;
             verify_yearly_results_conn(c, &mut ctx, results)
         })
     }
@@ -1456,7 +1456,7 @@ impl ObservationRepository for SqliteSupply {
             return Ok(());
         }
         self.market.read(|c| {
-            let mut ctx = VerifyCtx::default();
+            let mut ctx = VerifyCtx;
             verify_range_results_conn(c, &mut ctx, results)
         })
     }
@@ -1467,7 +1467,7 @@ impl ObservationRepository for SqliteSupply {
     ) -> Result<Vec<AvailabilityFacts>, Error> {
         let _total = crate::stage_trace::span("availability.total");
         self.market.read(|c| {
-            let mut ctx = VerifyCtx::default();
+            let mut ctx = VerifyCtx;
             let entities: Vec<Option<Security>> = if plan.args.dataset == Dataset::Catalog {
                 vec![None]
             } else {

@@ -66,13 +66,6 @@ pub(crate) fn read_result_ctx(
 ) -> Result<Option<(Value, Receipt)>, Error> {
     read_result_legacy(c, id)
 }
-pub(crate) fn read_result_meta_ctx(
-    c: &Connection,
-    _ctx: &mut VerifyCtx,
-    id: &str,
-) -> Result<Option<(Value, Receipt)>, Error> {
-    read_result_legacy(c, id)
-}
 
 /// The legacy-envelope tail of `read_result_ctx` (pre-compact schema) —
 /// unchanged; extracted only so the committed-tier wrapper can share it.

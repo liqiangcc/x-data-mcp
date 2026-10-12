@@ -596,7 +596,6 @@ fn stale_base_version_fails_closed() {
         Ok(())
     })
     .unwrap();
-    let _ = path;
 }
 
 #[test]
@@ -632,7 +631,7 @@ fn replace_rollback_keeps_series_consistent() {
                 entity: SYMBOL,
                 period: Period::Day,
                 base_version_id: Some(&first.version_id),
-                change: Change::Replace { bars: &new_bars },
+                change: SeriesChange::Replace { bars: &new_bars },
                 range_start_day: 0,
                 range_end_day: 1,
                 algorithm_version: UPDATE_ALGO,

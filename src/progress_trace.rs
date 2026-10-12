@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // chain-era probes; names are index-coupled to NAMES
 pub(crate) enum Stage {
     TaskAssembly,
     Reconstruct,
@@ -191,6 +192,7 @@ impl Drop for Span {
     }
 }
 
+#[allow(dead_code)] // caller retired with the segment store
 pub(crate) fn segment_rows(rows: usize) {
     STATE.with(|state| {
         if let Some(state) = state.borrow_mut().as_mut() {

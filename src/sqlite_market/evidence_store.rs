@@ -251,8 +251,11 @@ pub(crate) fn put_source_binding(c: &Connection, binding: &SourceBinding) -> Res
     Ok(digest)
 }
 
+/// `source_bindings` row as stored.
+type BindingRow = (String, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
+
 pub(crate) fn read_source_binding(c: &Connection, digest: &Digest) -> Result<SourceBinding, Error> {
-    let row: Option<(String, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> = c
+    let row: Option<BindingRow> = c
         .query_row(
             "SELECT generation_id,generation_manifest_sha256,day_member_sha256,security_event_sha256,evidence_digest FROM source_bindings WHERE source_binding_digest=?1",
             params![digest.as_slice()],

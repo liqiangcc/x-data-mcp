@@ -497,11 +497,15 @@ fn ops_continuity_json(
 /// complete coverage only, no unit/adjustment semantic drift, matching
 /// snapshot-input digests.
 #[allow(clippy::too_many_arguments)]
+/// New (binding, version-evidence, coverage) when a typed metadata carry
+/// accompanies the commit.
+type MetadataCarry = (Option<Digest>, Option<Digest>, Option<CoverageStatus>);
+
 fn metadata_fields(
     c: &Connection,
     base: &series::SeriesRow,
     metadata: Option<&crate::market_update::TypedVersionMetadata>,
-) -> Result<(Option<Digest>, Option<Digest>, Option<CoverageStatus>), Error> {
+) -> Result<MetadataCarry, Error> {
     let Some(metadata) = metadata else {
         return Ok((None, None, None));
     };
@@ -603,7 +607,7 @@ fn commit_ops(
     let full_bars;
     let (change, mode, prefix_bytes, window_bars) = if tail_only {
         (
-            series_commit::Change::Append {
+            series_commit::SeriesChange::Append {
                 upserts: compact_upserts.as_slice(),
             },
             "append",
@@ -618,7 +622,7 @@ fn commit_ops(
         };
         full_bars = series_commit::to_compact_bars(expected, scope.period)?;
         (
-            series_commit::Change::Replace {
+            series_commit::SeriesChange::Replace {
                 bars: full_bars.as_slice(),
             },
             "full",
@@ -686,7 +690,7 @@ fn classify_envelope<'a>(
     new_bars: &'a [CompactBar],
 ) -> Result<series_commit::Change<'a>, Error> {
     match head {
-        None => Ok(series_commit::Change::FirstPublish { bars: new_bars }),
+        None => Ok(series_commit::SeriesChange::FirstPublish { bars: new_bars }),
         Some(row) => {
             if row.entity != entity || row.period != period {
                 return Err(invalid("commit scope mismatch"));
@@ -694,14 +698,14 @@ fn classify_envelope<'a>(
             let stored = series::all_bars(c, row.series_key)?;
             let new_digest = series::fold_bars(entity, period, new_bars)?;
             if new_digest == row.content_digest {
-                return Ok(series_commit::Change::NoChange);
+                return Ok(series_commit::SeriesChange::NoChange);
             }
             if stored.len() < new_bars.len() && stored[..] == new_bars[..stored.len()] {
-                return Ok(series_commit::Change::Append {
+                return Ok(series_commit::SeriesChange::Append {
                     upserts: &new_bars[stored.len()..],
                 });
             }
-            Ok(series_commit::Change::Replace { bars: new_bars })
+            Ok(series_commit::SeriesChange::Replace { bars: new_bars })
         }
     }
 }
@@ -791,24 +795,26 @@ fn commit_plan(
     let (base_version_id, change, mode, prefix_bytes) = if no_change {
         (
             head.as_ref().map(|h| h.version_id.as_str()),
-            series_commit::Change::NoChange,
+            series_commit::SeriesChange::NoChange,
             "unchanged",
             head.as_ref().map(|h| h.record_count as u64 * 32),
         )
     } else {
         let mut change =
             classify_envelope(c, &scope.symbol, scope.period, head.as_ref(), &new_bars)?;
-        if matches!(change, series_commit::Change::NoChange) && metadata_changed {
+        if matches!(change, series_commit::SeriesChange::NoChange) && metadata_changed {
             // Content identical, metadata moved — the A5 metadata kind.
-            change = series_commit::Change::Metadata;
+            change = series_commit::SeriesChange::Metadata;
         }
         let mode = match &change {
-            series_commit::Change::FirstPublish { .. } => "first",
-            series_commit::Change::Append { .. } => "append",
-            series_commit::Change::Replace { .. } => "full",
-            series_commit::Change::Metadata | series_commit::Change::NoChange => "unchanged",
+            series_commit::SeriesChange::FirstPublish { .. } => "first",
+            series_commit::SeriesChange::Append { .. } => "append",
+            series_commit::SeriesChange::Replace { .. } => "full",
+            series_commit::SeriesChange::Metadata | series_commit::SeriesChange::NoChange => {
+                "unchanged"
+            }
         };
-        let prefix = if matches!(change, series_commit::Change::Append { .. }) {
+        let prefix = if matches!(change, series_commit::SeriesChange::Append { .. }) {
             head.as_ref().map(|h| h.record_count as u64 * 32)
         } else {
             None
@@ -924,7 +930,7 @@ fn commit_plan_no_change(
             entity: &scope.symbol,
             period: scope.period,
             base_version_id: Some(base_id),
-            change: series_commit::Change::NoChange,
+            change: series_commit::SeriesChange::NoChange,
             range_start_day: range_start,
             range_end_day: range_end,
             algorithm_version: series_commit::UPDATE_ALGO,
@@ -1140,7 +1146,7 @@ impl RangeRepository for SqliteCompactMarket {
                     entity: &scope.symbol,
                     period: scope.period,
                     base_version_id: Some(base_version_id),
-                    change: series_commit::Change::NoChange,
+                    change: series_commit::SeriesChange::NoChange,
                     range_start_day: compact_market::epoch_day(range.start),
                     range_end_day: compact_market::epoch_day(range.end),
                     algorithm_version: series_commit::UPDATE_ALGO,
@@ -1211,7 +1217,7 @@ impl RangeRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
-        Ok(self.tasks.transition(task, revision, run, change)?)
+        self.tasks.transition(task, revision, run, change)
     }
     fn cover_gap(&self, covering: &crate::market_storage::GapCovering) -> Result<bool, Error> {
         covering.validate()?;
@@ -1441,7 +1447,7 @@ fn update_batch_item(
                         entity: &item.symbol,
                         period: Period::Day,
                         base_version_id: Some(base_version_id),
-                        change: series_commit::Change::NoChange,
+                        change: series_commit::SeriesChange::NoChange,
                         range_start_day: *range_start_day,
                         range_end_day: *range_end_day,
                         algorithm_version: series_commit::UPDATE_ALGO,
@@ -1489,7 +1495,7 @@ fn update_batch_item(
                         entity: &item.symbol,
                         period: Period::Day,
                         base_version_id: Some(base_version_id),
-                        change: series_commit::Change::Append {
+                        change: series_commit::SeriesChange::Append {
                             upserts: compact_upserts.as_slice(),
                         },
                         range_start_day: upserts
@@ -1566,10 +1572,10 @@ fn update_batch_item(
 
 impl TaskRepository for SqliteCompactMarket {
     fn read_request(&self, id: &str) -> Result<Option<RequestRecord>, task_control::Error> {
-        Ok(self.tasks.read_request(id)?)
+        self.tasks.read_request(id)
     }
     fn read_task(&self, id: &str) -> Result<Option<TaskSnapshot>, task_control::Error> {
-        Ok(self.tasks.read_task(id)?)
+        self.tasks.read_task(id)
     }
     fn accept(
         &self,
@@ -1579,7 +1585,7 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         retry: Option<&RetryGuard>,
     ) -> Result<Acceptance, task_control::Error> {
-        Ok(self.tasks.accept(id, command, work, run, retry)?)
+        self.tasks.accept(id, command, work, run, retry)
     }
     fn transition(
         &self,
@@ -1588,7 +1594,7 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, task_control::Error> {
-        Ok(self.tasks.transition(task, revision, run, change)?)
+        self.tasks.transition(task, revision, run, change)
     }
     fn transition_light(
         &self,
@@ -1596,13 +1602,13 @@ impl TaskRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<(), task_control::Error> {
-        Ok(self.tasks.transition_light(s, run, change)?)
+        self.tasks.transition_light(s, run, change)
     }
     fn candidates(&self, run: &str) -> Result<Vec<TaskSnapshot>, task_control::Error> {
-        Ok(self.tasks.candidates(run)?)
+        self.tasks.candidates(run)
     }
     fn reconcile(&self, run: &str) -> Result<usize, task_control::Error> {
-        Ok(self.tasks.reconcile(run)?)
+        self.tasks.reconcile(run)
     }
 }
 
@@ -1624,7 +1630,7 @@ impl crate::official_market::DailyCollectionRepository for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
-        Ok(self.tasks.transition(task, revision, run, change)?)
+        self.tasks.transition(task, revision, run, change)
     }
     fn commit_collection_batch(
         &self,
@@ -1781,7 +1787,7 @@ fn collection_item_commit(c: &Connection, item: &CollectionCandidate) -> Result<
             entity: &item.symbol,
             period: Period::Day,
             base_version_id: None,
-            change: series_commit::Change::FirstPublish { bars: &bars },
+            change: series_commit::SeriesChange::FirstPublish { bars: &bars },
             range_start_day: bars[0].trade_day,
             range_end_day: bars[bars.len() - 1].trade_day,
             algorithm_version: series_commit::COLLECTION_ALGO,
@@ -1808,7 +1814,7 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
-        Ok(self.tasks.transition(task, revision, run, change)?)
+        self.tasks.transition(task, revision, run, change)
     }
     fn commit_yearly(
         &self,
@@ -1887,7 +1893,7 @@ impl crate::gap_verification::runner::GapTaskStore for SqliteCompactMarket {
         run: &str,
         change: Change,
     ) -> Result<TaskSnapshot, Error> {
-        Ok(self.tasks.transition(task, revision, run, change)?)
+        self.tasks.transition(task, revision, run, change)
     }
 }
 
