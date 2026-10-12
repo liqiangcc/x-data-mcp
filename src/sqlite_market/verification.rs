@@ -33,7 +33,7 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
         let (kind, id, item) = row.map_err(storage)?;
         if legacy
             || (kind == 0) != daily
-            || !task.items.iter().any(|i| &i.spec.item_id == item)
+            || !task.items.iter().any(|i| i.spec.item_id == item)
             || found.contains_key(&item)
         {
             return Err(integrity(
