@@ -702,7 +702,9 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         "daily_replaced_since_derivation"
     );
 
-    // A rederived yearly clears the invalid state.
+    // A rederived yearly clears the invalid state. The new bar sits on the
+    // new base's last 2020 trading day (06-08) — deriving a bar at the old
+    // base's last day would be a fabricated row and fail closed at read.
     let base = base_checked(&f, SYMBOL);
     let head = {
         let c = Connection::open(f.tasks.path()).unwrap();
@@ -715,7 +717,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &yearly_task,
         "item-2",
         SYMBOL,
-        &[(day_epoch(2020, 2, 4), 100)],
+        &[(day_epoch(2020, 6, 8), 310)],
         &base.version().version_id,
         Some(head.version_id),
     );
