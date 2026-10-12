@@ -1079,7 +1079,7 @@ fn update_batch_commit_mixed_isolation_and_rollback() {
             },
         },
     ];
-    let out = repo.commit_update_batch(&items).unwrap().unwrap();
+    let out = repo.commit_update_batch(&task_id, &items).unwrap().unwrap();
     assert_eq!(out.len(), 2);
     let ok = out[0].as_ref().expect("first item must commit");
     assert_eq!(ok.publication_id, "upd-ok");
@@ -1278,28 +1278,30 @@ fn check_binding_rejects_wrong_owner_state_target_and_occupancy() {
     let (_path, repo) = repo(&dir);
     let (task_id, _r) = running_task(&repo);
 
-    let base_commit = |task: &str, item: &str, run: &str, symbol: &str| Commit {
-        result_id: "bind-1",
-        task_id: task,
-        item_id: item,
-        run_id: run,
-        occupancy_key: "",
-        expected_task_revision: 1,
-        entity: symbol,
-        period: Period::Day,
-        base_version_id: None,
-        change: SeriesChange::FirstPublish { bars: &[] },
-        range_start_day: 0,
-        range_end_day: 0,
-        algorithm_version: "test",
-        window_digest: None,
-        source_binding_digest: None,
-        evidence_digest: None,
-        coverage_status: None,
-        metadata_changed: false,
-        event_evidence_digest: [0xAA; 32],
-        published_at: None,
-    };
+    fn base_commit<'a>(task: &'a str, item: &'a str, run: &'a str, symbol: &'a str) -> Commit<'a> {
+        Commit {
+            result_id: "bind-1",
+            task_id: task,
+            item_id: item,
+            run_id: run,
+            occupancy_key: "",
+            expected_task_revision: 1,
+            entity: symbol,
+            period: Period::Day,
+            base_version_id: None,
+            change: SeriesChange::FirstPublish { bars: &[] },
+            range_start_day: 0,
+            range_end_day: 0,
+            algorithm_version: "test",
+            window_digest: None,
+            source_binding_digest: None,
+            evidence_digest: None,
+            coverage_status: None,
+            metadata_changed: false,
+            event_evidence_digest: [0xAA; 32],
+            published_at: None,
+        }
+    }
 
     let occ = scope().occupancy_key();
     let real_revision = repo.task(&task_id).unwrap().task.state_revision;
