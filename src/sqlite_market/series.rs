@@ -1026,17 +1026,31 @@ pub fn startup_check(c: &Connection) -> Result<(), Error> {
     if orphan {
         return Err(integrity("orphan yearly lineage"));
     }
-    // 3. Every (entity, period) carrying events must own a series row whose
-    //    first event is first_publish. The DISTINCT pass rides the covering
-    //    index market_events_entity_period; the probes are O(#pairs).
-    let pairs = c
-        .prepare("SELECT DISTINCT entity, period FROM market_events")
-        .map_err(storage)?
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
-        .map_err(storage)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(storage)?;
-    for (entity, period) in pairs {
+    // 3. Orphan events: every (entity, period) carrying events must own a
+    //    series row. NO O(events) DISTINCT scan here — SQLite has no loose
+    //    index scan, so emulate one: seek the next distinct (entity,period)
+    //    pair in index order, O(#pairs) index seeks total.
+    let mut cursor: Option<(String, i64)> = None;
+    loop {
+        let pair: Option<(String, i64)> = match &cursor {
+            None => c
+                .query_row(
+                    "SELECT entity, period FROM market_events INDEXED BY market_events_entity_period ORDER BY entity, period LIMIT 1",
+                    [],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                )
+                .optional()
+                .map_err(storage)?,
+            Some((entity, period)) => c
+                .query_row(
+                    "SELECT entity, period FROM market_events INDEXED BY market_events_entity_period WHERE (entity, period) > (?1, ?2) ORDER BY entity, period LIMIT 1",
+                    params![entity, period],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                )
+                .optional()
+                .map_err(storage)?,
+        };
+        let Some((entity, period)) = pair else { break };
         let exists: bool = c
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=1)",
@@ -1047,16 +1061,24 @@ pub fn startup_check(c: &Connection) -> Result<(), Error> {
         if !exists {
             return Err(integrity("market event without series row"));
         }
-        let first_kind: String = c
-            .query_row(
-                "SELECT kind FROM market_events INDEXED BY market_events_entity_period WHERE entity=?1 AND period=?2 AND seq=(SELECT MIN(seq) FROM market_events WHERE entity=?1 AND period=?2)",
-                params![entity, period],
-                |r| r.get(0),
-            )
-            .map_err(storage)?;
-        if first_kind != "first_publish" {
-            return Err(integrity("first market event is not first_publish"));
-        }
+        cursor = Some((entity, period));
+    }
+    // 4. Series-driven first-publish: one bounded index seek per series —
+    //    driven by market_series, not by an event-side DISTINCT scan.
+    let bad_first: bool = c
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM market_series s
+                WHERE COALESCE(
+                    (SELECT e.kind FROM market_events e INDEXED BY market_events_entity_period
+                     WHERE e.entity = s.entity AND e.period = s.period
+                     ORDER BY e.seq ASC LIMIT 1), '') <> 'first_publish')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    if bad_first {
+        return Err(integrity("first market event is not first_publish"));
     }
     Ok(())
 }
