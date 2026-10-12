@@ -226,8 +226,14 @@ const DURABLE_EFFECTS_SQL_COMPACT: &str =
     "SELECT EXISTS(SELECT 1 FROM task_publications WHERE task_id=?1
                  UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1
                  UNION ALL SELECT 1 FROM publication_results WHERE task_id=?1)";
+/// Schema 21 keeps a single durable record: one `market_events` row per
+/// committed result.
+const DURABLE_EFFECTS_SQL_LATEST_ONLY: &str =
+    "SELECT EXISTS(SELECT 1 FROM market_events WHERE task_id=?1)";
 fn durable_effects(c: &Connection, task_id: &str) -> Result<bool, Error> {
-    let sql = if crate::sqlite_market::is_compact_schema(c).map_err(storage)? {
+    let sql = if crate::sqlite_market::is_latest_only_schema(c).map_err(storage)? {
+        DURABLE_EFFECTS_SQL_LATEST_ONLY
+    } else if crate::sqlite_market::is_compact_schema(c).map_err(storage)? {
         DURABLE_EFFECTS_SQL_COMPACT
     } else {
         DURABLE_EFFECTS_SQL

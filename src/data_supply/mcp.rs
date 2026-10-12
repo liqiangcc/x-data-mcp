@@ -511,6 +511,7 @@ fn mapped(e: Error) -> ApiError {
         Error::Invalid(_) => "invalid_arguments",
         Error::Integrity(_) | Error::Base(_) => "integrity_error",
         Error::NotFound => "version_not_found",
+        Error::Stale(_) => "stale_version",
         Error::Conflict(_) => "precondition_conflict",
         Error::OutcomeUnknown(_) => "outcome_unknown",
         _ => "storage_error",

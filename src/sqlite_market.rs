@@ -165,8 +165,29 @@ pub(crate) fn is_compact_schema(c: &Connection) -> Result<bool, Error> {
     )
     .map_err(storage)
 }
+/// Schema 21 ("latest-only"): `market_series` exists. Probed by table
+/// presence — `check_schema` has already bound the file to the expected
+/// schema identity on the way in.
+pub(crate) fn is_latest_only_schema(c: &Connection) -> Result<bool, Error> {
+    c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='market_series')",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(storage)
+}
 
 pub(crate) fn head(c: &Connection, scope: &Scope) -> Result<Option<String>, Error> {
+    if is_latest_only_schema(c)? {
+        return c
+            .query_row(
+                "SELECT version_id FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=1",
+                params![scope.symbol, compact_repo::period_code(scope.period)],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage);
+    }
     if is_compact_schema(c)? {
         return c
             .query_row(
@@ -482,6 +503,16 @@ pub(crate) fn read_record(
     published: bool,
     allow_yearly: bool,
 ) -> Result<CheckedRecord, Error> {
+    if is_latest_only_schema(c)? {
+        // Schema 21 keeps only committed current state — the staged tier is
+        // gone, so `published` has no effect; misses resolve `Stale` when the
+        // pinned digest was committed before (SPEC §6.1).
+        let record = series::materialize_checked(c, id, true)?;
+        if !allow_yearly && record.version().period != Period::Day {
+            return Err(Error::Integrity("yearly record in daily context".into()));
+        }
+        return Ok(record);
+    }
     if is_compact_schema(c)? {
         let record = compact_repo::materialize_checked(c, id, !published)?;
         if !allow_yearly && record.version.period != Period::Day {
@@ -507,6 +538,17 @@ pub(crate) fn slim_published(
     published: bool,
     allow_yearly: bool,
 ) -> Result<Option<CheckedRecord>, Error> {
+    if is_latest_only_schema(c)? {
+        // Schema 21 keeps only committed current state — the staged tier is
+        // gone, so `published` has no effect.
+        let Some(record) = series::materialize_header(c, id)? else {
+            return Ok(None);
+        };
+        if !allow_yearly && record.version().period != Period::Day {
+            return Err(Error::Integrity("yearly record in daily context".into()));
+        }
+        return Ok(Some(record));
+    }
     if !published || !is_compact_schema(c)? {
         return Ok(None);
     }
@@ -623,6 +665,26 @@ pub(crate) fn range_rows(
     p: Period,
     range: &Range,
 ) -> Result<Vec<Bar>, Error> {
+    if is_latest_only_schema(c)? {
+        let row = series::require_series(c, id)?;
+        if row.period != p {
+            return Err(Error::Integrity("range version period mismatch".into()));
+        }
+        return Ok(series::bars_in_range(
+            c,
+            row.series_key,
+            crate::compact_market::epoch_day(range.start),
+            crate::compact_market::epoch_day(range.end),
+        )?
+        .iter()
+        .map(|b| b.to_bar(p))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(integrity)?
+        .into_iter()
+        .filter(|b| range.after.map(|a| b.date > a).unwrap_or(true))
+        .take(range.limit + 1)
+        .collect());
+    }
     if is_compact_schema(c)? {
         let record = compact_repo::materialize_checked(c, id, false)?;
         if record.version.period != p {
@@ -1073,6 +1135,8 @@ pub fn set_fixture_rollover_depth(depth: Option<u32>) {
 pub(crate) mod envelope;
 pub(crate) mod gaps;
 pub(crate) mod manifest;
+#[allow(dead_code)]
+pub(crate) mod series;
 pub(crate) mod update;
 pub(crate) mod yearly_results;
 

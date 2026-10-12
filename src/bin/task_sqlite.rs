@@ -1,6 +1,6 @@
 //! Explicit schema lifecycle, never invoked by ordinary reads.
 //! `init`/`upgrade` produce the legacy schema; `init20` creates a fresh
-//! compact-storage database (schema 20), the production entry point for
+//! compact-storage database (schema 21), the production entry point for
 //! #259 fresh-rebuild deployments.
 fn main() {
     if let Err(e) = run() {
@@ -16,7 +16,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let store = x_data_mcp::sqlite_tasks::SqliteTasks::new(&args[1]);
     if args[0].to_str() == Some("check") {
         // Read-only full registry sweep: safe while the service is running.
-        let findings = store.registry_sweep_readonly()?;
+        let mut findings = store.registry_sweep_readonly()?;
+        // Schema-21 latest-only series deep check: closure probes plus a
+        // full digest recompute per series (SPEC-LATEST-ONLY §3.5/Q11);
+        // empty on earlier schemas.
+        for reason in store.series_check_readonly()? {
+            findings.push(x_data_mcp::sqlite_tasks::SweepFinding {
+                check: "series.deep",
+                reason,
+            });
+        }
         if findings.is_empty() {
             println!("task registry check passed");
             return Ok(());

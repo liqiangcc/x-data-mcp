@@ -14,6 +14,9 @@ pub(crate) fn read_facts(c: &Connection, task_id: &str) -> Result<Facts, Error> 
     let kind = contract_kind(&task.task.key).ok_or(Error::Task(TaskError::UnsupportedContract))?;
     let daily = matches!(kind, FactContract::Daily);
     let legacy = matches!(kind, FactContract::Legacy);
+    if is_latest_only_schema(c)? {
+        return read_facts_series(c, task, daily, legacy);
+    }
     let compact_schema: bool = c
         .query_row(
             "SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='publication_batches')",
@@ -260,6 +263,97 @@ fn read_facts_compact(
         return Err(integrity(
             "task publication associations do not match execution receipts",
         ));
+    }
+    let mut items = Vec::new();
+    for item in &task.items {
+        let evidence = found
+            .remove(&item.spec.item_id)
+            .unwrap_or(Evidence::Missing);
+        if matches!(evidence, Evidence::Missing)
+            && (item.stage == Stage::Finished && item.outcome.as_ref().is_some_and(|o| o.success))
+        {
+            return Err(integrity(
+                "successful item lacks publication execution evidence",
+            ));
+        }
+        items.push(ItemFact {
+            item_id: item.spec.item_id.clone(),
+            evidence,
+        });
+    }
+    Ok(Facts { task, items })
+}
+
+/// Schema-21 facts read (SPEC-LATEST-ONLY §6.1 event era): one
+/// `market_events` row per committed item result — `result_digest` is the
+/// evidence anchor, `new_content_digest` the resulting version id, and
+/// `outcome=1` the reused marker. There is no separate publication table:
+/// the event log IS the registry, so the v19 `task_publications` count
+/// check has nothing to compare and the per-item coverage check below
+/// carries the same weight.
+fn read_facts_series(
+    c: &Connection,
+    task: crate::task_control::TaskSnapshot,
+    daily: bool,
+    legacy: bool,
+) -> Result<Facts, Error> {
+    let task_id = task.task.task_id.clone();
+    if legacy {
+        return Err(integrity(
+            "legacy contract facts cannot exist on latest-only storage",
+        ));
+    }
+    let mut stmt = c
+        .prepare(
+            "SELECT period,item_id,outcome,task_revision,result_id,result_digest,new_content_digest FROM market_events WHERE task_id=?1",
+        )
+        .map_err(storage)?;
+    let rows = stmt
+        .query_map([&task_id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Vec<u8>>(5)?,
+                r.get::<_, Vec<u8>>(6)?,
+            ))
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let mut found = std::collections::BTreeMap::new();
+    for (period, item, outcome, revision, id, digest, new_digest) in rows {
+        if (period == 1) != daily
+            || !task.items.iter().any(|i| i.spec.item_id == item)
+            || found.contains_key(&item)
+        {
+            return Err(integrity(
+                "publication result contract/item association differs",
+            ));
+        }
+        let digest: [u8; 32] = digest
+            .try_into()
+            .map_err(|_| integrity("stored result digest is malformed"))?;
+        let new_digest: [u8; 32] = new_digest
+            .try_into()
+            .map_err(|_| integrity("stored content digest is malformed"))?;
+        let revision =
+            u64::try_from(revision).map_err(|_| integrity("stored task revision overflows"))?;
+        found.insert(
+            item,
+            Evidence::Committed {
+                evidence_sha256: super::compact_repo::hex_bytes(&digest),
+                receipt: crate::market_storage::Receipt {
+                    publication_id: id,
+                    version_id: super::compact_repo::hex_bytes(&new_digest),
+                    task_id: task_id.clone(),
+                    task_revision: revision,
+                },
+                reused_version: outcome == 1,
+            },
+        );
     }
     let mut items = Vec::new();
     for item in &task.items {

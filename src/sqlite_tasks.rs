@@ -32,10 +32,14 @@ pub(crate) const MIGRATIONS: [&str; 18] = [
 ];
 /// Compact market storage (#259) is an explicit opt-in target: compact files
 /// are refused by `check_schema` above so legacy adapters stay fail-closed.
-pub const COMPACT_SCHEMA_VERSION: u32 = 20;
-pub(crate) const COMPACT_MIGRATIONS: [&str; 2] = [
+/// Schema 21 replaces the version-manifest store with latest-only
+/// `market_series`/`series_bars` + the `market_events` log
+/// (SPEC-LATEST-ONLY §1; still fresh-init only, never in-place).
+pub const COMPACT_SCHEMA_VERSION: u32 = 21;
+pub(crate) const COMPACT_MIGRATIONS: [&str; 3] = [
     include_str!("../migrations/tasks/019_compact_market.sql"),
     include_str!("../migrations/tasks/020_evidence_parts.sql"),
+    include_str!("../migrations/tasks/021_latest_only.sql"),
 ];
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.
@@ -232,6 +236,26 @@ impl SqliteTasks {
             )));
         }
         registry_sweep(&tx)
+    }
+    /// Latest-only market deep check (schema 21): the series/event closure
+    /// probes plus a full digest recompute per series — the explicit
+    /// `task_sqlite check` pass (SPEC-LATEST-ONLY §3.5/RULINGS Q11). Empty on
+    /// other schemas.
+    pub fn series_check_readonly(&self) -> Result<Vec<String>, Error> {
+        let mut c = self.connect(true)?;
+        let tx = c.transaction().map_err(storage)?;
+        let version: u32 = tx
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(storage)?;
+        if version != COMPACT_SCHEMA_VERSION {
+            return Ok(vec![]);
+        }
+        if !crate::sqlite_market::is_latest_only_schema(&tx)? {
+            return Err(Error::StorageUnavailable(
+                "schema 21 without market_series tables".into(),
+            ));
+        }
+        crate::sqlite_market::series::deep_check(&tx)
     }
     pub(crate) fn connect(&self, readonly: bool) -> Result<Connection, Error> {
         let flag = if readonly {

@@ -832,10 +832,20 @@ fn head_transition_refreshes_a_stale_held_head() {
     assert!(db.item_execution_started(&tid, &item_id).unwrap());
 }
 
-const COMPACT_TABLES: [&str; 15] = [
+/// Schema-21 latest-only compact set (SPEC-LATEST-ONLY §1): the schema-19
+/// version-manifest/result tables below are replaced by `market_series` +
+/// `series_bars` + `yearly_series_lineage` + `market_events`.
+const COMPACT_TABLES: [&str; 7] = [
     "evidence_bundles",
     "evidence_parts",
     "source_bindings",
+    "market_series",
+    "series_bars",
+    "yearly_series_lineage",
+    "market_events",
+];
+/// Dropped by migration 021 — their absence is part of the v21 shape.
+const DROPPED_V19_TABLES: [&str; 12] = [
     "bar_segments",
     "segment_bars",
     "data_versions",
@@ -910,17 +920,24 @@ fn assert_compact_shape(path: &std::path::Path) {
     for table in LEGACY_MARKET_TABLES {
         assert!(!tables.contains(&table.to_string()), "legacy {table} kept");
     }
+    for table in DROPPED_V19_TABLES {
+        assert!(
+            !tables.contains(&table.to_string()),
+            "v19 table {table} kept"
+        );
+    }
     for table in PRESERVED_TABLES {
         assert!(
             tables.contains(&table.to_string()),
             "preserved {table} lost"
         );
     }
-    let versions = raw_columns(path, "data_versions");
-    assert!(versions.contains(&"version_key".to_string()));
-    assert!(!versions.contains(&"compat_json".to_string()));
-    assert!(!versions.contains(&"envelope_json".to_string()));
-    assert!(raw_columns(path, "bar_segments").contains(&"segment_key".to_string()));
+    let series = raw_columns(path, "market_series");
+    assert!(series.contains(&"series_key".to_string()));
+    assert!(series.contains(&"content_digest".to_string()));
+    assert!(series.contains(&"version_id".to_string()));
+    assert!(raw_columns(path, "series_bars").contains(&"series_key".to_string()));
+    assert!(raw_columns(path, "market_events").contains(&"result_id".to_string()));
 }
 fn assert_legacy_shape(path: &std::path::Path) {
     assert_eq!(raw_user_version(path), SCHEMA_VERSION);
