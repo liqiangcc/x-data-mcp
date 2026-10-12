@@ -467,8 +467,8 @@ fn stored_year_version(fixture: &Fixture, symbol: &str, id: &str) -> EffectiveVe
                 &lineage.base_daily_digest,
             ),
             algorithm_version: lineage.algorithm_version,
-            first_trading_date: crate::compact_market::epoch_date(lineage.first_trade_day),
-            last_trading_date: crate::compact_market::epoch_date(lineage.last_trade_day),
+            first_trading_date: crate::compact_market::epoch_date(lineage.first_trade_day).unwrap(),
+            last_trading_date: crate::compact_market::epoch_date(lineage.last_trade_day).unwrap(),
         }),
     }
 }
