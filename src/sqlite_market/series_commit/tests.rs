@@ -2064,7 +2064,7 @@ fn commit_yearly_plan(
         run_id: RUN.into(),
         expected_revision: rev,
         intent: PublishIntent::CurrentHead {
-            expected_head: None,
+            expected_daily_head: base.version().version_id.clone(),
             expected_yearly_head: prior.as_ref().map(|p| p.version().version_id.clone()),
         },
     };
@@ -2553,4 +2553,77 @@ fn year_bar(y: i32, close: i64) -> Bar {
 
 fn digest32(bytes: &[u8]) -> Digest {
     bytes.try_into().expect("32-byte digest")
+}
+
+#[test]
+fn catalog_roundtrip_on_compact_schema_uses_bound_tasks() {
+    // N1: the worker builds the catalog executor from `market.tasks()`;
+    // on schema 21 that handle is coordinator-bound — catalog publish /
+    // read-back / task binding must work through it.
+    use crate::catalog::{
+        CatalogSnapshot, CompletenessEvidence, Exchange, IndustryInfo, SecurityRecord, SecurityType,
+    };
+    use crate::sqlite_catalog::SqliteCatalog;
+
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let catalog = SqliteCatalog::new(repo.tasks());
+    let now = Utc::now();
+    let snapshot = CatalogSnapshot {
+        source: "fixture:catalog".into(),
+        acquired_at: now,
+        completeness: CompletenessEvidence::Complete { expected_count: 1 },
+        records: vec![SecurityRecord {
+            symbol: "600006".into(),
+            name: "样例".into(),
+            exchange: Exchange::Shanghai,
+            security_type: SecurityType::AShare,
+            source_security_id: "sh600006".into(),
+            industry: IndustryInfo::Missing {
+                reason: "fixture unknown".into(),
+            },
+            source: "fixture:catalog".into(),
+            acquired_at: now,
+        }],
+    };
+    catalog
+        .publish_fixture("cat-v1", snapshot.clone(), None)
+        .unwrap();
+    let facts = catalog.selection_facts().unwrap();
+    assert_eq!(facts.catalog_head.as_deref(), Some("cat-v1"));
+    assert_eq!(catalog.fixed("cat-v1").unwrap().records.len(), 1);
+    assert!(matches!(
+        catalog.publish_fixture("cat-v2", snapshot, Some("stale")),
+        Err(crate::market_storage::Error::Conflict(_))
+    ));
+    assert_eq!(
+        catalog.selection_facts().unwrap().catalog_head.as_deref(),
+        Some("cat-v1")
+    );
+    // The bound task handle still works on the v21 file (accept + read).
+    let accepted = repo.tasks().accept(
+        "req-catalog-bound",
+        &crate::task_control::Command {
+            key: crate::task_control::CommandKey {
+                operation: "collect".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: serde_json::json!({}),
+        },
+        &crate::task_control::FrozenWork {
+            items: vec![crate::task_control::ItemSpec {
+                item_id: "i1".into(),
+                target: serde_json::json!({"symbol": SYMBOL}),
+                progress_unit: "security_period".into(),
+                frozen_inputs: serde_json::json!({}),
+                scope_keys: std::collections::BTreeSet::from(["scope-1".to_string()]),
+            }],
+            scopes: std::collections::BTreeSet::from(["scope-1".to_string()]),
+            shared_evidence: None,
+        },
+        RUN,
+        None,
+    );
+    assert!(accepted.is_ok());
 }

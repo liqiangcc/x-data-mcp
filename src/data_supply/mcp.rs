@@ -937,3 +937,6 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
     }
     v
 }
+
+#[cfg(test)]
+mod tests;

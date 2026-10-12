@@ -443,6 +443,16 @@ pub struct AvailabilityItem {
     pub related_tasks: Vec<TaskSummary>,
     pub related_tasks_total: usize,
     pub related_tasks_truncated: bool,
+    /// Yearly rows trailing the live daily base: `"behind"` + the daily
+    /// base day the row is correct as of (RULINGS A1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of_day: Option<NaiveDate>,
+    /// Classified reason for an absent yearly row (daily base superseded
+    /// or value semantics moved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<AbsentReason>,
     pub limitations: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

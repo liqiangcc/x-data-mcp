@@ -1,0 +1,597 @@
+//! N3: stale/invalid read surfaces exercised through the real MCP handler
+//! (`DataApi::call`), not just storage functions — the wire shape is the
+//! contract: `stale_version` for superseded pins, `version_not_found` for
+//! never-committed ids, `stale:"behind"`+`as_of_day` marks, and
+//! absent-with-reason rows for invalidated yearly content.
+use std::collections::BTreeSet;
+
+use rusqlite::Connection;
+use serde_json::{Value, json};
+use tempfile::TempDir;
+
+use super::DataApi;
+use crate::data_supply::Access;
+use crate::market_data::{
+    Adjustment, AdjustmentEvidence, Bar, CoverageEvidence, CoverageStatus, MarketDataBatch, Period,
+    Provenance, UnitCurrencyEvidence,
+};
+use crate::market_storage::{
+    MarketRepository, Publication, PublishIntent, PublishPlan, Receipt, Scope, compat,
+};
+use crate::mcp::ToolHandler;
+use crate::publish::{EffectiveVersion, ValidationSummary};
+use crate::sqlite_market::backend::MarketBackend;
+use crate::sqlite_market::series;
+use crate::sqlite_tasks::SqliteTasks;
+use crate::task_control::{self, CommandKey, ItemSpec, TaskRepository};
+use crate::yearly_publication::results::{YearlyRepository, YearlyResultPlan};
+use chrono::{DateTime, NaiveDate};
+
+const SYMBOL: &str = "sh.600006";
+const RUN: &str = "run";
+
+struct Fixture {
+    tasks: SqliteTasks,
+    backend: MarketBackend,
+    api: DataApi,
+    _dir: TempDir,
+}
+
+fn fixture() -> Fixture {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in("/dev/shm")
+        .unwrap();
+    let path = dir.path().join("m.db");
+    SqliteTasks::new(&path).initialize_compact().unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let tasks = SqliteTasks::new(&path);
+    let backend = MarketBackend::open(&tasks).unwrap();
+    let MarketBackend::Compact(_) = &backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let api = DataApi::new_with_backend(
+        tasks.clone(),
+        backend.clone(),
+        RUN.into(),
+        Access::local(),
+        None,
+    )
+    .unwrap();
+    Fixture {
+        tasks,
+        backend,
+        api,
+        _dir: dir,
+    }
+}
+
+fn units() -> UnitCurrencyEvidence {
+    UnitCurrencyEvidence {
+        price_currency: crate::market_data::EvidenceValue::confirmed("CNY", "bound"),
+        price_unit: crate::market_data::EvidenceValue::confirmed("share", "bound"),
+        volume_unit: crate::market_data::EvidenceValue::confirmed("share", "bound"),
+        amount_currency: crate::market_data::EvidenceValue::confirmed("CNY", "bound"),
+        amount_unit: crate::market_data::EvidenceValue::confirmed("yuan", "bound"),
+    }
+}
+
+fn bar(day: i64, cents: i64) -> Bar {
+    crate::compact_market::CompactBar {
+        trade_day: day,
+        open_cents: cents,
+        high_cents: cents + 10,
+        low_cents: cents - 10,
+        close_cents: cents,
+        volume: Some(100),
+        amount: Some("1000".into()),
+        r7_raw: Some(7),
+    }
+    .to_bar(Period::Day)
+    .unwrap()
+}
+
+fn year_bar(y: i32, close: i64) -> Bar {
+    crate::compact_market::CompactBar {
+        trade_day: day_epoch(y, 12, 31),
+        open_cents: close,
+        high_cents: close + 10,
+        low_cents: close - 10,
+        close_cents: close,
+        volume: Some(100),
+        amount: Some("1000".into()),
+        r7_raw: Some(7),
+    }
+    .to_bar(Period::Year)
+    .unwrap()
+}
+
+fn day_epoch(y: i32, m: u32, d: u32) -> i64 {
+    crate::compact_market::epoch_day(NaiveDate::from_ymd_opt(y, m, d).unwrap())
+}
+
+/// Accepted-and-claimed task with `count` pending items on one scope —
+/// mirrors the in-crate TaskHandle fixture without depending on it.
+fn task(fixture: &Fixture, symbol: &str, count: usize, period: &str, req: &str) -> String {
+    let scope = task_control::legacy::scope_id(symbol, period);
+    let items: Vec<ItemSpec> = (1..=count)
+        .map(|index| ItemSpec {
+            item_id: format!("item-{index}"),
+            target: json!({"symbol": symbol, "period": period}),
+            progress_unit: "bars".into(),
+            frozen_inputs: json!({}),
+            scope_keys: BTreeSet::from([scope.clone()]),
+        })
+        .collect();
+    let command = task_control::Command {
+        key: CommandKey {
+            operation: "update_data".into(),
+            dataset: if period == "year" {
+                "market.yearly".into()
+            } else {
+                "market.daily".into()
+            },
+            contract_version: "v1".into(),
+        },
+        intent: json!({}),
+    };
+    let work = task_control::FrozenWork {
+        items,
+        scopes: BTreeSet::from([scope]),
+        shared_evidence: None,
+    };
+    let acceptance = fixture
+        .tasks
+        .accept(req, &command, &work, RUN, None)
+        .unwrap();
+    let task_id = match acceptance.record.outcome {
+        task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+        _ => panic!("expected task outcome"),
+    };
+    let revision = fixture.tasks.task(&task_id).unwrap().task.state_revision;
+    fixture
+        .tasks
+        .transition(&task_id, revision, RUN, task_control::Change::Claim)
+        .unwrap();
+    task_id
+}
+
+fn start_item(fixture: &Fixture, task_id: &str, item: &str) -> u64 {
+    let revision = fixture.tasks.task(task_id).unwrap().task.state_revision;
+    fixture
+        .tasks
+        .transition(
+            task_id,
+            revision,
+            RUN,
+            task_control::Change::StartItem(item.into()),
+        )
+        .unwrap()
+        .task
+        .state_revision
+}
+
+fn command(task_id: &str, publication_id: &str, revision: u64, item: &str) -> Publication {
+    Publication {
+        publication_id: publication_id.into(),
+        version_id: "v".into(),
+        task_id: task_id.into(),
+        item_id: item.into(),
+        run_id: RUN.into(),
+        expected_revision: revision,
+        intent: PublishIntent::CurrentHead {
+            expected_daily_head: String::new(),
+            expected_yearly_head: None,
+        },
+    }
+}
+
+fn batch_of(version: &EffectiveVersion) -> MarketDataBatch {
+    MarketDataBatch {
+        symbol: version.symbol.clone(),
+        period: version.period,
+        adjustment: Adjustment::Forward,
+        bars: version.records.clone(),
+        provenance: Provenance {
+            source: version.source.clone(),
+            source_period: "day".into(),
+            source_adjustment: "qfq".into(),
+            symbol: version.symbol.clone(),
+            acquired_at: version.published_at,
+            adapter_version: "fixture".into(),
+            yearly_derivation: version.yearly_derivation.clone(),
+            snapshot_inputs: None,
+        },
+        coverage: CoverageEvidence::complete("full history verified"),
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+    }
+}
+
+fn checked_of(version: &EffectiveVersion) -> compat::CheckedRecord {
+    let mut raw = serde_json::to_value(version).unwrap();
+    raw["batch"] = serde_json::to_value(batch_of(version)).unwrap();
+    raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+    compat::check(&raw).unwrap()
+}
+
+/// Publish a daily head through the real envelope path (stage → mark
+/// validated → commit); `base` is the CAS pin for non-first commits.
+fn publish_daily(
+    fixture: &Fixture,
+    task_id: &str,
+    item: &str,
+    bars: Vec<Bar>,
+    base: Option<&str>,
+) -> Receipt {
+    let rev = start_item(fixture, task_id, item);
+    let version_label = format!("v-{item}");
+    let version = EffectiveVersion {
+        version_id: version_label.clone(),
+        symbol: SYMBOL.into(),
+        period: Period::Day,
+        adjustment: Adjustment::Forward,
+        source: "official".into(),
+        records: bars,
+        published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
+        validation: ValidationSummary {
+            record_count: 0,
+            unique_record_count: 0,
+            duplicate_count: 0,
+        },
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        yearly_derivation: None,
+    };
+    let mut raw = serde_json::to_value(&version).unwrap();
+    raw["batch"] = serde_json::to_value(batch_of(&version)).unwrap();
+    raw["compact_source"] = json!({
+        "generation_id": "gen-1",
+        "generation_manifest_sha256": "0b".repeat(32),
+        "day_member_sha256": "0c".repeat(32),
+        "security_event_sha256": "0e".repeat(32),
+        "generation_evidence": {"snapshot_inputs": []},
+    });
+    raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+    fixture.backend.stage(&raw).unwrap();
+    let candidate = fixture.backend.candidate(&version_label).unwrap();
+    fixture.backend.mark_validated(&candidate).unwrap();
+    let mut cmd = command(task_id, &format!("pub-{item}"), rev, item);
+    cmd.version_id = version_label;
+    let scope = Scope {
+        symbol: SYMBOL.into(),
+        period: Period::Day,
+    };
+    fixture
+        .backend
+        .commit(&PublishPlan {
+            command: cmd,
+            record: candidate,
+            required_heads: vec![(scope.clone(), base.map(String::from))],
+            promote: Some(scope),
+            base_digest: None,
+        })
+        .unwrap()
+}
+
+/// Commit the yearly candidate through the real `commit_yearly` plan path.
+fn commit_yearly_plan(
+    fixture: &Fixture,
+    task_id: &str,
+    item: &str,
+    years: &[(i32, i64)],
+    base_id: &str,
+    prior: Option<String>,
+) -> Receipt {
+    let rev = start_item(fixture, task_id, item);
+    let bars: Vec<Bar> = years.iter().map(|(y, c)| year_bar(*y, *c)).collect();
+    let (first, last) = (bars[0].date, bars[bars.len() - 1].date);
+    let version = EffectiveVersion {
+        version_id: format!("y-{item}"),
+        symbol: SYMBOL.into(),
+        period: Period::Year,
+        adjustment: Adjustment::Forward,
+        source: "official".into(),
+        records: bars,
+        published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
+        validation: ValidationSummary {
+            record_count: 0,
+            unique_record_count: 0,
+            duplicate_count: 0,
+        },
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        yearly_derivation: Some(crate::market_data::YearlyDerivation {
+            base_daily_version_id: base_id.into(),
+            algorithm_version: "local-natural-year-v1".into(),
+            first_trading_date: first,
+            last_trading_date: last,
+        }),
+    };
+    let base = base_checked(fixture);
+    let plan = YearlyResultPlan {
+        publication: PublishPlan {
+            command: command(task_id, &format!("pub-{item}"), rev, item),
+            record: checked_of(&version),
+            required_heads: vec![],
+            promote: None,
+            base_digest: None,
+        },
+        base,
+        prior: prior.map(|id| checked_of(&year_version(&id, base_id))),
+        no_change: false,
+        audit: json!({}),
+        audit_payloads: vec![],
+    };
+    fixture.backend.commit_yearly(&plan).unwrap()
+}
+
+fn year_version(id: &str, base_id: &str) -> EffectiveVersion {
+    EffectiveVersion {
+        version_id: id.into(),
+        symbol: SYMBOL.into(),
+        period: Period::Year,
+        adjustment: Adjustment::Forward,
+        source: "official".into(),
+        records: vec![year_bar(2020, 100)],
+        published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
+        validation: ValidationSummary {
+            record_count: 0,
+            unique_record_count: 0,
+            duplicate_count: 0,
+        },
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        yearly_derivation: Some(crate::market_data::YearlyDerivation {
+            base_daily_version_id: base_id.into(),
+            algorithm_version: "local-natural-year-v1".into(),
+            first_trading_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+            last_trading_date: NaiveDate::from_ymd_opt(2020, 12, 31).unwrap(),
+        }),
+    }
+}
+
+fn base_checked(fixture: &Fixture) -> compat::CheckedRecord {
+    let c = Connection::open(fixture.tasks.path()).unwrap();
+    let daily = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let bars = series::all_bars(&c, daily.series_key)
+        .unwrap()
+        .iter()
+        .map(|b| b.to_bar(Period::Day))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let version = EffectiveVersion {
+        version_id: daily.version_id.clone(),
+        symbol: SYMBOL.into(),
+        period: Period::Day,
+        adjustment: Adjustment::Forward,
+        source: "official".into(),
+        records: bars,
+        published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
+        validation: ValidationSummary {
+            record_count: 0,
+            unique_record_count: 0,
+            duplicate_count: 0,
+        },
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        yearly_derivation: None,
+    };
+    checked_of(&version)
+}
+
+fn query_yearly(version: Value) -> Value {
+    json!({
+        "dataset": "market.yearly",
+        "contract_version": "v1",
+        "selection": {"kind": "single", "entity": {"exchange": "sh", "code": "600006"}},
+        "filter": {"kind": "yearly", "start_year": 2019, "end_year": 2030},
+        "version": version,
+        "page_size": 100,
+    })
+}
+
+#[test]
+fn yearly_wire_reports_fresh_behind_and_stale_pins() {
+    let f = fixture();
+    let daily_task = task(&f, SYMBOL, 3, "day", "req-d");
+    let daily = publish_daily(
+        &f,
+        &daily_task,
+        "item-1",
+        vec![bar(0, 100), bar(1, 110)],
+        None,
+    );
+
+    let yearly_task = task(&f, SYMBOL, 2, "year", "req-y");
+    let yearly = commit_yearly_plan(
+        &f,
+        &yearly_task,
+        "item-1",
+        &[(2020, 100)],
+        &daily.version_id,
+        None,
+    );
+
+    // Fresh yearly: latest resolves present with no stale mark.
+    let page = f
+        .api
+        .call(
+            "query_data",
+            query_yearly(json!({"kind": "latest_per_entity"})),
+        )
+        .unwrap();
+    assert_eq!(page["manifest"][0]["status"], "present");
+    assert!(page["manifest"][0]["stale"].is_null());
+
+    // Daily append -> the yearly row trails the live base (behind mark).
+    let appended = publish_daily(
+        &f,
+        &daily_task,
+        "item-2",
+        vec![bar(0, 100), bar(1, 110), bar(2, 120)],
+        Some(&daily.version_id),
+    );
+    assert_ne!(appended.version_id, daily.version_id);
+    let page = f
+        .api
+        .call(
+            "query_data",
+            query_yearly(json!({"kind": "latest_per_entity"})),
+        )
+        .unwrap();
+    assert_eq!(page["manifest"][0]["status"], "present");
+    assert_eq!(page["manifest"][0]["stale"], "behind");
+    assert!(page["manifest"][0]["as_of_day"].is_string());
+    let availability = f
+        .api
+        .call(
+            "get_data_availability",
+            query_yearly(json!({"kind": "latest_per_entity"})),
+        )
+        .unwrap();
+    assert_eq!(availability["items"][0]["stale"], "behind");
+
+    // The daily pin that was superseded reports stale_version; a
+    // never-committed digest reports version_not_found.
+    for (pin, code) in [
+        (daily.version_id.clone(), "stale_version"),
+        ("0".repeat(64), "version_not_found"),
+    ] {
+        let err = f
+            .api
+            .call(
+                "query_data",
+                json!({
+                    "dataset": "market.daily",
+                    "contract_version": "v1",
+                    "selection": {"kind": "single", "entity": {"exchange": "sh", "code": "600006"}},
+                    "filter": {"kind": "daily", "start_date": "2020-01-01", "end_date": "2030-12-31"},
+                    "version": {"kind": "explicit_version_map", "versions": [{"entity": {"exchange": "sh", "code": "600006"}, "version_id": pin}]},
+                    "page_size": 100,
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, code, "pin {pin}: {err:?}");
+    }
+}
+
+#[test]
+fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
+    let f = fixture();
+    let daily_task = task(&f, SYMBOL, 3, "day", "req-d2");
+    let daily = publish_daily(
+        &f,
+        &daily_task,
+        "item-1",
+        vec![bar(0, 100), bar(1, 110)],
+        None,
+    );
+    let yearly_task = task(&f, SYMBOL, 2, "year", "req-y2");
+    commit_yearly_plan(
+        &f,
+        &yearly_task,
+        "item-1",
+        &[(2020, 100)],
+        &daily.version_id,
+        None,
+    );
+
+    // A daily REPLACE (non-prefix rewrite) invalidates the yearly row.
+    publish_daily(
+        &f,
+        &daily_task,
+        "item-2",
+        vec![bar(9, 300), bar(10, 310)],
+        Some(&daily.version_id),
+    );
+
+    // Single-entity yearly query: stale_version, not served content.
+    let err = f
+        .api
+        .call(
+            "query_data",
+            query_yearly(json!({"kind": "latest_per_entity"})),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "stale_version", "{err:?}");
+
+    // Batched query: row-level absent + reason, not a failed request.
+    let batch = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset": "market.yearly",
+                "contract_version": "v1",
+                "selection": {"kind": "batch", "entities": [
+                    {"exchange": "sh", "code": "600006"},
+                    {"exchange": "sz", "code": "000001"}
+                ]},
+                "filter": {"kind": "yearly", "start_year": 2019, "end_year": 2030},
+                "version": {"kind": "latest_per_entity"},
+                "page_size": 100,
+            }),
+        )
+        .unwrap();
+    let invalid = batch["manifest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["entity"]["code"] == "600006")
+        .unwrap();
+    assert_eq!(invalid["status"], "absent");
+    assert_eq!(invalid["reason"], "daily_replaced_since_derivation");
+    // The second entity never existed -> plain absent.
+    let other = batch["manifest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["entity"]["code"] == "000001")
+        .unwrap();
+    assert_eq!(other["status"], "absent");
+    assert!(other["reason"].is_null());
+
+    // Availability marks the invalidated row absent-with-reason too.
+    let availability = f
+        .api
+        .call(
+            "get_data_availability",
+            query_yearly(json!({"kind": "latest_per_entity"})),
+        )
+        .unwrap();
+    assert_eq!(availability["items"][0]["availability"], "absent");
+    assert_eq!(
+        availability["items"][0]["reason"],
+        "daily_replaced_since_derivation"
+    );
+
+    // A rederived yearly clears the invalid state.
+    let base = base_checked(&f);
+    let head = {
+        let c = Connection::open(f.tasks.path()).unwrap();
+        series::read_series(&c, SYMBOL, Period::Year)
+            .unwrap()
+            .unwrap()
+    };
+    commit_yearly_plan(
+        &f,
+        &yearly_task,
+        "item-2",
+        &[(2020, 100)],
+        &base.version().version_id,
+        Some(head.version_id),
+    );
+    let page = f
+        .api
+        .call(
+            "query_data",
+            query_yearly(json!({"kind": "latest_per_entity"})),
+        )
+        .unwrap();
+    assert_eq!(page["manifest"][0]["status"], "present");
+    assert!(page["manifest"][0]["stale"].is_null());
+}
