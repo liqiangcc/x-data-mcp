@@ -825,6 +825,9 @@ fn commit_plan(
             series_commit::SeriesChange::Metadata | series_commit::SeriesChange::NoChange => {
                 "unchanged"
             }
+            series_commit::SeriesChange::Yearly { .. } => {
+                unreachable!("yearly commits go through commit_yearly")
+            }
         };
         let prefix = if matches!(change, series_commit::SeriesChange::Append { .. }) {
             head.as_ref().map(|h| h.record_count as u64 * 32)

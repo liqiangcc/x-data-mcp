@@ -423,6 +423,8 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
             row.content_digest,
         ),
         (SeriesChange::NoChange, None) => return Err(Error::NotFound),
+        // Yearly dispatches to commit_yearly_inner before this match.
+        (SeriesChange::Yearly { .. }, _) => unreachable!("yearly dispatched earlier"),
     };
     let metadata_changed = w.metadata_changed
         || w.source_binding_digest.is_some()
@@ -637,6 +639,8 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                 return Err(Error::Conflict("effective head changed".into()));
             }
         }
+        // Yearly dispatches to commit_yearly_inner before this match.
+        SeriesChange::Yearly { .. } => unreachable!("yearly dispatched earlier"),
     }
 
     finish_item_and_task(c, w, task_revision_i64)?;
