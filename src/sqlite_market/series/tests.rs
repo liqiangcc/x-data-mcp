@@ -801,7 +801,7 @@ fn supply_reads_on_schema21() {
         crate::data_supply::presence::PresenceOutcome::Resolved { years, .. } => {
             assert_eq!(years, &vec![2025]);
         }
-        other => panic!("unexpected presence outcome: {other:?}"),
+        _ => panic!("unexpected presence outcome"),
     }
 }
 

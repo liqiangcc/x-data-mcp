@@ -332,7 +332,7 @@ impl ReadRepository for SqliteSupply {
             }else{
                 let latest=crate::sqlite_market::is_latest_only_schema(c)?;
                 let compact=!latest && crate::sqlite_market::is_compact_schema(c)?;
-                let orphan:bool=if latest{false}else if compact{c.query_row("SELECT EXISTS(SELECT 1 FROM task_publications tp LEFT JOIN data_versions v ON v.version_key=tp.version_key WHERE v.version_key IS NULL)",[],|r|r.get(0))}else{c.query_row("SELECT EXISTS(SELECT 1 FROM publication_batches b LEFT JOIN data_versions v ON b.version_id=v.version_id WHERE v.version_id IS NULL)",[],|r|r.get(0))}.map_err(storage)?;if orphan{return Err(Error::Integrity("orphan market publication".into()));}
+                if !latest{let orphan:bool=if compact{c.query_row("SELECT EXISTS(SELECT 1 FROM task_publications tp LEFT JOIN data_versions v ON v.version_key=tp.version_key WHERE v.version_key IS NULL)",[],|r|r.get(0))}else{c.query_row("SELECT EXISTS(SELECT 1 FROM publication_batches b LEFT JOIN data_versions v ON b.version_id=v.version_id WHERE v.version_id IS NULL)",[],|r|r.get(0))}.map_err(storage)?;if orphan{return Err(Error::Integrity("orphan market publication".into()));}}
                 let list_sql=if compact{"SELECT v.version_id FROM data_versions v WHERE v.entity=?1 AND v.period=?2 AND (v.state=3 OR EXISTS(SELECT 1 FROM task_publications tp WHERE tp.version_key=v.version_key)) ORDER BY v.published_at DESC,v.version_id ASC"}else{"SELECT version_id FROM data_versions v WHERE symbol=?1 AND period=?2 AND (state='published' OR EXISTS(SELECT 1 FROM publication_batches b WHERE b.version_id=v.version_id)) ORDER BY published_at DESC,version_id ASC"};
                 for entity in entities {
                     if latest {

@@ -247,10 +247,8 @@ pub(crate) fn read_series(
 ) -> Result<Option<SeriesRow>, Error> {
     read_series_row(
         c,
-        concat!(
-            "SELECT ",
-            SERIES_COLUMNS,
-            " FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=1"
+        &format!(
+            "SELECT {SERIES_COLUMNS} FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=1"
         ),
         params![entity, super::compact_repo::period_code(period)],
     )
@@ -262,11 +260,7 @@ pub(crate) fn read_series_by_version_id(
 ) -> Result<Option<SeriesRow>, Error> {
     read_series_row(
         c,
-        concat!(
-            "SELECT ",
-            SERIES_COLUMNS,
-            " FROM market_series WHERE version_id=?1"
-        ),
+        &format!("SELECT {SERIES_COLUMNS} FROM market_series WHERE version_id=?1"),
         params![version_id],
     )
 }
@@ -277,11 +271,7 @@ pub(crate) fn read_series_by_key(
 ) -> Result<Option<SeriesRow>, Error> {
     read_series_row(
         c,
-        concat!(
-            "SELECT ",
-            SERIES_COLUMNS,
-            " FROM market_series WHERE series_key=?1"
-        ),
+        &format!("SELECT {SERIES_COLUMNS} FROM market_series WHERE series_key=?1"),
         params![series_key],
     )
 }
@@ -337,11 +327,7 @@ fn read_bars(
 pub(crate) fn all_bars(c: &Connection, series_key: i64) -> Result<Vec<CompactBar>, Error> {
     read_bars(
         c,
-        concat!(
-            "SELECT ",
-            BAR_COLUMNS,
-            " FROM series_bars WHERE series_key=?1 ORDER BY trade_day"
-        ),
+        &format!("SELECT {BAR_COLUMNS} FROM series_bars WHERE series_key=?1 ORDER BY trade_day"),
         params![series_key],
     )
 }
@@ -355,10 +341,8 @@ pub(crate) fn bars_in_range(
 ) -> Result<Vec<CompactBar>, Error> {
     read_bars(
         c,
-        concat!(
-            "SELECT ",
-            BAR_COLUMNS,
-            " FROM series_bars WHERE series_key=?1 AND trade_day BETWEEN ?2 AND ?3 ORDER BY trade_day"
+        &format!(
+            "SELECT {BAR_COLUMNS} FROM series_bars WHERE series_key=?1 AND trade_day BETWEEN ?2 AND ?3 ORDER BY trade_day"
         ),
         params![series_key, start_day, end_day],
     )
@@ -537,7 +521,7 @@ fn read_event_row(
 pub(crate) fn event_by_seq(c: &Connection, seq: i64) -> Result<Option<EventRow>, Error> {
     read_event_row(
         c,
-        concat!("SELECT ", EVENT_COLUMNS, " FROM market_events WHERE seq=?1"),
+        &format!("SELECT {EVENT_COLUMNS} FROM market_events WHERE seq=?1"),
         params![seq],
     )
 }
@@ -551,10 +535,8 @@ pub(crate) fn latest_event(
 ) -> Result<Option<EventRow>, Error> {
     read_event_row(
         c,
-        concat!(
-            "SELECT ",
-            EVENT_COLUMNS,
-            " FROM market_events WHERE entity=?1 AND period=?2 ORDER BY seq DESC LIMIT 1"
+        &format!(
+            "SELECT {EVENT_COLUMNS} FROM market_events WHERE entity=?1 AND period=?2 ORDER BY seq DESC LIMIT 1"
         ),
         params![entity, super::compact_repo::period_code(period)],
     )
@@ -564,11 +546,7 @@ pub(crate) fn latest_event(
 pub(crate) fn event_by_result(c: &Connection, result_id: &str) -> Result<Option<EventRow>, Error> {
     read_event_row(
         c,
-        concat!(
-            "SELECT ",
-            EVENT_COLUMNS,
-            " FROM market_events WHERE result_id=?1"
-        ),
+        &format!("SELECT {EVENT_COLUMNS} FROM market_events WHERE result_id=?1"),
         params![result_id],
     )
 }
@@ -580,11 +558,7 @@ pub(crate) fn events_after(
     period: Period,
     seq: i64,
 ) -> Result<Vec<EventRow>, Error> {
-    c.prepare(concat!(
-        "SELECT ",
-        EVENT_COLUMNS,
-        " FROM market_events WHERE entity=?1 AND period=?2 AND seq>?3 ORDER BY seq"
-    ))
+    c.prepare(&format!("SELECT {EVENT_COLUMNS} FROM market_events WHERE entity=?1 AND period=?2 AND seq>?3 ORDER BY seq"))
     .map_err(storage)?
     .query_map(
         params![entity, super::compact_repo::period_code(period), seq],

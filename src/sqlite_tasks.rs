@@ -250,12 +250,13 @@ impl SqliteTasks {
         if version != COMPACT_SCHEMA_VERSION {
             return Ok(vec![]);
         }
-        if !crate::sqlite_market::is_latest_only_schema(&tx)? {
+        if !crate::sqlite_market::is_latest_only_schema(&tx).map_err(storage)? {
             return Err(Error::StorageUnavailable(
                 "schema 21 without market_series tables".into(),
             ));
         }
         crate::sqlite_market::series::deep_check(&tx)
+            .map_err(|e| Error::StorageUnavailable(e.to_string()))
     }
     pub(crate) fn connect(&self, readonly: bool) -> Result<Connection, Error> {
         let flag = if readonly {
