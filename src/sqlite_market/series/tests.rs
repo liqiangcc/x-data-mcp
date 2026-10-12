@@ -823,6 +823,81 @@ fn supply_reads_on_schema21() {
     }
 }
 
+// R2' (OWNER-RULING-PAR-1A): get_yearly_base_years reason split — a pin
+// committed then superseded is `base_superseded`, a never-committed id is
+// `base_unavailable`, neither is integrity_failure.
+#[test]
+fn presence_reasons_distinguish_superseded_from_never_seen() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, tasks, c) = db();
+    let (ev, gen_ev) = put_test_evidence(&c);
+    let binding = put_test_binding(&c, gen_ev);
+    let v1 = seed_daily(&c, ENTITY, &[bar(day(2025, 1, 2), 1000)], ev, binding);
+    apply_append(
+        &c,
+        ENTITY,
+        &[bar(day(2025, 1, 3), 1001)],
+        ev,
+        binding,
+        "sup",
+    );
+    drop(c);
+    std::fs::set_permissions(tasks.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    let backend = crate::sqlite_market::backend::MarketBackend::open(&tasks).unwrap();
+    let supply = crate::sqlite_supply::SqliteSupply {
+        market: backend.clone(),
+    };
+    let access = Access::local();
+    // A well-formed digest that was never committed anywhere, on a second
+    // entity — items are unique-entity, sorted by Security.
+    let never_seen = "00".repeat(32);
+    let other = Security {
+        exchange: Exchange::Sh,
+        code: "600007".into(),
+    };
+    let plan = crate::data_supply::presence::PresencePlan::new(
+        YearPresenceQuery {
+            contract_version: crate::data_supply::wire::ContractVersion::V1,
+            items: vec![
+                YearPresenceItem {
+                    entity: security(),
+                    base_daily_version_id: v1.version_id.clone(),
+                    start_year: 1,
+                    end_year: 9999,
+                },
+                YearPresenceItem {
+                    entity: other,
+                    base_daily_version_id: never_seen.clone(),
+                    start_year: 1,
+                    end_year: 9999,
+                },
+            ],
+        },
+        &access,
+    )
+    .unwrap();
+    let outcomes = supply.year_presence(&plan, &access).unwrap();
+    assert_eq!(outcomes.len(), 2);
+    match &outcomes[0] {
+        crate::data_supply::presence::PresenceOutcome::Unavailable(reason) => {
+            assert_eq!(
+                *reason,
+                crate::data_supply::wire::YearPresenceReason::BaseSuperseded
+            );
+        }
+        _ => panic!("superseded pin must be unavailable"),
+    }
+    match &outcomes[1] {
+        crate::data_supply::presence::PresenceOutcome::Unavailable(reason) => {
+            assert_eq!(
+                *reason,
+                crate::data_supply::wire::YearPresenceReason::BaseUnavailable
+            );
+        }
+        _ => panic!("never-committed pin must be unavailable"),
+    }
+}
+
 // §8.1-11: 1M-event startup timing fixture. Run manually:
 // `cargo test startup_check_1m -- --ignored`. Seeded with foreign_keys=OFF so
 // bulk events do not need stub task rows — the closure probes do not consult

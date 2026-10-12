@@ -295,6 +295,9 @@ pub enum YearPresenceStatus {
 #[serde(rename_all = "snake_case")]
 pub enum YearPresenceReason {
     BaseUnavailable,
+    /// The pinned daily id was committed but is superseded by a newer head
+    /// — ordinary expiry, not corruption (OWNER-RULING-PAR-1A R2').
+    BaseSuperseded,
     IntegrityFailure,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
