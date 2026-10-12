@@ -103,8 +103,12 @@ CREATE TABLE market_events(
   CHECK((kind='metadata' AND old_content_digest = new_content_digest AND metadata_changed=1)
      OR (kind<>'metadata'))
 ) STRICT, WITHOUT ROWID;
+-- Covering for the startup/closure probes: tail closure (`seq`/`seq DESC`),
+-- the per-pair first-event `kind` probe and the digest compare all read this
+-- index without touching the table. Also drives the per-pair event
+-- iterators in yearly_state/check_entity_chain.
 CREATE INDEX market_events_entity_period
-  ON market_events(entity, period, seq DESC);
+  ON market_events(entity, period, seq DESC, new_content_digest, kind);
 -- §6.1 stale probe: did this content digest ever become current.
 CREATE INDEX market_events_new_digest ON market_events(new_content_digest);
 DROP TABLE market_update_delta_clips;

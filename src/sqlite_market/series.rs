@@ -989,21 +989,24 @@ pub fn startup_check(c: &Connection) -> Result<(), Error> {
     if !super::is_latest_only_schema(c)? {
         return Ok(());
     }
-    // 1. Tail closure: every series row's last_event_seq must name an event
-    //    of the same (entity, period) whose new digest IS the stored digest,
-    //    and it must be the pair's newest event. O(#series) PK/index probes.
+    // 1. Tail closure per series: two INDEX-ONLY probes against the
+    //    covering index market_events_entity_period
+    //    (entity, period, seq DESC, new_content_digest, kind):
+    //    the named event must exist with the stored digest, and no newer
+    //    event may exist for the pair. No table-row fetches at all.
     let broken: bool = c
         .query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM market_series s
-                LEFT JOIN market_events e ON e.seq = s.last_event_seq
-                WHERE e.seq IS NULL
-                   OR e.entity <> s.entity
-                   OR e.period <> s.period
-                   OR e.new_content_digest <> s.content_digest
-                   OR s.last_event_seq <> (
-                       SELECT MAX(seq) FROM market_events e2
-                       WHERE e2.entity = s.entity AND e2.period = s.period))",
+                WHERE NOT EXISTS(
+                        SELECT 1 FROM market_events e INDEXED BY market_events_entity_period
+                        WHERE e.entity = s.entity AND e.period = s.period
+                          AND e.seq = s.last_event_seq
+                          AND e.new_content_digest = s.content_digest)
+                   OR EXISTS(
+                        SELECT 1 FROM market_events e2 INDEXED BY market_events_entity_period
+                        WHERE e2.entity = s.entity AND e2.period = s.period
+                          AND e2.seq > s.last_event_seq))",
             [],
             |r| r.get(0),
         )
@@ -1048,7 +1051,7 @@ pub fn startup_check(c: &Connection) -> Result<(), Error> {
         }
         let first_kind: String = c
             .query_row(
-                "SELECT kind FROM market_events WHERE entity=?1 AND period=?2 ORDER BY seq LIMIT 1",
+                "SELECT kind FROM market_events INDEXED BY market_events_entity_period WHERE entity=?1 AND period=?2 AND seq=(SELECT MIN(seq) FROM market_events WHERE entity=?1 AND period=?2)",
                 params![entity, period],
                 |r| r.get(0),
             )
