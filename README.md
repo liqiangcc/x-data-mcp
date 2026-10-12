@@ -34,32 +34,29 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 ## 当前状态
 
 > 部署与运行事实以 [docs/STATUS.md](docs/STATUS.md) 为准，性能与容量目标以 [docs/SLO.md](docs/SLO.md) 为准。
-> 2026-10-09 已迁移至 aws-node 并运行 preview.30；2026-10-10 起同代、跨代日线与年线统一为 write-loop <600s hard。
-> 本节下文中关于主机、版本、generation 和 15min 门禁的表述均已被取代，仅作历史记录。
+> 部署版本、主机、generation、数据量等机器事实只在 STATUS 维护，本节不复述。2026-10-10 起同代、跨代日线与年线统一为 write-loop <600s hard。
+> 本节下文标为“历史”的段落（早期实测、15min 门禁沿革）已被取代，仅作历史记录。
 
 **OWNER-ONLY OPERATIONAL PREVIEW — external distribution not authorized.**
 
-本机 `/opt/x-data-mcp-preview/` 以 systemd 运行已部署的
-[v0.2.0-preview.29](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.29)
-（代码 `4493d45`），双 MCP server 拓扑：`x-data-mcp-data`（`run/mcp.sock`，
-20 data tools）与 `x-data-mcp-acquire`（`run/acquire.sock`，10 acquisition tools）。
+本机以 systemd 运行已部署的双 MCP server 拓扑：`x-data-mcp-data`（21 data tools，
+含只读 `get_yearly_base_years`，capability revision `generic-data-v5`）与
+`x-data-mcp-acquire`（10 acquisition tools）。部署版本（撰写时为 v0.2.0-preview.31）、
+socket 路径、generation 与数据量见 [docs/STATUS.md](docs/STATUS.md)。
 显式 `task_sqlite init` 的新库使用 fresh compact schema 20；工具数量不是稳定契约，
 客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
-当前开发分支（XP-014，未部署）注册 21 data tools（新增只读
-`get_yearly_base_years`）并宣告 `generic-data-v5`；preview.29 部署实例仍为
-20 data tools / `generic-data-v3`。
 
 已实现并在真实 generation 上执行过：immutable generation 生命周期
 （acquire → byte verify → consistency verify → 条件 activate）、
 generation-bound daily/yearly update，catalog/daily/yearly/query/verification
 数据路径均在本机生产实例运行（编排边界见[每日同步说明](docs/daily-sync.md)）。
 
-全市场实测（preview.26–28 生产路径证据）：`securities.catalog` 目录
+历史实测（preview.26–28 生产路径证据，不代表当前部署）：`securities.catalog` 目录
 5,227 实体；daily 首次全市场采集约 340s；yearly 全量约 900s；库体积约 831MB；
 同代 no-change `update_data` 全量 5,222 items 约 616s（约 10min）；跨代
 update envelope 约 37min。
 
-性能/容量 gate 现状：PASS —— 首采 DB ≤2.5GiB、部署体积 ≤4GiB、首次全市场
+历史性能/容量 gate 沿革（当前目标见 [SLO](docs/SLO.md)）：PASS —— 首采 DB ≤2.5GiB、部署体积 ≤4GiB、首次全市场
 采集 ≤20min。原统一的 5min/16MiB 日更门禁已由 2026-09-28 owner decision
 supersede，[#259](https://github.com/liqiangcc/x-data-mcp/issues/259) 在
 re-baseline 后关闭；现行同代 no-change full-market `update_data` 合同为

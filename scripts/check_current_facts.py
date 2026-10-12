@@ -35,6 +35,90 @@ STALE_BATCH_LIMIT_BLOCK = re.compile(
 STALE_EIGHT_TOOLS = re.compile(r"当前八工具")
 LEGACY_CONTEXT_MARKERS = ("legacy", "升级来源", "历史", "旧库")
 
+# Stale deployment claims inside the "current" regions (TASK-GOV-DOCS-FIX-1).
+# A current region may only state the deployed machine facts that match the
+# code constants / STATUS.md: `N data tools` with N == EXPECTED_DATA_TOOLS,
+# `generic-data-vN` with the expected revision, and `preview.N` that is the
+# deployed version (docs/STATUS.md "部署版本" row) or the package version.
+#
+# Historical exemption (so real history can stay): a *paragraph* (blank-line
+# separated block, list items included) is exempt when any of its lines contains
+# a HISTORICAL_MARKERS word, and everything under a heading whose text contains
+# one is exempt until the next heading of the same or a higher level. Mark old
+# measurements with "历史" / "historical" instead of deleting them.
+HISTORICAL_MARKERS = ("历史", "historical", "Historical")
+DATA_TOOLS_CLAIM = re.compile(
+    r"\b(\d+)\s*(?:个\s*)?data\s*(?:tools?|工具)", re.IGNORECASE
+)
+REVISION_CLAIM = re.compile(r"generic-data-v(\d+)")
+PREVIEW_CLAIM = re.compile(r"preview\.(\d+)")
+STATUS_DEPLOYED_VERSION = re.compile(
+    r"\|\s*部署版本\s*\|\s*`?v?\d+\.\d+\.\d+-preview\.(\d+)"
+)
+
+
+def deployed_preview_numbers(status_text: str | None, package_version: str) -> set[str]:
+    """Preview numbers a current region may mention: STATUS.md deployed + package."""
+    allowed = set()
+    m = re.search(r"preview\.(\d+)", package_version)
+    if m:
+        allowed.add(m.group(1))
+    if status_text:
+        m = STATUS_DEPLOYED_VERSION.search(status_text)
+        if m:
+            allowed.add(m.group(1))
+    return allowed
+
+
+def stale_deployment_claims(
+    region: str, allowed_previews: set[str], data_tools: int, revision: str
+) -> list[tuple[int, str, str]]:
+    """Returns (line number in region, kind, line) for each stale claim."""
+    lines = region.splitlines()
+    wanted_revision = revision.rsplit("-v", 1)[-1]
+    found: list[tuple[int, str, str]] = []
+    paragraph: list[int] = []
+    hist_level: int | None = None  # heading level of the open historical heading
+
+    def flush() -> None:
+        if not paragraph:
+            return
+        if not any(
+            marker in lines[i] for i in paragraph for marker in HISTORICAL_MARKERS
+        ):
+            for i in paragraph:
+                line = lines[i]
+                for m in DATA_TOOLS_CLAIM.finditer(line):
+                    if int(m.group(1)) != data_tools:
+                        found.append((i + 1, f"{m.group(0)} (expected {data_tools})", line))
+                for m in REVISION_CLAIM.finditer(line):
+                    if m.group(1) != wanted_revision:
+                        found.append((i + 1, f"{m.group(0)} (expected {revision})", line))
+                for m in PREVIEW_CLAIM.finditer(line):
+                    if m.group(1) not in allowed_previews:
+                        found.append(
+                            (i + 1, f"{m.group(0)} (deployed: {sorted(allowed_previews)})", line)
+                        )
+        paragraph.clear()
+
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            flush()
+            level = len(stripped) - len(stripped.lstrip("#"))
+            if hist_level is not None and level <= hist_level:
+                hist_level = None
+            if hist_level is None and any(mk in line for mk in HISTORICAL_MARKERS):
+                hist_level = level
+            continue
+        if not line.strip():
+            flush()
+            continue
+        if hist_level is None:
+            paragraph.append(i)
+    flush()
+    return found
+
 
 def top_current_region(text: str, start_heading: str | None) -> str:
     lines = text.splitlines(keepends=True)
@@ -177,6 +261,12 @@ def main() -> int:
         and '`get_data_capabilities`（`contract_version' not in status_skill,
     )
 
+    status_path = ROOT / "docs/STATUS.md"
+    allowed_previews = deployed_preview_numbers(
+        status_path.read_text(encoding="utf-8") if status_path.exists() else None,
+        EXPECTED_PACKAGE_VERSION,
+    )
+
     for rel, heading in CURRENT_DOCS.items():
         region = top_current_region(
             (ROOT / rel).read_text(encoding="utf-8"), heading
@@ -204,6 +294,17 @@ def main() -> int:
             f"{rel} current region keeps no 当前八工具 claim",
             not STALE_EIGHT_TOOLS.search(region),
         )
+        for lineno, kind, line in stale_deployment_claims(
+            region,
+            allowed_previews,
+            EXPECTED_DATA_TOOLS,
+            EXPECTED_DATA_CAPABILITY_REVISION,
+        ):
+            check(
+                f"{rel} current region line {lineno} states a stale deployment fact",
+                False,
+                f"{kind}: {line.strip()}",
+            )
 
     if failures:
         for failure in failures:
