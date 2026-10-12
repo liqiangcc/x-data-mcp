@@ -39,6 +39,10 @@ class Rules(unittest.TestCase):
         self.assertFalse(in_scope("Cargo.lock"))
         self.assertTrue(in_scope("docs/STATUS.md"))
 
+    def test_scope_skips_the_gate_and_its_own_test_data(self):
+        self.assertFalse(in_scope("scripts/check_public_hygiene.py"))
+        self.assertFalse(in_scope("scripts/test_public_hygiene.py"))
+
 
 if __name__ == "__main__":
     unittest.main()

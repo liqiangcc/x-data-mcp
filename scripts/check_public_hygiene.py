@@ -26,6 +26,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 SKIP_PREFIXES = ("evidence/", "fixtures/", "archive/")
 SKIP_SUFFIXES = (".lock", "package-lock.json")
+# The gate and its tests necessarily contain example patterns as test data.
+SELF = ("scripts/check_public_hygiene.py", "scripts/test_public_hygiene.py")
 
 # Local part must not follow "/" (URL user-info such as `https://user@host`);
 # the domain must end in an alphabetic TLD (so `tool@0.9.1` version pins pass).
@@ -50,7 +52,11 @@ PRIVATE_IP = re.compile(
 
 
 def in_scope(path: str) -> bool:
-    return not path.startswith(SKIP_PREFIXES) and not path.endswith(SKIP_SUFFIXES)
+    return (
+        path not in SELF
+        and not path.startswith(SKIP_PREFIXES)
+        and not path.endswith(SKIP_SUFFIXES)
+    )
 
 
 def scan_text(path: str, text: str) -> list[str]:
