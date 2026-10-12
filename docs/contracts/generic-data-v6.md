@@ -94,7 +94,7 @@ stale pin 静默落到新内容上。
 | list_data_versions | 无 | market dataset 每实体至多 1 item；`version_id`=当前内容 id；`published_at`=最近事件提交时间（实现 `src/sqlite_supply.rs:235-265`）。catalog 不变 | 无 |
 | query_data | `version.kind` 形状不变 | market 行带 `version_ref`（version_id/integrity_sha256 同 hex）；年线 stale 行级状态见 §6 TODO(S3) | `explicit_version_map` 过期 id → `stale_version`（曾存在）或 `version_not_found`（未存在）（实现 `src/sqlite_supply.rs:1227-1245` `verify_versions_meta_conn`）；批量内 invalid 年线实体按行级状态返回不连坐（RULINGS A1，行级形状 TODO(S3)） |
 | get_data_availability | 无 | `version_ref`=当前行；年线实体增报 stale 分类（fresh/behind/invalid + `as_of_day`，形状 TODO(S3)） | 行级 `integrity_failure` 不连坐整批（RULINGS A1；S1 现状为整次 `Integrity` 错误，S3 修行级化，OWNER-ACCEPT-S1 C2） |
-| get_yearly_base_years | 无 | 字段名 `base_daily_version_id` 保留，值=派生时日线 version_id；stale 标记形状 TODO(S3) | 当前实现：stale/伪造 base → 行级 `integrity_failure`，缺失 base → `base_unavailable`（`src/sqlite_supply.rs:104-135`） |
+| get_yearly_base_years | 无 | 入参是调用方 pin 住的日线 `base_daily_version_id`，出参是该日线基下的年份集合——**不返回年线 lineage**（OWNER-RULING-PAR-1A R2'，语义不变） | pin 的日线 id **已被取代**（曾存在、非当前 digest）→ 新增行级 reason `base_superseded`（wire 字符串，`YearPresenceReason::BaseSuperseded`，**S4 wire 增量**）；从未存在 → `base_unavailable`；伪造/损坏 → `integrity_failure`。现状：stale 一律 `integrity_failure`（`src/sqlite_supply.rs:104-135`） |
 | update_data / backfill_data | `base_version_id` 语义=**当前** head 的 version_id（内容 hex）；`expected_head`/`expected_yearly_head` CAS 同义 | receipt `version_id`=新内容 id；`no_change` 不变 | 见 §3 写路径分档（R1 定稿：stale base → item 级 `needs_verification`） |
 | republish_data | 保留（RULINGS Q1：#247 显式 republish 合同，非版本概念） | 语义改为「显式区间的**源数据刷新**」，落到统一的 append/replace/no_change/metadata 提交函数；S4 更新 description（现行 `REPUBLISH_DESCRIPTION` `registry.rs:130` 仍是 v19 措辞） | 同 update_data |
 | verify_publication_result | 无 | 新语义见 §5（SPEC §6.6） | 目标任务/事件不存在 → `task_not_found`/`version_not_found`（沿用现有码 `mcp.rs:828-845`） |
@@ -151,10 +151,11 @@ RULINGS A1/Q10：stale 出参形状在 S3 定稿，必须含 `behind|invalid`
 2. `get_data_availability`：item 级 stale 字段名（`stale:"behind"|
    "invalid"`? `as_of_day` 字段位置）、`reason` 枚举取值；
    invalid 与真正 `absent`/`unavailable` 的可区分表达。
-3. `get_yearly_base_years`：stale 标记挂在哪个字段、reason 枚举
-   是否新增。R2 已定方向：对 behind/invalid 的年线返回已记录
-   lineage 并带分类，只有伪造 lineage 才是行级
-   `integrity_failure`（现状一律 `integrity_failure`，S3 修）。
+3. `get_yearly_base_years`：**已定稿（OWNER-RULING-PAR-1A R2'，作废
+   原 R2）**。该工具语义不变（pin 住日线 id → 年份集合，不返回年线
+   lineage）；stale 表达即行级 `reason_code` 枚举新增
+   `base_superseded`（S4 登记，随 v6 工具描述），superseded 不再混
+   入 `integrity_failure`。
 4. 行级 `reason` 枚举全集与 wire 码映射表。
 5. metadata 事件后年线分类边界（OWNER-ACCEPT-S1 C3）：哪些
    metadata 字段（units/currency/adjustment 证据）影响年线聚合、
