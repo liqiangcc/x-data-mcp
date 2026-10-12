@@ -592,6 +592,20 @@ fn commit_ops(
     metadata: Option<&crate::market_update::TypedVersionMetadata>,
     continuity_evidence: Option<&Value>,
 ) -> Result<Receipt, Error> {
+    // Replay wins over the head CAS: an already-committed result id must
+    // replay its receipt even after the head moved on. Identity mismatch
+    // (same result id, different task/item) stays a hard Conflict.
+    if let Some(event) = series::event_by_result(c, &command.publication_id)? {
+        if event.task_id != command.task_id || event.item_id != command.item_id {
+            return Err(Error::Conflict("result identity conflict".into()));
+        }
+        return Ok(Receipt {
+            publication_id: command.publication_id.clone(),
+            version_id: series::version_id(&event.new_content_digest),
+            task_id: command.task_id.clone(),
+            task_revision: event.task_revision as u64,
+        });
+    }
     let head = series::read_series(c, &scope.symbol, scope.period)?.ok_or(Error::NotFound)?;
     if head.version_id != base_version_id {
         return Err(Error::Stale(format!(
@@ -1414,7 +1428,10 @@ fn update_batch_item(
     let committed = {
         c.execute_batch("SAVEPOINT update_batch_item")
             .map_err(storage)?;
-        let outcome = match &item.prepared {
+        // The arms run inside a closure so a `?` early-return becomes the
+        // item's Err outcome (savepoint rollback + FinishItem) instead of
+        // aborting the whole batch.
+        let outcome: Result<Receipt, Error> = (|| match &item.prepared {
             crate::market_update::UpdateBatchPrepared::NoChange {
                 base_version_id,
                 range_start_day,
@@ -1519,7 +1536,7 @@ fn update_batch_item(
                     },
                 )
             }
-        };
+        })();
         match outcome {
             Ok(receipt) => {
                 c.execute_batch("RELEASE update_batch_item")

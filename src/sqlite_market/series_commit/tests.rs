@@ -17,7 +17,7 @@ use crate::market_storage::{Publication, PublishIntent, PublishPlan, compat};
 use crate::market_update::publication::RangeRepository;
 use crate::publish::{EffectiveVersion, ValidationSummary};
 use crate::sqlite_market::{series, storage};
-use crate::task_control::{self, CommandKey, ItemSpec};
+use crate::task_control::{self, CommandKey, ItemSpec, TaskRepository};
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::Connection;
 
@@ -384,6 +384,15 @@ fn running_task_multi(
     repo: &super::super::compact_repo::SqliteCompactMarket,
     count: usize,
 ) -> (String, u64) {
+    running_task_multi_req(repo, count, "req-m")
+}
+
+/// `req` lets one test create several tasks — request ids dedupe.
+fn running_task_multi_req(
+    repo: &super::super::compact_repo::SqliteCompactMarket,
+    count: usize,
+    req: &str,
+) -> (String, u64) {
     use crate::task_control::TaskRepository;
     let scope = task_control::legacy::scope_id(SYMBOL, "day");
     let items: Vec<ItemSpec> = (1..=count)
@@ -408,7 +417,7 @@ fn running_task_multi(
         },
         intent: json!({}),
     };
-    let acceptance = repo.accept("req-m", &command, &work, RUN, None).unwrap();
+    let acceptance = repo.accept(req, &command, &work, RUN, None).unwrap();
     let task_id = match acceptance.record.outcome {
         task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
         _ => panic!("expected task outcome"),
@@ -506,6 +515,27 @@ fn append_duplicate_day_fails_closed() {
         assert_eq!(row.record_count, 2);
         Ok(())
     })
+    .unwrap();
+}
+
+/// Runner semantics after a rejected commit: the item records its
+/// failure so the next item may start (one running item per task).
+fn fail_item(repo: &super::super::compact_repo::SqliteCompactMarket, task_id: &str, item: &str) {
+    use crate::task_control::TaskRepository;
+    let revision = repo.task(task_id).unwrap().task.state_revision;
+    repo.transition(
+        task_id,
+        revision,
+        RUN,
+        task_control::Change::FinishItem(
+            item.into(),
+            task_control::ItemOutcome {
+                success: false,
+                error: Some("commit rejected".into()),
+                evidence: None,
+            },
+        ),
+    )
     .unwrap();
 }
 
@@ -865,6 +895,7 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
         err.to_string().contains("drifts source or adjustment"),
         "unexpected rejection: {err}"
     );
+    fail_item(&repo, &task_id, "item-3");
 
     // Adjustment-evidence drift.
     let mut bad_adj = metadata.clone();
@@ -885,6 +916,7 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
         err.to_string().contains("drifts source or adjustment"),
         "unexpected rejection: {err}"
     );
+    fail_item(&repo, &task_id, "item-4");
 
     // Unit drift.
     let mut bad_units = metadata.clone();
@@ -928,6 +960,7 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
         err.to_string().contains("coverage is not complete"),
         "unexpected rejection: {err}"
     );
+    fail_item(&repo, &task_id, "item-6");
 
     // The series still shows the 4-bar append only.
     let row = series::read_series(&c, SYMBOL, Period::Day)
@@ -1013,9 +1046,21 @@ fn collection_rejects_unconfirmed_unit_evidence_and_existing_series() {
         .count();
     assert_eq!(finished, 4, "every item must carry a terminal outcome");
 
+    // Release the task's scope so a second collection task may be
+    // accepted (one running scope per entity).
+    let revision = repo.task(&task_id).unwrap().task.state_revision;
+    repo.transition(
+        &task_id,
+        revision,
+        RUN,
+        task_control::Change::FinishExecution,
+    )
+    .unwrap();
+
     // Collection on an existing series -> Conflict (drift checks do not
-    // apply to first-publish semantics).
-    let (task2, _r2) = running_task(&repo);
+    // apply to first-publish semantics). Batch owns the StartItem, so
+    // the task is claimed but its item left pending.
+    let (task2, _r2) = running_task_multi_req(&repo, 1, "req-m2");
     let single = vec![candidate(&task2, ITEM, units())];
     let out2 = repo
         .commit_collection_batch(&task2, &single)
@@ -1118,7 +1163,7 @@ fn typed_and_envelope_paths_store_identical_series_bytes() {
 
     let dir_b = tempdir();
     let (_p_b, repo_b) = repo(&dir_b);
-    let (task_b, _r_b) = running_task(&repo_b);
+    let (task_b, _r_b) = running_task_multi(&repo_b, 1);
     let item = CollectionCandidate {
         task_id: task_b.clone(),
         item_id: ITEM.into(),
@@ -1225,12 +1270,11 @@ fn ops_result_id_replay_identity_conflict_and_no_change_purity() {
         .unwrap();
     assert_eq!(events, 1, "replay must not write a second event");
 
-    // Same result_id under a different task -> Conflict.
-    let (task2, _r2) = running_task_multi(&repo, 2);
-    let rev_b = start_item_id(&repo, &task2, "item-1");
+    // Same result_id under a different task -> Conflict (replay gate
+    // fires on identity before any head/binding check).
     let err = repo
         .commit_range_ops(
-            &command_at(&task2, "pub-2", rev_b, "item-1"),
+            &command_at("task-other", "pub-2", rev2, "item-1"),
             &scope(),
             &append.version_id,
             &[bar(3, 130)],
@@ -1336,12 +1380,28 @@ fn check_binding_rejects_wrong_owner_state_target_and_occupancy() {
     let err = repo.write(|c| commit_series_tx(c, &w)).unwrap_err();
     assert!(matches!(err, Error::Conflict(_)), "occupancy: {err:?}");
 
-    // Correct binding commits.
-    let mut w = base_commit(&task_id, ITEM, RUN, SYMBOL);
-    w.occupancy_key = &occ;
-    w.expected_task_revision = real_revision;
-    w.change = SeriesChange::FirstPublish { bars: &[BAR0] };
-    repo.write(|c| commit_series_tx(c, &w)).unwrap();
+    // Correct binding commits — the event evidence must be a real
+    // bundle, so the digests are written inside the transaction.
+    repo.write(|c| {
+        let evidence = evidence_store::put_evidence(c, EvidenceKind::Version, &version_evidence())?;
+        let binding = put_generation_binding(
+            c,
+            "gen-1",
+            &"0b".repeat(32),
+            &"0c".repeat(32),
+            &"0e".repeat(32),
+            &generation_evidence(),
+        )?;
+        let mut w = base_commit(&task_id, ITEM, RUN, SYMBOL);
+        w.occupancy_key = &occ;
+        w.expected_task_revision = real_revision;
+        w.change = SeriesChange::FirstPublish { bars: &[BAR0] };
+        w.source_binding_digest = Some(binding);
+        w.evidence_digest = Some(evidence);
+        w.event_evidence_digest = evidence;
+        commit_series_tx(c, &w)
+    })
+    .unwrap();
 }
 
 const BAR0: CompactBar = CompactBar {
