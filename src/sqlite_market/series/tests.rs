@@ -984,3 +984,35 @@ fn startup_check_1m_events() {
     startup_check(&c).unwrap();
     eprintln!("startup_check 1M events: {:?}", started.elapsed());
 }
+
+#[test]
+fn deep_check_flags_forged_yearly_lineage() {
+    // §3.5: a lineage row that names a base the daily series never had is
+    // an integrity finding, not a silent classification.
+    let (_dir, _tasks, c) = db();
+    let (ev, gen_ev) = put_test_evidence(&c);
+    let binding = put_test_binding(&c, gen_ev);
+    let daily = seed_daily(&c, ENTITY, &[bar(day(2025, 1, 2), 1000)], ev, binding);
+    let yearly = seed_yearly(
+        &c,
+        ENTITY,
+        &[bar(day(2025, 12, 31), 1000)],
+        ev,
+        binding,
+        &daily,
+        day(2025, 12, 31),
+    );
+    assert!(deep_check(&c).unwrap().is_empty());
+
+    // Forge the lineage base digest — the check must flag it.
+    c.execute(
+        "UPDATE yearly_series_lineage SET base_daily_digest=?1 WHERE series_key=?2",
+        params![[0xEE_u8; 32].as_slice(), yearly.series_key],
+    )
+    .unwrap();
+    let findings = deep_check(&c).unwrap();
+    assert!(
+        findings.iter().any(|f| f.contains("yearly lineage")),
+        "forged lineage must surface in findings: {findings:?}"
+    );
+}
