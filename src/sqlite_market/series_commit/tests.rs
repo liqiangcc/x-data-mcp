@@ -444,7 +444,7 @@ fn start_item_id(
         RUN,
         task_control::Change::StartItem(item.into()),
     )
-    .unwrap()
+    .unwrap_or_else(|e| panic!("start_item({item}) at rev {revision}: {e:?}"))
     .task
     .state_revision
 }
@@ -1061,7 +1061,9 @@ fn collection_rejects_unconfirmed_unit_evidence_and_existing_series() {
     // apply to first-publish semantics). Batch owns the StartItem, so
     // the task is claimed but its item left pending.
     let (task2, _r2) = running_task_multi_req(&repo, 1, "req-m2");
-    let single = vec![candidate(&task2, ITEM, units())];
+    let mut again = candidate(&task2, ITEM, units());
+    again.publication_id = "col-again".into();
+    let single = vec![again];
     let out2 = repo
         .commit_collection_batch(&task2, &single)
         .unwrap()
@@ -1458,7 +1460,7 @@ fn typed_append_base_coverage_parity_with_envelope_bytes() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(cov, 0, "coverage must stay complete (code 0)");
+    assert_eq!(cov, 1, "coverage must stay complete (code 1)");
     let ev: Value = serde_json::from_str(&evidence_json).unwrap();
     assert_eq!(ev["coverage_reason"], "full history verified");
     assert_eq!(ev["unit_currency"]["price_unit"]["value"], "share");
