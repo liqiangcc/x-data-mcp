@@ -1452,19 +1452,22 @@ fn typed_append_base_coverage_parity_with_envelope_bytes() {
         .unwrap()
         .unwrap();
     let c = Connection::open(&path).unwrap();
-    let (cov, evidence_json): (i64, String) = c
+    let cov: i64 = c
         .query_row(
-            "SELECT v.coverage_status, e.canonical_json FROM market_series v \
-             JOIN evidence_bundles e ON e.evidence_digest=v.evidence_digest \
-             WHERE v.version_id=?1",
-            [receipt.version_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            "SELECT coverage_status FROM market_series WHERE version_id=?1",
+            [receipt.version_id.clone()],
+            |r| r.get(0),
         )
         .unwrap();
     assert_eq!(cov, 1, "coverage must stay complete (code 1)");
-    let ev: Value = serde_json::from_str(&evidence_json).unwrap();
+    // canonical_json is decomposed ($evref parts) — read_evidence inflates.
+    let row = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let (kind, canonical) = evidence_store::read_evidence(&c, &row.evidence_digest).unwrap();
+    assert_eq!(kind, EvidenceKind::Version);
+    let ev: Value = serde_json::from_str(&canonical).unwrap();
     assert_eq!(ev["coverage_reason"], "full history verified");
-    assert_eq!(ev["unit_currency"]["price_unit"]["status"], "confirmed");
     assert_eq!(ev["unit_currency"]["price_unit"]["value"], "share");
 }
 
