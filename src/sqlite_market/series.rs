@@ -720,13 +720,14 @@ pub(crate) fn yearly_state(c: &Connection, series: &SeriesRow) -> Result<YearlyS
         // and the series row disagree; corrupt.
         return Err(integrity("yearly lineage trails unrecorded daily state"));
     }
-    // A semantic evidence move outranks a plain replace: a semantics-moving
-    // replace reports the stronger reason.
-    if tail.iter().any(|e| e.semantics_changed != 0) {
-        return Ok(YearlyState::Invalid(YearlyInvalidReason::SemanticsChanged));
-    }
+    // Ruling: a base replace outranks a pure evidence move — when both hold
+    // the row reports DailyReplaced (both fail closed); SemanticsChanged
+    // only surfaces on append/metadata tails carrying drifted evidence.
     if tail.iter().any(|e| e.kind == "replace") {
         return Ok(YearlyState::Invalid(YearlyInvalidReason::DailyReplaced));
+    }
+    if tail.iter().any(|e| e.semantics_changed != 0) {
+        return Ok(YearlyState::Invalid(YearlyInvalidReason::SemanticsChanged));
     }
     Ok(YearlyState::Behind {
         as_of_day: lineage.as_of_day,

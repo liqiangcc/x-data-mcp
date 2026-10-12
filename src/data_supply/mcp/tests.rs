@@ -715,7 +715,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &yearly_task,
         "item-2",
         SYMBOL,
-        &[(day_epoch(2020, 2, 4), 100)],
+        &[(day_epoch(2020, 6, 8), 100)],
         &base.version().version_id,
         Some(head.version_id),
     );

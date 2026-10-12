@@ -2549,6 +2549,102 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
     let yearly = series::read_series(&c, SYMBOL, Period::Year)
         .unwrap()
         .unwrap();
+    // Ruling: a replace tail wins over a pure evidence move — both fail
+    // closed; the row reports the content-level reason.
+    assert_eq!(
+        series::yearly_state(&c, &yearly).unwrap(),
+        series::YearlyState::Invalid(series::YearlyInvalidReason::DailyReplaced)
+    );
+
+    // A pure APPEND carrying drifted evidence (no replace in the tail)
+    // surfaces the SemanticsChanged reason. Re-derive the yearly first so
+    // the lineage base moves past the replace.
+    let daily_head = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let base2 = daily_checked(&r);
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    let prior = mk_year_version(
+        &yearly.version_id,
+        vec![year_bar(2020, 100)],
+        &daily_head.version_id,
+    );
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version("y-v2", vec![year_bar(2020, 100)], &daily_head.version_id),
+        &base2,
+        Some(checked(&prior)),
+        None,
+        None,
+    )
+    .unwrap();
+    let daily_head = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let (_i4, pub_d4, rev_d4) = daily_task.item(&r.repo);
+    let append_bars: Vec<CompactBar> = [CompactBar::from_bar(bar(3, 130), Period::Day).unwrap()]
+        .into_iter()
+        .collect();
+    r.repo
+        .write(|c| {
+            let evidence = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Version,
+                &json!(VersionEvidence {
+                    source: "official".into(),
+                    coverage_reason: "full history verified".into(),
+                    unit_currency: drifted_units.clone(),
+                    adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+                }),
+            )?;
+            let continuity = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Continuity,
+                &json!({"mode": "prefix", "proven": true}),
+            )?;
+            commit_series_tx(
+                c,
+                &Commit {
+                    result_id: &pub_d4,
+                    task_id: &daily_task.task_id,
+                    item_id: "item-4",
+                    run_id: RUN,
+                    occupancy_key: &scope().occupancy_key(),
+                    expected_task_revision: rev_d4,
+                    entity: SYMBOL,
+                    period: Period::Day,
+                    base_version_id: Some(daily_head.version_id.as_str()),
+                    change: SeriesChange::Append {
+                        upserts: &append_bars,
+                    },
+                    range_start_day: 3,
+                    range_end_day: 3,
+                    algorithm_version: "test",
+                    window_digest: None,
+                    source_binding_digest: Some(daily_head.source_binding_digest),
+                    evidence_digest: Some(evidence),
+                    coverage_status: Some(crate::market_data::CoverageStatus::Complete),
+                    metadata_changed: true,
+                    event_evidence_digest: continuity,
+                    published_at: None,
+                },
+            )
+        })
+        .unwrap();
+    let sem: i64 = c
+        .query_row(
+            "SELECT semantics_changed FROM market_events WHERE entity=?1 AND period=1 ORDER BY seq DESC LIMIT 1",
+            [SYMBOL],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(sem, 1, "pure append with drifted evidence flags semantics");
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         series::yearly_state(&c, &yearly).unwrap(),
         series::YearlyState::Invalid(series::YearlyInvalidReason::SemanticsChanged)
