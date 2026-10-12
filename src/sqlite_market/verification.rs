@@ -244,7 +244,7 @@ fn read_facts_series(
         revision,
         id,
         digest,
-        old_digest,
+        _old_digest,
         new_digest,
         evidence_digest,
     ) in &rows
