@@ -1867,7 +1867,7 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 tx.commit().map_err(storage)?;
                 return Ok(receipt);
             }
-            let v = plan.record.version();
+            let v = plan.publication.record.version();
             let scope = Scope {
                 symbol: v.symbol.clone(),
                 period: Period::Year,
@@ -1888,9 +1888,9 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 EvidenceKind::Version,
                 &json!(crate::compact_market::VersionEvidence {
                     source: v.source.clone(),
-                    coverage_reason: plan.record.batch.coverage.reason.clone(),
-                    unit_currency: plan.record.batch.unit_currency.clone(),
-                    adjustment_evidence: plan.record.batch.adjustment_evidence.clone(),
+                    coverage_reason: plan.publication.record.batch.coverage.reason.clone(),
+                    unit_currency: plan.publication.record.batch.unit_currency.clone(),
+                    adjustment_evidence: plan.publication.record.batch.adjustment_evidence.clone(),
                 }),
             )?;
             let event_evidence = evidence_store::put_evidence(
@@ -1931,7 +1931,7 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 // the commit derives it from the daily series inside the tx.
                 source_binding_digest: None,
                 evidence_digest: Some(version_evidence),
-                coverage_status: Some(plan.record.batch.coverage.status),
+                coverage_status: Some(plan.publication.record.batch.coverage.status),
                 metadata_changed: false,
                 event_evidence_digest: event_evidence,
                 published_at: Some(v.published_at),
