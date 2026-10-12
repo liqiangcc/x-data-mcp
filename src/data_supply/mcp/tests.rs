@@ -46,11 +46,14 @@ fn fixture() -> Fixture {
     let path = dir.path().join("m.db");
     SqliteTasks::new(&path).initialize_compact().unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let tasks = SqliteTasks::new(&path);
-    let backend = MarketBackend::open(&tasks).unwrap();
+    let backend = MarketBackend::open(&SqliteTasks::new(&path)).unwrap();
     let MarketBackend::Compact(_) = &backend else {
         panic!("fixture must open the compact backend");
     };
+    // Task operations must run on the coordinator-bound handle — a plain
+    // `SqliteTasks::new` is the legacy adapter and refuses compact files by
+    // design (`check_schema` stays fail-closed).
+    let tasks = backend.tasks();
     let api = DataApi::new_with_backend(
         tasks.clone(),
         backend.clone(),
@@ -101,7 +104,7 @@ fn year_bar(y: i32, close: i64) -> Bar {
         close_cents: close,
         volume: Some(100),
         amount: Some("1000".into()),
-        r7_raw: Some(7),
+        r7_raw: None,
     }
     .to_bar(Period::Year)
     .unwrap()
@@ -279,8 +282,16 @@ fn batch_of(version: &EffectiveVersion) -> MarketDataBatch {
 }
 
 fn checked_of(version: &EffectiveVersion) -> compat::CheckedRecord {
-    let mut raw = serde_json::to_value(version).unwrap();
-    raw["batch"] = serde_json::to_value(batch_of(version)).unwrap();
+    // compat::check re-derives the batch validation and requires the
+    // candidate's records/validation to equal it — run the real dedup so
+    // the sealed record is consistent.
+    let mut version = version.clone();
+    let batch = batch_of(&version);
+    let (records, validation) = crate::publish::validate_and_deduplicate(&batch).unwrap();
+    version.records = records;
+    version.validation = validation;
+    let mut raw = serde_json::to_value(&version).unwrap();
+    raw["batch"] = serde_json::to_value(batch_of(&version)).unwrap();
     raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
     compat::check(&raw).unwrap()
 }
@@ -314,6 +325,11 @@ fn publish_daily(
         adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
         yearly_derivation: None,
     };
+    let mut version = version.clone();
+    let batch = batch_of(&version);
+    let (records, validation) = crate::publish::validate_and_deduplicate(&batch).unwrap();
+    version.records = records;
+    version.validation = validation;
     let mut raw = serde_json::to_value(&version).unwrap();
     raw["batch"] = serde_json::to_value(batch_of(&version)).unwrap();
     raw["compact_source"] = json!({

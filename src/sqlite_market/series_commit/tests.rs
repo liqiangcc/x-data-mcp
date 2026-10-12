@@ -2549,7 +2549,7 @@ fn year_bar(y: i32, close: i64) -> Bar {
         close_cents: close,
         volume: Some(100),
         amount: Some("1000".into()),
-        r7_raw: Some(7),
+        r7_raw: None,
     }
     .to_bar(Period::Year)
     .unwrap()

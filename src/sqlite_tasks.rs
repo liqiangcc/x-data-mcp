@@ -30,11 +30,11 @@ pub(crate) const MIGRATIONS: [&str; 18] = [
     include_str!("../migrations/tasks/017_manifest_delta.sql"),
     include_str!("../migrations/tasks/018_shared_evidence.sql"),
 ];
+/// Compact market storage (#259) is an explicit opt-in target: compact files
+/// are refused by `check_schema` above so legacy adapters stay fail-closed.
 /// Schema 21 replaces the version-manifest store with latest-only
 /// `market_series`/`series_bars` + the `market_events` log
 /// (SPEC-LATEST-ONLY §1; still fresh-init only, never in-place).
-/// `check_schema` accepts both durable shapes (18 legacy, 21 latest-only):
-/// the task-store surface is identical and every v21 service runs on them.
 pub const COMPACT_SCHEMA_VERSION: u32 = 21;
 pub(crate) const COMPACT_MIGRATIONS: [&str; 3] = [
     include_str!("../migrations/tasks/019_compact_market.sql"),
@@ -408,11 +408,7 @@ pub(crate) fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> 
     let version: u32 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(storage)?;
-    // `current` requires a schema this binary manages end-to-end (legacy
-    // 18 or latest-only 21); otherwise any applied migration row set up
-    // through 21 stays readable, including the compact 19/20 checkpoints.
-    let supported = version == SCHEMA_VERSION || version == COMPACT_SCHEMA_VERSION;
-    if version == 0 || version > COMPACT_SCHEMA_VERSION || (current && !supported) {
+    if version == 0 || version > SCHEMA_VERSION || current && version != SCHEMA_VERSION {
         return Err(Error::StorageUnavailable(format!(
             "unsupported/uninitialized schema {version}; explicit initialization/upgrade required"
         )));
@@ -427,12 +423,7 @@ pub(crate) fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> 
         .map_err(storage)?;
     if rows.len() != version as usize
         || rows.iter().enumerate().any(|(i, (v, d))| {
-            let migration = if i < MIGRATIONS.len() {
-                MIGRATIONS[i]
-            } else {
-                COMPACT_MIGRATIONS[i - MIGRATIONS.len()]
-            };
-            *v as usize != i + 1 || *d != crate::hash::sha256(migration.as_bytes())
+            *v as usize != i + 1 || *d != crate::hash::sha256(MIGRATIONS[i].as_bytes())
         })
     {
         return Err(Error::StorageUnavailable(
