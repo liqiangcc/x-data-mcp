@@ -2585,7 +2585,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
         .unwrap()
         .unwrap();
     let (_i4, pub_d4, rev_d4) = daily_task.item(&r.repo);
-    let append_bars: Vec<CompactBar> = [CompactBar::from_bar(bar(3, 130), Period::Day).unwrap()]
+    let append_bars: Vec<CompactBar> = [CompactBar::from_bar(&bar(3, 130), Period::Day).unwrap()]
         .into_iter()
         .collect();
     r.repo
