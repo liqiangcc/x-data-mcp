@@ -904,7 +904,7 @@ fn explicit_daily_update_rewrites_history_on_compact() {
              FROM market_series v \
              JOIN source_bindings sb ON sb.source_binding_digest = v.source_binding_digest \
              JOIN market_events e ON e.new_content_digest = v.content_digest \
-             WHERE v.version_id = ?1",
+             WHERE v.version_id = ?1 AND e.kind = 'replace' AND e.outcome = 2",
             [new_id.clone()],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
