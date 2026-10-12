@@ -642,7 +642,7 @@ fn supply_reads_on_schema21() {
         low_cents: 999,
         close_cents: 1001,
         volume: Some(200),
-        amount: Some("246.90".into()),
+        amount: Some("246.9".into()),
         r7_raw: None,
     };
     seed_yearly(
