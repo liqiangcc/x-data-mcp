@@ -33,7 +33,8 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -139,52 +140,65 @@ class Stack:
 # acquire-side helpers
 # ---------------------------------------------------------------------------
 
+MIRROR_FILES = ("base.zip", "gbbq.zip", "hsjday.zip")
+
+
 def mirror_inputs(mirror: str, input_dir: str) -> list:
-    """Replace mirror contents with the generation input set. Returns the
-    installed file names."""
+    """Replace mirror contents with the generation's three declared role
+    files (acquire's Mirror fetcher maps only these names; evidence JSON
+    next to them in the input dir is not copied). Returns installed names."""
     for f in os.listdir(mirror):
         os.remove(os.path.join(mirror, f))
     installed = []
-    for name in sorted(os.listdir(input_dir)):
+    for name in MIRROR_FILES:
         src = os.path.join(input_dir, name)
-        if os.path.isfile(src):
-            shutil.copy2(src, os.path.join(mirror, name))
-            installed.append(name)
+        if not os.path.isfile(src):
+            raise RuntimeError(f"input dir {input_dir} lacks {name}")
+        shutil.copy2(src, os.path.join(mirror, name))
+        installed.append(name)
     return installed
 
 
 def acquire_and_activate(acq: Mcp, request_prefix: str, tag: str) -> dict:
     """acquire_generation -> verify_generation -> activate_generation.
-    Arg shapes per .devin/skills/x-data-daily-sync/SKILL.md (step 2);
-    live-schema drift is a NOT_RUN caveat for the RESULT."""
+    Wire shapes per src/acquire/wire.rs: the acceptance carries
+    request_id/task_id/state/reused only; the task view carries `state`
+    (accepted/running/succeeded/failed) and, once installed, generation_id;
+    verify replies `state` (consistency_verified/not_verified/conflict/
+    refused); activate replies `state` (active/refused + reason_code);
+    sync_status carries the active pointer under `active`."""
     rec = {"tag": tag}
     t = time.monotonic()
     accept = acq.call("acquire_generation", {**ACQ_CONTRACT, "request_id": f"{request_prefix}-{tag}-acq"})
     rec["acquire_accept"] = accept
     task_id = accept.get("task_id")
-    gen_id = accept.get("generation_id")
     while True:
         task = acq.call("get_acquisition_task", {**ACQ_CONTRACT, "task_id": task_id})
-        status = (task.get("task") or task).get("status")
-        if status in {"succeeded", "failed", "cancelled"}:
+        status = task.get("state")
+        if status in {"succeeded", "failed"}:
             break
         if time.monotonic() - t > 2700:
-            raise RuntimeError(f"acquisition {task_id} timeout status={status}")
+            raise RuntimeError(f"acquisition {task_id} timeout state={status}")
         time.sleep(5.0)
     if status != "succeeded":
         raise RuntimeError(f"acquisition {task_id} terminal {status}: {task}")
-    rec["acquire_task"] = {"task_id": task_id, "generation_id": gen_id, "status": status}
+    gen_id = task.get("generation_id")
+    if not gen_id:
+        raise RuntimeError(f"acquisition {task_id} succeeded without generation_id: {task}")
+    rec["acquire_task"] = {"task_id": task_id, "generation_id": gen_id, "status": status,
+                           "stage": task.get("stage"), "bytes_done": task.get("bytes_done")}
     ver = acq.call("verify_generation", {**ACQ_CONTRACT, "request_id": f"{request_prefix}-{tag}-ver",
                                           "generation_id": gen_id})
     rec["verify"] = ver
-    if ver.get("decision") not in ("consistency_verified", "VERIFIED_COMPATIBLE"):
+    if ver.get("state") != "consistency_verified":
         raise RuntimeError(f"verify_generation not verified: {ver}")
     sync = acq.call("sync_status", ACQ_CONTRACT)
-    prev = ((sync.get("active_generation") or {}).get("generation_id")
-            or sync.get("active_generation_ref"))
+    prev = (sync.get("active") or {}).get("generation_id")
     act = acq.call("activate_generation", {**ACQ_CONTRACT, "request_id": f"{request_prefix}-{tag}-act",
                                             "generation_id": gen_id, "expected_previous": prev})
     rec["activate"] = act
+    if act.get("state") != "active":
+        raise RuntimeError(f"activate_generation refused: {act}")
     rec["wall_s"] = round(time.monotonic() - t, 1)
     return rec
 
@@ -336,6 +350,40 @@ def phase_daily_update(mcp: Mcp, prefix: str, name: str, entities,
     return out
 
 
+def resolve_years(presence: dict, ditems: dict) -> tuple:
+    """XP-014/yearly_g8.resolve_years shape on one get_yearly_base_years
+    reply. Returns (resolved, empty, unavailable): resolved maps entity-key
+    -> in-window present years; future-dated years (> current Asia/Shanghai
+    year) are recorded as anomalies in `unavailable`, never silently dropped
+    by the window intersection; unrequested/unresolved/missing-years items
+    are `unavailable` too (they block an unqualified PASS)."""
+    cur_year = datetime.now(ZoneInfo("Asia/Shanghai")).year
+    resolved, empty, unavailable = {}, [], []
+    for it in presence.get("items") or []:
+        e = it.get("entity") or {}
+        k = (e.get("exchange"), e.get("code"))
+        if k not in ditems:
+            unavailable.append({"entity": k, "reason_code": "unrequested_item"})
+            continue
+        if it.get("status") != "resolved":
+            unavailable.append({"entity": k, "reason_code": it.get("reason_code")})
+            continue
+        present = it.get("present_years")
+        if not isinstance(present, list):
+            unavailable.append({"entity": k, "reason_code": "missing_present_years"})
+            continue
+        future = sorted(y for y in present if y > cur_year)
+        if future:
+            unavailable.append({"entity": k, "reason_code": "future_years_in_response", "years": future})
+        lo, hi = int(ditems[k]["first_record"][:4]), int(ditems[k]["last_record"][:4])
+        years = sorted(y for y in present if lo <= y <= hi)
+        if years:
+            resolved[k] = years
+        else:
+            empty.append({"entity": k, "reason_code": "empty_present_years"})
+    return resolved, empty, unavailable
+
+
 def phase_yearly(mcp: Mcp, prefix: str, name: str, entities, max_chunks: int) -> dict:
     """yearly_g8.py shape: per <=100 chunk — daily+yearly availability,
     one get_yearly_base_years, update_data(market.yearly,current_head)."""
@@ -375,19 +423,7 @@ def phase_yearly(mcp: Mcp, prefix: str, name: str, entities, max_chunks: int) ->
                 "base_daily_version_id": i["version_ref"]["version_id"]}
                for k, i in ditems.items()]
         presence = mcp.call("get_yearly_base_years", {"contract_version": "v1", "items": req})
-        resolved, empty, unavailable = {}, [], []
-        for it in presence.get("items") or []:
-            e = it.get("entity") or {}
-            k = (e.get("exchange"), e.get("code"))
-            if it.get("status") != "resolved" or not isinstance(it.get("present_years"), list):
-                unavailable.append({"entity": k, "reason_code": it.get("reason_code")})
-                continue
-            years = sorted(y for y in it["present_years"]
-                           if int(ditems[k]["first_record"][:4]) <= y <= int(ditems[k]["last_record"][:4]))
-            if years:
-                resolved[k] = years
-            else:
-                empty.append({"entity": k, "reason_code": "empty_present_years"})
+        resolved, empty, unavailable = resolve_years(presence, ditems)
         items = [{"entity": {"exchange": k[0], "code": k[1]},
                   "base_daily_version_id": i["version_ref"]["version_id"],
                   "years": resolved[k],
@@ -457,6 +493,11 @@ def main() -> int:
         "phases": args.phases, "max_chunks": args.max_chunks,
         "no_service_mgmt": args.no_service_mgmt, "poll_s": POLL_S}}
     phases = args.phases.split(",")
+    unknown = set(phases) - {"collect", "yearly1", "genb", "append", "nochange", "yearly2"}
+    if unknown:
+        sys.exit(f"unknown phases {sorted(unknown)}")
+    if {"append", "nochange"} & set(phases) and not args.end_date:
+        sys.exit("--end-date is required for the append/nochange phases (checked before any work starts)")
     try:
         if not args.no_service_mgmt:
             run["init_out"] = stack.init_db(args.init_subcommand)

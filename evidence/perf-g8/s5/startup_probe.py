@@ -35,6 +35,8 @@ from s5_common import guard_paths, utc_now, write_json
 def drop_caches_file(path: str) -> None:
     fd = os.open(path, os.O_RDONLY)
     try:
+        # dirty pages from the fresh copy are not droppable until written back
+        os.fsync(fd)
         os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
     finally:
         os.close(fd)

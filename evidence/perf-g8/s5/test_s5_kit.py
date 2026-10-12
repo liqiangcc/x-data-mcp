@@ -10,6 +10,9 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
+import struct
+import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import s5_common
@@ -119,6 +122,114 @@ class ClassifyReuseTests(unittest.TestCase):
         self.assertEqual(out["published"], 1)
         self.assertEqual(out["no_change"], 1)
         self.assertEqual(out["unknown"], 1)
+
+
+
+import s5_run
+
+
+class FakeAcq:
+    def __init__(self, replies):
+        self.replies = replies
+        self.calls = []
+
+    def call(self, name, args):
+        self.calls.append((name, args))
+        r = self.replies[name]
+        return r.pop(0) if isinstance(r, list) else r
+
+
+class AcquireWireTests(unittest.TestCase):
+    """Shapes follow src/acquire/wire.rs (state, not status; generation_id on the
+    task view; active pointer under `active`)."""
+
+    def replies(self, verify_state="consistency_verified", act_state="active"):
+        return {
+            "acquire_generation": {"request_id": "r", "task_id": "t1", "state": "accepted", "reused": False},
+            "get_acquisition_task": [{"task_id": "t1", "state": "running", "generation_id": None},
+                                     {"task_id": "t1", "state": "succeeded", "generation_id": "g1"}],
+            "verify_generation": {"generation_id": "g1", "state": verify_state},
+            "sync_status": {"active": {"generation_id": "gprev"}},
+            "activate_generation": {"generation_id": "g1", "state": act_state, "reason_code": None},
+        }
+
+    def test_chain_ok(self):
+        acq = FakeAcq(self.replies())
+        orig = s5_run.time.sleep
+        s5_run.time.sleep = lambda s: None
+        try:
+            rec = s5_run.acquire_and_activate(acq, "p", "gena")
+        finally:
+            s5_run.time.sleep = orig
+        self.assertEqual(rec["acquire_task"]["generation_id"], "g1")
+        act = [a for n, a in acq.calls if n == "activate_generation"][0]
+        self.assertEqual(act["expected_previous"], "gprev")
+
+    def test_not_verified_and_refused_raise(self):
+        orig = s5_run.time.sleep
+        s5_run.time.sleep = lambda s: None
+        try:
+            with self.assertRaises(RuntimeError):
+                s5_run.acquire_and_activate(FakeAcq(self.replies(verify_state="not_verified")), "p", "x")
+            with self.assertRaises(RuntimeError):
+                s5_run.acquire_and_activate(FakeAcq(self.replies(act_state="refused")), "p", "x")
+        finally:
+            s5_run.time.sleep = orig
+
+
+class ResolveYearsTests(unittest.TestCase):
+    def test_window_future_and_unresolved(self):
+        k = ("sh", "600000")
+        d = {k: {"first_record": "2001-03-01", "last_record": "2026-10-08"},
+             ("sz", "000001"): {"first_record": "2001-03-01", "last_record": "2026-10-08"},
+             ("sz", "000002"): {"first_record": "2005-01-01", "last_record": "2006-01-01"}}
+        pres = {"items": [
+            {"entity": {"exchange": "sh", "code": "600000"}, "status": "resolved",
+             "present_years": [2000, 2001, 2002, 2026, 9999]},
+            {"entity": {"exchange": "sz", "code": "000001"}, "status": "unresolved", "reason_code": "x"},
+            {"entity": {"exchange": "sz", "code": "000002"}, "status": "resolved", "present_years": [1999]},
+            {"entity": {"exchange": "bj", "code": "1"}, "status": "resolved", "present_years": []},
+        ]}
+        resolved, empty, unavail = s5_run.resolve_years(pres, d)
+        self.assertEqual(resolved[k], [2001, 2002, 2026])
+        self.assertEqual([e["reason_code"] for e in empty], ["empty_present_years"])
+        codes = sorted(u["reason_code"] for u in unavail)
+        self.assertEqual(codes, ["future_years_in_response", "unrequested_item", "x"])
+
+
+class MirrorTests(unittest.TestCase):
+    def test_only_declared_roles(self):
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as mir:
+            for n in ("base.zip", "gbbq.zip", "hsjday.zip", "snapshot-manifest.json"):
+                open(os.path.join(src, n), "w").write(n)
+            open(os.path.join(mir, "stale.zip"), "w").write("x")
+            got = s5_run.mirror_inputs(mir, src)
+            self.assertEqual(got, ["base.zip", "gbbq.zip", "hsjday.zip"])
+            self.assertEqual(sorted(os.listdir(mir)), ["base.zip", "gbbq.zip", "hsjday.zip"])
+            os.remove(os.path.join(src, "gbbq.zip"))
+            with self.assertRaises(RuntimeError):
+                s5_run.mirror_inputs(mir, src)
+
+
+class TruncKTests(unittest.TestCase):
+    def _day(self, dates):
+        return b"".join(struct.pack("<I", d) + b"\0" * 28 for d in dates)
+
+    def test_truncate_and_keep(self):
+        import make_trunc_k
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = os.path.join(d, "a.zip"), os.path.join(d, "b.zip")
+            with zipfile.ZipFile(src, "w") as z:
+                z.writestr("sh\\lday\\sh600000.day", self._day(range(20260901, 20260909)))
+                z.writestr("sh\\lday\\sh880312.day", self._day(range(20260901, 20260909)))
+                z.writestr("sz\\lday\\sz000001.day", self._day([20260901, 20260902]))
+            st = make_trunc_k.truncate(src, dst, 5, ["sh/lday/sh880312.day"])
+            with zipfile.ZipFile(dst) as z:
+                n = {i.filename: len(z.read(i.filename)) // 32 for i in z.infolist()}
+            self.assertEqual(n["sh\\lday\\sh600000.day"], 3)
+            self.assertEqual(n["sh\\lday\\sh880312.day"], 8)
+            self.assertEqual(n["sz\\lday\\sz000001.day"], 2)
+            self.assertEqual((st["truncated"], len(st["day_too_small"])), (1, 1))
 
 
 if __name__ == "__main__":

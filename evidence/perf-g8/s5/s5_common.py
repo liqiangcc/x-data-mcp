@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 # Forbidden roots for every path the kit resolves (glob semantics of
 # "/root/x-perf-g8*" — the prefix itself matches all sibling trees such as
 # x-perf-g8-xp015 or x-perf-g8-deploy31).
-FORBIDDEN_ROOTS = ("/opt/x-data-mcp-preview", "/root/x-perf-g8")
+FORBIDDEN_ROOTS = ("/opt/x-data-mcp-preview", "/root/x-perf-g8", "/root/x-data-mcp-owner")
 
 POLL_S = 0.25  # same polling granularity as the XP-015 drivers
 TERMINAL = {
