@@ -463,7 +463,16 @@ fn append_duplicate_day_fails_closed() {
         .unwrap()
         .unwrap()
         .series_key;
-    let dup = bar(1, 999);
+    let dup = crate::compact_market::CompactBar {
+        trade_day: 1,
+        open_cents: 999,
+        high_cents: 999,
+        low_cents: 999,
+        close_cents: 999,
+        volume: Some(1),
+        amount: Some("1".into()),
+        r7_raw: Some(7),
+    };
     let err = series::insert_bars(&c, key, &[dup]).unwrap_err();
     assert!(
         matches!(err, Error::Integrity(_) | Error::Storage(_)),
