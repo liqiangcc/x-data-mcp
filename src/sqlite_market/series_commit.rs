@@ -784,7 +784,7 @@ fn commit_yearly_inner(
     let (kind, outcome, continuity, prefix_bytes) = match head {
         None => ("first_publish", 2, None, None),
         Some(row) if row.content_digest == new_digest => {
-            ("no_change", 1, Some(1), Some(merged.len() as u64 * 32))
+            ("no_change", 1, Some(1), Some(merged.len() as i64 * 32))
         }
         Some(_) => ("yearly_rederive", 2, Some(3), None),
     };
