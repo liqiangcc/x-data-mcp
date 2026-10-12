@@ -1845,8 +1845,8 @@ fn ybar(y: i32, close: i64) -> CompactBar {
         high_cents: close + 10,
         low_cents: close - 10,
         close_cents: close,
-        volume: 1,
-        amount_cents: None,
+        volume: Some(1),
+        amount: None,
         r7_raw: None,
     }
 }
