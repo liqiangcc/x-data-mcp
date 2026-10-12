@@ -947,6 +947,11 @@ fn assert_legacy_shape(path: &std::path::Path) {
     assert!(raw_tables(path).contains(&"payloads".to_string()));
 }
 
+/// Boundary (RESULT-S3 intentional assertion change): (1) a schema-21 file
+/// is read/write-accepted by the standalone task-store handle — the binary
+/// manages that schema end-to-end; (2) a compact 19/20 checkpoint stays
+/// fail-closed — the current handle refuses it; (3) `upgrade_compact` still
+/// refuses an already-compact file.
 #[test]
 fn initialize_compact_builds_compact_schema_and_refuses_legacy_ops() {
     let dir = tempfile::tempdir().unwrap();
@@ -954,9 +959,23 @@ fn initialize_compact_builds_compact_schema_and_refuses_legacy_ops() {
     let db = SqliteTasks::new(&path);
     db.initialize_compact().unwrap();
     assert_compact_shape(&path);
-    let e = db.read(|_| Ok(())).unwrap_err().to_string();
+    db.read(|_| Ok(())).unwrap();
+    db.write(|_| Ok(())).unwrap();
+
+    // A 19/20-era checkpoint file: user_version 20 with the matching
+    // migration rows — the current handle still refuses read/write.
+    db.checkpoint_truncate().unwrap();
+    let path20 = dir.path().join("checkpoint20.db");
+    std::fs::copy(&path, &path20).unwrap();
+    let c = Connection::open(&path20).unwrap();
+    c.pragma_update(None, "user_version", 20).unwrap();
+    c.execute("DELETE FROM schema_migrations WHERE version>20", [])
+        .unwrap();
+    drop(c);
+    let db20 = SqliteTasks::new(&path20);
+    let e = db20.read(|_| Ok(())).unwrap_err().to_string();
     assert!(e.contains("unsupported/uninitialized schema"), "{e}");
-    let e = db.write(|_| Ok(())).unwrap_err().to_string();
+    let e = db20.write(|_| Ok(())).unwrap_err().to_string();
     assert!(e.contains("unsupported/uninitialized schema"), "{e}");
 }
 
@@ -976,10 +995,12 @@ fn upgrade_compact_replaces_empty_schema18_database() {
         .exists([])
         .unwrap();
     assert!(!broken);
-    let e = db.read(|_| Ok(())).unwrap_err().to_string();
-    assert!(e.contains("unsupported/uninitialized schema"), "{e}");
+    // Schema 21 is the managed current schema: read/write accept it, while
+    // a second `upgrade_compact` still refuses the compact file.
+    db.read(|_| Ok(())).unwrap();
+    db.write(|_| Ok(())).unwrap();
     let e = db.upgrade_compact().unwrap_err().to_string();
-    assert!(e.contains("unsupported/uninitialized schema"), "{e}");
+    assert!(e.contains("cannot upgrade to compact"), "{e}");
 }
 
 #[test]

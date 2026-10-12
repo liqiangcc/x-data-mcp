@@ -164,6 +164,11 @@ impl SqliteTasks {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
         let version = check_schema(&tx, false)?;
+        if version > SCHEMA_VERSION {
+            return Err(Error::StorageUnavailable(format!(
+                "schema {version} is already past legacy {SCHEMA_VERSION}; a compact checkpoint cannot run legacy migrations"
+            )));
+        }
         for (index, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
             apply_migration(&tx, index + 1, sql)?;
             post_migration(&tx, index + 1)?;
@@ -408,7 +413,11 @@ pub(crate) fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> 
     let version: u32 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(storage)?;
-    if version == 0 || version > SCHEMA_VERSION || current && version != SCHEMA_VERSION {
+    // `current` requires a schema this binary manages end-to-end (legacy
+    // 18 or latest-only 21); otherwise any applied migration row set up
+    // through 21 stays readable, including the compact 19/20 checkpoints.
+    let supported = version == SCHEMA_VERSION || version == COMPACT_SCHEMA_VERSION;
+    if version == 0 || version > COMPACT_SCHEMA_VERSION || (current && !supported) {
         return Err(Error::StorageUnavailable(format!(
             "unsupported/uninitialized schema {version}; explicit initialization/upgrade required"
         )));
@@ -423,7 +432,12 @@ pub(crate) fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> 
         .map_err(storage)?;
     if rows.len() != version as usize
         || rows.iter().enumerate().any(|(i, (v, d))| {
-            *v as usize != i + 1 || *d != crate::hash::sha256(MIGRATIONS[i].as_bytes())
+            let migration = if i < MIGRATIONS.len() {
+                MIGRATIONS[i]
+            } else {
+                COMPACT_MIGRATIONS[i - MIGRATIONS.len()]
+            };
+            *v as usize != i + 1 || *d != crate::hash::sha256(migration.as_bytes())
         })
     {
         return Err(Error::StorageUnavailable(
