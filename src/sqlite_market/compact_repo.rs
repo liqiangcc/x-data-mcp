@@ -743,9 +743,14 @@ fn commit_plan(
     }
     // Replay first: the result-id anchor outranks every commit-time gate —
     // a repeated command must return the original receipt, not conflict on
-    // the already-advanced head.
-    if let Some(receipt) = receipt_for(c, &command.publication_id)? {
-        return Ok(receipt);
+    // the already-advanced head. A result id bound to a different
+    // task/item is an identity conflict, not a replay.
+    if let Some(event) = series::event_by_result(c, &command.publication_id)? {
+        if event.task_id != command.task_id || event.item_id != command.item_id {
+            return Err(Error::Conflict("result identity conflict".into()));
+        }
+        return receipt_for(c, &command.publication_id)?
+            .ok_or_else(|| integrity("receipt event lacks result payload"));
     }
     // The sealed plan's record must equal the staged candidate.
     let staged = read_staged(c, &command.version_id)?;
@@ -1865,8 +1870,15 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 .map_err(storage)?;
             let command = plan.command();
             // Replay first — the result-id anchor outranks every gate; a
-            // repeated command returns its recorded receipt.
-            if let Some(receipt) = receipt_for(&tx, &command.publication_id)? {
+            // repeated command returns its recorded receipt. A result id
+            // bound to a different task/item is an identity conflict, not a
+            // replay.
+            if let Some(event) = series::event_by_result(&tx, &command.publication_id)? {
+                if event.task_id != command.task_id || event.item_id != command.item_id {
+                    return Err(Error::Conflict("result identity conflict".into()));
+                }
+                let receipt = receipt_for(&tx, &command.publication_id)?
+                    .ok_or_else(|| integrity("receipt event lacks result payload"))?;
                 tx.commit().map_err(storage)?;
                 return Ok(receipt);
             }
@@ -1905,10 +1917,11 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                     "years": v.records.iter().map(|r| r.date.year()).collect::<Vec<_>>(),
                 }),
             )?;
-            let as_of = v
-                .published_at
-                .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
-                .date_naive();
+            // `as_of_day` is the daily-content cutoff the derivation consumed
+            // (`last_trading_date`), not the publish wall-clock — reads clip
+            // the daily re-aggregation at it so a same-year append leaves the
+            // row merely Behind rather than unclassifiable.
+            let as_of = lineage.last_trading_date;
             let occupancy = scope.occupancy_key();
             let w = series_commit::Commit {
                 result_id: &command.publication_id,

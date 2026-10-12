@@ -842,7 +842,11 @@ fn task_facts(
         publications.push(market_ref(dataset, &e, &r));
     }
     let mut q = c
-        .prepare("SELECT result_id FROM market_update_results WHERE task_id=?1 ORDER BY result_id")
+        .prepare(if crate::sqlite_market::is_latest_only_schema(c)? {
+            "SELECT result_id FROM market_events WHERE task_id=?1 AND period=1 ORDER BY result_id"
+        } else {
+            "SELECT result_id FROM market_update_results WHERE task_id=?1 ORDER BY result_id"
+        })
         .map_err(storage)?;
     let result_ids = q
         .query_map([id], |r| r.get::<_, String>(0))
@@ -854,9 +858,11 @@ fn task_facts(
         .map(|id| range_result(c, ctx, id))
         .collect::<Result<Vec<_>, _>>()?;
     let mut q = c
-        .prepare(
-            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id",
-        )
+        .prepare(if crate::sqlite_market::is_latest_only_schema(c)? {
+            "SELECT result_id FROM market_events WHERE task_id=?1 AND period=2 ORDER BY result_id"
+        } else {
+            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id"
+        })
         .map_err(storage)?;
     let yearly_ids = q
         .query_map([id], |r| r.get::<_, String>(0))
@@ -1851,7 +1857,12 @@ fn task_facts_series(
     let mut publications = Vec::new();
     let mut range_results = Vec::new();
     let mut yearly_results = Vec::new();
+    // Every durable event is the item's result evidence: first_publish has
+    // no base version to express as a RangeExecutionResult, but the event
+    // itself still evidences the item, so the evidenced set is item-level.
+    let mut evidenced_items: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (entity, period, kind, outcome, item_id, result_id, old, new, base, created) in events {
+        evidenced_items.insert(item_id.clone());
         let e = crate::data_supply::observe::entity(&entity)
             .ok_or_else(|| Error::Integrity("event entity is not a security".into()))?;
         let new_id = digest_hex(&new)?;
@@ -1918,7 +1929,21 @@ fn task_facts_series(
             });
         }
     }
-    task_facts_check_evidenced(&s, &range_results, &yearly_results)?;
+    let successful: std::collections::BTreeSet<String> = s
+        .items
+        .iter()
+        .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+        .map(|i| i.spec.item_id.clone())
+        .collect();
+    if matches!(
+        s.task.key.operation.as_str(),
+        "update_data" | "backfill_data" | "republish_data"
+    ) && successful != evidenced_items
+    {
+        return Err(Error::Integrity(
+            "successful range task lacks matching result evidence".into(),
+        ));
+    }
     Ok(TaskFacts {
         request_id: request,
         snapshot: s,

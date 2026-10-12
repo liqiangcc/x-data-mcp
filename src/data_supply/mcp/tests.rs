@@ -95,9 +95,9 @@ fn bar(day: i64, cents: i64) -> Bar {
     .unwrap()
 }
 
-fn year_bar(y: i32, close: i64) -> Bar {
+fn year_bar(trade_day: i64, close: i64) -> Bar {
     crate::compact_market::CompactBar {
-        trade_day: day_epoch(y, 12, 31),
+        trade_day,
         open_cents: close,
         high_cents: close + 10,
         low_cents: close - 10,
@@ -116,6 +116,32 @@ fn day_epoch(y: i32, m: u32, d: u32) -> i64 {
 
 /// Accepted-and-claimed task with `count` pending items on one scope —
 /// mirrors the in-crate TaskHandle fixture without depending on it.
+/// Frozen inputs the progress observer replays: daily range items carry
+/// base+range, yearly items carry the daily base pin + years + intent.
+fn frozen_inputs(period: &str) -> Value {
+    if period == "year" {
+        json!({
+            "base_daily_version_id": "v1",
+            "base_integrity_sha256": "ab".repeat(32),
+            "years": [2020],
+            "intent": {"expected_daily_head": "v1", "expected_yearly_head": null},
+            "comparison": null,
+        })
+    } else {
+        json!({
+            "base_version_id": "v1",
+            "base_integrity_sha256": "ab".repeat(32),
+            "range": {"start": "2020-01-06", "end": "2020-02-04"},
+        })
+    }
+}
+fn contract_version(period: &str) -> &'static str {
+    if period == "year" {
+        crate::yearly_publication::tasks::CONTRACT_VERSION
+    } else {
+        crate::market_update::tasks::CONTRACT_VERSION
+    }
+}
 fn task(fixture: &Fixture, symbol: &str, count: usize, period: &str, req: &str) -> String {
     let scope = task_control::legacy::scope_id(symbol, period);
     let items: Vec<ItemSpec> = (1..=count)
@@ -123,7 +149,7 @@ fn task(fixture: &Fixture, symbol: &str, count: usize, period: &str, req: &str) 
             item_id: format!("item-{index}"),
             target: json!({"symbol": symbol, "period": period}),
             progress_unit: "bars".into(),
-            frozen_inputs: json!({}),
+            frozen_inputs: frozen_inputs(period),
             scope_keys: BTreeSet::from([scope.clone()]),
         })
         .collect();
@@ -135,7 +161,7 @@ fn task(fixture: &Fixture, symbol: &str, count: usize, period: &str, req: &str) 
             } else {
                 "market.daily".into()
             },
-            contract_version: "v1".into(),
+            contract_version: contract_version(period).into(),
         },
         intent: json!({}),
     };
@@ -180,7 +206,7 @@ fn task_many(fixture: &Fixture, symbols: &[String], period: &str, req: &str) -> 
             item_id: format!("item-{}", i + 1),
             target: json!({"symbol": s, "period": period}),
             progress_unit: "bars".into(),
-            frozen_inputs: json!({}),
+            frozen_inputs: frozen_inputs(period),
             scope_keys: BTreeSet::from([task_control::legacy::scope_id(s, period)]),
         })
         .collect();
@@ -192,7 +218,7 @@ fn task_many(fixture: &Fixture, symbols: &[String], period: &str, req: &str) -> 
             } else {
                 "market.daily".into()
             },
-            contract_version: "v1".into(),
+            contract_version: contract_version(period).into(),
         },
         intent: json!({}),
     };
@@ -343,7 +369,7 @@ fn publish_daily(
     fixture.backend.stage(&raw).unwrap();
     let candidate = fixture.backend.candidate(&version_label).unwrap();
     fixture.backend.mark_validated(&candidate).unwrap();
-    let mut cmd = command(task_id, &format!("pub-{item}"), rev, item);
+    let mut cmd = command(task_id, &format!("pub-{task_id}-{item}"), rev, item);
     cmd.version_id = version_label;
     let scope = Scope {
         symbol: symbol.into(),
@@ -367,13 +393,15 @@ fn commit_yearly_plan(
     task_id: &str,
     item: &str,
     symbol: &str,
-    years: &[(i32, i64)],
+    years: &[(i64, i64)],
     base_id: &str,
     prior: Option<String>,
 ) -> Receipt {
     let rev = start_item(fixture, task_id, item);
-    let bars: Vec<Bar> = years.iter().map(|(y, c)| year_bar(*y, *c)).collect();
-    let (first, last) = (bars[0].date, bars[bars.len() - 1].date);
+    let base = base_checked(fixture, symbol);
+    let base_bars = &base.version().records;
+    let (first, last) = (base_bars[0].date, base_bars[base_bars.len() - 1].date);
+    let bars: Vec<Bar> = years.iter().map(|(d, c)| year_bar(*d, *c)).collect();
     let version = EffectiveVersion {
         version_id: format!("y-{item}"),
         symbol: symbol.into(),
@@ -396,10 +424,9 @@ fn commit_yearly_plan(
             last_trading_date: last,
         }),
     };
-    let base = base_checked(fixture, symbol);
     let plan = YearlyResultPlan {
         publication: PublishPlan {
-            command: command(task_id, &format!("pub-{item}"), rev, item),
+            command: command(task_id, &format!("pub-{task_id}-{item}"), rev, item),
             record: checked_of(&version),
             required_heads: vec![],
             promote: None,
@@ -421,7 +448,7 @@ fn year_version(id: &str, base_id: &str) -> EffectiveVersion {
         period: Period::Year,
         adjustment: Adjustment::Forward,
         source: "official".into(),
-        records: vec![year_bar(2020, 100)],
+        records: vec![year_bar(day_epoch(2020, 2, 4), 100)],
         published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
         validation: ValidationSummary {
             record_count: 0,
@@ -490,7 +517,10 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
         &daily_task,
         "item-1",
         SYMBOL,
-        vec![bar(0, 100), bar(1, 110)],
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+        ],
         None,
     );
 
@@ -500,7 +530,7 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
         &yearly_task,
         "item-1",
         SYMBOL,
-        &[(2020, 100)],
+        &[(day_epoch(2020, 2, 4), 100)],
         &daily.version_id,
         None,
     );
@@ -513,8 +543,8 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
             query_yearly(json!({"kind": "latest_per_entity"})),
         )
         .unwrap();
-    assert_eq!(page["manifest"][0]["status"], "present");
-    assert!(page["manifest"][0]["stale"].is_null());
+    assert_eq!(page["version_manifest"][0]["status"], "present");
+    assert!(page["version_manifest"][0]["stale"].is_null());
 
     // Daily append -> the yearly row trails the live base (behind mark).
     let appended = publish_daily(
@@ -522,7 +552,11 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
         &daily_task,
         "item-2",
         SYMBOL,
-        vec![bar(0, 100), bar(1, 110), bar(2, 120)],
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+            bar(day_epoch(2020, 3, 5), 120),
+        ],
         Some(&daily.version_id),
     );
     assert_ne!(appended.version_id, daily.version_id);
@@ -533,9 +567,9 @@ fn yearly_wire_reports_fresh_behind_and_stale_pins() {
             query_yearly(json!({"kind": "latest_per_entity"})),
         )
         .unwrap();
-    assert_eq!(page["manifest"][0]["status"], "present");
-    assert_eq!(page["manifest"][0]["stale"], "behind");
-    assert!(page["manifest"][0]["as_of_day"].is_string());
+    assert_eq!(page["version_manifest"][0]["status"], "present");
+    assert_eq!(page["version_manifest"][0]["stale"], "behind");
+    assert!(page["version_manifest"][0]["as_of_day"].is_string());
     let availability = f
         .api
         .call(
@@ -578,7 +612,10 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &daily_task,
         "item-1",
         SYMBOL,
-        vec![bar(0, 100), bar(1, 110)],
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+        ],
         None,
     );
     let yearly_task = task(&f, SYMBOL, 2, "year", "req-y2");
@@ -587,7 +624,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &yearly_task,
         "item-1",
         SYMBOL,
-        &[(2020, 100)],
+        &[(day_epoch(2020, 2, 4), 100)],
         &daily.version_id,
         None,
     );
@@ -598,7 +635,10 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &daily_task,
         "item-2",
         SYMBOL,
-        vec![bar(9, 300), bar(10, 310)],
+        vec![
+            bar(day_epoch(2020, 4, 2), 300),
+            bar(day_epoch(2020, 6, 8), 310),
+        ],
         Some(&daily.version_id),
     );
 
@@ -630,7 +670,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
             }),
         )
         .unwrap();
-    let invalid = batch["manifest"]
+    let invalid = batch["version_manifest"]
         .as_array()
         .unwrap()
         .iter()
@@ -639,7 +679,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
     assert_eq!(invalid["status"], "absent");
     assert_eq!(invalid["reason"], "daily_replaced_since_derivation");
     // The second entity never existed -> plain absent.
-    let other = batch["manifest"]
+    let other = batch["version_manifest"]
         .as_array()
         .unwrap()
         .iter()
@@ -675,7 +715,7 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
         &yearly_task,
         "item-2",
         SYMBOL,
-        &[(2020, 100)],
+        &[(day_epoch(2020, 2, 4), 100)],
         &base.version().version_id,
         Some(head.version_id),
     );
@@ -686,8 +726,8 @@ fn yearly_wire_reports_invalid_as_stale_or_absent_reason() {
             query_yearly(json!({"kind": "latest_per_entity"})),
         )
         .unwrap();
-    assert_eq!(page["manifest"][0]["status"], "present");
-    assert!(page["manifest"][0]["stale"].is_null());
+    assert_eq!(page["version_manifest"][0]["status"], "present");
+    assert!(page["version_manifest"][0]["stale"].is_null());
 }
 
 #[test]
@@ -703,7 +743,10 @@ fn yearly_batch_availability_reports_one_invalid_row_among_fresh() {
             &daily_task,
             &format!("item-{}", i + 1),
             s,
-            vec![bar(0, 100), bar(1, 110)],
+            vec![
+                bar(day_epoch(2020, 1, 6), 100),
+                bar(day_epoch(2020, 2, 4), 110),
+            ],
             None,
         );
     }
@@ -715,7 +758,7 @@ fn yearly_batch_availability_reports_one_invalid_row_among_fresh() {
             &yearly_task,
             &format!("item-{}", i + 1),
             s,
-            &[(2020, 100)],
+            &[(day_epoch(2020, 2, 4), 100)],
             &base.version().version_id,
             None,
         );
@@ -730,7 +773,10 @@ fn yearly_batch_availability_reports_one_invalid_row_among_fresh() {
         &victim_task,
         "item-1",
         victim,
-        vec![bar(9, 300)],
+        vec![
+            bar(day_epoch(2020, 4, 2), 300),
+            bar(day_epoch(2020, 6, 8), 310),
+        ],
         Some(&victim_head),
     );
 
@@ -776,7 +822,14 @@ fn progress_through_handler_on_compact_schema() {
     // the item success/failure split intact.
     let f = fixture();
     let task_id = task(&f, SYMBOL, 1, "day", "req-p");
-    publish_daily(&f, &task_id, "item-1", SYMBOL, vec![bar(0, 100)], None);
+    publish_daily(
+        &f,
+        &task_id,
+        "item-1",
+        SYMBOL,
+        vec![bar(day_epoch(2020, 1, 6), 100)],
+        None,
+    );
     let progress = f
         .api
         .call(
