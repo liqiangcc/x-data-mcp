@@ -191,8 +191,6 @@ impl WriteCoordinator {
             return Err(integrity("writer connection is not in autocommit"));
         }
         let _held = crate::stage_trace::span("coord.write.held");
-        // XP-041: no digest memo inside a write transaction.
-        let _no_digest_memo = super::compact_versions::suspend_cache();
         let wal_before = crate::stage_trace::enabled().then(|| self.wal_bytes());
         let outcome = f(conn);
         if let Some(before) = wal_before {
@@ -307,9 +305,6 @@ impl WriteCoordinator {
             if inspect_schema_identity(&tx)? != self.expected {
                 return Err(integrity("schema identity changed"));
             }
-            // XP-041: evidence / source-binding rows verified once per READ
-            // TRANSACTION and shared by every chain traversal inside it.
-            let _digest_memo = super::compact_versions::read_cache_scope();
             let value = f(&tx)?;
             self.lease.validate().map_err(unavailable)?;
             if inspect_schema_identity(&tx)? != self.expected {

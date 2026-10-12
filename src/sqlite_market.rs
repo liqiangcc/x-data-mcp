@@ -11,6 +11,12 @@ use chrono::{Datelike, FixedOffset, NaiveDate};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use rust_decimal::Decimal;
 use serde_json::Value;
+/// Transaction-scoped verification context (XP-011). The chain-store
+/// digest memoization is retired with schema 19/20 (S2); the type stays as
+/// an empty token so every reader signature keeps its shape.
+#[derive(Default)]
+pub(crate) struct VerifyCtx;
+
 #[derive(Clone)]
 pub struct SqliteMarket {
     pub tasks: SqliteTasks,
@@ -189,14 +195,9 @@ pub(crate) fn head(c: &Connection, scope: &Scope) -> Result<Option<String>, Erro
             .map_err(storage);
     }
     if is_compact_schema(c)? {
-        return c
-            .query_row(
-                "SELECT v.version_id FROM effective_heads h                  JOIN data_versions v ON v.version_key=h.version_key                  WHERE h.entity=?1 AND h.period=?2 AND h.adjustment=1",
-                params![scope.symbol, compact_repo::period_code(scope.period)],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(storage);
+        // schema 21 (market_series) is handled above; older compact
+        // schemas are retired — a connection here means legacy.
+        return Err(integrity("unsupported schema revision"));
     }
     c.query_row(
         "SELECT version_id FROM effective_heads WHERE symbol=?1 AND period=?2 AND adjustment='qfq'",
@@ -514,11 +515,7 @@ pub(crate) fn read_record(
         return Ok(record);
     }
     if is_compact_schema(c)? {
-        let record = compact_repo::materialize_checked(c, id, !published)?;
-        if !allow_yearly && record.version.period != Period::Day {
-            return Err(Error::Integrity("yearly record in daily context".into()));
-        }
-        return Ok(record);
+        return Err(integrity("unsupported schema revision"));
     }
     let record = read_projection(c, id, published, allow_yearly)?;
     let base = base_record(c, &record)?;
@@ -533,7 +530,7 @@ pub(crate) fn read_record(
 /// unpublished semantics. Never feed the result to bar-reading code.
 pub(crate) fn slim_published(
     c: &Connection,
-    ctx: &mut compact_versions::VerifyCtx,
+    ctx: &mut VerifyCtx,
     id: &str,
     published: bool,
     allow_yearly: bool,
@@ -549,22 +546,15 @@ pub(crate) fn slim_published(
         }
         return Ok(Some(record));
     }
-    if !published || !is_compact_schema(c)? {
-        return Ok(None);
-    }
-    let Some(record) = compact_repo::materialize_slim(c, ctx, id)? else {
-        return Ok(None);
-    };
-    if !allow_yearly && record.version().period != Period::Day {
-        return Err(Error::Integrity("yearly record in daily context".into()));
-    }
-    Ok(Some(record))
+    let _ = ctx;
+    let _ = published;
+    Ok(None)
 }
 /// `read_record` resolved through the header projection when the row is a
 /// published compact version; identical arguments and fallback semantics.
 pub(crate) fn read_record_slim(
     c: &Connection,
-    ctx: &mut compact_versions::VerifyCtx,
+    ctx: &mut VerifyCtx,
     id: &str,
     published: bool,
     allow_yearly: bool,
@@ -686,22 +676,7 @@ pub(crate) fn range_rows(
         .collect());
     }
     if is_compact_schema(c)? {
-        let record = compact_repo::materialize_checked(c, id, false)?;
-        if record.version.period != p {
-            return Err(Error::Integrity("range version period mismatch".into()));
-        }
-        return Ok(record
-            .version
-            .records
-            .iter()
-            .filter(|b| {
-                b.date >= range.start
-                    && b.date <= range.end
-                    && range.after.map(|a| b.date > a).unwrap_or(true)
-            })
-            .take(range.limit + 1)
-            .cloned()
-            .collect());
+        return Err(integrity("unsupported schema revision"));
     }
     if p == Period::Day {
         let segment_backed: bool = c
@@ -1119,24 +1094,14 @@ pub(crate) mod collection;
 #[allow(dead_code)]
 pub(crate) mod compact_repo;
 #[allow(dead_code)]
-pub(crate) mod compact_results;
-#[allow(dead_code)]
 pub(crate) mod compact_runtime;
-#[allow(dead_code)]
-pub(crate) mod compact_v19;
-#[allow(dead_code)]
-pub(crate) mod compact_versions;
-
-/// Fixture / test tooling only (XP-051): force every entity to roll over at
-/// `depth` instead of its staggered depth; `None` restores the default.
-pub fn set_fixture_rollover_depth(depth: Option<u32>) {
-    compact_versions::set_rollover_override(depth);
-}
 pub(crate) mod envelope;
+pub(crate) mod evidence_store;
 pub(crate) mod gaps;
 pub(crate) mod manifest;
-#[allow(dead_code)]
 pub(crate) mod series;
+#[allow(dead_code)]
+pub(crate) mod series_commit;
 pub(crate) mod update;
 pub(crate) mod yearly_results;
 

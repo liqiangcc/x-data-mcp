@@ -4,8 +4,7 @@ use crate::{
     market_storage::{Error, Scope},
     sqlite_catalog,
     sqlite_market::{
-        backend::MarketBackend, compact_versions::VerifyCtx, read_record, read_record_slim,
-        slim_published,
+        VerifyCtx, backend::MarketBackend, read_record, read_record_slim, slim_published,
     },
 };
 use chrono::{DateTime, Datelike, Utc};
@@ -30,83 +29,9 @@ fn market_ref(
         integrity_sha256: r.raw()["integrity_sha256"].as_str().unwrap().into(),
     }
 }
-/// `market_ref` built from committed-tier row facts (XP-020): the
-/// envelope `integrity_sha256` of a published row IS the stored
-/// `integrity_digest` hex — the same value `synthesize` emits. A
-/// missing digest is committed-state corruption and fails closed.
-fn market_ref_facts(
-    dataset: Dataset,
-    entity: &Security,
-    facts: &crate::sqlite_market::compact_versions::VersionResultFacts,
-) -> Result<VersionRef, Error> {
-    Ok(VersionRef {
-        dataset,
-        contract_version: ContractVersion::V1,
-        entity: Some(entity.clone()),
-        version_id: facts.version_id.clone(),
-        integrity_sha256: crate::compact_market::digest_hex(
-            &facts.integrity_digest.ok_or_else(|| {
-                Error::Integrity("committed version lacks integrity digest".into())
-            })?,
-        ),
-    })
-}
-fn catalog_ref(v: &crate::catalog::CatalogVersion) -> Result<VersionRef, Error> {
-    Ok(VersionRef {
-        dataset: Dataset::Catalog,
-        contract_version: ContractVersion::V1,
-        entity: None,
-        version_id: v.version_id.clone(),
-        integrity_sha256: sqlite_catalog::digest(v)?,
-    })
-}
-/// `read_market` backed by the header-only compact projection when the row
-/// is a published version — identical `raw()`/identity surface with
-/// `version().records` empty. `None` (non-compact, missing, or unpublished
-/// row) falls back to the unchanged full path; `Some` callers must not read
-/// bars from the record.
-fn slim_market(
-    c: &Connection,
-    ctx: &mut VerifyCtx,
-    dataset: Dataset,
-    entity: &Security,
-    id: &str,
-) -> Result<Option<crate::market_storage::compat::CheckedRecord>, Error> {
-    let Some(r) = slim_published(c, ctx, id, true, true)? else {
-        return Ok(None);
-    };
-    if r.version().symbol != entity.symbol() || Some(r.version().period) != dataset.period() {
-        return Err(Error::Integrity("version entity/dataset mismatch".into()));
-    }
-    Ok(Some(r))
-}
-fn read_market(
-    c: &Connection,
-    ctx: &mut VerifyCtx,
-    dataset: Dataset,
-    entity: &Security,
-    id: &str,
-) -> Result<crate::market_storage::compat::CheckedRecord, Error> {
-    if let Some(r) = slim_market(c, ctx, dataset, entity, id)? {
-        return Ok(r);
-    }
-    let r = read_record(c, id, true, true)?;
-    if r.version().symbol != entity.symbol() || Some(r.version().period) != dataset.period() {
-        return Err(Error::Integrity("version entity/dataset mismatch".into()));
-    }
-    Ok(r)
-}
-/// `get_yearly_base_years` per-item resolution (XP-014): the pinned daily
-/// version is fully verified inside this read transaction and the in-window
-/// year set is derived from the verified records — never inferred from
-/// first/last/count and never satisfied by stored digests. Missing or
-/// unpublished bases report `base_unavailable`; identity/period/content/
-/// lineage failures report `integrity_failure`; storage failures abort the
-/// whole request. Non-compact schemas delegate to `read_record` verbatim.
 fn presence_item(
     c: &Connection,
-    ctx: &mut VerifyCtx,
-    compact: bool,
+    _ctx: &mut VerifyCtx,
     item: &YearPresenceItem,
 ) -> Result<crate::data_supply::presence::PresenceOutcome, Error> {
     use crate::data_supply::presence::PresenceOutcome as Outcome;
@@ -189,81 +114,26 @@ fn presence_item(
             years,
         });
     }
-    if compact {
-        let key =
-            match crate::sqlite_market::compact_repo::version_key(c, &item.base_daily_version_id) {
-                Ok(key) => key,
-                Err(Error::NotFound) => {
-                    return Ok(Outcome::Unavailable(YearPresenceReason::BaseUnavailable));
-                }
-                Err(error) => return Err(error),
-            };
-        let facts = match crate::stage_trace::timed("presence.item.facts", || ctx.facts(c, key)) {
-            Ok(facts) => facts,
-            Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
-                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
-            }
-            Err(error) => return Err(error),
-        };
-        if facts.state != crate::sqlite_market::compact_versions::CompactVersionState::Published {
+    let record = match read_record(c, &item.base_daily_version_id, true, false) {
+        Ok(record) => record,
+        Err(Error::NotFound) => {
             return Ok(Outcome::Unavailable(YearPresenceReason::BaseUnavailable));
         }
-        // XP-031 R3: leaf = complete verification, ancestors = committed tier.
-        let history = match crate::stage_trace::timed("presence.item.verified", || {
-            ctx.presence_history(c, key)
-        }) {
-            Ok(h) => h,
-            Err(Error::Integrity(_) | Error::Base(_) | Error::NotFound) => {
-                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
-            }
-            Err(error) => return Err(error),
-        };
-        if history.entity != item.entity.symbol()
-            || history.period != crate::market_data::Period::Day
-        {
+        Err(Error::Integrity(_) | Error::Base(_)) => {
             return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
         }
-        let mut years = std::collections::BTreeSet::new();
-        for day in &history.days {
-            let Ok(date) = crate::compact_market::epoch_date(*day) else {
-                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
-            };
-            if date >= first && date <= last {
-                years.insert(date.year());
-            }
-        }
-        Ok(Outcome::Resolved {
-            version_ref: VersionRef {
-                dataset: Dataset::Daily,
-                contract_version: ContractVersion::V1,
-                entity: Some(item.entity.clone()),
-                version_id: item.base_daily_version_id.clone(),
-                integrity_sha256: crate::compact_market::digest_hex(&history.integrity_digest),
-            },
-            years: years.into_iter().collect(),
-        })
-    } else {
-        let record = match read_record(c, &item.base_daily_version_id, true, false) {
-            Ok(record) => record,
-            Err(Error::NotFound) => {
-                return Ok(Outcome::Unavailable(YearPresenceReason::BaseUnavailable));
-            }
-            Err(Error::Integrity(_) | Error::Base(_)) => {
-                return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
-            }
-            Err(error) => return Err(error),
-        };
-        if record.version().symbol != item.entity.symbol() {
-            return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
-        }
-        Ok(resolved(
-            record.raw()["integrity_sha256"]
-                .as_str()
-                .ok_or_else(|| Error::Integrity("published record lacks integrity digest".into()))?
-                .to_owned(),
-            record.version(),
-        ))
+        Err(error) => return Err(error),
+    };
+    if record.version().symbol != item.entity.symbol() {
+        return Ok(Outcome::Unavailable(YearPresenceReason::IntegrityFailure));
     }
+    Ok(resolved(
+        record.raw()["integrity_sha256"]
+            .as_str()
+            .ok_or_else(|| Error::Integrity("published record lacks integrity digest".into()))?
+            .to_owned(),
+        record.version(),
+    ))
 }
 
 impl SqliteSupply {
@@ -277,13 +147,12 @@ impl SqliteSupply {
         mut after_item: impl FnMut(usize),
     ) -> Result<Vec<crate::data_supply::presence::PresenceOutcome>, Error> {
         self.market.read(|c| {
-            let compact = crate::sqlite_market::is_compact_schema(c)?;
             let mut ctx = VerifyCtx::default();
             plan.items
                 .iter()
                 .enumerate()
                 .map(|(i, item)| {
-                    let outcome = presence_item(c, &mut ctx, compact, item);
+                    let outcome = presence_item(c, &mut ctx, item);
                     after_item(i);
                     outcome
                 })
@@ -294,9 +163,7 @@ impl SqliteSupply {
 
 impl crate::data_supply::presence::PresenceRepository for SqliteSupply {
     /// The whole batch resolves inside ONE `market.read` transaction — a
-    /// concurrent commit mid-batch cannot split the snapshot — and shares
-    /// this transaction's verified-facts/segment context (XP-011) so
-    /// sibling versions reusing immutable ancestors verify once. Items are
+    /// concurrent commit mid-batch cannot split the snapshot. Items are
     /// processed one at a time; no batch-sized full-history cache.
     fn year_presence(
         &self,
@@ -331,9 +198,8 @@ impl ReadRepository for SqliteSupply {
                 for id in ids {let v=sqlite_catalog::read(c,&id)?;result.push(VersionInfo{version_ref:catalog_ref(&v)?,published_at:v.published_at});}
             }else{
                 let latest=crate::sqlite_market::is_latest_only_schema(c)?;
-                let compact=!latest && crate::sqlite_market::is_compact_schema(c)?;
-                if !latest{let orphan:bool=if compact{c.query_row("SELECT EXISTS(SELECT 1 FROM task_publications tp LEFT JOIN data_versions v ON v.version_key=tp.version_key WHERE v.version_key IS NULL)",[],|r|r.get(0))}else{c.query_row("SELECT EXISTS(SELECT 1 FROM publication_batches b LEFT JOIN data_versions v ON b.version_id=v.version_id WHERE v.version_id IS NULL)",[],|r|r.get(0))}.map_err(storage)?;if orphan{return Err(Error::Integrity("orphan market publication".into()));}}
-                let list_sql=if compact{"SELECT v.version_id FROM data_versions v WHERE v.entity=?1 AND v.period=?2 AND (v.state=3 OR EXISTS(SELECT 1 FROM task_publications tp WHERE tp.version_key=v.version_key)) ORDER BY v.published_at DESC,v.version_id ASC"}else{"SELECT version_id FROM data_versions v WHERE symbol=?1 AND period=?2 AND (state='published' OR EXISTS(SELECT 1 FROM publication_batches b WHERE b.version_id=v.version_id)) ORDER BY published_at DESC,version_id ASC"};
+                if !latest{let orphan:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM publication_batches b LEFT JOIN data_versions v ON b.version_id=v.version_id WHERE v.version_id IS NULL)",[],|r|r.get(0)).map_err(storage)?;if orphan{return Err(Error::Integrity("orphan market publication".into()));}}
+                let list_sql="SELECT version_id FROM data_versions v WHERE symbol=?1 AND period=?2 AND (state='published' OR EXISTS(SELECT 1 FROM publication_batches b WHERE b.version_id=v.version_id)) ORDER BY published_at DESC,version_id ASC";
                 for entity in entities {
                     if latest {
                         // SPEC §6.1 list_data_versions on schema 21: at most one
@@ -344,7 +210,7 @@ impl ReadRepository for SqliteSupply {
                         continue;
                     }
                     let mut s=c.prepare(list_sql).map_err(storage)?;
-                    let get_id=|r:&rusqlite::Row<'_>| r.get::<_,String>(0);let ids:Vec<String>=if compact{s.query_map(params![entity.symbol(),if args.dataset==Dataset::Daily{1}else{2}],get_id)}else{s.query_map(params![entity.symbol(),if args.dataset==Dataset::Daily{"day"}else{"year"}],get_id)}.map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
+                    let get_id=|r:&rusqlite::Row<'_>| r.get::<_,String>(0);let ids:Vec<String>=s.query_map(params![entity.symbol(),if args.dataset==Dataset::Daily{"day"}else{"year"}],get_id).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
                     for id in ids {let r=read_market(c,&mut ctx,args.dataset,&entity,&id)?;result.push(VersionInfo{version_ref:market_ref(args.dataset,&entity,&r),published_at:r.version().published_at});}
                 }
             }
@@ -559,109 +425,6 @@ type AvailabilityStats = (
     Option<chrono::NaiveDate>,
     usize,
 );
-// Test-only switch: force the full-verification stats path so tests can
-// compare it field by field with the committed-tier fast path.
-#[cfg(test)]
-thread_local! {
-    pub(crate) static FORCE_FULL_STATS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-/// Committed-tier market stats (XP-025 D daily, XP-030 R2 yearly; H10
-/// approved "availability per-entity stats/verification at committed
-/// tier"): when the query range covers the whole published version, the
-/// manifest, metadata and first/last/count come from the version row (its
-/// published fields, including the yearly lineage binding, are still
-/// verified by `committed_facts`) and its version-evidence row — no chain
-/// walk, no node verification, no bar decoding. For yearly versions the
-/// lineage is the stored `yearly_lineage` row; the per-bar re-aggregation
-/// against the base (`YearlyMetaScan`) is not repeated at this tier.
-/// Sub-range filters, unpublished versions and non-compact stores return
-/// `None` and keep the fully verified path.
-fn committed_market_stats(
-    c: &Connection,
-    ctx: &mut VerifyCtx,
-    plan: &QueryPlan,
-    entity: &Security,
-    id: &str,
-) -> Result<Option<AvailabilityStats>, Error> {
-    use crate::sqlite_market::compact_versions::{self, CompactVersionState};
-    let key = match crate::sqlite_market::compact_repo::version_key(c, id) {
-        Ok(key) => key,
-        Err(Error::NotFound) => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    let facts = ctx.committed_facts(c, key)?;
-    if facts.state != CompactVersionState::Published {
-        return Ok(None);
-    }
-    let dataset = plan.args.dataset;
-    if facts.entity != entity.symbol() || Some(facts.period) != dataset.period() {
-        return Err(Error::Integrity("version entity/dataset mismatch".into()));
-    }
-    let (start, end) = market_range(plan)?;
-    if !(crate::compact_market::epoch_day(start) <= facts.first_day
-        && facts.last_day <= crate::compact_market::epoch_day(end))
-    {
-        return Ok(None);
-    }
-    let count = usize::try_from(facts.record_count)
-        .map_err(|_| Error::Integrity("committed record_count out of range".into()))?;
-    if count > MAX_ROWS {
-        return Err(invalid("snapshot row budget exceeded"));
-    }
-    let (kind, canonical) = compact_versions::read_evidence(c, &facts.evidence_digest)?;
-    if kind != crate::compact_market::EvidenceKind::Version {
-        return Err(Error::Integrity("version evidence kind mismatch".into()));
-    }
-    let evidence: crate::compact_market::VersionEvidence =
-        serde_json::from_str(&canonical).map_err(|e| Error::Integrity(e.to_string()))?;
-    let published_at = facts
-        .published_at
-        .as_deref()
-        .ok_or_else(|| Error::Integrity("published version lacks published_at".into()))?
-        .parse()
-        .map_err(|e: chrono::ParseError| Error::Integrity(e.to_string()))?;
-    let day =
-        |d: i64| crate::compact_market::epoch_date(d).map_err(|e| Error::Integrity(e.to_string()));
-    let lineage = if dataset == Dataset::Yearly {
-        Some(compact_versions::committed_yearly_lineage(c, key)?)
-    } else {
-        None
-    };
-    let manifest = ManifestEntry {
-        entity: Some(entity.clone()),
-        version_ref: Some(market_ref_facts(dataset, entity, &facts)?),
-        status: ManifestStatus::Present,
-        metadata: Some(Metadata {
-            source: evidence.source,
-            published_at,
-            coverage_status: match facts.coverage_status {
-                1 => "complete",
-                2 => "incomplete",
-                _ => "unknown",
-            }
-            .into(),
-            coverage_reason: evidence.coverage_reason,
-            units: unit_evidence(&evidence.unit_currency),
-            adjustment: Some(adjustment_evidence(&evidence.adjustment_evidence)),
-            lineage: lineage
-                .map(|l| {
-                    Ok::<_, Error>(Lineage {
-                        base_daily_version_id: l.base_daily_version_id,
-                        algorithm_version: l.algorithm_version,
-                        first_trading_date: day(l.first_trade_day)?,
-                        last_trading_date: day(l.last_trade_day)?,
-                    })
-                })
-                .transpose()?,
-        }),
-    };
-    Ok(Some((
-        Some(manifest),
-        Some(day(facts.first_day)?),
-        Some(day(facts.last_day)?),
-        count,
-    )))
-}
 fn availability_stats(
     c: &Connection,
     ctx: &mut VerifyCtx,
@@ -715,65 +478,6 @@ fn availability_stats(
     };
     if crate::sqlite_market::is_latest_only_schema(c)? {
         return series_stats(c, plan, entity, &id);
-    }
-    #[cfg(test)]
-    let force_full = FORCE_FULL_STATS.with(|f| f.get());
-    #[cfg(not(test))]
-    let force_full = false;
-    if matches!(plan.args.dataset, Dataset::Daily | Dataset::Yearly)
-        && !force_full
-        && crate::sqlite_market::is_compact_schema(c)?
-        && let Some(stats) = committed_market_stats(c, ctx, plan, entity, &id)?
-    {
-        return Ok(stats);
-    }
-    // Published compact heads answer the same facts without a full record
-    // materialization: the slim projection's manifest/metadata are
-    // byte-identical, and the in-window stats come from the windowed leaf
-    // read (chain linkage + clip digests still enforced) instead of the
-    // materialized `records` list.
-    let slim = crate::stage_trace::timed("avail.stats.slim_market", || {
-        slim_market(c, ctx, plan.args.dataset, entity, &id)
-    })?;
-    if let Some(r) = slim {
-        let _window = crate::stage_trace::span(if plan.args.dataset == Dataset::Yearly {
-            "avail.stats.yearly_window_and_meta"
-        } else {
-            "avail.stats.daily_window"
-        });
-        let manifest = ManifestEntry {
-            entity: Some(entity.clone()),
-            version_ref: Some(market_ref(plan.args.dataset, entity, &r)),
-            status: ManifestStatus::Present,
-            metadata: Some(metadata(&r)),
-        };
-        let (start, end) = market_range(plan)?;
-        let key = crate::sqlite_market::compact_repo::version_key(c, &id)?;
-        let mut count = 0usize;
-        let mut first = None;
-        let mut last = None;
-        let mut meta_scan = YearlyMetaScan::new();
-        for b in crate::sqlite_market::compact_versions::leaf_bars_in_range(
-            c,
-            key,
-            crate::compact_market::epoch_day(start),
-            crate::compact_market::epoch_day(end),
-        )? {
-            let date = crate::compact_market::epoch_date(b.trade_day)
-                .map_err(|e| Error::Integrity(e.to_string()))?;
-            if plan.args.dataset == Dataset::Yearly {
-                meta_scan.meta(c, &r, date)?;
-            }
-            count += 1;
-            if count > MAX_ROWS {
-                return Err(invalid("snapshot row budget exceeded"));
-            }
-            if first.is_none() {
-                first = Some(date);
-            }
-            last = Some(date);
-        }
-        return Ok((Some(manifest), first, last, count));
     }
     let r = read_market(c, ctx, plan.args.dataset, entity, &id)?;
     let manifest = ManifestEntry {
@@ -855,50 +559,12 @@ pub(crate) fn yearly_row_meta(
             Some(!finished),
         ));
     }
-    let (lineage, as_of) = yearly_lineage_as_of(c, r)?;
-    let base = read_record(c, &lineage.base_daily_version_id, true, false)?;
-    let annual = crate::yearly::aggregate(&base.version, None, as_of)
-        .map_err(|e| Error::Integrity(format!("yearly re-aggregation: {e}")))?;
-    let record = annual
-        .records
-        .iter()
-        .find(|rec| rec.bar.date == date)
-        .ok_or_else(|| Error::Integrity("yearly record missing from re-aggregation".into()))?;
-    Ok((
-        Some(record.lineage.first_trading_date),
-        Some(record.lineage.last_trading_date),
-        Some(record.year_unfinished),
-    ))
+    crate::sqlite_market::series::yearly_row_meta(c, r, date)
 }
-fn yearly_lineage_as_of<'a>(
-    c: &Connection,
-    r: &'a crate::market_storage::compat::CheckedRecord,
-) -> Result<(&'a crate::market_data::YearlyDerivation, chrono::NaiveDate), Error> {
-    let lineage = r
-        .version()
-        .yearly_derivation
-        .as_ref()
-        .ok_or_else(|| Error::Integrity("yearly version lacks derivation".into()))?;
-    let as_of_day: i64 = c
-        .query_row(
-            "SELECT l.as_of_day FROM yearly_lineage l \
-             JOIN data_versions v ON v.version_key=l.version_key WHERE v.version_id=?1",
-            [&r.version().version_id],
-            |r| r.get(0),
-        )
-        .map_err(storage)?;
-    let as_of = crate::compact_market::epoch_date(as_of_day)
-        .map_err(|e| Error::Integrity(format!("stored yearly as_of: {e}")))?;
-    Ok((lineage, as_of))
-}
-/// Per-version memo for the compact `yearly_row_meta` check: the base daily
-/// read + re-aggregation are pure functions of the checked version's stored
-/// lineage, so a scan of N yearly rows shares one computation instead of
-/// re-materializing the base per row. Keyed by (version_id, as_of_day) —
-/// a different record simply recomputes, keeping per-row error order.
-pub(crate) struct YearlyMetaScan {
-    annual: Option<(String, i64, std::rc::Rc<crate::yearly::AnnualSeries>)>,
-}
+/// Per-year row-metadata entry point (`YearlyMetaScan` used to memoize the
+/// compact re-aggregation; schema 21's `series::yearly_row_meta` dispatches
+/// per row — kept as a type only to preserve call sites).
+pub(crate) struct YearlyMetaScan;
 impl Default for YearlyMetaScan {
     fn default() -> Self {
         Self::new()
@@ -906,7 +572,7 @@ impl Default for YearlyMetaScan {
 }
 impl YearlyMetaScan {
     pub(crate) fn new() -> Self {
-        Self { annual: None }
+        Self
     }
     pub(crate) fn meta(
         &mut self,
@@ -914,42 +580,7 @@ impl YearlyMetaScan {
         r: &crate::market_storage::compat::CheckedRecord,
         date: chrono::NaiveDate,
     ) -> Result<YearlyRowMeta, Error> {
-        if crate::sqlite_market::is_latest_only_schema(c)? {
-            return crate::sqlite_market::series::yearly_row_meta(c, r, date);
-        }
-        if !crate::sqlite_market::is_compact_schema(c)? {
-            return yearly_row_meta(c, r, date);
-        }
-        let (lineage, as_of) = yearly_lineage_as_of(c, r)?;
-        let as_of_day = crate::compact_market::epoch_day(as_of);
-        let hit = self
-            .annual
-            .as_ref()
-            .is_some_and(|(id, day, _)| id == &r.version().version_id && *day == as_of_day);
-        if !hit {
-            let base = read_record(c, &lineage.base_daily_version_id, true, false)?;
-            let annual = crate::yearly::aggregate(&base.version, None, as_of)
-                .map_err(|e| Error::Integrity(format!("yearly re-aggregation: {e}")))?;
-            self.annual = Some((
-                r.version().version_id.clone(),
-                as_of_day,
-                std::rc::Rc::new(annual),
-            ));
-        }
-        let record = self
-            .annual
-            .as_ref()
-            .unwrap()
-            .2
-            .records
-            .iter()
-            .find(|rec| rec.bar.date == date)
-            .ok_or_else(|| Error::Integrity("yearly record missing from re-aggregation".into()))?;
-        Ok((
-            Some(record.lineage.first_trading_date),
-            Some(record.lineage.last_trading_date),
-            Some(record.year_unfinished),
-        ))
+        yearly_row_meta(c, r, date)
     }
 }
 
@@ -1094,7 +725,7 @@ fn task_facts(
         return task_facts_series(c, request, s);
     }
     let mut q = c
-        .prepare(if crate::sqlite_market::is_compact_schema(c)?{"SELECT v.version_id FROM task_publications tp JOIN data_versions v ON v.version_key=tp.version_key WHERE tp.task_id=?1 ORDER BY v.version_id"}else{"SELECT version_id FROM task_publications WHERE task_id=?1 ORDER BY version_id"})
+        .prepare("SELECT version_id FROM task_publications WHERE task_id=?1 ORDER BY version_id")
         .map_err(storage)?;
     let ids = q
         .query_map([id], |r| r.get::<_, String>(0))
@@ -1128,12 +759,9 @@ fn task_facts(
         .map(|id| range_result(c, ctx, id))
         .collect::<Result<Vec<_>, _>>()?;
     let mut q = c
-        .prepare(if crate::sqlite_market::is_compact_schema(c)? {
-            "SELECT publication_id FROM publication_results \
-             WHERE task_id=?1 AND publication_kind=2 ORDER BY publication_id"
-        } else {
-            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id"
-        })
+        .prepare(
+            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id",
+        )
         .map_err(storage)?;
     let yearly_ids = q
         .query_map([id], |r| r.get::<_, String>(0))
@@ -1172,67 +800,7 @@ fn task_facts_committed(
         let (request, s) = task_facts_head(c, id, access)?;
         return task_facts_series(c, request, s);
     }
-    if !crate::sqlite_market::is_compact_schema(c)? {
-        return task_facts(c, ctx, id, access, true);
-    }
-    let (request, s) = task_facts_head(c, id, access)?;
-    let mut q = c
-        .prepare("SELECT v.version_id FROM task_publications tp JOIN data_versions v ON v.version_key=tp.version_key WHERE tp.task_id=?1 ORDER BY v.version_id")
-        .map_err(storage)?;
-    let ids = q
-        .query_map([id], |r| r.get::<_, String>(0))
-        .map_err(storage)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(storage)?;
-    let mut publications = vec![];
-    for id in ids {
-        // Committed tier: the reference consumes identity + stored
-        // integrity digest from row facts — no envelope at all.
-        let facts = ctx.committed_facts_by_id(c, &id)?;
-        let e = crate::data_supply::observe::entity(&facts.entity)
-            .ok_or_else(|| Error::Integrity("published task symbol".into()))?;
-        let dataset = if facts.period == crate::market_data::Period::Day {
-            Dataset::Daily
-        } else {
-            Dataset::Yearly
-        };
-        publications.push(market_ref_facts(dataset, &e, &facts)?);
-    }
-    let mut q = c
-        .prepare("SELECT result_id FROM market_update_results WHERE task_id=?1 ORDER BY result_id")
-        .map_err(storage)?;
-    let result_ids = q
-        .query_map([id], |r| r.get::<_, String>(0))
-        .map_err(storage)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(storage)?;
-    let range_results = result_ids
-        .iter()
-        .map(|id| range_result_meta(c, ctx, id))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut q = c
-        .prepare(
-            "SELECT publication_id FROM publication_results \
-             WHERE task_id=?1 AND publication_kind=2 ORDER BY publication_id",
-        )
-        .map_err(storage)?;
-    let yearly_ids = q
-        .query_map([id], |r| r.get::<_, String>(0))
-        .map_err(storage)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(storage)?;
-    let yearly_results = yearly_ids
-        .iter()
-        .map(|id| yearly_result_meta(c, ctx, id))
-        .collect::<Result<Vec<_>, _>>()?;
-    task_facts_check_evidenced(&s, &range_results, &yearly_results)?;
-    Ok(TaskFacts {
-        yearly_results,
-        range_results,
-        request_id: request,
-        snapshot: s,
-        publications,
-    })
+    task_facts(c, ctx, id, access, true)
 }
 /// `task_facts(verify_outputs=false)` at summary depth: identical
 /// authorization and bound-request validation via `read_bound_task`, but
@@ -1634,28 +1202,7 @@ fn verify_versions_meta_conn(
         }
         return Ok(());
     }
-    if !crate::sqlite_market::is_compact_schema(c)? {
-        return verify_versions_conn(c, ctx, refs);
-    }
-    for r in unique_refs(refs) {
-        let actual = if r.dataset == Dataset::Catalog {
-            catalog_ref(&sqlite_catalog::read(c, &r.version_id)?)?
-        } else {
-            let entity = r
-                .entity
-                .as_ref()
-                .ok_or_else(|| invalid("missing version entity"))?;
-            let facts = ctx.committed_facts_by_id(c, &r.version_id)?;
-            if facts.entity != entity.symbol() || Some(facts.period) != r.dataset.period() {
-                return Err(Error::Integrity("version entity/dataset mismatch".into()));
-            }
-            market_ref_facts(r.dataset, entity, &facts)?
-        };
-        if actual != r {
-            return Err(Error::Integrity("fixed version changed".into()));
-        }
-    }
-    Ok(())
+    verify_versions_conn(c, ctx, refs)
 }
 /// `verify_range_results_conn` at the committed-state tier (XP-020):
 /// the same re-derive-and-compare loop over the committed-tier
@@ -1667,17 +1214,17 @@ fn verify_range_results_meta_conn(
     ctx: &mut VerifyCtx,
     results: &[RangeExecutionResult],
 ) -> Result<(), Error> {
-    if !crate::sqlite_market::is_compact_schema(c)? {
-        return verify_range_results_conn(c, ctx, results);
-    }
-    for expected in results {
-        if range_result_meta(c, ctx, &expected.result_id)? != *expected {
-            return Err(Error::Integrity(
-                "range result changed since snapshot".into(),
-            ));
+    if crate::sqlite_market::is_latest_only_schema(c)? {
+        for expected in results {
+            if range_result_series(c, &expected.result_id)? != *expected {
+                return Err(Error::Integrity(
+                    "range result changed since snapshot".into(),
+                ));
+            }
         }
+        return Ok(());
     }
-    Ok(())
+    verify_range_results_conn(c, ctx, results)
 }
 /// `verify_yearly_results_conn` at the committed-state tier (XP-020):
 /// same contract as `verify_range_results_meta_conn`.
@@ -1686,17 +1233,17 @@ fn verify_yearly_results_meta_conn(
     ctx: &mut VerifyCtx,
     results: &[YearlyExecutionResult],
 ) -> Result<(), Error> {
-    if !crate::sqlite_market::is_compact_schema(c)? {
-        return verify_yearly_results_conn(c, ctx, results);
-    }
-    for expected in results {
-        if yearly_result_meta(c, ctx, &expected.result_id)? != *expected {
-            return Err(Error::Integrity(
-                "yearly result changed since snapshot".into(),
-            ));
+    if crate::sqlite_market::is_latest_only_schema(c)? {
+        for expected in results {
+            if yearly_result_series(c, &expected.result_id)? != *expected {
+                return Err(Error::Integrity(
+                    "yearly result changed since snapshot".into(),
+                ));
+            }
         }
+        return Ok(());
     }
-    Ok(())
+    verify_yearly_results_conn(c, ctx, results)
 }
 /// Receipt comparisons on an already-open connection — the same
 /// `(_, receipt)` mapping both backend `check_receipt` implementations
@@ -2004,85 +1551,6 @@ fn yearly_result(
     serde_json::from_value(serde_json::json!({"result_id":id,"item_id":audit["command"]["item_id"],"base_daily_version":market_ref(Dataset::Daily,&entity,&base),"result_version":market_ref(Dataset::Yearly,&entity,&result),"no_change":audit["no_change"],"derived_at":audit["candidate"]["batch"]["provenance"]["acquired_at"]})).map_err(|e|Error::Integrity(e.to_string()))
 }
 
-/// `range_result` at the committed-state verification tier (XP-020) —
-/// progress read scope only. The audit comes from
-/// `update::read_result_meta_ctx`; base/result identity, period and
-/// entity checks run on committed facts and the `VersionRef`s are
-/// built from the same stored digests — producing a
-/// `RangeExecutionResult` identical to `range_result`. Non-compact
-/// databases delegate to `range_result` verbatim.
-fn range_result_meta(
-    c: &Connection,
-    ctx: &mut VerifyCtx,
-    id: &str,
-) -> Result<RangeExecutionResult, Error> {
-    if crate::sqlite_market::is_latest_only_schema(c)? {
-        return range_result_series(c, id);
-    }
-    if !crate::sqlite_market::is_compact_schema(c)? {
-        return range_result(c, ctx, id);
-    }
-    let (audit, receipt) = crate::sqlite_market::update::read_result_meta_ctx(c, ctx, id)?
-        .ok_or_else(|| Error::Integrity("range result missing".into()))?;
-    let base_id = audit["evidence"]["base_version_id"]
-        .as_str()
-        .ok_or_else(|| Error::Integrity("range base reference missing".into()))?;
-    // These reads share the task/receipt transaction; never query a latest head.
-    let base = ctx.committed_facts_by_id(c, base_id)?;
-    let result = ctx.committed_facts_by_id(c, &receipt.version_id)?;
-    if base.period != crate::market_data::Period::Day
-        || result.period != crate::market_data::Period::Day
-        || base.entity != result.entity
-    {
-        return Err(Error::Integrity(
-            "range result version identity/period mismatch".into(),
-        ));
-    }
-    let entity = crate::data_supply::observe::entity(&base.entity)
-        .ok_or_else(|| Error::Integrity("range result entity missing".into()))?;
-    let base_ref = market_ref_facts(Dataset::Daily, &entity, &base)?;
-    let result_ref = market_ref_facts(Dataset::Daily, &entity, &result)?;
-    serde_json::from_value(serde_json::json!({
-        "result_id":id,"item_id":audit["command"]["item_id"],
-        "base_version":base_ref,"result_version":result_ref,
-        "no_change":audit["no_change"],"acquired_at":audit["segment"]["provenance"]["acquired_at"]
-    }))
-    .map_err(|e| Error::Integrity(format!("range result projection: {e}")))
-}
-
-/// `yearly_result` at the committed-state verification tier (XP-020) —
-/// progress read scope only; same contract as `range_result_meta`.
-fn yearly_result_meta(
-    c: &Connection,
-    ctx: &mut VerifyCtx,
-    id: &str,
-) -> Result<YearlyExecutionResult, Error> {
-    if crate::sqlite_market::is_latest_only_schema(c)? {
-        return yearly_result_series(c, id);
-    }
-    if !crate::sqlite_market::is_compact_schema(c)? {
-        return yearly_result(c, ctx, id);
-    }
-    let (audit, receipt) = crate::sqlite_market::yearly_results::read_result_meta_ctx(c, ctx, id)?
-        .ok_or_else(|| Error::Integrity("yearly result missing".into()))?;
-    let base_id = audit["base_daily_version_id"]
-        .as_str()
-        .ok_or_else(|| Error::Integrity("yearly base missing".into()))?;
-    let base = ctx.committed_facts_by_id(c, base_id)?;
-    let result = ctx.committed_facts_by_id(c, &receipt.version_id)?;
-    if base.period != crate::market_data::Period::Day
-        || result.period != crate::market_data::Period::Year
-        || base.entity != result.entity
-    {
-        return Err(Error::Integrity("yearly result identity/period".into()));
-    }
-    let entity = crate::data_supply::observe::entity(&base.entity)
-        .ok_or_else(|| Error::Integrity("yearly result entity".into()))?;
-    let base_ref = market_ref_facts(Dataset::Daily, &entity, &base)?;
-    let result_ref = market_ref_facts(Dataset::Yearly, &entity, &result)?;
-    serde_json::from_value(serde_json::json!({"result_id":id,"item_id":audit["command"]["item_id"],"base_daily_version":base_ref,"result_version":result_ref,"no_change":audit["no_change"],"derived_at":audit["candidate"]["batch"]["provenance"]["acquired_at"]})).map_err(|e|Error::Integrity(e.to_string()))
-}
-
 // ---------------------------------------------------------------------------
 // Schema-21 latest-only helpers
 // ---------------------------------------------------------------------------
@@ -2117,7 +1585,7 @@ fn series_metadata(
     series: &crate::sqlite_market::series::SeriesRow,
 ) -> Result<Metadata, Error> {
     let (kind, canonical) =
-        crate::sqlite_market::compact_versions::read_evidence(c, &series.evidence_digest)?;
+        crate::sqlite_market::evidence_store::read_evidence(c, &series.evidence_digest)?;
     if kind != crate::compact_market::EvidenceKind::Version {
         return Err(Error::Integrity("version evidence kind mismatch".into()));
     }

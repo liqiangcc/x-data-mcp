@@ -111,6 +111,16 @@ CREATE INDEX market_events_entity_period
   ON market_events(entity, period, seq DESC, new_content_digest, kind);
 -- §6.1 stale probe: did this content digest ever become current.
 CREATE INDEX market_events_new_digest ON market_events(new_content_digest);
+
+-- Envelope-path scratch: stage() stores the caller-verified candidate row
+-- here and commit()/candidate()/staged_matches() bind plan.record to it.
+-- Not durable state: a commit consumes its row; task orphans are dropped
+-- by the next matching stage or left harmlessly (bounded by task size).
+CREATE TABLE staged_records(
+  version_id TEXT PRIMARY KEY,
+  raw TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT, WITHOUT ROWID;
 DROP TABLE market_update_delta_clips;
 DROP TABLE task_publications;
 DROP TABLE publication_results;

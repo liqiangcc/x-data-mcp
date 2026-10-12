@@ -126,35 +126,27 @@ pub fn resolve_default_work_on(
         let head_id = head(c, &scope)
             .map_err(|e| invalid(format!("daily head unreadable for {symbol}: {e}")))?
             .ok_or_else(|| invalid(format!("{symbol} has no published qfq daily head")))?;
-        // Compact schema: identity, stored integrity digest and day bounds are
-        // version-row facts — admission must not materialize the full history.
+        // Latest-only schema: identity, digest (= version_id) and day bounds
+        // are series-row facts — admission must not materialize history.
         let (base_integrity_sha256, first_day, last_day) = if is_compact_schema(c)
             .map_err(|e| invalid(format!("schema probe failed for {symbol}: {e}")))?
         {
-            let key = crate::sqlite_market::compact_repo::version_key(c, &head_id)
-                .map_err(|e| invalid(format!("daily head unreadable for {symbol}: {e}")))?;
-            let facts = crate::sqlite_market::compact_versions::result_facts(c, key)
-                .map_err(|e| invalid(format!("daily head unverifiable for {symbol}: {e}")))?;
-            let digest = facts
-                .integrity_digest
-                .ok_or_else(|| invalid(format!("base digest missing for {symbol}")))?;
-            if facts.state != crate::sqlite_market::compact_versions::CompactVersionState::Published
-                || facts.entity != *symbol
-                || facts.period != Period::Day
-                || facts.version_id != head_id
-            {
+            let row = crate::sqlite_market::series::read_series(c, symbol, Period::Day)
+                .map_err(|e| invalid(format!("daily head unreadable for {symbol}: {e}")))?
+                .ok_or_else(|| invalid(format!("daily head missing for {symbol}")))?;
+            if row.version_id != head_id {
                 return Err(invalid(format!(
                     "daily head identity mismatch for {symbol}"
                 )));
             }
             (
-                crate::sqlite_market::compact_repo::hex_bytes(&digest),
+                row.version_id.clone(),
                 Some(
-                    crate::compact_market::epoch_date(facts.first_day)
+                    crate::compact_market::epoch_date(row.first_day)
                         .map_err(|e| invalid(format!("base first_day invalid: {e}")))?,
                 ),
                 Some(
-                    crate::compact_market::epoch_date(facts.last_day)
+                    crate::compact_market::epoch_date(row.last_day)
                         .map_err(|e| invalid(format!("base last_day invalid: {e}")))?,
                 ),
             )

@@ -68,15 +68,19 @@ fn version_evidence() -> Value {
 
 fn put_test_evidence(c: &Connection) -> (Digest, Digest) {
     let version =
-        compact_versions::put_evidence(c, EvidenceKind::Version, &version_evidence()).unwrap();
-    let generation =
-        compact_versions::put_evidence(c, EvidenceKind::Generation, &json!({"generation": "test"}))
+        super::super::evidence_store::put_evidence(c, EvidenceKind::Version, &version_evidence())
             .unwrap();
+    let generation = super::super::evidence_store::put_evidence(
+        c,
+        EvidenceKind::Generation,
+        &json!({"generation": "test"}),
+    )
+    .unwrap();
     (version, generation)
 }
 
 fn put_test_binding(c: &Connection, generation_evidence: Digest) -> Digest {
-    compact_versions::put_source_binding(
+    super::super::evidence_store::put_source_binding(
         c,
         &SourceBinding {
             generation_id: "gen-test".into(),

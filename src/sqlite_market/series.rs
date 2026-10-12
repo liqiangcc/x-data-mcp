@@ -18,7 +18,6 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use super::compact_versions;
 use super::{integrity, storage};
 use crate::compact_market::{
     self, CompactBar, Digest, EvidenceKind, SourceBinding, VersionEvidence,
@@ -552,6 +551,19 @@ pub(crate) fn event_by_result(c: &Connection, result_id: &str) -> Result<Option<
 }
 
 /// Events of one (entity, period) strictly after `seq`, ascending.
+/// Replay/read anchor for the `UNIQUE(task_id, item_id)` pair.
+pub(crate) fn event_by_task_item(
+    c: &Connection,
+    task_id: &str,
+    item_id: &str,
+) -> Result<Option<EventRow>, Error> {
+    read_event_row(
+        c,
+        &format!("SELECT {EVENT_COLUMNS} FROM market_events WHERE task_id=?1 AND item_id=?2"),
+        params![task_id, item_id],
+    )
+}
+
 pub(crate) fn events_after(
     c: &Connection,
     entity: &str,
@@ -710,30 +722,7 @@ fn digest_seen_for(
 // ---------------------------------------------------------------------------
 
 fn read_source_binding(c: &Connection, digest: &Digest) -> Result<SourceBinding, Error> {
-    let row = c
-        .query_row(
-            "SELECT generation_id,generation_manifest_sha256,day_member_sha256,security_event_sha256,evidence_digest FROM source_bindings WHERE source_binding_digest=?1",
-            params![digest.as_slice()],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, Vec<u8>>(2)?,
-                    r.get::<_, Vec<u8>>(3)?,
-                    r.get::<_, Vec<u8>>(4)?,
-                ))
-            },
-        )
-        .optional()
-        .map_err(storage)?
-        .ok_or_else(|| integrity("source binding missing"))?;
-    Ok(SourceBinding {
-        generation_id: row.0,
-        generation_manifest_sha256: digest32(row.1)?,
-        day_member_sha256: digest32(row.2)?,
-        security_event_sha256: digest32(row.3)?,
-        evidence_digest: digest32(row.4)?,
-    })
+    super::evidence_store::read_source_binding(c, digest)
 }
 
 fn period_name(period: Period) -> &'static str {
@@ -751,7 +740,8 @@ pub(crate) fn checked_record(
     series: &SeriesRow,
     full: bool,
 ) -> Result<CheckedRecord, Error> {
-    let (kind, canonical) = compact_versions::read_evidence(c, &series.evidence_digest)?;
+    let (kind, canonical) =
+        crate::sqlite_market::evidence_store::read_evidence(c, &series.evidence_digest)?;
     if kind != EvidenceKind::Version {
         return Err(integrity("version evidence kind mismatch"));
     }
@@ -806,7 +796,8 @@ pub(crate) fn checked_record(
         yearly_derivation,
     };
     let source_binding = read_source_binding(c, &series.source_binding_digest)?;
-    let (kind, canonical) = compact_versions::read_evidence(c, &source_binding.evidence_digest)?;
+    let (kind, canonical) =
+        crate::sqlite_market::evidence_store::read_evidence(c, &source_binding.evidence_digest)?;
     if kind != EvidenceKind::Generation {
         return Err(integrity("source binding evidence is not generation"));
     }
@@ -937,7 +928,8 @@ pub(crate) fn yearly_row_meta(
     .map_err(integrity)?;
     // `aggregate` requires confirmed unit/adjustment evidence — the daily
     // series' version evidence supplies it.
-    let (kind, canonical) = compact_versions::read_evidence(c, &daily.evidence_digest)?;
+    let (kind, canonical) =
+        crate::sqlite_market::evidence_store::read_evidence(c, &daily.evidence_digest)?;
     if kind != EvidenceKind::Version {
         return Err(integrity("version evidence kind mismatch"));
     }

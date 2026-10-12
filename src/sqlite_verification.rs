@@ -223,9 +223,7 @@ const DURABLE_EFFECTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM publication_batch
 /// Schema-19 drops `publication_batches`/`yearly_execution_results`; their
 /// receipts live in `publication_results` instead.
 const DURABLE_EFFECTS_SQL_COMPACT: &str =
-    "SELECT EXISTS(SELECT 1 FROM task_publications WHERE task_id=?1
-                 UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1
-                 UNION ALL SELECT 1 FROM publication_results WHERE task_id=?1)";
+    "SELECT EXISTS(SELECT 1 FROM market_events WHERE task_id=?1)";
 /// Schema 21 keeps a single durable record: one `market_events` row per
 /// committed result.
 const DURABLE_EFFECTS_SQL_LATEST_ONLY: &str =
@@ -273,8 +271,7 @@ impl crate::task_verification::determinate::EvidenceRepository for SqliteTasks {
             let mut stmt = c
                 .prepare(
                     if crate::sqlite_market::is_compact_schema(c).map_err(storage)? {
-                        "SELECT item_id FROM market_update_results WHERE task_id=?1
-                         UNION SELECT item_id FROM publication_results WHERE task_id=?1"
+                        "SELECT item_id FROM market_events WHERE task_id=?1"
                     } else {
                         "SELECT item_id FROM market_update_results WHERE task_id=?1
                          UNION SELECT item_id FROM yearly_execution_results WHERE task_id=?1
