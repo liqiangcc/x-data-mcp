@@ -2585,6 +2585,10 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
         .unwrap()
         .unwrap();
     let (_i4, pub_d4, rev_d4) = daily_task.item(&r.repo);
+    // The head already carries the fen drift — the append must move the
+    // semantics AGAIN for the flag to read 1.
+    let mut drifted2 = drifted_units.clone();
+    drifted2.price_unit = EvidenceValue::confirmed("li", "drift-again");
     let append_bars: Vec<CompactBar> = [CompactBar::from_bar(&bar(3, 130), Period::Day).unwrap()]
         .into_iter()
         .collect();
@@ -2596,7 +2600,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
                 &json!(VersionEvidence {
                     source: "official".into(),
                     coverage_reason: "full history verified".into(),
-                    unit_currency: drifted_units.clone(),
+                    unit_currency: drifted2.clone(),
                     adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
                 }),
             )?;
