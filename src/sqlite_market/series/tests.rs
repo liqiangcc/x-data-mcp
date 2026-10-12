@@ -623,6 +623,7 @@ fn yearly_state_classification() {
 // Read paths through SqliteSupply on a real schema-21 file.
 #[test]
 fn supply_reads_on_schema21() {
+    use std::os::unix::fs::PermissionsExt;
     let (_dir, tasks, c) = db();
     let (ev, gen_ev) = put_test_evidence(&c);
     let binding = put_test_binding(&c, gen_ev);
@@ -656,6 +657,9 @@ fn supply_reads_on_schema21() {
     // One committed append supersedes v1 → v1 becomes a `stale_version`.
     let d = apply_append(&c, ENTITY, &daily_bars[2..], ev, binding, "a2");
     drop(c);
+    // DatabaseLease::acquire requires the database file to be private
+    // (mode & 0o077 == 0) — same constraint compact_repo::tests::repo uses.
+    std::fs::set_permissions(tasks.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
     let backend = crate::sqlite_market::backend::MarketBackend::open(&tasks).unwrap();
     let supply = crate::sqlite_supply::SqliteSupply {
         market: backend.clone(),
