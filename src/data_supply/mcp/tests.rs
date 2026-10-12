@@ -1102,7 +1102,7 @@ fn task_read_handlers_answer_success_and_not_found_on_compact_schema() {
         .call("list_tasks", json!({"dataset": "market.daily"}))
         .unwrap();
     assert!(
-        page["tasks"]
+        page["items"]
             .as_array()
             .unwrap()
             .iter()
