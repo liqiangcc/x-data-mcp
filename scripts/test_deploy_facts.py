@@ -27,7 +27,7 @@ REAL_STATUS_MD = r"""# 当前状态（STATUS）
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 主机 | aws-node（hostname `ip-172-31-10-15`） | `hostname` |
+| 主机 | aws-node | 运维记录 |
 | 系统 | Ubuntu 26.04 LTS，kernel 7.0.0-1014-aws | `/etc/os-release`、`uname -r` |
 | 资源 | 2 vCPU（1 个物理核加 2 个超线程，没有 SHA-NI），1.9GiB RAM + 8GiB swap，根盘 77G（已用 34%） | `lscpu`、`/proc/cpuinfo`、`free -h`、`df -h` |
 | 本机工具链 | rustc / cargo 1.99.0 | `rustc --version` |
@@ -46,7 +46,7 @@ REAL_STATUS_MD = r"""# 当前状态（STATUS）
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 设置了 `X_DATA_MCP_TDX_FETCH=current/scripts/tdx_fetch.py` |
 | `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 只转发 data server，不转发 acquire |
 
-访问边界：所有会话都以 `Access::local()` 运行，即 `local-owner`，可访问全部数据集。经 tunnel 进入的会话也一样，可以调用 `update_data`、`cancel_task`、`republish_data` 等写工具。因此对外边界完全依赖 tunnel 与账号认证。**是否接受这一点，尚待 owner 明确决定。**
+访问边界与认证细节属于运维信息，不记录在公开仓库。当前边界是否可接受，尚待 owner 明确决定。
 
 ## 数据
 
