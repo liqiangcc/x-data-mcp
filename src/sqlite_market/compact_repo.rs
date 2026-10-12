@@ -1747,6 +1747,21 @@ fn collection_item_commit(c: &Connection, item: &CollectionCandidate) -> Result<
     if bars.windows(2).any(|p| p[0].trade_day >= p[1].trade_day) {
         return Err(integrity("candidate bars are not strictly increasing"));
     }
+    // Unit-evidence gate (v19 collection_candidate_check parity, F1):
+    // confirmed price evidence always; volume/amount units required only
+    // when the candidate actually carries those fields.
+    let unit = &item.unit_currency;
+    if !unit.price_currency.is_confirmed() || !unit.price_unit.is_confirmed() {
+        return Err(integrity("price unit/currency evidence is not confirmed"));
+    }
+    if bars.iter().any(|b| b.volume.is_some()) && !unit.volume_unit.is_confirmed() {
+        return Err(integrity("volume unit evidence missing for volume bars"));
+    }
+    if bars.iter().any(|b| b.amount.is_some())
+        && !(unit.amount_currency.is_confirmed() && unit.amount_unit.is_confirmed())
+    {
+        return Err(integrity("amount unit evidence missing for amount bars"));
+    }
     let binding = series_commit::put_generation_binding(
         c,
         &item.generation_id,

@@ -70,6 +70,8 @@ CREATE TABLE market_events(
   outcome INTEGER NOT NULL CHECK(outcome IN (1,2)),
   metadata_changed INTEGER NOT NULL CHECK(metadata_changed IN (0,1)),
   continuity_mode INTEGER CHECK(continuity_mode IN (1,2,3)),
+  -- Nominal value only (record_count*32 at append), NOT real prefix byte
+  -- count; audit display only, never feed bar math with it.
   prefix_bytes INTEGER,
   old_content_digest BLOB CHECK(old_content_digest IS NULL OR length(old_content_digest)=32),
   new_content_digest BLOB NOT NULL CHECK(length(new_content_digest)=32),
@@ -114,8 +116,10 @@ CREATE INDEX market_events_new_digest ON market_events(new_content_digest);
 
 -- Envelope-path scratch: stage() stores the caller-verified candidate row
 -- here and commit()/candidate()/staged_matches() bind plan.record to it.
--- Not durable state: a commit consumes its row; task orphans are dropped
--- by the next matching stage or left harmlessly (bounded by task size).
+-- A successful commit DELETEs its row (see commit_plan). Orphans left by
+-- a failed stage or a cancelled task are overwritten by the next stage
+-- under the same version_id; residual growth is bounded by the number of
+-- distinct staged candidates in unfinished tasks.
 CREATE TABLE staged_records(
   version_id TEXT PRIMARY KEY,
   raw TEXT NOT NULL,

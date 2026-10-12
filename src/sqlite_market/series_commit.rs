@@ -553,14 +553,19 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         }
         SeriesChange::Metadata | SeriesChange::NoChange => {
             let row = head.as_ref().unwrap();
+            // Metadata reflects new durable state -> bump updated_at;
+            // NoChange only logs an event -> leave it alone.
+            let touched =
+                matches!(w.change, SeriesChange::Metadata).then(|| Utc::now().to_rfc3339());
             let changed = c
                 .execute(
-                    "UPDATE market_series SET coverage_status=?1,source_binding_digest=?2,evidence_digest=?3,last_event_seq=?4 WHERE series_key=?5 AND last_event_seq=?6",
+                    "UPDATE market_series SET coverage_status=?1,source_binding_digest=?2,evidence_digest=?3,last_event_seq=?4,updated_at=COALESCE(?5,updated_at) WHERE series_key=?6 AND last_event_seq=?7",
                     params![
                         coverage_code(coverage_status),
                         source_binding.as_slice(),
                         evidence_digest.as_slice(),
                         seq,
+                        touched,
                         row.series_key,
                         row.last_event_seq,
                     ],
@@ -600,14 +605,14 @@ pub(crate) fn window_fold(bars: &[CompactBar]) -> Result<Digest, Error> {
 }
 
 pub(crate) fn hex_digest(text: &str) -> Result<Digest, Error> {
-    let bytes = (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16))
-        .collect::<Result<Vec<u8>, _>>()
-        .map_err(|_| invalid("malformed hex digest"))?;
-    bytes
-        .try_into()
-        .map_err(|_| invalid("malformed hex digest"))
+    if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(invalid("digest hex must be 32 bytes"));
+    }
+    let mut digest = [0u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).map_err(invalid)?;
+    }
+    Ok(digest)
 }
 
 /// Version evidence the collection/typed paths carry verbatim.
