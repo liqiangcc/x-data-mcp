@@ -865,6 +865,8 @@ fn run_task_retry_keeps_shared_evidence_binding() {
 // Execution-phase chunking (TASK-DEVIN-PLANRUN-CHUNK-EXEC): run_items must
 // bound prepare/commit working sets to ~100 items regardless of task size.
 // ---------------------------------------------------------------------------
+use x_data_mcp::market_update::publication::RangeRepository as _;
+use x_data_mcp::task_control::TaskRepository as _;
 
 /// Typed acquisition that reports the base unchanged: enough to drive the
 /// real prepare/batch-commit machinery on the compact backend while
