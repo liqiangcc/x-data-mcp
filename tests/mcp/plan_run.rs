@@ -1362,7 +1362,9 @@ fn run_items_cancel_between_chunks_preserves_committed_receipts() {
         x_data_mcp::task_control::Status::Cancelled,
         "unreached items must end through the cancellation finish"
     );
-    // The committed chunk's receipts remain; later items carry outcomes.
+    // The committed chunk's receipts remain; unreached items keep the
+    // existing cancellation semantics — never started, outcome absent;
+    // the Cancelled head is the finish record.
     assert!(
         spy.inner
             .item_receipt(&task_id, &item_ids[0])
@@ -1370,8 +1372,14 @@ fn run_items_cancel_between_chunks_preserves_committed_receipts() {
             .is_some()
     );
     assert!(
-        task.items.iter().all(|i| i.outcome.is_some()),
-        "every item must be accounted for after cancellation"
+        task.items[..100]
+            .iter()
+            .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
+        "committed chunk items keep their success outcomes"
+    );
+    assert!(
+        task.items[100..].iter().all(|i| i.outcome.is_none()),
+        "unreached items carry no outcome under cancellation semantics"
     );
 }
 #[test]
@@ -1448,7 +1456,24 @@ fn run_items_chunked_execution_matches_per_item_outcomes() {
         .zip(per_item.iter())
     {
         assert_eq!(item_a.spec.item_id, item_b.spec.item_id);
-        assert_eq!(item_a.outcome, item_b.outcome);
+        // outcome.success/kind must match; result_id embeds a task-bound
+        // digest so it legitimately differs across rigs.
+        assert_eq!(
+            item_a.outcome.as_ref().map(|o| o.success),
+            item_b.outcome.as_ref().map(|o| o.success)
+        );
+        assert_eq!(
+            item_a
+                .outcome
+                .as_ref()
+                .and_then(|o| o.evidence.as_ref())
+                .and_then(|e| e.get("result_kind")),
+            item_b
+                .outcome
+                .as_ref()
+                .and_then(|o| o.evidence.as_ref())
+                .and_then(|e| e.get("result_kind"))
+        );
         assert!(item_a.outcome.as_ref().is_some_and(|o| o.success));
         let receipt_a = rig_a
             .backend
