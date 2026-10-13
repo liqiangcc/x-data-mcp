@@ -1332,12 +1332,11 @@ fn run_items_chunk_failure_isolates_and_recovered_items_record() {
             .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
         "failed chunk's items must recover per-item"
     );
-    assert_eq!(
+    assert!(
         spy.inner
             .item_receipt(&task_id, &item_ids[0])
             .unwrap()
             .is_some(),
-        true,
         "first chunk's receipts must survive the later chunk's rollback"
     );
 }
