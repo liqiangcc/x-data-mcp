@@ -12,10 +12,12 @@ Safety rules (mirroring prod_guard.py / TASK-DEVIN-DEPLOY-1 §R):
   * The production socket is usable ONLY when PROD_REBUILD_V6_PRODUCTION=1
     AND PROD_REBUILD_V6_SOCKET resolves exactly (realpath, no `..`) to
     /opt/x-data-mcp-preview/run/mcp.sock. Any other socket is rehearsal mode.
-  * Read-only preflight runs BEFORE any write: capability must be
-    generic-data-v6 with 21 data tools, and the target must be provably
-    empty (no catalog version, no daily head on probe entities). A non-empty
-    target exits before the first write call.
+  * Read-only preflight runs BEFORE any write: capability revision and
+    data-tool count must match the expected values — generic-data-v6 / 21
+    by default, overridable via PROD_REBUILD_V6_EXPECT_CAPABILITY /
+    PROD_REBUILD_V6_EXPECT_DATA_TOOLS for post-switch (v7/23) runs — and
+    the target must be provably empty (no catalog version, no daily head
+    on probe entities). A non-empty target exits before the first write.
   * Tool whitelist: only start_collection/update_data writes plus the read
     tools below; every call passes through GuardedMcp. acquire_* /
     activate_* / check_official_updates / republish_data / backfill_data /
@@ -174,11 +176,17 @@ def preflight(mcp: GuardedMcp) -> dict:
         "filter": {"kind": "daily", "start_date": "1990-01-01", "end_date": "2026-12-31"},
         "version": {"kind": "latest_per_entity"}, "page_size": 100})
     tool_names = {i.get("tool_name") for i in caps.get("items") or []}
+    # Expected capability/tool count are env-parametrized: the deployed
+    # contract switches from generic-data-v6/21 to v7/23 on the binary
+    # switch day, and the same preflight must gate both.
+    exp_capability = os.environ.get(
+        "PROD_REBUILD_V6_EXPECT_CAPABILITY", "generic-data-v6")
+    exp_tools = int(os.environ.get("PROD_REBUILD_V6_EXPECT_DATA_TOOLS", "21"))
     checks = {
-        "capability_revision_v6": caps.get("capability_revision") == "generic-data-v6",
+        "capability_revision_expected": caps.get("capability_revision") == exp_capability,
         # items are one Capability per tool x dataset — distinct tool names are
-        # the data-tools count (21 on the data socket).
-        "data_tools_21": len(tool_names) == 21,
+        # the data-tools count (21 on the data socket pre-switch, 23 after).
+        "data_tools_expected": len(tool_names) == exp_tools,
         "production_ready_false": caps.get("production_ready") is False,
         "catalog_versions_empty": not (vers.get("items") or []),
         "daily_heads_empty": all(
@@ -187,6 +195,8 @@ def preflight(mcp: GuardedMcp) -> dict:
     return {
         "checks": checks,
         "ok": all(checks.values()),
+        "expected": {"capability_revision": exp_capability,
+                     "data_tools": exp_tools},
         "capability": {k: caps.get(k) for k in
                        ("capability_revision", "implementation", "production_ready")},
         "probe_items": len(avail.get("items") or []),

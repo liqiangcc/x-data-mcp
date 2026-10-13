@@ -38,17 +38,19 @@
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 当前 generation | `2d5851a460eeae86cb84aa58e09f1c46bed6a9092aafd7170ab3c9367313add6`，2026-10-13T06:52Z 激活（Skill 会话 acquire→verify→activate） | `generations/active-generation.json` |
-| 前一 generation | `87322997b21ee492224b42984c7fa5df865840d26f04bee628e54ce74a0e0de6`（重建基线，字节保留于本机 gen 根目录）；更早的 `a49c314b…` 仅在 ecs 冷备 | 同上、迁移报告 |
-| 数据库 | `state/preview.sqlite`，fresh compact schema 21，854,990,848 B（2026-10-13 实测，quick_check ok，staged_records 0） | `ls -l` |
+| 当前 generation | `a119629b5683877ef9fce08427a5e994bc96216dede8a9776e2f3baec577c913`，2026-10-13T10:35:10Z 激活（Skill 会话 acquire→verify→activate） | `generations/active-generation.json` |
+| 前一 generation | `2d5851a460eeae86cb84aa58e09f1c46bed6a9092aafd7170ab3c9367313add6`（2026-10-13T06:50Z 激活）；`87322997…` 重建基线仍在（superseded）。热 generation 现 3/6 个；4 个已无字节的旧 generation（84b3f15d、c360967a、2e918330、a49c314b）已于 2026-10-13 由操作员退役为 evidence_only（只改状态，清单/决策/证据保留） | 同上、迁移报告 |
+| 数据库 | `state/preview.sqlite`，fresh compact schema 21，909,185,024 B（2026-10-13 实测，quick_check ok，staged_records 0）；一个日更周期约 +54MB | `ls -l` |
 | 目录 | 5,228 个实体 | 重建驱动读回 |
-| 日线 | 已发布 5,224 个；5,212 个 head 为 2026-10-12，其余 12 家停牌/无数据实体为更早的最后交易日（fail-closed：`no bars inside the accepted range`） | 追加驱动读回 |
-| 年线 | 5,224 个 published，随 2026-10-13 追加全部重派生至 10-12 的 daily base | 追加驱动读回 |
+| 日线 | 已发布 5,224 个；5,211 个 head 为 2026-10-13；13 家停牌/无数据实体更早（fail-closed：`no bars inside the accepted range`——10-13 停牌的 sh.600825/sz.002717/sz.301314 last_day=10-12；更早的 sh.600293/601059/601198/688496（2026-09-10）/sz.000016/002388/002731/002813/002860/300773） | 追加驱动读回 |
+| 年线 | 5,224 个 published，随 10-13 追加重派生至 10-13 的 daily base | 追加驱动读回 |
 | 缺失 | `sz.001381`、`sz.301569`、`sz.301660`、`sz.301718`（官方 hsjday 缺成员，4 个日线任务条目 fail-closed，预期） | 重建驱动读回 |
 | 与迁移报告的差异 | 迁移报告记录 `sz.001246` 为空、年线 5,223 个 succeeded；本次重建该实体有 2 条日线（2026-09-30、2026-10-08）和 1 条年线，年线共 5,224 个。读回的这两项预期值（5,223 与 `sz.001246` 为空）因此不符，判断为预期值过时而非故障，待 owner 确认 | `deploy31-readback.json` |
 | 重建耗时 | 全新重建基于 generation 87322997（数据截止 2026-10-08）：collect write-loop 308.4s（catalog + 日线 53 块，含 4 个缺成员条目）+ 年线首次 write-loop 208.9s；预览演练对照 209.7s / 224.3s | 重建驱动 JSON |
 
-部署后首次增量更新（2026-10-12 收盘后，跨代 Append，验证 GOAL-008 关闭条件）：2026-10-13 执行——Skill 会话先完成新 generation `2d5851a4…` 的 acquire→verify→activate（06:52Z），随后用 Skill 逐页枚举 5,228 个目录成员做增量，27 分钟内未提交任何 `update_data`，速度不足被叫停；10-09 与 10-12 的追加改由程序化驱动 `prod_append_v6.py`（PR #347，未合并）完成：daily write-loop 311.4s（53 块、5,224 项）+ 年线重聚合 239.9s（53 任务），读回零差异（published 5,224、落后恰 12 家 fail-closed、staged_records=0）。批量更新工具（plan/run，generic-data-v7）在设计中。#304 的有效 PASS 仍为 3/10（均为 unchanged）。
+部署后首次增量更新（2026-10-12 收盘后，跨代 Append，验证 GOAL-008 关闭条件）：2026-10-13 执行——Skill 会话先完成新 generation `2d5851a4…` 的 acquire→verify→activate（06:52Z），随后用 Skill 逐页枚举 5,228 个目录成员做增量，27 分钟内未提交任何 `update_data`，速度不足被叫停；10-09 与 10-12 的追加改由程序化驱动 `prod_append_v6.py`（PR #347，未合并）完成：daily write-loop 311.4s（53 块、5,224 项）+ 年线重聚合 239.9s（53 任务），读回零差异（published 5,224、落后恰 12 家 fail-closed、staged_records=0）。同日第二次同步（10-13 收盘后）：Skill 会话完成新 generation `a119629b…` 的 acquire→verify→activate（10:35Z）后，对 27 个实体自行提交了 10-13 的 `update_data`（成功），随后被操作员叫停；其余实体的追加仍由程序化驱动完成（幂等跳过已更新的 27 家）：daily write-loop 173.1s（52 块、5,197 项，published 5,184 + 13 fail-closed）+ 年线重聚合 259.1s（53 任务，含 Skill 已更新实体的年线补齐），读回 staged_records=0。事件计数：first_publish 10,448；append 10,331；replace 92；no_change 25；yearly_rederive 10,423。
+
+运维事实：热 generation 上限 6（`MAX_HOT_GENERATIONS`），超限后 `acquire_generation` 被拒 `generation_capacity`；Skill 无权退役 generation，今日由操作员退役 4 个已无字节的旧 generation 腾出容量；日更流程需要保留策略。Skill 在有更新日的路径仍未完整验证（枚举过慢一次、部分自行追加一次）；#304 的有效 PASS 仍为 3/10（均为 unchanged）。批量更新工具（plan/run，generic-data-v7）实现中。
 
 ## 进行中
 
@@ -72,6 +74,7 @@
 | `/opt/x-data-mcp-preview/mcp.json` 的 `x-data-mcp-demo` 指向一个不存在的 sqlite | 配置过时 | `ls` |
 | `src/acquire/fetch.rs` 在未设置 `X_DATA_MCP_TDX_FETCH` 时，回退到编译期的 `CARGO_MANIFEST_DIR` | 不带该变量启动的实例无法下载 | 源码 |
 | 生产服务、私有性能栈和多个 agent 会话共用 1 个物理核和 1.9GiB 内存；`/tmp` 是内存盘 | 2026-10-10 约 04:34Z 过载重启；测量结果有噪声 | 运维观察 |
+| 热 generation 上限 6 且无自动保留策略：超限后 `acquire_generation` 被拒（`generation_capacity`），退役只能由操作员执行 | 日更会在积累若干代后被容量拒绝；需要保留策略或自动退役 | 2026-10-13 实测 |
 | Skill 日更依赖 AI 会话逐页枚举目录实体（页大小受限、随目录规模线性增长；5,228 实体实测 27 分钟未提交一条更新） | 有更新那天的同步在 Skill 口径下不可用；已改由程序化追加驱动完成，批量更新工具（generic-data-v7）设计中 | 2026-10-13 首次增量实测 |
 | AGENTS.md 的环境段、README「当前状态」、`docs/daily-sync.md`「当前状态」仍写 ecs-node / preview.29 / generation `2e9183…` | 读取这些文档的 agent 会被误导 | 本次核对；这三处已加指向本文件的说明 |
 

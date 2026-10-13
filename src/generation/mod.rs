@@ -109,6 +109,8 @@ pub enum Error {
     NotConsistencyVerified(String),
     #[error("artifact {0} for generation {1} already exists")]
     ArtifactExists(String, String),
+    #[error("artifact {0} for generation {1} exists with different bytes; refusing to overwrite")]
+    ArtifactConflict(String, String),
 }
 
 #[derive(Clone)]
@@ -428,6 +430,32 @@ impl Store {
         file.sync_all()?;
         fsync_dir(&dir)?;
         Ok(crate::hash::sha256(bytes))
+    }
+
+    /// Write-once with an idempotent hit for verify re-entry (D-1): a
+    /// supplementary artifact left behind by a crash between the artifact
+    /// and the decision write is accepted as already written when its
+    /// bytes match `bytes` exactly (returns its sha256 without rewriting).
+    /// A byte mismatch stays fail-closed — the existing file is never
+    /// overwritten or removed.
+    pub fn ensure_artifact(
+        &self,
+        generation_id: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<String, Error> {
+        match self.write_artifact(generation_id, name, bytes) {
+            Ok(sha) => Ok(sha),
+            Err(Error::ArtifactExists(..)) => match self.artifact(generation_id, name)? {
+                Some(existing) if existing == bytes => Ok(crate::hash::sha256(&existing)),
+                Some(_) => Err(Error::ArtifactConflict(name.into(), generation_id.into())),
+                None => Err(Error::Io(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("artifact {name} vanished before read-back"),
+                ))),
+            },
+            Err(e) => Err(e),
+        }
     }
 
     /// Read a supplementary artifact written by `write_artifact`.

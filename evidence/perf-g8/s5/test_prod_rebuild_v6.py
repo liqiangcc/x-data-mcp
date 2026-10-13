@@ -169,12 +169,32 @@ class Preflight(unittest.TestCase):
     def test_refuses_wrong_capability(self):
         res = drv.preflight(self._mcp(cap_over={"capability_revision": "generic-data-v5"}))
         self.assertFalse(res["ok"])
-        self.assertFalse(res["checks"]["capability_revision_v6"])
+        self.assertFalse(res["checks"]["capability_revision_expected"])
 
     def test_refuses_wrong_tool_count(self):
         res = drv.preflight(self._mcp(cap_over={"items": []}))
         self.assertFalse(res["ok"])
-        self.assertFalse(res["checks"]["data_tools_21"])
+        self.assertFalse(res["checks"]["data_tools_expected"])
+
+    def test_v7_expectations_via_env(self):
+        env = {"PROD_REBUILD_V6_EXPECT_CAPABILITY": "generic-data-v7",
+               "PROD_REBUILD_V6_EXPECT_DATA_TOOLS": "23"}
+        caps = {"capability_revision": "generic-data-v7",
+                "items": [{"tool_name": f"t{i}"} for i in range(23)]}
+        with mock.patch.dict("os.environ", env):
+            res = drv.preflight(self._mcp(cap_over=caps))
+        self.assertTrue(res["ok"], res["checks"])
+        self.assertEqual(res["expected"]["capability_revision"], "generic-data-v7")
+        self.assertEqual(res["expected"]["data_tools"], 23)
+
+    def test_v7_defaults_refused(self):
+        # Without the env override a v7 service must still fail the gate.
+        caps = {"capability_revision": "generic-data-v7",
+                "items": [{"tool_name": f"t{i}"} for i in range(23)]}
+        res = drv.preflight(self._mcp(cap_over=caps))
+        self.assertFalse(res["ok"])
+        self.assertFalse(res["checks"]["capability_revision_expected"])
+        self.assertFalse(res["checks"]["data_tools_expected"])
 
 
 if __name__ == "__main__":
