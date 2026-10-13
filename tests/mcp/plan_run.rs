@@ -57,13 +57,6 @@ fn gbbq_member(records: &[[u8; 29]]) -> Vec<u8> {
 fn now() -> DateTime<Utc> {
     Utc::now()
 }
-fn today_u32() -> u32 {
-    x_data_mcp::calendar::shanghai_date(Utc::now())
-        .format("%Y%m%d")
-        .to_string()
-        .parse()
-        .unwrap()
-}
 /// `YYYYMMDD` for `days` before the Shanghai today.
 fn day_u32(days: i64) -> u32 {
     (x_data_mcp::calendar::shanghai_date(Utc::now()) - chrono::Duration::days(days))
@@ -188,9 +181,6 @@ fn catalog_fixture(codes: &[&str], exchanges: &[&str]) -> CatalogSnapshot {
 struct Rig {
     _db: tempfile::TempDir,
     api: DataApi,
-    backend: MarketBackend,
-    tasks: SqliteTasks,
-    source: x_data_mcp::official_market::TdxMarketSource,
     snapshot: Snapshot,
 }
 /// Seed `codes` (sh.600006-style ("sh","600006") tuples) into a fresh
@@ -250,9 +240,6 @@ fn rig(members: &[(&str, &str, u32)]) -> Rig {
     api.call("run_worker_once", json!({})).unwrap();
     Rig {
         api,
-        backend,
-        tasks,
-        source,
         snapshot: snap,
         _db: db,
     }
