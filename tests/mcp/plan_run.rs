@@ -719,3 +719,84 @@ fn planrun_scales_to_market_wide_membership() {
     assert!(plan_ms < 5_000, "plan took {plan_ms}ms > 5s");
     assert!(run_ms < 10_000, "run acceptance took {run_ms}ms > 10s");
 }
+
+/// Retry of a plan-run task must keep the shared-evidence binding: the
+/// item evidence markers (`selection_evidence.evidence_digest` = plan_id)
+/// validate against `FrozenWork::validate` only when the rebuilt work
+/// carries the same `shared_evidence`. Before the fix `service.retry`
+/// rebuilt the work with `shared_evidence: None` and the validate step
+/// rejected every marker-stamped task as "item evidence marker
+/// mismatches shared evidence" (owner observed on the private stack).
+#[test]
+fn run_task_retry_keeps_shared_evidence_binding() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use x_data_mcp::task_control::{Change, ItemOutcome, TaskRepository};
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let p = plan(&r.api, "market.daily");
+    let accepted = run(&r.api, "market.daily", "run-retryable", &p);
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    let original = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(original.items.len(), 1);
+    let item_id = original.items[0].spec.item_id.clone();
+    assert_eq!(
+        original.items[0].spec.frozen_inputs["selection_evidence"]["evidence_digest"], p["plan_id"],
+        "run item must carry the plan-id evidence marker"
+    );
+    // Drive the task to a terminal `failed` state under the service run
+    // so its scopes release and the item is retry-selectable.
+    let mut rev = original.task.state_revision;
+    for change in [
+        Change::Claim,
+        Change::StartItem(item_id.clone()),
+        Change::FinishItem(
+            item_id.clone(),
+            ItemOutcome {
+                success: false,
+                error: Some("simulated item failure".into()),
+                evidence: None,
+            },
+        ),
+        Change::FinishExecution,
+    ] {
+        rev = r
+            .tasks
+            .transition(&task_id, rev, "run", change)
+            .unwrap()
+            .task
+            .state_revision;
+    }
+    assert_eq!(
+        r.tasks.read_task(&task_id).unwrap().unwrap().task.status,
+        x_data_mcp::task_control::Status::Failed
+    );
+    let retried = r
+        .api
+        .call(
+            "retry_task",
+            json!({"contract_version":"v1","original_task_id":task_id,"new_request_id":"retry-1","item_ids":[item_id]}),
+        )
+        .unwrap();
+    assert_eq!(retried["reused"], false);
+    let retry_task = r
+        .tasks
+        .read_task(retried["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    // The retry task's frozen work carries the original shared evidence —
+    // the item markers validate against it instead of mismatching None.
+    assert_eq!(
+        retry_task.task.work.shared_evidence,
+        original.task.work.shared_evidence
+    );
+    assert_eq!(
+        retry_task.items[0].spec.frozen_inputs["selection_evidence"]["evidence_digest"],
+        p["plan_id"]
+    );
+    // Explicit tasks (shared_evidence: None) keep identical behavior —
+    // the rig's start_collection seed task is already terminal with every
+    // item succeeded, so its single selectable-item retry check lands on
+    // the same code path and must not gain evidence.
+    let seed = r.tasks.read_task(&r.seed_task).unwrap().unwrap();
+    assert!(seed.task.status.terminal());
+    assert!(seed.task.work.shared_evidence.is_none());
+}

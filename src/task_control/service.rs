@@ -206,7 +206,12 @@ impl<R: TaskRepository> TaskControl<R> {
         let work = FrozenWork {
             items,
             scopes,
-            shared_evidence: None,
+            // Retry must keep the original evidence binding: explicit
+            // tasks carry None (unchanged behavior), while plan-run and
+            // other marker-stamped tasks validate their item digests
+            // against shared_evidence — dropping it made them
+            // un-retryable.
+            shared_evidence: old.task.work.shared_evidence.clone(),
         };
         work.validate()?;
         let command = Command {
