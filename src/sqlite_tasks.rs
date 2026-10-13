@@ -1792,6 +1792,20 @@ pub(crate) fn accept_streamed_tx(
     let evidence_digest = shared_evidence
         .as_ref()
         .and_then(|e| e["evidence_digest"].as_str().map(str::to_string));
+    // Parent row first — task_items carries an FK to tasks. The streamed
+    // frozen-work blob lands in the UPDATE after the iterator drains.
+    c.execute(
+        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,evidence_digest) VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,'',NULL,?5,0,0,?6)",
+        params![
+            task_id,
+            encode(&command.key)?,
+            run,
+            now,
+            None::<String>,
+            evidence_digest
+        ],
+    )
+    .map_err(storage)?;
     let mut item_stmt = c
         .prepare("INSERT INTO task_items VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)")
         .map_err(storage)?;
@@ -1852,18 +1866,8 @@ pub(crate) fn accept_streamed_tx(
     }
     frozen.push('}');
     c.execute(
-        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,evidence_digest) VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,?5,NULL,?6,?7,?7,?8)",
-        params![
-            task_id,
-            encode(&command.key)?,
-            run,
-            now,
-            frozen,
-            None::<String>,
-            count as u32,
-            count as u32,
-            evidence_digest
-        ],
+        "UPDATE tasks SET frozen_work_json=?2,item_count=?3,items_pending=?3 WHERE task_id=?1",
+        params![task_id, frozen, count as u32],
     )
     .map_err(storage)?;
     let mut scope_stmt = c
