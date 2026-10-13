@@ -4,20 +4,18 @@
 
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
-当前部署为 v0.2.0-preview.29（`4493d45`）双 MCP server：data socket 提供
-20 data tools，acquisition socket 提供 10 acquisition tools；fresh init 库使用
-compact schema 20。2026-09-29 explicit fresh rebuild 后，2026-09-30
-operator-path 已激活 generation
-`2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，
-并发布 catalog `catalog-1790660536962300201`（5,227 records）、5,223 个
-`market.daily` published versions 和 5,223 个 `market.yearly` derived
-versions；最新集中行情日为 2026-09-29（5,211 entities）；4 个官方
-`hsjday` 成员缺失保持 absent。generic-data-v3
-live discovery PASS，daily/yearly 样本 QFQ readback PASS；工具数不是稳定业务契约；客户端必须以
-运行实例的 `tools/list` 与 capability descriptor 为准。
-当前开发分支（XP-014，未部署）注册 21 data tools（新增 `get_yearly_base_years`）
-并宣告 `generic-data-v5`；preview.29 部署实例仍为 20 data tools /
-`generic-data-v3`，旧 strict Skill 会话遇 revision 不匹配即停止而非静默适配。
+当前部署为双 MCP server：data socket 提供 21 data tools（capability revision
+`generic-data-v5`，含只读 `get_yearly_base_years`），acquisition socket 提供
+10 acquisition tools；fresh init 库使用 compact schema 20。部署版本（撰写时为
+v0.2.0-preview.31）、generation、catalog 与行情数据量等机器事实只在
+[STATUS](STATUS.md) 维护，本文不复述；工具数不是稳定业务契约；客户端必须以
+运行实例的 `tools/list` 与 capability descriptor 为准。旧 strict Skill 会话遇
+revision 不匹配即停止而非静默适配。
+
+历史记录（preview.29 时期，非当前部署）：2026-09-29 explicit fresh rebuild 后
+operator-path 激活过 generation `2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，
+发布 catalog 5,227 records、5,223 个 `market.daily` 与 5,223 个 `market.yearly`
+versions；当时的 live discovery 为 `generic-data-v3`、20 data tools。
 运行时 `tools/list` 与 `get_data_capabilities` 是机器契约入口；本文不复制完整 schema。
 
 读路径有界化说明（XP-025 D，开发分支）：
@@ -40,7 +38,7 @@ live discovery PASS，daily/yearly 样本 QFQ readback PASS；工具数不是稳
 
 immutable generation、验证后激活、generation-bound update 和 capability 已实现，
 全市场 collection/update 已经分批 MCP 编排取得真实 generation 证据
-（preview.26–28 连续验收：catalog 5,227 实体、daily 首采约 340s、yearly 约
+（历史：preview.26–28 连续验收：catalog 5,227 实体、daily 首采约 340s、yearly 约
 900s、同代 no-change `update_data` 5,222 items 约 616s）。#259 已在
 2026-09-28 owner re-baseline 后关闭：同代 no-change `update_data` 现行合同为
 ≤15min / ≤4KiB/item / `data_versions +0`，preview.27/schema20 实测

@@ -26,6 +26,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: git diff --check
       - run: python3 scripts/check_current_facts.py
+      - run: python3 -B -m unittest discover -s scripts -p 'test_current_facts.py'
       - run: python3 scripts/check_daily_sync_eval.py
       - name: Deployment facts checks (STATUS.md freshness, version, host rules)
         run: |
