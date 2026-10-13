@@ -6,10 +6,11 @@
 （冲突以 RULINGS 为准）；两文件不在仓库内，相关裁决已随文转述。
 
 **状态**：目标契约，未部署。当前部署仍为 `generic-data-v5` / compact
-schema 20（见 [STATUS](../STATUS.md)）。代码面 S1（存储+读路径）与
-S2/S2b（日线写路径）已在 `feat/latest-only-storage` 落地；capability
-revision 仍为 `generic-data-v5`（`src/data_supply/mcp.rs:343`），S4
-统一 bump。凡下文标注「实现已核」的论断附 文件:行号；未标者为契约目标。
+schema 20（见 [STATUS](../STATUS.md)）。代码面 S1（存储+读路径）、
+S2/S2b（日线写路径）、S3（年线 stale 出参）与 S4（capability bump、
+wire/description 收尾）已在 `feat/latest-only-storage` 落地：capability
+revision 已为 `generic-data-v6`（`src/data_supply/mcp.rs:343`）。
+凡下文标注「实现已核」的论断附 文件:行号；未标者为契约目标。
 部署日的文档/脚本切换清单见 [v6-switch-checklist](v6-switch-checklist.md)。
 
 ## 1. 适用面与不变量
@@ -92,11 +93,11 @@ stale pin 静默落到新内容上。
 |---|---|---|---|
 | get_data_capabilities | 无 | `capability_revision=v6`；description 注明单版本语义（S4） | 无 |
 | list_data_versions | 无 | market dataset 每实体至多 1 item；`version_id`=当前内容 id；`published_at`=最近事件提交时间（实现 `src/sqlite_supply.rs:235-265`）。catalog 不变 | 无 |
-| query_data | `version.kind` 形状不变 | market 行带 `version_ref`（version_id/integrity_sha256 同 hex）；年线 stale 行级状态见 §6 TODO(S3) | `explicit_version_map` 过期 id → `stale_version`（曾存在）或 `version_not_found`（未存在）（实现 `src/sqlite_supply.rs:1227-1245` `verify_versions_meta_conn`）；批量内 invalid 年线实体按行级状态返回不连坐（RULINGS A1，行级形状 TODO(S3)） |
-| get_data_availability | 无 | `version_ref`=当前行；年线实体增报 stale 分类（fresh/behind/invalid + `as_of_day`，形状 TODO(S3)） | 行级 `integrity_failure` 不连坐整批（RULINGS A1；S1 现状为整次 `Integrity` 错误，S3 修行级化，OWNER-ACCEPT-S1 C2） |
-| get_yearly_base_years | 无 | 入参是调用方 pin 住的日线 `base_daily_version_id`，出参是该日线基下的年份集合——**不返回年线 lineage**（OWNER-RULING-PAR-1A R2'，语义不变） | pin 的日线 id **已被取代**（曾存在、非当前 digest）→ 新增行级 reason `base_superseded`（wire 字符串，`YearPresenceReason::BaseSuperseded`，**S4 wire 增量**）；从未存在 → `base_unavailable`；伪造/损坏 → `integrity_failure`。现状：stale 一律 `integrity_failure`（`src/sqlite_supply.rs:104-135`） |
+| query_data | `version.kind` 形状不变 | market 行带 `version_ref`（version_id/integrity_sha256 同 hex）；年线 stale 行级状态见 §6（已定稿） | `explicit_version_map` 过期 id → `stale_version`（曾存在）或 `version_not_found`（未存在）（实现 `src/sqlite_supply.rs:1227-1245` `verify_versions_meta_conn`）；批量内 invalid 年线实体按行级 `status:"absent"`+`reason` 返回不连坐（RULINGS A1，§6.1） |
+| get_data_availability | 无 | `version_ref`=当前行；年线实体增报 stale 分类（`stale:"behind"`+`as_of_day`；invalid → `availability:"absent"`+`reason`，§6.2） | 行级 `integrity_failure` 不连坐整批（RULINGS A1，已行级化） |
+| get_yearly_base_years | 无 | 入参是调用方 pin 住的日线 `base_daily_version_id`，出参是该日线基下的年份集合——**不返回年线 lineage**（OWNER-RULING-PAR-1A R2'，语义不变） | pin 的日线 id **已被取代**（曾存在、非当前 digest）→ 行级 `reason_code:"base_superseded"`（`YearPresenceReason::BaseSuperseded`，wire.rs:300；判定 `src/sqlite_supply.rs:115-129`）；从未存在 → `base_unavailable`；伪造/损坏 → `integrity_failure` |
 | update_data / backfill_data | `base_version_id` 语义=**当前** head 的 version_id（内容 hex）；`expected_head`/`expected_yearly_head` CAS 同义 | receipt `version_id`=新内容 id；`no_change` 不变 | 见 §3 写路径分档（R1 定稿：stale base → item 级 `needs_verification`） |
-| republish_data | 保留（RULINGS Q1：#247 显式 republish 合同，非版本概念） | 语义改为「显式区间的**源数据刷新**」，落到统一的 append/replace/no_change/metadata 提交函数；S4 更新 description（现行 `REPUBLISH_DESCRIPTION` `registry.rs:130` 仍是 v19 措辞） | 同 update_data |
+| republish_data | 保留（RULINGS Q1：#247 显式 republish 合同，非版本概念） | 语义为「显式区间的**源数据刷新**」，落到统一的 append/replace/no_change/metadata 提交函数；description 已是新措辞（`REPUBLISH_DESCRIPTION` `registry.rs:130`：被取代 base → item 级 `needs_verification`（STALE_BASE: 前缀），绝不静默重 pin） | 同 update_data |
 | verify_publication_result | 无 | 新语义见 §5（SPEC §6.6） | 目标任务/事件不存在 → `task_not_found`/`version_not_found`（沿用现有码 `mcp.rs:828-845`） |
 | verify_stopped_writes / verify_data_gap / inspect_verification_task | 无 | 无 | 无 |
 | start_collection / retry_task / cancel_task / list_tasks / get_task / get_task_progress / get_request / run_worker_once / compute_metrics | 无 | 无（进度与结果中的 `version_id` 一律为内容 hex） | 无 |
@@ -109,63 +110,130 @@ wire 类型 `VersionChoice`/`Query`/`VersionRef`/`ManifestEntry`/`Row`
 
 - 对**仍是当前序列**的更新事件：验证 ①事件行存在
   ②`new_content_digest == 当前 series.content_digest`
-  ③evidence 捆绑可重放。
+  ③evidence 捆绑可重放（实现 `src/sqlite_market/verification.rs:304-313`：
+  `new_digest == series.content_digest` → 读 evidence 捆绑重放）。
 - 对**已被后续更新覆盖**的历史任务：只验证「该 `result_id` 的事件
   存在 + 事件 digest 链闭合到当前 `series.content_digest`」；
   不能再验证那一刻的数据内容（单版本下旧 bar 集合不存在）。
-  registry description 须在 S4 改写明（registry.rs:188-196 附近条目）。
+  （实现 `verification.rs:314-328`：事件在实体链中定位，
+  `tail` 逐环 `old==prev.new` 且末环 `new==当前 digest`；
+  不闭合 → integrity 错误 fail-closed。）
 - `market_events.result_digest` 继承旧 `market_update_results`/
-  `publication_results` 的 result_digest 锚点角色（RULINGS Q12：
-  canonical 形状在 S2 实现时给出并附测试）。
+  `publication_results` 的 result_digest 锚点角色（RULINGS Q12；
+  canonical 形状由 `series_commit::event_result_digest` 重算比对，
+  `verification.rs:271-289`）。
 - 伪造/不存在的 `result_id` → `task_not_found`/`version_not_found`
-  （沿用现有码，OWNER-RULING-PAR-1A R3）。
-- 实现现状：schema-21 facts read 以事件行为结果锚点
-  （`src/sqlite_market/verification.rs:171-243` `read_facts_series`），
-  判定层按「事件存在 + receipt 绑定（task_id/revision/digest 形状）」
-  检查（`src/publication_verification/decision.rs:80-140`）。
-  R3 已裁决现判定层不够：S4 前半按 SPEC §6.6 落「当前事件全验
-  vs 被覆盖只验存在+链闭合」两个分支并各补一个测试（
-  OWNER-RULING-PAR-1A R3）。
+  （沿用现有码 `mcp.rs:513-514, 828-845`，OWNER-RULING-PAR-1A R3）。
+- 判定层三值结论（`publication_verification/decision.rs:9-14`
+  `Conclusion`，wire `snake_case`）：全部 item 有可验证事件证据 →
+  `all_recorded`；有缺证且目标仍 `NeedsVerification` →
+  `insufficient_evidence`；否则 `not_applicable`。receipt 形状
+  `decision.rs:16-25`（verification_task_id/target_task_id/双方
+  revision/conclusion/reason/missing_receipt_item_ids）。
 
-## 6. TODO(S3)：年线 stale 出参形状（未定稿）
+## 6. 年线 stale 出参形状（已定稿，实现已核）
 
-RULINGS A1/Q10：stale 出参形状在 S3 定稿，必须含 `behind|invalid`
-与 `as_of_day`。判定逻辑已定（实现 `series.rs:653-700`
-`YearlyState`）：
+RULINGS A1/Q10：stale 出参形状含 `behind|invalid` 与 `as_of_day`。
+判定逻辑（`src/sqlite_market/series.rs:660-700` `YearlyState` /
+`yearly_state`）：
 
-- **fresh**：记录 base 仍等于当前日线状态；
+- **fresh**：记录的 base 仍等于当前日线状态；
 - **behind**：base 之后只有 `append`/`no_change`/`metadata` 事件——
   年线数据对其 `as_of_day` 仍正确，`query_data` 照常返回并带
   stale 标记；
-- **invalid**：base 之后出现 `replace`（除权/修订）——该实体年线
-  不得返回（fail-closed）；批量查询按行级状态返回不连坐
-  （RULINGS A1）；
+- **invalid**：base 之后出现 `replace`（除权/修订）或语义变更
+  提交——该实体年线不得返回（fail-closed）；批量查询按行级
+  状态返回不连坐（RULINGS A1）；
 - **integrity**：`lineage.base_daily_digest` 不在该实体日线事件链 →
-  integrity 错误（伪造/损坏）。
+  integrity 错误（伪造/损坏；`yearly_state` 对缺 lineage、缺日线
+  序列、digest 脱链、`base_event_seq` 越过链尾一律 `Error::Integrity`）。
 
-**S3 必须回答的问题**（定稿后由 Owner 通知补入本文档）：
+### 6.1 `query_data`
 
-1. `query_data`：behind/invalid 在 `version_manifest`/`ManifestEntry`
-   里的字段名与位置（`status` 枚举新增值还是 `metadata` 子字段？）；
-   单实体 invalid 查询的错误码（`stale_version` 还是 integrity 系）。
-2. `get_data_availability`：item 级 stale 字段名（`stale:"behind"|
-   "invalid"`? `as_of_day` 字段位置）、`reason` 枚举取值；
-   invalid 与真正 `absent`/`unavailable` 的可区分表达。
-3. `get_yearly_base_years`：**已定稿（OWNER-RULING-PAR-1A R2'，作废
-   原 R2）**。该工具语义不变（pin 住日线 id → 年份集合，不返回年线
-   lineage）；stale 表达即行级 `reason_code` 枚举新增
-   `base_superseded`（S4 登记，随 v6 工具描述），superseded 不再混
-   入 `integrity_failure`。
-4. 行级 `reason` 枚举全集与 wire 码映射表。
-5. metadata 事件后年线分类边界（OWNER-ACCEPT-S1 C3）：哪些
-   metadata 字段（units/currency/adjustment 证据）影响年线聚合、
-   命中时应判 invalid 而非 behind。
+`ManifestEntry` 三个可选字段（`src/data_supply/wire.rs:140-150`，
+均为 `Option` + `skip_serializing_if`，None 时字段整体缺席；
+`entity/version_ref/status/metadata` 照旧输出，`status` 枚举仍为
+`present|absent`）：
 
-当前实现差距（S1/S2b，S3 修复）：query manifest 对 Invalid 年线
-报 `Absent` 且无 reason（`src/sqlite_supply.rs:377-391`）；
-availability 对 Invalid 年线整次返回 `Integrity` 错误
-（`src/sqlite_supply.rs:1684-1691`）；均不满足 RULINGS A1 行级化
-要求（OWNER-ACCEPT-S1 C2）。
+| 情形 | 行形状 | 实现 |
+|---|---|---|
+| fresh / behind | `status:"present"`；behind 加 `"stale":"behind"` + `"as_of_day":"<YYYY-MM-DD>"` | `src/sqlite_supply.rs:399-403, 444-445` |
+| invalid，**单实体**查询 | 整次调用报错 **`stale_version`**（`Error::Stale`，错误文本含 reason code） | `src/sqlite_supply.rs:406-414`；映射 `mcp.rs:514` |
+| invalid，**批量**查询 | 该实体行 `status:"absent"`、`version_ref:null` + `"reason":<AbsentReason>`（其余实体正常返回） | `src/sqlite_supply.rs:415-430` |
+
+样例（断言见 `src/data_supply/mcp/tests.rs:578-579`（behind/as_of_day）、
+`:660`（单实体 `stale_version`）、`:686-687`（批量 absent+reason））：
+
+```json
+{"entity":{"exchange":"sh","code":"600006"},"version_ref":{"dataset":"market.yearly","contract_version":"v1","entity":{"exchange":"sh","code":"600006"},"version_id":"<hex64>","integrity_sha256":"<hex64>"},"status":"present","metadata":{...},"stale":"behind","as_of_day":"2026-06-08"}
+{"entity":{"exchange":"sh","code":"600006"},"version_ref":null,"status":"absent","metadata":null,"reason":"daily_replaced_since_derivation"}
+```
+
+### 6.2 `get_data_availability`
+
+`AvailabilityItem` 同样三个可选字段（`src/data_supply/wire.rs:451-460`）：
+
+| 情形 | 行形状 | 实现 |
+|---|---|---|
+| fresh | `availability:"available"` 等正常值，无 stale | — |
+| behind | 正常 availability 值 + `"stale":"behind"` + `"as_of_day":"<YYYY-MM-DD>"` | `src/sqlite_supply.rs:1743-1752` |
+| invalid | **`availability:"absent"`** + `"reason":<AbsentReason>`；`version_ref:null` | `src/sqlite_supply.rs:1753-1779` |
+
+断言：`items[0]["stale"]=="behind"`（`src/data_supply/mcp/tests.rs:587`）；
+invalid 行 `{"availability":"absent","reason":"daily_replaced_since_derivation"}`
+（`mcp/tests.rs:706-710`）。invalid 以 `absent`+`reason` 表达，与真正
+`absent`（version_ref 存在但无记录）/`unavailable`（integrity 损坏）
+可区分。
+
+### 6.3 `get_yearly_base_years`
+
+`YearPresenceResult.reason_code`（`src/data_supply/wire.rs:296-318`）
+枚举全集与判定（`src/sqlite_supply.rs:110-129`）：
+
+| reason_code | 触发 |
+|---|---|
+| `null` | `status:"resolved"`，`present_years` 为实际集合（可为 `[]`） |
+| `base_unavailable` | pin 的日线 id 从未提交 |
+| `base_superseded` | pin 曾提交、已被更新 head 取代（`digest_seen` 命中但非当前序列；OWNER-RULING-PAR-1A R2'） |
+| `integrity_failure` | 伪造/损坏：实体或周期不符、内容校验失败、lineage 不匹配 |
+
+样例（`tests/mcp/yearly_presence.rs:128-148`）：
+
+```json
+{"entity":{"exchange":"sh","code":"600008"},"base_daily_version_id":"<hex64>","status":"unavailable","version_ref":null,"present_years":null,"reason_code":"base_superseded"}
+```
+
+### 6.4 行级 `reason` 枚举全集
+
+`AbsentReason`（`src/data_supply/wire.rs:151-157`，snake_case）只有两值，
+由 `YearlyInvalidReason::code()` 一一映射
+（`src/sqlite_market/series.rs:677-690`）：
+
+| wire 值 | 触发 |
+|---|---|
+| `daily_replaced_since_derivation` | base 之后出现日线 `replace` 事件 |
+| `value_semantics_changed` | base 之后的提交改变了年线聚合所依赖的版本证据 |
+
+### 6.5 metadata 事件的分类边界（OWNER-ACCEPT-S1 C3）
+
+`metadata`/`no_change`/`append` 事件默认仍判 **behind**；但当提交的
+版本证据三元组 **{source, unit_currency, adjustment_evidence}** 发生变化
+时记 `semantics_changed=1`（DDL `021_latest_only.sql:72-75`，C3），
+该年线判 **invalid(`value_semantics_changed`)** 而非 behind
+（`YearlyInvalidReason::SemanticsChanged`，`series.rs:667-679`）——
+价格口径/单位/复权证据改变后，旧年线内容不再可证。
+
+### 6.6 与 wire 码的映射速查
+
+| 位置 | 输出 |
+|---|---|
+| `query_data` 单实体 invalid | wire 错误码 `stale_version` |
+| `query_data` 批量 invalid 行 | `status:"absent"` + `reason`（§6.4） |
+| `query_data` behind 行 | `stale:"behind"` + `as_of_day` |
+| `get_data_availability` invalid 行 | `availability:"absent"` + `reason` |
+| `get_data_availability` behind 行 | `stale:"behind"` + `as_of_day` |
+| `get_yearly_base_years` superseded 行 | `reason_code:"base_superseded"` |
+| lineage 伪造/损坏（三处共用） | 整次 integrity 错误 fail-closed |
 
 ## 7. 部署与切换
 
