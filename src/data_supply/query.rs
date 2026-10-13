@@ -4,10 +4,13 @@ use crate::market_storage::Error;
 use chrono::{NaiveDate, Utc};
 use std::{
     cell::RefCell,
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
+    rc::Rc,
 };
 pub const MAX_ROWS: usize = 100_000;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
+const CACHE_ENTRIES: usize = 32;
+const CACHE_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Clone)]
 pub struct QueryPlan {
     pub args: Query,
@@ -111,15 +114,79 @@ struct Saved {
     id: String,
     offset: usize,
     content: Content,
+    /// Serialized size recorded at the snapshot-budget check, so resumed
+    /// entries never re-serialize. Entries sharing `id` point at the same
+    /// Rc'd snapshot and are accounted once in `CursorCache::bytes`.
+    bytes: usize,
 }
 #[derive(Clone)]
 enum Content {
-    Data(QuerySnapshot),
-    Versions(Vec<VersionInfo>),
+    Data(Rc<QuerySnapshot>),
+    Versions(Rc<Vec<VersionInfo>>),
+}
+/// LRU cursor cache. Entries are cheap handles (Rc + metadata); capacity is
+/// bounded by entry count AND by the summed bytes of distinct snapshots.
+struct CursorCache {
+    entries: VecDeque<Saved>,
+    /// Live entry count per snapshot id (page cursors of one query share
+    /// `id` — and the snapshot — via resume/save).
+    refs: HashMap<String, u32>,
+    bytes: usize,
+    entry_cap: usize,
+    byte_cap: usize,
+}
+impl Default for CursorCache {
+    fn default() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            refs: HashMap::new(),
+            bytes: 0,
+            entry_cap: CACHE_ENTRIES,
+            byte_cap: CACHE_BYTES,
+        }
+    }
+}
+impl CursorCache {
+    fn release(&mut self, s: &Saved) {
+        if let Some(n) = self.refs.get_mut(&s.id) {
+            *n -= 1;
+            if *n == 0 {
+                self.refs.remove(&s.id);
+                self.bytes -= s.bytes;
+            }
+        }
+    }
+    fn push(&mut self, s: Saved) {
+        let new_bytes = if self.refs.contains_key(&s.id) {
+            0
+        } else {
+            s.bytes
+        };
+        while self.entries.len() >= self.entry_cap || self.bytes + new_bytes > self.byte_cap {
+            match self.entries.pop_front() {
+                Some(old) => self.release(&old),
+                None => break,
+            }
+        }
+        *self.refs.entry(s.id.clone()).or_insert(0) += 1;
+        self.bytes += new_bytes;
+        self.entries.push_back(s);
+    }
+    /// LRU: resuming a cursor marks it most-recently-used.
+    fn resume(&mut self, token: &str) -> Option<Saved> {
+        let pos = self.entries.iter().position(|s| s.token == token)?;
+        let s = self.entries.remove(pos)?;
+        self.entries.push_back(s.clone());
+        Some(s)
+    }
+    /// (entries, distinct-snapshot bytes, distinct snapshots)
+    fn stats(&self) -> (usize, usize, usize) {
+        (self.entries.len(), self.bytes, self.refs.len())
+    }
 }
 pub struct Queries<R> {
     pub repository: R,
-    cache: RefCell<VecDeque<Saved>>,
+    cache: RefCell<CursorCache>,
     instance: String,
     sequence: RefCell<u64>,
 }
@@ -127,7 +194,7 @@ impl<R: ReadRepository> Queries<R> {
     pub fn new(repository: R) -> Self {
         Self {
             repository,
-            cache: RefCell::new(VecDeque::new()),
+            cache: RefCell::new(CursorCache::default()),
             instance: format!(
                 "{}-{}",
                 std::process::id(),
@@ -141,23 +208,33 @@ impl<R: ReadRepository> Queries<R> {
         *n += 1;
         format!("{}-{n}", self.instance)
     }
+    /// Test seam: shrink the cache caps so eviction behavior is exercisable
+    /// without multi-MB fixtures. Production uses `new`.
+    #[doc(hidden)]
+    pub fn with_cache_limits(repository: R, entry_cap: usize, byte_cap: usize) -> Self {
+        let q = Self::new(repository);
+        let mut c = q.cache.borrow_mut();
+        c.entry_cap = entry_cap;
+        c.byte_cap = byte_cap;
+        drop(c);
+        q
+    }
+    /// Test seam: (entries, distinct-snapshot bytes, distinct snapshots).
+    #[doc(hidden)]
+    pub fn cache_stats(&self) -> (usize, usize, usize) {
+        self.cache.borrow().stats()
+    }
     fn save(&self, mut s: Saved) -> String {
         let token = self.id();
         s.token = token.clone();
-        let mut c = self.cache.borrow_mut();
-        if c.len() == 32 {
-            c.pop_front();
-        }
-        c.push_back(s);
+        self.cache.borrow_mut().push(s);
         token
     }
     fn resume(&self, token: &str, key: &str, access: &Access) -> Result<Saved, Error> {
         let s = self
             .cache
-            .borrow()
-            .iter()
-            .find(|s| s.token == token)
-            .cloned()
+            .borrow_mut()
+            .resume(token)
             .ok_or_else(|| invalid("invalid/expired cursor"))?;
         if s.key != key || &s.access != access {
             return Err(invalid("cursor conditions/authorization changed"));
@@ -176,10 +253,10 @@ impl<R: ReadRepository> Queries<R> {
             let data = crate::stage_trace::timed("query.repository", || {
                 self.repository.query(&plan, access)
             })?;
-            let over_budget = crate::stage_trace::timed("query.budget", || {
-                data.rows.len() > MAX_ROWS || serde_json::to_vec(&data).unwrap().len() > MAX_BYTES
+            let bytes = crate::stage_trace::timed("query.budget", || {
+                serde_json::to_vec(&data).unwrap().len()
             });
-            if over_budget {
+            if data.rows.len() > MAX_ROWS || bytes > MAX_BYTES {
                 return Err(invalid("snapshot budget exceeded"));
             }
             Saved {
@@ -189,7 +266,8 @@ impl<R: ReadRepository> Queries<R> {
                 time: Utc::now(),
                 id: self.id(),
                 offset: 0,
-                content: Content::Data(data),
+                content: Content::Data(Rc::new(data)),
+                bytes,
             }
         };
         let Content::Data(data) = &saved.content else {
@@ -236,7 +314,8 @@ impl<R: ReadRepository> Queries<R> {
             self.resume(&cursor, &key, access)?
         } else {
             let data = self.repository.versions(&args, access)?;
-            if data.len() > MAX_ROWS || serde_json::to_vec(&data).unwrap().len() > MAX_BYTES {
+            let bytes = serde_json::to_vec(&data).unwrap().len();
+            if data.len() > MAX_ROWS || bytes > MAX_BYTES {
                 return Err(invalid("snapshot budget exceeded"));
             }
             Saved {
@@ -246,7 +325,8 @@ impl<R: ReadRepository> Queries<R> {
                 time: Utc::now(),
                 id: self.id(),
                 offset: 0,
-                content: Content::Versions(data),
+                content: Content::Versions(Rc::new(data)),
+                bytes,
             }
         };
         let Content::Versions(data) = &saved.content else {
