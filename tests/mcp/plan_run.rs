@@ -1761,7 +1761,8 @@ fn running_planrun_task_accepts_cancel_at_a_stale_revision() {
 /// Per-entity durable content of one database — bars, head rows and the
 /// event projection minus task-bound columns (task_id/result_id/seq and
 /// clock fields legitimately differ across runs).
-fn market_projection(path: &Path) -> (Vec<Vec<String>>, Vec<Vec<String>>, Vec<Vec<String>>) {
+type SqlRows = Vec<Vec<String>>;
+fn market_projection(path: &Path) -> (SqlRows, SqlRows, SqlRows) {
     let c = rusqlite::Connection::open(path).unwrap();
     let dump = |sql: &str| {
         c.prepare(sql)
