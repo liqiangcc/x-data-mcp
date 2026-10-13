@@ -528,37 +528,11 @@ fn vmhwm_kb() -> u64 {
     status_kb("VmHWM:")
 }
 
-/// ~5.2k entities each carrying a REAL published head (no phantom markers):
-/// the batch collection commit — the same mechanism the series-commit suite
-/// seeds with — writes a real checkpoint version + head per member, then
-/// `plan_market_update` and `run_market_update` acceptance are measured for
-/// wall time and process VmHWM/VmRSS deltas. This is the scale at which the
-/// bulk acceptance path peaked ~950MB (TASK-DEVIN-PLANRUN-MEMORY).
-#[test]
-fn planrun_scales_to_market_wide_membership() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let r = rig(&[("sh", "600006", day_u32(1))]);
-    const EXTRA: usize = 5_200;
-    let mut codes = vec!["600006".to_string()];
-    let mut symbols = vec!["sh.600006".to_string()];
-    let mut extra = Vec::with_capacity(EXTRA);
-    for i in 0..EXTRA {
-        let code = format!("{:06}", 700_000 + i);
-        extra.push(format!("sh.{code}"));
-        symbols.push(format!("sh.{code}"));
-        codes.push(code);
-    }
-    let catalog = SqliteCatalog::new(r.tasks.clone());
-    catalog
-        .publish_fixture(
-            "catalog-2",
-            catalog_fixture(
-                &codes.iter().map(String::as_str).collect::<Vec<_>>(),
-                &vec!["sh"; codes.len()],
-            ),
-            Some("catalog-1"),
-        )
-        .unwrap();
+/// Seed real published daily heads for `symbols` through the batch
+/// collection commit in ~200-item tasks — a single 5.2k-item task makes
+/// per-item `decide` scans quadratic — and finish each task so its
+/// scopes release before the plan resolution runs.
+fn seed_daily_heads(r: &Rig, symbols: &[String]) {
     use x_data_mcp::official_market::DailyCollectionRepository;
     use x_data_mcp::task_control::{
         Command, CommandKey, FrozenWork, RequestOutcome, TaskRepository,
@@ -593,7 +567,7 @@ fn planrun_scales_to_market_wide_membership() {
     // Seed real heads in ~200-item tasks — a single 5.2k-item task makes
     // per-item `decide` scans quadratic — and finish each task so its
     // scopes release before the plan resolution runs.
-    for (batch, chunk) in extra.chunks(200).enumerate() {
+    for (batch, chunk) in symbols.chunks(200).enumerate() {
         let mut scopes = std::collections::BTreeSet::new();
         let mut specs = Vec::with_capacity(chunk.len());
         for sym in chunk {
@@ -686,6 +660,40 @@ fn planrun_scales_to_market_wide_membership() {
             task.task.status
         );
     }
+}
+
+/// ~5.2k entities each carrying a REAL published head (no phantom markers):
+/// the batch collection commit — the same mechanism the series-commit suite
+/// seeds with — writes a real checkpoint version + head per member, then
+/// `plan_market_update` and `run_market_update` acceptance are measured for
+/// wall time and process VmHWM/VmRSS deltas. This is the scale at which the
+/// bulk acceptance path peaked ~950MB (TASK-DEVIN-PLANRUN-MEMORY).
+#[test]
+fn planrun_scales_to_market_wide_membership() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    const EXTRA: usize = 5_200;
+    let mut codes = vec!["600006".to_string()];
+    let mut symbols = vec!["sh.600006".to_string()];
+    let mut extra = Vec::with_capacity(EXTRA);
+    for i in 0..EXTRA {
+        let code = format!("{:06}", 700_000 + i);
+        extra.push(format!("sh.{code}"));
+        symbols.push(format!("sh.{code}"));
+        codes.push(code);
+    }
+    let catalog = SqliteCatalog::new(r.tasks.clone());
+    catalog
+        .publish_fixture(
+            "catalog-2",
+            catalog_fixture(
+                &codes.iter().map(String::as_str).collect::<Vec<_>>(),
+                &vec!["sh"; codes.len()],
+            ),
+            Some("catalog-1"),
+        )
+        .unwrap();
+    seed_daily_heads(&r, &extra);
 
     // 5,201 eligible members (head day 1 << pending day) + 0 absent.
     let rss0 = vmrss_kb();
@@ -718,6 +726,58 @@ fn planrun_scales_to_market_wide_membership() {
     );
     assert!(plan_ms < 5_000, "plan took {plan_ms}ms > 5s");
     assert!(run_ms < 10_000, "run acceptance took {run_ms}ms > 10s");
+
+    // Execution phase (TASK-DEVIN-PLANRUN-CHUNK-EXEC): the accepted task
+    // must run to a terminal state with bounded memory — chunked at
+    // EXEC_CHUNK=100 so a 5,201-item task peaks like a ≤100-item task
+    // (the unchunked prepare_batch peaked ~969MB on the private stack).
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    let item_ids: Vec<String> = r
+        .tasks
+        .read_task(&task_id)
+        .unwrap()
+        .unwrap()
+        .items
+        .iter()
+        .map(|i| i.spec.item_id.clone())
+        .collect();
+    assert_eq!(item_ids.len(), symbols.len());
+    let exec_hwm0 = vmhwm_kb();
+    let t2 = std::time::Instant::now();
+    let provider = UnchangedProvider {
+        typed_calls: std::cell::Cell::new(0),
+    };
+    let runner = x_data_mcp::market_update::runner::RangeRunner {
+        repository: r.backend.clone(),
+        run_id: "run".into(),
+    };
+    runner
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .expect("compact backend carries the update batch");
+    let exec_ms = t2.elapsed().as_millis();
+    let exec_peak_delta = vmhwm_kb().saturating_sub(exec_hwm0);
+    eprintln!(
+        "plan-run exec: {} items in {exec_ms}ms; exec peak +{exec_peak_delta}kB; rss {}kB",
+        item_ids.len(),
+        vmrss_kb()
+    );
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(
+        task.task.status.terminal(),
+        "task must reach a terminal state: {:?}",
+        task.task.status
+    );
+    assert!(
+        task.items
+            .iter()
+            .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
+        "every item must record a successful outcome"
+    );
+    assert!(
+        exec_peak_delta < 200 * 1024,
+        "execution peak RSS delta {exec_peak_delta}kB exceeds the 200MB budget"
+    );
 }
 
 /// Retry of a plan-run task must keep the shared-evidence binding: the
@@ -799,4 +859,603 @@ fn run_task_retry_keeps_shared_evidence_binding() {
     let seed = r.tasks.read_task(&r.seed_task).unwrap().unwrap();
     assert!(seed.task.status.terminal());
     assert!(seed.task.work.shared_evidence.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Execution-phase chunking (TASK-DEVIN-PLANRUN-CHUNK-EXEC): run_items must
+// bound prepare/commit working sets to ~100 items regardless of task size.
+// ---------------------------------------------------------------------------
+
+/// Typed acquisition that reports the base unchanged: enough to drive the
+/// real prepare/batch-commit machinery on the compact backend while
+/// keeping every receipt a NoChange (version reuse, no new bars).
+struct UnchangedProvider {
+    typed_calls: std::cell::Cell<usize>,
+}
+impl x_data_mcp::market_update::runner::RangeProvider for UnchangedProvider {
+    fn acquire(
+        &self,
+        _base: &x_data_mcp::market_storage::compat::CheckedRecord,
+        _range: &x_data_mcp::market_update::DateRange,
+        _candidate_id: &str,
+    ) -> Result<x_data_mcp::market_update::runner::Acquisition, x_data_mcp::market_data::SourceError>
+    {
+        Err(x_data_mcp::market_data::SourceError::NotVerified(
+            "fixture: envelope path unused".into(),
+        ))
+    }
+    fn acquire_typed(
+        &self,
+        facts: &x_data_mcp::market_update::UpdateBaseFacts,
+        _base_window: &[x_data_mcp::market_data::Bar],
+        range: &x_data_mcp::market_update::DateRange,
+    ) -> Result<
+        Option<x_data_mcp::market_update::runner::TypedAcquisition>,
+        x_data_mcp::market_data::SourceError,
+    > {
+        self.typed_calls.set(self.typed_calls.get() + 1);
+        Ok(Some(x_data_mcp::market_update::runner::TypedAcquisition {
+            decision: x_data_mcp::market_update::runner::TypedDecision::Unchanged,
+            evidence: x_data_mcp::market_update::Evidence {
+                base_version_id: facts.version_id.clone(),
+                base_integrity_sha256: facts.integrity_sha256.clone(),
+                candidate_sha256: "fixture:candidate".into(),
+                range: range.clone(),
+                same_qfq_basis_ref: "fixture:basis".into(),
+                revision_ref: None,
+                continuity: None,
+            },
+        }))
+    }
+}
+
+/// Delegating wrapper over the live backend: every call forwards to the
+/// real repository while `commit_update_batch` records each call's item
+/// ids and can inject a structural failure or a task cancellation at a
+/// chosen call index — the seam the chunk-boundary tests need without
+/// changing production code.
+#[derive(Clone)]
+struct Spy {
+    inner: MarketBackend,
+    commits: std::rc::Rc<std::cell::RefCell<Vec<Vec<String>>>>,
+    fail_at: std::cell::Cell<usize>,
+    cancel_after: std::cell::Cell<usize>,
+}
+impl Spy {
+    fn wrap(inner: &MarketBackend) -> Self {
+        Self {
+            inner: inner.clone(),
+            commits: std::rc::Rc::new(std::cell::RefCell::new(vec![])),
+            fail_at: std::cell::Cell::new(0),
+            cancel_after: std::cell::Cell::new(0),
+        }
+    }
+    fn commit_sizes(&self) -> Vec<usize> {
+        self.commits.borrow().iter().map(Vec::len).collect()
+    }
+}
+impl x_data_mcp::market_storage::MarketRepository for Spy {
+    fn stage(&self, raw: &Value) -> Result<(), x_data_mcp::market_storage::Error> {
+        self.inner.stage(raw)
+    }
+    fn candidate(
+        &self,
+        id: &str,
+    ) -> Result<x_data_mcp::market_storage::compat::CheckedRecord, x_data_mcp::market_storage::Error>
+    {
+        self.inner.candidate(id)
+    }
+    fn staged_matches(
+        &self,
+        version_id: &str,
+        whole: &Value,
+    ) -> Result<bool, x_data_mcp::market_storage::Error> {
+        self.inner.staged_matches(version_id, whole)
+    }
+    fn mark_validated(
+        &self,
+        record: &x_data_mcp::market_storage::compat::CheckedRecord,
+    ) -> Result<(), x_data_mcp::market_storage::Error> {
+        self.inner.mark_validated(record)
+    }
+    fn fixed(
+        &self,
+        id: &str,
+    ) -> Result<x_data_mcp::market_storage::compat::CheckedRecord, x_data_mcp::market_storage::Error>
+    {
+        self.inner.fixed(id)
+    }
+    fn fixed_many(
+        &self,
+        ids: &[String],
+    ) -> Result<
+        Vec<x_data_mcp::market_storage::compat::CheckedRecord>,
+        x_data_mcp::market_storage::Error,
+    > {
+        self.inner.fixed_many(ids)
+    }
+    fn fixed_facts(
+        &self,
+        id: &str,
+    ) -> Result<x_data_mcp::market_storage::FixedFacts, x_data_mcp::market_storage::Error> {
+        self.inner.fixed_facts(id)
+    }
+    fn fixed_window(
+        &self,
+        id: &str,
+        first_day: chrono::NaiveDate,
+        last_day: chrono::NaiveDate,
+    ) -> Result<x_data_mcp::market_storage::compat::CheckedRecord, x_data_mcp::market_storage::Error>
+    {
+        self.inner.fixed_window(id, first_day, last_day)
+    }
+    fn fixed_window_years(
+        &self,
+        id: &str,
+        first_day: chrono::NaiveDate,
+        last_day: chrono::NaiveDate,
+    ) -> Result<std::collections::BTreeSet<i32>, x_data_mcp::market_storage::Error> {
+        self.inner.fixed_window_years(id, first_day, last_day)
+    }
+    fn task(
+        &self,
+        id: &str,
+    ) -> Result<x_data_mcp::task_control::TaskSnapshot, x_data_mcp::market_storage::Error> {
+        self.inner.task(id)
+    }
+    fn task_head(
+        &self,
+        id: &str,
+    ) -> Result<x_data_mcp::task_control::TaskHead, x_data_mcp::market_storage::Error> {
+        self.inner.task_head(id)
+    }
+    fn task_item_binding(
+        &self,
+        task: &str,
+        item: &str,
+    ) -> Result<Option<x_data_mcp::task_control::ItemBinding>, x_data_mcp::market_storage::Error>
+    {
+        self.inner.task_item_binding(task, item)
+    }
+    fn transition_task_head(
+        &self,
+        head: &mut x_data_mcp::task_control::TaskHead,
+        item: Option<&mut x_data_mcp::task_control::TaskItem>,
+        run: &str,
+        change: x_data_mcp::task_control::Change,
+    ) -> Result<(), x_data_mcp::market_storage::Error> {
+        self.inner.transition_task_head(head, item, run, change)
+    }
+    fn commit(
+        &self,
+        plan: &x_data_mcp::market_storage::PublishPlan,
+    ) -> Result<x_data_mcp::market_storage::Receipt, x_data_mcp::market_storage::Error> {
+        self.inner.commit(plan)
+    }
+    fn receipt(
+        &self,
+        id: &str,
+    ) -> Result<Option<x_data_mcp::market_storage::Receipt>, x_data_mcp::market_storage::Error>
+    {
+        self.inner.receipt(id)
+    }
+    fn range(
+        &self,
+        scope: &x_data_mcp::market_storage::Scope,
+        version: Option<&str>,
+        range: &x_data_mcp::market_storage::Range,
+    ) -> Result<x_data_mcp::market_storage::ReadPage, x_data_mcp::market_storage::Error> {
+        self.inner.range(scope, version, range)
+    }
+    fn versions(
+        &self,
+        scope: &x_data_mcp::market_storage::Scope,
+    ) -> Result<Vec<x_data_mcp::publish::EffectiveVersion>, x_data_mcp::market_storage::Error> {
+        self.inner.versions(scope)
+    }
+}
+impl x_data_mcp::market_update::publication::RangeRepository for Spy {
+    fn range_item_states(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+    ) -> Result<
+        Vec<
+            Result<
+                x_data_mcp::market_update::publication::RangeItemState,
+                x_data_mcp::market_storage::Error,
+            >,
+        >,
+        x_data_mcp::market_storage::Error,
+    > {
+        self.inner.range_item_states(task_id, item_ids)
+    }
+    fn range_base_reads(
+        &self,
+        wants: &[x_data_mcp::market_update::publication::BaseWant],
+    ) -> Result<
+        Vec<
+            Result<
+                Option<x_data_mcp::market_update::publication::BaseRead>,
+                x_data_mcp::market_storage::Error,
+            >,
+        >,
+        x_data_mcp::market_storage::Error,
+    > {
+        self.inner.range_base_reads(wants)
+    }
+    fn update_base_facts(
+        &self,
+        base_version_id: &str,
+    ) -> Result<Option<x_data_mcp::market_update::UpdateBaseFacts>, x_data_mcp::market_storage::Error>
+    {
+        self.inner.update_base_facts(base_version_id)
+    }
+    fn base_bars_in_range(
+        &self,
+        base_version_id: &str,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+    ) -> Result<Option<Vec<x_data_mcp::market_data::Bar>>, x_data_mcp::market_storage::Error> {
+        self.inner.base_bars_in_range(base_version_id, start, end)
+    }
+    fn commit_range(
+        &self,
+        plan: &x_data_mcp::market_update::publication::RangePlan,
+    ) -> Result<x_data_mcp::market_storage::Receipt, x_data_mcp::market_storage::Error> {
+        self.inner.commit_range(plan)
+    }
+    fn commit_range_ops_typed(
+        &self,
+        command: &x_data_mcp::market_storage::Publication,
+        scope: &x_data_mcp::market_storage::Scope,
+        base_version_id: &str,
+        upserts: &[x_data_mcp::market_data::Bar],
+        removes: &[chrono::NaiveDate],
+        metadata: Option<&x_data_mcp::market_update::TypedVersionMetadata>,
+        continuity_evidence: Option<&Value>,
+    ) -> Result<Option<x_data_mcp::market_storage::Receipt>, x_data_mcp::market_storage::Error>
+    {
+        self.inner.commit_range_ops_typed(
+            command,
+            scope,
+            base_version_id,
+            upserts,
+            removes,
+            metadata,
+            continuity_evidence,
+        )
+    }
+    fn commit_range_no_change_typed(
+        &self,
+        command: &x_data_mcp::market_storage::Publication,
+        base_version_id: &str,
+        range: &x_data_mcp::market_update::DateRange,
+        continuity_evidence: Option<&Value>,
+    ) -> Result<Option<x_data_mcp::market_storage::Receipt>, x_data_mcp::market_storage::Error>
+    {
+        self.inner.commit_range_no_change_typed(
+            command,
+            base_version_id,
+            range,
+            continuity_evidence,
+        )
+    }
+    fn commit_update_batch(
+        &self,
+        task_id: &str,
+        items: &[x_data_mcp::market_update::UpdateBatchItem],
+    ) -> Result<
+        Option<Vec<Result<x_data_mcp::market_storage::Receipt, x_data_mcp::market_storage::Error>>>,
+        x_data_mcp::market_storage::Error,
+    > {
+        let index = self.commits.borrow().len() + 1;
+        self.commits
+            .borrow_mut()
+            .push(items.iter().map(|i| i.item_id.clone()).collect());
+        if self.fail_at.get() == index {
+            return Err(x_data_mcp::market_storage::Error::Invalid(
+                "fixture: injected batch failure".into(),
+            ));
+        }
+        let out = self.inner.commit_update_batch(task_id, items);
+        if self.cancel_after.get() == index
+            && let Ok(head) = self.inner.task_head(task_id)
+        {
+            self.inner
+                .transition_task(
+                    task_id,
+                    head.state_revision,
+                    "run",
+                    x_data_mcp::task_control::Change::RequestCancel,
+                )
+                .unwrap();
+        }
+        out
+    }
+    fn range_receipt(
+        &self,
+        id: &str,
+    ) -> Result<Option<x_data_mcp::market_storage::Receipt>, x_data_mcp::market_storage::Error>
+    {
+        self.inner.range_receipt(id)
+    }
+    fn item_receipt(
+        &self,
+        task: &str,
+        item: &str,
+    ) -> Result<Option<x_data_mcp::market_storage::Receipt>, x_data_mcp::market_storage::Error>
+    {
+        self.inner.item_receipt(task, item)
+    }
+    fn transition_task(
+        &self,
+        task: &str,
+        revision: u64,
+        run: &str,
+        change: x_data_mcp::task_control::Change,
+    ) -> Result<x_data_mcp::task_control::TaskSnapshot, x_data_mcp::market_storage::Error> {
+        self.inner.transition_task(task, revision, run, change)
+    }
+    fn cover_gap(
+        &self,
+        covering: &x_data_mcp::market_storage::GapCovering,
+    ) -> Result<bool, x_data_mcp::market_storage::Error> {
+        self.inner.cover_gap(covering)
+    }
+    fn gap_coverings(
+        &self,
+        gap_id: &str,
+    ) -> Result<Vec<x_data_mcp::market_storage::GapCovering>, x_data_mcp::market_storage::Error>
+    {
+        self.inner.gap_coverings(gap_id)
+    }
+}
+
+/// Build `members` real heads (chunk-seeded) plus a fresh catalog so the
+/// plan resolves them all eligible; returns the accepted run task's ids.
+fn run_task_with_members(r: &Rig, count: usize) -> (String, Vec<String>) {
+    let mut codes = vec!["600006".to_string()];
+    let mut symbols = vec!["sh.600006".to_string()];
+    for i in 1..count {
+        let code = format!("{:06}", 700_000 + i);
+        symbols.push(format!("sh.{code}"));
+        codes.push(code);
+    }
+    let catalog = SqliteCatalog::new(r.tasks.clone());
+    catalog
+        .publish_fixture(
+            "catalog-2",
+            catalog_fixture(
+                &codes.iter().map(String::as_str).collect::<Vec<_>>(),
+                &vec!["sh"; codes.len()],
+            ),
+            Some("catalog-1"),
+        )
+        .unwrap();
+    seed_daily_heads(r, &symbols[1..]);
+    let p = plan(&r.api, "market.daily");
+    assert_eq!(p["counts"]["eligible"], symbols.len() as u64);
+    let accepted = run(&r.api, "market.daily", "req-chunk", &p);
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    let item_ids: Vec<String> = r
+        .tasks
+        .read_task(&task_id)
+        .unwrap()
+        .unwrap()
+        .items
+        .iter()
+        .map(|i| i.spec.item_id.clone())
+        .collect();
+    (task_id, item_ids)
+}
+fn runner(repo: &Spy) -> x_data_mcp::market_update::runner::RangeRunner<Spy> {
+    x_data_mcp::market_update::runner::RangeRunner {
+        repository: repo.clone(),
+        run_id: "run".into(),
+    }
+}
+
+#[test]
+fn run_items_commits_update_batch_in_bounded_chunks() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 250);
+    assert_eq!(item_ids.len(), 250);
+    let spy = Spy::wrap(&r.backend);
+    let provider = UnchangedProvider {
+        typed_calls: std::cell::Cell::new(0),
+    };
+    runner(&spy)
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .expect("compact backend carries the update batch");
+    // EXEC_CHUNK = 100 (pub(crate), restated here): 250 items -> [100,100,50].
+    assert_eq!(spy.commit_sizes(), vec![100, 100, 50]);
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(task.task.status.terminal(), "task must be terminal");
+    assert!(
+        task.items
+            .iter()
+            .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
+        "every item must record a successful outcome"
+    );
+    assert_eq!(provider.typed_calls.get(), 250);
+}
+#[test]
+fn run_items_empty_and_single_item_boundaries() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let spy = Spy::wrap(&r.backend);
+    let provider = UnchangedProvider {
+        typed_calls: std::cell::Cell::new(0),
+    };
+    // Zero items: no repository contact at all.
+    assert!(matches!(
+        runner(&spy).run_items("task-x", &[], &provider),
+        Ok(Some(()))
+    ));
+    assert!(spy.commit_sizes().is_empty());
+    // One item: one single-item commit.
+    let (task_id, item_ids) = run_task_with_members(&r, 2);
+    let one = vec![item_ids[0].clone()];
+    runner(&spy)
+        .run_items(&task_id, &one, &provider)
+        .unwrap()
+        .unwrap();
+    assert_eq!(spy.commit_sizes(), vec![1]);
+}
+#[test]
+fn run_items_chunk_failure_isolates_and_recovered_items_record() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 150);
+    let spy = Spy::wrap(&r.backend);
+    spy.fail_at.set(2); // the 50-item second chunk's commit fails structurally
+    let provider = UnchangedProvider {
+        typed_calls: std::cell::Cell::new(0),
+    };
+    runner(&spy)
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .unwrap();
+    // Chunk 1 committed; chunk 2 rolled back and every one of its items
+    // recovered through the per-item path.
+    assert_eq!(spy.commit_sizes(), vec![100, 50]);
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(
+        task.items
+            .iter()
+            .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
+        "failed chunk's items must recover per-item"
+    );
+    assert_eq!(
+        spy.inner
+            .item_receipt(&task_id, &item_ids[0])
+            .unwrap()
+            .is_some(),
+        true,
+        "first chunk's receipts must survive the later chunk's rollback"
+    );
+}
+#[test]
+fn run_items_cancel_between_chunks_preserves_committed_receipts() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 150);
+    let spy = Spy::wrap(&r.backend);
+    spy.cancel_after.set(1); // RequestCancel lands after chunk 1's commit
+    let provider = UnchangedProvider {
+        typed_calls: std::cell::Cell::new(0),
+    };
+    runner(&spy)
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .unwrap();
+    // Only chunk 1's batch commit ran.
+    assert_eq!(spy.commit_sizes(), vec![100]);
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::Cancelled,
+        "unreached items must end through the cancellation finish"
+    );
+    // The committed chunk's receipts remain; later items carry outcomes.
+    assert!(
+        spy.inner
+            .item_receipt(&task_id, &item_ids[0])
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        task.items.iter().all(|i| i.outcome.is_some()),
+        "every item must be accounted for after cancellation"
+    );
+}
+#[test]
+fn run_items_receipt_replay_never_reacquires() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 3);
+    let spy = Spy::wrap(&r.backend);
+    let provider = UnchangedProvider {
+        typed_calls: std::cell::Cell::new(0),
+    };
+    runner(&spy)
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .unwrap();
+    assert_eq!(provider.typed_calls.get(), 3);
+    // A killed-mid-task re-entry: items with receipts replay without any
+    // further acquisition or batch commit.
+    runner(&spy)
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .unwrap();
+    assert_eq!(provider.typed_calls.get(), 3);
+    assert_eq!(spy.commit_sizes(), vec![3]);
+}
+
+/// Chunked batch execution must produce the same durable facts as the
+/// authoritative per-item path: same per-item outcomes and receipt
+/// version bindings for identical inputs (two rigs seeded identically —
+/// seeded version ids are deterministic, so receipt version_ids compare
+/// across rigs).
+#[test]
+fn run_items_chunked_execution_matches_per_item_outcomes() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    const N: usize = 120;
+    let rig_a = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_a, ids_a) = run_task_with_members(&rig_a, N);
+    let rig_b = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_b, ids_b) = run_task_with_members(&rig_b, N);
+    assert_eq!(
+        ids_a, ids_b,
+        "identical seeds must produce identical item ids"
+    );
+    let spy = Spy::wrap(&rig_a.backend);
+    let provider = UnchangedProvider {
+        typed_calls: std::cell::Cell::new(0),
+    };
+    runner(&spy)
+        .run_items(&task_a, &ids_a, &provider)
+        .unwrap()
+        .unwrap();
+    // Reference: the per-item path on the same inputs (commit_update_batch
+    // untouched — spy B records nothing).
+    let spy_b = Spy::wrap(&rig_b.backend);
+    let runner_b = runner(&spy_b);
+    let mut per_item: Vec<Option<String>> = Vec::new();
+    for item_id in &ids_b {
+        match runner_b.run_item(&task_b, item_id, &provider).unwrap() {
+            x_data_mcp::market_update::runner::ItemExecution::Published(receipt) => {
+                per_item.push(Some(receipt.version_id));
+            }
+            other => panic!("per-item execution must publish: {other:?}"),
+        }
+    }
+    assert!(spy_b.commit_sizes().is_empty());
+    // Durable equivalence: every item's receipt version_id and success
+    // outcome matches between the chunked batch and the per-item path.
+    let task = rig_a.tasks.read_task(&task_a).unwrap().unwrap();
+    let task_b_items = rig_b.tasks.read_task(&task_b).unwrap().unwrap();
+    for ((item_a, item_b), receipt_version) in task
+        .items
+        .iter()
+        .zip(task_b_items.items.iter())
+        .zip(per_item.iter())
+    {
+        assert_eq!(item_a.spec.item_id, item_b.spec.item_id);
+        assert_eq!(item_a.outcome, item_b.outcome);
+        assert!(item_a.outcome.as_ref().is_some_and(|o| o.success));
+        let receipt_a = rig_a
+            .backend
+            .item_receipt(&task_a, &item_a.spec.item_id)
+            .unwrap()
+            .expect("chunked item must hold a receipt");
+        assert_eq!(&receipt_a.version_id, receipt_version.as_ref().unwrap());
+    }
+    // Task-level parity: both terminal-succeeded, same counters.
+    assert_eq!(task.task.status, task_b_items.task.status);
+    assert_eq!(task.task.counts, task_b_items.task.counts);
 }

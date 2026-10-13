@@ -1862,43 +1862,64 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
         item_ids: &[String],
         generation_id: &str,
     ) -> Result<Option<()>, Error> {
-        let mut candidates = Vec::new();
-        let mut fallback = Vec::new();
-        for item_id in item_ids {
-            match self.collection_candidate(task_id, item_id, generation_id) {
-                Ok(Some(candidate)) => candidates.push(candidate),
-                Ok(None) | Err(_) => fallback.push(item_id.clone()),
+        let mut offset = 0;
+        while offset < item_ids.len() {
+            // Cancellation lands between chunks: committed chunks keep
+            // their receipts, remaining items keep the per-item path
+            // which owns the cancellation finish semantics.
+            if offset > 0
+                && self.repository.task_head(task_id)?.status
+                    == crate::task_control::Status::CancelRequested
+            {
+                break;
             }
-        }
-        let results = match self
-            .repository
-            .commit_collection_batch(task_id, &candidates)
-        {
-            Ok(Some(results)) => results,
-            Ok(None) => return Ok(None),
-            Err(_) => {
-                // Structural/transaction errors rolled the whole batch back:
+            let chunk = &item_ids
+                [offset..(offset + crate::market_update::runner::EXEC_CHUNK).min(item_ids.len())];
+            let mut candidates = Vec::new();
+            let mut fallback = Vec::new();
+            for item_id in chunk {
+                match self.collection_candidate(task_id, item_id, generation_id) {
+                    Ok(Some(candidate)) => candidates.push(candidate),
+                    Ok(None) | Err(_) => fallback.push(item_id.clone()),
+                }
+            }
+            let results = match self
+                .repository
+                .commit_collection_batch(task_id, &candidates)
+            {
+                Ok(Some(results)) => results,
+                // The first chunk's `None` keeps the documented contract —
+                // no batch surface, the caller runs the whole task per item.
+                Ok(None) if offset == 0 => return Ok(None),
+                // A mid-task `None`/structural error rolled the chunk back:
                 // isolate per item so one bad item cannot wedge the task in a
                 // Running-retry loop (the documented batch contract).
-                fallback.extend(candidates.iter().map(|item| item.item_id.clone()));
-                for item_id in fallback {
-                    self.run_item(task_id, &item_id)?;
+                Ok(None) | Err(_) => {
+                    fallback.extend(candidates.iter().map(|item| item.item_id.clone()));
+                    for item_id in fallback {
+                        self.run_item(task_id, &item_id)?;
+                    }
+                    offset += crate::market_update::runner::EXEC_CHUNK;
+                    continue;
                 }
-                return Ok(Some(()));
+            };
+            if results.len() != candidates.len() {
+                return Err(Error::Integrity(
+                    "collection batch result count does not match candidates".into(),
+                ));
             }
-        };
-        if results.len() != candidates.len() {
-            return Err(Error::Integrity(
-                "collection batch result count does not match candidates".into(),
-            ));
-        }
-        for (candidate, result) in candidates.iter().zip(results) {
-            if result.is_err() {
-                fallback.push(candidate.item_id.clone());
+            for (candidate, result) in candidates.iter().zip(results) {
+                if result.is_err() {
+                    fallback.push(candidate.item_id.clone());
+                }
             }
+            for item_id in fallback {
+                self.run_item(task_id, &item_id)?;
+            }
+            offset += crate::market_update::runner::EXEC_CHUNK;
         }
-        for item_id in fallback {
-            self.run_item(task_id, &item_id)?;
+        for item_id in &item_ids[offset..] {
+            self.run_item(task_id, item_id)?;
         }
         Ok(Some(()))
     }
