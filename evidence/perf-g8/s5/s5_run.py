@@ -464,6 +464,12 @@ def phase_yearly(mcp: Mcp, prefix: str, name: str, entities, max_chunks: int) ->
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    # POSIX: a background (`&`) child of a non-interactive shell inherits
+    # SIGINT=SIG_IGN, and Python then never installs its KeyboardInterrupt
+    # handler — which is why watch_s5.py's SIGINT was a no-op on the
+    # detached 2026-10-13 r5 run. Install it explicitly; the finally block
+    # below still stops the stack services on interrupt.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--stack-root", required=True, help="private stack dir (db/run/mirror)")
     ap.add_argument("--pkg-bin", required=True, help="dir holding data_service/acquire_service/task_sqlite")
@@ -563,6 +569,10 @@ def main() -> int:
             run["phases"]["yearly_rederive"] = res
             write_json(str(out_dir / "s5-yearly-rederive.json"), res)
             mark("after_yearly_rederive")
+    except KeyboardInterrupt:
+        run["error"] = "interrupted (SIGINT, e.g. watchdog stop-line)"
+        write_json(str(out_dir / "s5-run.json"), run)
+        raise
     except Exception as exc:
         run["error"] = str(exc)
         write_json(str(out_dir / "s5-run.json"), run)

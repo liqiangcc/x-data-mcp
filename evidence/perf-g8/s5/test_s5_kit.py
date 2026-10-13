@@ -232,6 +232,90 @@ class TruncKTests(unittest.TestCase):
             self.assertEqual((st["truncated"], len(st["day_too_small"])), (1, 1))
 
 
+import watch_s5
+
+
+class WatchdogTerminateTests(unittest.TestCase):
+    """watch_s5.terminate must really stop the run — the 2026-10-13 r5
+    detached run showed a bare SIGINT is a no-op on a process launched as
+    a shell background job (SIGINT inherited SIG_IGN)."""
+
+    def _spawn(self, code):
+        return subprocess.Popen([sys.executable, "-c", code],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def test_sigint_ignoring_process_is_stopped(self):
+        # POSIX background-launch disposition: SIGINT ignored -> the watchdog
+        # must escalate; SIGTERM's default disposition still kills.
+        p = subprocess.Popen(
+            [sys.executable, "-c",
+             "import signal,sys,time;"
+             "signal.signal(signal.SIGINT,signal.SIG_IGN);"
+             "sys.stdout.write('ready\\n');sys.stdout.flush();time.sleep(60)"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            self.assertEqual(p.stdout.readline(), b"ready\n")  # SIG_IGN installed
+            t0 = time.time()
+            level = watch_s5.terminate(p.pid)
+            self.assertIn(level, ("sigterm", "sigkill"))
+            self.assertFalse(watch_s5._alive(p.pid))
+            self.assertLess(time.time() - t0, 20)
+        finally:
+            if watch_s5._alive(p.pid):
+                p.kill()
+        p.wait()
+
+    def test_polite_process_stops_at_sigint(self):
+        # Default SIGINT disposition (what s5_run now installs explicitly)
+        # raises KeyboardInterrupt -> no escalation needed.
+        p = self._spawn("import time;time.sleep(60)")
+        try:
+            level = watch_s5.terminate(p.pid)
+            self.assertEqual(level, "sigint")
+            self.assertFalse(watch_s5._alive(p.pid))
+        finally:
+            if watch_s5._alive(p.pid):
+                p.kill()
+        p.wait()
+
+    def test_descendants_finds_children(self):
+        child = self._spawn("import time;time.sleep(60)")
+        parent = self._spawn(
+            "import subprocess,sys,time;"
+            "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+            "time.sleep(60)")
+        try:
+            kids = []
+            for _ in range(50):  # grandchild fork is async; poll briefly
+                kids = watch_s5.descendants(parent.pid)
+                if kids:
+                    break
+                time.sleep(0.1)
+            self.assertEqual(len(kids), 1)
+            self.assertNotIn(child.pid, kids)
+        finally:
+            for p in (parent, child):
+                if watch_s5._alive(p.pid):
+                    p.kill()
+                p.wait()
+            for k in kids:  # grandchild is reparented when parent dies
+                try:
+                    os.kill(k, 9)
+                except OSError:
+                    pass
+
+    def test_pattern_pids_matches_cmdline_only(self):
+        marker = "s5watch-marker-9f3b"
+        p = self._spawn("import time;time.sleep(60) # " + marker)
+        try:
+            self.assertEqual(watch_s5.pattern_pids(marker), [p.pid])
+            self.assertEqual(watch_s5.pattern_pids(marker, exclude={p.pid}), [])
+        finally:
+            if watch_s5._alive(p.pid):
+                p.kill()
+            p.wait()
+
+
 class DbSizeTests(unittest.TestCase):
     def test_snapshot_and_missing(self):
         import sqlite3
