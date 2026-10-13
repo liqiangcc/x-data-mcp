@@ -1,0 +1,854 @@
+//! Stateless market-update plans (generic-data-v7).
+//!
+//! `plan_market_update` resolves the whole current-catalog∩collected
+//! universe inside one repository read snapshot and returns only a digest
+//! plus counts. `run_market_update` re-runs the identical resolution under
+//! a fresh snapshot and requires the client-supplied `plan_id` to match
+//! exactly — a mismatch is `plan_stale`, never a partial execution. No plan
+//! state is persisted: the digest binds the dataset, the plan contract
+//! version, the active verified generation, the target day and every
+//! per-entity resolved fact, and the admitted task's frozen work is
+//! rebuilt deterministically from the same canonical payload.
+use super::wire::{Dataset, PlanCounts, PlanReasonCount, PlanView};
+use crate::market_data::Period;
+use crate::market_storage::Scope;
+use crate::sqlite_market::{head, is_latest_only_schema, series};
+use crate::task_control::{CommandKey, Contract, Error, FrozenWork, ItemSpec};
+use chrono::{Datelike, NaiveDate, Utc};
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
+
+/// Plan contract version bound into every `plan_id` digest. The wire
+/// `contract_version` stays `v1`; this string pins the canonical plan
+/// shape the digest covers.
+pub const PLAN_CONTRACT_VERSION: &str = "market-update-plan-v1";
+/// Contract version of tasks admitted by `run_market_update`. The worker
+/// dispatches them on the normal `update_data` operation; the version
+/// distinguishes plan tasks for progress/reporting.
+pub const RUN_CONTRACT_VERSION: &str = "market-plan-run-task-v1";
+/// Frozen-input key stamped with the plan's generation id — the same key
+/// the `Bound` decorator uses so worker session opens are unchanged.
+const SOURCE_GENERATION_KEY: &str = super::generation::SOURCE_GENERATION_KEY;
+
+fn invalid(message: impl ToString) -> Error {
+    Error::InvalidCommand(message.to_string())
+}
+fn iinvalid(message: impl ToString) -> crate::market_storage::Error {
+    crate::market_storage::Error::Invalid(message.to_string())
+}
+fn plan_err(e: PlanError) -> Error {
+    match e {
+        PlanError::Invalid(m) => invalid(m),
+        PlanError::Storage(m) => Error::StorageUnavailable(m),
+    }
+}
+fn istorage(message: impl ToString) -> crate::market_storage::Error {
+    crate::market_storage::Error::Storage(message.to_string())
+}
+
+/// Plan-level failure boundary; the handler maps these to wire codes.
+#[derive(Debug)]
+pub enum PlanError {
+    /// Caller-side shape/range problems — `invalid_arguments`.
+    Invalid(String),
+    /// Storage or integrity reads failed — `storage_error`.
+    Storage(String),
+}
+
+/// One canonical range `[start_date, end_date]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanRange {
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+}
+/// One open proven gap pinned into a daily plan item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanGap {
+    pub gap_id: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub evidence_digest: String,
+}
+/// Eligible daily item — everything the frozen default work needs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DailyPlanItem {
+    pub entity: String,
+    pub base_version_id: String,
+    pub base_integrity_sha256: String,
+    pub refresh_range: PlanRange,
+    pub proven_gap_ranges: Vec<PlanGap>,
+}
+/// Yearly head the plan expects to supersede, with its content digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanComparison {
+    pub version_id: String,
+    pub integrity_sha256: String,
+}
+/// Eligible yearly item — everything the frozen yearly work needs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct YearlyPlanItem {
+    pub entity: String,
+    pub base_daily_version_id: String,
+    pub base_integrity_sha256: String,
+    pub years: Vec<i32>,
+    pub expected_yearly_head: Option<String>,
+    pub comparison: Option<PlanComparison>,
+}
+/// Canonical per-entity work record (untagged: the dataset column pins the
+/// variant, so each row serializes as the plain struct).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PlanItem {
+    Daily(DailyPlanItem),
+    Yearly(YearlyPlanItem),
+}
+impl PlanItem {
+    fn entity(&self) -> &str {
+        match self {
+            Self::Daily(i) => &i.entity,
+            Self::Yearly(i) => &i.entity,
+        }
+    }
+}
+/// One non-eligible entity with a fixed reason string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanIneligible {
+    pub entity: String,
+    pub reason: String,
+}
+
+/// A resolved plan: deterministic, timestamp-free, small enough to return.
+#[derive(Debug)]
+pub struct Plan {
+    pub dataset: Dataset,
+    pub generation_id: Option<String>,
+    pub target_day: NaiveDate,
+    pub items: Vec<PlanItem>,
+    pub ineligible: Vec<PlanIneligible>,
+}
+/// Canonical digest input. Declaration order IS the serialization order;
+/// items are sorted by entity and `ineligible` by (entity, reason) before
+/// this is hashed, so the digest is reproducible across processes.
+#[derive(Serialize)]
+struct CanonicalPlan<'a> {
+    dataset: &'a str,
+    contract_version: &'a str,
+    generation_id: Option<&'a str>,
+    target_day: NaiveDate,
+    items: &'a [PlanItem],
+    ineligible: &'a [PlanIneligible],
+}
+impl Plan {
+    fn dataset_name(&self) -> &'static str {
+        match self.dataset {
+            Dataset::Daily => "market.daily",
+            Dataset::Yearly => "market.yearly",
+            Dataset::Catalog => "securities.catalog",
+        }
+    }
+    /// Canonical serialization — the exact digest input.
+    fn canonical(&self) -> CanonicalPlan<'_> {
+        CanonicalPlan {
+            dataset: self.dataset_name(),
+            contract_version: PLAN_CONTRACT_VERSION,
+            generation_id: self.generation_id.as_deref(),
+            target_day: self.target_day,
+            items: &self.items,
+            ineligible: &self.ineligible,
+        }
+    }
+    fn canonical_bytes(&self) -> Result<Vec<u8>, PlanError> {
+        serde_json::to_vec(&self.canonical())
+            .map_err(|e| PlanError::Invalid(format!("plan serialization: {e}")))
+    }
+    /// `plan_id` = sha256 over the canonical plan — deterministic for the
+    /// same snapshot facts and parameters.
+    pub fn plan_id(&self) -> Result<String, PlanError> {
+        Ok(crate::hash::sha256(&self.canonical_bytes()?))
+    }
+    /// The accepted-request intent: the canonical plan plus its digest, so
+    /// the run contract can re-verify the payload self-consistently.
+    pub fn intent(&self) -> Result<Value, PlanError> {
+        let mut value: Map<String, Value> = match serde_json::to_value(self.canonical())
+            .map_err(|e| PlanError::Invalid(format!("plan serialization: {e}")))?
+        {
+            Value::Object(map) => map,
+            _ => return Err(PlanError::Invalid("plan canonical is not an object".into())),
+        };
+        value.insert("plan_id".into(), json!(self.plan_id()?));
+        Ok(Value::Object(value))
+    }
+    fn eligible(&self) -> u64 {
+        self.items.len() as u64
+    }
+    fn reason_count(&self, reason: &str) -> u64 {
+        self.ineligible
+            .iter()
+            .filter(|i| i.reason == reason)
+            .count() as u64
+    }
+    pub fn counts(&self) -> PlanCounts {
+        PlanCounts {
+            eligible: self.eligible(),
+            already_current: self.reason_count("already_current"),
+            absent: self.reason_count("absent") + self.reason_count("no_daily_base"),
+            ineligible: self
+                .ineligible
+                .iter()
+                .filter(|i| {
+                    !matches!(
+                        i.reason.as_str(),
+                        "already_current" | "absent" | "no_daily_base"
+                    )
+                })
+                .count() as u64,
+        }
+    }
+    /// Aggregated ineligible reasons (excluding `already_current`/`absent`,
+    /// which have their own count fields), sorted by reason.
+    fn ineligible_reasons(&self) -> Vec<PlanReasonCount> {
+        let mut counts: BTreeMap<&str, u64> = BTreeMap::new();
+        for i in &self.ineligible {
+            if matches!(
+                i.reason.as_str(),
+                "already_current" | "absent" | "no_daily_base"
+            ) {
+                continue;
+            }
+            *counts.entry(i.reason.as_str()).or_default() += 1;
+        }
+        counts
+            .into_iter()
+            .map(|(reason, count)| PlanReasonCount {
+                reason: reason.into(),
+                count,
+            })
+            .collect()
+    }
+    pub fn view(&self) -> Result<PlanView, PlanError> {
+        Ok(PlanView {
+            plan_id: self.plan_id()?,
+            dataset: self.dataset,
+            contract_version: super::wire::ContractVersion::V1,
+            generation_ref: self.generation_id.clone(),
+            target_day: self.target_day,
+            counts: self.counts(),
+            ineligible_reasons: self.ineligible_reasons(),
+            snapshot_time: Utc::now(),
+        })
+    }
+    /// Sorted-by-entity copies suitable for canonical hashing.
+    fn sort(&mut self) {
+        self.items.sort_by(|a, b| a.entity().cmp(b.entity()));
+        self.ineligible
+            .sort_by(|a, b| a.entity.cmp(&b.entity).then(a.reason.cmp(&b.reason)));
+    }
+}
+/// `true` for a well-formed `plan_id` (64 lowercase hex).
+pub fn valid_plan_id(plan_id: &str) -> bool {
+    plan_id.len() == 64
+        && plan_id
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+/// Non-terminal task statuses (claims still hold scope occupancy).
+const ACTIVE_STATUSES: &[&str] = &[
+    "pending",
+    "running",
+    "cancel_requested",
+    "needs_verification",
+];
+
+/// Non-terminal update work discovered inside the plan read snapshot.
+#[derive(Debug)]
+pub struct InflightUpdate {
+    pub task_id: String,
+    pub dataset: String,
+}
+/// Scan the tasks table inside the caller's read snapshot for non-terminal
+/// update-family tasks on `datasets`. Update-family operations overlap
+/// entities' scope claims, so any non-terminal one conflicts with a new
+/// whole-market task — report it before reaching `accept`'s range_conflict.
+fn inflight_updates(c: &Connection) -> Result<Vec<InflightUpdate>, crate::market_storage::Error> {
+    let active = ACTIVE_STATUSES
+        .iter()
+        .map(|s| format!("'{s}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut q = c
+        .prepare(&format!(
+            "SELECT task_id,command_key_json FROM tasks WHERE status IN ({active})"
+        ))
+        .map_err(|e| istorage(format!("inflight task scan: {e}")))?;
+    let mut found = vec![];
+    for row in q
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| istorage(format!("inflight task scan: {e}")))?
+    {
+        let (task_id, key_json) = row.map_err(|e| istorage(format!("inflight task scan: {e}")))?;
+        let key: Value = serde_json::from_str(&key_json)
+            .map_err(|e| istorage(format!("inflight task key decode: {e}")))?;
+        let dataset = key["dataset"].as_str().unwrap_or_default();
+        let operation = key["operation"].as_str().unwrap_or_default();
+        if matches!(
+            operation,
+            "update_data" | "backfill_data" | "republish_data"
+        ) && matches!(dataset, "market.daily" | "market.yearly")
+        {
+            found.push(InflightUpdate {
+                task_id,
+                dataset: dataset.to_string(),
+            });
+        }
+    }
+    Ok(found)
+}
+
+/// Resolved run request: recomputed plan plus the in-flight update scan,
+/// all inside one repository read snapshot.
+pub struct RunResolution {
+    pub plan: Plan,
+    pub inflight: Vec<InflightUpdate>,
+}
+
+/// Resolve `plan_market_update`: canonical facts only, no persistence.
+pub fn resolve_plan(
+    market: &crate::sqlite_market::backend::MarketBackend,
+    generation: Option<&super::generation::GenerationSource>,
+    dataset: Dataset,
+    end_date: Option<NaiveDate>,
+    today: NaiveDate,
+) -> Result<Plan, PlanError> {
+    let target_day = end_date.unwrap_or(today);
+    if target_day > today {
+        return Err(PlanError::Invalid(
+            "end_date must not be later than today".into(),
+        ));
+    }
+    let generation_id = generation.and_then(|g| g.active_verified_id());
+    let mut plan = market
+        .read(|c| match dataset {
+            Dataset::Daily => resolve_daily_on(c, target_day, today),
+            Dataset::Yearly => resolve_yearly_on(c, target_day, today),
+            Dataset::Catalog => Err(iinvalid(
+                "plan_market_update supports market.daily and market.yearly",
+            )),
+        })
+        .map_err(|e| PlanError::Storage(e.to_string()))?;
+    plan.generation_id = generation_id;
+    plan.target_day = target_day;
+    plan.sort();
+    Ok(plan)
+}
+
+/// Re-resolve for `run_market_update`: the plan plus the in-flight update
+/// scan, inside ONE read snapshot so the digest comparison and the
+/// concurrency check describe the same state.
+pub fn resolve_run(
+    market: &crate::sqlite_market::backend::MarketBackend,
+    generation: Option<&super::generation::GenerationSource>,
+    dataset: Dataset,
+    target_day: NaiveDate,
+    today: NaiveDate,
+) -> Result<RunResolution, PlanError> {
+    if target_day > today {
+        return Err(PlanError::Invalid(
+            "target_day must not be later than today".into(),
+        ));
+    }
+    let generation_id = generation.and_then(|g| g.active_verified_id());
+    let mut out = market
+        .read(|c| {
+            let plan = match dataset {
+                Dataset::Daily => resolve_daily_on(c, target_day, today),
+                Dataset::Yearly => resolve_yearly_on(c, target_day, today),
+                Dataset::Catalog => Err(iinvalid(
+                    "run_market_update supports market.daily and market.yearly",
+                )),
+            }?;
+            let inflight = inflight_updates(c)?;
+            Ok((plan, inflight))
+        })
+        .map_err(|e| PlanError::Storage(e.to_string()))?;
+    out.0.generation_id = generation_id;
+    out.0.target_day = target_day;
+    out.0.sort();
+    Ok(RunResolution {
+        plan: out.0,
+        inflight: out.1,
+    })
+}
+
+/// `market.daily` plan: catalog∩collected universe, per-entity class.
+fn resolve_daily_on(
+    c: &Connection,
+    target_day: NaiveDate,
+    today: NaiveDate,
+) -> Result<Plan, crate::market_storage::Error> {
+    let universe = universe(c)?;
+    let mut items = vec![];
+    let mut ineligible = vec![];
+    for symbol in &universe {
+        let scope = Scope {
+            symbol: symbol.clone(),
+            period: Period::Day,
+        };
+        let Some(head_id) =
+            head(c, &scope).map_err(|e| istorage(format!("daily head read: {e}")))?
+        else {
+            ineligible.push(PlanIneligible {
+                entity: symbol.clone(),
+                reason: "absent".into(),
+            });
+            continue;
+        };
+        let Some((base_integrity_sha256, first_day, last_day)) = daily_base(c, symbol, &head_id)?
+        else {
+            ineligible.push(PlanIneligible {
+                entity: symbol.clone(),
+                reason: "head_unreadable".into(),
+            });
+            continue;
+        };
+        if first_day > last_day {
+            ineligible.push(PlanIneligible {
+                entity: symbol.clone(),
+                reason: "invalid_base_dates".into(),
+            });
+            continue;
+        }
+        if last_day > today {
+            ineligible.push(PlanIneligible {
+                entity: symbol.clone(),
+                reason: "future_data".into(),
+            });
+            continue;
+        }
+        if last_day >= target_day {
+            ineligible.push(PlanIneligible {
+                entity: symbol.clone(),
+                reason: "already_current".into(),
+            });
+            continue;
+        }
+        let mut proven_gap_ranges = vec![];
+        let mut rejected = false;
+        for g in crate::sqlite_market::gaps::read_open_gaps(c, symbol, Period::Day)
+            .map_err(|e| istorage(format!("open gap read: {e}")))?
+        {
+            if g.end_date > target_day {
+                ineligible.push(PlanIneligible {
+                    entity: symbol.clone(),
+                    reason: "gap_beyond_target".into(),
+                });
+                rejected = true;
+                break;
+            }
+            proven_gap_ranges.push(PlanGap {
+                gap_id: g.gap_id,
+                start_date: g.start_date,
+                end_date: g.end_date,
+                evidence_digest: g.evidence_digest,
+            });
+        }
+        if rejected {
+            continue;
+        }
+        items.push(PlanItem::Daily(DailyPlanItem {
+            entity: symbol.clone(),
+            base_version_id: head_id,
+            base_integrity_sha256,
+            refresh_range: PlanRange {
+                start_date: first_day,
+                end_date: target_day,
+            },
+            proven_gap_ranges,
+        }));
+    }
+    Ok(Plan {
+        dataset: Dataset::Daily,
+        generation_id: None,
+        target_day,
+        items,
+        ineligible,
+    })
+}
+
+/// Current-catalog∩collected universe; an empty universe resolves to an
+/// empty plan (a fact, not a failure).
+fn universe(c: &Connection) -> Result<Vec<String>, crate::market_storage::Error> {
+    match super::default_selection::resolve_default_daily_on(c) {
+        Ok(selection) => Ok(selection.securities),
+        Err(super::default_selection::SelectionError::EmptySelection) => Ok(vec![]),
+        Err(super::default_selection::SelectionError::Invalid(m)) => {
+            Err(iinvalid(format!("selection: {m}")))
+        }
+    }
+}
+
+/// Per-entity published daily head facts: integrity digest and day bounds.
+/// `Ok(None)` means the row exists but is inconsistent/corrupt — the
+/// caller classifies it as ineligible rather than failing the whole plan.
+fn daily_base(
+    c: &Connection,
+    symbol: &str,
+    head_id: &str,
+) -> Result<Option<(String, NaiveDate, NaiveDate)>, crate::market_storage::Error> {
+    if is_latest_only_schema(c).map_err(|e| istorage(format!("schema probe: {e}")))? {
+        let row = match series::read_series(c, symbol, Period::Day) {
+            Ok(row) => row,
+            Err(crate::market_storage::Error::Integrity(_)) => return Ok(None),
+            Err(e) => return Err(istorage(format!("daily series read: {e}"))),
+        };
+        let Some(row) = row else { return Ok(None) };
+        if row.version_id != head_id {
+            return Ok(None);
+        }
+        let first = crate::compact_market::epoch_date(row.first_day)
+            .map_err(|e| istorage(format!("base first_day: {e}")))?;
+        let last = crate::compact_market::epoch_date(row.last_day)
+            .map_err(|e| istorage(format!("base last_day: {e}")))?;
+        return Ok(Some((row.version_id.clone(), first, last)));
+    }
+    let base = match crate::sqlite_market::read_record(c, head_id, true, false) {
+        Ok(record) => record,
+        Err(crate::market_storage::Error::Integrity(_)) => return Ok(None),
+        Err(e) => return Err(istorage(format!("daily head read: {e}"))),
+    };
+    if base.version().symbol != symbol
+        || base.version().period != Period::Day
+        || base.version().version_id != head_id
+    {
+        return Ok(None);
+    }
+    let digest = base.raw()["integrity_sha256"]
+        .as_str()
+        .ok_or_else(|| istorage(format!("base digest missing for {symbol}")))?
+        .to_owned();
+    let (Some(first), Some(last)) = (
+        base.version().records.first().map(|b| b.date),
+        base.version().records.last().map(|b| b.date),
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some((digest, first, last)))
+}
+
+/// `market.yearly` plan: same universe; requires the latest-only schema
+/// (yearly stale classification is series/lineage-based).
+fn resolve_yearly_on(
+    c: &Connection,
+    target_day: NaiveDate,
+    _today: NaiveDate,
+) -> Result<Plan, crate::market_storage::Error> {
+    if !is_latest_only_schema(c).map_err(|e| istorage(format!("schema probe: {e}")))? {
+        return Err(iinvalid(
+            "plan_market_update market.yearly requires the latest-only market schema",
+        ));
+    }
+    let universe = universe(c)?;
+    let mut items = vec![];
+    let mut ineligible = vec![];
+    for symbol in &universe {
+        let daily = match series::read_series(c, symbol, Period::Day) {
+            Ok(row) => row,
+            Err(crate::market_storage::Error::Integrity(_)) => {
+                ineligible.push(PlanIneligible {
+                    entity: symbol.clone(),
+                    reason: "head_unreadable".into(),
+                });
+                continue;
+            }
+            Err(e) => return Err(istorage(format!("daily series read: {e}"))),
+        };
+        let Some(daily) = daily else {
+            ineligible.push(PlanIneligible {
+                entity: symbol.clone(),
+                reason: "no_daily_base".into(),
+            });
+            continue;
+        };
+        let years: std::collections::BTreeSet<i32> =
+            series::years_in_range(c, daily.series_key, daily.first_day, daily.last_day)
+                .map_err(|e| istorage(format!("year presence read: {e}")))?
+                .into_iter()
+                .filter(|y| *y <= target_day.year())
+                .collect();
+        let yearly = series::read_series(c, symbol, Period::Year)
+            .map_err(|e| istorage(format!("yearly series read: {e}")))?;
+        match yearly {
+            None => {
+                if years.is_empty() {
+                    ineligible.push(PlanIneligible {
+                        entity: symbol.clone(),
+                        reason: "no_derivable_years".into(),
+                    });
+                    continue;
+                }
+                items.push(PlanItem::Yearly(YearlyPlanItem {
+                    entity: symbol.clone(),
+                    base_daily_version_id: daily.version_id.clone(),
+                    base_integrity_sha256: daily.version_id.clone(),
+                    years: years.iter().copied().collect(),
+                    expected_yearly_head: None,
+                    comparison: None,
+                }));
+            }
+            Some(yearly) => {
+                let state = match series::yearly_state(c, &yearly) {
+                    Ok(state) => state,
+                    Err(crate::market_storage::Error::Integrity(_)) => {
+                        ineligible.push(PlanIneligible {
+                            entity: symbol.clone(),
+                            reason: "integrity_failure".into(),
+                        });
+                        continue;
+                    }
+                    Err(e) => return Err(istorage(format!("yearly state: {e}"))),
+                };
+                match state {
+                    series::YearlyState::Fresh => ineligible.push(PlanIneligible {
+                        entity: symbol.clone(),
+                        reason: "already_current".into(),
+                    }),
+                    series::YearlyState::Behind { .. } => {
+                        if years.is_empty() {
+                            ineligible.push(PlanIneligible {
+                                entity: symbol.clone(),
+                                reason: "no_derivable_years".into(),
+                            });
+                            continue;
+                        }
+                        items.push(PlanItem::Yearly(YearlyPlanItem {
+                            entity: symbol.clone(),
+                            base_daily_version_id: daily.version_id.clone(),
+                            base_integrity_sha256: daily.version_id.clone(),
+                            years: years.iter().copied().collect(),
+                            expected_yearly_head: Some(yearly.version_id.clone()),
+                            comparison: Some(PlanComparison {
+                                version_id: yearly.version_id.clone(),
+                                integrity_sha256: yearly.version_id.clone(),
+                            }),
+                        }));
+                    }
+                    series::YearlyState::Invalid(reason) => ineligible.push(PlanIneligible {
+                        entity: symbol.clone(),
+                        reason: match reason {
+                            series::YearlyInvalidReason::DailyReplaced => {
+                                "daily_replaced_since_derivation"
+                            }
+                            series::YearlyInvalidReason::SemanticsChanged => {
+                                "value_semantics_changed"
+                            }
+                        }
+                        .into(),
+                    }),
+                }
+            }
+        }
+    }
+    Ok(Plan {
+        dataset: Dataset::Yearly,
+        generation_id: None,
+        target_day,
+        items,
+        ineligible,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// run contract
+// ---------------------------------------------------------------------------
+
+/// Accepted `run_market_update` intent. `items` deserialize per dataset in
+/// `normalize`; `plan_id` is re-derived from the canonical fields — a
+/// forged payload fails closed at resolve.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunIntent {
+    plan_id: String,
+    dataset: String,
+    contract_version: String,
+    generation_id: Option<String>,
+    target_day: NaiveDate,
+    items: Vec<Value>,
+    ineligible: Vec<PlanIneligible>,
+}
+/// Contract turning a verified plan payload into `FrozenWork`. Not
+/// wrapped by `Bound`: the generation binding comes from the plan itself
+/// (canonical `generation_id`), stamped onto every item here — exactly
+/// the fact `run` verified at accept time.
+pub struct PlanRunContract {
+    pub dataset: &'static str,
+}
+impl PlanRunContract {
+    /// Decode items per the declared dataset; rejects drifted shapes.
+    fn items(&self, raw: &[Value]) -> Result<Vec<PlanItem>, Error> {
+        let mut items = Vec::with_capacity(raw.len());
+        for value in raw {
+            items.push(match self.dataset {
+                "market.daily" => PlanItem::Daily(
+                    serde_json::from_value::<DailyPlanItem>(value.clone()).map_err(invalid)?,
+                ),
+                "market.yearly" => PlanItem::Yearly(
+                    serde_json::from_value::<YearlyPlanItem>(value.clone()).map_err(invalid)?,
+                ),
+                _ => return Err(invalid("plan-run dataset not registered")),
+            });
+        }
+        Ok(items)
+    }
+    fn plan(&self, input: &RunIntent) -> Result<Plan, Error> {
+        let dataset = match input.dataset.as_str() {
+            "market.daily" => Dataset::Daily,
+            "market.yearly" => Dataset::Yearly,
+            other => return Err(invalid(format!("plan-run dataset unsupported: {other}"))),
+        };
+        Ok(Plan {
+            dataset,
+            generation_id: input.generation_id.clone(),
+            target_day: input.target_day,
+            items: self.items(&input.items)?,
+            ineligible: input.ineligible.clone(),
+        })
+    }
+}
+impl Contract for PlanRunContract {
+    fn key(&self) -> CommandKey {
+        CommandKey {
+            operation: "update_data".into(),
+            dataset: self.dataset.into(),
+            contract_version: RUN_CONTRACT_VERSION.into(),
+        }
+    }
+    fn normalize(&self, raw: Value) -> Result<Value, Error> {
+        let mut input: RunIntent = serde_json::from_value(raw).map_err(invalid)?;
+        if input.dataset != self.dataset {
+            return Err(invalid("plan-run dataset/key mismatch"));
+        }
+        if input.contract_version != PLAN_CONTRACT_VERSION {
+            return Err(invalid("plan-run plan contract mismatch"));
+        }
+        if !valid_plan_id(&input.plan_id) {
+            return Err(invalid("plan_id must be 64 lowercase hex"));
+        }
+        let mut items = self.items(&input.items)?;
+        items.sort_by(|a, b| a.entity().cmp(b.entity()));
+        input.items = items
+            .iter()
+            .map(|i| serde_json::to_value(i).map_err(invalid))
+            .collect::<Result<_, _>>()?;
+        input
+            .ineligible
+            .sort_by(|a, b| a.entity.cmp(&b.entity).then(a.reason.cmp(&b.reason)));
+        serde_json::to_value(input).map_err(invalid)
+    }
+    fn resolve(&self, raw: &Value) -> Result<FrozenWork, Error> {
+        let input: RunIntent = serde_json::from_value(raw.clone()).map_err(invalid)?;
+        let mut plan = self.plan(&input)?;
+        plan.sort();
+        // The payload's own digest must cover the canonical content — this
+        // is the integrity gate between the verified plan and the frozen
+        // work (the wire-level plan_stale check happens in the handler).
+        if plan.plan_id().map_err(plan_err)? != input.plan_id {
+            return Err(invalid("plan payload/digest mismatch"));
+        }
+        let generation = input
+            .generation_id
+            .as_ref()
+            .map(|id| json!(id))
+            .unwrap_or(Value::Null);
+        let mut scopes = std::collections::BTreeSet::new();
+        let mut items = vec![];
+        for item in &plan.items {
+            let (scope, frozen) = match item {
+                PlanItem::Daily(i) => {
+                    let scope = crate::task_control::legacy::scope_id(&i.entity, "day");
+                    let mut value = json!({
+                        "selection_evidence": {"evidence_digest": input.plan_id},
+                        "base_version_id": i.base_version_id,
+                        "base_integrity_sha256": i.base_integrity_sha256,
+                        "refresh_range": {
+                            "start_date": i.refresh_range.start_date,
+                            "end_date": i.refresh_range.end_date,
+                        },
+                        "proven_gap_ranges": i.proven_gap_ranges.iter().map(|g| json!({
+                            "gap_id": g.gap_id,
+                            "range": {"start_date": g.start_date, "end_date": g.end_date},
+                            "evidence_digest": g.evidence_digest,
+                        })).collect::<Vec<_>>(),
+                    });
+                    value[SOURCE_GENERATION_KEY] = generation.clone();
+                    (scope, value)
+                }
+                PlanItem::Yearly(i) => {
+                    let scope = crate::task_control::legacy::scope_id(&i.entity, "year");
+                    let intent = crate::market_storage::PublishIntent::CurrentHead {
+                        expected_daily_head: i.base_daily_version_id.clone(),
+                        expected_yearly_head: i.expected_yearly_head.clone(),
+                    };
+                    let mut value = crate::yearly_publication::tasks::frozen(
+                        &i.base_daily_version_id,
+                        &i.base_integrity_sha256,
+                        &i.years
+                            .iter()
+                            .copied()
+                            .collect::<std::collections::BTreeSet<_>>(),
+                        &intent,
+                    );
+                    value["comparison"] = i
+                        .comparison
+                        .as_ref()
+                        .map(|p| {
+                            json!({
+                                "version_id": p.version_id,
+                                "integrity_sha256": p.integrity_sha256,
+                            })
+                        })
+                        .unwrap_or(Value::Null);
+                    value[SOURCE_GENERATION_KEY] = generation.clone();
+                    (scope, value)
+                }
+            };
+            scopes.insert(scope.clone());
+            items.push(ItemSpec {
+                item_id: scope.clone(),
+                scope_keys: [scope].into(),
+                target: json!({
+                    "symbol": item.entity(),
+                    "period": match item {
+                        PlanItem::Daily(_) => "day",
+                        PlanItem::Yearly(_) => "year",
+                    },
+                }),
+                progress_unit: "security_period".into(),
+                frozen_inputs: frozen,
+            });
+        }
+        let counts = plan.counts();
+        Ok(FrozenWork {
+            items,
+            scopes,
+            shared_evidence: Some(json!({
+                "kind": "market_update_plan",
+                "evidence_digest": input.plan_id,
+                "plan_id": input.plan_id,
+                "dataset": input.dataset,
+                "contract_version": PLAN_CONTRACT_VERSION,
+                "generation_id": input.generation_id,
+                "target_day": input.target_day,
+                "counts": counts,
+                "ineligible_reasons": plan.ineligible_reasons(),
+            })),
+        })
+    }
+}

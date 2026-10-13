@@ -299,6 +299,11 @@ pub fn authorized(s: &TaskSnapshot, a: &Access) -> bool {
 }
 pub fn summary(f: &TaskFacts, run: &str) -> TaskSummary {
     let t = &f.snapshot.task;
+    // Plan-run tasks carry the verified plan digest in shared_evidence;
+    // surface it so progress reads can correlate task ↔ plan.
+    let plan = (t.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION)
+        .then(|| f.snapshot.work.shared_evidence.as_ref())
+        .flatten();
     TaskSummary {
         task_id: t.task_id.clone(),
         request_id: f.request_id.clone(),
@@ -312,6 +317,8 @@ pub fn summary(f: &TaskFacts, run: &str) -> TaskSummary {
         state_revision: t.state_revision,
         created_at: t.created_at,
         last_progress_at: t.last_progress_at,
+        plan_id: plan.and_then(|e| e["plan_id"].as_str()).map(str::to_owned),
+        plan_counts: plan.and_then(|e| serde_json::from_value(e["counts"].clone()).ok()),
     }
 }
 #[derive(Clone)]

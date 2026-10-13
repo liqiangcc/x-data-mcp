@@ -40,10 +40,6 @@ pub struct Entry {
     /// Operator/debug controls exist for humans and service wiring; routine
     /// AI synchronization must not orchestrate them.
     pub operator_only: bool,
-    /// Whether the handler actually executes in this build. Declared-only
-    /// tools stay in the registry so schema and discovery stay single-sourced;
-    /// the capability surface reports them as not implemented.
-    pub implemented: bool,
 }
 impl Entry {
     /// Write/verification controls require the local-owner context; read
@@ -179,7 +175,6 @@ fn entry<I: JsonSchema, O: JsonSchema>(
         output: serde_json::to_value(schema_for!(O)).unwrap(),
         example,
         operator_only: false,
-        implemented: true,
     }
 }
 pub fn entries() -> Vec<Entry> {
@@ -333,13 +328,6 @@ pub fn entries() -> Vec<Entry> {
     ];
     for e in &mut entries {
         e.operator_only = matches!(e.handler, Handler::Worker | Handler::InspectVerification);
-        // Declared under generic-data-v7 ahead of their handlers (staged
-        // commits): capability reports them as not implemented until the
-        // handler lands in this series.
-        e.implemented = !matches!(
-            e.handler,
-            Handler::PlanMarketUpdate | Handler::RunMarketUpdate
-        );
     }
     entries
 }

@@ -365,6 +365,25 @@ pub(crate) fn days_in_range(
     .map_err(storage)
 }
 
+/// Distinct calendar years inside [start_day, end_day] — the bounded
+/// presence probe for whole-catalog yearly planning; per-series output is
+/// years, not day rows.
+pub(crate) fn years_in_range(
+    c: &Connection,
+    series_key: i64,
+    start_day: i64,
+    end_day: i64,
+) -> Result<Vec<i32>, Error> {
+    c.prepare(
+        "SELECT DISTINCT CAST(strftime('%Y', trade_day * 86400, 'unixepoch') AS INTEGER) FROM series_bars WHERE series_key=?1 AND trade_day BETWEEN ?2 AND ?3 ORDER BY 1",
+    )
+    .map_err(storage)?
+    .query_map(params![series_key, start_day, end_day], |r| r.get(0))
+    .map_err(storage)?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(storage)
+}
+
 /// (count, first_day, last_day) inside a window — the availability facts.
 pub(crate) fn window_stats(
     c: &Connection,

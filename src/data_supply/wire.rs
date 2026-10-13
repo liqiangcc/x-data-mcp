@@ -373,6 +373,13 @@ pub struct TaskSummary {
     pub state_revision: u64,
     pub created_at: DateTime<Utc>,
     pub last_progress_at: DateTime<Utc>,
+    /// Set on tasks admitted through `run_market_update`: the verified
+    /// plan digest this task's frozen work was rebuilt from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
+    /// Companion to `plan_id`: the plan's per-class counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_counts: Option<PlanCounts>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

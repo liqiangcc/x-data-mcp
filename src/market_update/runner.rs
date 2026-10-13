@@ -101,8 +101,12 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         provider: &dyn RangeProvider,
     ) -> Result<ItemExecution, Error> {
         let mut binding = self.binding(task_id, item_id, "range")?;
-        let default_contract =
-            binding.head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
+        // Plan-run tasks carry the default frozen shape — the per-item work
+        // is identical; only how the item set was derived differs.
+        let default_contract = matches!(
+            binding.head.key.contract_version.as_str(),
+            super::tasks::DEFAULT_CONTRACT_VERSION | crate::data_supply::plan::RUN_CONTRACT_VERSION
+        );
         let republish_contract =
             binding.head.key.contract_version == super::tasks::REPUBLISH_CONTRACT_VERSION;
         if !matches!(
@@ -481,8 +485,10 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         binding: &crate::task_control::ItemBinding,
         has_receipt: bool,
     ) -> Result<Option<PlannedItem>, Error> {
-        let default_contract =
-            binding.head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
+        let default_contract = matches!(
+            binding.head.key.contract_version.as_str(),
+            super::tasks::DEFAULT_CONTRACT_VERSION | crate::data_supply::plan::RUN_CONTRACT_VERSION
+        );
         let republish_contract =
             binding.head.key.contract_version == super::tasks::REPUBLISH_CONTRACT_VERSION;
         if !matches!(

@@ -145,6 +145,16 @@ impl DataApi {
                         bind(Box::new(crate::gap_verification::contract::GapVerificationContract {
                             store: repository.market.clone(),
                         })),
+                        // Plan-run tasks pin the generation recorded in the
+                        // verified plan — stamping it here (not via `Bound`)
+                        // keeps the item binding identical to what the
+                        // digest check covered at accept time.
+                        Box::new(super::plan::PlanRunContract {
+                            dataset: "market.daily",
+                        }),
+                        Box::new(super::plan::PlanRunContract {
+                            dataset: "market.yearly",
+                        }),
                         bind(Box::new(super::collect::CollectionContract {
                             dataset: Dataset::Daily,
                             repository: repository.clone(),
@@ -300,7 +310,7 @@ impl DataApi {
                     description: e.description.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
-                    implemented: e.implemented,
+                    implemented: true,
                     operator_only: e.operator_only,
                     runtime_readiness: if block.is_some() {
                         Readiness::Blocked
@@ -371,6 +381,48 @@ impl DataApi {
             )
             .unwrap(),
             item_ids: f.items.iter().map(|i| i.spec.item_id.clone()).collect(),
+            runtime_readiness: if block.is_some() {
+                Readiness::Blocked
+            } else {
+                Readiness::Ready
+            },
+            blocking_reasons: block.into_iter().collect(),
+        })
+    }
+    /// `run_market_update` acceptance for both fresh admissions and request
+    /// replays: plan identity and counts come from the task's shared
+    /// evidence, never re-derived after the fact.
+    fn plan_acceptance(
+        &self,
+        request_id: &str,
+        reused: bool,
+        f: &crate::task_control::TaskSnapshot,
+    ) -> Result<Value, ApiError> {
+        let evidence = f.work.shared_evidence.as_ref();
+        let block = self.task_runtime_block(&f.task.key);
+        encode(PlanRunAcceptance {
+            request_id: request_id.into(),
+            task_id: f.task.task_id.clone(),
+            dataset: f.task.key.dataset.clone(),
+            contract_version: f.task.key.contract_version.clone(),
+            plan_id: evidence
+                .and_then(|e| e["plan_id"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+            reused,
+            status: serde_json::from_value(
+                serde_json::to_value(f.visible_status(&self.legacy.control.run_id)).unwrap(),
+            )
+            .unwrap(),
+            item_count: f.items.len() as u64,
+            plan_counts: evidence
+                .and_then(|e| serde_json::from_value(e["counts"].clone()).ok())
+                .unwrap_or(PlanCounts {
+                    eligible: f.items.len() as u64,
+                    already_current: 0,
+                    absent: 0,
+                    ineligible: 0,
+                }),
             runtime_readiness: if block.is_some() {
                 Readiness::Blocked
             } else {
@@ -501,6 +553,19 @@ fn decode<T: DeserializeOwned>(v: Value) -> Result<T, ApiError> {
 }
 fn encode<T: Serialize>(v: T) -> Result<Value, ApiError> {
     serde_json::to_value(v).map_err(|e| ApiError::new("internal_error", e.to_string()))
+}
+fn plan_error(e: super::plan::PlanError) -> ApiError {
+    match e {
+        super::plan::PlanError::Invalid(m) => ApiError::new("invalid_arguments", m),
+        super::plan::PlanError::Storage(m) => ApiError::new("storage_error", m),
+    }
+}
+fn plan_dataset_name(dataset: Dataset) -> &'static str {
+    match dataset {
+        Dataset::Daily => "market.daily",
+        Dataset::Yearly => "market.yearly",
+        Dataset::Catalog => "securities.catalog",
+    }
 }
 fn mapped(e: Error) -> ApiError {
     if let Error::Task(task) = e {
@@ -782,10 +847,124 @@ impl DataApi {
             | Handler::Task
             | Handler::Request
             | Handler::Cancel => self.control_call(name, input),
-            Handler::PlanMarketUpdate | Handler::RunMarketUpdate => Err(ApiError::new(
-                "not_implemented",
-                "plan/run market update is declared under generic-data-v7 but not implemented in this build",
-            )),
+            Handler::PlanMarketUpdate => {
+                let command: PlanMarketUpdate = decode(input)?;
+                self.access
+                    .require(command.dataset(), None)
+                    .map_err(mapped)?;
+                let plan = super::plan::resolve_plan(
+                    &self.queries.repository.market,
+                    self.generation.as_ref(),
+                    command.dataset(),
+                    command.end_date(),
+                    crate::calendar::shanghai_today(),
+                )
+                .map_err(plan_error)?;
+                encode(plan.view().map_err(plan_error)?)
+            }
+            Handler::RunMarketUpdate => {
+                if self.access != Access::local() {
+                    return Err(ApiError::new(
+                        "forbidden",
+                        "run_market_update requires local owner access",
+                    ));
+                }
+                let command: RunMarketUpdate = decode(input)?;
+                if !super::plan::valid_plan_id(command.plan_id()) {
+                    return Err(ApiError::new(
+                        "invalid_plan",
+                        "plan_id must be 64 lowercase hex",
+                    ));
+                }
+                // Request replay outranks staleness: a request_id already
+                // bound to an identical run returns its original acceptance,
+                // no matter how much the state has since drifted.
+                if let Some(record) = self
+                    .legacy
+                    .control
+                    .read_request(command.request_id())
+                    .map_err(task_error)?
+                {
+                    let stored = &record.command;
+                    let matches_call = stored.key.operation == "update_data"
+                        && stored.key.dataset == plan_dataset_name(command.dataset())
+                        && stored.key.contract_version == super::plan::RUN_CONTRACT_VERSION
+                        && stored.intent["plan_id"].as_str() == Some(command.plan_id())
+                        && stored.intent["target_day"].as_str()
+                            == Some(command.target_day().to_string().as_str());
+                    if !matches_call {
+                        return Err(ApiError::new(
+                            "request_conflict",
+                            "request_id bound to a different command",
+                        ));
+                    }
+                    let crate::task_control::RequestOutcome::Task(f) = record.outcome else {
+                        return Err(ApiError::new(
+                            "unsupported_request_outcome",
+                            "task binding required",
+                        ));
+                    };
+                    return self.plan_acceptance(command.request_id(), true, &f);
+                }
+                let today = crate::calendar::shanghai_today();
+                let resolved = super::plan::resolve_run(
+                    &self.queries.repository.market,
+                    self.generation.as_ref(),
+                    command.dataset(),
+                    command.target_day(),
+                    today,
+                )
+                .map_err(plan_error)?;
+                let recomputed = resolved.plan.plan_id().map_err(plan_error)?;
+                if recomputed != command.plan_id() {
+                    return Err(ApiError::new(
+                        "plan_stale",
+                        "resolved plan drifted from the supplied plan_id; run plan_market_update again",
+                    ));
+                }
+                for task in &resolved.inflight {
+                    if command.dataset() == Dataset::Yearly && task.dataset == "market.daily" {
+                        return Err(ApiError::new(
+                            "daily_update_inflight",
+                            format!("non-terminal market.daily update task: {}", task.task_id),
+                        ));
+                    }
+                    if task.dataset == plan_dataset_name(command.dataset()) {
+                        return Err(ApiError::new(
+                            "plan_in_progress",
+                            format!(
+                                "non-terminal update task on {}: {}",
+                                task.dataset, task.task_id
+                            ),
+                        ));
+                    }
+                }
+                let counts = resolved.plan.counts();
+                if counts.eligible == 0 {
+                    return Err(ApiError::new(
+                        "invalid_plan",
+                        "plan contains no executable items",
+                    ));
+                }
+                let intent = resolved.plan.intent().map_err(plan_error)?;
+                let key = crate::task_control::CommandKey {
+                    operation: "update_data".into(),
+                    dataset: plan_dataset_name(command.dataset()).into(),
+                    contract_version: super::plan::RUN_CONTRACT_VERSION.into(),
+                };
+                let acceptance = self
+                    .legacy
+                    .control
+                    .accept(command.request_id(), key, intent)
+                    .map_err(task_error)?;
+                let crate::task_control::RequestOutcome::Task(f) = acceptance.record.outcome else {
+                    return Err(ApiError::new(
+                        "unsupported_request_outcome",
+                        "task binding required",
+                    ));
+                };
+                self.plan_acceptance(command.request_id(), acceptance.reused, &f)
+            }
             Handler::Query => {
                 let reply = self
                     .queries
