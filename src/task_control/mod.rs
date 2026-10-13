@@ -168,7 +168,40 @@ impl TaskSnapshot {
     /// O(1) head projection of this snapshot: the row-level view
     /// `decide`/`read_task_head` maintain, without the item list.
     pub fn head(&self) -> TaskHead {
-        head_of(self)
+        TaskHead {
+            task_id: self.task.task_id.clone(),
+            key: self.task.key.clone(),
+            status: self.task.status,
+            state_revision: self.task.state_revision,
+            accepted_run_id: self.task.accepted_run_id.clone(),
+            owner_run_id: self.task.owner_run_id.clone(),
+            last_progress_at: self.task.last_progress_at,
+            result: self.task.result.clone(),
+            counts: ItemCounts {
+                total: self.items.len() as u64,
+                pending: self
+                    .items
+                    .iter()
+                    .filter(|i| i.stage == Stage::Pending)
+                    .count() as u64,
+                running: self
+                    .items
+                    .iter()
+                    .filter(|i| i.stage == Stage::Running)
+                    .count() as u64,
+                finished: self
+                    .items
+                    .iter()
+                    .filter(|i| i.stage == Stage::Finished)
+                    .count() as u64,
+                succeeded: self
+                    .items
+                    .iter()
+                    .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+                    .count() as u64,
+            },
+            evidence_digest: self.task.work.evidence_digest().map(str::to_string),
+        }
     }
     pub fn visible_status(&self, run: &str) -> Status {
         visible_status(

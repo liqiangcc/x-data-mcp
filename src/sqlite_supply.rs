@@ -8,7 +8,7 @@ use crate::{
     },
 };
 use chrono::{DateTime, Datelike, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 #[derive(Clone)]
 pub struct SqliteSupply {
     pub market: MarketBackend,
@@ -994,7 +994,11 @@ fn task_head_facts(
         )
         .optional()
         .map_err(storage)?
-        .ok_or_else(|| Error::NeedsVerification("task binding/execution missing".into()))?;
+        .ok_or_else(|| {
+            Error::Task(crate::task_control::Error::NeedsVerification(
+                "task binding/execution missing".into(),
+            ))
+        })?;
     crate::sqlite_tasks::read_request(c, &request)?;
     let head = crate::task_control::TaskHead {
         task_id: id.into(),
@@ -1335,7 +1339,10 @@ fn related_tasks_for(
     }
     // All in-flight tasks plus the newest RELATED_FINISHED_CAP finished ones,
     // in list order; facts are loaded once per distinct task.
-    let mut loaded: HashMap<String, Option<std::rc::Rc<TaskFacts>>> = HashMap::new();
+    let mut loaded: HashMap<
+        String,
+        Option<std::rc::Rc<crate::data_supply::observe::TaskHeadFacts>>,
+    > = HashMap::new();
     let mut select = |candidates: &BTreeSet<Candidate>| -> Result<RelatedSelection, Error> {
         let mut finished = 0usize;
         let mut tasks = vec![];
