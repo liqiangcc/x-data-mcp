@@ -17,7 +17,8 @@ use crate::task_control::{CommandKey, Contract, Error, FrozenWork, ItemSpec};
 use chrono::{Datelike, NaiveDate, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
+use sha2::Digest;
 use std::collections::BTreeMap;
 
 /// Plan contract version bound into every `plan_id` digest. The wire
@@ -37,12 +38,6 @@ fn invalid(message: impl ToString) -> Error {
 }
 fn iinvalid(message: impl ToString) -> crate::market_storage::Error {
     crate::market_storage::Error::Invalid(message.to_string())
-}
-fn plan_err(e: PlanError) -> Error {
-    match e {
-        PlanError::Invalid(m) => invalid(m),
-        PlanError::Storage(m) => Error::StorageUnavailable(m),
-    }
 }
 fn istorage(message: impl ToString) -> crate::market_storage::Error {
     crate::market_storage::Error::Storage(message.to_string())
@@ -165,26 +160,66 @@ impl Plan {
             ineligible: &self.ineligible,
         }
     }
-    fn canonical_bytes(&self) -> Result<Vec<u8>, PlanError> {
-        serde_json::to_vec(&self.canonical())
-            .map_err(|e| PlanError::Invalid(format!("plan serialization: {e}")))
-    }
     /// `plan_id` = sha256 over the canonical plan — deterministic for the
-    /// same snapshot facts and parameters.
+    /// same snapshot facts and parameters. The canonical byte stream is
+    /// identical to `serde_json::to_vec` of the same struct; it is fed
+    /// through the digest writer so a whole-market plan never needs its
+    /// serialized form materialized.
     pub fn plan_id(&self) -> Result<String, PlanError> {
-        Ok(crate::hash::sha256(&self.canonical_bytes()?))
+        let mut hasher = sha2::Sha256::new();
+        serde_json::to_writer(&mut hasher, &self.canonical())
+            .map_err(|e| PlanError::Invalid(format!("plan serialization: {e}")))?;
+        Ok(hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
     }
-    /// The accepted-request intent: the canonical plan plus its digest, so
-    /// the run contract can re-verify the payload self-consistently.
-    pub fn intent(&self) -> Result<Value, PlanError> {
-        let mut value: Map<String, Value> = match serde_json::to_value(self.canonical())
-            .map_err(|e| PlanError::Invalid(format!("plan serialization: {e}")))?
-        {
-            Value::Object(map) => map,
-            _ => return Err(PlanError::Invalid("plan canonical is not an object".into())),
-        };
-        value.insert("plan_id".into(), json!(self.plan_id()?));
-        Ok(Value::Object(value))
+    /// The accepted-request intent: a compact digest-bound descriptor.
+    /// Item payloads live in the task's frozen work, not the request
+    /// binding — keeping them out of `command_json` is what makes a
+    /// whole-market run acceptance fit in bounded memory.
+    pub fn run_intent(&self) -> Result<Value, PlanError> {
+        serde_json::to_value(RunIntent {
+            contract_version: PLAN_CONTRACT_VERSION.into(),
+            plan_id: self.plan_id()?,
+            dataset: self.dataset_name().into(),
+            generation_id: self.generation_id.clone(),
+            target_day: self.target_day,
+            item_count: self.items.len() as u64,
+        })
+        .map_err(|e| PlanError::Invalid(format!("plan intent serialization: {e}")))
+    }
+    /// Decompose into the streamed-acceptance parts: the shared evidence,
+    /// the occupied scope set, and the items the caller converts to
+    /// `ItemSpec`s one at a time. The digest is recomputed here so every
+    /// evidence marker provably matches the plan that produced them.
+    pub fn run_parts(self) -> Result<RunWorkParts, PlanError> {
+        let plan_id = self.plan_id()?;
+        let counts = self.counts();
+        let shared_evidence = json!({
+            "kind": "market_update_plan",
+            "evidence_digest": plan_id,
+            "plan_id": plan_id,
+            "dataset": self.dataset_name(),
+            "contract_version": PLAN_CONTRACT_VERSION,
+            "generation_id": self.generation_id.clone(),
+            "target_day": self.target_day,
+            "counts": counts,
+            "ineligible_reasons": self.ineligible_reasons(),
+        });
+        let scopes = self
+            .items
+            .iter()
+            .map(item_scope)
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok(RunWorkParts {
+            plan_id,
+            generation: self.generation_id.map(Value::String).unwrap_or(Value::Null),
+            scopes,
+            shared_evidence,
+            items: self.items,
+        })
     }
     fn eligible(&self) -> u64 {
         self.items.len() as u64
@@ -669,58 +704,122 @@ fn resolve_yearly_on(
 // run contract
 // ---------------------------------------------------------------------------
 
-/// Accepted `run_market_update` intent. `items` deserialize per dataset in
-/// `normalize`; `plan_id` is re-derived from the canonical fields — a
-/// forged payload fails closed at resolve.
+/// Accepted `run_market_update` intent — a compact digest-bound
+/// descriptor. The item list deliberately stays in the task's frozen
+/// work, not the request binding: a whole-market payload decoded into
+/// `command_json` is what made the acceptance spike ~950MB at 5.2k
+/// members (TASK-DEVIN-PLANRUN-MEMORY).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RunIntent {
+    contract_version: String,
     plan_id: String,
     dataset: String,
-    contract_version: String,
     generation_id: Option<String>,
     target_day: NaiveDate,
-    items: Vec<Value>,
-    ineligible: Vec<PlanIneligible>,
+    item_count: u64,
 }
-/// Contract turning a verified plan payload into `FrozenWork`. Not
-/// wrapped by `Bound`: the generation binding comes from the plan itself
-/// (canonical `generation_id`), stamped onto every item here — exactly
-/// the fact `run` verified at accept time.
+/// Parts the `run_market_update` handler feeds into streamed acceptance:
+/// per-item conversion happens lazily so the frozen-work tree is never
+/// materialized whole.
+pub struct RunWorkParts {
+    /// Digest every item's `selection_evidence` marker must carry — the
+    /// recomputed `plan_id`, proven to cover these items.
+    pub plan_id: String,
+    /// `source_generation_id` stamped onto every frozen input.
+    pub generation: Value,
+    /// The occupied update scope set (one `[market,symbol,period]` per
+    /// item) — written to `scope_occupancy` by acceptance.
+    pub scopes: std::collections::BTreeSet<String>,
+    /// Shared evidence persisted once in `frozen_work_json`; `TaskSummary`
+    /// reads `plan_id`/`counts` back out of it.
+    pub shared_evidence: Value,
+    /// Executable plan members — streamed through `item_spec`.
+    pub items: Vec<PlanItem>,
+}
+fn item_scope(item: &PlanItem) -> String {
+    match item {
+        PlanItem::Daily(i) => crate::task_control::legacy::scope_id(&i.entity, "day"),
+        PlanItem::Yearly(i) => crate::task_control::legacy::scope_id(&i.entity, "year"),
+    }
+}
+/// Frozen `ItemSpec` for one plan member — field-for-field the same shape
+/// the previous bulk `resolve` produced.
+pub fn item_spec(item: PlanItem, plan_id: &str, generation: &Value) -> ItemSpec {
+    let (scope, entity, period, frozen) = match item {
+        PlanItem::Daily(i) => {
+            let mut value = json!({
+                "selection_evidence": {"evidence_digest": plan_id},
+                "base_version_id": i.base_version_id,
+                "base_integrity_sha256": i.base_integrity_sha256,
+                "refresh_range": {
+                    "start_date": i.refresh_range.start_date,
+                    "end_date": i.refresh_range.end_date,
+                },
+                "proven_gap_ranges": i.proven_gap_ranges.iter().map(|g| json!({
+                    "gap_id": g.gap_id,
+                    "range": {"start_date": g.start_date, "end_date": g.end_date},
+                    "evidence_digest": g.evidence_digest,
+                })).collect::<Vec<_>>(),
+            });
+            value[SOURCE_GENERATION_KEY] = generation.clone();
+            (
+                crate::task_control::legacy::scope_id(&i.entity, "day"),
+                i.entity,
+                "day",
+                value,
+            )
+        }
+        PlanItem::Yearly(i) => {
+            let intent = crate::market_storage::PublishIntent::CurrentHead {
+                expected_daily_head: i.base_daily_version_id.clone(),
+                expected_yearly_head: i.expected_yearly_head.clone(),
+            };
+            let mut value = crate::yearly_publication::tasks::frozen(
+                &i.base_daily_version_id,
+                &i.base_integrity_sha256,
+                &i.years
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                &intent,
+            );
+            value["comparison"] = i
+                .comparison
+                .as_ref()
+                .map(|p| {
+                    json!({
+                        "version_id": p.version_id,
+                        "integrity_sha256": p.integrity_sha256,
+                    })
+                })
+                .unwrap_or(Value::Null);
+            value[SOURCE_GENERATION_KEY] = generation.clone();
+            (
+                crate::task_control::legacy::scope_id(&i.entity, "year"),
+                i.entity,
+                "year",
+                value,
+            )
+        }
+    };
+    ItemSpec {
+        item_id: scope.clone(),
+        scope_keys: [scope].into(),
+        target: json!({
+            "symbol": entity,
+            "period": period,
+        }),
+        progress_unit: "security_period".into(),
+        frozen_inputs: frozen,
+    }
+}
+/// Contract validating the compact run intent. Task materialization
+/// happens through `TaskControl::accept_streamed` — the plan's items
+/// never re-enter the intent payload — so `resolve` refuses; the contract
+/// exists so requests/snapshots remain decodable on the read path.
 pub struct PlanRunContract {
     pub dataset: &'static str,
-}
-impl PlanRunContract {
-    /// Decode items per the declared dataset; rejects drifted shapes.
-    fn items(&self, raw: &[Value]) -> Result<Vec<PlanItem>, Error> {
-        let mut items = Vec::with_capacity(raw.len());
-        for value in raw {
-            items.push(match self.dataset {
-                "market.daily" => PlanItem::Daily(
-                    serde_json::from_value::<DailyPlanItem>(value.clone()).map_err(invalid)?,
-                ),
-                "market.yearly" => PlanItem::Yearly(
-                    serde_json::from_value::<YearlyPlanItem>(value.clone()).map_err(invalid)?,
-                ),
-                _ => return Err(invalid("plan-run dataset not registered")),
-            });
-        }
-        Ok(items)
-    }
-    fn plan(&self, input: &RunIntent) -> Result<Plan, Error> {
-        let dataset = match input.dataset.as_str() {
-            "market.daily" => Dataset::Daily,
-            "market.yearly" => Dataset::Yearly,
-            other => return Err(invalid(format!("plan-run dataset unsupported: {other}"))),
-        };
-        Ok(Plan {
-            dataset,
-            generation_id: input.generation_id.clone(),
-            target_day: input.target_day,
-            items: self.items(&input.items)?,
-            ineligible: input.ineligible.clone(),
-        })
-    }
 }
 impl Contract for PlanRunContract {
     fn key(&self) -> CommandKey {
@@ -731,7 +830,7 @@ impl Contract for PlanRunContract {
         }
     }
     fn normalize(&self, raw: Value) -> Result<Value, Error> {
-        let mut input: RunIntent = serde_json::from_value(raw).map_err(invalid)?;
+        let input: RunIntent = serde_json::from_value(raw).map_err(invalid)?;
         if input.dataset != self.dataset {
             return Err(invalid("plan-run dataset/key mismatch"));
         }
@@ -741,114 +840,56 @@ impl Contract for PlanRunContract {
         if !valid_plan_id(&input.plan_id) {
             return Err(invalid("plan_id must be 64 lowercase hex"));
         }
-        let mut items = self.items(&input.items)?;
-        items.sort_by(|a, b| a.entity().cmp(b.entity()));
-        input.items = items
-            .iter()
-            .map(|i| serde_json::to_value(i).map_err(invalid))
-            .collect::<Result<_, _>>()?;
-        input
-            .ineligible
-            .sort_by(|a, b| a.entity.cmp(&b.entity).then(a.reason.cmp(&b.reason)));
+        if input.item_count == 0 {
+            return Err(invalid("plan-run item_count must be positive"));
+        }
         serde_json::to_value(input).map_err(invalid)
     }
-    fn resolve(&self, raw: &Value) -> Result<FrozenWork, Error> {
-        let input: RunIntent = serde_json::from_value(raw.clone()).map_err(invalid)?;
-        let mut plan = self.plan(&input)?;
-        plan.sort();
-        // The payload's own digest must cover the canonical content — this
-        // is the integrity gate between the verified plan and the frozen
-        // work (the wire-level plan_stale check happens in the handler).
-        if plan.plan_id().map_err(plan_err)? != input.plan_id {
-            return Err(invalid("plan payload/digest mismatch"));
-        }
-        let generation = input
-            .generation_id
-            .as_ref()
-            .map(|id| json!(id))
-            .unwrap_or(Value::Null);
-        let mut scopes = std::collections::BTreeSet::new();
-        let mut items = vec![];
-        for item in &plan.items {
-            let (scope, frozen) = match item {
-                PlanItem::Daily(i) => {
-                    let scope = crate::task_control::legacy::scope_id(&i.entity, "day");
-                    let mut value = json!({
-                        "selection_evidence": {"evidence_digest": input.plan_id},
-                        "base_version_id": i.base_version_id,
-                        "base_integrity_sha256": i.base_integrity_sha256,
-                        "refresh_range": {
-                            "start_date": i.refresh_range.start_date,
-                            "end_date": i.refresh_range.end_date,
-                        },
-                        "proven_gap_ranges": i.proven_gap_ranges.iter().map(|g| json!({
-                            "gap_id": g.gap_id,
-                            "range": {"start_date": g.start_date, "end_date": g.end_date},
-                            "evidence_digest": g.evidence_digest,
-                        })).collect::<Vec<_>>(),
-                    });
-                    value[SOURCE_GENERATION_KEY] = generation.clone();
-                    (scope, value)
-                }
-                PlanItem::Yearly(i) => {
-                    let scope = crate::task_control::legacy::scope_id(&i.entity, "year");
-                    let intent = crate::market_storage::PublishIntent::CurrentHead {
-                        expected_daily_head: i.base_daily_version_id.clone(),
-                        expected_yearly_head: i.expected_yearly_head.clone(),
-                    };
-                    let mut value = crate::yearly_publication::tasks::frozen(
-                        &i.base_daily_version_id,
-                        &i.base_integrity_sha256,
-                        &i.years
-                            .iter()
-                            .copied()
-                            .collect::<std::collections::BTreeSet<_>>(),
-                        &intent,
-                    );
-                    value["comparison"] = i
-                        .comparison
-                        .as_ref()
-                        .map(|p| {
-                            json!({
-                                "version_id": p.version_id,
-                                "integrity_sha256": p.integrity_sha256,
-                            })
-                        })
-                        .unwrap_or(Value::Null);
-                    value[SOURCE_GENERATION_KEY] = generation.clone();
-                    (scope, value)
-                }
-            };
-            scopes.insert(scope.clone());
-            items.push(ItemSpec {
-                item_id: scope.clone(),
-                scope_keys: [scope].into(),
-                target: json!({
-                    "symbol": item.entity(),
-                    "period": match item {
-                        PlanItem::Daily(_) => "day",
-                        PlanItem::Yearly(_) => "year",
-                    },
-                }),
-                progress_unit: "security_period".into(),
-                frozen_inputs: frozen,
-            });
-        }
-        let counts = plan.counts();
-        Ok(FrozenWork {
-            items,
-            scopes,
-            shared_evidence: Some(json!({
-                "kind": "market_update_plan",
-                "evidence_digest": input.plan_id,
-                "plan_id": input.plan_id,
-                "dataset": input.dataset,
-                "contract_version": PLAN_CONTRACT_VERSION,
-                "generation_id": input.generation_id,
-                "target_day": input.target_day,
-                "counts": counts,
-                "ineligible_reasons": plan.ineligible_reasons(),
-            })),
-        })
+    fn resolve(&self, _raw: &Value) -> Result<FrozenWork, Error> {
+        Err(invalid(
+            "plan-run tasks admit through accept_streamed, not contract resolve",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Byte-format lock: `plan_id` must stay identical for the same
+    /// canonical plan across refactors — the digest is what clients carry
+    /// between `plan` and `run`. The golden value was computed from the
+    /// canonical JSON (`{"dataset":"market.daily",...}`) produced by the
+    /// field order declared above.
+    #[test]
+    fn plan_id_matches_canonical_byte_format() {
+        let plan = Plan {
+            dataset: Dataset::Daily,
+            generation_id: Some("gen-x".into()),
+            target_day: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
+            items: vec![PlanItem::Daily(DailyPlanItem {
+                entity: "sh.600000".into(),
+                base_version_id: "v-1".into(),
+                base_integrity_sha256: "aa".repeat(32),
+                refresh_range: PlanRange {
+                    start_date: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
+                    end_date: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+                },
+                proven_gap_ranges: vec![PlanGap {
+                    gap_id: "gap-1".into(),
+                    start_date: NaiveDate::from_ymd_opt(2026, 10, 8).unwrap(),
+                    end_date: NaiveDate::from_ymd_opt(2026, 10, 8).unwrap(),
+                    evidence_digest: "bb".repeat(32),
+                }],
+            })],
+            ineligible: vec![PlanIneligible {
+                entity: "sz.000001".into(),
+                reason: "already_current".into(),
+            }],
+        };
+        assert_eq!(
+            plan.plan_id().unwrap(),
+            "749f17267b83f15bf3c3c4c51b5c8a2336eaf84385cdfaf850fe0605ea104acf"
+        );
     }
 }

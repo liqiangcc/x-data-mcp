@@ -509,3 +509,183 @@ fn plan_and_run_recompute_scale_to_full_catalog() {
     assert!(plan_ms < 30_000, "plan resolve took {plan_ms}ms");
     assert!(run_ms < 60_000, "run recompute+accept took {run_ms}ms");
 }
+
+fn status_kb(field: &str) -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .unwrap()
+        .lines()
+        .find(|l| l.starts_with(field))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+fn vmrss_kb() -> u64 {
+    status_kb("VmRSS:")
+}
+fn vmhwm_kb() -> u64 {
+    status_kb("VmHWM:")
+}
+
+/// ~5.2k entities each carrying a REAL published head (no phantom markers):
+/// the batch collection commit — the same mechanism the series-commit suite
+/// seeds with — writes a real checkpoint version + head per member, then
+/// `plan_market_update` and `run_market_update` acceptance are measured for
+/// wall time and process VmHWM/VmRSS deltas. This is the scale at which the
+/// bulk acceptance path peaked ~950MB (TASK-DEVIN-PLANRUN-MEMORY).
+#[test]
+fn planrun_scales_to_market_wide_membership() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    const EXTRA: usize = 5_200;
+    let mut codes = vec!["600006".to_string()];
+    let mut symbols = vec!["sh.600006".to_string()];
+    for i in 0..EXTRA {
+        let code = format!("{:06}", 700_000 + i);
+        symbols.push(format!("sh.{code}"));
+        codes.push(code);
+    }
+    let catalog = SqliteCatalog::new(r.tasks.clone());
+    catalog
+        .publish_fixture(
+            "catalog-2",
+            catalog_fixture(
+                &codes.iter().map(String::as_str).collect::<Vec<_>>(),
+                &vec!["sh"; codes.len()],
+            ),
+            Some("catalog-1"),
+        )
+        .unwrap();
+    use x_data_mcp::task_control::{
+        Command, CommandKey, FrozenWork, RequestOutcome, TaskRepository,
+    };
+    let mut scopes = std::collections::BTreeSet::new();
+    let mut specs = Vec::with_capacity(symbols.len());
+    for sym in &symbols {
+        let scope = x_data_mcp::task_control::legacy::scope_id(sym, "day");
+        scopes.insert(scope.clone());
+        specs.push(x_data_mcp::task_control::ItemSpec {
+            item_id: scope.clone(),
+            scope_keys: [scope].into(),
+            target: json!({"symbol": sym, "period": "day"}),
+            progress_unit: "security_period".into(),
+            frozen_inputs: json!({}),
+        });
+    }
+    let seed = r
+        .tasks
+        .accept(
+            "req-seed",
+            &Command {
+                key: CommandKey {
+                    operation: "start_collection".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: "explicit-collection-v1".into(),
+                },
+                intent: json!({}),
+            },
+            &FrozenWork {
+                items: specs,
+                scopes,
+                shared_evidence: None,
+            },
+            "run-seed",
+            None,
+        )
+        .unwrap();
+    let RequestOutcome::Task(snap) = seed.record.outcome else {
+        panic!("seed acceptance must bind a task")
+    };
+    let seed_task = snap.task.task_id;
+    let backend = MarketBackend::open(&r.tasks).unwrap();
+    use x_data_mcp::market_data::{
+        AdjustmentEvidence, CoverageEvidence, EvidenceValue, Period, UnitCurrencyEvidence,
+    };
+    use x_data_mcp::official_market::DailyCollectionRepository;
+    let mut candidates = Vec::with_capacity(symbols.len());
+    for (i, sym) in symbols.iter().enumerate() {
+        candidates.push(x_data_mcp::official_market::CollectionCandidate {
+            task_id: seed_task.clone(),
+            item_id: x_data_mcp::task_control::legacy::scope_id(sym, "day"),
+            publication_id: format!("scale-col-{i}"),
+            version_id: format!("scale-v-{i}"),
+            run_id: "run-seed".into(),
+            symbol: sym.clone(),
+            source: "official".into(),
+            bars: vec![
+                x_data_mcp::compact_market::CompactBar {
+                    trade_day: 1,
+                    open_cents: 1000,
+                    high_cents: 1010,
+                    low_cents: 990,
+                    close_cents: 1005,
+                    volume: Some(100),
+                    amount: Some("1000".into()),
+                    r7_raw: Some(7),
+                }
+                .to_bar(Period::Day)
+                .unwrap(),
+            ],
+            coverage: CoverageEvidence::complete("seed"),
+            unit_currency: UnitCurrencyEvidence {
+                price_currency: EvidenceValue::confirmed("CNY", "bound"),
+                price_unit: EvidenceValue::confirmed("share", "bound"),
+                volume_unit: EvidenceValue::confirmed("share", "bound"),
+                amount_currency: EvidenceValue::confirmed("CNY", "bound"),
+                amount_unit: EvidenceValue::confirmed("yuan", "bound"),
+            },
+            adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+            published_at: Utc::now(),
+            generation_id: "gen-1".into(),
+            generation_manifest_sha256: "0b".repeat(32),
+            day_member_sha256: "0c".repeat(32),
+            security_event_sha256: "0e".repeat(32),
+            generation_evidence: json!({
+                "generation_id": "gen-1",
+                "snapshot_inputs": [{
+                    "role": "daily",
+                    "member": format!("{sym}.day"),
+                    "archive_sha256": "12".repeat(32),
+                    "member_sha256": "cd".repeat(32),
+                }],
+            }),
+        });
+    }
+    for res in backend
+        .commit_collection_batch(&seed_task, &candidates)
+        .unwrap()
+        .unwrap()
+    {
+        assert!(res.is_ok(), "seed collection commit failed: {res:?}");
+    }
+    // 5,201 eligible members (head day 1 << pending day) + 0 absent.
+    let rss0 = vmrss_kb();
+    let hwm0 = vmhwm_kb();
+    let t0 = std::time::Instant::now();
+    let p = plan(&r.api, "market.daily");
+    let plan_ms = t0.elapsed().as_millis();
+    let hwm_after_plan = vmhwm_kb();
+    let plan_hwm_delta = hwm_after_plan.saturating_sub(hwm0);
+    let t1 = std::time::Instant::now();
+    let accepted = run(&r.api, "market.daily", "req-scale", &p);
+    let run_ms = t1.elapsed().as_millis();
+    let run_peak_delta = vmhwm_kb().saturating_sub(hwm_after_plan);
+    eprintln!(
+        "plan-run scale: {} members; plan {plan_ms}ms peak +{plan_hwm_delta}kB; run-accept {run_ms}ms peak +{run_peak_delta}kB; rss {rss0}→{}kB",
+        symbols.len(),
+        vmrss_kb()
+    );
+    assert_eq!(p["counts"]["eligible"], symbols.len() as u64);
+    assert_eq!(accepted["reused"], false);
+    assert_eq!(accepted["item_count"], symbols.len() as u64);
+    assert_eq!(accepted["plan_id"], p["plan_id"]);
+    // Memory: acceptance must stay far below the production 1.9GB host —
+    // the pre-refactor path peaked ~950MB here; the target is <200MB per
+    // call (GOAL recorded in TASK-DEVIN-PLANRUN-MEMORY §2).
+    let peak = plan_hwm_delta.max(run_peak_delta);
+    assert!(
+        peak < 200 * 1024,
+        "peak RSS delta {peak}kB exceeds the 200MB plan-run budget"
+    );
+    assert!(plan_ms < 5_000, "plan took {plan_ms}ms > 5s");
+    assert!(run_ms < 10_000, "run acceptance took {run_ms}ms > 10s");
+}

@@ -1322,6 +1322,24 @@ impl TaskRepository for SqliteTasks {
         }
         self.write(|c| accept_tx(c, id, command, work, run, retry))
     }
+    /// Real streamed accept: item rows and the frozen-work blob are
+    /// written as the iterator yields specs, inside the same immediate
+    /// transaction `accept_tx` uses. The returned record is constructed
+    /// (items not materialized); the persisted rows are identical.
+    fn accept_streamed(
+        &self,
+        id: &str,
+        command: &Command,
+        shared_evidence: Option<Value>,
+        scopes: BTreeSet<String>,
+        items: &mut dyn Iterator<Item = ItemSpec>,
+        run: &str,
+    ) -> Result<Acceptance, Error> {
+        if id.trim().is_empty() || run.trim().is_empty() {
+            return Err(Error::InvalidCommand("empty identity".into()));
+        }
+        self.write(|c| accept_streamed_tx(c, id, command, shared_evidence, scopes, items, run))
+    }
     fn transition(
         &self,
         id: &str,
@@ -1711,6 +1729,198 @@ pub(crate) fn accept_tx(
     .map_err(storage)?;
     Ok(Acceptance {
         record: read_request(c, id)?.ok_or_else(|| inconsistent("inserted binding missing"))?,
+        reused: false,
+    })
+}
+
+/// Streamed accept — identical transaction shape, rows, and validations
+/// to `accept_tx`, but item specs arrive as an iterator: each one is
+/// validated, written to `task_items`, and serialized into the
+/// `frozen_work_json` blob one at a time, so a whole-market admission
+/// (~5k items) never materializes the whole frozen-work tree in memory.
+/// The returned record is constructed rather than re-read; its `items`
+/// list is empty, so callers needing detail re-read the task.
+pub(crate) fn accept_streamed_tx(
+    c: &Connection,
+    id: &str,
+    command: &Command,
+    shared_evidence: Option<Value>,
+    scopes: &BTreeSet<String>,
+    items: &mut dyn Iterator<Item = ItemSpec>,
+    run: &str,
+) -> Result<Acceptance, Error> {
+    let _total = crate::stage_trace::span("accept.total");
+    if let Some(record) = read_request(c, id)? {
+        if record.command != *command {
+            return Err(Error::RequestConflict);
+        }
+        return Ok(Acceptance {
+            record,
+            reused: true,
+        });
+    }
+    run_registry_gates(c, GateScope::Active)?;
+    if scopes.is_empty() {
+        return Err(Error::InvalidCommand("empty work".into()));
+    }
+    // Same scope-occupancy gate as accept_tx, chunked instead of one
+    // query per scope — a whole-market task occupies thousands of scopes.
+    let mut conflicts = Vec::new();
+    for chunk in scopes.iter().collect::<Vec<_>>().chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let mut stmt = c
+            .prepare(&format!(
+                "SELECT scope_key FROM scope_occupancy WHERE scope_key IN ({placeholders})"
+            ))
+            .map_err(storage)?;
+        let mut rows = stmt
+            .query(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())))
+            .map_err(storage)?;
+        while let Some(row) = rows.next().map_err(storage)? {
+            conflicts.push(row.get::<_, String>(0).map_err(storage)?);
+        }
+    }
+    if !conflicts.is_empty() {
+        return Err(Error::RangeConflict(conflicts));
+    }
+    let task_id: String = c
+        .query_row("SELECT 'task-' || lower(hex(randomblob(16)))", [], |r| {
+            r.get(0)
+        })
+        .map_err(storage)?;
+    let now = Utc::now().to_rfc3339();
+    let evidence_digest = shared_evidence
+        .as_ref()
+        .and_then(|e| e["evidence_digest"].as_str().map(str::to_string));
+    let mut item_stmt = c
+        .prepare("INSERT INTO task_items VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)")
+        .map_err(storage)?;
+    // The blob byte content equals serde's FrozenWork serialization
+    // (items, scopes, shared_evidence — the derive's field order).
+    let mut frozen = String::with_capacity(1 << 24);
+    frozen.push_str("{\"items\":[");
+    let mut seen = BTreeSet::new();
+    let mut count: u64 = 0;
+    let mut first = true;
+    // The same validations FrozenWork::validate performs — done here so a
+    // bad item fails before its row instead of after the whole tree.
+    for item in items.by_ref() {
+        if item.item_id.trim().is_empty() || item.progress_unit.trim().is_empty() {
+            return Err(Error::InvalidCommand("empty item identity".into()));
+        }
+        if !item.scope_keys.is_subset(scopes) {
+            return Err(Error::InvalidCommand(
+                "item scope outside declared work".into(),
+            ));
+        }
+        if !seen.insert(item.item_id.clone()) {
+            return Err(Error::InvalidCommand("duplicate item identity".into()));
+        }
+        if let Some(digest) = evidence_digest.as_deref() {
+            if item.frozen_inputs["selection_evidence"]["evidence_digest"].as_str() != Some(digest)
+            {
+                return Err(Error::InvalidCommand(
+                    "item evidence marker does not match shared evidence".into(),
+                ));
+            }
+        }
+        item_stmt
+            .execute(params![
+                task_id,
+                item.item_id,
+                encode(&item.target)?,
+                item.progress_unit,
+                encode(&item.frozen_inputs)?,
+                encode(&item.scope_keys)?
+            ])
+            .map_err(storage)?;
+        if !first {
+            frozen.push(',');
+        }
+        first = false;
+        frozen.push_str(&serde_json::to_string(&item).map_err(storage)?);
+        count += 1;
+    }
+    if count == 0 {
+        return Err(Error::InvalidCommand("empty work".into()));
+    }
+    drop(item_stmt);
+    frozen.push_str("],\"scopes\":");
+    frozen.push_str(&serde_json::to_string(scopes).map_err(storage)?);
+    if let Some(evidence) = &shared_evidence {
+        frozen.push_str(",\"shared_evidence\":");
+        frozen.push_str(&serde_json::to_string(evidence).map_err(storage)?);
+    }
+    frozen.push('}');
+    c.execute(
+        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,evidence_digest) VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,?5,NULL,?6,?7,?7,?8)",
+        params![
+            task_id,
+            encode(&command.key)?,
+            run,
+            now,
+            frozen,
+            None::<String>,
+            count as u32,
+            count as u32,
+            evidence_digest
+        ],
+    )
+    .map_err(storage)?;
+    let mut scope_stmt = c
+        .prepare("INSERT INTO task_scopes VALUES(?1,?2)")
+        .map_err(storage)?;
+    let mut occupancy_stmt = c
+        .prepare("INSERT INTO scope_occupancy VALUES(?1,?2,0)")
+        .map_err(storage)?;
+    for scope in scopes {
+        scope_stmt
+            .execute(params![task_id, scope])
+            .map_err(storage)?;
+        occupancy_stmt
+            .execute(params![scope, task_id])
+            .map_err(storage)?;
+    }
+    let raw = encode(command)?;
+    c.execute(
+        "INSERT INTO requests VALUES(?1,?2,?3,'task',?4,NULL)",
+        params![id, raw, crate::hash::sha256(raw.as_bytes()), task_id],
+    )
+    .map_err(storage)?;
+    let now_dt: chrono::DateTime<Utc> = now.parse().map_err(storage)?;
+    Ok(Acceptance {
+        record: RequestRecord {
+            request_id: id.into(),
+            command: command.clone(),
+            outcome: RequestOutcome::Task(Box::new(TaskSnapshot {
+                task: TaskRecord {
+                    task_id: task_id.clone(),
+                    key: command.key.clone(),
+                    status: Status::Pending,
+                    state_revision: 0,
+                    accepted_run_id: run.into(),
+                    owner_run_id: None,
+                    created_at: now_dt,
+                    last_progress_at: now_dt,
+                    work: FrozenWork {
+                        items: vec![],
+                        scopes: scopes.clone(),
+                        shared_evidence,
+                    },
+                    result: None,
+                    retry_of: None,
+                },
+                items: vec![],
+                claims: scopes
+                    .iter()
+                    .map(|scope_key| ScopeClaim {
+                        scope_key: scope_key.clone(),
+                        task_id: task_id.clone(),
+                        state_revision: 0,
+                    })
+                    .collect(),
+            })),
+        },
         reused: false,
     })
 }

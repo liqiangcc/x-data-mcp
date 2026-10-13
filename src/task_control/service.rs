@@ -92,6 +92,53 @@ impl<R: TaskRepository> TaskControl<R> {
         self.repository
             .accept(id, &command, &work, &self.run_id, None)
     }
+    /// Acceptance for pre-resolved streamed work — the same binding
+    /// semantics as `accept` (request replay first, then gates plus a
+    /// single-transaction persist) but item specs arrive as an iterator
+    /// so a whole-market admission never holds the full frozen-work tree
+    /// in memory at once. The intent is still contract-normalized before
+    /// binding.
+    pub fn accept_streamed(
+        &self,
+        id: &str,
+        command: &Command,
+        shared_evidence: Option<Value>,
+        scopes: BTreeSet<String>,
+        items: &mut dyn Iterator<Item = ItemSpec>,
+    ) -> Result<Acceptance, Error> {
+        if id.trim().is_empty() {
+            return Err(Error::InvalidCommand("empty request_id".into()));
+        }
+        let normalized = Command {
+            key: command.key.clone(),
+            intent: crate::stage_trace::timed("svc.accept.normalize", || {
+                self.contract(&command.key)?
+                    .normalize(command.intent.clone())
+            })?,
+        };
+        let existing = crate::stage_trace::timed("svc.accept.read_request", || {
+            self.repository.read_request(id)
+        })?;
+        if let Some(record) = existing {
+            self.known(&record)?;
+            if record.command != normalized {
+                return Err(Error::RequestConflict);
+            }
+            return Ok(Acceptance {
+                record,
+                reused: true,
+            });
+        }
+        let _repo = crate::stage_trace::span("svc.accept.repository");
+        self.repository.accept_streamed(
+            id,
+            &normalized,
+            shared_evidence,
+            scopes,
+            items,
+            &self.run_id,
+        )
+    }
     pub fn cancel(&self, id: &str, revision: u64) -> Result<TaskSnapshot, Error> {
         self.read_task(id)?;
         self.repository

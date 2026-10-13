@@ -397,6 +397,7 @@ impl DataApi {
         request_id: &str,
         reused: bool,
         f: &crate::task_control::TaskSnapshot,
+        item_count: u64,
     ) -> Result<Value, ApiError> {
         let evidence = f.task.work.shared_evidence.as_ref();
         let block = self.task_runtime_block(&f.task.key);
@@ -414,11 +415,11 @@ impl DataApi {
                 serde_json::to_value(f.visible_status(&self.legacy.control.run_id)).unwrap(),
             )
             .unwrap(),
-            item_count: f.items.len() as u64,
+            item_count,
             plan_counts: evidence
                 .and_then(|e| serde_json::from_value(e["counts"].clone()).ok())
                 .unwrap_or(PlanCounts {
-                    eligible: f.items.len() as u64,
+                    eligible: item_count,
                     already_current: 0,
                     absent: 0,
                     ineligible: 0,
@@ -904,7 +905,12 @@ impl DataApi {
                             "task binding required",
                         ));
                     };
-                    return self.plan_acceptance(command.request_id(), true, &f);
+                    return self.plan_acceptance(
+                        command.request_id(),
+                        true,
+                        &f,
+                        f.items.len() as u64,
+                    );
                 }
                 let today = crate::calendar::shanghai_today();
                 let resolved = super::plan::resolve_run(
@@ -946,16 +952,34 @@ impl DataApi {
                         "plan contains no executable items",
                     ));
                 }
-                let intent = resolved.plan.intent().map_err(plan_error)?;
-                let key = crate::task_control::CommandKey {
-                    operation: "update_data".into(),
-                    dataset: plan_dataset_name(command.dataset()).into(),
-                    contract_version: super::plan::RUN_CONTRACT_VERSION.into(),
+                let task_command = crate::task_control::Command {
+                    key: crate::task_control::CommandKey {
+                        operation: "update_data".into(),
+                        dataset: plan_dataset_name(command.dataset()).into(),
+                        contract_version: super::plan::RUN_CONTRACT_VERSION.into(),
+                    },
+                    intent: resolved.plan.run_intent().map_err(plan_error)?,
                 };
+                let super::plan::RunWorkParts {
+                    plan_id,
+                    generation,
+                    scopes,
+                    shared_evidence,
+                    items,
+                } = resolved.plan.run_parts().map_err(plan_error)?;
+                let mut specs = items
+                    .into_iter()
+                    .map(|item| super::plan::item_spec(item, &plan_id, &generation));
                 let acceptance = self
                     .legacy
                     .control
-                    .accept(command.request_id(), key, intent)
+                    .accept_streamed(
+                        command.request_id(),
+                        &task_command,
+                        Some(shared_evidence),
+                        scopes,
+                        &mut specs,
+                    )
                     .map_err(task_error)?;
                 let crate::task_control::RequestOutcome::Task(f) = acceptance.record.outcome else {
                     return Err(ApiError::new(
@@ -963,7 +987,7 @@ impl DataApi {
                         "task binding required",
                     ));
                 };
-                self.plan_acceptance(command.request_id(), acceptance.reused, &f)
+                self.plan_acceptance(command.request_id(), acceptance.reused, &f, counts.eligible)
             }
             Handler::Query => {
                 let reply = self

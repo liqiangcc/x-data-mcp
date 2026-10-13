@@ -356,6 +356,35 @@ pub trait TaskRepository {
         run: &str,
         retry: Option<&RetryGuard>,
     ) -> Result<Acceptance, Error>;
+    /// Streamed accept for unbounded item counts: persists each spec as
+    /// the iterator yields it instead of materializing the whole frozen
+    /// work tree in memory first. Semantics are identical to `accept`
+    /// (same binding, gates, transaction, and on-disk rows) except the
+    /// returned record is constructed rather than re-read — its `items`
+    /// list is empty and callers needing full detail re-read the task.
+    /// The default implementation materializes the whole list and
+    /// delegates to `accept`; backends with very large task admissions
+    /// override it to stream.
+    fn accept_streamed(
+        &self,
+        id: &str,
+        command: &Command,
+        shared_evidence: Option<Value>,
+        scopes: BTreeSet<String>,
+        items: &mut dyn Iterator<Item = ItemSpec>,
+        run: &str,
+    ) -> Result<Acceptance, Error> {
+        let mut work = FrozenWork {
+            items: Vec::new(),
+            scopes,
+            shared_evidence,
+        };
+        for item in items {
+            work.items.push(item);
+        }
+        work.validate()?;
+        self.accept(id, command, &work, run, None)
+    }
     fn transition(
         &self,
         id: &str,

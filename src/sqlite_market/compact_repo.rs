@@ -28,8 +28,8 @@ use crate::official_market::CollectionCandidate;
 use crate::publish::EffectiveVersion;
 use crate::sqlite_tasks::SqliteTasks;
 use crate::task_control::{
-    self, Acceptance, Change, Command, FrozenWork, RequestRecord, RetryGuard, TaskHead, TaskItem,
-    TaskRepository, TaskSnapshot,
+    self, Acceptance, Change, Command, FrozenWork, ItemSpec, RequestRecord, RetryGuard, TaskHead,
+    TaskItem, TaskRepository, TaskSnapshot,
 };
 
 const BUSY: Duration = Duration::from_secs(5);
@@ -1645,6 +1645,18 @@ impl TaskRepository for SqliteCompactMarket {
         retry: Option<&RetryGuard>,
     ) -> Result<Acceptance, task_control::Error> {
         self.tasks.accept(id, command, work, run, retry)
+    }
+    fn accept_streamed(
+        &self,
+        id: &str,
+        command: &Command,
+        shared_evidence: Option<Value>,
+        scopes: BTreeSet<String>,
+        items: &mut dyn Iterator<Item = ItemSpec>,
+        run: &str,
+    ) -> Result<Acceptance, task_control::Error> {
+        self.tasks
+            .accept_streamed(id, command, shared_evidence, scopes, items, run)
     }
     fn transition(
         &self,
