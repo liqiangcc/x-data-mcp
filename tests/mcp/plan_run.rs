@@ -642,7 +642,10 @@ fn planrun_scales_to_market_wide_membership() {
                 run_id: "run-seed".into(),
                 symbol: sym.clone(),
                 source: "official".into(),
-                bars: vec![bar(1), bar(2)],
+                // Head day 1 — same lag as the rig seed so every member is
+                // eligible for the pending-day plan (day-2 heads classify
+                // `already_current` and would fall out of `items`).
+                bars: vec![bar(1)],
                 coverage: CoverageEvidence::complete("seed"),
                 unit_currency: units(),
                 adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
