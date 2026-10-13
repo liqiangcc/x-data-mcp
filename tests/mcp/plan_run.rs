@@ -2,7 +2,7 @@
 //! digest-bound stateless plan workflow on the compact backend — digest
 //! determinism, stale/in-flight refusal, request replay and end-to-end
 //! execution through the existing worker.
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use std::{io::Write, path::Path};
 use x_data_mcp::{
@@ -72,7 +72,7 @@ fn day_u32(days: i64) -> u32 {
         .parse()
         .unwrap()
 }
-fn day_member(code: &str, last_day: u32) -> Vec<u8> {
+fn day_member(_code: &str, last_day: u32) -> Vec<u8> {
     [
         day_record(last_day - 2, [1128, 1130, 1125, 1129], 0.0, 100),
         day_record(last_day - 1, [1129, 1132, 1128, 1131], 0.0, 110),
@@ -240,7 +240,7 @@ fn rig(members: &[(&str, &str, u32)]) -> Rig {
     .with_market_source(source.clone());
     let securities: Vec<Value> = members
         .iter()
-        .map(|(ex, code)| json!({"exchange":ex,"code":code}))
+        .map(|(ex, code, _)| json!({"exchange":ex,"code":code}))
         .collect();
     api.call(
         "start_collection",
