@@ -865,6 +865,7 @@ fn run_task_retry_keeps_shared_evidence_binding() {
 // Execution-phase chunking (TASK-DEVIN-PLANRUN-CHUNK-EXEC): run_items must
 // bound prepare/commit working sets to ~100 items regardless of task size.
 // ---------------------------------------------------------------------------
+use x_data_mcp::market_storage::MarketRepository as _;
 use x_data_mcp::market_update::publication::RangeRepository as _;
 use x_data_mcp::task_control::TaskRepository as _;
 
@@ -1459,5 +1460,7 @@ fn run_items_chunked_execution_matches_per_item_outcomes() {
     }
     // Task-level parity: both terminal-succeeded, same counters.
     assert_eq!(task.task.status, task_b_items.task.status);
-    assert_eq!(task.task.counts, task_b_items.task.counts);
+    let head_a = rig_a.backend.task_head(&task_a).unwrap();
+    let head_b = rig_b.backend.task_head(&task_b).unwrap();
+    assert_eq!(head_a.counts, head_b.counts);
 }
