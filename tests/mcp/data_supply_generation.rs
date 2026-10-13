@@ -792,7 +792,6 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
 #[test]
 fn staged_records_empty_after_full_cycle_on_compact() {
     use chrono::Datelike;
-    use x_data_mcp::market_storage::MarketRepository;
     use x_data_mcp::market_update::tasks::{Operation, RangeContract};
     use x_data_mcp::sqlite_market::backend::MarketBackend;
     use x_data_mcp::yearly_publication::tasks::YearlyContract;
@@ -889,7 +888,7 @@ fn staged_records_empty_after_full_cycle_on_compact() {
     control
         .accept(
             "req-update-b",
-            range_key,
+            range_key.clone(),
             json!({"items":[{"symbol":"sh.600006","base_version_id":head_a,"start_date":day - chrono::Duration::days(1),"end_date":day - chrono::Duration::days(1)}]}),
         )
         .unwrap();
@@ -902,7 +901,7 @@ fn staged_records_empty_after_full_cycle_on_compact() {
     control
         .accept(
             "req-yearly-1",
-            yearly_key,
+            yearly_key.clone(),
             json!({"items":[{"symbol":"sh.600006","base_daily_version_id":head_b,"years":[year],"intent":{"CurrentHead":{"expected_daily_head":head_b,"expected_yearly_head":null}},"comparison_version_id":null}]}),
         )
         .unwrap();
@@ -921,7 +920,7 @@ fn staged_records_empty_after_full_cycle_on_compact() {
     control
         .accept(
             "req-update-c",
-            range_key,
+            range_key.clone(),
             json!({"items":[{"symbol":"sh.600006","base_version_id":head_b,"start_date":day,"end_date":day}]}),
         )
         .unwrap();
@@ -931,7 +930,7 @@ fn staged_records_empty_after_full_cycle_on_compact() {
     control
         .accept(
             "req-yearly-2",
-            yearly_key,
+            yearly_key.clone(),
             json!({"items":[{"symbol":"sh.600006","base_daily_version_id":head_c,"years":[year],"intent":{"CurrentHead":{"expected_daily_head":head_c,"expected_yearly_head":yearly_head}},"comparison_version_id":null}]}),
         )
         .unwrap();
@@ -941,7 +940,7 @@ fn staged_records_empty_after_full_cycle_on_compact() {
     control
         .accept(
             "req-update-nc",
-            range_key,
+            range_key.clone(),
             json!({"items":[{"symbol":"sh.600006","base_version_id":head_c,"start_date":day,"end_date":day}]}),
         )
         .unwrap();
