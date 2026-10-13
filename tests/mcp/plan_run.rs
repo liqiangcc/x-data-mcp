@@ -727,6 +727,16 @@ fn planrun_scales_to_market_wide_membership() {
     assert!(plan_ms < 5_000, "plan took {plan_ms}ms > 5s");
     assert!(run_ms < 10_000, "run acceptance took {run_ms}ms > 10s");
 
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    let item_ids: Vec<String> = r
+        .tasks
+        .read_task(&task_id)
+        .unwrap()
+        .unwrap()
+        .items
+        .iter()
+        .map(|i| i.spec.item_id.clone())
+        .collect();
     // Bounded reads (PLANRUN-BOUNDED-READS): a >100-item task must be
     // served from head columns plus keyset item pages — response bytes
     // and process HWM must not scale with the item count.
@@ -804,16 +814,6 @@ fn planrun_scales_to_market_wide_membership() {
     // must run to a terminal state with bounded memory — chunked at
     // EXEC_CHUNK=100 so a 5,201-item task peaks like a ≤100-item task
     // (the unchunked prepare_batch peaked ~969MB on the private stack).
-    let task_id = accepted["task_id"].as_str().unwrap().to_string();
-    let item_ids: Vec<String> = r
-        .tasks
-        .read_task(&task_id)
-        .unwrap()
-        .unwrap()
-        .items
-        .iter()
-        .map(|i| i.spec.item_id.clone())
-        .collect();
     assert_eq!(item_ids.len(), symbols.len());
     let exec_hwm0 = vmhwm_kb();
     let t2 = std::time::Instant::now();
