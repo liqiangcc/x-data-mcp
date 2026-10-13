@@ -14,10 +14,11 @@ EXPECTED_COMPACT_SCHEMA = 21
 EXPECTED_DATA_TOOLS = 21
 EXPECTED_ACQUIRE_TOOLS = 10
 EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v6"
-# The strict Skills describe the DEPLOYED contract (v6 after the switch) —
-# the same constant also keys the stale-deployment-claim check below: the
-# "current" regions describe the deployed instance, not the code on main.
-# Flipped v5 -> v6 in the deploy-day switch commit together with the Skills.
+# The strict Skills describe the DEPLOYED contract (v6 after the switch).
+# The same deployed revision keys the strict-Skill checks and the
+# stale-deployment-claim check below: the "current" regions describe the
+# deployed instance, not the code on main. Flip this constant together with
+# the Skills in the same commit at the next contract switch.
 EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v6"
 
 CURRENT_DOCS = {
