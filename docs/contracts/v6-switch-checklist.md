@@ -67,6 +67,7 @@ OWNER-RULING-PAR-1A R4：本节改动**必须在 S4 与 capability bump
 | `EXPECTED_COMPACT_SCHEMA` 上方注释 | 「DEPLOYED preview instance remains on schema 20 … doc-fact regexes below stay keyed to 20」 | 部署完成后改为描述 schema 21 已部署 |
 | `EXPECTED_COMPACT_SCHEMA = 21` | 21 | 不变（fresh init 常量已是 21） |
 | `EXPECTED_DATA_CAPABILITY_REVISION` | `"generic-data-v5"` | `"generic-data-v6"`（**与 capability bump 同一提交**，见 §0.1） |
+| `EXPECTED_SKILL_CAPABILITY_REVISION` | `"generic-data-v5"` | `"generic-data-v6"`——该常量同时驱动当前状态区 stale 声明检查（当前区描述已部署实例）；与 §3 两个 Skill 的翻转**同一提交** |
 | `REQUIRED_FACTS` 第一项 `("schema 20", re.compile(r"schema[\s:=v]*20(?!\d)"…` | 正则期望 20 | `("schema 21", re.compile(r"schema[\s:=v]*21(?!\d)"…`——与 §2 文档翻转同提交 |
 | `EXPECTED_PACKAGE_VERSION` | `"0.2.0-preview.31"` | 部署 tag 对应版本 |
 

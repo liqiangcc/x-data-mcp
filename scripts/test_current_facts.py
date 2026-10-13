@@ -31,6 +31,14 @@ class StaleDeploymentClaims(unittest.TestCase):
         )
         self.assertEqual(claims(text), [])
 
+    def test_v6_claim_is_flagged_while_deployed_revision_is_v5(self):
+        # The deployed instance still declares v5 until the deploy-day
+        # switch; a current region naming the code revision (v6) is stale.
+        text = "当前部署注册 21 data tools 并宣告 `generic-data-v6`。\n"
+        found = claims(text)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("generic-data-v6", found[0])
+
     def test_the_old_sentences_are_flagged(self):
         # The wording that main@9189b68 still carried after the preview.31 deploy.
         old = (
