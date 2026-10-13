@@ -302,7 +302,7 @@ pub fn summary(f: &TaskFacts, run: &str) -> TaskSummary {
     // Plan-run tasks carry the verified plan digest in shared_evidence;
     // surface it so progress reads can correlate task ↔ plan.
     let plan = (t.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION)
-        .then(|| f.snapshot.work.shared_evidence.as_ref())
+        .then(|| f.snapshot.task.work.shared_evidence.as_ref())
         .flatten();
     TaskSummary {
         task_id: t.task_id.clone(),

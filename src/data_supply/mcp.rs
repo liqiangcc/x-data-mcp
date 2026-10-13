@@ -398,7 +398,7 @@ impl DataApi {
         reused: bool,
         f: &crate::task_control::TaskSnapshot,
     ) -> Result<Value, ApiError> {
-        let evidence = f.work.shared_evidence.as_ref();
+        let evidence = f.task.work.shared_evidence.as_ref();
         let block = self.task_runtime_block(&f.task.key);
         encode(PlanRunAcceptance {
             request_id: request_id.into(),
