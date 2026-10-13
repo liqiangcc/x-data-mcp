@@ -18,6 +18,10 @@ EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v6"
 # The strict Skills still describe the DEPLOYED contract (v5) until the
 # deploy-day switch (docs/contracts/v6-switch-checklist.md §3) — bumping
 # them early would make the strict gate refuse the live v5 instance.
+# The same deployed revision keys the stale-deployment-claim check below:
+# the "current" regions describe the deployed instance, not the code on
+# main, so they must keep stating v5 until the switch. Flip this constant
+# (v5 -> v6) in the deploy-day switch commit together with the Skills.
 EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v5"
 
 CURRENT_DOCS = {
@@ -305,7 +309,7 @@ def main() -> int:
             region,
             allowed_previews,
             EXPECTED_DATA_TOOLS,
-            EXPECTED_DATA_CAPABILITY_REVISION,
+            EXPECTED_SKILL_CAPABILITY_REVISION,
         ):
             check(
                 f"{rel} current region line {lineno} states a stale deployment fact",
