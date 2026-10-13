@@ -1255,22 +1255,6 @@ impl RangeRepository for SqliteCompactMarket {
             }
             {
                 let _span = crate::stage_trace::span("daily.commit_batch.head_persist");
-                // Terminal parity with finish_item_and_task's CASE arm —
-                // the head-based decide does not flip status on the last
-                // item finish; the committed row must be identical.
-                if head.counts.finished == head.counts.total
-                    && head.status == task_control::Status::Running
-                {
-                    head.status = if head.counts.succeeded == head.counts.total {
-                        task_control::Status::Succeeded
-                    } else {
-                        task_control::Status::PartiallyFailed
-                    };
-                    head.result = Some(serde_json::json!({
-                        "finished_items": head.counts.finished,
-                        "successful_items": head.counts.succeeded,
-                    }));
-                }
                 crate::sqlite_tasks::persist_head(&tx, &head, persisted_revision)
                     .map_err(Error::Task)?;
             }
@@ -1460,6 +1444,24 @@ fn base_bars_in_range_on(
 /// Per-item batch step for `commit_update_batch`: replay → start the item
 /// → commit inside a savepoint → map failures to item outcomes.
 /// Structural errors abort the whole batch transaction.
+/// The terminal status/result `finish_item_and_task`'s SQL CASE sets
+/// when an item's success-finish completes the task — only the
+/// successful-commit path may produce it; a task whose last item fails
+/// keeps `running` and reaches `failed`/`cancelled` via the runner's
+/// `FinishExecution`, exactly as before.
+fn commit_terminal(head: &mut task_control::TaskHead) {
+    if head.counts.finished == head.counts.total && head.status == task_control::Status::Running {
+        head.status = if head.counts.succeeded == head.counts.total {
+            task_control::Status::Succeeded
+        } else {
+            task_control::Status::PartiallyFailed
+        };
+        head.result = Some(serde_json::json!({
+            "finished_items": head.counts.finished,
+            "successful_items": head.counts.succeeded,
+        }));
+    }
+}
 fn update_batch_item(
     c: &Connection,
     head: &mut task_control::TaskHead,
@@ -1670,6 +1672,7 @@ fn update_batch_item(
                 Utc::now(),
             )
             .map_err(Error::Task)?;
+            commit_terminal(head);
             Ok(Ok(receipt))
         }
         Err(error) => {
@@ -1829,19 +1832,6 @@ impl crate::official_market::DailyCollectionRepository for SqliteCompactMarket {
             for item in items {
                 out.push(collection_batch_item(&tx, &mut head, item)?);
             }
-            if head.counts.finished == head.counts.total
-                && head.status == task_control::Status::Running
-            {
-                head.status = if head.counts.succeeded == head.counts.total {
-                    task_control::Status::Succeeded
-                } else {
-                    task_control::Status::PartiallyFailed
-                };
-                head.result = Some(serde_json::json!({
-                    "finished_items": head.counts.finished,
-                    "successful_items": head.counts.succeeded,
-                }));
-            }
             crate::sqlite_tasks::persist_head(&tx, &head, persisted_revision)
                 .map_err(Error::Task)?;
             tx.commit().map_err(storage)?;
@@ -1932,6 +1922,7 @@ fn collection_batch_item(
                 Utc::now(),
             )
             .map_err(Error::Task)?;
+            commit_terminal(head);
             Ok(Ok(receipt))
         }
         Err(error) => {
