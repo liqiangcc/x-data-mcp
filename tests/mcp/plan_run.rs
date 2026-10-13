@@ -138,12 +138,17 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// the regression signature of PLANRUN-COMMIT-COST (the pre-fix path
 /// wrote the `frozen_work_json`-sized task row ~2× per item).
 static TASK_ROW_WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-fn task_write_probe(evt: rusqlite::trace::TraceEvent<'_>) {
-    if let rusqlite::trace::TraceEvent::Profile(stmt, _d) = evt
-        && stmt.sql().starts_with("UPDATE tasks")
+fn task_write_probe(ctx: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization {
+    if let rusqlite::hooks::AuthAction::Update {
+        table_name,
+        column_name,
+    } = ctx.action
+        && table_name == "tasks"
+        && column_name == "state_revision"
     {
         TASK_ROW_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
+    rusqlite::hooks::Authorization::Allow
 }
 struct EnvReset;
 impl EnvReset {
@@ -829,7 +834,7 @@ fn planrun_scales_to_market_wide_membership() {
     let exec_hwm0 = vmhwm_kb();
     TASK_ROW_WRITES.store(0, std::sync::atomic::Ordering::Relaxed);
     r.backend
-        .compact_writer_trace(Some(task_write_probe))
+        .compact_writer_authorizer(Some(task_write_probe))
         .unwrap();
     let t2 = std::time::Instant::now();
     let provider = UnchangedProvider {
@@ -844,7 +849,7 @@ fn planrun_scales_to_market_wide_membership() {
         .unwrap()
         .expect("compact backend carries the update batch");
     let exec_ms = t2.elapsed().as_millis();
-    r.backend.compact_writer_trace(None).unwrap();
+    r.backend.compact_writer_authorizer(None).unwrap();
     let task_row_writes = TASK_ROW_WRITES.load(std::sync::atomic::Ordering::Relaxed);
     // O(chunk) task-row writes: claim + one head persist per 100-item
     // chunk. The pre-fix path ran ~2×items ≈ 10,400 UPDATEs on the
@@ -1639,7 +1644,7 @@ fn commit_task_row_writes_do_not_scale_with_task_size() {
     assert_eq!(item_ids.len(), 100);
     TASK_ROW_WRITES.store(0, std::sync::atomic::Ordering::Relaxed);
     r.backend
-        .compact_writer_trace(Some(task_write_probe))
+        .compact_writer_authorizer(Some(task_write_probe))
         .unwrap();
     let provider = UnchangedProvider {
         typed_calls: std::cell::Cell::new(0),
@@ -1652,7 +1657,7 @@ fn commit_task_row_writes_do_not_scale_with_task_size() {
         .run_items(&task_id, &item_ids, &provider)
         .unwrap()
         .expect("compact backend carries the update batch");
-    r.backend.compact_writer_trace(None).unwrap();
+    r.backend.compact_writer_authorizer(None).unwrap();
     let writes = TASK_ROW_WRITES.load(std::sync::atomic::Ordering::Relaxed);
     assert!(
         writes <= 4,

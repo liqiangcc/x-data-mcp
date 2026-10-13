@@ -68,20 +68,17 @@ impl MarketBackend {
         }
     }
 
-    /// Diagnostic seam (PLANRUN-COMMIT-COST): installs a statement
-    /// profiler on the compact writer connection so tests can count
-    /// per-table statement traffic. No-op on the legacy backend.
+    /// Diagnostic seam (PLANRUN-COMMIT-COST): installs an authorizer on
+    /// the compact writer connection so tests can count per-table
+    /// statement traffic. No-op on the legacy backend.
     #[doc(hidden)]
-    pub fn compact_writer_trace(
+    pub fn compact_writer_authorizer(
         &self,
-        f: Option<fn(rusqlite::trace::TraceEvent<'_>)>,
+        hook: Option<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
     ) -> Result<(), Error> {
         match self {
             Self::Legacy(_) => Ok(()),
-            Self::Compact(m) => m.write(|c| {
-                c.trace_v2(rusqlite::trace::TraceEventCodes::PROFILE, f);
-                Ok(())
-            }),
+            Self::Compact(m) => m.write(|c| c.authorizer(hook).map_err(super::storage)),
         }
     }
 
