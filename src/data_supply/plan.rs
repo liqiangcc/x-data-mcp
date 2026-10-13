@@ -33,6 +33,19 @@ pub const RUN_CONTRACT_VERSION: &str = "market-plan-run-task-v1";
 /// the `Bound` decorator uses so worker session opens are unchanged.
 const SOURCE_GENERATION_KEY: &str = super::generation::SOURCE_GENERATION_KEY;
 
+/// `io::Write` adapter so canonical JSON streams into sha256 without a
+/// materialized byte buffer (`sha2` does not implement `io::Write` here).
+struct DigestWriter(sha2::Sha256);
+impl std::io::Write for DigestWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn invalid(message: impl ToString) -> Error {
     Error::InvalidCommand(message.to_string())
 }
@@ -166,10 +179,11 @@ impl Plan {
     /// through the digest writer so a whole-market plan never needs its
     /// serialized form materialized.
     pub fn plan_id(&self) -> Result<String, PlanError> {
-        let mut hasher = sha2::Sha256::new();
+        let mut hasher = DigestWriter(sha2::Sha256::new());
         serde_json::to_writer(&mut hasher, &self.canonical())
             .map_err(|e| PlanError::Invalid(format!("plan serialization: {e}")))?;
         Ok(hasher
+            .0
             .finalize()
             .iter()
             .map(|byte| format!("{byte:02x}"))

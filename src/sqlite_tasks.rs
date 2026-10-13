@@ -1338,7 +1338,7 @@ impl TaskRepository for SqliteTasks {
         if id.trim().is_empty() || run.trim().is_empty() {
             return Err(Error::InvalidCommand("empty identity".into()));
         }
-        self.write(|c| accept_streamed_tx(c, id, command, shared_evidence, scopes, items, run))
+        self.write(|c| accept_streamed_tx(c, id, command, shared_evidence, &scopes, items, run))
     }
     fn transition(
         &self,
@@ -1804,7 +1804,7 @@ pub(crate) fn accept_streamed_tx(
     let mut first = true;
     // The same validations FrozenWork::validate performs — done here so a
     // bad item fails before its row instead of after the whole tree.
-    for item in items.by_ref() {
+    while let Some(item) = items.next() {
         if item.item_id.trim().is_empty() || item.progress_unit.trim().is_empty() {
             return Err(Error::InvalidCommand("empty item identity".into()));
         }
