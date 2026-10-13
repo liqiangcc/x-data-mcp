@@ -1804,7 +1804,7 @@ pub(crate) fn accept_streamed_tx(
     let mut first = true;
     // The same validations FrozenWork::validate performs — done here so a
     // bad item fails before its row instead of after the whole tree.
-    while let Some(item) = items.next() {
+    for item in &mut *items {
         if item.item_id.trim().is_empty() || item.progress_unit.trim().is_empty() {
             return Err(Error::InvalidCommand("empty item identity".into()));
         }
@@ -1816,13 +1816,12 @@ pub(crate) fn accept_streamed_tx(
         if !seen.insert(item.item_id.clone()) {
             return Err(Error::InvalidCommand("duplicate item identity".into()));
         }
-        if let Some(digest) = evidence_digest.as_deref() {
-            if item.frozen_inputs["selection_evidence"]["evidence_digest"].as_str() != Some(digest)
-            {
-                return Err(Error::InvalidCommand(
-                    "item evidence marker does not match shared evidence".into(),
-                ));
-            }
+        if let Some(digest) = evidence_digest.as_deref()
+            && item.frozen_inputs["selection_evidence"]["evidence_digest"].as_str() != Some(digest)
+        {
+            return Err(Error::InvalidCommand(
+                "item evidence marker does not match shared evidence".into(),
+            ));
         }
         item_stmt
             .execute(params![
