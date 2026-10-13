@@ -746,14 +746,12 @@ fn crash_with_two_active_rows_collapses_to_pointer() {
 
 /// P15: crash between `write_artifact(EVIDENCE)` and `write_decision`
 /// (`service.rs:764-791`). The evidence file exists but the decision was
-/// never written. **Deterministic outcome today:** every verify errors at
-/// `write_artifact` (`ArtifactExists`), for this and every other request
-/// id — the generation can never gain a decision and can never activate
-/// without manual removal of the evidence file. This test pins the
-/// deterministic failure; it is reported as an unrecoverable crash point
-/// (RESULT-PAR-2), not silently repaired.
+/// never written. Verify re-entry treats the residue as an idempotent
+/// hit when its bytes match the recomputed evidence exactly: the
+/// write-once store call is skipped (the file is never rewritten), the
+/// decision write completes, and the generation becomes activatable.
 #[test]
-fn crash_between_evidence_write_and_decision_blocks_verify_deterministically() {
+fn crash_between_evidence_write_and_decision_verify_reentry_recovers() {
     let mirror = tempfile::tempdir().unwrap();
     write_mirror(mirror.path(), today_u32());
     let root = tempfile::tempdir().unwrap();
@@ -766,30 +764,85 @@ fn crash_between_evidence_write_and_decision_blocks_verify_deterministically() {
 
     remirror(mirror.path(), 600007, today_u32());
     let gen_b = generation_of(&service, &install(&service, "req-p15b").task_id);
-    // Crash residue: evidence written, decision never written.
-    std::fs::write(
-        generation_dir(root.path(), &gen_b).join("compatibility-evidence.json"),
-        b"{}",
-    )
-    .unwrap();
+    // Produce the real evidence bytes with one complete verify, then
+    // remove only the decision file — the exact P15 disk residue
+    // (evidence written, decision absent).
+    verify(&service, &gen_b);
+    let evidence_path = generation_dir(root.path(), &gen_b).join("compatibility-evidence.json");
+    let evidence_sha = sha(&std::fs::read(&evidence_path).unwrap());
+    std::fs::remove_file(generation_dir(root.path(), &gen_b).join("consistency-decision.json"))
+        .unwrap();
     drop(service);
 
     let service = open(root.path(), mirror.path());
-    let first = service.verify_generation("req-p15-v1", &gen_b);
-    assert!(first.is_err(), "expected ArtifactExists, got {first:?}");
-    let second = service.verify_generation("req-p15-v2", &gen_b);
-    assert!(second.is_err());
-    assert!(
-        second.unwrap_err().to_string().contains("already exists"),
-        "failure must be the deterministic write-once guard"
+    // Re-entry completes the interrupted verify; the evidence file keeps
+    // its original bytes and the decision is written fresh.
+    let reply = service.verify_generation("req-p15-v1", &gen_b).unwrap();
+    assert_eq!(
+        reply.consistency_status.as_deref(),
+        Some("VERIFIED_COMPATIBLE")
     );
+    assert_eq!(
+        generation_state(&service.sync_status().unwrap(), &gen_b).as_deref(),
+        Some("consistency_verified")
+    );
+    assert_eq!(sha(&std::fs::read(&evidence_path).unwrap()), evidence_sha);
+    let decision_path = generation_dir(root.path(), &gen_b).join("consistency-decision.json");
+    assert!(decision_path.exists());
+    assert_eq!(
+        reply.decision_sha256.as_deref(),
+        Some(sha(&std::fs::read(&decision_path).unwrap()).as_str())
+    );
+    // A further verify under another request replays the recorded decision.
+    let replayed = service.verify_generation("req-p15-v2", &gen_b).unwrap();
+    assert_eq!(replayed.decision_sha256, reply.decision_sha256);
+    // The recovered generation now passes the full gate and activates.
+    assert_eq!(activate(&service, &gen_b, Some(&gen_a)).state, "active");
+    let status = service.sync_status().unwrap();
+    assert_eq!(status.active.as_ref().unwrap().generation_id, gen_b);
+    assert_eq!(dir_digest(&generation_dir(root.path(), &gen_a)), before_a);
+}
+
+/// P15b: same crash point, but the residue bytes differ from the
+/// recomputed evidence. Verify stays fail-closed: a deterministic error,
+/// the foreign bytes are never overwritten or removed, the row never
+/// advances, and activation remains refused.
+#[test]
+fn crash_evidence_residue_mismatch_fails_closed() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = open(root.path(), mirror.path());
+    // A healthy active generation must stay untouched throughout.
+    let gen_a = generation_of(&service, &install(&service, "req-p15ma").task_id);
+    verify(&service, &gen_a);
+    assert_eq!(activate(&service, &gen_a, None).state, "active");
+    let before_a = dir_digest(&generation_dir(root.path(), &gen_a));
+
+    remirror(mirror.path(), 600007, today_u32());
+    let gen_b = generation_of(&service, &install(&service, "req-p15mb").task_id);
+    // Crash residue whose bytes could not have come from this pipeline.
+    let evidence_path = generation_dir(root.path(), &gen_b).join("compatibility-evidence.json");
+    std::fs::write(&evidence_path, b"{}").unwrap();
+    drop(service);
+
+    let service = open(root.path(), mirror.path());
+    for request_id in ["req-p15m-v1", "req-p15m-v2"] {
+        let err = service.verify_generation(request_id, &gen_b).unwrap_err();
+        assert!(
+            err.to_string().contains("different bytes"),
+            "expected the byte-mismatch conflict, got {err:?}"
+        );
+    }
+    // The residue is byte-identical afterwards: no overwrite, no delete.
+    assert_eq!(std::fs::read(&evidence_path).unwrap(), b"{}");
     // The row never advances; activation fails closed.
     assert_eq!(
         generation_state(&service.sync_status().unwrap(), &gen_b).as_deref(),
         Some("byte_verified")
     );
     let refused = service
-        .activate_generation("activate-p15b", &gen_b, Some(&gen_a))
+        .activate_generation("activate-p15mb", &gen_b, Some(&gen_a))
         .unwrap();
     assert_eq!(refused.state, "refused");
     assert_eq!(

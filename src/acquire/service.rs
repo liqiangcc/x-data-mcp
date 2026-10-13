@@ -761,7 +761,7 @@ impl AcquireService {
         };
         let evidence_json = evidence.as_ref().map(serde_json::to_vec).transpose()?;
         let evidence_sha256 = match (&installed.dir, &evidence_json) {
-            (_, Some(bytes)) => Some(self.store.write_artifact(
+            (_, Some(bytes)) => Some(self.store.ensure_artifact(
                 generation_id,
                 generation::EVIDENCE_NAME,
                 bytes,

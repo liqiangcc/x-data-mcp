@@ -225,6 +225,18 @@ verified active generation
 - Publication outcome unknown：调用 publication verification；不把超时当失败。
 - Started task 停止状态不明：使用 stopped-write evidence 流程；不强制释放占用。
 
+Acquisition crash 恢复现状语义（PAR-2 实测，测试见 `acquire_crash_points`）：
+
+- evidence 已写而 decision 未写的 verify 中断可幂等重入：字节一致的残留 evidence
+  视为已写并继续写 decision；字节不一致则 fail-closed（`different bytes`），不覆盖、
+  不删除，需人工核查该 generation 目录。
+- request 行已提交而下载 task 行未写时，该 request_id 永久返回
+  `request_binding_lost`——这是确定终态，不是半成品；调用方必须换新 request_id
+  重新发起 acquire。
+- install rename 已发生而 task 记 failed（UnverifiedStage）时，落盘的 generation
+  目录在下次服务 open 时被收养为 `byte_verified`，可继续 verify/activate——
+  “任务 failed 但产物成功”是机械可判定的现状语义，不是失败信号。
+
 ## Capability 要求
 
 Capability 必须表达：
