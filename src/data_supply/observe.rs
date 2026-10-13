@@ -741,8 +741,11 @@ fn frozen_daily_ranges(task: &TaskSnapshot) -> Result<Vec<FrozenDailyRange>, Err
         crate::market_update::tasks::CONTRACT_VERSION
             | crate::market_update::tasks::REPUBLISH_CONTRACT_VERSION
     );
-    let default =
-        task.task.key.contract_version == crate::market_update::tasks::DEFAULT_CONTRACT_VERSION;
+    let default = matches!(
+        task.task.key.contract_version.as_str(),
+        crate::market_update::tasks::DEFAULT_CONTRACT_VERSION
+            | crate::data_supply::plan::RUN_CONTRACT_VERSION
+    );
     if !explicit && !default {
         return Err(Error::Integrity("unknown frozen range contract".into()));
     }
@@ -790,7 +793,11 @@ fn frozen_yearly_inputs(task: &TaskSnapshot) -> Result<Vec<FrozenYearlyInput>, E
     {
         return Ok(vec![]);
     }
-    if task.task.key.contract_version != crate::yearly_publication::tasks::CONTRACT_VERSION {
+    if !matches!(
+        task.task.key.contract_version.as_str(),
+        crate::yearly_publication::tasks::CONTRACT_VERSION
+            | crate::data_supply::plan::RUN_CONTRACT_VERSION
+    ) {
         return Err(Error::Integrity("unknown frozen yearly contract".into()));
     }
     task.items.iter().map(|item|{
