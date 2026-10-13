@@ -935,7 +935,11 @@ pub(crate) fn read_task_head(c: &Connection, id: &str) -> Result<Option<TaskHead
         evidence_digest: r.get(12).map_err(storage)?,
     }))
 }
-fn read_task_item(c: &Connection, task_id: &str, item_id: &str) -> Result<Option<TaskItem>, Error> {
+pub(crate) fn read_task_item(
+    c: &Connection,
+    task_id: &str,
+    item_id: &str,
+) -> Result<Option<TaskItem>, Error> {
     let mut stmt = c.prepare("SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=?1 AND item_id=?2").map_err(storage)?;
     let mut rows = stmt.query(params![task_id, item_id]).map_err(storage)?;
     let Some(r) = rows.next().map_err(storage)? else {
@@ -1159,7 +1163,7 @@ fn outcome_unchanged(
         _ => Ok(false),
     }
 }
-fn write_item_row(c: &Connection, task_id: &str, item: &TaskItem) -> Result<(), Error> {
+pub(crate) fn write_item_row(c: &Connection, task_id: &str, item: &TaskItem) -> Result<(), Error> {
     #[cfg(test)]
     tests::count_write("task_items");
     c.execute(
@@ -1295,6 +1299,48 @@ pub(crate) fn write_task_delta(
         c.execute(
             "DELETE FROM scope_occupancy WHERE task_id=?1",
             [&s.task.task_id],
+        )
+        .map_err(storage)?;
+    }
+    Ok(())
+}
+/// One batch-chunk head persist: the caller ran `decide_head` transitions
+/// in memory and now writes the end-of-chunk head — ONE `tasks` row update
+/// instead of one per item (the row carries the multi-MB `frozen_work_json`
+/// record, so a per-item update rewrites the whole task body each time).
+/// `expected` is the last persisted revision; counters are written as
+/// absolute values from the in-memory head.
+pub(crate) fn persist_head(c: &Connection, head: &TaskHead, expected: u64) -> Result<(), Error> {
+    #[cfg(test)]
+    tests::count_write("tasks");
+    let changed = c
+        .execute(
+            "UPDATE tasks SET status=?1,state_revision=?2,owner_run_id=?3,last_progress_at=?4,result_json=?5,item_count=?6,items_pending=?7,items_running=?8,items_finished=?9,items_succeeded=?10 WHERE task_id=?11 AND state_revision=?12",
+            params![
+                tag(&head.status),
+                db_revision(head.state_revision)?,
+                head.owner_run_id.as_deref(),
+                head.last_progress_at.to_rfc3339(),
+                head.result.as_ref().map(encode).transpose()?,
+                head.counts.total as i64,
+                head.counts.pending as i64,
+                head.counts.running as i64,
+                head.counts.finished as i64,
+                head.counts.succeeded as i64,
+                head.task_id,
+                db_revision(expected)?
+            ],
+        )
+        .map_err(storage)?;
+    if changed != 1 {
+        return Err(Error::RevisionConflict);
+    }
+    if head.status.terminal() {
+        #[cfg(test)]
+        tests::count_write("scope_occupancy");
+        c.execute(
+            "DELETE FROM scope_occupancy WHERE task_id=?1",
+            [&head.task_id],
         )
         .map_err(storage)?;
     }

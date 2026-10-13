@@ -114,6 +114,11 @@ pub(crate) struct Commit<'a> {
     /// same transaction — commit or replay — keeps the scratch table from
     /// leaking one row per typed/yearly commit.
     pub staged_version_id: Option<&'a str>,
+    /// When set, the commit writes the item row but leaves the `tasks` row
+    /// update + terminal bookkeeping to the caller's deferred head persist
+    /// (chunked batch commits write the `frozen_work_json`-sized task row
+    /// once per chunk instead of once per item).
+    pub defer_task_row: bool,
 }
 
 /// Canonical result identity digest stored on the event row — replay and
@@ -250,9 +255,13 @@ fn check_binding(c: &Connection, w: &Commit) -> Result<(), Error> {
 /// bookkeeping the v19 results path ran (`task_revision` CAS is inside
 /// the tasks UPDATE).
 fn finish_item_and_task(c: &Connection, w: &Commit, task_revision: i64) -> Result<(), Error> {
+    finish_item_row(c, w)?;
+    finish_task_row_and_terminal(c, w, task_revision)
+}
+/// The item-row half of item completion — a narrow row write the deferred
+/// (chunked) path still performs per item.
+fn finish_item_row(c: &Connection, w: &Commit) -> Result<(), Error> {
     let outcome_json = result_outcome_json(w.result_id, "market_update")?;
-    let expected_i64 = i64::try_from(w.expected_task_revision)
-        .map_err(|_| integrity("task revision out of range"))?;
     let changed = c
         .execute(
             "UPDATE task_items SET stage='finished',outcome_json=?1 WHERE task_id=?2 AND item_id=?3 AND stage='running' AND outcome_json IS NULL",
@@ -262,6 +271,18 @@ fn finish_item_and_task(c: &Connection, w: &Commit, task_revision: i64) -> Resul
     if changed != 1 {
         return Err(Error::Conflict("task item is not running".into()));
     }
+    Ok(())
+}
+/// The task-row half — the `frozen_work_json`-sized row rewrite plus the
+/// terminal result/occupancy bookkeeping. Chunked callers defer this to a
+/// single per-chunk `persist_head` write.
+fn finish_task_row_and_terminal(
+    c: &Connection,
+    w: &Commit,
+    task_revision: i64,
+) -> Result<(), Error> {
+    let expected_i64 = i64::try_from(w.expected_task_revision)
+        .map_err(|_| integrity("task revision out of range"))?;
     let changed = c
         .execute(
             "UPDATE tasks SET state_revision=?1,items_running=items_running-1,items_finished=items_finished+1,items_succeeded=items_succeeded+1,status=CASE WHEN items_finished+1=item_count THEN CASE WHEN items_succeeded+1=item_count THEN 'succeeded' ELSE 'partially_failed' END ELSE status END WHERE task_id=?2 AND status='running' AND state_revision=?3 AND items_running>0",
@@ -667,7 +688,11 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         SeriesChange::Yearly { .. } => unreachable!("yearly dispatched earlier"),
     }
 
-    finish_item_and_task(c, w, task_revision_i64)?;
+    if w.defer_task_row {
+        finish_item_row(c, w)?;
+    } else {
+        finish_item_and_task(c, w, task_revision_i64)?;
+    }
     Ok(Receipt {
         publication_id: w.result_id.into(),
         version_id: new_version_id,
@@ -972,7 +997,11 @@ fn commit_yearly_inner(
             as_of_day,
         },
     )?;
-    finish_item_and_task(c, w, task_revision_i64)?;
+    if w.defer_task_row {
+        finish_item_row(c, w)?;
+    } else {
+        finish_item_and_task(c, w, task_revision_i64)?;
+    }
     Ok(Receipt {
         publication_id: w.result_id.into(),
         version_id: new_version_id,
