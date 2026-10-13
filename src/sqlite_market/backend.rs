@@ -68,18 +68,18 @@ impl MarketBackend {
         }
     }
 
-    /// Diagnostic seam (PLANRUN-COMMIT-COST): installs a statement profiler
-    /// on the compact writer connection so tests can count per-table
-    /// statement traffic. No-op on the legacy backend.
+    /// Diagnostic seam (PLANRUN-COMMIT-COST): installs a statement
+    /// profiler on the compact writer connection so tests can count
+    /// per-table statement traffic. No-op on the legacy backend.
     #[doc(hidden)]
-    pub fn compact_writer_profile(
+    pub fn compact_writer_trace(
         &self,
-        f: Option<fn(&str, std::time::Duration)>,
+        f: Option<fn(rusqlite::trace::TraceEvent<'_>)>,
     ) -> Result<(), Error> {
         match self {
             Self::Legacy(_) => Ok(()),
             Self::Compact(m) => m.write(|c| {
-                c.profile(f);
+                c.trace_v2(rusqlite::trace::TraceEventCodes::PROFILE, f);
                 Ok(())
             }),
         }

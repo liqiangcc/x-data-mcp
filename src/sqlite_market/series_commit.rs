@@ -114,6 +114,11 @@ pub(crate) struct Commit<'a> {
     /// same transaction — commit or replay — keeps the scratch table from
     /// leaking one row per typed/yearly commit.
     pub staged_version_id: Option<&'a str>,
+    /// When set, the commit writes the item row but leaves the `tasks` row
+    /// update + terminal bookkeeping to the caller's deferred head persist
+    /// (chunked batch commits write the `frozen_work_json`-sized task row
+    /// once per chunk instead of once per item).
+    pub defer_task_row: bool,
 }
 
 /// Canonical result identity digest stored on the event row — replay and
