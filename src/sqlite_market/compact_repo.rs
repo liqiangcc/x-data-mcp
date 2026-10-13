@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -143,7 +143,26 @@ fn invalid(message: impl std::fmt::Display) -> Error {
 // Staged candidate scratch (staged_records — see 021 migration comment)
 // ---------------------------------------------------------------------------
 
+/// Staged-row TTL: a candidate exists only between `stage()` and its
+/// item's commit — seconds apart in every pipeline. A row untouched for
+/// longer belongs to an item run that crashed or was cancelled mid-flight
+/// and will never be consumed; the stage-time sweep reclaims it.
+const STAGED_TTL: chrono::Duration = chrono::Duration::hours(24);
+
+/// Delete staged rows whose last stage attempt precedes `cutoff`. Runs
+/// inside `stage()`'s transaction — the `staged_records_created_at` index
+/// keeps it O(expired) — so orphan growth is bounded to candidates staged
+/// within the TTL window.
+pub(crate) fn gc_staged(c: &Connection, cutoff: chrono::DateTime<Utc>) -> Result<usize, Error> {
+    c.execute(
+        "DELETE FROM staged_records WHERE created_at < ?1",
+        params![cutoff.to_rfc3339()],
+    )
+    .map_err(storage)
+}
+
 fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
+    gc_staged(c, Utc::now() - STAGED_TTL)?;
     let record = compat::check(raw)?;
     let period = record.version().period;
     let entity = record.version().symbol.clone();
@@ -193,7 +212,7 @@ fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
     let version_id = record.version().version_id.clone();
     c.execute(
         "INSERT INTO staged_records(version_id,raw,created_at) VALUES(?1,?2,?3)
-         ON CONFLICT(version_id) DO UPDATE SET raw=excluded.raw",
+         ON CONFLICT(version_id) DO UPDATE SET raw=excluded.raw,created_at=excluded.created_at",
         params![version_id, raw.to_string(), Utc::now().to_rfc3339()],
     )
     .map_err(storage)?;
@@ -599,6 +618,7 @@ fn commit_ops(
         if event.task_id != command.task_id || event.item_id != command.item_id {
             return Err(Error::Conflict("result identity conflict".into()));
         }
+        series_commit::consume_staged(c, Some(command.version_id.as_str()))?;
         return Ok(Receipt {
             publication_id: command.publication_id.clone(),
             version_id: series::version_id(&event.new_content_digest),
@@ -689,6 +709,7 @@ fn commit_ops(
             metadata_changed,
             event_evidence_digest: evidence,
             published_at: None,
+            staged_version_id: Some(command.version_id.as_str()),
         },
     )
 }
@@ -739,13 +760,19 @@ fn commit_plan(
     let v = record.version();
     let scope = Scope::of(v);
     if v.period == Period::Year {
-        return Err(invalid("yearly write path arrives with S3"));
+        return Err(invalid("yearly commits go through commit_yearly"));
     }
     // Replay first: the result-id anchor outranks every commit-time gate —
     // a repeated command must return the original receipt, not conflict on
-    // the already-advanced head.
-    if let Some(receipt) = receipt_for(c, &command.publication_id)? {
-        return Ok(receipt);
+    // the already-advanced head. A result id bound to a different
+    // task/item is an identity conflict, not a replay.
+    if let Some(event) = series::event_by_result(c, &command.publication_id)? {
+        if event.task_id != command.task_id || event.item_id != command.item_id {
+            return Err(Error::Conflict("result identity conflict".into()));
+        }
+        series_commit::consume_staged(c, Some(command.version_id.as_str()))?;
+        return receipt_for(c, &command.publication_id)?
+            .ok_or_else(|| integrity("receipt event lacks result payload"));
     }
     // The sealed plan's record must equal the staged candidate.
     let staged = read_staged(c, &command.version_id)?;
@@ -825,6 +852,9 @@ fn commit_plan(
             series_commit::SeriesChange::Metadata | series_commit::SeriesChange::NoChange => {
                 "unchanged"
             }
+            series_commit::SeriesChange::Yearly { .. } => {
+                unreachable!("yearly commits go through commit_yearly")
+            }
         };
         let prefix = if matches!(change, series_commit::SeriesChange::Append { .. }) {
             head.as_ref().map(|h| h.record_count as u64 * 32)
@@ -896,13 +926,9 @@ fn commit_plan(
             metadata_changed: !no_change && metadata_changed,
             event_evidence_digest: event_evidence,
             published_at: Some(v.published_at),
+            staged_version_id: Some(command.version_id.as_str()),
         },
     )?;
-    c.execute(
-        "DELETE FROM staged_records WHERE version_id=?1",
-        params![command.version_id],
-    )
-    .map_err(storage)?;
     Ok(receipt)
 }
 
@@ -916,6 +942,7 @@ fn commit_plan_no_change(
 ) -> Result<Receipt, Error> {
     let command = &plan.publication.command;
     if let Some(receipt) = receipt_for(c, &command.publication_id)? {
+        series_commit::consume_staged(c, Some(command.version_id.as_str()))?;
         return Ok(receipt);
     }
     let base_id = &plan.base.version().version_id;
@@ -953,6 +980,9 @@ fn commit_plan_no_change(
             metadata_changed: false,
             event_evidence_digest: event_evidence,
             published_at: None,
+            // The envelope path stages the candidate before classification
+            // — a no_change commit must consume that row too.
+            staged_version_id: Some(command.version_id.as_str()),
         },
     )
 }
@@ -1169,6 +1199,7 @@ impl RangeRepository for SqliteCompactMarket {
                     metadata_changed: false,
                     event_evidence_digest: evidence,
                     published_at: None,
+                    staged_version_id: None,
                 },
             )?;
             tx.commit()
@@ -1396,12 +1427,21 @@ fn update_batch_item(
     snapshot: &mut TaskSnapshot,
     item: &crate::market_update::UpdateBatchItem,
 ) -> Result<Result<Receipt, Error>, Error> {
+    // The typed batch never stages; the id still names the scratch row an
+    // earlier failed envelope attempt of this same item may have left.
+    let staged_version_id = match &item.prepared {
+        crate::market_update::UpdateBatchPrepared::Append {
+            result_version_id, ..
+        } => Some(result_version_id.as_str()),
+        crate::market_update::UpdateBatchPrepared::NoChange { .. } => None,
+    };
     if let Some(event) = series::event_by_result(c, &item.publication_id)? {
         if event.task_id != item.task_id || event.item_id != item.item_id {
             return Err(Error::Conflict(
                 "update result id replays a different commit".into(),
             ));
         }
+        series_commit::consume_staged(c, staged_version_id)?;
         return Ok(Ok(Receipt {
             publication_id: item.publication_id.clone(),
             version_id: series::version_id(&event.new_content_digest),
@@ -1475,6 +1515,7 @@ fn update_batch_item(
                         metadata_changed: false,
                         event_evidence_digest: evidence,
                         published_at: None,
+                        staged_version_id: None,
                     },
                 )
             }
@@ -1533,6 +1574,7 @@ fn update_batch_item(
                         metadata_changed: binding.is_some() || evidence_d.is_some(),
                         event_evidence_digest: evidence,
                         published_at: None,
+                        staged_version_id,
                     },
                 )
             }
@@ -1697,6 +1739,7 @@ fn collection_batch_item(
                 "collection result id replays a different commit".into(),
             ));
         }
+        series_commit::consume_staged(c, Some(item.version_id.as_str()))?;
         return Ok(Ok(Receipt {
             publication_id: item.publication_id.clone(),
             version_id: series::version_id(&event.new_content_digest),
@@ -1832,12 +1875,13 @@ fn collection_item_commit(c: &Connection, item: &CollectionCandidate) -> Result<
             metadata_changed: false,
             event_evidence_digest: evidence,
             published_at: Some(item.published_at),
+            staged_version_id: Some(item.version_id.as_str()),
         },
     )
 }
 
 // ---------------------------------------------------------------------------
-// YearlyRepository — S3 stub (write path arrives with yearly rework)
+// YearlyRepository — schema-21 yearly commits (S3)
 // ---------------------------------------------------------------------------
 
 impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarket {
@@ -1854,9 +1898,102 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
     }
     fn commit_yearly(
         &self,
-        _plan: &crate::yearly_publication::results::YearlyResultPlan,
+        plan: &crate::yearly_publication::results::YearlyResultPlan,
     ) -> Result<Receipt, Error> {
-        Err(invalid("yearly write path arrives with S3"))
+        self.write(|c| {
+            let tx = c
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(storage)?;
+            let command = plan.command();
+            // Replay first — the result-id anchor outranks every gate; a
+            // repeated command returns its recorded receipt. A result id
+            // bound to a different task/item is an identity conflict, not a
+            // replay.
+            if let Some(event) = series::event_by_result(&tx, &command.publication_id)? {
+                if event.task_id != command.task_id || event.item_id != command.item_id {
+                    return Err(Error::Conflict("result identity conflict".into()));
+                }
+                series_commit::consume_staged(&tx, Some(command.version_id.as_str()))?;
+                let receipt = receipt_for(&tx, &command.publication_id)?
+                    .ok_or_else(|| integrity("receipt event lacks result payload"))?;
+                tx.commit().map_err(storage)?;
+                return Ok(receipt);
+            }
+            let v = plan.publication.record.version();
+            let scope = Scope {
+                symbol: v.symbol.clone(),
+                period: Period::Year,
+            };
+            let lineage = v
+                .yearly_derivation
+                .as_ref()
+                .ok_or_else(|| integrity("yearly candidate lacks derivation lineage"))?;
+            let bars: Vec<CompactBar> = v
+                .records
+                .iter()
+                .map(|r| CompactBar::from_bar(r, Period::Year))
+                .collect::<Result<_, _>>()
+                .map_err(integrity)?;
+            let daily_base = series_commit::hex_digest(&plan.base.version().version_id)?;
+            let version_evidence = evidence_store::put_evidence(
+                &tx,
+                EvidenceKind::Version,
+                &json!(crate::compact_market::VersionEvidence {
+                    source: v.source.clone(),
+                    coverage_reason: plan.publication.record.batch.coverage.reason.clone(),
+                    unit_currency: plan.publication.record.batch.unit_currency.clone(),
+                    adjustment_evidence: plan.publication.record.batch.adjustment_evidence.clone(),
+                }),
+            )?;
+            let event_evidence = evidence_store::put_evidence(
+                &tx,
+                EvidenceKind::Yearly,
+                &json!({
+                    "base_daily_version_id": plan.base.version().version_id,
+                    "algorithm_version": lineage.algorithm_version,
+                    "years": v.records.iter().map(|r| r.date.year()).collect::<Vec<_>>(),
+                }),
+            )?;
+            // `as_of_day` is the daily-content cutoff the derivation consumed
+            // (`last_trading_date`), not the publish wall-clock — reads clip
+            // the daily re-aggregation at it so a same-year append leaves the
+            // row merely Behind rather than unclassifiable.
+            let as_of = lineage.last_trading_date;
+            let occupancy = scope.occupancy_key();
+            let w = series_commit::Commit {
+                result_id: &command.publication_id,
+                task_id: &command.task_id,
+                item_id: &command.item_id,
+                run_id: &command.run_id,
+                occupancy_key: &occupancy,
+                expected_task_revision: command.expected_revision,
+                entity: &v.symbol,
+                period: Period::Year,
+                base_version_id: plan.prior.as_ref().map(|p| p.version().version_id.as_str()),
+                change: series_commit::SeriesChange::Yearly {
+                    upserts: &bars,
+                    daily_base_digest: daily_base,
+                    algorithm_version: &lineage.algorithm_version,
+                    as_of_day: compact_market::epoch_day(as_of),
+                },
+                range_start_day: 0,
+                range_end_day: 0,
+                algorithm_version: &lineage.algorithm_version,
+                window_digest: None,
+                // Yearly rows inherit the daily head's source binding —
+                // the commit derives it from the daily series inside the tx.
+                source_binding_digest: None,
+                evidence_digest: Some(version_evidence),
+                coverage_status: Some(plan.publication.record.batch.coverage.status),
+                metadata_changed: false,
+                event_evidence_digest: event_evidence,
+                published_at: Some(v.published_at),
+                staged_version_id: Some(command.version_id.as_str()),
+            };
+            let receipt = series_commit::commit_series_tx(&tx, &w)?;
+            tx.commit().map_err(storage)?;
+            Ok(receipt)
+        })
     }
     fn yearly_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
         self.read(|c| receipt_for(c, id))

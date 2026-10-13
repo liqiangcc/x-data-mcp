@@ -114,15 +114,17 @@ fn presence_item(
         ) {
             Ok(Some(row)) => row,
             Ok(None) => {
-                // SPEC §6.1: a superseded (committed-then-replaced) digest is
-                // fail-closed integrity, not merely an absent base.
+                // R2' (OWNER-RULING-PAR-1A): a superseded
+                // (committed-then-replaced) pin is ordinary expiry —
+                // base_superseded, not corruption; a never-committed id
+                // stays base_unavailable.
                 let stale =
                     crate::sqlite_market::series::decode_version_id(&item.base_daily_version_id)
                         .is_some_and(|d| {
                             crate::sqlite_market::series::digest_seen(c, &d).unwrap_or(false)
                         });
                 return Ok(Outcome::Unavailable(if stale {
-                    YearPresenceReason::IntegrityFailure
+                    YearPresenceReason::BaseSuperseded
                 } else {
                     YearPresenceReason::BaseUnavailable
                 }));
@@ -284,6 +286,10 @@ pub(crate) fn query(
                 version_ref: None,
                 status: ManifestStatus::Absent,
                 metadata: None,
+
+                stale: None,
+                as_of_day: None,
+                reason: None,
             });
             return Ok(result);
         };
@@ -302,6 +308,10 @@ pub(crate) fn query(
                 adjustment: None,
                 lineage: None,
             }),
+
+            stale: None,
+            as_of_day: None,
+            reason: None,
         });
         let Filter::Catalog {
             code,
@@ -371,27 +381,56 @@ pub(crate) fn query(
                     version_ref: None,
                     status: ManifestStatus::Absent,
                     metadata: None,
+
+                    stale: None,
+                    as_of_day: None,
+                    reason: None,
                 });
                 continue;
             };
-            if latest_only && plan.args.dataset == Dataset::Yearly {
-                // RULINGS A1: a daily `replace` since the recorded base
-                // invalidates the entity's stored yearly rows — refuse the
-                // row, not the whole request.
-                if let Some(series) =
+            let mut stale_mark: Option<(String, chrono::NaiveDate)> = None;
+            if latest_only
+                && plan.args.dataset == Dataset::Yearly
+                && let Some(series) =
                     crate::sqlite_market::series::read_series_by_version_id(c, &id)?
-                    && matches!(
-                        crate::sqlite_market::series::yearly_state(c, &series)?,
-                        crate::sqlite_market::series::YearlyState::Invalid
-                    )
-                {
-                    result.manifest.push(ManifestEntry {
-                        entity: Some(entity.clone()),
-                        version_ref: None,
-                        status: ManifestStatus::Absent,
-                        metadata: None,
-                    });
-                    continue;
+            {
+                match crate::sqlite_market::series::yearly_state(c, &series)? {
+                    crate::sqlite_market::series::YearlyState::Fresh => {}
+                    crate::sqlite_market::series::YearlyState::Behind { as_of_day } => {
+                        stale_mark = Some((
+                            "behind".into(),
+                            crate::compact_market::epoch_date(as_of_day)
+                                .map_err(|e| Error::Integrity(e.to_string()))?,
+                        ));
+                    }
+                    crate::sqlite_market::series::YearlyState::Invalid(reason) => {
+                        // SPEC §6.2: a single-entity Invalid surfaces
+                        // `stale_version`; batched calls degrade to
+                        // absent-with-reason for that row only.
+                        if plan.entities.len() == 1 {
+                            return Err(Error::Stale(format!(
+                                "yearly head superseded: {}",
+                                reason.code()
+                            )));
+                        }
+                        result.manifest.push(ManifestEntry {
+                            entity: Some(entity.clone()),
+                            version_ref: None,
+                            status: ManifestStatus::Absent,
+                            metadata: None,
+                            stale: None,
+                            as_of_day: None,
+                            reason: Some(match reason {
+                                crate::sqlite_market::series::YearlyInvalidReason::DailyReplaced => {
+                                    AbsentReason::DailyReplacedSinceDerivation
+                                }
+                                crate::sqlite_market::series::YearlyInvalidReason::SemanticsChanged => {
+                                    AbsentReason::ValueSemanticsChanged
+                                }
+                            }),
+                        });
+                        continue;
+                    }
                 }
             }
             let r = read_market(c, ctx, plan.args.dataset, entity, &id)?;
@@ -402,6 +441,9 @@ pub(crate) fn query(
                 version_ref: Some(reference.clone()),
                 status: ManifestStatus::Present,
                 metadata: Some(metadata(&r)),
+                stale: stale_mark.as_ref().map(|m| m.0.clone()),
+                as_of_day: stale_mark.as_ref().map(|m| m.1),
+                reason: None,
             });
             let (start, end) = match plan.args.filter {
                 Filter::Daily {
@@ -515,6 +557,10 @@ fn availability_stats(
                 version_ref: None,
                 status: ManifestStatus::Absent,
                 metadata: None,
+
+                stale: None,
+                as_of_day: None,
+                reason: None,
             }),
             None,
             None,
@@ -530,6 +576,10 @@ fn availability_stats(
         version_ref: Some(market_ref(plan.args.dataset, entity, &r)),
         status: ManifestStatus::Present,
         metadata: Some(metadata(&r)),
+
+        stale: None,
+        as_of_day: None,
+        reason: None,
     };
     let (start, end) = market_range(plan)?;
     let mut count = 0usize;
@@ -792,7 +842,11 @@ fn task_facts(
         publications.push(market_ref(dataset, &e, &r));
     }
     let mut q = c
-        .prepare("SELECT result_id FROM market_update_results WHERE task_id=?1 ORDER BY result_id")
+        .prepare(if crate::sqlite_market::is_latest_only_schema(c)? {
+            "SELECT result_id FROM market_events WHERE task_id=?1 AND period=1 ORDER BY result_id"
+        } else {
+            "SELECT result_id FROM market_update_results WHERE task_id=?1 ORDER BY result_id"
+        })
         .map_err(storage)?;
     let result_ids = q
         .query_map([id], |r| r.get::<_, String>(0))
@@ -804,9 +858,11 @@ fn task_facts(
         .map(|id| range_result(c, ctx, id))
         .collect::<Result<Vec<_>, _>>()?;
     let mut q = c
-        .prepare(
-            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id",
-        )
+        .prepare(if crate::sqlite_market::is_latest_only_schema(c)? {
+            "SELECT result_id FROM market_events WHERE task_id=?1 AND period=2 ORDER BY result_id"
+        } else {
+            "SELECT result_id FROM yearly_execution_results WHERE task_id=?1 ORDER BY result_id"
+        })
         .map_err(storage)?;
     let yearly_ids = q
         .query_map([id], |r| r.get::<_, String>(0))
@@ -1683,15 +1739,41 @@ fn series_stats(
     if series.entity != entity.symbol() || Some(series.period) != plan.args.dataset.period() {
         return Err(Error::Integrity("version entity/dataset mismatch".into()));
     }
-    if plan.args.dataset == Dataset::Yearly
-        && matches!(
-            crate::sqlite_market::series::yearly_state(c, &series)?,
-            crate::sqlite_market::series::YearlyState::Invalid
-        )
-    {
-        return Err(Error::Integrity(
-            "yearly lineage invalidated by replace event".into(),
-        ));
+    let mut stale_mark: Option<(String, chrono::NaiveDate)> = None;
+    if plan.args.dataset == Dataset::Yearly {
+        match crate::sqlite_market::series::yearly_state(c, &series)? {
+            crate::sqlite_market::series::YearlyState::Fresh => {}
+            crate::sqlite_market::series::YearlyState::Behind { as_of_day } => {
+                stale_mark = Some((
+                    "behind".into(),
+                    crate::compact_market::epoch_date(as_of_day)
+                        .map_err(|e| Error::Integrity(e.to_string()))?,
+                ));
+            }
+            crate::sqlite_market::series::YearlyState::Invalid(reason) => {
+                return Ok((
+                    Some(ManifestEntry {
+                        entity: Some(entity.clone()),
+                        version_ref: None,
+                        status: ManifestStatus::Absent,
+                        metadata: None,
+                        stale: None,
+                        as_of_day: None,
+                        reason: Some(match reason {
+                            crate::sqlite_market::series::YearlyInvalidReason::DailyReplaced => {
+                                AbsentReason::DailyReplacedSinceDerivation
+                            }
+                            crate::sqlite_market::series::YearlyInvalidReason::SemanticsChanged => {
+                                AbsentReason::ValueSemanticsChanged
+                            }
+                        }),
+                    }),
+                    None,
+                    None,
+                    0,
+                ));
+            }
+        }
     }
     let (start, end) = market_range(plan)?;
     let (count, first, last) = crate::sqlite_market::series::window_stats(
@@ -1708,6 +1790,9 @@ fn series_stats(
         version_ref: Some(series_version_ref(plan.args.dataset, entity, &series)),
         status: ManifestStatus::Present,
         metadata: Some(series_metadata(c, &series)?),
+        stale: stale_mark.as_ref().map(|m| m.0.clone()),
+        as_of_day: stale_mark.as_ref().map(|m| m.1),
+        reason: None,
     };
     let to_date =
         |d: i64| crate::compact_market::epoch_date(d).map_err(|e| Error::Integrity(e.to_string()));
@@ -1772,7 +1857,12 @@ fn task_facts_series(
     let mut publications = Vec::new();
     let mut range_results = Vec::new();
     let mut yearly_results = Vec::new();
+    // Every durable event is the item's result evidence: first_publish has
+    // no base version to express as a RangeExecutionResult, but the event
+    // itself still evidences the item, so the evidenced set is item-level.
+    let mut evidenced_items: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (entity, period, kind, outcome, item_id, result_id, old, new, base, created) in events {
+        evidenced_items.insert(item_id.clone());
         let e = crate::data_supply::observe::entity(&entity)
             .ok_or_else(|| Error::Integrity("event entity is not a security".into()))?;
         let new_id = digest_hex(&new)?;
@@ -1839,7 +1929,21 @@ fn task_facts_series(
             });
         }
     }
-    task_facts_check_evidenced(&s, &range_results, &yearly_results)?;
+    let successful: std::collections::BTreeSet<String> = s
+        .items
+        .iter()
+        .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+        .map(|i| i.spec.item_id.clone())
+        .collect();
+    if matches!(
+        s.task.key.operation.as_str(),
+        "update_data" | "backfill_data" | "republish_data"
+    ) && successful != evidenced_items
+    {
+        return Err(Error::Integrity(
+            "successful range task lacks matching result evidence".into(),
+        ));
+    }
     Ok(TaskFacts {
         request_id: request,
         snapshot: s,

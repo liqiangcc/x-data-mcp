@@ -18,6 +18,7 @@ use crate::market_update::publication::RangeRepository;
 use crate::publish::{EffectiveVersion, ValidationSummary};
 use crate::sqlite_market::{series, storage};
 use crate::task_control::{self, CommandKey, ItemSpec, TaskRepository};
+use crate::yearly_publication::results::YearlyRepository;
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::Connection;
 
@@ -189,16 +190,9 @@ fn scope() -> Scope {
     }
 }
 
-/// Commit a first-publish envelope commit: stage → candidate →
-/// mark_validated → commit — same flow the envelope path runs.
-fn publish_bars(
-    repo: &super::super::compact_repo::SqliteCompactMarket,
-    task_id: &str,
-    revision: u64,
-    publication_id: &str,
-    version_label: &str,
-    bars: Vec<Bar>,
-) -> crate::market_storage::Receipt {
+/// The staged candidate record the envelope path parks before commit —
+/// same shape `publish_bars` writes.
+fn staged_raw(version_label: &str, bars: Vec<Bar>) -> Value {
     let mut version = EffectiveVersion {
         version_id: version_label.into(),
         symbol: SYMBOL.into(),
@@ -248,6 +242,20 @@ fn publish_bars(
         "generation_evidence": generation_evidence(),
     });
     raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+    raw
+}
+
+/// Commit a first-publish envelope commit: stage → candidate →
+/// mark_validated → commit — same flow the envelope path runs.
+fn publish_bars(
+    repo: &super::super::compact_repo::SqliteCompactMarket,
+    task_id: &str,
+    revision: u64,
+    publication_id: &str,
+    version_label: &str,
+    bars: Vec<Bar>,
+) -> crate::market_storage::Receipt {
+    let raw = staged_raw(version_label, bars);
     repo.stage(&raw).unwrap();
     let candidate = repo.candidate(version_label).unwrap();
     repo.mark_validated(&candidate).unwrap();
@@ -694,6 +702,7 @@ fn replace_rollback_keeps_series_consistent() {
                 metadata_changed: false,
                 event_evidence_digest: continuity,
                 published_at: None,
+                staged_version_id: None,
             },
         )?;
         let _ = result;
@@ -1347,6 +1356,7 @@ fn check_binding_rejects_wrong_owner_state_target_and_occupancy() {
             metadata_changed: false,
             event_evidence_digest: [0xAA; 32],
             published_at: None,
+            staged_version_id: None,
         }
     }
 
@@ -1697,6 +1707,7 @@ fn metadata_commit_updates_updated_at_no_change_does_not() {
                 metadata_changed: true,
                 event_evidence_digest: evidence,
                 published_at: None,
+                staged_version_id: None,
             },
         )
     })
@@ -1727,4 +1738,1507 @@ fn hex_digest_rejects_malformed_input() {
     }
     assert!(hex_digest(&"0".repeat(64)).is_ok());
     assert!(hex_digest(&"Ab".repeat(32)).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// S3 harness + yearly tests. `TaskHandle::item()` enforces the
+// one-running-item rule: it finishes a still-running previous item before
+// starting the next.
+// ---------------------------------------------------------------------------
+
+struct Repo {
+    path: std::path::PathBuf,
+    repo: super::super::compact_repo::SqliteCompactMarket,
+    _dir: tempfile::TempDir,
+}
+
+impl Repo {
+    fn new() -> Self {
+        let dir = tempdir();
+        let (path, repo) = repo(&dir);
+        Repo {
+            path,
+            repo,
+            _dir: dir,
+        }
+    }
+
+    /// `count` pending items on the given scope/period; the task is claimed
+    /// but no item is started — `item()` owns the StartItem lifecycle.
+    fn task(&self, count: usize, period: &str, req: &str) -> TaskHandle {
+        let scope = task_control::legacy::scope_id(SYMBOL, period);
+        let items: Vec<ItemSpec> = (1..=count)
+            .map(|index| ItemSpec {
+                item_id: format!("item-{index}"),
+                target: json!({"symbol": SYMBOL, "period": period}),
+                progress_unit: "bars".into(),
+                frozen_inputs: json!({}),
+                scope_keys: std::collections::BTreeSet::from([scope.clone()]),
+            })
+            .collect();
+        let command = task_control::Command {
+            key: CommandKey {
+                operation: "update_data".into(),
+                dataset: if period == "year" {
+                    "market.yearly".into()
+                } else {
+                    "market.daily".into()
+                },
+                contract_version: "v1".into(),
+            },
+            intent: json!({}),
+        };
+        let work = task_control::FrozenWork {
+            items,
+            scopes: std::collections::BTreeSet::from([scope]),
+            shared_evidence: None,
+        };
+        let acceptance = self.repo.accept(req, &command, &work, RUN, None).unwrap();
+        let task_id = match acceptance.record.outcome {
+            task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+            _ => panic!("expected task outcome"),
+        };
+        let revision = self.repo.task(&task_id).unwrap().task.state_revision;
+        self.repo
+            .transition(&task_id, revision, RUN, task_control::Change::Claim)
+            .unwrap();
+        TaskHandle {
+            task_id,
+            prefix: format!("{period}-{req}"),
+            next_item: 0,
+            running: None,
+        }
+    }
+}
+
+struct TaskHandle {
+    task_id: String,
+    prefix: String,
+    next_item: usize,
+    running: Option<String>,
+}
+
+impl TaskHandle {
+    /// Start the next item, finishing the previous one if a rejected commit
+    /// left it running. Returns (item_id, publication_id, revision).
+    /// Publication ids carry the task's req prefix — `result_id` is
+    /// globally unique.
+    fn item(
+        &mut self,
+        repo: &super::super::compact_repo::SqliteCompactMarket,
+    ) -> (String, String, u64) {
+        if let Some(prev) = self.running.take() {
+            let still_running = repo
+                .task(&self.task_id)
+                .unwrap()
+                .items
+                .iter()
+                .any(|i| i.spec.item_id == prev && i.stage == task_control::Stage::Running);
+            if still_running {
+                fail_item(repo, &self.task_id, &prev);
+            }
+        }
+        self.next_item += 1;
+        let item = format!("item-{}", self.next_item);
+        let pub_id = format!("{}-pub-{}", self.prefix, self.next_item);
+        let rev = start_item_id(repo, &self.task_id, &item);
+        self.running = Some(item.clone());
+        (item, pub_id, rev)
+    }
+}
+
+/// Epoch day for a calendar date — yearly bar `trade_day` is the last
+/// trading day of its year.
+fn day(y: i32, m: u32, d: u32) -> i64 {
+    compact_market::epoch_day(NaiveDate::from_ymd_opt(y, m, d).unwrap())
+}
+
+fn ybar(y: i32, close: i64) -> CompactBar {
+    CompactBar {
+        trade_day: day(y, 12, 31),
+        open_cents: close,
+        high_cents: close + 10,
+        low_cents: close - 10,
+        close_cents: close,
+        volume: Some(1),
+        amount: None,
+        r7_raw: None,
+    }
+}
+
+#[test]
+fn yearly_first_publish_creates_series_lineage_and_event() {
+    // Tracer bullet (S3): the real commit gate writes the yearly series,
+    // affected bars, lineage and the first_publish event in one tx.
+    let r = Repo::new();
+    let mut daily_task = r.task(1, "day", "req-d");
+    let (_i1, pub1, rev1) = daily_task.item(&r.repo);
+    let first = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev1,
+        &pub1,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+
+    let mut yearly_task = r.task(1, "year", "req-y");
+    let (y_item, y_pub, y_rev) = yearly_task.item(&r.repo);
+    let occupancy = task_control::legacy::scope_id(SYMBOL, "year");
+    let as_of = day(2026, 10, 12);
+    let c0 = Connection::open(&r.path).unwrap();
+    let daily = series::read_series(&c0, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    r.repo
+        .write(|c| {
+            let evidence =
+                evidence_store::put_evidence(c, EvidenceKind::Version, &version_evidence())?;
+            let y_evidence = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Yearly,
+                &json!({"base_daily_version_id": daily.version_id}),
+            )?;
+            commit_series_tx(
+                c,
+                &Commit {
+                    result_id: &y_pub,
+                    task_id: &yearly_task.task_id,
+                    item_id: &y_item,
+                    run_id: RUN,
+                    occupancy_key: &occupancy,
+                    expected_task_revision: y_rev,
+                    entity: SYMBOL,
+                    period: Period::Year,
+                    base_version_id: None,
+                    change: SeriesChange::Yearly {
+                        upserts: &[ybar(2020, 100)],
+                        daily_base_digest: daily.content_digest,
+                        algorithm_version: "local-natural-year-v1",
+                        as_of_day: as_of,
+                    },
+                    range_start_day: 0,
+                    range_end_day: 0,
+                    algorithm_version: "local-natural-year-v1",
+                    window_digest: None,
+                    source_binding_digest: None,
+                    evidence_digest: Some(evidence),
+                    coverage_status: Some(crate::market_data::CoverageStatus::Complete),
+                    metadata_changed: false,
+                    event_evidence_digest: y_evidence,
+                    published_at: None,
+                    staged_version_id: None,
+                },
+            )
+        })
+        .unwrap();
+
+    let c = Connection::open(&r.path).unwrap();
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .expect("yearly series must exist");
+    let bars = series::all_bars(&c, yearly.series_key).unwrap();
+    assert_eq!(bars.len(), 1);
+    assert_eq!(bars[0].trade_day, day(2020, 12, 31));
+    // first_publish event on the yearly series.
+    let kind: String = c
+        .query_row(
+            "SELECT kind FROM market_events WHERE entity=?1 AND period=2 ORDER BY seq DESC LIMIT 1",
+            [SYMBOL],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "first_publish");
+    // lineage names the daily base the derivation read.
+    let lineage = series::yearly_lineage(&c, yearly.series_key)
+        .unwrap()
+        .expect("lineage must exist");
+    assert_eq!(lineage.base_daily_digest, daily.content_digest);
+    assert_eq!(lineage.base_event_seq, daily.last_event_seq);
+    assert_eq!(lineage.as_of_day, as_of);
+    assert_eq!(first.version_id, daily.version_id);
+}
+
+// ---------------------------------------------------------------------------
+// S3 batch 2: yearly commit through the real YearlyResultPlan surface —
+// rederive subset, no_change lineage advance, CAS race, result_id replay,
+// and the stale-classification read-out (§8.1-7/8, §8.2, C3).
+// ---------------------------------------------------------------------------
+
+fn mk_year_version(version_id: &str, bars: Vec<Bar>, base_daily_id: &str) -> EffectiveVersion {
+    let (first, last) = (bars[0].date, bars[bars.len() - 1].date);
+    let mut version = EffectiveVersion {
+        version_id: version_id.into(),
+        symbol: SYMBOL.into(),
+        period: Period::Year,
+        adjustment: Adjustment::Forward,
+        source: "official".into(),
+        records: bars,
+        published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
+        validation: ValidationSummary {
+            record_count: 0,
+            unique_record_count: 0,
+            duplicate_count: 0,
+        },
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        yearly_derivation: Some(crate::market_data::YearlyDerivation {
+            base_daily_version_id: base_daily_id.into(),
+            algorithm_version: "local-natural-year-v1".into(),
+            first_trading_date: first,
+            last_trading_date: last,
+        }),
+    };
+    let (records, validation) = crate::publish::validate_and_deduplicate(&mk_batch(&version))
+        .expect("yearly candidate validates");
+    version.records = records;
+    version.validation = validation;
+    version
+}
+
+fn mk_batch(version: &EffectiveVersion) -> MarketDataBatch {
+    MarketDataBatch {
+        symbol: version.symbol.clone(),
+        period: version.period,
+        adjustment: Adjustment::Forward,
+        bars: version.records.clone(),
+        provenance: Provenance {
+            source: version.source.clone(),
+            source_period: "day".into(),
+            source_adjustment: "qfq".into(),
+            symbol: version.symbol.clone(),
+            acquired_at: version.published_at,
+            adapter_version: "local-yearly-publication-v1".into(),
+            yearly_derivation: version.yearly_derivation.clone(),
+            snapshot_inputs: None,
+        },
+        coverage: CoverageEvidence::complete("selected years verified"),
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+    }
+}
+
+fn checked(version: &EffectiveVersion) -> compat::CheckedRecord {
+    let mut raw = serde_json::to_value(version).unwrap();
+    raw["batch"] = serde_json::to_value(mk_batch(version)).unwrap();
+    raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+    compat::check(&raw).unwrap()
+}
+
+fn daily_checked(r: &Repo) -> compat::CheckedRecord {
+    let c = Connection::open(&r.path).unwrap();
+    let daily = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let bars = series::all_bars(&c, daily.series_key).unwrap();
+    let bars = bars
+        .iter()
+        .map(|b| b.to_bar(Period::Day))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let mut version = EffectiveVersion {
+        version_id: daily.version_id.clone(),
+        symbol: SYMBOL.into(),
+        period: Period::Day,
+        adjustment: Adjustment::Forward,
+        source: "official".into(),
+        records: bars,
+        published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
+        validation: ValidationSummary {
+            record_count: 0,
+            unique_record_count: 0,
+            duplicate_count: 0,
+        },
+        unit_currency: units(),
+        adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        yearly_derivation: None,
+    };
+    let (records, validation) =
+        crate::publish::validate_and_deduplicate(&mk_batch(&version)).unwrap();
+    version.records = records;
+    version.validation = validation;
+    checked(&version)
+}
+
+/// Commit the yearly candidate through the REAL `commit_yearly` plan path.
+/// `replay` resubmits the exact recorded identity (publication id + item
+/// id) without starting a fresh item — the receipt must come straight back.
+fn commit_yearly_plan(
+    r: &Repo,
+    task: &mut TaskHandle,
+    candidate: EffectiveVersion,
+    base: &compat::CheckedRecord,
+    prior: Option<compat::CheckedRecord>,
+    result_id: Option<&str>,
+    replay_item: Option<&str>,
+) -> Result<crate::market_storage::Receipt, crate::market_storage::Error> {
+    let (item, pub_id, rev) = match replay_item {
+        Some(item) => (item.to_string(), String::new(), 0),
+        None => task.item(&r.repo),
+    };
+    let publication_id = result_id.map(str::to_string).unwrap_or(pub_id);
+    let command = Publication {
+        publication_id,
+        version_id: candidate.version_id.clone(),
+        task_id: task.task_id.clone(),
+        item_id: item,
+        run_id: RUN.into(),
+        expected_revision: rev,
+        intent: PublishIntent::CurrentHead {
+            expected_daily_head: base.version().version_id.clone(),
+            expected_yearly_head: prior.as_ref().map(|p| p.version().version_id.clone()),
+        },
+    };
+    let record = checked(&candidate);
+    let no_change = prior
+        .as_ref()
+        .is_some_and(|p| p.raw()["integrity_sha256"] == record.raw()["integrity_sha256"]);
+    let plan = crate::yearly_publication::results::YearlyResultPlan {
+        publication: PublishPlan {
+            command,
+            record,
+            required_heads: vec![],
+            promote: None,
+            base_digest: None,
+        },
+        base: base.clone(),
+        prior,
+        no_change,
+        audit: json!({}),
+        audit_payloads: vec![],
+    };
+    r.repo.commit_yearly(&plan)
+}
+
+#[test]
+fn yearly_rederive_rewrites_only_affected_years() {
+    // §8.1-8: an affected-year upsert replaces that year's bar only; every
+    // other stored year row survives untouched.
+    let r = Repo::new();
+    let mut daily_task = r.task(1, "day", "req-d8");
+    let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev_d,
+        &pub_d,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(3, "year", "req-y8");
+
+    // First yearly publish: 2020 + 2021.
+    let first_yearly = commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version(
+            "y-v1",
+            vec![year_bar(2020, 100), year_bar(2021, 200)],
+            &daily.version_id,
+        ),
+        &base,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Rederive with only 2021 affected: 2021 changes, 2020 stays.
+    let prior = {
+        let c = Connection::open(&r.path).unwrap();
+        let row = series::read_series(&c, SYMBOL, Period::Year)
+            .unwrap()
+            .unwrap();
+        mk_year_version(
+            &row.version_id,
+            vec![year_bar(2020, 100), year_bar(2021, 200)],
+            &daily.version_id,
+        )
+    };
+    let second = commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version(
+            "y-v2",
+            vec![year_bar(2020, 100), year_bar(2021, 220)],
+            &daily.version_id,
+        ),
+        &base,
+        Some(checked(&prior)),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_ne!(second.version_id, first_yearly.version_id);
+
+    let c = Connection::open(&r.path).unwrap();
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    let bars = series::all_bars(&c, yearly.series_key).unwrap();
+    assert_eq!(bars.len(), 2);
+    assert_eq!(bars[0].close_cents, 100, "2020 bar must be untouched");
+    assert_eq!(bars[1].close_cents, 220, "2021 bar rederived");
+    // yearly_rederive event with daily base linkage.
+    let (kind, base_digest): (String, Vec<u8>) = c
+        .query_row(
+            "SELECT kind,base_content_digest FROM market_events WHERE entity=?1 AND period=2 ORDER BY seq DESC LIMIT 1",
+            [SYMBOL],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(kind, "yearly_rederive");
+    let daily_head = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        series::version_id(&digest32(&base_digest)),
+        daily_head.version_id
+    );
+}
+
+#[test]
+fn yearly_no_change_advances_lineage_base() {
+    // A second derivation with identical content logs no_change but still
+    // advances the lineage to the newer daily base (Fresh again).
+    let r = Repo::new();
+    let mut daily_task = r.task(2, "day", "req-d9");
+    let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev_d,
+        &pub_d,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(2, "year", "req-y9");
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version("y-v1", vec![year_bar(2020, 100)], &daily.version_id),
+        &base,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Daily append: the yearly now trails the current daily (Behind).
+    let (_i2, pub_d2, rev_d2) = daily_task.item(&r.repo);
+    r.repo
+        .commit_range_ops(
+            &command_at(&daily_task.task_id, &pub_d2, rev_d2, "item-2"),
+            &scope(),
+            &daily.version_id,
+            &[bar(2, 120)],
+            &[],
+            &[bar(0, 100), bar(1, 110), bar(2, 120)],
+        )
+        .unwrap()
+        .unwrap();
+    let base2 = daily_checked(&r);
+    let c = Connection::open(&r.path).unwrap();
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        series::yearly_state(&c, &yearly).unwrap(),
+        series::YearlyState::Behind { .. }
+    ));
+
+    // Same yearly content against the new daily base -> no_change, but the
+    // lineage moves forward so the row is Fresh again.
+    let prior = mk_year_version(
+        &yearly.version_id,
+        vec![year_bar(2020, 100)],
+        &base2.version().version_id,
+    );
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version(
+            "y-v2",
+            vec![year_bar(2020, 100)],
+            &base2.version().version_id,
+        ),
+        &base2,
+        Some(checked(&prior)),
+        None,
+        None,
+    )
+    .unwrap();
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    let kind: String = c
+        .query_row(
+            "SELECT kind FROM market_events WHERE entity=?1 AND period=2 ORDER BY seq DESC LIMIT 1",
+            [SYMBOL],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "no_change");
+    assert_eq!(
+        series::yearly_state(&c, &yearly).unwrap(),
+        series::YearlyState::Fresh,
+        "no_change must advance the lineage base to the new daily"
+    );
+}
+
+#[test]
+fn yearly_commit_stale_daily_base_fails_closed() {
+    // SPEC §5: the derivation's daily base must still be the current daily
+    // head inside the write tx — a raced daily append lands `Stale`, the
+    // item is not consumed, and a re-derived commit succeeds.
+    let r = Repo::new();
+    let mut daily_task = r.task(2, "day", "req-d10");
+    let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev_d,
+        &pub_d,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    let stale_base = daily_checked(&r);
+
+    // Race: the daily head moves before the yearly commit lands.
+    let (_i2, pub_d2, rev_d2) = daily_task.item(&r.repo);
+    let moved = r
+        .repo
+        .commit_range_ops(
+            &command_at(&daily_task.task_id, &pub_d2, rev_d2, "item-2"),
+            &scope(),
+            &daily.version_id,
+            &[bar(2, 120)],
+            &[],
+            &[bar(0, 100), bar(1, 110), bar(2, 120)],
+        )
+        .unwrap()
+        .unwrap();
+
+    let mut yearly_task = r.task(2, "year", "req-y10");
+    let err = commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version("y-v1", vec![year_bar(2020, 100)], &daily.version_id),
+        &stale_base,
+        None,
+        None,
+        None,
+    )
+    .expect_err("stale daily base must be rejected");
+    assert!(
+        matches!(err, crate::market_storage::Error::Stale(_)),
+        "expected Stale, got {err:?}"
+    );
+    // The item stays consumable: a re-derived commit lands first_publish.
+    let fresh_base = daily_checked(&r);
+    let receipt = commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version("y-v2", vec![year_bar(2020, 100)], &moved.version_id),
+        &fresh_base,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let c = Connection::open(&r.path).unwrap();
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    assert_eq!(yearly.version_id, receipt.version_id);
+    assert_eq!(
+        series::yearly_state(&c, &yearly).unwrap(),
+        series::YearlyState::Fresh
+    );
+}
+
+#[test]
+fn yearly_rederive_replays_result_id() {
+    // §8.2-16 yearly variant: re-submitting the same result_id replays the
+    // recorded receipt — one event, one result.
+    let r = Repo::new();
+    let mut daily_task = r.task(1, "day", "req-d11");
+    let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev_d,
+        &pub_d,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(2, "year", "req-y11");
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version("y-v1", vec![year_bar(2020, 100)], &daily.version_id),
+        &base,
+        None,
+        Some("y-result-1"),
+        None,
+    )
+    .unwrap();
+
+    let prior = {
+        let c = Connection::open(&r.path).unwrap();
+        let row = series::read_series(&c, SYMBOL, Period::Year)
+            .unwrap()
+            .unwrap();
+        mk_year_version(
+            &row.version_id,
+            vec![year_bar(2020, 100)],
+            &daily.version_id,
+        )
+    };
+    let replayed = commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version("y-v2", vec![year_bar(2020, 120)], &daily.version_id),
+        &base,
+        Some(checked(&prior)),
+        Some("y-result-1"),
+        Some("item-1"),
+    )
+    .unwrap();
+    assert_eq!(replayed.publication_id, "y-result-1");
+    let c = Connection::open(&r.path).unwrap();
+    let events: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM market_events WHERE entity=?1 AND period=2",
+            [SYMBOL],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(events, 1, "replay must not insert a second yearly event");
+    // The replayed commit did not land the drifted content either.
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    let bars = series::all_bars(&c, yearly.series_key).unwrap();
+    assert_eq!(bars[0].close_cents, 100);
+}
+
+#[test]
+fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
+    // C3: a daily commit whose version evidence differs in {source,
+    // unit_currency, adjustment_evidence} flips the yearly row to
+    // Invalid(value_semantics_changed); a metadata-only event carrying the
+    // SAME semantics leaves it Behind.
+    let r = Repo::new();
+    let mut daily_task = r.task(4, "day", "req-d12");
+    let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev_d,
+        &pub_d,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(2, "year", "req-y12");
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version("y-v1", vec![year_bar(2020, 100)], &daily.version_id),
+        &base,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // A metadata event with unchanged semantics -> Behind, not Invalid.
+    let (_i2, pub_d2, rev_d2) = daily_task.item(&r.repo);
+    let metadata = metadata_gen("gen-b", &"be".repeat(32));
+    r.repo
+        .commit_range_ops_typed(
+            &command_at(&daily_task.task_id, &pub_d2, rev_d2, "item-2"),
+            &scope(),
+            &daily.version_id,
+            &[bar(2, 120)],
+            &[],
+            Some(&metadata),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+    let c = Connection::open(&r.path).unwrap();
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            series::yearly_state(&c, &yearly).unwrap(),
+            series::YearlyState::Behind { .. }
+        ),
+        "metadata-only semantics must not invalidate the yearly row"
+    );
+    let sem: i64 = c
+        .query_row(
+            "SELECT semantics_changed FROM market_events WHERE entity=?1 AND period=1 ORDER BY seq DESC LIMIT 1",
+            [SYMBOL],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(sem, 0, "same-semantics metadata lands semantics_changed=0");
+
+    // A REPLACE carrying different unit evidence flips semantics_changed=1
+    // and the yearly row becomes Invalid(value_semantics_changed).
+    let daily_head = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let (_i3, pub_d3, rev_d3) = daily_task.item(&r.repo);
+    let mut drifted_units = units();
+    drifted_units.price_unit = EvidenceValue::confirmed("fen", "drift");
+    let replace_bars: Vec<CompactBar> = [bar(0, 100), bar(1, 110), bar(2, 120)]
+        .iter()
+        .map(|b| CompactBar::from_bar(b, Period::Day).unwrap())
+        .collect();
+    r.repo
+        .write(|c| {
+            let evidence = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Version,
+                &json!(VersionEvidence {
+                    source: "official".into(),
+                    coverage_reason: "full history verified".into(),
+                    unit_currency: drifted_units.clone(),
+                    adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+                }),
+            )?;
+            let continuity = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Continuity,
+                &json!({"mode": "full", "proven": true}),
+            )?;
+            commit_series_tx(
+                c,
+                &Commit {
+                    result_id: &pub_d3,
+                    task_id: &daily_task.task_id,
+                    item_id: "item-3",
+                    run_id: RUN,
+                    occupancy_key: &scope().occupancy_key(),
+                    expected_task_revision: rev_d3,
+                    entity: SYMBOL,
+                    period: Period::Day,
+                    base_version_id: Some(daily_head.version_id.as_str()),
+                    change: SeriesChange::Replace {
+                        bars: &replace_bars,
+                    },
+                    range_start_day: 0,
+                    range_end_day: 2,
+                    algorithm_version: "test",
+                    window_digest: None,
+                    source_binding_digest: Some(daily_head.source_binding_digest),
+                    evidence_digest: Some(evidence),
+                    coverage_status: Some(crate::market_data::CoverageStatus::Complete),
+                    metadata_changed: true,
+                    event_evidence_digest: continuity,
+                    published_at: None,
+                    staged_version_id: None,
+                },
+            )
+        })
+        .unwrap();
+    let sem: i64 = c
+        .query_row(
+            "SELECT semantics_changed FROM market_events WHERE entity=?1 AND period=1 ORDER BY seq DESC LIMIT 1",
+            [SYMBOL],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(sem, 1, "drifted unit evidence must flag semantics_changed");
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    // Ruling: a replace tail wins over a pure evidence move — both fail
+    // closed; the row reports the content-level reason.
+    assert_eq!(
+        series::yearly_state(&c, &yearly).unwrap(),
+        series::YearlyState::Invalid(series::YearlyInvalidReason::DailyReplaced)
+    );
+
+    // A pure APPEND carrying drifted evidence (no replace in the tail)
+    // surfaces the SemanticsChanged reason. Re-derive the yearly first so
+    // the lineage base moves past the replace.
+    let daily_head = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let base2 = daily_checked(&r);
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    let prior = mk_year_version(
+        &yearly.version_id,
+        vec![year_bar(2020, 100)],
+        &daily_head.version_id,
+    );
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        mk_year_version("y-v2", vec![year_bar(2020, 100)], &daily_head.version_id),
+        &base2,
+        Some(checked(&prior)),
+        None,
+        None,
+    )
+    .unwrap();
+    let daily_head = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let (_i4, pub_d4, rev_d4) = daily_task.item(&r.repo);
+    // The head already carries the fen drift — the append must move the
+    // semantics AGAIN for the flag to read 1.
+    let mut drifted2 = drifted_units.clone();
+    drifted2.price_unit = EvidenceValue::confirmed("li", "drift-again");
+    let append_bars: Vec<CompactBar> = [CompactBar::from_bar(&bar(3, 130), Period::Day).unwrap()]
+        .into_iter()
+        .collect();
+    r.repo
+        .write(|c| {
+            let evidence = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Version,
+                &json!(VersionEvidence {
+                    source: "official".into(),
+                    coverage_reason: "full history verified".into(),
+                    unit_currency: drifted2.clone(),
+                    adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+                }),
+            )?;
+            let continuity = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Continuity,
+                &json!({"mode": "prefix", "proven": true}),
+            )?;
+            commit_series_tx(
+                c,
+                &Commit {
+                    result_id: &pub_d4,
+                    task_id: &daily_task.task_id,
+                    item_id: "item-4",
+                    run_id: RUN,
+                    occupancy_key: &scope().occupancy_key(),
+                    expected_task_revision: rev_d4,
+                    entity: SYMBOL,
+                    period: Period::Day,
+                    base_version_id: Some(daily_head.version_id.as_str()),
+                    change: SeriesChange::Append {
+                        upserts: &append_bars,
+                    },
+                    range_start_day: 3,
+                    range_end_day: 3,
+                    algorithm_version: "test",
+                    window_digest: None,
+                    source_binding_digest: Some(daily_head.source_binding_digest),
+                    evidence_digest: Some(evidence),
+                    coverage_status: Some(crate::market_data::CoverageStatus::Complete),
+                    metadata_changed: true,
+                    event_evidence_digest: continuity,
+                    published_at: None,
+                    staged_version_id: None,
+                },
+            )
+        })
+        .unwrap();
+    let sem: i64 = c
+        .query_row(
+            "SELECT semantics_changed FROM market_events WHERE entity=?1 AND period=1 ORDER BY seq DESC LIMIT 1",
+            [SYMBOL],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(sem, 1, "pure append with drifted evidence flags semantics");
+    let yearly = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        series::yearly_state(&c, &yearly).unwrap(),
+        series::YearlyState::Invalid(series::YearlyInvalidReason::SemanticsChanged)
+    );
+}
+
+fn year_bar(y: i32, close: i64) -> Bar {
+    CompactBar {
+        trade_day: day(y, 12, 31),
+        open_cents: close,
+        high_cents: close + 10,
+        low_cents: close - 10,
+        close_cents: close,
+        volume: Some(100),
+        amount: Some("1000".into()),
+        r7_raw: None,
+    }
+    .to_bar(Period::Year)
+    .unwrap()
+}
+
+fn digest32(bytes: &[u8]) -> Digest {
+    bytes.try_into().expect("32-byte digest")
+}
+
+#[test]
+fn catalog_roundtrip_on_compact_schema_uses_bound_tasks() {
+    // N1: the worker builds the catalog executor from `market.tasks()`;
+    // on schema 21 that handle is coordinator-bound — catalog publish /
+    // read-back / task binding must work through it.
+    use crate::catalog::{
+        CatalogSnapshot, CompletenessEvidence, Exchange, IndustryInfo, SecurityRecord, SecurityType,
+    };
+    use crate::sqlite_catalog::SqliteCatalog;
+
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let catalog = SqliteCatalog::new(repo.tasks());
+    let now = Utc::now();
+    let snapshot = CatalogSnapshot {
+        source: "fixture:catalog".into(),
+        acquired_at: now,
+        completeness: CompletenessEvidence::Complete { expected_count: 1 },
+        records: vec![SecurityRecord {
+            symbol: "600006".into(),
+            name: "样例".into(),
+            exchange: Exchange::Shanghai,
+            security_type: SecurityType::AShare,
+            source_security_id: "sh600006".into(),
+            industry: IndustryInfo::Missing {
+                reason: "fixture unknown".into(),
+            },
+            source: "fixture:catalog".into(),
+            acquired_at: now,
+        }],
+    };
+    catalog
+        .publish_fixture("cat-v1", snapshot.clone(), None)
+        .unwrap();
+    let facts = catalog.selection_facts().unwrap();
+    assert_eq!(facts.catalog_head.as_deref(), Some("cat-v1"));
+    assert_eq!(catalog.fixed("cat-v1").unwrap().records.len(), 1);
+    assert!(matches!(
+        catalog.publish_fixture("cat-v2", snapshot, Some("stale")),
+        Err(crate::market_storage::Error::Conflict(_))
+    ));
+    assert_eq!(
+        catalog.selection_facts().unwrap().catalog_head.as_deref(),
+        Some("cat-v1")
+    );
+    // The bound task handle still works on the v21 file (accept + read).
+    let accepted = repo.tasks().accept(
+        "req-catalog-bound",
+        &crate::task_control::Command {
+            key: crate::task_control::CommandKey {
+                operation: "collect".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v1".into(),
+            },
+            intent: serde_json::json!({}),
+        },
+        &crate::task_control::FrozenWork {
+            items: vec![crate::task_control::ItemSpec {
+                item_id: "i1".into(),
+                target: serde_json::json!({"symbol": SYMBOL}),
+                progress_unit: "security_period".into(),
+                frozen_inputs: serde_json::json!({}),
+                scope_keys: std::collections::BTreeSet::from(["scope-1".to_string()]),
+            }],
+            scopes: std::collections::BTreeSet::from(["scope-1".to_string()]),
+            shared_evidence: None,
+        },
+        RUN,
+        None,
+    );
+    assert!(accepted.is_ok());
+}
+
+#[test]
+fn rejected_item_leaves_head_and_task_state_untouched() {
+    // N2 storage side: a commit that fails the binding gate leaves the
+    // series head and records the item's failure — the item cannot leak
+    // a partial write, and the task revision reflects only the rejection.
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let (task_id, _r) = running_task_multi(&repo, 3);
+    let rev1 = start_item_id(&repo, &task_id, "item-1");
+    let first = publish_bars(
+        &repo,
+        &task_id,
+        rev1,
+        "pub-1",
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+
+    // Foreign item rejected by the binding gate.
+    let mut other_task_items: Vec<ItemSpec> = Vec::new();
+    let other_scope = task_control::legacy::scope_id(SYMBOL, "year");
+    other_task_items.push(ItemSpec {
+        item_id: "item-1".into(),
+        target: json!({"symbol": SYMBOL, "period": "year"}),
+        progress_unit: "bars".into(),
+        frozen_inputs: json!({}),
+        scope_keys: std::collections::BTreeSet::from([other_scope.clone()]),
+    });
+    let other_command = task_control::Command {
+        key: CommandKey {
+            operation: "update_data".into(),
+            dataset: "market.yearly".into(),
+            contract_version: "v1".into(),
+        },
+        intent: json!({}),
+    };
+    let other_work = task_control::FrozenWork {
+        items: other_task_items,
+        scopes: std::collections::BTreeSet::from([other_scope]),
+        shared_evidence: None,
+    };
+    let other_task = match repo
+        .accept("req-other", &other_command, &other_work, RUN, None)
+        .unwrap()
+        .record
+        .outcome
+    {
+        task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+        _ => panic!("expected task outcome"),
+    };
+    let other_rev = repo.task(&other_task).unwrap().task.state_revision;
+    repo.transition(&other_task, other_rev, RUN, task_control::Change::Claim)
+        .unwrap();
+    let rev_other = start_item_id(&repo, &other_task, "item-1");
+    let _ = rev_other;
+    let c = Connection::open(dir.path().join("market.db")).unwrap();
+    let head_before = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    let upserts = to_compact_bars(&[bar(2, 120)], Period::Day).unwrap();
+    let err = repo
+        .write(|c| {
+            let evidence =
+                evidence_store::put_evidence(c, EvidenceKind::Version, &version_evidence())?;
+            let continuity = evidence_store::put_evidence(
+                c,
+                EvidenceKind::Continuity,
+                &json!({"mode": "prefix", "proven": true}),
+            )?;
+            commit_series_tx(
+                c,
+                &Commit {
+                    result_id: "pub-cross",
+                    task_id: &task_id,
+                    item_id: "item-1",
+                    run_id: RUN,
+                    occupancy_key: &scope().occupancy_key(),
+                    expected_task_revision: rev_other,
+                    entity: SYMBOL,
+                    period: Period::Day,
+                    base_version_id: Some(&first.version_id),
+                    change: SeriesChange::Append { upserts: &upserts },
+                    range_start_day: 2,
+                    range_end_day: 2,
+                    algorithm_version: "test",
+                    window_digest: None,
+                    source_binding_digest: None,
+                    evidence_digest: Some(evidence),
+                    coverage_status: None,
+                    metadata_changed: false,
+                    event_evidence_digest: continuity,
+                    published_at: None,
+                    staged_version_id: None,
+                },
+            )
+        })
+        .expect_err("cross-task item must be rejected");
+    assert!(matches!(err, Error::Conflict(_) | Error::Integrity(_)));
+
+    let c = Connection::open(dir.path().join("market.db")).unwrap();
+    let head_after = series::read_series(&c, SYMBOL, Period::Day)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        head_after.version_id, head_before.version_id,
+        "rejected item must not advance the head"
+    );
+    assert_eq!(head_after.last_event_seq, head_before.last_event_seq);
+    let events: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM market_events WHERE result_id='pub-cross'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(events, 0, "rejected commit leaves no event row");
+
+    // The bound item itself stays usable: a correct commit still lands.
+    let rev2 = start_item_id(&repo, &task_id, "item-2");
+    repo.commit_range_ops(
+        &command_at(&task_id, "pub-2", rev2, "item-2"),
+        &scope(),
+        &first.version_id,
+        &[bar(2, 120)],
+        &[],
+        &[bar(0, 100), bar(1, 110), bar(2, 120)],
+    )
+    .unwrap()
+    .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// staged_records lifecycle: every commit path consumes its candidate inside
+// the commit transaction; rows orphaned by failed/cancelled item runs are
+// bounded by the stage-time TTL sweep (fix/staged-records-gc).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn typed_commit_consumes_a_staged_orphan_of_the_same_item() {
+    // An envelope attempt that staged `range-version-{item}` and then
+    // failed leaves the row behind; the item's later typed commit carries
+    // the same candidate id and reclaims it inside the commit transaction.
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    let (task_id, _r) = running_task_multi(&repo, 2);
+    let rev1 = start_item_id(&repo, &task_id, "item-1");
+    let first = publish_bars(&repo, &task_id, rev1, "pub-1", "v1", vec![bar(0, 100)]);
+    let rev2 = start_item_id(&repo, &task_id, "item-2");
+    let cmd = command_at(&task_id, "pub-2", rev2, "item-2");
+    repo.stage(&staged_raw(&cmd.version_id, vec![bar(0, 100), bar(1, 110)]))
+        .unwrap();
+    let c = Connection::open(&path).unwrap();
+    let staged: i64 = c
+        .query_row(
+            "SELECT count(*) FROM staged_records WHERE version_id=?1",
+            [&cmd.version_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(staged, 1, "orphaned candidate must exist before commit");
+
+    repo.commit_range_ops(
+        &cmd,
+        &scope(),
+        &first.version_id,
+        &[bar(1, 110)],
+        &[],
+        &[bar(0, 100), bar(1, 110)],
+    )
+    .unwrap()
+    .unwrap();
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(staged, 0, "typed commit must consume the staged orphan");
+}
+
+#[test]
+fn yearly_commit_consumes_its_staged_candidate() {
+    // The yearly pipeline stages `yearly-version-…` during prepare; the
+    // commit consumed it — the leaked rows in the S5 result DB came from
+    // this path (one staged row per yearly event).
+    let r = Repo::new();
+    let mut daily_task = r.task(1, "day", "req-d");
+    let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev_d,
+        &pub_d,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(1, "year", "req-y");
+    let candidate = mk_year_version("y-v1", vec![year_bar(2020, 100)], &daily.version_id);
+    // The same write prepare_derived_yearly performs when the candidate is
+    // absent (yearly_publication.rs stage-on-prepare).
+    r.repo.stage(checked(&candidate).raw()).unwrap();
+    let c = Connection::open(&r.path).unwrap();
+    let staged: i64 = c
+        .query_row(
+            "SELECT count(*) FROM staged_records WHERE version_id='y-v1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(staged, 1, "yearly candidate must be staged before commit");
+
+    commit_yearly_plan(&r, &mut yearly_task, candidate, &base, None, None, None).unwrap();
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(staged, 0, "yearly commit must consume the staged row");
+}
+
+#[test]
+fn yearly_replay_consumes_the_restaged_candidate() {
+    // A retried yearly item stages its candidate again and the commit hits
+    // the replay arm — replay must consume the re-staged row too.
+    let r = Repo::new();
+    let mut daily_task = r.task(1, "day", "req-d");
+    let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev_d,
+        &pub_d,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(1, "year", "req-y");
+    let candidate = mk_year_version("y-v1", vec![year_bar(2020, 100)], &daily.version_id);
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        candidate.clone(),
+        &base,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Re-stage the same candidate and re-commit the same result id —
+    // commit_yearly's replay arm must also delete the row.
+    r.repo.stage(checked(&candidate).raw()).unwrap();
+    let c = Connection::open(&r.path).unwrap();
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        candidate,
+        &base,
+        None,
+        Some("year-req-y-pub-1"),
+        Some("item-1"),
+    )
+    .unwrap();
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        staged, 0,
+        "replayed yearly commit must consume the staged row"
+    );
+}
+
+#[test]
+fn failed_commit_keeps_the_staged_row_until_gc() {
+    // A rejected commit rolls back the consume: the candidate survives for
+    // the retry, and only the TTL sweep reclaims it.
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    let (task_id, _r) = running_task_multi(&repo, 2);
+    let rev1 = start_item_id(&repo, &task_id, "item-1");
+    let _first = publish_bars(&repo, &task_id, rev1, "pub-1", "v1", vec![bar(0, 100)]);
+    let rev2 = start_item_id(&repo, &task_id, "item-2");
+    let cmd = command_at(&task_id, "pub-2", rev2, "item-2");
+    repo.stage(&staged_raw(&cmd.version_id, vec![bar(0, 100), bar(1, 110)]))
+        .unwrap();
+
+    // Stale base CAS fails → the transaction (including the consume) rolls
+    // back and the staged row stays available for the next attempt.
+    assert!(
+        repo.commit_range_ops(
+            &cmd,
+            &scope(),
+            "stale-base",
+            &[bar(1, 110)],
+            &[],
+            &[bar(0, 100), bar(1, 110)],
+        )
+        .is_err()
+    );
+    let c = Connection::open(&path).unwrap();
+    let staged: i64 = c
+        .query_row(
+            "SELECT count(*) FROM staged_records WHERE version_id=?1",
+            [&cmd.version_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(staged, 1, "failed commit must keep the staged row");
+
+    // The orphan is bounded by the TTL window: once its last stage attempt
+    // ages out, the next stage() sweeps it.
+    c.execute(
+        "UPDATE staged_records SET created_at='2000-01-01T00:00:00+00:00'",
+        [],
+    )
+    .unwrap();
+    repo.stage(&staged_raw("v-later", vec![bar(0, 50)]))
+        .unwrap();
+    let (old, fresh): (i64, i64) = c
+        .query_row(
+            "SELECT count(*) FILTER (WHERE version_id=?1), count(*) FROM staged_records",
+            [&cmd.version_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(old, 0, "expired orphan must be swept by the next stage");
+    assert_eq!(fresh, 1, "the just-staged row survives the sweep");
+}
+
+#[test]
+fn stage_time_gc_sweeps_only_expired_orphans() {
+    // Rows younger than the TTL stay; rows whose last stage attempt is
+    // older than the cutoff are reclaimed by the next stage() call. The
+    // residual bound is the candidates staged within the window.
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    repo.stage(&staged_raw("v-old", vec![bar(0, 50)])).unwrap();
+    repo.stage(&staged_raw("v-fresh", vec![bar(0, 60)]))
+        .unwrap();
+    let c = Connection::open(&path).unwrap();
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(staged, 2, "fresh orphans stay under the TTL");
+
+    c.execute(
+        "UPDATE staged_records SET created_at='2000-01-01T00:00:00+00:00' WHERE version_id='v-old'",
+        [],
+    )
+    .unwrap();
+    repo.stage(&staged_raw("v-next", vec![bar(0, 70)])).unwrap();
+    let (old, rest): (i64, i64) = c
+        .query_row(
+            "SELECT count(*) FILTER (WHERE version_id='v-old'), count(*) FROM staged_records",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(old, 0);
+    assert_eq!(rest, 2, "only the expired orphan is swept");
+
+    // The same sweep is directly callable — a future cutoff reclaims all.
+    let swept = repo
+        .write(|c| {
+            super::super::compact_repo::gc_staged(c, Utc::now() + chrono::Duration::seconds(1))
+        })
+        .unwrap();
+    assert_eq!(swept, 2);
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(staged, 0);
+}
+
+#[test]
+fn full_commit_cycle_leaves_no_staged_rows() {
+    // One whole update cycle on the compact backend: envelope
+    // first-publish, typed append, no_change, yearly derive and yearly
+    // rederive — every commit consumes its candidate in the same
+    // transaction, so staged_records returns to zero.
+    let r = Repo::new();
+    let c = Connection::open(&r.path).unwrap();
+    let staged = |c: &Connection| -> i64 {
+        c.query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+            .unwrap()
+    };
+
+    // First publish (envelope path: stages then consumes).
+    let mut daily_task = r.task(4, "day", "req-d");
+    let (_i, pub1, rev1) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev1,
+        &pub1,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    assert_eq!(staged(&c), 0, "first publish must consume its candidate");
+
+    // Typed append: the command's version_id is the candidate id the
+    // envelope fallback would have staged under — the typed commit reclaims
+    // it too.
+    let (_i2, pub2, rev2) = daily_task.item(&r.repo);
+    let append_cmd = command_at(&daily_task.task_id, &pub2, rev2, "item-2");
+    r.repo
+        .stage(&staged_raw(
+            &append_cmd.version_id,
+            vec![bar(0, 100), bar(1, 110), bar(2, 120)],
+        ))
+        .unwrap();
+    let head2 = r
+        .repo
+        .commit_range_ops(
+            &append_cmd,
+            &scope(),
+            &daily.version_id,
+            &[bar(2, 120)],
+            &[],
+            &[bar(0, 100), bar(1, 110), bar(2, 120)],
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(staged(&c), 0, "typed append must consume the orphan");
+
+    // No-change on the same head: nothing is staged, nothing is left.
+    let (_i3, pub3, rev3) = daily_task.item(&r.repo);
+    let nc_cmd = command_at(&daily_task.task_id, &pub3, rev3, "item-3");
+    r.repo
+        .commit_range_no_change_typed(
+            &nc_cmd,
+            &head2.version_id,
+            &crate::market_update::DateRange {
+                start: date(0),
+                end: date(2),
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(staged(&c), 0, "no_change leaves the table untouched");
+
+    // Yearly derive + rederive through the real prepare-stage/commit pair.
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(2, "year", "req-y");
+    let y1 = mk_year_version(
+        "y-v1",
+        vec![year_bar(1970, 100)],
+        &base.version().version_id,
+    );
+    r.repo.stage(checked(&y1).raw()).unwrap();
+    commit_yearly_plan(&r, &mut yearly_task, y1, &base, None, None, None).unwrap();
+    assert_eq!(staged(&c), 0, "yearly commit must consume its candidate");
+
+    // Second daily version + rederived yearly on the new base.
+    let (_i4, pub4, rev4) = daily_task.item(&r.repo);
+    let append2 = command_at(&daily_task.task_id, &pub4, rev4, "item-4");
+    r.repo
+        .commit_range_ops(
+            &append2,
+            &scope(),
+            &head2.version_id,
+            &[bar(3, 130)],
+            &[],
+            &[bar(0, 100), bar(1, 110), bar(2, 120), bar(3, 130)],
+        )
+        .unwrap()
+        .unwrap();
+    let base2 = daily_checked(&r);
+    let yearly_head = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap()
+        .version_id;
+    let prior = checked(&mk_year_version(
+        &yearly_head,
+        vec![year_bar(1970, 100)],
+        &base.version().version_id,
+    ));
+    let y2 = mk_year_version(
+        "y-v2",
+        vec![year_bar(1970, 130)],
+        &base2.version().version_id,
+    );
+    r.repo.stage(checked(&y2).raw()).unwrap();
+    commit_yearly_plan(&r, &mut yearly_task, y2, &base2, Some(prior), None, None).unwrap();
+    assert_eq!(staged(&c), 0, "yearly rederive must consume its candidate");
 }

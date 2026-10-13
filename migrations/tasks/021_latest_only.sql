@@ -69,6 +69,10 @@ CREATE TABLE market_events(
     ('first_publish','append','replace','no_change','metadata','yearly_rederive')),
   outcome INTEGER NOT NULL CHECK(outcome IN (1,2)),
   metadata_changed INTEGER NOT NULL CHECK(metadata_changed IN (0,1)),
+  -- C3: 1 when the commit's version evidence differs from the head's in
+  -- {source, unit_currency, adjustment_evidence} — the fields yearly
+  -- aggregation depends on. 0 for no_change/metadata-without-evidence.
+  semantics_changed INTEGER NOT NULL DEFAULT 0 CHECK(semantics_changed IN (0,1)),
   continuity_mode INTEGER CHECK(continuity_mode IN (1,2,3)),
   -- Nominal value only (record_count*32 at append), NOT real prefix byte
   -- count; audit display only, never feed bar math with it.
@@ -116,15 +120,19 @@ CREATE INDEX market_events_new_digest ON market_events(new_content_digest);
 
 -- Envelope-path scratch: stage() stores the caller-verified candidate row
 -- here and commit()/candidate()/staged_matches() bind plan.record to it.
--- A successful commit DELETEs its row (see commit_plan). Orphans left by
--- a failed stage or a cancelled task are overwritten by the next stage
--- under the same version_id; residual growth is bounded by the number of
--- distinct staged candidates in unfinished tasks.
+-- Every commit path consumes its candidate inside the commit transaction
+-- (commit_series_tx + the replay arms delete by staged_version_id). Rows
+-- orphaned by a crashed or cancelled item run are swept by the next
+-- stage() once their last stage attempt is older than STAGED_TTL
+-- (compact_repo.rs); residual growth is bounded to candidates staged
+-- within that window.
 CREATE TABLE staged_records(
   version_id TEXT PRIMARY KEY,
   raw TEXT NOT NULL,
   created_at TEXT NOT NULL
 ) STRICT, WITHOUT ROWID;
+-- Backs the TTL sweep's range delete (WHERE created_at < cutoff).
+CREATE INDEX staged_records_created_at ON staged_records(created_at);
 DROP TABLE market_update_delta_clips;
 DROP TABLE task_publications;
 DROP TABLE publication_results;
