@@ -143,7 +143,26 @@ fn invalid(message: impl std::fmt::Display) -> Error {
 // Staged candidate scratch (staged_records — see 021 migration comment)
 // ---------------------------------------------------------------------------
 
+/// Staged-row TTL: a candidate exists only between `stage()` and its
+/// item's commit — seconds apart in every pipeline. A row untouched for
+/// longer belongs to an item run that crashed or was cancelled mid-flight
+/// and will never be consumed; the stage-time sweep reclaims it.
+const STAGED_TTL: chrono::Duration = chrono::Duration::hours(24);
+
+/// Delete staged rows whose last stage attempt precedes `cutoff`. Runs
+/// inside `stage()`'s transaction — the `staged_records_created_at` index
+/// keeps it O(expired) — so orphan growth is bounded to candidates staged
+/// within the TTL window.
+pub(crate) fn gc_staged(c: &Connection, cutoff: chrono::DateTime<Utc>) -> Result<usize, Error> {
+    c.execute(
+        "DELETE FROM staged_records WHERE created_at < ?1",
+        params![cutoff.to_rfc3339()],
+    )
+    .map_err(storage)
+}
+
 fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
+    gc_staged(c, Utc::now() - STAGED_TTL)?;
     let record = compat::check(raw)?;
     let period = record.version().period;
     let entity = record.version().symbol.clone();
@@ -193,7 +212,7 @@ fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
     let version_id = record.version().version_id.clone();
     c.execute(
         "INSERT INTO staged_records(version_id,raw,created_at) VALUES(?1,?2,?3)
-         ON CONFLICT(version_id) DO UPDATE SET raw=excluded.raw",
+         ON CONFLICT(version_id) DO UPDATE SET raw=excluded.raw,created_at=excluded.created_at",
         params![version_id, raw.to_string(), Utc::now().to_rfc3339()],
     )
     .map_err(storage)?;
@@ -599,6 +618,7 @@ fn commit_ops(
         if event.task_id != command.task_id || event.item_id != command.item_id {
             return Err(Error::Conflict("result identity conflict".into()));
         }
+        series_commit::consume_staged(c, Some(command.version_id.as_str()))?;
         return Ok(Receipt {
             publication_id: command.publication_id.clone(),
             version_id: series::version_id(&event.new_content_digest),
@@ -689,6 +709,7 @@ fn commit_ops(
             metadata_changed,
             event_evidence_digest: evidence,
             published_at: None,
+            staged_version_id: Some(command.version_id.as_str()),
         },
     )
 }
@@ -749,6 +770,7 @@ fn commit_plan(
         if event.task_id != command.task_id || event.item_id != command.item_id {
             return Err(Error::Conflict("result identity conflict".into()));
         }
+        series_commit::consume_staged(c, Some(command.version_id.as_str()))?;
         return receipt_for(c, &command.publication_id)?
             .ok_or_else(|| integrity("receipt event lacks result payload"));
     }
@@ -904,13 +926,9 @@ fn commit_plan(
             metadata_changed: !no_change && metadata_changed,
             event_evidence_digest: event_evidence,
             published_at: Some(v.published_at),
+            staged_version_id: Some(command.version_id.as_str()),
         },
     )?;
-    c.execute(
-        "DELETE FROM staged_records WHERE version_id=?1",
-        params![command.version_id],
-    )
-    .map_err(storage)?;
     Ok(receipt)
 }
 
@@ -924,6 +942,7 @@ fn commit_plan_no_change(
 ) -> Result<Receipt, Error> {
     let command = &plan.publication.command;
     if let Some(receipt) = receipt_for(c, &command.publication_id)? {
+        series_commit::consume_staged(c, Some(command.version_id.as_str()))?;
         return Ok(receipt);
     }
     let base_id = &plan.base.version().version_id;
@@ -961,6 +980,9 @@ fn commit_plan_no_change(
             metadata_changed: false,
             event_evidence_digest: event_evidence,
             published_at: None,
+            // The envelope path stages the candidate before classification
+            // — a no_change commit must consume that row too.
+            staged_version_id: Some(command.version_id.as_str()),
         },
     )
 }
@@ -1177,6 +1199,7 @@ impl RangeRepository for SqliteCompactMarket {
                     metadata_changed: false,
                     event_evidence_digest: evidence,
                     published_at: None,
+                    staged_version_id: None,
                 },
             )?;
             tx.commit()
@@ -1404,12 +1427,21 @@ fn update_batch_item(
     snapshot: &mut TaskSnapshot,
     item: &crate::market_update::UpdateBatchItem,
 ) -> Result<Result<Receipt, Error>, Error> {
+    // The typed batch never stages; the id still names the scratch row an
+    // earlier failed envelope attempt of this same item may have left.
+    let staged_version_id = match &item.prepared {
+        crate::market_update::UpdateBatchPrepared::Append {
+            result_version_id, ..
+        } => Some(result_version_id.as_str()),
+        crate::market_update::UpdateBatchPrepared::NoChange { .. } => None,
+    };
     if let Some(event) = series::event_by_result(c, &item.publication_id)? {
         if event.task_id != item.task_id || event.item_id != item.item_id {
             return Err(Error::Conflict(
                 "update result id replays a different commit".into(),
             ));
         }
+        series_commit::consume_staged(c, staged_version_id)?;
         return Ok(Ok(Receipt {
             publication_id: item.publication_id.clone(),
             version_id: series::version_id(&event.new_content_digest),
@@ -1483,6 +1515,7 @@ fn update_batch_item(
                         metadata_changed: false,
                         event_evidence_digest: evidence,
                         published_at: None,
+                        staged_version_id: None,
                     },
                 )
             }
@@ -1541,6 +1574,7 @@ fn update_batch_item(
                         metadata_changed: binding.is_some() || evidence_d.is_some(),
                         event_evidence_digest: evidence,
                         published_at: None,
+                        staged_version_id,
                     },
                 )
             }
@@ -1705,6 +1739,7 @@ fn collection_batch_item(
                 "collection result id replays a different commit".into(),
             ));
         }
+        series_commit::consume_staged(c, Some(item.version_id.as_str()))?;
         return Ok(Ok(Receipt {
             publication_id: item.publication_id.clone(),
             version_id: series::version_id(&event.new_content_digest),
@@ -1840,6 +1875,7 @@ fn collection_item_commit(c: &Connection, item: &CollectionCandidate) -> Result<
             metadata_changed: false,
             event_evidence_digest: evidence,
             published_at: Some(item.published_at),
+            staged_version_id: Some(item.version_id.as_str()),
         },
     )
 }
@@ -1877,6 +1913,7 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 if event.task_id != command.task_id || event.item_id != command.item_id {
                     return Err(Error::Conflict("result identity conflict".into()));
                 }
+                series_commit::consume_staged(&tx, Some(command.version_id.as_str()))?;
                 let receipt = receipt_for(&tx, &command.publication_id)?
                     .ok_or_else(|| integrity("receipt event lacks result payload"))?;
                 tx.commit().map_err(storage)?;
@@ -1951,6 +1988,7 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 metadata_changed: false,
                 event_evidence_digest: event_evidence,
                 published_at: Some(v.published_at),
+                staged_version_id: Some(command.version_id.as_str()),
             };
             let receipt = series_commit::commit_series_tx(&tx, &w)?;
             tx.commit().map_err(storage)?;

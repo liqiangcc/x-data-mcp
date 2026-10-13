@@ -169,7 +169,7 @@ fn fixture(changed: bool) -> Fixture {
     }
 }
 impl Fixture {
-    fn prepare(&self) -> Result<Preparation, Error> {
+    fn prepare_plan(&self) -> Result<Preparation, Error> {
         Publisher {
             repository: self.db.clone(),
         }
@@ -182,7 +182,7 @@ impl Fixture {
         )
     }
     fn plan(&self) -> Box<RangePlan> {
-        let Preparation::Ready(plan) = self.prepare().unwrap() else {
+        let Preparation::Ready(plan) = self.prepare_plan().unwrap() else {
             panic!("expected approval")
         };
         plan
@@ -313,13 +313,13 @@ fn range_full_coverage_evidence_cannot_be_inferred_from_segment() {
     let mut f = fixture(true);
     f.whole = None;
     assert!(matches!(
-        f.prepare().unwrap(),
+        f.prepare_plan().unwrap(),
         Preparation::NeedsVerification(Reason::CoverageUnknown)
     ));
     let mut f = fixture(true);
     f.whole.as_mut().unwrap().evidence.combined_integrity_sha256 = "other".into();
     assert!(matches!(
-        f.prepare().unwrap(),
+        f.prepare_plan().unwrap(),
         Preparation::NeedsVerification(Reason::CoverageUnknown)
     ));
     assert_eq!(f.count("market_update_results"), 0);
@@ -338,7 +338,7 @@ fn range_candidate_must_preserve_outside_rows_even_with_bound_whole_evidence() {
     f.whole.as_mut().unwrap().record = raw.clone();
     f.whole.as_mut().unwrap().evidence.combined_integrity_sha256 =
         raw["integrity_sha256"].as_str().unwrap().into();
-    assert!(matches!(f.prepare(), Err(Error::Invalid(_))));
+    assert!(matches!(f.prepare_plan(), Err(Error::Invalid(_))));
 }
 #[test]
 fn range_receipt_refuses_corrupt_result_or_fixed_version() {
@@ -362,13 +362,13 @@ fn range_needs_verification_and_no_change_do_not_fabricate_new_versions() {
     let mut f = fixture(false);
     f.evidence.same_qfq_basis_ref.clear();
     assert!(matches!(
-        f.prepare().unwrap(),
+        f.prepare_plan().unwrap(),
         Preparation::NeedsVerification(Reason::BasisUnknown)
     ));
     assert_eq!(f.count("data_versions"), 1);
     let mut f = fixture(false);
     f.command.version_id = "new-but-unchanged".into();
-    assert!(matches!(f.prepare(), Err(Error::Invalid(_))));
+    assert!(matches!(f.prepare_plan(), Err(Error::Invalid(_))));
     assert_eq!(f.count("data_versions"), 1);
 }
 #[test]
@@ -608,7 +608,7 @@ fn range_publish_cannot_widen_the_accepted_frozen_dates() {
     let mut f = fixture(false);
     f.range.start = "2025-01-01".parse().unwrap();
     f.evidence.range = f.range.clone();
-    assert!(matches!(f.prepare(), Err(Error::Conflict(_))));
+    assert!(matches!(f.prepare_plan(), Err(Error::Conflict(_))));
     assert_eq!(f.count("market_update_results"), 0);
 }
 
@@ -2836,6 +2836,27 @@ fn two_fifty_day_append_growth_stays_bounded() {
         "day-250 growth {}B is not commensurate with early mean {early:.0}B/day",
         growth[days - 1]
     );
+    // staged_records (compact schema 21) must stay empty across the whole
+    // append loop — every commit consumes its staged candidate and orphans
+    // are bounded by the stage-time TTL sweep. This soak drives the legacy
+    // backend, where the table does not exist; the compact-side assertion
+    // lives in `staged_records_empty_after_full_cycle_on_compact`.
+    {
+        let c = Connection::open(&path).unwrap();
+        let has_staged: bool = c
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='staged_records')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        if has_staged {
+            let staged: i64 = c
+                .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(staged, 0, "{days}-day append must not leak staged rows");
+        }
+    }
 }
 
 /// Shared batch evidence (unit/currency, coverage, adjustment) is

@@ -190,16 +190,9 @@ fn scope() -> Scope {
     }
 }
 
-/// Commit a first-publish envelope commit: stage → candidate →
-/// mark_validated → commit — same flow the envelope path runs.
-fn publish_bars(
-    repo: &super::super::compact_repo::SqliteCompactMarket,
-    task_id: &str,
-    revision: u64,
-    publication_id: &str,
-    version_label: &str,
-    bars: Vec<Bar>,
-) -> crate::market_storage::Receipt {
+/// The staged candidate record the envelope path parks before commit —
+/// same shape `publish_bars` writes.
+fn staged_raw(version_label: &str, bars: Vec<Bar>) -> Value {
     let mut version = EffectiveVersion {
         version_id: version_label.into(),
         symbol: SYMBOL.into(),
@@ -249,6 +242,20 @@ fn publish_bars(
         "generation_evidence": generation_evidence(),
     });
     raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+    raw
+}
+
+/// Commit a first-publish envelope commit: stage → candidate →
+/// mark_validated → commit — same flow the envelope path runs.
+fn publish_bars(
+    repo: &super::super::compact_repo::SqliteCompactMarket,
+    task_id: &str,
+    revision: u64,
+    publication_id: &str,
+    version_label: &str,
+    bars: Vec<Bar>,
+) -> crate::market_storage::Receipt {
+    let raw = staged_raw(version_label, bars);
     repo.stage(&raw).unwrap();
     let candidate = repo.candidate(version_label).unwrap();
     repo.mark_validated(&candidate).unwrap();
@@ -695,6 +702,7 @@ fn replace_rollback_keeps_series_consistent() {
                 metadata_changed: false,
                 event_evidence_digest: continuity,
                 published_at: None,
+                staged_version_id: None,
             },
         )?;
         let _ = result;
@@ -1348,6 +1356,7 @@ fn check_binding_rejects_wrong_owner_state_target_and_occupancy() {
             metadata_changed: false,
             event_evidence_digest: [0xAA; 32],
             published_at: None,
+            staged_version_id: None,
         }
     }
 
@@ -1698,6 +1707,7 @@ fn metadata_commit_updates_updated_at_no_change_does_not() {
                 metadata_changed: true,
                 event_evidence_digest: evidence,
                 published_at: None,
+                staged_version_id: None,
             },
         )
     })
@@ -1917,6 +1927,7 @@ fn yearly_first_publish_creates_series_lineage_and_event() {
                     metadata_changed: false,
                     event_evidence_digest: y_evidence,
                     published_at: None,
+                    staged_version_id: None,
                 },
             )
         })
@@ -2534,6 +2545,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
                     metadata_changed: true,
                     event_evidence_digest: continuity,
                     published_at: None,
+                    staged_version_id: None,
                 },
             )
         })
@@ -2634,6 +2646,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
                     metadata_changed: true,
                     event_evidence_digest: continuity,
                     published_at: None,
+                    staged_version_id: None,
                 },
             )
         })
@@ -2839,6 +2852,7 @@ fn rejected_item_leaves_head_and_task_state_untouched() {
                     metadata_changed: false,
                     event_evidence_digest: continuity,
                     published_at: None,
+                    staged_version_id: None,
                 },
             )
         })
@@ -2875,4 +2889,356 @@ fn rejected_item_leaves_head_and_task_state_untouched() {
     )
     .unwrap()
     .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// staged_records lifecycle: every commit path consumes its candidate inside
+// the commit transaction; rows orphaned by failed/cancelled item runs are
+// bounded by the stage-time TTL sweep (fix/staged-records-gc).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn typed_commit_consumes_a_staged_orphan_of_the_same_item() {
+    // An envelope attempt that staged `range-version-{item}` and then
+    // failed leaves the row behind; the item's later typed commit carries
+    // the same candidate id and reclaims it inside the commit transaction.
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    let (task_id, _r) = running_task_multi(&repo, 2);
+    let rev1 = start_item_id(&repo, &task_id, "item-1");
+    let first = publish_bars(&repo, &task_id, rev1, "pub-1", "v1", vec![bar(0, 100)]);
+    let rev2 = start_item_id(&repo, &task_id, "item-2");
+    let cmd = command_at(&task_id, "pub-2", rev2, "item-2");
+    repo.stage(&staged_raw(&cmd.version_id, vec![bar(0, 100), bar(1, 110)]))
+        .unwrap();
+    let c = Connection::open(&path).unwrap();
+    let staged: i64 = c
+        .query_row(
+            "SELECT count(*) FROM staged_records WHERE version_id=?1",
+            [&cmd.version_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(staged, 1, "orphaned candidate must exist before commit");
+
+    repo.commit_range_ops(
+        &cmd,
+        &scope(),
+        &first.version_id,
+        &[bar(1, 110)],
+        &[],
+        &[bar(0, 100), bar(1, 110)],
+    )
+    .unwrap()
+    .unwrap();
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(staged, 0, "typed commit must consume the staged orphan");
+}
+
+#[test]
+fn yearly_commit_consumes_its_staged_candidate() {
+    // The yearly pipeline stages `yearly-version-…` during prepare; the
+    // commit consumed it — the leaked rows in the S5 result DB came from
+    // this path (one staged row per yearly event).
+    let r = Repo::new();
+    let mut daily_task = r.task(1, "day", "req-d");
+    let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev_d,
+        &pub_d,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(1, "year", "req-y");
+    let candidate = mk_year_version("y-v1", vec![year_bar(2020, 100)], &daily.version_id);
+    // The same write prepare_derived_yearly performs when the candidate is
+    // absent (yearly_publication.rs stage-on-prepare).
+    r.repo.stage(checked(&candidate).raw()).unwrap();
+    let c = Connection::open(&r.path).unwrap();
+    let staged: i64 = c
+        .query_row(
+            "SELECT count(*) FROM staged_records WHERE version_id='y-v1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(staged, 1, "yearly candidate must be staged before commit");
+
+    commit_yearly_plan(&r, &mut yearly_task, candidate, &base, None, None, None).unwrap();
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(staged, 0, "yearly commit must consume the staged row");
+}
+
+#[test]
+fn yearly_replay_consumes_the_restaged_candidate() {
+    // A retried yearly item stages its candidate again and the commit hits
+    // the replay arm — replay must consume the re-staged row too.
+    let r = Repo::new();
+    let mut daily_task = r.task(1, "day", "req-d");
+    let (_i, pub_d, rev_d) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev_d,
+        &pub_d,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(1, "year", "req-y");
+    let candidate = mk_year_version("y-v1", vec![year_bar(2020, 100)], &daily.version_id);
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        candidate.clone(),
+        &base,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Re-stage the same candidate and re-commit the same result id —
+    // commit_yearly's replay arm must also delete the row.
+    r.repo.stage(checked(&candidate).raw()).unwrap();
+    let c = Connection::open(&r.path).unwrap();
+    commit_yearly_plan(
+        &r,
+        &mut yearly_task,
+        candidate,
+        &base,
+        None,
+        Some("year-req-y-pub-1"),
+        Some("item-1"),
+    )
+    .unwrap();
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        staged, 0,
+        "replayed yearly commit must consume the staged row"
+    );
+}
+
+#[test]
+fn failed_commit_keeps_the_staged_row_until_gc() {
+    // A rejected commit rolls back the consume: the candidate survives for
+    // the retry, and only the TTL sweep reclaims it.
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    let (task_id, _r) = running_task_multi(&repo, 2);
+    let rev1 = start_item_id(&repo, &task_id, "item-1");
+    let _first = publish_bars(&repo, &task_id, rev1, "pub-1", "v1", vec![bar(0, 100)]);
+    let rev2 = start_item_id(&repo, &task_id, "item-2");
+    let cmd = command_at(&task_id, "pub-2", rev2, "item-2");
+    repo.stage(&staged_raw(&cmd.version_id, vec![bar(0, 100), bar(1, 110)]))
+        .unwrap();
+
+    // Stale base CAS fails → the transaction (including the consume) rolls
+    // back and the staged row stays available for the next attempt.
+    assert!(
+        repo.commit_range_ops(
+            &cmd,
+            &scope(),
+            "stale-base",
+            &[bar(1, 110)],
+            &[],
+            &[bar(0, 100), bar(1, 110)],
+        )
+        .is_err()
+    );
+    let c = Connection::open(&path).unwrap();
+    let staged: i64 = c
+        .query_row(
+            "SELECT count(*) FROM staged_records WHERE version_id=?1",
+            [&cmd.version_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(staged, 1, "failed commit must keep the staged row");
+
+    // The orphan is bounded by the TTL window: once its last stage attempt
+    // ages out, the next stage() sweeps it.
+    c.execute(
+        "UPDATE staged_records SET created_at='2000-01-01T00:00:00+00:00'",
+        [],
+    )
+    .unwrap();
+    repo.stage(&staged_raw("v-later", vec![bar(0, 50)]))
+        .unwrap();
+    let (old, fresh): (i64, i64) = c
+        .query_row(
+            "SELECT count(*) FILTER (WHERE version_id=?1), count(*) FROM staged_records",
+            [&cmd.version_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(old, 0, "expired orphan must be swept by the next stage");
+    assert_eq!(fresh, 1, "the just-staged row survives the sweep");
+}
+
+#[test]
+fn stage_time_gc_sweeps_only_expired_orphans() {
+    // Rows younger than the TTL stay; rows whose last stage attempt is
+    // older than the cutoff are reclaimed by the next stage() call. The
+    // residual bound is the candidates staged within the window.
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    repo.stage(&staged_raw("v-old", vec![bar(0, 50)])).unwrap();
+    repo.stage(&staged_raw("v-fresh", vec![bar(0, 60)]))
+        .unwrap();
+    let c = Connection::open(&path).unwrap();
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(staged, 2, "fresh orphans stay under the TTL");
+
+    c.execute(
+        "UPDATE staged_records SET created_at='2000-01-01T00:00:00+00:00' WHERE version_id='v-old'",
+        [],
+    )
+    .unwrap();
+    repo.stage(&staged_raw("v-next", vec![bar(0, 70)])).unwrap();
+    let (old, rest): (i64, i64) = c
+        .query_row(
+            "SELECT count(*) FILTER (WHERE version_id='v-old'), count(*) FROM staged_records",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(old, 0);
+    assert_eq!(rest, 2, "only the expired orphan is swept");
+
+    // The same sweep is directly callable — a future cutoff reclaims all.
+    let swept = repo
+        .write(|c| {
+            super::super::compact_repo::gc_staged(c, Utc::now() + chrono::Duration::seconds(1))
+        })
+        .unwrap();
+    assert_eq!(swept, 2);
+    let staged: i64 = c
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(staged, 0);
+}
+
+#[test]
+fn full_commit_cycle_leaves_no_staged_rows() {
+    // One whole update cycle on the compact backend: envelope
+    // first-publish, typed append, no_change, yearly derive and yearly
+    // rederive — every commit consumes its candidate in the same
+    // transaction, so staged_records returns to zero.
+    let r = Repo::new();
+    let c = Connection::open(&r.path).unwrap();
+    let staged = |c: &Connection| -> i64 {
+        c.query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+            .unwrap()
+    };
+
+    // First publish (envelope path: stages then consumes).
+    let mut daily_task = r.task(4, "day", "req-d");
+    let (_i, pub1, rev1) = daily_task.item(&r.repo);
+    let daily = publish_bars(
+        &r.repo,
+        &daily_task.task_id,
+        rev1,
+        &pub1,
+        "v1",
+        vec![bar(0, 100), bar(1, 110)],
+    );
+    assert_eq!(staged(&c), 0, "first publish must consume its candidate");
+
+    // Typed append: the command's version_id is the candidate id the
+    // envelope fallback would have staged under — the typed commit reclaims
+    // it too.
+    let (_i2, pub2, rev2) = daily_task.item(&r.repo);
+    let append_cmd = command_at(&daily_task.task_id, &pub2, rev2, "item-2");
+    r.repo
+        .stage(&staged_raw(
+            &append_cmd.version_id,
+            vec![bar(0, 100), bar(1, 110), bar(2, 120)],
+        ))
+        .unwrap();
+    let head2 = r
+        .repo
+        .commit_range_ops(
+            &append_cmd,
+            &scope(),
+            &daily.version_id,
+            &[bar(2, 120)],
+            &[],
+            &[bar(0, 100), bar(1, 110), bar(2, 120)],
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(staged(&c), 0, "typed append must consume the orphan");
+
+    // No-change on the same head: nothing is staged, nothing is left.
+    let (_i3, pub3, rev3) = daily_task.item(&r.repo);
+    let nc_cmd = command_at(&daily_task.task_id, &pub3, rev3, "item-3");
+    r.repo
+        .commit_range_no_change_typed(
+            &nc_cmd,
+            &head2.version_id,
+            &crate::market_update::DateRange {
+                start: date(0),
+                end: date(2),
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(staged(&c), 0, "no_change leaves the table untouched");
+
+    // Yearly derive + rederive through the real prepare-stage/commit pair.
+    let base = daily_checked(&r);
+    let mut yearly_task = r.task(2, "year", "req-y");
+    let y1 = mk_year_version(
+        "y-v1",
+        vec![year_bar(1970, 100)],
+        &base.version().version_id,
+    );
+    r.repo.stage(checked(&y1).raw()).unwrap();
+    commit_yearly_plan(&r, &mut yearly_task, y1, &base, None, None, None).unwrap();
+    assert_eq!(staged(&c), 0, "yearly commit must consume its candidate");
+
+    // Second daily version + rederived yearly on the new base.
+    let (_i4, pub4, rev4) = daily_task.item(&r.repo);
+    let append2 = command_at(&daily_task.task_id, &pub4, rev4, "item-4");
+    r.repo
+        .commit_range_ops(
+            &append2,
+            &scope(),
+            &head2.version_id,
+            &[bar(3, 130)],
+            &[],
+            &[bar(0, 100), bar(1, 110), bar(2, 120), bar(3, 130)],
+        )
+        .unwrap()
+        .unwrap();
+    let base2 = daily_checked(&r);
+    let yearly_head = series::read_series(&c, SYMBOL, Period::Year)
+        .unwrap()
+        .unwrap()
+        .version_id;
+    let prior = checked(&mk_year_version(
+        &yearly_head,
+        vec![year_bar(1970, 100)],
+        &base.version().version_id,
+    ));
+    let y2 = mk_year_version(
+        "y-v2",
+        vec![year_bar(1970, 130)],
+        &base2.version().version_id,
+    );
+    r.repo.stage(checked(&y2).raw()).unwrap();
+    commit_yearly_plan(&r, &mut yearly_task, y2, &base2, Some(prior), None, None).unwrap();
+    assert_eq!(staged(&c), 0, "yearly rederive must consume its candidate");
 }

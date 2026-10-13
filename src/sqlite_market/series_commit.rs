@@ -108,6 +108,12 @@ pub(crate) struct Commit<'a> {
     pub event_evidence_digest: Digest,
     /// Provenance timestamp for `first_publish` series rows.
     pub published_at: Option<DateTime<Utc>>,
+    /// The `staged_records` key this commit consumes (the envelope/yearly
+    /// paths park the caller-verified candidate there between `stage()` and
+    /// commit). `None` when the path never stages. Deleting it inside the
+    /// same transaction — commit or replay — keeps the scratch table from
+    /// leaking one row per typed/yearly commit.
+    pub staged_version_id: Option<&'a str>,
 }
 
 /// Canonical result identity digest stored on the event row — replay and
@@ -158,6 +164,23 @@ fn coverage_code(status: CoverageStatus) -> i64 {
         CoverageStatus::Incomplete => 2,
         CoverageStatus::Unknown => 3,
     }
+}
+
+/// Consume the staged candidate inside the caller's transaction. A no-op
+/// when `staged_version_id` is `None` or no row exists under it; typed
+/// paths pass the candidate id they would have staged under, which also
+/// reclaims a row orphaned by an earlier failed envelope attempt of the
+/// same item.
+pub(crate) fn consume_staged(c: &Connection, staged_version_id: Option<&str>) -> Result<(), Error> {
+    let Some(id) = staged_version_id else {
+        return Ok(());
+    };
+    c.execute(
+        "DELETE FROM staged_records WHERE version_id=?1",
+        params![id],
+    )
+    .map_err(storage)?;
+    Ok(())
 }
 
 /// Replay anchor: a committed event under this `result_id` returns its
@@ -296,6 +319,10 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
     if w.range_start_day > w.range_end_day {
         return Err(integrity("commit range inverted"));
     }
+    // A committed (or replayed) item never needs its staged candidate
+    // again — consume it inside this transaction. A failed commit rolls
+    // the delete back, so the row survives for the next attempt.
+    consume_staged(c, w.staged_version_id)?;
     if let Some(receipt) = replay_receipt(c, w)? {
         return Ok(receipt);
     }
