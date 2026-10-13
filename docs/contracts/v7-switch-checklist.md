@@ -65,7 +65,9 @@ v7：schema 不变，无 `init`/`init20` 步骤，不碰 DB/WAL/generations，
 - 日更编排改为 plan/run：acquire→verify→activate 之后，
   `plan_market_update`（market.daily）→ 复核 counts/digest →
   `run_market_update`（带 plan 返回的 `target_day`+`plan_id`）→
-  轮询 `get_task_progress` 至终态 → `plan_market_update`
+  轮询 `get_task_progress` 至终态（大任务按 `unfinished` keyset 分页，
+  只看 `status`/计数/`next_cursor`，不要期待逐 item 结果数组）→
+  `plan_market_update`
   （market.yearly，要求 daily 无非终态任务）→ `run_market_update` →
   readback。`plan_stale` → 重新 plan；不再按 ≤100 分批显式编排；
 - `.devin/evals/daily-sync-config.json` allowlist 加

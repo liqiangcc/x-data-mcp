@@ -727,6 +727,79 @@ fn planrun_scales_to_market_wide_membership() {
     assert!(plan_ms < 5_000, "plan took {plan_ms}ms > 5s");
     assert!(run_ms < 10_000, "run acceptance took {run_ms}ms > 10s");
 
+    // Bounded reads (PLANRUN-BOUNDED-READS): a >100-item task must be
+    // served from head columns plus keyset item pages — response bytes
+    // and process HWM must not scale with the item count.
+    let hwm0 = vmhwm_kb();
+    let view = r
+        .api
+        .call(
+            "get_task",
+            json!({"contract_version":"v1","task_id":task_id}),
+        )
+        .unwrap();
+    assert_eq!(view["task_id"], task_id);
+    assert_eq!(view["plan_id"], p["plan_id"]);
+    assert!(
+        serde_json::to_vec(&view).unwrap().len() < 2 * 1024,
+        "get_task response must stay small for large tasks"
+    );
+    let get_task_delta = vmhwm_kb().saturating_sub(hwm0);
+    assert!(
+        get_task_delta < 10 * 1024,
+        "get_task HWM delta {get_task_delta}kB exceeds the 10MB budget"
+    );
+    let page = r.api.call("list_tasks", json!({"page_size":1000})).unwrap();
+    assert!(
+        page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["task_id"] == task_id)
+    );
+    let list_delta = vmhwm_kb().saturating_sub(hwm0);
+    assert!(
+        list_delta < 10 * 1024,
+        "list_tasks HWM delta {list_delta}kB exceeds the 10MB budget"
+    );
+    // Keyset pagination over unfinished items: every item appears
+    // exactly once, each page stays <50KB, per-item arrays are empty and
+    // the plan summary rides along.
+    let mut seen = std::collections::BTreeSet::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..64 {
+        let mut args = json!({"task_id":task_id,"page_size":100});
+        if let Some(c) = cursor.take() {
+            args["cursor"] = json!(c);
+        }
+        let page = r.api.call("get_task_progress", args).unwrap();
+        let bytes = serde_json::to_vec(&page).unwrap().len();
+        assert!(bytes < 50 * 1024, "progress page {bytes}B exceeds 50KB");
+        assert_eq!(page["total"], symbols.len() as u64);
+        assert_eq!(page["plan"]["plan_id"], p["plan_id"]);
+        assert_eq!(page["plan"]["generation_id"], p["generation_ref"]);
+        assert_eq!(
+            page["range_results"],
+            json!([]),
+            "large-task pages never carry per-item result arrays"
+        );
+        for item in page["unfinished"].as_array().unwrap() {
+            assert!(
+                seen.insert(item["item_id"].as_str().unwrap().to_string()),
+                "unfinished item repeated across pages"
+            );
+        }
+        match page["next_cursor"].as_str() {
+            Some(next) => cursor = Some(next.to_string()),
+            None => break,
+        }
+    }
+    assert_eq!(seen.len(), symbols.len(), "every item paged exactly once");
+    eprintln!(
+        "plan-run reads: get_task +{get_task_delta}kB, list_tasks +{list_delta}kB, {} progress pages",
+        52
+    );
+
     // Execution phase (TASK-DEVIN-PLANRUN-CHUNK-EXEC): the accepted task
     // must run to a terminal state with bounded memory — chunked at
     // EXEC_CHUNK=100 so a 5,201-item task peaks like a ≤100-item task
@@ -1487,4 +1560,40 @@ fn run_items_chunked_execution_matches_per_item_outcomes() {
     let head_a = rig_a.backend.task_head(&task_a).unwrap();
     let head_b = rig_b.backend.task_head(&task_b).unwrap();
     assert_eq!(head_a.counts, head_b.counts);
+}
+
+/// ≤100-item tasks keep the v6 progress shape byte-identical: the full
+/// per-item arrays ride every page and the bounded `plan` object is
+/// absent entirely.
+#[test]
+fn small_task_progress_keeps_full_shape() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 2);
+    let page = r
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id":task_id,"page_size":100}),
+        )
+        .unwrap();
+    assert_eq!(page["total"], 2);
+    assert!(
+        page.get("plan").is_none(),
+        "small tasks must not carry the bounded plan object"
+    );
+    assert_eq!(
+        page["frozen_daily_ranges"].as_array().unwrap().len(),
+        item_ids.len(),
+        "small tasks keep the per-item frozen ranges"
+    );
+    assert_eq!(page["unfinished"].as_array().unwrap().len(), 2);
+    let view = r
+        .api
+        .call(
+            "get_task",
+            json!({"contract_version":"v1","task_id":task_id}),
+        )
+        .unwrap();
+    assert_eq!(view["task_id"], task_id);
 }

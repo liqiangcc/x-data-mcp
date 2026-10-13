@@ -70,7 +70,32 @@ compact schema 21（见 [STATUS](../STATUS.md)）。schema 不变（仍 21），
 | `daily_update_inflight` | yearly plan/run 时 market.daily 有非终态更新任务 |
 | 沿用 | `invalid_arguments`、`unsupported_contract`、`request_conflict`、`empty_request_id`、`unknown_dataset` |
 
-## 5. 与 #294 的关系
+## 5. 大任务的读形状（item_count > 100）
+
+`get_task`/`list_tasks`/`get_task_progress` 对超过
+`observe::LARGE_TASK_ITEMS`（=100，与显式契约受理上限同值）的任务切
+换到有界读：内存与响应体积与任务项数无关。≤100 项的任务（全部 v6
+显式任务）形状逐字节不变。
+
+- `get_task`/`list_tasks`：summary 字段不变（含 plan-run 任务的
+  `plan_id`/`plan_counts`），服务端只读任务头列与
+  `shared_evidence`，不反序列化 `frozen_work_json` 的 item 列表。
+- `get_task_progress`：响应为任务状态、聚合计数
+  （`total/pending/running/finished/succeeded/failed`）、`task.plan_id`/
+  `plan_counts`、新增顶层 `plan{plan_id, generation_id, target_day}`；
+  `unfinished` 仅分页返回**未完成或失败**的 item（按 `item_id` 升序
+  keyset 翻页，`page_size` 决定本页条数），成功项不逐条列出；
+  `frozen_daily_ranges`/`range_results`/`frozen_yearly_inputs`/
+  `yearly_results`/`publication_versions` 恒为空数组（大任务的成功项
+  结果经 `market_update_results` 审计面或 item receipt 单独查）。
+  `page_size`≤100 时每页响应 <50KB。
+- 游标语义：大任务的 `next_cursor` 为 keyset 位置（末项
+  `item_id`），翻页读到的是翻页时刻的最新项状态（非创建游标时的
+  快照）；小任务保持原有快照分页语义不变。
+- 取消/失败排查：`unfinished` 恒含失败项（`success=false` + `error`），
+  未开始项 `success=null`。
+
+## 6. 与 #294 的关系
 
 显式 `update_data` 的「整批原子受理、>100 拒绝」语义不变（见
 [generic-data-tools](../generic-data-tools.md) 的原子受理裁决）。plan/run 工作流
