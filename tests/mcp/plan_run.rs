@@ -615,7 +615,11 @@ fn planrun_scales_to_market_wide_membership() {
                     key: CommandKey {
                         operation: "start_collection".into(),
                         dataset: "market.daily".into(),
-                        contract_version: "explicit-collection-v1".into(),
+                        // family() in default_selection only maps
+                        // ("market.daily","v1") to the typed family —
+                        // other contract versions leave the execution-
+                        // start markers out of the daily universe.
+                        contract_version: "v1".into(),
                     },
                     intent: json!({}),
                 },
