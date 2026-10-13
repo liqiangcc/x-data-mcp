@@ -25,9 +25,12 @@ preview.31 / schema 20 / `generic-data-v5`（[STATUS](../STATUS.md)），
      （smoke 对发布包断言，漏改则 release 冒烟必挂）；
    - 两个 Skill 的 revision 断言（§3），前提是接受「bump 提交合入
      到部署完成之间，strict Skill 对仍是 v5 的生产实例报
-     `SKILL_CONTRACT_MISMATCH` 并停止」这一预期 fail-closed 窗口；
-     headless 日更读取的是哪份 SKILL.md 未核实，部署日前需向
-     Owner 确认其分发路径。
+     `SKILL_CONTRACT_MISMATCH` 并停止」这一预期 fail-closed 窗口。
+     headless 日更读取的 SKILL.md 已核实：`run_daily_sync_eval.sh`
+     先 `cd` 到仓库根（`git rev-parse --show-toplevel`）再起 devin，
+     读的是该工作树里的 `.devin/skills/x-data-daily-sync/SKILL.md`
+     ——即日更前 Owner 工作树必须已更新到包含本切换 PR 的 main
+     提交。
    - `scripts/deploy_phase_g.sh` 的 schema-20 断言与
      `task_sqlite init20` 的命名/打印（OWNER-RULING-PAR-1A R4：
      **必须进 S4 与 bump 同一提交**，`init20` 保留别名、输出 21，
