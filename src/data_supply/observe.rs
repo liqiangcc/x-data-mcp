@@ -814,6 +814,7 @@ impl<R: ObservationRepository> Observer<R> {
                         .transpose()
                         .map_err(|e| Error::Integrity(format!("stopped check result: {e}")))?,
                     frozen_yearly_inputs: frozen_yearly_inputs(&facts.snapshot)?,
+                    plan: None,
                 };
                 let wire_bytes = {
                     let _span = Span::enter(Stage::WireBudget);

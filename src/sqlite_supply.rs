@@ -955,9 +955,9 @@ fn task_head_facts(
             .map_err(storage)?;
         return match binding {
             None => Err(Error::Task(crate::task_control::Error::TaskNotFound)),
-            Some(_) => Err(Error::NeedsVerification(
+            Some(_) => Err(Error::Task(crate::task_control::Error::NeedsVerification(
                 "task binding/execution missing".into(),
-            )),
+            ))),
         };
     };
     let status: String = r.get(1).map_err(storage)?;
@@ -979,9 +979,9 @@ fn task_head_facts(
             .and_then(|e| e.get("evidence_digest"))
             .and_then(serde_json::Value::as_str)
     {
-        return Err(Error::NeedsVerification(
+        return Err(Error::Task(crate::task_control::Error::NeedsVerification(
             "task evidence digest column/blob mismatch".into(),
-        ));
+        )));
     }
     if !authorized_head(c, id, &key, access)? {
         return Err(invalid("forbidden"));
