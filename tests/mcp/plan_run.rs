@@ -214,6 +214,8 @@ fn rig(members: &[(&str, &str, u32)]) -> Rig {
     let db = tempfile::tempdir().unwrap();
     let tasks = SqliteTasks::new(db.path().join("m.sqlite"));
     tasks.initialize_compact().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(tasks.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
     let backend = MarketBackend::open(&tasks).unwrap();
     SqliteCatalog::new(tasks.clone())
         .publish_fixture(
