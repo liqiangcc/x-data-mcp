@@ -541,8 +541,10 @@ fn planrun_scales_to_market_wide_membership() {
     const EXTRA: usize = 5_200;
     let mut codes = vec!["600006".to_string()];
     let mut symbols = vec!["sh.600006".to_string()];
+    let mut extra = Vec::with_capacity(EXTRA);
     for i in 0..EXTRA {
         let code = format!("{:06}", 700_000 + i);
+        extra.push(format!("sh.{code}"));
         symbols.push(format!("sh.{code}"));
         codes.push(code);
     }
@@ -557,110 +559,128 @@ fn planrun_scales_to_market_wide_membership() {
             Some("catalog-1"),
         )
         .unwrap();
+    use x_data_mcp::official_market::DailyCollectionRepository;
     use x_data_mcp::task_control::{
-        Command, CommandKey, FrozenWork, RequestOutcome, TaskRepository,
+        Change, Command, CommandKey, FrozenWork, RequestOutcome, TaskRepository,
     };
-    let mut scopes = std::collections::BTreeSet::new();
-    let mut specs = Vec::with_capacity(symbols.len());
-    for sym in &symbols {
-        let scope = x_data_mcp::task_control::legacy::scope_id(sym, "day");
-        scopes.insert(scope.clone());
-        specs.push(x_data_mcp::task_control::ItemSpec {
-            item_id: scope.clone(),
-            scope_keys: [scope].into(),
-            target: json!({"symbol": sym, "period": "day"}),
-            progress_unit: "security_period".into(),
-            frozen_inputs: json!({}),
-        });
-    }
-    let seed = r
-        .tasks
-        .accept(
-            "req-seed",
-            &Command {
-                key: CommandKey {
-                    operation: "start_collection".into(),
-                    dataset: "market.daily".into(),
-                    contract_version: "explicit-collection-v1".into(),
-                },
-                intent: json!({}),
-            },
-            &FrozenWork {
-                items: specs,
-                scopes,
-                shared_evidence: None,
-            },
-            "run-seed",
-            None,
-        )
-        .unwrap();
-    let RequestOutcome::Task(snap) = seed.record.outcome else {
-        panic!("seed acceptance must bind a task")
-    };
-    let seed_task = snap.task.task_id;
     // Reuse the rig's live backend handle — `MarketBackend::open` cannot
     // take a second lease on the same database file.
     let backend = r.backend.clone();
     use x_data_mcp::market_data::{
         AdjustmentEvidence, CoverageEvidence, EvidenceValue, Period, UnitCurrencyEvidence,
     };
-    use x_data_mcp::official_market::DailyCollectionRepository;
-    let mut candidates = Vec::with_capacity(symbols.len());
-    for (i, sym) in symbols.iter().enumerate() {
-        candidates.push(x_data_mcp::official_market::CollectionCandidate {
-            task_id: seed_task.clone(),
-            item_id: x_data_mcp::task_control::legacy::scope_id(sym, "day"),
-            publication_id: format!("scale-col-{i}"),
-            version_id: format!("scale-v-{i}"),
-            run_id: "run-seed".into(),
-            symbol: sym.clone(),
-            source: "official".into(),
-            bars: vec![
-                x_data_mcp::compact_market::CompactBar {
-                    trade_day: 1,
-                    open_cents: 1000,
-                    high_cents: 1010,
-                    low_cents: 990,
-                    close_cents: 1005,
-                    volume: Some(100),
-                    amount: Some("1000".into()),
-                    r7_raw: Some(7),
-                }
-                .to_bar(Period::Day)
-                .unwrap(),
-            ],
-            coverage: CoverageEvidence::complete("seed"),
-            unit_currency: UnitCurrencyEvidence {
-                price_currency: EvidenceValue::confirmed("CNY", "bound"),
-                price_unit: EvidenceValue::confirmed("share", "bound"),
-                volume_unit: EvidenceValue::confirmed("share", "bound"),
-                amount_currency: EvidenceValue::confirmed("CNY", "bound"),
-                amount_unit: EvidenceValue::confirmed("yuan", "bound"),
-            },
-            adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
-            published_at: Utc::now(),
-            generation_id: "gen-1".into(),
-            generation_manifest_sha256: "0b".repeat(32),
-            day_member_sha256: "0c".repeat(32),
-            security_event_sha256: "0e".repeat(32),
-            generation_evidence: json!({
-                "generation_id": "gen-1",
-                "snapshot_inputs": [{
-                    "role": "daily",
-                    "member": format!("{sym}.day"),
-                    "archive_sha256": "12".repeat(32),
-                    "member_sha256": "cd".repeat(32),
-                }],
-            }),
-        });
-    }
-    for res in backend
-        .commit_collection_batch(&seed_task, &candidates)
+    let bar = |day| {
+        x_data_mcp::compact_market::CompactBar {
+            trade_day: day,
+            open_cents: 1000,
+            high_cents: 1010,
+            low_cents: 990,
+            close_cents: 1005,
+            volume: Some(100),
+            amount: Some("1000".into()),
+            r7_raw: Some(7),
+        }
+        .to_bar(Period::Day)
         .unwrap()
-        .unwrap()
-    {
-        assert!(res.is_ok(), "seed collection commit failed: {res:?}");
+    };
+    let units = || UnitCurrencyEvidence {
+        price_currency: EvidenceValue::confirmed("CNY", "bound"),
+        price_unit: EvidenceValue::confirmed("share", "bound"),
+        volume_unit: EvidenceValue::confirmed("share", "bound"),
+        amount_currency: EvidenceValue::confirmed("CNY", "bound"),
+        amount_unit: EvidenceValue::confirmed("yuan", "bound"),
+    };
+    // Seed real heads in ~200-item tasks — a single 5.2k-item task makes
+    // per-item `decide` scans quadratic — and finish each task so its
+    // scopes release before the plan resolution runs.
+    for (batch, chunk) in extra.chunks(200).enumerate() {
+        let mut scopes = std::collections::BTreeSet::new();
+        let mut specs = Vec::with_capacity(chunk.len());
+        for sym in chunk {
+            let scope = x_data_mcp::task_control::legacy::scope_id(sym, "day");
+            scopes.insert(scope.clone());
+            specs.push(x_data_mcp::task_control::ItemSpec {
+                item_id: scope.clone(),
+                scope_keys: [scope].into(),
+                target: json!({"symbol": sym, "period": "day"}),
+                progress_unit: "security_period".into(),
+                frozen_inputs: json!({}),
+            });
+        }
+        let seed = r
+            .tasks
+            .accept(
+                &format!("req-seed-{batch}"),
+                &Command {
+                    key: CommandKey {
+                        operation: "start_collection".into(),
+                        dataset: "market.daily".into(),
+                        contract_version: "explicit-collection-v1".into(),
+                    },
+                    intent: json!({}),
+                },
+                &FrozenWork {
+                    items: specs,
+                    scopes,
+                    shared_evidence: None,
+                },
+                "run-seed",
+                None,
+            )
+            .unwrap();
+        let RequestOutcome::Task(snap) = seed.record.outcome else {
+            panic!("seed acceptance must bind a task")
+        };
+        let seed_task = snap.task.task_id;
+        let mut candidates = Vec::with_capacity(chunk.len());
+        for (i, sym) in chunk.iter().enumerate() {
+            candidates.push(x_data_mcp::official_market::CollectionCandidate {
+                task_id: seed_task.clone(),
+                item_id: x_data_mcp::task_control::legacy::scope_id(sym, "day"),
+                publication_id: format!("scale-col-{batch}-{i}"),
+                version_id: format!("scale-v-{batch}-{i}"),
+                run_id: "run-seed".into(),
+                symbol: sym.clone(),
+                source: "official".into(),
+                bars: vec![bar(1), bar(2)],
+                coverage: CoverageEvidence::complete("seed"),
+                unit_currency: units(),
+                adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+                published_at: Utc::now(),
+                generation_id: "gen-1".into(),
+                generation_manifest_sha256: "0b".repeat(32),
+                day_member_sha256: "0c".repeat(32),
+                security_event_sha256: "0e".repeat(32),
+                generation_evidence: json!({
+                    "generation_id": "gen-1",
+                    "snapshot_inputs": [{
+                        "role": "daily",
+                        "member": format!("{sym}.day"),
+                        "archive_sha256": "12".repeat(32),
+                        "member_sha256": "cd".repeat(32),
+                    }],
+                }),
+            });
+        }
+        for res in backend
+            .commit_collection_batch(&seed_task, &candidates)
+            .unwrap()
+            .unwrap()
+        {
+            assert!(res.is_ok(), "seed collection commit failed: {res:?}");
+        }
+        let revision = r
+            .tasks
+            .read_task(&seed_task)
+            .unwrap()
+            .unwrap()
+            .task
+            .state_revision;
+        r.tasks
+            .transition(&seed_task, revision, "run-seed", Change::FinishExecution)
+            .unwrap();
     }
+
     // 5,201 eligible members (head day 1 << pending day) + 0 absent.
     let rss0 = vmrss_kb();
     let hwm0 = vmhwm_kb();
