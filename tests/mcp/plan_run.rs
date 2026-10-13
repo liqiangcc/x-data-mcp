@@ -188,6 +188,8 @@ struct Rig {
     _db: tempfile::TempDir,
     api: DataApi,
     snapshot: Snapshot,
+    tasks: SqliteTasks,
+    seed_task: String,
 }
 /// Seed `codes` (sh.600006-style ("sh","600006") tuples) into a fresh
 /// compact database: catalog fixture head, then `start_collection` +
@@ -240,15 +242,18 @@ fn rig(members: &[(&str, &str, u32)]) -> Rig {
         .iter()
         .map(|(ex, code, _)| json!({"exchange":ex,"code":code}))
         .collect();
-    api.call(
-        "start_collection",
-        json!({"request_id":"seed","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":securities}}),
-    )
-    .unwrap();
+    let accepted = api
+        .call(
+            "start_collection",
+            json!({"request_id":"seed","dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":securities}}),
+        )
+        .unwrap();
     api.call("run_worker_once", json!({})).unwrap();
     Rig {
         api,
         snapshot: snap,
+        tasks,
+        seed_task: accepted["task_id"].as_str().unwrap().to_string(),
         _db: db,
     }
 }
@@ -431,4 +436,76 @@ fn yearly_plan_derives_and_daily_inflight_blocks_yearly_run() {
     assert_eq!(py2["counts"]["already_current"], 2, "{py2}");
     assert_eq!(py2["counts"]["eligible"], 0);
     assert_ne!(py2["plan_id"], py["plan_id"]);
+}
+
+/// A-share-scale plan timing (TASK-DEVIN-IMPL-PLAN-RUN-1: 5k synthetic
+/// entities): phantom catalog members carry execution-start markers seeded
+/// straight into `task_item_execution_starts` (the selection layer only
+/// reads the marker identity + task command key); 20 real members exercise
+/// the head-reading eligible path. Measured numbers land in test output;
+/// the assertions stay loose so slow CI hosts do not flake.
+#[test]
+fn plan_and_run_recompute_scale_to_full_catalog() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 20 real members, heads pinned one day behind today.
+    let real: Vec<(&str, String, u32)> = (10..30)
+        .map(|i| ("sh", format!("600{i:03}"), day_u32(1)))
+        .collect();
+    let real_refs: Vec<(&str, &str, u32)> = real.iter().map(|m| (m.0, m.1.as_str(), m.2)).collect();
+    let r = rig(&real_refs);
+
+    // 4,980 phantom members: catalog records + task_items + markers on the
+    // already-terminal seed task, inserted in one transaction.
+    let mut phantom: Vec<String> = Vec::new();
+    for i in 10_000..14_980 {
+        phantom.push(format!("sz.00{i}"));
+    }
+    // catalog-2 carries every member: the real sh.6000xx keep their heads,
+    // the phantom sz.00xxxx are started-but-absent.
+    let mut codes: Vec<&str> = real.iter().map(|m| m.1.as_str()).collect();
+    codes.extend(phantom.iter().map(|s| s.strip_prefix("sz.").unwrap()));
+    let mut exchanges = vec!["sh"; real.len()];
+    exchanges.extend(std::iter::repeat_n("sz", phantom.len()));
+    SqliteCatalog::new(r.tasks.clone())
+        .publish_fixture(
+            "catalog-2",
+            catalog_fixture(&codes, &exchanges),
+            Some("catalog-1"),
+        )
+        .unwrap();
+    let mut c = rusqlite::Connection::open(r.tasks.path()).unwrap();
+    let tx = c.transaction().unwrap();
+    for sym in &phantom {
+        let item = serde_json::to_string(&json!(["market", sym, "day"])).unwrap();
+        tx.execute(
+            "INSERT INTO task_items(task_id,item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage) \
+             VALUES(?1,?2,?3,'entity','{}','[]','pending')",
+            rusqlite::params![r.seed_task, item, format!("{{\"symbol\":\"{sym}\",\"period\":\"day\"}}")],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO task_item_execution_starts VALUES(?1,?2,'perf-seed',1,'2026-01-01T00:00:00Z')",
+            rusqlite::params![r.seed_task, item],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+    drop(c);
+
+    let t0 = std::time::Instant::now();
+    let p = plan(&r.api, "market.daily");
+    let plan_ms = t0.elapsed().as_millis();
+    assert_eq!(p["counts"]["eligible"], 20, "{p}");
+    assert_eq!(p["counts"]["absent"], phantom.len(), "{p}");
+
+    let t1 = std::time::Instant::now();
+    let accepted = run(&r.api, "market.daily", "run-perf", &p);
+    let run_ms = t1.elapsed().as_millis();
+    assert_eq!(accepted["item_count"], 20);
+    eprintln!(
+        "5k-member plan resolve {plan_ms}ms, run recompute+accept {run_ms}ms (eligible 20 / absent {})",
+        phantom.len()
+    );
+    assert!(plan_ms < 30_000, "plan resolve took {plan_ms}ms");
+    assert!(run_ms < 60_000, "run recompute+accept took {run_ms}ms");
 }
