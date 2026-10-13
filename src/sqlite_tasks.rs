@@ -32,10 +32,14 @@ pub(crate) const MIGRATIONS: [&str; 18] = [
 ];
 /// Compact market storage (#259) is an explicit opt-in target: compact files
 /// are refused by `check_schema` above so legacy adapters stay fail-closed.
-pub const COMPACT_SCHEMA_VERSION: u32 = 20;
-pub(crate) const COMPACT_MIGRATIONS: [&str; 2] = [
+/// Schema 21 replaces the version-manifest store with latest-only
+/// `market_series`/`series_bars` + the `market_events` log
+/// (SPEC-LATEST-ONLY §1; still fresh-init only, never in-place).
+pub const COMPACT_SCHEMA_VERSION: u32 = 21;
+pub(crate) const COMPACT_MIGRATIONS: [&str; 3] = [
     include_str!("../migrations/tasks/019_compact_market.sql"),
     include_str!("../migrations/tasks/020_evidence_parts.sql"),
+    include_str!("../migrations/tasks/021_latest_only.sql"),
 ];
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.
@@ -160,6 +164,11 @@ impl SqliteTasks {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(storage)?;
         let version = check_schema(&tx, false)?;
+        if version > SCHEMA_VERSION {
+            return Err(Error::StorageUnavailable(format!(
+                "schema {version} is already past legacy {SCHEMA_VERSION}; a compact checkpoint cannot run legacy migrations"
+            )));
+        }
         for (index, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
             apply_migration(&tx, index + 1, sql)?;
             post_migration(&tx, index + 1)?;
@@ -232,6 +241,27 @@ impl SqliteTasks {
             )));
         }
         registry_sweep(&tx)
+    }
+    /// Latest-only market deep check (schema 21): the series/event closure
+    /// probes plus a full digest recompute per series — the explicit
+    /// `task_sqlite check` pass (SPEC-LATEST-ONLY §3.5/RULINGS Q11). Empty on
+    /// other schemas.
+    pub fn series_check_readonly(&self) -> Result<Vec<String>, Error> {
+        let mut c = self.connect(true)?;
+        let tx = c.transaction().map_err(storage)?;
+        let version: u32 = tx
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(storage)?;
+        if version != COMPACT_SCHEMA_VERSION {
+            return Ok(vec![]);
+        }
+        if !crate::sqlite_market::is_latest_only_schema(&tx).map_err(storage)? {
+            return Err(Error::StorageUnavailable(
+                "schema 21 without market_series tables".into(),
+            ));
+        }
+        crate::sqlite_market::series::deep_check(&tx)
+            .map_err(|e| Error::StorageUnavailable(e.to_string()))
     }
     pub(crate) fn connect(&self, readonly: bool) -> Result<Connection, Error> {
         let flag = if readonly {
@@ -383,7 +413,11 @@ pub(crate) fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> 
     let version: u32 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(storage)?;
-    if version == 0 || version > SCHEMA_VERSION || current && version != SCHEMA_VERSION {
+    // `current` requires a schema this binary manages end-to-end (legacy
+    // 18 or latest-only 21); otherwise any applied migration row set up
+    // through 21 stays readable, including the compact 19/20 checkpoints.
+    let supported = version == SCHEMA_VERSION || version == COMPACT_SCHEMA_VERSION;
+    if version == 0 || version > COMPACT_SCHEMA_VERSION || (current && !supported) {
         return Err(Error::StorageUnavailable(format!(
             "unsupported/uninitialized schema {version}; explicit initialization/upgrade required"
         )));
@@ -398,7 +432,12 @@ pub(crate) fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> 
         .map_err(storage)?;
     if rows.len() != version as usize
         || rows.iter().enumerate().any(|(i, (v, d))| {
-            *v as usize != i + 1 || *d != crate::hash::sha256(MIGRATIONS[i].as_bytes())
+            let migration = if i < MIGRATIONS.len() {
+                MIGRATIONS[i]
+            } else {
+                COMPACT_MIGRATIONS[i - MIGRATIONS.len()]
+            };
+            *v as usize != i + 1 || *d != crate::hash::sha256(migration.as_bytes())
         })
     {
         return Err(Error::StorageUnavailable(
@@ -735,6 +774,7 @@ pub(crate) fn read_bound_task(c: &Connection, id: &str) -> Result<Option<TaskSna
 /// summary-surface equivalence; production reads use `read_bound_task`
 /// because skipping item/occupancy checks weakened corruption detection.
 #[cfg(test)]
+#[allow(dead_code)] // light binding read; kept for task-side call sites
 pub(crate) fn read_bound_task_light(
     c: &Connection,
     id: &str,

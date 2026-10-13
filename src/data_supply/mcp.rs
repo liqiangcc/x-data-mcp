@@ -340,7 +340,7 @@ impl DataApi {
             production_blocking_reasons.push(self.source_block());
         }
         encode(Capabilities {
-            capability_revision: "generic-data-v5".into(),
+            capability_revision: "generic-data-v6".into(),
             items,
             max_batch_entities: 100,
             max_page_size: 1000,
@@ -511,6 +511,7 @@ fn mapped(e: Error) -> ApiError {
         Error::Invalid(_) => "invalid_arguments",
         Error::Integrity(_) | Error::Base(_) => "integrity_error",
         Error::NotFound => "version_not_found",
+        Error::Stale(_) => "stale_version",
         Error::Conflict(_) => "precondition_conflict",
         Error::OutcomeUnknown(_) => "outcome_unknown",
         _ => "storage_error",
@@ -936,3 +937,6 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
     }
     v
 }
+
+#[cfg(test)]
+mod tests;

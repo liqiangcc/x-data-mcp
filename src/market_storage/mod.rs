@@ -27,6 +27,12 @@ pub enum Error {
     Conflict(String),
     #[error("MARKET_NOT_FOUND")]
     NotFound,
+    /// SPEC-LATEST-ONLY §6.1 (schema 21): the pinned version id exists in the
+    /// event log but is no longer the current series state — distinct from
+    /// `NotFound` (never committed). Wire-mapped to `stale_version` in
+    /// generic-data-v6.
+    #[error("MARKET_STALE: {0}")]
+    Stale(String),
     #[error("INVALID_MARKET_COMMAND: {0}")]
     Invalid(String),
     #[error("PUBLISH_OUTCOME_UNKNOWN: {0}; inspect the same publication_id")]

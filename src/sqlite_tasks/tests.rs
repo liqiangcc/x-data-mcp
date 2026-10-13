@@ -832,10 +832,21 @@ fn head_transition_refreshes_a_stale_held_head() {
     assert!(db.item_execution_started(&tid, &item_id).unwrap());
 }
 
-const COMPACT_TABLES: [&str; 15] = [
+/// Schema-21 latest-only compact set (SPEC-LATEST-ONLY §1): the schema-19
+/// version-manifest/result tables below are replaced by `market_series` +
+/// `series_bars` + `yearly_series_lineage` + `market_events`.
+const COMPACT_TABLES: [&str; 8] = [
     "evidence_bundles",
     "evidence_parts",
     "source_bindings",
+    "market_series",
+    "series_bars",
+    "yearly_series_lineage",
+    "market_events",
+    "staged_records",
+];
+/// Dropped by migration 021 — their absence is part of the v21 shape.
+const DROPPED_V19_TABLES: [&str; 12] = [
     "bar_segments",
     "segment_bars",
     "data_versions",
@@ -910,17 +921,24 @@ fn assert_compact_shape(path: &std::path::Path) {
     for table in LEGACY_MARKET_TABLES {
         assert!(!tables.contains(&table.to_string()), "legacy {table} kept");
     }
+    for table in DROPPED_V19_TABLES {
+        assert!(
+            !tables.contains(&table.to_string()),
+            "v19 table {table} kept"
+        );
+    }
     for table in PRESERVED_TABLES {
         assert!(
             tables.contains(&table.to_string()),
             "preserved {table} lost"
         );
     }
-    let versions = raw_columns(path, "data_versions");
-    assert!(versions.contains(&"version_key".to_string()));
-    assert!(!versions.contains(&"compat_json".to_string()));
-    assert!(!versions.contains(&"envelope_json".to_string()));
-    assert!(raw_columns(path, "bar_segments").contains(&"segment_key".to_string()));
+    let series = raw_columns(path, "market_series");
+    assert!(series.contains(&"series_key".to_string()));
+    assert!(series.contains(&"content_digest".to_string()));
+    assert!(series.contains(&"version_id".to_string()));
+    assert!(raw_columns(path, "series_bars").contains(&"series_key".to_string()));
+    assert!(raw_columns(path, "market_events").contains(&"result_id".to_string()));
 }
 fn assert_legacy_shape(path: &std::path::Path) {
     assert_eq!(raw_user_version(path), SCHEMA_VERSION);
@@ -929,6 +947,11 @@ fn assert_legacy_shape(path: &std::path::Path) {
     assert!(raw_tables(path).contains(&"payloads".to_string()));
 }
 
+/// Boundary (RESULT-S3 intentional assertion change): (1) a schema-21 file
+/// is read/write-accepted by the standalone task-store handle — the binary
+/// manages that schema end-to-end; (2) a compact 19/20 checkpoint stays
+/// fail-closed — the current handle refuses it; (3) `upgrade_compact` still
+/// refuses an already-compact file.
 #[test]
 fn initialize_compact_builds_compact_schema_and_refuses_legacy_ops() {
     let dir = tempfile::tempdir().unwrap();
@@ -936,9 +959,23 @@ fn initialize_compact_builds_compact_schema_and_refuses_legacy_ops() {
     let db = SqliteTasks::new(&path);
     db.initialize_compact().unwrap();
     assert_compact_shape(&path);
-    let e = db.read(|_| Ok(())).unwrap_err().to_string();
+    db.read(|_| Ok(())).unwrap();
+    db.write(|_| Ok(())).unwrap();
+
+    // A 19/20-era checkpoint file: user_version 20 with the matching
+    // migration rows — the current handle still refuses read/write.
+    db.checkpoint_truncate().unwrap();
+    let path20 = dir.path().join("checkpoint20.db");
+    std::fs::copy(&path, &path20).unwrap();
+    let c = Connection::open(&path20).unwrap();
+    c.pragma_update(None, "user_version", 20).unwrap();
+    c.execute("DELETE FROM schema_migrations WHERE version>20", [])
+        .unwrap();
+    drop(c);
+    let db20 = SqliteTasks::new(&path20);
+    let e = db20.read(|_| Ok(())).unwrap_err().to_string();
     assert!(e.contains("unsupported/uninitialized schema"), "{e}");
-    let e = db.write(|_| Ok(())).unwrap_err().to_string();
+    let e = db20.write(|_| Ok(())).unwrap_err().to_string();
     assert!(e.contains("unsupported/uninitialized schema"), "{e}");
 }
 
@@ -958,10 +995,12 @@ fn upgrade_compact_replaces_empty_schema18_database() {
         .exists([])
         .unwrap();
     assert!(!broken);
-    let e = db.read(|_| Ok(())).unwrap_err().to_string();
-    assert!(e.contains("unsupported/uninitialized schema"), "{e}");
+    // Schema 21 is the managed current schema: read/write accept it, while
+    // a second `upgrade_compact` still refuses the compact file.
+    db.read(|_| Ok(())).unwrap();
+    db.write(|_| Ok(())).unwrap();
     let e = db.upgrade_compact().unwrap_err().to_string();
-    assert!(e.contains("unsupported/uninitialized schema"), "{e}");
+    assert!(e.contains("cannot upgrade to compact"), "{e}");
 }
 
 #[test]

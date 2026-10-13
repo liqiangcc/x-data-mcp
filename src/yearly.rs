@@ -218,6 +218,7 @@ pub fn trace_key(
 /// Test hook: drops this thread's memoized series so a re-verification
 /// recomputes from the stored base.
 #[cfg(test)]
+#[allow(dead_code)] // memo reset used by the S3 re-derivation write path
 pub(crate) fn clear_aggregate_memo() {
     AGGREGATE_MEMO.with(|memo| memo.borrow_mut().clear());
 }

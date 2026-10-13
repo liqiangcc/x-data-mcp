@@ -67,6 +67,13 @@ impl MarketBackend {
             Self::Compact(m) => m.read(f),
         }
     }
+
+    /// Latest-only series/event closure checks (schema 21; no-op on earlier
+    /// schemas) — O(#series) committed-state probes per SPEC-LATEST-ONLY §3.5
+    /// and RULINGS A3. Called by `data_service` startup.
+    pub fn series_startup_check(&self) -> Result<(), Error> {
+        self.read(crate::sqlite_market::series::startup_check)
+    }
 }
 
 impl crate::market_storage::MarketRepository for MarketBackend {

@@ -7,6 +7,7 @@ mod mcp_stdio;
 mod metrics_stdio;
 mod metrics_storage;
 mod query;
+mod query_cache;
 #[path = "../support/market.rs"]
 mod support_market;
 #[path = "../support/metrics.rs"]

@@ -1,5 +1,7 @@
 # Issue #262 性能分析
 
+> 历史文档：描述 schema 20 版本链模型，被 [docs/latest-only-storage.md](../latest-only-storage.md) 取代（待合并）。
+
 ## 当前裁定（2026-09-28）
 
 本文 preview.23/24 的统一门禁分析为历史记录，下文实测数字保持原样。owner 已用

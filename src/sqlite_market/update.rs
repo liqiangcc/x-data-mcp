@@ -122,34 +122,17 @@ impl RangeRepository for SqliteMarket {
     }
 }
 pub(crate) fn read_result(c: &Connection, id: &str) -> Result<Option<(Value, Receipt)>, Error> {
-    read_result_ctx(c, &mut super::compact_versions::VerifyCtx::default(), id)
-}
-
-/// `read_result` sharing the caller's transaction-scoped verified-facts
-/// context so repeated immutable-version verification deduplicates.
-pub(crate) fn read_result_ctx(
-    c: &Connection,
-    ctx: &mut super::compact_versions::VerifyCtx,
-    id: &str,
-) -> Result<Option<(Value, Receipt)>, Error> {
-    if super::is_compact_schema(c)? {
-        return super::compact_results::read_update_audit_ctx(c, ctx, id);
-    }
     read_result_legacy(c, id)
 }
 
-/// `read_result_ctx` at the committed-state verification tier (XP-020):
-/// the progress/metadata read scope routes through the committed-tier
-/// audit reader on compact storage; non-compact databases keep the
-/// unchanged legacy read below.
-pub(crate) fn read_result_meta_ctx(
+/// `read_result` sharing the caller's read transaction (S2: the
+/// verification context is gone with the chain store — the parameter
+/// stays so call sites keep their shape).
+pub(crate) fn read_result_ctx(
     c: &Connection,
-    ctx: &mut super::compact_versions::VerifyCtx,
+    _ctx: &mut VerifyCtx,
     id: &str,
 ) -> Result<Option<(Value, Receipt)>, Error> {
-    if super::is_compact_schema(c)? {
-        return super::compact_results::read_update_audit_meta_ctx(c, ctx, id);
-    }
     read_result_legacy(c, id)
 }
 

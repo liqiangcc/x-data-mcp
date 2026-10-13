@@ -8,10 +8,17 @@ ROOT = Path(__file__).resolve().parent.parent
 
 EXPECTED_PACKAGE_VERSION = "0.2.0-preview.31"
 EXPECTED_LEGACY_SCHEMA = 18
-EXPECTED_COMPACT_SCHEMA = 20
+# Fresh `init`/`init20` output schema (code constant). The DEPLOYED preview
+# instance remains on schema 20 until the next rebuild — the doc-fact regexes
+# below stay keyed to 20 and continue to describe the deployed DB.
+EXPECTED_COMPACT_SCHEMA = 21
 EXPECTED_DATA_TOOLS = 21
 EXPECTED_ACQUIRE_TOOLS = 10
-EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v5"
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v6"
+# The strict Skills still describe the DEPLOYED contract (v5) until the
+# deploy-day switch (docs/contracts/v6-switch-checklist.md §3) — bumping
+# them early would make the strict gate refuse the live v5 instance.
+EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v5"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",
@@ -240,7 +247,7 @@ def main() -> int:
         ROOT / ".devin/skills/x-data-status/SKILL.md"
     ).read_text(encoding="utf-8")
     for label, fact in [
-        ("daily Skill capability revision", EXPECTED_DATA_CAPABILITY_REVISION),
+        ("daily Skill capability revision", EXPECTED_SKILL_CAPABILITY_REVISION),
         ("daily Skill day pending gate", "`pending_roles` 包含 `day`"),
         ("daily Skill day pending stop", "`day` 不在 `pending_roles`"),
         (
@@ -252,8 +259,8 @@ def main() -> int:
         check(label, fact in daily_skill, f"missing {fact!r}")
     check(
         "status Skill capability revision",
-        EXPECTED_DATA_CAPABILITY_REVISION in status_skill,
-        f"missing {EXPECTED_DATA_CAPABILITY_REVISION!r}",
+        EXPECTED_SKILL_CAPABILITY_REVISION in status_skill,
+        f"missing {EXPECTED_SKILL_CAPABILITY_REVISION!r}",
     )
     check(
         "data capability calls carry no contract_version",

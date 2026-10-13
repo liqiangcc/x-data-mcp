@@ -87,6 +87,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Err("task registry history is inconsistent; refusing to start".into());
     }
+    // Committed-state closure checks for latest-only market storage
+    // (SPEC-LATEST-ONLY §3.5; no-op on schemas <21).
+    backend.series_startup_check()?;
     let endpoint = Endpoint::bind(std::path::Path::new(&args[1]), &lease)?;
     let gate = Arc::new(WorkerGate::default());
     let stopping = Arc::new(AtomicBool::new(false));

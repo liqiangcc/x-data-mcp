@@ -9,6 +9,12 @@
 > Gate 见 [#259 最终紧凑存储设计冻结候选](tasks/issue-259-final-storage-design.md)；当前实测状态见
 > [#259 physical audit](https://github.com/liqiangcc/x-data-mcp/issues/259#issuecomment-5756919342)。
 
+> **模型状态（版本链 vs 单版本）。** 下文的 `data_versions`、`version_inputs`、`effective_heads`、
+> 「每次更新产生新版本」「旧查询仍能解释其输入」描述的是**版本链模型**，它是已部署的 schema 20
+> （v0.2.0-preview.31）所实现的模型，但**不再被视为目标模型**。待合并的目标模型是
+> schema 21 的单版本存储（每 `(实体, 周期)` 只存当前序列 + 追加式事件日志），见
+> [单版本（latest-only）行情存储模型](latest-only-storage.md)。两者并列：线上仍是 schema 20；schema 21 合并并部署之前，不要把它当作已部署事实。
+
 ## 状态与决策来源
 
 设计任务：[Issue #69](https://github.com/liqiangcc/x-data-mcp/issues/69)。编写日期：2026-09-12。

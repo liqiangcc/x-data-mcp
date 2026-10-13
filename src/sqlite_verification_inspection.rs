@@ -147,7 +147,9 @@ fn read_facts(c: &Connection, id: &str) -> Result<Facts, Error> {
     }
     let has_business_effects: bool = c
         .query_row(
-            if crate::sqlite_market::is_compact_schema(c).map_err(storage)? {
+            if crate::sqlite_market::is_latest_only_schema(c).map_err(storage)? {
+                "SELECT EXISTS(SELECT 1 FROM market_events WHERE task_id=?1)"
+            } else if crate::sqlite_market::is_compact_schema(c).map_err(storage)? {
                 "SELECT EXISTS(SELECT 1 FROM task_publications WHERE task_id=?1 \
                  UNION ALL SELECT 1 FROM market_update_results WHERE task_id=?1 \
                  UNION ALL SELECT 1 FROM publication_results WHERE task_id=?1)"

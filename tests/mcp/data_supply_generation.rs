@@ -773,7 +773,7 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
     let conn = rusqlite::Connection::open(dir.path().join("market.db")).unwrap();
     let bound: String = conn
         .query_row(
-            "SELECT sb.generation_id FROM data_versions v \
+            "SELECT sb.generation_id FROM market_series v \
              JOIN source_bindings sb ON sb.source_binding_digest = v.source_binding_digest \
              WHERE v.version_id = ?1",
             [new_id],
@@ -781,6 +781,177 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
         )
         .unwrap();
     assert_eq!(bound, gen_b);
+}
+
+/// staged_records lifecycle on the compact backend (fix/staged-records-gc):
+/// a full real-runner cycle — first collection, typed append, yearly derive,
+/// yearly rederive, no_change — must leave `staged_records` empty: every
+/// commit consumes its staged candidate inside the commit transaction, and
+/// orphans from failed/cancelled item runs are bounded by the stage-time
+/// TTL sweep.
+#[test]
+fn staged_records_empty_after_full_cycle_on_compact() {
+    use chrono::Datelike;
+    use x_data_mcp::market_update::tasks::{Operation, RangeContract};
+    use x_data_mcp::sqlite_market::backend::MarketBackend;
+    use x_data_mcp::yearly_publication::tasks::YearlyContract;
+
+    let today = today_u32();
+    // Three generations, each extending the member by one day bar.
+    let member_a = [
+        day_record(today - 3, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(today - 2, [1129, 1132, 1128, 1131], 0.0, 110),
+    ]
+    .concat();
+    let mut member_b = member_a.clone();
+    member_b.extend_from_slice(&day_record(today - 1, [1131, 1135, 1130, 1134], 0.0, 120));
+    let mut member_c = member_b.clone();
+    member_c.extend_from_slice(&day_record(today, [1134, 1138, 1133, 1137], 0.0, 130));
+
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror_day(mirror.path(), 600006, &member_a);
+    let root = tempfile::tempdir().unwrap();
+    let service = AcquireService::open(root.path(), Source::Mirror(mirror.path().into())).unwrap();
+    let gen_a = activate_generation(&service, "req-gen-a", None);
+    let generation = GenerationSource::new(root.path());
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("market.db");
+    let tasks = SqliteTasks::new(&db);
+    tasks.initialize_compact().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let backend = MarketBackend::open(&tasks).unwrap();
+    assert!(matches!(backend, MarketBackend::Compact(_)));
+    let tasks = backend.tasks();
+    let supply = SqliteSupply {
+        market: backend.clone(),
+    };
+    let range = RangeContract {
+        operation: Operation::Update,
+        repository: backend.clone(),
+        today: x_data_mcp::calendar::shanghai_today,
+    };
+    let range_key = range.key();
+    let yearly = YearlyContract {
+        operation: Operation::Update,
+        repository: backend.clone(),
+        today: x_data_mcp::calendar::shanghai_today,
+    };
+    let yearly_key = yearly.key();
+    let control = TaskControl::new(
+        tasks.clone(),
+        "run-s".into(),
+        vec![
+            Box::new(Bound {
+                inner: Box::new(CollectionContract {
+                    dataset: Dataset::Daily,
+                    repository: supply.clone(),
+                }),
+                source: generation.clone(),
+            }) as Box<dyn Contract>,
+            Box::new(Bound {
+                inner: Box::new(range),
+                source: generation.clone(),
+            }) as Box<dyn Contract>,
+            Box::new(Bound {
+                inner: Box::new(yearly),
+                source: generation.clone(),
+            }) as Box<dyn Contract>,
+        ],
+    )
+    .unwrap();
+    let run_task = |control: &TaskControl<SqliteTasks>| {
+        let done =
+            x_data_mcp::data_supply::worker::run_once(control, &backend, None, Some(&generation))
+                .unwrap()
+                .unwrap();
+        assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+    };
+    let scope = Scope {
+        symbol: "sh.600006".into(),
+        period: Period::Day,
+    };
+    let day = x_data_mcp::calendar::shanghai_today();
+    let year = day.year();
+
+    // First collection through the real worker path.
+    control
+        .accept("req-daily", control_key(&supply), daily_payload("600006"))
+        .unwrap();
+    run_task(&control);
+    let head_a = backend.effective_head(&scope).unwrap().unwrap();
+
+    // Typed append on generation B.
+    write_mirror_day(mirror.path(), 600006, &member_b);
+    let gen_b = activate_generation(&service, "req-gen-b", Some(&gen_a));
+    control
+        .accept(
+            "req-update-b",
+            range_key.clone(),
+            json!({"items":[{"symbol":"sh.600006","base_version_id":head_a,"start_date":day - chrono::Duration::days(1),"end_date":day - chrono::Duration::days(1)}]}),
+        )
+        .unwrap();
+    run_task(&control);
+    let head_b = backend.effective_head(&scope).unwrap().unwrap();
+    assert_ne!(head_b, head_a);
+
+    // Yearly derive on the current head — the yearly runner stages the
+    // derived candidate, then commit_yearly must consume it.
+    control
+        .accept(
+            "req-yearly-1",
+            yearly_key.clone(),
+            json!({"items":[{"symbol":"sh.600006","base_daily_version_id":head_b,"years":[year],"intent":{"CurrentHead":{"expected_daily_head":head_b,"expected_yearly_head":null}},"comparison_version_id":null}]}),
+        )
+        .unwrap();
+    run_task(&control);
+    let yearly_head = backend
+        .effective_head(&Scope {
+            symbol: "sh.600006".into(),
+            period: Period::Year,
+        })
+        .unwrap()
+        .unwrap();
+
+    // One more append on generation C, then the yearly rederive.
+    write_mirror_day(mirror.path(), 600006, &member_c);
+    let _gen_c = activate_generation(&service, "req-gen-c", Some(&gen_b));
+    control
+        .accept(
+            "req-update-c",
+            range_key.clone(),
+            json!({"items":[{"symbol":"sh.600006","base_version_id":head_b,"start_date":day,"end_date":day}]}),
+        )
+        .unwrap();
+    run_task(&control);
+    let head_c = backend.effective_head(&scope).unwrap().unwrap();
+    assert_ne!(head_c, head_b);
+    control
+        .accept(
+            "req-yearly-2",
+            yearly_key.clone(),
+            json!({"items":[{"symbol":"sh.600006","base_daily_version_id":head_c,"years":[year],"intent":{"CurrentHead":{"expected_daily_head":head_c,"expected_yearly_head":yearly_head}},"comparison_version_id":null}]}),
+        )
+        .unwrap();
+    run_task(&control);
+
+    // Same-generation no_change update over the covered window.
+    control
+        .accept(
+            "req-update-nc",
+            range_key.clone(),
+            json!({"items":[{"symbol":"sh.600006","base_version_id":head_c,"start_date":day,"end_date":day}]}),
+        )
+        .unwrap();
+    run_task(&control);
+
+    // Every commit consumed its staged candidate; nothing leaks.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let staged: i64 = conn
+        .query_row("SELECT count(*) FROM staged_records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(staged, 0, "full cycle must leave staged_records empty");
 }
 
 /// #290 regression: a corporate-action generation (qfq repricing rewrites
@@ -898,31 +1069,38 @@ fn explicit_daily_update_rewrites_history_on_compact() {
         "first bar must carry the repriced (not base) value"
     );
     let conn = rusqlite::Connection::open(dir.path().join("market.db")).unwrap();
-    let (bound, parent_key): (String, Option<i64>) = conn
+    let bound: String = conn
         .query_row(
-            "SELECT sb.generation_id, v.parent_version_key FROM data_versions v \
+            "SELECT sb.generation_id FROM market_series v \
              JOIN source_bindings sb ON sb.source_binding_digest = v.source_binding_digest \
              WHERE v.version_id = ?1",
             [new_id.clone()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| r.get(0),
         )
         .unwrap();
     assert_eq!(bound, gen_b);
-    // A full revision is a root checkpoint: the base→result chain lives in
-    // the update result row, not in a version parent pointer.
-    assert_eq!(parent_key, None, "rewrite must stage as a root checkpoint");
-    let (result_base, continuity): (String, i64) = conn
+    // A full revision commits as a `replace` event: the event that FIRST
+    // produced the current content digest must carry continuity_mode=3 and
+    // old_digest pointing at the head it replaced.
+    let (kind, continuity, base_digest, seqs): (String, i64, String, String) = conn
         .query_row(
-            "SELECT bv.version_id, r.continuity_mode FROM market_update_results r \
-             JOIN data_versions bv ON bv.version_key = r.base_version_key \
-             JOIN data_versions rv ON rv.version_key = r.result_version_key \
-             WHERE rv.version_id = ?1",
-            [new_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            "SELECT e.kind, e.continuity_mode, lower(hex(e.old_content_digest)), \
+                    (SELECT group_concat(seq||':'||kind,',') FROM market_events \
+                     WHERE entity = e.entity AND period = e.period) \
+             FROM market_series v \
+             JOIN market_events e ON e.new_content_digest = v.content_digest \
+             WHERE v.version_id = ?1 \
+             ORDER BY e.seq ASC LIMIT 1",
+            [new_id.clone()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .unwrap();
-    assert_eq!(result_base, base_id, "update result links base→rewrite");
-    assert_eq!(continuity, 3, "continuity_mode=full");
+    assert_eq!(&kind, "replace", "events: {seqs}");
+    assert_eq!(continuity, 3, "continuity_mode=full; events: {seqs}");
+    assert_eq!(
+        base_digest, base_id,
+        "replace event links old digest→new; events: {seqs}"
+    );
 }
 
 /// #290 fail-closed: a rewrite candidate that silently drops a base record

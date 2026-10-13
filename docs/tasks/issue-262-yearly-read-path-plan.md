@@ -1,5 +1,7 @@
 # Issue #262 — yearly/read-path performance plan
 
+> 历史文档：描述 schema 20 版本链模型，被 [docs/latest-only-storage.md](../latest-only-storage.md) 取代（待合并）。
+
 ## Baseline (measured, preview.18 @ ECS 2vCPU/2GiB, schema-19, 5,221 entities)
 
 | Phase | Cost | Evidence |

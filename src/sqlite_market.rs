@@ -11,6 +11,12 @@ use chrono::{Datelike, FixedOffset, NaiveDate};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use rust_decimal::Decimal;
 use serde_json::Value;
+/// Transaction-scoped verification context (XP-011). The chain-store
+/// digest memoization is retired with schema 19/20 (S2); the type stays as
+/// an empty token so every reader signature keeps its shape.
+#[derive(Default)]
+pub(crate) struct VerifyCtx;
+
 #[derive(Clone)]
 pub struct SqliteMarket {
     pub tasks: SqliteTasks,
@@ -165,17 +171,33 @@ pub(crate) fn is_compact_schema(c: &Connection) -> Result<bool, Error> {
     )
     .map_err(storage)
 }
+/// Schema 21 ("latest-only"): `market_series` exists. Probed by table
+/// presence — `check_schema` has already bound the file to the expected
+/// schema identity on the way in.
+pub(crate) fn is_latest_only_schema(c: &Connection) -> Result<bool, Error> {
+    c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='market_series')",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(storage)
+}
 
 pub(crate) fn head(c: &Connection, scope: &Scope) -> Result<Option<String>, Error> {
-    if is_compact_schema(c)? {
+    if is_latest_only_schema(c)? {
         return c
             .query_row(
-                "SELECT v.version_id FROM effective_heads h                  JOIN data_versions v ON v.version_key=h.version_key                  WHERE h.entity=?1 AND h.period=?2 AND h.adjustment=1",
+                "SELECT version_id FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=1",
                 params![scope.symbol, compact_repo::period_code(scope.period)],
                 |r| r.get(0),
             )
             .optional()
             .map_err(storage);
+    }
+    if is_compact_schema(c)? {
+        // schema 21 (market_series) is handled above; older compact
+        // schemas are retired — a connection here means legacy.
+        return Err(integrity("unsupported schema revision"));
     }
     c.query_row(
         "SELECT version_id FROM effective_heads WHERE symbol=?1 AND period=?2 AND adjustment='qfq'",
@@ -482,12 +504,18 @@ pub(crate) fn read_record(
     published: bool,
     allow_yearly: bool,
 ) -> Result<CheckedRecord, Error> {
-    if is_compact_schema(c)? {
-        let record = compact_repo::materialize_checked(c, id, !published)?;
-        if !allow_yearly && record.version.period != Period::Day {
+    if is_latest_only_schema(c)? {
+        // Schema 21 keeps only committed current state — the staged tier is
+        // gone, so `published` has no effect; misses resolve `Stale` when the
+        // pinned digest was committed before (SPEC §6.1).
+        let record = series::materialize_checked(c, id, true)?;
+        if !allow_yearly && record.version().period != Period::Day {
             return Err(Error::Integrity("yearly record in daily context".into()));
         }
         return Ok(record);
+    }
+    if is_compact_schema(c)? {
+        return Err(integrity("unsupported schema revision"));
     }
     let record = read_projection(c, id, published, allow_yearly)?;
     let base = base_record(c, &record)?;
@@ -502,27 +530,31 @@ pub(crate) fn read_record(
 /// unpublished semantics. Never feed the result to bar-reading code.
 pub(crate) fn slim_published(
     c: &Connection,
-    ctx: &mut compact_versions::VerifyCtx,
+    ctx: &mut VerifyCtx,
     id: &str,
     published: bool,
     allow_yearly: bool,
 ) -> Result<Option<CheckedRecord>, Error> {
-    if !published || !is_compact_schema(c)? {
-        return Ok(None);
+    if is_latest_only_schema(c)? {
+        // Schema 21 keeps only committed current state — the staged tier is
+        // gone, so `published` has no effect.
+        let Some(record) = series::materialize_header(c, id)? else {
+            return Ok(None);
+        };
+        if !allow_yearly && record.version().period != Period::Day {
+            return Err(Error::Integrity("yearly record in daily context".into()));
+        }
+        return Ok(Some(record));
     }
-    let Some(record) = compact_repo::materialize_slim(c, ctx, id)? else {
-        return Ok(None);
-    };
-    if !allow_yearly && record.version().period != Period::Day {
-        return Err(Error::Integrity("yearly record in daily context".into()));
-    }
-    Ok(Some(record))
+    let _ = ctx;
+    let _ = published;
+    Ok(None)
 }
 /// `read_record` resolved through the header projection when the row is a
 /// published compact version; identical arguments and fallback semantics.
 pub(crate) fn read_record_slim(
     c: &Connection,
-    ctx: &mut compact_versions::VerifyCtx,
+    ctx: &mut VerifyCtx,
     id: &str,
     published: bool,
     allow_yearly: bool,
@@ -623,23 +655,28 @@ pub(crate) fn range_rows(
     p: Period,
     range: &Range,
 ) -> Result<Vec<Bar>, Error> {
-    if is_compact_schema(c)? {
-        let record = compact_repo::materialize_checked(c, id, false)?;
-        if record.version.period != p {
+    if is_latest_only_schema(c)? {
+        let row = series::require_series(c, id)?;
+        if row.period != p {
             return Err(Error::Integrity("range version period mismatch".into()));
         }
-        return Ok(record
-            .version
-            .records
-            .iter()
-            .filter(|b| {
-                b.date >= range.start
-                    && b.date <= range.end
-                    && range.after.map(|a| b.date > a).unwrap_or(true)
-            })
-            .take(range.limit + 1)
-            .cloned()
-            .collect());
+        return Ok(series::bars_in_range(
+            c,
+            row.series_key,
+            crate::compact_market::epoch_day(range.start),
+            crate::compact_market::epoch_day(range.end),
+        )?
+        .iter()
+        .map(|b| b.to_bar(p))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(integrity)?
+        .into_iter()
+        .filter(|b| range.after.map(|a| b.date > a).unwrap_or(true))
+        .take(range.limit + 1)
+        .collect());
+    }
+    if is_compact_schema(c)? {
+        return Err(integrity("unsupported schema revision"));
     }
     if p == Period::Day {
         let segment_backed: bool = c
@@ -1057,22 +1094,14 @@ pub(crate) mod collection;
 #[allow(dead_code)]
 pub(crate) mod compact_repo;
 #[allow(dead_code)]
-pub(crate) mod compact_results;
-#[allow(dead_code)]
 pub(crate) mod compact_runtime;
-#[allow(dead_code)]
-pub(crate) mod compact_v19;
-#[allow(dead_code)]
-pub(crate) mod compact_versions;
-
-/// Fixture / test tooling only (XP-051): force every entity to roll over at
-/// `depth` instead of its staggered depth; `None` restores the default.
-pub fn set_fixture_rollover_depth(depth: Option<u32>) {
-    compact_versions::set_rollover_override(depth);
-}
 pub(crate) mod envelope;
+pub(crate) mod evidence_store;
 pub(crate) mod gaps;
 pub(crate) mod manifest;
+pub(crate) mod series;
+#[allow(dead_code)]
+pub(crate) mod series_commit;
 pub(crate) mod update;
 pub(crate) mod yearly_results;
 
