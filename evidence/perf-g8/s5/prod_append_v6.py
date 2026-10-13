@@ -102,12 +102,20 @@ YEARLY_REDERIVE_STALE = "behind"
 YEARLY_INVALID_REASONS = frozenset(
     {"daily_replaced_since_derivation", "value_semantics_changed"})
 
+# Expected fail-closed class (SKILL §fail-closed): entities whose source
+# snapshot carries no bars in the accepted window — suspended / delisted /
+# no-data tails. Expected on every full-market append; never retried, never
+# blocking, recorded as the fail-closed set.
+FAIL_CLOSED_NO_BARS = "no bars inside the accepted range"
+
 # Env-provided expectations (unset = record-only, no diff for that key).
 EXPECT_KEYS = (
     "PROD_APPEND_V6_EXPECT_DAILY_PUBLISHED",
     "PROD_APPEND_V6_EXPECT_DAILY_ABSENT",      # comma-separated e.g. "sz.a,sz.b"
     "PROD_APPEND_V6_EXPECT_GENERATION",
     "PROD_APPEND_V6_EXPECT_MAX_APPEND_EVENTS",
+    "PROD_APPEND_V6_EXPECT_STILL_LAGGING",     # comma-separated; entities allowed to trail
+    "PROD_APPEND_V6_EXPECT_STAGED_RECORDS",    # int; unset -> require 0
 )
 
 
@@ -222,35 +230,65 @@ def phase_append(mcp: GuardedMcp, prefix: str, entities, end_date: date) -> dict
     out["submitted_keys"] = sorted(
         f"{i['entity']['exchange']}.{i['entity']['code']}" for i in items)
     ph.start()
+    fail_closed = {}   # entity key -> error text (expected class only)
+    hard_fail = {}     # entity key -> error text (any other item failure)
     for idx, chunk in enumerate(chunked(items, 100), 1):
         rid = f"{prefix}-append-{idx:03d}"
         rec = submit_and_wait(mcp, rid, chunk)
         rec["items"] = len(chunk)
+        rec["outcomes"] = classify_range_results(rec.get("progress") or {})
+        for u in (rec.get("progress") or {}).get("unfinished") or []:
+            e = u.get("entity") or {}
+            key = f"{e.get('exchange')}.{e.get('code')}"
+            err = u.get("error") or ""
+            if FAIL_CLOSED_NO_BARS in err:
+                fail_closed[key] = err
+            else:
+                hard_fail[key] = err
         ph.record_task(rec)
         out["chunks"].append(rec)
         st = (rec.get("progress", {}).get("task") or {}).get("status")
-        if st in {"failed", "cancelled", "interrupted"}:
-            out["stopped"] = {"reason": "task_terminal", "request_id": rid, "status": st}
+        # cancelled/interrupted/needs_verification are infrastructure-level
+        # stops; a `failed` task whose item failures are ALL the expected
+        # no-bars class is recorded, not blocking.
+        if st in {"cancelled", "interrupted", "needs_verification"} or \
+                (st == "failed" and hard_fail):
+            out["stopped"] = {"reason": "task_terminal", "request_id": rid,
+                              "status": st, "hard_fail": hard_fail}
             out.update(ph.finish())
             out["outcome_totals"] = merge_outcome_totals(out["chunks"])
             out["progress_totals"] = sum_progress(out["chunks"])
             return out
-    # Bounded stale-base retry: re-read heads for entities still behind and
-    # resubmit exactly once. A second stale outcome stops the run.
+    # Bounded retry ONLY for entities still behind without an expected
+    # fail-closed verdict (stale-base / unknown causes); no-bars items are
+    # never retried (SKILL: expected fail-closed, do not retry).
     still = _still_lagging(mcp, entities, end_date)
-    if still:
-        out["still_lagging_after_first_pass"] = still
-        retry_items = build_append_items(still, end_date)
+    retry_heads = {k: h for k, h in still.items() if k not in fail_closed}
+    if retry_heads:
+        retry_items = build_append_items(retry_heads, end_date)
         for idx, chunk in enumerate(chunked(retry_items, 100), 1):
             rid = f"{prefix}-append-retry-{idx:03d}"
             rec = submit_and_wait(mcp, rid, chunk)
             rec["items"] = len(chunk)
+            rec["outcomes"] = classify_range_results(rec.get("progress") or {})
+            for u in (rec.get("progress") or {}).get("unfinished") or []:
+                e = u.get("entity") or {}
+                key = f"{e.get('exchange')}.{e.get('code')}"
+                err = u.get("error") or ""
+                if FAIL_CLOSED_NO_BARS in err:
+                    fail_closed.setdefault(key, err)
+                else:
+                    hard_fail.setdefault(key, err)
             ph.record_task(rec)
             out["retry_chunks"].append(rec)
-        out["still_lagging_final"] = sorted(_still_lagging(mcp, entities, end_date).keys())
-        if out["still_lagging_final"]:
-            out["stopped"] = {"reason": "entities_still_lagging_after_retry",
-                              "entities": out["still_lagging_final"]}
+    out["still_lagging_final"] = sorted(_still_lagging(mcp, entities, end_date).keys())
+    out["fail_closed_entities"] = sorted(fail_closed)
+    out["hard_fail_entities"] = sorted(hard_fail)
+    blocking = sorted(set(out["still_lagging_final"]) - set(fail_closed))
+    if blocking or hard_fail:
+        out["stopped"] = {"reason": "entities_still_lagging_or_failed",
+                          "still_lagging_not_fail_closed": blocking,
+                          "hard_fail": hard_fail}
     out.update(ph.finish())
     out["outcome_totals"] = merge_outcome_totals(out["chunks"] + out["retry_chunks"])
     out["progress_totals"] = sum_progress(out["chunks"] + out["retry_chunks"])
@@ -298,10 +336,20 @@ def phase_yearly_rederive(mcp: GuardedMcp, prefix: str, entities,
         if not need:
             out["skipped_up_to_date"] += len(chunk)
             continue
+        # Head pins come from list_data_versions, NOT availability: an
+        # invalidated yearly reports version_ref=null (absent +
+        # daily_replaced/value_semantics_changed) while market_series still
+        # holds the head row — expected_yearly_head must pin that stored
+        # version or the CAS gate rejects with "effective head already
+        # exists". Only entities with no stored yearly at all get null.
+        vers = mcp.call("list_data_versions", {
+            "dataset": "market.yearly", "contract_version": "v1",
+            "selection": {"kind": "batch", "entities": chunk}, "page_size": 100})
         yheads = {}
-        for it in items:
-            e = it.get("entity") or {}
-            yheads[(e.get("exchange"), e.get("code"))] = (it.get("version_ref") or {}).get("version_id")
+        for it in vers.get("items") or []:
+            e = ((it.get("version_ref") or {}).get("entity")) or {}
+            yheads[(e.get("exchange"), e.get("code"))] = \
+                (it.get("version_ref") or {}).get("version_id")
         daily = mcp.call("get_data_availability", {
             "dataset": "market.daily", "contract_version": "v1",
             "selection": {"kind": "batch", "entities": chunk},
@@ -356,10 +404,19 @@ def preflight(mcp: GuardedMcp, entities, end_date: date, expect: dict) -> dict:
     tool_names = {i.get("tool_name") for i in caps.get("items") or []}
     gen_ref = next((i.get("active_generation_ref") for i in caps.get("items") or []
                     if i.get("active_generation_ref")), None)
-    tl = mcp.call("list_tasks", {"contract_version": "v1", "page_size": 1000})
-    inflight = [{"task_id": t.get("task_id"), "status": t.get("status")}
-                for t in tl.get("items") or []
-                if t.get("status") in INFLIGHT_TASK_STATUSES]
+    inflight = []
+    cursor = None
+    while True:
+        args = {"page_size": 1000}
+        if cursor:
+            args["cursor"] = cursor
+        tl = mcp.call("list_tasks", args)
+        inflight += [{"task_id": t.get("task_id"), "status": t.get("status")}
+                     for t in tl.get("items") or []
+                     if t.get("status") in INFLIGHT_TASK_STATUSES]
+        cursor = tl.get("next_cursor")
+        if not cursor:
+            break
     heads, absent = s5_run.daily_heads(mcp, entities, end_date)
     absent_keys = sorted(f"{(a['entity'] or {}).get('exchange')}.{(a['entity'] or {}).get('code')}"
                          for a in absent)
@@ -402,8 +459,17 @@ def readback(mcp: GuardedMcp, db: str, entities, end_date: date,
             "filter": {"kind": "yearly", "start_year": 1900, "end_year": 2026},
             "version": {"kind": "latest_per_entity"}, "page_size": 100})
         yearly_items += y.get("items") or []
-    out["yearly_still_behind"] = len(yearly_needs_rederive(yearly_items))
+    # "Behind" only counts entities that CAN be derived — entities with no
+    # daily head (the source-missing absent set) hold no yearly by design.
+    daily_keys = {f"{h['entity']['exchange']}.{h['entity']['code']}"
+                  for h in heads.values()}
+    out["yearly_still_behind"] = len(
+        {f"{k[0]}.{k[1]}" for k in yearly_needs_rederive(yearly_items)
+         if f"{k[0]}.{k[1]}" in daily_keys})
     out["daily_published"] = len(heads)
+    out["still_lagging"] = sorted(
+        k for k, h in heads.items()
+        if date.fromisoformat(h["last_record"]) < end_date)
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
     try:
         out["user_version"] = con.execute("PRAGMA user_version").fetchone()[0]
@@ -420,11 +486,20 @@ def readback(mcp: GuardedMcp, db: str, entities, end_date: date,
         diffs.append(f"yearly_still_behind {out['yearly_still_behind']} != 0")
     if out["user_version"] != 21:
         diffs.append(f"user_version {out['user_version']} != 21")
-    if out["staged_records"] != 0:
-        diffs.append(f"staged_records {out['staged_records']} != 0")
+    exp_staged = expect.get("PROD_APPEND_V6_EXPECT_STAGED_RECORDS")
+    want_staged = int(exp_staged) if exp_staged else 0
+    if out["staged_records"] != want_staged:
+        diffs.append(f"staged_records {out['staged_records']} != expected {want_staged}")
+    exp_lag = expected_absent(expect) | {
+        s.strip() for s in (expect.get("PROD_APPEND_V6_EXPECT_STILL_LAGGING") or "").split(",")
+        if s.strip()}
     for s in out["samples"]:
-        if s["last_record"] is not None and s["last_record"] < end_date.isoformat():
+        if (s["last_record"] is not None and s["last_record"] < end_date.isoformat()
+                and s["entity"] not in exp_lag):
             diffs.append(f"sample {s['entity']} last_record {s['last_record']} < {end_date}")
+    extra_lag = sorted(set(out["still_lagging"]) - exp_lag)
+    if extra_lag:
+        diffs.append(f"still_lagging beyond expected set: {extra_lag}")
     exp_daily = expect.get("PROD_APPEND_V6_EXPECT_DAILY_PUBLISHED")
     if exp_daily and out["daily_published"] != int(exp_daily):
         diffs.append(f"daily_published {out['daily_published']} != expected {exp_daily}")
@@ -447,6 +522,10 @@ def main() -> int:
            "db": env["db"], "out": env["out"], "end_date": env["end_date"].isoformat(),
            "phases": {}}
     mcp = GuardedMcp(Mcp(env["sock"]))
+    # Request ids must be unique per RUN: the server binds request_id -> task
+    # (first-write-wins replay), so reusing a prior run's id would silently
+    # adopt its old task instead of executing this run's items.
+    run["request_tag"] = f"{env['prefix']}-{int(time.time())}"
     try:
         _, entities = s5_run.catalog_entities(mcp)
         pre = preflight(mcp, entities, env["end_date"], env["expect"])
@@ -457,13 +536,13 @@ def main() -> int:
             write_json(str(out_dir / "append-run.json"), run)
             print(run["error"], file=sys.stderr)
             return 2
-        res = phase_append(mcp, env["prefix"], entities, env["end_date"])
+        res = phase_append(mcp, run["request_tag"], entities, env["end_date"])
         run["phases"]["append"] = res
         write_json(str(out_dir / "append-daily.json"), res)
         if res.get("stopped"):
             raise RuntimeError(f"append stopped: {res['stopped']}")
         updated_keys = set(res.get("submitted_keys") or [])
-        resy = phase_yearly_rederive(mcp, env["prefix"], entities, updated_keys)
+        resy = phase_yearly_rederive(mcp, run["request_tag"], entities, updated_keys)
         run["phases"]["yearly_rederive"] = resy
         write_json(str(out_dir / "append-yearly.json"), resy)
         if resy.get("stopped") or any((t.get("status") == "failed") for t in resy.get("tasks", [])):
