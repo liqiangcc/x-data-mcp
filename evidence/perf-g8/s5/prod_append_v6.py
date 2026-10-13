@@ -116,6 +116,8 @@ EXPECT_KEYS = (
     "PROD_APPEND_V6_EXPECT_MAX_APPEND_EVENTS",
     "PROD_APPEND_V6_EXPECT_STILL_LAGGING",     # comma-separated; entities allowed to trail
     "PROD_APPEND_V6_EXPECT_STAGED_RECORDS",    # int; unset -> require 0
+    "PROD_APPEND_V6_EXPECT_CAPABILITY",        # default generic-data-v6; v7 after switch
+    "PROD_APPEND_V6_EXPECT_DATA_TOOLS",        # default 21; 23 after switch
 )
 
 
@@ -421,9 +423,14 @@ def preflight(mcp: GuardedMcp, entities, end_date: date, expect: dict) -> dict:
     absent_keys = sorted(f"{(a['entity'] or {}).get('exchange')}.{(a['entity'] or {}).get('code')}"
                          for a in absent)
     exp_abs = expected_absent(expect)
+    # Capability/tool-count expectations are env-parametrized (default
+    # v6/21): the same preflight must gate the post-switch v7/23 service.
+    exp_capability = (expect.get("PROD_APPEND_V6_EXPECT_CAPABILITY")
+                      or "generic-data-v6")
+    exp_tools = int(expect.get("PROD_APPEND_V6_EXPECT_DATA_TOOLS") or "21")
     checks = {
-        "capability_revision_v6": caps.get("capability_revision") == "generic-data-v6",
-        "data_tools_21": len(tool_names) == 21,
+        "capability_revision_expected": caps.get("capability_revision") == exp_capability,
+        "data_tools_expected": len(tool_names) == exp_tools,
         "production_ready_false": caps.get("production_ready") is False,
         "active_generation_present": gen_ref is not None,
         "no_inflight_tasks": not inflight,
@@ -435,6 +442,8 @@ def preflight(mcp: GuardedMcp, entities, end_date: date, expect: dict) -> dict:
     if exp_gen:
         checks["generation_matches_expect"] = (gen_ref == exp_gen)
     return {"checks": checks, "ok": all(checks.values()),
+            "expected": {"capability_revision": exp_capability,
+                         "data_tools": exp_tools},
             "active_generation_ref": gen_ref, "inflight": inflight,
             "heads": len(heads), "absent": absent_keys,
             "capability": {k: caps.get(k) for k in
