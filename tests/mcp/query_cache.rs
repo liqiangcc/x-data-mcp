@@ -8,7 +8,6 @@ use x_data_mcp::{
     sqlite_market::SqliteMarket,
     sqlite_supply::SqliteSupply,
     sqlite_tasks::SqliteTasks,
-    task_control::TaskRepository,
 };
 
 use crate::support_market as market;
