@@ -134,6 +134,15 @@ fn snapshot(day_members: &[(&str, &[u8])]) -> Snapshot {
 
 /// Env mutation is process-global; serialize all env-installed source tests.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Counts `UPDATE tasks` statements on the compact writer connection —
+/// the regression signature of PLANRUN-COMMIT-COST (the pre-fix path
+/// wrote the `frozen_work_json`-sized task row ~2× per item).
+static TASK_ROW_WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+fn task_write_probe(sql: &str, _d: std::time::Duration) {
+    if sql.starts_with("UPDATE tasks") {
+        TASK_ROW_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 struct EnvReset;
 impl EnvReset {
     fn install(manifest: &Path, root: &Path) -> Self {
@@ -816,6 +825,10 @@ fn planrun_scales_to_market_wide_membership() {
     // (the unchunked prepare_batch peaked ~969MB on the private stack).
     assert_eq!(item_ids.len(), symbols.len());
     let exec_hwm0 = vmhwm_kb();
+    TASK_ROW_WRITES.store(0, std::sync::atomic::Ordering::Relaxed);
+    r.backend
+        .compact_writer_profile(Some(task_write_probe))
+        .unwrap();
     let t2 = std::time::Instant::now();
     let provider = UnchangedProvider {
         typed_calls: std::cell::Cell::new(0),
@@ -829,9 +842,23 @@ fn planrun_scales_to_market_wide_membership() {
         .unwrap()
         .expect("compact backend carries the update batch");
     let exec_ms = t2.elapsed().as_millis();
+    r.backend.compact_writer_profile(None).unwrap();
+    let task_row_writes = TASK_ROW_WRITES.load(std::sync::atomic::Ordering::Relaxed);
+    // O(chunk) task-row writes: claim + one head persist per 100-item
+    // chunk. The pre-fix path ran ~2×items ≈ 10,400 UPDATEs on the
+    // multi-MB `frozen_work_json` row (≈490ms/item private-stack).
+    let chunks = item_ids.len().div_ceil(100);
+    assert!(
+        task_row_writes <= 2 * chunks + 8,
+        "tasks-row updates {task_row_writes} must scale with chunks, not items"
+    );
+    assert!(
+        exec_ms < 600_000,
+        "5,201-item write loop {exec_ms}ms exceeds the 600s hard gate"
+    );
     let exec_peak_delta = vmhwm_kb().saturating_sub(exec_hwm0);
     eprintln!(
-        "plan-run exec: {} items in {exec_ms}ms; exec peak +{exec_peak_delta}kB; rss {}kB",
+        "plan-run exec: {} items in {exec_ms}ms; task-row writes {task_row_writes} ({chunks} chunks); exec peak +{exec_peak_delta}kB; rss {}kB",
         item_ids.len(),
         vmrss_kb()
     );
@@ -1596,4 +1623,43 @@ fn small_task_progress_keeps_full_shape() {
         )
         .unwrap();
     assert_eq!(view["task_id"], task_id);
+}
+
+/// PLANRUN-COMMIT-COST scale-independence: the same 100-item chunk inside
+/// a ≤100-item task performs the same O(1) task-row writes as inside a
+/// 5,201-item task — the per-chunk `UPDATE tasks` count must not grow
+/// with the task's item count (≈2 per chunk + claim, vs ~2×items before).
+#[test]
+fn commit_task_row_writes_do_not_scale_with_task_size() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 100);
+    assert_eq!(item_ids.len(), 100);
+    TASK_ROW_WRITES.store(0, std::sync::atomic::Ordering::Relaxed);
+    r.backend
+        .compact_writer_profile(Some(task_write_probe))
+        .unwrap();
+    let provider = UnchangedProvider {
+        typed_calls: std::cell::Cell::new(0),
+    };
+    let runner = x_data_mcp::market_update::runner::RangeRunner {
+        repository: r.backend.clone(),
+        run_id: "run".into(),
+    };
+    runner
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .expect("compact backend carries the update batch");
+    r.backend.compact_writer_profile(None).unwrap();
+    let writes = TASK_ROW_WRITES.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        writes <= 4,
+        "100-item task: {writes} task-row writes must be O(chunks), not O(items)"
+    );
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(task.task.status.terminal(), "{:?}", task.task.status);
+    assert_eq!(
+        task.items.iter().filter(|i| i.outcome.is_some()).count(),
+        100
+    );
 }
