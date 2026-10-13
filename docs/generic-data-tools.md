@@ -38,6 +38,8 @@ readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capab
 | get_data_capabilities | 发现当前调用者可用的数据能力 | 可选 dataset、operation | 能力修订号、数据类型和操作契约 |
 | start_collection | 首次建立指定数据 | dataset、contract_version、request_id、selection | WriteAcceptance |
 | update_data | 刷新已有数据 | 同上 | WriteAcceptance |
+| plan_market_update | 解析全市场更新计划（v7：已实现，未部署；见 [generic-data-v7](contracts/generic-data-v7.md)） | dataset（market.daily/market.yearly）、contract_version、end_date? | PlanView（plan_id + 分类计数） |
+| run_market_update | 按 plan 受理单一大任务（v7：已实现，未部署；重算比对 digest，失配 fail-closed） | dataset、contract_version、request_id、target_day、plan_id | PlanRunAcceptance |
 | backfill_data | 补指定历史范围 | 同上，加类型化 range | WriteAcceptance |
 | republish_data | 授权重发固定基线（#247 纯 enrichment：仅填未晋升字段或新增日期，已知值改/丢 fail-closed；仅显式 items，无 default selection） | 同 update_data | WriteAcceptance |
 | query_data | 读取已发布数据 | dataset、contract_version、selection、filter、version_id?、page_size?、cursor? | DataPage |
