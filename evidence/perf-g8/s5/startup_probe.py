@@ -104,6 +104,10 @@ def main() -> int:
     ap.add_argument("--gen-root", required=True)
     ap.add_argument("--sock", required=True, help="probe socket path")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--use-db-in-place", action="store_true",
+                    help="treat --db as the private copy itself (no extra copy; for low-disk "
+                         "windows). The db is modified by the probe runs; do not point it at a "
+                         "result you must keep untouched.")
     ap.add_argument("--runs", type=int, default=1,
                     help="cold runs; each cold run is followed by one warm run")
     args = ap.parse_args()
@@ -118,18 +122,19 @@ def main() -> int:
     work = Path(safe["work_dir"])
     work.mkdir(parents=True, exist_ok=True)
     os.chmod(work, 0o700)  # the service refuses a non-private runtime/socket directory
-    db_copy = str(work / "probe.sqlite")
+    db_copy = safe["db"] if args.use_db_in_place else str(work / "probe.sqlite")
 
     out = {"started_at": utc_now(), "source_db": safe["db"],
            "runs": [], "note": "cold = posix_fadvise(DONTNEED) on the private copy before start"}
     log_path = work / "probe-service.log"
     for i in range(args.runs):
         t0 = time.monotonic()
-        for ext in ("", "-wal", "-shm"):
-            if os.path.exists(db_copy + ext):
-                os.remove(db_copy + ext)
-        shutil.copy2(safe["db"], db_copy)
-        os.chmod(db_copy, 0o600)
+        if not args.use_db_in_place:
+            for ext in ("", "-wal", "-shm"):
+                if os.path.exists(db_copy + ext):
+                    os.remove(db_copy + ext)
+            shutil.copy2(safe["db"], db_copy)
+            os.chmod(db_copy, 0o600)
         copy_s = time.monotonic() - t0
         with open(log_path, "ab") as log:
             cold = one_run(2 * i, True, db_copy, safe["sock"],
