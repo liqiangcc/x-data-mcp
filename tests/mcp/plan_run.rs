@@ -1597,3 +1597,459 @@ fn small_task_progress_keeps_full_shape() {
         .unwrap();
     assert_eq!(view["task_id"], task_id);
 }
+
+// ---------------------------------------------------------------------------
+// Recovery (TASK-DEVIN-PLANRUN-RECOVERY): a live plan-run task accepts
+// cancellation at the committed revision, and a task left non-terminal by
+// a vanished run auto-closes as `interrupted` at the next reconcile.
+// ---------------------------------------------------------------------------
+
+/// Append-at-target fixture provider: each typed acquire commits one bar
+/// at the item's range end, advancing the entity head to the plan's
+/// target day — a committed item re-plans as `already_current`.
+struct AppendProvider;
+impl x_data_mcp::market_update::runner::RangeProvider for AppendProvider {
+    fn acquire(
+        &self,
+        _base: &x_data_mcp::market_storage::compat::CheckedRecord,
+        _range: &x_data_mcp::market_update::DateRange,
+        _candidate_id: &str,
+    ) -> Result<x_data_mcp::market_update::runner::Acquisition, x_data_mcp::market_data::SourceError>
+    {
+        Err(x_data_mcp::market_data::SourceError::NotVerified(
+            "fixture: envelope path unused".into(),
+        ))
+    }
+    fn acquire_typed(
+        &self,
+        facts: &x_data_mcp::market_update::UpdateBaseFacts,
+        _base_window: &[x_data_mcp::market_data::Bar],
+        range: &x_data_mcp::market_update::DateRange,
+    ) -> Result<
+        Option<x_data_mcp::market_update::runner::TypedAcquisition>,
+        x_data_mcp::market_data::SourceError,
+    > {
+        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let bar = x_data_mcp::compact_market::CompactBar {
+            trade_day: range.end.signed_duration_since(epoch).num_days(),
+            open_cents: 1000,
+            high_cents: 1010,
+            low_cents: 990,
+            close_cents: 1005,
+            volume: Some(100),
+            amount: Some("1000".into()),
+            r7_raw: Some(7),
+        }
+        .to_bar(x_data_mcp::market_data::Period::Day)
+        .unwrap();
+        Ok(Some(x_data_mcp::market_update::runner::TypedAcquisition {
+            decision: x_data_mcp::market_update::runner::TypedDecision::Append {
+                upserts: vec![bar],
+                metadata: None,
+            },
+            evidence: x_data_mcp::market_update::Evidence {
+                base_version_id: facts.version_id.clone(),
+                base_integrity_sha256: facts.integrity_sha256.clone(),
+                candidate_sha256: "fixture:candidate".into(),
+                range: range.clone(),
+                same_qfq_basis_ref: "fixture:basis".into(),
+                revision_ref: None,
+                continuity: None,
+            },
+        }))
+    }
+}
+
+/// A running plan-run task advances its revision per committed chunk, so
+/// an `expected_revision` read earlier always loses the race. Cancellation
+/// is a monotone intent: the request now applies at the committed
+/// revision, and only terminal tasks keep the strict precondition.
+#[test]
+fn running_planrun_task_accepts_cancel_at_a_stale_revision() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 150);
+    let provider = UnchangedProvider {
+        typed_calls: std::cell::Cell::new(0),
+    };
+    let runner = x_data_mcp::market_update::runner::RangeRunner {
+        repository: r.backend.clone(),
+        run_id: "run".into(),
+    };
+    // Commit the first chunk: the task is live at a later revision.
+    runner
+        .run_items(&task_id, &item_ids[..100], &provider)
+        .unwrap()
+        .expect("compact backend carries the update batch");
+    let live = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(live.task.status, x_data_mcp::task_control::Status::Running);
+    assert!(live.task.state_revision > 0);
+    // The acceptance-time revision is stale, yet the request lands on the
+    // state the write actually reads.
+    let reply = r
+        .api
+        .call(
+            "cancel_task",
+            json!({"contract_version":"v1","task_id":task_id,"expected_revision":0}),
+        )
+        .unwrap();
+    assert_eq!(reply["status"], "cancel_requested");
+    // The worker drains through the existing cancellation finish:
+    // committed chunk outcomes survive, unreached items carry none.
+    runner
+        .run_items(&task_id, &item_ids[100..], &provider)
+        .unwrap()
+        .unwrap();
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::Cancelled
+    );
+    assert!(
+        task.items[..100]
+            .iter()
+            .all(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+    );
+    assert!(task.items[100..].iter().all(|i| i.outcome.is_none()));
+    // A terminal task still enforces the revision precondition.
+    assert_eq!(
+        r.api
+            .call(
+                "cancel_task",
+                json!({"contract_version":"v1","task_id":task_id,"expected_revision":0}),
+            )
+            .unwrap_err()
+            .code,
+        "precondition_conflict"
+    );
+}
+
+/// Per-entity durable content of one database — bars, head rows and the
+/// event projection minus task-bound columns (task_id/result_id/seq and
+/// clock fields legitimately differ across runs).
+fn market_projection(path: &Path) -> (Vec<Vec<String>>, Vec<Vec<String>>, Vec<Vec<String>>) {
+    let c = rusqlite::Connection::open(path).unwrap();
+    let dump = |sql: &str| {
+        c.prepare(sql)
+            .unwrap()
+            .query_map([], |r| {
+                let mut row = Vec::with_capacity(r.as_ref().column_count());
+                for i in 0..r.as_ref().column_count() {
+                    row.push(format!(
+                        "{:?}",
+                        r.get::<_, rusqlite::types::Value>(i).unwrap()
+                    ));
+                }
+                Ok(row)
+            })
+            .unwrap()
+            .collect::<Result<Vec<Vec<String>>, _>>()
+            .unwrap()
+    };
+    let bars = dump(
+        "SELECT s.entity,b.trade_day,b.open_cents,b.high_cents,b.low_cents,b.close_cents,b.volume,b.amount,b.r7_raw \
+         FROM series_bars b JOIN market_series s USING(series_key) ORDER BY s.entity,b.trade_day",
+    );
+    let series = dump(
+        "SELECT entity,period,adjustment,version_id,hex(content_digest),digest_format,record_count,first_day,last_day,coverage_status,hex(source_binding_digest),hex(evidence_digest) \
+         FROM market_series ORDER BY entity,period,adjustment",
+    );
+    let events = dump(
+        "SELECT entity,period,kind,outcome,metadata_changed,semantics_changed,continuity_mode,prefix_bytes,hex(old_content_digest),hex(new_content_digest),range_start_day,range_end_day,hex(window_digest),hex(base_content_digest),algorithm_version,item_id \
+         FROM market_events ORDER BY entity,period,seq",
+    );
+    (bars, series, events)
+}
+fn sql_count(c: &rusqlite::Connection, sql: &str, id: &str) -> i64 {
+    c.query_row(sql, [id], |r| r.get(0)).unwrap()
+}
+
+/// A plan-run task whose accepting run died mid-execution is an orphan no
+/// tool could previously close. The startup reconcile now closes it
+/// `interrupted` in one transaction: occupancy releases, the killed
+/// running item returns to pending (no invented outcome), and every row —
+/// scopes, request, execution-start markers — is preserved. Re-planning
+/// then re-selects exactly the unfinished set, and the resumed run
+/// converges to the same durable content as an uninterrupted run.
+#[test]
+fn planrun_orphan_closes_as_interrupted_and_resumes_to_the_same_state() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use x_data_mcp::task_control::{Change, Stage, Status};
+    const N: usize = 150;
+    // Identically seeded control rig: same task runs uninterrupted.
+    let rig_b = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_b, ids_b) = run_task_with_members(&rig_b, N);
+    let runner_b = x_data_mcp::market_update::runner::RangeRunner {
+        repository: rig_b.backend.clone(),
+        run_id: "run".into(),
+    };
+    runner_b
+        .run_items(&task_b, &ids_b, &AppendProvider)
+        .unwrap()
+        .expect("compact backend carries the update batch");
+    assert_eq!(
+        rig_b.tasks.read_task(&task_b).unwrap().unwrap().task.status,
+        Status::Succeeded
+    );
+
+    let rig_a = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_a, ids_a) = run_task_with_members(&rig_a, N);
+    assert_eq!(ids_a, ids_b, "identical seeds must produce identical items");
+    let runner_a = x_data_mcp::market_update::runner::RangeRunner {
+        repository: rig_a.backend.clone(),
+        run_id: "run".into(),
+    };
+    // Chunk 1 commits (100 durable item outcomes); the kill lands with
+    // item 101 still at the running stage — a start marker but no outcome.
+    runner_a
+        .run_items(&task_a, &ids_a[..100], &AppendProvider)
+        .unwrap()
+        .unwrap();
+    let rev = rig_a.backend.task_head(&task_a).unwrap().state_revision;
+    rig_a
+        .tasks
+        .transition(&task_a, rev, "run", Change::StartItem(ids_a[100].clone()))
+        .unwrap();
+
+    // Service restart under a new run id: the startup reconcile closes
+    // the orphan in the same transaction.
+    assert_eq!(rig_a.tasks.reconcile("run-b").unwrap(), 1);
+    let closed = rig_a.tasks.read_task(&task_a).unwrap().unwrap();
+    assert_eq!(closed.task.status, Status::Interrupted);
+    let interruption = &closed.task.result.as_ref().unwrap()["interruption"];
+    assert_eq!(interruption["reason"], "service_restarted");
+    assert_eq!(interruption["successful_items"], 100);
+    assert_eq!(interruption["unfinished_items"], N - 100);
+    assert!(closed.claims.is_empty(), "interrupt releases all occupancy");
+    assert!(closed.items.iter().all(|i| i.stage != Stage::Running));
+    assert_eq!(
+        closed
+            .items
+            .iter()
+            .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+            .count(),
+        100
+    );
+    // Nothing is deleted: scopes, the request binding and execution-start
+    // markers all survive the close.
+    let c = rusqlite::Connection::open(rig_a.tasks.path()).unwrap();
+    assert_eq!(
+        sql_count(
+            &c,
+            "SELECT count(*) FROM task_scopes WHERE task_id=?1",
+            &task_a
+        ),
+        N as i64
+    );
+    assert_eq!(
+        sql_count(
+            &c,
+            "SELECT count(*) FROM task_item_execution_starts WHERE task_id=?1",
+            &task_a
+        ),
+        101
+    );
+    assert_eq!(
+        sql_count(
+            &c,
+            "SELECT count(*) FROM requests WHERE task_id=?1",
+            &task_a
+        ),
+        1
+    );
+    // The closed registry passes the full sweep and the accept gates —
+    // `accept.gate.orphan` no longer refuses this database at startup.
+    assert!(rig_a.tasks.registry_sweep().unwrap().is_empty());
+    // Reconcile is idempotent.
+    assert_eq!(rig_a.tasks.reconcile("run-b").unwrap(), 0);
+    assert_eq!(rig_a.tasks.read_task(&task_a).unwrap().unwrap(), closed);
+    drop(c);
+
+    // The restarted service reads the task as terminal, `verify` reports
+    // it not applicable (never needs_verification), and re-planning is
+    // unblocked by `plan_in_progress`/`daily_update_inflight`.
+    let api_b = DataApi::new_with_backend(
+        rig_a.tasks.clone(),
+        rig_a.backend.clone(),
+        "run-b".into(),
+        Access::local(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        api_b
+            .call(
+                "get_task",
+                json!({"contract_version":"v1","task_id":task_a}),
+            )
+            .unwrap()["status"],
+        "interrupted"
+    );
+    assert_eq!(
+        api_b
+            .call(
+                "verify_stopped_writes",
+                json!({"contract_version":"v1","request_id":"verify-orphan","target_task_id":task_a}),
+            )
+            .unwrap_err()
+            .code,
+        "invalid_arguments"
+    );
+    let p2 = plan(&api_b, "market.daily");
+    assert_eq!(p2["counts"]["eligible"], (N - 100) as u64, "{p2}");
+    let resumed = run(&api_b, "market.daily", "resume-1", &p2);
+    assert_eq!(resumed["item_count"], (N - 100) as u64);
+    let task_a2 = resumed["task_id"].as_str().unwrap().to_string();
+    let ids_a2: Vec<String> = rig_a
+        .tasks
+        .read_task(&task_a2)
+        .unwrap()
+        .unwrap()
+        .items
+        .iter()
+        .map(|i| i.spec.item_id.clone())
+        .collect();
+    let runner_a2 = x_data_mcp::market_update::runner::RangeRunner {
+        repository: rig_a.backend.clone(),
+        run_id: "run-b".into(),
+    };
+    runner_a2
+        .run_items(&task_a2, &ids_a2, &AppendProvider)
+        .unwrap()
+        .unwrap();
+    let done = rig_a.tasks.read_task(&task_a2).unwrap().unwrap();
+    assert_eq!(done.task.status, Status::Succeeded);
+
+    // Durable equivalence: every item's receipt version binding and the
+    // whole market projection match the uninterrupted control rig.
+    let mut receipts_a = std::collections::BTreeMap::new();
+    for item in &ids_a[..100] {
+        receipts_a.insert(
+            item.clone(),
+            rig_a
+                .backend
+                .item_receipt(&task_a, item)
+                .unwrap()
+                .expect("committed item keeps its receipt")
+                .version_id,
+        );
+    }
+    for item in &ids_a2 {
+        receipts_a.insert(
+            item.clone(),
+            rig_a
+                .backend
+                .item_receipt(&task_a2, item)
+                .unwrap()
+                .expect("resumed item has a receipt")
+                .version_id,
+        );
+    }
+    let receipts_b: std::collections::BTreeMap<_, _> = ids_b
+        .iter()
+        .map(|item| {
+            (
+                item.clone(),
+                rig_b
+                    .backend
+                    .item_receipt(&task_b, item)
+                    .unwrap()
+                    .unwrap()
+                    .version_id,
+            )
+        })
+        .collect();
+    assert_eq!(receipts_a, receipts_b);
+    assert_eq!(
+        market_projection(rig_a.tasks.path()),
+        market_projection(rig_b.tasks.path()),
+        "interrupted+resumed library must equal the uninterrupted run"
+    );
+}
+
+/// A plan-run orphan that never started also closes on restart: no item
+/// ran, occupancy still releases, and a same-run explicit task keeps the
+/// needs_verification path — the auto-close is scoped to the plan-run
+/// contract only.
+#[test]
+fn pending_planrun_orphan_interrupts_and_explicit_tasks_keep_verification() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use x_data_mcp::task_control::{
+        Command, CommandKey, FrozenWork, ItemSpec, RequestOutcome, Stage, Status,
+    };
+    let r = rig(&[("sh", "600006", day_u32(1)), ("sz", "000002", day_u32(1))]);
+    let p = plan(&r.api, "market.daily");
+    let accepted = run(&r.api, "market.daily", "run-orphan", &p);
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    // An explicit-contract task accepted by the same dying run.
+    let scopes: std::collections::BTreeSet<String> =
+        std::iter::once("doc:orphan".to_string()).collect();
+    let RequestOutcome::Task(other) = r
+        .tasks
+        .accept(
+            "manual-orphan",
+            &Command {
+                key: CommandKey {
+                    operation: "index".into(),
+                    dataset: "test_documents".into(),
+                    contract_version: "v1".into(),
+                },
+                intent: json!({}),
+            },
+            &FrozenWork {
+                items: vec![ItemSpec {
+                    item_id: "doc".into(),
+                    target: json!({"document":"orphan"}),
+                    progress_unit: "document".into(),
+                    frozen_inputs: json!({}),
+                    scope_keys: scopes.clone(),
+                }],
+                scopes,
+                shared_evidence: None,
+            },
+            "run",
+            None,
+        )
+        .unwrap()
+        .record
+        .outcome
+    else {
+        panic!("manual acceptance must bind a task")
+    };
+    // Restart: reconcile closes both orphans in one pass.
+    assert_eq!(r.tasks.reconcile("run-b").unwrap(), 2);
+    let closed = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(closed.task.status, Status::Interrupted);
+    let interruption = &closed.task.result.as_ref().unwrap()["interruption"];
+    assert_eq!(interruption["successful_items"], 0);
+    assert_eq!(interruption["unfinished_items"], 2);
+    assert!(closed.claims.is_empty());
+    assert!(
+        closed
+            .items
+            .iter()
+            .all(|i| i.stage == Stage::Pending && i.outcome.is_none())
+    );
+    // The explicit task is untouched: still needs_verification, claims held.
+    let other = r.tasks.read_task(&other.task.task_id).unwrap().unwrap();
+    assert_eq!(other.task.status, Status::NeedsVerification);
+    assert_eq!(other.claims.len(), 1);
+    // Idempotent: neither task is touched again.
+    assert_eq!(r.tasks.reconcile("run-b").unwrap(), 0);
+    assert_eq!(r.tasks.read_task(&task_id).unwrap().unwrap(), closed);
+    assert_eq!(
+        r.tasks.read_task(&other.task.task_id).unwrap().unwrap(),
+        other
+    );
+    // The restarted service's registry and plan paths are unblocked.
+    assert!(r.tasks.registry_sweep().unwrap().is_empty());
+    let api_b = DataApi::new_with_backend(
+        r.tasks.clone(),
+        r.backend.clone(),
+        "run-b".into(),
+        Access::local(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(plan(&api_b, "market.daily")["counts"]["eligible"], 2);
+}

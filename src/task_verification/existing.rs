@@ -82,7 +82,7 @@ pub fn accept<R: TaskRepository + StopRepository + ExistingStopRepository + Clon
         .repository
         .read_task(target_id)?
         .ok_or(Error::TaskNotFound)?;
-    if target.task.status == Status::Interrupted {
+    if verified_stopped(&target) {
         return existing(&control.repository, id, target);
     }
     match control.accept(id, command_key(), intent) {
@@ -92,7 +92,7 @@ pub fn accept<R: TaskRepository + StopRepository + ExistingStopRepository + Clon
                 .repository
                 .read_task(target_id)?
                 .ok_or(Error::TaskNotFound)?;
-            if current.task.status == Status::Interrupted {
+            if verified_stopped(&current) {
                 existing(&control.repository, id, current)
             } else {
                 Err(error)
@@ -100,4 +100,19 @@ pub fn accept<R: TaskRepository + StopRepository + ExistingStopRepository + Clon
         }
         result => result,
     }
+}
+
+/// A verified-stop interruption binds the receipt that closed it. An
+/// `interrupted` task without that link (e.g. a plan-run orphan closed by
+/// the startup reconcile) is already terminal — the fresh verification
+/// admission reports it as not applicable rather than needing
+/// verification, and never invents a prior conclusion.
+fn verified_stopped(target: &TaskSnapshot) -> bool {
+    target.task.status == Status::Interrupted
+        && target
+            .task
+            .result
+            .as_ref()
+            .and_then(|r| r["interruption"]["verification_task_id"].as_str())
+            .is_some()
 }

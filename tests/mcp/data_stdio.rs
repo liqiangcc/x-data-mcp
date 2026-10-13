@@ -260,14 +260,16 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     );
     let rev = view["state_revision"].as_u64().unwrap();
     assert!(rev > 0);
-    assert_eq!(
-        s.call(
-            "cancel_task",
-            json!({"contract_version":"v1","task_id":a["task_id"],"expected_revision":rev-1}),
-            true
-        )["code"],
-        "precondition_conflict"
+    // A stale expected_revision no longer rejects on a live task — cancel
+    // applies at the committed revision; here it is idempotent because
+    // the task is already cancel_requested.
+    let cancelled = s.call(
+        "cancel_task",
+        json!({"contract_version":"v1","task_id":a["task_id"],"expected_revision":rev-1}),
+        false,
     );
+    assert_eq!(cancelled["status"], "cancel_requested");
+    assert_eq!(cancelled["state_revision"], rev);
     s.call(
         "cancel_task",
         json!({"contract_version":"v1","task_id":a["task_id"],"expected_revision":rev}),

@@ -1942,9 +1942,18 @@ pub(crate) fn transition_tx(
     change: Change,
 ) -> Result<TaskSnapshot, Error> {
     let old = read_bound_task(c, id)?.ok_or(Error::TaskNotFound)?;
-    if old.task.state_revision != revision {
+    // Cancellation is a monotone intent, not a blind overwrite of a
+    // caller-read state: a live task applies it at the revision this
+    // transaction actually reads. A running task advances its revision
+    // per item/commit, so a caller-held `expected_revision` precondition
+    // made cancelling live work unwinnable. Terminal tasks and every
+    // other change keep the strict expected-revision precondition.
+    if old.task.state_revision != revision
+        && !(matches!(change, Change::RequestCancel) && !old.task.status.terminal())
+    {
         return Err(Error::RevisionConflict);
     }
+    let expected = old.task.state_revision;
     let started_item = match &change {
         Change::StartItem(item_id) => Some(item_id.clone()),
         _ => None,
@@ -1952,8 +1961,8 @@ pub(crate) fn transition_tx(
     let now = Utc::now();
     let mut next = old;
     decide(&mut next, run, change, now)?;
-    if next.task.state_revision != revision {
-        write_task(c, &next, revision)?;
+    if next.task.state_revision != expected {
+        write_task(c, &next, expected)?;
         if let Some(item_id) = started_item {
             c.execute(
                 "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
