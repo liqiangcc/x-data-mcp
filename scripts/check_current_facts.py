@@ -8,17 +8,15 @@ ROOT = Path(__file__).resolve().parent.parent
 
 EXPECTED_PACKAGE_VERSION = "0.2.0-preview.31"
 EXPECTED_LEGACY_SCHEMA = 18
-# Fresh `init`/`init20` output schema (code constant). The DEPLOYED preview
-# instance remains on schema 20 until the next rebuild — the doc-fact regexes
-# below stay keyed to 20 and continue to describe the deployed DB.
+# Fresh `init`/`init20` output schema (code constant). The deployed preview
+# instance runs schema 21 (fresh rebuild at the v6 switch).
 EXPECTED_COMPACT_SCHEMA = 21
 EXPECTED_DATA_TOOLS = 21
 EXPECTED_ACQUIRE_TOOLS = 10
 EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v6"
-# The strict Skills still describe the DEPLOYED contract (v5) until the
-# deploy-day switch (docs/contracts/v6-switch-checklist.md §3) — bumping
-# them early would make the strict gate refuse the live v5 instance.
-EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v5"
+# The strict Skills describe the deployed contract (v6) — flipped together
+# with this constant at the deploy-day switch.
+EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v6"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",
@@ -29,7 +27,7 @@ CURRENT_DOCS = {
 }
 
 REQUIRED_FACTS = [
-    ("schema 20", re.compile(r"schema[\s:=v]*20(?!\d)", re.IGNORECASE)),
+    ("schema 21", re.compile(r"schema[\s:=v]*21(?!\d)", re.IGNORECASE)),
     ("21 data tools", re.compile(r"\b21\s+data\s+tools?\b", re.IGNORECASE)),
     ("10 acquisition tools", re.compile(r"\b10\s+acquisition\s+tools?\b", re.IGNORECASE)),
 ]

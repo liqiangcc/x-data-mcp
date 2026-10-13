@@ -34,20 +34,17 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 ## 当前状态
 
 > 部署与运行事实以 [docs/STATUS.md](docs/STATUS.md) 为准，性能与容量目标以 [docs/SLO.md](docs/SLO.md) 为准。
-> 2026-10-09 已迁移至 aws-node 并运行 preview.30；2026-10-10 起同代、跨代日线与年线统一为 write-loop <600s hard。
-> 本节下文中关于主机、版本、generation 和 15min 门禁的表述均已被取代，仅作历史记录。
 
 **OWNER-ONLY OPERATIONAL PREVIEW — external distribution not authorized.**
 
 本机 `/opt/x-data-mcp-preview/` 以 systemd 运行已部署的
-[v0.2.0-preview.29](https://github.com/liqiangcc/x-data-mcp/releases/tag/v0.2.0-preview.29)
-（代码 `4493d45`），双 MCP server 拓扑：`x-data-mcp-data`（`run/mcp.sock`，
-20 data tools）与 `x-data-mcp-acquire`（`run/acquire.sock`，10 acquisition tools）。
-显式 `task_sqlite init` 的新库使用 fresh compact schema 20；工具数量不是稳定契约，
+TODO(DEPLOY)：<部署 tag 与代码 sha>，双 MCP server 拓扑：`x-data-mcp-data`
+（`run/mcp.sock`，21 data tools）与 `x-data-mcp-acquire`（`run/acquire.sock`，
+10 acquisition tools）。显式 `task_sqlite init` 的新库使用 fresh compact
+schema 21；工具数量不是稳定契约，
 客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
-当前开发分支（XP-014，未部署）注册 21 data tools（新增只读
-`get_yearly_base_years`）并宣告 `generic-data-v5`；preview.29 部署实例仍为
-20 data tools / `generic-data-v3`。
+当前部署宣告 `generic-data-v6`（market 单版本序列：version_id=内容 hex，
+latest-only）。
 
 已实现并在真实 generation 上执行过：immutable generation 生命周期
 （acquire → byte verify → consistency verify → 条件 activate）、
@@ -85,7 +82,7 @@ unsupported-metadata fallback 仍按
 external distribution is not authorized；它不是“服务未运行”的同义词。
 
 schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
-（既有库显式 upgrade 的来源版本），`COMPACT_SCHEMA_VERSION=20` 是 fresh 部署的
+（既有库显式 upgrade 的来源版本），`COMPACT_SCHEMA_VERSION=21` 是 fresh 部署的
 compact schema。Issue/Epic 中的“v15”是交付规划标签，不是 schema 编号。
 
 唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →

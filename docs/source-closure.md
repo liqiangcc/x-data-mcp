@@ -2,17 +2,12 @@
 
 当前摘要：#54 QFQ、#131 固定文件集合一致性和 #71 限定个人研究范围已分别裁定；这些结论只适用于明确证据与声明范围。新 generation 仍需新 manifest 和独立一致性决定。
 当前 acquisition 已实现 immutable generation、验证后条件激活和 generation-bound
-routine update（见[每日同步说明](daily-sync.md)）；preview.29 双 MCP 拓扑已在本机
-部署运行——data socket 提供 20 data tools、acquire socket 提供 10 acquisition
-tools、fresh init 库使用 compact schema 20。当前开发分支（XP-014，未部署）
-注册 21 data tools（新增 `get_yearly_base_years`）并宣告 `generic-data-v5`；
-preview.29 部署实例仍为 20 data tools / `generic-data-v3`。2026-09-29 explicit fresh rebuild
-后，2026-09-30 operator-path 已激活 generation
-`2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，
-并发布 catalog `catalog-1790660536962300201`（5,227 records）、5,223 个
-`market.daily` published versions 和 5,223 个 `market.yearly` derived versions；
-最新集中行情日为 2026-09-29（5,211 entities）；4 个官方 `hsjday` 成员缺失保持
-absent。
+routine update（见[每日同步说明](daily-sync.md)）；双 MCP 拓扑已在本机
+部署运行（TODO(DEPLOY)：<部署 tag 与代码 sha>）——data socket 提供
+21 data tools、acquire socket 提供 10 acquisition
+tools、fresh init 库使用 compact schema 21，宣告 `generic-data-v6`
+（market 单版本序列：version_id=内容 hex；generation/catalog/重建后的实体与
+样本数据见 [STATUS](STATUS.md)）。
 generation 生命周期与全市场分批
 collection/update 均有真实证据（preview.26–28 连续验收：catalog 5,227 实体、
 daily 首采约 340s、同代 no-change `update_data` 5,222 items 约 616s）。#259 已在
