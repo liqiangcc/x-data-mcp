@@ -232,5 +232,23 @@ class TruncKTests(unittest.TestCase):
             self.assertEqual((st["truncated"], len(st["day_too_small"])), (1, 1))
 
 
+class DbSizeTests(unittest.TestCase):
+    def test_snapshot_and_missing(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "x.sqlite")
+            con = sqlite3.connect(db)
+            con.execute("create table t(a)")
+            con.executemany("insert into t values(?)", [(i,) for i in range(1000)])
+            con.commit()
+            con.close()
+            snap = s5_common.db_size_snapshot(db)
+            self.assertGreater(snap["main_bytes"], 0)
+            self.assertEqual(snap["page_size"] * snap["page_count"], snap["main_bytes"])
+            miss = s5_common.db_size_snapshot(os.path.join(d, "none.sqlite"))
+            self.assertIsNone(miss["main_bytes"])
+            self.assertIn("pragma_error", miss)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ Reuses `classify_range_results`/`POLL_S` from the XP-015 drivers
 from __future__ import annotations
 
 import json
+import sqlite3
 import os
 import socket
 import sys
@@ -201,4 +202,27 @@ def sum_progress(per_task: list) -> dict:
     for t in per_task:
         for k in out:
             out[k] += int(t.get(k) or 0)
+    return out
+
+
+def db_size_snapshot(db: str) -> dict:
+    """File sizes plus page_count/freelist_count of a (possibly live, WAL) db at a
+    phase boundary. Uses a short read-only connection; failures are recorded,
+    never raised (a measurement hook must not fail a window)."""
+    out = {"at": utc_now()}
+    for key, path in (("main_bytes", db), ("wal_bytes", db + "-wal")):
+        try:
+            out[key] = os.path.getsize(path)
+        except OSError:
+            out[key] = None
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            out["page_count"] = con.execute("PRAGMA page_count").fetchone()[0]
+            out["freelist_count"] = con.execute("PRAGMA freelist_count").fetchone()[0]
+            out["page_size"] = con.execute("PRAGMA page_size").fetchone()[0]
+        finally:
+            con.close()
+    except Exception as exc:  # noqa: BLE001
+        out["pragma_error"] = str(exc)[:200]
     return out

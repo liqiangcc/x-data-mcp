@@ -47,6 +47,7 @@ from s5_common import (
     iso,
     merge_outcome_totals,
     sum_progress,
+    db_size_snapshot,
     server_window,
     utc_now,
     wait_task,
@@ -497,6 +498,11 @@ def main() -> int:
         "phases": args.phases, "max_chunks": args.max_chunks,
         "no_service_mgmt": args.no_service_mgmt, "poll_s": POLL_S}}
     phases = args.phases.split(",")
+    run["db_sizes"] = {}
+
+    def mark(label: str) -> None:
+        if not args.no_service_mgmt or os.path.exists(stack.db):
+            run["db_sizes"][label] = db_size_snapshot(stack.db)
     unknown = set(phases) - {"collect", "yearly1", "genb", "append", "nochange", "yearly2"}
     if unknown:
         sys.exit(f"unknown phases {sorted(unknown)}")
@@ -507,6 +513,7 @@ def main() -> int:
             run["init_out"] = stack.init_db(args.init_subcommand)
             stack.start()
             run["startup"] = stack.wait_sockets()
+            mark("after_init")
         mcp = Mcp(stack.mcp_sock)
         acq = Mcp(stack.acq_sock)
         caps = mcp.call("get_data_capabilities", {})
@@ -519,9 +526,11 @@ def main() -> int:
             else:
                 run["phases"]["gen_a"] = {"skipped": "no_service_mgmt"}
             write_json(str(out_dir / "s5-gena.json"), run["phases"]["gen_a"])
+            mark("after_gen_a")
             res = phase_collect(mcp, args.request_prefix, args.max_chunks)
             run["phases"]["collect"] = res
             write_json(str(out_dir / "s5-collect.json"), res)
+            mark("after_collect")
         # Entity list is re-read after collection so later phases pin the
         # catalog snapshot that exists when they run (same as the drivers).
         entities = None
@@ -531,12 +540,14 @@ def main() -> int:
             res = phase_yearly(mcp, f"{args.request_prefix}-y1", "yearly_first", entities, args.max_chunks)
             run["phases"]["yearly_first"] = res
             write_json(str(out_dir / "s5-yearly-first.json"), res)
+            mark("after_yearly_first")
         if "genb" in phases:
             if not args.no_service_mgmt:
                 installed = mirror_inputs(stack.mirror, safe["input_new"])
                 run["phases"]["gen_b"] = acquire_and_activate(acq, args.request_prefix, "genb")
                 run["phases"]["gen_b"]["mirror_files"] = installed
                 write_json(str(out_dir / "s5-genb.json"), run["phases"]["gen_b"])
+                mark("after_gen_b")
         end = date.fromisoformat(args.end_date) if args.end_date else None
         for name, no_change in (("append", False), ("nochange", True)):
             if name in phases:
@@ -546,10 +557,12 @@ def main() -> int:
                                          entities, end, no_change, args.max_chunks)
                 run["phases"][name] = res
                 write_json(str(out_dir / f"s5-{name}.json"), res)
+                mark(f"after_{name}")
         if "yearly2" in phases:
             res = phase_yearly(mcp, f"{args.request_prefix}-y2", "yearly_rederive", entities, args.max_chunks)
             run["phases"]["yearly_rederive"] = res
             write_json(str(out_dir / "s5-yearly-rederive.json"), res)
+            mark("after_yearly_rederive")
     except Exception as exc:
         run["error"] = str(exc)
         write_json(str(out_dir / "s5-run.json"), run)
