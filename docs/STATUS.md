@@ -6,7 +6,7 @@
 
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
-最后核实：TODO(DEPLOY)（部署日更新；现行为 2026-10-12）。部署与数据相关数值为部署并重建后读取 live 服务的结果；其余标注「来源」的数值来自所列报告或命令。
+最后核实：2026-10-13。部署与数据相关数值为部署并重建后读取 live 服务的结果；其余标注「来源」的数值来自所列报告或命令。
 
 ## 部署
 
@@ -16,10 +16,10 @@
 | 系统 | Ubuntu 26.04 LTS，kernel 7.0.0-1014-aws | `/etc/os-release`、`uname -r` |
 | 资源 | EC2 t3.small（可突发）：2 vCPU（1 个物理核加 2 个超线程，没有 SHA-NI），1.9GiB RAM + 8GiB swap，根盘 77G；`/tmp` 是 953MB 的 tmpfs（占内存） | `lscpu`、`/proc/cpuinfo`、`free -h`、`df -h` |
 | 本机工具链 | rustc / cargo 1.99.0 | `rustc --version` |
-| 部署版本 | TODO(DEPLOY)：<新 tag> @ `<代码 sha>` | `/opt/x-data-mcp-preview/current/manifest.json` |
-| 部署时间 | TODO(DEPLOY)：<部署时间>，`scripts/deploy_phase_g.sh <新 tag>`；旧库归档于 `state/preview.sqlite.v21-archived-<部署时间>`（归档名里的 schema 号按被归档库事实填写）；previous deployment v0.2.0-preview.31 (schema 20，`releases/83d323f…`) 保留作回滚点 | 部署报告 |
+| 部署版本 | v0.2.0-preview.32 @ `db40ed2d14ebe5e047de889c8e6a9c240cfee58e` | `/opt/x-data-mcp-preview/current/manifest.json` |
+| 部署时间 | 2026-10-13T06:31Z，`scripts/deploy_phase_g.sh v0.2.0-preview.32 --force-git-transport`；旧库归档于 `state/preview.sqlite.v20-archived-20261013T063110Z`；previous deployment v0.2.0-preview.31 (schema 20，`releases/83d323f…`) 保留作回滚点 | 部署报告 |
 | 构建 | rustc 1.99.0，ubuntu-24.04，最低 glibc 2.39 | 同上 |
-| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/83d323f…` | `ls -l` |
+| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/db40ed2d…` | `ls -l` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
 | ecs-node | 服务已 stop 并 disable，数据保留为冷备（含 generation `a49c314b…` 的字节） | 同上 |
 | production_ready | `false`：owner 个人研究、本地使用，未授权对外分发（#71） | `get_data_capabilities` |
@@ -46,7 +46,7 @@
 | 年线 | 5,224 个 published，0 失败，0 unknown | 重建驱动读回 |
 | 缺失 | `sz.001381`、`sz.301569`、`sz.301660`、`sz.301718`（官方 hsjday 缺成员，4 个日线任务条目 fail-closed，预期） | 重建驱动读回 |
 | 与迁移报告的差异 | 迁移报告记录 `sz.001246` 为空、年线 5,223 个 succeeded；本次重建该实体有 2 条日线（2026-09-30、2026-10-08）和 1 条年线，年线共 5,224 个。读回的这两项预期值（5,223 与 `sz.001246` 为空）因此不符，判断为预期值过时而非故障，待 owner 确认 | `deploy31-readback.json` |
-| 重建耗时 | 全新重建基于 generation 87322997（数据截止 2026-10-08）：catalog 10.0s + 日线 53 块约 4 分钟 57 秒（含 4 个缺成员条目）+ 年线首次 write-loop 304.7s | 重建驱动 JSON |
+| 重建耗时 | 全新重建基于 generation 87322997（数据截止 2026-10-08）：collect write-loop 308.4s（catalog + 日线 53 块，含 4 个缺成员条目）+ 年线首次 write-loop 208.9s；预览演练对照 209.7s / 224.3s | 重建驱动 JSON（`/root/x-deploy-preview32-out/out/rebuild-*.json`） |
 
 部署后首次增量更新（2026-10-12 收盘后，跨代 Append，验证 GOAL-008 关闭条件）：**待执行**。
 
