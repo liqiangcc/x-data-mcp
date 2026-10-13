@@ -669,16 +669,15 @@ fn planrun_scales_to_market_wide_membership() {
         {
             assert!(res.is_ok(), "seed collection commit failed: {res:?}");
         }
-        let revision = r
-            .tasks
-            .read_task(&seed_task)
-            .unwrap()
-            .unwrap()
-            .task
-            .state_revision;
-        r.tasks
-            .transition(&seed_task, revision, "run-seed", Change::FinishExecution)
-            .unwrap();
+        // `finish_item_and_task` drives the last item's task to a terminal
+        // status and releases its scope occupancy inside the same tx — no
+        // explicit FinishExecution (decide rejects it on terminal tasks).
+        let task = r.tasks.read_task(&seed_task).unwrap().unwrap();
+        assert!(
+            task.task.status.terminal(),
+            "seed task must be terminal after its batch: {:?}",
+            task.task.status
+        );
     }
 
     // 5,201 eligible members (head day 1 << pending day) + 0 absent.
