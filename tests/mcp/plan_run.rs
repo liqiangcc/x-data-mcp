@@ -84,30 +84,36 @@ struct Snapshot {
 fn snapshot(day_members: &[(&str, &[u8])]) -> Snapshot {
     let dir = tempfile::tempdir().unwrap();
     let gbbq = gbbq_member(&[gbbq_record(1, "600006", 20240101, 1)]);
-    let roles: [(&str, &str, &[u8]); 3] = [
+    write_zip(
+        &dir.path().join("base.zip"),
+        &[("base.dbf", b"unused-by-daily-source".as_slice())],
+    );
+    write_zip(&dir.path().join("hsjday.zip"), day_members);
+    write_zip(&dir.path().join("gbbq.zip"), &[("gbbq", gbbq.as_slice())]);
+    let roles = [
         (
             "base_industry",
             "base.zip",
-            b"unused-by-daily-source".as_slice(),
+            "http://www.tdx.com.cn/products/data/data/dbf/base.zip",
         ),
-        ("day", "hsjday.zip", &[]),
-        ("gbbq", "gbbq.zip", gbbq.as_slice()),
+        (
+            "day",
+            "hsjday.zip",
+            "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+        ),
+        (
+            "gbbq",
+            "gbbq.zip",
+            "http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+        ),
     ];
     let mut files = Vec::new();
-    for (role, name, stub) in roles {
-        let path = dir.path().join(name);
-        if name == "hsjday.zip" {
-            write_zip(&path, day_members);
-        } else if name == "base.zip" {
-            write_zip(&path, &[("base.dbf", stub)]);
-        } else {
-            write_zip(&path, &[("gbbq", stub)]);
-        }
-        let bytes = std::fs::read(&path).unwrap();
+    for (role, name, url) in roles {
+        let bytes = std::fs::read(dir.path().join(name)).unwrap();
         files.push(json!({
             "role": role,
             "relative_path": name,
-            "source_url": "https://example.invalid/snapshot",
+            "source_url": url,
             "acquisition_started_at": "2026-09-11T01:00:00Z",
             "acquisition_completed_at": "2026-09-11T02:00:00Z",
             "last_modified": null,

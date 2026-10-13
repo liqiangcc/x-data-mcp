@@ -25,7 +25,7 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
     let value: serde_json::Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
     assert_eq!(value["status"], "PASS");
     for required in [
-        "initialize_discovery_21_tools_generic_data_v6",
+        "initialize_discovery_23_tools_generic_data_v7",
         "persistent_service_proxy_discovery_and_reconnect",
         "same_proxy_idle_over_30_seconds_then_calls_again",
         "publication_inspection_discovery_and_never_started_refusal_without_binding",
