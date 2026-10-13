@@ -97,11 +97,17 @@ fn paged_query_shares_one_snapshot_and_byte_cap_evicts_lru() {
     let mut again = args_at("2026-01-31");
     again.cursor = Some(cursors[0].clone());
     assert!(q.query(again, &access).unwrap().page_complete);
+    // The second resume re-marks the first snapshot MRU, so the next push
+    // evicts the untouched third one instead.
     q.query(args_at("2026-04-30"), &access).unwrap();
+    let mut lru_evicted = args_at("2026-03-31");
+    lru_evicted.cursor = Some(cursors[2].clone());
+    assert!(q.query(lru_evicted, &access).is_err());
+    // One more push finally evicts the twice-resumed first snapshot.
+    q.query(args_at("2026-05-31"), &access).unwrap();
     let (_, bytes, distinct) = q.cache_stats();
     assert!(bytes <= one_snapshot * 5 / 2);
     assert_eq!(distinct, 2);
-    // And once the resumed cursor itself is evicted it too is invalid.
     let mut gone = args_at("2026-01-31");
     gone.cursor = Some(cursors[0].clone());
     assert!(q.query(gone, &access).is_err());
