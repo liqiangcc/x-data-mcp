@@ -401,6 +401,17 @@ pub struct TaskListPage {
     pub next_cursor: Option<String>,
     pub page_complete: bool,
 }
+/// Bounded progress summary of the plan that produced a large task
+/// (`contract_version == market-plan-run-task-v1`): the plan-level facts
+/// a poller needs when per-item arrays are withheld by the bounded-read
+/// path — `task.plan_id`/`plan_counts` carry the digest and counts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanProgress {
+    pub plan_id: String,
+    pub generation_id: Option<String>,
+    pub target_day: Option<chrono::NaiveDate>,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProgressPage {
@@ -417,6 +428,12 @@ pub struct ProgressPage {
     pub unfinished: Vec<ProgressItem>,
     pub next_cursor: Option<String>,
     pub page_complete: bool,
+    /// Set when the task exceeded the bounded-read threshold
+    /// (`observe::LARGE_TASK_ITEMS`): per-item arrays below are empty by
+    /// design and this object carries the plan summary instead. Absent
+    /// on smaller tasks, which keep the full per-item shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanProgress>,
     pub publication_versions: Vec<VersionRef>,
     pub frozen_daily_ranges: Vec<FrozenDailyRange>,
     pub range_results: Vec<RangeExecutionResult>,

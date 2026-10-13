@@ -2061,7 +2061,7 @@ pub(crate) fn transition_light_tx(
     Ok(())
 }
 
-fn read_revision(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+pub(crate) fn read_revision(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     let n: i64 = row.get(index)?;
     u64::try_from(n).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, n))
 }

@@ -448,9 +448,9 @@ impl DataApi {
                 let f = self
                     .observer
                     .repository
-                    .task(&a.task_id, &self.access)
+                    .task_head_facts(&a.task_id, &self.access)
                     .map_err(mapped)?;
-                return encode(super::observe::summary(&f, &self.observer.run_id));
+                return encode(super::observe::summary_head(&f, &self.observer.run_id));
             }
             "get_request" => {
                 let a: RequestV1 = decode(input)?;

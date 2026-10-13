@@ -165,6 +165,11 @@ pub struct TaskSnapshot {
     pub claims: Vec<ScopeClaim>,
 }
 impl TaskSnapshot {
+    /// O(1) head projection of this snapshot: the row-level view
+    /// `decide`/`read_task_head` maintain, without the item list.
+    pub fn head(&self) -> TaskHead {
+        head_of(self)
+    }
     pub fn visible_status(&self, run: &str) -> Status {
         visible_status(
             self.task.status,
