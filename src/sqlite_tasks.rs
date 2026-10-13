@@ -1830,8 +1830,12 @@ pub(crate) fn accept_streamed_tx(
         if !seen.insert(item.item_id.clone()) {
             return Err(Error::InvalidCommand("duplicate item identity".into()));
         }
-        if let Some(digest) = evidence_digest.as_deref()
-            && item.frozen_inputs["selection_evidence"]["evidence_digest"].as_str() != Some(digest)
+        if let Some(marker) = item
+            .frozen_inputs
+            .get("selection_evidence")
+            .and_then(|v| v.get("evidence_digest"))
+            .and_then(Value::as_str)
+            && evidence_digest.as_deref() != Some(marker)
         {
             return Err(Error::InvalidCommand(
                 "item evidence marker does not match shared evidence".into(),

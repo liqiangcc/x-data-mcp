@@ -189,6 +189,7 @@ struct Rig {
     api: DataApi,
     snapshot: Snapshot,
     tasks: SqliteTasks,
+    backend: MarketBackend,
     seed_task: String,
 }
 /// Seed `codes` (sh.600006-style ("sh","600006") tuples) into a fresh
@@ -253,6 +254,7 @@ fn rig(members: &[(&str, &str, u32)]) -> Rig {
         api,
         snapshot: snap,
         tasks,
+        backend,
         seed_task: accepted["task_id"].as_str().unwrap().to_string(),
         _db: db,
     }
@@ -596,7 +598,9 @@ fn planrun_scales_to_market_wide_membership() {
         panic!("seed acceptance must bind a task")
     };
     let seed_task = snap.task.task_id;
-    let backend = MarketBackend::open(&r.tasks).unwrap();
+    // Reuse the rig's live backend handle — `MarketBackend::open` cannot
+    // take a second lease on the same database file.
+    let backend = r.backend.clone();
     use x_data_mcp::market_data::{
         AdjustmentEvidence, CoverageEvidence, EvidenceValue, Period, UnitCurrencyEvidence,
     };
