@@ -4,10 +4,10 @@
 
 2026-09-12 用户要求现在考虑扩展，并授权按“工具按业务动作稳定、数据类别通过类型化参数扩展”
 开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。当前部署：data socket 注册
-21 data tools（capability revision `generic-data-v5`，含只读 `get_yearly_base_years`），
-acquire socket 注册 10 acquisition tools，fresh init 库为 compact schema 20。部署版本
-（撰写时为 v0.2.0-preview.31）、generation 与数据量等机器事实只在
-[STATUS](STATUS.md) 维护，本文不复述。通用查询、任务、
+21 data tools（capability revision `generic-data-v6`，含只读 `get_yearly_base_years`，
+market 单版本序列：version_id=内容 hex，latest-only），
+acquire socket 注册 10 acquisition tools，fresh init 库为 compact schema 21。部署版本、
+generation 与数据量等机器事实只在 [STATUS](STATUS.md) 维护，本文不复述。通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场
 collection/update 已通过分批 MCP 编排取得真实 generation 证据
 （历史：preview.26–28 连续验收）；

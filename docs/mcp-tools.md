@@ -5,9 +5,10 @@
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
 当前部署为双 MCP server：data socket 提供 21 data tools（capability revision
-`generic-data-v5`，含只读 `get_yearly_base_years`），acquisition socket 提供
-10 acquisition tools；fresh init 库使用 compact schema 20。部署版本（撰写时为
-v0.2.0-preview.31）、generation、catalog 与行情数据量等机器事实只在
+`generic-data-v6`，含只读 `get_yearly_base_years`，market 单版本序列：
+version_id=内容 hex，latest-only），acquisition socket 提供
+10 acquisition tools；fresh init 库使用 compact schema 21。部署版本、
+generation、catalog 与行情数据量等机器事实只在
 [STATUS](STATUS.md) 维护，本文不复述；工具数不是稳定业务契约；客户端必须以
 运行实例的 `tools/list` 与 capability descriptor 为准。旧 strict Skill 会话遇
 revision 不匹配即停止而非静默适配。
@@ -23,7 +24,7 @@ versions；当时的 live discovery 为 `generic-data-v3`、20 data tools。
   快照时间仍作为上界（首次调用之后创建的任务不会出现在后续页），排序（`created_at` 降序、`task_id` 升序）、
   `page_complete`、游标与授权绑定不变。**状态口径变化：** 过滤在首次调用时对全表求值的旧语义改为按
   每页读取时的任务状态逐页求值（页内展示与过滤依据一致，但跨页之间任务状态可能已变化）。
-- `get_data_availability` 的 `related_tasks`（generic-data-v5：在途 + 最近 5 个已结束，附 `related_tasks_total` / `related_tasks_truncated`）改为按 `task_scopes.scope_key`（`["market",symbol,"day"|"daily"|"year"]`，其中 `daily` 是缺口核查任务使用的周期）
+- `get_data_availability` 的 `related_tasks`（v5 语义：在途 + 最近 5 个已结束，附 `related_tasks_total` / `related_tasks_truncated`）改为按 `task_scopes.scope_key`（`["market",symbol,"day"|"daily"|"year"]`，其中 `daily` 是缺口核查任务使用的周期）
   关联所请求实体的任务，不再扫描、解析全部任务。此前按任务条目 `target.symbol` 关联；市场类任务两者一致。
   仅有 `target.task_id`、无 symbol 的任务（如 `task.verification` 的 `verify_stopped_writes`）此前也不会
   出现在实体的 `related_tasks` 中，现在同样不会。缺口核查任务（`daily`）仍会出现；publication / task verification 本来就没有 symbol 目标。

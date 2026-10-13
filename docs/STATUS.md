@@ -6,7 +6,7 @@
 
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
-最后核实：2026-10-12。部署与数据相关数值为 2026-10-12 部署并重建后读取 live 服务的结果；其余标注「来源」的数值来自所列报告或命令。
+最后核实：TODO(DEPLOY)（部署日更新；现行为 2026-10-12）。部署与数据相关数值为部署并重建后读取 live 服务的结果；其余标注「来源」的数值来自所列报告或命令。
 
 ## 部署
 
@@ -16,8 +16,8 @@
 | 系统 | Ubuntu 26.04 LTS，kernel 7.0.0-1014-aws | `/etc/os-release`、`uname -r` |
 | 资源 | EC2 t3.small（可突发）：2 vCPU（1 个物理核加 2 个超线程，没有 SHA-NI），1.9GiB RAM + 8GiB swap，根盘 77G；`/tmp` 是 953MB 的 tmpfs（占内存） | `lscpu`、`/proc/cpuinfo`、`free -h`、`df -h` |
 | 本机工具链 | rustc / cargo 1.99.0 | `rustc --version` |
-| 部署版本 | v0.2.0-preview.31 @ `83d323f44e148dfa499a77504749bb7ef4335fc1` | `/opt/x-data-mcp-preview/current/manifest.json`、`reports/preview31-phaseg-deployment.json` |
-| 部署时间 | 2026-10-12T01:21:10Z，`scripts/deploy_phase_g.sh v0.2.0-preview.31 --force-git-transport`（`gh release view` 的 asset digest 在 gh 2.62 上缺失，故用 git 传输路径；tarball sha256 `b0e693f9…` 与 Release digest 一致）；旧库归档于 `state/preview.sqlite.v20-archived-20261012T012110Z`；上一版 `releases/4ff45d7…` 保留作回滚点 | 部署报告 |
+| 部署版本 | TODO(DEPLOY)：<新 tag> @ `<代码 sha>` | `/opt/x-data-mcp-preview/current/manifest.json` |
+| 部署时间 | TODO(DEPLOY)：<部署时间>，`scripts/deploy_phase_g.sh <新 tag>`；旧库归档于 `state/preview.sqlite.v21-archived-<部署时间>`（归档名里的 schema 号按被归档库事实填写）；previous deployment v0.2.0-preview.31 (schema 20，`releases/83d323f…`) 保留作回滚点 | 部署报告 |
 | 构建 | rustc 1.99.0，ubuntu-24.04，最低 glibc 2.39 | 同上 |
 | 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/83d323f…` | `ls -l` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
@@ -28,7 +28,7 @@
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 21 | capability `generic-data-v5`（含只读 `get_yearly_base_years`）；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` |
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 21 | capability `generic-data-v6`（含只读 `get_yearly_base_years`）；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 设置了 `X_DATA_MCP_TDX_FETCH=current/scripts/tdx_fetch.py` |
 | `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 只转发 data server，不转发 acquire |
 
@@ -40,7 +40,7 @@
 |---|---|---|
 | 当前 generation | `87322997b21ee492224b42984c7fa5df865840d26f04bee628e54ce74a0e0de6`，2026-10-08T09:06:02Z 激活 | `generations/active-generation.json` |
 | 前一 generation | `a49c314b8f910aa68d0a66b9f3b3d08bf0d57f5b215a8b77a973786391e512a1`（字节只在 ecs 冷备中） | 同上、迁移报告 |
-| 数据库 | `state/preview.sqlite`，fresh compact schema 20，809,979,904 B（2026-10-12 01:32Z，重建后） | `ls -l` |
+| 数据库 | `state/preview.sqlite`，fresh compact schema 21，TODO(DEPLOY)：<部署日 `ls -l` 实测> B | `ls -l` |
 | 目录 | 5,228 个实体 | 重建驱动读回 |
 | 日线 | 已发布 5,224 个；head 5,209 个为 2026-10-08，其余为更早的最后交易日（停牌/退市类） | 重建驱动读回 |
 | 年线 | 5,224 个 published，0 失败，0 unknown | 重建驱动读回 |
@@ -63,8 +63,9 @@
 
 | 问题 | 影响 | 来源 |
 |---|---|---|
-| 只换二进制（不再每次全新 init）的部署：启动 registry sweep 的耗时随历史任务线性增长，约运行 70 天后超过 `x-data-mcp-tunnel` 的 10 秒等待（`wait-data-service.py`）；缓解（只 sweep 最近 N 天、先开 socket 后台 sweep）会改变「sweep 失败即拒绝启动」的语义，需另行批准 | 目前每次部署全新 init，未触发 | XP-043 |
+| 只换二进制（不再每次全新 init）的部署：启动 registry sweep 的耗时随历史任务线性增长，约运行 70 天后超过 `x-data-mcp-tunnel` 的 10 秒等待（`wait-data-service.py`）；缓解（只 sweep 最近 N 天、先开 socket 后台 sweep）会改变「sweep 失败即拒绝启动」的语义，需另行批准。schema 21 的启动检查已改为逐 series 索引点查（S2b F3，不再 loose-scan） | 目前每次部署全新 init，未触发 | XP-043 |
 | 任务簿记（`frozen_work_json`、`requests.command_json`、`shared_evidence`）每年约增长 10–16GB（每天约 106 个任务） | 只换二进制的长期运行会逼近「部署体积 ≤4GiB」；降低需要改存储格式并定留存策略 | S7 |
+| `market_events` 事件日志无界增长（RULINGS Q9 已接受）：估计 ~5,224 行/日 ≈ 1MB/日（S5 实测 26,118 行 / dbstat ~16MB 含索引） | 长期运行累积；与任务簿记增长分开记录 | RULINGS Q9、S5 |
 | rollover 校验放宽后，回滚到旧二进制时，其对早 rollover 结果行的完整校验会报「requires depth-256 base」；已有 >127 深的链升级后首日会集中 rollover 一次 | 只影响长期运行的库 | XP-051 |
 | 年线最坏链深余量薄（约 2–9%），宿主为 t3.small，噪声约 ±10%，冷缓存首批明显偏慢 | 个别批次可能离群 | XP-045b/047/048/052 |
 | aws `acquire.sqlite` 中有 4 个没有字节的 generation，normalized-retire 待处理 | 采集台账有残留 | 迁移报告 |

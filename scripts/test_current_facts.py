@@ -14,30 +14,39 @@ spec.loader.exec_module(cf)
 ALLOWED = {"31"}
 
 
-def claims(text: str) -> list[str]:
+def claims(text: str, deployed: str = "generic-data-v6") -> list[str]:
+    # Default mirrors this branch's deployed-revision constant (post-switch).
     return [
         kind
         for _, kind, _ in cf.stale_deployment_claims(
-            text, ALLOWED, 21, "generic-data-v5"
+            text, ALLOWED, 21, deployed
         )
     ]
 
 
 class StaleDeploymentClaims(unittest.TestCase):
     def test_current_facts_pass(self):
-        text = (
+        v6_text = (
+            "本机已部署 v0.2.0-preview.31；data server 21 data tools，"
+            "capability revision `generic-data-v6`，10 acquisition tools。\n"
+        )
+        self.assertEqual(claims(v6_text), [])
+        v5_text = (
             "本机已部署 v0.2.0-preview.31；data server 21 data tools，"
             "capability revision `generic-data-v5`，10 acquisition tools。\n"
         )
-        self.assertEqual(claims(text), [])
+        self.assertEqual(claims(v5_text, "generic-data-v5"), [])
 
-    def test_v6_claim_is_flagged_while_deployed_revision_is_v5(self):
-        # The deployed instance still declares v5 until the deploy-day
-        # switch; a current region naming the code revision (v6) is stale.
-        text = "当前部署注册 21 data tools 并宣告 `generic-data-v6`。\n"
+    def test_v5_claim_is_flagged_while_deployed_revision_is_v6(self):
+        # Post-switch the deployed instance declares v6; a current region
+        # naming the previous deployed revision (v5) is stale.
+        text = "当前部署注册 21 data tools 并宣告 `generic-data-v5`。\n"
         found = claims(text)
         self.assertEqual(len(found), 1, found)
-        self.assertIn("generic-data-v6", found[0])
+        self.assertIn("generic-data-v5", found[0])
+        self.assertEqual(
+            claims("当前部署注册 21 data tools 并宣告 `generic-data-v6`。\n"), []
+        )
 
     def test_the_old_sentences_are_flagged(self):
         # The wording that main@9189b68 still carried after the preview.31 deploy.
