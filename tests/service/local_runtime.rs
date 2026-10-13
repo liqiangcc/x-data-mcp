@@ -211,7 +211,7 @@ fn real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal()
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(tools.len(), 21);
+    assert_eq!(tools.len(), 23);
     let caps = session.call("get_data_capabilities", json!({}), false);
     assert_eq!(caps["production_ready"], false);
     let names: std::collections::BTreeSet<_> =

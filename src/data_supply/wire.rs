@@ -586,6 +586,134 @@ pub struct Cancellation {
     pub state_revision: u64,
 }
 
+/// `plan_market_update` input (generic-data-v7): a dataset-tagged request
+/// for a compact, deterministic whole-catalog update plan. `end_date`
+/// defaults to the Asia/Shanghai acceptance date and may only be earlier —
+/// a future target is rejected before any work is described.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "dataset", deny_unknown_fields)]
+pub enum PlanMarketUpdate {
+    #[serde(rename = "market.daily")]
+    Daily {
+        contract_version: ContractVersion,
+        end_date: Option<NaiveDate>,
+    },
+    #[serde(rename = "market.yearly")]
+    Yearly {
+        contract_version: ContractVersion,
+        end_date: Option<NaiveDate>,
+    },
+}
+impl PlanMarketUpdate {
+    pub fn dataset(&self) -> Dataset {
+        match self {
+            Self::Daily { .. } => Dataset::Daily,
+            Self::Yearly { .. } => Dataset::Yearly,
+        }
+    }
+    pub fn end_date(&self) -> Option<NaiveDate> {
+        match self {
+            Self::Daily { end_date, .. } | Self::Yearly { end_date, .. } => *end_date,
+        }
+    }
+}
+/// Per-class plan outcome counts; `eligible` is the only executable class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanCounts {
+    pub eligible: u64,
+    pub already_current: u64,
+    pub absent: u64,
+    pub ineligible: u64,
+}
+/// Count of non-eligible entities grouped by a fixed reason string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanReasonCount {
+    pub reason: String,
+    pub count: u64,
+}
+/// `plan_market_update` output: a compact digest-bound summary. `plan_id`
+/// is the sha256 of the deterministic canonical plan — the same state and
+/// the same `end_date` always produce the same id, and any catalog, head,
+/// gap or generation change produces a different one. The plan carries no
+/// entity list; eligibility detail stays server-side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanView {
+    pub plan_id: String,
+    pub dataset: Dataset,
+    pub contract_version: ContractVersion,
+    pub generation_ref: Option<String>,
+    pub target_day: NaiveDate,
+    pub counts: PlanCounts,
+    pub ineligible_reasons: Vec<PlanReasonCount>,
+    pub snapshot_time: DateTime<Utc>,
+}
+/// `run_market_update` input: binds the request to a plan digest the
+/// server re-derives under one read snapshot — a digest mismatch is a
+/// `plan_stale` refusal, never a partial execution.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "dataset", deny_unknown_fields)]
+pub enum RunMarketUpdate {
+    #[serde(rename = "market.daily")]
+    Daily {
+        contract_version: ContractVersion,
+        request_id: String,
+        target_day: NaiveDate,
+        plan_id: String,
+    },
+    #[serde(rename = "market.yearly")]
+    Yearly {
+        contract_version: ContractVersion,
+        request_id: String,
+        target_day: NaiveDate,
+        plan_id: String,
+    },
+}
+impl RunMarketUpdate {
+    pub fn dataset(&self) -> Dataset {
+        match self {
+            Self::Daily { .. } => Dataset::Daily,
+            Self::Yearly { .. } => Dataset::Yearly,
+        }
+    }
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::Daily { request_id, .. } | Self::Yearly { request_id, .. } => request_id,
+        }
+    }
+    pub fn target_day(&self) -> NaiveDate {
+        match self {
+            Self::Daily { target_day, .. } | Self::Yearly { target_day, .. } => *target_day,
+        }
+    }
+    pub fn plan_id(&self) -> &str {
+        match self {
+            Self::Daily { plan_id, .. } | Self::Yearly { plan_id, .. } => plan_id,
+        }
+    }
+}
+/// `run_market_update` acceptance: the admitted task identity plus the
+/// plan the request bound. The eligible set can cover the whole catalog,
+/// so the view returns counts, not item ids — progress and per-item
+/// outcomes are paged through `get_task_progress`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanRunAcceptance {
+    pub request_id: String,
+    pub task_id: String,
+    pub dataset: String,
+    pub contract_version: String,
+    pub plan_id: String,
+    pub reused: bool,
+    pub status: TaskStatus,
+    pub item_count: u64,
+    pub plan_counts: PlanCounts,
+    pub runtime_readiness: Readiness,
+    pub blocking_reasons: Vec<BlockingReason>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfirmedGap {

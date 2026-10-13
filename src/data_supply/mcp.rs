@@ -300,7 +300,7 @@ impl DataApi {
                     description: e.description.into(),
                     dataset,
                     contract_version: ContractVersion::V1,
-                    implemented: true,
+                    implemented: e.implemented,
                     operator_only: e.operator_only,
                     runtime_readiness: if block.is_some() {
                         Readiness::Blocked
@@ -340,7 +340,7 @@ impl DataApi {
             production_blocking_reasons.push(self.source_block());
         }
         encode(Capabilities {
-            capability_revision: "generic-data-v6".into(),
+            capability_revision: "generic-data-v7".into(),
             items,
             max_batch_entities: 100,
             max_page_size: 1000,
@@ -782,6 +782,10 @@ impl DataApi {
             | Handler::Task
             | Handler::Request
             | Handler::Cancel => self.control_call(name, input),
+            Handler::PlanMarketUpdate | Handler::RunMarketUpdate => Err(ApiError::new(
+                "not_implemented",
+                "plan/run market update is declared under generic-data-v7 but not implemented in this build",
+            )),
             Handler::Query => {
                 let reply = self
                     .queries
@@ -867,6 +871,8 @@ impl ToolHandler for DataApi {
                     | "update_data"
                     | "backfill_data"
                     | "republish_data"
+                    | "plan_market_update"
+                    | "run_market_update"
             );
         let _rpc = crate::stage_trace::span_named("rpc.", name);
         self.dispatch(name, input).map_err(|mut e| {
@@ -878,6 +884,7 @@ impl ToolHandler for DataApi {
                             "update_data"
                                 | "backfill_data"
                                 | "republish_data"
+                                | "run_market_update"
                                 | "verify_publication_result"
                                 | "inspect_verification_task"
                                 | "verify_data_gap"
@@ -892,6 +899,7 @@ impl ToolHandler for DataApi {
                             | "update_data"
                             | "backfill_data"
                             | "republish_data"
+                            | "run_market_update"
                             | "verify_publication_result"
                             | "inspect_verification_task"
                             | "verify_data_gap"

@@ -11,9 +11,13 @@ EXPECTED_LEGACY_SCHEMA = 18
 # Fresh `init`/`init20` output schema (code constant). The deployed preview
 # instance runs schema 21 (fresh rebuild at the v6 switch).
 EXPECTED_COMPACT_SCHEMA = 21
-EXPECTED_DATA_TOOLS = 21
+EXPECTED_DATA_TOOLS = 23
+# The deployed instance still reports v6 / 21 tools: documentation
+# "current" regions describe deployment facts, so stale-claim checks
+# compare against the deployed constants, not the code constants.
+EXPECTED_DEPLOYED_DATA_TOOLS = 21
 EXPECTED_ACQUIRE_TOOLS = 10
-EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v6"
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v7"
 # The strict Skills describe the DEPLOYED contract (v6 after the switch).
 # The same deployed revision keys the strict-Skill checks and the
 # stale-deployment-claim check below: the "current" regions describe the
@@ -305,7 +309,7 @@ def main() -> int:
         for lineno, kind, line in stale_deployment_claims(
             region,
             allowed_previews,
-            EXPECTED_DATA_TOOLS,
+            EXPECTED_DEPLOYED_DATA_TOOLS,
             EXPECTED_SKILL_CAPABILITY_REVISION,
         ):
             check(
