@@ -342,7 +342,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         }
         // Items past a cancellation break (or never reached) still take
         // the authoritative per-item path.
-        for item_id in &item_ids[offset..] {
+        for item_id in &item_ids[offset.min(item_ids.len())..] {
             self.run_item(task_id, item_id, provider)?;
         }
         Ok(Some(()))

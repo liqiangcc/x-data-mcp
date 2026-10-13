@@ -1918,7 +1918,7 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             }
             offset += crate::market_update::runner::EXEC_CHUNK;
         }
-        for item_id in &item_ids[offset..] {
+        for item_id in &item_ids[offset.min(item_ids.len())..] {
             self.run_item(task_id, item_id)?;
         }
         Ok(Some(()))
