@@ -248,8 +248,29 @@ class PreflightChecks(unittest.TestCase):
         g = self._mcp(caps={"capability_revision": "generic-data-v5",
                             "production_ready": False, "items": []})
         res = self._run_preflight(g, [])
-        self.assertFalse(res["checks"]["capability_revision_v6"])
-        self.assertFalse(res["checks"]["data_tools_21"])
+        self.assertFalse(res["checks"]["capability_revision_expected"])
+        self.assertFalse(res["checks"]["data_tools_expected"])
+
+    def test_v7_expectations_via_env(self):
+        caps = {"capability_revision": "generic-data-v7",
+                "production_ready": False,
+                "items": [{"tool_name": "g", "active_generation_ref": "g1"}]
+                + [{"tool_name": f"t{i}"} for i in range(22)]}
+        res = self._run_preflight(
+            self._mcp(caps=caps), [],
+            {"PROD_APPEND_V6_EXPECT_CAPABILITY": "generic-data-v7",
+             "PROD_APPEND_V6_EXPECT_DATA_TOOLS": "23"})
+        self.assertTrue(res["checks"]["capability_revision_expected"])
+        self.assertTrue(res["checks"]["data_tools_expected"])
+        self.assertEqual(res["expected"]["data_tools"], 23)
+
+    def test_v7_defaults_refused(self):
+        caps = {"capability_revision": "generic-data-v7",
+                "production_ready": False,
+                "items": [{"tool_name": f"t{i}"} for i in range(23)]}
+        res = self._run_preflight(self._mcp(caps=caps), [])
+        self.assertFalse(res["checks"]["capability_revision_expected"])
+        self.assertFalse(res["checks"]["data_tools_expected"])
 
 
 class ExpectedAbsent(unittest.TestCase):
