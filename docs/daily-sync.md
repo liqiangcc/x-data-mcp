@@ -3,19 +3,18 @@
 ## 当前状态
 
 > 部署与运行事实以 [STATUS](STATUS.md) 为准，性能与容量目标以 [SLO](SLO.md) 为准。
-> 本节下文标为“历史”的段落（早期实测、15min 门禁沿革、preview.29 时期的部署记录）已被取代，仅作历史记录。
-
 **OPERATIONAL OWNER-ONLY PREVIEW / CLASS-SPECIFIC SLOS**
 
 当前运行时包含两个 MCP server（本机 systemd 部署；部署版本、主机、generation 等机器事实
-见 [STATUS](STATUS.md)，撰写时为 v0.2.0-preview.31）：
+见 [STATUS](STATUS.md)）：
 
 - `x-data-acquire`：远端文件探测、下载和本地安装，10 acquisition tools。
 - `x-data-mcp`：任务、版本、发布、查询、核实和计算，21 data tools（含只读
-  `get_yearly_base_years`），capability revision `generic-data-v5`；strict Skill
+  `get_yearly_base_years`），capability revision `generic-data-v6`（market
+  单版本序列：version_id=内容 hex，latest-only）；strict Skill
   会话遇 revision 不匹配即停止。
 
-显式 init 的新库使用 fresh compact schema 20；`SCHEMA_VERSION=18` 仅为 legacy
+显式 init 的新库使用 fresh compact schema 21；`SCHEMA_VERSION=18` 仅为 legacy
 upgrade source schema（既有库升级来源），不是当前部署 schema。
 
 immutable generation、每代 #131 验证后条件激活、任务受理时冻结

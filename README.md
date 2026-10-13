@@ -34,16 +34,14 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 ## 当前状态
 
 > 部署与运行事实以 [docs/STATUS.md](docs/STATUS.md) 为准，性能与容量目标以 [docs/SLO.md](docs/SLO.md) 为准。
-> 部署版本、主机、generation、数据量等机器事实只在 STATUS 维护，本节不复述。2026-10-10 起同代、跨代日线与年线统一为 write-loop <600s hard。
-> 本节下文标为“历史”的段落（早期实测、15min 门禁沿革）已被取代，仅作历史记录。
-
 **OWNER-ONLY OPERATIONAL PREVIEW — external distribution not authorized.**
 
 本机以 systemd 运行已部署的双 MCP server 拓扑：`x-data-mcp-data`（21 data tools，
-含只读 `get_yearly_base_years`，capability revision `generic-data-v5`）与
-`x-data-mcp-acquire`（10 acquisition tools）。部署版本（撰写时为 v0.2.0-preview.31）、
-socket 路径、generation 与数据量见 [docs/STATUS.md](docs/STATUS.md)。
-显式 `task_sqlite init` 的新库使用 fresh compact schema 20；工具数量不是稳定契约，
+含只读 `get_yearly_base_years`，capability revision `generic-data-v6`，market
+单版本序列：version_id=内容 hex，latest-only）与
+`x-data-mcp-acquire`（10 acquisition tools）。部署版本、socket 路径、
+generation 与数据量见 [docs/STATUS.md](docs/STATUS.md)。
+显式 `task_sqlite init` 的新库使用 fresh compact schema 21；工具数量不是稳定契约，
 客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
 
 已实现并在真实 generation 上执行过：immutable generation 生命周期
@@ -82,7 +80,7 @@ unsupported-metadata fallback 仍按
 external distribution is not authorized；它不是“服务未运行”的同义词。
 
 schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
-（既有库显式 upgrade 的来源版本），`COMPACT_SCHEMA_VERSION=20` 是 fresh 部署的
+（既有库显式 upgrade 的来源版本），`COMPACT_SCHEMA_VERSION=21` 是 fresh 部署的
 compact schema。Issue/Epic 中的“v15”是交付规划标签，不是 schema 编号。
 
 唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →

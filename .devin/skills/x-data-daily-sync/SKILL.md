@@ -52,7 +52,8 @@ allowed-tools:
 - 只有远端 `day` role 明确不同于当前 active generation（`pending_roles` 包含 `day`），才允许创建 acquisition task。
 - `base_industry` / `gbbq` pending 但 `day` 未 pending 时，只报告 pending source changes 并结束；
   不下载、不验证、不激活 generation，也不创建数据任务。
-- 部署后空库重建是独立、必须由用户明确提出的操作；不得从 `data_versions=0` 自动推断
+- 部署后空库重建是独立、必须由用户明确提出的操作；不得从 `list_data_versions`
+  返回空列表自动推断
   重建授权，也不得借“每日同步”隐式执行。用户明确要求空库重建时，必须报告拟使用的
   verified active generation、其数据截止日与远端 role 状态，再按单独确认的重建范围执行。
 
@@ -65,8 +66,8 @@ allowed-tools:
   - `implementation.generation_contract_version` 必须等于 `official-generation-v1`
 - `mcp__x-data-mcp__get_data_capabilities`（按当前 schema 传 `{}`，不得附加
   `contract_version`）：
-  - `capability_revision` 必须等于 `generic-data-v5`
-    （v5 起 `get_data_availability` 的 `related_tasks` 只含在途任务与最近 5 个已结束任务，另有 `related_tasks_total` / `related_tasks_truncated`；绑定 v4 的旧 strict Skill 遇到 v5 即按下一条停止，不得静默适配。）
+  - `capability_revision` 必须等于 `generic-data-v6`
+    （v6 起 market 数据为单版本序列：`version_id` 为内容 hex，`list_data_versions` 每实体至多一项；显式 pin 读取被取代时报 `stale_version`，写路径 stale base 为 item 级 `needs_verification`（`STALE_BASE:` 前缀），均须重取当前 head 重试，不得静默适配；v5 的 `related_tasks` 口径沿用，只含在途任务与最近 5 个已结束任务，另有 `related_tasks_total` / `related_tasks_truncated`；绑定 v5 的旧 strict Skill 遇到 v6 即按下一条停止，不得静默适配。）
 
 任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。记录 `schema_digest`、`active_generation_ref`、`runtime_readiness`、`blocking_reasons` 作为事实。
 
@@ -147,6 +148,8 @@ catalog dataset 枚举实体，再按 ≤100 实体切成 `batch` selection。
 1. 对 3.0 中已有 head 的实体构造 item：
    `{"entity":{"exchange","code"},"base_version_id":<head version_id>,"start_date":<last_record+1 日>,"end_date":<目标交易日>}`。
    `end_date` 取本次 generation 快照的实际最后交易日；取不到时用当前日期——窗口内无源 bar 只会该 item fail-closed，不影响其他 item。
+   被取代的 base 受理为 item 级 `needs_verification`（`STALE_BASE:` 前缀）：
+   重取当前 head `version_id` 后重提该 item，不得静默落到新 head。
 2. items 按 ≤100 分 chunk，逐 chunk 调 `update_data`（`{"dataset":"market.daily","contract_version":"v1","request_id":<唯一>,"items":[…]}`），串行：一个任务终态后再提下一个。
 3. 已有 head 的实体**不得**改用 `start_collection`（会返回 `existing daily head requires the update_data range path`）。
 4. `selection:{"kind":"default"}` 只在解析结果 ≤100 实体时可用；全市场默认使用显式 items。
@@ -181,7 +184,7 @@ active generation 开始首采。
 - `query_data` 抽样若干实体最新交易日数据（`selection:{"kind":"single"|"batch"}`，`filter:{"kind":"daily",...}`，`version:{"kind":"latest_per_entity"}`）。
 - 汇报：active generation、published/no_change 计数、最新数据日期、全部 request/task refs。
 
-可选：派生 `market.yearly` — yearly 只接受显式 items（无 default selection，collection 亦被 worker 设计性拒绝）：先用同一批 catalog 实体对 market.daily / market.yearly 分别按 ≤100 batch 调 `get_data_availability` 或 `list_data_versions`，取得当前 daily head `version_id` 与当前 yearly head；每 ≤100 实体 chunk 再调一次 `get_yearly_base_years`（`{"contract_version":"v1","items":[{entity, base_daily_version_id:<daily head>}]}`，**不传 `start_year`/`end_year`**，用默认 1..9999 以免隐藏未来年）取 `present_years`——先把大于「Asia/Shanghai 当前年份」的年份作为异常入报告并阻止无条件 PASS，再令 `resolved` 实体的 `years = present_years ∩ 目标窗口`（只交当前年时即 `[<当前年>] ∩ present_years`），交集为空 → 该实体不提交 item、记 empty；`unavailable` 逐项入报告且本次结果不得算无条件 PASS；未来年按上海时区判定（非 UTC），记异常上报，不静默丢弃。随后按 ≤100 分 chunk 调 `update_data` `dataset:"market.yearly"`，每项 `{entity, base_daily_version_id:<daily head>, years:[<解析后年份>], publication:{"mode":"current_head","expected_yearly_head":<当前 yearly head version_id 或 null>}}`；串行轮询与 fail-closed 判定同上。`selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
+可选：派生 `market.yearly` — yearly 只接受显式 items（无 default selection，collection 亦被 worker 设计性拒绝）：先用同一批 catalog 实体对 market.daily / market.yearly 分别按 ≤100 batch 调 `get_data_availability` 或 `list_data_versions`，取得当前 daily head `version_id` 与当前 yearly head；每 ≤100 实体 chunk 再调一次 `get_yearly_base_years`（`{"contract_version":"v1","items":[{entity, base_daily_version_id:<daily head>}]}`，**不传 `start_year`/`end_year`**，用默认 1..9999 以免隐藏未来年）取 `present_years`——先把大于「Asia/Shanghai 当前年份」的年份作为异常入报告并阻止无条件 PASS，再令 `resolved` 实体的 `years = present_years ∩ 目标窗口`（只交当前年时即 `[<当前年>] ∩ present_years`），交集为空 → 该实体不提交 item、记 empty；`unavailable` 逐项入报告且本次结果不得算无条件 PASS——其中 `reason_code:"base_superseded"` 表示 pin 的日线 id 已被新 head 取代（v6 单版本下为常态过期，非损坏），应重取当前 daily head 重试该实体；`base_unavailable`/`integrity_failure` 属 fail-closed；未来年按上海时区判定（非 UTC），记异常上报，不静默丢弃。年线 stale 判读：`query_data`/`get_data_availability` 行上的 `stale:"behind"` + `as_of_day` 表示年线对该 base 日仍正确、可照常使用；`status/availability:"absent"` + `reason:"daily_replaced_since_derivation"`（base 后有日线 replace）或 `"value_semantics_changed"`（来源/单位/复权证据变化）表示该年线已失效，必须按新 daily base 重新派生，不得当现存 head 处理。随后按 ≤100 分 chunk 调 `update_data` `dataset:"market.yearly"`，每项 `{entity, base_daily_version_id:<daily head>, years:[<解析后年份>], publication:{"mode":"current_head","expected_yearly_head":<当前 yearly head version_id 或 null>}}`；串行轮询与 fail-closed 判定同上。`selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
 
 ## 5. 超时与结果不明的恢复（绝不盲发新 ID）
 
