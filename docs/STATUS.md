@@ -38,17 +38,17 @@
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 当前 generation | `87322997b21ee492224b42984c7fa5df865840d26f04bee628e54ce74a0e0de6`，2026-10-08T09:06:02Z 激活 | `generations/active-generation.json` |
-| 前一 generation | `a49c314b8f910aa68d0a66b9f3b3d08bf0d57f5b215a8b77a973786391e512a1`（字节只在 ecs 冷备中） | 同上、迁移报告 |
-| 数据库 | `state/preview.sqlite`，fresh compact schema 21，TODO(DEPLOY)：<部署日 `ls -l` 实测> B | `ls -l` |
+| 当前 generation | `2d5851a460eeae86cb84aa58e09f1c46bed6a9092aafd7170ab3c9367313add6`，2026-10-13T06:52Z 激活（Skill 会话 acquire→verify→activate） | `generations/active-generation.json` |
+| 前一 generation | `87322997b21ee492224b42984c7fa5df865840d26f04bee628e54ce74a0e0de6`（重建基线，字节保留于本机 gen 根目录）；更早的 `a49c314b…` 仅在 ecs 冷备 | 同上、迁移报告 |
+| 数据库 | `state/preview.sqlite`，fresh compact schema 21，854,990,848 B（2026-10-13 实测，quick_check ok，staged_records 0） | `ls -l` |
 | 目录 | 5,228 个实体 | 重建驱动读回 |
-| 日线 | 已发布 5,224 个；head 5,209 个为 2026-10-08，其余为更早的最后交易日（停牌/退市类） | 重建驱动读回 |
-| 年线 | 5,224 个 published，0 失败，0 unknown | 重建驱动读回 |
+| 日线 | 已发布 5,224 个；5,212 个 head 为 2026-10-12，其余 12 家停牌/无数据实体为更早的最后交易日（fail-closed：`no bars inside the accepted range`） | 追加驱动读回 |
+| 年线 | 5,224 个 published，随 2026-10-13 追加全部重派生至 10-12 的 daily base | 追加驱动读回 |
 | 缺失 | `sz.001381`、`sz.301569`、`sz.301660`、`sz.301718`（官方 hsjday 缺成员，4 个日线任务条目 fail-closed，预期） | 重建驱动读回 |
 | 与迁移报告的差异 | 迁移报告记录 `sz.001246` 为空、年线 5,223 个 succeeded；本次重建该实体有 2 条日线（2026-09-30、2026-10-08）和 1 条年线，年线共 5,224 个。读回的这两项预期值（5,223 与 `sz.001246` 为空）因此不符，判断为预期值过时而非故障，待 owner 确认 | `deploy31-readback.json` |
 | 重建耗时 | 全新重建基于 generation 87322997（数据截止 2026-10-08）：collect write-loop 308.4s（catalog + 日线 53 块，含 4 个缺成员条目）+ 年线首次 write-loop 208.9s；预览演练对照 209.7s / 224.3s | 重建驱动 JSON（`/root/x-deploy-preview32-out/out/rebuild-*.json`） |
 
-部署后首次增量更新（2026-10-12 收盘后，跨代 Append，验证 GOAL-008 关闭条件）：**待执行**。
+部署后首次增量更新（2026-10-12 收盘后，跨代 Append，验证 GOAL-008 关闭条件）：2026-10-13 执行——Skill 会话先完成新 generation `2d5851a4…` 的 acquire→verify→activate（06:52Z），随后用 Skill 逐页枚举 5,228 个目录成员做增量，27 分钟内未提交任何 `update_data`，速度不足被叫停；10-09 与 10-12 的追加改由程序化驱动 `prod_append_v6.py`（PR #347，未合并）完成：daily write-loop 311.4s（53 块、5,224 项）+ 年线重聚合 239.9s（53 任务），读回零差异（published 5,224、落后恰 12 家 fail-closed、staged_records=0）。批量更新工具（plan/run，generic-data-v7）在设计中。#304 的有效 PASS 仍为 3/10（均为 unchanged）。
 
 ## 进行中
 
@@ -72,6 +72,7 @@
 | `/opt/x-data-mcp-preview/mcp.json` 的 `x-data-mcp-demo` 指向一个不存在的 sqlite | 配置过时 | `ls` |
 | `src/acquire/fetch.rs` 在未设置 `X_DATA_MCP_TDX_FETCH` 时，回退到编译期的 `CARGO_MANIFEST_DIR` | 不带该变量启动的实例无法下载 | 源码 |
 | 生产服务、私有性能栈和多个 agent 会话共用 1 个物理核和 1.9GiB 内存；`/tmp` 是内存盘 | 2026-10-10 约 04:34Z 过载重启；测量结果有噪声 | 运维观察 |
+| Skill 日更依赖 AI 会话逐页枚举目录实体（页大小受限、随目录规模线性增长；5,228 实体实测 27 分钟未提交一条更新） | 有更新那天的同步在 Skill 口径下不可用；已改由程序化追加驱动完成，批量更新工具（generic-data-v7）设计中 | 2026-10-13 首次增量实测 |
 | AGENTS.md 的环境段、README「当前状态」、`docs/daily-sync.md`「当前状态」仍写 ecs-node / preview.29 / generation `2e9183…` | 读取这些文档的 agent 会被误导 | 本次核对；这三处已加指向本文件的说明 |
 
 已关闭：#324（stopped-write 重写 `outcome_json`，随 PR #323 修复）；受理体检扫描全部历史（随 PR #323 修复，2026-10-12 部署后生产已包含）。
