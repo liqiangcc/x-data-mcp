@@ -1,5 +1,10 @@
 # 固定 daily version 的本地年线核心
 
+> **年线语义的模型状态。** 下文「固定一个已发布 daily version」是版本链模型（已部署的 schema 20）。
+> 待合并的 schema 21 单版本模型中，年线派生**当前日线序列**，血统记录派生时的日线摘要与事件 seq，
+> 并按 fresh / behind / invalid 分类（日线追加使年线落后但仍可读，除权使年线失效）。聚合规则本身
+> （自然年分组、OHLC、量额求和条件、as_of 与未结束年度）不变。见 [单版本（latest-only）行情存储模型](latest-only-storage.md)。
+
 Issue #60 承接 #3：`yearly::aggregate` 只读取一个由调用方从已发布存储取得的
 `EffectiveVersion`，以其 Asia/Shanghai 交易日期按自然年分组；支持全部或显式年度集合。
 该纯函数能校验输入内容，不能证明任意内存对象确实曾发布；发布身份验证仍由存储/用例负责。
