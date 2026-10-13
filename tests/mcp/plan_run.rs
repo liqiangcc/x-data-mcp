@@ -561,7 +561,7 @@ fn planrun_scales_to_market_wide_membership() {
         .unwrap();
     use x_data_mcp::official_market::DailyCollectionRepository;
     use x_data_mcp::task_control::{
-        Change, Command, CommandKey, FrozenWork, RequestOutcome, TaskRepository,
+        Command, CommandKey, FrozenWork, RequestOutcome, TaskRepository,
     };
     // Reuse the rig's live backend handle — `MarketBackend::open` cannot
     // take a second lease on the same database file.
