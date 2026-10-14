@@ -1848,7 +1848,7 @@ fn planrun_orphan_closes_as_interrupted_and_resumes_to_the_same_state() {
 
     // Service restart under a new run id: the startup reconcile closes
     // the orphan in the same transaction.
-    assert_eq!(rig_a.tasks.reconcile("run-b").unwrap(), 1);
+    assert_eq!(rig_a.tasks.reconcile_plan_run("run-b").unwrap(), 1);
     let closed = rig_a.tasks.read_task(&task_a).unwrap().unwrap();
     assert_eq!(closed.task.status, Status::Interrupted);
     let interruption = &closed.task.result.as_ref().unwrap()["interruption"];
@@ -1896,7 +1896,7 @@ fn planrun_orphan_closes_as_interrupted_and_resumes_to_the_same_state() {
     // `accept.gate.orphan` no longer refuses this database at startup.
     assert!(rig_a.tasks.registry_sweep().unwrap().is_empty());
     // Reconcile is idempotent.
-    assert_eq!(rig_a.tasks.reconcile("run-b").unwrap(), 0);
+    assert_eq!(rig_a.tasks.reconcile_plan_run("run-b").unwrap(), 0);
     assert_eq!(rig_a.tasks.read_task(&task_a).unwrap().unwrap(), closed);
     drop(c);
 
@@ -2002,12 +2002,15 @@ fn planrun_orphan_closes_as_interrupted_and_resumes_to_the_same_state() {
     );
 }
 
-/// A plan-run orphan that never started also closes on restart: no item
-/// ran, occupancy still releases, and a same-run explicit task keeps the
-/// needs_verification path — the auto-close is scoped to the plan-run
-/// contract only.
+/// A plan-run orphan and an explicit `update_data` orphan die with the
+/// same run. The startup reconcile (`reconcile_plan_run`, the entry
+/// `data_service` calls) closes only the plan-run task — the explicit
+/// task's stored snapshot, revision and occupancy stay byte-for-byte
+/// identical; its needs_verification marking remains a visible-state
+/// decision, never a startup write. The generic `reconcile` keeps its
+/// old semantics for callers that opt in.
 #[test]
-fn pending_planrun_orphan_interrupts_and_explicit_tasks_keep_verification() {
+fn startup_reconcile_closes_only_planrun_orphans_and_leaves_explicit_tasks_intact() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use x_data_mcp::task_control::{
         Command, CommandKey, FrozenWork, ItemSpec, RequestOutcome, Stage, Status,
@@ -2016,26 +2019,27 @@ fn pending_planrun_orphan_interrupts_and_explicit_tasks_keep_verification() {
     let p = plan(&r.api, "market.daily");
     let accepted = run(&r.api, "market.daily", "run-orphan", &p);
     let task_id = accepted["task_id"].as_str().unwrap().to_string();
-    // An explicit-contract task accepted by the same dying run.
+    // An explicit update_data task (CONTRACT_VERSION) accepted by the
+    // same dying run — a scope disjoint from the planned members.
     let scopes: std::collections::BTreeSet<String> =
-        std::iter::once("doc:orphan".to_string()).collect();
+        std::iter::once("market:xx.999999:day".to_string()).collect();
     let RequestOutcome::Task(other) = r
         .tasks
         .accept(
-            "manual-orphan",
+            "explicit-orphan",
             &Command {
                 key: CommandKey {
-                    operation: "index".into(),
-                    dataset: "test_documents".into(),
-                    contract_version: "v1".into(),
+                    operation: "update_data".into(),
+                    dataset: "market.daily".into(),
+                    contract_version: x_data_mcp::market_update::tasks::CONTRACT_VERSION.into(),
                 },
                 intent: json!({}),
             },
             &FrozenWork {
                 items: vec![ItemSpec {
-                    item_id: "doc".into(),
-                    target: json!({"document":"orphan"}),
-                    progress_unit: "document".into(),
+                    item_id: "market:xx.999999:day".into(),
+                    target: json!({"entity":"xx.999999"}),
+                    progress_unit: "entity".into(),
                     frozen_inputs: json!({}),
                     scope_keys: scopes.clone(),
                 }],
@@ -2049,10 +2053,11 @@ fn pending_planrun_orphan_interrupts_and_explicit_tasks_keep_verification() {
         .record
         .outcome
     else {
-        panic!("manual acceptance must bind a task")
+        panic!("explicit acceptance must bind a task")
     };
-    // Restart: reconcile closes both orphans in one pass.
-    assert_eq!(r.tasks.reconcile("run-b").unwrap(), 2);
+    let explicit_before = r.tasks.read_task(&other.task.task_id).unwrap().unwrap();
+    // Restart: the startup reconcile closes only the plan-run orphan.
+    assert_eq!(r.tasks.reconcile_plan_run("run-b").unwrap(), 1);
     let closed = r.tasks.read_task(&task_id).unwrap().unwrap();
     assert_eq!(closed.task.status, Status::Interrupted);
     let interruption = &closed.task.result.as_ref().unwrap()["interruption"];
@@ -2065,17 +2070,42 @@ fn pending_planrun_orphan_interrupts_and_explicit_tasks_keep_verification() {
             .iter()
             .all(|i| i.stage == Stage::Pending && i.outcome.is_none())
     );
-    // The explicit task is untouched: still needs_verification, claims held.
-    let other = r.tasks.read_task(&other.task.task_id).unwrap().unwrap();
-    assert_eq!(other.task.status, Status::NeedsVerification);
-    assert_eq!(other.claims.len(), 1);
-    // Idempotent: neither task is touched again.
-    assert_eq!(r.tasks.reconcile("run-b").unwrap(), 0);
-    assert_eq!(r.tasks.read_task(&task_id).unwrap().unwrap(), closed);
+    // The explicit orphan's persisted state is byte-for-byte untouched —
+    // same status, revision, items and claims — while its *visible*
+    // status under the new run still reports needs_verification.
     assert_eq!(
         r.tasks.read_task(&other.task.task_id).unwrap().unwrap(),
-        other
+        explicit_before
     );
+    assert_eq!(
+        explicit_before.visible_status("run-b"),
+        Status::NeedsVerification
+    );
+    assert_eq!(explicit_before.claims.len(), 1);
+    let c = rusqlite::Connection::open(r.tasks.path()).unwrap();
+    assert_eq!(
+        sql_count(
+            &c,
+            "SELECT count(*) FROM scope_occupancy WHERE task_id=?1",
+            &other.task.task_id
+        ),
+        1
+    );
+    // Idempotent for the scoped entry; the generic reconcile still
+    // persists the needs_verification marking when a caller opts in.
+    assert_eq!(r.tasks.reconcile_plan_run("run-b").unwrap(), 0);
+    assert_eq!(r.tasks.read_task(&task_id).unwrap().unwrap(), closed);
+    assert_eq!(r.tasks.reconcile("run-b").unwrap(), 1);
+    assert_eq!(
+        r.tasks
+            .read_task(&other.task.task_id)
+            .unwrap()
+            .unwrap()
+            .task
+            .status,
+        Status::NeedsVerification
+    );
+    assert_eq!(r.tasks.reconcile("run-b").unwrap(), 0);
     // The restarted service's registry and plan paths are unblocked.
     assert!(r.tasks.registry_sweep().unwrap().is_empty());
     let api_b = DataApi::new_with_backend(
@@ -2125,5 +2155,75 @@ fn commit_task_row_writes_do_not_scale_with_task_size() {
     assert_eq!(
         task.items.iter().filter(|i| i.outcome.is_some()).count(),
         100
+    );
+}
+
+/// Startup reconcile on a market-scale pending orphan stays bounded: the
+/// snapshot path materializes the whole 5,201-item task once — the close
+/// writes the task row and item stage resets in a single transaction.
+/// Asserts the wall-clock (<10s) and VmHWM-rise (<300MB) budgets on the
+/// CI host so the restart cost is measured, not assumed.
+#[test]
+fn planrun_orphan_reconcile_at_market_scale_stays_bounded() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    const EXTRA: usize = 5_200;
+    let mut codes = vec!["600006".to_string()];
+    let mut symbols = vec!["sh.600006".to_string()];
+    let mut extra = Vec::with_capacity(EXTRA);
+    for i in 0..EXTRA {
+        let code = format!("{:06}", 700_000 + i);
+        extra.push(format!("sh.{code}"));
+        symbols.push(format!("sh.{code}"));
+        codes.push(code);
+    }
+    let catalog = SqliteCatalog::new(r.tasks.clone());
+    catalog
+        .publish_fixture(
+            "catalog-2",
+            catalog_fixture(
+                &codes.iter().map(String::as_str).collect::<Vec<_>>(),
+                &vec!["sh"; codes.len()],
+            ),
+            Some("catalog-1"),
+        )
+        .unwrap();
+    seed_daily_heads(&r, &extra);
+    let p = plan(&r.api, "market.daily");
+    let accepted = run(&r.api, "market.daily", "req-scale", &p);
+    assert_eq!(accepted["item_count"], symbols.len() as u64);
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+
+    // Simulated restart: the task is a pending orphan under a new run.
+    let hwm0 = vmhwm_kb();
+    let started = std::time::Instant::now();
+    let closed_n = r.tasks.reconcile_plan_run("run-b").unwrap();
+    let wall = started.elapsed();
+    let hwm_delta_kb = vmhwm_kb().saturating_sub(hwm0);
+    eprintln!(
+        "orphan reconcile scale: {} items, {wall:?}, VmHWM +{hwm_delta_kb}kB",
+        symbols.len()
+    );
+    assert_eq!(closed_n, 1);
+    assert!(
+        wall < std::time::Duration::from_secs(10),
+        "reconcile took {wall:?} > 10s"
+    );
+    assert!(
+        hwm_delta_kb < 300 * 1024,
+        "reconcile VmHWM delta {hwm_delta_kb}kB exceeds 300MB"
+    );
+    let closed = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(
+        closed.task.status,
+        x_data_mcp::task_control::Status::Interrupted
+    );
+    assert!(closed.claims.is_empty());
+    assert_eq!(closed.items.len(), symbols.len());
+    assert!(
+        closed
+            .items
+            .iter()
+            .all(|i| i.stage == x_data_mcp::task_control::Stage::Pending && i.outcome.is_none())
     );
 }

@@ -78,8 +78,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Plan-run tasks left non-terminal by a previous process close as
     // `interrupted` here: their chunk-committed work is durable and the
     // unfinished set is re-planned. Explicit update_data and all other
-    // contracts keep the needs_verification + verify path unchanged.
-    backend.tasks().reconcile(&run_id)?;
+    // contracts are untouched — their needs_verification marking stays a
+    // visible-state decision, not a startup write.
+    backend.tasks().reconcile_plan_run(&run_id)?;
     // The accept path only checks in-flight tasks; terminal history is
     // verified here, once per start. Any finding refuses to start.
     let findings = backend.tasks().registry_sweep()?;
