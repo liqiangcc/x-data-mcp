@@ -4,7 +4,11 @@
 //! execution through the existing worker.
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
-use std::{io::Write, path::Path};
+use std::{
+    io::Write,
+    path::Path,
+    time::{Duration, Instant},
+};
 use x_data_mcp::{
     catalog::{
         CatalogSnapshot, CompletenessEvidence, Exchange, IndustryInfo, SecurityRecord, SecurityType,
@@ -2321,4 +2325,176 @@ fn large_task_progress_routes_failures_by_bounded_reason() {
         whole < 50 * 1024,
         "page of failures must stay small: {whole}"
     );
+}
+
+/// A `start_collection` accepted but never executed: the rig's seed task is
+/// terminal (its scope claims released on the terminal transition), so a
+/// fresh daily collection for the same entity accepts and stays `pending`
+/// with no owner — the non-terminal task the wait loop holds on. Execution
+/// (which would fail with the existing-head path) is never run.
+fn pending_daily_task(r: &Rig, request_id: &str) -> String {
+    let accepted = r
+        .api
+        .call(
+            "start_collection",
+            json!({"request_id":request_id,"dataset":"market.daily","contract_version":"v1","selection":{"kind":"explicit","securities":[{"exchange":"sh","code":"600006"}]}}),
+        )
+        .unwrap();
+    accepted["task_id"].as_str().unwrap().to_string()
+}
+
+/// A terminal task returns at once even when the caller asks for a long wait.
+#[test]
+fn progress_wait_returns_immediately_for_a_terminal_task() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let base = r
+        .api
+        .call("get_task_progress", json!({"task_id": r.seed_task.clone()}))
+        .unwrap();
+    assert!(
+        matches!(
+            base["task"]["status"].as_str().unwrap(),
+            "succeeded" | "partially_failed" | "failed" | "cancelled" | "interrupted"
+        ),
+        "the rig seed task must be terminal for this test: {base}"
+    );
+    let t0 = Instant::now();
+    let page = r
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id": r.seed_task.clone(), "wait_seconds": 30}),
+        )
+        .unwrap();
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "a terminal task must not consume the wait budget: {elapsed:?}"
+    );
+    assert_eq!(
+        page["task"]["state_revision"],
+        base["task"]["state_revision"]
+    );
+}
+
+/// A non-terminal task with nothing progressing holds until the budget, then
+/// reports the unchanged revision (loose bounds for CI jitter).
+#[test]
+fn progress_wait_times_out_without_a_state_change() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let task_id = pending_daily_task(&r, "wait-timeout");
+    let base = r
+        .api
+        .call("get_task_progress", json!({"task_id": task_id.clone()}))
+        .unwrap();
+    assert_eq!(base["task"]["status"], "pending", "{base}");
+    let revision = base["task"]["state_revision"].as_u64().unwrap();
+    let t0 = Instant::now();
+    let page = r
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id": task_id, "wait_seconds": 1, "since_revision": revision}),
+        )
+        .unwrap();
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(800),
+        "must hold for at least ~80% of the budget: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(4),
+        "must not wait the full cap: {elapsed:?}"
+    );
+    assert_eq!(
+        page["task"]["state_revision"].as_u64().unwrap(),
+        revision,
+        "an idle wait must report the unchanged revision: {page}"
+    );
+}
+
+/// Another writer advancing the task row ends the wait early.
+#[test]
+fn progress_wait_returns_early_when_the_task_advances() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let task_id = pending_daily_task(&r, "wait-advance");
+    let base = r
+        .api
+        .call("get_task_progress", json!({"task_id": task_id.clone()}))
+        .unwrap();
+    let revision = base["task"]["state_revision"].as_u64().unwrap();
+    // ~300ms later a separate connection bumps the durable revision and
+    // leaves the status non-terminal: exactly what the head re-read sees.
+    let path = r.tasks.path().to_path_buf();
+    let tid = task_id.clone();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        let c = rusqlite::Connection::open(path).unwrap();
+        c.busy_timeout(Duration::from_secs(5)).unwrap();
+        c.execute(
+            "UPDATE tasks SET state_revision=state_revision+1, status='running' WHERE task_id=?1",
+            rusqlite::params![tid],
+        )
+        .unwrap();
+    });
+    let t0 = Instant::now();
+    let page = r
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id": task_id, "wait_seconds": 30, "since_revision": revision}),
+        )
+        .unwrap();
+    let elapsed = t0.elapsed();
+    writer.join().unwrap();
+    assert!(
+        page["task"]["state_revision"].as_u64().unwrap() > revision,
+        "the advance must be visible in the response: {page}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(240),
+        "must not return before the other writer advanced: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "must return soon after the advance, not the full budget: {elapsed:?}"
+    );
+}
+
+/// Without the wait parameters the response shape and timing are unchanged:
+/// absent behaves exactly like an explicit `wait_seconds: 0`, and neither
+/// input field leaks into the response.
+#[test]
+fn progress_without_wait_parameters_is_unchanged() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let task_id = pending_daily_task(&r, "wait-absent");
+    let t0 = Instant::now();
+    let absent = r
+        .api
+        .call("get_task_progress", json!({"task_id": task_id.clone()}))
+        .unwrap();
+    assert!(
+        t0.elapsed() < Duration::from_secs(2),
+        "no wait parameters must return immediately"
+    );
+    let zero = r
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id": task_id, "wait_seconds": 0}),
+        )
+        .unwrap();
+    assert!(absent.get("wait_seconds").is_none(), "{absent}");
+    assert!(absent.get("since_revision").is_none(), "{absent}");
+    let strip = |mut v: Value| {
+        let o = v.as_object_mut().unwrap();
+        o.remove("snapshot_id");
+        o.remove("snapshot_time");
+        v
+    };
+    assert_eq!(strip(absent), strip(zero));
 }
