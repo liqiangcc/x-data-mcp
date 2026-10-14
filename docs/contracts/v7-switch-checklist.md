@@ -71,9 +71,10 @@ v7：schema 不变，无 `init`/`init20` 步骤，不碰 DB/WAL/generations，
   **按 `failed_by_reason` 补漏日线 `REVISION_UNVERIFIED`**（§7.2 显式
   `update_data` 前向窗口）→ `plan_market_update`
   （market.yearly，要求 daily 无非终态任务）→
+  `run_market_update`（market.yearly，只处理 `eligible`）→
   **按 `ineligible_reasons` 补漏年线 `value_semantics_changed` /
-  `daily_replaced_since_derivation`**（§7.4 显式年线重推）→
-  `run_market_update`（market.yearly）→ readback。`plan_stale` → 重新 plan；
+  `daily_replaced_since_derivation`**（§7.4 显式年线重推；**必须排在年线 run 之后**，
+  否则 run 的 `plan_id` 会 `plan_stale`）→ readback。`plan_stale` → 重新 plan；
   不再按 ≤100 分批显式编排；
 - `.devin/evals/daily-sync-config.json` allowlist 加
   `mcp__x-data__plan_market_update`、`mcp__x-data__run_market_update`

@@ -133,13 +133,17 @@ acquire→verify→activate 仍按 [daily-sync](../daily-sync.md) 执行，不�
 | 3 | 轮询日线到终态 | `get_task_progress(task_id)` | — | `status ∈ {succeeded, partially_failed, failed}`；大任务按 `unfinished` keyset 分页（§5） |
 | 4 | 日线失败路由 | 读顶层 `plan.failed_by_reason`；对 `REVISION_UNVERIFIED` 走显式 `update_data`（§7.2） | 日线任务已到终态 | 每个显式任务终态后 head 前进 |
 | 5 | 年线 plan | `plan_market_update{dataset:"market.yearly", contract_version:"v1"[, end_date]}` | **`market.daily` 无非终态更新任务**（含步骤 4 的显式补漏任务；否则 `daily_update_inflight`，§3/§4） | 年线 `plan_id`、`counts`、`ineligible_reasons` |
-| 6 | 年线不可处理路由 | 对 `ineligible_reasons` 中 `value_semantics_changed` / `daily_replaced_since_derivation` 走显式年线重推（§7.4） | 年线 plan 已返回 | 每个显式任务终态后 yearly head 前进 |
-| 7 | 年线 run | `run_market_update{dataset:"market.yearly", contract_version:"v1", request_id, target_day, plan_id}` | 同步骤 2 的 digest 绑定；`market.daily` 无非终态任务 | `task_id`；worker 串行执行 |
-| 8 | readback | `get_data_availability` / `query_data`（`latest_per_entity`） | 步骤 3/7 任务均终态 | 各实体最新交易日、coverage/freshness 事实 |
+| 6 | 年线 run（只处理 `eligible`） | `run_market_update{dataset:"market.yearly", contract_version:"v1", request_id, target_day, plan_id}` | 年线 plan 刚返回，其间无 catalog/head/gap/generation 变化（否则 `plan_stale`）；`market.daily` 无非终态任务 | `task_id`；worker 串行执行 |
+| 7 | 年线不可处理路由 | 对 `ineligible_reasons` 中 `value_semantics_changed` / `daily_replaced_since_derivation` 走显式年线重推（§7.4） | 年线 run 已到终态 | 每个显式任务终态后 yearly head 前进 |
+| 8 | readback | `get_data_availability` / `query_data`（`latest_per_entity`） | 步骤 3/6/7 任务均终态 | 各实体最新交易日、coverage/freshness 事实 |
 
-顺序约束：服务端单 worker 串行执行，步骤 2 与步骤 4 的显式任务、步骤 6 与
-步骤 7 的任务都各自串行提交。`run_market_update` 的 digest 绑定（§3 步骤 2）
-要求提交前状态未变，所以补漏任务改变 head 后若要再 run，必须重新 plan。
+顺序约束：服务端单 worker 串行执行。日线为 run→补漏（步骤 2→4）；年线为
+plan→run→补漏（步骤 5→6→7）。**年线补漏必须排在年线 run 之后**：
+`run_market_update` 的 `plan_id` 绑定 plan 时刻的状态（§3 步骤 2），而显式年线重推
+（§7.4）会推进这些实体的年线 head、改变 ineligible 集合；若把补漏排在 run 之前，
+步骤 6 的 run 必然 `plan_stale`。补漏完成后可选再 `plan_market_update`
+（`dataset:"market.yearly"`）核对一次：此时 `eligible` 应为 0，`ineligible` 只剩
+`already_current` 及预期的无需动作原因。
 
 ### 7.2 日线失败路由
 
@@ -200,8 +204,8 @@ ineligible；只有 `Invalid`（上表最后两行）才进 ineligible 并需显
 
 ### 7.4 显式年线重推调用形状
 
-对 §7.3 需重推的实体（每批 ≤100 项），按 `prod_append_v6.py` 的
-`phase_yearly_rederive`:319-401 顺序：
+对 §7.3 需重推的实体（每批 ≤100 项；**排在年线 run 之后，见 §7.1**），按
+`prod_append_v6.py` 的 `phase_yearly_rederive`:319-401 顺序：
 
 1. `get_data_availability{dataset:"market.yearly", contract_version:"v1",
    selection:{"kind":"batch","entities":[…chunk…]}, filter:{"kind":"yearly", …},
