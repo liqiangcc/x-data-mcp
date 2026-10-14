@@ -316,7 +316,21 @@ fn real_service_restart_does_not_resume_old_nonterminal_tasks() {
     wait_terminal(&db, new["task_id"].as_str().unwrap());
     let reader = tasks.clone().with_busy_timeout(Duration::from_secs(5));
     for s in historical {
-        assert_eq!(read_task_retried(&reader, &s.task.task_id), s);
+        // Startup reconcile persists the needs_verification marking for
+        // non-plan-run orphans; nothing resumes and claims stay held.
+        let after = read_task_retried(&reader, &s.task.task_id);
+        assert_eq!(after.task.status, Status::NeedsVerification);
+        assert_eq!(after.task.state_revision, s.task.state_revision + 1);
+        assert_eq!(after.items, s.items);
+        assert_eq!(
+            after
+                .claims
+                .iter()
+                .map(|c| &c.scope_key)
+                .collect::<Vec<_>>(),
+            s.claims.iter().map(|c| &c.scope_key).collect::<Vec<_>>()
+        );
+        assert!(!after.claims.is_empty());
         assert_eq!(
             session.call(
                 "get_task",
@@ -325,7 +339,6 @@ fn real_service_restart_does_not_resume_old_nonterminal_tasks() {
             )["status"],
             "needs_verification"
         );
-        assert!(!s.claims.is_empty());
     }
     drop(session);
     restarted.stop();
