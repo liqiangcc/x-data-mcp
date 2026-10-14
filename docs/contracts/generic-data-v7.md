@@ -115,3 +115,148 @@ compact schema 21（见 [STATUS](../STATUS.md)）。schema 不变（仍 21），
 [generic-data-tools](../generic-data-tools.md) 的原子受理裁决）。plan/run 工作流
 内部不存在整批拒绝模式：单个 item 失败只影响该 item。这**仅在**新工作流
 内消除 #294 的失败模式；#294 本身是否收口由 issue 裁定，不由本契约隐含。
+
+## 7. 日更完整顺序与补漏路由
+
+本节把「acquire→verify→activate 之后，一次全市场日更按什么顺序做完，以及
+plan/run 有意不处理的那一小部分实体如何补」写成可机械执行的顺序。**范围**：
+本节只描述 v7 的 `plan_market_update`/`run_market_update`（§2/§3）与既有显式
+`update_data`（[generic-data-tools](../generic-data-tools.md)）的组合；
+acquire→verify→activate 仍按 [daily-sync](../daily-sync.md) 执行，不在此重复。
+
+### 7.1 有序步骤
+
+| # | 步骤 | 调用 | 前置条件 | 终态/产出 |
+|---|---|---|---|---|
+| 1 | 日线 plan | `plan_market_update{dataset:"market.daily", contract_version:"v1"[, end_date]}` | active verified generation 存在；无在途 acquisition；无同 dataset 非终态更新任务 | `plan_id`、`target_day`、`counts`、`ineligible_reasons` |
+| 2 | 日线 run | `run_market_update{dataset:"market.daily", contract_version:"v1", request_id, target_day, plan_id}` | 上一步 plan 刚返回，其间无 catalog/head/gap/generation 变化（否则 `plan_stale`，§3）；同 dataset 无非终态更新任务 | `task_id`；worker 串行执行 |
+| 3 | 轮询日线到终态 | `get_task_progress(task_id)` | — | `status ∈ {succeeded, partially_failed, failed}`；大任务按 `unfinished` keyset 分页（§5） |
+| 4 | 日线失败路由 | 读顶层 `plan.failed_by_reason`；对 `REVISION_UNVERIFIED` 走显式 `update_data`（§7.2） | 日线任务已到终态 | 每个显式任务终态后 head 前进 |
+| 5 | 年线 plan | `plan_market_update{dataset:"market.yearly", contract_version:"v1"[, end_date]}` | **`market.daily` 无非终态更新任务**（含步骤 4 的显式补漏任务；否则 `daily_update_inflight`，§3/§4） | 年线 `plan_id`、`counts`、`ineligible_reasons` |
+| 6 | 年线不可处理路由 | 对 `ineligible_reasons` 中 `value_semantics_changed` / `daily_replaced_since_derivation` 走显式年线重推（§7.4） | 年线 plan 已返回 | 每个显式任务终态后 yearly head 前进 |
+| 7 | 年线 run | `run_market_update{dataset:"market.yearly", contract_version:"v1", request_id, target_day, plan_id}` | 同步骤 2 的 digest 绑定；`market.daily` 无非终态任务 | `task_id`；worker 串行执行 |
+| 8 | readback | `get_data_availability` / `query_data`（`latest_per_entity`） | 步骤 3/7 任务均终态 | 各实体最新交易日、coverage/freshness 事实 |
+
+顺序约束：服务端单 worker 串行执行，步骤 2 与步骤 4 的显式任务、步骤 6 与
+步骤 7 的任务都各自串行提交。`run_market_update` 的 digest 绑定（§3 步骤 2）
+要求提交前状态未变，所以补漏任务改变 head 后若要再 run，必须重新 plan。
+
+### 7.2 日线失败路由
+
+`reason_code → 动作` 的分类表见 §5，本节不重复；此处只补 `REVISION_UNVERIFIED`
+的显式调用示例。
+
+成因：plan/run 的日线刷新窗口是**整段历史**（`refresh_range=[first_day,
+target_day]`，`src/data_supply/plan.rs:519-522`），窗口内已发布 bar 被上游重算
+（除权/复权）且无修订证据 → 按设计 fail-closed。显式 `update_data` 改用**前向
+窗口** `[last_record+1, target_day]`：窗口内无历史 bar，走重写分支完成。每任务
+≤100 项，按实体当前 head 分批。
+
+请求示例（字段逐一对齐 `prod_append_v6.py` 的 `build_append_items`:207-219 与
+`submit_and_wait`:186-188）：
+
+```json
+{
+  "dataset": "market.daily",
+  "contract_version": "v1",
+  "request_id": "daily-<YYYYMMDD>-residual-001",
+  "items": [
+    {
+      "entity": {"exchange": "<sh|sz>", "code": "<6位代码>"},
+      "base_version_id": "<该实体当前 daily head 的 version_id>",
+      "start_date": "<该实体 last_record 的次一日>",
+      "end_date": "<target_day>"
+    }
+  ],
+  "selection": null
+}
+```
+
+- `entity`/`base_version_id`/`start_date`/`end_date` 即 `RangeWriteItem`
+  （`wire.rs:761-766`）；显式 items 形式下 `selection` 传 `null`（prod 驱动显式
+  传 `None`；该字段为 `Option`，不传等价）。
+- `base_version_id` 必须取**提交时**该实体当前 head；被并发取代会 item 级
+  `STALE_BASE:` `needs_verification`，重取 head 后重提该 item。
+- 不要对这些实体 `retry_task`：同一窗口、同一证据，确定性复败。
+
+### 7.3 年线不可处理原因
+
+`plan_market_update(dataset:"market.yearly")` 逐实体解析后落入 `eligible`（进
+run）或 `ineligible:<reason>`。`resolve_yearly_on`
+（`src/data_supply/plan.rs:597-715`）里**全部**出现的 reason：
+
+| reason | 含义（出处） | 调用方动作 |
+|---|---|---|
+| `already_current` | 年线 base 仍等于当前 daily 状态（`YearlyState::Fresh`，`series.rs:680-681,731-735`） | 正常状态，无需动作 |
+| `head_unreadable` | daily series 行存在但读不出/不一致（Integrity，`plan.rs:612-619`） | fail-closed；不自动修复，报告（损坏或缺陷） |
+| `no_daily_base` | 该实体无已发布 daily head（`plan.rs:622-628`） | 与日线 `absent` 同类；先走日线首采，本步不做年线 |
+| `no_derivable_years` | daily 区间内没有 ≤`target_day.year()` 的可派生年份（`plan.rs:639-644,673-679`） | 无需动作；无内容可推 |
+| `integrity_failure` | `yearly_state` 判定 lineage 断裂/伪造（`plan.rs:656-664`；`series.rs:713-754`） | fail-closed；不自动修复，报告 |
+| `daily_replaced_since_derivation` | base 之后日线发生 `replace`，旧年线内容基于已被替换的数据（`plan.rs:692-703`；`series.rs:695-696,745-747`） | **需显式年线重推**（§7.4） |
+| `value_semantics_changed` | base 之后日线 commit 改变 `{source, unit_currency, adjustment_evidence}`（`plan.rs:698-700`；`series.rs:697-698,748-750`） | **需显式年线重推**（§7.4） |
+
+注：`YearlyState::Behind`（`series.rs:682-684`）产生的是 **item**（进 run），不是
+ineligible；只有 `Invalid`（上表最后两行）才进 ineligible 并需显式重推。
+
+### 7.4 显式年线重推调用形状
+
+对 §7.3 需重推的实体（每批 ≤100 项），按 `prod_append_v6.py` 的
+`phase_yearly_rederive`:319-401 顺序：
+
+1. `get_data_availability{dataset:"market.yearly", contract_version:"v1",
+   selection:{"kind":"batch","entities":[…chunk…]}, filter:{"kind":"yearly", …},
+   version:{"kind":"latest_per_entity"}, page_size:100}` → 取 `items`；需重推集 =
+   `version_ref` 为空 ∪ `stale=="behind"` ∪ `reason` 为
+   `daily_replaced_since_derivation` 或 `value_semantics_changed`
+   （`prod_append_v6.py:306-316,328-337`）。
+2. `list_data_versions{dataset:"market.yearly", …, selection:{"kind":"batch",
+   "entities":[…chunk…]}}` → 取每实体 `version_ref.version_id` 作为
+   `expected_yearly_head`（`prod_append_v6.py:347-354`）。**坑**：失效年线在
+   availability 上报 `version_ref=null`，但 `market_series` 仍存 head 行；
+   `expected_yearly_head` 必须 pin `list_data_versions` 里那个已存版本，否则 CAS
+   网关以 `effective head already exists` 拒绝。只有完全没有已存年线的实体才取
+   null（`prod_append_v6.py:341-346`）。
+3. `get_data_availability{dataset:"market.daily", …}` → 取该实体 daily
+   `version_ref.version_id` 与 `first_record`/`last_record`
+   （`prod_append_v6.py:355-365`）。
+4. `get_yearly_base_years{contract_version:"v1", items:[{entity,
+   base_daily_version_id:<daily head>}]}` → 取 `present_years`（**不传
+   `start_year`/`end_year`**，用默认 1..9999，`wire.rs:273-280`）；`resolve_years`
+   把 `present_years ∩ [first_record 年, last_record 年]` 作为 `years`，未来年
+   （> 上海当前年）记异常入报告（`s5_run.py:357-388`）。
+5. `update_data{dataset:"market.yearly", contract_version:"v1", request_id,
+   items:[…]}` 提交（`prod_append_v6.py:374-386`）。
+
+请求示例（字段对齐 `YearlyWriteItem`，`wire.rs:832-838`；item 构造见
+`prod_append_v6.py` `phase_yearly_rederive`:374-379）：
+
+```json
+{
+  "dataset": "market.yearly",
+  "contract_version": "v1",
+  "request_id": "daily-<YYYYMMDD>-y-001",
+  "items": [
+    {
+      "entity": {"exchange": "<sh|sz>", "code": "<6位代码>"},
+      "base_daily_version_id": "<该实体当前 daily head 的 version_id>",
+      "years": [<present_years ∩ [first_record 年, last_record 年]>],
+      "publication": {
+        "mode": "current_head",
+        "expected_yearly_head": "<list_data_versions 里已存 yearly head version_id，无则 null>"
+      }
+    }
+  ]
+}
+```
+
+- `publication` 为 `YearlyPublication::CurrentHead`（`wire.rs:826-828`），`mode`
+  取 `current_head`。
+- `get_yearly_base_years` 的 `base_daily_version_id` 已被新 head 取代时返回
+  `reason_code:"base_superseded"`（`wire.rs:296-302`）——重取当前 daily head
+  重试该实体；`base_unavailable`/`integrity_failure` 属 fail-closed。
+
+### 7.5 预期规模
+
+这两类占比随追赶跨度变化：单日追赶通常是**几十个**量级，跨多个交易日的追赶
+会到**数百个**。每个显式任务 ≤100 项，所以按当前 head 分批串行提交。规模随
+当日事件数与追赶跨度变化，不构成固定阈值。
