@@ -2426,8 +2426,9 @@ fn progress_wait_returns_early_when_the_task_advances() {
         .call("get_task_progress", json!({"task_id": task_id.clone()}))
         .unwrap();
     let revision = base["task"]["state_revision"].as_u64().unwrap();
-    // ~300ms later a separate connection bumps the durable revision and
-    // leaves the status non-terminal: exactly what the head re-read sees.
+    // ~300ms later a separate connection advances the task row the way the
+    // worker's claim transition does (revision bump, running + owner), which
+    // keeps the row consistent for the response assembly.
     let path = r.tasks.path().to_path_buf();
     let tid = task_id.clone();
     let writer = std::thread::spawn(move || {
@@ -2435,7 +2436,7 @@ fn progress_wait_returns_early_when_the_task_advances() {
         let c = rusqlite::Connection::open(path).unwrap();
         c.busy_timeout(Duration::from_secs(5)).unwrap();
         c.execute(
-            "UPDATE tasks SET state_revision=state_revision+1, status='running' WHERE task_id=?1",
+            "UPDATE tasks SET state_revision=state_revision+1, status='running', owner_run_id='run' WHERE task_id=?1",
             rusqlite::params![tid],
         )
         .unwrap();
