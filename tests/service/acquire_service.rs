@@ -799,3 +799,18 @@ fn daemon_serves_full_generation_loop_over_mcp() {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[test]
+fn every_advertised_acquire_tool_schema_has_an_object_root() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let api = AcquireApi::new(open(root.path(), mirror.path()));
+    let tools = api.tools();
+    let tools = tools.as_array().unwrap();
+    assert_eq!(tools.len(), 10);
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        assert_eq!(tool["inputSchema"]["type"], json!("object"), "input {name}");
+    }
+}
