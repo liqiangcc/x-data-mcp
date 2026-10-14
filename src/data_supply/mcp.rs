@@ -853,15 +853,26 @@ impl DataApi {
                 self.access
                     .require(command.dataset(), None)
                     .map_err(mapped)?;
+                let today = crate::calendar::shanghai_today();
+                let (end_date, source) = match command.end_date() {
+                    Some(day) => (day, super::plan::TargetDaySource::Explicit),
+                    None => super::plan::default_target_day(
+                        &self.queries.repository.market,
+                        self.generation.as_ref(),
+                        today,
+                    ),
+                };
                 let plan = super::plan::resolve_plan(
                     &self.queries.repository.market,
                     self.generation.as_ref(),
                     command.dataset(),
-                    command.end_date(),
-                    crate::calendar::shanghai_today(),
+                    Some(end_date),
+                    today,
                 )
                 .map_err(plan_error)?;
-                encode(plan.view().map_err(plan_error)?)
+                let mut view = plan.view().map_err(plan_error)?;
+                view.target_day_source = Some(source.as_str().to_owned());
+                encode(view)
             }
             Handler::RunMarketUpdate => {
                 if self.access != Access::local() {
