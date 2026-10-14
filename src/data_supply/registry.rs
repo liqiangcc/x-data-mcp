@@ -25,6 +25,8 @@ pub enum Handler {
     Range(crate::market_update::tasks::Operation),
     Republish,
     VerifyGap,
+    PlanMarketUpdate,
+    RunMarketUpdate,
 }
 /// One tool descriptor: tools/list, get_data_capabilities, dispatch and
 /// golden examples are all generated from this single source.
@@ -57,6 +59,7 @@ impl Entry {
                 | Handler::VerifyPublication
                 | Handler::InspectVerification
                 | Handler::VerifyGap
+                | Handler::RunMarketUpdate
         )
     }
     /// Datasets this tool advertises in get_data_capabilities. `None` is a
@@ -64,11 +67,13 @@ impl Entry {
     /// (tool, dataset, contract_version) shape for dataset-bound tools.
     pub fn datasets(&self, access: &super::Access) -> Vec<Option<Dataset>> {
         match self.handler {
-            Handler::Range(_) => [Dataset::Daily, Dataset::Yearly]
-                .into_iter()
-                .filter(|d| access.allows(*d, None))
-                .map(Some)
-                .collect(),
+            Handler::Range(_) | Handler::PlanMarketUpdate | Handler::RunMarketUpdate => {
+                [Dataset::Daily, Dataset::Yearly]
+                    .into_iter()
+                    .filter(|d| access.allows(*d, None))
+                    .map(Some)
+                    .collect()
+            }
             Handler::Republish => access
                 .allows(Dataset::Daily, None)
                 .then_some(Some(Dataset::Daily))
@@ -131,19 +136,21 @@ pub const REPUBLISH_DESCRIPTION: &str = "Local-owner explicit-range source refre
 pub const WORKER_DESCRIPTION: &str = "Operator/debug single-step execution of at most one locally owned pending task. The data_service background worker executes pending tasks automatically, so routine synchronization flows must not invoke this tool; while the service worker is busy it fails with worker_busy and never runs a second execution. It never downloads market data, never approves sources, and never unlocks or repairs tasks.";
 pub const COLLECTION_DESCRIPTION: &str = "First establishment only: creates the initial publication for entities with no published head — explicit entity list, catalog version, or the snapshot-resolved default selection, frozen at acceptance. Daily and catalog items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); yearly items derive from published daily bases. This is not the routine update path; entities with published heads update through their own write tasks. Replaying the same request_id returns the original acceptance.";
 pub const INSPECT_DESCRIPTION: &str = "Owner-only bounded management of an abnormal verification task, not a recursive asynchronous task. Each reliably persisted result, including insufficient evidence, consumes request_id; the same ID replays its historical result without re-inspecting. A new ID is needed for fresh evidence. Checks registered local execution exclusion and durable finish separately; may close only the verification task, never the original business task or its claims. Missing/unregistered runtime proof retains protection. No force/evidence flags, waiting, implicit retry or production source approval.";
-pub const QUERY_DESCRIPTION: &str = "Read integrity-checked published rows for one dataset/selection with an explicit filter and version choice. Paged and snapshot-scoped; never triggers collection, repair or source access. Market datasets are single-version (generic-data-v6): version_id is the content-digest hex of the current head — an explicit pin superseded by a newer head reports stale_version while a never-committed id reports version_not_found. Yearly rows trailing the live daily base carry stale \"behind\" and as_of_day; entries withheld for a classified lineage reason carry reason.";
-pub const VERSIONS_DESCRIPTION: &str = "List published version references for one dataset/selection — for market datasets at most one current head version per entity (generic-data-v6). Paged; read-only.";
+pub const QUERY_DESCRIPTION: &str = "Read integrity-checked published rows for one dataset/selection with an explicit filter and version choice. Paged and snapshot-scoped; never triggers collection, repair or source access. Market datasets are single-version (generic-data-v7): version_id is the content-digest hex of the current head — an explicit pin superseded by a newer head reports stale_version while a never-committed id reports version_not_found. Yearly rows trailing the live daily base carry stale \"behind\" and as_of_day; entries withheld for a classified lineage reason carry reason.";
+pub const VERSIONS_DESCRIPTION: &str = "List published version references for one dataset/selection — for market datasets at most one current head version per entity (generic-data-v7). Paged; read-only.";
 pub const AVAILABILITY_DESCRIPTION: &str = "Report published coverage, freshness, confirmed gaps and unresolved ranges per entity, with related task references; yearly entities also report daily-base staleness (fresh, behind via stale+as_of_day, or a classified reason on absent entries). Paged; read-only.";
 pub const TASKS_DESCRIPTION: &str =
     "Page task summaries filtered by dataset, operation, status and creation range. Read-only.";
 pub const PROGRESS_DESCRIPTION: &str = "Page one task's item progress, execution results, publication versions and verification receipts. Read-only.";
 pub const PRESENCE_DESCRIPTION: &str = "Resolve the exact natural-year set present in each pinned published market.daily base version — the only input yearly orchestration needs for years subsets. 1..100 entity/base bindings per call; every item fully verified inside one bounded snapshot; resolved items carry the real integrity digest and sorted unique years (a valid empty history is []), missing or unpublished bases report base_unavailable, bases superseded by a newer daily head report base_superseded, identity/content/lineage mismatches report integrity_failure. No cursor, no task creation, no head writes. Read-only.";
-pub const CAPABILITIES_DESCRIPTION: &str = "Report this server's capability matrix: implemented tools, per-dataset schemas, runtime and governance readiness, structured blocking reasons and production gate facts. capability_revision generic-data-v6 denotes single-version market storage: one current daily and one current yearly series per entity with content-derived version ids. Facts only — no workflow ordering or cross-server instructions.";
+pub const CAPABILITIES_DESCRIPTION: &str = "Report this server's capability matrix: implemented tools, per-dataset schemas, runtime and governance readiness, structured blocking reasons and production gate facts. capability_revision generic-data-v7 denotes single-version market storage: one current daily and one current yearly series per entity with content-derived version ids. Facts only — no workflow ordering or cross-server instructions.";
 pub const TASK_DESCRIPTION: &str = "Read one task's status, frozen scope and per-item results.";
 pub const REQUEST_DESCRIPTION: &str = "Read the durable request_id binding and its bound task or terminal result without accepting work.";
-pub const CANCEL_DESCRIPTION: &str = "Request cancellation of a task under an expected_revision precondition; returns the post-request visible status and state revision.";
+pub const CANCEL_DESCRIPTION: &str = "Request cancellation of a task; expected_revision is still accepted but only terminal tasks enforce it — a live task applies the request at the revision the write actually reads. Returns the post-request visible status and state revision.";
 pub const RETRY_DESCRIPTION: &str = "Re-accept explicitly selected unfinished items of an existing task as a new linked task. Item ids only; outcomes and finished items cannot be silently re-run.";
 pub const COMPUTE_DESCRIPTION: &str = "Run a named bounded metric algorithm over explicit published version inputs and return the computation or a structured not_computable outcome. Read-only.";
+pub const PLAN_DESCRIPTION: &str = "Whole-catalog update planning (generic-data-v7): resolves the current catalog against published heads and returns a compact deterministic plan — plan_id is the sha256 of the canonical resolved state binding the active verified generation and the target day, with eligible/already_current/absent/ineligible counts and per-reason ineligible counts. The response never lists entities. Read-only: no task is created and nothing is persisted; replanning an unchanged state returns the identical plan_id. Any catalog, head, gap or generation change produces a different plan_id.";
+pub const RUN_DESCRIPTION: &str = "Accept and run a previously returned market update plan (generic-data-v7): the server re-resolves the plan inside one read snapshot and requires the supplied plan_id to match exactly — a mismatch is a plan_stale refusal and no task is created; continue by calling plan_market_update again. On a match one task covering every eligible entity is accepted and executed serially by the single worker; per-item outcomes are published / no_change / needs_verification and one item's failure never rejects the rest. For market.yearly the run additionally refuses while any market.daily update task is non-terminal (daily_update_inflight). Local-owner access required; replaying the same request_id returns the original acceptance.";
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerInput {}
@@ -305,6 +312,18 @@ pub fn entries() -> Vec<Entry> {
             Handler::Capabilities,
             CAPABILITIES_DESCRIPTION,
             json!({}),
+        ),
+        entry::<PlanMarketUpdate, PlanView>(
+            "plan_market_update",
+            Handler::PlanMarketUpdate,
+            PLAN_DESCRIPTION,
+            json!({"dataset":"market.daily","contract_version":"v1"}),
+        ),
+        entry::<RunMarketUpdate, PlanRunAcceptance>(
+            "run_market_update",
+            Handler::RunMarketUpdate,
+            RUN_DESCRIPTION,
+            json!({"dataset":"market.daily","contract_version":"v1","request_id":"example-plan-run","target_day":"2026-01-30","plan_id":"0000000000000000000000000000000000000000000000000000000000000000"}),
         ),
     ];
     for e in &mut entries {

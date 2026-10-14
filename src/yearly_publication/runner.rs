@@ -153,7 +153,10 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             binding.head.key.operation.as_str(),
             "update_data" | "backfill_data"
         ) || binding.head.key.dataset != "market.yearly"
-            || binding.head.key.contract_version != super::tasks::CONTRACT_VERSION
+            || !matches!(
+                binding.head.key.contract_version.as_str(),
+                super::tasks::CONTRACT_VERSION | crate::data_supply::plan::RUN_CONTRACT_VERSION
+            )
         {
             return Err(Error::Invalid(
                 "unsupported yearly execution contract".into(),

@@ -288,4 +288,9 @@ request_outcome，区分未绑定、任务绑定、请求级终态、结果待�
 [计算设计](compute-capabilities.md)、[每日同步说明](daily-sync.md)和[实施基线](implementation-baseline.md)。
 本页以上仅为旧八工具的固定历史事实。
 
+v7 增量（历史记录，代码已实现、部署日随二进制切换生效）：`plan_market_update`
+/`run_market_update` 无状态计划+受理工作流，契约见
+[generic-data-v7](contracts/generic-data-v7.md)，部署切换步骤见
+[v7-switch-checklist](contracts/v7-switch-checklist.md)。
+
 此前逐类别工具、共享结果和组合探索已移到 [历史草案](history/mcp-tools-proposals.md)，仅供追溯，不据此额外注册工具。当前兼容差距与首个任务验收统一见实施基线。

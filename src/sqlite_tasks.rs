@@ -104,6 +104,14 @@ impl SqliteTasks {
         })
         .map_err(storage)
     }
+    /// Startup-scoped reconcile: closes only `RUN_CONTRACT_VERSION` orphans
+    /// as `interrupted`. Explicit `update_data` and every other contract's
+    /// orphans keep their persisted state and revision byte-for-byte — for
+    /// those the needs_verification marking remains a visible-state
+    /// decision, never a startup write.
+    pub fn reconcile_plan_run(&self, run: &str) -> Result<usize, Error> {
+        self.write(|c| reconcile_tx(c, run, Some(crate::data_supply::plan::RUN_CONTRACT_VERSION)))
+    }
     /// Mechanical durable fact only: whether this item's StartItem transition
     /// committed a start marker. No contract or business filtering here.
     pub fn item_execution_started(&self, task_id: &str, item_id: &str) -> Result<bool, Error> {
@@ -935,7 +943,11 @@ pub(crate) fn read_task_head(c: &Connection, id: &str) -> Result<Option<TaskHead
         evidence_digest: r.get(12).map_err(storage)?,
     }))
 }
-fn read_task_item(c: &Connection, task_id: &str, item_id: &str) -> Result<Option<TaskItem>, Error> {
+pub(crate) fn read_task_item(
+    c: &Connection,
+    task_id: &str,
+    item_id: &str,
+) -> Result<Option<TaskItem>, Error> {
     let mut stmt = c.prepare("SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json FROM task_items WHERE task_id=?1 AND item_id=?2").map_err(storage)?;
     let mut rows = stmt.query(params![task_id, item_id]).map_err(storage)?;
     let Some(r) = rows.next().map_err(storage)? else {
@@ -1159,7 +1171,7 @@ fn outcome_unchanged(
         _ => Ok(false),
     }
 }
-fn write_item_row(c: &Connection, task_id: &str, item: &TaskItem) -> Result<(), Error> {
+pub(crate) fn write_item_row(c: &Connection, task_id: &str, item: &TaskItem) -> Result<(), Error> {
     #[cfg(test)]
     tests::count_write("task_items");
     c.execute(
@@ -1300,6 +1312,48 @@ pub(crate) fn write_task_delta(
     }
     Ok(())
 }
+/// One batch-chunk head persist: the caller ran `decide_head` transitions
+/// in memory and now writes the end-of-chunk head — ONE `tasks` row update
+/// instead of one per item (the row carries the multi-MB `frozen_work_json`
+/// record, so a per-item update rewrites the whole task body each time).
+/// `expected` is the last persisted revision; counters are written as
+/// absolute values from the in-memory head.
+pub(crate) fn persist_head(c: &Connection, head: &TaskHead, expected: u64) -> Result<(), Error> {
+    #[cfg(test)]
+    tests::count_write("tasks");
+    let changed = c
+        .execute(
+            "UPDATE tasks SET status=?1,state_revision=?2,owner_run_id=?3,last_progress_at=?4,result_json=?5,item_count=?6,items_pending=?7,items_running=?8,items_finished=?9,items_succeeded=?10 WHERE task_id=?11 AND state_revision=?12",
+            params![
+                tag(&head.status),
+                db_revision(head.state_revision)?,
+                head.owner_run_id.as_deref(),
+                head.last_progress_at.to_rfc3339(),
+                head.result.as_ref().map(encode).transpose()?,
+                head.counts.total as i64,
+                head.counts.pending as i64,
+                head.counts.running as i64,
+                head.counts.finished as i64,
+                head.counts.succeeded as i64,
+                head.task_id,
+                db_revision(expected)?
+            ],
+        )
+        .map_err(storage)?;
+    if changed != 1 {
+        return Err(Error::RevisionConflict);
+    }
+    if head.status.terminal() {
+        #[cfg(test)]
+        tests::count_write("scope_occupancy");
+        c.execute(
+            "DELETE FROM scope_occupancy WHERE task_id=?1",
+            [&head.task_id],
+        )
+        .map_err(storage)?;
+    }
+    Ok(())
+}
 impl TaskRepository for SqliteTasks {
     fn read_request(&self, id: &str) -> Result<Option<RequestRecord>, Error> {
         self.read(|c| read_request(c, id))
@@ -1322,6 +1376,24 @@ impl TaskRepository for SqliteTasks {
         }
         self.write(|c| accept_tx(c, id, command, work, run, retry))
     }
+    /// Real streamed accept: item rows and the frozen-work blob are
+    /// written as the iterator yields specs, inside the same immediate
+    /// transaction `accept_tx` uses. The returned record is constructed
+    /// (items not materialized); the persisted rows are identical.
+    fn accept_streamed(
+        &self,
+        id: &str,
+        command: &Command,
+        shared_evidence: Option<Value>,
+        scopes: BTreeSet<String>,
+        items: &mut dyn Iterator<Item = ItemSpec>,
+        run: &str,
+    ) -> Result<Acceptance, Error> {
+        if id.trim().is_empty() || run.trim().is_empty() {
+            return Err(Error::InvalidCommand("empty identity".into()));
+        }
+        self.write(|c| accept_streamed_tx(c, id, command, shared_evidence, &scopes, items, run))
+    }
     fn transition(
         &self,
         id: &str,
@@ -1335,7 +1407,7 @@ impl TaskRepository for SqliteTasks {
         self.read(|c| candidates_tx(c, run))
     }
     fn reconcile(&self, run: &str) -> Result<usize, Error> {
-        self.write(|c| reconcile_tx(c, run))
+        self.write(|c| reconcile_tx(c, run, None))
     }
     /// O(1) per-item transition: verifies only the task-row revision (which
     /// serializes every mutation), decides on the caller-held snapshot in
@@ -1715,6 +1787,205 @@ pub(crate) fn accept_tx(
     })
 }
 
+/// Streamed accept — identical transaction shape, rows, and validations
+/// to `accept_tx`, but item specs arrive as an iterator: each one is
+/// validated, written to `task_items`, and serialized into the
+/// `frozen_work_json` blob one at a time, so a whole-market admission
+/// (~5k items) never materializes the whole frozen-work tree in memory.
+/// The returned record is constructed rather than re-read; its `items`
+/// list is empty, so callers needing detail re-read the task.
+pub(crate) fn accept_streamed_tx(
+    c: &Connection,
+    id: &str,
+    command: &Command,
+    shared_evidence: Option<Value>,
+    scopes: &BTreeSet<String>,
+    items: &mut dyn Iterator<Item = ItemSpec>,
+    run: &str,
+) -> Result<Acceptance, Error> {
+    let _total = crate::stage_trace::span("accept.total");
+    if let Some(record) = read_request(c, id)? {
+        if record.command != *command {
+            return Err(Error::RequestConflict);
+        }
+        return Ok(Acceptance {
+            record,
+            reused: true,
+        });
+    }
+    run_registry_gates(c, GateScope::Active)?;
+    if scopes.is_empty() {
+        return Err(Error::InvalidCommand("empty work".into()));
+    }
+    // Same scope-occupancy gate as accept_tx, chunked instead of one
+    // query per scope — a whole-market task occupies thousands of scopes.
+    let mut conflicts = Vec::new();
+    for chunk in scopes.iter().collect::<Vec<_>>().chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let mut stmt = c
+            .prepare(&format!(
+                "SELECT scope_key FROM scope_occupancy WHERE scope_key IN ({placeholders})"
+            ))
+            .map_err(storage)?;
+        let mut rows = stmt
+            .query(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())))
+            .map_err(storage)?;
+        while let Some(row) = rows.next().map_err(storage)? {
+            conflicts.push(row.get::<_, String>(0).map_err(storage)?);
+        }
+    }
+    if !conflicts.is_empty() {
+        return Err(Error::RangeConflict(conflicts));
+    }
+    let task_id: String = c
+        .query_row("SELECT 'task-' || lower(hex(randomblob(16)))", [], |r| {
+            r.get(0)
+        })
+        .map_err(storage)?;
+    let now = Utc::now().to_rfc3339();
+    let evidence_digest = shared_evidence
+        .as_ref()
+        .and_then(|e| e["evidence_digest"].as_str().map(str::to_string));
+    // Parent row first — task_items carries an FK to tasks. The streamed
+    // frozen-work blob lands in the UPDATE after the iterator drains.
+    c.execute(
+        "INSERT INTO tasks(task_id,command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,frozen_work_json,result_json,retry_of,item_count,items_pending,evidence_digest) VALUES(?1,?2,'pending',0,?3,NULL,?4,?4,'',NULL,?5,0,0,?6)",
+        params![
+            task_id,
+            encode(&command.key)?,
+            run,
+            now,
+            None::<String>,
+            evidence_digest
+        ],
+    )
+    .map_err(storage)?;
+    let mut item_stmt = c
+        .prepare("INSERT INTO task_items VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)")
+        .map_err(storage)?;
+    // The blob byte content equals serde's FrozenWork serialization
+    // (items, scopes, shared_evidence — the derive's field order).
+    let mut frozen = String::with_capacity(1 << 24);
+    frozen.push_str("{\"items\":[");
+    let mut seen = BTreeSet::new();
+    let mut count: u64 = 0;
+    let mut first = true;
+    // The same validations FrozenWork::validate performs — done here so a
+    // bad item fails before its row instead of after the whole tree.
+    for item in &mut *items {
+        if item.item_id.trim().is_empty() || item.progress_unit.trim().is_empty() {
+            return Err(Error::InvalidCommand("empty item identity".into()));
+        }
+        if !item.scope_keys.is_subset(scopes) {
+            return Err(Error::InvalidCommand(
+                "item scope outside declared work".into(),
+            ));
+        }
+        if !seen.insert(item.item_id.clone()) {
+            return Err(Error::InvalidCommand("duplicate item identity".into()));
+        }
+        if let Some(marker) = item
+            .frozen_inputs
+            .get("selection_evidence")
+            .and_then(|v| v.get("evidence_digest"))
+            .and_then(Value::as_str)
+            && evidence_digest.as_deref() != Some(marker)
+        {
+            return Err(Error::InvalidCommand(
+                "item evidence marker does not match shared evidence".into(),
+            ));
+        }
+        item_stmt
+            .execute(params![
+                task_id,
+                item.item_id,
+                encode(&item.target)?,
+                item.progress_unit,
+                encode(&item.frozen_inputs)?,
+                encode(&item.scope_keys)?
+            ])
+            .map_err(storage)?;
+        if !first {
+            frozen.push(',');
+        }
+        first = false;
+        frozen.push_str(&serde_json::to_string(&item).map_err(storage)?);
+        count += 1;
+    }
+    if count == 0 {
+        return Err(Error::InvalidCommand("empty work".into()));
+    }
+    drop(item_stmt);
+    frozen.push_str("],\"scopes\":");
+    frozen.push_str(&serde_json::to_string(scopes).map_err(storage)?);
+    if let Some(evidence) = &shared_evidence {
+        frozen.push_str(",\"shared_evidence\":");
+        frozen.push_str(&serde_json::to_string(evidence).map_err(storage)?);
+    }
+    frozen.push('}');
+    c.execute(
+        "UPDATE tasks SET frozen_work_json=?2,item_count=?3,items_pending=?3 WHERE task_id=?1",
+        params![task_id, frozen, count as u32],
+    )
+    .map_err(storage)?;
+    let mut scope_stmt = c
+        .prepare("INSERT INTO task_scopes VALUES(?1,?2)")
+        .map_err(storage)?;
+    let mut occupancy_stmt = c
+        .prepare("INSERT INTO scope_occupancy VALUES(?1,?2,0)")
+        .map_err(storage)?;
+    for scope in scopes {
+        scope_stmt
+            .execute(params![task_id, scope])
+            .map_err(storage)?;
+        occupancy_stmt
+            .execute(params![scope, task_id])
+            .map_err(storage)?;
+    }
+    let raw = encode(command)?;
+    c.execute(
+        "INSERT INTO requests VALUES(?1,?2,?3,'task',?4,NULL)",
+        params![id, raw, crate::hash::sha256(raw.as_bytes()), task_id],
+    )
+    .map_err(storage)?;
+    let now_dt: chrono::DateTime<Utc> = now.parse().map_err(storage)?;
+    Ok(Acceptance {
+        record: RequestRecord {
+            request_id: id.into(),
+            command: command.clone(),
+            outcome: RequestOutcome::Task(Box::new(TaskSnapshot {
+                task: TaskRecord {
+                    task_id: task_id.clone(),
+                    key: command.key.clone(),
+                    status: Status::Pending,
+                    state_revision: 0,
+                    accepted_run_id: run.into(),
+                    owner_run_id: None,
+                    created_at: now_dt,
+                    last_progress_at: now_dt,
+                    work: FrozenWork {
+                        items: vec![],
+                        scopes: scopes.clone(),
+                        shared_evidence,
+                    },
+                    result: None,
+                    retry_of: None,
+                },
+                items: vec![],
+                claims: scopes
+                    .iter()
+                    .map(|scope_key| ScopeClaim {
+                        scope_key: scope_key.clone(),
+                        task_id: task_id.clone(),
+                        state_revision: 0,
+                    })
+                    .collect(),
+            })),
+        },
+        reused: false,
+    })
+}
+
 /// Connection-level transition shared by `SqliteTasks` and the compact
 /// repository; identical decide/persist semantics.
 pub(crate) fn transition_tx(
@@ -1725,9 +1996,18 @@ pub(crate) fn transition_tx(
     change: Change,
 ) -> Result<TaskSnapshot, Error> {
     let old = read_bound_task(c, id)?.ok_or(Error::TaskNotFound)?;
-    if old.task.state_revision != revision {
+    // Cancellation is a monotone intent, not a blind overwrite of a
+    // caller-read state: a live task applies it at the revision this
+    // transaction actually reads. A running task advances its revision
+    // per item/commit, so a caller-held `expected_revision` precondition
+    // made cancelling live work unwinnable. Terminal tasks and every
+    // other change keep the strict expected-revision precondition.
+    if old.task.state_revision != revision
+        && !(matches!(change, Change::RequestCancel) && !old.task.status.terminal())
+    {
         return Err(Error::RevisionConflict);
     }
+    let expected = old.task.state_revision;
     let started_item = match &change {
         Change::StartItem(item_id) => Some(item_id.clone()),
         _ => None,
@@ -1735,8 +2015,8 @@ pub(crate) fn transition_tx(
     let now = Utc::now();
     let mut next = old;
     decide(&mut next, run, change, now)?;
-    if next.task.state_revision != revision {
-        write_task(c, &next, revision)?;
+    if next.task.state_revision != expected {
+        write_task(c, &next, expected)?;
         if let Some(item_id) = started_item {
             c.execute(
                 "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
@@ -1769,12 +2049,23 @@ pub(crate) fn candidates_tx(c: &Connection, run: &str) -> Result<Vec<TaskSnapsho
         .collect()
 }
 
-pub(crate) fn reconcile_tx(c: &Connection, run: &str) -> Result<usize, Error> {
+/// `only_contract` narrows the reconcile to one contract version — the
+/// service startup path passes `RUN_CONTRACT_VERSION` so a restart closes
+/// plan-run orphans without touching the persisted state of explicit
+/// update_data (or any other) orphans: for those, the needs_verification
+/// marking stays a visible-state decision, never a startup write.
+pub(crate) fn reconcile_tx(
+    c: &Connection,
+    run: &str,
+    only_contract: Option<&str>,
+) -> Result<usize, Error> {
     let mut stmt = c
-        .prepare("SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled','interrupted') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1))")
+        .prepare(
+            "SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled','interrupted') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1)) AND (?2 IS NULL OR json_extract(command_key_json,'$.contract_version')=?2)",
+        )
         .map_err(storage)?;
     let ids = stmt
-        .query_map([run], |r| r.get::<_, String>(0))
+        .query_map(params![run, only_contract], |r| r.get::<_, String>(0))
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;
@@ -1844,7 +2135,7 @@ pub(crate) fn transition_light_tx(
     Ok(())
 }
 
-fn read_revision(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+pub(crate) fn read_revision(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     let n: i64 = row.get(index)?;
     u64::try_from(n).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, n))
 }

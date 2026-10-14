@@ -222,8 +222,10 @@ pub(super) fn validate_binding(
     if let Some(stamped) = binding.item.spec.frozen_inputs.get("source_generation_id") {
         expected["source_generation_id"] = stamped.clone();
     }
-    if binding.head.key.contract_version != CONTRACT_VERSION
-        || binding.head.key.dataset != "market.yearly"
+    if !matches!(
+        binding.head.key.contract_version.as_str(),
+        CONTRACT_VERSION | crate::data_supply::plan::RUN_CONTRACT_VERSION
+    ) || binding.head.key.dataset != "market.yearly"
         || binding.item.spec.item_id != command.item_id
         || binding.item.spec.frozen_inputs != expected
     {

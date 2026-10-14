@@ -28,8 +28,8 @@ use crate::official_market::CollectionCandidate;
 use crate::publish::EffectiveVersion;
 use crate::sqlite_tasks::SqliteTasks;
 use crate::task_control::{
-    self, Acceptance, Change, Command, FrozenWork, RequestRecord, RetryGuard, TaskHead, TaskItem,
-    TaskRepository, TaskSnapshot,
+    self, Acceptance, Change, Command, FrozenWork, ItemSpec, RequestRecord, RetryGuard, TaskHead,
+    TaskItem, TaskRepository, TaskSnapshot,
 };
 
 const BUSY: Duration = Duration::from_secs(5);
@@ -710,6 +710,7 @@ fn commit_ops(
             event_evidence_digest: evidence,
             published_at: None,
             staged_version_id: Some(command.version_id.as_str()),
+            defer_task_row: false,
         },
     )
 }
@@ -927,6 +928,7 @@ fn commit_plan(
             event_evidence_digest: event_evidence,
             published_at: Some(v.published_at),
             staged_version_id: Some(command.version_id.as_str()),
+            defer_task_row: false,
         },
     )?;
     Ok(receipt)
@@ -983,6 +985,7 @@ fn commit_plan_no_change(
             // The envelope path stages the candidate before classification
             // — a no_change commit must consume that row too.
             staged_version_id: Some(command.version_id.as_str()),
+            defer_task_row: false,
         },
     )
 }
@@ -1200,6 +1203,7 @@ impl RangeRepository for SqliteCompactMarket {
                     event_evidence_digest: evidence,
                     published_at: None,
                     staged_version_id: None,
+                    defer_task_row: false,
                 },
             )?;
             tx.commit()
@@ -1216,25 +1220,43 @@ impl RangeRepository for SqliteCompactMarket {
             let tx = c
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(storage)?;
-            let mut snapshot = crate::sqlite_tasks::read_bound_task(&tx, task_id)
+            // Chunk commit bookkeeping runs on the task HEAD plus per-item
+            // rows only: a per-item `tasks` update would rewrite the
+            // `frozen_work_json`-sized record N times per chunk — the
+            // ~490ms/item the private stack measured on the 5,224-item
+            // plan-run task. `decide_head` keeps counters/revision in
+            // memory; `persist_head` lands the row once per chunk.
+            let head_span = crate::stage_trace::span("daily.commit_batch.head_read");
+            let mut head = crate::sqlite_tasks::read_task_head(&tx, task_id)
                 .map_err(Error::Task)?
                 .ok_or(Error::Task(task_control::Error::TaskNotFound))?;
-            if snapshot.task.status == crate::task_control::Status::Pending {
-                let run_id = items
-                    .first()
-                    .map(|item| item.run_id.clone())
-                    .ok_or_else(|| invalid("update batch carries no items"))?;
-                crate::sqlite_tasks::transition_light_tx(
-                    &tx,
-                    &mut snapshot,
+            let run_id = items
+                .first()
+                .map(|item| item.run_id.clone())
+                .ok_or_else(|| invalid("update batch carries no items"))?;
+            let mut persisted_revision = head.state_revision;
+            if head.status == crate::task_control::Status::Pending {
+                crate::task_control::decide_head(
+                    &mut head,
+                    None,
                     &run_id,
                     Change::Claim,
+                    Utc::now(),
                 )
                 .map_err(Error::Task)?;
+                crate::sqlite_tasks::persist_head(&tx, &head, persisted_revision)
+                    .map_err(Error::Task)?;
+                persisted_revision = head.state_revision;
             }
+            drop(head_span);
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                out.push(update_batch_item(&tx, &mut snapshot, item)?);
+                out.push(update_batch_item(&tx, &mut head, item)?);
+            }
+            {
+                let _span = crate::stage_trace::span("daily.commit_batch.head_persist");
+                crate::sqlite_tasks::persist_head(&tx, &head, persisted_revision)
+                    .map_err(Error::Task)?;
             }
             tx.commit().map_err(storage)?;
             Ok(Some(out))
@@ -1422,9 +1444,27 @@ fn base_bars_in_range_on(
 /// Per-item batch step for `commit_update_batch`: replay → start the item
 /// → commit inside a savepoint → map failures to item outcomes.
 /// Structural errors abort the whole batch transaction.
+/// The terminal status/result `finish_item_and_task`'s SQL CASE sets
+/// when an item's success-finish completes the task — only the
+/// successful-commit path may produce it; a task whose last item fails
+/// keeps `running` and reaches `failed`/`cancelled` via the runner's
+/// `FinishExecution`, exactly as before.
+fn commit_terminal(head: &mut task_control::TaskHead) {
+    if head.counts.finished == head.counts.total && head.status == task_control::Status::Running {
+        head.status = if head.counts.succeeded == head.counts.total {
+            task_control::Status::Succeeded
+        } else {
+            task_control::Status::PartiallyFailed
+        };
+        head.result = Some(serde_json::json!({
+            "finished_items": head.counts.finished,
+            "successful_items": head.counts.succeeded,
+        }));
+    }
+}
 fn update_batch_item(
     c: &Connection,
-    snapshot: &mut TaskSnapshot,
+    head: &mut task_control::TaskHead,
     item: &crate::market_update::UpdateBatchItem,
 ) -> Result<Result<Receipt, Error>, Error> {
     // The typed batch never stages; the id still names the scratch row an
@@ -1449,22 +1489,36 @@ fn update_batch_item(
             task_revision: event.task_revision as u64,
         }));
     }
-    crate::sqlite_tasks::transition_light_tx(
-        c,
-        snapshot,
-        &item.run_id,
-        Change::StartItem(item.item_id.clone()),
-    )
-    .map_err(Error::Task)?;
-    let revision: i64 = c
-        .query_row(
-            "SELECT state_revision FROM tasks WHERE task_id=?1",
-            [&item.task_id],
-            |r| r.get(0),
+    let mut item_row = {
+        let _span = crate::stage_trace::span("daily.commit_batch.item_start");
+        let mut item_row = crate::sqlite_tasks::read_task_item(c, &item.task_id, &item.item_id)
+            .map_err(Error::Task)?
+            .ok_or(Error::Task(task_control::Error::RevisionConflict))?;
+        let now = Utc::now();
+        crate::task_control::decide_head(
+            head,
+            Some(&mut item_row),
+            &item.run_id,
+            Change::StartItem(item.item_id.clone()),
+            now,
+        )
+        .map_err(Error::Task)?;
+        crate::sqlite_tasks::write_item_row(c, &item.task_id, &item_row).map_err(Error::Task)?;
+        c.execute(
+            "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
+            params![
+                &item.task_id,
+                &item.item_id,
+                &item.run_id,
+                i64::try_from(head.state_revision)
+                    .map_err(|_| integrity("task revision out of range"))?,
+                now.to_rfc3339()
+            ],
         )
         .map_err(storage)?;
-    let expected_revision =
-        u64::try_from(revision).map_err(|_| integrity("task revision out of range"))?;
+        item_row
+    };
+    let expected_revision = head.state_revision;
     let committed = {
         c.execute_batch("SAVEPOINT update_batch_item")
             .map_err(storage)?;
@@ -1516,6 +1570,7 @@ fn update_batch_item(
                         event_evidence_digest: evidence,
                         published_at: None,
                         staged_version_id: None,
+                        defer_task_row: true,
                     },
                 )
             }
@@ -1575,6 +1630,7 @@ fn update_batch_item(
                         event_evidence_digest: evidence,
                         published_at: None,
                         staged_version_id,
+                        defer_task_row: true,
                     },
                 )
             }
@@ -1593,9 +1649,35 @@ fn update_batch_item(
         }
     };
     match committed {
-        Ok(receipt) => Ok(Ok(receipt)),
+        Ok(receipt) => {
+            let _span = crate::stage_trace::span("daily.commit_batch.item_finish");
+            // finish_item_row already persisted the canonical outcome;
+            // decide_head advances the in-memory head to the event's
+            // task_revision (+1) — the item row is not re-written.
+            crate::task_control::decide_head(
+                head,
+                Some(&mut item_row),
+                &item.run_id,
+                Change::FinishItem(
+                    item.item_id.clone(),
+                    task_control::ItemOutcome {
+                        success: true,
+                        error: None,
+                        evidence: Some(serde_json::json!({
+                            "result_id": item.publication_id,
+                            "result_kind": "market_update"
+                        })),
+                    },
+                ),
+                Utc::now(),
+            )
+            .map_err(Error::Task)?;
+            commit_terminal(head);
+            Ok(Ok(receipt))
+        }
         Err(error) => {
-            let change = if matches!(
+            let _span = crate::stage_trace::span("daily.commit_batch.item_finish");
+            let finish = !matches!(
                 error,
                 Error::OutcomeUnknown(_)
                     | Error::Storage(_)
@@ -1603,12 +1685,8 @@ fn update_batch_item(
                         task_control::Error::StorageUnavailable(_)
                             | task_control::Error::OutcomeUnknown(_)
                     )
-            ) {
-                Change::RequireVerification {
-                    item_id: item.item_id.clone(),
-                    reason: "item execution result not confirmed inside update batch; committed receipt not yet established".into(),
-                }
-            } else {
+            );
+            let change = if finish {
                 Change::FinishItem(
                     item.item_id.clone(),
                     task_control::ItemOutcome {
@@ -1617,9 +1695,24 @@ fn update_batch_item(
                         evidence: None,
                     },
                 )
+            } else {
+                Change::RequireVerification {
+                    item_id: item.item_id.clone(),
+                    reason: "item execution result not confirmed inside update batch; committed receipt not yet established".into(),
+                }
             };
-            crate::sqlite_tasks::transition_light_tx(c, snapshot, &item.run_id, change)
-                .map_err(Error::Task)?;
+            crate::task_control::decide_head(
+                head,
+                Some(&mut item_row),
+                &item.run_id,
+                change,
+                Utc::now(),
+            )
+            .map_err(Error::Task)?;
+            if finish {
+                crate::sqlite_tasks::write_item_row(c, &item.task_id, &item_row)
+                    .map_err(Error::Task)?;
+            }
             Ok(Err(error))
         }
     }
@@ -1645,6 +1738,18 @@ impl TaskRepository for SqliteCompactMarket {
         retry: Option<&RetryGuard>,
     ) -> Result<Acceptance, task_control::Error> {
         self.tasks.accept(id, command, work, run, retry)
+    }
+    fn accept_streamed(
+        &self,
+        id: &str,
+        command: &Command,
+        shared_evidence: Option<Value>,
+        scopes: BTreeSet<String>,
+        items: &mut dyn Iterator<Item = ItemSpec>,
+        run: &str,
+    ) -> Result<Acceptance, task_control::Error> {
+        self.tasks
+            .accept_streamed(id, command, shared_evidence, scopes, items, run)
     }
     fn transition(
         &self,
@@ -1702,26 +1807,33 @@ impl crate::official_market::DailyCollectionRepository for SqliteCompactMarket {
             let tx = c
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(storage)?;
-            let mut snapshot = crate::sqlite_tasks::read_bound_task(&tx, task_id)
+            let mut head = crate::sqlite_tasks::read_task_head(&tx, task_id)
                 .map_err(Error::Task)?
                 .ok_or(Error::Task(task_control::Error::TaskNotFound))?;
-            if snapshot.task.status == task_control::Status::Pending {
-                let run_id = items
-                    .first()
-                    .map(|item| item.run_id.clone())
-                    .ok_or_else(|| invalid("collection batch carries no items"))?;
-                crate::sqlite_tasks::transition_light_tx(
-                    &tx,
-                    &mut snapshot,
+            let run_id = items
+                .first()
+                .map(|item| item.run_id.clone())
+                .ok_or_else(|| invalid("collection batch carries no items"))?;
+            let mut persisted_revision = head.state_revision;
+            if head.status == task_control::Status::Pending {
+                crate::task_control::decide_head(
+                    &mut head,
+                    None,
                     &run_id,
                     Change::Claim,
+                    Utc::now(),
                 )
                 .map_err(Error::Task)?;
+                crate::sqlite_tasks::persist_head(&tx, &head, persisted_revision)
+                    .map_err(Error::Task)?;
+                persisted_revision = head.state_revision;
             }
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                out.push(collection_batch_item(&tx, &mut snapshot, item)?);
+                out.push(collection_batch_item(&tx, &mut head, item)?);
             }
+            crate::sqlite_tasks::persist_head(&tx, &head, persisted_revision)
+                .map_err(Error::Task)?;
             tx.commit().map_err(storage)?;
             Ok(Some(out))
         })
@@ -1730,7 +1842,7 @@ impl crate::official_market::DailyCollectionRepository for SqliteCompactMarket {
 
 fn collection_batch_item(
     c: &Connection,
-    snapshot: &mut TaskSnapshot,
+    head: &mut task_control::TaskHead,
     item: &CollectionCandidate,
 ) -> Result<Result<Receipt, Error>, Error> {
     if let Some(event) = series::event_by_result(c, &item.publication_id)? {
@@ -1747,17 +1859,36 @@ fn collection_batch_item(
             task_revision: event.task_revision as u64,
         }));
     }
-    crate::sqlite_tasks::transition_light_tx(
-        c,
-        snapshot,
+    let mut item_row = crate::sqlite_tasks::read_task_item(c, &item.task_id, &item.item_id)
+        .map_err(Error::Task)?
+        .ok_or(Error::Task(task_control::Error::RevisionConflict))?;
+    let now = Utc::now();
+    crate::task_control::decide_head(
+        head,
+        Some(&mut item_row),
         &item.run_id,
         Change::StartItem(item.item_id.clone()),
+        now,
     )
     .map_err(Error::Task)?;
+    crate::sqlite_tasks::write_item_row(c, &item.task_id, &item_row).map_err(Error::Task)?;
+    c.execute(
+        "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
+        params![
+            &item.task_id,
+            &item.item_id,
+            &item.run_id,
+            i64::try_from(head.state_revision)
+                .map_err(|_| integrity("task revision out of range"))?,
+            now.to_rfc3339()
+        ],
+    )
+    .map_err(storage)?;
+    let expected_revision = head.state_revision;
     let committed = {
         c.execute_batch("SAVEPOINT collection_batch_item")
             .map_err(storage)?;
-        let outcome = collection_item_commit(c, item);
+        let outcome = collection_item_commit(c, item, expected_revision);
         match outcome {
             Ok(receipt) => {
                 c.execute_batch("RELEASE collection_batch_item")
@@ -1772,11 +1903,32 @@ fn collection_batch_item(
         }
     };
     match committed {
-        Ok(receipt) => Ok(Ok(receipt)),
+        Ok(receipt) => {
+            crate::task_control::decide_head(
+                head,
+                Some(&mut item_row),
+                &item.run_id,
+                Change::FinishItem(
+                    item.item_id.clone(),
+                    task_control::ItemOutcome {
+                        success: true,
+                        error: None,
+                        evidence: Some(serde_json::json!({
+                            "result_id": item.publication_id,
+                            "result_kind": "market_update"
+                        })),
+                    },
+                ),
+                Utc::now(),
+            )
+            .map_err(Error::Task)?;
+            commit_terminal(head);
+            Ok(Ok(receipt))
+        }
         Err(error) => {
-            crate::sqlite_tasks::transition_light_tx(
-                c,
-                snapshot,
+            crate::task_control::decide_head(
+                head,
+                Some(&mut item_row),
                 &item.run_id,
                 Change::FinishItem(
                     item.item_id.clone(),
@@ -1786,14 +1938,21 @@ fn collection_batch_item(
                         evidence: None,
                     },
                 ),
+                Utc::now(),
             )
             .map_err(Error::Task)?;
+            crate::sqlite_tasks::write_item_row(c, &item.task_id, &item_row)
+                .map_err(Error::Task)?;
             Ok(Err(error))
         }
     }
 }
 
-fn collection_item_commit(c: &Connection, item: &CollectionCandidate) -> Result<Receipt, Error> {
+fn collection_item_commit(
+    c: &Connection,
+    item: &CollectionCandidate,
+    expected_revision: u64,
+) -> Result<Receipt, Error> {
     compact_market::canonical_entity(&item.symbol).map_err(integrity)?;
     let bars: Vec<CompactBar> = item
         .bars
@@ -1840,13 +1999,6 @@ fn collection_item_commit(c: &Connection, item: &CollectionCandidate) -> Result<
             adjustment_evidence: item.adjustment_evidence.clone(),
         }),
     )?;
-    let revision: i64 = c
-        .query_row(
-            "SELECT state_revision FROM tasks WHERE task_id=?1",
-            [&item.task_id],
-            |r| r.get(0),
-        )
-        .map_err(storage)?;
     let scope = Scope {
         symbol: item.symbol.clone(),
         period: Period::Day,
@@ -1859,8 +2011,7 @@ fn collection_item_commit(c: &Connection, item: &CollectionCandidate) -> Result<
             item_id: &item.item_id,
             run_id: &item.run_id,
             occupancy_key: &scope.occupancy_key(),
-            expected_task_revision: u64::try_from(revision)
-                .map_err(|_| integrity("task revision out of range"))?,
+            expected_task_revision: expected_revision,
             entity: &item.symbol,
             period: Period::Day,
             base_version_id: None,
@@ -1876,6 +2027,7 @@ fn collection_item_commit(c: &Connection, item: &CollectionCandidate) -> Result<
             event_evidence_digest: evidence,
             published_at: Some(item.published_at),
             staged_version_id: Some(item.version_id.as_str()),
+            defer_task_row: true,
         },
     )
 }
@@ -1989,6 +2141,7 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 event_evidence_digest: event_evidence,
                 published_at: Some(v.published_at),
                 staged_version_id: Some(command.version_id.as_str()),
+                defer_task_row: false,
             };
             let receipt = series_commit::commit_series_tx(&tx, &w)?;
             tx.commit().map_err(storage)?;

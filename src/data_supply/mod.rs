@@ -43,6 +43,7 @@ pub mod collect;
 
 pub mod default_range;
 pub mod default_selection;
+pub mod plan;
 
 pub mod range;
 

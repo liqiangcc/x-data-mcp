@@ -67,7 +67,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     assert!(s.request("initialize", json!({}))["result"]["serverInfo"].is_object());
     let listing = s.request("tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), if cfg!(target_os = "linux") { 21 } else { 20 });
+    assert_eq!(tools.len(), if cfg!(target_os = "linux") { 23 } else { 22 });
     let caps = s.call("get_data_capabilities", json!({}), false);
     let listed: std::collections::BTreeSet<_> =
         tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -157,7 +157,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
             .iter()
             .all(|r| !r["detail"].as_str().unwrap_or_default().contains("#225"))
     );
-    assert_eq!(republish["capability_revision"], "generic-data-v6");
+    assert_eq!(republish["capability_revision"], "generic-data-v7");
     let schema =
         |name: &str, field: &str| tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();
     for entry in x_data_mcp::data_supply::registry::entries() {
@@ -179,6 +179,8 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
                 | x_data_mcp::data_supply::registry::Handler::Retry
                 | x_data_mcp::data_supply::registry::Handler::Task
                 | x_data_mcp::data_supply::registry::Handler::Cancel
+                | x_data_mcp::data_supply::registry::Handler::PlanMarketUpdate
+                | x_data_mcp::data_supply::registry::Handler::RunMarketUpdate
         ) {
             continue;
         }
@@ -258,14 +260,16 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     );
     let rev = view["state_revision"].as_u64().unwrap();
     assert!(rev > 0);
-    assert_eq!(
-        s.call(
-            "cancel_task",
-            json!({"contract_version":"v1","task_id":a["task_id"],"expected_revision":rev-1}),
-            true
-        )["code"],
-        "precondition_conflict"
+    // A stale expected_revision no longer rejects on a live task — cancel
+    // applies at the committed revision; here it is idempotent because
+    // the task is already cancel_requested.
+    let cancelled = s.call(
+        "cancel_task",
+        json!({"contract_version":"v1","task_id":a["task_id"],"expected_revision":rev-1}),
+        false,
     );
+    assert_eq!(cancelled["status"], "cancel_requested");
+    assert_eq!(cancelled["state_revision"], rev);
     s.call(
         "cancel_task",
         json!({"contract_version":"v1","task_id":a["task_id"],"expected_revision":rev}),

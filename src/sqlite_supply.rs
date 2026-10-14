@@ -8,7 +8,7 @@ use crate::{
     },
 };
 use chrono::{DateTime, Datelike, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 #[derive(Clone)]
 pub struct SqliteSupply {
     pub market: MarketBackend,
@@ -919,6 +919,173 @@ fn task_facts_light(c: &Connection, id: &str, access: &Access) -> Result<TaskFac
         yearly_results: vec![],
     })
 }
+/// Head-only task facts (PLANRUN-BOUNDED-READS): every `summary` and
+/// bounded-progress field read from `tasks` columns plus
+/// `shared_evidence` extracted by `json_extract` — the multi-MB
+/// `frozen_work_json` item list and per-item output rows are never
+/// materialized. The authorization and bound-request rules are the same
+/// ones `read_bound_task`/`task_facts_head` enforce.
+fn task_head_facts(
+    c: &Connection,
+    id: &str,
+    access: &Access,
+) -> Result<crate::data_supply::observe::TaskHeadFacts, Error> {
+    // Owner-only check evidence must not leak integrity diagnostics to a reader.
+    if *access != Access::local() {
+        let private: bool = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE task_id=?1 AND json_extract(command_key_json,'$.dataset')='task.verification')",
+            [id], |r| r.get(0),
+        ).map_err(storage)?;
+        if private {
+            return Err(invalid("forbidden"));
+        }
+    }
+    let mut stmt = c.prepare(
+        "SELECT command_key_json,status,state_revision,accepted_run_id,owner_run_id,created_at,last_progress_at,result_json,item_count,items_pending,items_running,items_finished,items_succeeded,evidence_digest,json_extract(frozen_work_json,'$.shared_evidence') FROM tasks WHERE task_id=?1",
+    ).map_err(storage)?;
+    let mut rows = stmt.query([id]).map_err(storage)?;
+    let Some(r) = rows.next().map_err(storage)? else {
+        let binding: Option<String> = c
+            .query_row(
+                "SELECT request_id FROM requests WHERE task_id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        return match binding {
+            None => Err(Error::Task(crate::task_control::Error::TaskNotFound)),
+            Some(_) => Err(Error::Task(crate::task_control::Error::NeedsVerification(
+                "task binding/execution missing".into(),
+            ))),
+        };
+    };
+    let status: String = r.get(1).map_err(storage)?;
+    let key: crate::task_control::CommandKey =
+        serde_json::from_str(&r.get::<_, String>(0).map_err(storage)?).map_err(storage)?;
+    let evidence: Option<serde_json::Value> = r
+        .get::<_, Option<String>>(14)
+        .map_err(storage)?
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(storage)?;
+    // The digest column and the evidence marker inside the blob must
+    // agree — the same binding `read_task` enforces, minus the full
+    // `frozen_work_json` decode.
+    let column_digest: Option<String> = r.get(13).map_err(storage)?;
+    if column_digest.as_deref()
+        != evidence
+            .as_ref()
+            .and_then(|e| e.get("evidence_digest"))
+            .and_then(serde_json::Value::as_str)
+    {
+        return Err(Error::Task(crate::task_control::Error::NeedsVerification(
+            "task evidence digest column/blob mismatch".into(),
+        )));
+    }
+    if !authorized_head(c, id, &key, access)? {
+        return Err(invalid("forbidden"));
+    }
+    let request: String = c
+        .query_row(
+            "SELECT request_id FROM requests WHERE task_id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?
+        .ok_or_else(|| {
+            Error::Task(crate::task_control::Error::NeedsVerification(
+                "task binding/execution missing".into(),
+            ))
+        })?;
+    crate::sqlite_tasks::read_request(c, &request)?;
+    let head = crate::task_control::TaskHead {
+        task_id: id.into(),
+        key,
+        status: serde_json::from_str(&format!("\"{status}\"")).map_err(storage)?,
+        state_revision: crate::sqlite_tasks::read_revision(r, 2).map_err(storage)?,
+        accepted_run_id: r.get(3).map_err(storage)?,
+        owner_run_id: r.get(4).map_err(storage)?,
+        last_progress_at: r
+            .get::<_, String>(6)
+            .map_err(storage)?
+            .parse()
+            .map_err(storage)?,
+        result: r
+            .get::<_, Option<String>>(7)
+            .map_err(storage)?
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(storage)?,
+        counts: crate::task_control::ItemCounts {
+            total: r.get::<_, i64>(8).map_err(storage)? as u64,
+            pending: r.get::<_, i64>(9).map_err(storage)? as u64,
+            running: r.get::<_, i64>(10).map_err(storage)? as u64,
+            finished: r.get::<_, i64>(11).map_err(storage)? as u64,
+            succeeded: r.get::<_, i64>(12).map_err(storage)? as u64,
+        },
+        evidence_digest: column_digest,
+    };
+    let created_at = r
+        .get::<_, String>(5)
+        .map_err(storage)?
+        .parse()
+        .map_err(storage)?;
+    Ok(crate::data_supply::observe::TaskHeadFacts {
+        request_id: request,
+        head,
+        created_at,
+        shared_evidence: evidence,
+    })
+}
+/// `authorized` at head depth: the dataset rule is unchanged; per-item
+/// `target` checks stream `task_items.target_json` rows — they only run
+/// when the answer can depend on items (mixed-period compound dataset or
+/// a restricted security allowlist), and never materialize beyond a row.
+fn authorized_head(
+    c: &Connection,
+    id: &str,
+    key: &crate::task_control::CommandKey,
+    access: &Access,
+) -> Result<bool, Error> {
+    if key.dataset == "task.verification" {
+        return Ok(*access == Access::local());
+    }
+    let mut datasets: Vec<Dataset> = match key.dataset.as_str() {
+        "market.daily" => vec![Dataset::Daily],
+        "market.yearly" => vec![Dataset::Yearly],
+        "securities.catalog" => vec![Dataset::Catalog],
+        "legacy_market_compound" => vec![],
+        _ => return Ok(false),
+    };
+    if key.dataset == "legacy_market_compound" || access.securities.is_some() {
+        let mut stmt = c
+            .prepare("SELECT target_json FROM task_items WHERE task_id=?1")
+            .map_err(storage)?;
+        let mut rows = stmt.query([id]).map_err(storage)?;
+        while let Some(r) = rows.next().map_err(storage)? {
+            let target: serde_json::Value =
+                serde_json::from_str(&r.get::<_, String>(0).map_err(storage)?).map_err(storage)?;
+            if key.dataset == "legacy_market_compound" {
+                datasets.push(if target["period"] == "day" {
+                    Dataset::Daily
+                } else {
+                    Dataset::Yearly
+                });
+            }
+            if let Some(allowed) = &access.securities {
+                let ok = target["symbol"].as_str().is_none_or(|s| {
+                    crate::data_supply::observe::entity(s).is_some_and(|e| allowed.contains(&e))
+                });
+                if !ok {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    Ok(datasets.into_iter().all(|d| access.allows(d, None)))
+}
 /// Whether `access` may see tasks of `dataset` at all.
 fn dataset_visible(dataset: &str, access: &Access) -> bool {
     match dataset {
@@ -932,30 +1099,23 @@ fn dataset_visible(dataset: &str, access: &Access) -> bool {
         _ => false,
     }
 }
+/// Head facts of ONE task when the caller may see it (dataset allowed and
+/// every item symbol allowed); `None` = hidden from this caller.
+fn load_task_head_facts(
+    c: &Connection,
+    id: &str,
+    access: &Access,
+) -> Result<Option<crate::data_supply::observe::TaskHeadFacts>, Error> {
+    match task_head_facts(c, id, access) {
+        Ok(f) => Ok(Some(f)),
+        Err(Error::Invalid(s)) if s == "forbidden" => Ok(None),
+        Err(e) => Err(e),
+    }
+}
 /// Light facts of ONE task when the caller may see it (dataset allowed and
 /// every item symbol allowed); `None` = hidden from this caller. This is
 /// the per-row body the old full `task_list` ran for every task.
 fn load_task_facts(c: &Connection, id: &str, access: &Access) -> Result<Option<TaskFacts>, Error> {
-    let (key, work): (String, String) = c
-        .query_row(
-            "SELECT command_key_json,frozen_work_json FROM tasks WHERE task_id=?1",
-            [id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .map_err(storage)?;
-    let key: crate::task_control::CommandKey = serde_json::from_str(&key).map_err(storage)?;
-    if !dataset_visible(&key.dataset, access) {
-        return Ok(None);
-    }
-    let work: crate::task_control::FrozenWork = serde_json::from_str(&work).map_err(storage)?;
-    if work.items.iter().any(|i| {
-        i.target["symbol"].as_str().is_some_and(|s| {
-            crate::data_supply::observe::entity(s)
-                .is_none_or(|e| access.securities.as_ref().is_some_and(|a| !a.contains(&e)))
-        })
-    }) {
-        return Ok(None);
-    }
     match task_facts_light(c, id, access) {
         Ok(f) => Ok(Some(f)),
         Err(Error::Invalid(s)) if s == "forbidden" => Ok(None),
@@ -1068,7 +1228,7 @@ fn scan_tasks(
         .flatten();
     let mut facts = vec![];
     for (id, _) in rows {
-        if let Some(f) = load_task_facts(c, &id, access)? {
+        if let Some(f) = load_task_head_facts(c, &id, access)? {
             facts.push(f);
         }
     }
@@ -1081,7 +1241,10 @@ fn scan_tasks(
 /// Without a `scope_key` index the scan is O(task_scopes rows).
 /// Related tasks of one subject: the selected facts plus the total number of
 /// related (dataset-visible) tasks before the in-flight + latest-N cut.
-type RelatedSelection = (Vec<std::rc::Rc<TaskFacts>>, usize);
+type RelatedSelection = (
+    Vec<std::rc::Rc<crate::data_supply::observe::TaskHeadFacts>>,
+    usize,
+);
 type RelatedTasks = (
     std::collections::HashMap<String, RelatedSelection>,
     RelatedSelection,
@@ -1176,7 +1339,10 @@ fn related_tasks_for(
     }
     // All in-flight tasks plus the newest RELATED_FINISHED_CAP finished ones,
     // in list order; facts are loaded once per distinct task.
-    let mut loaded: HashMap<String, Option<std::rc::Rc<TaskFacts>>> = HashMap::new();
+    let mut loaded: HashMap<
+        String,
+        Option<std::rc::Rc<crate::data_supply::observe::TaskHeadFacts>>,
+    > = HashMap::new();
     let mut select = |candidates: &BTreeSet<Candidate>| -> Result<RelatedSelection, Error> {
         let mut finished = 0usize;
         let mut tasks = vec![];
@@ -1190,7 +1356,7 @@ fn related_tasks_for(
             let facts = match loaded.get(id) {
                 Some(found) => found.clone(),
                 None => {
-                    let facts = load_task_facts(c, id, access)?.map(std::rc::Rc::new);
+                    let facts = load_task_head_facts(c, id, access)?.map(std::rc::Rc::new);
                     loaded.insert(id.clone(), facts.clone());
                     facts
                 }
@@ -1395,6 +1561,82 @@ struct SqliteProgressRead<'a> {
     ctx: std::cell::RefCell<VerifyCtx>,
 }
 impl crate::data_supply::observe::ProgressRead for SqliteProgressRead<'_> {
+    fn task_head_facts(
+        &self,
+        id: &str,
+        access: &Access,
+    ) -> Result<crate::data_supply::observe::TaskHeadFacts, Error> {
+        task_head_facts(self.c, id, access)
+    }
+    /// Keyset slice of not-yet-successful items (PLANRUN-BOUNDED-READS):
+    /// `item_id > after`, LIMIT `limit`, decoded one row at a time — the
+    /// page is bounded by `limit`, never by task size.
+    fn unfinished_items(
+        &self,
+        id: &str,
+        after: Option<&str>,
+        limit: usize,
+        access: &Access,
+    ) -> Result<Vec<crate::task_control::TaskItem>, Error> {
+        task_head_facts(self.c, id, access)?;
+        let mut stmt = self
+            .c
+            .prepare(
+                "SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json                  FROM task_items WHERE task_id=?1 AND item_id>?2                  AND (outcome_json IS NULL OR json_extract(outcome_json,'$.success')=0)                  ORDER BY item_id LIMIT ?3",
+            )
+            .map_err(storage)?;
+        let mut rows = stmt
+            .query(rusqlite::params![id, after.unwrap_or(""), limit as i64])
+            .map_err(storage)?;
+        let mut items = Vec::new();
+        while let Some(r) = rows.next().map_err(storage)? {
+            let stage: String = r.get(5).map_err(storage)?;
+            items.push(crate::task_control::TaskItem {
+                spec: crate::task_control::ItemSpec {
+                    item_id: r.get(0).map_err(storage)?,
+                    target: serde_json::from_str(&r.get::<_, String>(1).map_err(storage)?)
+                        .map_err(storage)?,
+                    progress_unit: r.get(2).map_err(storage)?,
+                    frozen_inputs: serde_json::from_str(&r.get::<_, String>(3).map_err(storage)?)
+                        .map_err(storage)?,
+                    scope_keys: serde_json::from_str(&r.get::<_, String>(4).map_err(storage)?)
+                        .map_err(storage)?,
+                },
+                stage: serde_json::from_str(&format!("\"{stage}\"")).map_err(storage)?,
+                outcome: r
+                    .get::<_, Option<String>>(6)
+                    .map_err(storage)?
+                    .map(|s| serde_json::from_str(&s))
+                    .transpose()
+                    .map_err(storage)?,
+            });
+        }
+        Ok(items)
+    }
+    /// Failed items grouped by `reason_code`: one aggregate-free scan of
+    /// the failed rows, reading only a bounded prefix of each error.
+    fn failed_reason_counts(
+        &self,
+        id: &str,
+        access: &Access,
+    ) -> Result<std::collections::BTreeMap<String, usize>, Error> {
+        task_head_facts(self.c, id, access)?;
+        let mut stmt = self
+            .c
+            .prepare(
+                "SELECT substr(COALESCE(json_extract(outcome_json,'$.error'),''),1,400) FROM task_items WHERE task_id=?1 AND json_extract(outcome_json,'$.success')=0",
+            )
+            .map_err(storage)?;
+        let mut rows = stmt.query(rusqlite::params![id]).map_err(storage)?;
+        let mut counts = std::collections::BTreeMap::new();
+        while let Some(r) = rows.next().map_err(storage)? {
+            let error: String = r.get(0).map_err(storage)?;
+            *counts
+                .entry(crate::data_supply::observe::reason_code(&error).to_owned())
+                .or_insert(0) += 1;
+        }
+        Ok(counts)
+    }
     /// Progress/metadata reads run at the committed-state verification
     /// tier (XP-020): every touched `data_versions` row is re-verified
     /// by `committed_facts` (published state + recomputed
@@ -1468,6 +1710,13 @@ impl ObservationRepository for SqliteSupply {
             let mut ctx = VerifyCtx;
             task_facts(c, &mut ctx, id, access, true)
         })
+    }
+    fn task_head_facts(
+        &self,
+        id: &str,
+        access: &Access,
+    ) -> Result<crate::data_supply::observe::TaskHeadFacts, Error> {
+        self.market.read(|c| task_head_facts(c, id, access))
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)

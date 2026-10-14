@@ -165,6 +165,44 @@ pub struct TaskSnapshot {
     pub claims: Vec<ScopeClaim>,
 }
 impl TaskSnapshot {
+    /// O(1) head projection of this snapshot: the row-level view
+    /// `decide`/`read_task_head` maintain, without the item list.
+    pub fn head(&self) -> TaskHead {
+        TaskHead {
+            task_id: self.task.task_id.clone(),
+            key: self.task.key.clone(),
+            status: self.task.status,
+            state_revision: self.task.state_revision,
+            accepted_run_id: self.task.accepted_run_id.clone(),
+            owner_run_id: self.task.owner_run_id.clone(),
+            last_progress_at: self.task.last_progress_at,
+            result: self.task.result.clone(),
+            counts: ItemCounts {
+                total: self.items.len() as u64,
+                pending: self
+                    .items
+                    .iter()
+                    .filter(|i| i.stage == Stage::Pending)
+                    .count() as u64,
+                running: self
+                    .items
+                    .iter()
+                    .filter(|i| i.stage == Stage::Running)
+                    .count() as u64,
+                finished: self
+                    .items
+                    .iter()
+                    .filter(|i| i.stage == Stage::Finished)
+                    .count() as u64,
+                succeeded: self
+                    .items
+                    .iter()
+                    .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+                    .count() as u64,
+            },
+            evidence_digest: self.task.work.evidence_digest().map(str::to_string),
+        }
+    }
     pub fn visible_status(&self, run: &str) -> Status {
         visible_status(
             self.task.status,
@@ -356,6 +394,35 @@ pub trait TaskRepository {
         run: &str,
         retry: Option<&RetryGuard>,
     ) -> Result<Acceptance, Error>;
+    /// Streamed accept for unbounded item counts: persists each spec as
+    /// the iterator yields it instead of materializing the whole frozen
+    /// work tree in memory first. Semantics are identical to `accept`
+    /// (same binding, gates, transaction, and on-disk rows) except the
+    /// returned record is constructed rather than re-read — its `items`
+    /// list is empty and callers needing full detail re-read the task.
+    /// The default implementation materializes the whole list and
+    /// delegates to `accept`; backends with very large task admissions
+    /// override it to stream.
+    fn accept_streamed(
+        &self,
+        id: &str,
+        command: &Command,
+        shared_evidence: Option<Value>,
+        scopes: BTreeSet<String>,
+        items: &mut dyn Iterator<Item = ItemSpec>,
+        run: &str,
+    ) -> Result<Acceptance, Error> {
+        let mut work = FrozenWork {
+            items: Vec::new(),
+            scopes,
+            shared_evidence,
+        };
+        for item in items {
+            work.items.push(item);
+        }
+        work.validate()?;
+        self.accept(id, command, &work, run, None)
+    }
     fn transition(
         &self,
         id: &str,
@@ -413,7 +480,40 @@ pub fn decide(
     let cancellation_finished = matches!(change, Change::FinishCancellation);
     let recovery = matches!(change, Change::Reconcile);
     if recovery {
-        if s.visible_status(run) != s.task.status {
+        // A plan-run task left non-terminal by a vanished run closes as
+        // `interrupted` instead of parking in needs_verification: its
+        // per-chunk commits are durable (receipt + events land
+        // atomically), running items hold no outcome, and re-planning
+        // re-selects exactly the unfinished set. Explicit update_data and
+        // every other contract keep the needs_verification + verify path.
+        let foreign = s.task.accepted_run_id != run
+            || s.task
+                .owner_run_id
+                .as_deref()
+                .is_some_and(|owner| owner != run);
+        if foreign && s.task.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION
+        {
+            for item in s.items.iter_mut() {
+                if item.stage == Stage::Running {
+                    item.stage = Stage::Pending;
+                }
+            }
+            let succeeded = s
+                .items
+                .iter()
+                .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+                .count();
+            s.task.status = Status::Interrupted;
+            s.task.result = Some(serde_json::json!({
+                "interruption": {
+                    "reason": "service_restarted",
+                    "total_items": s.items.len(),
+                    "successful_items": succeeded,
+                    "unfinished_items": s.items.len() - succeeded,
+                    "resume": "re-plan with plan_market_update and resume with run_market_update",
+                }
+            }));
+        } else if s.visible_status(run) != s.task.status {
             s.task.status = Status::NeedsVerification;
         } else {
             return Ok(());
@@ -571,7 +671,33 @@ pub(crate) fn decide_head(
     let cancellation_finished = matches!(change, Change::FinishCancellation);
     let recovery = matches!(change, Change::Reconcile);
     if recovery {
-        if head.visible_status(run) != head.status {
+        // Same contract carve-out as `decide` (see it for why). The head
+        // path holds no item vector, so it can only close orphans whose
+        // running-item count is already zero; anything else belongs to
+        // the snapshot reconcile — refuse rather than diverge.
+        let foreign = head.accepted_run_id != run
+            || head
+                .owner_run_id
+                .as_deref()
+                .is_some_and(|owner| owner != run);
+        if foreign && head.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION {
+            if head.counts.running != 0 {
+                return Err(Error::NeedsVerification(
+                    "plan-run orphan with running items requires the snapshot reconcile path"
+                        .into(),
+                ));
+            }
+            head.status = Status::Interrupted;
+            head.result = Some(serde_json::json!({
+                "interruption": {
+                    "reason": "service_restarted",
+                    "total_items": head.counts.total,
+                    "successful_items": head.counts.succeeded,
+                    "unfinished_items": head.counts.total - head.counts.succeeded,
+                    "resume": "re-plan with plan_market_update and resume with run_market_update",
+                }
+            }));
+        } else if head.visible_status(run) != head.status {
             head.status = Status::NeedsVerification;
         } else {
             return Ok(());

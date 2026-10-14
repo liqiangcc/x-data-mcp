@@ -66,8 +66,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .timestamp_nanos_opt()
             .ok_or("run clock outside range")?
     );
-    // Uses the existing read-only schema check. Never creates/migrates a database,
-    // and does not reconcile old tasks or substitute a new store on failure.
+    // Uses the existing read-only schema check. Never creates/migrates a database
+    // or substitutes a new store on failure.
     // The backend is assembled once and shared across connections: on a
     // a compact database the repository reuses this process's lease
     // instead of acquiring a second flock.
@@ -75,6 +75,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let backend =
         x_data_mcp::sqlite_market::backend::MarketBackend::open_shared(&tasks, lease.clone())?;
     backend.tasks().candidates(&run_id)?;
+    // Plan-run tasks left non-terminal by a previous process close as
+    // `interrupted` here: their chunk-committed work is durable and the
+    // unfinished set is re-planned. Explicit update_data and all other
+    // contracts are untouched — their needs_verification marking stays a
+    // visible-state decision, not a startup write.
+    backend.tasks().reconcile_plan_run(&run_id)?;
     // The accept path only checks in-flight tasks; terminal history is
     // verified here, once per start. Any finding refuses to start.
     let findings = backend.tasks().registry_sweep()?;

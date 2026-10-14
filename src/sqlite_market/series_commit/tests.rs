@@ -703,6 +703,7 @@ fn replace_rollback_keeps_series_consistent() {
                 event_evidence_digest: continuity,
                 published_at: None,
                 staged_version_id: None,
+                defer_task_row: false,
             },
         )?;
         let _ = result;
@@ -1357,6 +1358,7 @@ fn check_binding_rejects_wrong_owner_state_target_and_occupancy() {
             event_evidence_digest: [0xAA; 32],
             published_at: None,
             staged_version_id: None,
+            defer_task_row: false,
         }
     }
 
@@ -1708,6 +1710,7 @@ fn metadata_commit_updates_updated_at_no_change_does_not() {
                 event_evidence_digest: evidence,
                 published_at: None,
                 staged_version_id: None,
+                defer_task_row: false,
             },
         )
     })
@@ -1928,6 +1931,7 @@ fn yearly_first_publish_creates_series_lineage_and_event() {
                     event_evidence_digest: y_evidence,
                     published_at: None,
                     staged_version_id: None,
+                    defer_task_row: false,
                 },
             )
         })
@@ -2546,6 +2550,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
                     event_evidence_digest: continuity,
                     published_at: None,
                     staged_version_id: None,
+                    defer_task_row: false,
                 },
             )
         })
@@ -2647,6 +2652,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
                     event_evidence_digest: continuity,
                     published_at: None,
                     staged_version_id: None,
+                    defer_task_row: false,
                 },
             )
         })
@@ -2853,6 +2859,7 @@ fn rejected_item_leaves_head_and_task_state_untouched() {
                     event_evidence_digest: continuity,
                     published_at: None,
                     staged_version_id: None,
+                    defer_task_row: false,
                 },
             )
         })

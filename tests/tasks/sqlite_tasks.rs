@@ -194,8 +194,11 @@ fn current_running_terminal_and_read_only_state_are_distinct_from_missing_eviden
     assert_eq!(running.visible_status("run-a"), Status::Running);
     assert_eq!(running.task.accepted_run_id, "run-a");
     assert_eq!(running.task.owner_run_id.as_deref(), Some("run-a"));
+    // The revision precondition still guards non-cancel writes; cancel is
+    // exempt on live tasks (it applies at the committed revision instead —
+    // see `stale_revision_cancel_applies_at_the_committed_revision`).
     assert!(matches!(
-        db.transition(&s.task.task_id, 0, "run-a", Change::RequestCancel),
+        db.transition(&s.task.task_id, 0, "run-a", Change::FinishExecution),
         Err(Error::RevisionConflict)
     ));
     for _ in 0..3 {
@@ -406,6 +409,79 @@ fn cancel_is_request_until_controlled_stop_and_retry_preserves_original() {
     assert_eq!(snapshot(replay).task.status, Status::Failed);
     assert_eq!(ctl.read_task(&original.task.task_id).unwrap(), stopped);
 }
+/// Cancellation is a monotone intent applied at the committed revision,
+/// not an overwrite of a caller-read state: a stale `expected_revision`
+/// no longer loses to execution progress on a live task. Terminal tasks
+/// keep the strict precondition.
+#[test]
+fn stale_revision_cancel_applies_at_the_committed_revision() {
+    let (_dir, db) = database();
+    let ctl = control(&db, "run-a");
+    let original = snapshot(accept(&db, "r", &["a", "b"]));
+    let id = original.task.task_id;
+    // Any off-current revision — lower or higher — applies the request to
+    // the state this transaction actually reads.
+    let requested = ctl.cancel(&id, original.task.state_revision + 7).unwrap();
+    assert_eq!(requested.task.status, Status::CancelRequested);
+    assert_eq!(requested.task.state_revision, 1);
+    // Re-requesting cancel on the live task stays idempotent.
+    assert_eq!(ctl.cancel(&id, 0).unwrap(), requested);
+    let stopped = ctl.run_once(&Complete(true)).unwrap().unwrap();
+    assert_eq!(stopped.task.status, Status::Cancelled);
+    // Terminal + stale revision keeps the strict conflict; the matching
+    // revision is an idempotent no-op.
+    assert!(matches!(
+        ctl.cancel(&id, stopped.task.state_revision + 1),
+        Err(Error::RevisionConflict)
+    ));
+    assert_eq!(
+        ctl.cancel(&id, stopped.task.state_revision).unwrap(),
+        stopped
+    );
+}
+/// The same rule under racing revision progress: while a live task's
+/// revision advances elsewhere, a cancel carrying the original
+/// (now stale) revision still lands — the read→call window that made
+/// running plan-run tasks uncancellable is closed at the write.
+#[test]
+fn cancel_lands_while_another_thread_advances_the_revision() {
+    let (_dir, db) = database();
+    let ctl = control(&db, "run-a");
+    let original = snapshot(accept(&db, "r", &["a", "b"]));
+    let id = original.task.task_id;
+    let stale = original.task.state_revision;
+    let writer = db.clone();
+    let item = original.items[0].spec.item_id.clone();
+    let task = id.clone();
+    let progressed = std::thread::spawn(move || {
+        writer
+            .transition(&task, stale, "run-a", Change::Claim)
+            .unwrap();
+        writer
+            .transition(&task, stale + 1, "run-a", Change::StartItem(item.clone()))
+            .unwrap();
+        writer
+            .transition(
+                &task,
+                stale + 2,
+                "run-a",
+                Change::FinishItem(
+                    item,
+                    ItemOutcome {
+                        success: true,
+                        error: None,
+                        evidence: None,
+                    },
+                ),
+            )
+            .unwrap();
+    });
+    progressed.join().unwrap();
+    let requested = ctl.cancel(&id, stale).unwrap();
+    assert_eq!(requested.task.status, Status::CancelRequested);
+    assert!(requested.task.state_revision > stale);
+}
+
 #[test]
 fn completion_during_cancellation_uses_actual_outcomes_and_keeps_unfinished_items() {
     for n in [1, 2] {

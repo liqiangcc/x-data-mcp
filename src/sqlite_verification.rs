@@ -35,11 +35,15 @@ pub(crate) fn validate_task_link(c: &Connection, s: &TaskSnapshot) -> Result<(),
         return Ok(());
     };
     let id = if s.task.status == Status::Interrupted {
-        Some(
-            result["interruption"]["verification_task_id"]
-                .as_str()
-                .ok_or_else(|| integrity("interruption check link missing"))?,
-        )
+        match result["interruption"]["verification_task_id"].as_str() {
+            Some(id) => Some(id),
+            // The startup reconcile's own closure (plan-run orphans left
+            // by a vanished run) is a service-written record, not a
+            // verified stop — it carries no audit link. Any other
+            // interruption shape without a link stays unreadable.
+            None if result["interruption"]["reason"].as_str() == Some("service_restarted") => None,
+            None => return Err(integrity("interruption check link missing")),
+        }
     } else if result.get("stopped_write_check").is_some() {
         Some(s.task.task_id.as_str())
     } else {

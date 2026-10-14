@@ -373,6 +373,13 @@ pub struct TaskSummary {
     pub state_revision: u64,
     pub created_at: DateTime<Utc>,
     pub last_progress_at: DateTime<Utc>,
+    /// Set on tasks admitted through `run_market_update`: the verified
+    /// plan digest this task's frozen work was rebuilt from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
+    /// Companion to `plan_id`: the plan's per-class counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_counts: Option<PlanCounts>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -384,6 +391,11 @@ pub struct ProgressItem {
     pub stage: String,
     pub success: Option<bool>,
     pub error: Option<String>,
+    /// Stable machine-readable class of `error` (bounded large-task pages
+    /// only; see `observe::reason_code`). Absent on small tasks, which keep
+    /// their original shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -393,6 +405,23 @@ pub struct TaskListPage {
     pub items: Vec<TaskSummary>,
     pub next_cursor: Option<String>,
     pub page_complete: bool,
+}
+/// Bounded progress summary of the plan that produced a large task
+/// (`contract_version == market-plan-run-task-v1`): the plan-level facts
+/// a poller needs when per-item arrays are withheld by the bounded-read
+/// path — `task.plan_id`/`plan_counts` carry the digest and counts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanProgress {
+    pub plan_id: String,
+    pub generation_id: Option<String>,
+    pub target_day: Option<chrono::NaiveDate>,
+    /// Failed items by `reason_code`, counted when the first page of the
+    /// progress snapshot is built. Lets a caller route a failure class
+    /// (for example `REVISION_UNVERIFIED` to an explicit `update_data`
+    /// forward window) without paging every failed item.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub failed_by_reason: std::collections::BTreeMap<String, usize>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -410,6 +439,12 @@ pub struct ProgressPage {
     pub unfinished: Vec<ProgressItem>,
     pub next_cursor: Option<String>,
     pub page_complete: bool,
+    /// Set when the task exceeded the bounded-read threshold
+    /// (`observe::LARGE_TASK_ITEMS`): per-item arrays below are empty by
+    /// design and this object carries the plan summary instead. Absent
+    /// on smaller tasks, which keep the full per-item shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanProgress>,
     pub publication_versions: Vec<VersionRef>,
     pub frozen_daily_ranges: Vec<FrozenDailyRange>,
     pub range_results: Vec<RangeExecutionResult>,
@@ -584,6 +619,134 @@ pub struct Cancellation {
     pub task_id: String,
     pub status: TaskStatus,
     pub state_revision: u64,
+}
+
+/// `plan_market_update` input (generic-data-v7): a dataset-tagged request
+/// for a compact, deterministic whole-catalog update plan. `end_date`
+/// defaults to the Asia/Shanghai acceptance date and may only be earlier —
+/// a future target is rejected before any work is described.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "dataset", deny_unknown_fields)]
+pub enum PlanMarketUpdate {
+    #[serde(rename = "market.daily")]
+    Daily {
+        contract_version: ContractVersion,
+        end_date: Option<NaiveDate>,
+    },
+    #[serde(rename = "market.yearly")]
+    Yearly {
+        contract_version: ContractVersion,
+        end_date: Option<NaiveDate>,
+    },
+}
+impl PlanMarketUpdate {
+    pub fn dataset(&self) -> Dataset {
+        match self {
+            Self::Daily { .. } => Dataset::Daily,
+            Self::Yearly { .. } => Dataset::Yearly,
+        }
+    }
+    pub fn end_date(&self) -> Option<NaiveDate> {
+        match self {
+            Self::Daily { end_date, .. } | Self::Yearly { end_date, .. } => *end_date,
+        }
+    }
+}
+/// Per-class plan outcome counts; `eligible` is the only executable class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanCounts {
+    pub eligible: u64,
+    pub already_current: u64,
+    pub absent: u64,
+    pub ineligible: u64,
+}
+/// Count of non-eligible entities grouped by a fixed reason string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanReasonCount {
+    pub reason: String,
+    pub count: u64,
+}
+/// `plan_market_update` output: a compact digest-bound summary. `plan_id`
+/// is the sha256 of the deterministic canonical plan — the same state and
+/// the same `end_date` always produce the same id, and any catalog, head,
+/// gap or generation change produces a different one. The plan carries no
+/// entity list; eligibility detail stays server-side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanView {
+    pub plan_id: String,
+    pub dataset: Dataset,
+    pub contract_version: ContractVersion,
+    pub generation_ref: Option<String>,
+    pub target_day: NaiveDate,
+    pub counts: PlanCounts,
+    pub ineligible_reasons: Vec<PlanReasonCount>,
+    pub snapshot_time: DateTime<Utc>,
+}
+/// `run_market_update` input: binds the request to a plan digest the
+/// server re-derives under one read snapshot — a digest mismatch is a
+/// `plan_stale` refusal, never a partial execution.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "dataset", deny_unknown_fields)]
+pub enum RunMarketUpdate {
+    #[serde(rename = "market.daily")]
+    Daily {
+        contract_version: ContractVersion,
+        request_id: String,
+        target_day: NaiveDate,
+        plan_id: String,
+    },
+    #[serde(rename = "market.yearly")]
+    Yearly {
+        contract_version: ContractVersion,
+        request_id: String,
+        target_day: NaiveDate,
+        plan_id: String,
+    },
+}
+impl RunMarketUpdate {
+    pub fn dataset(&self) -> Dataset {
+        match self {
+            Self::Daily { .. } => Dataset::Daily,
+            Self::Yearly { .. } => Dataset::Yearly,
+        }
+    }
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::Daily { request_id, .. } | Self::Yearly { request_id, .. } => request_id,
+        }
+    }
+    pub fn target_day(&self) -> NaiveDate {
+        match self {
+            Self::Daily { target_day, .. } | Self::Yearly { target_day, .. } => *target_day,
+        }
+    }
+    pub fn plan_id(&self) -> &str {
+        match self {
+            Self::Daily { plan_id, .. } | Self::Yearly { plan_id, .. } => plan_id,
+        }
+    }
+}
+/// `run_market_update` acceptance: the admitted task identity plus the
+/// plan the request bound. The eligible set can cover the whole catalog,
+/// so the view returns counts, not item ids — progress and per-item
+/// outcomes are paged through `get_task_progress`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanRunAcceptance {
+    pub request_id: String,
+    pub task_id: String,
+    pub dataset: String,
+    pub contract_version: String,
+    pub plan_id: String,
+    pub reused: bool,
+    pub status: TaskStatus,
+    pub item_count: u64,
+    pub plan_counts: PlanCounts,
+    pub runtime_readiness: Readiness,
+    pub blocking_reasons: Vec<BlockingReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

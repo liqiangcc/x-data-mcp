@@ -394,46 +394,189 @@ impl<R: MarketRepository> Publisher<R> {
             .repository
             .task_item_binding(&command.task_id, &command.item_id)?
             .map(|binding| binding.item.spec.frozen_inputs);
-        let frozen_matches = if head.key.contract_version == super::tasks::CONTRACT_VERSION
-            && head.key.dataset == "market.daily"
-        {
-            // Generation mode stamps `source_generation_id` at accept;
-            // carry it through — its value is enforced by the worker's
-            // bound-session resolution, not by this input check.
-            let mut expected = super::tasks::frozen(
-                &evidence.base_version_id,
-                &evidence.base_integrity_sha256,
-                range,
-            );
-            if let Some(stamped) = item_frozen
-                .as_ref()
-                .and_then(|f| f.get("source_generation_id"))
-            {
-                expected["source_generation_id"] = stamped.clone();
-            }
-            item_frozen.as_ref() == Some(&expected)
-        } else if head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION
-            && head.key.dataset == "market.daily"
-        {
-            // The executed range must equal the union of the item's frozen
-            // required ranges (refresh + frozen gaps for update, frozen
-            // gaps only for backfill) on the frozen base identity.
-            item_frozen
-                .as_ref()
-                .and_then(|frozen| super::tasks::parse_default_frozen(frozen).ok())
-                .is_some_and(|frozen| {
-                    frozen.base_version_id == evidence.base_version_id
-                        && frozen.base_integrity_sha256 == evidence.base_integrity_sha256
-                        && frozen.union().ok().as_ref() == Some(range)
-                })
-        } else {
-            false
-        };
+        let frozen_matches = frozen_inputs_match(
+            &head.key.contract_version,
+            &head.key.dataset,
+            item_frozen.as_ref(),
+            evidence,
+            range,
+        );
         if range_task && !frozen_matches {
             return Err(Error::Conflict(
                 "range publication differs from accepted frozen inputs".into(),
             ));
         }
         Ok(())
+    }
+}
+
+/// Whether an item's accepted frozen inputs bind the executed base and range
+/// for the task's contract. Pure so the contract whitelist is testable
+/// without a repository: contracts outside the three known shapes never
+/// match.
+fn frozen_inputs_match(
+    contract_version: &str,
+    dataset: &str,
+    item_frozen: Option<&serde_json::Value>,
+    evidence: &Evidence,
+    range: &DateRange,
+) -> bool {
+    if contract_version == super::tasks::CONTRACT_VERSION && dataset == "market.daily" {
+        // Generation mode stamps `source_generation_id` at accept;
+        // carry it through — its value is enforced by the worker's
+        // bound-session resolution, not by this input check.
+        let mut expected = super::tasks::frozen(
+            &evidence.base_version_id,
+            &evidence.base_integrity_sha256,
+            range,
+        );
+        if let Some(stamped) = item_frozen.and_then(|f| f.get("source_generation_id")) {
+            expected["source_generation_id"] = stamped.clone();
+        }
+        item_frozen == Some(&expected)
+    } else if matches!(
+        contract_version,
+        super::tasks::DEFAULT_CONTRACT_VERSION | crate::data_supply::plan::RUN_CONTRACT_VERSION
+    ) && dataset == "market.daily"
+    {
+        // Plan-run items carry the default frozen shape (see
+        // `data_supply::plan::item_spec`), so they bind the same way.
+        // The executed range must equal the union of the item's frozen
+        // required ranges (refresh + frozen gaps for update, frozen
+        // gaps only for backfill) on the frozen base identity.
+        item_frozen
+            .and_then(|frozen| super::tasks::parse_default_frozen(frozen).ok())
+            .is_some_and(|frozen| {
+                frozen.base_version_id == evidence.base_version_id
+                    && frozen.base_integrity_sha256 == evidence.base_integrity_sha256
+                    && frozen.union().ok().as_ref() == Some(range)
+            })
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+mod frozen_inputs_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    /// The real plan-run item of sh.600026 from the market-wide private-stack
+    /// run (354 entities were rejected with `PUBLISH_PRECONDITION` because the
+    /// plan-run contract was missing from this check's whitelist).
+    fn plan_run_item() -> serde_json::Value {
+        serde_json::json!({
+            "base_integrity_sha256": "1507c411a0563fc1a7f03f8ed9cf521ab21e37673afeed866a8704ceec37ba08",
+            "base_version_id": "1507c411a0563fc1a7f03f8ed9cf521ab21e37673afeed866a8704ceec37ba08",
+            "proven_gap_ranges": [],
+            "refresh_range": {"start_date": "2002-05-23", "end_date": "2026-10-13"},
+            "selection_evidence": {"evidence_digest": "8e900d2e83fe07897056efe061c4673f8fac52e1be1b32881debda264680e5f1"},
+            "source_generation_id": "52fe6b77e031548d6c92e83fb387580669c10f257b770b3968ed573f04f000ae"
+        })
+    }
+
+    fn evidence(range: &DateRange) -> Evidence {
+        Evidence {
+            base_version_id: "1507c411a0563fc1a7f03f8ed9cf521ab21e37673afeed866a8704ceec37ba08"
+                .into(),
+            base_integrity_sha256:
+                "1507c411a0563fc1a7f03f8ed9cf521ab21e37673afeed866a8704ceec37ba08".into(),
+            candidate_sha256: "candidate".into(),
+            range: range.clone(),
+            same_qfq_basis_ref: "basis".into(),
+            revision_ref: None,
+            continuity: None,
+        }
+    }
+
+    fn full_range() -> DateRange {
+        DateRange {
+            start: day(2002, 5, 23),
+            end: day(2026, 10, 13),
+        }
+    }
+
+    #[test]
+    fn plan_run_contract_binds_like_the_default_contract() {
+        let range = full_range();
+        let item = plan_run_item();
+        for contract in [
+            super::super::tasks::DEFAULT_CONTRACT_VERSION,
+            crate::data_supply::plan::RUN_CONTRACT_VERSION,
+        ] {
+            assert!(
+                frozen_inputs_match(
+                    contract,
+                    "market.daily",
+                    Some(&item),
+                    &evidence(&range),
+                    &range
+                ),
+                "{contract} must accept an item whose frozen inputs equal the executed base and range"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_run_contract_still_fails_closed_on_any_drift() {
+        let range = full_range();
+        let item = plan_run_item();
+        let run = crate::data_supply::plan::RUN_CONTRACT_VERSION;
+        // executed range differs from the frozen union
+        let narrower = DateRange {
+            start: day(2026, 10, 9),
+            end: day(2026, 10, 13),
+        };
+        assert!(!frozen_inputs_match(
+            run,
+            "market.daily",
+            Some(&item),
+            &evidence(&narrower),
+            &narrower
+        ));
+        // executed base differs from the frozen base
+        let mut other_base = evidence(&range);
+        other_base.base_version_id = "f".repeat(64);
+        assert!(!frozen_inputs_match(
+            run,
+            "market.daily",
+            Some(&item),
+            &other_base,
+            &range
+        ));
+        // no accepted item, malformed item, or a different dataset
+        assert!(!frozen_inputs_match(
+            run,
+            "market.daily",
+            None,
+            &evidence(&range),
+            &range
+        ));
+        assert!(!frozen_inputs_match(
+            run,
+            "market.daily",
+            Some(&serde_json::json!({"base_version_id": "x"})),
+            &evidence(&range),
+            &range
+        ));
+        assert!(!frozen_inputs_match(
+            run,
+            "market.yearly",
+            Some(&item),
+            &evidence(&range),
+            &range
+        ));
+        // an unknown contract never matches
+        assert!(!frozen_inputs_match(
+            "unknown-v9",
+            "market.daily",
+            Some(&item),
+            &evidence(&range),
+            &range
+        ));
     }
 }

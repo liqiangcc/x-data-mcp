@@ -18,6 +18,13 @@ pub struct CombinedCandidate {
     pub record: Value,
     pub evidence: CombinedEvidence,
 }
+/// Execution batch bound: the same ≤100 ceiling the explicit update
+/// contract enforces on task acceptance. Chunked runners keep prepare,
+/// commit and covering working sets proportional to the chunk — a
+/// 5,224-item plan-run task peaks like a ≤100-item task instead of
+/// materializing the whole batch (private-stack run peaked ~969MB
+/// during `prepare_batch.base_reads` before this).
+pub(crate) const EXEC_CHUNK: usize = 100;
 pub struct Acquisition {
     pub batch: MarketDataBatch,
     pub evidence: Evidence,
@@ -101,8 +108,12 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         provider: &dyn RangeProvider,
     ) -> Result<ItemExecution, Error> {
         let mut binding = self.binding(task_id, item_id, "range")?;
-        let default_contract =
-            binding.head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
+        // Plan-run tasks carry the default frozen shape — the per-item work
+        // is identical; only how the item set was derived differs.
+        let default_contract = matches!(
+            binding.head.key.contract_version.as_str(),
+            super::tasks::DEFAULT_CONTRACT_VERSION | crate::data_supply::plan::RUN_CONTRACT_VERSION
+        );
         let republish_contract =
             binding.head.key.contract_version == super::tasks::REPUBLISH_CONTRACT_VERSION;
         if !matches!(
@@ -267,54 +278,72 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         provider: &dyn RangeProvider,
     ) -> Result<Option<()>, Error> {
         let _total = crate::stage_trace::span("daily.run_items.total");
-        let mut items = Vec::new();
-        // Frozen inputs of prepared default-contract items: their gap
-        // coverings append after the batch commit, per receipt.
-        let mut coverings: Vec<(String, Value)> = Vec::new();
-        let (prepared, mut fallback) = self.prepare_batch(task_id, item_ids, provider);
-        for (item, frozen) in prepared {
-            if let Some(frozen) = frozen {
-                coverings.push((item.item_id.clone(), frozen));
+        let mut offset = 0;
+        while offset < item_ids.len() {
+            // Cancellation lands between chunks: committed chunks keep
+            // their receipts, the remaining items take the per-item
+            // path which owns the cancellation finish semantics.
+            if offset > 0 && self.repository.task_head(task_id)?.status == Status::CancelRequested {
+                break;
             }
-            items.push(item);
-        }
-        if !items.is_empty() {
-            let commit_span = crate::stage_trace::span("daily.commit_batch");
-            let committed = self.repository.commit_update_batch(task_id, &items);
-            drop(commit_span);
-            let results = match committed {
-                Ok(Some(results)) => Some(results),
-                Ok(None) => return Ok(None),
-                Err(_) => {
-                    // Structural failure rolled the whole batch back:
-                    // isolate per item so one bad item cannot wedge the
-                    // task in a Running-retry loop (the batch contract).
-                    fallback.extend(items.iter().map(|item| item.item_id.clone()));
-                    None
+            let chunk = &item_ids[offset..(offset + EXEC_CHUNK).min(item_ids.len())];
+            let mut items = Vec::new();
+            // Frozen inputs of prepared default-contract items: their gap
+            // coverings append after the batch commit, per receipt.
+            let mut coverings: Vec<(String, Value)> = Vec::new();
+            let (prepared, mut fallback) = self.prepare_batch(task_id, chunk, provider);
+            for (item, frozen) in prepared {
+                if let Some(frozen) = frozen {
+                    coverings.push((item.item_id.clone(), frozen));
                 }
-            };
-            if let Some(results) = results {
-                if results.len() != items.len() {
-                    return Err(Error::Integrity(
-                        "update batch result count does not match items".into(),
-                    ));
-                }
-                for (item, result) in items.iter().zip(results) {
-                    match result {
-                        Ok(receipt) => {
-                            if let Some((_, frozen)) =
-                                coverings.iter().find(|(id, _)| *id == item.item_id)
-                            {
-                                self.ensure_default_coverings(frozen, &receipt.version_id)?;
+                items.push(item);
+            }
+            if !items.is_empty() {
+                let commit_span = crate::stage_trace::span("daily.commit_batch");
+                let committed = self.repository.commit_update_batch(task_id, &items);
+                drop(commit_span);
+                let results = match committed {
+                    Ok(Some(results)) => Some(results),
+                    // The first chunk's `None` keeps the documented
+                    // contract — the repository lacks the batch surface
+                    // and the caller runs the whole task per item.
+                    Ok(None) if offset == 0 => return Ok(None),
+                    // A mid-task `None`/structural error rolled the chunk
+                    // back: those items keep the per-item path.
+                    Ok(None) | Err(_) => {
+                        fallback.extend(items.iter().map(|item| item.item_id.clone()));
+                        None
+                    }
+                };
+                if let Some(results) = results {
+                    if results.len() != items.len() {
+                        return Err(Error::Integrity(
+                            "update batch result count does not match items".into(),
+                        ));
+                    }
+                    for (item, result) in items.iter().zip(results) {
+                        match result {
+                            Ok(receipt) => {
+                                if let Some((_, frozen)) =
+                                    coverings.iter().find(|(id, _)| *id == item.item_id)
+                                {
+                                    self.ensure_default_coverings(frozen, &receipt.version_id)?;
+                                }
                             }
+                            Err(_) => fallback.push(item.item_id.clone()),
                         }
-                        Err(_) => fallback.push(item.item_id.clone()),
                     }
                 }
             }
+            for item_id in fallback {
+                self.run_item(task_id, &item_id, provider)?;
+            }
+            offset += EXEC_CHUNK;
         }
-        for item_id in fallback {
-            self.run_item(task_id, &item_id, provider)?;
+        // Items past a cancellation break (or never reached) still take
+        // the authoritative per-item path.
+        for item_id in &item_ids[offset.min(item_ids.len())..] {
+            self.run_item(task_id, item_id, provider)?;
         }
         Ok(Some(()))
     }
@@ -481,8 +510,10 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         binding: &crate::task_control::ItemBinding,
         has_receipt: bool,
     ) -> Result<Option<PlannedItem>, Error> {
-        let default_contract =
-            binding.head.key.contract_version == super::tasks::DEFAULT_CONTRACT_VERSION;
+        let default_contract = matches!(
+            binding.head.key.contract_version.as_str(),
+            super::tasks::DEFAULT_CONTRACT_VERSION | crate::data_supply::plan::RUN_CONTRACT_VERSION
+        );
         let republish_contract =
             binding.head.key.contract_version == super::tasks::REPUBLISH_CONTRACT_VERSION;
         if !matches!(
