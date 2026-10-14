@@ -62,14 +62,20 @@ v7：schema 不变，无 `init`/`init20` 步骤，不碰 DB/WAL/generations，
 
 ### `.devin/skills/x-data-daily-sync/SKILL.md`
 - `capability_revision` 断言 `generic-data-v6` → `generic-data-v7`；
-- 日更编排改为 plan/run：acquire→verify→activate 之后，
+- 日更编排改为 plan/run 顺序，直接引用 `generic-data-v7.md` §7.1 的有序步骤
+  （共 8 步，**两步补漏不可省略**）：acquire→verify→activate 之后，
   `plan_market_update`（market.daily）→ 复核 counts/digest →
   `run_market_update`（带 plan 返回的 `target_day`+`plan_id`）→
   轮询 `get_task_progress` 至终态（大任务按 `unfinished` keyset 分页，
   只看 `status`/计数/`next_cursor`，不要期待逐 item 结果数组）→
-  `plan_market_update`
-  （market.yearly，要求 daily 无非终态任务）→ `run_market_update` →
-  readback。`plan_stale` → 重新 plan；不再按 ≤100 分批显式编排；
+  **按 `failed_by_reason` 补漏日线 `REVISION_UNVERIFIED`**（§7.2 显式
+  `update_data` 前向窗口）→ `plan_market_update`
+  （market.yearly，要求 daily 无非终态任务）→
+  `run_market_update`（market.yearly，只处理 `eligible`）→
+  **按 `ineligible_reasons` 补漏年线 `value_semantics_changed` /
+  `daily_replaced_since_derivation`**（§7.4 显式年线重推；**必须排在年线 run 之后**，
+  否则 run 的 `plan_id` 会 `plan_stale`）→ readback。`plan_stale` → 重新 plan；
+  不再按 ≤100 分批显式编排；
 - `.devin/evals/daily-sync-config.json` allowlist 加
   `mcp__x-data__plan_market_update`、`mcp__x-data__run_market_update`
   （`check_daily_sync_eval.py` 要求 eval allowlist == Skill allowlist，
