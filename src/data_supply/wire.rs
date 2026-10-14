@@ -391,6 +391,11 @@ pub struct ProgressItem {
     pub stage: String,
     pub success: Option<bool>,
     pub error: Option<String>,
+    /// Stable machine-readable class of `error` (bounded large-task pages
+    /// only; see `observe::reason_code`). Absent on small tasks, which keep
+    /// their original shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -411,6 +416,12 @@ pub struct PlanProgress {
     pub plan_id: String,
     pub generation_id: Option<String>,
     pub target_day: Option<chrono::NaiveDate>,
+    /// Failed items by `reason_code`, counted when the first page of the
+    /// progress snapshot is built. Lets a caller route a failure class
+    /// (for example `REVISION_UNVERIFIED` to an explicit `update_data`
+    /// forward window) without paging every failed item.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub failed_by_reason: std::collections::BTreeMap<String, usize>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

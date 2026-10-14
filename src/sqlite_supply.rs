@@ -1613,6 +1613,30 @@ impl crate::data_supply::observe::ProgressRead for SqliteProgressRead<'_> {
         }
         Ok(items)
     }
+    /// Failed items grouped by `reason_code`: one aggregate-free scan of
+    /// the failed rows, reading only a bounded prefix of each error.
+    fn failed_reason_counts(
+        &self,
+        id: &str,
+        access: &Access,
+    ) -> Result<std::collections::BTreeMap<String, usize>, Error> {
+        task_head_facts(self.c, id, access)?;
+        let mut stmt = self
+            .c
+            .prepare(
+                "SELECT substr(COALESCE(json_extract(outcome_json,'$.error'),''),1,400) FROM task_items WHERE task_id=?1 AND json_extract(outcome_json,'$.success')=0",
+            )
+            .map_err(storage)?;
+        let mut rows = stmt.query(rusqlite::params![id]).map_err(storage)?;
+        let mut counts = std::collections::BTreeMap::new();
+        while let Some(r) = rows.next().map_err(storage)? {
+            let error: String = r.get(0).map_err(storage)?;
+            *counts
+                .entry(crate::data_supply::observe::reason_code(&error).to_owned())
+                .or_insert(0) += 1;
+        }
+        Ok(counts)
+    }
     /// Progress/metadata reads run at the committed-state verification
     /// tier (XP-020): every touched `data_versions` row is re-verified
     /// by `committed_facts` (published state + recomputed

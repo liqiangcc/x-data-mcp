@@ -92,8 +92,22 @@ compact schema 21（见 [STATUS](../STATUS.md)）。schema 不变（仍 21），
 - 游标语义：大任务的 `next_cursor` 为 keyset 位置（末项
   `item_id`），翻页读到的是翻页时刻的最新项状态（非创建游标时的
   快照）；小任务保持原有快照分页语义不变。
-- 取消/失败排查：`unfinished` 恒含失败项（`success=false` + `error`），
-  未开始项 `success=null`。
+- 取消/失败排查：`unfinished` 恒含失败项（`success=false`），未开始项
+  `success=null`。大任务页里失败项的 `error` 截断到
+  `observe::BOUNDED_ERROR_CHARS`（240 字符，超出处追加 `… (N chars
+  total)`；完整文本留在任务记录里——一个除权实体的 `RevisionUnverified`
+  错误曾长达 ~94KB），并带稳定的 `reason_code`。
+- 失败原因归类：顶层 `plan.failed_by_reason`（`reason_code → 计数`，
+  首页快照时统计，无失败时省略）加上每个失败项的 `reason_code`，让调用
+  方按类别路由而不必翻完所有失败项。`reason_code` 取值（映射在
+  `observe::reason_code`，改动需同步本表）：
+
+  | reason_code | 含义 | 调用方动作 |
+  |---|---|---|
+  | `REVISION_UNVERIFIED` | 窗口内已发布历史被上游重算（典型：除权），无修订证据，按设计 fail-closed | 用 `update_data` 显式前向窗口 `[last_day+1, target_day]` 补（见 `v7-switch-checklist.md` §2），每任务 ≤100 项 |
+  | `PUBLISH_PRECONDITION` | 执行值与受理时冻结的输入不一致 | 不应出现；出现即缺陷，保留现场并报告，不要重试 |
+  | `NO_BARS_IN_RANGE` | 受理区间内无行情（停牌/退市） | 预期的 fail-closed，无需动作 |
+  | `OTHER` | 其它 | 读 `error`，必要时报告 |
 
 ## 6. 与 #294 的关系
 
