@@ -156,6 +156,8 @@ fn real_task_list_and_progress_freeze_state_and_enforce_authorization() {
         task_id: task.into(),
         page_size: 1,
         cursor: None,
+        wait_seconds: None,
+        since_revision: None,
     };
     let first = observer.progress(p.clone(), &Access::local()).unwrap();
     assert_eq!(first.total, 2);

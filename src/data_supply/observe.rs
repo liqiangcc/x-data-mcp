@@ -29,7 +29,9 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// wait was requested (absent or 0 — the immediate-return behavior),
 /// otherwise `min(seconds, 50)`.
 fn wait_budget(seconds: u32) -> Option<Duration> {
-    (seconds > 0).then(|| Duration::from_secs(u64::from(seconds.min(MAX_WAIT_SECONDS))))
+    (seconds > 0).then_some(Duration::from_secs(u64::from(
+        seconds.min(MAX_WAIT_SECONDS),
+    )))
 }
 #[derive(Clone)]
 pub struct TaskFacts {
