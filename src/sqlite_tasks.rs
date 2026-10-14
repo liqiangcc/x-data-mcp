@@ -104,6 +104,14 @@ impl SqliteTasks {
         })
         .map_err(storage)
     }
+    /// Startup-scoped reconcile: closes only `RUN_CONTRACT_VERSION` orphans
+    /// as `interrupted`. Explicit `update_data` and every other contract's
+    /// orphans keep their persisted state and revision byte-for-byte — for
+    /// those the needs_verification marking remains a visible-state
+    /// decision, never a startup write.
+    pub fn reconcile_plan_run(&self, run: &str) -> Result<usize, Error> {
+        self.write(|c| reconcile_tx(c, run, Some(crate::data_supply::plan::RUN_CONTRACT_VERSION)))
+    }
     /// Mechanical durable fact only: whether this item's StartItem transition
     /// committed a start marker. No contract or business filtering here.
     pub fn item_execution_started(&self, task_id: &str, item_id: &str) -> Result<bool, Error> {
@@ -1399,7 +1407,7 @@ impl TaskRepository for SqliteTasks {
         self.read(|c| candidates_tx(c, run))
     }
     fn reconcile(&self, run: &str) -> Result<usize, Error> {
-        self.write(|c| reconcile_tx(c, run))
+        self.write(|c| reconcile_tx(c, run, None))
     }
     /// O(1) per-item transition: verifies only the task-row revision (which
     /// serializes every mutation), decides on the caller-held snapshot in
@@ -1988,9 +1996,18 @@ pub(crate) fn transition_tx(
     change: Change,
 ) -> Result<TaskSnapshot, Error> {
     let old = read_bound_task(c, id)?.ok_or(Error::TaskNotFound)?;
-    if old.task.state_revision != revision {
+    // Cancellation is a monotone intent, not a blind overwrite of a
+    // caller-read state: a live task applies it at the revision this
+    // transaction actually reads. A running task advances its revision
+    // per item/commit, so a caller-held `expected_revision` precondition
+    // made cancelling live work unwinnable. Terminal tasks and every
+    // other change keep the strict expected-revision precondition.
+    if old.task.state_revision != revision
+        && !(matches!(change, Change::RequestCancel) && !old.task.status.terminal())
+    {
         return Err(Error::RevisionConflict);
     }
+    let expected = old.task.state_revision;
     let started_item = match &change {
         Change::StartItem(item_id) => Some(item_id.clone()),
         _ => None,
@@ -1998,8 +2015,8 @@ pub(crate) fn transition_tx(
     let now = Utc::now();
     let mut next = old;
     decide(&mut next, run, change, now)?;
-    if next.task.state_revision != revision {
-        write_task(c, &next, revision)?;
+    if next.task.state_revision != expected {
+        write_task(c, &next, expected)?;
         if let Some(item_id) = started_item {
             c.execute(
                 "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
@@ -2032,12 +2049,23 @@ pub(crate) fn candidates_tx(c: &Connection, run: &str) -> Result<Vec<TaskSnapsho
         .collect()
 }
 
-pub(crate) fn reconcile_tx(c: &Connection, run: &str) -> Result<usize, Error> {
+/// `only_contract` narrows the reconcile to one contract version — the
+/// service startup path passes `RUN_CONTRACT_VERSION` so a restart closes
+/// plan-run orphans without touching the persisted state of explicit
+/// update_data (or any other) orphans: for those, the needs_verification
+/// marking stays a visible-state decision, never a startup write.
+pub(crate) fn reconcile_tx(
+    c: &Connection,
+    run: &str,
+    only_contract: Option<&str>,
+) -> Result<usize, Error> {
     let mut stmt = c
-        .prepare("SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled','interrupted') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1))")
+        .prepare(
+            "SELECT task_id FROM tasks WHERE status NOT IN ('succeeded','partially_failed','failed','cancelled','interrupted') AND (accepted_run_id<>?1 OR (owner_run_id IS NOT NULL AND owner_run_id<>?1)) AND (?2 IS NULL OR json_extract(command_key_json,'$.contract_version')=?2)",
+        )
         .map_err(storage)?;
     let ids = stmt
-        .query_map([run], |r| r.get::<_, String>(0))
+        .query_map(params![run, only_contract], |r| r.get::<_, String>(0))
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;

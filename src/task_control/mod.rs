@@ -480,7 +480,40 @@ pub fn decide(
     let cancellation_finished = matches!(change, Change::FinishCancellation);
     let recovery = matches!(change, Change::Reconcile);
     if recovery {
-        if s.visible_status(run) != s.task.status {
+        // A plan-run task left non-terminal by a vanished run closes as
+        // `interrupted` instead of parking in needs_verification: its
+        // per-chunk commits are durable (receipt + events land
+        // atomically), running items hold no outcome, and re-planning
+        // re-selects exactly the unfinished set. Explicit update_data and
+        // every other contract keep the needs_verification + verify path.
+        let foreign = s.task.accepted_run_id != run
+            || s.task
+                .owner_run_id
+                .as_deref()
+                .is_some_and(|owner| owner != run);
+        if foreign && s.task.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION
+        {
+            for item in s.items.iter_mut() {
+                if item.stage == Stage::Running {
+                    item.stage = Stage::Pending;
+                }
+            }
+            let succeeded = s
+                .items
+                .iter()
+                .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
+                .count();
+            s.task.status = Status::Interrupted;
+            s.task.result = Some(serde_json::json!({
+                "interruption": {
+                    "reason": "service_restarted",
+                    "total_items": s.items.len(),
+                    "successful_items": succeeded,
+                    "unfinished_items": s.items.len() - succeeded,
+                    "resume": "re-plan with plan_market_update and resume with run_market_update",
+                }
+            }));
+        } else if s.visible_status(run) != s.task.status {
             s.task.status = Status::NeedsVerification;
         } else {
             return Ok(());
@@ -638,7 +671,33 @@ pub(crate) fn decide_head(
     let cancellation_finished = matches!(change, Change::FinishCancellation);
     let recovery = matches!(change, Change::Reconcile);
     if recovery {
-        if head.visible_status(run) != head.status {
+        // Same contract carve-out as `decide` (see it for why). The head
+        // path holds no item vector, so it can only close orphans whose
+        // running-item count is already zero; anything else belongs to
+        // the snapshot reconcile — refuse rather than diverge.
+        let foreign = head.accepted_run_id != run
+            || head
+                .owner_run_id
+                .as_deref()
+                .is_some_and(|owner| owner != run);
+        if foreign && head.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION {
+            if head.counts.running != 0 {
+                return Err(Error::NeedsVerification(
+                    "plan-run orphan with running items requires the snapshot reconcile path"
+                        .into(),
+                ));
+            }
+            head.status = Status::Interrupted;
+            head.result = Some(serde_json::json!({
+                "interruption": {
+                    "reason": "service_restarted",
+                    "total_items": head.counts.total,
+                    "successful_items": head.counts.succeeded,
+                    "unfinished_items": head.counts.total - head.counts.succeeded,
+                    "resume": "re-plan with plan_market_update and resume with run_market_update",
+                }
+            }));
+        } else if head.visible_status(run) != head.status {
             head.status = Status::NeedsVerification;
         } else {
             return Ok(());
