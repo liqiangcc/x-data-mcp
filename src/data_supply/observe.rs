@@ -172,6 +172,23 @@ pub trait ProgressRead {
         items.truncate(limit);
         Ok(items)
     }
+    /// Failed items grouped by `reason_code`, for the bounded progress
+    /// path. The default counts `task`'s materialized items.
+    fn failed_reason_counts(
+        &self,
+        id: &str,
+        access: &Access,
+    ) -> Result<std::collections::BTreeMap<String, usize>, Error> {
+        let mut counts = std::collections::BTreeMap::new();
+        for item in self.task(id, access)?.snapshot.items {
+            if let Some(outcome) = item.outcome.as_ref().filter(|o| !o.success) {
+                *counts
+                    .entry(reason_code(outcome.error.as_deref().unwrap_or("")).to_owned())
+                    .or_insert(0) += 1;
+            }
+        }
+        Ok(counts)
+    }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error>;
     fn verify_range_results(&self, results: &[RangeExecutionResult]) -> Result<(), Error>;
     fn verify_yearly_results(&self, results: &[YearlyExecutionResult]) -> Result<(), Error>;
@@ -689,6 +706,12 @@ impl<R: ObservationRepository> Observer<R> {
                 let finished = head_facts.head.counts.finished as usize;
                 let succeeded = head_facts.head.counts.succeeded as usize;
                 let total = head_facts.head.counts.total as usize;
+                let mut plan = plan_progress(&head_facts.shared_evidence);
+                if finished > succeeded
+                    && let Some(plan) = plan.as_mut()
+                {
+                    plan.failed_by_reason = read.failed_reason_counts(&args.task_id, access)?;
+                }
                 let p = ProgressPage {
                     snapshot_id: String::new(),
                     snapshot_time: Utc::now(),
@@ -707,7 +730,7 @@ impl<R: ObservationRepository> Observer<R> {
                     unfinished: vec![],
                     next_cursor: None,
                     page_complete: false,
-                    plan: plan_progress(&head_facts.shared_evidence),
+                    plan,
                     publication_versions: vec![],
                     frozen_daily_ranges: vec![],
                     range_results: vec![],
@@ -841,7 +864,7 @@ impl<R: ObservationRepository> Observer<R> {
             result.unfinished = items
                 .iter()
                 .take(args.page_size)
-                .map(progress_item)
+                .map(|i| bound_item(progress_item(i)))
                 .collect();
             result.snapshot_id = s.id.clone();
             result.snapshot_time = s.time;
@@ -952,6 +975,7 @@ fn plan_progress(evidence: &Option<serde_json::Value>) -> Option<PlanProgress> {
         plan_id: e["plan_id"].as_str()?.to_owned(),
         generation_id: e["generation_id"].as_str().map(str::to_owned),
         target_day: serde_json::from_value(e["target_day"].clone()).ok(),
+        failed_by_reason: Default::default(),
     })
 }
 /// The `unfinished` entry one task item produces — shared by the
@@ -965,7 +989,41 @@ fn progress_item(i: &crate::task_control::TaskItem) -> ProgressItem {
         stage: format!("{:?}", i.stage).to_lowercase(),
         success: i.outcome.as_ref().map(|o| o.success),
         error: i.outcome.as_ref().and_then(|o| o.error.clone()),
+        reason_code: None,
     }
+}
+/// Longest `error` a bounded large-task page carries. A failed item's full
+/// error can be tens of kilobytes (a revision error lists every revised
+/// day of the history); the class is in `reason_code`, the full text stays
+/// in the task record.
+pub const BOUNDED_ERROR_CHARS: usize = 240;
+/// Stable class of a failed item's error text. The mapping is part of the
+/// v7 contract (`generic-data-v7.md` §5); keep it in this one place.
+pub fn reason_code(error: &str) -> &'static str {
+    if error.contains("RevisionUnverified") {
+        "REVISION_UNVERIFIED"
+    } else if error.contains("PUBLISH_PRECONDITION") {
+        "PUBLISH_PRECONDITION"
+    } else if error.contains("no bars inside the accepted range") {
+        "NO_BARS_IN_RANGE"
+    } else {
+        "OTHER"
+    }
+}
+/// Large-task view of one unfinished item: failed items get their
+/// `reason_code` and a truncated `error`.
+fn bound_item(mut item: ProgressItem) -> ProgressItem {
+    if item.success == Some(false) {
+        let error = item.error.take().unwrap_or_default();
+        item.reason_code = Some(reason_code(&error).to_owned());
+        item.error = Some(if error.chars().count() > BOUNDED_ERROR_CHARS {
+            let head: String = error.chars().take(BOUNDED_ERROR_CHARS).collect();
+            format!("{head}… ({} chars total)", error.chars().count())
+        } else {
+            error
+        });
+    }
+    item
 }
 fn budget<T: serde::Serialize>(v: &[T]) -> Result<(), Error> {
     if v.len() > 10000 || serde_json::to_vec(v).unwrap().len() > MAX_BYTES {
@@ -1060,4 +1118,67 @@ fn frozen_yearly_inputs(task: &TaskSnapshot) -> Result<Vec<FrozenYearlyInput>, E
         };
         serde_json::from_value(serde_json::json!({"item_id":item.spec.item_id,"entity":entity,"base_daily_version_id":f["base_daily_version_id"],"base_integrity_sha256":f["base_integrity_sha256"],"years":f["years"],"publication":publication,"comparison":f["comparison"]})).map_err(|e|Error::Integrity(e.to_string()))
     }).collect()
+}
+
+#[cfg(test)]
+mod reason_tests {
+    use super::*;
+
+    fn failed(error: &str) -> ProgressItem {
+        ProgressItem {
+            item_id: "[\"market\",\"sh.600039\",\"day\"]".into(),
+            entity: None,
+            period: Some("day".into()),
+            progress_unit: "item".into(),
+            stage: "finished".into(),
+            success: Some(false),
+            error: Some(error.into()),
+            reason_code: None,
+        }
+    }
+
+    /// The error classes the v7 contract promises (generic-data-v7.md §5),
+    /// built from the texts the 10-13 market-wide run actually produced.
+    #[test]
+    fn reason_code_classes_are_stable() {
+        let revised = "INVALID_MARKET_COMMAND: NEEDS_VERIFICATION: RevisionUnverified([2003-03-25, 2003-03-26])";
+        let frozen = "PUBLISH_PRECONDITION: range publication differs from accepted frozen inputs";
+        let halted = "no bars inside the accepted range";
+        assert_eq!(reason_code(revised), "REVISION_UNVERIFIED");
+        assert_eq!(reason_code(frozen), "PUBLISH_PRECONDITION");
+        assert_eq!(reason_code(halted), "NO_BARS_IN_RANGE");
+        assert_eq!(reason_code("something else entirely"), "OTHER");
+        assert_eq!(reason_code(""), "OTHER");
+    }
+
+    #[test]
+    fn bounded_item_carries_class_and_a_short_error() {
+        let long = format!(
+            "INVALID_MARKET_COMMAND: NEEDS_VERIFICATION: RevisionUnverified([{}])",
+            "2003-03-25, ".repeat(8_000)
+        );
+        let item = bound_item(failed(&long));
+        assert_eq!(item.reason_code.as_deref(), Some("REVISION_UNVERIFIED"));
+        let error = item.error.unwrap();
+        assert!(error.chars().count() < BOUNDED_ERROR_CHARS + 40, "{error}");
+        assert!(error.starts_with("INVALID_MARKET_COMMAND"));
+        assert!(error.contains("chars total"));
+        // a short error is kept verbatim
+        let kept = bound_item(failed("PUBLISH_PRECONDITION: x"));
+        assert_eq!(kept.error.as_deref(), Some("PUBLISH_PRECONDITION: x"));
+        assert_eq!(kept.reason_code.as_deref(), Some("PUBLISH_PRECONDITION"));
+    }
+
+    #[test]
+    fn bounded_item_leaves_pending_and_succeeded_items_alone() {
+        let mut pending = failed("");
+        pending.success = None;
+        pending.error = None;
+        let same = bound_item(pending.clone());
+        assert_eq!(same, pending);
+        let mut done = failed("");
+        done.success = Some(true);
+        done.error = None;
+        assert_eq!(bound_item(done.clone()), done);
+    }
 }

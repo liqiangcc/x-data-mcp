@@ -974,6 +974,7 @@ fn run_task_retry_keeps_shared_evidence_binding() {
 // ---------------------------------------------------------------------------
 use x_data_mcp::market_storage::MarketRepository as _;
 use x_data_mcp::market_update::publication::RangeRepository as _;
+use x_data_mcp::market_update::runner::RangeProvider as _;
 use x_data_mcp::task_control::TaskRepository as _;
 
 /// Typed acquisition that reports the base unchanged: enough to drive the
@@ -2225,5 +2226,100 @@ fn planrun_orphan_reconcile_at_market_scale_stays_bounded() {
             .items
             .iter()
             .all(|i| i.stage == x_data_mcp::task_control::Stage::Pending && i.outcome.is_none())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Failure routing (TASK-DEVIN-PLANRUN-FROZEN-FIX): a large task reports why
+// items failed in bounded form, so a caller can route one failure class
+// (REVISION_UNVERIFIED -> explicit update_data forward window) without
+// paging every failed item or receiving tens of kilobytes of error text.
+// ---------------------------------------------------------------------------
+
+/// Typed acquisition that fails for chosen symbols with a very long
+/// "revision" message (the real run's `RevisionUnverified` error listed
+/// every revised day of the history) and reports everything else unchanged.
+struct FailingProvider {
+    fail: std::collections::BTreeSet<String>,
+    ok: UnchangedProvider,
+}
+impl x_data_mcp::market_update::runner::RangeProvider for FailingProvider {
+    fn acquire(
+        &self,
+        base: &x_data_mcp::market_storage::compat::CheckedRecord,
+        range: &x_data_mcp::market_update::DateRange,
+        candidate_id: &str,
+    ) -> Result<x_data_mcp::market_update::runner::Acquisition, x_data_mcp::market_data::SourceError>
+    {
+        self.ok.acquire(base, range, candidate_id)
+    }
+    fn acquire_typed(
+        &self,
+        facts: &x_data_mcp::market_update::UpdateBaseFacts,
+        base_window: &[x_data_mcp::market_data::Bar],
+        range: &x_data_mcp::market_update::DateRange,
+    ) -> Result<
+        Option<x_data_mcp::market_update::runner::TypedAcquisition>,
+        x_data_mcp::market_data::SourceError,
+    > {
+        if self.fail.contains(&facts.symbol) {
+            return Err(x_data_mcp::market_data::SourceError::NotVerified(format!(
+                "RevisionUnverified([{}])",
+                "2003-03-25, ".repeat(6_000)
+            )));
+        }
+        self.ok.acquire_typed(facts, base_window, range)
+    }
+}
+
+#[test]
+fn large_task_progress_routes_failures_by_bounded_reason() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 150);
+    let spy = Spy::wrap(&r.backend);
+    let fail: std::collections::BTreeSet<String> = [10, 20, 30, 40, 50]
+        .iter()
+        .map(|i| format!("sh.{:06}", 700_000 + i))
+        .collect();
+    let provider = FailingProvider {
+        fail: fail.clone(),
+        ok: UnchangedProvider {
+            typed_calls: std::cell::Cell::new(0),
+        },
+    };
+    runner(&spy)
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .unwrap();
+
+    let page = r
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id":task_id,"page_size":100}),
+        )
+        .unwrap();
+    assert_eq!(page["total"], 150, "{page}");
+    assert_eq!(page["failed"], fail.len() as u64, "{page}");
+    // plan-level class counts add up to the failed items
+    let by_reason = page["plan"]["failed_by_reason"].as_object().unwrap();
+    let counted: u64 = by_reason.values().map(|v| v.as_u64().unwrap()).sum();
+    assert_eq!(counted, fail.len() as u64, "{by_reason:?}");
+    // every unfinished entry is a failed item with a class and a bounded error
+    let unfinished = page["unfinished"].as_array().unwrap();
+    assert_eq!(unfinished.len(), fail.len(), "{page}");
+    for item in unfinished {
+        assert_eq!(item["success"], false);
+        assert!(item["reason_code"].is_string(), "{item}");
+        assert!(
+            item["error"].as_str().unwrap().chars().count() < 300,
+            "large-task errors must be truncated: {item}"
+        );
+    }
+    let whole = serde_json::to_vec(&page).unwrap().len();
+    assert!(
+        whole < 50 * 1024,
+        "page of failures must stay small: {whole}"
     );
 }

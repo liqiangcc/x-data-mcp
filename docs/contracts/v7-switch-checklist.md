@@ -75,6 +75,20 @@ v7：schema 不变，无 `init`/`init20` 步骤，不碰 DB/WAL/generations，
   （`check_daily_sync_eval.py` 要求 eval allowlist == Skill allowlist，
   同提交）。
 
+#### `REVISION_UNVERIFIED` 失败集的路由（Skill 编排必须包含）
+- 何时出现：上游对已发布历史重算（除权/复权变化）。plan/run 的刷新窗口
+  是整段历史，窗口内已发布 bar 被改写又没有修订证据，所以对这些实体
+  fail-closed，任务终态为 `partially_failed`。生产里同一批实体由
+  `update_data` 显式前向窗口走重写分支（`replace`，continuity 3）完成。
+  10-13 当天约 21 个，跨多个交易日的追赶会更多。
+- 怎么取清单：`get_task_progress` 的 `plan.failed_by_reason` 给计数；
+  `unfinished` 分页（`page_size`≤100）里 `reason_code=REVISION_UNVERIFIED`
+  的项即实体（`entity` 字段）。
+- 怎么补：对这些实体用 `update_data` 显式区间
+  `[该实体 last_record+1, target_day]`，每任务 ≤100 项（既有显式契约
+  上限），然后照常 readback。**不要**对它们 `retry_task`（确定性复败）。
+- 其余 `reason_code` 的动作见 `generic-data-v7.md` §5。
+
 ### `.devin/skills/x-data-status/SKILL.md`
 - `generic-data-v6` → `generic-data-v7`。
 
