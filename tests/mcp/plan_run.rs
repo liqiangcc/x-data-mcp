@@ -974,7 +974,6 @@ fn run_task_retry_keeps_shared_evidence_binding() {
 // ---------------------------------------------------------------------------
 use x_data_mcp::market_storage::MarketRepository as _;
 use x_data_mcp::market_update::publication::RangeRepository as _;
-use x_data_mcp::market_update::runner::RangeProvider as _;
 use x_data_mcp::task_control::TaskRepository as _;
 
 /// Typed acquisition that reports the base unchanged: enough to drive the
