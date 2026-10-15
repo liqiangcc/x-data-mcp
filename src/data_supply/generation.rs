@@ -80,6 +80,15 @@ impl GenerationSource {
             .ok()
             .map(|_| pointer.generation_id)
     }
+    /// The active verified generation's id plus a read-only handle on its
+    /// official source, WITHOUT pinning it. For plan-time facts only (the
+    /// handle is dropped before the call returns to the caller's scope of
+    /// interest); execution always goes through `open_bound`, which pins.
+    pub fn active_source(&self) -> Option<(String, TdxMarketSource)> {
+        let pointer = self.store.active().ok()??;
+        let session = self.session(&pointer.generation_id).ok()?;
+        Some((pointer.generation_id, session.source.clone()))
+    }
     /// Open a session pinned to `generation_id`. Fails closed on a
     /// missing, corrupt, unverified or evidence-only generation.
     pub fn open_bound(

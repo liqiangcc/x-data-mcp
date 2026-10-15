@@ -2498,4 +2498,42 @@ fn progress_without_wait_parameters_is_unchanged() {
         v
     };
     assert_eq!(strip(absent), strip(zero));
+
+// ---------------------------------------------------------------------------
+// Default target day (TASK-CB-4): without `end_date` the plan follows the
+// active generation's latest trade day and reports where the day came from.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn plan_reports_where_the_target_day_came_from() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    // The rig binds no generation, so the default is the previous behavior
+    // (today) and the response says so.
+    let defaulted = plan(&r.api, "market.daily");
+    assert_eq!(
+        defaulted["target_day_source"], "today_fallback",
+        "{defaulted}"
+    );
+    // An explicit end_date is honored and reported as such.
+    let explicit = r
+        .api
+        .call(
+            "plan_market_update",
+            json!({"dataset":"market.daily","contract_version":"v1","end_date":"2026-10-01"}),
+        )
+        .unwrap();
+    assert_eq!(explicit["target_day"], "2026-10-01", "{explicit}");
+    assert_eq!(explicit["target_day_source"], "explicit", "{explicit}");
+    // The source is informational: it is not part of the canonical plan, so
+    // the same state + target day yields the same plan_id either way.
+    let again = r
+        .api
+        .call(
+            "plan_market_update",
+            json!({"dataset":"market.daily","contract_version":"v1","end_date":defaulted["target_day"]}),
+        )
+        .unwrap();
+    assert_eq!(again["plan_id"], defaulted["plan_id"]);
+    assert_eq!(again["target_day_source"], "explicit");
 }

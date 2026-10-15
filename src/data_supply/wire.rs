@@ -694,6 +694,13 @@ pub struct PlanView {
     pub contract_version: ContractVersion,
     pub generation_ref: Option<String>,
     pub target_day: NaiveDate,
+    /// How `target_day` was chosen: `explicit` (the caller passed
+    /// `end_date`), `generation_latest` (the active generation's latest
+    /// trade day, never later than today) or `today_fallback` (no readable
+    /// generation sample). Informational: it is not part of the canonical
+    /// plan, so it never affects `plan_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_day_source: Option<String>,
     pub counts: PlanCounts,
     pub ineligible_reasons: Vec<PlanReasonCount>,
     pub snapshot_time: DateTime<Utc>,
