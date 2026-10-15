@@ -2498,6 +2498,7 @@ fn progress_without_wait_parameters_is_unchanged() {
         v
     };
     assert_eq!(strip(absent), strip(zero));
+}
 
 // ---------------------------------------------------------------------------
 // Default target day (TASK-CB-4): without `end_date` the plan follows the
