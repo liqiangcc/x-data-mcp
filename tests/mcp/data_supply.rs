@@ -1199,3 +1199,39 @@ fn verify_data_gap_fixture_verifier_end_to_end_reports_open_gap() {
         .unwrap();
     assert_eq!(replay["reused"], json!(true));
 }
+
+#[test]
+fn every_advertised_data_tool_schema_has_an_object_root() {
+    use x_data_mcp::{data_supply::mcp::DataApi, mcp::ToolHandler};
+    let d = tempfile::tempdir().unwrap();
+    let api = DataApi::new(
+        SqliteTasks::new(d.path().join("db")),
+        "run".into(),
+        Access::local(),
+    )
+    .unwrap();
+    let tools = api.tools();
+    let tools = tools.as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    // The tools whose root schemars rendered as a bare oneOf/anyOf must be
+    // covered by this assertion rather than silently absent.
+    for expected in [
+        "update_data",
+        "backfill_data",
+        "republish_data",
+        "start_collection",
+        "plan_market_update",
+        "run_market_update",
+        "verify_publication_result",
+        "verify_stopped_writes",
+    ] {
+        assert!(names.contains(&expected), "missing tool {expected}");
+    }
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        assert_eq!(tool["inputSchema"]["type"], json!("object"), "input {name}");
+        if let Some(output) = tool.get("outputSchema") {
+            assert_eq!(output["type"], json!("object"), "output {name}");
+        }
+    }
+}
