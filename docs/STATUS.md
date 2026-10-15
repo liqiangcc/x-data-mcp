@@ -28,7 +28,7 @@
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 21 | capability `generic-data-v6`（含只读 `get_yearly_base_years`）；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` |
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 23 | capability `generic-data-v7`（含只读 `get_yearly_base_years`）；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 设置了 `X_DATA_MCP_TDX_FETCH=current/scripts/tdx_fetch.py` |
 | `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 只转发 data server，不转发 acquire |
 

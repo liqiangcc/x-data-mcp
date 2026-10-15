@@ -12,18 +12,18 @@ EXPECTED_LEGACY_SCHEMA = 18
 # instance runs schema 21 (fresh rebuild at the v6 switch).
 EXPECTED_COMPACT_SCHEMA = 21
 EXPECTED_DATA_TOOLS = 23
-# The deployed instance still reports v6 / 21 tools: documentation
-# "current" regions describe deployment facts, so stale-claim checks
-# compare against the deployed constants, not the code constants.
-EXPECTED_DEPLOYED_DATA_TOOLS = 21
+# The deployed instance reports v7 / 23 tools after the v7 switch:
+# documentation "current" regions describe deployment facts, so stale-claim
+# checks compare against the deployed constants, not the code constants.
+EXPECTED_DEPLOYED_DATA_TOOLS = 23
 EXPECTED_ACQUIRE_TOOLS = 10
 EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v7"
-# The strict Skills describe the DEPLOYED contract (v6 after the switch).
+# The strict Skills describe the DEPLOYED contract (v7 after the switch).
 # The same deployed revision keys the strict-Skill checks and the
 # stale-deployment-claim check below: the "current" regions describe the
 # deployed instance, not the code on main. Flip this constant together with
 # the Skills in the same commit at the next contract switch.
-EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v6"
+EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v7"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",
@@ -35,7 +35,7 @@ CURRENT_DOCS = {
 
 REQUIRED_FACTS = [
     ("schema 21", re.compile(r"schema[\s:=v]*21(?!\d)", re.IGNORECASE)),
-    ("21 data tools", re.compile(r"\b21\s+data\s+tools?\b", re.IGNORECASE)),
+    ("23 data tools", re.compile(r"\b23\s+data\s+tools?\b", re.IGNORECASE)),
     ("10 acquisition tools", re.compile(r"\b10\s+acquisition\s+tools?\b", re.IGNORECASE)),
 ]
 

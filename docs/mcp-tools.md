@@ -4,8 +4,9 @@
 
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
-当前部署为双 MCP server：data socket 提供 21 data tools（capability revision
-`generic-data-v6`，含只读 `get_yearly_base_years`，market 单版本序列：
+当前部署为双 MCP server：data socket 提供 23 data tools（capability revision
+`generic-data-v7`，含只读 `get_yearly_base_years` 与
+`plan_market_update`/`run_market_update`，market 单版本序列：
 version_id=内容 hex，latest-only），acquisition socket 提供
 10 acquisition tools；fresh init 库使用 compact schema 21。部署版本、
 generation、catalog 与行情数据量等机器事实只在

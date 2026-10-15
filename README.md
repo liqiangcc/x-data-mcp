@@ -36,9 +36,10 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 > 部署与运行事实以 [docs/STATUS.md](docs/STATUS.md) 为准，性能与容量目标以 [docs/SLO.md](docs/SLO.md) 为准。
 **OWNER-ONLY OPERATIONAL PREVIEW — external distribution not authorized.**
 
-本机以 systemd 运行已部署的双 MCP server 拓扑：`x-data-mcp-data`（21 data tools，
-含只读 `get_yearly_base_years`，capability revision `generic-data-v6`，market
-单版本序列：version_id=内容 hex，latest-only）与
+本机以 systemd 运行已部署的双 MCP server 拓扑：`x-data-mcp-data`（23 data tools，
+含只读 `get_yearly_base_years` 与 `plan_market_update`/`run_market_update`，
+capability revision `generic-data-v7`，market 单版本序列：version_id=内容 hex，
+latest-only）与
 `x-data-mcp-acquire`（10 acquisition tools）。部署版本、socket 路径、
 generation 与数据量见 [docs/STATUS.md](docs/STATUS.md)。
 显式 `task_sqlite init` 的新库使用 fresh compact schema 21；工具数量不是稳定契约，
