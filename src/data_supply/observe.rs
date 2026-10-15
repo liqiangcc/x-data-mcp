@@ -7,7 +7,11 @@ use super::{
 use crate::progress_trace::{Span, Stage, Trace};
 use crate::{market_storage::Error, task_control::TaskSnapshot};
 use chrono::{DateTime, Datelike, Utc};
-use std::{cell::RefCell, collections::VecDeque};
+use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 /// Tasks with more items than this switch to bounded reads: summary and
 /// progress surfaces serve task-head columns plus a paginated
 /// not-yet-successful item slice instead of materializing
@@ -15,6 +19,20 @@ use std::{cell::RefCell, collections::VecDeque};
 /// tasks are capped at 100 items, so the threshold never changes their
 /// response shapes; plan-run tasks can carry thousands.
 pub const LARGE_TASK_ITEMS: u64 = 100;
+/// Upper bound on one `get_task_progress` server-side wait, in seconds.
+/// Larger `wait_seconds` values are clamped to this (never rejected) so a
+/// single call cannot occupy its connection thread indefinitely.
+pub const MAX_WAIT_SECONDS: u32 = 50;
+/// Long-poll re-read cadence (the 300–500ms window in the contract).
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(400);
+/// Server wait budget for a caller-supplied `wait_seconds`: `None` when no
+/// wait was requested (absent or 0 — the immediate-return behavior),
+/// otherwise `min(seconds, 50)`.
+fn wait_budget(seconds: u32) -> Option<Duration> {
+    (seconds > 0).then_some(Duration::from_secs(u64::from(
+        seconds.min(MAX_WAIT_SECONDS),
+    )))
+}
 #[derive(Clone)]
 pub struct TaskFacts {
     pub request_id: String,
@@ -664,6 +682,38 @@ impl<R: ObservationRepository> Observer<R> {
         }
         Ok(p)
     }
+    /// Server-side long-poll for `get_task_progress`: while the task is
+    /// non-terminal and the caller asked to wait, re-read only the task
+    /// head (no item materialization) until the task reaches a terminal
+    /// status, its `state_revision` moves past `since_revision`, or the
+    /// clamped budget expires. Each iteration is its own short-lived read
+    /// scope — no read transaction is held across the sleep, so the worker
+    /// thread is never blocked. A missing or unauthorized task fails
+    /// immediately through the same head read (never waited on).
+    fn wait_for_progress(&self, args: &ProgressQuery, access: &Access) -> Result<(), Error> {
+        let Some(budget) = wait_budget(args.wait_seconds.unwrap_or(0)) else {
+            return Ok(());
+        };
+        let deadline = Instant::now() + budget;
+        let mut baseline = args.since_revision;
+        loop {
+            let head = self.repository.task_head_facts(&args.task_id, access)?.head;
+            if head.status.terminal() {
+                return Ok(());
+            }
+            match baseline {
+                Some(revision) if head.state_revision > revision => return Ok(()),
+                Some(_) => {}
+                // No caller baseline: the revision read at wait entry is it.
+                None => baseline = Some(head.state_revision),
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(());
+            }
+            std::thread::sleep(WAIT_POLL_INTERVAL.min(deadline - now));
+        }
+    }
     pub fn progress(
         &self,
         mut args: ProgressQuery,
@@ -672,7 +722,18 @@ impl<R: ObservationRepository> Observer<R> {
         let trace = Trace::begin();
         page_size(args.page_size)?;
         let cursor = args.cursor.take();
-        let key = format!("progress:{}", serde_json::to_string(&args).unwrap());
+        // Long-poll before taking the read scope: the wait loop opens and
+        // closes its own head-only reads, so no transaction is held across
+        // a sleep. Cursor pages are a continuation and never wait.
+        if cursor.is_none() {
+            self.wait_for_progress(&args, access)?;
+        }
+        // Cursor identity must not depend on the wait parameters: a fresh
+        // call may carry them while its continuation pages need not.
+        let mut key_args = args.clone();
+        key_args.wait_seconds = None;
+        key_args.since_revision = None;
+        let key = format!("progress:{}", serde_json::to_string(&key_args).unwrap());
         // One RPC (fresh or cursor page) = one read scope: backends may
         // consolidate all storage reads below into a single transaction
         // (XP-016). Cursor identity/authorization/expiry checks and the
@@ -1180,5 +1241,17 @@ mod reason_tests {
         done.success = Some(true);
         done.error = None;
         assert_eq!(bound_item(done.clone()), done);
+    }
+
+    /// The `wait_seconds` clamp: 0/absent means no wait; anything above the
+    /// 50-second cap is clamped rather than rejected.
+    #[test]
+    fn wait_budget_clamps_to_the_server_cap() {
+        assert_eq!(wait_budget(0), None);
+        assert_eq!(wait_budget(1), Some(Duration::from_secs(1)));
+        assert_eq!(wait_budget(45), Some(Duration::from_secs(45)));
+        assert_eq!(wait_budget(50), Some(Duration::from_secs(50)));
+        assert_eq!(wait_budget(51), Some(Duration::from_secs(50)));
+        assert_eq!(wait_budget(u32::MAX), Some(Duration::from_secs(50)));
     }
 }
