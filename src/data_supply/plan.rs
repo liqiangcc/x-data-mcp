@@ -289,6 +289,7 @@ impl Plan {
             contract_version: super::wire::ContractVersion::V1,
             generation_ref: self.generation_id.clone(),
             target_day: self.target_day,
+            target_day_source: None,
             counts: self.counts(),
             ineligible_reasons: self.ineligible_reasons(),
             snapshot_time: Utc::now(),
@@ -367,6 +368,72 @@ fn inflight_updates(c: &Connection) -> Result<Vec<InflightUpdate>, crate::market
 pub struct RunResolution {
     pub plan: Plan,
     pub inflight: Vec<InflightUpdate>,
+}
+
+/// How a plan's `target_day` was chosen (reported on the plan response
+/// only; never part of the canonical plan or its `plan_id`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetDaySource {
+    Explicit,
+    GenerationLatest,
+    TodayFallback,
+}
+impl TargetDaySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::GenerationLatest => "generation_latest",
+            Self::TodayFallback => "today_fallback",
+        }
+    }
+}
+/// Securities sampled to find the active generation's latest trade day:
+/// the first N of the sorted plan universe, so the choice is a pure
+/// function of the generation bytes and the database state.
+const TARGET_DAY_SAMPLE: usize = 32;
+
+/// Default target day from the latest trade day seen in the sample, capped
+/// at `today`; no readable sample means `today`. Pure so it is testable
+/// without a generation.
+pub(crate) fn pick_target_day(
+    latest: impl IntoIterator<Item = Option<NaiveDate>>,
+    today: NaiveDate,
+) -> (NaiveDate, TargetDaySource) {
+    match latest.into_iter().flatten().max() {
+        Some(day) => (day.min(today), TargetDaySource::GenerationLatest),
+        None => (today, TargetDaySource::TodayFallback),
+    }
+}
+
+/// `plan_market_update` without `end_date`: the official day for today is
+/// published late in the afternoon, so defaulting to today would list every
+/// entity as lagging forever. Use the latest trade day the active
+/// generation actually contains. Falls back to `today` (the previous
+/// behavior) when there is no verified generation or nothing is readable.
+pub fn default_target_day(
+    market: &crate::sqlite_market::backend::MarketBackend,
+    generation: Option<&super::generation::GenerationSource>,
+    today: NaiveDate,
+) -> (NaiveDate, TargetDaySource) {
+    let fallback = (today, TargetDaySource::TodayFallback);
+    let Some((_, source)) = generation.and_then(|g| g.active_source()) else {
+        return fallback;
+    };
+    let Ok(mut symbols) = market.read(universe) else {
+        return fallback;
+    };
+    symbols.sort();
+    symbols.truncate(TARGET_DAY_SAMPLE);
+    let session = source.materialize_session();
+    pick_target_day(
+        symbols.iter().map(|symbol| {
+            session
+                .materialize_daily(symbol)
+                .ok()
+                .and_then(|batch| batch.bars.iter().map(|bar| bar.date).max())
+        }),
+        today,
+    )
 }
 
 /// Resolve `plan_market_update`: canonical facts only, no persistence.
@@ -869,6 +936,44 @@ impl Contract for PlanRunContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn target_day_follows_the_generation_and_never_exceeds_today() {
+        let today = d(2026, 10, 14);
+        // The generation ends at 10-13: that is the target, not today.
+        assert_eq!(
+            pick_target_day([Some(d(2026, 10, 12)), None, Some(d(2026, 10, 13))], today),
+            (d(2026, 10, 13), TargetDaySource::GenerationLatest)
+        );
+        // A generation claiming a later day than today is capped.
+        assert_eq!(
+            pick_target_day([Some(d(2026, 10, 20))], today),
+            (today, TargetDaySource::GenerationLatest)
+        );
+        // Nothing readable: the previous behavior (today), reported as such.
+        assert_eq!(
+            pick_target_day([None, None], today),
+            (today, TargetDaySource::TodayFallback)
+        );
+        assert_eq!(
+            pick_target_day(std::iter::empty(), today),
+            (today, TargetDaySource::TodayFallback)
+        );
+    }
+
+    #[test]
+    fn target_day_source_names_are_stable() {
+        assert_eq!(TargetDaySource::Explicit.as_str(), "explicit");
+        assert_eq!(
+            TargetDaySource::GenerationLatest.as_str(),
+            "generation_latest"
+        );
+        assert_eq!(TargetDaySource::TodayFallback.as_str(), "today_fallback");
+    }
 
     /// Byte-format lock: `plan_id` must stay identical for the same
     /// canonical plan across refactors — the digest is what clients carry

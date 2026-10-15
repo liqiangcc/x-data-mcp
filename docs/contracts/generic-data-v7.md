@@ -24,14 +24,22 @@ compact schema 21（见 [STATUS](../STATUS.md)）。schema 不变（仍 21），
 ## 2. `plan_market_update`
 
 - 输入：`{dataset: "market.daily" | "market.yearly", contract_version: "v1",
-  end_date?: "YYYY-MM-DD"}`；`end_date` 缺省为受理时钟的
-  Asia/Shanghai 当日，只允许传**更早**日期，大于当日即拒绝。
+  end_date?: "YYYY-MM-DD"}`；显式 `end_date` 只允许不晚于受理时钟的
+  Asia/Shanghai 当日，大于当日即拒绝。**缺省**时目标日取
+  `min(当日, active generation 内最新交易日)`：官方当日行情要到下午晚些
+  时候才发布，缺省取当日会让每个实体永远显示为待更新。"generation 内最新
+  交易日"是对排序后 plan universe 的前 32 个实体读取其日线最后一根 K 线
+  日期取最大值（只读，不钉住 generation，结果只取决于 generation 字节与
+  库状态）；没有 active verified generation 或样本全部读不到时回退为当日。
 - 行为（只读，不建任务、不写库）：在单个读快照内对当前 catalog 覆盖
   ∩ 已首采实体逐实体解析，分为 `eligible`（可执行）、`already_current`、
   `absent`、`ineligible:<reason>` 四类。
 - 输出（小）：`{plan_id, dataset, contract_version, generation_ref,
-  target_day, counts{eligible, already_current, absent, ineligible},
-  ineligible_reasons[{reason, count}], snapshot_time}`。不枚举实体。
+  target_day, target_day_source?, counts{eligible, already_current, absent,
+  ineligible}, ineligible_reasons[{reason, count}], snapshot_time}`。不枚举
+  实体。`target_day_source ∈ {explicit, generation_latest, today_fallback}`
+  说明目标日的来源；它只是说明字段，**不进入** canonical plan，不影响
+  `plan_id`。
 - `plan_id = sha256(canonical_json)`；canonical =
   `{dataset, contract_version:"market-update-plan-v1", generation_id,
   target_day, items:[…按 entity 排序], ineligible:[{entity,reason} 排序]}`，
