@@ -324,8 +324,9 @@ impl DataApi {
                         .generation
                         .as_ref()
                         .and_then(|g| g.active_verified_id()),
-                    input_schema: detailed.then(|| e.input.clone()),
-                    output_schema: detailed.then(|| e.output.clone()),
+                    input_schema: detailed.then(|| crate::mcp::ensure_object_root(e.input.clone())),
+                    output_schema: detailed
+                        .then(|| crate::mcp::ensure_object_root(e.output.clone())),
                     example: detailed.then(|| capability_example(&e, dataset)),
                     schema_digest: crate::hash::sha256(
                         serde_json::to_vec(&json!([e.input, e.output]))
@@ -593,7 +594,7 @@ impl DataApi {
                 .into_iter()
                 .filter(|e| self.access == Access::local() || !e.requires_local())
                 .map(|e| {
-                    json!({"name":e.name,"description":e.description,"inputSchema":e.input,"outputSchema":e.output})
+                    json!({"name":e.name,"description":e.description,"inputSchema":crate::mcp::ensure_object_root(e.input),"outputSchema":crate::mcp::ensure_object_root(e.output)})
                 })
                 .collect(),
         )

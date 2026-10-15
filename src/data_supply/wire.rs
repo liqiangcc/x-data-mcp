@@ -360,6 +360,19 @@ pub struct ProgressQuery {
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
+    /// Optional server-side wait (long-poll), in seconds. Absent or 0
+    /// returns immediately (the pre-existing behavior). A positive value
+    /// lets the server hold the call until the task reaches a terminal
+    /// status or its `state_revision` moves past `since_revision`, capped
+    /// at 50 seconds (larger values are treated as 50, never rejected).
+    /// Applies to fresh calls; cursor pages always return immediately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_seconds: Option<u32>,
+    /// Optional: the `task.state_revision` the caller last observed.
+    /// Waiting ends early once the task advances past it. When absent, the
+    /// revision read at wait entry is used as the baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_revision: Option<u64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

@@ -150,7 +150,7 @@ impl ToolHandler for AcquireApi {
                     json!({
                         "name": e.name,
                         "description": e.description,
-                        "inputSchema": (e.input)(),
+                        "inputSchema": crate::mcp::ensure_object_root((e.input)()),
                     })
                 })
                 .collect(),

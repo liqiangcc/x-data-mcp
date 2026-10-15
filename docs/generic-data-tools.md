@@ -47,7 +47,7 @@ readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capab
 | get_data_availability | 检查已存版本与覆盖证据 | dataset、selection、range、分页 | AvailabilitySnapshot |
 | list_tasks | 发现已有任务 | 类型/状态/时间过滤、分页 | TaskListSnapshot |
 | get_request | 核对持久请求结果 | request_id | RequestResult |
-| get_task / get_task_progress | 查询任务/固定进度快照 | task_id；进度支持分页 | TaskResult / TaskSnapshot |
+| get_task / get_task_progress | 查询任务/固定进度快照 | task_id；进度支持分页；进度可选 wait_seconds（服务端等待，上限 50s）、since_revision | TaskResult / TaskSnapshot |
 | cancel_task | 申请取消 | task_id | CancellationResult |
 | retry_task | 对原任务未完成项显式重试 | original_task_id、new_request_id、item_ids | WriteAcceptance |
 

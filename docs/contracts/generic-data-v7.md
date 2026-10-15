@@ -117,6 +117,28 @@ compact schema 21（见 [STATUS](../STATUS.md)）。schema 不变（仍 21），
   | `NO_BARS_IN_RANGE` | 受理区间内无行情（停牌/退市） | 预期的 fail-closed，无需动作 |
   | `OTHER` | 其它 | 读 `error`，必要时报告 |
 
+### 等待参数（长轮询）
+
+`get_task_progress` 额外接受两个**可选**入参，让一次调用在服务端等待任务推进，
+免去调用方（AI 代理没有 `sleep`/shell）反复空轮询——每次调用参数不同，也不会被
+客户端的重复调用检测判为死循环：
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `wait_seconds` | 整数，可选 | 0 或缺省 = 立即返回（原行为）；>0 时服务端最多等待这么久，**上限 50 秒**（超过按 50 处理，不报错）。仅当任务**非终态**时等待；任务不存在/无权限等错误照旧立即返回。 |
+| `since_revision` | 整数，可选 | 调用方上次看到的 `task.state_revision`。等待在 `state_revision > since_revision` 时提前结束；缺省时以进入等待时读到的 revision 为基准。 |
+
+等待循环每 300~500ms 只重读任务头（`tasks` 行的 `state_revision`/`status`，不物化
+item），每次读完立即释放读作用域再休眠：不跨越 sleep 持有读事务，不阻塞后台 worker。
+返回仍是原来的正常进度响应（含大任务的有界形状），只是可能更晚返回；`wait_seconds`/
+`since_revision` 只出现在该工具的 inputSchema 里，不出现在响应里。等待只作用于**新
+调用**；携带 `cursor` 的翻页调用始终立即返回。单次调用最长占用其连接约 50 秒（每个连接
+独立线程，不影响其它连接或后台 worker）。
+
+给 Skill 的推荐用法：轮询时用 `wait_seconds: 45`，`since_revision` 取上一响应的
+`task.state_revision`；收到响应后按需翻页 `unfinished`（见上），再以新的
+`state_revision` 发起下一次等待。
+
 ## 6. 与 #294 的关系
 
 显式 `update_data` 的「整批原子受理、>100 拒绝」语义不变（见

@@ -412,6 +412,24 @@ fn worker_error(error: WorkerError) -> ApiError {
     }
 }
 
+/// MCP clients require the root of every advertised `inputSchema`/
+/// `outputSchema` to declare `"type": "object"`. Schemars emits a bare
+/// `oneOf`/`anyOf` root for internally tagged enums, so the schema handed to
+/// `tools/list` is normalized here. The registry descriptor itself is left
+/// untouched: dispatch decodes through serde, never through these schemas, so
+/// tool behavior is unchanged. A non-object schema, or one whose root already
+/// carries a `type`, is returned as-is.
+pub fn ensure_object_root(schema: Value) -> Value {
+    match schema {
+        Value::Object(mut map) => {
+            map.entry("type")
+                .or_insert_with(|| Value::String("object".into()));
+            Value::Object(map)
+        }
+        other => other,
+    }
+}
+
 pub fn public_tools() -> Value {
     let mut tools = json!([
         {
@@ -690,5 +708,34 @@ impl<S: MarketDataPipeline> ToolHandler for McpApi<S> {
                 format!("unsupported tool: {name}"),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_object_root;
+    use serde_json::json;
+
+    #[test]
+    fn object_root_is_added_only_when_missing() {
+        // No root type: a type is inserted and every other key survives.
+        let any_of = json!({"anyOf": [{"type": "object"}], "title": "t"});
+        let normalized = ensure_object_root(any_of.clone());
+        assert_eq!(normalized["type"], "object");
+        assert_eq!(normalized["anyOf"], any_of["anyOf"]);
+        assert_eq!(normalized["title"], "t");
+        // An existing root type is never overwritten.
+        assert_eq!(
+            ensure_object_root(json!({"type": "object", "properties": {}})),
+            json!({"type": "object", "properties": {}})
+        );
+        assert_eq!(
+            ensure_object_root(json!({"type": "string"})),
+            json!({"type": "string"})
+        );
+        // Non-object schemas pass through untouched.
+        assert_eq!(ensure_object_root(json!(true)), json!(true));
+        assert_eq!(ensure_object_root(json!(["a"])), json!(["a"]));
+        assert_eq!(ensure_object_root(json!(null)), json!(null));
     }
 }
