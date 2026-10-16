@@ -1235,5 +1235,17 @@ fn every_advertised_data_tool_schema_has_an_object_root() {
         if let Some(output) = tool.get("outputSchema") {
             assert_eq!(output["type"], json!("object"), "output {name}");
         }
+        // A oneOf/anyOf-rooted input must also publish the union of its
+        // branches' properties: clients that complete a property-less object
+        // root with `additionalProperties: false` would otherwise reject every
+        // field of the tool.
+        let input = &tool["inputSchema"];
+        if input.get("oneOf").is_some() || input.get("anyOf").is_some() {
+            let properties = input["properties"].as_object();
+            assert!(
+                properties.is_some_and(|p| p.contains_key("dataset")),
+                "union root of {name} must declare the branch properties: {input}"
+            );
+        }
     }
 }
