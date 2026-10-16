@@ -6,7 +6,7 @@
 
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
-最后核实：2026-10-13。部署与数据相关数值为部署并重建后读取 live 服务的结果；其余标注「来源」的数值来自所列报告或命令。
+最后核实：2026-10-16。部署与数据相关数值为部署并重建后读取 live 服务的结果；其余标注「来源」的数值来自所列报告或命令。
 
 ## 部署
 
@@ -16,13 +16,15 @@
 | 系统 | Ubuntu 26.04 LTS，kernel 7.0.0-1014-aws | `/etc/os-release`、`uname -r` |
 | 资源 | EC2 t3.small（可突发）：2 vCPU（1 个物理核加 2 个超线程，没有 SHA-NI），1.9GiB RAM + 8GiB swap，根盘 77G；`/tmp` 是 953MB 的 tmpfs（占内存） | `lscpu`、`/proc/cpuinfo`、`free -h`、`df -h` |
 | 本机工具链 | rustc / cargo 1.99.0 | `rustc --version` |
-| 部署版本 | v0.2.0-preview.32 @ `db40ed2d14ebe5e047de889c8e6a9c240cfee58e` | `/opt/x-data-mcp-preview/current/manifest.json` |
-| 部署时间 | 2026-10-13T06:31Z，`scripts/deploy_phase_g.sh v0.2.0-preview.32 --force-git-transport`；旧库归档于 `state/preview.sqlite.v20-archived-20261013T063110Z`；previous deployment v0.2.0-preview.31 (schema 20，`releases/83d323f…`) 保留作回滚点 | 部署报告 |
+| 部署版本 | v0.2.0-preview.33 @ `d91d33b3a6782e049b0f8ab2236b01f3889af64e` | `/opt/x-data-mcp-preview/current/manifest.json` |
+| 部署时间 | 2026-10-16T02:28Z，`scripts/switch_binary.sh v0.2.0-preview.33`（二进制热切换，无库迁移、无重建，S1–S6 全过，未触发自动回滚）；previous deployment v0.2.0-preview.32 (schema 21，`releases/db40ed2d…`) 保留作回滚点 | 部署报告 |
 | 构建 | rustc 1.99.0，ubuntu-24.04，最低 glibc 2.39 | 同上 |
-| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/db40ed2d…` | `ls -l` |
+| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/d91d33b3…` | `ls -l` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
 | ecs-node | 服务已 stop 并 disable，数据保留为冷备（含 generation `a49c314b…` 的字节） | 同上 |
 | production_ready | `false`：owner 个人研究、本地使用，未授权对外分发（#71） | `get_data_capabilities` |
+
+本次 v7 部署为二进制热切换，数据库沿用（schema 21），部署时刻无数据重建。已知回滚代价：v7 运行过 plan/run 之后若回滚到 v6，v6 对 plan/run 任务的 `get_task_progress` 会报未知契约，存在被重启恢复收尾（`interrupted`）的 plan/run 任务时 v6 的 `list_tasks` 会整体失败。
 
 ## 服务
 
@@ -38,12 +40,12 @@
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 当前 generation | `a119629b5683877ef9fce08427a5e994bc96216dede8a9776e2f3baec577c913`，2026-10-13T10:35:10Z 激活（Skill 会话 acquire→verify→activate） | `generations/active-generation.json` |
-| 前一 generation | `2d5851a460eeae86cb84aa58e09f1c46bed6a9092aafd7170ab3c9367313add6`（2026-10-13T06:50Z 激活）；`87322997…` 重建基线仍在（superseded）。热 generation 现 3/6 个；4 个已无字节的旧 generation（84b3f15d、c360967a、2e918330、a49c314b）已于 2026-10-13 由操作员退役为 evidence_only（只改状态，清单/决策/证据保留） | 同上、迁移报告 |
-| 数据库 | `state/preview.sqlite`，fresh compact schema 21，909,185,024 B（2026-10-13 实测，quick_check ok，staged_records 0）；一个日更周期约 +54MB | `ls -l` |
+| 当前 generation | `54553656c79afe2c16a6f497ec860410c27268cc333ebe070110099a36917065`，2026-10-15T10:50:22Z 激活 | `generations/active-generation.json` |
+| 前一 generation | `a119629b5683877ef9fce08427a5e994bc96216dede8a9776e2f3baec577c913`（2026-10-13T10:35:10Z 激活） | 同上 |
+| 数据库 | `state/preview.sqlite`，fresh compact schema 21，1,018,265,600 B（2026-10-16 实测；WAL 0 B） | `ls -l` |
 | 目录 | 5,228 个实体 | 重建驱动读回 |
-| 日线 | 已发布 5,224 个；5,211 个 head 为 2026-10-13；13 家停牌/无数据实体更早（fail-closed：`no bars inside the accepted range`——10-13 停牌的 sh.600825/sz.002717/sz.301314 last_day=10-12；更早的 sh.600293/601059/601198/688496（2026-09-10）/sz.000016/002388/002731/002813/002860/300773） | 追加驱动读回 |
-| 年线 | 5,224 个 published，随 10-13 追加重派生至 10-13 的 daily base | 追加驱动读回 |
+| 日线 | 已发布 5,224 个；head 5,224 个，最新数据日 2026-10-15（day 20741） | 部署后只读核对 |
+| 年线 | 5,224 个 published，最新数据日 2026-10-15（day 20741） | 部署后只读核对 |
 | 缺失 | `sz.001381`、`sz.301569`、`sz.301660`、`sz.301718`（官方 hsjday 缺成员，4 个日线任务条目 fail-closed，预期） | 重建驱动读回 |
 | 与迁移报告的差异 | 迁移报告记录 `sz.001246` 为空、年线 5,223 个 succeeded；本次重建该实体有 2 条日线（2026-09-30、2026-10-08）和 1 条年线，年线共 5,224 个。读回的这两项预期值（5,223 与 `sz.001246` 为空）因此不符，判断为预期值过时而非故障，待 owner 确认 | `deploy31-readback.json` |
 | 重建耗时 | 全新重建基于 generation 87322997（数据截止 2026-10-08）：collect write-loop 308.4s（catalog + 日线 53 块，含 4 个缺成员条目）+ 年线首次 write-loop 208.9s；预览演练对照 209.7s / 224.3s | 重建驱动 JSON |
