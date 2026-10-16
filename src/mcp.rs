@@ -415,19 +415,102 @@ fn worker_error(error: WorkerError) -> ApiError {
 /// MCP clients require the root of every advertised `inputSchema`/
 /// `outputSchema` to declare `"type": "object"`. Schemars emits a bare
 /// `oneOf`/`anyOf` root for internally tagged enums, so the schema handed to
-/// `tools/list` is normalized here. The registry descriptor itself is left
-/// untouched: dispatch decodes through serde, never through these schemas, so
-/// tool behavior is unchanged. A non-object schema, or one whose root already
-/// carries a `type`, is returned as-is.
+/// `tools/list` is normalized here. Some clients additionally complete an
+/// object root that declares no `properties` with `properties: {}` and
+/// `additionalProperties: false`, which then rejects every field of a
+/// `oneOf`-rooted input. Such a root therefore also publishes the union of
+/// its branches' properties and the keys every branch requires; the branches
+/// themselves stay in place, so discrimination is unchanged. The registry
+/// descriptor itself is left untouched: dispatch decodes through serde, never
+/// through these schemas, so tool behavior is unchanged. A non-object schema,
+/// or one whose root already carries a `type`/`properties`, keeps them.
 pub fn ensure_object_root(schema: Value) -> Value {
-    match schema {
-        Value::Object(mut map) => {
-            map.entry("type")
-                .or_insert_with(|| Value::String("object".into()));
-            Value::Object(map)
-        }
-        other => other,
+    let Value::Object(mut map) = schema else {
+        return schema;
+    };
+    map.entry("type")
+        .or_insert_with(|| Value::String("object".into()));
+    if !map.contains_key("properties")
+        && let Some((properties, required)) = merged_branch_shape(&map)
+    {
+        map.insert("properties".into(), Value::Object(properties));
+        map.entry("required").or_insert(Value::Array(required));
     }
+    Value::Object(map)
+}
+
+/// The object schema a `oneOf`/`anyOf` branch stands for: the branch itself,
+/// or the `#/$defs/<name>` definition it points at.
+fn resolve_branch<'a>(
+    branch: &'a Value,
+    root: &'a serde_json::Map<String, Value>,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    let branch = branch.as_object()?;
+    match branch.get("$ref") {
+        Some(Value::String(reference)) => root
+            .get("$defs")?
+            .get(reference.strip_prefix("#/$defs/")?)?
+            .as_object(),
+        _ => Some(branch),
+    }
+}
+
+/// Union of the properties of every `oneOf`/`anyOf` branch plus the keys all
+/// branches require. `None` unless every branch resolves to an object schema
+/// with inline `properties` (anything else is left exactly as published).
+fn merged_branch_shape(
+    root: &serde_json::Map<String, Value>,
+) -> Option<(serde_json::Map<String, Value>, Vec<Value>)> {
+    let mut branches = Vec::new();
+    for key in ["oneOf", "anyOf"] {
+        if let Some(Value::Array(items)) = root.get(key) {
+            branches.extend(items.iter());
+        }
+    }
+    if branches.is_empty() {
+        return None;
+    }
+    let mut variants: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
+    let mut common: Option<std::collections::BTreeSet<String>> = None;
+    for branch in branches {
+        let object = resolve_branch(branch, root)?;
+        for (name, schema) in object.get("properties")?.as_object()? {
+            let seen = variants.entry(name.clone()).or_default();
+            if !seen.contains(schema) {
+                seen.push(schema.clone());
+            }
+        }
+        let required: std::collections::BTreeSet<String> = object
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|keys| {
+                keys.iter()
+                    .filter_map(|key| key.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        common = Some(match common {
+            None => required,
+            Some(seen) => seen.intersection(&required).cloned().collect(),
+        });
+    }
+    let properties = variants
+        .into_iter()
+        .map(|(name, mut schemas)| {
+            let schema = if schemas.len() == 1 {
+                schemas.remove(0)
+            } else {
+                serde_json::json!({ "anyOf": schemas })
+            };
+            (name, schema)
+        })
+        .collect();
+    let required = common
+        .unwrap_or_default()
+        .into_iter()
+        .map(Value::String)
+        .collect();
+    Some((properties, required))
 }
 
 pub fn public_tools() -> Value {
@@ -737,5 +820,61 @@ mod tests {
         assert_eq!(ensure_object_root(json!(true)), json!(true));
         assert_eq!(ensure_object_root(json!(["a"])), json!(["a"]));
         assert_eq!(ensure_object_root(json!(null)), json!(null));
+    }
+
+    #[test]
+    fn tagged_union_root_publishes_the_union_of_its_branches() {
+        let schema = json!({
+            "oneOf": [
+                {"type": "object", "additionalProperties": false,
+                 "properties": {"dataset": {"const": "a"}, "id": {"type": "string"},
+                                "x": {"type": "integer"}},
+                 "required": ["dataset", "id"]},
+                {"type": "object", "additionalProperties": false,
+                 "properties": {"dataset": {"const": "b"}, "id": {"type": "string"},
+                                "x": {"type": "string"}},
+                 "required": ["dataset", "id", "x"]}
+            ],
+            "title": "T"
+        });
+        let normalized = ensure_object_root(schema.clone());
+        assert_eq!(normalized["type"], "object");
+        // Branches are untouched, so a client still discriminates on them.
+        assert_eq!(normalized["oneOf"], schema["oneOf"]);
+        let properties = normalized["properties"].as_object().unwrap();
+        assert_eq!(properties.len(), 3);
+        // A property both branches declare identically keeps its schema; one
+        // they declare differently becomes the alternatives.
+        assert_eq!(properties["id"], json!({"type": "string"}));
+        assert_eq!(
+            properties["x"],
+            json!({"anyOf": [{"type": "integer"}, {"type": "string"}]})
+        );
+        assert_eq!(
+            properties["dataset"],
+            json!({"anyOf": [{"const": "a"}, {"const": "b"}]})
+        );
+        // Only the keys every branch requires are required at the root.
+        assert_eq!(normalized["required"], json!(["dataset", "id"]));
+    }
+
+    #[test]
+    fn referenced_branches_are_resolved_and_unresolvable_ones_leave_the_root_alone() {
+        let with_refs = json!({
+            "$defs": {"A": {"type": "object", "properties": {"a": {"type": "string"}},
+                            "required": ["a"]},
+                      "B": {"type": "object", "properties": {"b": {"type": "string"}}}},
+            "anyOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}]
+        });
+        let normalized = ensure_object_root(with_refs);
+        assert_eq!(normalized["properties"].as_object().unwrap().len(), 2);
+        assert_eq!(normalized["required"], json!([]));
+        // A branch with no inline properties cannot be summarized.
+        let opaque = ensure_object_root(json!({"oneOf": [{"type": "object"}]}));
+        assert!(opaque.get("properties").is_none());
+        // A root that already declares properties is never rewritten.
+        let declared = json!({"type": "object", "oneOf": [
+            {"properties": {"z": {}}}], "properties": {"y": {}}});
+        assert_eq!(ensure_object_root(declared.clone()), declared);
     }
 }
