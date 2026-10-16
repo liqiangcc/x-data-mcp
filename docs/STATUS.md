@@ -41,7 +41,7 @@
 | 项 | 事实 | 来源 |
 |---|---|---|
 | 当前 generation | `54553656c79afe2c16a6f497ec860410c27268cc333ebe070110099a36917065`，2026-10-15T10:50:22Z 激活 | `generations/active-generation.json` |
-| 前一 generation | `a119629b5683877ef9fce08427a5e994bc96216dede8a9776e2f3baec577c913`（2026-10-13T10:35:10Z 激活） | 同上 |
+| 前一 generation | `a119629b5683877ef9fce08427a5e994bc96216dede8a9776e2f3baec577c913`（2026-10-13T10:35:10Z 激活）；4 个已无字节的旧 generation（84b3f15d、c360967a、2e918330、a49c314b）已于 2026-10-13 由操作员退役为 evidence_only（只改状态，清单/决策/证据保留） | 同上、迁移报告 |
 | 数据库 | `state/preview.sqlite`，fresh compact schema 21，1,018,265,600 B（2026-10-16 实测；WAL 0 B） | `ls -l` |
 | 目录 | 5,228 个实体 | 重建驱动读回 |
 | 日线 | 已发布 5,224 个；head 5,224 个，最新数据日 2026-10-15（day 20741） | 部署后只读核对 |
