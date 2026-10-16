@@ -9,8 +9,9 @@
 见 [STATUS](STATUS.md)）：
 
 - `x-data-acquire`：远端文件探测、下载和本地安装，10 acquisition tools。
-- `x-data-mcp`：任务、版本、发布、查询、核实和计算，21 data tools（含只读
-  `get_yearly_base_years`），capability revision `generic-data-v6`（market
+- `x-data-mcp`：任务、版本、发布、查询、核实和计算，23 data tools（含只读
+  `get_yearly_base_years` 与 `plan_market_update`/`run_market_update`），
+  capability revision `generic-data-v7`（market
   单版本序列：version_id=内容 hex，latest-only）；strict Skill
   会话遇 revision 不匹配即停止。
 

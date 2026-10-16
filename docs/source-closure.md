@@ -3,7 +3,8 @@
 当前摘要：#54 QFQ、#131 固定文件集合一致性和 #71 限定个人研究范围已分别裁定；这些结论只适用于明确证据与声明范围。新 generation 仍需新 manifest 和独立一致性决定。
 当前 acquisition 已实现 immutable generation、验证后条件激活和 generation-bound
 routine update（见[每日同步说明](daily-sync.md)）；双 MCP 拓扑已在本机
-部署运行——data socket 提供 21 data tools（`generic-data-v6`，market 单版本序列：
+部署运行——data socket 提供 23 data tools（`generic-data-v7`，含 `plan_market_update`/
+`run_market_update`，market 单版本序列：
 version_id=内容 hex，latest-only）、acquire socket 提供
 10 acquisition tools、fresh init 库使用 compact schema 21；部署版本、generation
 与数据量等机器事实只在 [STATUS](STATUS.md)

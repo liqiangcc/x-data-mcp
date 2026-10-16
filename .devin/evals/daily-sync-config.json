@@ -12,6 +12,8 @@
       "mcp__x-data-acquire__sync_status",
       "mcp__x-data-mcp__get_data_capabilities",
       "mcp__x-data-mcp__start_collection",
+      "mcp__x-data-mcp__plan_market_update",
+      "mcp__x-data-mcp__run_market_update",
       "mcp__x-data-mcp__update_data",
       "mcp__x-data-mcp__get_task",
       "mcp__x-data-mcp__get_request",
