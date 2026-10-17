@@ -9,7 +9,7 @@
 //! version, the active verified generation, the target day and every
 //! per-entity resolved fact, and the admitted task's frozen work is
 //! rebuilt deterministically from the same canonical payload.
-use super::wire::{Dataset, PlanCounts, PlanReasonCount, PlanView};
+use super::wire::{Dataset, PlanCounts, PlanIneligibleEntity, PlanReasonCount, PlanView};
 use crate::market_data::Period;
 use crate::market_storage::Scope;
 use crate::sqlite_market::{head, is_latest_only_schema, series};
@@ -32,6 +32,11 @@ pub const RUN_CONTRACT_VERSION: &str = "market-plan-run-task-v1";
 /// Frozen-input key stamped with the plan's generation id — the same key
 /// the `Bound` decorator uses so worker session opens are unchanged.
 const SOURCE_GENERATION_KEY: &str = super::generation::SOURCE_GENERATION_KEY;
+/// Most ineligible entities `PlanView::ineligible_entities` will carry.
+/// Entity names are small, but a whole-catalog plan can hold thousands, so
+/// the diagnostic list is capped; `ineligible_entities_truncated` flags a
+/// cut. Never part of the canonical plan or its `plan_id`.
+pub const PLAN_INELIGIBLE_ENTITY_LIMIT: usize = 500;
 
 /// `io::Write` adapter so canonical JSON streams into sha256 without a
 /// materialized byte buffer (`sha2` does not implement `io::Write` here).
@@ -283,6 +288,23 @@ impl Plan {
             .collect()
     }
     pub fn view(&self) -> Result<PlanView, PlanError> {
+        let mut ineligible_entities: Vec<PlanIneligibleEntity> = self
+            .ineligible
+            .iter()
+            .filter(|i| {
+                !matches!(
+                    i.reason.as_str(),
+                    "already_current" | "absent" | "no_daily_base"
+                )
+            })
+            .map(|i| PlanIneligibleEntity {
+                entity: i.entity.clone(),
+                reason: i.reason.clone(),
+            })
+            .collect();
+        let ineligible_entities_truncated =
+            ineligible_entities.len() > PLAN_INELIGIBLE_ENTITY_LIMIT;
+        ineligible_entities.truncate(PLAN_INELIGIBLE_ENTITY_LIMIT);
         Ok(PlanView {
             plan_id: self.plan_id()?,
             dataset: self.dataset,
@@ -292,6 +314,8 @@ impl Plan {
             target_day_source: None,
             counts: self.counts(),
             ineligible_reasons: self.ineligible_reasons(),
+            ineligible_entities,
+            ineligible_entities_truncated,
             snapshot_time: Utc::now(),
         })
     }
@@ -1009,6 +1033,180 @@ mod tests {
         assert_eq!(
             plan.plan_id().unwrap(),
             "749f17267b83f15bf3c3c4c51b5c8a2336eaf84385cdfaf850fe0605ea104acf"
+        );
+    }
+
+    fn inelig(entity: &str, reason: &str) -> PlanIneligible {
+        PlanIneligible {
+            entity: entity.into(),
+            reason: reason.into(),
+        }
+    }
+
+    fn plan_with_ineligible(ineligible: Vec<PlanIneligible>) -> Plan {
+        Plan {
+            dataset: Dataset::Yearly,
+            generation_id: None,
+            target_day: d(2026, 10, 14),
+            items: vec![],
+            ineligible,
+        }
+    }
+
+    /// The view list is filtered with the same口径 as `ineligible_reasons`:
+    /// `already_current`/`absent`/`no_daily_base` stay out, the rest appear
+    /// by (entity, reason).
+    #[test]
+    fn view_ineligible_entities_match_the_reason_filter() {
+        let mut plan = plan_with_ineligible(vec![
+            inelig("sh.600000", "already_current"),
+            inelig("sh.600001", "absent"),
+            inelig("sh.600002", "no_daily_base"),
+            inelig("sz.000001", "daily_replaced_since_derivation"),
+            inelig("sz.000002", "value_semantics_changed"),
+            inelig("sz.000003", "head_unreadable"),
+            inelig("sz.000004", "value_semantics_changed"),
+        ]);
+        plan.sort();
+        let view = plan.view().unwrap();
+        let named: Vec<(String, String)> = view
+            .ineligible_entities
+            .iter()
+            .map(|e| (e.entity.clone(), e.reason.clone()))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                (
+                    "sz.000001".to_string(),
+                    "daily_replaced_since_derivation".into()
+                ),
+                ("sz.000002".to_string(), "value_semantics_changed".into()),
+                ("sz.000003".to_string(), "head_unreadable".into()),
+                ("sz.000004".to_string(), "value_semantics_changed".into()),
+            ]
+        );
+        assert!(!view.ineligible_entities_truncated);
+        let mut view_reasons: Vec<&str> = view
+            .ineligible_entities
+            .iter()
+            .map(|e| e.reason.as_str())
+            .collect();
+        view_reasons.sort_unstable();
+        view_reasons.dedup();
+        let aggregate_reasons: Vec<&str> = view
+            .ineligible_reasons
+            .iter()
+            .map(|r| r.reason.as_str())
+            .collect();
+        assert_eq!(view_reasons, aggregate_reasons);
+        assert_eq!(
+            view.ineligible_reasons
+                .iter()
+                .map(|r| (r.reason.as_str(), r.count))
+                .collect::<Vec<_>>(),
+            vec![
+                ("daily_replaced_since_derivation", 1),
+                ("head_unreadable", 1),
+                ("value_semantics_changed", 2),
+            ]
+        );
+    }
+
+    /// 501 routing-eligible entities yield 500 named plus the truncation
+    /// flag; exactly 500 does not set it.
+    #[test]
+    fn view_truncates_ineligible_entities_at_the_limit() {
+        let over: Vec<PlanIneligible> = (0..PLAN_INELIGIBLE_ENTITY_LIMIT + 1)
+            .map(|n| inelig(&format!("sh.{n:06}"), "value_semantics_changed"))
+            .collect();
+        let mut plan = plan_with_ineligible(over);
+        plan.sort();
+        let view = plan.view().unwrap();
+        assert_eq!(view.ineligible_entities.len(), PLAN_INELIGIBLE_ENTITY_LIMIT);
+        assert!(view.ineligible_entities_truncated);
+
+        let at: Vec<PlanIneligible> = (0..PLAN_INELIGIBLE_ENTITY_LIMIT)
+            .map(|n| inelig(&format!("sh.{n:06}"), "value_semantics_changed"))
+            .collect();
+        let mut plan = plan_with_ineligible(at);
+        plan.sort();
+        let view = plan.view().unwrap();
+        assert_eq!(view.ineligible_entities.len(), PLAN_INELIGIBLE_ENTITY_LIMIT);
+        assert!(!view.ineligible_entities_truncated);
+    }
+
+    /// The new view fields are diagnostics: `plan_id` covers only the
+    /// canonical keys, so populating the list cannot move the digest.
+    #[test]
+    fn plan_id_does_not_depend_on_the_view_entity_list() {
+        let plan = plan_with_ineligible(vec![
+            inelig("sh.600000", "value_semantics_changed"),
+            inelig("sh.600001", "already_current"),
+        ]);
+        let id = plan.plan_id().unwrap();
+        assert_eq!(plan.view().unwrap().plan_id, id);
+        let canonical = serde_json::to_value(plan.canonical()).unwrap();
+        let keys: std::collections::BTreeSet<&str> = canonical
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "dataset",
+                "contract_version",
+                "generation_id",
+                "target_day",
+                "items",
+                "ineligible",
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+        );
+    }
+
+    /// `skip_serializing_if` keeps the response compact: an empty list emits
+    /// neither field, and an untruncated list omits only the flag.
+    #[test]
+    fn view_omits_the_entity_fields_when_empty() {
+        let plan = plan_with_ineligible(vec![
+            inelig("sh.600000", "already_current"),
+            inelig("sh.600001", "absent"),
+            inelig("sh.600002", "no_daily_base"),
+        ]);
+        let view = plan.view().unwrap();
+        assert!(view.ineligible_entities.is_empty());
+        assert!(!view.ineligible_entities_truncated);
+        let value = serde_json::to_value(view).unwrap();
+        let object = value.as_object().unwrap();
+        assert!(!object.contains_key("ineligible_entities"), "{value}");
+        assert!(
+            !object.contains_key("ineligible_entities_truncated"),
+            "{value}"
+        );
+
+        let plan = plan_with_ineligible(vec![inelig("sh.600000", "head_unreadable")]);
+        let value = serde_json::to_value(plan.view().unwrap()).unwrap();
+        assert_eq!(value["ineligible_entities"][0]["entity"], "sh.600000");
+        assert!(
+            !value
+                .as_object()
+                .unwrap()
+                .contains_key("ineligible_entities_truncated"),
+            "{value}"
+        );
+
+        let over: Vec<PlanIneligible> = (0..PLAN_INELIGIBLE_ENTITY_LIMIT + 1)
+            .map(|n| inelig(&format!("sh.{n:06}"), "value_semantics_changed"))
+            .collect();
+        let value = serde_json::to_value(plan_with_ineligible(over).view().unwrap()).unwrap();
+        assert_eq!(
+            value["ineligible_entities_truncated"],
+            serde_json::json!(true),
+            "{value}"
         );
     }
 }

@@ -681,11 +681,20 @@ pub struct PlanReasonCount {
     pub reason: String,
     pub count: u64,
 }
+/// One non-eligible entity named in a plan view, with its fixed reason
+/// string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanIneligibleEntity {
+    pub entity: String,
+    pub reason: String,
+}
 /// `plan_market_update` output: a compact digest-bound summary. `plan_id`
 /// is the sha256 of the deterministic canonical plan — the same state and
 /// the same `end_date` always produce the same id, and any catalog, head,
 /// gap or generation change produces a different one. The plan carries no
-/// entity list; eligibility detail stays server-side.
+/// eligible entity list; it names only the ineligible entities that need
+/// caller routing, bounded by `PLAN_INELIGIBLE_ENTITY_LIMIT`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanView {
@@ -703,6 +712,17 @@ pub struct PlanView {
     pub target_day_source: Option<String>,
     pub counts: PlanCounts,
     pub ineligible_reasons: Vec<PlanReasonCount>,
+    /// Ineligible entities that need caller routing, sorted by (entity,
+    /// reason) and capped at `PLAN_INELIGIBLE_ENTITY_LIMIT`. The same
+    /// classes as `ineligible_reasons`: `already_current`/`absent`/
+    /// `no_daily_base` are excluded. Diagnostic only: never part of the
+    /// canonical plan, so it does not affect `plan_id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ineligible_entities: Vec<PlanIneligibleEntity>,
+    /// `true` when more ineligible entities exist than the limit admitted:
+    /// `ineligible_entities` holds the first `PLAN_INELIGIBLE_ENTITY_LIMIT`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ineligible_entities_truncated: bool,
     pub snapshot_time: DateTime<Utc>,
 }
 /// `run_market_update` input: binds the request to a plan digest the

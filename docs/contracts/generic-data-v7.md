@@ -36,8 +36,11 @@ compact schema 21（见 [STATUS](../STATUS.md)）。schema 不变（仍 21），
   `absent`、`ineligible:<reason>` 四类。
 - 输出（小）：`{plan_id, dataset, contract_version, generation_ref,
   target_day, target_day_source?, counts{eligible, already_current, absent,
-  ineligible}, ineligible_reasons[{reason, count}], snapshot_time}`。不枚举
-  实体。`target_day_source ∈ {explicit, generation_latest, today_fallback}`
+  ineligible}, ineligible_reasons[{reason, count}], ineligible_entities?[{entity,
+  reason}], ineligible_entities_truncated?, snapshot_time}`。**不枚举 eligible
+  实体**；`ineligible_entities` 仅列需调用方路由的 ineligible 实体（上限 500，
+  同 `ineligible_reasons` 口径，见 §7.1）。`target_day_source ∈ {explicit,
+  generation_latest, today_fallback}`
   说明目标日的来源；它只是说明字段，**不进入** canonical plan，不影响
   `plan_id`。
 - `plan_id = sha256(canonical_json)`；canonical =
@@ -158,11 +161,11 @@ acquire→verify→activate 仍按 [daily-sync](../daily-sync.md) 执行，不�
 
 | # | 步骤 | 调用 | 前置条件 | 终态/产出 |
 |---|---|---|---|---|
-| 1 | 日线 plan | `plan_market_update{dataset:"market.daily", contract_version:"v1"[, end_date]}` | active verified generation 存在；无在途 acquisition；无同 dataset 非终态更新任务 | `plan_id`、`target_day`、`counts`、`ineligible_reasons` |
+| 1 | 日线 plan | `plan_market_update{dataset:"market.daily", contract_version:"v1"[, end_date]}` | active verified generation 存在；无在途 acquisition；无同 dataset 非终态更新任务 | `plan_id`、`target_day`、`counts`、`ineligible_reasons`、`ineligible_entities` |
 | 2 | 日线 run | `run_market_update{dataset:"market.daily", contract_version:"v1", request_id, target_day, plan_id}` | 上一步 plan 刚返回，其间无 catalog/head/gap/generation 变化（否则 `plan_stale`，§3）；同 dataset 无非终态更新任务 | `task_id`；worker 串行执行 |
 | 3 | 轮询日线到终态 | `get_task_progress(task_id)` | — | `status ∈ {succeeded, partially_failed, failed}`；大任务按 `unfinished` keyset 分页（§5） |
 | 4 | 日线失败路由 | 读顶层 `plan.failed_by_reason`；对 `REVISION_UNVERIFIED` 走显式 `update_data`（§7.2） | 日线任务已到终态 | 每个显式任务终态后 head 前进 |
-| 5 | 年线 plan | `plan_market_update{dataset:"market.yearly", contract_version:"v1"[, end_date]}` | **`market.daily` 无非终态更新任务**（含步骤 4 的显式补漏任务；否则 `daily_update_inflight`，§3/§4） | 年线 `plan_id`、`counts`、`ineligible_reasons` |
+| 5 | 年线 plan | `plan_market_update{dataset:"market.yearly", contract_version:"v1"[, end_date]}` | **`market.daily` 无非终态更新任务**（含步骤 4 的显式补漏任务；否则 `daily_update_inflight`，§3/§4） | 年线 `plan_id`、`counts`、`ineligible_reasons`、`ineligible_entities` |
 | 6 | 年线 run（只处理 `eligible`） | `run_market_update{dataset:"market.yearly", contract_version:"v1", request_id, target_day, plan_id}` | 年线 plan 刚返回，其间无 catalog/head/gap/generation 变化（否则 `plan_stale`）；`market.daily` 无非终态任务 | `task_id`；worker 串行执行 |
 | 7 | 年线不可处理路由 | 对 `ineligible_reasons` 中 `value_semantics_changed` / `daily_replaced_since_derivation` 走显式年线重推（§7.4） | 年线 run 已到终态 | 每个显式任务终态后 yearly head 前进 |
 | 8 | readback | `get_data_availability` / `query_data`（`latest_per_entity`） | 步骤 3/6/7 任务均终态 | 各实体最新交易日、coverage/freshness 事实 |
@@ -174,6 +177,15 @@ plan→run→补漏（步骤 5→6→7）。**年线补漏必须排在年线 run
 步骤 6 的 run 必然 `plan_stale`。补漏完成后可选再 `plan_market_update`
 （`dataset:"market.yearly"`）核对一次：此时 `eligible` 应为 0，`ineligible` 只剩
 `already_current` 及预期的无需动作原因。
+
+plan 返回的 `ineligible_entities` 是新增的**受限诊断字段**：它与
+`ineligible_reasons` 同一过滤口径（排除 `already_current`/`absent`/
+`no_daily_base`），逐项给出 `{entity, reason}`，按 (entity, reason) 排序，上限
+`PLAN_INELIGIBLE_ENTITY_LIMIT = 500`；超过 500 项时截断并置
+`ineligible_entities_truncated=true`。它**不进入** canonical plan，因此不影响
+`plan_id`；空列表时序列化省略该字段（`ineligible_entities_truncated` 仅在 `true`
+时出现）。调用方应优先用它作为步骤 7 的需重推集，仅在
+`ineligible_entities_truncated=true` 时回退到 §7.4 的 availability 枚举。
 
 ### 7.2 日线失败路由
 
