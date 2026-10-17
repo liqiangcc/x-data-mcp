@@ -212,7 +212,10 @@ plan/run 或 §3.6 显式分支。轮询与 fail-closed 判定同 §3.2/§3.3。
 
 显式年线重推步骤（每批 ≤100 实体）：
 
-1. `get_data_availability`（`dataset:"market.yearly"`，batch）取需重推集：`version_ref`
+1. 需重推集**优先**用年线 plan 返回的 `ineligible_entities`（`reason ∈
+   {daily_replaced_since_derivation, value_semantics_changed}`）作实体清单；仅当
+   `ineligible_entities_truncated=true`（实体数超过 500）时回退到枚举：
+   `get_data_availability`（`dataset:"market.yearly"`，batch）取 `version_ref`
    为空 ∪ `stale=="behind"` ∪ `reason ∈ {daily_replaced_since_derivation,
    value_semantics_changed}`。
 2. `list_data_versions`（`dataset:"market.yearly"`，batch）取每实体已存 head
