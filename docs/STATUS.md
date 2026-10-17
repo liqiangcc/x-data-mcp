@@ -6,7 +6,7 @@
 
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
-最后核实：2026-10-16。部署与数据相关数值为部署并重建后读取 live 服务的结果；其余标注「来源」的数值来自所列报告或命令。
+最后核实：2026-10-17。部署与数据相关数值为部署并重建后读取 live 服务的结果；其余标注「来源」的数值来自所列报告或命令。
 
 ## 部署
 
@@ -16,15 +16,15 @@
 | 系统 | Ubuntu 26.04 LTS，kernel 7.0.0-1014-aws | `/etc/os-release`、`uname -r` |
 | 资源 | EC2 t3.small（可突发）：2 vCPU（1 个物理核加 2 个超线程，没有 SHA-NI），1.9GiB RAM + 8GiB swap，根盘 77G；`/tmp` 是 953MB 的 tmpfs（占内存） | `lscpu`、`/proc/cpuinfo`、`free -h`、`df -h` |
 | 本机工具链 | rustc / cargo 1.99.0 | `rustc --version` |
-| 部署版本 | v0.2.0-preview.33 @ `d91d33b3a6782e049b0f8ab2236b01f3889af64e` | `/opt/x-data-mcp-preview/current/manifest.json` |
-| 部署时间 | 2026-10-16T02:28Z，`scripts/switch_binary.sh v0.2.0-preview.33`（二进制热切换，无库迁移、无重建，S1–S6 全过，未触发自动回滚）；previous deployment v0.2.0-preview.32 (schema 21，`releases/db40ed2d…`) 保留作回滚点 | 部署报告 |
+| 部署版本 | v0.2.0-preview.34 @ `a77d0901124c373921f8d5c89586ddfc71f7ee1a` | `/opt/x-data-mcp-preview/current/manifest.json` |
+| 部署时间 | 2026-10-17T18:09Z，`scripts/switch_binary.sh v0.2.0-preview.34`（二进制热切换，无库迁移、无重建，S1–S6 全过，未触发自动回滚）；previous deployment v0.2.0-preview.33 (schema 21，`releases/d91d33b3…`) 保留作回滚点 | 部署报告 |
 | 构建 | rustc 1.99.0，ubuntu-24.04，最低 glibc 2.39 | 同上 |
-| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/d91d33b3…` | `ls -l` |
+| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/a77d0901…` | `ls -l` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
 | ecs-node | 服务已 stop 并 disable，数据保留为冷备（含 generation `a49c314b…` 的字节） | 同上 |
 | production_ready | `false`：owner 个人研究、本地使用，未授权对外分发（#71） | `get_data_capabilities` |
 
-本次 v7 部署为二进制热切换，数据库沿用（schema 21），部署时刻无数据重建。已知回滚代价：v7 运行过 plan/run 之后若回滚到 v6，v6 对 plan/run 任务的 `get_task_progress` 会报未知契约，存在被重启恢复收尾（`interrupted`）的 plan/run 任务时 v6 的 `list_tasks` 会整体失败。
+v7 自 preview.33 起运行；preview.34 为二进制热切换，数据库沿用（schema 21），部署时刻无数据重建。回滚到 preview.33 不涉及契约差异；回滚到 preview.32（v6）的已知代价：v7 运行过 plan/run 之后，v6 对 plan/run 任务的 `get_task_progress` 会报未知契约，存在被重启恢复收尾（`interrupted`）的 plan/run 任务时 v6 的 `list_tasks` 会整体失败。
 
 ## 服务
 
@@ -40,12 +40,12 @@
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 当前 generation | `54553656c79afe2c16a6f497ec860410c27268cc333ebe070110099a36917065`，2026-10-15T10:50:22Z 激活 | `generations/active-generation.json` |
-| 前一 generation | `8b8614c31b757fa1fc46c9872c2ef22cf190c637eda2dddea8d498ad6daa29a4`；4 个已无字节的旧 generation（84b3f15d、c360967a、2e918330、a49c314b）已于 2026-10-13 由操作员退役为 evidence_only（只改状态，清单/决策/证据保留） | 同上、迁移报告 |
-| 数据库 | `state/preview.sqlite`，fresh compact schema 21，1,018,265,600 B（2026-10-16 实测；WAL 0 B） | `ls -l` |
+| 当前 generation | `f289c612bb6ea3dc1d2c759130bf5fe563bdc762d40010d0d4710391eee5d9b0`，2026-10-16T10:51:34Z 激活 | `generations/active-generation.json` |
+| 前一 generation | `54553656c79afe2c16a6f497ec860410c27268cc333ebe070110099a36917065`；4 个已无字节的旧 generation（84b3f15d、c360967a、2e918330、a49c314b）已于 2026-10-13 由操作员退役为 evidence_only（只改状态，清单/决策/证据保留） | 同上、迁移报告 |
+| 数据库 | `state/preview.sqlite`，fresh compact schema 21，1,078,165,504 B（2026-10-17 实测；WAL 0 B） | `ls -l` |
 | 目录 | 5,228 个实体 | 重建驱动读回 |
-| 日线 | 已发布 5,224 个；5,213 个 head 为 2026-10-15；11 家停牌/无数据实体更早（fail-closed）：sh.600825/sz.002717/sz.301314 last_day=10-12，其余 sh.600293/601059/601198/688496、sz.000016/002388/002731/300773 更早；年线同样 11 家落后 | 部署后只读核对 |
-| 年线 | 5,224 个 published，5,213 个 head 为 2026-10-15，随 10-15 追加重派生 | 部署后只读核对 |
+| 日线 | 已发布 5,224 个；5,214 个 head 为 2026-10-16；10 个停牌/无数据实体更早（fail-closed）：sh.600293、sh.601059、sh.601198、sh.688496、sz.000016、sz.002388、sz.002717、sz.002731、sz.300773、sz.301314 | 部署后只读核对 |
+| 年线 | 5,224 个 published，5,214 个 head 为 2026-10-16，落后集合与日线相同 | 部署后只读核对 |
 | 缺失 | `sz.001381`、`sz.301569`、`sz.301660`、`sz.301718`（官方 hsjday 缺成员，4 个日线任务条目 fail-closed，预期） | 重建驱动读回 |
 | 与迁移报告的差异 | 迁移报告记录 `sz.001246` 为空、年线 5,223 个 succeeded；本次重建该实体有 2 条日线（2026-09-30、2026-10-08）和 1 条年线，年线共 5,224 个。读回的这两项预期值（5,223 与 `sz.001246` 为空）因此不符，判断为预期值过时而非故障，待 owner 确认 | `deploy31-readback.json` |
 | 重建耗时 | 全新重建基于 generation 87322997（数据截止 2026-10-08）：collect write-loop 308.4s（catalog + 日线 53 块，含 4 个缺成员条目）+ 年线首次 write-loop 208.9s；预览演练对照 209.7s / 224.3s | 重建驱动 JSON |
