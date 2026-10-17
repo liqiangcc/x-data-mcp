@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-EXPECTED_PACKAGE_VERSION = "0.2.0-preview.33"
+EXPECTED_PACKAGE_VERSION = "0.2.0-preview.34"
 EXPECTED_LEGACY_SCHEMA = 18
 # Fresh `init`/`init20` output schema (code constant). The deployed preview
 # instance runs schema 21 (fresh rebuild at the v6 switch).
