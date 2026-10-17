@@ -1,0 +1,22 @@
+{
+  "status": "PASS",
+  "version": "x-data-mcp 0.2.0-preview.34 a77d0901124c373921f8d5c89586ddfc71f7ee1a NOT_PRODUCTION_READY",
+  "binary_sha256": "4f0099fae54fcdeb08d7dca268c711008d366e7f8cc8ddb373d372729fbfb895",
+  "checks": [
+    "explicit_fixture_init_and_no_clobber",
+    "initialize_discovery_23_tools_generic_data_v7",
+    "catalog_null_and_yearly_confirmed_qfq_fixed_paging",
+    "fixed_compute_deterministic_fixture_vector",
+    "request_task_retry_cancel_and_source_gate",
+    "yearly_update_frozen_input_and_blocked_worker_preserves_fixture",
+    "publication_inspection_discovery_and_never_started_refusal_without_binding",
+    "stopping_inspection_proves_never_started_without_source_execution",
+    "bounded_inspection_historical_request_without_recursive_task_or_rewrite",
+    "persistent_service_proxy_discovery_and_reconnect",
+    "same_proxy_idle_over_30_seconds_then_calls_again",
+    "acquire_service_socket_discovery_and_capabilities"
+  ],
+  "live_source": "NOT_RUN",
+  "production": "NOT_PRODUCTION_READY",
+  "data": "SYNTHETIC_FIXTURE_ONLY"
+}
