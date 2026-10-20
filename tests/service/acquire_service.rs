@@ -469,6 +469,204 @@ fn pins_block_retire_and_retire_keeps_evidence_only() {
 }
 
 #[test]
+fn superseded_generations_retire_past_the_retained_window() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = open(root.path(), mirror.path());
+    let mut generations: Vec<String> = vec![];
+    let mut previous: Option<String> = None;
+    for i in 0..5u32 {
+        remirror(mirror.path(), 600040 + i, today_u32());
+        let acceptance = install(&service, &format!("req-ret-{i}"));
+        let next_gen = generation_of(&service, &acceptance.task_id);
+        assert_eq!(verify(&service, &next_gen).state, "consistency_verified");
+        let reply = activate(&service, &next_gen, previous.as_deref());
+        assert_eq!(reply.state, "active", "{reply:?}");
+        // Activations 4 and 5 retire the oldest superseded generation each.
+        let expected: Vec<String> = match i {
+            3 => vec![generations[0].clone()],
+            4 => vec![generations[1].clone()],
+            _ => vec![],
+        };
+        assert_eq!(reply.retired_generations, expected, "activation {i}");
+        generations.push(next_gen.clone());
+        previous = Some(next_gen);
+    }
+
+    let status = service.sync_status().unwrap();
+    let state_of = |id: &str| {
+        status
+            .generations
+            .iter()
+            .find(|g| g.generation_id == id)
+            .unwrap()
+            .state
+            .clone()
+    };
+    assert_eq!(state_of(&generations[0]), "evidence_only");
+    assert_eq!(state_of(&generations[1]), "evidence_only");
+    assert_eq!(state_of(&generations[2]), "superseded");
+    assert_eq!(state_of(&generations[3]), "superseded");
+    assert_eq!(state_of(&generations[4]), "active");
+    assert!(
+        service
+            .generations()
+            .verify_installed(&generations[0], chrono::Utc::now())
+            .is_err()
+    );
+    assert!(
+        service
+            .generations()
+            .usable(&generations[2], chrono::Utc::now())
+            .is_ok()
+    );
+    assert!(
+        service
+            .generations()
+            .decision(&generations[0])
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn pinned_superseded_generation_survives_auto_retention() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = open(root.path(), mirror.path());
+    remirror(mirror.path(), 600060, today_u32());
+    let first = install(&service, "req-held-0");
+    let g0 = generation_of(&service, &first.task_id);
+    verify(&service, &g0);
+    assert_eq!(activate(&service, &g0, None).state, "active");
+    let pin = service.generations().pin(&g0, "task:held-auto").unwrap();
+
+    let mut generations = vec![g0.clone()];
+    for i in 1..=3u32 {
+        remirror(mirror.path(), 600060 + i, today_u32());
+        let acceptance = install(&service, &format!("req-held-{i}"));
+        let next_gen = generation_of(&service, &acceptance.task_id);
+        verify(&service, &next_gen);
+        let reply = activate(&service, &next_gen, generations.last().map(String::as_str));
+        assert_eq!(reply.state, "active", "{reply:?}");
+        // By activation 3 the pinned g0 is the oldest superseded: it is
+        // skipped, not an error, and the swap still commits.
+        assert!(reply.retired_generations.is_empty(), "{reply:?}");
+        generations.push(next_gen);
+    }
+    assert_eq!(
+        service
+            .sync_status()
+            .unwrap()
+            .generations
+            .iter()
+            .find(|g| g.generation_id == g0)
+            .unwrap()
+            .state,
+        "superseded"
+    );
+    assert!(
+        service
+            .generations()
+            .usable(&g0, chrono::Utc::now())
+            .is_ok()
+    );
+
+    // Once unpinned, the next activation retires the two oldest superseded.
+    drop(pin);
+    remirror(mirror.path(), 600064, today_u32());
+    let acceptance = install(&service, "req-held-4");
+    let next_gen = generation_of(&service, &acceptance.task_id);
+    verify(&service, &next_gen);
+    let reply = activate(&service, &next_gen, generations.last().map(String::as_str));
+    assert_eq!(reply.state, "active", "{reply:?}");
+    assert_eq!(
+        reply.retired_generations,
+        vec![generations[1].clone(), g0.clone()]
+    );
+}
+
+#[test]
+fn activation_replay_returns_recorded_retirements_without_retiring_again() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = open(root.path(), mirror.path());
+    let mut generations: Vec<String> = vec![];
+    let mut last: Option<wire::ActivateReply> = None;
+    for i in 0..4u32 {
+        remirror(mirror.path(), 600080 + i, today_u32());
+        let acceptance = install(&service, &format!("req-replay-{i}"));
+        let next_gen = generation_of(&service, &acceptance.task_id);
+        verify(&service, &next_gen);
+        let reply = service
+            .activate_generation(
+                &format!("activate-replay-{i}"),
+                &next_gen,
+                generations.last().map(String::as_str),
+            )
+            .unwrap();
+        assert_eq!(reply.state, "active", "{reply:?}");
+        generations.push(next_gen);
+        last = Some(reply);
+    }
+    let last = last.unwrap();
+    assert_eq!(last.retired_generations, vec![generations[0].clone()]);
+
+    let replay = service
+        .activate_generation(
+            "activate-replay-3",
+            &generations[3],
+            Some(generations[2].as_str()),
+        )
+        .unwrap();
+    assert!(replay.reused, "{replay:?}");
+    assert_eq!(replay.state, "active");
+    assert_eq!(replay.retired_generations, last.retired_generations);
+    assert_eq!(
+        service
+            .sync_status()
+            .unwrap()
+            .generations
+            .iter()
+            .find(|g| g.generation_id == generations[1])
+            .unwrap()
+            .state,
+        "superseded"
+    );
+}
+
+#[test]
+fn ten_daily_updates_never_hit_generation_capacity() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = open(root.path(), mirror.path());
+    let mut previous: Option<String> = None;
+    for day in 0..10u32 {
+        remirror(mirror.path(), 600200 + day, today_u32());
+        // `install` unwraps the acquire call: a generation_capacity refusal
+        // would fail the test here.
+        let acceptance = install(&service, &format!("req-daily-{day}"));
+        let next_gen = generation_of(&service, &acceptance.task_id);
+        assert_eq!(verify(&service, &next_gen).state, "consistency_verified");
+        let reply = activate(&service, &next_gen, previous.as_deref());
+        assert_eq!(reply.state, "active", "day {day}: {reply:?}");
+        let hot = service
+            .sync_status()
+            .unwrap()
+            .generations
+            .iter()
+            .filter(|g| g.state != "evidence_only")
+            .count();
+        assert!(hot <= 3, "day {day}: {hot} hot generations");
+        previous = Some(next_gen);
+    }
+}
+
+#[test]
 fn hot_capacity_refuses_new_candidates_without_deletion() {
     let mirror = tempfile::tempdir().unwrap();
     write_mirror(mirror.path(), today_u32());

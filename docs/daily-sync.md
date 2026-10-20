@@ -128,8 +128,8 @@ Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。#259
 | `get_acquisition_task` | 读取下载、校验、持久化阶段和稳定 refs |
 | `get_acquisition_request` | 在响应丢失或超时后按 request identity 恢复事实 |
 | `verify_generation` | 使用 #131 契约和显式 CompatibilityEvidence 产生 consistency decision；不激活 |
-| `activate_generation` | 对 `consistency_verified` generation 执行 expected-previous 条件激活；不更新行情 |
-| `retire_generation` | owner/operator 显式确认后按引用与留存规则退役 generation |
+| `activate_generation` | 对 `consistency_verified` generation 执行 expected-previous 条件激活；不更新行情。激活成功后自动保留：按安装时间保留最近 2 个 `superseded` generation（含刚被取代的前一代），更旧者自动退役为 `evidence_only`（字节删除）；有 live pin 或在途获取任务的代跳过且不使激活失败；回复 `retired_generations` 列出本次退役的 id，replay 返回同一列表 |
+| `retire_generation` | owner/operator 显式确认后按引用与留存规则退役 generation；与上面的自动保留共用同一 pin/在途任务检查，active 代永不退役 |
 | `sync_status` | 只读返回 active/pending generation、manifest 和 consistency 状态 |
 | `run_worker_once` | operator/debug-only；正常长期服务不由 Skill 调用 |
 

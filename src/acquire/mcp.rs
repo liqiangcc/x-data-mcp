@@ -47,7 +47,7 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         name: "activate_generation",
-        description: "Conditional activation: only a consistency_verified generation may swap the atomic active pointer, and only when expected_previous still matches. Refusals are durable outcomes.",
+        description: "Conditional activation: only a consistency_verified generation may swap the atomic active pointer, and only when expected_previous still matches. After the swap, superseded generations beyond the newest two retire automatically (reported in retired_generations). Refusals are durable outcomes.",
         input: schema::<ActivateGeneration>,
     },
     Entry {

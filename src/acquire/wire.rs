@@ -185,6 +185,11 @@ pub struct ActivateReply {
     pub activated_at: Option<String>,
     pub previous_generation_id: Option<String>,
     pub reused: bool,
+    /// Superseded generations this activation retired under the automatic
+    /// retention rule (bytes deleted, now `evidence_only`). Recorded with the
+    /// outcome, so a replay returns the same list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_generations: Vec<String>,
 }
 /// Operator/worker turn: advances the oldest open acquisition task by one
 /// durable stage. Empty input — the runtime worker loop calls this by
