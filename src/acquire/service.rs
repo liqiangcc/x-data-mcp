@@ -923,7 +923,8 @@ impl AcquireService {
                     })?;
                 }
                 // The swap is committed; retention failures never undo it.
-                let retired_generations = self.retire_expired_superseded();
+                let retired_generations =
+                    self.retire_expired_superseded(pointer.previous_generation_id.as_deref());
                 Ok(wire::ActivateReply {
                     request_id: request_id.into(),
                     generation_id: generation_id.into(),
@@ -1059,7 +1060,7 @@ impl AcquireService {
     /// through the same pin and in-flight checks as the manual retire.
     /// Blocked or failing generations are skipped and never fail the
     /// activation that triggered them.
-    fn retire_expired_superseded(&self) -> Vec<String> {
+    fn retire_expired_superseded(&self, previous: Option<&str>) -> Vec<String> {
         let mut superseded = match self.db.generations_in(&[GEN_SUPERSEDED]) {
             Ok(rows) => rows,
             Err(e) => {
@@ -1070,6 +1071,11 @@ impl AcquireService {
         superseded.sort_by(|a, b| b.installed_at.cmp(&a.installed_at));
         let mut retired = vec![];
         for row in superseded.into_iter().skip(RETAINED_SUPERSEDED) {
+            // The generation this activation just replaced is the rollback
+            // target; it keeps its bytes whatever its install time.
+            if previous == Some(row.generation_id.as_str()) {
+                continue;
+            }
             let generation_id = row.generation_id.clone();
             match self.retire_bytes_and_mark(row) {
                 Ok(Ok(())) => retired.push(generation_id),

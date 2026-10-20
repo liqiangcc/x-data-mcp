@@ -112,8 +112,8 @@ remote_observed
 - 新数据任务冻结 exact `source_generation_id`。
 - acquisition 只能签发下载/字节事实，不能因为 HTTP、ETag、Last-Modified、文件名或单文件 SHA 正确而自行签发 #131 兼容结论。
 
-Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。#259 容量目标与 #260 仍需共同裁定 superseded
-文件的热保留、冷归档或整代 retire 规则；在裁定前不得自动删除。任何被 task/session 引用的 generation
+Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。热盘上的 superseded generation 按自动保留规则处理：激活成功后保留最近 2 个（含刚被取代的前一代，其作为回滚目标始终保留），更旧者自动退役为 `evidence_only`；
+冷归档仍需 #259 容量目标与 #260 另行裁定，被自动退役的字节不再可用于完整 source replay。任何被 task/session 引用的 generation
 必须保留，状态需区分 hot、cold、evidence-only 和 unavailable，不能在删除原字节后继续声称可完整 source replay。
 
 ## 目标工具职责
