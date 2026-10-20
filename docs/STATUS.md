@@ -40,17 +40,19 @@ v7 自 preview.33 起运行；preview.34 为二进制热切换，数据库沿用
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 当前 generation | `f289c612bb6ea3dc1d2c759130bf5fe563bdc762d40010d0d4710391eee5d9b0`，2026-10-16T10:51:34Z 激活 | `generations/active-generation.json` |
-| 前一 generation | `54553656c79afe2c16a6f497ec860410c27268cc333ebe070110099a36917065`；4 个已无字节的旧 generation（84b3f15d、c360967a、2e918330、a49c314b）已于 2026-10-13 由操作员退役为 evidence_only（只改状态，清单/决策/证据保留） | 同上、迁移报告 |
-| 数据库 | `state/preview.sqlite`，fresh compact schema 21，1,078,165,504 B（2026-10-17 实测；WAL 0 B） | `ls -l` |
+| 当前 generation | `9d9e38d7bd26c08baba6313f71d34084f9fef9da731013bfd335091dd991f70a`，2026-10-19T13:24:42Z 激活 | `generations/active-generation.json` |
+| 前一 generation | `f289c612bb6ea3dc1d2c759130bf5fe563bdc762d40010d0d4710391eee5d9b0`；`87322997…` 已于 2026-10-19 由操作员（经用户确认）退役为 evidence_only，完整备份在归档目录；4 个已无字节的旧 generation（84b3f15d、c360967a、2e918330、a49c314b）已于 2026-10-13 由操作员退役为 evidence_only（只改状态，清单/决策/证据保留） | 同上、迁移报告 |
+| 数据库 | `state/preview.sqlite`，fresh compact schema 21，1,132,068,864 B（2026-10-19 实测；WAL 16,777,216 B） | `ls -l` |
 | 目录 | 5,228 个实体 | 重建驱动读回 |
-| 日线 | 已发布 5,224 个；5,214 个 head 为 2026-10-16；10 个停牌/无数据实体更早（fail-closed）：sh.600293、sh.601059、sh.601198、sh.688496、sz.000016、sz.002388、sz.002717、sz.002731、sz.300773、sz.301314 | 部署后只读核对 |
-| 年线 | 5,224 个 published，5,214 个 head 为 2026-10-16，落后集合与日线相同 | 部署后只读核对 |
+| 日线 | 已发布 5,224 个；5,211 个 head 为 2026-10-19；13 个停牌/无新 bar 实体更早（fail-closed）：sh.600293、sh.601059、sh.601198、sh.688496、sz.000016、sz.002388、sz.002717、sz.002731、sz.301314 与 sh.603517、sh.603759、sh.603838、sz.301468（后四个停在 2026-10-16） | 部署后只读核对 |
+| 年线 | 5,224 个 published，5,211 个 head 为 2026-10-19，落后集合与日线相同 | 部署后只读核对 |
 | 缺失 | `sz.001381`、`sz.301569`、`sz.301660`、`sz.301718`（官方 hsjday 缺成员，4 个日线任务条目 fail-closed，预期） | 重建驱动读回 |
 | 与迁移报告的差异 | 迁移报告记录 `sz.001246` 为空、年线 5,223 个 succeeded；本次重建该实体有 2 条日线（2026-09-30、2026-10-08）和 1 条年线，年线共 5,224 个。读回的这两项预期值（5,223 与 `sz.001246` 为空）因此不符，判断为预期值过时而非故障，待 owner 确认 | `deploy31-readback.json` |
 | 重建耗时 | 全新重建基于 generation 87322997（数据截止 2026-10-08）：collect write-loop 308.4s（catalog + 日线 53 块，含 4 个缺成员条目）+ 年线首次 write-loop 208.9s；预览演练对照 209.7s / 224.3s | 重建驱动 JSON |
 
 部署后首次增量更新（2026-10-12 收盘后，跨代 Append，验证 GOAL-008 关闭条件）：2026-10-13 执行——Skill 会话先完成新 generation `2d5851a4…` 的 acquire→verify→activate（06:52Z），随后用 Skill 逐页枚举 5,228 个目录成员做增量，27 分钟内未提交任何 `update_data`，速度不足被叫停；10-09 与 10-12 的追加改由程序化驱动 `prod_append_v6.py`（PR #347，未合并）完成：daily write-loop 311.4s（53 块、5,224 项）+ 年线重聚合 239.9s（53 任务），读回零差异（published 5,224、落后恰 12 家 fail-closed、staged_records=0）。同日第二次同步（10-13 收盘后）：Skill 会话完成新 generation `a119629b…` 的 acquire→verify→activate（10:35Z）后，对 27 个实体自行提交了 10-13 的 `update_data`（成功），随后被操作员叫停；其余实体的追加仍由程序化驱动完成（幂等跳过已更新的 27 家）：daily write-loop 173.1s（52 块、5,197 项，published 5,184 + 13 fail-closed）+ 年线重聚合 259.1s（53 任务，含 Skill 已更新实体的年线补齐），读回 staged_records=0。事件计数：first_publish 10,448；append 10,331；replace 92；no_change 25；yearly_rederive 10,423。
+
+2026-10-19 日更（v7 plan/run 第二次真实运行，目标日 2026-10-19）：acquire 首次被 `generation_capacity` 拒绝，退役 87322997 后重新获取 generation `9d9e38d7…`（571,587,501 B，约 30 分钟），verify=consistency_verified，activate 带 expected_previous。日线 plan/run 5,224 项，成功 5,207、失败 17（均 `REVISION_UNVERIFIED`），run 189s；17 项用 `update_data` 前向窗口补漏，16 成功，`sh.603517` 窗口内无 bar（预期 fail-closed）。年线 plan eligible 5,186 / ineligible 37（`value_semantics_changed` 21、`daily_replaced_since_derivation` 16，`ineligible_entities` 首次在真实数据上完整列出、未截断），run 全部成功，417.5s；37 项显式重推后再 plan：already_current 5,224、eligible 0、ineligible 0、absent 4。进度响应最大 1,788 B；最低 MemAvailable 712MB。热 generation 现为 6/6，下一次 acquire 前需要再退役一个。
 
 运维事实：热 generation 上限 6（`MAX_HOT_GENERATIONS`），超限后 `acquire_generation` 被拒 `generation_capacity`；Skill 无权退役 generation，今日由操作员退役 4 个已无字节的旧 generation 腾出容量；日更流程需要保留策略。Skill 在有更新日的路径仍未完整验证（枚举过慢一次、部分自行追加一次）；#304 的有效 PASS 仍为 3/10（均为 unchanged）。批量更新工具（plan/run，generic-data-v7）实现中。
 
