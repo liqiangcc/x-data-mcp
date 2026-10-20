@@ -54,7 +54,7 @@ v7 自 preview.33 起运行；preview.34 为二进制热切换，数据库沿用
 
 2026-10-19 日更（v7 plan/run 第二次真实运行，目标日 2026-10-19）：acquire 首次被 `generation_capacity` 拒绝，退役 87322997 后重新获取 generation `9d9e38d7…`（571,587,501 B，约 30 分钟），verify=consistency_verified，activate 带 expected_previous。日线 plan/run 5,224 项，成功 5,207、失败 17（均 `REVISION_UNVERIFIED`），run 189s；17 项用 `update_data` 前向窗口补漏，16 成功，`sh.603517` 窗口内无 bar（预期 fail-closed）。年线 plan eligible 5,186 / ineligible 37（`value_semantics_changed` 21、`daily_replaced_since_derivation` 16，`ineligible_entities` 首次在真实数据上完整列出、未截断），run 全部成功，417.5s；37 项显式重推后再 plan：already_current 5,224、eligible 0、ineligible 0、absent 4。进度响应最大 1,788 B；最低 MemAvailable 712MB。热 generation 现为 6/6，下一次 acquire 前需要再退役一个。
 
-运维事实：热 generation 上限 6（`MAX_HOT_GENERATIONS`），超限后 `acquire_generation` 被拒 `generation_capacity`；Skill 无权退役 generation，今日由操作员退役 4 个已无字节的旧 generation 腾出容量；日更流程需要保留策略。Skill 在有更新日的路径仍未完整验证（枚举过慢一次、部分自行追加一次）；#304 的有效 PASS 仍为 3/10（均为 unchanged）。批量更新工具（plan/run，generic-data-v7）实现中。
+运维事实：热 generation 上限 6（`MAX_HOT_GENERATIONS`），超限后 `acquire_generation` 被拒 `generation_capacity`；Skill 无权退役 generation，今日由操作员退役 4 个已无字节的旧 generation 腾出容量；保留策略已实现（activate 后自动退役超出最近 2 个 superseded 的代，待发布部署，未部署）。Skill 在有更新日的路径仍未完整验证（枚举过慢一次、部分自行追加一次）；#304 的有效 PASS 仍为 3/10（均为 unchanged）。批量更新工具（plan/run，generic-data-v7）实现中。
 
 ## 进行中
 
@@ -78,7 +78,7 @@ v7 自 preview.33 起运行；preview.34 为二进制热切换，数据库沿用
 | `/opt/x-data-mcp-preview/mcp.json` 的 `x-data-mcp-demo` 指向一个不存在的 sqlite | 配置过时 | `ls` |
 | `src/acquire/fetch.rs` 在未设置 `X_DATA_MCP_TDX_FETCH` 时，回退到编译期的 `CARGO_MANIFEST_DIR` | 不带该变量启动的实例无法下载 | 源码 |
 | 生产服务、私有性能栈和多个 agent 会话共用 1 个物理核和 1.9GiB 内存；`/tmp` 是内存盘 | 2026-10-10 约 04:34Z 过载重启；测量结果有噪声 | 运维观察 |
-| 热 generation 上限 6 且无自动保留策略：超限后 `acquire_generation` 被拒（`generation_capacity`），退役只能由操作员执行 | 日更会在积累若干代后被容量拒绝；需要保留策略或自动退役 | 2026-10-13 实测 |
+| 热 generation 上限 6：超限后 `acquire_generation` 被拒（`generation_capacity`）。自动保留策略已实现，待发布部署；部署前退役仍需操作员执行 | 部署前日更会在积累若干代后被容量拒绝；部署后由 activate 自动退役 | 2026-10-13 实测 |
 | Skill 日更依赖 AI 会话逐页枚举目录实体（页大小受限、随目录规模线性增长；5,228 实体实测 27 分钟未提交一条更新） | 有更新那天的同步在 Skill 口径下不可用；已改由程序化追加驱动完成，批量更新工具（generic-data-v7）设计中 | 2026-10-13 首次增量实测 |
 | AGENTS.md 的环境段、README「当前状态」、`docs/daily-sync.md`「当前状态」仍写 ecs-node / preview.29 / generation `2e9183…` | 读取这些文档的 agent 会被误导 | 本次核对；这三处已加指向本文件的说明 |
 

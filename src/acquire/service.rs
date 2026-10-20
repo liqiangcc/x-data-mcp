@@ -37,6 +37,10 @@ pub const PROBE_CONTRACT_VERSION: &str = "official-generation-probe-v1";
 /// Hot-set bound (D2): active + previous + undecided candidates. New
 /// acquisitions are refused at the bound until a candidate retires.
 pub const MAX_HOT_GENERATIONS: usize = 6;
+/// Automatic retention (D2): after each committed activation the newest
+/// `RETAINED_SUPERSEDED` superseded generations (the one just replaced
+/// included) keep their bytes; older superseded generations retire.
+const RETAINED_SUPERSEDED: usize = 2;
 /// Deterministic `.day` members fully parsed during the day probe; the
 /// sample is the sorted-member head, so reruns are stable.
 const DAY_SAMPLE: usize = 64;
@@ -918,6 +922,9 @@ impl AcquireService {
                         ..row
                     })?;
                 }
+                // The swap is committed; retention failures never undo it.
+                let retired_generations =
+                    self.retire_expired_superseded(pointer.previous_generation_id.as_deref());
                 Ok(wire::ActivateReply {
                     request_id: request_id.into(),
                     generation_id: generation_id.into(),
@@ -928,6 +935,7 @@ impl AcquireService {
                     activated_at: Some(pointer.activated_at.to_rfc3339()),
                     previous_generation_id: pointer.previous_generation_id,
                     reused: false,
+                    retired_generations,
                 })
             }
             Err(generation::Error::ActivationConflict { actual, .. }) => Ok(wire::ActivateReply {
@@ -940,6 +948,7 @@ impl AcquireService {
                 activated_at: None,
                 previous_generation_id: actual,
                 reused: false,
+                retired_generations: vec![],
             }),
             Err(e) => Err(Error::Generation(e)),
         }
@@ -1018,44 +1027,92 @@ impl AcquireService {
                 "confirm_token_mismatch",
             ));
         }
-        let pins = self.store.pins(generation_id)?;
-        if !pins.is_empty() {
-            return Ok(wire::RetireReply {
+        match self.retire_bytes_and_mark(row)? {
+            Ok(()) => Ok(wire::RetireReply {
+                request_id: request_id.into(),
+                generation_id: generation_id.into(),
+                state: GEN_EVIDENCE_ONLY.into(),
+                reason_code: None,
+                detail: None,
+                reused: false,
+            }),
+            Err(RetireBlock::Pinned(pins)) => Ok(wire::RetireReply {
                 request_id: request_id.into(),
                 generation_id: generation_id.into(),
                 state: "refused".into(),
                 reason_code: Some("generation_referenced".into()),
                 detail: Some(format!("live pins: {}", pins.join(","))),
                 reused: false,
-            });
+            }),
+            Err(RetireBlock::Inflight(task_id)) => Ok(wire::RetireReply {
+                request_id: request_id.into(),
+                generation_id: generation_id.into(),
+                state: "refused".into(),
+                reason_code: Some("generation_referenced".into()),
+                detail: Some(format!("inflight acquisition task {task_id}")),
+                reused: false,
+            }),
+        }
+    }
+
+    /// Automatic retention after a committed swap: superseded generations
+    /// beyond the newest `RETAINED_SUPERSEDED` (by install time) retire
+    /// through the same pin and in-flight checks as the manual retire.
+    /// Blocked or failing generations are skipped and never fail the
+    /// activation that triggered them.
+    fn retire_expired_superseded(&self, previous: Option<&str>) -> Vec<String> {
+        let mut superseded = match self.db.generations_in(&[GEN_SUPERSEDED]) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("acquire retention: listing superseded generations failed: {e}");
+                return vec![];
+            }
+        };
+        superseded.sort_by_key(|g| std::cmp::Reverse(g.installed_at));
+        let mut retired = vec![];
+        for row in superseded.into_iter().skip(RETAINED_SUPERSEDED) {
+            // The generation this activation just replaced is the rollback
+            // target; it keeps its bytes whatever its install time.
+            if previous == Some(row.generation_id.as_str()) {
+                continue;
+            }
+            let generation_id = row.generation_id.clone();
+            match self.retire_bytes_and_mark(row) {
+                Ok(Ok(())) => retired.push(generation_id),
+                Ok(Err(_blocked)) => {}
+                Err(e) => {
+                    eprintln!("acquire retention: retiring {generation_id} failed: {e}");
+                }
+            }
+        }
+        retired
+    }
+
+    /// Shared retire action: a live pin or an accepted/running acquisition
+    /// task blocks the retire (not an error); otherwise the bytes are
+    /// deleted and the row becomes `evidence_only`. Callers own the
+    /// active-generation and confirm-token checks.
+    fn retire_bytes_and_mark(
+        &self,
+        row: store::Generation,
+    ) -> Result<Result<(), RetireBlock>, Error> {
+        let pins = self.store.pins(&row.generation_id)?;
+        if !pins.is_empty() {
+            return Ok(Err(RetireBlock::Pinned(pins)));
         }
         if let Some(acq_request) = row.acquisition_request_id.as_deref()
             && let Some(task) = self.db.task_by_request(acq_request)?
             && matches!(task.state.as_str(), ST_ACCEPTED | ST_RUNNING)
         {
-            return Ok(wire::RetireReply {
-                request_id: request_id.into(),
-                generation_id: generation_id.into(),
-                state: "refused".into(),
-                reason_code: Some("generation_referenced".into()),
-                detail: Some(format!("inflight acquisition task {}", task.task_id)),
-                reused: false,
-            });
+            return Ok(Err(RetireBlock::Inflight(task.task_id)));
         }
-        self.store.retire_bytes(generation_id)?;
+        self.store.retire_bytes(&row.generation_id)?;
         self.db.upsert_generation(&store::Generation {
             state: GEN_EVIDENCE_ONLY.into(),
             updated_at: Utc::now(),
             ..row
         })?;
-        Ok(wire::RetireReply {
-            request_id: request_id.into(),
-            generation_id: generation_id.into(),
-            state: GEN_EVIDENCE_ONLY.into(),
-            reason_code: None,
-            detail: None,
-            reused: false,
-        })
+        Ok(Ok(()))
     }
 
     // ---------- status ----------
@@ -1093,6 +1150,12 @@ impl AcquireService {
             ),
         })
     }
+}
+
+/// Why `retire_bytes_and_mark` declined to retire a generation.
+enum RetireBlock {
+    Pinned(Vec<String>),
+    Inflight(String),
 }
 
 fn detail_bytes(detail: &Value) -> u64 {
@@ -1150,6 +1213,7 @@ fn refused_activate(
         activated_at: None,
         previous_generation_id: None,
         reused: false,
+        retired_generations: vec![],
     }
 }
 fn refused_retire(request_id: &str, generation_id: &str, code: &'static str) -> wire::RetireReply {
