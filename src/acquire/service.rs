@@ -1068,7 +1068,7 @@ impl AcquireService {
                 return vec![];
             }
         };
-        superseded.sort_by(|a, b| b.installed_at.cmp(&a.installed_at));
+        superseded.sort_by_key(|g| std::cmp::Reverse(g.installed_at));
         let mut retired = vec![];
         for row in superseded.into_iter().skip(RETAINED_SUPERSEDED) {
             // The generation this activation just replaced is the rollback
