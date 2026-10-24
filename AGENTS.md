@@ -25,14 +25,14 @@
 
 > **环境事实已过时：** 2026-10-09 起开发、测量和生产都在 aws-node 上，ecs-node 只作冷备。当前主机、版本、generation 和服务以 [docs/STATUS.md](docs/STATUS.md) 为准，性能门禁以 [docs/SLO.md](docs/SLO.md) 为准。以下环境段与「生产运行事实」仅作历史记录，未经 STATUS 核对不得当作当前事实。
 
-开发与验收环境为本机 `ecs-node`（KVM 虚拟机，hostname 即 ecs-node；Ubuntu 24.04.4，kernel 6.8.0-106-generic，2 vCPU Intel Xeon Platinum 8336C，约 2GiB RAM + 4GiB swap，rustc/cargo 1.97.1 rustup stable，`/root/x-data-mcp` 为主检出）：根文件系统为 ext4（/dev/vda2）非 overlayfs，runtime-guard 本地通过；`/dev/shm` 为 tmpfs。官方输入位于本机 `/opt/x-data-mcp-preview/official-inputs/`（见其中 snapshot-manifest.json），官方文件只下载一次入库复用，重复下载需说明理由；gen-1 retained 字节永久不可得，跨代一致性走已提交派生证据。
+**历史（2026-10-09 前的开发环境，非当前事实；当前主机与版本见 [docs/STATUS.md](docs/STATUS.md)）：** 开发与验收环境为本机 `ecs-node`（KVM 虚拟机，hostname 即 ecs-node；Ubuntu 24.04.4，kernel 6.8.0-106-generic，2 vCPU Intel Xeon Platinum 8336C，约 2GiB RAM + 4GiB swap，rustc/cargo 1.97.1 rustup stable，`/root/x-data-mcp` 为主检出）：根文件系统为 ext4（/dev/vda2）非 overlayfs，runtime-guard 本地通过；`/dev/shm` 为 tmpfs。官方输入位于本机 `/opt/x-data-mcp-preview/official-inputs/`（见其中 snapshot-manifest.json），官方文件只下载一次入库复用，重复下载需说明理由；gen-1 retained 字节永久不可得，跨代一致性走已提交派生证据。
 
 Box（旧 Tailscale 节点 `grok-bot-vm-411252337`）已于 2026-09-25 回收下线：其上 `/home/box/retained-inputs/`、迁移协作 mailbox 与 agent 会话随之失效；Node.js 迁移（#271）已冻结，实现与证据保留在 `migration/*` 分支。dev/preview 场景的 `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（#213）仅限本地验收，生产禁用；客户端 `mcp_connect` 连接时同样需要该变量。
 
-`ecs-node` 即本机 hostname，不是指向其它主机的别名：`~/.ssh/config` 无 `Host ecs-node` 块（`ssh -G ecs-node` 仅输出默认值），`getent hosts ecs-node` 解析到本机地址。它同时承担开发、最终部署、真实 MCP 路径与最终 disk/WAL
+**历史（同上，2026-10-09 前）：** `ecs-node` 即当时本机 hostname，不是指向其它主机的别名：`~/.ssh/config` 无 `Host ecs-node` 块（`ssh -G ecs-node` 仅输出默认值），`getent hosts ecs-node` 解析到本机地址。它同时承担开发、最终部署、真实 MCP 路径与最终 disk/WAL
 验收。生产部署运行于本机 `/opt/x-data-mcp-preview/`（`x-data-mcp-data`/`x-data-mcp-acquire` systemd 单元 + `run/mcp.sock`/`run/acquire.sock` unix socket）；本机即承载生产实例。
 
-生产运行事实（preview.29 @ 4493d45，2026-09-29 验证）：
+**历史（preview.29 时期的运行事实，2026-09-29 验证；不是当前部署）：** 以下段落保留作证据，当前版本、generation、数据量与服务状态以 [docs/STATUS.md](docs/STATUS.md) 为准。
 
 - 部署管线：版本 bump + tag + `scripts/build_release.sh` + `scripts/smoke_release.py --bin-dir <解包目录>/bin --report <path>` + `gh release create --target <sha>`（tag 已存在时也必须传 `--target`，否则 `targetCommitish` 落成默认分支名，smoke 绑定校验失败）+ `deploy_phase_g.sh <tag>`（在 git 仓库目录内运行，`GH_REPO` 需就绪；release 资产名必须含 `<tarball>`、`<tarball>.sha256`、定名 `smoke-report.json`；每次部署归档旧库并全新 init 最新 compact schema（现 v21），非原地升级）。
 - 契约要点：`securities.catalog` 的 selection 为 `{"scope":"current_sh_sz_a"}`；已有 daily head 的实体禁止 `start_collection`（`market.daily` 返回 `existing daily head requires the update_data range path`），必须走 `update_data` 的 `explicit-range-task-v1` item（entity/base_version_id/start_date/end_date）；`market.yearly` 的 collection 被 worker 设计性拒绝，年线一律走 `update_data`（item 含 `base_daily_version_id`、`years`、`publication.expected_yearly_head`）。
