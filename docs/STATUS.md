@@ -56,8 +56,8 @@ acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.
 | 项 | 事实 | 来源 |
 |---|---|---|
 | 当前 generation | `c184e9c4b816dfc068d4d6e2eaedcf5e1742ad2979b0e54be2af798b54995d91`，2026-10-24T17:01:34Z 激活（`activation_request_id=ops-20261024-act-1`，previous `9d9e38d7…`）；代目录 572,634,818 B（三个官方成员合计 572,630,763 B + 清单/决策/证据） | `generations/active-generation.json`、live `sync_status`、`du -sb`、`snapshot-manifest.json` |
-| 热 generation | **6/6 已满**：1 active + 5 superseded（`9d9e38d7`、`f289c612`、`a119629b`、`8b8614c3`、`54553656`）；另有 9 个 evidence_only。preview.35 的自动保留只在 activate 成功后触发，**下一次 acquire 仍会被 `generation_capacity` 拒绝** | `generations/acquire.sqlite`（按 `state` 计数）、`src/acquire/service.rs:39,456` |
-| 退役记录 | `87322997…` 2026-10-19 退役（经用户确认）；`2d5851a4…` 2026-10-24T16:57:16Z 退役，**退役前 548M、退役后 16K，释放约 546MB**；更早 4 个已无字节的代（84b3f15d、c360967a、2e918330、a49c314b）2026-10-13 退役为 evidence_only（只改状态，清单/决策/证据保留） | `generations/acquire.sqlite`（`updated_at`、`request_outcomes` 的 `ops-20261024-retire-2d58`）、`du -sb generations/generations/*`；退役前后 `generations` 总量 3.3G→2.7G 与「释放约 546MB」一致（worker 两次 `du -sh` 复核） |
+| 热 generation | **5/6**（2026-10-24T17:52Z 清理后）：1 active + 4 superseded（`9d9e38d7`、`f289c612`、`8b8614c3`、`54553656`）；另有 10 个 evidence_only。下一次 acquire 可直接受理（5 < 6）；activate 成功后 preview.35 的自动保留会退役最旧的 superseded（预期 `8b8614c3`、`54553656`），保留最新 2 个加刚被取代的前一代 | `generations/acquire.sqlite`（按 `state` 计数）、`src/acquire/service.rs:39,456,1058-1084` |
+| 退役记录 | `87322997…` 2026-10-19 退役（经用户确认）；`2d5851a4…` 2026-10-24T16:57:16Z 退役，**退役前 548M、退役后 16K，释放约 546MB**；`a119629b…` 2026-10-24T17:52Z 退役，**退役前 574M、退役后 16K，释放约 574MB**；更早 4 个已无字节的代（84b3f15d、c360967a、2e918330、a49c314b）2026-10-13 退役为 evidence_only（只改状态，清单/决策/证据保留） | `generations/acquire.sqlite`（`updated_at`、`request_outcomes` 的 `ops-20261024-retire-2d58`/`ops-20261024-retire-a119`）、`du -sb generations/generations/*`；退役前后 `generations` 总量 3.3G→2.7G→2.1G 与两次释放一致 |
 | 数据库 | `state/preview.sqlite`，fresh compact schema 21（`pragma user_version=21`），1,185,640,448 B；WAL 0 B（17:25:22 停服务时 checkpoint）、SHM 32,768 B | `ls -l`、`pragma user_version` |
 | 目录 | 5,228 个实体（`catalog-1791873196258239513`） | `catalog_head`/`catalog_members` 只读查询、live `get_data_availability`（`record_count=5228`） |
 | 日线 | 已发布 5,224 个；**5,216 个 head 为 2026-10-23**（`last_day=20749`）；8 个更早（fail-closed，`coverage_status=1`）：sz.000016 2026-09-03、sh.688496 2026-09-10、sh.601059 2026-09-14、sh.601198 2026-09-14、sz.002717 2026-10-12、sz.301314 2026-10-12、sz.301468 2026-10-16、sh.601326 2026-10-20 | `market_series`（`period=1`）`last_day` 分布只读查询、live `get_data_availability` |
@@ -109,13 +109,13 @@ acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.
 
 | 项 | 事实（2026-10-24T17:26Z 实测，preview.35 切换之后） | 来源 |
 |---|---|---|
-| `/opt/x-data-mcp-preview` 全树 | 6.2GiB（`du -sh`；`du -sb` 为 6,612,550,726 B） | `du -sh .`、`du -sb .` |
-| generations | 3.3GiB：6 个带字节代合计 3,439,714,688 B（active `c184e9c4` 572,634,818；superseded `9d9e38d7` 571,591,556、`f289c612` 571,549,313、`a119629b` 574,454,342、`8b8614c3` 574,645,314、`54553656` 574,839,345）；另 9 个代目录各约 4KB（只有清单/决策/证据，无代字节） | `du -sb generations/generations/*` |
-| state | 2.7GiB：`preview.sqlite` 1,185,640,448 B + WAL 0 B + SHM 32,768 B + 两份 v20 归档库（`preview.sqlite.v20-archived-20261012T012110Z` 810,266,624 B、`…20261013T063110Z` 810,082,304 B，合计 1,620,348,928 B） | `du -sh state/*`、`ls -l` |
+| `/opt/x-data-mcp-preview` 全树 | 4.2GiB（`du -sh`，2026-10-24T17:55Z 清理后；清理前 6.2GiB） | `du -sh .`、`du -sb .` |
+| generations | 2.7GiB：5 个带字节代（active `c184e9c4` 572,634,818；superseded `9d9e38d7` 571,591,556、`f289c612` 571,549,313、`8b8614c3` 574,645,314、`54553656` 574,839,345）；另 10 个代目录各约 4KB（只有清单/决策/证据，无代字节） | `du -sb generations/generations/*` |
+| state | 1.2GiB：`preview.sqlite` 1,185,640,448 B + WAL 0 B + SHM 32,768 B。两份 v20 归档库已移出 `/opt` 到 `/root/x-data-archive/` 并 gzip（1,620,348,928 B → 742,656,972 B，`gzip -t` 通过，原库 SHA-256 保存在 `SHA256SUMS.v20`） | `du -sh state/*`、`ls -l`、`gzip -t` |
 | releases | 348MiB，6 个版本目录（49–96MiB/个；新增 `23edeaf…` 50MiB） | `du -sh releases/*` |
 | reports | 2.8MiB（含新的 `preview35-switch-20261024.json`） | `du -sh reports`、`ls -l reports/` |
-| `/tmp` | tmpfs 953MB，已用 625MB（66%），以调试残留为主（`one-read-tmp` 133M、`bp`/`bp_prev` 各 73M、`rc` 53M、`strace-strace200.log` 46M 等） | `df -h /tmp`、`du -sh /tmp/*` |
-| 根盘 | 77G，已用 50G，余 27G（`/tmp` 是内存盘，不计入） | `df -h /` |
+| `/tmp` | tmpfs 953MB，已用 19MB（2%）；2026-10-24T17:49Z 清理了 10-23 的调试残留（strace 日志、probe DB、`one-read-tmp`、`bp`/`bp_prev`、`reading-mcp-*` 等，约 606MB） | `df -h /tmp`、`du -sh /tmp/*` |
+| 根盘 | 77G，已用 49G，余 28G（`/tmp` 是内存盘，不计入） | `df -h /` |
 
 ## 进行中
 
@@ -137,11 +137,11 @@ acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.
 | `market_events` 事件日志无界增长（RULINGS Q9 已接受）：估计 ~5,224 行/日 ≈ 1MB/日（S5 实测 26,118 行 / dbstat ~16MB 含索引） | 长期运行累积；与任务簿记增长分开记录 | RULINGS Q9、S5 |
 | rollover 校验放宽后，回滚到旧二进制时，其对早 rollover 结果行的完整校验会报「requires depth-256 base」；已有 >127 深的链升级后首日会集中 rollover 一次 | 只影响长期运行的库 | XP-051 |
 | 年线最坏链深余量薄（约 2–9%），宿主为 t3.small，噪声约 ±10%，冷缓存首批明显偏慢 | 个别批次可能离群 | XP-045b/047/048/052 |
-| aws `acquire.sqlite` 中有 9 个 evidence_only 代现已无代字节（2026-10-24T17:26Z 实测各约 4KB：868f4fa1、804c5a63、04c28d88、84b3f15d、c360967a、2e918330、a49c314b、87322997、2d5851a4）。其中 `2d5851a4` 是 2026-10-24T16:57:16Z 退役时才清掉字节（退役前 548M）；其余 8 个在更早退役时就已无字节 | 采集台账有残留；这些代已是 evidence_only，不计入热容量，但目录与清单仍占少量空间 | `du -sb generations/generations/*`、`generations/acquire.sqlite` |
+| aws `acquire.sqlite` 中有 10 个 evidence_only 代现已无代字节（2026-10-24T17:55Z 实测各约 4KB：868f4fa1、804c5a63、04c28d88、84b3f15d、c360967a、2e918330、a49c314b、87322997、2d5851a4、a119629b）。其中 `2d5851a4`（16:57Z）与 `a119629b`（17:52Z）是退役时才清掉字节；其余 8 个在更早退役时就已无字节 | 采集台账有残留；这些代已是 evidence_only，不计入热容量，但目录与清单仍占少量空间 | `du -sb generations/generations/*`、`generations/acquire.sqlite` |
 | `/opt/x-data-mcp-preview/mcp.json` 的 `x-data-mcp-demo` 指向一个不存在的 sqlite | 配置过时 | `ls` |
 | `src/acquire/fetch.rs` 在未设置 `X_DATA_MCP_TDX_FETCH` 时，回退到编译期的 `CARGO_MANIFEST_DIR` | 不带该变量启动的实例无法下载 | 源码 |
 | 生产服务、私有性能栈和多个 agent 会话共用 1 个物理核和 1.9GiB 内存；`/tmp` 是内存盘 | 2026-10-10 约 04:34Z 过载重启；测量结果有噪声 | 运维观察 |
-| 热 generation 上限 6：超限后 `acquire_generation` 被拒（`generation_capacity`）。2026-10-24 实测路径：16:56Z 为 6/6（1 active + 5 superseded）→ 16:57:16Z 退役 `2d5851a4…` 降到 5/6 → 16:57:26Z acquire 被受理 → 17:01:34Z 新代 `c184e9c4` 激活，`9d9e38d7` 转为 superseded，**回到 6/6**（preview.35 切换不改变计数）。因此下一次 acquire 前仍需再退役一代。容量是**计数**，但退役一个有字节的代同时会释放空间：`2d5851a4…` 退役前 548M、退役后 16K，释放约 546MB。自动保留策略（保留最新 2 个 superseded）**已随 preview.35 部署**（2026-10-24T17:25Z），但只在 activate 提交成功后生效 | 每完成一次跨代日更就消耗一个热代名额；下一次 acquire 前仍需手工腾位（保留策略只在 activate 后才回收） | 2026-10-13 / 2026-10-24 实测（`generations/acquire.sqlite`、`du -sh`、`df /`）、`src/acquire/service.rs:43,925,1058-1084` |
+| 热 generation 上限 6：超限后 `acquire_generation` 被拒（`generation_capacity`）。2026-10-24 实测路径：16:56Z 为 6/6（1 active + 5 superseded）→ 16:57:16Z 退役 `2d5851a4…` 降到 5/6 → 16:57:26Z acquire 被受理 → 17:01:34Z 新代 `c184e9c4` 激活，`9d9e38d7` 转为 superseded，**回到 6/6** → 17:52Z 再退役 `a119629b…`，**当前 5/6**，下一次 acquire 无需再手工腾位。容量是**计数**，但退役一个有字节的代同时释放空间（`2d5851a4` 约 546MB、`a119629b` 约 574MB）。自动保留策略（保留最新 2 个 superseded）**已随 preview.35 部署**（2026-10-24T17:25Z），在 activate 提交成功后生效 | 跨代日更会消耗热代名额；当前 5/6，activate 后由自动保留回收到约 4/6 | 2026-10-13 / 2026-10-24 实测（`generations/acquire.sqlite`、`du -sh`、`df /`）、`src/acquire/service.rs:43,925,1058-1084` |
 | Skill 日更依赖 AI 会话逐页枚举目录实体（页大小受限、随目录规模线性增长；5,228 实体实测 27 分钟未提交一条更新） | 有更新那天的同步在 Skill 口径下不可用；已改由程序化追加驱动完成，批量更新工具（generic-data-v7）设计中 | 2026-10-13 首次增量实测 |
 | AGENTS.md 的环境段、README「当前状态」、`docs/daily-sync.md`「当前状态」仍写 ecs-node / preview.29 / generation `2e9183…` | 读取这些文档的 agent 会被误导 | 本次核对；这三处已加指向本文件的说明；AGENTS.md 的 ecs-node / preview.29 段已在 2026-10-24 标为「历史」 |
 
