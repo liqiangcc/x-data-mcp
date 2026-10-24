@@ -16,6 +16,7 @@
 set -euo pipefail
 
 ROOT=${XDM_DEPLOY_ROOT:-/opt/x-data-mcp-preview}
+SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TAG=${1:?usage: switch_binary.sh <tag> <S(40-hex)> [--execute]}
 S=${2:?usage: switch_binary.sh <tag> <S(40-hex)> [--execute]}
 EXECUTE=0
@@ -106,23 +107,29 @@ say "S5 atomic symlink switch (ln to staging name, then mv -T over current)"
 run ln -sfn "$NEW" "$ROOT/current.new"
 run mv -T "$ROOT/current.new" "$ROOT/current"
 
-say "S6 start (data then acquire), wait for sockets, verify is-active and symlink"
+say "S6 start (data then acquire), wait for readiness, verify is-active and symlink"
 run systemctl start x-data-mcp-data
 run systemctl start x-data-mcp-acquire
+# Readiness is the MCP handshake on the socket (scripts/wait_service_ready.py),
+# never a fixed sleep or a bare socket-file test: a cold data service binds the
+# endpoint only after registry_sweep + series_startup_check (~31s on 2026-10-23).
+READY_TIMEOUT=${XDM_READY_TIMEOUT:-120}
 if [[ $EXECUTE == 1 ]]; then
-    for _ in $(seq 1 200); do
-        [[ -S "$ROOT/run/mcp.sock" && -S "$ROOT/run/acquire.sock" ]] && break
-        sleep 0.1
-    done
-    [[ -S "$ROOT/run/mcp.sock" && -S "$ROOT/run/acquire.sock" ]]
+    python3 "$SCRIPTS_DIR/wait_service_ready.py" "$ROOT/run/mcp.sock" \
+        --timeout "$READY_TIMEOUT" --expect-tool plan_market_update
+    python3 "$SCRIPTS_DIR/wait_service_ready.py" "$ROOT/run/acquire.sock" \
+        --timeout "$READY_TIMEOUT" --expect-tool acquire_generation
     systemctl is-active --quiet x-data-mcp-data
     systemctl is-active --quiet x-data-mcp-acquire
     [[ "$(readlink "$ROOT/current")" == "$NEW" ]]
     trap - ERR
+else
+    echo "DRY: python3 $SCRIPTS_DIR/wait_service_ready.py $ROOT/run/mcp.sock --timeout $READY_TIMEOUT --expect-tool plan_market_update"
+    echo "DRY: python3 $SCRIPTS_DIR/wait_service_ready.py $ROOT/run/acquire.sock --timeout $READY_TIMEOUT --expect-tool acquire_generation"
 fi
 
 say "S7 next steps (operator, read-only via MCP, BEFORE any write task):"
-echo "   capability revisions generic-data-v3/x-data-acquire-v1; tools 20/10;"
+echo "   capability revisions generic-data-v7/x-data-acquire-v1; tools 23/10;"
 echo "   sync_status idle and active generation unchanged; pending_roles present;"
 echo "   head counts equal baseline; sample query_data reads unchanged."
 say "ROLLBACK plan on any mismatch (S2 failure aborts before touching prod; S6/S7 failure):"

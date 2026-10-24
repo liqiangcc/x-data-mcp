@@ -23,6 +23,7 @@
 set -euo pipefail
 
 DEPLOY_ROOT=${XDM_DEPLOY_ROOT:-/opt/x-data-mcp-preview}
+SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DB="$DEPLOY_ROOT/state/preview.sqlite"
 SOCK="$DEPLOY_ROOT/run/mcp.sock"
 SERVICE=x-data-mcp-data.service
@@ -281,8 +282,12 @@ fi
 step=switch
 ln -sfn "$RELEASE_DIR" "$DEPLOY_ROOT/current" || fail "switch current"
 systemctl start "$SERVICE" || fail "start $SERVICE"
-for _ in $(seq 1 100); do [[ -S "$SOCK" ]] && break; sleep 0.1; done
-[[ -S "$SOCK" ]] || fail "service socket did not appear"
+# Readiness is the MCP handshake on the socket (scripts/wait_service_ready.py),
+# never a fixed sleep or a bare socket-file test: a cold data service binds the
+# endpoint only after registry_sweep + series_startup_check (~31s on 2026-10-23).
+READY_TIMEOUT=${XDM_READY_TIMEOUT:-120}
+python3 "$SCRIPTS_DIR/wait_service_ready.py" "$SOCK" --timeout "$READY_TIMEOUT" \
+    --expect-tool plan_market_update || fail "service socket did not become ready"
 systemctl is-active --quiet "$SERVICE" || fail "$SERVICE not active"
 # Refresh the tunnel so its spawned mcp_connect comes from the new release.
 # MUTATING stays 1: a smoke/report failure after the switch still restores
