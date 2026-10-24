@@ -14,13 +14,21 @@
 | 3 | 全市场年线 `update_data` | write-loop <600s | **hard**（2026-10-10 签字） | aws 私有栈：E2E 4,021s，其中服务端窗口合计 702s。aws 生产重建：服务端合计 603s，E2E 约 45min。**perf `3b11231` / aws 私有栈，2026-10-11，浅链，53 批：年线首次 310.6s、日线变化后重聚合 328.3s，读回 PASS（XP-015，单次）。最坏链深（≤127）为分布外推：批中位 10.3s，×53 ≈ 548–588s，未做全量实测**。**v6/schema-21（同上口径）：年线首次 222.4s（k=5）/ 217.2s（k=1），重聚合 233.3s / 234.8s，5,224；重聚合周期库增量约 +27MB——每个日更周期库增量约 54MB（追加 27MB + 年线重聚合 27MB）** |
 | 3a | 年线服务端窗口子目标 | — | **待定**，等年线服务端分阶段计时完成后再定 | — |
 | 4 | 首次全市场采集 | ≤20min；首采后 DB ≤2.5GiB | hard（沿用） | aws 私有栈：346.4s。aws 生产重建：服务端合计 452s。**v6/schema-21（同上口径）：collect write-loop 200.3s（k=5）/ 208.8s（k=1），5,228 considered / 5,224 succeeded / 4 failed（官方缺成员，预期）** |
-| 5 | 部署体积 | ≤4GiB | hard（沿用） | — |
+| 5 | 部署体积 | ≤4GiB | **hard（沿用）**；测量口径待定（见备注） | 2026-10-24T17:26Z baseline（preview.35 切换后）：`/opt/x-data-mcp-preview` 全树 6.2GiB（`du -sh`；`du -sb` 为 6,612,550,726 B）= generations 3.3GiB（6 个带字节代合计 3,439,714,688 B）+ state 2.7GiB（当前库 1,185,640,448 B + WAL 0 B + 2 份 v20 归档库 1,620,348,928 B）+ releases 348MiB（6 个版本目录）+ reports 2.8MiB；`/tmp` tmpfs 另用 625MB，不计入。分项见 [STATUS](STATUS.md)「足迹」。按整树口径已超 4GiB |
 | 6 | 已完成 100 条任务的 `get_task_progress` | 中位 <1s，且每个样本 <2s | 回归小门（不是 SLO） | perf 分支 `ef4fea4`：中位 0.108s / 0.091s，最大 0.894s，PASS（未部署） |
 
 备注：
 - 2026-10-11 的全市场验收（XP-015）每个负载只跑了单次（n=1）；测量主机为 t3.small，噪声约 ±10%。第三类「保留的真实 mixed Append/Full/fail-closed」**未运行**（retained gen-1 字节永久不可得），见 `FINAL-G8-PERFORMANCE.md`。
 - 第 1–3 行的实测来自不同主机（ecs / aws）、不同代码版本和不同负载，**不能直接相互比较**。
 - 第 1–3 行的门禁对生产生效的前提是：满足门禁的代码已经合并并部署。私有栈上的结果不等于生产结果。
+- 第 5 行「部署体积」的测量边界此前未定义，已有记录也不一致：唯一的 PASS 证据 `docs/daily-sync.md:275`
+  写的是「preview.28 部署包」（发布包口径），而 `docs/tasks/issue-259-final-storage-design.md:67` 写的是
+  「完整部署目录」≤3.5GiB / hard ≤4GiB（目录口径）。发布包与目录相差一个数量级
+  （preview.35 的 tarball 为 20,317,354 B，而 2026-10-24T17:26Z 的 `/opt/x-data-mcp-preview` 全树为 6.2GiB）。
+  因此本节把口径标为**待定**：2026-10-24 只记录两种口径的 baseline，不自行判定 PASS/FAIL。
+  按目录口径（推断包含 `generations/` 与 `state/` 下的归档库）当前已超 4GiB，其中约 1.5GiB 是两份 v20 归档库（各约 810MB）、
+  约 2.7GiB 是 5 个 superseded 代的官方输入字节（各约 572MB），二者都是可回收项；当前 active 代（约 573MB）与当前库（约 1.2GB）是工作集，不可回收；
+  按发布包口径仍远低于 4GiB。
 
 ## 2. 计时口径
 
