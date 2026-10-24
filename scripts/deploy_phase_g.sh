@@ -27,6 +27,7 @@
 set -euo pipefail
 
 DEPLOY_ROOT=${XDM_DEPLOY_ROOT:-/opt/x-data-mcp-preview}
+SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DATA_SERVICE=${XDM_DATA_SERVICE:-x-data-mcp-data.service}
 ACQ_SERVICE=${XDM_ACQ_SERVICE:-x-data-mcp-acquire.service}
 REPORTS="$DEPLOY_ROOT/reports"
@@ -280,9 +281,14 @@ step=switch
 ln -sfn "$RELEASE_DIR" "$DEPLOY_ROOT/current" || fail "switch current"
 systemctl start "$DATA_SERVICE" || fail "start $DATA_SERVICE"
 systemctl start "$ACQ_SERVICE" || fail "start $ACQ_SERVICE"
-for _ in $(seq 1 200); do [[ -S "$SOCK_DATA" && -S "$SOCK_ACQ" ]] && break; sleep 0.1; done
-[[ -S "$SOCK_DATA" ]] || fail "data socket did not appear"
-[[ -S "$SOCK_ACQ" ]] || fail "acquire socket did not appear"
+# Readiness is the MCP handshake on each socket (scripts/wait_service_ready.py),
+# never a fixed sleep or a bare socket-file test: a cold data service binds the
+# endpoint only after registry_sweep + series_startup_check (~31s on 2026-10-23).
+READY_TIMEOUT=${XDM_READY_TIMEOUT:-120}
+python3 "$SCRIPTS_DIR/wait_service_ready.py" "$SOCK_DATA" --timeout "$READY_TIMEOUT" \
+    --expect-tool plan_market_update || fail "data socket did not become ready"
+python3 "$SCRIPTS_DIR/wait_service_ready.py" "$SOCK_ACQ" --timeout "$READY_TIMEOUT" \
+    --expect-tool acquire_generation || fail "acquire socket did not become ready"
 systemctl is-active --quiet "$DATA_SERVICE" || fail "$DATA_SERVICE not active"
 systemctl is-active --quiet "$ACQ_SERVICE" || fail "$ACQ_SERVICE not active"
 
