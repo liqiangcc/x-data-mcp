@@ -4,7 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from check_current_facts import CURRENT_DOCS as FACTS_CURRENT_DOCS
 from check_deploy_facts import (
+    CURRENT_DOCS,
     check_current_host,
     check_status_md,
     top_current_region,
@@ -214,6 +216,10 @@ class Regions(unittest.TestCase):
 
     def test_none_heading_uses_prefix(self):
         self.assertEqual(top_current_region("pre\n## h\nrest", None), "pre\n")
+
+    def test_current_docs_come_from_check_current_facts(self):
+        # P1-2 (#296): one region set for both linters, so they cannot drift.
+        self.assertIs(CURRENT_DOCS, FACTS_CURRENT_DOCS)
 
 
 if __name__ == "__main__":

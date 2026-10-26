@@ -4,7 +4,7 @@
 状态改为「已取代」并指向取代它的条目。部署与运行事实见 [STATUS](STATUS.md)，性能与容量目标见 [SLO](SLO.md)，
 本文件只回答「谁在什么时候定了什么、为什么」。
 
-状态取值：**生效**、**实施中**（已决定，代码未合并或未部署）、**已取代**。
+状态取值：**生效**、**实施中**（已决定，代码未合并或未部署）、**部分落地**（部分组件已合并或已部署，其余仍是目标）、**已取代**。`scripts/check_current_facts.py` 校验每个决策行的状态列以这四个取值之一开头（`docs/decisions.md` 的状态列规则，P1-2/#296）。
 
 ## 1. 性能与门禁
 
@@ -23,7 +23,7 @@
 | # | 日期 | 决策 | 原因 | 状态 | 来源 |
 |---|---|---|---|---|---|
 | D-08 | 2026-10-12 | 生产采用**归档旧库 + 全新初始化重建**，不做原地迁移；保留上一版 release 作回滚点；部署用 `scripts/deploy_phase_g.sh` | 只换二进制时启动 sweep 耗时随历史任务线性增长，约 70 天后超过 tunnel 的 10s 等待 | 生效 | [STATUS](STATUS.md)、PR #328 |
-| D-17 | 2026-10-24 | **服务就绪只有一个定义**：`scripts/wait_service_ready.py` —— socket 上完成 MCP `initialize` 且 `serverInfo.name == "x-data-mcp"`，需要时再要求 `tools/list` 含指定工具。部署脚本与隧道启动必须调用它，**禁止固定 `sleep`、固定秒数轮询或仅判断 socket 文件存在**；等待预算默认 60s（探针）/ 120s（部署脚本），可用 `XDM_READY_TIMEOUT` 覆盖 | 2026-10-23 冷启动 31s 超过 tunnel 硬编码的 10s 与部署脚本的 20s；socket 文件存在不等于可服务，`data_service` 在 `registry_sweep` + `series_startup_check` 之后才 bind，成本随历史线性增长（RESULT-XP-043）。tunnel 因此约 24h 不可用 | **部分落地**：`scripts/wait_service_ready.py` 已随 #370（`8e83f22`，2026-10-24 合入 main）进入 main，`scripts/switch_binary.sh` 与两个部署脚本已调用（默认 120s）；但 tunnel 的 `ExecStartPre` 仍调用 `/opt` 上不受版本控制的 `wait-data-service.py`（790 B，mtime 2026-10-24T16:56:58Z），未改为调用仓库脚本 | TASK-OPS-T1、PR #370 |
+| D-17 | 2026-10-24 | **服务就绪只有一个定义**：`scripts/wait_service_ready.py` —— socket 上完成 MCP `initialize` 且 `serverInfo.name == "x-data-mcp"`，需要时再要求 `tools/list` 含指定工具。部署脚本与隧道启动必须调用它，**禁止固定 `sleep`、固定秒数轮询或仅判断 socket 文件存在**；等待预算默认 60s（探针）/ 120s（部署脚本），可用 `XDM_READY_TIMEOUT` 覆盖 | 2026-10-23 冷启动 31s 超过 tunnel 硬编码的 10s 与部署脚本的 20s；socket 文件存在不等于可服务，`data_service` 在 `registry_sweep` + `series_startup_check` 之后才 bind，成本随历史线性增长（RESULT-XP-043）。tunnel 因此约 24h 不可用 | **部分落地**：`scripts/wait_service_ready.py` 已随 #370（`8e83f22`，2026-10-24 合入 main）进入 main，`scripts/switch_binary.sh` 与两个部署脚本已调用（默认 120s）；隧道 drop-in 模板已进仓库（`scripts/deploy_phase_g.sh` 的 `tunnel_dropin_template()`：`ExecStartPre=<deploy root>/current/scripts/wait_service_ready.py <data sock> --timeout 120 --expect-tool plan_market_update`），探针随发布包分发（`scripts/build_release.sh`）且 `scripts/smoke_release.py` 断言其存在且可执行——**仓库侧已就绪**；生产 `/etc/systemd/system/x-data-mcp-tunnel.service.d/data-service.conf` 仍调用 `/opt` 上不受版本控制的 `wait-data-service.py`（790 B，mtime 2026-10-24T16:56:58Z），**生产隧道切换到仓库探针待 owner 批准**（2026-10-26 未执行） | TASK-OPS-T1、PR #370、#296 P1-3 |
 
 ## 3. 存储模型
 

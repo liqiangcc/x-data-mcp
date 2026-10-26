@@ -23,7 +23,7 @@
 | 资源 | 2 vCPU（1 个物理核 × 2 超线程，Xeon Platinum 8259CL；`/proc/cpuinfo` 无 `sha_ni`），MemTotal 1,905,872 kB（约 1.82GiB）+ 8GiB swap（2×4GiB，实测已用 2.5GiB），根盘 77G（已用 50G、余 27G）；`/tmp` 是 953MB 的 tmpfs（占内存，实测已用 625MB） | `lscpu`、`grep -c processor /proc/cpuinfo`、`grep sha_ni /proc/cpuinfo`（无匹配）、`free -m`、`swapon --show`、`df -h / /tmp` |
 | 本机工具链 | 本机禁止本地 Rust 编译：执行 `rustc --version` 被主机策略拦截并返回「Local Rust compilation is forbidden on this host (1.9 GB RAM)」，仅允许 `cargo fmt`。因此本机工具链版本未复核；部署二进制的构建版本见「构建」行 | 实测拦截提示 |
 | 部署版本 | v0.2.0-preview.35 @ `23edeaf648049463a80d1f20584945e738f532c5` | `/opt/x-data-mcp-preview/current/manifest.json`、`readlink current`、live MCP `initialize` 返回 `serverInfo.version=0.2.0-preview.35` |
-| 部署时间 | 2026-10-24T17:25Z，二进制热切换（`current` 符号链接与两个单元的重启均在 17:25:22，新 `mcp.sock` 17:25:35）；切换用的脚本是分支 `fix/service-readiness @ d2608e7`，该就绪修复已随 #370（`8e83f22`，2026-10-24 合入 main）进入仓库：`scripts/switch_binary.sh` 的 S6 调用 `scripts/wait_service_ready.py`，默认超时 120s（`XDM_READY_TIMEOUT` 可覆盖）。本次报告 `reports/preview35-switch-20261024.json` 是切换后整理的（mtime 2026-10-24T17:30:30Z，比切换晚约 5 分钟）：内容只有 7 条 check 名称字符串（S1–S7），没有逐项证据；仓库内没有任何脚本能产出它（`switch_binary.sh` 不写报告）。就绪探针 data 13,461ms、acquire 8ms；DB 未迁移未重建（schema 21，`db_bytes` 1,185,640,448 与切换前相同）。上一个部署 preview.34 @ `a77d0901…` 保留在 `releases/` 作回滚点 | 报告 JSON、`stat`/`readlink`、`journalctl -u x-data-mcp-tunnel`、`scripts/switch_binary.sh:110-129`、PR #370 |
+| 部署时间 | 2026-10-24T17:25Z，二进制热切换（`current` 符号链接与两个单元的重启均在 17:25:22，新 `mcp.sock` 17:25:35）；切换用的脚本是分支 `fix/service-readiness @ d2608e7`，该就绪修复已随 #370（`8e83f22`，2026-10-24 合入 main）进入仓库：`scripts/switch_binary.sh` 的 S6 调用 `scripts/wait_service_ready.py`，默认超时 120s（`XDM_READY_TIMEOUT` 可覆盖）。本次报告 `reports/preview35-switch-20261024.json` 是切换后整理的（mtime 2026-10-24T17:30:30Z，比切换晚约 5 分钟）：内容只有 7 条 check 名称字符串（S1–S7），没有逐项证据；当时仓库内没有任何脚本能产出它（`switch_binary.sh` 自 #296 P1-3 起才写机器报告）。就绪探针 data 13,461ms、acquire 8ms；DB 未迁移未重建（schema 21，`db_bytes` 1,185,640,448 与切换前相同）。上一个部署 preview.34 @ `a77d0901…` 保留在 `releases/` 作回滚点 | 报告 JSON、`stat`/`readlink`、`journalctl -u x-data-mcp-tunnel`、`scripts/switch_binary.sh:110-129`、PR #370 |
 | 构建 | rustc 1.99.1 (58cf8f9c3 2026-10-13)，ubuntu-24.04，最低 glibc 2.39 | `current/manifest.json` |
 | 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/23edeaf…`（6 个版本目录共存，共 348MiB） | `readlink`、`du -sh releases/*` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
@@ -41,7 +41,7 @@ preview.34 那次没有落盘报告（见「已知问题」），preview.35 这�
 |---|---|---|---|---|
 | `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 23 | capability `generic-data-v7`（含只读 `get_yearly_base_years`）；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 设置了 `X_DATA_MCP_TDX_FETCH=current/scripts/tdx_fetch.py` |
-| `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 只转发 data server，不转发 acquire；`ExecStartPre` 用 `/opt/x-data-mcp-preview/wait-data-service.py`（该文件不在仓库内），就绪等待上限 **120s**（2026-10-24T16:56:58Z 由 10s 改为 120s，`deadline=time.monotonic()+120`），单元为 `Restart=always` / `RestartSec=10`；data 服务停止时隧道会因 stdio 子进程退出而自行退出 |
+| `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 只转发 data server，不转发 acquire；`ExecStartPre` 用 `/opt/x-data-mcp-preview/wait-data-service.py`（该文件不在仓库内），就绪等待上限 **120s**（2026-10-24T16:56:58Z 由 10s 改为 120s，`deadline=time.monotonic()+120`；但单元未设 `TimeoutStartSec`，systemd 默认 90s 也覆盖 `ExecStartPre`，所以实际生效上限是 **90s**），单元为 `Restart=always` / `RestartSec=10`；data 服务停止时隧道会因 stdio 子进程退出而自行退出 |
 
 访问边界与认证细节属于运维信息，不记录在公开仓库。当前边界是否可接受，尚待 owner 明确决定。
 
@@ -132,7 +132,7 @@ acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.
 |---|---|---|
 | 只换二进制（不再每次全新 init）的部署：启动 registry sweep 的耗时随历史任务线性增长（推断），10-23 时已超过 `x-data-mcp-tunnel` 当时 10 秒的就绪等待（`wait-data-service.py`；现为 120s）。两个实测点：**2026-10-23 主机重启后（preview.34，574 个任务，冷 page cache）31.5s**；**2026-10-24T17:25Z preview.35 切换（579 个任务，热 page cache）13.5s**。两点无法区分「任务数」与「缓存冷热」的贡献（推断：后者影响更大），因此「线性增长」本身未得到证实，需专门测量。10-23 那次是首次 `ExecStartPre`（当时 deadline 10s）失败后靠 `Restart=always` 重试成功；10-24T16:56:58Z 起该 deadline 已改为 120s，17:25 切换时一次等到 socket（13.5s），空窗来自 `RestartSec=10` 加就绪时间。缓解（只 sweep 最近 N 天、先开 socket 后台 sweep）会改变「sweep 失败即拒绝启动」的语义，需另行批准。schema 21 的启动检查已改为逐 series 索引点查（S2b F3，不再 loose-scan） | 每次重启/切换首轮必失败，多花一个 `RestartSec`；若重试也失败则长时间不可用 | `journalctl -u x-data-mcp-data/-tunnel`、`stat run/mcp.sock`、`reports/preview35-switch-20261024.json`（`readiness_probe.data_elapsed_ms=13461`） |
 | tunnel 启动竞态（仓库脚本已修，tunnel unit 仍用 /opt 旁路脚本）：2026-10-23 06:49 那次是 `wait-data-service.py` 的 10s deadline 短于 31.5s 冷启动，首轮 `ExecStartPre` 失败、靠 `Restart=always` 在 10s 后重试成功；`/opt` 内该脚本已于 2026-10-24T16:56:58Z 把 deadline 改为 120s，因此 10-24T17:25 切换时 `ExecStartPre` 一次等到 socket（13.5s）。#370（`8e83f22`，2026-10-24 合入 main）新增 `scripts/wait_service_ready.py`，`scripts/switch_binary.sh` 与两个部署脚本已调用（默认 120s）；但 tunnel 的 `ExecStartPre` 仍调用 `/opt` 上的 `wait-data-service.py`，该文件不在仓库内、也不受版本控制（D-17 只部分落地） | 重启/切换时的隧道空窗现在由 `RestartSec=10` + 就绪时间决定（17:25 实测约 13s）；若单元连续失败触到 `StartLimitBurst=5`，会停在 `failed` 需人工介入（未实测，推断）；仓库脚本已能等到 13.5–31.5s 冷启动（默认 120s），不再在 S6 判失败 | `journalctl -u x-data-mcp-tunnel`（10-23、10-24T17:25）、`grep deadline /opt/x-data-mcp-preview/wait-data-service.py`、`stat` 该文件 mtime、`scripts/switch_binary.sh`、`systemctl cat x-data-mcp-tunnel`、`systemctl show -p StartLimitBurst`、PR #370 |
-| 报告覆盖不均：preview.33 / preview.34 没有报告（`reports/` 在 preview.32 之后直到 preview.35 才有条目）；preview.35 的报告是切换后整理的（mtime 2026-10-24T17:30:30Z，切换 17:25:22），只有 7 条 check 名称、没有逐项证据；#370（`8e83f22`）合入的是就绪探针，`switch_binary.sh` 仍不写报告 | 下次切换仍不会有机器产出的逐项报告；preview.33/34 的 S1–S6 逐项结果永久不可复核，只能引用可观测结果（链接 mtime、单元 uptime、live version） | `ls -l reports/`、`cat reports/preview35-switch-20261024.json`、`scripts/switch_binary.sh:58-129` |
+| 报告覆盖不均：preview.33 / preview.34 没有报告（`reports/` 在 preview.32 之后直到 preview.35 才有条目）；preview.35 的报告是切换后整理的（mtime 2026-10-24T17:30:30Z，切换 17:25:22），只有 7 条 check 名称、没有逐项证据；#370（`8e83f22`）合入的是就绪探针。`switch_binary.sh` 自 #296 P1-3 起在 `--execute` 时写机器报告（`--report <path>`，默认 `reports/<short-tag>-switch-<UTC>.json`，含 P 与 S1–S7 逐项 `{step,status,elapsed_ms,evidence}`、探针 JSON 与回滚结果），preview.35 那份仍是人工整理的 | preview.33/34 的 S1–S6 逐项结果永久不可复核，只能引用可观测结果（链接 mtime、单元 uptime、live version）；下一次切换起有机器产出的逐项报告 | `ls -l reports/`、`cat reports/preview35-switch-20261024.json`、`scripts/switch_binary.sh`、`scripts/test_switch_binary.py` |
 | 任务簿记（`frozen_work_json`、`requests.command_json`、`shared_evidence`）每年约增长 10–16GB（每天约 106 个任务） | 只换二进制的长期运行会逼近「部署体积 ≤4GiB」；降低需要改存储格式并定留存策略 | S7 |
 | `market_events` 事件日志无界增长（RULINGS Q9 已接受）：估计 ~5,224 行/日 ≈ 1MB/日（S5 实测 26,118 行 / dbstat ~16MB 含索引） | 长期运行累积；与任务簿记增长分开记录 | RULINGS Q9、S5 |
 | **schema 20 历史**（现行 schema 21 无此机制）：rollover 校验放宽后，回滚到旧二进制时，其对早 rollover 结果行的完整校验会报「requires depth-256 base」；已有 >127 深的链升级后首日会集中 rollover 一次 | 只影响仍运行 schema 20 的旧库/旧二进制回滚 | XP-051；`grep -rn rollover src/` 无命中，`src/sqlite_market/manifest.rs` 只服务 legacy backend（`src/sqlite_market/backend.rs:31-51`） |
@@ -151,10 +151,21 @@ acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.
 
 1. **谁更新**：部署或迁移的执行者，在记录本次部署的同一个 PR 内更新。
 2. **其他文档**：README 只保留「项目是什么」并链接本文件；AGENTS.md 的环境段只写开发约束，主机事实链接本文件。旧段落的清理由后续 PR 完成。
-3. **CI 检查现状（2026-10-24 复核）。** `scripts/check_current_facts.py` 只检查包版本、schema、工具数量这类构建事实；`scripts/check_deploy_facts.py` 的覆盖情况：
+3. **格式约定（机器校验用，P1-2/#296）。** 同一事实只在一处给权威值，其余位置只复述：
+   - 热 generation 计数的权威行是「数据」表的「热 generation」行（`N/M`），且必须与同一行的 `active` + `superseded`
+     拆分自洽；其他位置的当前态复述必须与它一致。历史段、时间线（含 `→`）与预期值（「约」「预期」）不受约束。
+   - 「服务」表的「工具数」列是 data / acquire 工具数的权威值，必须等于源码注册表
+     （`src/data_supply/registry.rs` 的 `entries()`、`src/acquire/mcp.rs` 的 `ENTRIES`）。
+   - 「部署版本」行是当前部署版本的权威值；其他当前态断言（含 `serverInfo.version`）必须与它一致。
+   - `docs/contracts/*.md` 是历史快照：文件名不得含 `current`/`当前`，头部必须有 `**状态**：` 行且不得自称当前契约。
+   - `docs/decisions.md` 的状态列只能取文件开头声明的取值。
+4. **CI 检查现状（2026-10-26 复核，P1-2/#296）。** `scripts/check_current_facts.py` 检查构建事实（包版本、两套 schema、
+   data/acquire 工具数、capability revision）、5 个 `CURRENT_DOCS` 当前区域、P1-1 校正过的 7 个 `CURRENT_REGIONS`
+   当前区域、`docs/contracts/*.md` 快照、`docs/decisions.md` 状态列，以及本文件的内部一致性（热 generation 计数与拆分、
+   data/acquire 工具数、部署版本）。`scripts/check_deploy_facts.py` 的覆盖情况：
    - 「本文件声明的版本须与最近一份已提交的记录一致」：**未实现**。目前只校验版本串形式（ `vX.Y.Z-preview.N` ）。
-     preview.35 的报告在 `/opt/x-data-mcp-preview/reports/` 内、不进仓库，且是切换后人工整理的（仓库内没有能产出它的
-     脚本；`switch_binary.sh` 不写报告）。就绪修复已随 #370（`8e83f22`）合入 main；要实现这条检查，需先把报告路径与
-     产出/提交方式定下来。
+     preview.35 的报告在 `/opt/x-data-mcp-preview/reports/` 内、不进仓库，且是切换后人工整理的（#296 P1-3 之前
+     `switch_binary.sh` 不写报告；现在 `--execute` 会写 `reports/<short-tag>-switch-<UTC>.json`）。就绪修复已随
+     #370（`8e83f22`）合入 main；要实现这条检查，仍需先把报告是否随仓库提交定下来。
    - `CURRENT_DOCS` 的当前区域不得把已退役主机写成当前主机：**已实现**（`check_current_host`）。
    - 「最后核实」日期超过 14 天时告警：**已实现**（`STALE_DAYS = 14`）。

@@ -39,6 +39,7 @@ jobs:
       - name: Deployment script dry-run and readiness-probe checks (never executes; tempdir root)
         run: |
           python3 -B -m unittest discover -s scripts -p 'test_switch_binary.py'
+          python3 -B -m unittest discover -s scripts -p 'test_rollback_preview.py'
           python3 -B -m unittest discover -s scripts -p 'test_wait_service_ready.py'
       - name: Analysis backtest checks (synthetic fixture, never the live database)
         run: python3 -B -m unittest discover -s scripts -p 'test_boll_analysis.py'
