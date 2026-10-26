@@ -188,7 +188,7 @@ impl MarketDataPublisher {
             || !daily.records.iter().any(|bar| bar.date == lineage.first_trading_date)
             || !daily.records.iter().any(|bar| bar.date == lineage.last_trading_date)
             || !daily.adjustment_evidence.is_confirmed()
-            || daily.adjustment_evidence.value.as_deref() != Some("qfq")
+            || !Adjustment::Forward.matches_evidence(&daily.adjustment_evidence)
         {
             return Err(PublishError::InvalidRecord(
                 "yearly lineage does not match fixed published QFQ daily input".into(),
@@ -217,9 +217,7 @@ pub(crate) fn validate_adjustment_evidence(batch: &MarketDataBatch) -> Result<()
     if !evidence.is_confirmed() {
         return Err(PublishError::AdjustmentEvidence(evidence.reason.clone()));
     }
-    let expected = match batch.adjustment {
-        Adjustment::Forward => "qfq",
-    };
+    let expected = batch.adjustment.as_str();
     if evidence.value.as_deref() != Some(expected) {
         return Err(PublishError::AdjustmentEvidence(format!(
             "confirmed value must be {expected}"
@@ -333,9 +331,7 @@ fn period_name(period: Period) -> &'static str {
 }
 
 fn adjustment_name(adjustment: Adjustment) -> &'static str {
-    match adjustment {
-        Adjustment::Forward => "qfq",
-    }
+    adjustment.as_str()
 }
 
 static VERSION_SEQUENCE: AtomicU64 = AtomicU64::new(0);

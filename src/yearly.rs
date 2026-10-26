@@ -59,7 +59,7 @@ pub fn aggregate(
         || daily.symbol.trim().is_empty()
         || daily.source.trim().is_empty()
         || !daily.adjustment_evidence.is_confirmed()
-        || daily.adjustment_evidence.value.as_deref() != Some("qfq")
+        || !Adjustment::Forward.matches_evidence(&daily.adjustment_evidence)
         || !daily.unit_currency.price_currency.is_confirmed()
         || !daily.unit_currency.price_unit.is_confirmed()
     {

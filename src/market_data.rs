@@ -9,18 +9,58 @@ pub enum Period {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Adjustment {
+    /// 不复权: the `.day` price fact itself, no corporate-action transform
+    /// (schema 22 code 0, issue-383 §3.2/§4.1).
+    Raw,
+    /// 前复权: derived from the raw series plus category-1 events
+    /// (schema 22 code 1).
     Forward,
 }
 
 impl Adjustment {
     /// Storage code (schema 22 `market_series.adjustment` and
     /// `market_events.adjustment`): 0 = 不复权, 1 = 前复权 (issue-383 §3.2).
-    /// The enum has no raw variant yet — M1 PR-2 materializes it; until then
-    /// the storage layer refuses code 0 instead of guessing a meaning.
     pub fn code(self) -> i64 {
         match self {
+            Self::Raw => 0,
             Self::Forward => 1,
         }
+    }
+
+    /// Decode a stored code; `None` for values the DDL does not define so
+    /// callers fail closed instead of coercing (issue-383 §2.3 item 3).
+    pub fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(Self::Raw),
+            1 => Some(Self::Forward),
+            _ => None,
+        }
+    }
+
+    /// Wire/evidence string: `Provenance.source_adjustment`,
+    /// `AdjustmentEvidence.value`, `market.daily` metadata (issue-383 §2.2:
+    /// the 9 hand-written `"qfq"` literals become this one definition).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Raw => "raw",
+            Self::Forward => "qfq",
+        }
+    }
+
+    /// Parse the wire/evidence string; `None` for anything else. The exact
+    /// inverse of [`Self::as_str`], used where an external string must be
+    /// recognized without silently accepting a new 口径.
+    pub fn from_str_exact(value: &str) -> Option<Self> {
+        match value {
+            "raw" => Some(Self::Raw),
+            "qfq" => Some(Self::Forward),
+            _ => None,
+        }
+    }
+
+    /// True when the confirmed evidence value names this 口径.
+    pub fn matches_evidence(self, evidence: &AdjustmentEvidence) -> bool {
+        evidence.is_confirmed() && evidence.value.as_deref() == Some(self.as_str())
     }
 }
 
@@ -304,5 +344,36 @@ impl<S: MarketDataPipeline + ?Sized> MarketDataPipeline for &S {
         daily: &crate::publish::EffectiveVersion,
     ) -> Result<MarketDataBatch, SourceError> {
         (**self).derive_yearly(daily)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// issue-383 §2.3 item 3: the 口径 has one definition for its storage
+    /// code, its evidence string and its inverse — the nine hand-written
+    /// `"qfq"` comparisons now go through these.
+    #[test]
+    fn adjustment_code_and_evidence_string_round_trip() {
+        for (adjustment, code, text) in
+            [(Adjustment::Raw, 0, "raw"), (Adjustment::Forward, 1, "qfq")]
+        {
+            assert_eq!(adjustment.code(), code);
+            assert_eq!(Adjustment::from_code(code), Some(adjustment));
+            assert_eq!(adjustment.as_str(), text);
+            assert_eq!(Adjustment::from_str_exact(text), Some(adjustment));
+            let confirmed = AdjustmentEvidence::confirmed(text, "bound");
+            assert!(adjustment.matches_evidence(&confirmed));
+            let other = if adjustment == Adjustment::Raw {
+                Adjustment::Forward
+            } else {
+                Adjustment::Raw
+            };
+            assert!(!other.matches_evidence(&confirmed));
+            assert!(!adjustment.matches_evidence(&AdjustmentEvidence::unknown("no")));
+        }
+        assert_eq!(Adjustment::from_code(2), None);
+        assert_eq!(Adjustment::from_str_exact("unadjusted"), None);
     }
 }

@@ -5,11 +5,15 @@ use crate::{
     task::FrozenScope,
 };
 
+/// Per-item collection outcome; the alias keeps the struct's field list
+/// readable for the prepush heuristic, which does not parse `A<B, C>` types.
+pub type CollectionOutcome = Result<(), String>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CollectionItemResult {
     pub symbol: String,
     pub period: Period,
-    pub result: Result<(), String>,
+    pub result: CollectionOutcome,
 }
 
 pub struct Collector<S> {
@@ -116,9 +120,7 @@ fn validate_provenance(
 ) -> Result<(), SourceError> {
     // Both local QFQ daily and derived yearly are based on daily inputs.
     let expected_period = "day";
-    let expected_adjustment = match adjustment {
-        Adjustment::Forward => "qfq",
-    };
+    let expected_adjustment = adjustment.as_str();
     if batch.symbol != symbol
         || batch.period != period
         || batch.adjustment != adjustment

@@ -121,7 +121,7 @@ impl QueryService {
                 ));
             }
             if !version.adjustment_evidence.is_confirmed()
-                || version.adjustment_evidence.value.as_deref() != Some("qfq")
+                || !Adjustment::Forward.matches_evidence(&version.adjustment_evidence)
                 || version.source.trim().is_empty()
             {
                 return Err(QueryError::Unavailable(

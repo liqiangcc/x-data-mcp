@@ -80,14 +80,10 @@ impl SeriesShape {
     }
 }
 
-/// Decode a stored `adjustment` code. Code 0 (不复权) has no domain variant
-/// until M1 PR-2 materializes the raw series, so it fails closed here rather
-/// than being coerced to the forward 口径.
+/// Decode a stored `adjustment` code (0 = 不复权, 1 = 前复权). Values the
+/// DDL does not define fail closed rather than being coerced.
 pub(crate) fn decode_adjustment(code: i64) -> Result<Adjustment, Error> {
-    match code {
-        1 => Ok(Adjustment::Forward),
-        _ => Err(integrity("unknown series adjustment")),
-    }
+    Adjustment::from_code(code).ok_or_else(|| integrity("unknown series adjustment"))
 }
 
 fn decode_instrument_class(code: i64) -> Result<i64, Error> {
@@ -1044,7 +1040,7 @@ pub(crate) fn checked_record(
         version_id: series.version_id.clone(),
         symbol: series.entity.clone(),
         period: series.period,
-        adjustment: Adjustment::Forward,
+        adjustment: series.adjustment,
         source: evidence.source.clone(),
         records,
         published_at,
@@ -1071,7 +1067,7 @@ pub(crate) fn checked_record(
         } else {
             period_name(series.period).into()
         },
-        source_adjustment: "qfq".into(),
+        source_adjustment: series.adjustment.as_str().into(),
         symbol: series.entity.clone(),
         acquired_at: published_at,
         adapter_version: "effective-publish".into(),
@@ -1086,7 +1082,7 @@ pub(crate) fn checked_record(
     let batch = MarketDataBatch {
         symbol: series.entity.clone(),
         period: series.period,
-        adjustment: Adjustment::Forward,
+        adjustment: series.adjustment,
         bars: version.records.clone(),
         provenance,
         coverage: CoverageEvidence {

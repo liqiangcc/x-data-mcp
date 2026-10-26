@@ -5,7 +5,8 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use crate::market_data::{
-    AdjustmentEvidence, Bar, CoverageStatus, EvidenceStatus, Period, UnitCurrencyEvidence,
+    Adjustment, AdjustmentEvidence, Bar, CoverageStatus, EvidenceStatus, Period,
+    UnitCurrencyEvidence,
 };
 
 pub const MAX_SEGMENT_BARS: usize = 512;
@@ -759,10 +760,16 @@ fn check_version_evidence(value: &Value) -> Result<(), Error> {
         &evidence.adjustment_evidence.value,
         &evidence.adjustment_evidence.reason,
     )?;
+    // Schema 22 stores one version evidence row per 口径 (raw / qfq); both are
+    // valid here, an unrecognized value is not (issue-383 §2.3 item 3).
     if evidence.adjustment_evidence.status != EvidenceStatus::Confirmed
-        || evidence.adjustment_evidence.value.as_deref() != Some("qfq")
+        || !evidence
+            .adjustment_evidence
+            .value
+            .as_deref()
+            .is_some_and(|value| Adjustment::from_str_exact(value).is_some())
     {
-        return Err(invalid("adjustment evidence is not confirmed qfq"));
+        return Err(invalid("adjustment evidence is not a confirmed 口径"));
     }
     Ok(())
 }

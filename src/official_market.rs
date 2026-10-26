@@ -322,13 +322,15 @@ struct DecodedGbbq {
     by_security: std::collections::HashMap<(u8, String), (Vec<gbbq::Event>, usize)>,
 }
 
+/// Lazily opened central-directory indexes keyed by canonical archive path.
+type ArchiveCache = std::collections::HashMap<PathBuf, ArchiveIndex>;
+
 /// Per-source materialization channel; see `TdxMarketSource::materialize_session`.
 pub struct MaterializeSession<'a> {
     source: &'a TdxMarketSource,
     gbbq: std::cell::OnceCell<DecodedGbbq>,
-    /// Lazily opened central-directory indexes keyed by canonical archive
-    /// path; each archive is opened and scanned at most once per session.
-    archives: std::cell::RefCell<std::collections::HashMap<PathBuf, ArchiveIndex>>,
+    /// Each archive is opened and scanned at most once per session.
+    archives: std::cell::RefCell<ArchiveCache>,
 }
 
 impl MaterializeSession<'_> {
@@ -1542,7 +1544,7 @@ fn acquire_merged_segment(
     // snapshot inputs must equal the member/archive digests this
     // installed source actually read.
     if base.batch.provenance.source != SOURCE_NAME
-        || base.batch.provenance.source_adjustment != "qfq"
+        || base.batch.provenance.source_adjustment != Adjustment::Forward.as_str()
         || base.batch.provenance.snapshot_inputs != batch.provenance.snapshot_inputs
     {
         return Err(SourceError::NotVerified(
@@ -2243,8 +2245,7 @@ impl<R: MarketRepository> crate::gap_verification::SourceGapVerifier for TdxGapV
             || version.period != Period::Day
             || version.source != SOURCE_NAME
             || version.adjustment != Adjustment::Forward
-            || !version.adjustment_evidence.is_confirmed()
-            || version.adjustment_evidence.value.as_deref() != Some("qfq")
+            || !Adjustment::Forward.matches_evidence(&version.adjustment_evidence)
         {
             return Err(Error::BasisNotVerified(
                 "subject is not a pinned official-file QFQ daily version".into(),
@@ -2254,7 +2255,7 @@ impl<R: MarketRepository> crate::gap_verification::SourceGapVerifier for TdxGapV
         // snapshot inputs must equal the member/archive digests this
         // installed source actually read.
         if record.batch.provenance.source != SOURCE_NAME
-            || record.batch.provenance.source_adjustment != "qfq"
+            || record.batch.provenance.source_adjustment != Adjustment::Forward.as_str()
             || record.batch.provenance.snapshot_inputs != batch.provenance.snapshot_inputs
         {
             return Err(Error::BasisNotVerified(

@@ -2,7 +2,7 @@
 pub mod compat;
 pub mod query;
 use crate::{
-    market_data::{Bar, Period},
+    market_data::{Adjustment, Bar, Period},
     publish::EffectiveVersion,
     task_control::{
         self, Change, ItemBinding, ItemOutcome, Stage, Status, TaskHead, TaskItem, TaskSnapshot,
@@ -607,8 +607,7 @@ pub(crate) fn validate_base_identity(
         || daily.adjustment != v.adjustment
         || daily.source != v.source
         || daily.unit_currency != v.unit_currency
-        || !daily.adjustment_evidence.is_confirmed()
-        || daily.adjustment_evidence.value.as_deref() != Some("qfq")
+        || !Adjustment::Forward.matches_evidence(&daily.adjustment_evidence)
     {
         return Err(Error::Base(
             "fixed base identity/period/adjustment/source mismatch".into(),
@@ -679,8 +678,7 @@ pub(crate) fn validate_base_facts_meta<R: MarketRepository + ?Sized>(
         || daily.adjustment != v.adjustment
         || daily.source != v.source
         || daily.unit_currency != v.unit_currency
-        || !daily.adjustment_evidence.is_confirmed()
-        || daily.adjustment_evidence.value.as_deref() != Some("qfq")
+        || !Adjustment::Forward.matches_evidence(&daily.adjustment_evidence)
     {
         return Err(Error::Base(
             "fixed base identity/period/adjustment/source mismatch".into(),
