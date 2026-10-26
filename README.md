@@ -22,7 +22,8 @@
 [整体设计](docs/design.md)串联业务流程、模块职责、版本/任务和运行验收；
 [MCP tools 契约](docs/mcp-tools.md)记录历史契约与当前 runtime discovery 入口，
 [通用工具设计](docs/generic-data-tools.md)定义单动作能力边界，
-[每日同步说明](docs/daily-sync.md)记录双 MCP server、generation 状态机和 Devin Skill 编排边界。
+[每日同步说明](docs/daily-sync.md)记录双 MCP server、generation 状态机和 Devin Skill 编排边界，
+[数据目录](docs/data-catalog.md)说明现在能拿到哪些数据、语义与缺口（供选股/因子/回测使用）。
 SQLite 专项入口由整体设计统一引用。设计目标不表示实现、来源或部署已经验收。
 
 ## 与旧项目的关系
