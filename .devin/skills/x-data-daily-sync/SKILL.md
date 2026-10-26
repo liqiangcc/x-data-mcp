@@ -178,6 +178,8 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 `{"entity":{"exchange","code"},"base_version_id":<当前 head version_id>,
 "start_date":<last_record+1>,"end_date":<target_day>}`；`base_version_id` 取提交时当前 head，
 被并发取代会 item 级 `STALE_BASE:` `needs_verification`，重取 head 后重提该 item。
+该显式批次若被**整批拒绝**（`invalid_arguments`/`needs_verification`），按 §3.8 二分归因，
+不要当成全局停止。
 
 ### 3.4 年线 plan
 
@@ -237,6 +239,9 @@ plan/run 或 §3.6 显式分支。轮询与 fail-closed 判定同 §3.2/§3.3。
 补漏完成后可选再 `plan_market_update`（`dataset:"market.yearly"`）核对一次：此时 `eligible`
 应为 0，`ineligible` 只剩 `already_current` 及预期的无需动作原因。
 
+本步的显式批次被整批拒绝时按 §3.8 二分归因（年线 items 与日线 items 形状不同，但拆批与
+request_id 规则相同）。
+
 ### 3.7 无 published daily head → `start_collection` 显式 securities（首采路径，保留）
 
 本路径只在步骤 1 已确认 `day` pending、步骤 2 的新 generation 已 verified+active，
@@ -263,6 +268,43 @@ plan/run 或 §3.6 显式分支。轮询与 fail-closed 判定同 §3.2/§3.3。
 - per-item `needs_verification`（含 `NEEDS_VERIFICATION`/`NOT_VERIFIED`/`SOURCE_NOT_VERIFIED`）或窗口内无源 bar → **预期 fail-closed 类别**：除权实体与停牌/退市尾部在全市场日更中常规出现。**不重试、不绕过**，继续后续 chunk；`REVISION_UNVERIFIED` 类按 §3.3 走显式 `update_data` 前向窗口补齐（这是唯一需要动作的失败类）。
 - 任务级失败、受理拒绝（整个调用被拒）、大面积同类 per-item 失败（系统性迹象）→ **停止**并报告，不继续提交剩余 chunk。
 
+### 3.8 显式 items 整批被拒：分裂重试（兜底，不是主路径）
+
+`update_data` 的显式 items 受理是**调用级 fail-closed**：一批里任一项不合格，整个调用被拒，
+拿不到 per-item 结果（#294 选方向 C，见 `docs/decisions.md` D-18）。所以 §3.3/§3.6 的显式
+批次被整批拒绝时，按下面的规则二分归因，不要直接判死。
+
+**适用（三条同时成立）**：提交的是显式 items 批次（§3.3 日线前向窗口 / §3.6 年线重推）；
+整批被拒且错误码是 `invalid_arguments` 或 `needs_verification`；该批已过形状自查——1..100 项、
+`exchange` + 6 位 `code`、`start_date ≤ end_date`、`end_date ≤ target_day`、同一实体只有一段区间。
+
+**不适用（按 §6 停止或按原规则处理，不二分）**：`request_conflict`、`range_conflict`、
+`storage_error`、`outcome_unknown`、`unsupported_contract`、`empty_request_id`；形状自查不过
+（先改参数，不是分裂）。`range_conflict` 表示这些实体已被在途任务占用，等它终态。
+
+**怎么拆**：按 entity 排序把该批对半切成两个子批，各自提交；被受理的一半照常执行，只对仍被拒
+的一半继续二分，直到单项。深度上限 7（100→50→25→13→7→4→2→1），整棵树受理次数上限 2n−1
+（n≤100 时 ≤199）。子批**串行**提交（服务端单 worker）。
+
+**request_id**：被拒的受理**不消费** request_id——请求行只在受理事务的最后一步写入
+（`src/task_control/service.rs:61-93`：先读请求、normalize、resolve、validate，再进受理事务；
+`INSERT INTO requests` 在同一事务末尾，`src/sqlite_tasks.rs:1780`），所以子批可以复用原
+request_id。**推荐每个子批用新的唯一 request_id**，事后才能按 `get_request` 定位是哪一半被拒。
+两条硬规则：已受理的 request_id 不能换内容重提（`request_conflict`，
+`src/task_control/service.rs:78-87`）；已受理的项不能出现在后续子批里（实体范围已被占用，
+`range_conflict`，`src/sqlite_tasks.rs:1717-1731`）——分裂后只提交尚未受理的那一半。
+
+**终止条件**：单项仍被拒 → 该 item 归因完成，记入报告（entity + 错误码）并跳过，不用同一输入
+重试；归因过程中出现上面「不适用」的错误码 → 立即停掉整棵分裂树；深度或受理次数到上限 →
+停止并报告剩余项。
+
+**归因结果怎么用**：分裂只回答「哪一项让整批被拒」，不修该项本身。归因出的项若是 base 已被
+并发推进（受理期报 `needs_verification` + `STALE_BASE:`，来源 `src/sqlite_market/series.rs:283-292`
+的 superseded 判定与 `src/market_update/tasks.rs:277` 的前缀映射；执行期报 `REVISION_UNVERIFIED`），
+重取当前 head 后重提；其余 per-item 归因项按预期 fail-closed 聚合上报，不绕过。同一批反复触发
+分裂说明 plan 的可执行集合与受理实际可接受的集合不一致（典型：plan 之后 head 前进），报告这一
+事实，不要自行改成逐实体提交。
+
 ## 4. 验证与汇报
 
 - 复用 §3.0/§3.1 的 catalog `version_id` 与实体枚举；对 market.daily 继续按 ≤100 实体分批调用 `get_data_availability`
@@ -284,7 +326,8 @@ plan/run 或 §3.6 显式分支。轮询与 fail-closed 判定同 §3.2/§3.3。
 ## 6. 全局停止条件（任一命中即停止并报告 refs）
 
 `unknown` 观测、`day` 未明确 pending、缺少同次 day-pending 证据的 inflight acquisition、
-`not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝、
+`not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝
+（`update_data` 显式批次先按 §3.8 归因，per-item 类别走分裂重试，其余才停）、
 大面积同类 per-item 失败、轮询预算耗尽、工具不可用。per-item
 `needs_verification` 不属全局停止（见 §3.3/§3.7：`REVISION_UNVERIFIED` 走显式补漏，
 其余聚合上报为 fail-closed 集合）。停止时旧
