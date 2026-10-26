@@ -424,6 +424,8 @@ fn worker_error(error: WorkerError) -> ApiError {
 /// descriptor itself is left untouched: dispatch decodes through serde, never
 /// through these schemas, so tool behavior is unchanged. A non-object schema,
 /// or one whose root already carries a `type`/`properties`, keeps them.
+type JsonMap = serde_json::Map<String, Value>;
+
 pub fn ensure_object_root(schema: Value) -> Value {
     let Value::Object(mut map) = schema else {
         return schema;
@@ -441,10 +443,7 @@ pub fn ensure_object_root(schema: Value) -> Value {
 
 /// The object schema a `oneOf`/`anyOf` branch stands for: the branch itself,
 /// or the `#/$defs/<name>` definition it points at.
-fn resolve_branch<'a>(
-    branch: &'a Value,
-    root: &'a serde_json::Map<String, Value>,
-) -> Option<&'a serde_json::Map<String, Value>> {
+fn resolve_branch<'a>(branch: &'a Value, root: &'a JsonMap) -> Option<&'a JsonMap> {
     let branch = branch.as_object()?;
     match branch.get("$ref") {
         Some(Value::String(reference)) => root
@@ -458,9 +457,7 @@ fn resolve_branch<'a>(
 /// Union of the properties of every `oneOf`/`anyOf` branch plus the keys all
 /// branches require. `None` unless every branch resolves to an object schema
 /// with inline `properties` (anything else is left exactly as published).
-fn merged_branch_shape(
-    root: &serde_json::Map<String, Value>,
-) -> Option<(serde_json::Map<String, Value>, Vec<Value>)> {
+fn merged_branch_shape(root: &JsonMap) -> Option<(JsonMap, Vec<Value>)> {
     let mut branches = Vec::new();
     for key in ["oneOf", "anyOf"] {
         if let Some(Value::Array(items)) = root.get(key) {
@@ -730,6 +727,12 @@ fn query_error(error: crate::query::QueryError) -> ApiError {
 pub trait ToolHandler {
     fn tools(&self) -> Value;
     fn call(&self, name: &str, args: Value) -> Result<Value, ApiError>;
+    /// Background worker entry point. It is service-internal, not a published
+    /// tool: implementations may bypass their per-entry tool surface. The
+    /// default keeps the old behavior for handlers that expose it directly.
+    fn worker_once(&self) -> Result<Value, ApiError> {
+        self.call("run_worker_once", json!({}))
+    }
 }
 impl<S: MarketDataPipeline> ToolHandler for McpApi<S> {
     fn tools(&self) -> Value {

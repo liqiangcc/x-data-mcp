@@ -1,6 +1,5 @@
 use super::{DatabaseLease, Endpoint, WorkerGate};
 use crate::mcp::{ToolHandler, handle_json};
-use serde_json::json;
 use std::{
     io::{self, BufReader, Write},
     net::Shutdown,
@@ -87,7 +86,7 @@ where
                     break;
                 }
                 db.validate()?;
-                match api.call("run_worker_once", json!({})) {
+                match api.worker_once() {
                     Ok(_) => {}
                     Err(e) if e.code == "worker_busy" => {}
                     Err(e) if e.code == "worker_stopping" => break,

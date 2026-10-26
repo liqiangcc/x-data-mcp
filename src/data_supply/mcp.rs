@@ -292,22 +292,20 @@ impl DataApi {
         let blocked = block.is_some();
         Capability {
             tool_name: e.name.into(),
-            description: detailed.then(|| e.description.into()),
+            description: detailed.then_some(e.description.into()),
             dataset,
             contract_version: ContractVersion::V1,
             implemented: true,
             operator_only: e.operator_only,
             entry: entry.into(),
-            runtime_readiness: detailed.then(|| {
-                if blocked {
-                    Readiness::Blocked
-                } else {
-                    Readiness::Ready
-                }
+            runtime_readiness: detailed.then_some(if blocked {
+                Readiness::Blocked
+            } else {
+                Readiness::Ready
             }),
             governance_readiness: detailed.then_some(Readiness::Ready),
-            blocking_reasons: detailed.then(|| block.into_iter().collect()),
-            declared_scope: detailed.then(|| crate::official_market::DECLARED_SCOPE.into()),
+            blocking_reasons: detailed.then_some(block.into_iter().collect()),
+            declared_scope: detailed.then_some(crate::official_market::DECLARED_SCOPE.into()),
             active_generation_ref: if detailed {
                 self.generation
                     .as_ref()
@@ -716,6 +714,12 @@ impl DataApi {
                 format!("unsupported tool: {name}"),
             ));
         }
+        self.dispatch_internal(name, input)
+    }
+    /// Dispatch without the entry surface check. Only the service-internal
+    /// background worker uses it: ops must run tasks even though
+    /// `run_worker_once` is a maint-only published tool.
+    fn dispatch_internal(&self, name: &str, input: Value) -> Result<Value, ApiError> {
         if input
             .get("dataset")
             .is_some_and(|dataset| serde_json::from_value::<Dataset>(dataset.clone()).is_err())
@@ -1187,6 +1191,9 @@ fn task_error(e: crate::task_control::Error) -> ApiError {
 impl ToolHandler for DataApi {
     fn tools(&self) -> Value {
         self.public_tools()
+    }
+    fn worker_once(&self) -> Result<Value, ApiError> {
+        self.dispatch_internal("run_worker_once", json!({}))
     }
     fn call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
         let generic = input.get("contract_version").is_some()
