@@ -13,10 +13,13 @@ EXPECTED_LEGACY_SCHEMA = 18
 # the code constant may be ahead of it, e.g. schema 22 built by M1 PR-1 while
 # the deployed instance still runs schema 21.
 EXPECTED_COMPACT_SCHEMA = 22
-EXPECTED_DATA_TOOLS = 23
+# Registry/code fact (v8 PR-2 adds list_catalog_facets: 23 -> 24).
+EXPECTED_DATA_TOOLS = 24
 # The deployed instance reports v7 / 23 tools after the v7 switch:
 # documentation "current" regions describe deployment facts, so stale-claim
-# checks compare against the deployed constants, not the code constants.
+# checks compare against the deployed constants, not the code constants. A
+# sentence that explicitly says it is stating the code fact (代码/未部署) is
+# checked against the registry instead.
 EXPECTED_DEPLOYED_DATA_TOOLS = 23
 EXPECTED_ACQUIRE_TOOLS = 10
 EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v7"
@@ -145,6 +148,11 @@ ACQUIRE_TOOLS_CLAIM = re.compile(
 )
 # A bare "N tools" / "N 个工具": the number must be one of the two registries.
 BARE_TOOLS_CLAIM = re.compile(r"\b(\d+)\s*(?:个\s*)?(?:tools?\b|工具)", re.IGNORECASE)
+# A sentence that explicitly labels a count as the code/build fact (rather than
+# the deployed instance) is checked against the registry, not the deployed
+# constant. This is the tool-count counterpart of the STATUS "已部署：schema N；
+# 代码：schema M（未部署）" convention.
+CODE_FACT_MARKERS = ("代码", "未部署", "not deployed", "code (main)", "code:")
 # Sentence boundaries. The timeline arrow is handled separately (below): a
 # transition chain is exempt as a whole, not split into claims.
 SENTENCE_SPLIT = re.compile(r"[。；;！？]")
@@ -325,6 +333,13 @@ def claim_line(line_map: list[int], position: int) -> int:
     return line_map[min(position, len(line_map) - 1)]
 
 
+def expected_data_tools(sentence: str, deployed: int, code: int | None) -> int:
+    """Deployed count by default; a code-labelled sentence uses the registry."""
+    if code is not None and any(marker in sentence for marker in CODE_FACT_MARKERS):
+        return code
+    return deployed
+
+
 def stale_current_region_claims(
     region: str,
     schema: int,
@@ -332,6 +347,7 @@ def stale_current_region_claims(
     data_tools: int,
     acquire_tools: int,
     offset: int = 0,
+    code_data_tools: int | None = None,
 ) -> list[tuple[int, str, str]]:
     """(line, rule, detail) for each stale current-state claim in a region.
 
@@ -362,13 +378,14 @@ def stale_current_region_claims(
                             f"{m.group(0)} written as deployed (deployed: {revision})",
                         )
                     )
+        sentence_tools = expected_data_tools(sentence, data_tools, code_data_tools)
         for m in DATA_TOOLS_CLAIM.finditer(sentence):
-            if int(m.group(1)) != data_tools:
+            if int(m.group(1)) != sentence_tools:
                 found.append(
                     (
                         claim_line(line_map, m.start()),
                         "data-tool-count",
-                        f"{m.group(0)} (registry: {data_tools} data tools)",
+                        f"{m.group(0)} (expected {sentence_tools} data tools)",
                     )
                 )
         for m in ACQUIRE_TOOLS_CLAIM.finditer(sentence):
@@ -381,12 +398,12 @@ def stale_current_region_claims(
                     )
                 )
         for m in BARE_TOOLS_CLAIM.finditer(sentence):
-            if int(m.group(1)) not in (data_tools, acquire_tools):
+            if int(m.group(1)) not in (sentence_tools, acquire_tools):
                 found.append(
                     (
                         claim_line(line_map, m.start()),
                         "tool-count",
-                        f"{m.group(0)} is neither {data_tools} data nor "
+                        f"{m.group(0)} is neither {sentence_tools} data nor "
                         f"{acquire_tools} acquisition tools",
                     )
                 )
@@ -402,7 +419,12 @@ def contract_name_claims(rel: str) -> list[tuple[int, str, str]]:
 
 
 def contract_snapshot_claims(
-    text: str, schema: int, revision: str, data_tools: int, acquire_tools: int
+    text: str,
+    schema: int,
+    revision: str,
+    data_tools: int,
+    acquire_tools: int,
+    code_data_tools: int | None = None,
 ) -> list[tuple[int, str, str]]:
     """Snapshot rules for a docs/contracts/*.md file (P1-2, #296).
 
@@ -419,7 +441,12 @@ def contract_snapshot_claims(
     if CONTRACT_CURRENT_SELF_CLAIM.search(status.group(1)):
         found.append((lineno, "snapshot-status-claims-current", status.group(1).strip()))
     for line, rule, detail in stale_current_region_claims(
-        header, schema, revision, data_tools, acquire_tools
+        header,
+        schema,
+        revision,
+        data_tools,
+        acquire_tools,
+        code_data_tools=code_data_tools,
     ):
         found.append((line, f"snapshot-{rule}", detail))
     return found
@@ -465,7 +492,10 @@ def decision_status_claims(text: str) -> list[tuple[int, str, str]]:
 
 
 def status_consistency_errors(
-    text: str, data_tools: int, acquire_tools: int
+    text: str,
+    data_tools: int,
+    acquire_tools: int,
+    code_data_tools: int | None = None,
 ) -> list[tuple[int, str, str]]:
     """docs/STATUS.md must not contradict itself (P1-1, item 7c).
 
@@ -547,13 +577,14 @@ def status_consistency_errors(
                             f"preview.{deployed_preview}",
                         )
                     )
+        sentence_tools = expected_data_tools(sentence, data_tools, code_data_tools)
         for m in DATA_TOOLS_CLAIM.finditer(sentence):
-            if int(m.group(1)) != data_tools:
+            if int(m.group(1)) != sentence_tools:
                 found.append(
                     (
                         claim_line(line_map, m.start()),
                         "status-data-tool-count",
-                        f"{m.group(0)} (registry: {data_tools} data tools)",
+                        f"{m.group(0)} (expected {sentence_tools} data tools)",
                     )
                 )
         for m in ACQUIRE_TOOLS_CLAIM.finditer(sentence):
@@ -577,21 +608,21 @@ def status_consistency_errors(
             if acquire_at > data_at:
                 expected = acquire_tools
             elif data_at >= 0:
-                expected = data_tools
+                expected = sentence_tools
             if expected is not None and value != expected:
                 found.append(
                     (
                         claim_line(line_map, m.start()),
                         "status-tool-count",
-                        f"{m.group(0)} (registry: {expected} tools)",
+                        f"{m.group(0)} (expected {expected} tools)",
                     )
                 )
-            elif expected is None and value not in (data_tools, acquire_tools):
+            elif expected is None and value not in (sentence_tools, acquire_tools):
                 found.append(
                     (
                         claim_line(line_map, m.start()),
                         "status-tool-count",
-                        f"{m.group(0)} is neither {data_tools} data nor "
+                        f"{m.group(0)} is neither {sentence_tools} data nor "
                         f"{acquire_tools} acquisition tools",
                     )
                 )
@@ -870,9 +901,10 @@ def main() -> int:
                     region,
                     deployed_schema,
                     EXPECTED_DATA_CAPABILITY_REVISION,
-                    registry_data_tools,
+                    EXPECTED_DEPLOYED_DATA_TOOLS,
                     registry_acquire_tools,
                     offset,
+                    code_data_tools=registry_data_tools,
                 ),
             )
             for lineno, line in enumerate(region.splitlines(), start=1):
@@ -892,8 +924,9 @@ def main() -> int:
                 path.read_text(encoding="utf-8"),
                 deployed_schema,
                 EXPECTED_DATA_CAPABILITY_REVISION,
-                registry_data_tools,
+                EXPECTED_DEPLOYED_DATA_TOOLS,
                 registry_acquire_tools,
+                code_data_tools=registry_data_tools,
             ),
         )
 
@@ -911,8 +944,9 @@ def main() -> int:
             "docs/STATUS.md",
             status_consistency_errors(
                 status_path.read_text(encoding="utf-8"),
-                registry_data_tools,
+                EXPECTED_DEPLOYED_DATA_TOOLS,
                 registry_acquire_tools,
+                code_data_tools=registry_data_tools,
             ),
         )
 

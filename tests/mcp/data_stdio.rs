@@ -67,7 +67,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
     assert!(s.request("initialize", json!({}))["result"]["serverInfo"].is_object());
     let listing = s.request("tools/list", json!({}));
     let tools = listing["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), if cfg!(target_os = "linux") { 23 } else { 22 });
+    assert_eq!(tools.len(), if cfg!(target_os = "linux") { 24 } else { 23 });
     let caps = s.call("get_data_capabilities", json!({}), false);
     let listed: std::collections::BTreeSet<_> =
         tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -98,10 +98,15 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
         worker["items"][0]["input_schema"],
         worker_tool["inputSchema"]
     );
-    assert_eq!(
-        worker["items"][0]["output_schema"],
-        worker_tool["outputSchema"]
-    );
+    // v8 §6.2: outputSchema leaves tools/list; the detailed capability keeps
+    // it and must equal the registry descriptor byte-for-byte (AC-V8-3).
+    assert!(worker_tool.get("outputSchema").is_none());
+    let worker_output = x_data_mcp::data_supply::registry::entries()
+        .into_iter()
+        .find(|e| e.name == "run_worker_once")
+        .map(|e| x_data_mcp::mcp::ensure_object_root(e.output))
+        .unwrap();
+    assert_eq!(worker["items"][0]["output_schema"], worker_output);
     assert_eq!(
         s.call("run_worker_once", json!({"extra":true}), true)["code"],
         "invalid_arguments"
@@ -158,8 +163,16 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
             .all(|r| !r["detail"].as_str().unwrap_or_default().contains("#225"))
     );
     assert_eq!(republish["capability_revision"], "generic-data-v7");
-    let schema =
-        |name: &str, field: &str| tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();
+    let schema = |name: &str, field: &str| -> Value {
+        if field == "inputSchema" {
+            return tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();
+        }
+        let entry = x_data_mcp::data_supply::registry::entries()
+            .into_iter()
+            .find(|e| e.name == name)
+            .unwrap();
+        x_data_mcp::mcp::ensure_object_root(entry.output)
+    };
     for entry in x_data_mcp::data_supply::registry::entries() {
         jsonschema::validator_for(&entry.input)
             .unwrap()
@@ -181,6 +194,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
                 | x_data_mcp::data_supply::registry::Handler::Cancel
                 | x_data_mcp::data_supply::registry::Handler::PlanMarketUpdate
                 | x_data_mcp::data_supply::registry::Handler::RunMarketUpdate
+                | x_data_mcp::data_supply::registry::Handler::Facets
         ) {
             continue;
         }

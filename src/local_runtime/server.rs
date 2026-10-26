@@ -19,6 +19,9 @@ pub struct Config {
     pub io_timeout: Duration,
     pub max_clients: usize,
     pub max_frame_bytes: usize,
+    /// Run the background task worker. v8 §3.4: only the ops entry does; the
+    /// research and maint entries serve read/forensics calls without writing.
+    pub run_worker: bool,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -28,6 +31,7 @@ impl Default for Config {
             io_timeout: Duration::from_secs(30),
             max_clients: 16,
             max_frame_bytes: 4 * 1024 * 1024,
+            run_worker: true,
         }
     }
 }
@@ -66,7 +70,7 @@ where
     }
     let factory = Arc::new(factory);
     let active = Arc::new(AtomicUsize::new(0));
-    let worker = {
+    let worker = if config.run_worker {
         let factory = factory.clone();
         let db = db.clone();
         let stop = stopping.clone();
@@ -94,6 +98,16 @@ where
                         )));
                     }
                 }
+            }
+            Ok(())
+        })
+    } else {
+        // Research/maint entries never execute tasks: keep the shutdown
+        // contract (a live worker handle) without touching the database.
+        let stop = stopping.clone();
+        thread::spawn(move || -> io::Result<()> {
+            while !stop.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(10));
             }
             Ok(())
         })

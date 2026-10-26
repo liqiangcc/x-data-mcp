@@ -27,6 +27,108 @@ pub enum Handler {
     VerifyGap,
     PlanMarketUpdate,
     RunMarketUpdate,
+    Facets,
+}
+/// Which socket serves a tool (v8 design §3.1). The three deployed entries are
+/// static allowlists; `All` is the stdio/dev surface used by `mcp_data` and
+/// in-process tests, and `data_service` never accepts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    Research,
+    Ops,
+    Maint,
+    All,
+}
+/// Research entry (v8 §3.2): read-only discovery and queries only.
+pub const RESEARCH_TOOLS: &[&str] = &[
+    "get_data_capabilities",
+    "query_data",
+    "get_data_availability",
+    "list_data_versions",
+    "list_catalog_facets",
+];
+/// Ops entry: exactly the daily-sync Skill's data-side allowlist.
+pub const OPS_TOOLS: &[&str] = &[
+    "get_data_capabilities",
+    "plan_market_update",
+    "run_market_update",
+    "start_collection",
+    "update_data",
+    "get_task",
+    "get_task_progress",
+    "list_tasks",
+    "get_request",
+    "get_data_availability",
+    "query_data",
+    "list_data_versions",
+    "get_yearly_base_years",
+    "verify_publication_result",
+    "verify_stopped_writes",
+];
+/// Maintenance/forensics entry: operator-only retries, cancellation and
+/// evidence checks stay off the research and ops sockets.
+pub const MAINT_TOOLS: &[&str] = &[
+    "get_data_capabilities",
+    "backfill_data",
+    "republish_data",
+    "retry_task",
+    "cancel_task",
+    "inspect_verification_task",
+    "verify_data_gap",
+    "run_worker_once",
+    "compute_metrics",
+];
+impl EntryKind {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "research" => Some(Self::Research),
+            "ops" => Some(Self::Ops),
+            "maint" => Some(Self::Maint),
+            _ => None,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Research => "research",
+            Self::Ops => "ops",
+            Self::Maint => "maint",
+            Self::All => "all",
+        }
+    }
+    /// The static allowlist for a deployed entry; `None` means the dev/test
+    /// surface serves every registered tool.
+    pub fn allowlist(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Research => Some(RESEARCH_TOOLS),
+            Self::Ops => Some(OPS_TOOLS),
+            Self::Maint => Some(MAINT_TOOLS),
+            Self::All => None,
+        }
+    }
+    pub fn allows(self, name: &str) -> bool {
+        self.allowlist().is_none_or(|names| names.contains(&name))
+    }
+    /// Startup closure check: every allowlisted name must be registered and
+    /// appear once. A mismatch refuses to start instead of silently serving a
+    /// wider or narrower surface.
+    pub fn validate(self) -> Result<(), String> {
+        let Some(names) = self.allowlist() else {
+            return Ok(());
+        };
+        let registered = entries();
+        for (index, name) in names.iter().enumerate() {
+            if names[..index].contains(name) {
+                return Err(format!("entry {} lists {name} twice", self.name()));
+            }
+            if !registered.iter().any(|entry| entry.name == *name) {
+                return Err(format!(
+                    "entry {} lists unregistered tool {name}",
+                    self.name()
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 /// One tool descriptor: tools/list, get_data_capabilities, dispatch and
 /// golden examples are all generated from this single source.
@@ -42,6 +144,9 @@ pub struct Entry {
     pub operator_only: bool,
 }
 impl Entry {
+    pub fn served_in(&self, entry: Option<EntryKind>) -> bool {
+        entry.is_none_or(|entry| entry.allows(self.name))
+    }
     /// Write/verification controls require the local-owner context; read
     /// discovery tools stay available to restricted access.
     pub fn requires_local(&self) -> bool {
@@ -79,6 +184,11 @@ impl Entry {
                 .then_some(Some(Dataset::Daily))
                 .into_iter()
                 .collect(),
+            Handler::Facets => access
+                .allows(Dataset::Catalog, None)
+                .then_some(Some(Dataset::Catalog))
+                .into_iter()
+                .collect(),
             Handler::Query | Handler::Versions | Handler::Availability | Handler::Collection => {
                 access.datasets.iter().copied().map(Some).collect()
             }
@@ -99,22 +209,63 @@ pub struct CapabilitiesQuery {
 #[serde(deny_unknown_fields)]
 pub struct Capability {
     pub tool_name: String,
-    pub description: String,
+    /// Detailed-only fields are omitted from the compact catalog (v8 §6.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dataset: Option<Dataset>,
     pub contract_version: ContractVersion,
     pub implemented: bool,
     pub operator_only: bool,
-    pub runtime_readiness: Readiness,
-    pub governance_readiness: Readiness,
-    pub blocking_reasons: Vec<BlockingReason>,
-    pub declared_scope: String,
+    /// Entry serving this catalog item (v8 §3.3); "all" is the stdio surface.
+    pub entry: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_readiness: Option<Readiness>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub governance_readiness: Option<Readiness>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocking_reasons: Option<Vec<BlockingReason>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declared_scope: Option<String>,
     /// Set once immutable generations exist (#260 phase B); until then
     /// write tools bind the installed inspected snapshot at execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub active_generation_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub example: Option<Value>,
-    pub schema_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_digest: Option<String>,
+}
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogFacetsQuery {
+    /// Only `securities.catalog` is served today; omitted means the catalog.
+    pub dataset: Option<Dataset>,
+    /// A frozen catalog version id; omitted or "latest" resolves the head.
+    pub catalog_version: Option<String>,
+}
+#[derive(Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogFacets {
+    pub dataset: Dataset,
+    pub catalog_version: String,
+    pub facets: Facets,
+}
+#[derive(Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Facets {
+    pub industries: Vec<IndustryFacet>,
+}
+#[derive(Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IndustryFacet {
+    pub code: String,
+    pub name: String,
+    pub members: u64,
 }
 #[derive(Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -130,27 +281,28 @@ pub struct Capabilities {
     pub production_ready: bool,
     pub production_blocking_reasons: Vec<BlockingReason>,
 }
-pub const UPDATE_DESCRIPTION: &str = "Routine daily refresh. market.daily accepts explicit items each bound to a published base version, or selection {\"kind\":\"default\"} resolved and frozen from the acceptance snapshot (catalog + started securities + published heads + open proven gaps). market.yearly items publish explicit natural-year sets bound to published daily versions with an explicit frozen publication mode; historical mode never advances head. Daily items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); unchanged inputs are proven by member/event digests and land no_change, appended tails commit as new versions, and historical revisions fail closed without advancing heads. Per-item outcomes are published / no_change / needs_verification. Automatic gap discovery and catalog updates are not implemented.";
-pub const BACKFILL_DESCRIPTION: &str = "Bounded backfill, not the routine update path. market.daily explicit items fill a named range on top of a published base version; selection {\"kind\":\"default\"} resolves to frozen proven gaps only — never a full-market refresh. market.yearly items publish explicit natural-year sets bound to published daily versions with an explicit frozen publication mode. Daily items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); revisions fail closed without advancing heads.";
-pub const REPUBLISH_DESCRIPTION: &str = "Local-owner explicit-range source refresh (#247): re-acquires the declared source content for a fixed [start_date,end_date] window over a pinned market.daily head and commits it through the same append/replace/no_change/metadata commit path as update_data — authorized by this command itself, not by frozen proven gaps. A base superseded by a newer head resolves item-level needs_verification (STALE_BASE: prefix), never a silent re-pin; revised or lost known values fail closed at the provider merge and market_update::prepare. market.daily only; explicit items only — no selection and no other dataset.";
-pub const WORKER_DESCRIPTION: &str = "Operator/debug single-step execution of at most one locally owned pending task. The data_service background worker executes pending tasks automatically, so routine synchronization flows must not invoke this tool; while the service worker is busy it fails with worker_busy and never runs a second execution. It never downloads market data, never approves sources, and never unlocks or repairs tasks.";
-pub const COLLECTION_DESCRIPTION: &str = "First establishment only: creates the initial publication for entities with no published head — explicit entity list, catalog version, or the snapshot-resolved default selection, frozen at acceptance. Daily and catalog items execute only against the verified active generation (or the installed inspected snapshot in legacy mode); yearly items derive from published daily bases. This is not the routine update path; entities with published heads update through their own write tasks. Replaying the same request_id returns the original acceptance.";
-pub const INSPECT_DESCRIPTION: &str = "Owner-only bounded management of an abnormal verification task, not a recursive asynchronous task. Each reliably persisted result, including insufficient evidence, consumes request_id; the same ID replays its historical result without re-inspecting. A new ID is needed for fresh evidence. Checks registered local execution exclusion and durable finish separately; may close only the verification task, never the original business task or its claims. Missing/unregistered runtime proof retains protection. No force/evidence flags, waiting, implicit retry or production source approval.";
-pub const QUERY_DESCRIPTION: &str = "Read integrity-checked published rows for one dataset/selection with an explicit filter and version choice. Paged and snapshot-scoped; never triggers collection, repair or source access. Market datasets are single-version (generic-data-v7): version_id is the content-digest hex of the current head — an explicit pin superseded by a newer head reports stale_version while a never-committed id reports version_not_found. Yearly rows trailing the live daily base carry stale \"behind\" and as_of_day; entries withheld for a classified lineage reason carry reason.";
-pub const VERSIONS_DESCRIPTION: &str = "List published version references for one dataset/selection — for market datasets at most one current head version per entity (generic-data-v7). Paged; read-only.";
-pub const AVAILABILITY_DESCRIPTION: &str = "Report published coverage, freshness, confirmed gaps and unresolved ranges per entity, with related task references; yearly entities also report daily-base staleness (fresh, behind via stale+as_of_day, or a classified reason on absent entries). Paged; read-only.";
+pub const UPDATE_DESCRIPTION: &str = "Routine daily refresh. market.daily explicit items bind a published base version; the default selection resolves frozen heads and proven gaps. Unchanged inputs land no_change; revisions fail closed. Not for first establishment.";
+pub const BACKFILL_DESCRIPTION: &str = "Bounded backfill, not the routine path: explicit items fill a named range over a published base; the default selection resolves only frozen proven gaps. Revisions fail closed; never a full-market refresh.";
+pub const REPUBLISH_DESCRIPTION: &str = "Local-owner explicit-range source refresh: re-acquires a fixed start/end window over a pinned market.daily head through the same commit path as update_data. A superseded base needs_verification; revisions fail closed.";
+pub const WORKER_DESCRIPTION: &str = "Operator/debug single step of at most one locally owned pending task. The background worker already runs tasks, so routine synchronization must not call this; it never downloads market data.";
+pub const COLLECTION_DESCRIPTION: &str = "First establishment only: creates the initial publication for entities with no published head, from an explicit list, catalog version, or the default selection. Entities with heads use update_data.";
+pub const INSPECT_DESCRIPTION: &str = "Owner-only bounded inspection of an abnormal verification task. Each request_id is consumed by one persisted result; a new id is needed for fresh evidence. Never closes the business task.";
+pub const QUERY_DESCRIPTION: &str = "Read integrity-checked published rows for one dataset and selection. filter is dataset-specific; version defaults to latest_per_entity. Paged and snapshot-scoped; read-only, never collects or repairs.";
+pub const VERSIONS_DESCRIPTION: &str = "List published version references for one dataset and selection; market datasets report at most one current head per entity. Paged; read-only.";
+pub const AVAILABILITY_DESCRIPTION: &str = "Report published coverage, freshness, confirmed gaps and unresolved ranges per entity, with related task refs. Paged; read-only.";
 pub const TASKS_DESCRIPTION: &str =
     "Page task summaries filtered by dataset, operation, status and creation range. Read-only.";
-pub const PROGRESS_DESCRIPTION: &str = "Page one task's item progress, execution results, publication versions and verification receipts. Read-only. Optional server-side wait (wait_seconds, capped at 50s; since_revision = the last observed task.state_revision) holds the call until the task turns terminal or advances, so a poller need not spin.";
-pub const PRESENCE_DESCRIPTION: &str = "Resolve the exact natural-year set present in each pinned published market.daily base version — the only input yearly orchestration needs for years subsets. 1..100 entity/base bindings per call; every item fully verified inside one bounded snapshot; resolved items carry the real integrity digest and sorted unique years (a valid empty history is []), missing or unpublished bases report base_unavailable, bases superseded by a newer daily head report base_superseded, identity/content/lineage mismatches report integrity_failure. No cursor, no task creation, no head writes. Read-only.";
-pub const CAPABILITIES_DESCRIPTION: &str = "Report this server's capability matrix: implemented tools, per-dataset schemas, runtime and governance readiness, structured blocking reasons and production gate facts. capability_revision generic-data-v7 denotes single-version market storage: one current daily and one current yearly series per entity with content-derived version ids. Facts only — no workflow ordering or cross-server instructions.";
+pub const PROGRESS_DESCRIPTION: &str = "Page one task's item progress, results, versions and verification receipts. Optional wait_seconds (max 50) with since_revision holds until terminal or advanced. Read-only.";
+pub const PRESENCE_DESCRIPTION: &str = "Resolve the natural years present in pinned market.daily bases: 1..100 entity/base items in one bounded snapshot with verified integrity digests. Read-only; no cursor.";
+pub const CAPABILITIES_DESCRIPTION: &str = "Report capability revision and the tool catalog. No filter: compact catalog. dataset plus operation: detailed schema, example and readiness. Facts only; no workflow ordering.";
+pub const FACETS_DESCRIPTION: &str = "List catalog facets: industry code, name and member count for a frozen catalog version (default current). Read-only; pair with query_data filter.industry_code.";
 pub const TASK_DESCRIPTION: &str = "Read one task's status, frozen scope and per-item results.";
 pub const REQUEST_DESCRIPTION: &str = "Read the durable request_id binding and its bound task or terminal result without accepting work.";
-pub const CANCEL_DESCRIPTION: &str = "Request cancellation of a task; expected_revision is still accepted but only terminal tasks enforce it — a live task applies the request at the revision the write actually reads. Returns the post-request visible status and state revision.";
-pub const RETRY_DESCRIPTION: &str = "Re-accept explicitly selected unfinished items of an existing task as a new linked task. Item ids only; outcomes and finished items cannot be silently re-run.";
-pub const COMPUTE_DESCRIPTION: &str = "Run a named bounded metric algorithm over explicit published version inputs and return the computation or a structured not_computable outcome. Read-only.";
-pub const PLAN_DESCRIPTION: &str = "Whole-catalog update planning (generic-data-v7): resolves the current catalog against published heads and returns a compact deterministic plan — plan_id is the sha256 of the canonical resolved state binding the active verified generation and the target day, with eligible/already_current/absent/ineligible counts and per-reason ineligible counts. The response never lists entities. Read-only: no task is created and nothing is persisted; replanning an unchanged state returns the identical plan_id. Any catalog, head, gap or generation change produces a different plan_id.";
-pub const RUN_DESCRIPTION: &str = "Accept and run a previously returned market update plan (generic-data-v7): the server re-resolves the plan inside one read snapshot and requires the supplied plan_id to match exactly — a mismatch is a plan_stale refusal and no task is created; continue by calling plan_market_update again. On a match one task covering every eligible entity is accepted and executed serially by the single worker; per-item outcomes are published / no_change / needs_verification and one item's failure never rejects the rest. For market.yearly the run additionally refuses while any market.daily update task is non-terminal (daily_update_inflight). Local-owner access required; replaying the same request_id returns the original acceptance.";
+pub const CANCEL_DESCRIPTION: &str = "Request cancellation of a task. expected_revision is optional: omitted reads the current revision, an explicit value keeps the CAS precondition. Returns visible status and state_revision.";
+pub const RETRY_DESCRIPTION: &str = "Re-accept explicitly selected unfinished items of an existing task as a new linked task. Item ids only; finished items cannot be silently re-run.";
+pub const COMPUTE_DESCRIPTION: &str = "Run a named bounded metric algorithm over explicit published version inputs; returns the computation or a structured not_computable outcome. Read-only.";
+pub const PLAN_DESCRIPTION: &str = "Whole-catalog update plan: resolves the catalog against published heads and returns counts plus a deterministic plan_id binding the active generation and target day. Read-only; never lists entities.";
+pub const RUN_DESCRIPTION: &str = "Execute a previously returned plan. plan_id must match a re-resolved plan exactly, else plan_stale and no task. One task covers every eligible entity; per-item outcomes published/no_change/needs_verification.";
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerInput {}
@@ -288,6 +440,12 @@ pub fn entries() -> Vec<Entry> {
             Handler::Availability,
             AVAILABILITY_DESCRIPTION,
             query,
+        ),
+        entry::<CatalogFacetsQuery, CatalogFacets>(
+            "list_catalog_facets",
+            Handler::Facets,
+            FACETS_DESCRIPTION,
+            json!({"dataset":"securities.catalog"}),
         ),
         entry::<YearPresenceQuery, YearPresenceReply>(
             "get_yearly_base_years",

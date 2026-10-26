@@ -41,4 +41,4 @@ impl VerifyDataGap {
         serde_json::json!({"target": self.target})
     }
 }
-pub const DESCRIPTION: &str = "Explicit asynchronous verification of a proven local coverage gap in one published QFQ daily version. The caller names only symbol/day/[start,end]; the subject head is frozen at acceptance and re-checked at decision commit. Decisions come only from the installed trusted source-gap verifier; source limitation or unavailability never produces a proven gap, and a decision never triggers update/backfill by itself. Proving a gap requires the verified active generation (or the installed inspected snapshot in legacy mode); without one runtime readiness is blocked and no gap can be proven.";
+pub const DESCRIPTION: &str = "Verify a claimed market data gap for one symbol and range. Read-only; local owner only. Replaying request_id returns the stored receipt.";
