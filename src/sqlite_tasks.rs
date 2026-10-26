@@ -127,6 +127,24 @@ impl SqliteTasks {
             .map_err(storage)
         })
     }
+    /// Append the server-created derived items of a daily plan-run task
+    /// (issue-383 §9.2, M1 PR-7), idempotently.
+    ///
+    /// The item rows, the declared scopes, the occupancy claims, the
+    /// `frozen_work_json` blob and the task counters move together in one
+    /// transaction, so the accept-time gates (`accept.gate.item_counters`,
+    /// `accept.gate.active_occupancy`) keep holding for the rest of the run.
+    /// `Ok(false)` means the task already carries exactly this derived set
+    /// (a resumed run) or is no longer appendable (terminal/cancelled); a
+    /// partially present set is corruption, not a re-append.
+    pub(crate) fn ensure_derived_items(
+        &self,
+        task_id: &str,
+        run: &str,
+        items: &[ItemSpec],
+    ) -> Result<bool, Error> {
+        self.write(|c| ensure_derived_items_tx(c, task_id, run, items))
+    }
     pub fn initialize(&self) -> Result<(), Error> {
         self.initialize_target(false)
     }
@@ -1015,6 +1033,124 @@ pub(crate) fn read_item_binding(
         item,
     }))
 }
+/// Transaction body of [`SqliteTasks::ensure_derived_items`].
+fn ensure_derived_items_tx(
+    c: &Connection,
+    task_id: &str,
+    run: &str,
+    items: &[ItemSpec],
+) -> Result<bool, Error> {
+    if items.is_empty() {
+        return Ok(false);
+    }
+    let head = read_task_head(c, task_id)?.ok_or(Error::TaskNotFound)?;
+    if head.status.terminal() || head.status == Status::CancelRequested {
+        return Ok(false);
+    }
+    if head
+        .owner_run_id
+        .as_deref()
+        .is_some_and(|owner| owner != run)
+    {
+        return Err(Error::NeedsVerification(
+            "task is owned by another run".into(),
+        ));
+    }
+    let existing: BTreeSet<String> = {
+        let mut stmt = c
+            .prepare("SELECT item_id FROM task_items WHERE task_id=?1 AND item_id LIKE 'derived:%'")
+            .map_err(storage)?;
+        let rows = stmt
+            .query_map([task_id], |r| r.get::<_, String>(0))
+            .map_err(storage)?;
+        rows.collect::<Result<BTreeSet<_>, _>>().map_err(storage)?
+    };
+    if !existing.is_empty() {
+        let wanted: BTreeSet<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
+        if existing.len() == wanted.len() && wanted.iter().all(|id| existing.contains(*id)) {
+            return Ok(false);
+        }
+        return Err(inconsistent("derived item set is partially present"));
+    }
+    let raw: String = c
+        .query_row(
+            "SELECT frozen_work_json FROM tasks WHERE task_id=?1",
+            [task_id],
+            |r| r.get(0),
+        )
+        .map_err(storage)?;
+    let mut work: FrozenWork = decode(raw)?;
+    for item in items {
+        work.scopes.extend(item.scope_keys.iter().cloned());
+        work.items.push(item.clone());
+    }
+    work.validate()?;
+    let changed = c
+        .execute(
+            "UPDATE tasks SET frozen_work_json=?2,item_count=item_count+?3,\
+             items_pending=items_pending+?3,state_revision=state_revision+1,\
+             last_progress_at=?4 WHERE task_id=?1 AND state_revision=?5 \
+             AND status IN ('pending','running')",
+            params![
+                task_id,
+                encode(&work)?,
+                i64::try_from(items.len()).map_err(|_| inconsistent("derived item count"))?,
+                Utc::now().to_rfc3339(),
+                db_revision(head.state_revision)?,
+            ],
+        )
+        .map_err(storage)?;
+    if changed != 1 {
+        return Err(Error::RevisionConflict);
+    }
+    let mut item_stmt = c
+        .prepare("INSERT INTO task_items VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)")
+        .map_err(storage)?;
+    for item in items {
+        item_stmt
+            .execute(params![
+                task_id,
+                item.item_id,
+                encode(&item.target)?,
+                item.progress_unit,
+                encode(&item.frozen_inputs)?,
+                encode(&item.scope_keys)?,
+            ])
+            .map_err(storage)?;
+    }
+    drop(item_stmt);
+    let mut scope_stmt = c
+        .prepare("INSERT OR IGNORE INTO task_scopes VALUES(?1,?2)")
+        .map_err(storage)?;
+    let mut occupancy_stmt = c
+        .prepare("INSERT INTO scope_occupancy VALUES(?1,?2,0)")
+        .map_err(storage)?;
+    let mut holder_stmt = c
+        .prepare("SELECT task_id FROM scope_occupancy WHERE scope_key=?1")
+        .map_err(storage)?;
+    for item in items {
+        for scope in &item.scope_keys {
+            scope_stmt
+                .execute(params![task_id, scope])
+                .map_err(storage)?;
+            let holder: Option<String> = holder_stmt
+                .query_row([scope], |r| r.get(0))
+                .optional()
+                .map_err(storage)?;
+            match holder {
+                Some(holder) if holder == task_id => {}
+                Some(_) => return Err(Error::RangeConflict(vec![scope.clone()])),
+                None => {
+                    occupancy_stmt
+                        .execute(params![scope, task_id])
+                        .map_err(storage)?;
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// Persist a `decide_head`-decided binding: the touched item row (when the
 /// change carried one), the guarded task row with matching counter deltas,
 /// and the single terminal occupancy release. `expected` is the pre-decision

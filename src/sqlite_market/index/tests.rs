@@ -486,3 +486,157 @@ fn ddl_rejects_metadata_without_evidence() {
         );
     }
 }
+
+/// Accept + claim + start a one-item task with an explicit item shape — the
+/// internal `derived:index:*` items name their dataset instead of an
+/// entity/period pair (issue-383 §9.2).
+fn running_item(
+    repo: &SqliteCompactMarket,
+    request: &str,
+    item_id: &str,
+    target: serde_json::Value,
+    scope: &str,
+) -> (String, u64) {
+    let work = task_control::FrozenWork {
+        items: vec![ItemSpec {
+            item_id: item_id.into(),
+            target,
+            progress_unit: "derived_dataset".into(),
+            frozen_inputs: json!({}),
+            scope_keys: BTreeSet::from([scope.to_string()]),
+        }],
+        scopes: BTreeSet::from([scope.to_string()]),
+        shared_evidence: None,
+    };
+    let command = task_control::Command {
+        key: CommandKey {
+            operation: "update_data".into(),
+            dataset: "market.daily".into(),
+            contract_version: crate::market_update::tasks::CONTRACT_VERSION.into(),
+        },
+        intent: json!({}),
+    };
+    let acceptance = repo.accept(request, &command, &work, RUN, None).unwrap();
+    let task_id = match acceptance.record.outcome {
+        task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
+        _ => panic!("expected task outcome"),
+    };
+    let revision = repo.task(&task_id).unwrap().task.state_revision;
+    let revision = repo
+        .transition(&task_id, revision, RUN, task_control::Change::Claim)
+        .unwrap()
+        .task
+        .state_revision;
+    let revision = repo
+        .transition(
+            &task_id,
+            revision,
+            RUN,
+            task_control::Change::StartItem(item_id.into()),
+        )
+        .unwrap()
+        .task
+        .state_revision;
+    (task_id, revision)
+}
+
+fn commit_derived(
+    repo: &SqliteCompactMarket,
+    task_id: &str,
+    item_id: &str,
+    revision: u64,
+    index: &IndexBatch,
+    result_id: &str,
+) -> Result<crate::market_storage::Receipt, crate::market_storage::Error> {
+    let generation_evidence = json!({
+        "manifest_sha256": "0b".repeat(32),
+        "snapshot_inputs": [],
+    });
+    repo.commit_index(&IndexWrite {
+        index,
+        result_id,
+        task_id,
+        item_id,
+        run_id: RUN,
+        expected_task_revision: revision,
+        generation_id: "gen-1",
+        generation_manifest_sha256: &"0b".repeat(32),
+        generation_evidence: &generation_evidence,
+        published_at: ts(),
+    })
+}
+
+// issue-383 §9.2: the server-created index item carries its dataset as the
+// target; the commit gate must accept exactly that shape for the entity in
+// the item id, and keep rejecting every other target/series combination.
+#[test]
+fn derived_index_item_target_binds_its_own_entity_only() {
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let symbol = "sh.000001";
+    let item_id = task_control::derived::index(symbol);
+    let (task_id, revision) = running_item(
+        &repo,
+        "derived-ok",
+        &item_id,
+        task_control::derived::target(&item_id),
+        &task_control::derived::index_scope(symbol),
+    );
+    let batch = index_batch(symbol, vec![bar(0, 300_000, 7)]);
+    commit_derived(
+        &repo,
+        &task_id,
+        &item_id,
+        revision,
+        &batch,
+        "result-derived-ok",
+    )
+    .unwrap();
+    let task = repo.task(&task_id).unwrap();
+    assert_eq!(task.task.status, task_control::Status::Succeeded);
+    assert!(task.items[0].outcome.as_ref().is_some_and(|o| o.success));
+
+    // The id names sh.000016 but the batch writes sh.000905: neither the
+    // dataset target nor the occupancy key matches, so the commit fails
+    // closed instead of writing another entity's series.
+    let wrong_id = task_control::derived::index("sh.000016");
+    let (task_id, revision) = running_item(
+        &repo,
+        "derived-wrong-entity",
+        &wrong_id,
+        task_control::derived::target(&wrong_id),
+        &task_control::derived::index_scope("sh.000016"),
+    );
+    let other = index_batch("sh.000905", vec![bar(0, 300_000, 8)]);
+    let error = commit_derived(
+        &repo,
+        &task_id,
+        &wrong_id,
+        revision,
+        &other,
+        "result-derived-wrong",
+    )
+    .unwrap_err();
+    assert!(matches!(error, crate::market_storage::Error::Conflict(_)));
+
+    // A security item (plain scope-id) may not borrow the dataset target.
+    let security = task_control::legacy::scope_id("sh.000001", "day");
+    let (task_id, revision) = running_item(
+        &repo,
+        "derived-on-security-item",
+        &security,
+        task_control::derived::target(&task_control::derived::index(symbol)),
+        &security,
+    );
+    let batch = index_batch(symbol, vec![bar(0, 300_000, 9)]);
+    let error = commit_derived(
+        &repo,
+        &task_id,
+        &security,
+        revision,
+        &batch,
+        "result-derived-security-item",
+    )
+    .unwrap_err();
+    assert!(matches!(error, crate::market_storage::Error::Conflict(_)));
+}

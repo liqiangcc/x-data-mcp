@@ -208,6 +208,11 @@ Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目
 
 任何 `unknown`、`not_verified` 或 `conflict` 分支在激活前停止。正常新增交易日由 `update_data` 内部验证 raw-day prefix/chunk 和 per-security GBBQ event continuity；AI 不逐证券调用 `verify_data_gap`。
 
+v7 起全市场日更改由 `plan_market_update`/`run_market_update` 完成（步骤与失败
+路由见 [generic-data-v7](contracts/generic-data-v7.md) §7）。同一次日线 run 里，
+worker 还会追加 10 个服务器内部派生 item（9 个指数基准 + 交易日历）；它们的
+item 级结果只用于报告（`entity`/`period` 为 null），不进入实体补漏清单。
+
 ### 全新数据库
 
 ```text

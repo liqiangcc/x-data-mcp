@@ -88,6 +88,52 @@ impl MarketBackend {
     pub fn series_startup_check(&self) -> Result<(), Error> {
         self.read(crate::sqlite_market::series::startup_check)
     }
+
+    /// Commit one registered index benchmark series and its metadata row
+    /// (issue-383 §9.2, M1 PR-7). The derived `derived:index:*` item drives
+    /// this. Only the compact schema stores index series; the legacy backend
+    /// has no such shape, so the item fails closed instead of writing a stock
+    /// row with index prices.
+    pub(crate) fn commit_index(
+        &self,
+        write: &super::index::IndexWrite<'_>,
+    ) -> Result<Receipt, Error> {
+        match self {
+            Self::Compact(m) => m.commit_index(write),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "index series require the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Replace the derived trading calendar and register its version
+    /// (issue-383 §9.2, M1 PR-7). The derived `derived:calendar` item drives
+    /// this.
+    pub(crate) fn commit_calendar(
+        &self,
+        write: &super::calendar::CalendarWrite<'_>,
+    ) -> Result<super::derived::DerivedVersionRow, Error> {
+        match self {
+            Self::Compact(m) => m.commit_calendar(write),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "trading calendar requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// The calendar coverage self-check against the stored 不复权 series
+    /// (issue-383 §5.2), measured on a read connection.
+    pub(crate) fn measure_calendar_coverage(
+        &self,
+        calendar: &crate::trading_calendar::TradingCalendar,
+    ) -> Result<crate::trading_calendar::CalendarCoverage, Error> {
+        match self {
+            Self::Compact(m) => m.measure_calendar_coverage(calendar),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "trading calendar requires the compact market schema".into(),
+            )),
+        }
+    }
 }
 
 impl crate::market_storage::MarketRepository for MarketBackend {

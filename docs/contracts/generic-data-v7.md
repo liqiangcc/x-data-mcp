@@ -64,6 +64,17 @@
      `plan_id` 记入任务证据与 `get_task_progress` 摘要），worker 串行执行。
 - 执行：逐 item 沿用现有 append/derive 语义与 per-item CAS；单项失败
   （needs_verification 等）不拒绝整批。
+- 内部派生 item（issue-383 §9.2，M1）：`market.daily` 的 plan-run 任务在
+  worker 开始执行时追加 10 个服务器内部 item（`derived:index:<entity>` × 9 +
+  `derived:calendar`），用于在同一次 run 内维护指数基准与交易日历。它们复用
+  `task_items`/计数/进度面：`item_id` 以 `derived:` 开头，`target_json` 写
+  `{"dataset": <item_id>}`，`get_task_progress` 里 `entity`/`period` 为 null
+  （wire 形状不变）。受理响应与 `plan_counts` 仍只描述 plan 的实体集合
+  （`item_count` = plan eligible）；任务的 `total` 会多出这 10 项。
+  执行顺序：全部实体 item → 9 个指数 item → 日历 item。内部 item 失败只记
+  自身 `success=false`（带 `reason_code`），run 收尾为 `partially_failed`，
+  不回滚已提交的实体行情，也不静默跳过。内部 item 不是 catalog 实体：
+  它们的失败只用于报告，不进入 §7.3 的实体补漏路由。
 - 输出：`{request_id, task_id, dataset, contract_version, plan_id, reused,
   status, item_count, plan_counts, runtime_readiness, blocking_reasons}`；
   不返回 item 列表，进度与逐 item 结果经 `get_task_progress` 分页读。
@@ -87,6 +98,9 @@
 换到有界读：内存与响应体积与任务项数无关。≤100 项的任务（全部 v6
 显式任务）形状逐字节不变。
 
+- 阈值口径：按 plan 的 `eligible`（即受理响应的 `item_count`）判断，服务器
+  内部派生 item（§3，`derived:*`）不计入；没有 plan 证据的任务仍按任务行
+  的 item 总数判断。
 - `get_task`/`list_tasks`：summary 字段不变（含 plan-run 任务的
   `plan_id`/`plan_counts`），服务端只读任务头列与
   `shared_evidence`，不反序列化 `frozen_work_json` 的 item 列表。
@@ -168,6 +182,12 @@ acquire→verify→activate 仍按 [daily-sync](../daily-sync.md) 执行，不�
 | 6 | 年线 run（只处理 `eligible`） | `run_market_update{dataset:"market.yearly", contract_version:"v1", request_id, target_day, plan_id}` | 年线 plan 刚返回，其间无 catalog/head/gap/generation 变化（否则 `plan_stale`）；`market.daily` 无非终态任务 | `task_id`；worker 串行执行 |
 | 7 | 年线不可处理路由 | 对 `ineligible_reasons` 中 `value_semantics_changed` / `daily_replaced_since_derivation` 走显式年线重推（§7.4） | 年线 run 已到终态 | 每个显式任务终态后 yearly head 前进 |
 | 8 | readback | `get_data_availability` / `query_data`（`latest_per_entity`） | 步骤 3/6/7 任务均终态 | 各实体最新交易日、coverage/freshness 事实 |
+
+步骤 2/3 的内部派生 item：`market.daily` 的 plan-run 任务由 worker 追加并执行
+10 个服务器内部 item（`derived:index:<entity>` × 9 + `derived:calendar`，§3）。
+受理响应与 `plan_counts` 的 `item_count` 仍是 plan 的 `eligible`；任务的
+`total` 比它多 10，`unfinished` 里 `entity=null` 的 `derived:` 项是服务器内部
+结果，不是 catalog 实体，不进入步骤 4 的补漏路由。
 
 顺序约束：服务端单 worker 串行执行。日线为 run→补漏（步骤 2→4）；年线为
 plan→run→补漏（步骤 5→6→7）。**年线补漏必须排在年线 run 之后**：
