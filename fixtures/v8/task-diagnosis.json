@@ -1,0 +1,369 @@
+{
+  "input": {
+    "task": {
+      "task_id": "task-diagnosis-1",
+      "request_id": "request-diagnosis-1",
+      "dataset": "market.daily",
+      "operation": "update_data",
+      "contract_version": "market-plan-run-task-v1",
+      "status": "partially_failed",
+      "state_revision": 12,
+      "created_at": "2026-10-24T09:00:00Z",
+      "last_progress_at": "2026-10-24T09:41:00Z",
+      "plan_id": "plan-20261024-8f1c",
+      "plan_counts": {
+        "eligible": 300,
+        "already_current": 0,
+        "absent": 300,
+        "ineligible": 0
+      }
+    },
+    "counts": {
+      "total": 300,
+      "pending": 0,
+      "running": 0,
+      "finished": 300,
+      "succeeded": 276,
+      "failed": 24
+    },
+    "failed_by_reason": {
+      "NO_BARS_IN_RANGE": 3,
+      "PUBLISH_PRECONDITION": 1,
+      "REVISION_UNVERIFIED": 20
+    },
+    "sample": [
+      {
+        "item_id": "derived:calendar",
+        "entity": null,
+        "period": null,
+        "progress_unit": "derived_item",
+        "stage": "finished",
+        "success": false,
+        "error": "PUBLISH_PRECONDITION: base market.daily moved during the run",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600000\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600000" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600001\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600001" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600002\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600002" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600003\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600003" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600004\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600004" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600005\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600005" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600006\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600006" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600007\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600007" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600008\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600008" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600009\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600009" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600010\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600010" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600011\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600011" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600012\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600012" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600013\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600013" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600014\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600014" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600015\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600015" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600016\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600016" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600017\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600017" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      },
+      {
+        "item_id": "[\"market\",\"sh.600018\",\"day\"]",
+        "entity": { "exchange": "sh", "code": "600018" },
+        "period": "day",
+        "progress_unit": "security_period",
+        "stage": "finished",
+        "success": false,
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])",
+        "reason_code": null
+      }
+    ]
+  },
+  "expected": {
+    "wire_contract_version": "v2",
+    "task_id": "task-diagnosis-1",
+    "request_id": "request-diagnosis-1",
+    "dataset": "market.daily",
+    "operation": "update_data",
+    "task_contract_version": "market-plan-run-task-v1",
+    "status": "partially_failed",
+    "state_revision": 12,
+    "created_at": "2026-10-24T09:00:00Z",
+    "last_progress_at": "2026-10-24T09:41:00Z",
+    "plan_id": "plan-20261024-8f1c",
+    "plan_counts": {
+      "eligible": 300,
+      "already_current": 0,
+      "absent": 300,
+      "ineligible": 0
+    },
+    "total": 300,
+    "pending": 0,
+    "running": 0,
+    "finished": 300,
+    "succeeded": 276,
+    "failed": 24,
+    "failed_by_reason": {
+      "NO_BARS_IN_RANGE": 3,
+      "PUBLISH_PRECONDITION": 1,
+      "REVISION_UNVERIFIED": 20
+    },
+    "errors": [
+      {
+        "item_id": { "dataset": "derived:calendar" },
+        "reason_code": "PUBLISH_PRECONDITION",
+        "error": "PUBLISH_PRECONDITION: base market.daily moved during the run"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600000", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600001", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600002", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600003", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600004", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600005", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600006", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600007", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600008", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600009", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600010", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600011", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600012", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600013", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600014", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600015", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600016", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600017", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      },
+      {
+        "item_id": { "dataset": "market", "entity": "sh.600018", "period": "day" },
+        "reason_code": "REVISION_UNVERIFIED",
+        "error": "RevisionUnverified([2023-03-25, 2023-06-12])"
+      }
+    ]
+  }
+}

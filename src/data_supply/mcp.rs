@@ -539,7 +539,13 @@ impl DataApi {
         }
         match name {
             "get_task" => {
-                let a: TaskV1 = decode(input)?;
+                let a: TaskQuery = decode(input)?;
+                if a.contract_version == ReadContractVersion::V2 {
+                    return self
+                        .observer
+                        .task_v2(&a.task_id, &self.access)
+                        .map_err(mapped);
+                }
                 let f = self
                     .observer
                     .repository
@@ -735,15 +741,20 @@ impl DataApi {
                 "dataset is not registered",
             ));
         }
-        // v2 is the columnar read surface only (v8 PR-3, #387 §9.1); every
-        // other tool keeps the v1-only gate.
-        let columnar_read = matches!(
+        // v2 is the columnar read surface (v8 PR-3, #387 §9.1) plus the task
+        // surface (v8 PR-5, §14); every other tool keeps the v1-only gate.
+        let v2_read = matches!(
             name,
-            "query_data" | "get_data_availability" | "list_data_versions"
+            "query_data"
+                | "get_data_availability"
+                | "list_data_versions"
+                | "get_task"
+                | "get_task_progress"
+                | "list_tasks"
         );
         if input
             .get("contract_version")
-            .is_some_and(|version| version != "v1" && !(columnar_read && version == "v2"))
+            .is_some_and(|version| version != "v1" && !(v2_read && version == "v2"))
         {
             return Err(ApiError::new(
                 "unsupported_contract",
@@ -1167,16 +1178,27 @@ impl DataApi {
                     .map_err(mapped)?;
                 crate::stage_trace::timed("rpc.availability.encode", || encode(page))
             }
-            Handler::Tasks => encode(
-                self.observer
-                    .tasks(decode::<TasksQuery>(input)?, &self.access)
-                    .map_err(mapped)?,
-            ),
-            Handler::Progress => encode(
-                self.observer
-                    .progress(decode::<ProgressQuery>(input)?, &self.access)
-                    .map_err(mapped)?,
-            ),
+            Handler::Tasks => {
+                let query = decode::<TasksQuery>(input)?;
+                if query.contract_version == ReadContractVersion::V2 {
+                    return self.observer.tasks_v2(query, &self.access).map_err(mapped);
+                }
+                encode(self.observer.tasks(query, &self.access).map_err(mapped)?)
+            }
+            Handler::Progress => {
+                let query = decode::<ProgressQuery>(input)?;
+                if query.contract_version == ReadContractVersion::V2 {
+                    return self
+                        .observer
+                        .progress_v2(query, &self.access)
+                        .map_err(mapped);
+                }
+                encode(
+                    self.observer
+                        .progress(query, &self.access)
+                        .map_err(mapped)?,
+                )
+            }
             Handler::YearPresence => {
                 let reply = self
                     .queries

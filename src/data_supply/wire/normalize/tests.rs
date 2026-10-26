@@ -313,11 +313,12 @@ fn rejection_10_task_operations_cover_every_production_operation() {
 }
 
 /// §2.1.1 #12 / §7.2 row 11: `get_task` and `get_task_progress` agree that
-/// the version is v1.
+/// the version is v1 when it is omitted; v8 PR-5 (#387 §14) adds v2 to all
+/// three task reads.
 #[test]
 fn rejection_12_task_reads_agree_on_contract_version() {
-    let task: TaskV1 = decoded("get_task", json!({"task_id": "t"})).unwrap();
-    assert_eq!(task.contract_version, ContractVersion::V1);
+    let task: TaskQuery = decoded("get_task", json!({"task_id": "t"})).unwrap();
+    assert_eq!(task.contract_version, ReadContractVersion::V1);
     let progress: ProgressQuery = decoded(
         "get_task_progress",
         json!({"task_id": "t", "contract_version": "v1"}),
@@ -326,6 +327,20 @@ fn rejection_12_task_reads_agree_on_contract_version() {
     assert_eq!(progress.task_id, "t");
     let tasks: TasksQuery = decoded("list_tasks", json!({"contract_version": "v1"})).unwrap();
     assert_eq!(tasks.page_size, default_page());
+    for (name, input) in [
+        (
+            "get_task",
+            json!({"task_id": "t", "contract_version": "v2"}),
+        ),
+        (
+            "get_task_progress",
+            json!({"task_id": "t", "contract_version": "v2"}),
+        ),
+        ("list_tasks", json!({"contract_version": "v2"})),
+    ] {
+        let value: Value = decoded(name, input).unwrap();
+        assert_eq!(value["contract_version"], "v2", "{name}");
+    }
 }
 
 /// §2.1.1 #13: the display name in `code` is still rejected, and the message

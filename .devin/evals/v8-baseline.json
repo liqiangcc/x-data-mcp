@@ -43,6 +43,11 @@
       "id": "availability-batch-10",
       "fixture": "fixtures/v8/availability-batch-ten.json",
       "budget_tokens": 1500
+    },
+    {
+      "id": "T6-task-diagnosis",
+      "fixture": "fixtures/v8/task-diagnosis.json",
+      "budget_tokens": 2000
     }
   ]
 }

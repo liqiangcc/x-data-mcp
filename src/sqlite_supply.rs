@@ -960,6 +960,54 @@ fn task_facts_light(c: &Connection, id: &str, access: &Access) -> Result<TaskFac
         yearly_results: vec![],
     })
 }
+/// Decode one `task_items` row selected as
+/// `(item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json)`.
+fn task_item_row(r: &rusqlite::Row<'_>) -> Result<crate::task_control::TaskItem, Error> {
+    let stage: String = r.get(5).map_err(storage)?;
+    Ok(crate::task_control::TaskItem {
+        spec: crate::task_control::ItemSpec {
+            item_id: r.get(0).map_err(storage)?,
+            target: serde_json::from_str(&r.get::<_, String>(1).map_err(storage)?)
+                .map_err(storage)?,
+            progress_unit: r.get(2).map_err(storage)?,
+            frozen_inputs: serde_json::from_str(&r.get::<_, String>(3).map_err(storage)?)
+                .map_err(storage)?,
+            scope_keys: serde_json::from_str(&r.get::<_, String>(4).map_err(storage)?)
+                .map_err(storage)?,
+        },
+        stage: serde_json::from_str(&format!("\"{stage}\"")).map_err(storage)?,
+        outcome: r
+            .get::<_, Option<String>>(6)
+            .map_err(storage)?
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(storage)?,
+    })
+}
+/// Failed items grouped by `reason_code`: one aggregate-free scan of the
+/// failed rows, reading only a bounded prefix of each error. Shared by the
+/// progress read scope and the `list_tasks` v2 `reason_code` filter.
+fn failed_reason_counts_conn(
+    c: &Connection,
+    id: &str,
+    access: &Access,
+) -> Result<crate::data_supply::task_v2::FailedByReason, Error> {
+    task_head_facts(c, id, access)?;
+    let mut stmt = c
+        .prepare(
+            "SELECT substr(COALESCE(json_extract(outcome_json,'$.error'),''),1,400) FROM task_items WHERE task_id=?1 AND json_extract(outcome_json,'$.success')=0",
+        )
+        .map_err(storage)?;
+    let mut rows = stmt.query(rusqlite::params![id]).map_err(storage)?;
+    let mut counts = std::collections::BTreeMap::new();
+    while let Some(r) = rows.next().map_err(storage)? {
+        let error: String = r.get(0).map_err(storage)?;
+        *counts
+            .entry(crate::data_supply::observe::reason_code(&error).to_owned())
+            .or_insert(0) += 1;
+    }
+    Ok(counts)
+}
 /// Head-only task facts (PLANRUN-BOUNDED-READS): every `summary` and
 /// bounded-progress field read from `tasks` columns plus
 /// `shared_evidence` extracted by `json_extract` — the multi-MB
@@ -1631,26 +1679,32 @@ impl crate::data_supply::observe::ProgressRead for SqliteProgressRead<'_> {
             .map_err(storage)?;
         let mut items = Vec::new();
         while let Some(r) = rows.next().map_err(storage)? {
-            let stage: String = r.get(5).map_err(storage)?;
-            items.push(crate::task_control::TaskItem {
-                spec: crate::task_control::ItemSpec {
-                    item_id: r.get(0).map_err(storage)?,
-                    target: serde_json::from_str(&r.get::<_, String>(1).map_err(storage)?)
-                        .map_err(storage)?,
-                    progress_unit: r.get(2).map_err(storage)?,
-                    frozen_inputs: serde_json::from_str(&r.get::<_, String>(3).map_err(storage)?)
-                        .map_err(storage)?,
-                    scope_keys: serde_json::from_str(&r.get::<_, String>(4).map_err(storage)?)
-                        .map_err(storage)?,
-                },
-                stage: serde_json::from_str(&format!("\"{stage}\"")).map_err(storage)?,
-                outcome: r
-                    .get::<_, Option<String>>(6)
-                    .map_err(storage)?
-                    .map(|s| serde_json::from_str(&s))
-                    .transpose()
-                    .map_err(storage)?,
-            });
+            items.push(task_item_row(r)?);
+        }
+        Ok(items)
+    }
+    /// The first `limit` failed items by `item_id` (v8 PR-5, #387 §14):
+    /// the bounded sample a v2 `get_task` diagnosis carries. Same row
+    /// decode as the keyset page, `LIMIT` bounds the read.
+    fn failed_items(
+        &self,
+        id: &str,
+        limit: usize,
+        access: &Access,
+    ) -> Result<Vec<crate::task_control::TaskItem>, Error> {
+        task_head_facts(self.c, id, access)?;
+        let mut stmt = self
+            .c
+            .prepare(
+                "SELECT item_id,target_json,progress_unit,frozen_inputs_json,scope_keys_json,stage,outcome_json                  FROM task_items WHERE task_id=?1                  AND json_extract(outcome_json,'$.success')=0                  ORDER BY item_id LIMIT ?2",
+            )
+            .map_err(storage)?;
+        let mut rows = stmt
+            .query(rusqlite::params![id, limit as i64])
+            .map_err(storage)?;
+        let mut items = Vec::new();
+        while let Some(r) = rows.next().map_err(storage)? {
+            items.push(task_item_row(r)?);
         }
         Ok(items)
     }
@@ -1660,23 +1714,8 @@ impl crate::data_supply::observe::ProgressRead for SqliteProgressRead<'_> {
         &self,
         id: &str,
         access: &Access,
-    ) -> Result<std::collections::BTreeMap<String, usize>, Error> {
-        task_head_facts(self.c, id, access)?;
-        let mut stmt = self
-            .c
-            .prepare(
-                "SELECT substr(COALESCE(json_extract(outcome_json,'$.error'),''),1,400) FROM task_items WHERE task_id=?1 AND json_extract(outcome_json,'$.success')=0",
-            )
-            .map_err(storage)?;
-        let mut rows = stmt.query(rusqlite::params![id]).map_err(storage)?;
-        let mut counts = std::collections::BTreeMap::new();
-        while let Some(r) = rows.next().map_err(storage)? {
-            let error: String = r.get(0).map_err(storage)?;
-            *counts
-                .entry(crate::data_supply::observe::reason_code(&error).to_owned())
-                .or_insert(0) += 1;
-        }
-        Ok(counts)
+    ) -> Result<crate::data_supply::task_v2::FailedByReason, Error> {
+        failed_reason_counts_conn(self.c, id, access)
     }
     /// Progress/metadata reads run at the committed-state verification
     /// tier (XP-020): every touched `data_versions` row is re-verified
@@ -1758,6 +1797,16 @@ impl ObservationRepository for SqliteSupply {
         access: &Access,
     ) -> Result<crate::data_supply::observe::TaskHeadFacts, Error> {
         self.market.read(|c| task_head_facts(c, id, access))
+    }
+    /// One narrow failed-row read per candidate task; only the v2
+    /// `reason_code` filter calls it.
+    fn failed_reason_counts(
+        &self,
+        id: &str,
+        access: &Access,
+    ) -> Result<crate::data_supply::task_v2::FailedByReason, Error> {
+        self.market
+            .read(|c| failed_reason_counts_conn(c, id, access))
     }
     fn verify_versions(&self, refs: &[VersionRef]) -> Result<(), Error> {
         ReadRepository::verify(self, refs)

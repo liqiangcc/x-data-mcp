@@ -196,7 +196,7 @@ pub trait ProgressRead {
         &self,
         id: &str,
         access: &Access,
-    ) -> Result<std::collections::BTreeMap<String, usize>, Error> {
+    ) -> Result<super::task_v2::FailedByReason, Error> {
         let mut counts = std::collections::BTreeMap::new();
         for item in self.task(id, access)?.snapshot.items {
             if let Some(outcome) = item.outcome.as_ref().filter(|o| !o.success) {
@@ -302,6 +302,25 @@ pub trait ObservationRepository {
             head: f.snapshot.head(),
             shared_evidence: f.snapshot.task.work.shared_evidence,
         })
+    }
+    /// Failed items grouped by `reason_code`, for the `list_tasks` v2
+    /// `reason_code` filter. The default reads the full task; the SQLite
+    /// backend reads only failed rows (one narrow query per candidate task —
+    /// the filter is a targeted discovery aid, not the default list path).
+    fn failed_reason_counts(
+        &self,
+        id: &str,
+        access: &Access,
+    ) -> Result<super::task_v2::FailedByReason, Error> {
+        let mut counts = std::collections::BTreeMap::new();
+        for item in self.task(id, access)?.snapshot.items {
+            if let Some(outcome) = item.outcome.as_ref().filter(|o| !o.success) {
+                *counts
+                    .entry(reason_code(outcome.error.as_deref().unwrap_or("")).to_owned())
+                    .or_insert(0) += 1;
+            }
+        }
+        Ok(counts)
     }
     fn task(&self, id: &str, access: &Access) -> Result<TaskFacts, Error>;
     fn availability(
@@ -490,7 +509,13 @@ enum Content {
     /// Keyset position of a `list_tasks` snapshot (XP-025 D): the list
     /// itself is never materialized.
     TaskCursor(Option<(String, String)>),
-    Progress(Box<ProgressPage>),
+    /// Failed items grouped by `reason_code`, counted once per fresh call so
+    /// every cursor page of the same snapshot reports the same classification
+    /// (v8 PR-5, #387 §14).
+    Progress {
+        page: Box<ProgressPage>,
+        failed: super::task_v2::FailedByReason,
+    },
     /// Bounded large-task progress (PLANRUN-BOUNDED-READS): `page` keeps
     /// the small head summary with `unfinished` emptied; `after` is the
     /// keyset position — the last emitted unfinished item_id. Cursor
@@ -499,6 +524,7 @@ enum Content {
     ProgressKeyset {
         page: Box<ProgressPage>,
         after: Option<String>,
+        failed: super::task_v2::FailedByReason,
     },
     Availability(Vec<AvailabilityItem>),
 }
@@ -572,8 +598,81 @@ impl<R: ObservationRepository> Observer<R> {
         c.push_back(s);
         token
     }
-    pub fn tasks(&self, mut args: TasksQuery, access: &Access) -> Result<TaskListPage, Error> {
+    pub fn tasks(&self, args: TasksQuery, access: &Access) -> Result<TaskListPage, Error> {
+        self.tasks_page(args, access)
+    }
+    /// v2 task list (v8 PR-5, #387 §14): the v1 page, the wire contract
+    /// version, and the per-row rename that keeps the task's own contract
+    /// version apart from the wire one (§7.2 row 14).
+    pub fn tasks_v2(&self, args: TasksQuery, access: &Access) -> Result<serde_json::Value, Error> {
+        let page = self.tasks_page(args, access)?;
+        let TaskListPage {
+            snapshot_id,
+            snapshot_time,
+            items,
+            next_cursor,
+            page_complete,
+        } = page;
+        Ok(serde_json::json!({
+            "wire_contract_version": ReadContractVersion::V2,
+            "snapshot_id": snapshot_id,
+            "snapshot_time": snapshot_time,
+            "items": items.into_iter().map(super::task_v2::task_summary).collect::<Vec<_>>(),
+            "next_cursor": next_cursor,
+            "page_complete": page_complete,
+        }))
+    }
+    /// v2 `get_task` (v8 PR-5, #387 §14): the summary, the counters and the
+    /// bounded failure diagnosis in one read scope, so the counts and the
+    /// sample cannot disagree and T6 needs one call instead of three.
+    pub fn task_v2(&self, task_id: &str, access: &Access) -> Result<serde_json::Value, Error> {
+        self.repository.with_progress_read(|read| {
+            let head = read.task_head_facts(task_id, access)?;
+            let counts = TaskCounts {
+                total: head.head.counts.total as usize,
+                pending: head.head.counts.pending as usize,
+                running: head.head.counts.running as usize,
+                finished: head.head.counts.finished as usize,
+                succeeded: head.head.counts.succeeded as usize,
+                failed: head
+                    .head
+                    .counts
+                    .finished
+                    .saturating_sub(head.head.counts.succeeded) as usize,
+            };
+            let mut failed = std::collections::BTreeMap::new();
+            let mut sample = vec![];
+            if counts.failed > 0 {
+                failed = read.failed_reason_counts(task_id, access)?;
+                sample = read
+                    .failed_items(task_id, super::task_v2::ERROR_SAMPLE, access)?
+                    .iter()
+                    .map(progress_item)
+                    .collect();
+            }
+            Ok(super::task_v2::task_view(
+                summary_head(&head, &self.run_id),
+                counts,
+                failed,
+                &sample,
+            ))
+        })
+    }
+    fn tasks_page(&self, mut args: TasksQuery, access: &Access) -> Result<TaskListPage, Error> {
         page_size(args.page_size)?;
+        // v2 only (`reason_code` filters on item failures, which v1 never
+        // reads): reject instead of silently ignoring it.
+        if args.contract_version.is_v1() && args.reason_code.is_some() {
+            return Err(invalid("reason_code requires contract_version v2"));
+        }
+        if let Some(code) = &args.reason_code
+            && !super::task_v2::REASON_CODES.contains(&code.as_str())
+        {
+            return Err(invalid(&format!(
+                "reason_code must be one of {}; got {code:?}",
+                super::task_v2::REASON_CODES.join(", ")
+            )));
+        }
         if args
             .created_from
             .zip(args.created_to)
@@ -652,6 +751,7 @@ impl<R: ObservationRepository> Observer<R> {
                     && args.status.as_ref().is_none_or(|v| v.contains(&sm.status))
                     && args.created_from.is_none_or(|t| sm.created_at >= t)
                     && args.created_to.is_none_or(|t| sm.created_at <= t)
+                    && self.matches_reason(&sm.task_id, args.reason_code.as_deref(), access)?
                 {
                     matched.push(sm);
                     if matched.len() > args.page_size {
@@ -681,6 +781,23 @@ impl<R: ObservationRepository> Observer<R> {
             p.next_cursor = Some(self.save(s));
         }
         Ok(p)
+    }
+    /// Whether a task has at least one failed item of the requested class
+    /// (`list_tasks` v2 filter). One narrow failed-row read per candidate task
+    /// on the filter path only; the unfiltered list stays head-only.
+    fn matches_reason(
+        &self,
+        id: &str,
+        reason: Option<&str>,
+        access: &Access,
+    ) -> Result<bool, Error> {
+        match reason {
+            None => Ok(true),
+            Some(code) => Ok(self
+                .repository
+                .failed_reason_counts(id, access)?
+                .contains_key(code)),
+        }
     }
     /// Server-side long-poll for `get_task_progress`: while the task is
     /// non-terminal and the caller asked to wait, re-read only the task
@@ -714,11 +831,27 @@ impl<R: ObservationRepository> Observer<R> {
             std::thread::sleep(WAIT_POLL_INTERVAL.min(deadline - now));
         }
     }
-    pub fn progress(
+    pub fn progress(&self, args: ProgressQuery, access: &Access) -> Result<ProgressPage, Error> {
+        Ok(self.progress_page(args, access)?.0)
+    }
+    /// v2 progress (v8 PR-5, #387 §14): the v1 page with structured item
+    /// identities and one top-level `failed_by_reason`.
+    pub fn progress_v2(
+        &self,
+        args: ProgressQuery,
+        access: &Access,
+    ) -> Result<serde_json::Value, Error> {
+        let (page, failed) = self.progress_page(args, access)?;
+        super::task_v2::progress_view(page, failed)
+    }
+    /// The page plus its failure classification; v1 keeps only the page and
+    /// the classification reaches it through `plan.failed_by_reason` (bounded
+    /// tasks), exactly as before.
+    fn progress_page(
         &self,
         mut args: ProgressQuery,
         access: &Access,
-    ) -> Result<ProgressPage, Error> {
+    ) -> Result<(ProgressPage, super::task_v2::FailedByReason), Error> {
         let trace = Trace::begin();
         page_size(args.page_size)?;
         let cursor = args.cursor.take();
@@ -751,7 +884,7 @@ impl<R: ObservationRepository> Observer<R> {
         cursor: Option<String>,
         args: ProgressQuery,
         access: &Access,
-    ) -> Result<ProgressPage, Error> {
+    ) -> Result<(ProgressPage, super::task_v2::FailedByReason), Error> {
         let mut s = if let Some(c) = cursor {
             self.resume(&c, &key, access)?
         } else {
@@ -772,10 +905,16 @@ impl<R: ObservationRepository> Observer<R> {
                 let succeeded = head_facts.head.counts.succeeded as usize;
                 let total = head_facts.head.counts.total as usize;
                 let mut plan = plan_progress(&head_facts.shared_evidence);
-                if finished > succeeded
-                    && let Some(plan) = plan.as_mut()
-                {
-                    plan.failed_by_reason = read.failed_reason_counts(&args.task_id, access)?;
+                // v8 PR-5 (#387 §14): the classification is computed for the
+                // top-level v2 field; v1 keeps reading it under `plan`, so the
+                // v1 shape and cost are unchanged when nothing failed.
+                let failed = if finished > succeeded {
+                    read.failed_reason_counts(&args.task_id, access)?
+                } else {
+                    Default::default()
+                };
+                if let Some(plan) = plan.as_mut() {
+                    plan.failed_by_reason = failed.clone();
                 }
                 let p = ProgressPage {
                     snapshot_id: String::new(),
@@ -826,6 +965,7 @@ impl<R: ObservationRepository> Observer<R> {
                     Content::ProgressKeyset {
                         page: Box::new(p),
                         after: None,
+                        failed,
                     },
                 )
             } else {
@@ -849,6 +989,9 @@ impl<R: ObservationRepository> Observer<R> {
                 }
                 unfinished.sort_by(|a, b| a.item_id.cmp(&b.item_id));
                 budget(&unfinished)?;
+                // v8 PR-5 (#387 §14): one classification shared with the v2
+                // projection and with the bounded path.
+                let failed = super::task_v2::failed_by_reason(&unfinished);
                 let p = ProgressPage {
                     snapshot_id: String::new(),
                     snapshot_time: Utc::now(),
@@ -913,10 +1056,23 @@ impl<R: ObservationRepository> Observer<R> {
                 if wire_bytes > MAX_BYTES {
                     return Err(invalid("progress snapshot byte budget exceeded"));
                 }
-                self.start(key, access, Content::Progress(Box::new(p)))
+                self.start(
+                    key,
+                    access,
+                    Content::Progress {
+                        page: Box::new(p),
+                        failed,
+                    },
+                )
             }
         };
-        if let Content::ProgressKeyset { page, after } = &mut s.content {
+        if let Content::ProgressKeyset {
+            page,
+            after,
+            failed,
+        } = &mut s.content
+        {
+            let failed = std::collections::BTreeMap::clone(failed);
             // Bounded large-task page: head counters and plan summary were
             // saved once; each page re-queries not-yet-successful items by
             // keyset — no stored item vector.
@@ -944,11 +1100,12 @@ impl<R: ObservationRepository> Observer<R> {
             if wire_bytes > MAX_BYTES {
                 return Err(invalid("progress snapshot byte budget exceeded"));
             }
-            return Ok(result);
+            return Ok((result, failed));
         }
-        let Content::Progress(p) = &s.content else {
+        let Content::Progress { page: p, failed } = &s.content else {
             return Err(invalid("cursor category"));
         };
+        let failed = std::collections::BTreeMap::clone(failed);
         {
             let _span = Span::enter(Stage::VerifyVersions);
             read.verify_versions(&p.publication_versions)?;
@@ -974,7 +1131,7 @@ impl<R: ObservationRepository> Observer<R> {
         if more {
             result.next_cursor = Some(self.save(s));
         }
-        Ok(result)
+        Ok((result, failed))
     }
     pub fn availability(&self, args: Query, access: &Access) -> Result<AvailabilityPage, Error> {
         Ok(self.availability_page(args, access)?.0)
@@ -1102,36 +1259,17 @@ fn progress_item(i: &crate::task_control::TaskItem) -> ProgressItem {
         reason_code: None,
     }
 }
-/// Longest `error` a bounded large-task page carries. A failed item's full
-/// error can be tens of kilobytes (a revision error lists every revised
-/// day of the history); the class is in `reason_code`, the full text stays
-/// in the task record.
-pub const BOUNDED_ERROR_CHARS: usize = 240;
-/// Stable class of a failed item's error text. The mapping is part of the
-/// v7 contract (`generic-data-v7.md` §5); keep it in this one place.
-pub fn reason_code(error: &str) -> &'static str {
-    if error.contains("RevisionUnverified") {
-        "REVISION_UNVERIFIED"
-    } else if error.contains("PUBLISH_PRECONDITION") {
-        "PUBLISH_PRECONDITION"
-    } else if error.contains("no bars inside the accepted range") {
-        "NO_BARS_IN_RANGE"
-    } else {
-        "OTHER"
-    }
-}
+/// Longest `error` a bounded large-task page carries (see
+/// `task_v2::BOUNDED_ERROR_CHARS`; the mapping and the bound live in the v2
+/// projection module so both paths share one policy).
+pub use super::task_v2::{BOUNDED_ERROR_CHARS, reason_code};
 /// Large-task view of one unfinished item: failed items get their
 /// `reason_code` and a truncated `error`.
 fn bound_item(mut item: ProgressItem) -> ProgressItem {
     if item.success == Some(false) {
         let error = item.error.take().unwrap_or_default();
         item.reason_code = Some(reason_code(&error).to_owned());
-        item.error = Some(if error.chars().count() > BOUNDED_ERROR_CHARS {
-            let head: String = error.chars().take(BOUNDED_ERROR_CHARS).collect();
-            format!("{head}… ({} chars total)", error.chars().count())
-        } else {
-            error
-        });
+        item.error = Some(super::task_v2::bounded_error(&error));
     }
     item
 }
