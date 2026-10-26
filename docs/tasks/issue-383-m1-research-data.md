@@ -871,7 +871,7 @@ required-features = ["export"]
 | **PR-8** 导出 | `src/research/`（读模型 + 清单 + 流式行迭代）、`src/research/parquet.rs`（feature `export`）、`src/bin/export_research.rs`、`[[bin]] required-features`、CI 新 job（`--features export` 的测试 + release 构建 + 体积/编译时间记录）、venv 文档 | AC-M1-7；AC-M1-8；AC-M1-9；AC-M1-10 | 清单确定性（同输入同 `snapshot_id`）；文件 sha256 自洽；版本漂移拒绝；混合 generation 拒绝；只读（`mode=ro`，写库则测试失败）；小夹具 Parquet 用 pyarrow/duckdb 读回（CI 里用 duckdb CLI 或 Python，需在 PR 里确认 runner 有） | PR-3、PR-4、PR-5、PR-6 |
 | **PR-9**（可选，可与 PR-8 合并）文档与运维收口 | §8.4 的文档同步、`docs/tasks/` 实现记录、发布说明草稿、部署前实测清单（冷启动、write-loop、体积） | — | `check_current_facts` / `check_deploy_facts` / hygiene | 其余全部 |
 
-拆分原则：PR-1 只做"结构 + 参数化"，不改任何数值行为（前复权仍是 2dp，只是变成两条序列之一？——**不**：PR-1 后仍只有 `adjustment=1` 一条序列，PR-2 才加第二条。这样 PR-1 可以单独合并、单独回滚）。PR-3 之前，前复权仍是 2dp；PR-3 之后变 6dp，`version_id` 全变（本来每次重建都会变）。
+拆分原则：PR-1 只做"结构 + 参数化"，不改任何数值行为，也不新增序列——PR-1 之后库里仍只有 `adjustment=1` 一条序列（价格仍是 2dp），因此它可以单独合并、单独回滚；PR-2 才写第二条序列；PR-3 才把前复权从 2dp 换成 6dp。也就是说，"变贵"（PR-2 的存储）与"变准"（PR-3 的算法）是两个可分别回滚的步骤。
 
 ---
 
