@@ -78,10 +78,10 @@ ETF（M3，仅预留 `price_scale=3` 与 `instrument_class`）、北交所/B 股
 | `Period` 只有 `Day`/`Year` | `src/market_data.rs:5-9` |
 | DDL：`CHECK(adjustment=1)` | `migrations/tasks/021_latest_only.sql:11` |
 | DDL：价格列叫 `*_cents`（分） | `migrations/tasks/021_latest_only.sql:33-36` |
-| DDL：`UNIQUE(entity, period, adjustment)` | `migrations/tasks/021_latest_only.sql:22` |
+| DDL：`UNIQUE(entity, period, adjustment)` | `migrations/tasks/021_latest_only.sql:24` |
 | DDL：`market_events` 有 `UNIQUE(task_id, item_id)`、无 `adjustment` 列 | `migrations/tasks/021_latest_only.sql:60-100` |
 | DDL：`evidence_kind` 只允许 6 个取值 | `migrations/tasks/019_compact_market.sql:8-9` |
-| 存储层把 `adjustment=1` 写死在 SQL 里 | `src/sqlite_market/series.rs:251`、`:1139`、`:1444`；`src/sqlite_market.rs:190` |
+| 存储层把 `adjustment=1` 写死在 SQL 里 | `src/sqlite_market/series.rs:251`、`:1139`、`:1444`（INSERT 的 `VALUES(?1,?2,1,…)`）；`src/sqlite_market.rs:190` |
 | 启动检查遍历**全部** `market_series` 行（无口径过滤） | `src/sqlite_market/series.rs:1183` |
 | `CompactBar` 字段名与读回写死 2dp | `src/compact_market.rs:23-26`、`:39-42`、`:55-58` |
 | `cents()` 要求"恰好 2dp"，否则拒绝 | `src/compact_market.rs:812-822` |
@@ -102,7 +102,7 @@ ETF（M3，仅预留 `price_scale=3` 与 `instrument_class`）、北交所/B 股
 
 ### 2.3 直接影响设计的三个现状缺口
 
-1. **口径不是序列的维度**：`adjustment` 在 DDL 里是单值，代码里 6 处 SQL 写死 `=1`，`market_events` 的唯一键是 `(task_id, item_id)` —— 一条 item 只能写一条序列。要新增第二条序列，这三处必须一起改，否则写入要么被 CHECK 拒绝，要么两个序列抢同一个事件槽。
+1. **口径不是序列的维度**：`adjustment` 在 DDL 里是单值，代码里 3 处 SQL 写死 `=1`、1 处 INSERT 写死常量 `1`、1 处启动检查不过滤口径，`market_events` 的唯一键是 `(task_id, item_id)` —— 一条 item 只能写一条序列。要新增第二条序列，这三处必须一起改，否则写入要么被 CHECK 拒绝，要么两个序列抢同一个事件槽。
 2. **精度不是序列的属性**：`CompactBar` 与 `cents()` 把"分"写进类型与校验，ETF 的 4.178 会被直接拒绝（XDM-15 §5.1 已实测该拒绝路径）。加一个 6dp 序列同理。
 3. **"qfq" 是字符串常量而不是枚举**：`Adjustment` 有枚举，但校验点用的是 `value != Some("qfq")`。加变体时编译器不会报错，静默拒绝新口径。这是 H2（改结构体/helper 后 grep 全仓调用点）必须逐条处理的清单。
 
@@ -859,7 +859,7 @@ required-features = ["export"]
 
 | PR | 范围 | AC | 测试计划（CI） | 依赖 |
 |---|---|---|---|---|
-| **PR-1** schema 22 + 存储口径化 | 022 迁移（§3.1–3.5、§3.10）；`market_series.adjustment/price_scale/instrument_class`；`series_bars` 价格列更名；`market_events.adjustment` + 唯一键/索引；`yearly_series_lineage` 基口径；`evidence_kind` 扩展；`CompactBar` 字段与 `cents()` 改为按 scale；存储层 6 处写死 `adjustment=1` 的参数化；启动检查按三键；`EXPECTED_COMPACT_SCHEMA` 22 | AC-M1-12；迁移在全新 init 与空表升级两条路径可建；旧二进制拒绝 schema 22 | 迁移/升级测试（现有 `schema_upgrade` 类）；序列读写往返（2/3/6 三种 scale）；`cents()` 对 3dp 的接受与对超 scale 的拒绝；启动检查对两条序列的闭合；事件唯一键冲突测试 | 无（第一个） |
+| **PR-1** schema 22 + 存储口径化 | 022 迁移（§3.1–3.5、§3.10）；`market_series.adjustment/price_scale/instrument_class`；`series_bars` 价格列更名；`market_events.adjustment` + 唯一键/索引；`yearly_series_lineage` 基口径；`evidence_kind` 扩展；`CompactBar` 字段与 `cents()` 改为按 scale；存储层 3 处 `adjustment=1` SQL、1 处 INSERT 常量与 1 处无过滤全表遍历的参数化；启动检查按三键；`EXPECTED_COMPACT_SCHEMA` 22 | AC-M1-12；迁移在全新 init 与空表升级两条路径可建；旧二进制拒绝 schema 22 | 迁移/升级测试（现有 `schema_upgrade` 类）；序列读写往返（2/3/6 三种 scale）；`cents()` 对 3dp 的接受与对超 scale 的拒绝；启动检查对两条序列的闭合；事件唯一键冲突测试 | 无（第一个） |
 | **PR-2** 不复权序列物化 | `official_market` 新增 `raw_batch()`；同一 item 写两条序列 + 两条事件；`Adjustment::Raw` 与 `"raw"` 字符串校验参数化（§2.2 的 9 处） | AC-M1-1；AC-M1-11（部分） | `.day` → 不复权 bar 逐根相等（含 #381 四个判定分支）；两序列同事务提交/回滚；未来事件只改前复权；`RevisionUnverified` 保持 | PR-1 |
 | **PR-3** 精确有理数复权（6dp） | `qfq-exact-v1`：精确链 + 末次一次舍入；`forward_adjust_reference` 保留为 2dp 历史 oracle；新增 `forward_adjust_exact(bars, events, scale)` 与其参考实现；前复权序列 `price_scale=6`；`algorithm_version` 落库 | AC-M1-2；AC-M1-3 | 与参考实现逐位相等（夹具 + 现有冻结域 94 事件回归）；Python `Fraction` 参考夹具逐位相等；2dp 基线的差异逐条落在半分位（用 §16.1 的样本）；bigint 路径的边界（空事件、未来事件、同日多事件） | PR-1、PR-2 |
 | **PR-4** 因子事件表 | `adjustment_events` + `derived_dataset_versions`；写入路径（整组替换）；摘要 `adjustment-events-v1`；`normalize(c_bits) == c*` 断言 | BR-M1-2；AC-M1-2 的一半 | 摘要稳定性（同输入同版本、换顺序换版本）；`known_at` 恒 NULL；非 cat1 不入库、excluded 计数进证据；导出读模型能读到 | PR-1、PR-2 |
