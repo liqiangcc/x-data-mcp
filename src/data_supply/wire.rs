@@ -32,18 +32,16 @@ impl Dataset {
         }
     }
 }
-/// Contract version for the write/task surfaces: `v1` only. The read surface
-/// uses [`ReadContractVersion`], so a write tool's schema never advertises a
-/// version it rejects.
+// Write/task surfaces accept `v1` only; the read surface uses
+// `ReadContractVersion`, so a write tool's schema never advertises a version
+// it rejects (v8 PR-3, #387 §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ContractVersion {
     #[serde(rename = "v1")]
     V1,
 }
 
-/// `contract_version` for `query_data`, `get_data_availability` and
-/// `list_data_versions` (v8 PR-3, #387 §5): `v1` keeps the row shape, `v2`
-/// selects the columnar shape.
+// `v1` keeps the row shape, `v2` selects the columnar shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ReadContractVersion {
     #[serde(rename = "v1")]
