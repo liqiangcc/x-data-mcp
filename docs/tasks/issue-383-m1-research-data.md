@@ -588,6 +588,7 @@ export_research --db <sqlite-path> [--out <dir>] [--dataset all|daily|index|cale
 | `volume` | `INT64` | 股（已按 #381 归一）；NULL = 单位无法确认 |
 | `amount` | `DECIMAL(20,2)` | 元（源 f32） |
 | `r7_raw` | `UINT32` | 原始第 8 字段，仅审计 |
+| `volume_quantum` | `INT32` | 每手股数（个股恒 100）；NULL = 单位无法确认。D-34 owner 裁决（方案 1）：导出 schema **自带**该列，消费方不必猜"股/手"，M3 的 ETF（不同每手）也不需要改 schema |
 
 **factors.parquet**
 
@@ -624,35 +625,37 @@ export_research --db <sqlite-path> [--out <dir>] [--dataset all|daily|index|cale
 
 不导出 `market_events`（审计链在库里；导出是研究输入，不是审计包）。
 
-### 7.5 Python 侧（只设计，本次不安装）
+### 7.5 Python 侧（已安装并冒烟：R-9 批准后实测）
+
+经 R-9 批准后执行 `pip install`（对外部网络的写操作）。设计里的 venv 名
+`x-data-research` 落地时缩短为 **`/root/.venvs/x-research`**（磁盘，非 `/tmp`）：
 
 ```bash
-python3 -m venv /root/.venvs/x-data-research
-/root/.venvs/x-data-research/bin/pip install --upgrade pip
-/root/.venvs/x-data-research/bin/pip install 'pyarrow==<pin>' 'duckdb==<pin>'
-# 冒烟：不读全量，只验证能打开文件与列类型
-/root/.venvs/x-data-research/bin/python - <<'PY'
-import pyarrow.parquet as pq
-f = pq.ParquetFile('/root/x-data-exports/<snapshot_id>/daily_raw.parquet')
-print(f.schema_arrow)
-print(f.metadata.num_rows)
-PY
-/root/.venvs/x-data-research/bin/duckdb -c \
-  "select count(*), min(trade_day), max(trade_day) from '/root/x-data-exports/<snapshot_id>/daily_raw.parquet'"
+python3 -m venv /root/.venvs/x-research
+/root/.venvs/x-research/bin/pip install 'pyarrow==26.0.0' 'duckdb==2.0.0'
 ```
 
-约束与事实：
+实测版本与 wheel 体积（`pip install` 下载的 wheel，非解包后）：
 
-- 本机现有 Python 3.14 只有 `numpy`/`requests`，`pyarrow`/`duckdb`/`pandas`/`polars` **都没有**（调研报告① §6.1 实测）；`pip install` 属于对外部网络的写操作，**需 owner 批准**，本次不执行。
-- venv 放 `/root/.venvs/`（磁盘），不放 `/tmp`（RAM tmpfs，H18）。
-- 版本 pin 在实现 PR 里记录实际解析到的版本与 wheel 体积（估计 `pyarrow` ~40MB、`duckdb` ~20MB，均为估算，未实测）。
-- 读大文件时按列投影 + 分批：全历史 1,675 万行 × 10 列，`pyarrow` 一次读入会吃掉数百 MB（估计），主机只有 1.9GiB，因此示例统一用 `ParquetFile.iter_batches()` 或 duckdb 的流式聚合。
+| 包 | 版本 | wheel | 说明 |
+|---|---|---|---|
+| `pyarrow` | 26.0.0 | 54.0 MB | 纯 wheel，无编译 |
+| `duckdb` | 2.0.0 | 24.4 MB | 纯 wheel，无编译 |
+
+冒烟脚本 **`scripts/export_smoke.py`**（本 PR 新增，CI 里跑）：
+
+- `--self-check`：用 pyarrow 按 §7.4 契约自造 5 个文件再双读，**本机已通过**——证明这份契约本身能被第三方 reader 表达；
+- `--snapshot-dir DIR`：读 `<DIR>/manifest.json`，逐文件校验 arrow 逻辑类型、Parquet 物理类型与行数，并用 duckdb 做 `count(*)`/`min(trade_day)`/`max(trade_day)` 流式聚合。
+
+本机**未**跑 `--snapshot-dir`：真实导出要 Rust 二进制，而本机禁止编译；该路径由 CI 的 `export` job 执行（`.github/workflows/ci.yml`：先用 `cargo test --features export smoke_export_for_external_readers` 落一份真实快照，再让本脚本读它），已在 PR #408 通过，结果见 §7.8。物理类型检查只在真实导出上严格（pyarrow 自写文件用最小宽度 `FLBA`，不是 §7.4 的 9/16 字节），该检查已用反证确认非空转：故意写 16 字节 `amount` 时脚本报 `fixed length 16 != 9`。
+
+读大文件的约束不变：按列投影 + `ParquetFile.iter_batches()` 或 duckdb 流式聚合，全历史 1,675 万行不一次读入。
 
 ### 7.6 Rust 侧依赖选型（CI 编译与体积）
 
 | 选项 | 依赖树 | 体积/编译 | 结论 |
 |---|---|---|---|
-| `parquet`（default-features=false, features=["snap"]），用低层 `SerializedFileWriter` | `parquet` + `thrift` + `snap` + `bytes`/`twox-hash` 等少量 | 估计二进制 +1.5–2.5MB、CI 编译 +60–120s（**待实测**） | **推荐** |
+| `parquet`（default-features=false, features=["snap"]），用低层 `SerializedFileWriter` | `parquet` + `snap` + `twox-hash`/`half`/`seq-macro` 等少量（`thrift` 编解码在 `parquet` 内部，不是独立依赖） | **实测**（CI `export` job，无缓存的一次 release 构建）：`target/release/export_research` = **5,030,424 B**（4.8MiB），构建 **110s** | **推荐** |
 | `parquet` + `arrow` | 再加 `arrow-array/buffer/schema/select/cast/...` | 估计 +5–8MB、编译 +2–4min | 不采用：M1 只需要"按列写定长类型"，不需要 Arrow 计算生态 |
 | 自己写 Parquet 编码 | 0 依赖 | 体积最小 | 不采用：thrift 编码 + 页格式 + 统计信息，自研成本远大于依赖成本 |
 
@@ -664,7 +667,7 @@ default = []
 export = ["dep:parquet"]
 
 [dependencies]
-parquet = { version = "<pin>", optional = true, default-features = false, features = ["snap"] }
+parquet = { version = "59.3.2", optional = true, default-features = false, features = ["snap"] }
 
 [[bin]]
 name = "export_research"
@@ -672,7 +675,8 @@ path = "src/bin/export_research.rs"
 required-features = ["export"]
 ```
 
-- 默认 `cargo build`/`cargo nextest` **不编译 parquet**，CI 的既有 Rust 关键路径不受影响；新增一个 CI job 专门跑 `cargo test --features export` 与 `cargo build --features export --release` 并记录二进制大小与编译时间（这两个数字进 PR 正文，作为"体积预算"的实测值）。
+- 默认 `cargo build`/`cargo nextest` **不编译 parquet**，CI 的既有 Rust 关键路径不受影响；新增 CI job **`export`**（`.github/workflows/ci.yml`）专门跑 `cargo nextest run --features export`、`cargo test --features export smoke_export_for_external_readers`（落一份真实快照给 pyarrow/duckdb 读）与 `cargo build --features export --release`，并把二进制字节数与构建秒数写进 job summary。实测（PR #408 首次运行，无缓存）：**5,030,424 B / 110s**；`export_research` 是唯一带该 feature 的产物，所以这个字节数是"整只二进制"而不是 parquet 的边际体积——边际值需要一次 stub writer 的对照构建，没有为它单独跑一轮 CI。
+- 实际依赖树（`Cargo.lock` 由 `cargo metadata` 生成）：+106/−3 行，新增包为 `parquet`、`snap`、`twox-hash`、`half`、`seq-macro`、`tiny-keccak`、`const-random`(+`-macro`)、`crunchy`、`libm`、`num-bigint 0.5.1`（仓库已用 0.4，两版并存，semver 不兼容是正常的）；**没有** `arrow-*`。默认构建不拉这些。
 - **发布管线要改**：`scripts/build_release.sh` 需要带 `--features export`，否则发布包里没有导出命令。这是 owner 批准项（§10.3）。
 - 压缩选 `snap`（纯 Rust，无 C 依赖）：`zstd` 体积更小但引入 C 代码与更大的二进制；M1 的导出体积不是门禁项（§7.7），先用 snappy。
 
@@ -688,6 +692,35 @@ required-features = ["export"]
 | 合计 | — | **约 340MB**（估算；CSV+gzip 同口径为 347MB 实测，Parquet 的估计区间 170–350MB 未实测） |
 
 放 `/root/x-data-exports`（不在 `/opt` 部署树里），因此**不挤占 SLO 第 5 行的部署体积门禁**；但会占根文件系统（当前可用约 28GB，调研报告① §1.1 实测），每次全历史导出约 340MB，保留策略需要 owner 定（本次不定）。
+
+### 7.8 PR-8 实现落点与偏差
+
+代码位置（全部在现有 crate 内，不新建 crate）：
+
+| 文件 | 职责 | 编译门槛 |
+|---|---|---|
+| `src/research/mod.rs` | 请求/选择、绑定类型（catalog/generation/index/序列/派生/文件计划）、`open_read_only`、`plan()`（= §11 的 `research::build_snapshot`）、`verify_unchanged()`、列与文件常量、`LIMITATIONS` | 恒编译 |
+| `src/research/read.rs` | 只读连接（`SQLITE_OPEN_READ_ONLY` + `query_only=1` + schema 22 校验）、catalog/序列/因子集/日历读模型、流式行迭代 `for_each_*`、十进制定标换算 | 恒编译 |
+| `src/research/manifest.rs` | `algorithms()`、`identity()`（canonical JSON → `snapshot_id`）、`files_value()`、`document()` | 恒编译 |
+| `src/research/parquet.rs` | 五份文件的 Parquet 编码（低层 `SerializedFileWriter`） | `export` |
+| `src/research/export.rs` | `ExportOptions`、三步式 `SnapshotWriter`（规划 → 落临时目录 → 复验 + 写清单 + rename）、`export()`、`dry_run()` | `export` |
+| `src/bin/export_research.rs` | 参数解析与一行 JSON 摘要 | `export` + `required-features` |
+| `scripts/export_smoke.py` | 第三方 reader 冒烟（§7.5） | — |
+
+与设计文本的偏差（都是落地时发现的必要调整，逐条记录）：
+
+1. **命名**：§11 分离点 5 写的是 `research::build_snapshot` / `SnapshotRequest` / `Snapshot`；实现用 `plan()` / `ExportRequest` / `SnapshotPlan`。语义一致（纯读、无副作用、入口只做参数解析），改名是为了让"这一步只做规划、真正写文件是 `export()`"在类型名上就看得出来。读模型对外仍是一处：入口与未来的 MCP 研究入口都调 `plan()`。
+2. **`DECIMAL` 的物理类型**：§7.4 只规定逻辑类型。`INT64` 的 `DECIMAL` 精度上限是 18，所以 `DECIMAL(20,2)` 的 `amount` 写成 `FIXED_LEN_BYTE_ARRAY(9)`、`DECIMAL(28,18)` 的因子仿射写成 `FIXED_LEN_BYTE_ARRAY(16)`（Parquet 的十进制定长编码，大端补码）；`DECIMAL(18,6)` 的价格仍是 `INT64`。两种写法都已用 pyarrow 26.0.0 与 duckdb 2.0.0 实测读回。
+3. **`volume_quantum`**：§7.4 原表没有这一列，按 D-34 方案 1 补上（`INT32`，NULL = 未知）。M1 生产写路径恒写 NULL，所以测试里用一条 SQL 单独置 100 来证明该列已接线——这也说明它是"留给 M2/M3 的位置"，不是当下的数据。
+4. **可复现性**：`WriterProperties` 不设 `set_writer_version`（用默认的 1.0，兼容性最好），`set_created_by` 写固定串而不是 crate 版本，文件里不写时间戳；`identity` 排除 `created_at`/`files`/压缩参数/行组大小，因此同输入两次导出 `snapshot_id` 与每个文件的 sha256 都相同（AC-M1-7 的测试断言到 `files` 相等，不只是 id 相等）。
+5. **一致性（AC-M1-8）**：`SnapshotWriter` 分三步，`finalize()` 在**新连接**上重新 `plan()` 并与写文件时的计划逐字段比对（`verify_unchanged`），通过后才写 `manifest.json` 再 `rename`。因此"日更在导出期间提交"只会得到 `EXPORT_DRIFT` 且目录为空，不会留下半新半旧的快照；`--dry-run` 也在单一只读事务内规划。
+6. **只读（AC-M1-9）**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`；测试直接对读连接执行 `UPDATE` 断言失败，并断言导出前后主库文件字节完全相同。
+
+验证状态（本机禁止 Rust 编译，按 §15）：本机只跑了 `cargo fmt --check`（通过）与 `scripts/export_smoke.py --self-check`（通过）；Rust 侧全部由 PR #408 的 CI 证明，三个 job（`rust`/`export`/`package`）在 run `40336874624` 这一轮全绿：
+
+- `rust`：`clippy --all-targets --all-features -D warnings`、`nextest` 全量（930 个）、doc tests；
+- `export`：`--features export` 的 938 个测试（含 19 个 `research` 测试）、一份真实快照被 pyarrow 26.0.0 / duckdb 2.0.0 读回（5 个文件的 §7.4 逻辑类型逐列相等，duckdb 聚合行数与 `min/max(trade_day)` 相符，`daily_raw` 的 3 行非 NULL `volume_quantum`），以及 release 构建；
+- `package`：发布包结构未变（导出命令尚未进发布包，见 §10.3 第 3 条）。
 
 ---
 
