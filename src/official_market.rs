@@ -276,6 +276,12 @@ impl TdxMarketSource {
     pub fn materialize_daily(&self, symbol: &str) -> Result<MarketDataBatch, SourceError> {
         self.materialize_session().materialize_daily(symbol)
     }
+
+    /// The 不复权 (raw) batch for one security; see
+    /// [`MaterializeSession::raw_batch`] (issue-383 §4.1).
+    pub fn raw_batch(&self, symbol: &str) -> Result<MarketDataBatch, SourceError> {
+        self.materialize_session().raw_batch(symbol)
+    }
 }
 
 /// A `.day` member read for binding: the resolved member name and the
@@ -443,14 +449,28 @@ impl MaterializeSession<'_> {
     /// member is re-read per symbol through the shared archive index while
     /// the verified gbbq member bytes are decoded once and shared.
     pub fn materialize_daily(&self, symbol: &str) -> Result<MarketDataBatch, SourceError> {
+        self.materialize_day(symbol, Adjustment::Forward)
+    }
+
+    /// The 不复权 (raw) series for one security: the `.day` OHLC values
+    /// themselves (fen, `price_scale=2`), with the #381-normalized
+    /// volume/amount and `r7_raw` promoted verbatim (issue-383 §4.1).
+    /// Shares the member read/CRC with [`Self::materialize_daily`]; the
+    /// pair path below reads the member once for both 口径.
+    pub fn raw_batch(&self, symbol: &str) -> Result<MarketDataBatch, SourceError> {
+        self.materialize_day(symbol, Adjustment::Raw)
+    }
+
+    /// Both 口径 of one security from a single member read: the raw batch
+    /// (the price fact) and the forward-adjusted batch derived from it
+    /// (issue-383 §9.1). The `.day` member bytes are read and CRC-verified
+    /// once, parsed once, and the gbbq event set is decoded once.
+    pub fn materialize_pair(
+        &self,
+        symbol: &str,
+    ) -> Result<(MarketDataBatch, MarketDataBatch), SourceError> {
+        let (market, code) = Self::split_symbol(symbol)?;
         let source = self.source;
-        let Some((market, code)) = symbol.split_once('.').filter(|(m, c)| {
-            matches!(*m, "sh" | "sz") && c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())
-        }) else {
-            return Err(SourceError::Unsupported(format!(
-                "unsupported symbol {symbol:?}; expected sh|sz + six digits"
-            )));
-        };
         let (day_member, day_bytes) =
             self.member_bytes(&source.day, &Self::day_names(market, code))?;
         let raw_bars = day_file::parse(&day_bytes)
@@ -461,17 +481,98 @@ impl MaterializeSession<'_> {
             ));
         }
         let (events, excluded) = self.security_events(market, code)?;
-        let bars = Self::qfq_bars(&raw_bars, events)?;
+        let raw = self.assemble_daily(
+            symbol,
+            DayMemberRead {
+                member: day_member.clone(),
+                sha256: crate::hash::sha256(&day_bytes),
+            },
+            Adjustment::Raw,
+            Self::raw_bars(&raw_bars)?,
+            events,
+            excluded,
+        )?;
+        let forward = self.assemble_daily(
+            symbol,
+            DayMemberRead {
+                member: day_member,
+                sha256: crate::hash::sha256(&day_bytes),
+            },
+            Adjustment::Forward,
+            Self::qfq_bars(&raw_bars, events)?,
+            events,
+            excluded,
+        )?;
+        Ok((raw, forward))
+    }
+
+    /// One 口径 through the ordinary single-symbol path.
+    fn materialize_day(
+        &self,
+        symbol: &str,
+        adjustment: Adjustment,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let (market, code) = Self::split_symbol(symbol)?;
+        let source = self.source;
+        let (day_member, day_bytes) =
+            self.member_bytes(&source.day, &Self::day_names(market, code))?;
+        let raw_bars = day_file::parse(&day_bytes)
+            .map_err(|e| SourceError::InvalidResponse(format!(".day member malformed: {e}")))?;
+        if raw_bars.is_empty() {
+            return Err(SourceError::InvalidResponse(
+                ".day member carries no records".into(),
+            ));
+        }
+        let (events, excluded) = self.security_events(market, code)?;
+        let bars = match adjustment {
+            Adjustment::Raw => Self::raw_bars(&raw_bars)?,
+            Adjustment::Forward => Self::qfq_bars(&raw_bars, events)?,
+        };
         self.assemble_daily(
             symbol,
             DayMemberRead {
                 member: day_member,
                 sha256: crate::hash::sha256(&day_bytes),
             },
+            adjustment,
             bars,
             events,
             excluded,
         )
+    }
+
+    /// `sh|sz` + six digits, the only supported official `.day` members.
+    fn split_symbol(symbol: &str) -> Result<(&str, &str), SourceError> {
+        symbol
+            .split_once('.')
+            .filter(|(m, c)| {
+                matches!(*m, "sh" | "sz") && c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())
+            })
+            .ok_or_else(|| {
+                SourceError::Unsupported(format!(
+                    "unsupported symbol {symbol:?}; expected sh|sz + six digits"
+                ))
+            })
+    }
+
+    /// Map verified-raw `.day` records to 不复权 bars: prices are the raw
+    /// fen integers as 2dp yuan with no transform; volume/amount come from
+    /// the same #381 decisions the forward series uses, so both 口径 carry
+    /// identical volume/amount (issue-383 §4.1, AC-M1-1).
+    fn raw_bars(raw_bars: &[crate::day_file::RawDayRecord]) -> Result<Vec<Bar>, SourceError> {
+        Ok(raw_bars
+            .iter()
+            .map(|raw| Bar {
+                date: raw.date,
+                open: Decimal::new(i64::from(raw.ohlc_raw[0]), 2),
+                high: Decimal::new(i64::from(raw.ohlc_raw[1]), 2),
+                low: Decimal::new(i64::from(raw.ohlc_raw[2]), 2),
+                close: Decimal::new(i64::from(raw.ohlc_raw[3]), 2),
+                volume: normalized_volume(raw),
+                amount: amount_decimal(raw.amount_float32_bits),
+                r7_raw: Some(raw.r7_raw),
+            })
+            .collect())
     }
 
     /// Map verified-raw `.day` records through the QFQ event chain into
@@ -518,6 +619,7 @@ impl MaterializeSession<'_> {
         &self,
         symbol: &str,
         day: DayMemberRead,
+        adjustment: Adjustment,
         bars: Vec<Bar>,
         events: &[gbbq::Event],
         excluded: usize,
@@ -554,15 +656,33 @@ impl MaterializeSession<'_> {
             archive_sha256: source.gbbq.sha256.clone(),
             member_sha256: security_events_digest(events, excluded),
         };
+        // Both 口径 share the member/event bindings and the coverage claim
+        // (one `.day` member, one event set); only the adjustment evidence
+        // and the prices differ (issue-383 §4.1).
+        let adjustment_evidence = match adjustment {
+            Adjustment::Raw => AdjustmentEvidence::confirmed(
+                Adjustment::Raw.as_str(),
+                format!(
+                    ".day OHLC promoted verbatim (fen, no adjustment); category==1 GBBQ events are not applied to raw prices ({excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}"
+                ),
+            ),
+            Adjustment::Forward => AdjustmentEvidence::confirmed(
+                Adjustment::Forward.as_str(),
+                format!(
+                    "qfq::forward_adjust over category==1 GBBQ affine chain ({} events, {excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}",
+                    events.len()
+                ),
+            ),
+        };
         Ok(MarketDataBatch {
             symbol: symbol.into(),
             period: Period::Day,
-            adjustment: Adjustment::Forward,
+            adjustment,
             bars,
             provenance: Provenance {
                 source: SOURCE_NAME.into(),
                 source_period: "day".into(),
-                source_adjustment: "qfq".into(),
+                source_adjustment: adjustment.as_str().into(),
                 symbol: symbol.into(),
                 acquired_at,
                 adapter_version: ADAPTER_VERSION.into(),
@@ -595,13 +715,7 @@ impl MaterializeSession<'_> {
                     ".day amount is f32 yuan; anchored by #239 TdxQuant oracle (37,288/37,345 within tolerance, PR #242); not adjustment-adjusted",
                 ),
             },
-            adjustment_evidence: AdjustmentEvidence::confirmed(
-                "qfq",
-                format!(
-                    "qfq::forward_adjust over category==1 GBBQ affine chain ({} events, {excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}",
-                    events.len()
-                ),
-            ),
+            adjustment_evidence,
         })
     }
 }
@@ -613,6 +727,7 @@ impl MarketDataPipeline for TdxMarketSource {
         adjustment: Adjustment,
     ) -> Result<MarketDataBatch, SourceError> {
         match adjustment {
+            Adjustment::Raw => Self::raw_batch(self, symbol),
             Adjustment::Forward => Self::materialize_daily(self, symbol),
         }
     }
@@ -978,6 +1093,7 @@ impl TdxRangeProvider<'_> {
                         member: day_member.clone(),
                         sha256: day_member_sha256.clone(),
                     },
+                    Adjustment::Forward,
                     base_window.to_vec(),
                     events,
                     excluded,
@@ -1029,6 +1145,7 @@ impl TdxRangeProvider<'_> {
                         member: day_member.clone(),
                         sha256: day_member_sha256.clone(),
                     },
+                    Adjustment::Forward,
                     segment_bars,
                     events,
                     excluded,
@@ -1232,6 +1349,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                         member: day_member.clone(),
                         sha256: day_member_sha256.clone(),
                     },
+                    Adjustment::Forward,
                     base.batch.bars.clone(),
                     events,
                     excluded,
@@ -1284,6 +1402,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                         member: day_member.clone(),
                         sha256: day_member_sha256.clone(),
                     },
+                    Adjustment::Forward,
                     bars,
                     events,
                     excluded,
