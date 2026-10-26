@@ -963,6 +963,7 @@ impl x_data_mcp::market_update::runner::RangeProvider for SyntheticRangeProvider
             batch,
             evidence,
             combined,
+            raw: None,
         })
     }
 }

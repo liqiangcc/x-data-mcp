@@ -115,6 +115,7 @@ pub trait RangeRepository: MarketRepository {
         _upserts: &[crate::market_data::Bar],
         _removes: &[chrono::NaiveDate],
         _expected: &[crate::market_data::Bar],
+        _raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Option<Receipt>, Error> {
         Ok(None)
     }
@@ -154,6 +155,7 @@ pub trait RangeRepository: MarketRepository {
         _removes: &[chrono::NaiveDate],
         _metadata: Option<&crate::market_update::TypedVersionMetadata>,
         _continuity_evidence: Option<&serde_json::Value>,
+        _raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Option<Receipt>, Error> {
         Ok(None)
     }
@@ -167,6 +169,7 @@ pub trait RangeRepository: MarketRepository {
         _base_version_id: &str,
         _range: &crate::market_update::DateRange,
         _continuity_evidence: Option<&serde_json::Value>,
+        _raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Option<Receipt>, Error> {
         Ok(None)
     }
@@ -202,6 +205,7 @@ pub trait RangeRepository: MarketRepository {
     -> Result<Vec<crate::market_storage::GapCovering>, Error>;
 }
 impl<R: MarketRepository> Publisher<R> {
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_range(
         &self,
         command: Publication,
@@ -209,6 +213,7 @@ impl<R: MarketRepository> Publisher<R> {
         range: &DateRange,
         evidence: &Evidence,
         combined: Option<&super::runner::CombinedCandidate>,
+        raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Preparation, Error> {
         if command.publication_id.trim().is_empty()
             || command.intent
@@ -239,6 +244,7 @@ impl<R: MarketRepository> Publisher<R> {
                     required_heads: vec![(Scope::of(base.version()), Some(version_id))],
                     promote: None,
                     base_digest: None,
+                    raw: raw.cloned(),
                 };
                 let mut binding = self
                     .repository
@@ -340,7 +346,8 @@ impl<R: MarketRepository> Publisher<R> {
                         }
                     }
                 }
-                let plan = self.prepare(command)?;
+                let mut plan = self.prepare(command)?;
+                plan.raw = raw.cloned();
                 if plan.record.raw() != candidate.raw() {
                     return Err(Error::Integrity(
                         "combined candidate changed during approval".into(),

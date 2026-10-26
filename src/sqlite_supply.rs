@@ -2066,6 +2066,7 @@ fn task_facts_series(
     type Row = (
         String,
         i64,
+        i64,
         String,
         i64,
         String,
@@ -2077,7 +2078,7 @@ fn task_facts_series(
     );
     let events: Vec<Row> = c
         .prepare(
-            "SELECT entity,period,kind,outcome,item_id,result_id,old_content_digest,new_content_digest,base_content_digest,created_at FROM market_events WHERE task_id=?1 ORDER BY seq",
+            "SELECT entity,period,adjustment,kind,outcome,item_id,result_id,old_content_digest,new_content_digest,base_content_digest,created_at FROM market_events WHERE task_id=?1 ORDER BY seq",
         )
         .map_err(storage)?
         .query_map([s.task.task_id.as_str()], |r| {
@@ -2092,6 +2093,7 @@ fn task_facts_series(
                 r.get(7)?,
                 r.get(8)?,
                 r.get(9)?,
+                r.get(10)?,
             ))
         })
         .map_err(storage)?
@@ -2110,7 +2112,15 @@ fn task_facts_series(
     // no base version to express as a RangeExecutionResult, but the event
     // itself still evidences the item, so the evidenced set is item-level.
     let mut evidenced_items: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for (entity, period, kind, outcome, item_id, result_id, old, new, base, created) in events {
+    for (entity, period, adjustment, kind, outcome, item_id, result_id, old, new, base, created) in
+        events
+    {
+        // The MCP task surface projects the forward 口径 only: the raw event
+        // is the same item's internal audit, not a second item result
+        // (issue-383 §9.1; AC-M1-10 keeps the wire shape unchanged).
+        if period == 1 && adjustment != crate::market_data::Adjustment::Forward.code() {
+            continue;
+        }
         evidenced_items.insert(item_id.clone());
         let e = crate::data_supply::observe::entity(&entity)
             .ok_or_else(|| Error::Integrity("event entity is not a security".into()))?;

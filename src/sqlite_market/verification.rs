@@ -252,9 +252,12 @@ fn read_facts_series(
         evidence_digest,
     ) in &rows
     {
+        // One item audits one event per 口径 (schema 22): a daily item has a
+        // raw and a forward event, so the duplicate probe is per
+        // (item, adjustment), not per item (issue-383 §3.4).
         if (period == &1) != daily
             || !task.items.iter().any(|i| &i.spec.item_id == item)
-            || found.contains_key(item.as_str())
+            || found.contains_key(&(item.clone(), *adjustment_code))
         {
             return Err(integrity(
                 "publication result contract/item association differs",
@@ -334,7 +337,7 @@ fn read_facts_series(
             }
         }
         found.insert(
-            item.clone(),
+            (item.clone(), *adjustment_code),
             Evidence::Committed {
                 evidence_sha256: super::compact_repo::hex_bytes(&digest),
                 receipt: crate::market_storage::Receipt {
@@ -349,8 +352,20 @@ fn read_facts_series(
     }
     let mut items = Vec::new();
     for item in &task.items {
-        let evidence = found
-            .remove(&item.spec.item_id)
+        // The item's publication evidence is its MCP-visible forward event;
+        // the raw event is internal audit and never a separate item result.
+        let forward = found.remove(&(
+            item.spec.item_id.clone(),
+            crate::market_data::Adjustment::Forward.code(),
+        ));
+        let evidence = forward
+            .or_else(|| {
+                let key = found
+                    .keys()
+                    .find(|(item_id, _)| *item_id == item.spec.item_id)
+                    .cloned();
+                key.and_then(|key| found.remove(&key))
+            })
             .unwrap_or(Evidence::Missing);
         if matches!(evidence, Evidence::Missing)
             && (item.stage == Stage::Finished && item.outcome.as_ref().is_some_and(|o| o.success))

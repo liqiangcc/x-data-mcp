@@ -287,6 +287,37 @@ pub struct Provenance {
     #[serde(default)]
     pub snapshot_inputs: Option<Vec<SnapshotInputBinding>>,
 }
+/// The 不复权 side of one daily item's write set: the raw series is the
+/// source price fact and the forward series is derived from it, so both are
+/// committed in one transaction with one event each (issue-383 §9.1).
+///
+/// The commit aligns `bars` to the dates the forward side actually writes:
+/// the raw series always covers exactly the forward series' date range.
+/// A forward rewrite caused by a corporate action therefore resolves to a
+/// raw `no_change` by content digest, which is the intended asymmetry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawBatch {
+    /// Raw bars for the forward side's written dates: the tail for an
+    /// append, the full history for a first publish/replace, empty for a
+    /// no-change.
+    pub bars: Vec<Bar>,
+    /// Raw 口径 evidence (`value == "raw"`) the raw version evidence uses.
+    pub adjustment_evidence: AdjustmentEvidence,
+}
+
+impl RawBatch {
+    pub fn new(bars: Vec<Bar>, adjustment_evidence: AdjustmentEvidence) -> Self {
+        Self {
+            bars,
+            adjustment_evidence,
+        }
+    }
+
+    pub fn no_change(adjustment_evidence: AdjustmentEvidence) -> Self {
+        Self::new(Vec::new(), adjustment_evidence)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataBatch {
     pub symbol: String,

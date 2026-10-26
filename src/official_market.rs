@@ -108,6 +108,17 @@ fn normalized_volume(record: &day_file::RawDayRecord) -> Option<Decimal> {
     }
 }
 
+/// Raw 口径 evidence: the `.day` prices are the fact itself; category-1
+/// GBBQ events are recorded but never applied to them (issue-383 §4.1).
+fn raw_adjustment_evidence(excluded: usize) -> AdjustmentEvidence {
+    AdjustmentEvidence::confirmed(
+        Adjustment::Raw.as_str(),
+        format!(
+            ".day OHLC promoted verbatim (fen, no adjustment); category==1 GBBQ events are not applied to raw prices ({excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}"
+        ),
+    )
+}
+
 /// `low <= amount / (volume * 100) <= high` over raw `.day` values: does the
 /// recorded amount buy exactly `volume` hands at a price inside the day's
 /// own range? Zero volume/amount makes the ratio undefined, which is not a
@@ -660,12 +671,7 @@ impl MaterializeSession<'_> {
         // (one `.day` member, one event set); only the adjustment evidence
         // and the prices differ (issue-383 §4.1).
         let adjustment_evidence = match adjustment {
-            Adjustment::Raw => AdjustmentEvidence::confirmed(
-                Adjustment::Raw.as_str(),
-                format!(
-                    ".day OHLC promoted verbatim (fen, no adjustment); category==1 GBBQ events are not applied to raw prices ({excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}"
-                ),
-            ),
+            Adjustment::Raw => raw_adjustment_evidence(excluded),
             Adjustment::Forward => AdjustmentEvidence::confirmed(
                 Adjustment::Forward.as_str(),
                 format!(
@@ -1124,10 +1130,16 @@ impl TdxRangeProvider<'_> {
                         crate::market_update::candidate_digest(&segment)
                             .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
                     )?,
+                    // No raw content change; a metadata-only generation move
+                    // still reaches the raw series through the forward side.
+                    raw: Some(crate::market_data::RawBatch::no_change(
+                        raw_adjustment_evidence(excluded),
+                    )),
                 }))
             }
             Continuity::Append { tail, .. } => {
                 let tail_bars = MaterializeSession::qfq_bars(&tail, events)?;
+                let raw_tail = MaterializeSession::raw_bars(&tail)?;
                 let all_tail_in_range = tail_bars
                     .iter()
                     .all(|bar| range.start <= bar.date && bar.date <= range.end);
@@ -1202,6 +1214,10 @@ impl TdxRangeProvider<'_> {
                 {
                     return Ok(None);
                 }
+                // The commit aligns the raw tail to the forward upsert dates;
+                // an empty forward decision leaves the raw series unchanged.
+                let raw =
+                    crate::market_data::RawBatch::new(raw_tail, raw_adjustment_evidence(excluded));
                 Ok(Some(crate::market_update::runner::TypedAcquisition {
                     decision: if upserts.is_empty() {
                         crate::market_update::runner::TypedDecision::Unchanged
@@ -1215,6 +1231,7 @@ impl TdxRangeProvider<'_> {
                         crate::market_update::candidate_digest(&segment)
                             .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
                     )?,
+                    raw: Some(raw),
                 }))
             }
         }
@@ -1274,6 +1291,9 @@ impl RangeProvider for FabricatedAppendProvider<'_> {
             upserts: vec![upsert.clone()],
             metadata: None,
         };
+        // The fabricated bar has no `.day` raw counterpart; the harness
+        // measures the forward append path only.
+        acquired.raw = None;
         if let Some(continuity) = acquired.evidence.continuity.as_mut() {
             continuity.mode = "append".into();
         }
@@ -1341,7 +1361,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
         // identical to the base's materialization input, so the base's
         // stored bars are reused verbatim; only the tail is adjusted.
         // `unverified` pays the full materialize as before.
-        let (batch, combined) = match continuity {
+        let (batch, combined, raw) = match continuity {
             Continuity::Unchanged { .. } => {
                 let mut batch = self.session.assemble_daily(
                     &symbol,
@@ -1391,11 +1411,16 @@ impl RangeProvider for TdxRangeProvider<'_> {
                         false,
                     )?)
                 };
-                (segment, combined)
+                (
+                    segment,
+                    combined,
+                    crate::market_data::RawBatch::no_change(raw_adjustment_evidence(excluded)),
+                )
             }
             Continuity::Append { tail, .. } => {
                 let mut bars = base.batch.bars.clone();
                 bars.extend(MaterializeSession::qfq_bars(&tail, events)?);
+                let raw_tail = MaterializeSession::raw_bars(&tail)?;
                 let batch = self.session.assemble_daily(
                     &symbol,
                     DayMemberRead {
@@ -1432,11 +1457,25 @@ impl RangeProvider for TdxRangeProvider<'_> {
                 {
                     let mut segment = segment;
                     segment.coverage = base.batch.coverage.clone();
-                    (segment, None)
+                    (
+                        segment,
+                        None,
+                        crate::market_data::RawBatch::new(
+                            raw_tail,
+                            raw_adjustment_evidence(excluded),
+                        ),
+                    )
                 } else {
                     let combined =
                         self.combined_candidate(&ctx, base, &batch, &segment, merged, false)?;
-                    (segment, Some(combined))
+                    (
+                        segment,
+                        Some(combined),
+                        crate::market_data::RawBatch::new(
+                            raw_tail,
+                            raw_adjustment_evidence(excluded),
+                        ),
+                    )
                 }
             }
             Continuity::Unverified => {
@@ -1446,7 +1485,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                 // as a combined rewrite candidate (evidence mode `full`);
                 // `prepare_range` binds it by requiring every acquired
                 // segment bar verbatim and every base date still present.
-                let full_batch = self.session.materialize_daily(&symbol)?;
+                let (full_raw, full_batch) = self.session.materialize_pair(&symbol)?;
                 let mut segment = full_batch.clone();
                 segment
                     .bars
@@ -1464,7 +1503,11 @@ impl RangeProvider for TdxRangeProvider<'_> {
                     full_batch.bars.clone(),
                     true,
                 )?;
-                (segment, Some(combined))
+                (
+                    segment,
+                    Some(combined),
+                    crate::market_data::RawBatch::new(full_raw.bars, full_raw.adjustment_evidence),
+                )
             }
         };
         let gbbq_member_sha256 = self.session.decoded_gbbq()?.sha256.clone();
@@ -1493,6 +1536,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
             },
             batch,
             combined,
+            raw: Some(raw),
         })
     }
     fn acquire_typed(
@@ -1658,7 +1702,9 @@ fn acquire_merged_segment(
     revision_ref: Option<String>,
 ) -> Result<Acquisition, SourceError> {
     let source = session.source();
-    let batch = session.materialize_daily(&base.version().symbol)?;
+    // One member read yields both 口径; the raw side mirrors the forward
+    // bars' dates (issue-383 §9.1).
+    let (raw_batch, batch) = session.materialize_pair(&base.version().symbol)?;
     // Same pinned snapshot = same QFQ basis: the base's declared
     // snapshot inputs must equal the member/archive digests this
     // installed source actually read.
@@ -1739,6 +1785,10 @@ fn acquire_merged_segment(
             // updates only.
             continuity: None,
         },
+        raw: Some(crate::market_data::RawBatch::new(
+            raw_batch.bars,
+            raw_batch.adjustment_evidence,
+        )),
         combined: Some(CombinedCandidate {
             evidence: CombinedEvidence {
                 base_integrity_sha256: base_integrity,
@@ -1858,6 +1908,9 @@ pub struct CollectionCandidate {
     pub day_member_sha256: String,
     pub security_event_sha256: String,
     pub generation_evidence: Value,
+    /// The 不复权 side committed in the same transaction (issue-383 §9.1);
+    /// `None` only for fixtures that do not model the raw series.
+    pub raw: Option<crate::market_data::RawBatch>,
 }
 
 /// Repository surface for collection publication: generic commit plus the
@@ -2172,9 +2225,9 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 "existing daily head requires the update_data range path".into(),
             ));
         }
-        let batch = match self.session {
-            Some(session) => session.materialize_daily(symbol),
-            None => self.source.materialize_daily(symbol),
+        let (raw_batch, batch) = match self.session {
+            Some(session) => session.materialize_pair(symbol),
+            None => self.source.materialize_session().materialize_pair(symbol),
         }
         .map_err(|e| Error::Invalid(e.to_string()))?;
         let id = crate::hash::sha256(serde_json::json!([task_id, item_id]).to_string().as_bytes());
@@ -2211,6 +2264,10 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 "manifest_sha256": self.source.manifest_sha256(),
                 "snapshot_inputs": inputs,
             }),
+            raw: Some(crate::market_data::RawBatch::new(
+                raw_batch.bars,
+                raw_batch.adjustment_evidence,
+            )),
         }))
     }
 
@@ -2237,9 +2294,9 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 "existing daily head requires the update_data range path".into(),
             ));
         }
-        let batch = match self.session {
-            Some(session) => session.materialize_daily(symbol),
-            None => self.source.materialize_daily(symbol),
+        let (raw_batch, batch) = match self.session {
+            Some(session) => session.materialize_pair(symbol),
+            None => self.source.materialize_session().materialize_pair(symbol),
         }
         .map_err(|e| Error::Invalid(e.to_string()))?;
         let current = self.repository.task_head(&binding.head.task_id)?;
@@ -2278,7 +2335,7 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 .map_err(|e| Error::Integrity(e.to_string()))?,
         );
         self.repository.stage(&raw)?;
-        let plan = (Publisher {
+        let mut plan = (Publisher {
             repository: self.repository.clone(),
         })
         .prepare(Publication {
@@ -2292,6 +2349,10 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 expected_head: None,
             },
         })?;
+        plan.raw = Some(crate::market_data::RawBatch::new(
+            raw_batch.bars,
+            raw_batch.adjustment_evidence,
+        ));
         self.repository.commit(&plan)
     }
 }

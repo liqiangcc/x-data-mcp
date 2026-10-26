@@ -661,6 +661,7 @@ fn seed_daily_heads(r: &Rig, symbols: &[String]) {
                         "member_sha256": "cd".repeat(32),
                     }],
                 }),
+                raw: None,
             });
         }
         for res in backend
@@ -1019,6 +1020,7 @@ impl x_data_mcp::market_update::runner::RangeProvider for UnchangedProvider {
                 revision_ref: None,
                 continuity: None,
             },
+            raw: None,
         }))
     }
 }
@@ -1697,6 +1699,7 @@ impl x_data_mcp::market_update::runner::RangeProvider for AppendProvider {
                 revision_ref: None,
                 continuity: None,
             },
+            raw: None,
         }))
     }
 }

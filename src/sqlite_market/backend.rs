@@ -379,6 +379,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
         removes: &[chrono::NaiveDate],
         metadata: Option<&crate::market_update::TypedVersionMetadata>,
         continuity_evidence: Option<&serde_json::Value>,
+        raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Option<Receipt>, Error> {
         match self {
             Self::Legacy(m) => {
@@ -391,6 +392,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
                     removes,
                     metadata,
                     continuity_evidence,
+                    raw,
                 )
             }
             Self::Compact(m) => {
@@ -403,6 +405,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
                     removes,
                     metadata,
                     continuity_evidence,
+                    raw,
                 )
             }
         }
@@ -413,6 +416,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
         base_version_id: &str,
         range: &crate::market_update::DateRange,
         continuity_evidence: Option<&serde_json::Value>,
+        raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Option<Receipt>, Error> {
         match self {
             Self::Legacy(m) => {
@@ -422,6 +426,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
                     base_version_id,
                     range,
                     continuity_evidence,
+                    raw,
                 )
             }
             Self::Compact(m) => {
@@ -431,6 +436,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
                     base_version_id,
                     range,
                     continuity_evidence,
+                    raw,
                 )
             }
         }

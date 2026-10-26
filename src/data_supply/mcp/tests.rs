@@ -368,6 +368,7 @@ fn publish_daily(
             required_heads: vec![(scope.clone(), base.map(String::from))],
             promote: Some(scope),
             base_digest: None,
+            raw: None,
         })
         .unwrap()
 }
@@ -420,6 +421,7 @@ fn commit_yearly_plan(
             required_heads: vec![],
             promote: None,
             base_digest: None,
+            raw: None,
         },
         base,
         prior: prior.map(|id| checked_of(&stored_year_version(fixture, symbol, &id))),

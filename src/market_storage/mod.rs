@@ -93,6 +93,9 @@ pub struct PublishPlan {
     pub(crate) required_heads: Vec<(Scope, Option<String>)>,
     pub(crate) promote: Option<Scope>,
     pub(crate) base_digest: Option<String>,
+    /// The 不复权 side of a daily item commit (issue-383 §9.1). `None` on
+    /// yearly/legacy plans and on callers that do not carry the raw batch.
+    pub(crate) raw: Option<crate::market_data::RawBatch>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Receipt {
@@ -478,6 +481,7 @@ impl<R: MarketRepository> Publisher<R> {
             required_heads,
             promote,
             base_digest: None,
+            raw: None,
         };
         if let Some(lineage) = &plan.record.version.yearly_derivation {
             // Facts + memoized/windowed validation: the runner's derivation

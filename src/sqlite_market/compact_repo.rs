@@ -598,7 +598,7 @@ fn metadata_fields(
 }
 
 /// `commit_range_ops`/`commit_range_ops_typed` share one body: classify
-/// the diff into append vs replace, then one `commit_series_tx`.
+/// the diff into append vs replace, then one paired item commit.
 #[allow(clippy::too_many_arguments)]
 fn commit_ops(
     c: &Connection,
@@ -610,6 +610,7 @@ fn commit_ops(
     expected: Option<&[Bar]>,
     metadata: Option<&crate::market_update::TypedVersionMetadata>,
     continuity_evidence: Option<&Value>,
+    raw: Option<&crate::market_data::RawBatch>,
 ) -> Result<Receipt, Error> {
     // Replay wins over the head CAS: an already-committed result id must
     // replay its receipt even after the head moved on. Identity mismatch
@@ -676,7 +677,7 @@ fn commit_ops(
         ),
     )?;
     let metadata_changed = new_binding.is_some() || new_evidence.is_some();
-    series_commit::commit_series_tx(
+    series_commit::commit_item_tx(
         c,
         &series_commit::Commit {
             result_id: &command.publication_id,
@@ -687,6 +688,7 @@ fn commit_ops(
             expected_task_revision: command.expected_revision,
             entity: &scope.symbol,
             period: scope.period,
+            adjustment: crate::market_data::Adjustment::Forward,
             base_version_id: Some(base_version_id),
             change,
             range_start_day: upserts
@@ -712,6 +714,7 @@ fn commit_ops(
             staged_version_id: Some(command.version_id.as_str()),
             defer_task_row: false,
         },
+        raw,
     )
 }
 
@@ -898,7 +901,7 @@ fn commit_plan(
             ),
         )?,
     };
-    let receipt = series_commit::commit_series_tx(
+    let receipt = series_commit::commit_item_tx(
         c,
         &series_commit::Commit {
             result_id: &command.publication_id,
@@ -909,6 +912,7 @@ fn commit_plan(
             expected_task_revision: command.expected_revision,
             entity: &scope.symbol,
             period: scope.period,
+            adjustment: crate::market_data::Adjustment::Forward,
             base_version_id,
             change,
             range_start_day: range_start,
@@ -936,6 +940,7 @@ fn commit_plan(
             staged_version_id: Some(command.version_id.as_str()),
             defer_task_row: false,
         },
+        plan.raw.as_ref(),
     )?;
     Ok(receipt)
 }
@@ -965,7 +970,7 @@ fn commit_plan_no_change(
         .ok_or_else(|| invalid("no-change audit lacks a range"))?;
     let head = series::read_series(c, &scope.symbol, scope.period)?.ok_or(Error::NotFound)?;
     let window_bars = series::bars_in_range(c, head.series_key, range_start, range_end)?;
-    series_commit::commit_series_tx(
+    series_commit::commit_item_tx(
         c,
         &series_commit::Commit {
             result_id: &command.publication_id,
@@ -976,6 +981,7 @@ fn commit_plan_no_change(
             expected_task_revision: command.expected_revision,
             entity: &scope.symbol,
             period: scope.period,
+            adjustment: crate::market_data::Adjustment::Forward,
             base_version_id: Some(base_id),
             change: series_commit::SeriesChange::NoChange,
             range_start_day: range_start,
@@ -993,6 +999,7 @@ fn commit_plan_no_change(
             staged_version_id: Some(command.version_id.as_str()),
             defer_task_row: false,
         },
+        plan.raw.as_ref(),
     )
 }
 
@@ -1093,6 +1100,7 @@ impl RangeRepository for SqliteCompactMarket {
         upserts: &[Bar],
         removes: &[NaiveDate],
         expected: &[Bar],
+        raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Option<Receipt>, Error> {
         self.write(|c| {
             let tx = c
@@ -1108,6 +1116,7 @@ impl RangeRepository for SqliteCompactMarket {
                 Some(expected),
                 None,
                 None,
+                raw,
             )?;
             tx.commit()
                 .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
@@ -1137,6 +1146,7 @@ impl RangeRepository for SqliteCompactMarket {
         removes: &[NaiveDate],
         metadata: Option<&crate::market_update::TypedVersionMetadata>,
         continuity_evidence: Option<&Value>,
+        raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Option<Receipt>, Error> {
         self.write(|c| {
             let tx = c
@@ -1152,6 +1162,7 @@ impl RangeRepository for SqliteCompactMarket {
                 None,
                 metadata,
                 continuity_evidence,
+                raw,
             )?;
             tx.commit()
                 .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
@@ -1164,6 +1175,7 @@ impl RangeRepository for SqliteCompactMarket {
         base_version_id: &str,
         range: &crate::market_update::DateRange,
         continuity_evidence: Option<&Value>,
+        raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Option<Receipt>, Error> {
         self.write(|c| {
             let tx = c
@@ -1191,7 +1203,7 @@ impl RangeRepository for SqliteCompactMarket {
                     continuity_evidence,
                 ),
             )?;
-            let receipt = series_commit::commit_series_tx(
+            let receipt = series_commit::commit_item_tx(
                 &tx,
                 &series_commit::Commit {
                     result_id: &command.publication_id,
@@ -1202,6 +1214,7 @@ impl RangeRepository for SqliteCompactMarket {
                     expected_task_revision: command.expected_revision,
                     entity: &scope.symbol,
                     period: scope.period,
+                    adjustment: crate::market_data::Adjustment::Forward,
                     base_version_id: Some(base_version_id),
                     change: series_commit::SeriesChange::NoChange,
                     range_start_day: compact_market::epoch_day(range.start),
@@ -1217,6 +1230,7 @@ impl RangeRepository for SqliteCompactMarket {
                     staged_version_id: None,
                     defer_task_row: false,
                 },
+                raw,
             )?;
             tx.commit()
                 .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
@@ -1546,6 +1560,7 @@ fn update_batch_item(
                 range_start_day,
                 range_end_day,
                 continuity,
+                raw,
             } => {
                 let head = series::read_series_by_version_id(c, base_version_id)?
                     .ok_or(Error::NotFound)?;
@@ -1561,7 +1576,7 @@ fn update_batch_item(
                         Some(continuity),
                     ),
                 )?;
-                series_commit::commit_series_tx(
+                series_commit::commit_item_tx(
                     c,
                     &series_commit::Commit {
                         result_id: &item.publication_id,
@@ -1572,6 +1587,7 @@ fn update_batch_item(
                         expected_task_revision: expected_revision,
                         entity: &item.symbol,
                         period: Period::Day,
+                        adjustment: crate::market_data::Adjustment::Forward,
                         base_version_id: Some(base_version_id),
                         change: series_commit::SeriesChange::NoChange,
                         range_start_day: *range_start_day,
@@ -1587,6 +1603,7 @@ fn update_batch_item(
                         staged_version_id: None,
                         defer_task_row: true,
                     },
+                    raw.as_ref(),
                 )
             }
             crate::market_update::UpdateBatchPrepared::Append {
@@ -1595,6 +1612,7 @@ fn update_batch_item(
                 upserts,
                 metadata,
                 continuity,
+                raw,
             } => {
                 let head = series::read_series_by_version_id(c, base_version_id)?
                     .ok_or(Error::NotFound)?;
@@ -1612,7 +1630,7 @@ fn update_batch_item(
                         Some(continuity),
                     ),
                 )?;
-                series_commit::commit_series_tx(
+                series_commit::commit_item_tx(
                     c,
                     &series_commit::Commit {
                         result_id: &item.publication_id,
@@ -1623,6 +1641,7 @@ fn update_batch_item(
                         expected_task_revision: expected_revision,
                         entity: &item.symbol,
                         period: Period::Day,
+                        adjustment: crate::market_data::Adjustment::Forward,
                         base_version_id: Some(base_version_id),
                         change: series_commit::SeriesChange::Append {
                             upserts: compact_upserts.as_slice(),
@@ -1648,6 +1667,7 @@ fn update_batch_item(
                         staged_version_id,
                         defer_task_row: true,
                     },
+                    raw.as_ref(),
                 )
             }
         })();
@@ -2025,7 +2045,7 @@ fn collection_item_commit(
         symbol: item.symbol.clone(),
         period: Period::Day,
     };
-    series_commit::commit_series_tx(
+    series_commit::commit_item_tx(
         c,
         &series_commit::Commit {
             result_id: &item.publication_id,
@@ -2036,6 +2056,7 @@ fn collection_item_commit(
             expected_task_revision: expected_revision,
             entity: &item.symbol,
             period: Period::Day,
+            adjustment: crate::market_data::Adjustment::Forward,
             base_version_id: None,
             change: series_commit::SeriesChange::FirstPublish { bars: &bars },
             range_start_day: bars[0].trade_day,
@@ -2051,6 +2072,7 @@ fn collection_item_commit(
             staged_version_id: Some(item.version_id.as_str()),
             defer_task_row: true,
         },
+        item.raw.as_ref(),
     )
 }
 
@@ -2149,6 +2171,7 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                 expected_task_revision: command.expected_revision,
                 entity: &v.symbol,
                 period: Period::Year,
+                adjustment: crate::market_data::Adjustment::Forward,
                 base_version_id: plan.prior.as_ref().map(|p| p.version().version_id.as_str()),
                 change: series_commit::SeriesChange::Yearly {
                     upserts: &bars,

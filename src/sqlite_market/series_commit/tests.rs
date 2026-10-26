@@ -267,6 +267,7 @@ fn publish_bars(
         required_heads: vec![(scope(), None)],
         promote: Some(scope()),
         base_digest: None,
+        raw: None,
     };
     repo.commit(&plan).unwrap()
 }
@@ -338,6 +339,7 @@ fn append_then_replace_fold_equivalence() {
             &upserts,
             &[],
             &expected,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -369,6 +371,7 @@ fn append_then_replace_fold_equivalence() {
             &[bar(0, 200)],
             &[date(1), date(2)],
             &new_content,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -519,6 +522,7 @@ fn append_duplicate_day_fails_closed() {
             &[],
             None,
             None,
+            None,
         )
         .unwrap_err();
     assert!(
@@ -596,11 +600,11 @@ fn no_change_replays_idempotently() {
     };
     let cmd = command_at(&task_id, "pub-2", rev2, "item-2");
     let r1 = repo
-        .commit_range_no_change_typed(&cmd, &first.version_id, &range, None)
+        .commit_range_no_change_typed(&cmd, &first.version_id, &range, None, None)
         .unwrap()
         .unwrap();
     let r2 = repo
-        .commit_range_no_change_typed(&cmd, &first.version_id, &range, None)
+        .commit_range_no_change_typed(&cmd, &first.version_id, &range, None, None)
         .unwrap()
         .unwrap();
     assert_eq!(r1, r2);
@@ -641,6 +645,7 @@ fn stale_base_version_fails_closed() {
         &[bar(1, 110)],
         &[],
         &[bar(0, 100), bar(1, 110)],
+        None,
     )
     .unwrap()
     .unwrap();
@@ -655,6 +660,7 @@ fn stale_base_version_fails_closed() {
             &[bar(2, 120)],
             &[],
             &[bar(0, 100), bar(1, 110), bar(2, 120)],
+            None,
         )
         .unwrap_err();
     assert!(matches!(err, Error::Stale(_)), "{err:?}");
@@ -707,6 +713,7 @@ fn replace_rollback_keeps_series_consistent() {
                 expected_task_revision: rev2,
                 entity: SYMBOL,
                 period: Period::Day,
+                adjustment: Adjustment::Forward,
                 base_version_id: Some(&first.version_id),
                 change: SeriesChange::Replace { bars: &new_bars },
                 range_start_day: 0,
@@ -751,6 +758,7 @@ fn replace_rollback_keeps_series_consistent() {
             &[bar(1, 110)],
             &[],
             &[bar(0, 100), bar(1, 110)],
+            None,
         )
         .unwrap()
         .unwrap();
@@ -809,6 +817,7 @@ fn read_snapshot_isolated_from_concurrent_append() {
         &[bar(1, 110)],
         &[],
         &[bar(0, 100), bar(1, 110)],
+        None,
     )
     .unwrap()
     .unwrap();
@@ -884,6 +893,7 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             &[],
             Some(&metadata),
             None,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -916,6 +926,7 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             &[],
             Some(&bad_source),
             None,
+            None,
         )
         .expect_err("source drift must be rejected");
     assert!(
@@ -937,6 +948,7 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             &[],
             Some(&bad_adj),
             None,
+            None,
         )
         .expect_err("adjustment drift must be rejected");
     assert!(
@@ -957,6 +969,7 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             &[bar(4, 140)],
             &[],
             Some(&bad_units),
+            None,
             None,
         )
         .expect_err("unit drift must be rejected");
@@ -981,6 +994,7 @@ fn typed_append_rebinds_generation_metadata_and_rejects_drift() {
             &[bar(4, 140)],
             &[],
             Some(&bad_cov),
+            None,
             None,
         )
         .expect_err("non-complete coverage must be rejected");
@@ -1026,6 +1040,7 @@ fn collection_rejects_unconfirmed_unit_evidence_and_existing_series() {
             day_member_sha256: "0c".repeat(32),
             security_event_sha256: "0e".repeat(32),
             generation_evidence: generation_evidence(),
+            raw: None,
         }
     }
 
@@ -1135,6 +1150,7 @@ fn update_batch_commit_mixed_isolation_and_rollback() {
                 upserts: vec![bar(2, 120)],
                 metadata: None,
                 continuity: json!({"proven": true}),
+                raw: None,
             },
         },
         UpdateBatchItem {
@@ -1151,6 +1167,7 @@ fn update_batch_commit_mixed_isolation_and_rollback() {
                 upserts: vec![bar(3, 130)],
                 metadata: None,
                 continuity: json!({"proven": true}),
+                raw: None,
             },
         },
     ];
@@ -1212,6 +1229,7 @@ fn typed_and_envelope_paths_store_identical_series_bytes() {
         day_member_sha256: "0c".repeat(32),
         security_event_sha256: "0e".repeat(32),
         generation_evidence: generation_evidence(),
+        raw: None,
     };
     let out = repo_b
         .commit_collection_batch(&task_b, &[item])
@@ -1274,6 +1292,7 @@ fn ops_result_id_replay_identity_conflict_and_no_change_purity() {
             &[bar(2, 120)],
             &[],
             &[bar(0, 100), bar(1, 110), bar(2, 120)],
+            None,
         )
         .unwrap()
         .unwrap();
@@ -1286,6 +1305,7 @@ fn ops_result_id_replay_identity_conflict_and_no_change_purity() {
             &[bar(2, 120)],
             &[],
             &[bar(0, 100), bar(1, 110), bar(2, 120)],
+            None,
         )
         .unwrap()
         .unwrap();
@@ -1310,6 +1330,7 @@ fn ops_result_id_replay_identity_conflict_and_no_change_purity() {
             &[bar(3, 130)],
             &[],
             &[bar(0, 100), bar(1, 110), bar(2, 120), bar(3, 130)],
+            None,
         )
         .expect_err("same result id on a different task must conflict");
     assert!(
@@ -1328,6 +1349,7 @@ fn ops_result_id_replay_identity_conflict_and_no_change_purity() {
             &command_at(&task_id, "pub-nc", rev3, "item-3"),
             &append.version_id,
             &range,
+            None,
             None,
         )
         .unwrap()
@@ -1362,6 +1384,7 @@ fn check_binding_rejects_wrong_owner_state_target_and_occupancy() {
             expected_task_revision: 1,
             entity: symbol,
             period: Period::Day,
+            adjustment: Adjustment::Forward,
             base_version_id: None,
             change: SeriesChange::FirstPublish { bars: &[] },
             range_start_day: 0,
@@ -1477,6 +1500,7 @@ fn typed_append_base_coverage_parity_with_envelope_bytes() {
             &[],
             Some(&metadata),
             None,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -1530,6 +1554,7 @@ fn second_commit_on_same_item_fails_closed() {
             &[bar(1, 110)],
             &[],
             &[bar(0, 100), bar(1, 110)],
+            None,
         )
         .expect_err("finished item must reject a second result");
     assert!(
@@ -1582,6 +1607,7 @@ fn replace_with_constraint_violating_bar_rolls_back_fully() {
             &[],
             &[],
             &expected_bad,
+            None,
         )
         .expect_err("CHECK-violating replace must fail");
 
@@ -1618,6 +1644,7 @@ fn replace_with_constraint_violating_bar_rolls_back_fully() {
             &[],
             &[],
             &[bar(0, 200), bar(1, 210), bar(2, 220)],
+            None,
         )
         .unwrap()
         .unwrap();
@@ -1677,6 +1704,7 @@ fn metadata_commit_updates_updated_at_no_change_does_not() {
         &first.version_id,
         &range,
         None,
+        None,
     )
     .unwrap();
     let after_nc: String = c
@@ -1714,6 +1742,7 @@ fn metadata_commit_updates_updated_at_no_change_does_not() {
                 expected_task_revision: rev3,
                 entity: SYMBOL,
                 period: Period::Day,
+                adjustment: Adjustment::Forward,
                 base_version_id: Some(first.version_id.as_str()),
                 change: SeriesChange::Metadata,
                 range_start_day: head.first_day,
@@ -1930,6 +1959,7 @@ fn yearly_first_publish_creates_series_lineage_and_event() {
                     expected_task_revision: y_rev,
                     entity: SYMBOL,
                     period: Period::Year,
+                    adjustment: Adjustment::Forward,
                     base_version_id: None,
                     change: SeriesChange::Yearly {
                         upserts: &[ybar(2020, 100)],
@@ -2121,6 +2151,7 @@ fn commit_yearly_plan(
             required_heads: vec![],
             promote: None,
             base_digest: None,
+            raw: None,
         },
         base: base.clone(),
         prior,
@@ -2257,6 +2288,7 @@ fn yearly_no_change_advances_lineage_base() {
             &[bar(2, 120)],
             &[],
             &[bar(0, 100), bar(1, 110), bar(2, 120)],
+            None,
         )
         .unwrap()
         .unwrap();
@@ -2338,6 +2370,7 @@ fn yearly_commit_stale_daily_base_fails_closed() {
             &[bar(2, 120)],
             &[],
             &[bar(0, 100), bar(1, 110), bar(2, 120)],
+            None,
         )
         .unwrap()
         .unwrap();
@@ -2489,6 +2522,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
             &[],
             Some(&metadata),
             None,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -2554,6 +2588,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
                     expected_task_revision: rev_d3,
                     entity: SYMBOL,
                     period: Period::Day,
+                    adjustment: Adjustment::Forward,
                     base_version_id: Some(daily_head.version_id.as_str()),
                     change: SeriesChange::Replace {
                         bars: &replace_bars,
@@ -2661,6 +2696,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
                     expected_task_revision: rev_d4,
                     entity: SYMBOL,
                     period: Period::Day,
+                    adjustment: Adjustment::Forward,
                     base_version_id: Some(daily_head.version_id.as_str()),
                     change: SeriesChange::Append {
                         upserts: &append_bars,
@@ -2875,6 +2911,7 @@ fn rejected_item_leaves_head_and_task_state_untouched() {
                     expected_task_revision: rev_other,
                     entity: SYMBOL,
                     period: Period::Day,
+                    adjustment: Adjustment::Forward,
                     base_version_id: Some(&first.version_id),
                     change: SeriesChange::Append { upserts: &upserts },
                     range_start_day: 2,
@@ -2922,6 +2959,7 @@ fn rejected_item_leaves_head_and_task_state_untouched() {
         &[bar(2, 120)],
         &[],
         &[bar(0, 100), bar(1, 110), bar(2, 120)],
+        None,
     )
     .unwrap()
     .unwrap();
@@ -2964,6 +3002,7 @@ fn typed_commit_consumes_a_staged_orphan_of_the_same_item() {
         &[bar(1, 110)],
         &[],
         &[bar(0, 100), bar(1, 110)],
+        None,
     )
     .unwrap()
     .unwrap();
@@ -3088,6 +3127,7 @@ fn failed_commit_keeps_the_staged_row_until_gc() {
             &[bar(1, 110)],
             &[],
             &[bar(0, 100), bar(1, 110)],
+            None,
         )
         .is_err()
     );
@@ -3212,6 +3252,7 @@ fn full_commit_cycle_leaves_no_staged_rows() {
             &[bar(2, 120)],
             &[],
             &[bar(0, 100), bar(1, 110), bar(2, 120)],
+            None,
         )
         .unwrap()
         .unwrap();
@@ -3228,6 +3269,7 @@ fn full_commit_cycle_leaves_no_staged_rows() {
                 start: date(0),
                 end: date(2),
             },
+            None,
             None,
         )
         .unwrap();
@@ -3256,6 +3298,7 @@ fn full_commit_cycle_leaves_no_staged_rows() {
             &[bar(3, 130)],
             &[],
             &[bar(0, 100), bar(1, 110), bar(2, 120), bar(3, 130)],
+            None,
         )
         .unwrap()
         .unwrap();

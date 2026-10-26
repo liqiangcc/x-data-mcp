@@ -65,6 +65,16 @@ impl SeriesShape {
         price_scale: compact_market::PRICE_SCALE_CENTS,
     };
 
+    /// Stock series at 分 for the given 口径 — the shape every daily commit
+    /// writes in M1 (issue-383 §9.1).
+    pub(crate) const fn stock(adjustment: Adjustment) -> Self {
+        Self {
+            adjustment,
+            instrument_class: INSTRUMENT_CLASS_STOCK,
+            price_scale: compact_market::PRICE_SCALE_CENTS,
+        }
+    }
+
     /// Decode the three stored identity columns; values the DDL allows but
     /// this build does not implement fail closed instead of being coerced.
     pub(crate) fn decode(
