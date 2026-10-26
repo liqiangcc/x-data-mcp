@@ -14,6 +14,7 @@ use crate::market_data::{
     Adjustment, AdjustmentEvidence, Bar, CoverageEvidence, EvidenceValue, MarketDataBatch,
     Provenance, UnitCurrencyEvidence,
 };
+use crate::market_storage::MarketRepository;
 use crate::sqlite_market::compact_repo::SqliteCompactMarket;
 use crate::task_control::{self, CommandKey, ItemSpec, TaskRepository};
 
