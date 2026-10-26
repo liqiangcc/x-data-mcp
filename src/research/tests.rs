@@ -36,7 +36,7 @@ use crate::trading_calendar::TradingCalendar;
 
 const GEN1: &str = "gen-1";
 const GEN2: &str = "gen-2";
-const MANIFEST_SHA: &str = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0";
+const MANIFEST_SHA: &str = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b";
 const CREATED_AT: &str = "2026-10-26T00:00:00Z";
 
 fn tempdir() -> tempfile::TempDir {

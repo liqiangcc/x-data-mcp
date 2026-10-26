@@ -469,7 +469,7 @@ impl FactorBatch {
             }
             None => self.known_at_def.push(0),
         }
-        self.category.push(i32_value(i64::from(row.category))?);
+        self.category.push(i32_value(row.category)?);
         self.c1.push(i64_value(read::scaled_units(row.c[0], 2)?)?);
         self.c2.push(i64_value(read::scaled_units(row.c[1], 2)?)?);
         self.c3.push(i64_value(read::scaled_units(row.c[2], 2)?)?);

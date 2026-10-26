@@ -181,12 +181,10 @@ impl AdjustmentSelection {
 
     /// Does this selection include the given series 口径?
     pub fn includes(self, adjustment: Adjustment) -> bool {
-        match (self, adjustment) {
-            (Self::Both, _) => true,
-            (Self::Raw, Adjustment::Raw) => true,
-            (Self::Qfq, Adjustment::Forward) => true,
-            _ => false,
-        }
+        matches!(
+            (self, adjustment),
+            (Self::Both, _) | (Self::Raw, Adjustment::Raw) | (Self::Qfq, Adjustment::Forward)
+        )
     }
 }
 
