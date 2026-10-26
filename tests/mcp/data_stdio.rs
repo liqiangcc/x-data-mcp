@@ -1240,3 +1240,176 @@ fn real_bounded_inspection_stdio_replays_history_without_recursive_tasks() {
         .unwrap();
     assert_eq!(count, 2);
 }
+
+/// v8 PR-1 (#387 §7): the friendly spellings decode end to end over the real
+/// stdio surface, the still-rejected cases keep an actionable message, and a
+/// replayed `request_id` is the same request in both spellings (identical
+/// idempotency digest). Response payloads are otherwise unchanged.
+#[test]
+fn real_data_stdio_v8_input_normalization_accepts_friendly_spellings() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("db");
+    x_data_mcp::sqlite_tasks::SqliteTasks::new(&path)
+        .initialize()
+        .unwrap();
+    let mut s = Session::new(&path);
+    // #1 entity text, #2 version alias, #3 compact date, #5 omitted
+    // contract_version: one read decodes (the database is empty, so the page
+    // is empty rather than an error).
+    let page = s.call(
+        "query_data",
+        json!({
+            "dataset": "market.daily",
+            "selection": {"kind": "single", "entity": "sh.600000"},
+            "filter": {"kind": "daily", "start_date": "20200101", "end_date": "20200131"},
+            "version": {"kind": "latest"},
+        }),
+        false,
+    );
+    assert_eq!(page["dataset"], "market.daily");
+    assert!(page["records"].as_array().unwrap().is_empty());
+    // #4: a missing range field names the field and both accepted formats.
+    let err = s.call(
+        "query_data",
+        json!({
+            "dataset": "market.daily",
+            "selection": {"kind": "single", "entity": "sh.600000"},
+            "filter": {"kind": "daily", "end_date": "2020-01-31"},
+        }),
+        true,
+    );
+    assert_eq!(err["code"], "invalid_arguments");
+    assert!(err["message"].as_str().unwrap().contains("start_date"));
+    assert!(err["message"].as_str().unwrap().contains("YYYYMMDD"));
+    // #6: a cross-dataset selection lists the kinds this dataset allows.
+    let err = s.call(
+        "query_data",
+        json!({
+            "dataset": "market.daily",
+            "selection": {"kind": "catalog", "scope": "current_sh_sz_a"},
+            "filter": {"kind": "daily", "start_date": "2020-01-01", "end_date": "2020-01-31"},
+        }),
+        true,
+    );
+    assert_eq!(err["code"], "invalid_arguments");
+    assert!(err["message"].as_str().unwrap().contains("\"single\""));
+    // #7: an extra field is still rejected — normalization is not "accept
+    // everything".
+    let err = s.call(
+        "query_data",
+        json!({
+            "dataset": "market.daily",
+            "selection": {"kind": "single", "entity": "sh.600000"},
+            "filter": {"kind": "daily", "start_date": "2020-01-01", "end_date": "2020-01-31"},
+            "limit": 10,
+        }),
+        true,
+    );
+    assert_eq!(err["code"], "invalid_arguments");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown field `limit`")
+    );
+    // #8: capabilities still has no contract_version and names its fields.
+    let err = s.call(
+        "get_data_capabilities",
+        json!({"contract_version":"v1"}),
+        true,
+    );
+    assert_eq!(err["code"], "invalid_arguments");
+    assert!(err["message"].as_str().unwrap().contains("dataset"));
+    assert!(err["message"].as_str().unwrap().contains("operation"));
+    // #9: an unregistered capability operation keeps its own error.
+    let err = s.call("get_data_capabilities", json!({"operation":"query"}), true);
+    assert_eq!(err["code"], "unsupported_operation");
+    // #10: the operation filter accepts what production tasks carry.
+    let tasks = s.call("list_tasks", json!({"operation":"update_data"}), false);
+    assert!(tasks["items"].as_array().unwrap().is_empty());
+    let err = s.call("list_tasks", json!({"operation":"run_market_update"}), true);
+    assert_eq!(err["code"], "invalid_arguments");
+    // #11/#12: the missing task is still task_not_found — which also proves
+    // the omitted contract_version decoded, for both task reads.
+    for (name, args) in [
+        ("get_task", json!({"task_id":"missing"})),
+        (
+            "get_task_progress",
+            json!({"task_id":"missing","contract_version":"v1"}),
+        ),
+        ("cancel_task", json!({"task_id":"missing"})),
+    ] {
+        assert_eq!(s.call(name, args, true)["code"], "task_not_found", "{name}");
+    }
+    // #13: the display name in `code` is still rejected with routing advice.
+    let err = s.call(
+        "query_data",
+        json!({
+            "dataset": "market.daily",
+            "selection": {"kind": "single", "entity": {"exchange": "sh", "code": "sh.600000"}},
+            "filter": {"kind": "daily", "start_date": "2020-01-01", "end_date": "2020-01-31"},
+        }),
+        true,
+    );
+    assert_eq!(err["code"], "invalid_arguments");
+    assert!(err["message"].as_str().unwrap().contains("six digits"));
+    // #14: market reads require a range; catalog reads default their filter.
+    let err = s.call(
+        "query_data",
+        json!({"dataset": "market.daily", "selection": {"kind": "single", "entity": "sh.600000"}}),
+        true,
+    );
+    assert_eq!(err["code"], "invalid_arguments");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("filter.kind=daily")
+    );
+    let catalog = s.call(
+        "query_data",
+        json!({
+            "dataset": "securities.catalog",
+            "selection": {"kind": "catalog", "scope": "current_sh_sz_a"},
+        }),
+        false,
+    );
+    assert_eq!(catalog["dataset"], "securities.catalog");
+    // AC-V8-11: M2 point-in-time parameters are reserved, not ignored.
+    let err = s.call(
+        "query_data",
+        json!({
+            "dataset": "market.daily",
+            "selection": {"kind": "single", "entity": "sh.600000"},
+            "filter": {"kind": "daily", "start_date": "2020-01-01", "end_date": "2020-01-31"},
+            "known_at": "2020-01-31",
+        }),
+        true,
+    );
+    assert_eq!(err["code"], "reserved_for_m2");
+    // §7.3: the same request_id in the friendly and the contract spelling is
+    // one request; the replay is `reused`, so the digest matched byte for
+    // byte.
+    let first = s.call(
+        "start_collection",
+        json!({
+            "request_id": "v8-pr1-friendly",
+            "dataset": "market.daily",
+            "selection": {"kind": "explicit", "securities": ["sh.600000"]},
+        }),
+        false,
+    );
+    assert_eq!(first["reused"], false);
+    let replay = s.call(
+        "start_collection",
+        json!({
+            "request_id": "v8-pr1-friendly",
+            "dataset": "market.daily",
+            "contract_version": "v1",
+            "selection": {"kind": "explicit", "securities": [{"exchange": "sh", "code": "600000"}]},
+        }),
+        false,
+    );
+    assert_eq!(replay["reused"], true);
+    assert_eq!(replay["task_id"], first["task_id"]);
+}
