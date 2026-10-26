@@ -462,7 +462,7 @@ class RandomisedEquivalenceTest(FixtureCase):
                     highs[entity] = min(
                         bar[2] for bar in daily[entity][:80]
                     ) + rng.randint(0, 120)
-                self.setUp()
+                self.path = Path(self._dir.name) / f"seed{seed}.sqlite"
                 self.assert_trades_match(daily, highs)
 
 
