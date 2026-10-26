@@ -74,7 +74,7 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 | 年线 | 固定 daily 基线聚合 + 逐年 lineage，全市场已执行 | — |
 | 目录 | 官方目录全市场 5,228 实体已发布（`catalog-1791873196258239513`） | — |
 | 服务 | 双 systemd 单元 + 本机私有 socket 长期运行 | 外部分发/远程访问授权 |
-| 性能 / 全市场 | class-specific 合同：同代 no-change `update_data` ≤15min / ≤4KiB/item / `data_versions +0`（当前门禁与最新实测见 [SLO](SLO.md)）；历史实测（preview.27/schema20）：5,222 items / 616s / +18.5MB / 0 new versions | 跨代 envelope 约 37min 仅 measured baseline；真实 append/rewrite 待独立证据 |
+| 性能 / 全市场 | class-specific 合同（当前门禁见 [SLO](SLO.md) 第 1 行）：同代 no-change `update_data` write-loop <600s；checkpoint 后净增长 ≤4KiB/attempted item；`data_versions +0`。历史：时间项曾为 ≤15min（2026-09-28，2026-10-10 被 write-loop <600s 取代）；历史实测（preview.27/schema20）：5,222 items / 616s / +18.5MB / 0 new versions | 跨代 envelope 约 37min 仅 measured baseline；真实 append/rewrite 待独立证据 |
 | 编排 | 项目 Skill 覆盖 generation 与全市场分批编排 | 独立新会话仅 Skill 验收 |
 
 剩余差距集中在：#262 残余项、#294 admission 协议缺陷（独立问题，不为旧统一门禁
