@@ -77,31 +77,37 @@ fn a_date_only_one_index_traded_is_still_a_trading_day() {
 #[test]
 fn day_status_is_three_valued_and_never_claims_tradability() {
     let calendar = TradingCalendar::union(&batch(&[
-        ("sh.000001", &[day(2026, 10, 22), day(2026, 10, 23)]),
-        ("sz.399001", &[day(2026, 10, 22), day(2026, 10, 23)]),
+        ("sh.000001", &[day(2026, 10, 21), day(2026, 10, 23)]),
+        ("sz.399001", &[day(2026, 10, 21), day(2026, 10, 23)]),
     ]))
     .unwrap();
     assert_eq!(
-        calendar.day_status(day(2026, 10, 22)),
+        calendar.day_status(day(2026, 10, 21)),
         Some(DayStatus::InCalendar)
     );
-    // Saturday 2026-10-24: inside the covered span, no row → non-trading.
+    // 2026-10-22: inside the covered span, no row → non-trading day.
     assert_eq!(
-        calendar.day_status(day(2026, 10, 24)),
+        calendar.day_status(day(2026, 10, 22)),
         Some(DayStatus::NonTrading)
     );
-    assert!(calendar.is_non_trading_day(day(2026, 10, 24)));
+    assert!(calendar.is_non_trading_day(day(2026, 10, 22)));
     // A date before the first covered day is non-trading too.
     assert!(calendar.is_non_trading_day(day(1990, 1, 2)));
-    // Beyond `last_day` the calendar predicts nothing (§3.8).
+    // Beyond `last_day` the calendar predicts nothing (§3.8): 2026-10-24 is a
+    // Saturday, but "after the last input bar" outranks "a weekend" — the
+    // answer is unknown, not non-trading.
+    assert_eq!(
+        calendar.day_status(day(2026, 10, 24)),
+        Some(DayStatus::BeyondCalendar)
+    );
     assert_eq!(
         calendar.day_status(day(2026, 10, 26)),
         Some(DayStatus::BeyondCalendar)
     );
-    assert!(!calendar.is_non_trading_day(day(2026, 10, 26)));
-    assert!(!calendar.is_non_trading_day(day(2026, 10, 22)));
+    assert!(!calendar.is_non_trading_day(day(2026, 10, 24)));
+    assert!(!calendar.is_non_trading_day(day(2026, 10, 21)));
     // `last_day` is the last input bar, not "today".
-    assert_eq!(calendar.first_day(), Some(day(2026, 10, 22)));
+    assert_eq!(calendar.first_day(), Some(day(2026, 10, 21)));
     assert_eq!(calendar.last_day(), Some(day(2026, 10, 23)));
 }
 
@@ -221,7 +227,7 @@ fn coverage_limit_is_the_exact_fraction() {
 fn a_stored_calendar_answers_but_cannot_be_re_registered() {
     let stored = TradingCalendar::from_stored(vec![
         TradingDay {
-            day: day(2026, 10, 22),
+            day: day(2026, 10, 21),
             sources: 1,
         },
         TradingDay {
@@ -232,7 +238,7 @@ fn a_stored_calendar_answers_but_cannot_be_re_registered() {
     .unwrap();
     assert!(stored.inputs().is_empty());
     assert_eq!(
-        stored.day_status(day(2026, 10, 24)),
+        stored.day_status(day(2026, 10, 22)),
         Some(DayStatus::NonTrading)
     );
     assert!(
