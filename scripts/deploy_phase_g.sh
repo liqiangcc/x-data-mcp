@@ -23,6 +23,11 @@
 # ExecStart lines — the script does not invent a layout. Missing units
 # fail with the required unit bodies printed for one-time ops install.
 #
+# The tunnel drop-in that gates tunnel startup on the same readiness probe
+# is carried in the repo as a template (`tunnel_dropin_template()`, printed
+# with the unit bodies below). This script never installs it: writing
+# /etc/systemd/system is a separate owner-approved step (#296 P1-3).
+#
 # Usage: deploy_phase_g.sh <tag> [--dry-run] [--force-git-transport]
 set -euo pipefail
 
@@ -30,6 +35,7 @@ DEPLOY_ROOT=${XDM_DEPLOY_ROOT:-/opt/x-data-mcp-preview}
 SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DATA_SERVICE=${XDM_DATA_SERVICE:-x-data-mcp-data.service}
 ACQ_SERVICE=${XDM_ACQ_SERVICE:-x-data-mcp-acquire.service}
+TUNNEL_SERVICE=${XDM_TUNNEL_SERVICE:-x-data-mcp-tunnel.service}
 REPORTS="$DEPLOY_ROOT/reports"
 REPO=${REPO:-/root/x-data-mcp}
 TAG=""
@@ -117,7 +123,10 @@ fail() {
     exit 1
 }
 
-unit_exec_start() { systemctl cat "$1" 2>/dev/null | sed -nE 's/^ExecStart=//p' | head -1; }
+# `|| true`: a missing unit makes `systemctl cat` exit non-zero, and with
+# pipefail that used to abort the script before the "missing systemd unit(s)"
+# branch below could print the required unit bodies and the tunnel template.
+unit_exec_start() { systemctl cat "$1" 2>/dev/null | sed -nE 's/^ExecStart=//p' | head -1 || true; }
 
 required_units() {
     cat <<EOF
@@ -132,6 +141,28 @@ Required units (install once, then re-run):
   [Service]
   ExecStart=$DEPLOY_ROOT/current/bin/acquire_service $DEPLOY_ROOT/state/generations $DEPLOY_ROOT/run/acquire.sock
   Restart=on-failure
+EOF
+    tunnel_dropin_template
+}
+
+# #296 P1-3 / D-17: the tunnel must gate on the same readiness definition as
+# the deploy scripts — the repo probe from the `current` symlink, 120s budget,
+# and the tool assertion that proves the data plane is actually serving.
+# TimeoutStartSec must exceed the probe budget: systemd's default is 90s and
+# covers ExecStartPre, so a 120s wait would be killed before its own deadline.
+# This is a template only; the script writes no unit, drop-in or /etc file, and
+# switching the live unit is a separate owner-approved action.
+tunnel_dropin_template() {
+    cat <<EOF
+Tunnel drop-in (template only; this script does not install it):
+/etc/systemd/system/$TUNNEL_SERVICE.d/data-service.conf
+  [Unit]
+  Wants=$DATA_SERVICE
+  After=$DATA_SERVICE
+
+  [Service]
+  ExecStartPre=$DEPLOY_ROOT/current/scripts/wait_service_ready.py $DEPLOY_ROOT/run/mcp.sock --timeout 120 --expect-tool plan_market_update
+  TimeoutStartSec=180
 EOF
 }
 
