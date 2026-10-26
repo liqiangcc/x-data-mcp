@@ -679,11 +679,11 @@ fn decimals_are_scaled_exactly_once() {
         scaled_units(Decimal::new(1_234_567_109_375, 7), 2).unwrap(),
         12_345_671
     );
-    // A midpoint rounds away from zero (123456.715 -> 123456.72), which is the
-    // strategy the column needs: banker's rounding would give ...71.
+    // A midpoint rounds away from zero: 123456.705 -> 123456.71. Banker's
+    // rounding would give 123456.70, so this case tells the two apart.
     assert_eq!(
-        scaled_units(Decimal::new(1_234_567_150, 3), 2).unwrap(),
-        12_345_672
+        scaled_units(Decimal::new(123_456_705, 3), 2).unwrap(),
+        12_345_671
     );
     // A repeating decimal at 18dp: 10/13 rounds up at the 18th digit.
     assert_eq!(
