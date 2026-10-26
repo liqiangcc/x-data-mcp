@@ -353,6 +353,39 @@ fn exact_chain_reproduces_the_frozen_client_displays() {
     }
 }
 
+/// The per-event transform, one factor at a time: `T(x) = (x - C1/10 +
+/// C4*C2/10) / ((10+C3+C4)/10)`. Each column gets its own case so a swapped
+/// index fails here with a readable name instead of only in the corpus digest.
+#[test]
+fn exact_event_transform_matches_the_contract_formula_per_factor() {
+    let cases: [(&str, [i64; 4], u32, i64); 5] = [
+        // C1 = 每10股派现2.85: 7.92 - 0.285.
+        ("C1 only", [285, 0, 0, 0], 792, 7_635_000),
+        // C3 = 每10股送转3股: 10.00 × 10/13.
+        ("C3 only", [0, 0, 300, 0], 1000, 7_692_308),
+        // C4 = 每10股配5股, 配股价 0: 10.00 / 1.5.
+        ("C4 only", [0, 0, 0, 500], 1000, 6_666_667),
+        // C4 = 每10股配5股 at 5.00: (10.00 + 5 × 5.00/10) / 1.5.
+        ("C2 with C4", [0, 500, 0, 500], 1000, 8_333_333),
+        // C1 and C3 together: (7.92 - 0.285) × 10/13.
+        ("C1 with C3", [285, 0, 300, 0], 792, 5_873_077),
+    ];
+    for (name, c_2dp, cents, want) in cases {
+        let factors = gbbq::Event {
+            market: 1,
+            code: "600004".into(),
+            date_raw: 0,
+            category: 1,
+            c_raw: c_2dp.map(|units| units as f32 / 100.0),
+        }
+        .factors()
+        .unwrap();
+        let chain = gbbq::exact_compose_chain(std::iter::once(factors)).unwrap();
+        let got = chain.units(SCALE).unwrap().units(cents).unwrap();
+        assert_eq!(got, want, "{name}");
+    }
+}
+
 #[test]
 fn identity_chain_scales_the_raw_cents_without_rounding() {
     let raw = bars("sh.600006");

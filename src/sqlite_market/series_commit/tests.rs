@@ -3634,7 +3634,7 @@ fn raw_series_follows_an_authorized_forward_rewrite() {
         let forward_compact = to_compact_bars(
             &forward_bars,
             Period::Day,
-            crate::compact_market::PRICE_SCALE_CENTS,
+            crate::compact_market::PRICE_SCALE_QFQ,
         )?;
         commit_item_tx(
             c,

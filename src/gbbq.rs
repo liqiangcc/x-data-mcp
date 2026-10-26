@@ -349,9 +349,11 @@ pub fn exact_event_transform(c: &[Decimal; 4]) -> Result<ExactAffine, Error> {
     if denominator.is_zero() {
         return Err(Error::ExactDegenerateEvent);
     }
+    // b = (C4*C2 - C1) / (10 + C3 + C4), scaled by the 2dp integers:
+    // (n2*n4 - 100*n1) / (100 * (1000 + n3 + n4)).
     ExactAffine {
         pa: BigInt::from(100_000u32),
-        pb: &n[2] * &n[3] - BigInt::from(100u32) * &n[1],
+        pb: &n[1] * &n[3] - BigInt::from(100u32) * &n[0],
         den: BigInt::from(100u32) * denominator,
     }
     .reduced()
