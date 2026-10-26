@@ -356,7 +356,12 @@ fn commit_writes_the_rows_the_registration_and_the_evidence() {
     // points at the generation.
     let binding = evidence_store::read_source_binding(&c, &written.source_binding_digest).unwrap();
     assert_eq!(binding.generation_id, "gen-1");
-    assert_eq!(binding.security_event_sha256, [0u8; 32]);
+    // A calendar binds the empty corporate-action set, the same digest an
+    // index series binds (sha256 over the zero excluded-count word).
+    assert_eq!(
+        compact_market::digest_hex(&binding.security_event_sha256),
+        crate::hash::sha256(&0u64.to_le_bytes())
+    );
     assert!(read_calendar(&c).unwrap().is_some());
 }
 
@@ -417,7 +422,7 @@ fn bars_outside_the_calendar_are_listed_and_gate_the_commit() {
     let (_path, repo) = repo(&dir);
     let outside = day(1991, 4, 7);
     commit_raw_series(&repo, "req-a", "sh.600006", &[day(1991, 4, 6), outside]);
-    commit_raw_series(&repo, "req-b", "sz.000002", &[day(1991, 4, 8), outside]);
+    commit_raw_series(&repo, "req-b", "sz.000002", &[outside, day(1991, 4, 8)]);
     // The calendar covers the two dates the inputs printed, so three of the
     // four bars fall outside it.
     let batch = calendar_batch(&[day(1991, 4, 6)], &[day(1991, 4, 8)]);
