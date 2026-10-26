@@ -54,15 +54,15 @@ fn date(day: i64) -> NaiveDate {
 fn bar(day: i64, cents: i64) -> Bar {
     crate::compact_market::CompactBar {
         trade_day: day,
-        open_cents: cents,
-        high_cents: cents + 10,
-        low_cents: cents - 10,
-        close_cents: cents,
+        open_units: cents,
+        high_units: cents + 10,
+        low_units: cents - 10,
+        close_units: cents,
         volume: Some(100),
         amount: Some("1000".into()),
         r7_raw: Some(7),
     }
-    .to_bar(Period::Day)
+    .to_bar(Period::Day, crate::compact_market::PRICE_SCALE_CENTS)
     .unwrap()
 }
 
@@ -349,7 +349,13 @@ fn append_then_replace_fold_equivalence() {
     assert_eq!(row.record_count, 3);
     // digest after append == fresh fold over all bars.
     let all = series::all_bars(&c, row.series_key).unwrap();
-    let refold = series::fold_bars(SYMBOL, Period::Day, &all).unwrap();
+    let refold = series::fold_bars(
+        SYMBOL,
+        Period::Day,
+        series::SeriesShape::FORWARD_STOCK_CENTS,
+        &all,
+    )
+    .unwrap();
     assert_eq!(refold, row.content_digest);
 
     // §8.1-6: replace — old bars replaced wholesale; event continuity=3.
@@ -374,9 +380,15 @@ fn append_then_replace_fold_equivalence() {
     assert_eq!(row2.record_count, 4);
     let bars = series::all_bars(&c2, row2.series_key).unwrap();
     // Old close values are gone; new digest = fold over the new content.
-    assert_eq!(bars[0].close_cents, 200);
+    assert_eq!(bars[0].close_units, 200);
     assert_eq!(
-        series::fold_bars(SYMBOL, Period::Day, &bars).unwrap(),
+        series::fold_bars(
+            SYMBOL,
+            Period::Day,
+            series::SeriesShape::FORWARD_STOCK_CENTS,
+            &bars
+        )
+        .unwrap(),
         row2.content_digest
     );
     let event = series::event_by_result(&c2, "pub-3").unwrap().unwrap();
@@ -482,10 +494,10 @@ fn append_duplicate_day_fails_closed() {
         .series_key;
     let dup = crate::compact_market::CompactBar {
         trade_day: 1,
-        open_cents: 999,
-        high_cents: 999,
-        low_cents: 999,
-        close_cents: 999,
+        open_units: 999,
+        high_units: 999,
+        low_units: 999,
+        close_units: 999,
         volume: Some(1),
         amount: Some("1".into()),
         r7_raw: Some(7),
@@ -672,7 +684,12 @@ fn replace_rollback_keeps_series_consistent() {
     // the same failure shape as a kill between DELETE and INSERT.
     let rev2 = start_item_id(&repo, &task_id, "item-2");
     let cmd = command_at(&task_id, "pub-2", rev2, "item-2");
-    let new_bars = to_compact_bars(&[bar(0, 200), bar(1, 210)], Period::Day).unwrap();
+    let new_bars = to_compact_bars(
+        &[bar(0, 200), bar(1, 210)],
+        Period::Day,
+        crate::compact_market::PRICE_SCALE_CENTS,
+    )
+    .unwrap();
     repo.write(|c| {
         let tx = c
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -808,7 +825,7 @@ fn read_snapshot_isolated_from_concurrent_append() {
     )
     .unwrap();
     assert_eq!(after.len(), 1);
-    assert_eq!(after[0].close_cents, 100);
+    assert_eq!(after[0].close_units, 100);
     drop(rtx);
 }
 
@@ -1421,10 +1438,10 @@ fn check_binding_rejects_wrong_owner_state_target_and_occupancy() {
 
 const BAR0: CompactBar = CompactBar {
     trade_day: 0,
-    open_cents: 100,
-    high_cents: 110,
-    low_cents: 90,
-    close_cents: 100,
+    open_units: 100,
+    high_units: 110,
+    low_units: 90,
+    close_units: 100,
     volume: Some(1),
     amount: None,
     r7_raw: None,
@@ -1524,8 +1541,8 @@ fn second_commit_on_same_item_fails_closed() {
     // the same (task_id,item_id) pair under a different result id trips it.
     let c = Connection::open(&path).unwrap();
     let dup = c.execute(
-        "INSERT INTO market_events(seq,entity,period,kind,outcome,metadata_changed,new_content_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at) \
-         SELECT (SELECT max(seq)+1 FROM market_events),entity,period,'append',outcome,metadata_changed,new_content_digest,evidence_digest,task_id,item_id,task_revision,'pub-x',result_digest,created_at \
+        "INSERT INTO market_events(seq,entity,period,adjustment,kind,outcome,metadata_changed,new_content_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at) \
+         SELECT (SELECT max(seq)+1 FROM market_events),entity,period,adjustment,'append',outcome,metadata_changed,new_content_digest,evidence_digest,task_id,item_id,task_revision,'pub-x',result_digest,created_at \
          FROM market_events WHERE result_id='pub-1'",
         [],
     );
@@ -1859,10 +1876,10 @@ fn day(y: i32, m: u32, d: u32) -> i64 {
 fn ybar(y: i32, close: i64) -> CompactBar {
     CompactBar {
         trade_day: day(y, 12, 31),
-        open_cents: close,
-        high_cents: close + 10,
-        low_cents: close - 10,
-        close_cents: close,
+        open_units: close,
+        high_units: close + 10,
+        low_units: close - 10,
+        close_units: close,
         volume: Some(1),
         amount: None,
         r7_raw: None,
@@ -2037,7 +2054,7 @@ fn daily_checked(r: &Repo) -> compat::CheckedRecord {
     let bars = series::all_bars(&c, daily.series_key).unwrap();
     let bars = bars
         .iter()
-        .map(|b| b.to_bar(Period::Day))
+        .map(|b| b.to_bar(Period::Day, daily.price_scale))
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let mut version = EffectiveVersion {
@@ -2182,8 +2199,8 @@ fn yearly_rederive_rewrites_only_affected_years() {
         .unwrap();
     let bars = series::all_bars(&c, yearly.series_key).unwrap();
     assert_eq!(bars.len(), 2);
-    assert_eq!(bars[0].close_cents, 100, "2020 bar must be untouched");
-    assert_eq!(bars[1].close_cents, 220, "2021 bar rederived");
+    assert_eq!(bars[0].close_units, 100, "2020 bar must be untouched");
+    assert_eq!(bars[1].close_units, 220, "2021 bar rederived");
     // yearly_rederive event with daily base linkage.
     let (kind, base_digest): (String, Vec<u8>) = c
         .query_row(
@@ -2427,7 +2444,7 @@ fn yearly_rederive_replays_result_id() {
         .unwrap()
         .unwrap();
     let bars = series::all_bars(&c, yearly.series_key).unwrap();
-    assert_eq!(bars[0].close_cents, 100);
+    assert_eq!(bars[0].close_units, 100);
 }
 
 #[test]
@@ -2505,7 +2522,9 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
     drifted_units.price_unit = EvidenceValue::confirmed("fen", "drift");
     let replace_bars: Vec<CompactBar> = [bar(0, 100), bar(1, 110), bar(2, 120)]
         .iter()
-        .map(|b| CompactBar::from_bar(b, Period::Day).unwrap())
+        .map(|b| {
+            CompactBar::from_bar(b, Period::Day, crate::compact_market::PRICE_SCALE_CENTS).unwrap()
+        })
         .collect();
     r.repo
         .write(|c| {
@@ -2606,9 +2625,14 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
     // semantics AGAIN for the flag to read 1.
     let mut drifted2 = drifted_units.clone();
     drifted2.price_unit = EvidenceValue::confirmed("li", "drift-again");
-    let append_bars: Vec<CompactBar> = [CompactBar::from_bar(&bar(3, 130), Period::Day).unwrap()]
-        .into_iter()
-        .collect();
+    let append_bars: Vec<CompactBar> = [CompactBar::from_bar(
+        &bar(3, 130),
+        Period::Day,
+        crate::compact_market::PRICE_SCALE_CENTS,
+    )
+    .unwrap()]
+    .into_iter()
+    .collect();
     r.repo
         .write(|c| {
             let evidence = evidence_store::put_evidence(
@@ -2677,15 +2701,15 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
 fn year_bar(y: i32, close: i64) -> Bar {
     CompactBar {
         trade_day: day(y, 12, 31),
-        open_cents: close,
-        high_cents: close + 10,
-        low_cents: close - 10,
-        close_cents: close,
+        open_units: close,
+        high_units: close + 10,
+        low_units: close - 10,
+        close_units: close,
         volume: Some(100),
         amount: Some("1000".into()),
         r7_raw: None,
     }
-    .to_bar(Period::Year)
+    .to_bar(Period::Year, crate::compact_market::PRICE_SCALE_CENTS)
     .unwrap()
 }
 
@@ -2825,7 +2849,12 @@ fn rejected_item_leaves_head_and_task_state_untouched() {
     let head_before = series::read_series(&c, SYMBOL, Period::Day)
         .unwrap()
         .unwrap();
-    let upserts = to_compact_bars(&[bar(2, 120)], Period::Day).unwrap();
+    let upserts = to_compact_bars(
+        &[bar(2, 120)],
+        Period::Day,
+        crate::compact_market::PRICE_SCALE_CENTS,
+    )
+    .unwrap();
     let err = repo
         .write(|c| {
             let evidence =

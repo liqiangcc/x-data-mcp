@@ -1,6 +1,6 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::prelude::ToPrimitive as _;
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
@@ -11,6 +11,13 @@ use crate::market_data::{
 pub const MAX_SEGMENT_BARS: usize = 512;
 pub type Digest = [u8; 32];
 
+/// `market_series.price_scale` ceiling (schema 22 DDL, issue-383 §3.2): an
+/// integer price is `value / 10^price_scale` in 元 (点 for indexes).
+pub const MAX_PRICE_SCALE: u32 = 6;
+/// A-share prices in 分: `price_scale=2`. The only scale schema 22 writes
+/// until the forward-adjusted 6dp series lands (M1 PR-3).
+pub const PRICE_SCALE_CENTS: u32 = 2;
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("compact market data invalid: {0}")]
@@ -20,26 +27,28 @@ pub enum Error {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactBar {
     pub trade_day: i64,
-    pub open_cents: i64,
-    pub high_cents: i64,
-    pub low_cents: i64,
-    pub close_cents: i64,
+    pub open_units: i64,
+    pub high_units: i64,
+    pub low_units: i64,
+    pub close_units: i64,
     pub volume: Option<i64>,
     pub amount: Option<String>,
     pub r7_raw: Option<u32>,
 }
 
 impl CompactBar {
-    pub fn from_bar(bar: &Bar, period: Period) -> Result<Self, Error> {
+    /// Encode a domain bar at the series' `price_scale` (issue-383 §3.3):
+    /// the integers carry no unit, the owning `market_series` row does.
+    pub fn from_bar(bar: &Bar, period: Period, price_scale: u32) -> Result<Self, Error> {
         if period == Period::Year && bar.r7_raw.is_some() {
             return Err(invalid("yearly bar must not carry r7_raw"));
         }
         let compact = Self {
             trade_day: epoch_day(bar.date),
-            open_cents: cents(bar.open)?,
-            high_cents: cents(bar.high)?,
-            low_cents: cents(bar.low)?,
-            close_cents: cents(bar.close)?,
+            open_units: units(bar.open, price_scale)?,
+            high_units: units(bar.high, price_scale)?,
+            low_units: units(bar.low, price_scale)?,
+            close_units: units(bar.close, price_scale)?,
             volume: bar.volume.map(volume).transpose()?,
             amount: bar.amount.map(amount).transpose()?,
             r7_raw: bar.r7_raw,
@@ -48,14 +57,17 @@ impl CompactBar {
         Ok(compact)
     }
 
-    pub fn to_bar(&self, period: Period) -> Result<Bar, Error> {
+    /// Decode with the scale stored on the owning series row — a reader that
+    /// assumes 2dp would misprice every 6dp series (issue-383 §3.10).
+    pub fn to_bar(&self, period: Period, price_scale: u32) -> Result<Bar, Error> {
         let (date, amount) = self.decode_checked(period)?;
+        let scale = checked_scale(price_scale)?;
         Ok(Bar {
             date,
-            open: Decimal::new(self.open_cents, 2),
-            high: Decimal::new(self.high_cents, 2),
-            low: Decimal::new(self.low_cents, 2),
-            close: Decimal::new(self.close_cents, 2),
+            open: Decimal::new(self.open_units, scale),
+            high: Decimal::new(self.high_units, scale),
+            low: Decimal::new(self.low_units, scale),
+            close: Decimal::new(self.close_units, scale),
             volume: self.volume.map(Decimal::from),
             amount,
             r7_raw: self.r7_raw,
@@ -69,11 +81,11 @@ impl CompactBar {
     /// so callers consume them instead of re-parsing.
     fn decode_checked(&self, period: Period) -> Result<(NaiveDate, Option<Decimal>), Error> {
         let date = epoch_date(self.trade_day)?;
-        if self.high_cents < self.open_cents
-            || self.high_cents < self.close_cents
-            || self.high_cents < self.low_cents
-            || self.low_cents > self.open_cents
-            || self.low_cents > self.close_cents
+        if self.high_units < self.open_units
+            || self.high_units < self.close_units
+            || self.high_units < self.low_units
+            || self.low_units > self.open_units
+            || self.low_units > self.close_units
         {
             return Err(invalid("OHLC ordering violated"));
         }
@@ -221,6 +233,10 @@ pub enum EvidenceKind {
     Continuity,
     Catalog,
     Yearly,
+    /// Derived-data evidence: trading calendar input list, factor-set
+    /// provenance, index unit/scope evidence (issue-383 §3.9, §6.3). Carries
+    /// the "how it was proven" note, never bar arrays.
+    Derived,
     /// Storage-internal sub-document: a generation-common field of a larger
     /// evidence document, stored once and referenced by `$evref` from the
     /// parent's stored form (#259 P0-D). Never produced over the wire; a
@@ -237,6 +253,7 @@ impl EvidenceKind {
             Self::Continuity => "continuity",
             Self::Catalog => "catalog",
             Self::Yearly => "yearly",
+            Self::Derived => "derived",
             Self::Shared => "shared",
         }
     }
@@ -245,7 +262,7 @@ impl EvidenceKind {
         match self {
             Self::Continuity => 4_096,
             Self::Version | Self::Yearly => 16_384,
-            Self::Shared => 65_536,
+            Self::Derived | Self::Shared => 65_536,
             Self::Generation | Self::Catalog => 262_144,
             Self::BatchSelection => 4_194_304,
         }
@@ -809,17 +826,30 @@ pub(crate) fn epoch_date(day: i64) -> Result<NaiveDate, Error> {
         .ok_or_else(|| invalid("trade_day out of date range"))
 }
 
-fn cents(value: Decimal) -> Result<i64, Error> {
-    let scaled = value
-        .checked_mul(Decimal::from(100))
-        .ok_or_else(|| invalid("price scale overflow"))?;
-    let cents = scaled
-        .to_i64()
-        .ok_or_else(|| invalid("price exceeds i64 cents range"))?;
-    if Decimal::from(cents).checked_div(Decimal::from(100)) != Some(value) {
-        return Err(invalid("price is not exactly 2dp"));
+/// Validate a series `price_scale` against the DDL ceiling; keeps
+/// `Decimal::new`/`10^scale` inside their representable range.
+fn checked_scale(price_scale: u32) -> Result<u32, Error> {
+    if price_scale > MAX_PRICE_SCALE {
+        return Err(invalid("price_scale exceeds 6"));
     }
-    Ok(cents)
+    Ok(price_scale)
+}
+
+/// Integer price at `price_scale`: `value * 10^scale`, rejecting any value
+/// that does not round-trip exactly (more decimals than the series allows).
+fn units(value: Decimal, price_scale: u32) -> Result<i64, Error> {
+    let scale = checked_scale(price_scale)?;
+    let denominator = Decimal::from(10u32.pow(scale));
+    let scaled = value
+        .checked_mul(denominator)
+        .ok_or_else(|| invalid("price scale overflow"))?;
+    let units = scaled
+        .to_i64()
+        .ok_or_else(|| invalid("price exceeds i64 units range"))?;
+    if Decimal::from(units).checked_div(denominator) != Some(value) {
+        return Err(invalid("price has more decimals than price_scale"));
+    }
+    Ok(units)
 }
 
 fn volume(value: Decimal) -> Result<i64, Error> {
@@ -887,10 +917,10 @@ pub(crate) fn bar_encoding(out: &mut Vec<u8>, bar: &CompactBar) {
     out.extend_from_slice(b"x-data-bar-v1\0");
     out.extend_from_slice(&bar.trade_day.to_be_bytes());
     for value in [
-        bar.open_cents,
-        bar.high_cents,
-        bar.low_cents,
-        bar.close_cents,
+        bar.open_units,
+        bar.high_units,
+        bar.low_units,
+        bar.close_units,
     ] {
         out.extend_from_slice(&value.to_be_bytes());
     }
@@ -981,10 +1011,10 @@ mod tests {
     fn bar1() -> CompactBar {
         CompactBar {
             trade_day: 0,
-            open_cents: -123,
-            high_cents: -100,
-            low_cents: -200,
-            close_cents: -150,
+            open_units: -123,
+            high_units: -100,
+            low_units: -200,
+            close_units: -150,
             volume: Some(10),
             amount: Some("12.34".into()),
             r7_raw: Some(7),
@@ -994,10 +1024,10 @@ mod tests {
     fn bar2() -> CompactBar {
         CompactBar {
             trade_day: 1,
-            open_cents: 100,
-            high_cents: 200,
-            low_cents: 50,
-            close_cents: 150,
+            open_units: 100,
+            high_units: 200,
+            low_units: 50,
+            close_units: 150,
             volume: None,
             amount: None,
             r7_raw: None,
@@ -1060,15 +1090,21 @@ mod tests {
     #[test]
     fn negative_price_roundtrip() {
         let original = source_bar(0, "-1.23");
-        let compact = CompactBar::from_bar(&original, Period::Day).unwrap();
-        assert_eq!(compact.open_cents, -123);
-        assert_eq!(compact.to_bar(Period::Day).unwrap(), original);
+        let compact = CompactBar::from_bar(&original, Period::Day, PRICE_SCALE_CENTS).unwrap();
+        assert_eq!(compact.open_units, -123);
+        assert_eq!(
+            compact.to_bar(Period::Day, PRICE_SCALE_CENTS).unwrap(),
+            original
+        );
         let mut stored = compact.clone();
         stored.amount = Some("12.34".into());
         stored.volume = Some(10);
         stored.r7_raw = Some(7);
         assert_eq!(
-            stored.to_bar(Period::Day).unwrap().amount,
+            stored
+                .to_bar(Period::Day, PRICE_SCALE_CENTS)
+                .unwrap()
+                .amount,
             Decimal::new(1234, 2).into()
         );
     }
@@ -1076,30 +1112,54 @@ mod tests {
     #[test]
     fn rejects_sub_2dp_price() {
         let bar = source_bar(0, "1.234");
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
         let bar = source_bar(0, "1.235");
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
+    }
+
+    /// Schema 22 (issue-383 §3.3): the integer price is interpreted through
+    /// the series' `price_scale`, so 3dp/6dp values must round-trip and a
+    /// value with more decimals than the series allows must be rejected
+    /// rather than silently truncated.
+    #[test]
+    fn price_scale_accepts_exact_precision_and_rejects_extra_decimals() {
+        for (text, scale) in [("4.178", 3), ("1.234567", 6), ("8.445", 3), ("0.000001", 6)] {
+            let original = source_bar(0, text);
+            let compact = CompactBar::from_bar(&original, Period::Day, scale).unwrap();
+            assert_eq!(
+                compact.to_bar(Period::Day, scale).unwrap(),
+                original,
+                "{text} at scale {scale}"
+            );
+        }
+        // 4dp under a 3dp series: rejected, not rounded.
+        let bar = source_bar(0, "1.2345");
+        assert!(CompactBar::from_bar(&bar, Period::Day, 3).is_err());
+        // Above the DDL ceiling: refused in both directions.
+        let bar = source_bar(0, "1.0");
+        assert!(CompactBar::from_bar(&bar, Period::Day, MAX_PRICE_SCALE + 1).is_err());
+        assert!(bar1().to_bar(Period::Day, MAX_PRICE_SCALE + 1).is_err());
     }
 
     #[test]
     fn rejects_decimal_overflow() {
         let bar = source_bar(0, "79228162514264337593543950335");
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
         let bar = source_bar(0, "92233720368547758.08");
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
         let bar = source_bar(0, "92233720368547758.07");
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_ok());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_ok());
     }
 
     #[test]
     fn rejects_bad_volume() {
         let mut bar = source_bar(0, "1.00");
         bar.volume = Some(Decimal::from_str("-5").unwrap());
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
         bar.volume = Some(Decimal::from_str("1.5").unwrap());
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
         bar.volume = Some(Decimal::from_str("9223372036854775808").unwrap());
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
     }
 
     #[test]
@@ -1181,11 +1241,11 @@ mod tests {
     /// `decode_checked` must produce identical `Bar`/`Error` outcomes.
     fn reference_check(bar: &CompactBar, period: Period) -> Result<(), Error> {
         epoch_date(bar.trade_day)?;
-        if bar.high_cents < bar.open_cents
-            || bar.high_cents < bar.close_cents
-            || bar.high_cents < bar.low_cents
-            || bar.low_cents > bar.open_cents
-            || bar.low_cents > bar.close_cents
+        if bar.high_units < bar.open_units
+            || bar.high_units < bar.close_units
+            || bar.high_units < bar.low_units
+            || bar.low_units > bar.open_units
+            || bar.low_units > bar.close_units
         {
             return Err(invalid("OHLC ordering violated"));
         }
@@ -1211,7 +1271,7 @@ mod tests {
         Ok(())
     }
 
-    fn reference_to_bar(bar: &CompactBar, period: Period) -> Result<Bar, Error> {
+    fn reference_to_bar(bar: &CompactBar, period: Period, price_scale: u32) -> Result<Bar, Error> {
         reference_check(bar, period)?;
         let amount = bar
             .amount
@@ -1221,10 +1281,10 @@ mod tests {
             .map_err(|_| invalid("stored amount is not a decimal"))?;
         Ok(Bar {
             date: epoch_date(bar.trade_day)?,
-            open: Decimal::new(bar.open_cents, 2),
-            high: Decimal::new(bar.high_cents, 2),
-            low: Decimal::new(bar.low_cents, 2),
-            close: Decimal::new(bar.close_cents, 2),
+            open: Decimal::new(bar.open_units, price_scale),
+            high: Decimal::new(bar.high_units, price_scale),
+            low: Decimal::new(bar.low_units, price_scale),
+            close: Decimal::new(bar.close_units, price_scale),
             volume: bar.volume.map(Decimal::from),
             amount,
             r7_raw: bar.r7_raw,
@@ -1275,7 +1335,7 @@ mod tests {
         variants.push(bar);
         // OHLC inversion.
         let mut bar = bar2();
-        bar.high_cents = 49;
+        bar.high_units = 49;
         variants.push(bar);
         // Negative volume.
         let mut bar = bar2();
@@ -1289,13 +1349,13 @@ mod tests {
         // then OHLC, then volume, then amount, then yearly r7.
         let mut bar = bar2();
         bar.trade_day = i64::MAX;
-        bar.high_cents = 49;
+        bar.high_units = 49;
         bar.volume = Some(-1);
         bar.amount = Some("abc".into());
         bar.r7_raw = Some(1);
         variants.push(bar);
         let mut bar = bar2();
-        bar.high_cents = 49;
+        bar.high_units = 49;
         bar.volume = Some(-1);
         bar.amount = Some("-1".into());
         bar.r7_raw = Some(1);
@@ -1308,8 +1368,8 @@ mod tests {
                     "check diverged for {bar:?} {period:?}"
                 );
                 assert_eq!(
-                    bar.to_bar(period),
-                    reference_to_bar(bar, period),
+                    bar.to_bar(period, PRICE_SCALE_CENTS),
+                    reference_to_bar(bar, period, PRICE_SCALE_CENTS),
                     "to_bar diverged for {bar:?} {period:?}"
                 );
             }
@@ -1320,26 +1380,26 @@ mod tests {
     fn rejects_negative_amount() {
         let mut bar = source_bar(0, "1.00");
         bar.amount = Some(Decimal::from_str("-0.01").unwrap());
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
     }
 
     #[test]
     fn rejects_yearly_r7() {
         let mut bar = source_bar(0, "1.00");
         bar.r7_raw = Some(1);
-        assert!(CompactBar::from_bar(&bar, Period::Year).is_err());
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_ok());
-        assert!(bar1().to_bar(Period::Year).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Year, PRICE_SCALE_CENTS).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_ok());
+        assert!(bar1().to_bar(Period::Year, PRICE_SCALE_CENTS).is_err());
     }
 
     #[test]
     fn rejects_invalid_ohlc() {
         let mut bar = source_bar(0, "1.00");
         bar.low = Decimal::from_str("1.01").unwrap();
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
         let mut bar = source_bar(0, "1.00");
         bar.high = Decimal::from_str("0.99").unwrap();
-        assert!(CompactBar::from_bar(&bar, Period::Day).is_err());
+        assert!(CompactBar::from_bar(&bar, Period::Day, PRICE_SCALE_CENTS).is_err());
     }
 
     #[test]
@@ -1572,6 +1632,7 @@ mod tests {
             (EvidenceKind::Generation, 262_144),
             (EvidenceKind::Catalog, 262_144),
             (EvidenceKind::BatchSelection, 4_194_304),
+            (EvidenceKind::Derived, 65_536),
         ] {
             assert!(canonical_evidence(kind, &object_of_canonical_len(limit)).is_ok());
             assert!(canonical_evidence(kind, &object_of_canonical_len(limit + 1)).is_err());

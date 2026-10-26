@@ -6,7 +6,8 @@ routine update（见[每日同步说明](daily-sync.md)）；双 MCP 拓扑已�
 部署运行——data socket 提供 23 data tools（`generic-data-v7`，含 `plan_market_update`/
 `run_market_update`，market 单版本序列：
 version_id=内容 hex，latest-only）、acquire socket 提供
-10 acquisition tools、fresh init 库使用 compact schema 21；部署版本、generation
+10 acquisition tools；已部署实例为 compact schema 21，代码（main）为 schema 22
+（M1 PR-1，未部署）；部署版本、generation
 与数据量等机器事实只在 [STATUS](STATUS.md)
 维护，本文不复述。历史记录（preview.29 时期）：2026-09-30 operator-path 曾激活
 generation `2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，

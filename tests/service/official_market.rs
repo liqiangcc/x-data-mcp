@@ -4172,7 +4172,9 @@ fn retained_s0_compact_bar_physical_prototype() {
 #[test]
 #[ignore = "#259 S1 retained compact codec round-trip"]
 fn retained_s1_compact_codec_round_trips_all_bars() {
-    use x_data_mcp::compact_market::{CompactBar, MAX_SEGMENT_BARS, segment_digest};
+    use x_data_mcp::compact_market::{
+        CompactBar, MAX_SEGMENT_BARS, PRICE_SCALE_CENTS, segment_digest,
+    };
     let Some(snapshot) = retained_snapshot() else {
         eprintln!("retained-inputs absent; #259 S1 round-trip skipped");
         return;
@@ -4202,10 +4204,13 @@ fn retained_s1_compact_codec_round_trips_all_bars() {
         let compact = batch
             .bars
             .iter()
-            .map(|bar| CompactBar::from_bar(bar, Period::Day).unwrap())
+            .map(|bar| CompactBar::from_bar(bar, Period::Day, PRICE_SCALE_CENTS).unwrap())
             .collect::<Vec<_>>();
         for (bar, compact_bar) in batch.bars.iter().zip(&compact) {
-            assert_eq!(&compact_bar.to_bar(Period::Day).unwrap(), bar);
+            assert_eq!(
+                &compact_bar.to_bar(Period::Day, PRICE_SCALE_CENTS).unwrap(),
+                bar
+            );
         }
         for chunk in compact.chunks(MAX_SEGMENT_BARS) {
             segment_digest(&batch.symbol, Period::Day, chunk).unwrap();

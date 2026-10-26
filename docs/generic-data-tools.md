@@ -7,7 +7,8 @@
 23 data tools（capability revision `generic-data-v7`，含只读 `get_yearly_base_years` 与
 `plan_market_update`/`run_market_update`，
 market 单版本序列：version_id=内容 hex，latest-only），
-acquire socket 注册 10 acquisition tools，fresh init 库为 compact schema 21。部署版本、
+acquire socket 注册 10 acquisition tools；已部署实例为 compact schema 21，代码（main）
+为 schema 22（M1 PR-1，未部署）。部署版本、
 generation 与数据量等机器事实只在 [STATUS](STATUS.md) 维护，本文不复述。通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场
 collection/update 已通过分批 MCP 编排取得真实 generation 证据

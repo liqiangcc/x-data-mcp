@@ -80,11 +80,26 @@ MIN_BARS = 25  # the reference script drops series shorter than this
 # production.
 DEFAULT_WORKERS = 4
 
+# Schema 22 (issue-383 §3.3) renamed series_bars.*_cents to *_units: the
+# integers are interpreted through market_series.price_scale, and ratios are
+# scale-invariant.  The deployed instance may still be schema 21, so the price
+# column names are resolved per connection (see ``_price_suffix``) instead of
+# being hard-coded; every query uses ``{p}`` as the suffix placeholder.
+def _price_suffix(conn: sqlite3.Connection) -> str:
+    """``units`` on schema 22+, ``cents`` on the deployed schema 21."""
+    names = {row[1] for row in conn.execute("PRAGMA table_info(series_bars)")}
+    return "units" if "open_units" in names else "cents"
+
+
+def _price_sql(sql: str, suffix: str) -> str:
+    return sql.format(p=suffix)
+
+
 # One row per entity that has a 2025 yearly bar.  Yearly bars carry the year's
 # last trading day (migrations/tasks/021_latest_only.sql), so the year filter is
 # a plain trade_day range.
 _YEARLY_HIGH_SQL = """
-SELECT s.entity AS entity, max(b.high_cents) AS high_cents
+SELECT s.entity AS entity, max(b.high_{p}) AS high_px
 FROM market_series s
 JOIN series_bars b ON b.series_key = s.series_key
 WHERE s.period = 2 AND s.adjustment = 1 AND b.trade_day BETWEEN ?1 AND ?2
@@ -102,7 +117,7 @@ ORDER BY entity
 # LIMIT 1 stops at the first hit instead of aggregating the whole window.
 _FIRST_BREAKOUT_SQL = """
 SELECT trade_day FROM series_bars
-WHERE series_key = ?1 AND trade_day >= ?2 AND high_cents > ?3
+WHERE series_key = ?1 AND trade_day >= ?2 AND high_{p} > ?3
 ORDER BY trade_day
 LIMIT 1
 """
@@ -122,8 +137,8 @@ LIMIT 1
 # the first bar above the mid after the pullback is the signal.
 _SIGNAL_SQL = """
 WITH d AS MATERIALIZED (
-  SELECT trade_day AS day, close_cents AS cl,
-         CASE WHEN count(*) OVER w = ?4 THEN avg(close_cents) OVER w END AS mid
+  SELECT trade_day AS day, close_{p} AS cl,
+         CASE WHEN count(*) OVER w = ?4 THEN avg(close_{p}) OVER w END AS mid
   FROM series_bars
   WHERE series_key = ?1
     AND trade_day BETWEEN coalesce((
@@ -141,7 +156,8 @@ SELECT (SELECT day FROM pull) AS pull_day,
 
 # The signal bar and the bars a holding period can reach from the entry bar.
 _FORWARD_BARS_SQL = """
-SELECT trade_day, open_cents, high_cents, low_cents, close_cents
+SELECT trade_day, open_{p} AS open_px, high_{p} AS high_px,
+       low_{p} AS low_px, close_{p} AS close_px
 FROM series_bars
 WHERE series_key = ?1 AND trade_day >= ?2 AND trade_day <= ?3
 ORDER BY trade_day
@@ -154,15 +170,15 @@ _TAIL_SQL = """
 SELECT
   (SELECT trade_day FROM series_bars WHERE series_key = ?1 AND trade_day <= ?3
    ORDER BY trade_day DESC LIMIT 1) AS last_day,
-  (SELECT close_cents FROM series_bars WHERE series_key = ?1 AND trade_day <= ?3
+  (SELECT close_{p} FROM series_bars WHERE series_key = ?1 AND trade_day <= ?3
    ORDER BY trade_day DESC LIMIT 1) AS last_close,
-  (SELECT open_cents FROM series_bars WHERE series_key = ?1
+  (SELECT open_{p} FROM series_bars WHERE series_key = ?1
    AND trade_day > ?2 AND trade_day <= ?3 ORDER BY trade_day LIMIT 1) AS bo_entry
 """
 
 # Bars of one series used to build the equal-weight index.
 _INDEX_BARS_SQL = """
-SELECT trade_day, close_cents FROM series_bars
+SELECT trade_day, close_{p} AS close_px FROM series_bars
 WHERE series_key = ?1 AND trade_day BETWEEN ?2 AND ?3
 ORDER BY trade_day
 """
@@ -249,17 +265,21 @@ def _bars_up_to_last(conn: sqlite3.Connection, row: sqlite3.Row) -> int:
     return row["record_count"] - after
 
 
-def _trade(conn: sqlite3.Connection, key: int, breakout: int, signal: int) -> dict | None:
+def _trade(
+    conn: sqlite3.Connection, key: int, breakout: int, signal: int, suffix: str
+) -> dict | None:
     """Forward returns and excursions for one signal, in bar order from the entry bar."""
     bars = conn.execute(
-        _FORWARD_BARS_SQL, (key, signal, LAST_DAY, FORWARD_BARS + 1)
+        _price_sql(_FORWARD_BARS_SQL, suffix), (key, signal, LAST_DAY, FORWARD_BARS + 1)
     ).fetchall()
     if len(bars) < 2:
         return None  # no bar after the signal bar: the reference script drops it too
-    entry = bars[1]["open_cents"]
+    entry = bars[1]["open_px"]
     if entry <= 0:
         return None
-    tail = conn.execute(_TAIL_SQL, (key, breakout, LAST_DAY)).fetchone()
+    tail = conn.execute(
+        _price_sql(_TAIL_SQL, suffix), (key, breakout, LAST_DAY)
+    ).fetchone()
     last_close = tail["last_close"]
     trade = {
         "bo_day": breakout,
@@ -268,21 +288,21 @@ def _trade(conn: sqlite3.Connection, key: int, breakout: int, signal: int) -> di
         "entry": entry,
         "ex_end": tail["last_day"],
         "rend": last_close / entry - 1,
-        "mae20": min(bar["close_cents"] for bar in bars[1:22]) / entry - 1,
-        "mfe": max(bar["high_cents"] for bar in bars[1:22]) / entry - 1,
-        "mae": min(bar["low_cents"] for bar in bars[1:22]) / entry - 1,
+        "mae20": min(bar["close_px"] for bar in bars[1:22]) / entry - 1,
+        "mfe": max(bar["high_px"] for bar in bars[1:22]) / entry - 1,
+        "mae": min(bar["low_px"] for bar in bars[1:22]) / entry - 1,
     }
     for hold in HORIZONS:
         exit_bar = bars[1 + hold] if 1 + hold < len(bars) else None
         if exit_bar is not None:
-            trade[f"r{hold}"] = exit_bar["close_cents"] / entry - 1
+            trade[f"r{hold}"] = exit_bar["close_px"] / entry - 1
             trade[f"ex{hold}"] = exit_bar["trade_day"]
     bo_entry = tail["bo_entry"]
     if bo_entry and bo_entry > 0:
         trade["bo_entry"] = bo_entry
         for hold in HORIZONS:
             if f"r{hold}" in trade:
-                trade[f"b{hold}"] = bars[1 + hold]["close_cents"] / bo_entry - 1
+                trade[f"b{hold}"] = bars[1 + hold]["close_px"] / bo_entry - 1
         trade["bend"] = last_close / bo_entry - 1
     return trade
 
@@ -291,14 +311,17 @@ def load(path: str, workers: int = DEFAULT_WORKERS) -> Dataset:
     """One pass over the database: every variant reads from the result."""
     conn = connect(path)
     _require_window_functions()
+    suffix = _price_suffix(conn)
     highs = {
-        row["entity"]: row["high_cents"]
-        for row in conn.execute(_YEARLY_HIGH_SQL, (YEAR_2025_START, YEAR_2025_END))
+        row["entity"]: row["high_px"]
+        for row in conn.execute(
+            _price_sql(_YEARLY_HIGH_SQL, suffix), (YEAR_2025_START, YEAR_2025_END)
+        )
     }
     rows = conn.execute(_DAILY_SERIES_SQL).fetchall()
 
     def work(series_conn: sqlite3.Connection, row: sqlite3.Row):
-        return _series(series_conn, row, highs)
+        return _series(series_conn, row, highs, suffix)
 
     results = _map_series(path, rows, work, workers)
     trades = [trade for _, _, trade in results if trade is not None]
@@ -312,7 +335,7 @@ def load(path: str, workers: int = DEFAULT_WORKERS) -> Dataset:
 
 
 def _series(
-    conn: sqlite3.Connection, row: sqlite3.Row, highs: dict[str, int]
+    conn: sqlite3.Connection, row: sqlite3.Row, highs: dict[str, int], suffix: str
 ) -> tuple[bool, bool, dict | None]:
     """What one series contributes: (has 2025 high, has breakout, trade)."""
     high = highs.get(row["entity"])
@@ -321,16 +344,18 @@ def _series(
     if _bars_up_to_last(conn, row) < MIN_BARS:
         return True, False, None
     key = row["series_key"]
-    found = conn.execute(_FIRST_BREAKOUT_SQL, (key, BREAKOUT_START_DAY, high)).fetchone()
+    found = conn.execute(
+        _price_sql(_FIRST_BREAKOUT_SQL, suffix), (key, BREAKOUT_START_DAY, high)
+    ).fetchone()
     if found is None:
         return True, False, None
     breakout = found[0]
     signal = conn.execute(
-        _SIGNAL_SQL, (key, LAST_DAY, breakout, SMA_PERIOD)
+        _price_sql(_SIGNAL_SQL, suffix), (key, LAST_DAY, breakout, SMA_PERIOD)
     ).fetchone()["signal_day"]
     if signal is None:
         return True, True, None
-    trade = _trade(conn, key, breakout, signal)
+    trade = _trade(conn, key, breakout, signal, suffix)
     if trade is not None:
         trade["entity"] = row["entity"]
     return True, True, trade
@@ -424,11 +449,13 @@ def _equal_weight_index(conn: sqlite3.Connection) -> dict[int, float]:
     counters instead of a close price per entity and day.
     """
     accumulated: dict[tuple[int, int], list[float]] = {}
+    suffix = _price_suffix(conn)
     for row in conn.execute(_DAILY_SERIES_SQL).fetchall():
         previous_day = None
         previous_close = 0
         for bar in conn.execute(
-            _INDEX_BARS_SQL, (row["series_key"], INDEX_START_DAY, LAST_DAY)
+            _price_sql(_INDEX_BARS_SQL, suffix),
+            (row["series_key"], INDEX_START_DAY, LAST_DAY),
         ):
             if previous_day is not None:
                 bucket = accumulated.setdefault((previous_day, bar[0]), [0.0, 0])

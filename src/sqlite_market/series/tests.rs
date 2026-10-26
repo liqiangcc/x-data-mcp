@@ -22,6 +22,8 @@ use chrono::NaiveDate;
 use rusqlite::{Connection, params};
 
 const ENTITY: &str = "sh.600006";
+/// Schema 22's only materialized shape (forward-adjusted stock, 分).
+const SHAPE: SeriesShape = SeriesShape::FORWARD_STOCK_CENTS;
 
 fn db() -> (tempfile::TempDir, SqliteTasks, Connection) {
     use std::os::unix::fs::PermissionsExt;
@@ -44,10 +46,10 @@ fn day(y: i32, m: u32, d: u32) -> i64 {
 fn bar(day: i64, price: i64) -> CompactBar {
     CompactBar {
         trade_day: day,
-        open_cents: price,
-        high_cents: price + 1,
-        low_cents: price - 1,
-        close_cents: price,
+        open_units: price,
+        high_units: price + 1,
+        low_units: price - 1,
+        close_units: price,
         volume: Some(100),
         amount: Some("123.45".into()),
         r7_raw: Some(1),
@@ -122,6 +124,7 @@ fn event(
     NewEvent {
         entity: entity.into(),
         period,
+        adjustment: Adjustment::Forward,
         kind,
         outcome: if kind == "no_change" { 1 } else { 2 },
         metadata_changed: kind == "metadata",
@@ -200,7 +203,7 @@ fn seed_period(
     binding: Digest,
     tag: &str,
 ) -> SeriesRow {
-    let digest = fold_bars(entity, period, bars).unwrap();
+    let digest = fold_bars(entity, period, SHAPE, bars).unwrap();
     let seq = commit_event(
         c,
         event(
@@ -219,6 +222,9 @@ fn seed_period(
         &NewSeries {
             entity: entity.into(),
             period,
+            adjustment: SHAPE.adjustment,
+            instrument_class: SHAPE.instrument_class,
+            price_scale: SHAPE.price_scale,
             content_digest: digest,
             record_count: bars.len() as i64,
             first_day: bars[0].trade_day,
@@ -288,7 +294,7 @@ fn apply_replace(
     )
     .unwrap();
     insert_bars(c, s.series_key, bars).unwrap();
-    let digest = fold_bars(entity, Period::Day, bars).unwrap();
+    let digest = fold_bars(entity, Period::Day, SHAPE, bars).unwrap();
     let seq = commit_event(
         c,
         event(
@@ -337,6 +343,8 @@ fn seed_yearly(
             series_key: yearly.series_key,
             base_daily_digest: base.content_digest,
             base_event_seq: base.last_event_seq,
+            base_adjustment: Adjustment::Forward,
+            base_instrument_class: crate::market_data::INSTRUMENT_CLASS_STOCK,
             algorithm_version: "1".into(),
             first_trade_day: yearly_bars[0].trade_day,
             last_trade_day: yearly_bars.last().unwrap().trade_day,
@@ -366,16 +374,41 @@ fn digest_fold_is_path_independent() {
     let bars: Vec<_> = (0..5)
         .map(|i| bar(day(2025, 1, 2) + i, 1000 + i))
         .collect::<Vec<_>>();
-    let whole = fold_bars(ENTITY, Period::Day, &bars).unwrap();
-    let prefix = fold_bars(ENTITY, Period::Day, &bars[..3]).unwrap();
+    let whole = fold_bars(ENTITY, Period::Day, SHAPE, &bars).unwrap();
+    let prefix = fold_bars(ENTITY, Period::Day, SHAPE, &bars[..3]).unwrap();
     assert_eq!(whole, fold_more(prefix, &bars[3..]).unwrap());
     // Seed binds identity: same bars, different entity/period → different digest.
-    assert_ne!(whole, fold_bars("sh.600007", Period::Day, &bars).unwrap());
-    assert_ne!(whole, fold_bars(ENTITY, Period::Year, &bars).unwrap());
+    assert_ne!(
+        whole,
+        fold_bars("sh.600007", Period::Day, SHAPE, &bars).unwrap()
+    );
+    assert_ne!(
+        whole,
+        fold_bars(ENTITY, Period::Year, SHAPE, &bars).unwrap()
+    );
+    // Schema 22 §3.10: the seed also binds 品种 and 精度, so the same bar list
+    // under a different series identity is a different version. (The
+    // adjustment dimension gets its second value with the raw series, PR-2.)
+    let index_shape = SeriesShape {
+        instrument_class: crate::market_data::INSTRUMENT_CLASS_INDEX,
+        ..SHAPE
+    };
+    assert_ne!(
+        whole,
+        fold_bars(ENTITY, Period::Day, index_shape, &bars).unwrap()
+    );
+    let six_dp_shape = SeriesShape {
+        price_scale: 6,
+        ..SHAPE
+    };
+    assert_ne!(
+        whole,
+        fold_bars(ENTITY, Period::Day, six_dp_shape, &bars).unwrap()
+    );
     // Non-increasing input is rejected.
     let mut bad = bars.clone();
     bad.swap(0, 1);
-    assert!(fold_bars(ENTITY, Period::Day, &bad).is_err());
+    assert!(fold_bars(ENTITY, Period::Day, SHAPE, &bad).is_err());
 }
 
 // §8.1-2: version_id is hex(content_digest); the CHECK enforces the binding.
@@ -399,7 +432,7 @@ fn version_id_is_content_derived_and_check_enforced() {
     );
     // A version_id/digest mismatch is rejected by the CHECK, not by code.
     let bad = c.execute(
-        "INSERT INTO market_series(entity,period,adjustment,version_id,content_digest,digest_format,record_count,first_day,last_day,coverage_status,source_binding_digest,evidence_digest,last_event_seq,created_at,updated_at) VALUES('sh.600007',1,1,'not-a-digest',?1,'series-fold-v1',1,?2,?2,1,?3,?4,1,'x','x')",
+        "INSERT INTO market_series(entity,period,adjustment,instrument_class,price_scale,version_id,content_digest,digest_format,record_count,first_day,last_day,coverage_status,source_binding_digest,evidence_digest,last_event_seq,created_at,updated_at) VALUES('sh.600007',1,1,0,2,'not-a-digest',?1,'series-fold-v2',1,?2,?2,1,?3,?4,1,'x','x')",
         params![
             vec![9u8; 32],
             day(2025, 1, 1),
@@ -408,6 +441,120 @@ fn version_id_is_content_derived_and_check_enforced() {
         ],
     );
     assert!(bad.is_err());
+}
+
+// Schema 22 DDL (issue-383 §3.2/§3.10): a v1 digest cannot be relabelled as
+// v2, and yearly series exist only in the forward 口径.
+#[test]
+fn schema22_rejects_v1_digest_format_and_raw_yearly_series() {
+    let (_dir, _tasks, c) = db();
+    let (ev, gen_ev) = put_test_evidence(&c);
+    let binding = put_test_binding(&c, gen_ev);
+    let insert = |tag: u8, period: i64, adjustment: i64, digest_format: &str| {
+        let digest = [tag; 32];
+        c.execute(
+            "INSERT INTO market_series(entity,period,adjustment,instrument_class,price_scale,version_id,content_digest,digest_format,record_count,first_day,last_day,coverage_status,source_binding_digest,evidence_digest,last_event_seq,created_at,updated_at) VALUES('sh.600008',?1,?2,0,2,?3,?4,?5,1,?6,?6,1,?7,?8,1,'x','x')",
+            params![
+                period,
+                adjustment,
+                version_id(&digest),
+                digest.as_slice(),
+                digest_format,
+                day(2025, 1, 1),
+                binding.as_slice(),
+                ev.as_slice()
+            ],
+        )
+    };
+    assert!(
+        insert(0x31, 1, 1, "series-fold-v1").is_err(),
+        "a v1 digest format must not be relabelled as schema 22"
+    );
+    assert!(
+        insert(0x32, 2, 0, "series-fold-v2").is_err(),
+        "raw yearly series are not allowed"
+    );
+    assert!(insert(0x33, 1, 1, "series-fold-v2").is_ok());
+}
+
+// Schema 22 §3.9: `derived` joins the evidence vocabulary and round-trips
+// through the content-addressed store (calendar/factor/index evidence lands in
+// PR-4..PR-6; the kind itself is part of schema 22).
+#[test]
+fn derived_evidence_kind_round_trips() {
+    let (_dir, _tasks, c) = db();
+    let digest = crate::sqlite_market::evidence_store::put_evidence(
+        &c,
+        EvidenceKind::Derived,
+        &json!({"note": "index volume unit is hand"}),
+    )
+    .unwrap();
+    let (kind, canonical) =
+        crate::sqlite_market::evidence_store::read_evidence(&c, &digest).unwrap();
+    assert_eq!(kind, EvidenceKind::Derived);
+    assert!(canonical.contains("index volume unit is hand"));
+}
+
+// issue-383 §17.1: the startup closure probe must scope by all three keys.
+// A raw series of the same entity (a state PR-2 creates) closes against its
+// own event chain, not the forward one.
+#[test]
+fn startup_check_scopes_closure_by_adjustment() {
+    let (_dir, _tasks, c) = db();
+    let (ev, gen_ev) = put_test_evidence(&c);
+    let binding = put_test_binding(&c, gen_ev);
+    let bars = [bar(day(2025, 1, 2), 1000), bar(day(2025, 1, 3), 1001)];
+    seed_daily(&c, ENTITY, &bars, ev, binding);
+    // Raw-口径 rows have no writer until PR-2; the schema and the closure
+    // probe must already handle them, so this fixture inserts them directly.
+    // The event reuses the forward series' task item: schema 22 relaxes
+    // UNIQUE(task_id,item_id) to (task_id,item_id,adjustment), and PR-2 writes
+    // exactly this pair for one item.
+    let (task_id, item_id): (String, String) = c
+        .query_row(
+            "SELECT task_id,item_id FROM market_events WHERE entity=?1 AND adjustment=1",
+            params![ENTITY],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    let raw_digest = [0x5A; 32];
+    let raw_seq = next_event_seq(&c).unwrap();
+    c.execute(
+        "INSERT INTO market_events(seq,entity,period,adjustment,kind,outcome,metadata_changed,new_content_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at) VALUES(?1,?2,1,0,'first_publish',2,0,?3,?4,?5,?6,1,'result-raw',?7,'2026-01-01T00:00:00Z')",
+        params![
+            raw_seq,
+            ENTITY,
+            raw_digest.as_slice(),
+            ev.as_slice(),
+            task_id,
+            item_id,
+            [0x0Au8; 32].as_slice()
+        ],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO market_series(entity,period,adjustment,instrument_class,price_scale,version_id,content_digest,digest_format,record_count,first_day,last_day,coverage_status,source_binding_digest,evidence_digest,last_event_seq,created_at,updated_at) VALUES(?1,1,0,0,2,?2,?3,'series-fold-v2',2,?4,?5,1,?6,?7,?8,'x','x')",
+        params![
+            ENTITY,
+            version_id(&raw_digest),
+            raw_digest.as_slice(),
+            day(2025, 1, 2),
+            day(2025, 1, 3),
+            binding.as_slice(),
+            ev.as_slice(),
+            raw_seq
+        ],
+    )
+    .unwrap();
+    startup_check(&c).unwrap();
+    // The forward head resolves by its own 口径 only.
+    let forward = read_series(&c, ENTITY, Period::Day).unwrap().unwrap();
+    assert_eq!(forward.adjustment, Adjustment::Forward);
+    assert_ne!(forward.content_digest, raw_digest);
+    // Dropping the raw event breaks only the raw series' closure.
+    c.execute("DELETE FROM market_events WHERE adjustment=0", [])
+        .unwrap();
+    assert!(startup_check(&c).is_err());
 }
 
 // §8.1-3/4: closure invariants + the three tamper cases.
@@ -424,7 +571,7 @@ fn startup_check_detects_broken_closure() {
     seed_daily(&c, ENTITY, &bars[..2], ev, binding);
     let appended = apply_append(&c, ENTITY, &bars[2..], ev, binding, "a1");
     startup_check(&c).unwrap();
-    check_entity_chain(&c, ENTITY, Period::Day).unwrap();
+    check_entity_chain(&c, ENTITY, Period::Day, Adjustment::Forward).unwrap();
 
     // (a) rewritten tail digest: fake a consistent (digest, id) pair — the
     // series CHECK still passes, but the event/series closure does not.
@@ -492,6 +639,9 @@ fn startup_check_detects_broken_closure() {
         &NewSeries {
             entity: "sh.600009".into(),
             period: Period::Day,
+            adjustment: SHAPE.adjustment,
+            instrument_class: SHAPE.instrument_class,
+            price_scale: SHAPE.price_scale,
             content_digest: [0x09; 32],
             record_count: 1,
             first_day: day(2025, 1, 2),
@@ -645,10 +795,10 @@ fn supply_reads_on_schema21() {
     // year's close, open is the first bar's, high/low the extremes.
     let yearly_bar = CompactBar {
         trade_day: day(2025, 1, 3),
-        open_cents: 1000,
-        high_cents: 1002,
-        low_cents: 999,
-        close_cents: 1001,
+        open_units: 1000,
+        high_units: 1002,
+        low_units: 999,
+        close_units: 1001,
         volume: Some(200),
         amount: Some("246.9".into()),
         r7_raw: None,
@@ -923,7 +1073,7 @@ fn startup_check_1m_events() {
     for e in 0..entities {
         let entity = format!("sh.{:06}", 600000 + e);
         let bars = [bar(day(2025, 1, 2), 1000)];
-        let digest = fold_bars(&entity, Period::Day, &bars).unwrap();
+        let digest = fold_bars(&entity, Period::Day, SHAPE, &bars).unwrap();
 
         for n in 0..events_each {
             let kind = if n == 0 {
@@ -953,6 +1103,9 @@ fn startup_check_1m_events() {
                     &NewSeries {
                         entity: entity.clone(),
                         period: Period::Day,
+                        adjustment: SHAPE.adjustment,
+                        instrument_class: SHAPE.instrument_class,
+                        price_scale: SHAPE.price_scale,
                         content_digest: digest,
                         record_count: 1,
                         first_day: day(2025, 1, 2),

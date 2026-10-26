@@ -1,5 +1,5 @@
-//! Schema-21 latest-only market storage (SPEC-LATEST-ONLY §1–§3;
-//! SPEC-RULINGS-LATEST-ONLY A1–A5).
+//! Schema-21/22 latest-only market storage (SPEC-LATEST-ONLY §1–§3;
+//! SPEC-RULINGS-LATEST-ONLY A1–A5; M1 research data, issue-383 §3).
 //!
 //! Every `(entity, period, adjustment)` keeps exactly one current row in
 //! `market_series`; bars live in `series_bars` keyed by `(series_key,
@@ -7,8 +7,12 @@
 //! the same transaction that updates the series row (§3.4 invariant).
 //!
 //! Content identity is a sequential fold digest (SPEC §2.2):
-//! `h_0 = seed(entity, period)`, `h_n = SHA256(h_{n-1} || bar_encoding(bar_n))`
+//! `h_0 = seed(entity, period, shape)`,
+//! `h_n = SHA256(h_{n-1} || bar_encoding(bar_n))`
 //! — path-independent, O(k) to extend on append, O(n) to rebuild on replace.
+//! Schema 22 (`series-fold-v2`) folds the series 口径/精度 into the seed
+//! (`adjustment`, `instrument_class`, `price_scale`), so identical bar lists
+//! under different series identities cannot collide (issue-383 §3.10).
 //! `version_id = lower(hex(content_digest))`; a version id that existed but
 //! was superseded resolves to `Error::Stale`, one that never existed to
 //! `Error::NotFound` (SPEC §6.1).
@@ -23,8 +27,8 @@ use crate::compact_market::{
     self, CompactBar, Digest, EvidenceKind, SourceBinding, VersionEvidence,
 };
 use crate::market_data::{
-    Adjustment, CoverageEvidence, CoverageStatus, MarketDataBatch, Period, Provenance,
-    SnapshotInputBinding, YearlyDerivation,
+    Adjustment, CoverageEvidence, CoverageStatus, INSTRUMENT_CLASS_STOCK, MarketDataBatch, Period,
+    Provenance, SnapshotInputBinding, YearlyDerivation,
 };
 use crate::market_storage::{Error, compat::CheckedRecord};
 use crate::publish::{EffectiveVersion, ValidationSummary};
@@ -38,17 +42,86 @@ fn push_text(out: &mut Vec<u8>, value: &str) {
     out.extend_from_slice(value.as_bytes());
 }
 
-pub(crate) const DIGEST_FORMAT: &str = "series-fold-v1";
+pub(crate) const DIGEST_FORMAT: &str = "series-fold-v2";
 
-/// Domain-separated fold seed (SPEC §2.2): binds the digest to
-/// (entity, period) so identical bar lists under different identities cannot
-/// collide.
-pub(crate) fn seed_digest(entity: &str, period: Period) -> Result<Digest, Error> {
+/// The identity dimensions schema 22 binds into the series digest seed:
+/// 口径 (`adjustment`), 品种 (`instrument_class`) and 精度 (`price_scale`).
+/// `price_scale` lives on the series row, not in the bar encoding, so the
+/// seed is what makes "same integers, different scale" a different version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeriesShape {
+    pub adjustment: Adjustment,
+    pub instrument_class: i64,
+    pub price_scale: u32,
+}
+
+impl SeriesShape {
+    /// The only shape schema 22 materializes before PR-2/PR-3: forward
+    /// adjusted, stock, 分. Every write path names it explicitly so widening
+    /// the write set cannot silently reuse the wrong 口径.
+    pub(crate) const FORWARD_STOCK_CENTS: Self = Self {
+        adjustment: Adjustment::Forward,
+        instrument_class: INSTRUMENT_CLASS_STOCK,
+        price_scale: compact_market::PRICE_SCALE_CENTS,
+    };
+
+    /// Decode the three stored identity columns; values the DDL allows but
+    /// this build does not implement fail closed instead of being coerced.
+    pub(crate) fn decode(
+        adjustment: i64,
+        instrument_class: i64,
+        price_scale: i64,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            adjustment: decode_adjustment(adjustment)?,
+            instrument_class: decode_instrument_class(instrument_class)?,
+            price_scale: decode_price_scale(price_scale)?,
+        })
+    }
+}
+
+/// Decode a stored `adjustment` code. Code 0 (不复权) has no domain variant
+/// until M1 PR-2 materializes the raw series, so it fails closed here rather
+/// than being coerced to the forward 口径.
+pub(crate) fn decode_adjustment(code: i64) -> Result<Adjustment, Error> {
+    match code {
+        1 => Ok(Adjustment::Forward),
+        _ => Err(integrity("unknown series adjustment")),
+    }
+}
+
+fn decode_instrument_class(code: i64) -> Result<i64, Error> {
+    match code {
+        INSTRUMENT_CLASS_STOCK
+        | crate::market_data::INSTRUMENT_CLASS_INDEX
+        | crate::market_data::INSTRUMENT_CLASS_ETF => Ok(code),
+        _ => Err(integrity("unknown series instrument_class")),
+    }
+}
+
+fn decode_price_scale(code: i64) -> Result<u32, Error> {
+    match code {
+        0..=6 => Ok(code as u32),
+        _ => Err(integrity("series price_scale out of range")),
+    }
+}
+
+/// Domain-separated fold seed (SPEC §2.2, schema 22 §3.10): binds the digest
+/// to (entity, period, adjustment, instrument_class, price_scale) so identical
+/// bar lists under different series identities cannot collide.
+pub(crate) fn seed_digest(
+    entity: &str,
+    period: Period,
+    shape: SeriesShape,
+) -> Result<Digest, Error> {
     compact_market::canonical_entity(entity).map_err(|e| invalid(e.to_string()))?;
-    let mut payload = Vec::with_capacity(64);
-    payload.extend_from_slice(b"x-data-series-v1\0");
+    let mut payload = Vec::with_capacity(96);
+    payload.extend_from_slice(b"x-data-series-v2\0");
     push_text(&mut payload, entity);
     payload.push(compact_market::period_code(period));
+    payload.push(u8::try_from(shape.adjustment.code()).map_err(|_| invalid("adjustment"))?);
+    payload.push(u8::try_from(shape.instrument_class).map_err(|_| invalid("instrument_class"))?);
+    payload.push(u8::try_from(shape.price_scale).map_err(|_| invalid("price_scale"))?);
     Ok(Sha256::digest(&payload).into())
 }
 
@@ -66,9 +139,10 @@ pub(crate) fn fold_bar(state: Digest, bar: &CompactBar) -> Digest {
 pub(crate) fn fold_bars(
     entity: &str,
     period: Period,
+    shape: SeriesShape,
     bars: &[CompactBar],
 ) -> Result<Digest, Error> {
-    fold_more(seed_digest(entity, period)?, bars)
+    fold_more(seed_digest(entity, period, shape)?, bars)
 }
 
 /// Continue a stored fold with new bars — the append path is O(#new bars) and
@@ -117,6 +191,12 @@ pub(crate) struct SeriesRow {
     pub series_key: i64,
     pub entity: String,
     pub period: Period,
+    /// 0=不复权 / 1=前复权 (schema 22). Only `Forward` decodes today.
+    pub adjustment: Adjustment,
+    /// 0=股票 / 1=指数 / 2=ETF(M3 预留).
+    pub instrument_class: i64,
+    /// Denominator exponent of `series_bars.*_units` (元 / 点).
+    pub price_scale: u32,
     pub version_id: String,
     pub content_digest: Digest,
     pub record_count: i64,
@@ -131,11 +211,24 @@ pub(crate) struct SeriesRow {
     pub updated_at: String,
 }
 
-const SERIES_COLUMNS: &str = "series_key,entity,period,version_id,content_digest,record_count,first_day,last_day,coverage_status,source_binding_digest,evidence_digest,last_event_seq,created_at,updated_at";
+impl SeriesRow {
+    pub(crate) fn shape(&self) -> SeriesShape {
+        SeriesShape {
+            adjustment: self.adjustment,
+            instrument_class: self.instrument_class,
+            price_scale: self.price_scale,
+        }
+    }
+}
+
+const SERIES_COLUMNS: &str = "series_key,entity,period,adjustment,instrument_class,price_scale,version_id,content_digest,record_count,first_day,last_day,coverage_status,source_binding_digest,evidence_digest,last_event_seq,created_at,updated_at";
 
 type RawSeries = (
     i64,
     String,
+    i64,
+    i64,
+    i64,
     i64,
     String,
     Vec<u8>,
@@ -184,8 +277,8 @@ fn digest32_opt(raw: Option<Vec<u8>>) -> Result<Option<Digest>, Error> {
 }
 
 fn series_row(raw: RawSeries) -> Result<SeriesRow, Error> {
-    let content_digest = digest32(raw.4)?;
-    let vid = raw.3;
+    let content_digest = digest32(raw.7)?;
+    let vid = raw.6;
     if vid != version_id(&content_digest) {
         return Err(integrity("series version_id does not match content digest"));
     }
@@ -193,17 +286,20 @@ fn series_row(raw: RawSeries) -> Result<SeriesRow, Error> {
         series_key: raw.0,
         entity: raw.1,
         period: decode_period(raw.2)?,
+        adjustment: decode_adjustment(raw.3)?,
+        instrument_class: decode_instrument_class(raw.4)?,
+        price_scale: decode_price_scale(raw.5)?,
         version_id: vid,
         content_digest,
-        record_count: raw.5,
-        first_day: raw.6,
-        last_day: raw.7,
-        coverage_status: decode_coverage(raw.8)?,
-        source_binding_digest: digest32(raw.9)?,
-        evidence_digest: digest32(raw.10)?,
-        last_event_seq: raw.11,
-        created_at: raw.12,
-        updated_at: raw.13,
+        record_count: raw.8,
+        first_day: raw.9,
+        last_day: raw.10,
+        coverage_status: decode_coverage(raw.11)?,
+        source_binding_digest: digest32(raw.12)?,
+        evidence_digest: digest32(raw.13)?,
+        last_event_seq: raw.14,
+        created_at: raw.15,
+        updated_at: raw.16,
     })
 }
 
@@ -223,6 +319,9 @@ fn raw_series(r: &rusqlite::Row<'_>) -> Result<RawSeries, rusqlite::Error> {
         r.get(11)?,
         r.get(12)?,
         r.get(13)?,
+        r.get(14)?,
+        r.get(15)?,
+        r.get(16)?,
     ))
 }
 
@@ -238,19 +337,36 @@ fn read_series_row(
         .transpose()
 }
 
-/// The current series row for one (entity, period); `None` when never
-/// published.
+/// The current forward-adjusted series row for one (entity, period); `None`
+/// when never published. Kept as the qfq convenience head — the storage
+/// predicate itself is parameterized (`read_series_adjusted`).
 pub(crate) fn read_series(
     c: &Connection,
     entity: &str,
     period: Period,
 ) -> Result<Option<SeriesRow>, Error> {
+    read_series_adjusted(c, entity, period, Adjustment::Forward)
+}
+
+/// The current series row for one `(entity, period, adjustment)` — schema 22
+/// makes 口径 part of the identity, so every read that can see two series
+/// must name it (issue-383 §3.2).
+pub(crate) fn read_series_adjusted(
+    c: &Connection,
+    entity: &str,
+    period: Period,
+    adjustment: Adjustment,
+) -> Result<Option<SeriesRow>, Error> {
     read_series_row(
         c,
         &format!(
-            "SELECT {SERIES_COLUMNS} FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=1"
+            "SELECT {SERIES_COLUMNS} FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=?3"
         ),
-        params![entity, super::compact_repo::period_code(period)],
+        params![
+            entity,
+            super::compact_repo::period_code(period),
+            adjustment.code()
+        ],
     )
 }
 
@@ -297,7 +413,7 @@ pub(crate) fn require_series(c: &Connection, version_id: &str) -> Result<SeriesR
 // ---------------------------------------------------------------------------
 
 const BAR_COLUMNS: &str =
-    "trade_day,open_cents,high_cents,low_cents,close_cents,volume,amount,r7_raw";
+    "trade_day,open_units,high_units,low_units,close_units,volume,amount,r7_raw";
 
 fn read_bars(
     c: &Connection,
@@ -309,10 +425,10 @@ fn read_bars(
         .query_map(args, |r| {
             Ok(CompactBar {
                 trade_day: r.get(0)?,
-                open_cents: r.get(1)?,
-                high_cents: r.get(2)?,
-                low_cents: r.get(3)?,
-                close_cents: r.get(4)?,
+                open_units: r.get(1)?,
+                high_units: r.get(2)?,
+                low_units: r.get(3)?,
+                close_units: r.get(4)?,
                 volume: r.get(5)?,
                 amount: r.get(6)?,
                 r7_raw: r.get(7)?,
@@ -419,6 +535,9 @@ pub(crate) struct EventRow {
     pub seq: i64,
     pub entity: String,
     pub period: i64,
+    /// Series 口径 this event advances (schema 22): one item audits one
+    /// event per adjustment.
+    pub adjustment: Adjustment,
     pub kind: String,
     pub outcome: i64,
     pub metadata_changed: bool,
@@ -445,11 +564,12 @@ pub(crate) struct EventRow {
     pub semantics_changed: i64,
 }
 
-const EVENT_COLUMNS: &str = "seq,entity,period,kind,outcome,metadata_changed,continuity_mode,prefix_bytes,old_content_digest,new_content_digest,range_start_day,range_end_day,window_digest,base_content_digest,algorithm_version,source_binding_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at,semantics_changed";
+const EVENT_COLUMNS: &str = "seq,entity,period,adjustment,kind,outcome,metadata_changed,continuity_mode,prefix_bytes,old_content_digest,new_content_digest,range_start_day,range_end_day,window_digest,base_content_digest,algorithm_version,source_binding_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at,semantics_changed";
 
 type RawEvent = (
     i64,
     String,
+    i64,
     i64,
     String,
     i64,
@@ -500,6 +620,7 @@ fn event_row(r: &rusqlite::Row<'_>) -> Result<RawEvent, rusqlite::Error> {
         r.get(21)?,
         r.get(22)?,
         r.get(23)?,
+        r.get(24)?,
     ))
 }
 
@@ -508,27 +629,28 @@ fn event(raw: RawEvent) -> Result<EventRow, Error> {
         seq: raw.0,
         entity: raw.1,
         period: raw.2,
-        kind: raw.3,
-        outcome: raw.4,
-        metadata_changed: raw.5 != 0,
-        continuity_mode: raw.6,
-        prefix_bytes: raw.7,
-        old_content_digest: digest32_opt(raw.8)?,
-        new_content_digest: digest32(raw.9)?,
-        range_start_day: raw.10,
-        range_end_day: raw.11,
-        window_digest: digest32_opt(raw.12)?,
-        base_content_digest: digest32_opt(raw.13)?,
-        algorithm_version: raw.14,
-        source_binding_digest: digest32_opt(raw.15)?,
-        evidence_digest: digest32(raw.16)?,
-        task_id: raw.17,
-        item_id: raw.18,
-        task_revision: raw.19,
-        result_id: raw.20,
-        result_digest: digest32(raw.21)?,
-        created_at: raw.22,
-        semantics_changed: raw.23,
+        adjustment: decode_adjustment(raw.3)?,
+        kind: raw.4,
+        outcome: raw.5,
+        metadata_changed: raw.6 != 0,
+        continuity_mode: raw.7,
+        prefix_bytes: raw.8,
+        old_content_digest: digest32_opt(raw.9)?,
+        new_content_digest: digest32(raw.10)?,
+        range_start_day: raw.11,
+        range_end_day: raw.12,
+        window_digest: digest32_opt(raw.13)?,
+        base_content_digest: digest32_opt(raw.14)?,
+        algorithm_version: raw.15,
+        source_binding_digest: digest32_opt(raw.16)?,
+        evidence_digest: digest32(raw.17)?,
+        task_id: raw.18,
+        item_id: raw.19,
+        task_revision: raw.20,
+        result_id: raw.21,
+        result_digest: digest32(raw.22)?,
+        created_at: raw.23,
+        semantics_changed: raw.24,
     })
 }
 
@@ -553,20 +675,25 @@ pub(crate) fn event_by_seq(c: &Connection, seq: i64) -> Result<Option<EventRow>,
     )
 }
 
-/// The newest event of one (entity, period) — one probe against the
-/// `(entity, period, seq DESC)` index.
+/// The newest event of one (entity, period, adjustment) — one probe against
+/// the `(entity, period, adjustment, seq DESC)` index.
 #[allow(dead_code)]
 pub(crate) fn latest_event(
     c: &Connection,
     entity: &str,
     period: Period,
+    adjustment: Adjustment,
 ) -> Result<Option<EventRow>, Error> {
     read_event_row(
         c,
         &format!(
-            "SELECT {EVENT_COLUMNS} FROM market_events WHERE entity=?1 AND period=?2 ORDER BY seq DESC LIMIT 1"
+            "SELECT {EVENT_COLUMNS} FROM market_events WHERE entity=?1 AND period=?2 AND adjustment=?3 ORDER BY seq DESC LIMIT 1"
         ),
-        params![entity, super::compact_repo::period_code(period)],
+        params![
+            entity,
+            super::compact_repo::period_code(period),
+            adjustment.code()
+        ],
     )
 }
 
@@ -579,30 +706,41 @@ pub(crate) fn event_by_result(c: &Connection, result_id: &str) -> Result<Option<
     )
 }
 
-/// Events of one (entity, period) strictly after `seq`, ascending.
-/// Replay/read anchor for the `UNIQUE(task_id, item_id)` pair.
+/// The event of one item at one 口径 — replay/read anchor for the
+/// `UNIQUE(task_id, item_id, adjustment)` key.
 pub(crate) fn event_by_task_item(
     c: &Connection,
     task_id: &str,
     item_id: &str,
+    adjustment: Adjustment,
 ) -> Result<Option<EventRow>, Error> {
     read_event_row(
         c,
-        &format!("SELECT {EVENT_COLUMNS} FROM market_events WHERE task_id=?1 AND item_id=?2"),
-        params![task_id, item_id],
+        &format!(
+            "SELECT {EVENT_COLUMNS} FROM market_events WHERE task_id=?1 AND item_id=?2 AND adjustment=?3"
+        ),
+        params![task_id, item_id, adjustment.code()],
     )
 }
 
+/// Events of one (entity, period, adjustment) strictly after `seq`,
+/// ascending.
 pub(crate) fn events_after(
     c: &Connection,
     entity: &str,
     period: Period,
+    adjustment: Adjustment,
     seq: i64,
 ) -> Result<Vec<EventRow>, Error> {
-    c.prepare(&format!("SELECT {EVENT_COLUMNS} FROM market_events WHERE entity=?1 AND period=?2 AND seq>?3 ORDER BY seq"))
+    c.prepare(&format!("SELECT {EVENT_COLUMNS} FROM market_events WHERE entity=?1 AND period=?2 AND adjustment=?3 AND seq>?4 ORDER BY seq"))
     .map_err(storage)?
     .query_map(
-        params![entity, super::compact_repo::period_code(period), seq],
+        params![
+            entity,
+            super::compact_repo::period_code(period),
+            adjustment.code(),
+            seq
+        ],
         event_row,
     )
     .map_err(storage)?
@@ -633,6 +771,10 @@ pub(crate) struct SeriesLineage {
     pub series_key: i64,
     pub base_daily_digest: Digest,
     pub base_event_seq: i64,
+    /// 口径 of the daily series this yearly row was derived from
+    /// (schema 22 §3.5): yearly only derives from the forward 口径.
+    pub base_adjustment: Adjustment,
+    pub base_instrument_class: i64,
     pub algorithm_version: String,
     pub first_trade_day: i64,
     pub last_trade_day: i64,
@@ -644,17 +786,19 @@ pub(crate) fn yearly_lineage(
     series_key: i64,
 ) -> Result<Option<SeriesLineage>, Error> {
     c.query_row(
-        "SELECT series_key,base_daily_digest,base_event_seq,algorithm_version,first_trade_day,last_trade_day,as_of_day FROM yearly_series_lineage WHERE series_key=?1",
+        "SELECT series_key,base_daily_digest,base_event_seq,base_adjustment,base_instrument_class,algorithm_version,first_trade_day,last_trade_day,as_of_day FROM yearly_series_lineage WHERE series_key=?1",
         params![series_key],
         |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, Vec<u8>>(1)?,
                 r.get::<_, i64>(2)?,
-                r.get::<_, String>(3)?,
+                r.get::<_, i64>(3)?,
                 r.get::<_, i64>(4)?,
-                r.get::<_, i64>(5)?,
+                r.get::<_, String>(5)?,
                 r.get::<_, i64>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, i64>(8)?,
             ))
         },
     )
@@ -665,10 +809,12 @@ pub(crate) fn yearly_lineage(
             series_key: row.0,
             base_daily_digest: digest32(row.1)?,
             base_event_seq: row.2,
-            algorithm_version: row.3,
-            first_trade_day: row.4,
-            last_trade_day: row.5,
-            as_of_day: row.6,
+            base_adjustment: decode_adjustment(row.3)?,
+            base_instrument_class: decode_instrument_class(row.4)?,
+            algorithm_version: row.5,
+            first_trade_day: row.6,
+            last_trade_day: row.7,
+            as_of_day: row.8,
         })
     })
     .transpose()
@@ -716,14 +862,29 @@ pub(crate) fn yearly_state(c: &Connection, series: &SeriesRow) -> Result<YearlyS
     }
     let lineage = yearly_lineage(c, series.series_key)?
         .ok_or_else(|| integrity("yearly series lacks lineage"))?;
-    let daily = read_series(c, &series.entity, Period::Day)?
+    // §3.5: yearly derives only from the forward-adjusted stock daily series;
+    // a lineage naming any other base 口径 is forged and fails closed.
+    if lineage.base_adjustment != Adjustment::Forward
+        || lineage.base_instrument_class != INSTRUMENT_CLASS_STOCK
+    {
+        return Err(integrity(
+            "yearly lineage base 口径 is not forward-adjusted stock",
+        ));
+    }
+    let daily = read_series_adjusted(c, &series.entity, Period::Day, lineage.base_adjustment)?
         .ok_or_else(|| integrity("yearly series without daily base"))?;
     if daily.last_event_seq < lineage.base_event_seq {
         return Err(integrity("yearly lineage base event ahead of daily tail"));
     }
     // The recorded base must appear in this entity's daily event chain —
     // otherwise the lineage was forged or the chain is corrupt.
-    if !digest_seen_for(c, &series.entity, Period::Day, &lineage.base_daily_digest)? {
+    if !digest_seen_for(
+        c,
+        &series.entity,
+        Period::Day,
+        lineage.base_adjustment,
+        &lineage.base_daily_digest,
+    )? {
         return Err(integrity(
             "yearly lineage base digest not in daily event chain",
         ));
@@ -733,7 +894,13 @@ pub(crate) fn yearly_state(c: &Connection, series: &SeriesRow) -> Result<YearlyS
     {
         return Ok(YearlyState::Fresh);
     }
-    let tail = events_after(c, &series.entity, Period::Day, lineage.base_event_seq)?;
+    let tail = events_after(
+        c,
+        &series.entity,
+        Period::Day,
+        lineage.base_adjustment,
+        lineage.base_event_seq,
+    )?;
     if tail.is_empty() {
         // Digest differs but no events follow the recorded base — the chain
         // and the series row disagree; corrupt.
@@ -757,6 +924,8 @@ pub(crate) fn yearly_state(c: &Connection, series: &SeriesRow) -> Result<YearlyS
 pub(crate) struct LineageWrite<'a> {
     pub base_daily_digest: Digest,
     pub base_event_seq: i64,
+    pub base_adjustment: Adjustment,
+    pub base_instrument_class: i64,
     pub algorithm_version: &'a str,
     pub first_trade_day: i64,
     pub last_trade_day: i64,
@@ -772,11 +941,13 @@ pub(crate) fn put_lineage(
     w: &LineageWrite<'_>,
 ) -> Result<(), Error> {
     c.execute(
-        "INSERT OR REPLACE INTO yearly_series_lineage(series_key,base_daily_digest,base_event_seq,algorithm_version,first_trade_day,last_trade_day,as_of_day) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT OR REPLACE INTO yearly_series_lineage(series_key,base_daily_digest,base_event_seq,base_adjustment,base_instrument_class,algorithm_version,first_trade_day,last_trade_day,as_of_day) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
             series_key,
             w.base_daily_digest.as_slice(),
             w.base_event_seq,
+            w.base_adjustment.code(),
+            w.base_instrument_class,
             w.algorithm_version,
             w.first_trade_day,
             w.last_trade_day,
@@ -791,13 +962,15 @@ fn digest_seen_for(
     c: &Connection,
     entity: &str,
     period: Period,
+    adjustment: Adjustment,
     digest: &Digest,
 ) -> Result<bool, Error> {
     c.query_row(
-        "SELECT EXISTS(SELECT 1 FROM market_events WHERE entity=?1 AND period=?2 AND new_content_digest=?3)",
+        "SELECT EXISTS(SELECT 1 FROM market_events WHERE entity=?1 AND period=?2 AND adjustment=?3 AND new_content_digest=?4)",
         params![
             entity,
             super::compact_repo::period_code(period),
+            adjustment.code(),
             digest.as_slice()
         ],
         |r| r.get(0),
@@ -838,7 +1011,7 @@ pub(crate) fn checked_record(
     let records = if full {
         all_bars(c, series.series_key)?
             .iter()
-            .map(|b| b.to_bar(series.period))
+            .map(|b| b.to_bar(series.period, series.price_scale))
             .collect::<Result<Vec<_>, _>>()
             .map_err(integrity)?
     } else {
@@ -1012,7 +1185,7 @@ pub(crate) fn yearly_row_meta(
         compact_market::epoch_day(end),
     )?
     .iter()
-    .map(|b| b.to_bar(Period::Day))
+    .map(|b| b.to_bar(Period::Day, daily.price_scale))
     .collect::<Result<Vec<_>, _>>()
     .map_err(integrity)?;
     // `aggregate` requires confirmed unit/adjustment evidence — the daily
@@ -1072,9 +1245,12 @@ pub fn startup_check(c: &Connection) -> Result<(), Error> {
     }
     // 1. Tail closure per series: two INDEX-ONLY probes against the
     //    covering index market_events_entity_period
-    //    (entity, period, seq DESC, new_content_digest, kind):
+    //    (entity, period, adjustment, seq DESC, new_content_digest, kind):
     //    the named event must exist with the stored digest, and no newer
-    //    event may exist for the pair. No table-row fetches at all.
+    //    event may exist for the triple. Schema 22 makes adjustment part of
+    //    the series identity, so the probe must filter by all three keys or
+    //    two series of one entity would judge each other (issue-383 §17.1).
+    //    No table-row fetches at all.
     let broken: bool = c
         .query_row(
             "SELECT EXISTS(
@@ -1082,11 +1258,13 @@ pub fn startup_check(c: &Connection) -> Result<(), Error> {
                 WHERE NOT EXISTS(
                         SELECT 1 FROM market_events e INDEXED BY market_events_entity_period
                         WHERE e.entity = s.entity AND e.period = s.period
+                          AND e.adjustment = s.adjustment
                           AND e.seq = s.last_event_seq
                           AND e.new_content_digest = s.content_digest)
                    OR EXISTS(
                         SELECT 1 FROM market_events e2 INDEXED BY market_events_entity_period
                         WHERE e2.entity = s.entity AND e2.period = s.period
+                          AND e2.adjustment = s.adjustment
                           AND e2.seq > s.last_event_seq))",
             [],
             |r| r.get(0),
@@ -1109,42 +1287,44 @@ pub fn startup_check(c: &Connection) -> Result<(), Error> {
     if orphan {
         return Err(integrity("orphan yearly lineage"));
     }
-    // 3. Orphan events: every (entity, period) carrying events must own a
-    //    series row. NO O(events) DISTINCT scan here — SQLite has no loose
-    //    index scan, so emulate one: seek the next distinct (entity,period)
-    //    pair in index order, O(#pairs) index seeks total.
-    let mut cursor: Option<(String, i64)> = None;
+    // 3. Orphan events: every (entity, period, adjustment) carrying events
+    //    must own a series row. NO O(events) DISTINCT scan here — SQLite has
+    //    no loose index scan, so emulate one: seek the next distinct triple in
+    //    index order, O(#series) index seeks total.
+    let mut cursor: Option<(String, i64, i64)> = None;
     loop {
-        let pair: Option<(String, i64)> = match &cursor {
+        let triple: Option<(String, i64, i64)> = match &cursor {
             None => c
                 .query_row(
-                    "SELECT entity, period FROM market_events INDEXED BY market_events_entity_period ORDER BY entity, period LIMIT 1",
+                    "SELECT entity, period, adjustment FROM market_events INDEXED BY market_events_entity_period ORDER BY entity, period, adjustment LIMIT 1",
                     [],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
                 )
                 .optional()
                 .map_err(storage)?,
-            Some((entity, period)) => c
+            Some((entity, period, adjustment)) => c
                 .query_row(
-                    "SELECT entity, period FROM market_events INDEXED BY market_events_entity_period WHERE (entity, period) > (?1, ?2) ORDER BY entity, period LIMIT 1",
-                    params![entity, period],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                    "SELECT entity, period, adjustment FROM market_events INDEXED BY market_events_entity_period WHERE (entity, period, adjustment) > (?1, ?2, ?3) ORDER BY entity, period, adjustment LIMIT 1",
+                    params![entity, period, adjustment],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
                 )
                 .optional()
                 .map_err(storage)?,
         };
-        let Some((entity, period)) = pair else { break };
+        let Some((entity, period, adjustment)) = triple else {
+            break;
+        };
         let exists: bool = c
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=1)",
-                params![entity, period],
+                "SELECT EXISTS(SELECT 1 FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=?3)",
+                params![entity, period, adjustment],
                 |r| r.get(0),
             )
             .map_err(storage)?;
         if !exists {
             return Err(integrity("market event without series row"));
         }
-        cursor = Some((entity, period));
+        cursor = Some((entity, period, adjustment));
     }
     // 4. Series-driven first-publish: one bounded index seek per series —
     //    driven by market_series, not by an event-side DISTINCT scan.
@@ -1155,6 +1335,7 @@ pub fn startup_check(c: &Connection) -> Result<(), Error> {
                 WHERE COALESCE(
                     (SELECT e.kind FROM market_events e INDEXED BY market_events_entity_period
                      WHERE e.entity = s.entity AND e.period = s.period
+                       AND e.adjustment = s.adjustment
                      ORDER BY e.seq ASC LIMIT 1), '') <> 'first_publish')",
             [],
             |r| r.get(0),
@@ -1180,7 +1361,7 @@ pub fn deep_check(c: &Connection) -> Result<Vec<String>, Error> {
     }
     let rows = c
         .prepare(
-            "SELECT series_key,entity,period,content_digest,record_count,first_day,last_day FROM market_series",
+            "SELECT series_key,entity,period,adjustment,instrument_class,price_scale,content_digest,record_count,first_day,last_day FROM market_series",
         )
         .map_err(storage)?
         .query_map([], |r| {
@@ -1188,19 +1369,43 @@ pub fn deep_check(c: &Connection) -> Result<Vec<String>, Error> {
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, i64>(2)?,
-                r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, i64>(3)?,
                 r.get::<_, i64>(4)?,
                 r.get::<_, i64>(5)?,
-                r.get::<_, i64>(6)?,
+                r.get::<_, Vec<u8>>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, i64>(8)?,
+                r.get::<_, i64>(9)?,
             ))
         })
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;
-    for (key, entity, period_code, digest_raw, record_count, first_day, last_day) in rows {
+    for (
+        key,
+        entity,
+        period_code,
+        adjustment_code,
+        instrument_class,
+        price_scale,
+        digest_raw,
+        record_count,
+        first_day,
+        last_day,
+    ) in rows
+    {
         let label = format!("series {entity}#{key}");
         let period = match decode_period(period_code) {
             Ok(p) => p,
+            Err(e) => {
+                findings.push(format!("{label}: {e}"));
+                continue;
+            }
+        };
+        // The fold is defined over the stored identity: verifying a 6dp
+        // series with a 2dp seed would report a false digest mismatch.
+        let shape = match SeriesShape::decode(adjustment_code, instrument_class, price_scale) {
+            Ok(shape) => shape,
             Err(e) => {
                 findings.push(format!("{label}: {e}"));
                 continue;
@@ -1214,7 +1419,7 @@ pub fn deep_check(c: &Connection) -> Result<Vec<String>, Error> {
             }
         };
         match all_bars(c, key)
-            .and_then(|bars| fold_bars(&entity, period, &bars).map(|digest| (digest, bars)))
+            .and_then(|bars| fold_bars(&entity, period, shape, &bars).map(|digest| (digest, bars)))
         {
             Err(e) => findings.push(format!("{label}: fold failed: {e}")),
             Ok((computed, bars)) => {
@@ -1292,14 +1497,19 @@ pub(crate) fn check_entity_chain(
     c: &Connection,
     entity: &str,
     period: Period,
+    adjustment: Adjustment,
 ) -> Result<(), Error> {
     let rows = c
         .prepare(
-            "SELECT seq,kind,old_content_digest,new_content_digest FROM market_events WHERE entity=?1 AND period=?2 ORDER BY seq",
+            "SELECT seq,kind,old_content_digest,new_content_digest FROM market_events WHERE entity=?1 AND period=?2 AND adjustment=?3 ORDER BY seq",
         )
         .map_err(storage)?
         .query_map(
-            params![entity, super::compact_repo::period_code(period)],
+            params![
+                entity,
+                super::compact_repo::period_code(period),
+                adjustment.code()
+            ],
             |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
@@ -1361,6 +1571,7 @@ pub(crate) fn next_event_seq(c: &Connection) -> Result<i64, Error> {
 pub(crate) struct NewEvent {
     pub entity: String,
     pub period: Period,
+    pub adjustment: Adjustment,
     pub kind: &'static str,
     pub outcome: i64,
     pub metadata_changed: bool,
@@ -1387,11 +1598,12 @@ pub(crate) struct NewEvent {
 
 pub(crate) fn insert_event(c: &Connection, seq: i64, e: &NewEvent) -> Result<(), Error> {
     c.execute(
-        "INSERT INTO market_events(seq,entity,period,kind,outcome,metadata_changed,continuity_mode,prefix_bytes,old_content_digest,new_content_digest,range_start_day,range_end_day,window_digest,base_content_digest,algorithm_version,source_binding_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at,semantics_changed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
+        "INSERT INTO market_events(seq,entity,period,adjustment,kind,outcome,metadata_changed,continuity_mode,prefix_bytes,old_content_digest,new_content_digest,range_start_day,range_end_day,window_digest,base_content_digest,algorithm_version,source_binding_digest,evidence_digest,task_id,item_id,task_revision,result_id,result_digest,created_at,semantics_changed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
         params![
             seq,
             e.entity,
             super::compact_repo::period_code(e.period),
+            e.adjustment.code(),
             e.kind,
             e.outcome,
             e.metadata_changed as i64,
@@ -1425,6 +1637,9 @@ pub(crate) fn insert_event(c: &Connection, seq: i64, e: &NewEvent) -> Result<(),
 pub(crate) struct NewSeries {
     pub entity: String,
     pub period: Period,
+    pub adjustment: Adjustment,
+    pub instrument_class: i64,
+    pub price_scale: u32,
     pub content_digest: Digest,
     pub record_count: i64,
     pub first_day: i64,
@@ -1441,10 +1656,13 @@ pub(crate) struct NewSeries {
 /// Insert a series row; returns its `series_key`.
 pub(crate) fn insert_series(c: &Connection, s: &NewSeries) -> Result<i64, Error> {
     c.execute(
-        "INSERT INTO market_series(entity,period,adjustment,version_id,content_digest,digest_format,record_count,first_day,last_day,coverage_status,source_binding_digest,evidence_digest,last_event_seq,created_at,updated_at) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+        "INSERT INTO market_series(entity,period,adjustment,instrument_class,price_scale,version_id,content_digest,digest_format,record_count,first_day,last_day,coverage_status,source_binding_digest,evidence_digest,last_event_seq,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
         params![
             s.entity,
             super::compact_repo::period_code(s.period),
+            s.adjustment.code(),
+            s.instrument_class,
+            s.price_scale,
             version_id(&s.content_digest),
             s.content_digest.as_slice(),
             DIGEST_FORMAT,
@@ -1470,7 +1688,7 @@ pub(crate) fn insert_bars(
 ) -> Result<(), Error> {
     let mut statement = c
         .prepare(
-            "INSERT INTO series_bars(series_key,trade_day,open_cents,high_cents,low_cents,close_cents,volume,amount,r7_raw) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO series_bars(series_key,trade_day,open_units,high_units,low_units,close_units,volume,amount,r7_raw) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         )
         .map_err(storage)?;
     for bar in bars {
@@ -1478,10 +1696,10 @@ pub(crate) fn insert_bars(
             .execute(params![
                 series_key,
                 bar.trade_day,
-                bar.open_cents,
-                bar.high_cents,
-                bar.low_cents,
-                bar.close_cents,
+                bar.open_units,
+                bar.high_units,
+                bar.low_units,
+                bar.close_units,
                 bar.volume,
                 bar.amount,
                 bar.r7_raw,
@@ -1494,11 +1712,13 @@ pub(crate) fn insert_bars(
 #[allow(dead_code)] // yearly lineage writes land with S3
 pub(crate) fn insert_lineage(c: &Connection, l: &SeriesLineage) -> Result<(), Error> {
     c.execute(
-        "INSERT INTO yearly_series_lineage(series_key,base_daily_digest,base_event_seq,algorithm_version,first_trade_day,last_trade_day,as_of_day) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO yearly_series_lineage(series_key,base_daily_digest,base_event_seq,base_adjustment,base_instrument_class,algorithm_version,first_trade_day,last_trade_day,as_of_day) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
             l.series_key,
             l.base_daily_digest.as_slice(),
             l.base_event_seq,
+            l.base_adjustment.code(),
+            l.base_instrument_class,
             l.algorithm_version,
             l.first_trade_day,
             l.last_trade_day,

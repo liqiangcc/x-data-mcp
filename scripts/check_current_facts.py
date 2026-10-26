@@ -8,9 +8,11 @@ ROOT = Path(__file__).resolve().parent.parent
 
 EXPECTED_PACKAGE_VERSION = "0.2.0-preview.35"
 EXPECTED_LEGACY_SCHEMA = 18
-# Fresh `init`/`init20` output schema (code constant). The deployed preview
-# instance runs schema 21 (fresh rebuild at the v6 switch).
-EXPECTED_COMPACT_SCHEMA = 21
+# Fresh `init` output schema (code constant). The DEPLOYED schema is a
+# deployment fact and is read from docs/STATUS.md (see DEPLOYED_SCHEMA_ROW):
+# the code constant may be ahead of it, e.g. schema 22 built by M1 PR-1 while
+# the deployed instance still runs schema 21.
+EXPECTED_COMPACT_SCHEMA = 22
 EXPECTED_DATA_TOOLS = 23
 # The deployed instance reports v7 / 23 tools after the v7 switch:
 # documentation "current" regions describe deployment facts, so stale-claim
@@ -73,11 +75,24 @@ CURRENT_REGIONS: dict[str, tuple[str | None, ...]] = {
 # docs/contracts/*.md headers (including the generic-data-v7 status line) are
 # covered by contract_snapshot_claims(), so they are not listed twice.
 
-REQUIRED_FACTS = [
-    ("schema 21", re.compile(r"schema[\s:=v]*21(?!\d)", re.IGNORECASE)),
-    ("23 data tools", re.compile(r"\b23\s+data\s+tools?\b", re.IGNORECASE)),
-    ("10 acquisition tools", re.compile(r"\b10\s+acquisition\s+tools?\b", re.IGNORECASE)),
-]
+def required_facts(deployed_schema: int) -> list[tuple[str, re.Pattern]]:
+    """Facts every CURRENT_DOCS region must state.
+
+    The schema number is the DEPLOYED one: a current region describes the
+    deployed instance, so it keeps "已部署：schema 21" while the code constant
+    is 22. Tool counts come from the source registries.
+    """
+    return [
+        (
+            f"schema {deployed_schema}",
+            re.compile(rf"schema[\s:=v]*{deployed_schema}(?!\d)", re.IGNORECASE),
+        ),
+        ("23 data tools", re.compile(r"\b23\s+data\s+tools?\b", re.IGNORECASE)),
+        (
+            "10 acquisition tools",
+            re.compile(r"\b10\s+acquisition\s+tools?\b", re.IGNORECASE),
+        ),
+    ]
 
 STALE_SCHEMA_AS_CURRENT = re.compile(r"SCHEMA_VERSION\s*=\s*18")
 STALE_BATCH_LIMIT_BLOCK = re.compile(
@@ -106,6 +121,12 @@ REVISION_CLAIM = re.compile(r"generic-data-v(\d+)")
 PREVIEW_CLAIM = re.compile(r"preview\.(\d+)")
 STATUS_DEPLOYED_VERSION = re.compile(
     r"\|\s*部署版本\s*\|\s*`?v?\d+\.\d+\.\d+-preview\.(\d+)"
+)
+# Authoritative deployed schema row: "| 数据库 schema | 已部署：schema 21 ... |".
+# The code constant is a build fact; this row is the deployment fact, so a
+# current region may keep the deployed number while the code moves ahead.
+DEPLOYED_SCHEMA_ROW = re.compile(
+    r"\|\s*数据库\s*schema\s*\|[^\n]*?已部署\s*[:：]?\s*schema\s*(\d+)"
 )
 
 # --- P1-2 (#296): sentence-scoped current-state rules ---------------------
@@ -178,6 +199,14 @@ STATUS_CURRENT_MARKER = re.compile(
 DEPLOYED_VERSION_MARKER = re.compile(
     r"部署版本|当前部署|已部署|serverInfo\.version|server_version"
 )
+
+
+def deployed_schema_number(status_text: str | None) -> int | None:
+    """The deployed schema from STATUS.md's authoritative row, if present."""
+    if not status_text:
+        return None
+    match = DEPLOYED_SCHEMA_ROW.search(status_text)
+    return int(match.group(1)) if match else None
 
 
 def deployed_preview_numbers(status_text: str | None, package_version: str) -> set[str]:
@@ -756,9 +785,24 @@ def main() -> int:
     )
 
     status_path = ROOT / "docs/STATUS.md"
-    allowed_previews = deployed_preview_numbers(
-        status_path.read_text(encoding="utf-8") if status_path.exists() else None,
-        EXPECTED_PACKAGE_VERSION,
+    status_text = (
+        status_path.read_text(encoding="utf-8") if status_path.exists() else None
+    )
+    allowed_previews = deployed_preview_numbers(status_text, EXPECTED_PACKAGE_VERSION)
+    deployed_schema = deployed_schema_number(status_text)
+    check(
+        "docs/STATUS.md declares the deployed schema",
+        deployed_schema is not None,
+        "no '| 数据库 schema | 已部署：schema N' row",
+    )
+    if deployed_schema is None:
+        # Keep checking the rest against the code schema so the run reports
+        # every failure instead of stopping at the missing row.
+        deployed_schema = compact
+    check(
+        "deployed schema is not ahead of the code schema",
+        deployed_schema <= compact,
+        f"STATUS says {deployed_schema}, code builds {compact}",
     )
 
     for rel, heading in CURRENT_DOCS.items():
@@ -766,7 +810,7 @@ def main() -> int:
             (ROOT / rel).read_text(encoding="utf-8"), heading
         )
         check(f"{rel} current region located", bool(region), f"missing {heading}")
-        for label, pattern in REQUIRED_FACTS:
+        for label, pattern in required_facts(deployed_schema):
             check(
                 f"{rel} current region states {label}",
                 bool(pattern.search(region)),
@@ -803,7 +847,6 @@ def main() -> int:
     # P1-2 (#296): current-state regions P1-1 corrected, docs/contracts
     # snapshots, the decisions status column, and STATUS self-consistency.
     # Every failure carries file:line + rule name so it is locatable.
-    deployed_schema = compact if compact is not None else EXPECTED_COMPACT_SCHEMA
     registry_data_tools = len(data_names)
     registry_acquire_tools = len(acquire_names)
 
@@ -879,8 +922,8 @@ def main() -> int:
         return 1
     print(
         f"current-facts OK: {EXPECTED_PACKAGE_VERSION}, fresh compact schema "
-        f"{EXPECTED_COMPACT_SCHEMA} (legacy upgrade source schema "
-        f"{EXPECTED_LEGACY_SCHEMA}), {EXPECTED_DATA_TOOLS} data tools, "
+        f"{EXPECTED_COMPACT_SCHEMA} (deployed {deployed_schema}; legacy upgrade "
+        f"source schema {EXPECTED_LEGACY_SCHEMA}), {EXPECTED_DATA_TOOLS} data tools, "
         f"{EXPECTED_ACQUIRE_TOOLS} acquisition tools, "
         f"{len(CURRENT_DOCS)} current docs + {len(CURRENT_REGIONS)} current "
         f"regions + "

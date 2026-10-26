@@ -140,6 +140,8 @@
 
 - 部署方式不变：归档旧库，全新 init，全市场重建。**不做数据迁移**；schema 21 只出现在 fresh init 链尾。
 - 新二进制**只认 schema 21**；旧二进制遇到 schema 21 库报 unsupported schema 并 fail-closed。
+- 代码（main）已升到 **schema 22**（M1 PR-1，issue-383 §14：只改结构与参数化，不新增序列），
+  尚未部署；部署中的二进制与库仍是 schema 21。
 - **回滚 = 旧二进制 + 归档的 schema 20 库**（既定做法，不改变）。
 - 已部署事实不因本文改变：本文写作时生产仍是 schema 20 / preview.31（历史）；2026-10-13 起
   生产已是 schema 21（preview.32 全新 init），当前事实见 [STATUS](STATUS.md)。

@@ -72,7 +72,7 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 |---|---|---|
 | MCP | 双 server：data socket 23 data tools、acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC | 稳定契约与真实客户端验收 |
 | 任务 | SQLite 持久受理/取消/重试/核实、后台独立 worker 生命周期 | 无已知功能缺口 |
-| 行情 | SQLite fresh compact schema 21、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
+| 行情 | SQLite fresh compact schema 22（代码；生产实例 21）、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
 | 原始 .day | 解析、单位/币种证据与官方快照绑定已验收 | 每代重新建立证据 |
 | QFQ / GBBQ | #54 契约实现并经 Final Gate 验收 | 新 generation 重审计 |
 | 年线 | 固定 daily 基线聚合 + 逐年 lineage，全市场已执行 | — |

@@ -207,6 +207,8 @@ fn replay_receipt(c: &Connection, w: &Commit) -> Result<Option<Receipt>, Error> 
 
 /// One task item may produce exactly one market event
 /// (`UNIQUE(task_id,item_id)` is the backstop; this keeps the error text).
+/// Schema 22 widens the key to `(task_id, item_id, adjustment)`; until PR-2
+/// writes a second 口径 per item this probe stays item-wide.
 fn require_item_unused(c: &Connection, w: &Commit) -> Result<(), Error> {
     let exists: bool = c
         .query_row(
@@ -392,6 +394,11 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         return Err(integrity("yearly series require SeriesChange::Yearly"));
     }
 
+    // Schema 22 materializes exactly one shape (forward-adjusted stock, 分).
+    // PR-2 adds the raw series and PR-3 the 6dp forward series; each will
+    // pass the item's own shape here instead of this constant.
+    let shape = series::SeriesShape::FORWARD_STOCK_CENTS;
+
     // Resolve the kind/effect and the new state fields.
     let (kind, outcome, continuity, prefix_bytes, old_digest, new_digest): (
         &'static str,
@@ -409,7 +416,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                 None,
                 None,
                 None,
-                series::fold_bars(w.entity, w.period, bars)?,
+                series::fold_bars(w.entity, w.period, shape, bars)?,
             )
         }
         (SeriesChange::FirstPublish { .. }, Some(_)) => {
@@ -447,7 +454,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                 Some(3),
                 None,
                 Some(row.content_digest),
-                series::fold_bars(w.entity, w.period, bars)?,
+                series::fold_bars(w.entity, w.period, shape, bars)?,
             )
         }
         (SeriesChange::Replace { .. }, None) => {
@@ -554,6 +561,7 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         &series::NewEvent {
             entity: w.entity.into(),
             period: w.period,
+            adjustment: shape.adjustment,
             kind,
             outcome,
             metadata_changed,
@@ -590,6 +598,9 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
                 &series::NewSeries {
                     entity: w.entity.into(),
                     period: w.period,
+                    adjustment: shape.adjustment,
+                    instrument_class: shape.instrument_class,
+                    price_scale: shape.price_scale,
                     content_digest: new_digest,
                     record_count: bars.len() as i64,
                     first_day: bars[0].trade_day,
@@ -702,9 +713,13 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
 }
 
 /// Bars → `CompactBar` for the commit callers that carry `Bar`.
-pub(crate) fn to_compact_bars(bars: &[Bar], period: Period) -> Result<Vec<CompactBar>, Error> {
+pub(crate) fn to_compact_bars(
+    bars: &[Bar],
+    period: Period,
+    price_scale: u32,
+) -> Result<Vec<CompactBar>, Error> {
     bars.iter()
-        .map(|b| CompactBar::from_bar(b, period))
+        .map(|b| CompactBar::from_bar(b, period, price_scale))
         .collect::<Result<Vec<_>, _>>()
         .map_err(integrity)
 }
@@ -806,6 +821,9 @@ fn commit_yearly_inner(
     if upserts.is_empty() {
         return Err(integrity("yearly commit carries no bars"));
     }
+    // Schema 22 materializes exactly one yearly shape (forward-adjusted stock,
+    // 分); the lineage records the base 口径 explicitly (§3.5).
+    let shape = series::SeriesShape::FORWARD_STOCK_CENTS;
     // Merge the candidate's affected-year bars over the stored rows.
     let mut merged = match head {
         Some(row) => series::all_bars(c, row.series_key)?,
@@ -823,7 +841,7 @@ fn commit_yearly_inner(
     merged.extend_from_slice(upserts);
     merged.sort_by_key(|b| b.trade_day);
     check_bars(&merged)?;
-    let new_digest = series::fold_bars(w.entity, w.period, &merged)?;
+    let new_digest = series::fold_bars(w.entity, w.period, shape, &merged)?;
 
     let task_revision = w
         .expected_task_revision
@@ -870,6 +888,7 @@ fn commit_yearly_inner(
         &series::NewEvent {
             entity: w.entity.into(),
             period: w.period,
+            adjustment: shape.adjustment,
             kind,
             outcome,
             metadata_changed: false,
@@ -906,6 +925,9 @@ fn commit_yearly_inner(
                 &series::NewSeries {
                     entity: w.entity.into(),
                     period: w.period,
+                    adjustment: shape.adjustment,
+                    instrument_class: shape.instrument_class,
+                    price_scale: shape.price_scale,
                     content_digest: new_digest,
                     record_count: merged.len() as i64,
                     first_day: merged[0].trade_day,
@@ -991,6 +1013,8 @@ fn commit_yearly_inner(
         &series::LineageWrite {
             base_daily_digest: *daily_base_digest,
             base_event_seq: daily.last_event_seq,
+            base_adjustment: daily.adjustment,
+            base_instrument_class: daily.instrument_class,
             algorithm_version,
             first_trade_day: merged[0].trade_day,
             last_trade_day: merged[merged.len() - 1].trade_day,

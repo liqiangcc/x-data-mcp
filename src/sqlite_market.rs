@@ -187,8 +187,12 @@ pub(crate) fn head(c: &Connection, scope: &Scope) -> Result<Option<String>, Erro
     if is_latest_only_schema(c)? {
         return c
             .query_row(
-                "SELECT version_id FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=1",
-                params![scope.symbol, compact_repo::period_code(scope.period)],
+                "SELECT version_id FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=?3",
+                params![
+                    scope.symbol,
+                    compact_repo::period_code(scope.period),
+                    crate::market_data::Adjustment::Forward.code()
+                ],
                 |r| r.get(0),
             )
             .optional()
@@ -667,7 +671,7 @@ pub(crate) fn range_rows(
             crate::compact_market::epoch_day(range.end),
         )?
         .iter()
-        .map(|b| b.to_bar(p))
+        .map(|b| b.to_bar(p, row.price_scale))
         .collect::<Result<Vec<_>, _>>()
         .map_err(integrity)?
         .into_iter()

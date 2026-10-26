@@ -83,15 +83,15 @@ fn units() -> UnitCurrencyEvidence {
 fn bar(day: i64, cents: i64) -> Bar {
     crate::compact_market::CompactBar {
         trade_day: day,
-        open_cents: cents,
-        high_cents: cents + 10,
-        low_cents: cents - 10,
-        close_cents: cents,
+        open_units: cents,
+        high_units: cents + 10,
+        low_units: cents - 10,
+        close_units: cents,
         volume: Some(100),
         amount: Some("1000".into()),
         r7_raw: Some(7),
     }
-    .to_bar(Period::Day)
+    .to_bar(Period::Day, crate::compact_market::PRICE_SCALE_CENTS)
     .unwrap()
 }
 
@@ -445,7 +445,7 @@ fn stored_year_version(fixture: &Fixture, symbol: &str, id: &str) -> EffectiveVe
     let bars = series::all_bars(&c, row.series_key)
         .unwrap()
         .into_iter()
-        .map(|b| b.to_bar(Period::Year).unwrap())
+        .map(|b| b.to_bar(Period::Year, row.price_scale).unwrap())
         .collect();
     EffectiveVersion {
         version_id: id.into(),
@@ -481,7 +481,7 @@ fn base_checked(fixture: &Fixture, symbol: &str) -> compat::CheckedRecord {
     let bars = series::all_bars(&c, daily.series_key)
         .unwrap()
         .iter()
-        .map(|b| b.to_bar(Period::Day))
+        .map(|b| b.to_bar(Period::Day, daily.price_scale))
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let version = EffectiveVersion {

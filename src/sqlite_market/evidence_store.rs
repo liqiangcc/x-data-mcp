@@ -78,6 +78,7 @@ fn parse_evidence_kind(raw: &str) -> Result<EvidenceKind, Error> {
         "continuity" => EvidenceKind::Continuity,
         "catalog" => EvidenceKind::Catalog,
         "yearly" => EvidenceKind::Yearly,
+        "derived" => EvidenceKind::Derived,
         "shared" => EvidenceKind::Shared,
         _ => return Err(integrity("unknown evidence kind")),
     })
