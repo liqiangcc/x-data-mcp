@@ -1,4 +1,5 @@
 //! Stage A generic task decisions and application port. No SQLite or MCP types.
+pub mod derived;
 pub mod legacy;
 pub mod service;
 use chrono::{DateTime, Utc};

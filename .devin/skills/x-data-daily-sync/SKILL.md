@@ -161,6 +161,15 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 `status`/计数/`next_cursor`，**不期待逐 item 结果数组**。终态为
 `succeeded`/`partially_failed`/`failed`；全市场日更 `partially_failed` 是正常收尾。
 
+本任务除 plan 的实体 item 外，worker 还会追加 10 个**服务器内部派生 item**
+（`derived:index:<entity>` × 9 指数基准 + `derived:calendar` 交易日历，见
+`docs/contracts/generic-data-v7.md` §3）。受理响应与
+`plan_counts` 的 `item_count` 仍是 plan 的 `eligible`；`get_task_progress` 的
+`total` 会比它多 10。内部 item 在 `unfinished` 里 `entity`/`period` 为 `null`、
+`item_id` 以 `derived:` 开头，失败只记 item 级结果并使 run 收尾
+`partially_failed`——**不属于 catalog 实体，不进入 §3.3 的补漏清单**，按 `error`
+原样报告即可（不 `retry_task`、不用 `update_data` 补）。
+
 ### 3.3 日线失败路由（按 `failed_by_reason` 补漏，不可省略）
 
 读顶层 `plan.failed_by_reason`（`reason_code → 计数`）；逐项 `reason_code` 的动作：
@@ -173,7 +182,8 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 - `NO_BARS_IN_RANGE`：预期的 fail-closed（停牌/退市尾部），无需动作。
 - `OTHER`：读 `error`，必要时报告。
 
-清单取法：`unfinished` 分页里 `reason_code=REVISION_UNVERIFIED` 的项即实体（`entity` 字段）。
+清单取法：`unfinished` 分页里 `reason_code=REVISION_UNVERIFIED` **且带 `entity`** 的项
+即实体；`entity` 为 `null` 的 `derived:` 内部项（指数/日历）只报告，不列入补漏。
 显式 `update_data`（market.daily）请求每项形状：
 `{"entity":{"exchange","code"},"base_version_id":<当前 head version_id>,
 "start_date":<last_record+1>,"end_date":<target_day>}`；`base_version_id` 取提交时当前 head，

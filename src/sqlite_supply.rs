@@ -817,6 +817,7 @@ fn task_facts_check_evidenced(
         let successful = s
             .items
             .iter()
+            .filter(|i| !crate::task_control::derived::is_derived(&i.spec.item_id))
             .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
             .map(|i| i.spec.item_id.clone())
             .collect::<std::collections::BTreeSet<_>>();
@@ -2155,6 +2156,13 @@ fn task_facts_series(
     for (entity, period, adjustment, kind, outcome, item_id, result_id, old, new, base, created) in
         events
     {
+        // Server-internal derived items (issue-383 §9.2) are not securities:
+        // their events stay off the per-security task surface, so the index
+        // series never appears in `publication_versions`/`range_results`
+        // (AC-M1-10) and the evidenced set matches the entity items only.
+        if crate::task_control::derived::is_derived(&item_id) {
+            continue;
+        }
         // The MCP task surface projects the forward 口径 only: the raw event
         // is the same item's internal audit, not a second item result
         // (issue-383 §9.1; AC-M1-10 keeps the wire shape unchanged).
@@ -2231,6 +2239,7 @@ fn task_facts_series(
     let successful: std::collections::BTreeSet<String> = s
         .items
         .iter()
+        .filter(|i| !crate::task_control::derived::is_derived(&i.spec.item_id))
         .filter(|i| i.outcome.as_ref().is_some_and(|o| o.success))
         .map(|i| i.spec.item_id.clone())
         .collect();

@@ -215,11 +215,50 @@ pub fn run_once(
         }
         _ => &OfficialRangeProvider,
     };
+    // issue-383 §9.2: one plan-run daily task also maintains the derived
+    // datasets (trading calendar + benchmark indices). Their internal items
+    // are appended to the accepted task before any entity commit, so no
+    // entity item can terminal-ize the task ahead of them; execution still
+    // runs them after every entity item (indices first, calendar last).
+    let plan_run_daily = candidate.task.key.operation == "update_data"
+        && candidate.task.key.dataset == "market.daily"
+        && candidate.task.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION;
+    let derived = if plan_run_daily {
+        // The generation binding is copied from an entity item: a task's
+        // items are uniformly bound (`source_session` above refuses a mixed
+        // task), so the derived items join the same immutable generation.
+        let generation = candidate
+            .items
+            .iter()
+            .find_map(|item| {
+                item.spec
+                    .frozen_inputs
+                    .get(crate::data_supply::generation::SOURCE_GENERATION_KEY)
+                    .cloned()
+            })
+            .unwrap_or(serde_json::Value::Null);
+        let items = crate::data_supply::derived::item_specs(&generation);
+        control.repository.ensure_derived_items(
+            &candidate.task.task_id,
+            &control.run_id,
+            &items,
+        )?;
+        items
+    } else {
+        Vec::new()
+    };
     // S5G-6 bulk path: on compact backends the task's prepared items
     // commit in one write transaction; `None` or any unprepared item
     // keeps the per-item loop.
-    let item_ids: Vec<String> = candidate
+    // Entity items only: a resumed task already carries its internal
+    // derived items (they are executed below, never through the range
+    // provider).
+    let entity_items: Vec<&crate::task_control::TaskItem> = candidate
         .items
+        .iter()
+        .filter(|item| !crate::task_control::derived::is_derived(&item.spec.item_id))
+        .collect();
+    let item_ids: Vec<String> = entity_items
         .iter()
         .map(|item| item.spec.item_id.clone())
         .collect();
@@ -227,9 +266,33 @@ pub fn run_once(
         .run_items(&candidate.task.task_id, &item_ids, provider)?
         .is_none()
     {
-        for item in &candidate.items {
+        for item in &entity_items {
             runner.run_item(&candidate.task.task_id, &item.spec.item_id, provider)?;
         }
+    }
+    if !derived.is_empty() {
+        let generation_id = bound
+            .as_ref()
+            .map(|bound| bound.generation_id.clone())
+            .unwrap_or_else(|| {
+                session
+                    .as_ref()
+                    .map(|session| session.source().manifest_sha256().to_string())
+                    .unwrap_or_default()
+            });
+        let manifest = session
+            .as_ref()
+            .map(|session| session.source().manifest_sha256().to_string())
+            .unwrap_or_default();
+        crate::data_supply::derived::run(
+            market,
+            session.as_ref(),
+            &generation_id,
+            &manifest,
+            &candidate.task.task_id,
+            &control.run_id,
+            &derived,
+        )?;
     }
     Ok(Some(control.read_task(&candidate.task.task_id)?))
 }

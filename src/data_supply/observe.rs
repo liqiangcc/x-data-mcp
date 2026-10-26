@@ -763,7 +763,11 @@ impl<R: ObservationRepository> Observer<R> {
                 let _span = Span::enter(Stage::TaskAssembly);
                 read.task_head_facts(&args.task_id, access)?
             };
-            if head_facts.head.counts.total > LARGE_TASK_ITEMS {
+            let plan_items = head_facts
+                .shared_evidence
+                .as_ref()
+                .and_then(|evidence| evidence["counts"]["eligible"].as_u64());
+            if bounded_progress(head_facts.head.counts.total, plan_items) {
                 let finished = head_facts.head.counts.finished as usize;
                 let succeeded = head_facts.head.counts.succeeded as usize;
                 let total = head_facts.head.counts.total as usize;
@@ -1039,6 +1043,20 @@ fn plan_progress(evidence: &Option<serde_json::Value>) -> Option<PlanProgress> {
         failed_by_reason: Default::default(),
     })
 }
+/// Whether a task is served by the bounded (keyset) progress shape.
+///
+/// The threshold is about the plan the caller holds, not the task's live row
+/// count: a plan-run task also carries the server-internal derived items of
+/// issue-383 §9.2 (10 rows), and a 100-entity plan must keep the shape its
+/// acceptance (`item_count`) announced. Tasks without plan evidence keep the
+/// plain row-count rule.
+fn bounded_progress(total_items: u64, plan_items: Option<u64>) -> bool {
+    match plan_items {
+        Some(eligible) => eligible > LARGE_TASK_ITEMS,
+        None => total_items > LARGE_TASK_ITEMS,
+    }
+}
+
 /// The `unfinished` entry one task item produces — shared by the
 /// materialized and the keyset paths.
 fn progress_item(i: &crate::task_control::TaskItem) -> ProgressItem {
@@ -1119,6 +1137,11 @@ fn frozen_daily_ranges(task: &TaskSnapshot) -> Result<Vec<FrozenDailyRange>, Err
     }
     let mut out = vec![];
     for item in &task.items {
+        // Server-internal derived items carry a dataset target, not a security
+        // range (issue-383 §9.2); they are not projected as frozen ranges.
+        if crate::task_control::derived::is_derived(&item.spec.item_id) {
+            continue;
+        }
         let frozen = &item.spec.frozen_inputs;
         let entity = item.spec.target["symbol"]
             .as_str()
@@ -1196,6 +1219,20 @@ mod reason_tests {
             error: Some(error.into()),
             reason_code: None,
         }
+    }
+
+    // issue-383 §9.2: the internal derived items are not plan items, so the
+    // bounded-read shape must follow the plan the caller holds. A 100-entity
+    // plan keeps the small shape even though its task row carries 110 items.
+    #[test]
+    fn bounded_progress_follows_the_plan_not_the_internal_items() {
+        assert!(!bounded_progress(110, Some(100)));
+        assert!(bounded_progress(111, Some(101)));
+        assert!(!bounded_progress(100, None));
+        assert!(bounded_progress(101, None));
+        // A plan-run task always carries its evidence; the row-count rule is
+        // the non-plan fallback.
+        assert!(!bounded_progress(50, Some(50)));
     }
 
     /// The error classes the v7 contract promises (generic-data-v7.md §5),
