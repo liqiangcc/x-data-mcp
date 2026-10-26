@@ -640,7 +640,10 @@ fn commit_series_inner(c: &Connection, w: &Commit, finish: ItemFinish) -> Result
     require_item_unused(c, w)?;
     check_binding(c, w)?;
 
-    let head = series::read_series(c, w.entity, w.period)?;
+    // The CAS head is the series of THIS 口径: a paired daily item writes
+    // the forward series first, so reading the forward convenience here
+    // would make the raw half see a foreign head (issue-383 §9.1).
+    let head = series::read_series_adjusted(c, w.entity, w.period, w.adjustment)?;
     match (w.base_version_id, &head) {
         (None, Some(_)) => return Err(Error::Conflict("effective head already exists".into())),
         (None, None) => {}
