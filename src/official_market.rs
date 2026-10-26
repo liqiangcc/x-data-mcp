@@ -24,9 +24,10 @@
 use crate::{
     compact_market, day_file, gbbq,
     market_data::{
-        Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, Bar, CoverageEvidence,
-        CoverageStatus, EvidenceValue, IndexBatch, MarketDataBatch, MarketDataPipeline, Period,
-        Provenance, SnapshotInputBinding, SourceError, UnitCurrencyEvidence,
+        Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, Bar, CalendarBatch,
+        CalendarInputDates, CoverageEvidence, CoverageStatus, EvidenceValue, IndexBatch,
+        MarketDataBatch, MarketDataPipeline, Period, Provenance, SnapshotInputBinding, SourceError,
+        UnitCurrencyEvidence,
     },
     market_storage::{
         Error, MarketRepository, Publication, PublishIntent, Publisher, Receipt, Scope,
@@ -338,6 +339,12 @@ impl TdxMarketSource {
     /// [`MaterializeSession::index_batch`] (issue-383 §6.3).
     pub fn index_batch(&self, symbol: &str) -> Result<IndexBatch, SourceError> {
         self.materialize_session().index_batch(symbol)
+    }
+
+    /// Every registered calendar input's bar dates; see
+    /// [`MaterializeSession::calendar_dates`] (issue-383 §5.1).
+    pub fn calendar_dates(&self) -> Result<CalendarBatch, SourceError> {
+        self.materialize_session().calendar_dates()
     }
 }
 
@@ -705,6 +712,58 @@ impl MaterializeSession<'_> {
             batch,
             day_member_sha256,
             security_event_sha256,
+        })
+    }
+
+    /// Every registered calendar input's bar dates (issue-383 §5.1): one `.day`
+    /// member read per input, promoted as **dates only**.
+    ///
+    /// The calendar needs "this index printed a level that day" and nothing
+    /// else — no prices, no gbbq, no unit evidence — so the fact handed to the
+    /// domain is the narrowest one that supports `cal-union-v1`, and the
+    /// calendar stays recomputable from the members alone (§11 separation
+    /// point 2). Which indices feed it comes from the registration
+    /// (`trading_calendar::INPUTS`); an absent or malformed member is a source
+    /// failure, never a silently shorter calendar.
+    pub fn calendar_dates(&self) -> Result<CalendarBatch, SourceError> {
+        let source = self.source;
+        let mut inputs = Vec::with_capacity(crate::trading_calendar::INPUTS.len());
+        for registration in crate::trading_calendar::INPUTS {
+            let (market, code) = Self::split_symbol(registration.entity)?;
+            let (day_member, day_bytes) = self
+                .member_bytes(&source.day, &Self::day_names(market, code))
+                .map_err(|e| {
+                    SourceError::Invocation(format!(
+                        "calendar input {} `.day` member: {e}",
+                        registration.entity
+                    ))
+                })?;
+            let raw_bars = day_file::parse(&day_bytes).map_err(|e| {
+                SourceError::InvalidResponse(format!(
+                    "calendar input {} `.day` member malformed: {e}",
+                    registration.entity
+                ))
+            })?;
+            if raw_bars.is_empty() {
+                return Err(SourceError::InvalidResponse(format!(
+                    "calendar input {} `.day` member carries no records; the union \
+                     cannot be built from an absent input",
+                    registration.entity
+                )));
+            }
+            inputs.push(CalendarInputDates {
+                entity: registration.entity.to_string(),
+                member: day_member,
+                day_member_sha256: crate::hash::sha256(&day_bytes),
+                days: raw_bars.iter().map(|bar| bar.date).collect(),
+            });
+        }
+        Ok(CalendarBatch {
+            inputs,
+            // A calendar date proves "an index printed a level"; no
+            // corporate-action set is involved, so the binding records the
+            // empty set (the same digest an index series binds).
+            security_event_sha256: security_events_digest(&[], 0),
         })
     }
 

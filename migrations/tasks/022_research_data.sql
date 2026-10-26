@@ -278,3 +278,20 @@ CREATE TABLE index_series_meta(
   evidence_note TEXT NOT NULL CHECK(length(evidence_note) > 0),
   created_at TEXT NOT NULL
 ) STRICT;
+
+-- trading_days: the derived trading calendar (§3.8, M1 PR-6). A row means
+-- "at least one calendar input index had a bar that day"; there is no
+-- `is_open` column and no row for a non-trading day, so the table cannot
+-- express the half-open-interval ambiguity, and it cannot say "this day was
+-- tradable" either — a security may be suspended, unlisted or delisted on a
+-- day the calendar contains (BR-M1-5: the inference only runs one way).
+-- `sources` is the input bitmask (bit0 = sh.000001, bit1 = sz.399001), so a
+-- date only one exchange traded still proves the day; the 1991 Shenzhen
+-- Saturday sessions are exactly that case. The span ends at the last input
+-- bar: later days are unknown, not non-trading, and are never predicted.
+-- The whole table is rewritten in one transaction; its identity and audit
+-- live in derived_dataset_versions('trading_calendar','exchange_union').
+CREATE TABLE trading_days(
+  trade_day INTEGER PRIMARY KEY,
+  sources INTEGER NOT NULL CHECK(sources > 0)
+) STRICT, WITHOUT ROWID;

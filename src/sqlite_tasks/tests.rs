@@ -835,7 +835,7 @@ fn head_transition_refreshes_a_stale_held_head() {
 /// Schema-21 latest-only compact set (SPEC-LATEST-ONLY §1): the schema-19
 /// version-manifest/result tables below are replaced by `market_series` +
 /// `series_bars` + `yearly_series_lineage` + `market_events`.
-const COMPACT_TABLES: [&str; 11] = [
+const COMPACT_TABLES: [&str; 12] = [
     "evidence_bundles",
     "evidence_parts",
     "source_bindings",
@@ -850,6 +850,8 @@ const COMPACT_TABLES: [&str; 11] = [
     "derived_dataset_versions",
     // Schema 22 (M1 PR-5, issue-383 §3.9): per-index unit/aggregation scope.
     "index_series_meta",
+    // Schema 22 (M1 PR-6, issue-383 §3.8): the derived trading calendar.
+    "trading_days",
 ];
 /// Dropped by migration 021 — their absence is part of the v21 shape.
 const DROPPED_V19_TABLES: [&str; 12] = [
@@ -1001,6 +1003,17 @@ fn assert_compact_shape(path: &std::path::Path) {
     ] {
         assert!(derived.contains(&column.to_string()), "missing {column}");
     }
+    // §3.8: one row per trading day and the input mask — no `is_open` column
+    // to misread, and no future-day prediction column either.
+    let calendar = raw_columns(path, "trading_days");
+    for column in ["trade_day", "sources"] {
+        assert!(calendar.contains(&column.to_string()), "missing {column}");
+    }
+    assert_eq!(
+        calendar.len(),
+        2,
+        "trading_days is exactly (trade_day, sources)"
+    );
     // §3.9: unit and aggregation scope are data, one row per index series.
     let index = raw_columns(path, "index_series_meta");
     for column in [
