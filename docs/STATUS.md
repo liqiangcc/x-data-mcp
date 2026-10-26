@@ -151,7 +151,18 @@ acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.
 
 1. **谁更新**：部署或迁移的执行者，在记录本次部署的同一个 PR 内更新。
 2. **其他文档**：README 只保留「项目是什么」并链接本文件；AGENTS.md 的环境段只写开发约束，主机事实链接本文件。旧段落的清理由后续 PR 完成。
-3. **CI 检查现状（2026-10-24 复核）。** `scripts/check_current_facts.py` 只检查包版本、schema、工具数量这类构建事实；`scripts/check_deploy_facts.py` 的覆盖情况：
+3. **格式约定（机器校验用，P1-2/#296）。** 同一事实只在一处给权威值，其余位置只复述：
+   - 热 generation 计数的权威行是「数据」表的「热 generation」行（`N/M`），且必须与同一行的 `active` + `superseded`
+     拆分自洽；其他位置的当前态复述必须与它一致。历史段、时间线（含 `→`）与预期值（「约」「预期」）不受约束。
+   - 「服务」表的「工具数」列是 data / acquire 工具数的权威值，必须等于源码注册表
+     （`src/data_supply/registry.rs` 的 `entries()`、`src/acquire/mcp.rs` 的 `ENTRIES`）。
+   - 「部署版本」行是当前部署版本的权威值；其他当前态断言（含 `serverInfo.version`）必须与它一致。
+   - `docs/contracts/*.md` 是历史快照：文件名不得含 `current`/`当前`，头部必须有 `**状态**：` 行且不得自称当前契约。
+   - `docs/decisions.md` 的状态列只能取文件开头声明的取值。
+4. **CI 检查现状（2026-10-26 复核，P1-2/#296）。** `scripts/check_current_facts.py` 检查构建事实（包版本、两套 schema、
+   data/acquire 工具数、capability revision）、5 个 `CURRENT_DOCS` 当前区域、P1-1 校正过的 7 个 `CURRENT_REGIONS`
+   当前区域、`docs/contracts/*.md` 快照、`docs/decisions.md` 状态列，以及本文件的内部一致性（热 generation 计数与拆分、
+   data/acquire 工具数、部署版本）。`scripts/check_deploy_facts.py` 的覆盖情况：
    - 「本文件声明的版本须与最近一份已提交的记录一致」：**未实现**。目前只校验版本串形式（ `vX.Y.Z-preview.N` ）。
      preview.35 的报告在 `/opt/x-data-mcp-preview/reports/` 内、不进仓库，且是切换后人工整理的（仓库内没有能产出它的
      脚本；`switch_binary.sh` 不写报告）。就绪修复已随 #370（`8e83f22`）合入 main；要实现这条检查，需先把报告路径与

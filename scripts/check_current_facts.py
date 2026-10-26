@@ -33,6 +33,31 @@ CURRENT_DOCS = {
     "docs/source-closure.md": None,
 }
 
+# Current-state regions added by P1-2 (#296): the regions P1-1 corrected. They
+# do not restate every REQUIRED_FACT, so they get the stale-claim rules only
+# (schema / capability revision written as deployed, tool counts). `None` is
+# the same "block above the first '## ' heading" rule as CURRENT_DOCS; a tuple
+# lists the '## ' headings that are current-state regions in that file.
+CURRENT_REGIONS: dict[str, tuple[str | None, ...]] = {
+    "docs/design.md": (
+        "## 存储模型状态（版本链 vs 单版本）",
+        "## 当前能力与目标差距",
+    ),
+    "docs/latest-only-storage.md": (None,),
+    "docs/sqlite-storage-design.md": (None,),
+    "docs/verified-reads.md": (None,),
+    "docs/yearly.md": (None,),
+    "docs/publish-storage.md": (None,),
+    "docs/decisions.md": (
+        "## 1. 性能与门禁",
+        "## 2. 部署",
+        "## 3. 存储模型",
+        "## 4. 工程与仓库",
+    ),
+}
+# docs/contracts/*.md headers (including the generic-data-v7 status line) are
+# covered by contract_snapshot_claims(), so they are not listed twice.
+
 REQUIRED_FACTS = [
     ("schema 21", re.compile(r"schema[\s:=v]*21(?!\d)", re.IGNORECASE)),
     ("23 data tools", re.compile(r"\b23\s+data\s+tools?\b", re.IGNORECASE)),
@@ -66,6 +91,66 @@ REVISION_CLAIM = re.compile(r"generic-data-v(\d+)")
 PREVIEW_CLAIM = re.compile(r"preview\.(\d+)")
 STATUS_DEPLOYED_VERSION = re.compile(
     r"\|\s*部署版本\s*\|\s*`?v?\d+\.\d+\.\d+-preview\.(\d+)"
+)
+
+# --- P1-2 (#296): sentence-scoped current-state rules ---------------------
+# The P1-1 texts legitimately mention old values in progression form
+# ("schema 20 ... 已被 schema 21 取代", "自 preview.32 起部署", "v6 -> v7"),
+# so these rules key on assertion words and exempt per SENTENCE, not per
+# paragraph: a table row marked 历史 must not exempt the rows around it.
+CURRENT_ASSERTION = re.compile(
+    r"当前部署|已部署|线上|当前实现|当前生产|当前版本|当前运行|运行的是"
+    r"|current(?:ly)?\s+(?:deployed|running)|in\s+production",
+    re.IGNORECASE,
+)
+SCHEMA_CLAIM = re.compile(r"schema[\s:=v\-]*(\d{1,2})", re.IGNORECASE)
+ACQUIRE_TOOLS_CLAIM = re.compile(
+    r"\b(\d+)\s*(?:个\s*)?acquisition\s*(?:tools?|工具)", re.IGNORECASE
+)
+# A bare "N tools" / "N 个工具": the number must be one of the two registries.
+BARE_TOOLS_CLAIM = re.compile(r"\b(\d+)\s*(?:个\s*)?(?:tools?\b|工具)", re.IGNORECASE)
+# Sentence boundaries. The timeline arrow is handled separately (below): a
+# transition chain is exempt as a whole, not split into claims.
+SENTENCE_SPLIT = re.compile(r"[。；;！？]")
+# A timeline transition ("6/6 → 5/6") describes how a value changed, not what it
+# is now; only STATUS uses this marker.
+STATUS_TRANSITION = "→"
+HISTORY_IN_SENTENCE = HISTORICAL_MARKERS + (
+    "已取代",
+    "已被",
+    "及更早",
+    "legacy",
+    "当时",
+    "写作时",
+)
+
+# docs/contracts/ holds historical snapshots; none may call itself current.
+CONTRACTS_DIR = ROOT / "docs" / "contracts"
+CONTRACT_STATUS_LINE = re.compile(r"\*\*状态\*\*\s*[:：]\s*(.+)")
+# "当前契约见 X" points elsewhere and is fine; the status may not call THIS
+# file the current contract.
+CONTRACT_CURRENT_SELF_CLAIM = re.compile(
+    r"^\s*(?:当前|current)\b|当前契约(?!见)|current\s+contract", re.IGNORECASE
+)
+
+# docs/decisions.md: the 状态 column is a current-state claim. Its allowed
+# values are the ones the file itself declares.
+DECISION_STATUS_DECL = re.compile(r"状态取值\s*[:：]\s*(.+)")
+
+# docs/STATUS.md internal consistency (XDM-1 7c class): one authoritative
+# "| 热 generation | N/M" row, one "| 部署版本 |" row, and one 服务 table whose
+# 工具数 column must match the source registries.
+HOT_GENERATION_ROW = re.compile(r"\|\s*热\s*generation\s*\|\s*\**\s*(\d+)\s*/\s*(\d+)")
+HOT_FRACTION = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,2})\b")
+# A projection ("activate 后回收到约 4/6") is not a current-state claim.
+HOT_PROJECTION = ("预期", "预计", "约", "回收到", "将", "会")
+HOT_ACTIVE = re.compile(r"(\d+)\s*active\b", re.IGNORECASE)
+HOT_SUPERSEDED = re.compile(r"(\d+)\s*superseded\b", re.IGNORECASE)
+STATUS_CURRENT_MARKER = re.compile(
+    r"当前|现为|目前|下一次|\bnow\b|热\s*generation|\bhot\b", re.IGNORECASE
+)
+DEPLOYED_VERSION_MARKER = re.compile(
+    r"部署版本|当前部署|已部署|serverInfo\.version|server_version"
 )
 
 
@@ -130,6 +215,377 @@ def stale_deployment_claims(
             paragraph.append(i)
     flush()
     return found
+
+
+def _split_block(text: str, line_map: list[int]) -> list[tuple[str, list[int]]]:
+    """Split a block into sentences, keeping each character's source line."""
+    parts: list[tuple[str, list[int]]] = []
+    start = 0
+    for match in SENTENCE_SPLIT.finditer(text):
+        parts.append((text[start : match.start()], line_map[start : match.start()]))
+        start = match.end()
+    parts.append((text[start:], line_map[start:]))
+    return [(part, lines) for part, lines in parts if part.strip()]
+
+
+def claim_sentences(region: str, offset: int = 0) -> list[tuple[str, list[int]]]:
+    """(sentence, per-character source line) pairs for stale-claim scanning.
+
+    A markdown table row or a list item is its own sentence, so a 历史 marker in
+    one row cannot exempt the rest of the table. Wrapped prose lines are joined
+    before splitting (Chinese text wraps mid-sentence), and the line map keeps
+    every reported failure on the line that carries the claim.
+    """
+    sentences: list[tuple[str, list[int]]] = []
+    buffer: list[str] = []
+    buffer_lines: list[int] = []
+
+    def flush() -> None:
+        nonlocal buffer, buffer_lines
+        if not buffer:
+            return
+        sentences.extend(_split_block("".join(buffer), buffer_lines))
+        buffer = []
+        buffer_lines = []
+
+    for lineno, line in enumerate(region.splitlines(), start=1):
+        number = lineno + offset
+        if not line.strip():
+            flush()
+            continue
+        if line.lstrip().startswith("|") or re.match(r"\s*(?:[-*+]|\d+\.)\s", line):
+            flush()
+            sentences.extend(_split_block(line, [number] * len(line)))
+        else:
+            buffer.append(line)
+            buffer_lines.extend([number] * len(line))
+    flush()
+    return sentences
+
+
+def claim_line(line_map: list[int], position: int) -> int:
+    """Source line of a match inside a joined sentence."""
+    if not line_map:
+        return 0
+    return line_map[min(position, len(line_map) - 1)]
+
+
+def stale_current_region_claims(
+    region: str,
+    schema: int,
+    revision: str,
+    data_tools: int,
+    acquire_tools: int,
+    offset: int = 0,
+) -> list[tuple[int, str, str]]:
+    """(line, rule, detail) for each stale current-state claim in a region.
+
+    * an old schema / capability revision written as the deployed one;
+    * a tool count that disagrees with the source registries.
+    """
+    wanted_revision = revision.rsplit("-v", 1)[-1]
+    found: list[tuple[int, str, str]] = []
+    for sentence, line_map in claim_sentences(region, offset):
+        if any(marker in sentence for marker in HISTORY_IN_SENTENCE):
+            continue
+        if CURRENT_ASSERTION.search(sentence):
+            for m in SCHEMA_CLAIM.finditer(sentence):
+                if int(m.group(1)) != schema:
+                    found.append(
+                        (
+                            claim_line(line_map, m.start()),
+                            "stale-schema",
+                            f"{m.group(0)!r} written as deployed (deployed: schema {schema})",
+                        )
+                    )
+            for m in REVISION_CLAIM.finditer(sentence):
+                if m.group(1) != wanted_revision:
+                    found.append(
+                        (
+                            claim_line(line_map, m.start()),
+                            "stale-revision",
+                            f"{m.group(0)} written as deployed (deployed: {revision})",
+                        )
+                    )
+        for m in DATA_TOOLS_CLAIM.finditer(sentence):
+            if int(m.group(1)) != data_tools:
+                found.append(
+                    (
+                        claim_line(line_map, m.start()),
+                        "data-tool-count",
+                        f"{m.group(0)} (registry: {data_tools} data tools)",
+                    )
+                )
+        for m in ACQUIRE_TOOLS_CLAIM.finditer(sentence):
+            if int(m.group(1)) != acquire_tools:
+                found.append(
+                    (
+                        claim_line(line_map, m.start()),
+                        "acquire-tool-count",
+                        f"{m.group(0)} (registry: {acquire_tools} acquisition tools)",
+                    )
+                )
+        for m in BARE_TOOLS_CLAIM.finditer(sentence):
+            if int(m.group(1)) not in (data_tools, acquire_tools):
+                found.append(
+                    (
+                        claim_line(line_map, m.start()),
+                        "tool-count",
+                        f"{m.group(0)} is neither {data_tools} data nor "
+                        f"{acquire_tools} acquisition tools",
+                    )
+                )
+    return found
+
+
+def contract_name_claims(rel: str) -> list[tuple[int, str, str]]:
+    """A snapshot file name may not call itself current (P1-1 renamed one)."""
+    name = Path(rel).name
+    if re.search(r"current|当前", name, re.IGNORECASE):
+        return [(1, "snapshot-name-claims-current", name)]
+    return []
+
+
+def contract_snapshot_claims(
+    text: str, schema: int, revision: str, data_tools: int, acquire_tools: int
+) -> list[tuple[int, str, str]]:
+    """Snapshot rules for a docs/contracts/*.md file (P1-2, #296).
+
+    Its status line may not claim to be the current contract, and its header may
+    not present an old schema / revision / tool count as the deployed one.
+    """
+    found: list[tuple[int, str, str]] = []
+    header = top_current_region(text, None)
+    status = CONTRACT_STATUS_LINE.search(header)
+    if not status:
+        found.append((1, "snapshot-status-missing", "header has no '**状态**：' line"))
+        return found
+    lineno = header[: status.start()].count("\n") + 1
+    if CONTRACT_CURRENT_SELF_CLAIM.search(status.group(1)):
+        found.append((lineno, "snapshot-status-claims-current", status.group(1).strip()))
+    for line, rule, detail in stale_current_region_claims(
+        header, schema, revision, data_tools, acquire_tools
+    ):
+        found.append((line, f"snapshot-{rule}", detail))
+    return found
+
+
+def decision_status_claims(text: str) -> list[tuple[int, str, str]]:
+    """The docs/decisions.md 状态 column must use the declared status values."""
+    found: list[tuple[int, str, str]] = []
+    decl = DECISION_STATUS_DECL.search(text)
+    if not decl:
+        return [(1, "decision-status-vocabulary-missing", "no '状态取值：' line")]
+    allowed = re.findall(r"\*\*([^*]+)\*\*", decl.group(1))
+    if not allowed:
+        return [(1, "decision-status-vocabulary-missing", decl.group(1).strip())]
+    status_index: int | None = None
+    seen_table = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            status_index = None
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if "状态" in cells:
+            status_index = cells.index("状态")
+            seen_table = True
+            continue
+        if status_index is None or status_index >= len(cells):
+            continue
+        if all(re.fullmatch(r":?-{2,}:?", cell) for cell in cells):
+            continue
+        cell = cells[status_index].strip("* ")
+        if not any(cell.startswith(value) for value in allowed):
+            found.append(
+                (
+                    lineno,
+                    "decision-status-undeclared",
+                    f"{cell[:40]!r} is not one of {allowed}",
+                )
+            )
+    if not seen_table:
+        found.append((1, "decision-status-column-missing", "no table with a 状态 column"))
+    return found
+
+
+def status_consistency_errors(
+    text: str, data_tools: int, acquire_tools: int
+) -> list[tuple[int, str, str]]:
+    """docs/STATUS.md must not contradict itself (XDM-1 7c class).
+
+    One authoritative row per fact: "| 热 generation | N/M", "| 部署版本 |", and
+    the 服务 table's 工具数 column. Current-state restatements elsewhere must
+    agree; historical segments (历史 / 当时 / timeline arrows) are exempt.
+    """
+    found: list[tuple[int, str, str]] = []
+    hot = cap = None
+    hot_line = 0
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        m = HOT_GENERATION_ROW.search(line)
+        if m:
+            hot, cap, hot_line = int(m.group(1)), int(m.group(2)), lineno
+            break
+    if hot is None:
+        found.append(
+            (1, "status-hot-row-missing", "no authoritative '| 热 generation | N/M' row")
+        )
+
+    deployed = STATUS_DEPLOYED_VERSION.search(text)
+    deployed_preview = deployed.group(1) if deployed else None
+
+    for sentence, line_map in claim_sentences(text):
+        if any(marker in sentence for marker in HISTORY_IN_SENTENCE):
+            continue
+        if STATUS_TRANSITION in sentence:
+            continue
+        projecting = any(word in sentence for word in HOT_PROJECTION)
+        if STATUS_CURRENT_MARKER.search(sentence) and hot is not None and not projecting:
+            stated_hot = None
+            for m in HOT_FRACTION.finditer(sentence):
+                count, capacity = int(m.group(1)), int(m.group(2))
+                if capacity == cap or re.search(
+                    r"热|\bhot\b|generation", sentence, re.IGNORECASE
+                ):
+                    if count != hot:
+                        found.append(
+                            (
+                                claim_line(line_map, m.start()),
+                                "status-hot-count",
+                                f"{m.group(0)} disagrees with the 热 generation row "
+                                f"line {hot_line}: {hot}/{cap}",
+                            )
+                        )
+                    if capacity != cap:
+                        found.append(
+                            (
+                                claim_line(line_map, m.start()),
+                                "status-hot-capacity",
+                                f"{m.group(0)} disagrees with the 热 generation capacity "
+                                f"{cap} (line {hot_line})",
+                            )
+                        )
+                    stated_hot = count
+            active = HOT_ACTIVE.search(sentence)
+            superseded = HOT_SUPERSEDED.search(sentence)
+            if active and superseded:
+                total = int(active.group(1)) + int(superseded.group(1))
+                expected_total = stated_hot if stated_hot is not None else hot
+                if total != expected_total:
+                    found.append(
+                        (
+                            claim_line(line_map, active.start()),
+                            "status-hot-breakdown",
+                            f"{active.group(0)} + {superseded.group(0)} = {total}, "
+                            f"but this statement / the 热 generation row "
+                            f"(line {hot_line}) says {expected_total}",
+                        )
+                    )
+        if deployed_preview and DEPLOYED_VERSION_MARKER.search(sentence):
+            for m in PREVIEW_CLAIM.finditer(sentence):
+                if m.group(1) != deployed_preview:
+                    found.append(
+                        (
+                            claim_line(line_map, m.start()),
+                            "status-deployed-version",
+                            f"{m.group(0)} disagrees with the 部署版本 row: "
+                            f"preview.{deployed_preview}",
+                        )
+                    )
+        for m in DATA_TOOLS_CLAIM.finditer(sentence):
+            if int(m.group(1)) != data_tools:
+                found.append(
+                    (
+                        claim_line(line_map, m.start()),
+                        "status-data-tool-count",
+                        f"{m.group(0)} (registry: {data_tools} data tools)",
+                    )
+                )
+        for m in ACQUIRE_TOOLS_CLAIM.finditer(sentence):
+            if int(m.group(1)) != acquire_tools:
+                found.append(
+                    (
+                        claim_line(line_map, m.start()),
+                        "status-acquire-tool-count",
+                        f"{m.group(0)} (registry: {acquire_tools} acquisition tools)",
+                    )
+                )
+        pairs = list(re.finditer(r"(\d{1,3})\s*/\s*(\d{1,3})\s*工具", sentence))
+        for m in BARE_TOOLS_CLAIM.finditer(sentence):
+            if any(pair.start() <= m.start() < pair.end() for pair in pairs):
+                continue
+            value = int(m.group(1))
+            prefix = sentence[: m.start()].lower()
+            acquire_at = prefix.rfind("acquire")
+            data_at = prefix.rfind("data")
+            expected = None
+            if acquire_at > data_at:
+                expected = acquire_tools
+            elif data_at >= 0:
+                expected = data_tools
+            if expected is not None and value != expected:
+                found.append(
+                    (
+                        claim_line(line_map, m.start()),
+                        "status-tool-count",
+                        f"{m.group(0)} (registry: {expected} tools)",
+                    )
+                )
+            elif expected is None and value not in (data_tools, acquire_tools):
+                found.append(
+                    (
+                        claim_line(line_map, m.start()),
+                        "status-tool-count",
+                        f"{m.group(0)} is neither {data_tools} data nor "
+                        f"{acquire_tools} acquisition tools",
+                    )
+                )
+        for m in pairs:
+            if (int(m.group(1)), int(m.group(2))) != (data_tools, acquire_tools):
+                found.append(
+                    (
+                        claim_line(line_map, m.start()),
+                        "status-tool-pair",
+                        f"{m.group(0)} (registry: {data_tools}/{acquire_tools} tools)",
+                    )
+                )
+
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip().strip("`") for cell in stripped.strip("|").split("|")]
+        unit = cells[0] if cells else ""
+        expected = {
+            "x-data-mcp-data": data_tools,
+            "x-data-mcp-acquire": acquire_tools,
+        }.get(unit)
+        if expected is None:
+            continue
+        numbers = [cell for cell in cells[1:] if re.fullmatch(r"\d+", cell)]
+        if not numbers:
+            found.append(
+                (lineno, "status-service-tool-count", f"no numeric 工具数 cell for {unit}")
+            )
+        elif int(numbers[0]) != expected:
+            found.append(
+                (
+                    lineno,
+                    "status-service-tool-count",
+                    f"{unit} 工具数 {numbers[0]} (registry: {expected})",
+                )
+            )
+    return found
+
+
+def region_start_line(text: str, start_heading: str | None) -> int:
+    """0-based line offset of the region, so failures can cite the file line."""
+    if start_heading is None:
+        return 0
+    for i, line in enumerate(text.splitlines(keepends=True)):
+        if line.rstrip() == start_heading:
+            return i
+    return 0
 
 
 def top_current_region(text: str, start_heading: str | None) -> str:
@@ -318,6 +774,79 @@ def main() -> int:
                 f"{kind}: {line.strip()}",
             )
 
+    # P1-2 (#296): current-state regions P1-1 corrected, docs/contracts
+    # snapshots, the decisions status column, and STATUS self-consistency.
+    # Every failure carries file:line + rule name so it is locatable.
+    deployed_schema = compact if compact is not None else EXPECTED_COMPACT_SCHEMA
+    registry_data_tools = len(data_names)
+    registry_acquire_tools = len(acquire_names)
+
+    def add_claims(rel: str, claims: list[tuple[int, str, str]]) -> None:
+        for lineno, rule, detail in claims:
+            failures.append(f"{rel}:{lineno}: {rule}: {detail}")
+
+    for rel, headings in CURRENT_REGIONS.items():
+        path = ROOT / rel
+        check(f"{rel} exists", path.is_file())
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for heading in headings:
+            region = top_current_region(text, heading)
+            check(f"{rel} current region located", bool(region), f"missing {heading}")
+            offset = region_start_line(text, heading)
+            add_claims(
+                rel,
+                stale_current_region_claims(
+                    region,
+                    deployed_schema,
+                    EXPECTED_DATA_CAPABILITY_REVISION,
+                    registry_data_tools,
+                    registry_acquire_tools,
+                    offset,
+                ),
+            )
+            for lineno, line in enumerate(region.splitlines(), start=1):
+                if STALE_EIGHT_TOOLS.search(line):
+                    add_claims(rel, [(lineno + offset, "stale-eight-tools", line.strip())])
+
+    for path in sorted(CONTRACTS_DIR.iterdir()):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        add_claims(rel, contract_name_claims(rel))
+        if path.suffix != ".md":
+            continue
+        add_claims(
+            rel,
+            contract_snapshot_claims(
+                path.read_text(encoding="utf-8"),
+                deployed_schema,
+                EXPECTED_DATA_CAPABILITY_REVISION,
+                registry_data_tools,
+                registry_acquire_tools,
+            ),
+        )
+
+    decisions_rel = "docs/decisions.md"
+    decisions_path = ROOT / decisions_rel
+    check(f"{decisions_rel} exists", decisions_path.is_file())
+    if decisions_path.is_file():
+        add_claims(
+            decisions_rel,
+            decision_status_claims(decisions_path.read_text(encoding="utf-8")),
+        )
+
+    if status_path.is_file():
+        add_claims(
+            "docs/STATUS.md",
+            status_consistency_errors(
+                status_path.read_text(encoding="utf-8"),
+                registry_data_tools,
+                registry_acquire_tools,
+            ),
+        )
+
     if failures:
         for failure in failures:
             print(f"FAIL {failure}", file=sys.stderr)
@@ -327,7 +856,10 @@ def main() -> int:
         f"{EXPECTED_COMPACT_SCHEMA} (legacy upgrade source schema "
         f"{EXPECTED_LEGACY_SCHEMA}), {EXPECTED_DATA_TOOLS} data tools, "
         f"{EXPECTED_ACQUIRE_TOOLS} acquisition tools, "
-        f"{len(CURRENT_DOCS)} current docs consistent"
+        f"{len(CURRENT_DOCS)} current docs + {len(CURRENT_REGIONS)} current "
+        f"regions + "
+        f"{len([p for p in CONTRACTS_DIR.iterdir() if p.is_file()])} contract "
+        f"snapshots consistent"
     )
     return 0
 

@@ -113,5 +113,351 @@ class RealDocs(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+REGION_SCHEMA = 21
+REGION_REVISION = "generic-data-v7"
+REGION_DATA_TOOLS = 23
+REGION_ACQUIRE_TOOLS = 10
+
+
+def region_claims(text: str, offset: int = 0) -> list[tuple[int, str, str]]:
+    return cf.stale_current_region_claims(
+        text,
+        REGION_SCHEMA,
+        REGION_REVISION,
+        REGION_DATA_TOOLS,
+        REGION_ACQUIRE_TOOLS,
+        offset,
+    )
+
+
+def rules(claims: list[tuple[int, str, str]]) -> list[str]:
+    return [rule for _, rule, _ in claims]
+
+
+class StaleCurrentRegions(unittest.TestCase):
+    """P1-2 (#296): the regions P1-1 corrected (XDM-1 7d class)."""
+
+    def test_deployed_schema_is_accepted(self):
+        self.assertEqual(
+            region_claims("当前部署的是 schema 21 的单版本存储。\n"), []
+        )
+
+    def test_old_schema_written_as_deployed_is_flagged(self):
+        # design.md before P1-1 (XDM-1 7d).
+        old = (
+            "本文中「版本」等表述描述的是**版本链模型**：它是已部署的\n"
+            "schema 20（v0.2.0-preview.31）的行为，但**不再被视为目标模型**。"
+            "两者并列：线上仍是\n"
+            "schema 20，schema 21 合并并部署之前不能当作已部署事实。\n"
+        )
+        found = region_claims(old)
+        self.assertEqual(rules(found), ["stale-schema", "stale-schema"], found)
+        self.assertEqual([line for line, _, _ in found], [2, 3])
+
+    def test_superseded_schema_is_not_flagged(self):
+        # The P1-1 wording: schema 20 only appears as superseded history.
+        text = (
+            "它是\n"
+            "schema 20（v0.2.0-preview.31 及更早）的行为，**已被 schema 21 取代**（历史，不再被视为目标模型）。\n"
+            "当前部署的是 schema 21 的单版本存储：每 `(实体, 周期)` 只存当前序列。\n"
+            "schema 21 自 preview.32 起部署（旧 v20 库归档）。\n"
+        )
+        self.assertEqual(region_claims(text), [])
+
+    def test_old_revision_written_as_deployed_is_flagged(self):
+        # generic-data-v7.md before P1-1 (XDM-1 7d #9).
+        old = "**状态**：尚未部署；当前部署仍为 `generic-data-v6` / compact schema 21。\n"
+        found = region_claims(old)
+        self.assertEqual(rules(found), ["stale-revision"], found)
+        self.assertIn("generic-data-v6", found[0][2])
+
+    def test_revision_progression_is_not_flagged(self):
+        text = (
+            "`capability_revision`：`generic-data-v6` → `generic-data-v7`。\n"
+            "`related_tasks` 有界；capability 升到 `generic-data-v5`，Skill 同步更新。\n"
+            "当前部署已是 `generic-data-v7`（自 preview.33 起）。\n"
+        )
+        self.assertEqual(region_claims(text), [])
+
+    def test_tool_counts_must_match_the_registries(self):
+        # design.md:69 before P1-1 said 21 data tools (XDM-1 7d #2).
+        old = "| MCP | data socket 21 data tools、acquisition socket 10 acquisition tools | x |\n"
+        self.assertEqual(rules(region_claims(old)), ["data-tool-count"])
+        good = "| MCP | data socket 23 data tools、acquisition socket 10 acquisition tools | x |\n"
+        self.assertEqual(region_claims(good), [])
+        bad_acquire = "| MCP | data socket 23 data tools、acquisition socket 8 acquisition tools | x |\n"
+        self.assertEqual(rules(region_claims(bad_acquire)), ["acquire-tool-count"])
+
+    def test_bare_tool_count_must_be_one_of_the_registries(self):
+        # The v6 switch checklist header said "21 tools" (stale current fact).
+        self.assertEqual(rules(region_claims("对齐到 preview.31 / 21 tools / v5。\n")), ["tool-count"])
+        self.assertEqual(region_claims("双 server 共 23 tools。\n"), [])
+
+    def test_history_marked_sentence_is_exempt(self):
+        text = "历史实测（preview.27/schema20）：5,222 items / 616s。\n"
+        self.assertEqual(region_claims(text), [])
+
+    def test_history_marker_exempts_one_sentence_not_the_table(self):
+        text = (
+            "| 性能 | 历史实测（preview.27/schema20）：5,222 items | — |\n"
+            "| MCP | data socket 21 data tools | x |\n"
+        )
+        found = region_claims(text)
+        self.assertEqual(rules(found), ["data-tool-count"], found)
+        self.assertEqual(found[0][0], 2)
+
+    def test_wrapped_prose_lines_are_joined(self):
+        # The assertion and the schema number sit on different source lines.
+        text = "两者并列：线上仍是\nschema 20，schema 21 不能当作已部署事实。\n"
+        found = region_claims(text)
+        self.assertEqual(rules(found), ["stale-schema"], found)
+
+    def test_offset_reports_file_lines(self):
+        found = region_claims("intro\n\n线上仍是 schema 20。\n", offset=10)
+        self.assertEqual([line for line, _, _ in found], [13])
+
+
+CONTRACT_OK = """# 某历史快照
+
+**状态**：历史快照。当前契约见 [generic-data-v7](generic-data-v7.md)。
+
+正文。
+
+## 1. 细节
+
+正文。
+"""
+
+
+def contract_claims(text: str) -> list[tuple[int, str, str]]:
+    return cf.contract_snapshot_claims(
+        text,
+        REGION_SCHEMA,
+        REGION_REVISION,
+        REGION_DATA_TOOLS,
+        REGION_ACQUIRE_TOOLS,
+    )
+
+
+class ContractSnapshots(unittest.TestCase):
+    """P1-2 (#296) requirement 4: snapshots must not call themselves current."""
+
+    def test_historical_snapshot_passes(self):
+        self.assertEqual(contract_claims(CONTRACT_OK), [])
+
+    def test_file_name_claiming_current_is_rejected(self):
+        self.assertEqual(cf.contract_name_claims("docs/contracts/mcp-tools-current.json"),
+                         [(1, "snapshot-name-claims-current", "mcp-tools-current.json")])
+        self.assertEqual(
+            rules(cf.contract_name_claims("docs/contracts/当前契约.md")),
+            ["snapshot-name-claims-current"],
+        )
+        self.assertEqual(
+            cf.contract_name_claims("docs/contracts/mcp-tools-b3fe2b3.json"), []
+        )
+
+    def test_missing_status_line_is_rejected(self):
+        text = "# 快照\n\n正文。\n"
+        self.assertEqual(rules(contract_claims(text)), ["snapshot-status-missing"])
+
+    def test_status_claiming_to_be_current_is_rejected(self):
+        text = "# 快照\n\n**状态**：当前契约。\n"
+        self.assertEqual(
+            rules(contract_claims(text)), ["snapshot-status-claims-current"]
+        )
+
+    def test_header_old_deployment_is_rejected(self):
+        # v6-switch-checklist.md before P1-2.
+        text = (
+            "# generic-data-v6 / schema 21 部署日切换清单\n\n"
+            "**状态**：历史快照。\n\n"
+            "**现在不要改这些文件**——已部署实例仍是\n"
+            "preview.31 / schema 20 / `generic-data-v5`（STATUS），\n"
+            "提前改会让检查失败。\n"
+        )
+        found = contract_claims(text)
+        self.assertEqual(
+            sorted(rules(found)),
+            ["snapshot-stale-revision", "snapshot-stale-schema"],
+            found,
+        )
+        self.assertEqual({line for line, _, _ in found}, {6})
+
+    def test_repository_contracts_pass(self):
+        for path in sorted(cf.CONTRACTS_DIR.iterdir()):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(cf.ROOT).as_posix()
+            self.assertEqual(cf.contract_name_claims(rel), [], rel)
+            if path.suffix == ".md":
+                self.assertEqual(contract_claims(path.read_text(encoding="utf-8")), [], rel)
+
+
+DECISIONS_OK = """# 决策记录
+
+状态取值：**生效**、**实施中**（已决定，未部署）、**已取代**。
+
+## 1. 一节
+
+| # | 决策 | 状态 | 来源 |
+|---|---|---|---|
+| D-01 | 某决定 | 生效 | PR #1 |
+| D-02 | 某决定 | 已取代（D-01） | PR #2 |
+"""
+
+
+class DecisionsStatus(unittest.TestCase):
+    """P1-2 (#296): the decisions 状态 column must be machine-checkable."""
+
+    def test_declared_status_values_pass(self):
+        self.assertEqual(cf.decision_status_claims(DECISIONS_OK), [])
+
+    def test_undeclared_status_value_is_rejected(self):
+        text = DECISIONS_OK.replace("| D-02 | 某决定 | 已取代（D-01） |", "| D-02 | 某决定 | 待定 |")
+        found = cf.decision_status_claims(text)
+        self.assertEqual(rules(found), ["decision-status-undeclared"], found)
+        self.assertEqual(found[0][0], 10)
+
+    def test_missing_vocabulary_is_rejected(self):
+        text = DECISIONS_OK.replace("状态取值：", "状态：")
+        self.assertEqual(
+            rules(cf.decision_status_claims(text)),
+            ["decision-status-vocabulary-missing"],
+        )
+
+    def test_missing_status_column_is_rejected(self):
+        text = "# 决策记录\n\n状态取值：**生效**。\n\n| # | 决策 |\n|---|---|\n| D-01 | x |\n"
+        self.assertEqual(
+            rules(cf.decision_status_claims(text)),
+            ["decision-status-column-missing"],
+        )
+
+    def test_repository_decisions_pass(self):
+        text = (cf.ROOT / "docs/decisions.md").read_text(encoding="utf-8")
+        self.assertEqual(cf.decision_status_claims(text), [])
+
+
+STATUS_OK = """# 当前状态（STATUS）
+
+最后核实：2026-10-24。
+
+## 部署
+
+| 项 | 事实 | 来源 |
+|---|---|---|
+| 部署版本 | v0.2.0-preview.35 @ `23edeaf` | manifest |
+
+## 服务
+
+| systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
+|---|---|---|---|---|
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 23 | capability `generic-data-v7` |
+| `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | — |
+
+## 数据
+
+| 项 | 事实 | 来源 |
+|---|---|---|
+| 热 generation | **5/6**：1 active + 4 superseded；下一次 acquire 可直接受理 | acquire.sqlite |
+
+preview.35 部署后 capability 仍为 `generic-data-v7`，23/10 工具不变。
+
+工具数与能力版本为 live 只读复核：data socket `tools/list` 返回 23 个工具、
+acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.version` 均为 `0.2.0-preview.35`。
+"""
+
+
+def status_claims(text: str) -> list[tuple[int, str, str]]:
+    return cf.status_consistency_errors(text, REGION_DATA_TOOLS, REGION_ACQUIRE_TOOLS)
+
+
+class StatusConsistency(unittest.TestCase):
+    """P1-2 (#296) item 3: STATUS must not contradict itself (XDM-1 7c)."""
+
+    def test_consistent_status_passes(self):
+        self.assertEqual(status_claims(STATUS_OK), [])
+
+    def test_hot_count_contradiction_is_flagged(self):
+        # XDM-1 7c: the 容量 row said hot 6/6 while the 数据 table said 5/6.
+        text = STATUS_OK + (
+            "\n## 新鲜度\n\n| 项 | 事实 | 来源 |\n|---|---|---|\n"
+            "| 容量 | hot **6/6**（实测：1 active + 4 superseded） | acquire.sqlite |\n"
+        )
+        found = status_claims(text)
+        self.assertEqual(
+            sorted(set(rules(found))),
+            ["status-hot-breakdown", "status-hot-count"],
+            found,
+        )
+        self.assertTrue(all(line == 33 for line, _, _ in found), found)
+
+    def test_hot_timeline_is_exempt(self):
+        # A transition chain describes how the count changed, not its value.
+        text = STATUS_OK + (
+            "\n10-24 实测路径：16:56Z 为 6/6（1 active + 5 superseded）→ "
+            "17:52Z 再退役后当前 5/6。\n"
+        )
+        self.assertEqual(status_claims(text), [])
+
+    def test_hot_capacity_contradiction_is_flagged(self):
+        text = STATUS_OK + "\n当前 热 generation 上限 5/8，超限后拒绝受理。\n"
+        self.assertEqual(rules(status_claims(text)), ["status-hot-capacity"])
+
+    def test_hot_projection_is_exempt(self):
+        text = STATUS_OK + "\n当前 5/6，activate 后由自动保留回收到约 4/6。\n"
+        self.assertEqual(status_claims(text), [])
+
+    def test_missing_hot_row_is_flagged(self):
+        text = STATUS_OK.replace("| 热 generation | **5/6**", "| 代 | **5/6**")
+        self.assertEqual(rules(status_claims(text)), ["status-hot-row-missing"])
+
+    def test_deployed_version_contradiction_is_flagged(self):
+        text = STATUS_OK.replace(
+            "`serverInfo.version` 均为 `0.2.0-preview.35`",
+            "`serverInfo.version` 均为 `0.2.0-preview.34`",
+        )
+        self.assertEqual(rules(status_claims(text)), ["status-deployed-version"])
+
+    def test_service_table_tool_count_is_checked(self):
+        text = STATUS_OK.replace(
+            "| `run/mcp.sock` | 23 |", "| `run/mcp.sock` | 21 |"
+        )
+        self.assertEqual(rules(status_claims(text)), ["status-service-tool-count"])
+
+    def test_prose_tool_count_is_checked(self):
+        text = STATUS_OK.replace(
+            "data socket `tools/list` 返回 23 个工具",
+            "data socket `tools/list` 返回 21 个工具",
+        )
+        self.assertEqual(rules(status_claims(text)), ["status-tool-count"])
+
+    def test_tool_pair_is_checked(self):
+        text = STATUS_OK + "\npreview.34 与 preview.35 都是二进制热切换，21/10 工具不变。\n"
+        self.assertEqual(rules(status_claims(text)), ["status-tool-pair"])
+
+    def test_repository_status_passes(self):
+        text = (cf.ROOT / "docs/STATUS.md").read_text(encoding="utf-8")
+        self.assertEqual(status_claims(text), [])
+
+
+class CurrentRegionsCoverage(unittest.TestCase):
+    """Every configured region must exist, so a renamed heading fails loudly."""
+
+    def test_every_configured_region_is_found(self):
+        for rel, headings in cf.CURRENT_REGIONS.items():
+            text = (cf.ROOT / rel).read_text(encoding="utf-8")
+            for heading in headings:
+                self.assertTrue(cf.top_current_region(text, heading), f"{rel}: {heading}")
+
+    def test_design_md_has_both_p1_1_regions(self):
+        self.assertEqual(
+            cf.CURRENT_REGIONS["docs/design.md"],
+            ("## 存储模型状态（版本链 vs 单版本）", "## 当前能力与目标差距"),
+        )
+
+    def test_current_regions_and_docs_do_not_overlap(self):
+        self.assertEqual(set(cf.CURRENT_REGIONS) & set(cf.CURRENT_DOCS), set())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,15 +1,18 @@
 # generic-data-v6 / schema 21 部署日切换清单
 
-本文列出**部署日**要做的机械切换：把各文档「当前状态」从
+**状态**：历史快照。v6 切换已于 2026-10-13 随 preview.32 执行完毕；当前契约见
+[generic-data-v7](generic-data-v7.md)，当前部署事实见 [STATUS](../STATUS.md)。
+
+本文是当时**部署日**要做的机械切换：把各文档「当前状态」从
 `generic-data-v5` / compact schema 20 改成 `generic-data-v6` /
-compact schema 21。**现在不要改这些文件**——已部署实例仍是
-preview.31 / schema 20 / `generic-data-v5`（[STATUS](../STATUS.md)），
+compact schema 21。当时要求**不要提前改这些文件**——写作时的已部署实例
+是 preview.31 / schema 20 / `generic-data-v5`（历史，[STATUS](../STATUS.md)），
 提前改会让 `scripts/check_current_facts.py` 失败，且两个 Skill 被
 生产日更使用。
 
 位置一律用**锚点**（原文句子、区域标题、表行名）标注，不用行号：
-这些文档的「当前部署」句在并行 PR 中正被对齐到 preview.31 /
-21 tools / v5，行号会漂移。执行前以当日文件为准。
+这些文档的「当前部署」句在并行 PR 中当时正被对齐到 preview.31 /
+21 tools / v5（历史），行号会漂移。执行前以当日文件为准。
 
 ## 0. 顺序约束
 
