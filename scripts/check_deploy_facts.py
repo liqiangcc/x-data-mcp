@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Deployment-facts linter (TASK-XP-026 S5).
+"""Deployment-facts linter (TASK-XP-026 S5, extended by P1-2/#296).
 
-Companion to check_current_facts.py (which is owned by the mainline and
-must not be modified). Checks:
+Companion to check_current_facts.py, which owns the current-facts constants,
+the "current region" rules and the STATUS self-consistency rules. This file
+checks:
 
 1. docs/STATUS.md carries a "last verified" (最后核实) date; warns when it
    is older than 14 days. A missing STATUS.md is a warning, not a failure:
@@ -10,10 +11,11 @@ must not be modified). Checks:
    a date, or with a malformed one, is an error.
 2. Deployment version strings in STATUS.md must be legal
    (v?X.Y.Z-preview.N / preview.N forms).
-3. Inside the CURRENT_DOCS "current" regions (same doc set as
-   check_current_facts.py), ecs-node must not be written as the current
-   deployment host. Mentions of ecs-node in other roles (e.g. the
-   measurement environment of benchmark notes) are allowed.
+3. Inside the CURRENT_DOCS "current" regions, ecs-node must not be written
+   as the current deployment host. Mentions of ecs-node in other roles (e.g.
+   the measurement environment of benchmark notes) are allowed. The region
+   set is imported from check_current_facts.py so the two linters cannot
+   drift apart.
 
 Exit 0 with only warnings; exit 1 on errors.
 """
@@ -22,15 +24,9 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from check_current_facts import CURRENT_DOCS
 
-CURRENT_DOCS = {
-    "README.md": "## 当前状态",
-    "docs/daily-sync.md": "## 当前状态",
-    "docs/mcp-tools.md": "## 版本与阅读方式",
-    "docs/generic-data-tools.md": "## 决策与适用范围",
-    "docs/source-closure.md": None,
-}
+ROOT = Path(__file__).resolve().parent.parent
 
 STATUS_MD = ROOT / "docs" / "STATUS.md"
 STALE_DAYS = 14

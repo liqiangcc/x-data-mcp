@@ -1,10 +1,13 @@
 # generic-data-v7 部署日切换清单
 
-本文列出**部署日**要做的机械切换：把各文档「当前状态」与两个 Skill 从
+**状态**：历史快照。v7 切换已于 2026-10-16 随 preview.33 执行完毕；当前部署事实见
+[STATUS](../STATUS.md)。
+
+本文是当时**部署日**要做的机械切换：把各文档「当前状态」与两个 Skill 从
 `generic-data-v6` / 21 data tools 改成 `generic-data-v7` / 23 data tools。
-**现在不要改 Skill 与「当前状态」区域**——已部署实例仍是 preview.32 /
-schema 21 / `generic-data-v6`（[STATUS](../STATUS.md)），提前改会让
-`scripts/check_current_facts.py` 失败，且两个 Skill 被生产日更使用。
+当时要求**不要提前改 Skill 与「当前状态」区域**——写作时的已部署实例
+是 preview.32 / schema 21 / `generic-data-v6`（历史，[STATUS](../STATUS.md)），
+提前改会让 `scripts/check_current_facts.py` 失败，且两个 Skill 被生产日更使用。
 
 与 v6 切换的关键差别：**v7 不升 schema**（仍 21）、不加表，部署只需
 **替换二进制**——不用 `deploy_phase_g.sh` 的归档+全新 init 流程，用
