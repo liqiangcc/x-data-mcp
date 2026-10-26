@@ -65,8 +65,9 @@ AC 的定义在 Issue #383 的验收表（AC-M1-1…12），本文按 PR 行引�
   （`src/qfq.rs:219,269`），`ALGORITHM_VERSION = "qfq-exact-v1"`（`src/qfq.rs:204`）；2dp 基线
   `forward_adjust` 保留为历史 oracle，不再写库（`src/qfq.rs:103,167`）。
 - 验收：Python `Fraction` 夹具逐位相等（`tests/algorithms/qfq_exact.rs`；
-  `evidence/issue-383-qfq-exact/`）；AC-M1-3 断言差异只落在 2dp 半分位字段
-  （语料 2,992 个字段 = 3.63%，6dp 半分位 0 个）。
+  `evidence/issue-383-qfq-exact/`）；AC-M1-3 的不变量（6dp 值按 2dp 舍入后与旧 2dp 不同 ⇒ 必落在
+  2dp 半分位）由 CI 断言，但**在这份 3 只证券的语料上是空真**：语料有 2,992 个半分位字段（3.63%）、
+  0 条差异（6dp 半分位 0 个）。真实的逐条枚举要在私有栈对全量 generation 跑（U-1）。
 - 偏差：**`algorithm_version` 没有落成结构化列**——schema 22 没有
   `market_series.algorithm_version`，实现把它写进版本证据的 `adjustment_evidence.reason`
   （`src/official_market.rs:928-929`），随 `evidence_digest` 绑定；做成列需要 schema 23 或改 022。
