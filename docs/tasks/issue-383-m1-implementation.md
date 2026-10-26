@@ -61,15 +61,15 @@ AC 的定义在 Issue #383 的验收表（AC-M1-1…12），本文按 PR 行引�
 ### PR-3：精确有理数复权（`7c7040b`）
 
 - 复权链改成精确有理数合成、末次一次舍入：`ExactAffine`/`exact_event_transform`/
-  `exact_compose_chain`（`src/gbbq.rs:219,332,364`）；`forward_adjust_exact` 与逐 bar 参考实现
-  （`src/qfq.rs:219,268`），`ALGORITHM_VERSION = "qfq-exact-v1"`（`src/qfq.rs:204`）；2dp 基线
-  `forward_adjust` 保留为历史 oracle，不再写库（`src/qfq.rs:97,161`）。
+  `exact_compose_chain`（`src/gbbq.rs:227,341,364`）；`forward_adjust_exact` 与逐 bar 参考实现
+  （`src/qfq.rs:219,269`），`ALGORITHM_VERSION = "qfq-exact-v1"`（`src/qfq.rs:204`）；2dp 基线
+  `forward_adjust` 保留为历史 oracle，不再写库（`src/qfq.rs:103,167`）。
 - 验收：Python `Fraction` 夹具逐位相等（`tests/algorithms/qfq_exact.rs`；
   `evidence/issue-383-qfq-exact/`）；AC-M1-3 断言差异只落在 2dp 半分位字段
   （语料 2,992 个字段 = 3.63%，6dp 半分位 0 个）。
 - 偏差：**`algorithm_version` 没有落成结构化列**——schema 22 没有
   `market_series.algorithm_version`，实现把它写进版本证据的 `adjustment_evidence.reason`
-  （`src/official_market.rs:677`），随 `evidence_digest` 绑定；做成列需要 schema 23 或改 022。
+  （`src/official_market.rs:928-929`），随 `evidence_digest` 绑定；做成列需要 schema 23 或改 022。
   年线同样取 6dp（`SeriesShape::FORWARD_STOCK_UNITS`）；`to_bar` 不补尾随零（"最多 6 位"）。
 - 旧校验对账：`FORWARD_STOCK_CENTS`→`FORWARD_STOCK_UNITS`（调用点 8 处全改）；`commit_plan` 的
   默认精度改为按口径取；7 处测试夹具从 2dp 编码改到序列精度；冻结客户端显示断言改为
@@ -90,7 +90,7 @@ AC 的定义在 Issue #383 的验收表（AC-M1-1…12），本文按 PR 行引�
 ### PR-5：指数基准（`ec2f932`）
 
 - 9 条交易所体系宽基登记在 `src/index_registry.rs:131`（含中证 4 条，D-31），量额口径与成分数
-  逐指数登记，代码里没有 `if entity == ...`（`src/index_registry.rs:121-131`）；
+  逐指数登记，代码里没有 `if entity == ...`（`src/index_registry.rs:7,131`）；
   `index_series_meta`（`022:268-292`）存单位与口径，`evidence_note` 非空 CHECK；
   指数物化为 `instrument_class=1`、`price_scale=2`、`adjustment=0`；MCP 读路径按
   `instrument_class=0 AND adjustment=1` 解析（AC-M1-10）。
@@ -113,7 +113,7 @@ AC 的定义在 Issue #383 的验收表（AC-M1-1…12），本文按 PR 行引�
 ### PR-7：日更集成（`1b50379`）
 
 - 一次日线 plan-run 在实体 item 之后追加 10 个服务器内部 item：`derived:index:<entity>` × 9 +
-  `derived:calendar`（`src/task_control/derived.rs:27-31`；`src/data_supply/derived.rs:47`；
+  `derived:calendar`（`src/task_control/derived.rs:29-33`；`src/data_supply/derived.rs:47`；
   `src/data_supply/worker.rs:240,287`）。它们复用 `task_items` 与进度面，`entity`/`period` 为
   null，wire 形状不变（设计 §9.2）。
 - 失败语义：内部 item 失败只记自身结果，run 收尾 `partially_failed`；不确定结果转
