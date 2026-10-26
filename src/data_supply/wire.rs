@@ -29,6 +29,10 @@ pub enum ContractVersion {
     #[serde(rename = "v1")]
     V1,
 }
+/// One security identity. The typed contract stays `{exchange, code}`; the
+/// decode-layer `normalize` step (v8 PR-1, #387 §7) accepts the canonical
+/// text `"sh.600000"` and rewrites it to this form before decoding, so no
+/// response byte and no advertised schema changes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Security {
@@ -44,6 +48,24 @@ pub enum Exchange {
     Sz,
 }
 impl Security {
+    /// Parse the canonical identity text `"sh.600000"` (the spelling used by
+    /// tasks, scopes and logs). Six-digit validation stays in `validate`.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let Some((exchange, code)) = text.split_once('.') else {
+            return Err(format!(
+                "expected \"sh.600000\" or {{\"exchange\":\"sh\",\"code\":\"600000\"}}, got {text:?}"
+            ));
+        };
+        let exchange = match exchange.to_ascii_lowercase().as_str() {
+            "sh" => Exchange::Sh,
+            "sz" => Exchange::Sz,
+            other => return Err(format!("exchange must be sh or sz, got {other:?}")),
+        };
+        Ok(Self {
+            exchange,
+            code: code.to_owned(),
+        })
+    }
     pub fn symbol(&self) -> String {
         format!(
             "{}.{}",
@@ -58,7 +80,10 @@ impl Security {
         if self.code.len() == 6 && self.code.bytes().all(|b| b.is_ascii_digit()) {
             Ok(())
         } else {
-            Err("six digit security code required".into())
+            Err(format!(
+                "code must be six digits, got {:?}; pass the whole identity as entity: \"sh.600000\" or {{\"exchange\":\"sh\",\"code\":\"600000\"}}",
+                self.code
+            ))
         }
     }
 }
@@ -336,8 +361,16 @@ pub struct TasksQuery {
 #[serde(rename_all = "snake_case")]
 pub enum TaskOperation {
     StartCollection,
+    /// `update_data` also covers tasks admitted through `run_market_update`
+    /// (the plan-run contract writes this operation).
+    UpdateData,
+    BackfillData,
+    RepublishData,
+    RetryTask,
     VerifyStoppedWrites,
     VerifyPublicationResult,
+    VerifyDataGap,
+    InspectVerificationTask,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -624,7 +657,12 @@ pub struct RequestView {
 pub struct CancelV1 {
     pub contract_version: ContractVersion,
     pub task_id: String,
-    pub expected_revision: u64,
+    /// Optional CAS token (v8 PR-1, #387 §7.2 row 10): absent means the
+    /// current revision is read first; an explicit value keeps the strict
+    /// precondition (terminal tasks enforce it, live tasks apply the intent
+    /// at the revision the write reads).
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -944,3 +982,6 @@ pub struct InspectVerification {
     pub request_id: String,
     pub target_task_id: String,
 }
+
+mod normalize;
+pub use normalize::normalize;
