@@ -871,6 +871,7 @@ fn supply_reads_on_schema21() {
             version: VersionChoice::LatestPerEntity,
             page_size: 100,
             cursor: None,
+            fields: None,
         },
         &access,
     )
@@ -920,6 +921,7 @@ fn supply_reads_on_schema21() {
             version: VersionChoice::LatestPerEntity,
             page_size: 100,
             cursor: None,
+            fields: None,
         },
         &access,
     )

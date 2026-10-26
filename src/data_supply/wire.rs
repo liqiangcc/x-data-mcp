@@ -23,11 +23,24 @@ impl Dataset {
             Self::Catalog => None,
         }
     }
+    /// Wire spelling; used by v2 error messages (v8 PR-3, #387 §5).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Catalog => "securities.catalog",
+            Self::Daily => "market.daily",
+            Self::Yearly => "market.yearly",
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ContractVersion {
     #[serde(rename = "v1")]
     V1,
+    /// Columnar read responses (v8 PR-3, #387 §5). Only the read surface
+    /// (`query_data`, `get_data_availability`, `list_data_versions`) serves
+    /// it; every other tool still accepts `v1` only.
+    #[serde(rename = "v2")]
+    V2,
 }
 /// One security identity. The typed contract stays `{exchange, code}`; the
 /// decode-layer `normalize` step (v8 PR-1, #387 §7) accepts the canonical
@@ -141,6 +154,9 @@ pub struct Query {
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
+    /// v2 only: column projection (omitted = the dataset's core fields).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
 }
 pub fn default_page() -> usize {
     100

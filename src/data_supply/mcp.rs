@@ -729,7 +729,16 @@ impl DataApi {
                 "dataset is not registered",
             ));
         }
-        if input.get("contract_version").is_some_and(|v| v != "v1") {
+        // v2 is the columnar read surface only (v8 PR-3, #387 §9.1); every
+        // other tool keeps the v1-only gate.
+        let columnar_read = matches!(
+            name,
+            "query_data" | "get_data_availability" | "list_data_versions"
+        );
+        if input
+            .get("contract_version")
+            .is_some_and(|version| version != "v1" && !(columnar_read && version == "v2"))
+        {
             return Err(ApiError::new(
                 "unsupported_contract",
                 "unsupported contract version",
@@ -1126,21 +1135,34 @@ impl DataApi {
                 self.plan_acceptance(command.request_id(), acceptance.reused, &f, counts.eligible)
             }
             Handler::Query => {
-                let reply = self
-                    .queries
-                    .query(decode::<Query>(input)?, &self.access)
-                    .map_err(mapped)?;
+                let query = decode::<Query>(input)?;
+                if query.contract_version == ContractVersion::V2 {
+                    return self.queries.query_v2(query, &self.access).map_err(mapped);
+                }
+                let reply = self.queries.query(query, &self.access).map_err(mapped)?;
                 crate::stage_trace::timed("rpc.query.encode", || encode(reply))
             }
-            Handler::Versions => encode(
-                self.queries
-                    .versions(decode::<VersionsQuery>(input)?, &self.access)
-                    .map_err(mapped)?,
-            ),
+            Handler::Versions => {
+                let query = decode::<VersionsQuery>(input)?;
+                if query.contract_version == ContractVersion::V2 {
+                    return self
+                        .queries
+                        .versions_v2(query, &self.access)
+                        .map_err(mapped);
+                }
+                encode(self.queries.versions(query, &self.access).map_err(mapped)?)
+            }
             Handler::Availability => {
+                let query = decode::<Query>(input)?;
+                if query.contract_version == ContractVersion::V2 {
+                    return self
+                        .observer
+                        .availability_v2(query, &self.access)
+                        .map_err(mapped);
+                }
                 let page = self
                     .observer
-                    .availability(decode::<Query>(input)?, &self.access)
+                    .availability(query, &self.access)
                     .map_err(mapped)?;
                 crate::stage_trace::timed("rpc.availability.encode", || encode(page))
             }
@@ -1191,6 +1213,16 @@ fn task_error(e: crate::task_control::Error) -> ApiError {
 impl ToolHandler for DataApi {
     fn tools(&self) -> Value {
         self.public_tools()
+    }
+    /// text grading (v8 §5.4, AC-V8-12): research keeps the full JSON,
+    /// ops/maint send a bounded summary for large payloads. The environment
+    /// switch overrides the entry default; `data_service` refuses to start on
+    /// an unknown value, so an invalid value here only means "not deployed".
+    fn text_mode(&self) -> crate::mcp::TextMode {
+        crate::mcp::resolve_text_mode(
+            self.entry.map(|entry| entry.name()),
+            std::env::var("X_DATA_MCP_TEXT_MODE").ok().as_deref(),
+        )
     }
     fn worker_once(&self) -> Result<Value, ApiError> {
         self.dispatch_internal("run_worker_once", json!({}))

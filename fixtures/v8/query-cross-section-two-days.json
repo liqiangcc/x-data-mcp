@@ -1,0 +1,366 @@
+{
+  "expected": {
+    "columns": {
+      "close": [
+        [
+          "10.10",
+          "9.10",
+          "8.10"
+        ],
+        [
+          "10.20",
+          "9.20",
+          null
+        ]
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.daily",
+    "entities": [
+      "sh.600000",
+      "sh.600004",
+      "sh.600009"
+    ],
+    "layout": "cross_section",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "adjustment": {
+        "field": "price_adjustment",
+        "reason": "qfq-exact-v1 fixture",
+        "status": "confirmed",
+        "value": "qfq"
+      },
+      "coverage_reason": "fixture coverage",
+      "coverage_status": "complete",
+      "source": "official_market",
+      "units": [
+        {
+          "field": "price",
+          "reason": "fixture unit evidence",
+          "status": "confirmed",
+          "value": "CNY"
+        }
+      ]
+    },
+    "next_cursor": null,
+    "page_complete": true,
+    "row_count": 5,
+    "snapshot_id": "snap-cross-section",
+    "snapshot_time": "2026-10-26T09:00:00Z",
+    "trade_days": [
+      "2026-10-23",
+      "2026-10-24"
+    ],
+    "versions": [
+      {
+        "entity": "sh.600000",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      {
+        "entity": "sh.600004",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      {
+        "entity": "sh.600009",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    ]
+  },
+  "input": {
+    "dataset": "market.daily",
+    "entities": [
+      {
+        "code": "600000",
+        "exchange": "sh"
+      },
+      {
+        "code": "600004",
+        "exchange": "sh"
+      },
+      {
+        "code": "600009",
+        "exchange": "sh"
+      }
+    ],
+    "fields": [
+      "close"
+    ],
+    "layout": "cross_section",
+    "manifest": [
+      {
+        "entity": {
+          "code": "600000",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      },
+      {
+        "entity": {
+          "code": "600004",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600004",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      },
+      {
+        "entity": {
+          "code": "600009",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600009",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      }
+    ],
+    "meta": {
+      "limitations": [
+        "fixed version selection is not a shared source acquisition time",
+        "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+      ],
+      "next_cursor": null,
+      "page_complete": true,
+      "snapshot_id": "snap-cross-section",
+      "snapshot_time": "2026-10-26T09:00:00Z"
+    },
+    "rows": [
+      {
+        "amount": "10100",
+        "close": "10.10",
+        "date": "2026-10-23",
+        "entity": {
+          "code": "600000",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "10.20",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "9.90",
+        "open": "10.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "volume": "1000",
+        "year_unfinished": null
+      },
+      {
+        "amount": "18200",
+        "close": "9.10",
+        "date": "2026-10-23",
+        "entity": {
+          "code": "600004",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "9.20",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "8.90",
+        "open": "9.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600004",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "volume": "2000",
+        "year_unfinished": null
+      },
+      {
+        "amount": "24300",
+        "close": "8.10",
+        "date": "2026-10-23",
+        "entity": {
+          "code": "600009",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "8.20",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "7.90",
+        "open": "8.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600009",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "volume": "3000",
+        "year_unfinished": null
+      },
+      {
+        "amount": "11220",
+        "close": "10.20",
+        "date": "2026-10-24",
+        "entity": {
+          "code": "600000",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "10.30",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "10.00",
+        "open": "10.10",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "volume": "1100",
+        "year_unfinished": null
+      },
+      {
+        "amount": "19320",
+        "close": "9.20",
+        "date": "2026-10-24",
+        "entity": {
+          "code": "600004",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "9.30",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "9.00",
+        "open": "9.10",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600004",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "version_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "volume": "2100",
+        "year_unfinished": null
+      }
+    ],
+    "trade_days": [
+      "2026-10-23",
+      "2026-10-24"
+    ]
+  }
+}
