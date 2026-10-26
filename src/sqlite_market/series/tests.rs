@@ -507,7 +507,16 @@ fn startup_check_scopes_closure_by_adjustment() {
     seed_daily(&c, ENTITY, &bars, ev, binding);
     // Raw-口径 rows have no writer until PR-2; the schema and the closure
     // probe must already handle them, so this fixture inserts them directly.
-    let (task_id, item_id) = stub_item(&c, "raw");
+    // The event reuses the forward series' task item: schema 22 relaxes
+    // UNIQUE(task_id,item_id) to (task_id,item_id,adjustment), and PR-2 writes
+    // exactly this pair for one item.
+    let (task_id, item_id): (String, String) = c
+        .query_row(
+            "SELECT task_id,item_id FROM market_events WHERE entity=?1 AND adjustment=1",
+            params![ENTITY],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
     let raw_digest = [0x5A; 32];
     let raw_seq = next_event_seq(&c).unwrap();
     c.execute(
