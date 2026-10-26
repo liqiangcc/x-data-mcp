@@ -964,7 +964,7 @@ fn supply_reads_on_schema21() {
         .year_presence(
             &crate::data_supply::presence::PresencePlan::new(
                 YearPresenceQuery {
-                    contract_version: crate::data_supply::wire::ReadContractVersion::V1,
+                    contract_version: crate::data_supply::wire::ContractVersion::V1,
                     items: vec![YearPresenceItem {
                         entity: sec.clone(),
                         base_daily_version_id: d.version_id.clone(),
@@ -1021,7 +1021,7 @@ fn presence_reasons_distinguish_superseded_from_never_seen() {
     };
     let plan = crate::data_supply::presence::PresencePlan::new(
         YearPresenceQuery {
-            contract_version: crate::data_supply::wire::ReadContractVersion::V1,
+            contract_version: crate::data_supply::wire::ContractVersion::V1,
             items: vec![
                 YearPresenceItem {
                     entity: security(),
