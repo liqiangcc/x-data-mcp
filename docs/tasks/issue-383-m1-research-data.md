@@ -21,7 +21,7 @@
 | 6 | 日历 | 由 `sh.000001` ∪ `sz.399001` 的 `.day` 日期并集推导（`cal-union-v1`），带输入清单与算法版本；只用于"非交易日"判定；1991 年深市周六交易是已知边界 | 设计（数字引 调研报告①） |
 | 7 | 指数基准 | 9 条交易所体系宽基序列（含中证），OHLC=0.01 点、volume=手、amount=元；量额口径逐指数登记（成分股合计 / 全市场合计），代码不写死 | 设计（取证引 调研报告① §4.3） |
 | 8 | 导出 | 新增 bin `export_research`：Parquet + 清单，落 `/root/x-data-exports/<snapshot_id>/`；清单绑定目录版本、每条序列 `version_id`、来源 generation、文件 sha256；导出只读 | 设计 |
-| 9 | 契约 | M1 不新增工具、不新增 dataset、不改 wire 形状；新数据只经导出提供。唯一可见变化是 `market.daily` 的前复权价精度（2dp→6dp）与全部 `version_id` 变化。做不到"完全无变化"的原因与替代方案见 §8 | 设计 + 待裁决（Q3） |
+| 9 | 契约 | M1 不新增工具、不新增 dataset、不改 wire 形状；新数据只经导出提供。唯一可见变化是 `market.daily` 的前复权价精度（2dp→6dp）与全部 `version_id` 变化。做不到"完全无变化"的原因与替代方案见 §8 | 设计（Q3 已裁决：不算契约升版、不升 `capability_revision`，D-32） |
 | 10 | 日更 | 同一 `(entity, period=day)` item 在一个事务里写两条序列 + 因子事件集；日历与指数作为同一 run 内的服务器内部 item（不新增 wire 面）。存储 +约 1.5GB，写放大与冷启动代价见 §9 | 估算 |
 
 ---
@@ -51,7 +51,7 @@ ETF（M3，仅预留 `price_scale=3` 与 `instrument_class`）、北交所/B 股
 | 方案 (c)：不复权 + 因子，同时物化前复权 | §3/§4：两条序列 + 因子事件表；前复权标为派生（带 `algorithm_version` 与血缘），不当事实 |
 | 6 位小数前复权 | §4.3：`price_scale=6`；同时把算法换成精确有理数（否则 6dp 的末位仍依赖中间精度） |
 | 导出 bin + Parquet，文件 `/root/x-data-exports`，venv 在 `/root` | §7 |
-| 基准只用交易所指数 | §6；中证系是否算"交易所体系"列为 Q1 |
+| 基准只用交易所指数 | §6；中证系 4 条算作交易所体系指数、基准取 9 条序列（Q1 已裁决，D-31） |
 | ETF 放 M3 | §3.2 只预留 `price_scale=3` 与 `instrument_class=2`，不建 ETF 表、不做 ETF 目录 |
 
 ---
@@ -98,7 +98,7 @@ ETF（M3，仅预留 `price_scale=3` 与 `instrument_class`）、北交所/B 股
 | 读路径：实体只校验格式与访问权，**不校验目录成员** | `src/data_supply/query.rs:77-95` |
 | 快照上限 100 实体 / 每页 1..1000 行 | `src/data_supply/query.rs:85-86`、`:75` |
 | 小数输出不固定位数（"不擅自固定两位或六位小数"） | `docs/sqlite-storage-design.md:132` |
-| 部署体积门禁 ≤6GiB（目录口径；2026-10-26 前为 ≤4GiB、口径待定，已由 [SLO](../../docs/SLO.md) §4 的 2026-10-26 签字行上调） | `docs/SLO.md` 第 1 节第 5 行 |
+| 部署体积门禁 ≤8GiB（目录口径；2026-10-26 前为 ≤4GiB、口径待定，已由 [SLO](../../docs/SLO.md) §4 的 2026-10-26 签字行上调；本设计估算部署后约 5.7GiB，见 §17 第 5 条） | `docs/SLO.md` 第 1 节第 5 行 |
 
 ### 2.3 直接影响设计的三个现状缺口
 
@@ -115,7 +115,7 @@ ETF（M3，仅预留 `price_scale=3` 与 `instrument_class`）、北交所/B 股
 | 表 | 变更 | 层 |
 |---|---|---|
 | `market_series` | 改：`adjustment IN (0,1)`、新增 `price_scale`、`instrument_class`、`digest_format='series-fold-v2'`、`period=2 ⇒ adjustment=1` | 存储模型 |
-| `series_bars` | 改：价格列更名并改为"按 scale 解释的整数"；`volume_quantum` 视 Q4 预留 | 存储模型 |
+| `series_bars` | 改：价格列更名并改为"按 scale 解释的整数"；`volume_quantum` 已裁决预留（Q4 方案 1，D-34） | 存储模型 |
 | `market_events` | 改：新增 `adjustment`，唯一键改 `(task_id, item_id, adjustment)`，索引加 `adjustment` | 存储模型 |
 | `yearly_series_lineage` | 改：新增 `base_adjustment`（年线只从 `adjustment=1` 派生） | 存储模型 |
 | `evidence_bundles` | 改：`evidence_kind` 增加 `'derived'`（日历/因子集/指数口径的取证包） | 证据层 |
@@ -181,7 +181,7 @@ CREATE TABLE series_bars(
   volume INTEGER,
   amount TEXT,
   r7_raw INTEGER,
-  -- 待 Q4 裁决（#381 方案 1）：手日 bar 的成交量精度（100 股），普通 bar 为 NULL
+  -- 已裁决（#381 的 Q4 方案 1，D-34）：手日 bar 的成交量精度（100 股），普通 bar 为 NULL
   -- volume_quantum INTEGER CHECK(volume_quantum IS NULL OR volume_quantum > 0),
   PRIMARY KEY(series_key, trade_day),
   CHECK(high_units >= open_units AND high_units >= close_units AND high_units >= low_units),
@@ -193,7 +193,7 @@ CREATE TABLE series_bars(
 
 **为什么更名而不是保留 `*_cents`**：一列叫 `close_cents` 却存 1e-6 元的整数，是给未来每个人埋的坑（M3 的 ETF 还会存 1e-3 元）。更名的实际成本：DDL + `compact_market.rs`（`CompactBar` 字段 + `cents()`）+ `sqlite_market/series.rs` 的读写绑定 + 两个测试文件，全仓 `_cents` 共 89 处（`grep -rn _cents src/`，2026-10-26）；其中 `compact_market.rs` 与 `series.rs` **本来就要为 `price_scale` 改动**（§2.3 第 2 条），剩下的主要是测试字面量。schema 22 走全新 init，没有存量数据迁移成本。价格语义由 `market_series.price_scale` 唯一决定，`series_bars` 不再自称单位。
 
-`volume_quantum`：**不默认加**。调研报告④/#381 的"逐 bar 精度"方案尚未裁决（Q4）。若裁决为方案 1，schema 22 预留一列比之后升 schema 23 便宜（一次全新重建 vs 两次）；若裁决为"只写文档"，预留的列就是死列。故列为待确认，不写进 DDL。
+`volume_quantum`：**已裁决采用方案 1**（#381 的 Q4，D-34）：导出 schema 增加该列；数据库侧按上文取舍在 schema 22 预留一列（不预留则之后要再升一次 schema），具体由实现任务在 PR-1 确认。
 
 ### 3.4 `market_events`
 
@@ -265,7 +265,7 @@ CREATE INDEX adjustment_events_entity_day
 2. **`known_at` 恒为 NULL**：TDX 的 gbbq 只给除权日，没有公告日。M1 不猜、不用文件 mtime 冒充（那会随 generation 变化）。任何"时点复权"必须同时声明 `known_at=unknown`，见 BR-M1-9。
 3. **只存 cat1**：其他类别（cat 2/3/5/7/8/9/10）语义未经 #54 级证据（调研报告① §4.4、U-1），M1 不入库；`excluded` 计数仍进证据包（沿用 `security_events_digest` 的既有口径）。
 4. **整组替换**：一个实体的因子集在 item 事务内 delete+insert（事件数 ≤ 数十），不做增量；摘要变化即版本变化。
-5. **与 #381 的关系**：手日成交量只影响 `volume` 的取值与精度，不影响因子与价格；`volume_quantum`（逐 bar 100 股精度）仍待 #381 的“三选一”裁决（Q4），M1 不预置列。
+5. **与 #381 的关系**：手日成交量只影响 `volume` 的取值与精度，不影响因子与价格；`volume_quantum`（逐 bar 100 股精度）按 Q4 裁决采用方案 1（D-34）：导出 schema 带该列，数据库侧在 schema 22 预留。
 
 ### 3.7 `derived_dataset_versions`（非 bar 数据集的版本登记）
 
@@ -465,7 +465,7 @@ CREATE TABLE index_series_meta(
 
 - `000300`/`399300`、`000905`/`399905` 是**同一条序列的两个代码**（调研报告① 实测 bar 数相同）。存一条，另一个代码进 `aliases`，避免同一内容存两份、两个 `version_id`。
 - 明确**不收**：`sh.880xxx`（1,138 个）与 `sh.887xxx`（190 个）是通达信自编板块指数，不是交易所/中证发布（调研报告① §4.3）；`sz.399005`（中小板指）与 `sz.399303`（国证2000）是可选的后续追加项（加一行登记即可，见 §12 场景 1）。
-- Q1：中证指数有限公司发布的 4 条（`sh.000300` 沪深300、`sh.000905` 中证500、`sh.000852` 中证1000、`sh.000906` 中证800）是否算"交易所指数"。若 owner 只认沪深交易所自身发布的代码，则这 4 条移出，M1 清单退化为 5 条：`sh.000001`、`sz.399001`、`sz.399006`（创业板指，深交所）、`sh.000016`（上证50，上交所）、`sh.000688`（科创50，上交所）。**这个裁剪不需要改结构，只改登记表。**
+- Q1（**已裁决**，D-31）：中证指数有限公司发布的 4 条（`sh.000300` 沪深300、`sh.000905` 中证500、`sh.000852` 中证1000、`sh.000906` 中证800）**算作交易所体系指数**，基准保留 9 条序列；原裁剪方案（退化为 5 条：`sh.000001`、`sz.399001`、`sz.399006`、`sh.000016`、`sh.000688`）不采用。
 
 ### 6.2 单位与口径（写进 `index_series_meta`）
 
@@ -714,7 +714,7 @@ required-features = ["export"]
 ### 8.3 做不到"完全无变化"的部分与替代方案
 
 - **做不到的**：前复权序列从 2dp 变 6dp 是 owner 裁决的直接后果，无法"不暴露"——除非 M1 同时保留一条 2dp 前复权序列（+745MB，两条前复权序列互为冗余，且"哪条权威"无法回答），或者 MCP 读路径把 6dp 现算成 2dp（双重舍入：`round2(round6(x)) ≠ round2(x)`，在半分位 bar 上仍会与旧值不同，等于既付了派生成本又没有保证）。
-- **若审核认为精度属于契约**：替代方案是 M1 直接把 capability 升到 `generic-data-v8`，后续任务在 v8 上继续加 dataset/工具（**一次升版，不是两次**）。这条不需要改本设计的数据结构，只改 §8.1 的一行与发布说明。建议按"不升版"处理，理由如上；最终由审核/owner 定（Q3）。
+- **若审核认为精度属于契约**：替代方案是 M1 直接把 capability 升到 `generic-data-v8`，后续任务在 v8 上继续加 dataset/工具（**一次升版，不是两次**）。这条不需要改本设计的数据结构，只改 §8.1 的一行与发布说明。Q3 已裁决：按"不升版"处理（不升 `capability_revision`，发布说明里交代，D-32）。
 - **下游未核实**：`x` 仓库的 `KlineReader` 是否假设 2dp，本仓库无法核实（P-02 未决，另一个仓库）。部署前必须由 owner 确认，否则 6dp 可能在下游被截断或格式化错。这是**部署阻塞项**，不是设计缺陷。
 
 ### 8.4 需要同步改的文档（实现 PR 里做，本设计 PR 不改）
@@ -802,7 +802,7 @@ required-features = ["export"]
 1. 合并 / 打 tag / 发布 / 部署（D-10 的同类边界：实现授权不等于部署授权）。
 2. 前复权精度变化对外说明（发布说明 + `docs/mcp-tools.md`），以及 Q3 的升版选择。
 3. `scripts/build_release.sh` 增加 `--features export`（发布管线变更）。
-4. SLO 第 5 行的体积口径/阈值（Q2）：**已裁决**，2026-10-26 定为 ≤6GiB（目录口径），见 [SLO](../../docs/SLO.md) §4 与 [DECISIONS](../decisions.md) D-21；本条不再需要单独批准。
+4. SLO 第 5 行的体积口径/阈值（Q2）：**已裁决**，2026-10-26 定为 ≤8GiB（目录口径），见 [SLO](../../docs/SLO.md) §4 与 [DECISIONS](../decisions.md) D-21；本条不再需要单独批准。
 5. `/root/.venvs` 的 `pip install`（对外部网络写操作）。
 6. 下游 `x` 仓库 `KlineReader` 对 6dp 的确认（P-02）。
 
@@ -910,9 +910,9 @@ required-features = ["export"]
 | U-4 | 冷启动在 schema 22 下的实际耗时 | 需要编译产物 + 真实库 | 部署前在私有栈用合成夹具复测（沿用 latest-only 文档 §8 的方法） |
 | U-5 | 下游 `x` 仓库对 6dp 的兼容性 | 另一个仓库，P-02 未决 | owner 确认 |
 | U-6 | 指数在"成分股型指数"上历史早期的 volume 是否也是手 | 官方接口只有近年（调研报告① U-7） | 抽样历史日期，用交易所年鉴/成分股加总反推 |
-| U-7 | 中证系是否算"交易所指数" | 需要 owner 裁决（Q1） | Q1 |
+| U-7 | 中证系是否算"交易所指数" | 已裁决（D-31）：算作交易所体系指数，基准 9 条序列 | Q1（已关闭） |
 | U-8 | `pyarrow`/`duckdb` 的可用版本与 wheel 体积 | 未安装（本任务明确不装） | 批准后 `pip install` 并记录版本 |
-| U-9 | #381 的逐 bar 成交量精度（`volume_quantum`）是否落地 | 代码修复已合并（PR #382），但精度扩展的“三选一”仍未裁决 | Q4；若采纳方案 1，导出 schema 增加 `volume_quantum` 列 |
+| U-9 | #381 的逐 bar 成交量精度（`volume_quantum`）是否落地 | 已裁决（D-34）：采用方案 1，导出 schema 增加 `volume_quantum` 列 | Q4（已关闭） |
 
 ### 16.3 待确认（与 Issue 的 Q1–Q5 对应）
 
@@ -926,6 +926,6 @@ required-features = ["export"]
 2. `"qfq"` 字符串校验 9 处（§2.2）没有编译期保护；建议在 PR-2 顺手改成 `Adjustment` 的 `matches!`/方法，避免第三次踩。
 3. `src/data_supply/query.rs:77-95` 不校验目录成员：只要库里有序列，`query_data` 就能读到任意合法实体。M1 靠 `instrument_class` 过滤把指数挡住，但"目录外实体可读"本身是个独立问题（与 #246 的收录范围相关）。
 4. `series_bars` 缺 `trade_day` 单列索引（#373/#379 已测：2026 单年冷读 5.2–6.5s）。M1 的导出按 `series_key` 顺序读，不需要该索引；跨截面按日期的分析仍会慢，属于 性能耗时分解任务 的范围。
-5. `docs/SLO.md` 第 5 行的"部署体积"口径仍未定（发布包 vs 目录差一个数量级）；M1 的 +1.5GB 会让目录口径从 4.2GiB 到约 5.7GiB。本设计不自行改门禁。
+5. `docs/SLO.md` 第 5 行的"部署体积"口径已定（2026-10-26：目录口径 ≤8GiB，见 SLO §4）；M1 的 +1.5GB 会让目录口径从 4.2GiB 到约 5.7GiB，余量约 2.3GiB。本设计不自行改门禁，只提供估算。
 6. `docs/latest-only-storage.md` 写于 schema 21 实现前，其中"占位"项（§12）仍有三处未定稿（年线 stale 出参、事件列最终 DDL、capability 文本）；schema 22 会让"事件列最终 DDL"这一项再动一次，建议在 PR-1 里一并定稿。
 7. 调研报告① 的 99.53% 比对与本次的 2.06% 是两个不同的量（前者是两套近似实现的 bar 级差异，后者是精确 vs 近似的字段级差异），对外引用时不要混用。
