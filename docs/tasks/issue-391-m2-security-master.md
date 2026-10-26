@@ -789,6 +789,7 @@ Member { entity, exchange, code, listing_date, delisting_date, status,
 | `price_limits.parquet`（可选） | 16.7M | entity, trade_day, limit_up, limit_down, state, rule_id |
 
 - **`daily_raw.parquet` 不加派生列**：它是「解析事实」，涨跌停是派生；混在一起会让「同一 `version_id` 的日线文件内容随规则变化」。要涨跌停就取 `price_limits.parquet`（同一快照、同一绑定）。
+- **备选方案（若审核要求「日线文件直接带涨跌停列」）**：在 `daily_raw` 上追加 `limit_up`/`limit_down`/`limit_state`/`rule_id` 四列。代价是①日线文件的语义从「事实」变成「事实 + 派生」，同一 `version_id` 的日线在不同规则版本下内容不同；②导出要对 1,675 万根 bar 逐根做规则匹配（估算 +30–60s）；③规则或 ST 缺失时整列是 `unknown`，消费者容易误读成「没有涨跌停」。本设计不采用，但把代价写清，便于 owner 裁决。
 - 清单 `schema` 升到 `x-data-mcp.research-snapshot.v2`：`files[]` 增加 `dataset` 与 `temporal` 字段，`limitations` 增加三条（ST 缺口、股本 `known_at` 缺失、规则 pending）。`snapshot_id` 的定义不变（规范 JSON 前 32 hex）。
 - 体积：新增文件合计约 10–30MB（Parquet 压缩后），相对 M1 的 ~340MB 可忽略；`price_limits` 是可选项，约 200MB（估算，未实测）。
 
@@ -973,5 +974,5 @@ Member { entity, exchange, code, listing_date, delisting_date, status,
 8. `src/sqlite_tasks.rs:41` 的 `COMPACT_MIGRATIONS` 是固定长度数组，加迁移要同时改长度与顺序断言；`check_current_facts.py:15` 的常量也要同步，漏一处 CI 红。
 9. M1 的 `derived_dataset_versions.dataset_kind` 若在 PR-4 里写成封闭枚举，M2 的 6 个新数据集会要求再重建一次该表。**建议 M1 的 PR-4 把该 CHECK 写成开放集合或预留取值**——这是两条线的接口要求，不是 M2 能单方面决定的。
 10. `src/data_supply/query.rs:79-99` 不校验目录成员：只要库里有序列就能读到任意合法实体。M2 引入 `security_master` 后，「实体在库但不在主表」会变成一种真实状态，读路径需要一条明确规则（拒绝还是返回 `unknown` 成员），这属于 v8 的范围，M2 只记录。
-11. 调研报告①的「15 例 `SSDATE` 与首根 bar 差异」与本任务的「`SSDATE` vs 交易所 `LIST_DATE` 零冲突」是两个不同的比较，对外引用时不要混用。
+11. 调研报告① 的「15 例 `SSDATE` 与首根 bar 差异」与本任务的「`SSDATE` vs 交易所 `LIST_DATE` 零冲突」是两个不同的比较，对外引用时不要混用。
 12. `docs/data-catalog.md` §3.2 第 6 行的「62 只缺失」是**335 个退市代码子集**的数字；`base.dbf` 全表 A 股缺失是 **74** 只。两个数字都对，但必须写清范围。
