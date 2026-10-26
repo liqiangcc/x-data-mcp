@@ -844,11 +844,11 @@ fn bounded_summary(name: &str, value: &Value, is_error: bool) -> Value {
     while summary_bytes(&out) > SUMMARY_LIMIT && guard < 64 {
         guard += 1;
         let mut trimmed = false;
-        if let Some(Value::Object(counts)) = out.get_mut("counts") {
-            if let Some(last) = counts.keys().next_back().cloned() {
-                counts.remove(&last);
-                trimmed = true;
-            }
+        if let Some(Value::Object(counts)) = out.get_mut("counts")
+            && let Some(last) = counts.keys().next_back().cloned()
+        {
+            counts.remove(&last);
+            trimmed = true;
         }
         if !trimmed
             && let Some(Value::Object(refs)) = out.get_mut("refs")

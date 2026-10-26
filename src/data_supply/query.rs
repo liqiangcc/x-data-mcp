@@ -471,7 +471,7 @@ fn key_diff(stored: &str, requested: &str) -> Vec<String> {
     let keys: BTreeSet<&String> = stored.keys().chain(requested.keys()).collect();
     keys.into_iter()
         .filter(|key| stored.get(*key) != requested.get(*key))
-        .map(|key| key.clone())
+        .cloned()
         .collect()
 }
 
