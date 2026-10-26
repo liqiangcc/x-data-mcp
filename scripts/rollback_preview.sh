@@ -39,16 +39,24 @@ fi
 
 # --- mutation phase: failures write a FAIL report, never bare-exit -----------
 rollback_step=init
+# One report path per backup, defined once and passed to both writers below.
+REPORT_OUT="$REPORTS/rollback-$(basename "$BACKUP" .sqlite).json"
+# Fresh evidence per run: a report left by an earlier run of the same backup
+# must never be read as this run's outcome.
+rm -f "$REPORT_OUT"
 rfail() {
-    python3 - "$BACKUP" "$PREV" "$1" "$2" "$REPORTS" <<'PY' || true
+    # A step that already wrote its own verdict report (revalidate) keeps it:
+    # overwriting it would erase the per-check evidence.
+    if [[ ! -f "$REPORT_OUT" ]]; then
+        python3 - "$BACKUP" "$PREV" "$1" "$2" "$REPORT_OUT" <<'PY' || true
 import json, pathlib, sys
-backup, prev, step, msg, reports = sys.argv[1:]
+backup, prev, step, msg, report = sys.argv[1:]
 rep = {"status": "FAIL", "failed_at": step, "error": msg,
        "restored_backup": backup, "previous_release": prev,
        "production": "NOT_PRODUCTION_READY"}
-pathlib.Path(f"{reports}/rollback-{pathlib.Path(backup).stem}.json").write_text(
-    json.dumps(rep, indent=2))
+pathlib.Path(report).write_text(json.dumps(rep, indent=2))
 PY
+    fi
     echo "rollback FAILED_AT_$1: $2" >&2
     exit 1
 }
@@ -63,10 +71,10 @@ rollback_step=start_service; systemctl start "$SERVICE" || rfail "$rollback_step
 rollback_step=restart_tunnel; systemctl restart "$TUNNEL" || rfail "$rollback_step" "systemctl restart $TUNNEL"
 
 rollback_step=revalidate
-python3 - "$BACKUP" "$PREV" "$REPORTS" "$DEPLOY_ROOT" "$SERVICE" "$TUNNEL" <<'PY' \
+python3 - "$BACKUP" "$PREV" "$REPORT_OUT" "$DEPLOY_ROOT" "$SERVICE" "$TUNNEL" <<'PY' \
     || rfail "$rollback_step" "post-rollback verification"
 import hashlib, json, pathlib, shutil, sqlite3, subprocess, sys, tempfile
-backup, prev, reports, root, svc, tun = sys.argv[1:]
+backup, prev, report_out, root, svc, tun = sys.argv[1:]
 db_path = f"{root}/state/preview.sqlite"
 db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 schema = db.execute("PRAGMA user_version").fetchone()[0]
@@ -110,7 +118,7 @@ rep = {"status": "PASS" if all(checks.values()) else "FAIL",
        "tunnel_cgroup": cg, "tunnel_cgroup_mcp_connect": procs,
        "schema_check_stdout": r.stdout.strip(), "checks": checks,
        "production": "NOT_PRODUCTION_READY"}
-out = f"{reports}/rollback-{pathlib.Path(backup).stem}.json"
+out = report_out
 pathlib.Path(out).write_text(json.dumps(rep, indent=2))
 print(json.dumps({"status": rep["status"], "report": out}))
 sys.exit(0 if rep["status"] == "PASS" else 1)

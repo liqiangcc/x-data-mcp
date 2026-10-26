@@ -16,6 +16,10 @@ done
 cp -r migrations "$stage/migrations"
 mkdir -p "$stage/scripts"
 cp scripts/tdx_fetch.py "$stage/scripts/tdx_fetch.py"
+# The tunnel drop-in runs <release>/scripts/wait_service_ready.py directly
+# (D-17: one readiness definition), so it ships executable.
+cp scripts/wait_service_ready.py "$stage/scripts/wait_service_ready.py"
+chmod 755 "$stage/scripts/wait_service_ready.py"
 cp README.md "$stage/README.md"
 cp fixtures/demo/README.md "$stage/DEMO_DATA.md"
 cp scripts/smoke_release.py "$stage/check.py"
