@@ -311,10 +311,14 @@ fn raw_batch_is_the_day_price_fact_and_shares_the_forward_member_read() {
     assert!(raw.bars.iter().all(|b| b.amount == Some(dec("0"))));
     // One item read produces both 口径 with identical member/event bindings
     // and the same coverage claim; only prices and adjustment evidence move.
-    let (pair_raw, pair_forward) = source
+    let pair = source
         .materialize_session()
         .materialize_pair("sh.600006")
         .unwrap();
+    // The same read also yields the parsed factor set both 口径 were built
+    // from (M1 PR-4, issue-383 §3.6/§9.1).
+    assert_eq!(pair.factors.entity, "sh.600006");
+    let (pair_raw, pair_forward) = (pair.raw, pair.forward);
     assert_eq!(pair_raw, raw);
     let forward = source.materialize_daily("sh.600006").unwrap();
     assert_eq!(pair_forward, forward);
