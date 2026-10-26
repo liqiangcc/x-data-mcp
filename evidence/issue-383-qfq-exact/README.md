@@ -19,7 +19,7 @@ M1 PR-3（设计：[`docs/tasks/issue-383-m1-research-data.md`](../../docs/tasks
 | 输入 | 位置 |
 |---|---|
 | `.day` 成员（3 只证券） | `evidence/issue-166-windows-official-behavior/raw/files/{sh600004,sh600006,sz000002}.day` |
-| cat1 事件（94 条冻结域） | `evidence/issue-54-gbbq-full-events/result.json` |
+| cat1 事件（冻结域 94 条，其中 86 条属于有 `.day` 成员的 3 只证券；`sz.000004` 只有事件、无已提交成员） | `evidence/issue-54-gbbq-full-events/result.json` |
 | 合成边界用例 | `expected.json` 的 `cases`（输入与期望值放在同一处，Rust 侧喂同一份数字） |
 
 ## 断言的三件事
