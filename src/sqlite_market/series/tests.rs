@@ -343,6 +343,8 @@ fn seed_yearly(
             series_key: yearly.series_key,
             base_daily_digest: base.content_digest,
             base_event_seq: base.last_event_seq,
+            base_adjustment: Adjustment::Forward,
+            base_instrument_class: crate::market_data::INSTRUMENT_CLASS_STOCK,
             algorithm_version: "1".into(),
             first_trade_day: yearly_bars[0].trade_day,
             last_trade_day: yearly_bars.last().unwrap().trade_day,
@@ -517,7 +519,7 @@ fn startup_check_scopes_closure_by_adjustment() {
             ev.as_slice(),
             task_id,
             item_id,
-            [0x0A; 32].as_slice()
+            [0x0Au8; 32].as_slice()
         ],
     )
     .unwrap();
