@@ -20,7 +20,7 @@ use crate::market_data::{
     Adjustment, AdjustmentEventSet, AdjustmentEvidence, Bar, CalendarBatch, CalendarInputDates,
     CoverageStatus, EvidenceValue, Period, RawBatch, UnitCurrencyEvidence,
 };
-use crate::market_storage::MarketRepository;
+use crate::market_storage::{MarketRepository, Scope};
 use crate::sqlite_market::compact_repo::SqliteCompactMarket;
 use crate::sqlite_market::derived::DerivedVersionRow;
 use crate::sqlite_market::evidence_store;
@@ -29,7 +29,6 @@ use crate::sqlite_tasks::SqliteTasks;
 use crate::task_control::{self, CommandKey, ItemSpec, TaskRepository};
 use crate::trading_calendar::{TradingCalendar, TradingDay};
 use rust_decimal::Decimal;
-use serde_json::json;
 
 const RUN: &str = "run";
 const ITEM: &str = "item-1";
@@ -141,7 +140,11 @@ fn version_evidence() -> VersionEvidence {
 fn commit_raw_series(repo: &SqliteCompactMarket, request: &str, entity: &str, days: &[NaiveDate]) {
     let bars: Vec<Bar> = days.iter().copied().map(bar).collect();
     let (task_id, revision) = running_task(repo, request, entity);
-    let scope = task_control::legacy::scope_id(entity, "day");
+    let scope = Scope {
+        symbol: entity.into(),
+        period: Period::Day,
+    };
+    let occupancy_key = scope.occupancy_key();
     repo.tx(|c| {
         let version_ev = evidence_store::put_evidence(
             c,
@@ -177,7 +180,7 @@ fn commit_raw_series(repo: &SqliteCompactMarket, request: &str, entity: &str, da
                 task_id: &task_id,
                 item_id: ITEM,
                 run_id: RUN,
-                occupancy_key: &scope.occupancy_key(),
+                occupancy_key: &occupancy_key,
                 expected_task_revision: revision,
                 entity,
                 period: Period::Day,
