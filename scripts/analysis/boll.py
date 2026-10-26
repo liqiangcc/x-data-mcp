@@ -109,10 +109,17 @@ LIMIT 1
 
 # Pullback and reclaim for one series, in one statement.
 #
-# `lo` is the SMA20 warm-up start: the 20th bar counting back from the breakout
-# day, so the mid line at the first bar after the breakout has all 20 bars it
-# needs and every mid value equals the one the full-history reference computes.
-# `d` is MATERIALIZED so the window pass runs once for both lookups.
+# Parameters: ?1 series_key, ?2 right edge (LAST_DAY), ?3 breakout day,
+# ?4 SMA period.  The warm-up start is the SMA period-th bar counting back from
+# the breakout day, so the mid line at the first bar after the breakout has all
+# the bars it needs and every mid value equals the one the full-history
+# reference script computes.  `d` is MATERIALIZED so the window pass runs once
+# for both lookups.
+#
+# The reclaim needs no "previous close was not above the mid" test: by
+# definition no bar between the pullback and the first bar back above the mid
+# closed above its mid (bars without a mid are skipped by both versions), so
+# the first bar above the mid after the pullback is the signal.
 _SIGNAL_SQL = """
 WITH d AS MATERIALIZED (
   SELECT trade_day AS day, close_cents AS cl,
