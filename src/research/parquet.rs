@@ -20,6 +20,7 @@
 //! +2–4min CI) for what is a fixed-schema column dump.
 
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -104,7 +105,7 @@ fn properties(compression: Compression, row_group_rows: usize) -> WriterProperti
             Compression::Snappy => ParquetCompression::SNAPPY,
             Compression::None => ParquetCompression::UNCOMPRESSED,
         })
-        .set_max_row_group_size(row_group_rows)
+        .set_max_row_group_row_count(row_group_rows)
         // Constant, never the crate version: the file bytes must be
         // reproducible (AC-M1-7).
         .set_created_by("x-data-mcp research export".into())
