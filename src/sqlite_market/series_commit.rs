@@ -363,7 +363,26 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
     } else {
         ItemFinish::ItemAndTask
     };
-    commit_series_inner(c, w, finish)
+    commit_series_inner(c, w, finish, series::SeriesShape::stock(w.adjustment))
+}
+
+/// Index benchmark commit (issue-383 §6.3, M1 PR-5): the same event/state/bars
+/// path as every other bar series, with the series shape fixed to
+/// `instrument_class=1, adjustment=0, price_scale=2`. The 口径 and 品种 are
+/// identity dimensions, so the commit refuses a caller that asks for anything
+/// else instead of silently writing a stock row with index prices.
+pub(crate) fn commit_index_tx(c: &Connection, w: &Commit) -> Result<Receipt, Error> {
+    if w.period != Period::Day || w.adjustment != Adjustment::Raw {
+        return Err(integrity(
+            "index series are daily 不复权 only (adjustment=0, no yearly)",
+        ));
+    }
+    let finish = if w.defer_task_row {
+        ItemFinish::ItemRowOnly
+    } else {
+        ItemFinish::ItemAndTask
+    };
+    commit_series_inner(c, w, finish, series::SeriesShape::INDEX_UNITS)
 }
 
 /// Daily item write set (issue-383 §9.1): the raw 口径 and the forward 口径
@@ -396,7 +415,12 @@ pub(crate) fn commit_item_tx(
             task_revision: event.task_revision as u64,
         });
     }
-    let receipt = commit_series_inner(c, forward, ItemFinish::None)?;
+    let receipt = commit_series_inner(
+        c,
+        forward,
+        ItemFinish::None,
+        series::SeriesShape::stock(Adjustment::Forward),
+    )?;
     if let Some(raw) = raw {
         commit_raw_side(c, forward, raw)?;
         commit_factor_set(c, forward, raw)?;
@@ -656,11 +680,17 @@ fn commit_raw_side(
             defer_task_row: true,
         },
         ItemFinish::None,
+        series::SeriesShape::stock(Adjustment::Raw),
     )?;
     Ok(())
 }
 
-fn commit_series_inner(c: &Connection, w: &Commit, finish: ItemFinish) -> Result<Receipt, Error> {
+fn commit_series_inner(
+    c: &Connection,
+    w: &Commit,
+    finish: ItemFinish,
+    shape: series::SeriesShape,
+) -> Result<Receipt, Error> {
     compact_market::epoch_date(w.range_start_day).map_err(integrity)?;
     compact_market::epoch_date(w.range_end_day).map_err(integrity)?;
     if w.range_start_day > w.range_end_day {
@@ -721,10 +751,13 @@ fn commit_series_inner(c: &Connection, w: &Commit, finish: ItemFinish) -> Result
         return Err(integrity("yearly series require SeriesChange::Yearly"));
     }
 
-    // The written 口径 is the item's own identity dimension and it decides the
-    // series precision (2 for 不复权, 6 for 前复权, PR-3); the remaining shape
-    // field stays stock until PR-5 (index series). Schema 22 §3.2.
-    let shape = series::SeriesShape::stock(w.adjustment);
+    // The written 口径/品种/精度 is the caller's identity decision and it
+    // decides the digest seed and the stored series row: stock daily paths
+    // pass `SeriesShape::stock(adjustment)`, the index path passes
+    // `INDEX_UNITS` (issue-383 §3.2/§6.3).
+    if shape.adjustment != w.adjustment {
+        return Err(integrity("commit shape disagrees with its 口径"));
+    }
 
     // Resolve the kind/effect and the new state fields.
     let (kind, outcome, continuity, prefix_bytes, old_digest, new_digest): (

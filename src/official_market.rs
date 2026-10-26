@@ -25,8 +25,8 @@ use crate::{
     compact_market, day_file, gbbq,
     market_data::{
         Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, Bar, CoverageEvidence,
-        CoverageStatus, EvidenceValue, MarketDataBatch, MarketDataPipeline, Period, Provenance,
-        SnapshotInputBinding, SourceError, UnitCurrencyEvidence,
+        CoverageStatus, EvidenceValue, IndexBatch, MarketDataBatch, MarketDataPipeline, Period,
+        Provenance, SnapshotInputBinding, SourceError, UnitCurrencyEvidence,
     },
     market_storage::{
         Error, MarketRepository, Publication, PublishIntent, Publisher, Receipt, Scope,
@@ -115,6 +115,46 @@ fn raw_adjustment_evidence(excluded: usize) -> AdjustmentEvidence {
         Adjustment::Raw.as_str(),
         format!(
             ".day OHLC promoted verbatim (fen, no adjustment); category==1 GBBQ events are not applied to raw prices ({excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}"
+        ),
+    )
+}
+
+/// Unit evidence of an index series (issue-383 §6.2): 0.01 点 OHLC, volume in
+/// 手, amount in 元. An index level is a point value, so the price currency is
+/// explicitly unknown instead of claiming CNY; the units that the source
+/// actually proves stay confirmed.
+fn index_unit_evidence() -> UnitCurrencyEvidence {
+    UnitCurrencyEvidence {
+        price_currency: EvidenceValue::unknown(
+            "an index level is a point value, not a currency amount; no currency is claimed",
+        ),
+        price_unit: EvidenceValue::confirmed(
+            "index_point",
+            "official index interface matches .day OHLC exactly at 0.01 point (price_scale=2)",
+        ),
+        volume_unit: EvidenceValue::confirmed(
+            "hand",
+            "index .day volume is hands (100 shares): official tradingVol(shares) / .day vol = 100.0000 for constituent aggregates and 1.0000000 where the exchange publishes hands",
+        ),
+        amount_currency: EvidenceValue::confirmed(
+            "CNY",
+            "official tradingValue is yuan-denominated",
+        ),
+        amount_unit: EvidenceValue::confirmed(
+            "yuan",
+            "official tradingValue (1e8 yuan) x 1e8 / .day amount = 0.999999-1.000006",
+        ),
+    }
+}
+
+/// 口径 evidence of an index series: 不复权 is the only 口径 (no ex-rights
+/// event), and `r7_raw` is preserved verbatim without interpretation
+/// (issue-383 §6.3).
+fn index_adjustment_evidence() -> AdjustmentEvidence {
+    AdjustmentEvidence::confirmed(
+        Adjustment::Raw.as_str(),
+        format!(
+            "index level has no corporate action, so 不复权 is its only 口径; r7_raw is preserved verbatim and never interpreted; {DECLARED_SCOPE}"
         ),
     )
 }
@@ -292,6 +332,12 @@ impl TdxMarketSource {
     /// [`MaterializeSession::raw_batch`] (issue-383 §4.1).
     pub fn raw_batch(&self, symbol: &str) -> Result<MarketDataBatch, SourceError> {
         self.materialize_session().raw_batch(symbol)
+    }
+
+    /// One index benchmark's daily facts; see
+    /// [`MaterializeSession::index_batch`] (issue-383 §6.3).
+    pub fn index_batch(&self, symbol: &str) -> Result<IndexBatch, SourceError> {
+        self.materialize_session().index_batch(symbol)
     }
 }
 
@@ -578,6 +624,87 @@ impl MaterializeSession<'_> {
             raw,
             forward,
             factors: self.factor_set(symbol)?,
+        })
+    }
+
+    /// One index benchmark's daily facts (issue-383 §6.3): the `.day` member
+    /// read once, OHLC promoted verbatim as 0.01 点 (`price_scale=2`), volume
+    /// kept in 手 **as recorded** (the #381 hand normalization is a
+    /// security-share rule, not an index rule), amount in 元, and `r7_raw`
+    /// preserved verbatim and never interpreted.
+    ///
+    /// An index has no corporate action: the batch is 不复权 only, the gbbq
+    /// member is not consulted at all, and the bound event set is the digest
+    /// of the **empty** set (§3.1). Which entities are benchmarks is the
+    /// registry's decision, not the adapter's.
+    pub fn index_batch(&self, symbol: &str) -> Result<IndexBatch, SourceError> {
+        let (market, code) = Self::split_symbol(symbol)?;
+        let source = self.source;
+        let (day_member, day_bytes) =
+            self.member_bytes(&source.day, &Self::day_names(market, code))?;
+        let raw_bars = day_file::parse(&day_bytes)
+            .map_err(|e| SourceError::InvalidResponse(format!(".day member malformed: {e}")))?;
+        if raw_bars.is_empty() {
+            return Err(SourceError::InvalidResponse(
+                ".day member carries no records".into(),
+            ));
+        }
+        let day_member_sha256 = crate::hash::sha256(&day_bytes);
+        // The empty corporate-action set: an index level has no ex-rights
+        // event, so `security_event_sha256` records "no events" instead of
+        // borrowing a security's gbbq set.
+        let security_event_sha256 = security_events_digest(&[], 0);
+        let bars: Vec<Bar> = raw_bars
+            .iter()
+            .map(|raw| Bar {
+                date: raw.date,
+                open: Decimal::new(i64::from(raw.ohlc_raw[0]), 2),
+                high: Decimal::new(i64::from(raw.ohlc_raw[1]), 2),
+                low: Decimal::new(i64::from(raw.ohlc_raw[2]), 2),
+                close: Decimal::new(i64::from(raw.ohlc_raw[3]), 2),
+                // Hands exactly as the member records them; no marker
+                // interpretation (index r7 is not a volume marker).
+                volume: Some(Decimal::from(raw.volume_raw)),
+                amount: amount_decimal(raw.amount_float32_bits),
+                r7_raw: Some(raw.r7_raw),
+            })
+            .collect();
+        let day_binding = SnapshotInputBinding {
+            role: serde_json::to_value(source.day.role)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+            member: day_member,
+            archive_sha256: source.day.sha256.clone(),
+            member_sha256: day_member_sha256.clone(),
+        };
+        let batch = MarketDataBatch {
+            symbol: symbol.into(),
+            period: Period::Day,
+            adjustment: Adjustment::Raw,
+            bars,
+            provenance: Provenance {
+                source: SOURCE_NAME.into(),
+                source_period: "day".into(),
+                source_adjustment: Adjustment::Raw.as_str().into(),
+                symbol: symbol.into(),
+                acquired_at: source.day.acquisition_completed_at,
+                adapter_version: ADAPTER_VERSION.into(),
+                yearly_derivation: None,
+                snapshot_inputs: Some(vec![day_binding]),
+            },
+            coverage: CoverageEvidence::complete(format!(
+                "complete .day member history from inspected snapshot manifest {}; index unit/aggregation scope is proven per index in index_series_meta; {DECLARED_SCOPE}",
+                source.manifest_sha256
+            )),
+            unit_currency: index_unit_evidence(),
+            adjustment_evidence: index_adjustment_evidence(),
+        };
+        Ok(IndexBatch {
+            batch,
+            day_member_sha256,
+            security_event_sha256,
         })
     }
 

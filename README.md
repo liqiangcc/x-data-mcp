@@ -45,7 +45,7 @@ capability revision `generic-data-v7`，market 单版本序列：version_id=内�
 latest-only）与
 `x-data-mcp-acquire`（10 acquisition tools）。部署版本、socket 路径、
 generation 与数据量见 [docs/STATUS.md](docs/STATUS.md)。
-已部署实例为 fresh compact schema 21；代码（main）为 schema 22（M1 PR-1…PR-4，未部署），
+已部署实例为 fresh compact schema 21；代码（main）为 schema 22（M1 PR-1…PR-5，未部署），
 显式 `task_sqlite init` 的新库按代码的 schema 建立；工具数量不是稳定契约，
 客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
 

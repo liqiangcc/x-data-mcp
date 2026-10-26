@@ -1556,3 +1556,172 @@ fn query_data_manifest_adjustment_stays_qfq() {
     assert_eq!(adjustment["status"], "confirmed");
     assert_eq!(adjustment["value"], "qfq");
 }
+
+/// One index write through the storage commit path (M1 PR-5): the fixture's
+/// task machinery plus the neutral adapter-shaped batch.
+fn commit_index(
+    fixture: &Fixture,
+    task_id: &str,
+    item: &str,
+    symbol: &str,
+    bars: Vec<Bar>,
+) -> Receipt {
+    let revision = start_item(fixture, task_id, item);
+    let MarketBackend::Compact(repo) = &fixture.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let index = crate::market_data::IndexBatch {
+        batch: MarketDataBatch {
+            symbol: symbol.into(),
+            period: Period::Day,
+            adjustment: Adjustment::Raw,
+            bars,
+            provenance: Provenance {
+                source: "official-index".into(),
+                source_period: "day".into(),
+                source_adjustment: "raw".into(),
+                symbol: symbol.into(),
+                acquired_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
+                adapter_version: "fixture".into(),
+                yearly_derivation: None,
+                snapshot_inputs: None,
+            },
+            coverage: CoverageEvidence::complete("complete fixture history"),
+            unit_currency: UnitCurrencyEvidence {
+                price_currency: crate::market_data::EvidenceValue::unknown(
+                    "an index level is a point value",
+                ),
+                price_unit: crate::market_data::EvidenceValue::confirmed("index_point", "bound"),
+                volume_unit: crate::market_data::EvidenceValue::confirmed("hand", "bound"),
+                amount_currency: crate::market_data::EvidenceValue::confirmed("CNY", "bound"),
+                amount_unit: crate::market_data::EvidenceValue::confirmed("yuan", "bound"),
+            },
+            adjustment_evidence: AdjustmentEvidence::confirmed("raw", "no corporate action"),
+        },
+        day_member_sha256: "0c".repeat(32),
+        security_event_sha256: "0e".repeat(32),
+    };
+    let generation_evidence = json!({"manifest_sha256": "0b".repeat(32)});
+    repo.commit_index(&crate::sqlite_market::index::IndexWrite {
+        index: &index,
+        result_id: &format!("index-{task_id}-{item}"),
+        task_id,
+        item_id: item,
+        run_id: RUN,
+        expected_task_revision: revision,
+        generation_id: "gen-1",
+        generation_manifest_sha256: &"0b".repeat(32),
+        generation_evidence: &generation_evidence,
+        published_at: DateTime::from_timestamp(1_760_000_000, 0).unwrap(),
+    })
+    .unwrap()
+}
+
+fn index_query(code: &str, version: Value) -> Value {
+    json!({
+        "dataset": "market.daily",
+        "contract_version": "v1",
+        "selection": {"kind": "single", "entity": {"exchange": "sh", "code": code}},
+        "filter": {"kind": "daily", "start_date": "1990-01-01", "end_date": "2030-12-31"},
+        "version": version,
+        "page_size": 100,
+    })
+}
+
+/// AC-M1-10 (index part): a committed index series is a real bar series in
+/// storage but the public MCP read surface never resolves it — neither by
+/// latest head, nor by an explicitly pinned version id, nor in the version
+/// list.
+#[test]
+fn index_series_stay_invisible_on_the_query_surface() {
+    let f = fixture();
+    let task_id = task(&f, "sh.000001", 1, "day", "req-index");
+    let receipt = commit_index(
+        &f,
+        &task_id,
+        "item-1",
+        "sh.000001",
+        vec![
+            bar(day_epoch(2020, 1, 6), 300_000),
+            bar(day_epoch(2020, 1, 7), 301_000),
+        ],
+    );
+
+    // The series exists in storage (otherwise "absent" would be trivial).
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let series = repo
+        .read(|c| {
+            crate::sqlite_market::series::read_series_adjusted(
+                c,
+                "sh.000001",
+                Period::Day,
+                Adjustment::Raw,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        series.instrument_class,
+        crate::market_data::INSTRUMENT_CLASS_INDEX
+    );
+    assert_eq!(series.version_id, receipt.version_id);
+
+    // Latest head: absent, no records.
+    let page = f
+        .api
+        .call(
+            "query_data",
+            index_query("000001", json!({"kind": "latest_per_entity"})),
+        )
+        .unwrap();
+    assert_eq!(page["version_manifest"][0]["status"], "absent");
+    assert!(page["records"].as_array().unwrap().is_empty());
+
+    // A pinned index version id does not become readable just because it is
+    // known: the visibility boundary applies to explicit pins too.
+    let page = f
+        .api
+        .call(
+            "query_data",
+            index_query(
+                "000001",
+                json!({
+                    "kind": "explicit_version_map",
+                    "versions": [{
+                        "entity": {"exchange": "sh", "code": "000001"},
+                        "version_id": receipt.version_id,
+                    }],
+                }),
+            ),
+        )
+        .unwrap();
+    assert_eq!(page["version_manifest"][0]["status"], "absent");
+    assert!(page["records"].as_array().unwrap().is_empty());
+
+    // Availability reports the same absence.
+    let availability = f
+        .api
+        .call(
+            "get_data_availability",
+            index_query("000001", json!({"kind": "latest_per_entity"})),
+        )
+        .unwrap();
+    assert_eq!(availability["items"][0]["availability"], "absent");
+
+    // The version list does not advertise the index series either.
+    let versions = f
+        .api
+        .call(
+            "list_data_versions",
+            json!({
+                "dataset": "market.daily",
+                "contract_version": "v1",
+                "selection": {"kind": "single", "entity": {"exchange": "sh", "code": "000001"}},
+                "page_size": 10,
+            }),
+        )
+        .unwrap();
+    assert!(versions["items"].as_array().unwrap().is_empty());
+}

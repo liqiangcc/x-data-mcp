@@ -835,7 +835,7 @@ fn head_transition_refreshes_a_stale_held_head() {
 /// Schema-21 latest-only compact set (SPEC-LATEST-ONLY §1): the schema-19
 /// version-manifest/result tables below are replaced by `market_series` +
 /// `series_bars` + `yearly_series_lineage` + `market_events`.
-const COMPACT_TABLES: [&str; 10] = [
+const COMPACT_TABLES: [&str; 11] = [
     "evidence_bundles",
     "evidence_parts",
     "source_bindings",
@@ -848,6 +848,8 @@ const COMPACT_TABLES: [&str; 10] = [
     // the non-bar dataset version registration.
     "adjustment_events",
     "derived_dataset_versions",
+    // Schema 22 (M1 PR-5, issue-383 §3.9): per-index unit/aggregation scope.
+    "index_series_meta",
 ];
 /// Dropped by migration 021 — their absence is part of the v21 shape.
 const DROPPED_V19_TABLES: [&str; 12] = [
@@ -998,6 +1000,21 @@ fn assert_compact_shape(path: &std::path::Path) {
         "item_id",
     ] {
         assert!(derived.contains(&column.to_string()), "missing {column}");
+    }
+    // §3.9: unit and aggregation scope are data, one row per index series.
+    let index = raw_columns(path, "index_series_meta");
+    for column in [
+        "series_key",
+        "aliases",
+        "aggregate_scope",
+        "member_count",
+        "price_unit",
+        "volume_unit",
+        "amount_unit",
+        "evidence_digest",
+        "evidence_note",
+    ] {
+        assert!(index.contains(&column.to_string()), "missing {column}");
     }
 }
 fn assert_legacy_shape(path: &std::path::Path) {

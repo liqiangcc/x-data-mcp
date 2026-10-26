@@ -253,3 +253,28 @@ CREATE TABLE derived_dataset_versions(
   CHECK(first_day <= last_day),
   CHECK(version_id = lower(hex(content_digest)))
 ) STRICT;
+
+-- index_series_meta: per-index unit and aggregation-scope metadata (§3.9,
+-- M1 PR-5). Unit and scope are DATA (BR-M1-6): "OHLC=0.01 点 / volume=手 /
+-- amount=元" and each index's aggregation basis are rows, never code
+-- constants, so adding a benchmark is a registration row here plus one
+-- `market_series` series — not an `if entity == ...` branch.
+-- `series_key` is the index bar series (instrument_class=1, adjustment=0,
+-- price_scale=2). `aliases` holds alternate codes of the SAME series
+-- (comma-separated), so 000300/399300 keep one row and one version id.
+-- `evidence_note` is non-empty by CHECK: an index without a unit/scope proof
+-- is not collectible (AC-M1-6), and `evidence_digest` names the `derived`
+-- bundle that records how the claim was proven (§6.3).
+CREATE TABLE index_series_meta(
+  series_key INTEGER PRIMARY KEY REFERENCES market_series(series_key),
+  aliases TEXT NOT NULL DEFAULT '',
+  aggregate_scope TEXT NOT NULL
+    CHECK(aggregate_scope IN ('constituents','whole_market','whole_board')),
+  member_count INTEGER CHECK(member_count IS NULL OR member_count > 0),
+  price_unit TEXT NOT NULL CHECK(price_unit = 'index_point'),
+  volume_unit TEXT NOT NULL CHECK(volume_unit = 'hand'),
+  amount_unit TEXT NOT NULL CHECK(amount_unit = 'yuan'),
+  evidence_digest BLOB NOT NULL REFERENCES evidence_bundles(evidence_digest),
+  evidence_note TEXT NOT NULL CHECK(length(evidence_note) > 0),
+  created_at TEXT NOT NULL
+) STRICT;

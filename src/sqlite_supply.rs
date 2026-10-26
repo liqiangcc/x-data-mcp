@@ -251,7 +251,9 @@ impl ReadRepository for SqliteSupply {
                     if latest {
                         // SPEC §6.1 list_data_versions on schema 21: at most one
                         // (current) entry per entity.
-                        if let Some(row)=crate::sqlite_market::series::read_series(c,&entity.symbol(),if args.dataset==Dataset::Daily{crate::market_data::Period::Day}else{crate::market_data::Period::Year})? {
+                        // AC-M1-10: the public version list resolves stock
+                        // 前复权 series only (index/ETF are export-only).
+                        if let Some(row)=crate::sqlite_market::series::read_public_series(c,&entity.symbol(),if args.dataset==Dataset::Daily{crate::market_data::Period::Day}else{crate::market_data::Period::Year})? {
                             result.push(VersionInfo{version_ref:series_version_ref(args.dataset,&entity,&row),published_at:series_timestamp(&row.updated_at)?});
                         }
                         continue;
@@ -388,6 +390,24 @@ pub(crate) fn query(
                 });
                 continue;
             };
+            // AC-M1-10: an explicitly pinned version id is still subject to
+            // the public visibility boundary — an index series never becomes
+            // readable just because its id is known.
+            if latest_only
+                && matches!(&plan.args.version, VersionChoice::ExplicitVersionMap { .. })
+                && crate::sqlite_market::series::is_public_invisible_version(c, &id)?
+            {
+                result.manifest.push(ManifestEntry {
+                    entity: Some(entity.clone()),
+                    version_ref: None,
+                    status: ManifestStatus::Absent,
+                    metadata: None,
+                    stale: None,
+                    as_of_day: None,
+                    reason: None,
+                });
+                continue;
+            }
             let mut stale_mark: Option<(String, chrono::NaiveDate)> = None;
             if latest_only
                 && plan.args.dataset == Dataset::Yearly
@@ -567,6 +587,26 @@ fn availability_stats(
             0,
         ));
     };
+    // AC-M1-10: same visibility boundary as `query`, including explicit pins.
+    if crate::sqlite_market::is_latest_only_schema(c)?
+        && matches!(&plan.args.version, VersionChoice::ExplicitVersionMap { .. })
+        && crate::sqlite_market::series::is_public_invisible_version(c, &id)?
+    {
+        return Ok((
+            Some(ManifestEntry {
+                entity: Some(entity.clone()),
+                version_ref: None,
+                status: ManifestStatus::Absent,
+                metadata: None,
+                stale: None,
+                as_of_day: None,
+                reason: None,
+            }),
+            None,
+            None,
+            0,
+        ));
+    }
     if crate::sqlite_market::is_latest_only_schema(c)? {
         return series_stats(c, plan, entity, &id);
     }
