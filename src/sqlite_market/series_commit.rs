@@ -458,6 +458,7 @@ fn commit_raw_side(
         Metadata,
         Append,
         FirstPublish,
+        Replace,
     }
     // The bars a resolved change writes. Declared outside the match so the
     // `SeriesChange` borrow stays valid until the commit call.
@@ -538,9 +539,14 @@ fn commit_raw_side(
                         append_bars = Some(tail.clone());
                         (Resolved::Append, start, end, tail)
                     } else {
-                        return Err(Error::Integrity(
-                            "raw series revision without evidence".into(),
-                        ));
+                        // The forward side already authorized this full
+                        // rewrite (a verified source generation or an
+                        // explicit revision); the raw series is the source
+                        // fact and must follow it, not keep a stale price.
+                        let start = aligned[0].trade_day;
+                        let end = aligned[aligned.len() - 1].trade_day;
+                        full_bars = Some(aligned.clone());
+                        (Resolved::Replace, start, end, aligned)
                     }
                 }
             }
@@ -558,6 +564,7 @@ fn commit_raw_side(
             upserts: &append_bars,
         },
         Resolved::FirstPublish => SeriesChange::FirstPublish { bars: &full_bars },
+        Resolved::Replace => SeriesChange::Replace { bars: &full_bars },
     };
     // The raw side shares the forward side's source binding and coverage;
     // its own version evidence only swaps the adjustment 口径.
