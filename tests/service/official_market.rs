@@ -16,7 +16,7 @@ use x_data_mcp::{
         DailyCollectionRepository, TdxBackfillProvider, TdxDailyRunner, TdxGapVerifier,
         TdxMarketSource, TdxRepublishProvider,
     },
-    publish::{EffectiveVersion, ValidationSummary},
+    publish::{EffectiveVersion, ValidationSummary, validate_and_deduplicate},
     sqlite_market::SqliteMarket,
     sqlite_supply::SqliteSupply,
     sqlite_tasks::SqliteTasks,
@@ -39,6 +39,10 @@ fn sha(bytes: &[u8]) -> String {
 }
 
 fn day_record(date: u32, ohlc: [u32; 4], amount: f32, volume: u32) -> [u8; 32] {
+    day_record_r7(date, ohlc, amount, volume, 0)
+}
+
+fn day_record_r7(date: u32, ohlc: [u32; 4], amount: f32, volume: u32, r7: u32) -> [u8; 32] {
     let mut r = [0u8; 32];
     r[0..4].copy_from_slice(&date.to_le_bytes());
     for (i, w) in ohlc.iter().enumerate() {
@@ -46,6 +50,7 @@ fn day_record(date: u32, ohlc: [u32; 4], amount: f32, volume: u32) -> [u8; 32] {
     }
     r[20..24].copy_from_slice(&amount.to_bits().to_le_bytes());
     r[24..28].copy_from_slice(&volume.to_le_bytes());
+    r[28..32].copy_from_slice(&r7.to_le_bytes());
     r
 }
 
@@ -267,6 +272,106 @@ fn materializes_qfq_daily_with_snapshot_bound_provenance() {
     assert!(
         batch.coverage.reason.contains("DECLARED_SCOPE"),
         "published evidence must keep the declared-scope marking"
+    );
+}
+
+/// #381: `.day` records a day's volume in hands once the share count
+/// approaches the u32 limit, flagged by `0xC36400xx` in r7. The conversion is
+/// fail-closed: the marker and a raw-value consistency check must agree,
+/// otherwise the bar publishes an unknown volume instead of a guess.
+#[test]
+fn hand_recorded_volume_is_converted_and_unprovable_units_stay_unknown() {
+    // One fixture carries every decision branch; OHLC is identical so only
+    // the marker/amount/volume combination differs. Prices are `.day` fen
+    // (11.25–11.30 yuan), amounts are yuan.
+    let ohlc = [1128, 1130, 1125, 1129];
+    let bars: Vec<u8> = [
+        // Marker + consistency: 112,800,000 / (100,000 × 100) = 11.28 ∈ range.
+        day_record_r7(20250715, ohlc, 112_800_000.0, 100_000, 0xC364_0023),
+        // Marker without consistency: 112.8 is far above the day's high.
+        day_record_r7(20250716, ohlc, 11_280_000.0, 1_000, 0xC364_0011),
+        // Consistency without the marker (reverse mismatch): unknown too.
+        day_record(20250717, ohlc, 1_128_000.0, 1_000),
+        // No marker, no consistency: the #239 share reading.
+        day_record(20250718, ohlc, 11_280_000.0, 1_000_000),
+        // Below the u32 hand threshold: 4,289,510,575 shares stay shares (the
+        // hand reading would be ~0.11 yuan, outside the day's range).
+        day_record(20250721, ohlc, 48_385_679_360.0, 4_289_510_575),
+        // Above it: 42,902,714 hands = 4,290,271,400 shares.
+        day_record_r7(20250722, ohlc, 48_394_260_480.0, 42_902_714, 0xC364_000B),
+    ]
+    .concat();
+    let events = gbbq_member(&[]);
+    let snap = snapshot(
+        &[("sh\\lday\\sh600006.day", bars.as_slice())],
+        &[("gbbq", events.as_slice())],
+        &base_members(),
+    );
+    let batch = make_source(&snap).materialize_daily("sh.600006").unwrap();
+    assert_eq!(batch.bars.len(), 6);
+    assert_eq!(batch.bars[0].volume, Some(dec("10000000")));
+    assert_eq!(batch.bars[1].volume, None);
+    assert_eq!(batch.bars[2].volume, None);
+    assert_eq!(batch.bars[3].volume, Some(dec("1000000")));
+    assert_eq!(batch.bars[4].volume, Some(dec("4289510575")));
+    assert_eq!(batch.bars[5].volume, Some(dec("4290271400")));
+    // r7 stays verbatim evidence on every bar, converted or not.
+    assert_eq!(batch.bars[0].r7_raw, Some(0xC364_0023));
+    assert_eq!(batch.bars[2].r7_raw, Some(0));
+    assert_eq!(batch.bars[5].r7_raw, Some(0xC364_000B));
+    // The unit evidence stays the #239 share contract; an unprovable bar
+    // carries no value rather than a guessed one.
+    assert_eq!(
+        batch.unit_currency.volume_unit.value.as_deref(),
+        Some("share")
+    );
+    // Unknown volume does not block publication: the batch still validates.
+    let (records, _) = validate_and_deduplicate(&batch).unwrap();
+    assert_eq!(records.len(), 6);
+    // Prices are untouched by the volume decision (identity QFQ chain).
+    assert_eq!(batch.bars[0].close, dec("11.29"));
+}
+
+/// #381: the annual volume is derived from the published daily bars, so a
+/// converted hand bar reaches the year total instead of being understated by
+/// 100×.
+#[test]
+fn yearly_volume_follows_normalized_daily_volume() {
+    let ohlc = [1128, 1130, 1125, 1129];
+    let bars: Vec<u8> = [
+        day_record_r7(20250715, ohlc, 112_800_000.0, 100_000, 0xC364_0023),
+        day_record(20250716, ohlc, 11_280_000.0, 1_000_000),
+    ]
+    .concat();
+    let events = gbbq_member(&[]);
+    let snap = snapshot(
+        &[("sh\\lday\\sh600006.day", bars.as_slice())],
+        &[("gbbq", events.as_slice())],
+        &base_members(),
+    );
+    let batch = make_source(&snap).materialize_daily("sh.600006").unwrap();
+    let (records, validation) = validate_and_deduplicate(&batch).unwrap();
+    let daily = EffectiveVersion {
+        version_id: "published-hand-fixture".into(),
+        symbol: batch.symbol.clone(),
+        period: Period::Day,
+        adjustment: Adjustment::Forward,
+        source: batch.provenance.source.clone(),
+        records,
+        published_at: now(),
+        validation,
+        unit_currency: batch.unit_currency.clone(),
+        adjustment_evidence: batch.adjustment_evidence.clone(),
+        yearly_derivation: None,
+    };
+    let as_of = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+    let annual = x_data_mcp::yearly::aggregate(&daily, None, as_of).unwrap();
+    assert_eq!(annual.records.len(), 1);
+    // 10,000,000 converted shares + 1,000,000 shares.
+    assert_eq!(annual.records[0].bar.volume, Some(dec("11000000")));
+    assert_eq!(
+        annual.records[0].lineage.base_daily_version_id,
+        "published-hand-fixture"
     );
 }
 

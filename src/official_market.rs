@@ -13,8 +13,14 @@
 //! published evidence reason. `.day` amount/volume units are anchored by
 //! #239 TdxQuant oracle evidence (shares / yuan) and promoted into published
 //! bars verbatim — prices only are QFQ-adjusted; amount/volume are never
-//! adjusted. The eighth `.day` field (`reserved`) stays unpromoted: its
-//! A-share ex-basis semantics are only evidenced for 1999–2010 (#240).
+//! adjusted. The one exception is the u32 volume overflow case: TDX records a
+//! day in hands once the share count approaches the u32 limit and flags it
+//! with the `0xC36400xx` r7 marker, so such a bar is converted to shares
+//! (×100) when — and only when — the marker and a raw-value consistency check
+//! agree (#381, [`normalized_volume`]); an unprovable unit publishes `volume`
+//! unknown instead of a guess. The eighth `.day` field (`reserved`) otherwise
+//! stays unpromoted: its A-share ex-basis semantics are only evidenced for
+//! 1999–2010 (#240).
 use crate::{
     day_file, gbbq,
     market_data::{
@@ -55,6 +61,73 @@ pub(crate) const SECURITY_EVENTS_ROLE: &str = "gbbq-security-events";
 /// Largest manifest byte count the installer will read; the pinned snapshot
 /// schema carries exactly three file entries and stays far below this.
 const MANIFEST_LIMIT: u64 = 1 << 20;
+
+/// `.day` r7 marker TDX writes when a day's true share count no longer fits
+/// the u32 volume field, so the record carries hands instead (1 hand = 100
+/// shares). Only the high 24 bits are fixed; the low byte varies per record
+/// and stays opaque. The marker alone is not trusted — see
+/// [`normalized_volume`].
+const HAND_VOLUME_MARKER: u32 = 0xC364_0000;
+const HAND_VOLUME_MARKER_MASK: u32 = 0xFFFF_FF00;
+/// Shares per hand for a marker-recorded `.day` volume.
+const SHARES_PER_HAND: u32 = 100;
+
+/// `.day` amount as the published business decimal: the shortest decimal
+/// string of the f32 value widened to f64 (unchanged from the #239
+/// promotion; only the call sites were factored out).
+fn amount_decimal(bits: u32) -> Option<Decimal> {
+    Decimal::from_str(&f64::from(f32::from_bits(bits)).to_string()).ok()
+}
+
+/// Volume unit decision for one raw `.day` record, using **unadjusted**
+/// `.day` values only.
+///
+/// A record is classified as hand-recorded only when both independent facts
+/// agree: the `0xC36400xx` r7 marker and the raw-value consistency check
+/// `low <= amount / (volume * 100) <= high` (prices are `.day` fen, never
+/// the published QFQ prices). Anything else that could be a hand record
+/// stays unknown rather than being guessed:
+///
+/// | r7 marker | consistency | unit | result |
+/// |---|---|---|---|
+/// | yes | passes | hands | `volume_raw * 100` shares |
+/// | yes | fails | unconfirmed | `None` |
+/// | no | passes | unconfirmed (contradictory) | `None` |
+/// | no | fails | shares (#239) | `volume_raw` shares |
+///
+/// A hand-recorded bar is only precise to 100 shares: the source field
+/// dropped the remainder, and the contract has no per-bar volume precision
+/// field to carry that limit (see the XDM-19 issue).
+fn normalized_volume(record: &day_file::RawDayRecord) -> Option<Decimal> {
+    let marked = (record.r7_raw & HAND_VOLUME_MARKER_MASK) == HAND_VOLUME_MARKER;
+    let consistent = hands_consistent(record);
+    match (marked, consistent) {
+        (true, true) => Some(Decimal::from(record.volume_raw) * Decimal::from(SHARES_PER_HAND)),
+        (true, false) | (false, true) => None,
+        (false, false) => Some(Decimal::from(record.volume_raw)),
+    }
+}
+
+/// `low <= amount / (volume * 100) <= high` over raw `.day` values: does the
+/// recorded amount buy exactly `volume` hands at a price inside the day's
+/// own range? Zero volume/amount makes the ratio undefined, which is not a
+/// confirmation.
+fn hands_consistent(record: &day_file::RawDayRecord) -> bool {
+    if record.volume_raw == 0 {
+        return false;
+    }
+    let Some(amount) = amount_decimal(record.amount_float32_bits) else {
+        return false;
+    };
+    if amount <= Decimal::ZERO {
+        return false;
+    }
+    let hands = Decimal::from(record.volume_raw) * Decimal::from(SHARES_PER_HAND);
+    let vwap = amount / hands;
+    let low = Decimal::from(record.ohlc_raw[2]) / Decimal::from(100);
+    let high = Decimal::from(record.ohlc_raw[1]) / Decimal::from(100);
+    (low..=high).contains(&vwap)
+}
 
 /// Canonical digest of one security's interpreted event set: every
 /// category-1 event's stored `(date_raw, c_raw)` fields in decode order,
@@ -409,19 +482,25 @@ impl MaterializeSession<'_> {
     ) -> Result<Vec<Bar>, SourceError> {
         let adjusted = qfq::forward_adjust(raw_bars, events)
             .map_err(|e| SourceError::InvalidResponse(format!("qfq chain failed: {e}")))?;
-        let bars: Vec<Bar> = adjusted
+        // `forward_adjust` maps one input record to one output bar in input
+        // order; the unit decision needs the raw record, so the two slices
+        // are zipped by index.
+        if adjusted.len() != raw_bars.len() {
+            return Err(SourceError::InvalidResponse(
+                "qfq chain changed the bar count".into(),
+            ));
+        }
+        let bars: Vec<Bar> = raw_bars
             .iter()
-            .map(|b| Bar {
+            .zip(adjusted.iter())
+            .map(|(raw, b)| Bar {
                 date: b.date,
                 open: b.open,
                 high: b.high,
                 low: b.low,
                 close: b.close,
-                volume: Some(Decimal::from(b.volume_raw)),
-                amount: Decimal::from_str(
-                    &f64::from(f32::from_bits(b.amount_float32_bits)).to_string(),
-                )
-                .ok(),
+                volume: normalized_volume(raw),
+                amount: amount_decimal(b.amount_float32_bits),
                 r7_raw: Some(b.r7_raw),
             })
             .collect();
