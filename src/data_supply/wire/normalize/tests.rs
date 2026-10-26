@@ -8,7 +8,8 @@ use crate::data_supply::registry::{CapabilitiesQuery, entries};
 use crate::data_supply::wire::*;
 
 fn normalized(name: &str, input: Value) -> Value {
-    normalize(name, input).unwrap_or_else(|e| panic!("{}: {}: {input}", e.code, e.message))
+    let original = input.clone();
+    normalize(name, input).unwrap_or_else(|e| panic!("{}: {}: {original}", e.code, e.message))
 }
 
 fn decoded<T: serde::de::DeserializeOwned>(name: &str, input: Value) -> Result<T, String> {
@@ -235,9 +236,13 @@ fn rejection_05_contract_version_defaults_to_v1() {
 #[test]
 fn rejection_08_capabilities_still_rejects_contract_version() {
     assert_eq!(normalized("get_data_capabilities", json!({})), json!({}));
-    let error =
-        decoded::<CapabilitiesQuery>("get_data_capabilities", json!({"contract_version": "v1"}))
-            .unwrap_err();
+    let error = match decoded::<CapabilitiesQuery>(
+        "get_data_capabilities",
+        json!({"contract_version": "v1"}),
+    ) {
+        Ok(_) => panic!("get_data_capabilities must keep rejecting contract_version"),
+        Err(error) => error,
+    };
     assert!(
         error.contains("unknown field `contract_version`"),
         "{error}"
