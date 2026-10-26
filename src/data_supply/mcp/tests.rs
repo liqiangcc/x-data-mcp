@@ -1291,6 +1291,11 @@ fn seed_daily_pair(fixture: &Fixture) {
         period: Period::Day,
     };
     repo.tx(|c| {
+        let forward_compact = series_commit::to_compact_bars(
+            &forward_bars,
+            Period::Day,
+            crate::compact_market::PRICE_SCALE_CENTS,
+        )?;
         let version_ev = evidence_store::put_evidence(
             c,
             EvidenceKind::Version,
@@ -1325,7 +1330,7 @@ fn seed_daily_pair(fixture: &Fixture) {
                 adjustment: Adjustment::Forward,
                 base_version_id: None,
                 change: series_commit::SeriesChange::FirstPublish {
-                    bars: &forward_bars,
+                    bars: &forward_compact,
                 },
                 range_start_day: day,
                 range_end_day: day,

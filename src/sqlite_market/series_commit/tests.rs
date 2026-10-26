@@ -3353,6 +3353,11 @@ fn commit_pair_first(
     repo.tx(|c| {
         let (version_ev, binding) = put_seed_material(c);
         let continuity = put_continuity_evidence(c, &json!({"mode":"first"}))?;
+        let forward_compact = to_compact_bars(
+            forward_bars,
+            Period::Day,
+            crate::compact_market::PRICE_SCALE_CENTS,
+        )?;
         commit_item_tx(
             c,
             &Commit {
@@ -3366,9 +3371,11 @@ fn commit_pair_first(
                 period: Period::Day,
                 adjustment: Adjustment::Forward,
                 base_version_id: None,
-                change: SeriesChange::FirstPublish { bars: forward_bars },
+                change: SeriesChange::FirstPublish {
+                    bars: &forward_compact,
+                },
                 range_start_day: 0,
-                range_end_day: forward_bars.len() as i64 - 1,
+                range_end_day: forward_compact.len() as i64 - 1,
                 algorithm_version: COLLECTION_ALGO,
                 window_digest: None,
                 source_binding_digest: Some(binding),
@@ -3525,6 +3532,11 @@ fn future_event_rewrites_only_the_forward_口径() {
     repo.tx(|c| {
         let (version_ev, binding) = put_seed_material(c);
         let continuity = put_continuity_evidence(c, &json!({"mode":"full"}))?;
+        let forward_compact = to_compact_bars(
+            &rewritten_forward,
+            Period::Day,
+            crate::compact_market::PRICE_SCALE_CENTS,
+        )?;
         commit_item_tx(
             c,
             &Commit {
@@ -3539,7 +3551,7 @@ fn future_event_rewrites_only_the_forward_口径() {
                 adjustment: Adjustment::Forward,
                 base_version_id: Some(&first.version_id),
                 change: SeriesChange::Replace {
-                    bars: &rewritten_forward,
+                    bars: &forward_compact,
                 },
                 range_start_day: 0,
                 range_end_day: 1,
@@ -3613,6 +3625,11 @@ fn raw_series_rewrite_without_evidence_fails_closed() {
         .tx(|c| {
             let (version_ev, binding) = put_seed_material(c);
             let continuity = put_continuity_evidence(c, &json!({"mode":"full"}))?;
+            let forward_compact = to_compact_bars(
+                &forward_bars,
+                Period::Day,
+                crate::compact_market::PRICE_SCALE_CENTS,
+            )?;
             commit_item_tx(
                 c,
                 &Commit {
@@ -3627,7 +3644,7 @@ fn raw_series_rewrite_without_evidence_fails_closed() {
                     adjustment: Adjustment::Forward,
                     base_version_id: Some(&first.version_id),
                     change: SeriesChange::Replace {
-                        bars: &forward_bars,
+                        bars: &forward_compact,
                     },
                     range_start_day: 0,
                     range_end_day: 1,

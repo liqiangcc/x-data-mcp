@@ -107,6 +107,7 @@ pub trait RangeRepository: MarketRepository {
     /// replaces the envelope `combined_integrity_sha256` digest check).
     /// `Ok(None)` means the backend lacks an ops path; the caller falls
     /// back to `commit_range`.
+    #[allow(clippy::too_many_arguments)]
     fn commit_range_ops(
         &self,
         _command: &Publication,
