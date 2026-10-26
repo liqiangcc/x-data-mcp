@@ -1137,6 +1137,11 @@ fn frozen_daily_ranges(task: &TaskSnapshot) -> Result<Vec<FrozenDailyRange>, Err
     }
     let mut out = vec![];
     for item in &task.items {
+        // Server-internal derived items carry a dataset target, not a security
+        // range (issue-383 §9.2); they are not projected as frozen ranges.
+        if crate::task_control::derived::is_derived(&item.spec.item_id) {
+            continue;
+        }
         let frozen = &item.spec.frozen_inputs;
         let entity = item.spec.target["symbol"]
             .as_str()
