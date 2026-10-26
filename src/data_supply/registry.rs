@@ -282,7 +282,7 @@ pub struct Capabilities {
     pub production_blocking_reasons: Vec<BlockingReason>,
 }
 pub const UPDATE_DESCRIPTION: &str = "Routine daily refresh. market.daily explicit items bind a published base version; the default selection resolves frozen heads and proven gaps. Unchanged inputs land no_change; revisions fail closed. Not for first establishment.";
-pub const BACKFILL_DESCRIPTION: &str = "Bounded backfill, not the routine path: explicit items fill a named range over a published base; the default selection resolves only frozen proven gaps. Revisions fail closed; never a full-market refresh.";
+pub const BACKFILL_DESCRIPTION: &str = "Bounded backfill, not the routine path: market.daily explicit items fill a named range over a published base; the default selection resolves only frozen proven gaps. Revisions fail closed; never a full-market refresh.";
 pub const REPUBLISH_DESCRIPTION: &str = "Local-owner explicit-range source refresh: re-acquires a fixed start/end window over a pinned market.daily head through the same commit path as update_data. A superseded base needs_verification; revisions fail closed.";
 pub const WORKER_DESCRIPTION: &str = "Operator/debug single step of at most one locally owned pending task. The background worker already runs tasks, so routine synchronization must not call this; it never downloads market data.";
 pub const COLLECTION_DESCRIPTION: &str = "First establishment only: creates the initial publication for entities with no published head, from an explicit list, catalog version, or the default selection. Entities with heads use update_data.";
