@@ -195,6 +195,14 @@ fn progress_v2_structures_items_and_lists_by_reason_code() {
         "{page}"
     );
 
+    let all = api
+        .call("list_tasks", json!({"contract_version": "v2"}))
+        .unwrap();
+    assert_eq!(
+        all["items"].as_array().unwrap().len(),
+        2,
+        "both tasks must be listed: {all}"
+    );
     let listed = api
         .call(
             "list_tasks",
@@ -203,7 +211,7 @@ fn progress_v2_structures_items_and_lists_by_reason_code() {
         .unwrap();
     assert_eq!(listed["wire_contract_version"], "v2");
     let items = listed["items"].as_array().unwrap();
-    assert_eq!(items.len(), 1, "{listed}");
+    assert_eq!(items.len(), 1, "filtered: {listed} all: {all}");
     assert_eq!(items[0]["task_id"], task);
     assert_eq!(
         items[0]["task_contract_version"],

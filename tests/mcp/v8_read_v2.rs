@@ -523,11 +523,12 @@ fn v1_rejects_fields_and_versions_and_availability_serve_v2() {
     assert_eq!(availability["entities"][0], "sh.600006");
     assert!(availability["columns"]["availability"].is_array());
 
-    // Other tools keep the v1-only gate.
+    // Tools outside the v2 read surfaces keep the v1-only gate. `get_task`
+    // and the rest of the task surface moved to v2 in v8 PR-5 (#387 §14).
     let error = api
         .call(
-            "get_task",
-            json!({"contract_version":"v2","task_id":"nope"}),
+            "get_request",
+            json!({"contract_version":"v2","request_id":"nope"}),
         )
         .unwrap_err();
     assert_eq!(error.code, "unsupported_contract");
