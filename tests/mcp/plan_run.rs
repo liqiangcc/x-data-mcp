@@ -85,10 +85,6 @@ struct Snapshot {
     root: std::path::PathBuf,
     manifest: Vec<u8>,
 }
-fn snapshot(day_members: &[(&str, &[u8])]) -> Snapshot {
-    snapshot_with(day_members, true)
-}
-
 /// `include_derived = false` builds a generation that carries only the
 /// caller's members — the fixture for "a source that cannot serve the
 /// derived datasets" (internal item failure semantics, issue-383 §9.2).
