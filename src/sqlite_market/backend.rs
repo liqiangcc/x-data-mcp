@@ -268,6 +268,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
         upserts: &[crate::market_data::Bar],
         removes: &[chrono::NaiveDate],
         expected: &[crate::market_data::Bar],
+        raw: Option<&crate::market_data::RawBatch>,
     ) -> Result<Option<Receipt>, Error> {
         match self {
             Self::Legacy(m) => {
@@ -279,6 +280,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
                     upserts,
                     removes,
                     expected,
+                    raw,
                 )
             }
             Self::Compact(m) => {
@@ -290,6 +292,7 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
                     upserts,
                     removes,
                     expected,
+                    raw,
                 )
             }
         }

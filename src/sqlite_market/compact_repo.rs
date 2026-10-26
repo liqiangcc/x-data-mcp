@@ -999,7 +999,7 @@ fn commit_plan_no_change(
             staged_version_id: Some(command.version_id.as_str()),
             defer_task_row: false,
         },
-        plan.raw.as_ref(),
+        plan.publication.raw.as_ref(),
     )
 }
 

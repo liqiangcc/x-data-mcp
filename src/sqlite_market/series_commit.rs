@@ -452,12 +452,18 @@ fn commit_raw_side(
             })
             .collect()
     };
-    let (change, range_start_day, range_end_day, window_bars): (
-        SeriesChange<'_>,
-        i64,
-        i64,
-        Vec<CompactBar>,
-    ) = match &forward.change {
+    /// Which raw series mutation the forward change resolves to.
+    enum Resolved {
+        NoChange,
+        Metadata,
+        Append,
+        FirstPublish,
+    }
+    // The bars a resolved change writes. Declared outside the match so the
+    // `SeriesChange` borrow stays valid until the commit call.
+    let mut append_bars: Option<Vec<CompactBar>> = None;
+    let mut full_bars: Option<Vec<CompactBar>> = None;
+    let (resolved, range_start_day, range_end_day, window_bars) = match &forward.change {
         SeriesChange::NoChange | SeriesChange::Metadata => {
             let row = head
                 .as_ref()
@@ -468,12 +474,17 @@ fn commit_raw_side(
                 forward.range_start_day,
                 forward.range_end_day,
             )?;
-            let kind = if matches!(forward.change, SeriesChange::Metadata) {
-                SeriesChange::Metadata
+            let resolved = if matches!(forward.change, SeriesChange::Metadata) {
+                Resolved::Metadata
             } else {
-                SeriesChange::NoChange
+                Resolved::NoChange
             };
-            (kind, forward.range_start_day, forward.range_end_day, window)
+            (
+                resolved,
+                forward.range_start_day,
+                forward.range_end_day,
+                window,
+            )
         }
         SeriesChange::Append { upserts } => {
             let row = head
@@ -487,12 +498,8 @@ fn commit_raw_side(
             }
             let start = aligned[0].trade_day;
             let end = aligned[aligned.len() - 1].trade_day;
-            (
-                SeriesChange::Append { upserts: &aligned },
-                start,
-                end,
-                aligned.clone(),
-            )
+            append_bars = Some(aligned.clone());
+            (Resolved::Append, start, end, aligned)
         }
         SeriesChange::FirstPublish { bars } | SeriesChange::Replace { bars } => {
             let aligned = align(bars)?;
@@ -503,12 +510,8 @@ fn commit_raw_side(
                 None => {
                     let start = aligned[0].trade_day;
                     let end = aligned[aligned.len() - 1].trade_day;
-                    (
-                        SeriesChange::FirstPublish { bars: &aligned },
-                        start,
-                        end,
-                        aligned.clone(),
-                    )
+                    full_bars = Some(aligned.clone());
+                    (Resolved::FirstPublish, start, end, aligned)
                 }
                 Some(row) => {
                     let stored = series::all_bars(c, row.series_key)?;
@@ -522,22 +525,18 @@ fn commit_raw_side(
                             forward.range_end_day,
                         )?;
                         (
-                            SeriesChange::NoChange,
+                            Resolved::NoChange,
                             forward.range_start_day,
                             forward.range_end_day,
                             window,
                         )
                     } else if stored.len() < aligned.len() && stored[..] == aligned[..stored.len()]
                     {
-                        let tail = &aligned[stored.len()..];
+                        let tail = aligned[stored.len()..].to_vec();
                         let start = tail[0].trade_day;
                         let end = tail[tail.len() - 1].trade_day;
-                        (
-                            SeriesChange::Append { upserts: tail },
-                            start,
-                            end,
-                            tail.to_vec(),
-                        )
+                        append_bars = Some(tail.clone());
+                        (Resolved::Append, start, end, tail)
                     } else {
                         return Err(Error::Integrity(
                             "raw series revision without evidence".into(),
@@ -549,6 +548,16 @@ fn commit_raw_side(
         SeriesChange::Yearly { .. } => {
             return Err(integrity("paired daily commit cannot be yearly"));
         }
+    };
+    let append_bars = append_bars.unwrap_or_default();
+    let full_bars = full_bars.unwrap_or_default();
+    let change = match resolved {
+        Resolved::NoChange => SeriesChange::NoChange,
+        Resolved::Metadata => SeriesChange::Metadata,
+        Resolved::Append => SeriesChange::Append {
+            upserts: &append_bars,
+        },
+        Resolved::FirstPublish => SeriesChange::FirstPublish { bars: &full_bars },
     };
     // The raw side shares the forward side's source binding and coverage;
     // its own version evidence only swaps the adjustment 口径.
