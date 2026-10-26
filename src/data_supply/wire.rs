@@ -42,10 +42,7 @@ pub enum ContractVersion {
     #[serde(rename = "v2")]
     V2,
 }
-/// One security identity. The typed contract stays `{exchange, code}`; the
-/// decode-layer `normalize` step (v8 PR-1, #387 §7) accepts the canonical
-/// text `"sh.600000"` and rewrites it to this form before decoding, so no
-/// response byte and no advertised schema changes.
+/// Security identity (`{exchange, code}`; `"sh.600000"` is also accepted).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Security {
